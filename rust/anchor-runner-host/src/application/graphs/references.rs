@@ -1,6 +1,13 @@
 //! Who uses an environment name right now, and whether the assistant itself does.
+//!
+//! Both answers are *Graph* questions: the scan compiles the Graphs a run can come
+//! from and reads the kernel's declared sites, and the self-guard follows a
+//! Graph's `Op.call` edges. They lived in the environment application module
+//! because they are about environment names, but they depend on the Graph
+//! catalog and the bundle loader and nothing else.
 
-use super::*;
+use super::super::{ApplicationError, RunApplication};
+use serde::{Deserialize, Serialize};
 
 impl RunApplication {
     /// Whether this assistant's own Graph — or any Graph it calls — uses one
@@ -260,7 +267,8 @@ fn plugin_bindings(
 
 #[cfg(test)]
 mod tests {
-    use super::super::test_support::*;
+    use super::EnvironmentCoverage;
+    use crate::application::environments::test_support::*;
     use anchor_graph_host::PluginCatalog;
 
     /// Write one loadable bundle that declares the named environment on a node.
@@ -333,10 +341,7 @@ mod tests {
             }),
             "{references:?}"
         );
-        assert!(matches!(
-            references.coverage,
-            crate::application::environments::EnvironmentCoverage::Complete
-        ));
+        assert!(matches!(references.coverage, EnvironmentCoverage::Complete));
         let unused = application.environment_references("unused").unwrap();
         assert!(unused.nodes.is_empty() && unused.servers.is_empty());
     }
@@ -363,10 +368,7 @@ mod tests {
             "{references:?}"
         );
         assert!(
-            matches!(
-                references.coverage,
-                crate::application::environments::EnvironmentCoverage::Complete
-            ),
+            matches!(references.coverage, EnvironmentCoverage::Complete),
             "{references:?}"
         );
         assert_eq!(references.servers.len(), 1, "{references:?}");
@@ -387,7 +389,7 @@ mod tests {
 
         let references = application.environment_references("research").unwrap();
         match references.coverage {
-            crate::application::environments::EnvironmentCoverage::Partial { missing, .. } => {
+            EnvironmentCoverage::Partial { missing, .. } => {
                 assert_eq!(missing.len(), 1, "{missing:?}");
                 assert_eq!(missing[0].graph, "broken");
                 assert!(!missing[0].reason.is_empty(), "{missing:?}");

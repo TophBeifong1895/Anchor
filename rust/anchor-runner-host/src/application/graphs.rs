@@ -9,9 +9,12 @@ use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
 
 mod deletion;
+mod references;
 
 #[cfg(test)]
 mod tests;
+
+pub(crate) use references::{EnvironmentCoverage, EnvironmentReferences};
 
 #[derive(Debug)]
 pub(crate) enum GraphManagementError {

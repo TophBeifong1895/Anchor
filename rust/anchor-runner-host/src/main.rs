@@ -541,7 +541,7 @@ async fn execute_snapshot_with_control(
     };
     // Resolve declared environments before anything durable is written, so a
     // refused environment never leaves orphan admission facts behind.
-    if let Err(error) = crate::application::resolve_record_environments(&mut expected) {
+    if let Err(error) = crate::application::resolve_record_environments(&mut expected).await {
         return Response::Rejected {
             version: 1,
             request_id,

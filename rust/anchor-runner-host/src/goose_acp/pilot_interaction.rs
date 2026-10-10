@@ -326,10 +326,10 @@ fn environment_message(precondition: &EnvironmentPublishPrecondition) -> String 
 /// smaller number.
 fn render_impact(
     message: &mut String,
-    references: Option<&crate::application::environments::EnvironmentReferences>,
+    references: Option<&crate::application::graphs::EnvironmentReferences>,
 ) {
     match references.map(|references| &references.coverage) {
-        Some(crate::application::environments::EnvironmentCoverage::Complete) => {
+        Some(crate::application::graphs::EnvironmentCoverage::Complete) => {
             let references = references.expect("coverage implies references");
             let mut users = references
                 .nodes
@@ -354,7 +354,7 @@ fn render_impact(
                 }
             ));
         }
-        Some(crate::application::environments::EnvironmentCoverage::Partial {
+        Some(crate::application::graphs::EnvironmentCoverage::Partial {
             considered,
             total,
             missing,
@@ -368,7 +368,7 @@ fn render_impact(
                     .join("、")
             ));
         }
-        Some(crate::application::environments::EnvironmentCoverage::Unknown { reason }) => {
+        Some(crate::application::graphs::EnvironmentCoverage::Unknown { reason }) => {
             message.push_str(&format!("影响范围未知：{reason}（不能读成 0 个引用）。\n"))
         }
         None => message.push_str("影响范围未记录。\n"),

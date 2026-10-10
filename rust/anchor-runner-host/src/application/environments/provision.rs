@@ -19,6 +19,7 @@
 use std::sync::Arc;
 
 use super::*;
+use crate::application::graphs::{EnvironmentCoverage, EnvironmentReferences};
 use crate::environment_provision::{
     EnvironmentProvisioner, LockedPackage, ProvisionError, ResolvedRequirements, build_environment,
     fetch_wheelhouse, resolve_requirements, verify_published,
@@ -69,6 +70,9 @@ pub(crate) struct EnvironmentProvisionPlan {
     pub(crate) observed_present: bool,
     pub(crate) observed_name_version: Option<u64>,
     pub(crate) status: EnvironmentProvisionStatus,
+    /// When this attempt was first recorded; see `EnvironmentPlan::created`.
+    #[serde(default)]
+    pub(crate) created: u64,
 }
 
 #[derive(Debug, Clone)]
@@ -129,7 +133,27 @@ impl RunApplication {
         &self,
         plan: &EnvironmentProvisionPlan,
     ) -> Result<(), ApplicationError> {
-        write_json_durable(&self.environment_provision_plan_path(&plan.key()), plan)
+        let path = self.environment_provision_plan_path(&plan.key());
+        let mut plan = plan.clone();
+        if plan.created == 0 {
+            plan.created = read_created(&path)
+                .unwrap_or_else(|| crate::application::metadata::now_nanos() as u64);
+        }
+        write_json_durable(&path, &plan)?;
+        if !matches!(plan.status, EnvironmentProvisionStatus::Requested) {
+            prune_environment_records(&self.data_root, "environment-provision-plans", |bytes| {
+                serde_json::from_slice::<EnvironmentProvisionPlan>(bytes)
+                    .ok()
+                    .map(|plan| {
+                        (
+                            plan.name.clone(),
+                            plan.created,
+                            matches!(plan.status, EnvironmentProvisionStatus::Requested),
+                        )
+                    })
+            })?;
+        }
+        Ok(())
     }
 
     /// Freeze the plan a human is about to approve.
@@ -212,6 +236,7 @@ impl RunApplication {
             observed_present,
             observed_name_version: existing.as_ref().map(|entry| entry.version),
             status: EnvironmentProvisionStatus::Requested,
+            created: 0,
         };
         self.write_environment_provision_plan(&plan)?;
         Ok(EnvironmentProvisionPrecondition { plan, resolved })

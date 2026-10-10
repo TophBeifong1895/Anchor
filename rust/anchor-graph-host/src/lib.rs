@@ -1770,16 +1770,41 @@ impl<S: RunStore, A: ArtifactPort, N: NodeExecutionPort, C: RunControl> GraphCal
                                 .cloned()
                                 .map(|plugin| (plugin.id.clone(), plugin))
                                 .collect::<BTreeMap<_, _>>();
-                            anchor_runtime::graph::freeze_environments(
-                                &snapshot,
-                                &bindings,
-                                &|name| resolver.resolve(name),
+                            // Nothing declared means nothing to verify, and no
+                            // reason to leave the runtime thread.
+                            if anchor_runtime::graph::declared_environment_sites(
+                                &snapshot, &bindings,
                             )
-                            .map_err(|reason| {
-                                GraphError::Unsupported(format!(
-                                    "resolve child Run environments: {reason}"
-                                ))
-                            })?
+                            .is_empty()
+                            {
+                                BTreeMap::new()
+                            } else {
+                                // Resolving verifies a published tree by hashing
+                                // it. The port is synchronous by contract, so the
+                                // whole freeze runs on a blocking worker instead
+                                // of a runtime thread.
+                                let resolver = std::sync::Arc::clone(resolver);
+                                let snapshot = snapshot.clone();
+                                tokio::task::spawn_blocking(move || {
+                                    anchor_runtime::graph::freeze_environments(
+                                        &snapshot,
+                                        &bindings,
+                                        &|name| resolver.resolve(name),
+                                    )
+                                })
+                                .await
+                                .map_err(|_| {
+                                    GraphError::Unsupported(
+                                        "resolve child Run environments: the resolution task failed"
+                                            .to_owned(),
+                                    )
+                                })?
+                                .map_err(|reason| {
+                                    GraphError::Unsupported(format!(
+                                        "resolve child Run environments: {reason}"
+                                    ))
+                                })?
+                            }
                         }
                         None => BTreeMap::new(),
                     };

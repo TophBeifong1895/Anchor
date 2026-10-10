@@ -672,11 +672,14 @@ fn check_interruption(
     Ok(())
 }
 
-pub(super) async fn bounded<Output>(
-    operation: impl Future<Output = Result<Output, String>>,
+pub(super) async fn bounded<Output, Error>(
+    operation: impl Future<Output = Result<Output, Error>>,
     cancellation: &Cancellation,
     deadline: Option<Instant>,
-) -> Result<Output, String> {
+) -> Result<Output, Error>
+where
+    Error: From<String>,
+{
     check_interruption(cancellation, deadline)?;
     let cancelled = async {
         loop {
@@ -694,8 +697,8 @@ pub(super) async fn bounded<Output>(
     };
     tokio::select! {
         biased;
-        _ = cancelled => Err("ACP request cancelled".into()),
-        _ = expired => Err("ACP request deadline exceeded".into()),
+        _ = cancelled => Err("ACP request cancelled".to_string().into()),
+        _ = expired => Err("ACP request deadline exceeded".to_string().into()),
         result = operation => result,
     }
 }

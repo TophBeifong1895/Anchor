@@ -257,6 +257,7 @@ async fn the_operator_can_see_environment_requests_and_how_they_ended() {
             observed_name_version: None,
             references: None,
             status,
+            created: 0,
         }
     };
     state
@@ -431,6 +432,7 @@ async fn the_operator_can_see_what_environments_were_built_and_how_they_ended() 
             observed_present: false,
             observed_name_version: None,
             status,
+            created: 0,
         };
     state
         .application

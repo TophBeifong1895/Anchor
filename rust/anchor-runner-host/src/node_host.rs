@@ -24,7 +24,9 @@ mod contracts;
 mod conversation;
 mod media;
 
-pub(crate) use contracts::{NodeConversationHint, NodeHostResolver, NodeImage, ToolResolution};
+pub(crate) use contracts::{
+    NodeConversationHint, NodeHostResolver, NodeImage, ResolutionError, ToolResolution,
+};
 
 pub(crate) fn conversation_hint_for(
     metadata: &crate::application::RunMetadata,
@@ -331,165 +333,181 @@ impl NodeHostResolver for HostIoResolver {
 
     fn tools<'a>(&'a self, request: &'a NodeExecutionRequest) -> ToolResolution<'a> {
         Box::pin(async move {
-            let admitted = self
-                .run_store
-                .load(&request.key.run_id)
-                .map_err(|error| format!("load admitted Run Plugin bindings: {error}"))?
-                .ok_or_else(|| {
-                    format!(
-                        "Run `{}` has no durable Plugin binding record",
-                        request.key.run_id
+            // The error type is named once, here: every `?` inside then converts a
+            // host-side string into `ResolutionError::Host`, while the environment
+            // sites keep their own cause.
+            let resolved: Result<std::sync::Arc<dyn anchor_runtime::ToolPort>, ResolutionError> =
+                async move {
+                    // The first fallible step names the error type, so every later `?`
+                    // converts a host-side reason into `ResolutionError::Host` while the
+                    // environment sites keep their own cause.
+                    let admitted = self
+                        .run_store
+                        .load(&request.key.run_id)
+                        .map_err(|error| {
+                            ResolutionError::Host(format!(
+                                "load admitted Run Plugin bindings: {error}"
+                            ))
+                        })?
+                        .ok_or_else(|| {
+                            ResolutionError::Host(format!(
+                                "Run `{}` has no durable Plugin binding record",
+                                request.key.run_id
+                            ))
+                        })?;
+                    if admitted.graph_digest != request.key.graph_digest
+                        || !admitted.plugin_bindings_initialized
+                    {
+                        return Err(ResolutionError::Host(format!(
+                            "Run `{}` has no matching initialized Plugin binding record",
+                            request.key.run_id
+                        )));
+                    }
+                    for binding in &request.plugins {
+                        let Some(frozen) = admitted.plugin_bindings.get(&binding.id) else {
+                            return Err(ResolutionError::Host(format!(
+                                "Plugin `{}` is not bound by the admitted Run",
+                                binding.id,
+                            )));
+                        };
+                        if frozen != binding {
+                            return Err(ResolutionError::Host(format!(
+                                "Plugin `{}` differs from the frozen Run binding",
+                                binding.id
+                            )));
+                        }
+                    }
+                    let workspace = self.workspace(request)?;
+                    let mut local_inputs = self.local_input_mounts(&request.key)?;
+                    let conversation = self.conversation(&request.key)?;
+                    if let Some(conversation) = &conversation
+                        && let Some(mount) = self.previous_mount(&request.key, conversation)?
+                    {
+                        local_inputs.push(mount);
+                    }
+                    // Everything this invocation mounts is granted on the invocation
+                    // itself: the Run policy is the deployment floor, not a list of
+                    // per-Run trees (a parent Run cannot know its children's Plugins or
+                    // environments).
+                    let plugin_mounts = self.plugin_mounts(&request.plugins)?;
+                    let mut grants = local_inputs.clone();
+                    grants.extend(plugin_mounts.iter().cloned());
+                    let sandbox = std::sync::Arc::new(
+                        self.sandbox
+                            .with_readonly_grants(&grants)
+                            .map_err(|error| error.to_string())?,
+                    );
+                    let mut readonly_inputs = self
+                        .artifacts
+                        .input_mounts(
+                            &request.input_commits,
+                            &request.key.run_id,
+                            &request.key.graph_digest,
+                        )
+                        .map_err(|error| error.to_string())?;
+                    readonly_inputs.extend(plugin_mounts);
+                    readonly_inputs.extend(local_inputs);
+                    let mut mcp = self.catalog_config(&request.plugins)?;
+                    mcp.authorize_oauth(
+                        self.oauth_owner_for_run(&request.key.run_id)?,
+                        request.network,
                     )
-                })?;
-            if admitted.graph_digest != request.key.graph_digest
-                || !admitted.plugin_bindings_initialized
-            {
-                return Err(format!(
-                    "Run `{}` has no matching initialized Plugin binding record",
-                    request.key.run_id
-                ));
-            }
-            for binding in &request.plugins {
-                let Some(frozen) = admitted.plugin_bindings.get(&binding.id) else {
-                    return Err(format!(
-                        "Plugin `{}` is not bound by the admitted Run",
-                        binding.id,
-                    ));
-                };
-                if frozen != binding {
-                    return Err(format!(
-                        "Plugin `{}` differs from the frozen Run binding",
-                        binding.id
-                    ));
+                    .await?;
+                    let deployments = crate::deployment_library_root();
+                    // Verifying a published tree re-hashes it, so this runs off the
+                    // runtime thread; the boundary maps the one cause to its own class.
+                    let server_environments = crate::managed_environment::prepare_servers_async(
+                        request.environments.clone(),
+                        deployments.clone(),
+                    )
+                    .await
+                    .map_err(|error| ResolutionError::Graph(error.into_graph_error()))?;
+                    let plugins = self
+                        .tools
+                        .assemble_with_sandbox(
+                            &mcp,
+                            &request.plugins,
+                            request.network,
+                            crate::tool_host::SandboxLaunch {
+                                sandbox: &sandbox,
+                                workspace: &workspace,
+                                readonly_inputs: &readonly_inputs,
+                                server_environments: &server_environments,
+                            },
+                        )
+                        .await?;
+                    // Output beyond the stream previews is retained host-side and mounted
+                    // read-only at /spill, so a model can read what was cut off.
+                    let spill = crate::node_tools::SpillDirectory::new(
+                        self.local_inputs
+                            .state_root()
+                            .join("spill")
+                            .join(&request.key.run_id)
+                            .join(
+                                workspace
+                                    .file_name()
+                                    .map(|name| name.to_string_lossy().into_owned())
+                                    .unwrap_or_else(|| request.key.node_id.clone()),
+                            ),
+                        "/spill",
+                    );
+                    // A declared environment becomes this invocation's authority, so a
+                    // called Graph's environments work without widening the policy, and
+                    // the falling back to the global tool aggregate is skipped.
+                    let prepared = crate::managed_environment::prepare_for_async(
+                        request.task_environment().cloned(),
+                        deployments.clone(),
+                    )
+                    .await
+                    .map_err(|error| ResolutionError::Graph(error.into_graph_error()))?;
+                    let sandbox = match prepared.as_ref() {
+                        Some(prepared) => prepared.authorize(sandbox)?,
+                        None => sandbox,
+                    };
+                    let node_tools = crate::node_tools::NodeTools::new(
+                        crate::channel_tools::wrap(
+                            plugins,
+                            &request.plugins,
+                            request.key.clone(),
+                            self.local_inputs.state_root().to_path_buf(),
+                            conversation.as_ref().map(|value| value.reply_node.clone()),
+                            workspace.clone(),
+                            readonly_inputs.clone(),
+                            request.cancellation.clone(),
+                        ),
+                        sandbox,
+                        workspace,
+                        readonly_inputs,
+                        request.cancellation.clone(),
+                    )
+                    .with_spill(spill)
+                    .with_environment(self.mcp.environment.clone())
+                    .with_network(request.network);
+                    let node_tools = node_tools.with_managed_environment(prepared);
+                    let tools = std::sync::Arc::new(node_tools)
+                        as std::sync::Arc<dyn anchor_runtime::ToolPort>;
+                    // Tools a node's completion and continuity depend on stay listed; the rest
+                    // (plugins, channel tools) becomes reachable on demand.
+                    let mut always_visible = vec![
+                        crate::node_tools::RUN_TOOL_NAME.to_owned(),
+                        crate::node_tools::READ_TOOL_NAME.to_owned(),
+                        crate::node_tools::EDIT_TOOL_NAME.to_owned(),
+                    ];
+                    let tools = match conversation {
+                        Some(conversation) => {
+                            always_visible
+                                .push(crate::node_host::conversation::HISTORY_TOOL.to_owned());
+                            self.conversation_tools(tools, &request.key, conversation)
+                        }
+                        None => tools,
+                    };
+                    Ok::<_, ResolutionError>(crate::tool_disclosure::maybe_wrap(
+                        tools,
+                        crate::tool_disclosure::always_visible(always_visible),
+                    ))
                 }
-            }
-            let workspace = self.workspace(request)?;
-            let mut local_inputs = self.local_input_mounts(&request.key)?;
-            let conversation = self.conversation(&request.key)?;
-            if let Some(conversation) = &conversation
-                && let Some(mount) = self.previous_mount(&request.key, conversation)?
-            {
-                local_inputs.push(mount);
-            }
-            // Everything this invocation mounts is granted on the invocation
-            // itself: the Run policy is the deployment floor, not a list of
-            // per-Run trees (a parent Run cannot know its children's Plugins or
-            // environments).
-            let plugin_mounts = self.plugin_mounts(&request.plugins)?;
-            let mut grants = local_inputs.clone();
-            grants.extend(plugin_mounts.iter().cloned());
-            let sandbox = std::sync::Arc::new(
-                self.sandbox
-                    .with_readonly_grants(&grants)
-                    .map_err(|error| error.to_string())?,
-            );
-            let mut readonly_inputs = self
-                .artifacts
-                .input_mounts(
-                    &request.input_commits,
-                    &request.key.run_id,
-                    &request.key.graph_digest,
-                )
-                .map_err(|error| error.to_string())?;
-            readonly_inputs.extend(plugin_mounts);
-            readonly_inputs.extend(local_inputs);
-            let mut mcp = self.catalog_config(&request.plugins)?;
-            mcp.authorize_oauth(
-                self.oauth_owner_for_run(&request.key.run_id)?,
-                request.network,
-            )
-            .await?;
-            let deployments = crate::deployment_library_root();
-            // Verifying a published tree re-hashes it, so this runs off the
-            // runtime thread; the boundary maps the one cause to its own class.
-            let server_environments = crate::managed_environment::prepare_servers_async(
-                request.environments.clone(),
-                deployments.clone(),
-            )
-            .await
-            .map_err(|error| error.to_string())?;
-            let plugins = self
-                .tools
-                .assemble_with_sandbox(
-                    &mcp,
-                    &request.plugins,
-                    request.network,
-                    crate::tool_host::SandboxLaunch {
-                        sandbox: &sandbox,
-                        workspace: &workspace,
-                        readonly_inputs: &readonly_inputs,
-                        server_environments: &server_environments,
-                    },
-                )
-                .await?;
-            // Output beyond the stream previews is retained host-side and mounted
-            // read-only at /spill, so a model can read what was cut off.
-            let spill = crate::node_tools::SpillDirectory::new(
-                self.local_inputs
-                    .state_root()
-                    .join("spill")
-                    .join(&request.key.run_id)
-                    .join(
-                        workspace
-                            .file_name()
-                            .map(|name| name.to_string_lossy().into_owned())
-                            .unwrap_or_else(|| request.key.node_id.clone()),
-                    ),
-                "/spill",
-            );
-            // A declared environment becomes this invocation's authority, so a
-            // called Graph's environments work without widening the policy, and
-            // the falling back to the global tool aggregate is skipped.
-            let prepared = crate::managed_environment::prepare_for_async(
-                request.task_environment().cloned(),
-                deployments.clone(),
-            )
-            .await
-            .map_err(|error| error.to_string())?;
-            let sandbox = match prepared.as_ref() {
-                Some(prepared) => prepared.authorize(sandbox)?,
-                None => sandbox,
-            };
-            let node_tools = crate::node_tools::NodeTools::new(
-                crate::channel_tools::wrap(
-                    plugins,
-                    &request.plugins,
-                    request.key.clone(),
-                    self.local_inputs.state_root().to_path_buf(),
-                    conversation.as_ref().map(|value| value.reply_node.clone()),
-                    workspace.clone(),
-                    readonly_inputs.clone(),
-                    request.cancellation.clone(),
-                ),
-                sandbox,
-                workspace,
-                readonly_inputs,
-                request.cancellation.clone(),
-            )
-            .with_spill(spill)
-            .with_environment(self.mcp.environment.clone())
-            .with_network(request.network);
-            let node_tools = node_tools.with_managed_environment(prepared);
-            let tools =
-                std::sync::Arc::new(node_tools) as std::sync::Arc<dyn anchor_runtime::ToolPort>;
-            // Tools a node's completion and continuity depend on stay listed; the rest
-            // (plugins, channel tools) becomes reachable on demand.
-            let mut always_visible = vec![
-                crate::node_tools::RUN_TOOL_NAME.to_owned(),
-                crate::node_tools::READ_TOOL_NAME.to_owned(),
-                crate::node_tools::EDIT_TOOL_NAME.to_owned(),
-            ];
-            let tools = match conversation {
-                Some(conversation) => {
-                    always_visible.push(crate::node_host::conversation::HISTORY_TOOL.to_owned());
-                    self.conversation_tools(tools, &request.key, conversation)
-                }
-                None => tools,
-            };
-            Ok(crate::tool_disclosure::maybe_wrap(
-                tools,
-                crate::tool_disclosure::always_visible(always_visible),
-            ))
+                .await;
+            resolved
         })
     }
 }

@@ -459,7 +459,9 @@ impl GooseNodePort {
             Err(_) if request.cancellation.load(Ordering::Acquire) => {
                 return Ok(NodeExecutionOutcome::Cancelled);
             }
-            Err(error) => return Err(GraphError::Unsupported(error)),
+            // The resolver distinguishes a Run whose recorded environment cannot
+            // be honored from a host that cannot assemble tools at all.
+            Err(error) => return Err(error.into_graph_error()),
         };
         let mut random = [0u8; 32];
         fs::File::open("/dev/urandom")?.read_exact(&mut random)?;

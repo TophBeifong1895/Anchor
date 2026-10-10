@@ -859,8 +859,7 @@ async fn a_tampered_environment_refuses_to_run() {
     std::fs::write(&marker, "two").unwrap();
 
     let failure = crate::managed_environment::prepare(&binding, &library)
-        .err()
-        .expect("a tampered environment must refuse to run");
+        .expect_err("a tampered environment must refuse to run");
     assert!(failure.to_string().contains("not usable"), "{failure}");
     let _ = sandbox;
 }

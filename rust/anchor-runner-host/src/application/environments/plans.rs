@@ -1,6 +1,7 @@
 //! Publishing one prepared environment directory behind a native approval.
 
 use super::*;
+use crate::application::graphs::{EnvironmentCoverage, EnvironmentReferences};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "status", rename_all = "snake_case", deny_unknown_fields)]
@@ -44,6 +45,10 @@ pub(crate) struct EnvironmentPlan {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) references: Option<EnvironmentReferences>,
     pub(crate) status: EnvironmentPlanStatus,
+    /// When this attempt was first recorded. Zero in records written before the
+    /// field existed, which sorts them oldest.
+    #[serde(default)]
+    pub(crate) created: u64,
 }
 
 #[derive(Debug, Clone)]
@@ -92,7 +97,28 @@ impl RunApplication {
         plan: &EnvironmentPlan,
     ) -> Result<(), ApplicationError> {
         let path = self.environment_plan_path(&plan.key());
-        write_json_durable(&path, plan)
+        let mut plan = plan.clone();
+        // Re-writing a plan keeps its original creation time, so retention still
+        // sees the attempt that was actually approved.
+        if plan.created == 0 {
+            plan.created = read_created(&path)
+                .unwrap_or_else(|| crate::application::metadata::now_nanos() as u64);
+        }
+        write_json_durable(&path, &plan)?;
+        if !matches!(plan.status, EnvironmentPlanStatus::Requested) {
+            prune_environment_records(&self.data_root, "environment-plans", |bytes| {
+                serde_json::from_slice::<EnvironmentPlan>(bytes)
+                    .ok()
+                    .map(|plan| {
+                        (
+                            plan.name.clone(),
+                            plan.created,
+                            matches!(plan.status, EnvironmentPlanStatus::Requested),
+                        )
+                    })
+            })?;
+        }
+        Ok(())
     }
 
     /// Freeze what the operator is about to approve for one candidate.
@@ -167,6 +193,7 @@ impl RunApplication {
             observed_present,
             observed_name_version: existing.as_ref().map(|entry| entry.version),
             status: EnvironmentPlanStatus::Requested,
+            created: 0,
         };
         self.write_environment_plan(&plan)?;
         Ok(EnvironmentPublishPrecondition { plan })
@@ -533,5 +560,103 @@ mod tests {
             .unwrap();
         assert_ne!(id, published.id);
         assert_eq!(version, 2, "a switch bumps the name version");
+    }
+}
+
+#[cfg(test)]
+mod retention_tests {
+    use super::*;
+    use crate::application::environments::test_support::*;
+
+    /// Each approval attempt has its own identity, which is why records
+    /// accumulate at all: a new digest (or turn) is a new file.
+    fn plan(name: &str, key: &str, status: EnvironmentPlanStatus, created: u64) -> EnvironmentPlan {
+        EnvironmentPlan {
+            requester: requester(),
+            directory: PathBuf::from("/prepared"),
+            name: name.into(),
+            // A distinct identity per attempt, padded to the 64-hex shape the
+            // record validator expects.
+            digest: format!("{key:0<64}").chars().take(64).collect(),
+            bytes: 1,
+            files: 1,
+            observed_id: None,
+            observed_present: false,
+            observed_name_version: None,
+            references: None,
+            status,
+            created,
+        }
+    }
+
+    #[test]
+    fn one_name_keeps_its_newest_terminal_plans_and_never_drops_a_pending_one() {
+        let root = tempfile::tempdir().unwrap();
+        let application = application(root.path());
+        // A pending ask that a human may still answer, recorded first.
+        let pending = plan("research", "a", EnvironmentPlanStatus::Requested, 1);
+        application.write_environment_plan(&pending).unwrap();
+
+        let total = crate::application::environments::ENVIRONMENT_RECORDS_PER_NAME + 5;
+        for index in 0..total {
+            let created = 100 + index as u64;
+            application
+                .write_environment_plan(&plan(
+                    "research",
+                    &format!("{index:064x}").replace('0', "b"),
+                    EnvironmentPlanStatus::Published {
+                        id: "c".repeat(64),
+                        name_version: index as u64 + 1,
+                    },
+                    created,
+                ))
+                .unwrap();
+        }
+
+        let listed = list_environment_plans(&root.path().join("state")).unwrap();
+        let pending_now = listed
+            .records
+            .iter()
+            .filter(|plan| matches!(plan.status, EnvironmentPlanStatus::Requested))
+            .count();
+        let terminal = listed.records.len() - pending_now;
+        assert_eq!(pending_now, 1, "a pending record is never pruned");
+        // The bound counts the pending record too: a name keeps at most this
+        // many records, and the pending one is never the one that goes.
+        assert_eq!(
+            terminal,
+            crate::application::environments::ENVIRONMENT_RECORDS_PER_NAME - 1,
+            "{:?}",
+            listed.records
+        );
+        // The newest survive, the oldest are the ones that went.
+        let mut created = listed
+            .records
+            .iter()
+            .filter(|plan| !matches!(plan.status, EnvironmentPlanStatus::Requested))
+            .map(|plan| plan.created)
+            .collect::<Vec<_>>();
+        created.sort();
+        let kept = crate::application::environments::ENVIRONMENT_RECORDS_PER_NAME - 1;
+        assert_eq!(created.first().copied(), Some(100 + (total - kept) as u64));
+        assert_eq!(created.last().copied(), Some(100 + total as u64 - 1));
+    }
+
+    #[test]
+    fn a_bound_that_nothing_reaches_removes_nothing() {
+        let root = tempfile::tempdir().unwrap();
+        let application = application(root.path());
+        for index in 0..3 {
+            application
+                .write_environment_plan(&plan(
+                    "research",
+                    &format!("d{index}"),
+                    EnvironmentPlanStatus::Refused,
+                    index,
+                ))
+                .unwrap();
+        }
+        let listed = list_environment_plans(&root.path().join("state")).unwrap();
+        assert_eq!(listed.records.len(), 3);
     }
 }

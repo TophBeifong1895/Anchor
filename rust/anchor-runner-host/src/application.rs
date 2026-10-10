@@ -731,8 +731,9 @@ impl RunApplication {
         record.plugin_bindings_initialized = true;
         // Dependency environments are named in the Graph and resolved here, once:
         // the Run then carries the digest it actually ran with, and restoring it
-        // never re-reads the name table.
-        resolve_record_environments(&mut record)?;
+        // never re-reads the name table. Resolving re-hashes a published tree, so
+        // it runs off the runtime thread.
+        resolve_record_environments(&mut record).await?;
         let control = new_control();
         let execution = PreparedExecution::prepare_with_catalog(
             &record,
@@ -1568,7 +1569,7 @@ fn storage(error: impl std::fmt::Display) -> ApplicationError {
 /// Every Run-creation path must call this before persisting: a Run that declares
 /// an environment and records no binding is corruption, not a permission to look
 /// one up later.
-pub(crate) fn resolve_record_environments(
+pub(crate) async fn resolve_record_environments(
     record: &mut GraphRunRecord,
 ) -> Result<(), ApplicationError> {
     // A Run that declares nothing never needs a store, so a deployment without a
@@ -1593,12 +1594,15 @@ pub(crate) fn resolve_record_environments(
         )
     })?;
     // The host freezes directly from its store; the Graph-call layer uses the
-    // port, and both go through the same kernel traversal.
-    record.environments = freeze_environments(
-        &record.snapshot,
-        &record.plugin_bindings,
-        &EnvironmentStore::new(root),
-    )
+    // port, and both go through the same kernel traversal. Verifying a published
+    // environment hashes its whole tree, which must not block a runtime worker.
+    let snapshot = record.snapshot.clone();
+    let bindings = record.plugin_bindings.clone();
+    record.environments = tokio::task::spawn_blocking(move || {
+        freeze_environments(&snapshot, &bindings, &EnvironmentStore::new(root))
+    })
+    .await
+    .map_err(|_| ApplicationError::Storage("environment resolution task failed".into()))?
     .map_err(ApplicationError::Invalid)?;
     Ok(())
 }

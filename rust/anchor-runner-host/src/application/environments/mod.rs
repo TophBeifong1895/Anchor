@@ -17,7 +17,6 @@ use std::path::PathBuf;
 
 mod plans;
 mod provision;
-mod references;
 mod requirements;
 
 pub(crate) use plans::{
@@ -27,7 +26,6 @@ pub(crate) use provision::{
     EnvironmentProvisionPlan, EnvironmentProvisionPrecondition, EnvironmentProvisionStatus,
     list_environment_provision_plans,
 };
-pub(crate) use references::{EnvironmentCoverage, EnvironmentReferences};
 #[cfg(test)]
 pub(crate) use requirements::EnvironmentRequirement;
 pub(crate) use requirements::{
@@ -95,6 +93,7 @@ fn write_json_durable(
 
 /// One tolerant read policy for every host record family: skip what this host
 /// cannot read, count it, and never let one bad file hide the rest.
+#[derive(Debug)]
 pub(crate) struct RecordList<T> {
     pub(crate) records: Vec<T>,
     pub(crate) unreadable: usize,
@@ -144,6 +143,98 @@ pub(crate) fn list_json_records<T: serde::de::DeserializeOwned>(
 /// sorting, so the subset a caller sees is deterministic, and the caller reports
 /// that it bounded.
 pub(crate) const ENVIRONMENT_RECORD_LIMIT: usize = 200;
+
+/// How many decision records one name keeps, counting pending requests.
+///
+/// A record is written per approval attempt, so a deployment that prepares
+/// environments regularly would otherwise accumulate them without bound. A name
+/// keeps its newest few terminal records plus *every* pending one, because a
+/// pending record is a question a human may still answer; terminal records that
+/// fall off are the oldest, and the read models keep reporting how many records
+/// they could not read.
+pub(crate) const ENVIRONMENT_RECORDS_PER_NAME: usize = 20;
+
+/// The creation time already recorded at this path, if the file is readable.
+fn read_created(path: &std::path::Path) -> Option<u64> {
+    let bytes = std::fs::read(path).ok()?;
+    let value: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
+    value.get("created").and_then(serde_json::Value::as_u64)
+}
+
+/// One record, as retention needs to see it.
+struct Retained {
+    path: PathBuf,
+    name: String,
+    created: u64,
+    pending: bool,
+}
+
+/// Drop the oldest terminal records of each name beyond the bound.
+///
+/// Returns how many files were removed. A record this host cannot read is left
+/// alone: retention must not delete what it does not understand, and a pending
+/// (`Requested`) record is never dropped because a human may still answer it.
+pub(crate) fn prune_environment_records(
+    data_root: &std::path::Path,
+    directory: &str,
+    reader: impl Fn(&[u8]) -> Option<(String, u64, bool)>,
+) -> Result<usize, ApplicationError> {
+    let directory = data_root.join(directory);
+    let entries = match std::fs::read_dir(&directory) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(0),
+        Err(error) => return Err(ApplicationError::Storage(error.to_string())),
+    };
+    let mut by_name: std::collections::BTreeMap<String, Vec<Retained>> =
+        std::collections::BTreeMap::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().is_none_or(|extension| extension != "json") {
+            continue;
+        }
+        let Ok(bytes) = std::fs::read(&path) else {
+            continue;
+        };
+        let Some((name, created, pending)) = reader(&bytes) else {
+            continue;
+        };
+        by_name.entry(name.clone()).or_default().push(Retained {
+            path,
+            name,
+            created,
+            pending,
+        });
+    }
+    let mut removed = 0usize;
+    for (_, mut records) in by_name {
+        let pending = records.iter().filter(|record| record.pending).count();
+        let keep = ENVIRONMENT_RECORDS_PER_NAME.saturating_sub(pending);
+        // Newest first; ties by path so the choice is deterministic.
+        records
+            .sort_by(|left, right| (right.created, &right.path).cmp(&(left.created, &left.path)));
+        let mut kept_terminal = 0usize;
+        for record in records {
+            if record.pending {
+                continue;
+            }
+            if kept_terminal < keep {
+                kept_terminal += 1;
+                continue;
+            }
+            match std::fs::remove_file(&record.path) {
+                Ok(()) => removed += 1,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => {
+                    return Err(ApplicationError::Storage(format!(
+                        "environment record {} could not be pruned: {error}",
+                        record.name
+                    )));
+                }
+            }
+        }
+    }
+    Ok(removed)
+}
 
 /// Sort a projection and keep at most [`ENVIRONMENT_RECORD_LIMIT`] records.
 /// Returns whether anything was left out, so a listing never implies it is whole.

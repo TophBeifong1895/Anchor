@@ -27,24 +27,48 @@ use anchor_sandbox_bwrap::BubblewrapSandbox;
 
 /// Why one frozen binding cannot be used.
 ///
-/// One cause, one message, one type: each boundary decides only which error
-/// class its own interface uses (`GraphError::CorruptRun` where a Run's recorded
-/// fact cannot be honored, `String` where the host returns a tool error).
+/// Two causes, because the boundary has to keep them apart: a Run that recorded
+/// an environment the published store can no longer honor is a *corrupt Run*,
+/// while a deployment that cannot serve environments at all is an *unsupported
+/// capability*. Collapsing them into one string is how the AgentNode path used
+/// to relabel the first as the second.
 #[derive(Debug)]
-pub(crate) struct Unusable(String);
+pub(crate) enum Unusable {
+    /// The recorded fact cannot be honored: the content is missing, changed,
+    /// writable again, or provides nothing to run.
+    Recorded(String),
+    /// This host cannot serve the binding at all.
+    Unconfigured(String),
+}
 
 impl std::fmt::Display for Unusable {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str(&self.0)
+        match self {
+            Self::Recorded(reason) | Self::Unconfigured(reason) => formatter.write_str(reason),
+        }
     }
 }
 
 impl Unusable {
-    fn new(message: impl Into<String>) -> Self {
-        Self(message.into())
+    /// The GraphRunner's class for this cause, so every path agrees.
+    pub(crate) fn into_graph_error(self) -> anchor_runtime::graph::GraphError {
+        use anchor_runtime::graph::GraphError;
+        match self {
+            Self::Recorded(reason) => GraphError::CorruptRun(reason),
+            Self::Unconfigured(reason) => GraphError::Unsupported(reason),
+        }
+    }
+
+    fn recorded(message: impl Into<String>) -> Self {
+        Self::Recorded(message.into())
+    }
+
+    fn unconfigured(message: impl Into<String>) -> Self {
+        Self::Unconfigured(message.into())
     }
 }
 
+#[derive(Debug)]
 pub(crate) struct PreparedEnvironment {
     grant: ReadOnlyInput,
     bin: Option<PathBuf>,
@@ -57,7 +81,7 @@ pub(crate) fn prepare(
 ) -> Result<PreparedEnvironment, Unusable> {
     let store = EnvironmentStore::new(library_root);
     store.show(&binding.id).map_err(|error| {
-        Unusable::new(format!(
+        Unusable::recorded(format!(
             "dependency environment `{}` ({}) is not usable: {error}",
             binding.name, binding.id
         ))
@@ -70,7 +94,7 @@ pub(crate) fn prepare(
     // forbids.
     let bin = published.join("bin");
     if !bin.is_dir() {
-        return Err(Unusable::new(format!(
+        return Err(Unusable::recorded(format!(
             "dependency environment `{}` ({}) has no `bin` directory, so it cannot provide any command",
             binding.name, binding.id
         )));
@@ -126,7 +150,7 @@ pub(crate) fn prepare_servers(
             continue;
         };
         let Some(root) = library_root else {
-            return Err(Unusable::new(
+            return Err(Unusable::unconfigured(
                 "no library root is configured for a declared dependency environment",
             ));
         };
@@ -143,7 +167,9 @@ pub(crate) async fn prepare_for_async(
 ) -> Result<Option<PreparedEnvironment>, Unusable> {
     tokio::task::spawn_blocking(move || prepare_for(binding.as_ref(), library_root.as_deref()))
         .await
-        .map_err(|error| Unusable::new(format!("environment preparation failed: {error}")))?
+        .map_err(|error| {
+            Unusable::unconfigured(format!("environment preparation failed: {error}"))
+        })?
 }
 
 /// The same preparation for a set of Plugin servers, off the async worker.
@@ -153,7 +179,9 @@ pub(crate) async fn prepare_servers_async(
 ) -> Result<BTreeMap<PluginServerId, PreparedEnvironment>, Unusable> {
     tokio::task::spawn_blocking(move || prepare_servers(&environments, library_root.as_deref()))
         .await
-        .map_err(|error| Unusable::new(format!("environment preparation failed: {error}")))?
+        .map_err(|error| {
+            Unusable::unconfigured(format!("environment preparation failed: {error}"))
+        })?
 }
 
 /// Prepare a frozen environment for one invocation, if it declared one.
@@ -165,7 +193,80 @@ pub(crate) fn prepare_for(
         return Ok(None);
     };
     let root = library_root.ok_or_else(|| {
-        Unusable::new("no library root is configured for a declared dependency environment")
+        Unusable::unconfigured(
+            "no library root is configured for a declared dependency environment",
+        )
     })?;
     prepare(binding, root).map(Some)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use anchor_library::EnvironmentStore;
+
+    /// A published tree that provides a command.
+    fn candidate(root: &Path) -> PathBuf {
+        let directory = root.join("candidate");
+        std::fs::create_dir_all(directory.join("bin")).unwrap();
+        std::fs::write(directory.join("bin/python"), "#!/bin/sh\n").unwrap();
+        directory
+    }
+
+    #[test]
+    fn a_recorded_fact_that_cannot_be_honored_is_a_corrupt_run() {
+        let root = tempfile::tempdir().unwrap();
+        let library = root.path().join("library");
+        let store = EnvironmentStore::new(&library);
+        let published = store.publish(candidate(root.path())).unwrap();
+        let binding =
+            anchor_runtime::graph::EnvironmentBinding::node_task("work", "research", &published.id);
+        assert!(prepare(&binding, &library).is_ok());
+
+        // The published content changes behind the Run's back.
+        let tree = store.published_path(&published.id);
+        let mut stack = vec![tree.clone()];
+        while let Some(directory) = stack.pop() {
+            for entry in std::fs::read_dir(&directory).unwrap() {
+                let entry = entry.unwrap();
+                let metadata = std::fs::symlink_metadata(entry.path()).unwrap();
+                if metadata.is_dir() {
+                    stack.push(entry.path());
+                }
+                let mut permissions = metadata.permissions();
+                use std::os::unix::fs::PermissionsExt;
+                permissions.set_mode(permissions.mode() | 0o700);
+                std::fs::set_permissions(entry.path(), permissions).unwrap();
+            }
+        }
+        std::fs::write(tree.join("bin/python"), "#!/bin/sh\ntampered\n").unwrap();
+
+        let unusable = prepare(&binding, &library).unwrap_err();
+        assert!(matches!(unusable, Unusable::Recorded(_)), "{unusable:?}");
+        // The class the GraphRunner sees, which is the whole point of the split.
+        assert!(matches!(
+            unusable.into_graph_error(),
+            anchor_runtime::graph::GraphError::CorruptRun(_)
+        ));
+    }
+
+    #[test]
+    fn a_deployment_that_cannot_serve_environments_is_unsupported_not_corrupt() {
+        let binding = anchor_runtime::graph::EnvironmentBinding::node_task(
+            "work",
+            "research",
+            "a".repeat(64),
+        );
+        let unusable = prepare_for(Some(&binding), None).unwrap_err();
+        assert!(
+            matches!(unusable, Unusable::Unconfigured(_)),
+            "{unusable:?}"
+        );
+        assert!(matches!(
+            unusable.into_graph_error(),
+            anchor_runtime::graph::GraphError::Unsupported(_)
+        ));
+        // A node that declared nothing needs no library root at all.
+        assert!(prepare_for(None, None).unwrap().is_none());
+    }
 }
