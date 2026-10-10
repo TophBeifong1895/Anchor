@@ -1,7 +1,7 @@
 //! Publishing one prepared environment directory behind a native approval.
 
 use super::*;
-use crate::application::graphs::{EnvironmentCoverage, EnvironmentReferences};
+use crate::application::graphs::{EnvironmentReferences, ImpactCoverage};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "status", rename_all = "snake_case", deny_unknown_fields)]
@@ -176,7 +176,7 @@ impl RunApplication {
                 name: name.clone(),
                 nodes: Vec::new(),
                 servers: Vec::new(),
-                coverage: EnvironmentCoverage::Unknown {
+                coverage: ImpactCoverage::Unknown {
                     reason: format!("the impact report could not be produced: {error:?}"),
                 },
             },

@@ -329,7 +329,7 @@ fn render_impact(
     references: Option<&crate::application::graphs::EnvironmentReferences>,
 ) {
     match references.map(|references| &references.coverage) {
-        Some(crate::application::graphs::EnvironmentCoverage::Complete) => {
+        Some(crate::application::graphs::ImpactCoverage::Complete) => {
             let references = references.expect("coverage implies references");
             let mut users = references
                 .nodes
@@ -354,11 +354,29 @@ fn render_impact(
                 }
             ));
         }
-        Some(crate::application::graphs::EnvironmentCoverage::Partial {
+        Some(crate::application::graphs::ImpactCoverage::Partial { .. })
+        | Some(crate::application::graphs::ImpactCoverage::Unknown { .. }) => {}
+        None => message.push_str("影响范围未记录。\n"),
+    }
+    if let Some(references) = references {
+        render_coverage(message, &references.coverage);
+    }
+}
+
+/// Say how complete an impact report was, whatever it was about.
+///
+/// A count may only be read as "this is everything" when the scan really saw
+/// everything, so a partial or unknown scan says so instead of showing a
+/// smaller number.
+fn render_coverage(message: &mut String, coverage: &crate::application::graphs::ImpactCoverage) {
+    use crate::application::graphs::ImpactCoverage;
+    match coverage {
+        ImpactCoverage::Complete => {}
+        ImpactCoverage::Partial {
             considered,
             total,
             missing,
-        }) => {
+        } => {
             message.push_str(&format!(
                 "影响范围只能部分确认（已确认 {considered}/{total} 个图）：{}。下面这个数字不是全部。\n",
                 missing
@@ -368,10 +386,9 @@ fn render_impact(
                     .join("、")
             ));
         }
-        Some(crate::application::graphs::EnvironmentCoverage::Unknown { reason }) => {
+        ImpactCoverage::Unknown { reason } => {
             message.push_str(&format!("影响范围未知：{reason}（不能读成 0 个引用）。\n"))
         }
-        None => message.push_str("影响范围未记录。\n"),
     }
 }
 
@@ -803,6 +820,7 @@ fn install_message(precondition: &PluginInstallPrecondition) -> String {
         if !impact.unfinished_runs.is_empty() {
             message.push_str("未结束的 Run 记录了它被接纳时的插件指纹；替换后它们会拒绝继续，需要先结束或放弃它们。\n");
         }
+        render_coverage(&mut message, &impact.coverage);
     }
     for server in &review.servers {
         match (&server.command, &server.url) {

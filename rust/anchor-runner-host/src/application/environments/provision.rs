@@ -19,7 +19,7 @@
 use std::sync::Arc;
 
 use super::*;
-use crate::application::graphs::{EnvironmentCoverage, EnvironmentReferences};
+use crate::application::graphs::{EnvironmentReferences, ImpactCoverage};
 use crate::environment_provision::{
     EnvironmentProvisioner, LockedPackage, ProvisionError, ResolvedRequirements, build_environment,
     fetch_wheelhouse, resolve_requirements, verify_published,
@@ -214,7 +214,7 @@ impl RunApplication {
                 name: name.clone(),
                 nodes: Vec::new(),
                 servers: Vec::new(),
-                coverage: EnvironmentCoverage::Unknown {
+                coverage: ImpactCoverage::Unknown {
                     reason: format!("the impact report could not be produced: {error:?}"),
                 },
             },

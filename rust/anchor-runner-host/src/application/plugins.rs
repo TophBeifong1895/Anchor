@@ -1,3 +1,4 @@
+use super::graphs::{ImpactCoverage, ImpactScan, coverage_of};
 use super::{ApplicationError, RunApplication, is_unfinished};
 use anchor_graph_host::FilePluginCatalog;
 use anchor_library::{
@@ -27,7 +28,7 @@ pub(crate) struct PluginInstallPrecondition {
 ///
 /// Never stored: it is a projection over the Graph catalog and the Run records,
 /// so it cannot drift from them.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct PluginImpact {
     /// Saved Graphs that bind this Plugin.
@@ -35,6 +36,10 @@ pub(crate) struct PluginImpact {
     /// Runs that are not terminal and froze a binding for this Plugin. These are
     /// the ones a replacement can strand.
     pub(crate) unfinished_runs: Vec<String>,
+    /// How much of the catalog this report actually saw. A Graph this host
+    /// cannot load is a gap, never a silent omission: the operator is being
+    /// asked to trust a count.
+    pub(crate) coverage: ImpactCoverage,
 }
 
 impl PluginInstallPrecondition {
@@ -84,35 +89,45 @@ impl RunApplication {
         directory: PathBuf,
         id: String,
     ) -> Result<PluginInstallPrecondition, ApplicationError> {
-        tokio::task::spawn_blocking(move || {
+        let reviewed = directory.clone();
+        let (review, existing_digest) = tokio::task::spawn_blocking(move || {
             let review = Library::new(&library_root)
-                .review_directory(&id, &directory)
+                .review_directory(&id, &reviewed)
                 .map_err(plugin_error)?;
             let existing_digest = FilePluginCatalog::new(&library_root)
                 .definition(&id)
                 .ok()
                 .map(|definition| definition.digest);
-            Ok(PluginInstallPrecondition {
-                review,
-                directory,
-                existing_digest,
-                impact: PluginImpact::default(),
-            })
+            Ok::<_, ApplicationError>((review, existing_digest))
         })
         .await
-        .map_err(|_| ApplicationError::Storage("Plugin review task failed".into()))?
-        .and_then(|mut precondition| {
-            precondition.impact = self.plugin_impact(&precondition.review.id)?;
-            Ok(precondition)
+        .map_err(|_| ApplicationError::Storage("Plugin review task failed".into()))??;
+        // What the replacement would reach is a host projection over the Graph
+        // catalog and the Run records, so it is read here rather than guessed.
+        let impact = self.plugin_impact(&review.id)?;
+        Ok(PluginInstallPrecondition {
+            review,
+            directory,
+            existing_digest,
+            impact,
         })
     }
 
     /// Which Graphs and unfinished Runs depend on one Plugin right now.
     fn plugin_impact(&self, id: &str) -> Result<PluginImpact, ApplicationError> {
+        let (bundles, coverage) = match self.impact_scan() {
+            ImpactScan::Read {
+                bundles,
+                considered,
+                total,
+                missing,
+            } => (bundles, coverage_of(considered, total, missing)),
+            ImpactScan::Unreadable(reason) => (Vec::new(), ImpactCoverage::Unknown { reason }),
+        };
         let mut graphs = Vec::new();
-        for (name, bundle) in self.graph_bundles()? {
+        for (name, bundle) in &bundles {
             if bundle.plugins.iter().any(|binding| binding.id == id) {
-                graphs.push(name);
+                graphs.push(name.clone());
             }
         }
         graphs.sort();
@@ -126,6 +141,7 @@ impl RunApplication {
         Ok(PluginImpact {
             graphs,
             unfinished_runs,
+            coverage,
         })
     }
 
@@ -360,6 +376,7 @@ mod tests {
 #[cfg(test)]
 mod impact_tests {
     use super::*;
+    use anchor_graph_host::PluginCatalog;
     use anchor_runtime::graph::{GraphRunRecord, RunStore};
     use serde_json::json;
     use std::fs;
@@ -466,6 +483,83 @@ mod impact_tests {
                 .digest,
             precondition.review.digest
         );
+    }
+
+    /// A Graph this host cannot load is a *gap* in the report, never a silent
+    /// omission: the operator is being asked to trust a count.
+    #[tokio::test]
+    async fn an_unreadable_graph_is_reported_as_a_gap_not_left_out() {
+        let root = tempfile::tempdir().unwrap();
+        let catalog = root.path().join("catalog");
+        let application = RunApplication::new(root.path().join("state"), catalog.clone());
+
+        // A loadable bundle that binds the Plugin.
+        let bound = catalog.join("bound");
+        fs::create_dir_all(bound.join("plugins/demo")).unwrap();
+        fs::write(
+            bound.join("plugins/demo/plugin.json"),
+            json!({"name":"Demo","mcpServers":{"probe":{"command":"bin/run"}}}).to_string(),
+        )
+        .unwrap();
+        let binding = FilePluginCatalog::new(&bound)
+            .resolve(&["demo".to_owned()])
+            .unwrap()
+            .remove(0);
+        fs::write(
+            bound.join("graph.json"),
+            json!({
+                "objective": "uses the plugin",
+                "entry": "only",
+                "agents": {"worker": {"model": "fixture"}},
+                "ops": {},
+                "nodes": [{"id": "only", "agent": "worker", "plugins": ["demo"]}],
+                "edges": []
+            })
+            .to_string(),
+        )
+        .unwrap();
+        fs::write(
+            bound.join("manifest.json"),
+            json!({
+                "format": 1,
+                "graph": "graph.json",
+                "plugins": [{
+                    "id": "demo",
+                    "digest": binding.digest,
+                    "resources": binding.resources,
+                    "mcp_servers": binding.mcp_servers,
+                }]
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        // A Graph directory with no manifest cannot be loaded at all.
+        fs::create_dir_all(catalog.join("broken")).unwrap();
+        fs::write(
+            catalog.join("broken/graph.json"),
+            json!({
+                "objective": "broken",
+                "entry": "only",
+                "agents": {},
+                "ops": {"run": {"run": "true"}},
+                "nodes": [{"id": "only", "op": "run"}],
+                "edges": []
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        let impact = application.plugin_impact("demo").unwrap();
+        assert_eq!(impact.graphs, vec!["bound".to_owned()], "{impact:?}");
+        match impact.coverage {
+            ImpactCoverage::Partial { missing, .. } => {
+                assert_eq!(missing.len(), 1, "{missing:?}");
+                assert_eq!(missing[0].graph, "broken");
+                assert!(!missing[0].reason.is_empty(), "{missing:?}");
+            }
+            other => panic!("a Graph this host cannot load is a gap, got {other:?}"),
+        }
     }
 
     #[tokio::test]

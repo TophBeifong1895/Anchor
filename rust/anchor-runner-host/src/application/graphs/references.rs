@@ -7,6 +7,7 @@
 //! catalog and the bundle loader and nothing else.
 
 use super::super::{ApplicationError, RunApplication};
+use anchor_graph_host::LoadedGraphBundle;
 use serde::{Deserialize, Serialize};
 
 impl RunApplication {
@@ -73,13 +74,16 @@ pub(crate) struct EnvironmentReferences {
     pub(crate) servers: Vec<EnvironmentServerReference>,
     /// How much of the catalog this report actually saw. A report may only be
     /// read as "nobody uses this" when coverage is `Complete`.
-    pub(crate) coverage: EnvironmentCoverage,
+    pub(crate) coverage: ImpactCoverage,
 }
 
 /// How complete one derived impact report is.
+///
+/// Shared by every impact scan, not just the environment one: an "nobody uses
+/// this" answer may only be given when the scan really saw everything.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
-pub(crate) enum EnvironmentCoverage {
+pub(crate) enum ImpactCoverage {
     Complete,
     /// The scan stopped early or could not read some definitions.
     Partial {
@@ -87,7 +91,7 @@ pub(crate) enum EnvironmentCoverage {
         considered: usize,
         /// How many Graphs a run could come from.
         total: usize,
-        missing: Vec<EnvironmentMissing>,
+        missing: Vec<ImpactGap>,
     },
     /// The report could not be produced at all.
     Unknown {
@@ -111,10 +115,10 @@ pub(crate) struct EnvironmentServerReference {
     pub(crate) server: String,
 }
 
-/// One Graph this report could not read, and why.
+/// One Graph an impact report could not read, and why.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct EnvironmentMissing {
+pub(crate) struct ImpactGap {
     pub(crate) graph: String,
     pub(crate) reason: String,
 }
@@ -135,68 +139,26 @@ impl RunApplication {
         &self,
         name: &str,
     ) -> Result<EnvironmentReferences, ApplicationError> {
-        let unknown = |reason: String| EnvironmentReferences {
-            name: name.to_owned(),
-            nodes: Vec::new(),
-            servers: Vec::new(),
-            coverage: EnvironmentCoverage::Unknown { reason },
-        };
-        let mut candidates: Vec<String> = Vec::new();
-        if self.catalog_root.is_dir() {
-            let entries = match std::fs::read_dir(&self.catalog_root) {
-                Ok(entries) => entries,
-                Err(error) => {
-                    // An unreadable catalog is not "nobody uses this".
-                    return Ok(unknown(format!(
-                        "{} could not be read: {error}",
-                        self.catalog_root.display()
-                    )));
-                }
-            };
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if path.is_dir() && path.join("graph.json").is_file() {
-                    candidates.push(entry.file_name().to_string_lossy().into_owned());
-                }
+        let (bundles, considered, total, missing) = match self.impact_scan() {
+            ImpactScan::Read {
+                bundles,
+                considered,
+                total,
+                missing,
+            } => (bundles, considered, total, missing),
+            ImpactScan::Unreadable(reason) => {
+                return Ok(EnvironmentReferences {
+                    name: name.to_owned(),
+                    nodes: Vec::new(),
+                    servers: Vec::new(),
+                    coverage: ImpactCoverage::Unknown { reason },
+                });
             }
-        } else if self.configured_graph.is_none() {
-            return Ok(unknown(format!(
-                "{} is not a readable Graph catalog",
-                self.catalog_root.display()
-            )));
-        }
-        if let Some((configured, _)) = &self.configured_graph {
-            candidates.push(configured.clone());
-        }
-        candidates.sort();
-        // The configured bundle may also be a child of the catalog; scanning it
-        // twice would double-count its declarations.
-        let mut seen_paths = std::collections::BTreeSet::new();
-        candidates.retain(|graph| match self.graph_path_checked(graph) {
-            Ok(path) => seen_paths.insert(path.canonicalize().unwrap_or(path)),
-            Err(_) => true,
-        });
-        let total = candidates.len();
-        let considered = total.min(ENVIRONMENT_REFERENCE_LIMIT);
-        candidates.truncate(ENVIRONMENT_REFERENCE_LIMIT);
-
+        };
         let mut nodes = Vec::new();
         let mut servers = Vec::new();
-        let mut missing = Vec::new();
-        for graph in &candidates {
-            let (_, bundle) = match self.load_graph(graph) {
-                Ok(bundle) => bundle,
-                Err(error) => {
-                    // A Graph this host cannot load is one it cannot report on,
-                    // and the report says which one and why.
-                    missing.push(EnvironmentMissing {
-                        graph: graph.clone(),
-                        reason: error.to_string(),
-                    });
-                    continue;
-                }
-            };
-            let bindings = plugin_bindings(&bundle);
+        for (graph, bundle) in &bundles {
+            let bindings = plugin_bindings(bundle);
             for declared in
                 anchor_runtime::graph::declared_environment_sites(&bundle.snapshot, &bindings)
             {
@@ -225,33 +187,135 @@ impl RunApplication {
                 }
             }
         }
-        nodes.sort_by(|left, right| (&left.graph, &left.node).cmp(&(&right.graph, &right.node)));
-        nodes.dedup();
-        servers.sort_by(|left, right| {
-            (&left.graph, &left.node, &left.plugin, &left.server).cmp(&(
-                &right.graph,
-                &right.node,
-                &right.plugin,
-                &right.server,
-            ))
-        });
-        servers.dedup();
-        let coverage = if missing.is_empty() && total <= ENVIRONMENT_REFERENCE_LIMIT {
-            EnvironmentCoverage::Complete
-        } else {
-            EnvironmentCoverage::Partial {
-                considered,
-                total,
-                missing,
-            }
-        };
         Ok(EnvironmentReferences {
             name: name.to_owned(),
-            nodes,
-            servers,
-            coverage,
+            coverage: coverage_of(considered, total, missing),
+            nodes: sorted_nodes(nodes),
+            servers: sorted_servers(servers),
         })
     }
+
+    /// The Graphs an impact report can come from, with everything it could not
+    /// read named.
+    ///
+    /// One scan for every report, so no two of them can disagree about what
+    /// "everything" means — and so a report cannot quietly call itself complete
+    /// while a Graph it could not load is missing from it.
+    pub(crate) fn impact_scan(&self) -> ImpactScan {
+        let mut candidates: Vec<String> = Vec::new();
+        if self.catalog_root.is_dir() {
+            let entries = match std::fs::read_dir(&self.catalog_root) {
+                Ok(entries) => entries,
+                Err(error) => {
+                    // An unreadable catalog is not "nobody uses this".
+                    return ImpactScan::Unreadable(format!(
+                        "{} could not be read: {error}",
+                        self.catalog_root.display()
+                    ));
+                }
+            };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() && path.join("graph.json").is_file() {
+                    candidates.push(entry.file_name().to_string_lossy().into_owned());
+                }
+            }
+        } else if self.configured_graph.is_none() {
+            return ImpactScan::Unreadable(format!(
+                "{} is not a readable Graph catalog",
+                self.catalog_root.display()
+            ));
+        }
+        if let Some((configured, _)) = &self.configured_graph {
+            candidates.push(configured.clone());
+        }
+        candidates.sort();
+        // The configured bundle may also be a child of the catalog; scanning it
+        // twice would double-count its declarations.
+        let mut seen_paths = std::collections::BTreeSet::new();
+        candidates.retain(|graph| match self.graph_path_checked(graph) {
+            Ok(path) => seen_paths.insert(path.canonicalize().unwrap_or(path)),
+            Err(_) => true,
+        });
+        let total = candidates.len();
+        let considered = total.min(ENVIRONMENT_REFERENCE_LIMIT);
+        candidates.truncate(ENVIRONMENT_REFERENCE_LIMIT);
+
+        let mut bundles = Vec::new();
+        let mut missing = Vec::new();
+        for graph in candidates {
+            match self.load_graph(&graph) {
+                Ok((_, bundle)) => bundles.push((graph, bundle)),
+                Err(error) => {
+                    // A Graph this host cannot load is one it cannot report on,
+                    // and the report says which one and why.
+                    missing.push(ImpactGap {
+                        graph,
+                        reason: error.to_string(),
+                    });
+                }
+            }
+        }
+        ImpactScan::Read {
+            bundles,
+            considered,
+            total,
+            missing,
+        }
+    }
+}
+
+/// What an impact scan could see.
+pub(crate) enum ImpactScan {
+    Read {
+        bundles: Vec<(String, LoadedGraphBundle)>,
+        considered: usize,
+        total: usize,
+        missing: Vec<ImpactGap>,
+    },
+    /// The report could not be produced at all.
+    Unreadable(String),
+}
+
+/// How complete a scan was, in the shape every report and every stored record
+/// already uses.
+pub(crate) fn coverage_of(
+    considered: usize,
+    total: usize,
+    missing: Vec<ImpactGap>,
+) -> ImpactCoverage {
+    if missing.is_empty() && total <= ENVIRONMENT_REFERENCE_LIMIT {
+        ImpactCoverage::Complete
+    } else {
+        ImpactCoverage::Partial {
+            considered,
+            total,
+            missing,
+        }
+    }
+}
+
+pub(crate) fn sorted_nodes(
+    mut nodes: Vec<EnvironmentNodeReference>,
+) -> Vec<EnvironmentNodeReference> {
+    nodes.sort_by(|left, right| (&left.graph, &left.node).cmp(&(&right.graph, &right.node)));
+    nodes.dedup();
+    nodes
+}
+
+pub(crate) fn sorted_servers(
+    mut servers: Vec<EnvironmentServerReference>,
+) -> Vec<EnvironmentServerReference> {
+    servers.sort_by(|left, right| {
+        (&left.graph, &left.node, &left.plugin, &left.server).cmp(&(
+            &right.graph,
+            &right.node,
+            &right.plugin,
+            &right.server,
+        ))
+    });
+    servers.dedup();
+    servers
 }
 
 /// The bundle's Plugin bindings, keyed by id.
@@ -267,7 +331,7 @@ fn plugin_bindings(
 
 #[cfg(test)]
 mod tests {
-    use super::EnvironmentCoverage;
+    use super::ImpactCoverage;
     use crate::application::environments::test_support::*;
     use anchor_graph_host::PluginCatalog;
 
@@ -341,7 +405,7 @@ mod tests {
             }),
             "{references:?}"
         );
-        assert!(matches!(references.coverage, EnvironmentCoverage::Complete));
+        assert!(matches!(references.coverage, ImpactCoverage::Complete));
         let unused = application.environment_references("unused").unwrap();
         assert!(unused.nodes.is_empty() && unused.servers.is_empty());
     }
@@ -368,7 +432,7 @@ mod tests {
             "{references:?}"
         );
         assert!(
-            matches!(references.coverage, EnvironmentCoverage::Complete),
+            matches!(references.coverage, ImpactCoverage::Complete),
             "{references:?}"
         );
         assert_eq!(references.servers.len(), 1, "{references:?}");
@@ -389,7 +453,7 @@ mod tests {
 
         let references = application.environment_references("research").unwrap();
         match references.coverage {
-            EnvironmentCoverage::Partial { missing, .. } => {
+            ImpactCoverage::Partial { missing, .. } => {
                 assert_eq!(missing.len(), 1, "{missing:?}");
                 assert_eq!(missing[0].graph, "broken");
                 assert!(!missing[0].reason.is_empty(), "{missing:?}");
