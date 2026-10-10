@@ -27,6 +27,11 @@ pub(crate) fn definitions() -> Vec<ToolDefinition> {
             parameters: json!({"type":"object","properties":{"directory":{"type":"string"},"name":{"type":"string"}},"required":["directory","name"],"additionalProperties":false}),
         },
         ToolDefinition {
+            name: "environment_provision".into(),
+            description: "Build the dependency environment the recorded requirement asks for from this deployment's authorized sources, then point its name at the result. The user approves the exact resolved package set in a native form; approval is never a tool argument.".into(),
+            parameters: json!({"type":"object","properties":{"name":{"type":"string"}},"required":["name"],"additionalProperties":false}),
+        },
+        ToolDefinition {
             name: "plugin_install".into(),
             description: "Install a Plugin candidate you prepared inside your own workspace into the Anchor Library. The user approves the exact reviewed content in a native form; approval is never a tool argument. Fetch, adapt, build and self-test the candidate first, then review it.".into(),
             parameters: json!({"type":"object","properties":{"directory":{"type":"string"},"id":{"type":"string"}},"required":["directory"],"additionalProperties":false}),
@@ -101,6 +106,9 @@ pub(super) async fn call(
     }
     if name == "environment_publish" {
         return publish_environment(tools, arguments, peer, cancellation).await;
+    }
+    if name == "environment_provision" {
+        return provision_environment(tools, arguments, peer, cancellation).await;
     }
     if !matches!(name, "ask_user" | "graph_delete") {
         // Falling through to ask_user would show a generic form the model fills
@@ -306,17 +314,23 @@ fn environment_message(precondition: &EnvironmentPublishPrecondition) -> String 
     } else {
         "这是新名字，不会替换任何现有引用。\n"
     });
-    // The impact range the human is being asked about, as it was recorded.
-    match plan
-        .references
-        .as_ref()
-        .map(|references| &references.coverage)
-    {
+    render_impact(&mut message, plan.references.as_ref());
+    message.push_str("发布后内容不可修改；引用它的节点/插件会在下一次接纳时使用这个编号。\n");
+    message
+}
+
+/// Print the impact range exactly as completely as it was measured.
+///
+/// The wording matters: "nobody uses this" may only be said when coverage is
+/// `Complete`, so a partial or unknown report says so instead of showing a
+/// smaller number.
+fn render_impact(
+    message: &mut String,
+    references: Option<&crate::application::environments::EnvironmentReferences>,
+) {
+    match references.map(|references| &references.coverage) {
         Some(crate::application::environments::EnvironmentCoverage::Complete) => {
-            let references = plan
-                .references
-                .as_ref()
-                .expect("coverage implies references");
+            let references = references.expect("coverage implies references");
             let mut users = references
                 .nodes
                 .iter()
@@ -359,8 +373,6 @@ fn environment_message(precondition: &EnvironmentPublishPrecondition) -> String 
         }
         None => message.push_str("影响范围未记录。\n"),
     }
-    message.push_str("发布后内容不可修改；引用它的节点/插件会在下一次接纳时使用这个编号。\n");
-    message
 }
 
 async fn publish_environment(
@@ -510,6 +522,245 @@ async fn publish_environment(
             "name":precondition.plan.name,
             "id":id,
             "name_version":version,
+            "replaced":precondition.replacing(),
+            "plan_recorded":plan_recorded
+        })
+        .to_string(),
+    )])
+}
+
+/// The one argument the model may supply when asking to prepare an environment.
+fn provision_arguments(arguments: &serde_json::Map<String, Value>) -> Result<String, ToolError> {
+    if let Some(key) = arguments.keys().find(|key| key.as_str() != "name") {
+        return Err(failure(format!(
+            "environment_provision does not accept `{key}`; the user approves the resolved plan, not the model"
+        )));
+    }
+    let name = arguments
+        .get("name")
+        .and_then(Value::as_str)
+        .filter(|name| !name.trim().is_empty())
+        .ok_or_else(|| failure("name must be a nonempty deployment name"))?
+        .to_owned();
+    if !identifier(&name) {
+        return Err(failure(
+            "name must use only letters, digits, dot, dash and underscore",
+        ));
+    }
+    Ok(name)
+}
+
+/// What the human is shown before approving a resolved dependency plan.
+///
+/// The point is that they approve the *content*: the interpreter, the sources,
+/// and every pinned package with its digest — not a request like "install what
+/// the assistant asked for".
+fn provision_message(
+    precondition: &crate::application::environments::EnvironmentProvisionPrecondition,
+) -> String {
+    let plan = &precondition.plan;
+    let mut message = format!(
+        "确认按下面这个已解析的锁定集合准备并发布依赖环境「{}」？\n解释器：Python {}（{}，sha256 {}…）\n",
+        plan.name,
+        plan.interpreter,
+        plan.interpreter_path.display(),
+        &plan.interpreter_digest[..plan.interpreter_digest.len().min(16)]
+    );
+    message.push_str(&format!("来源：{}\n", plan.sources.join(", ")));
+    message.push_str(&format!(
+        "锁定集合（{} 个包，共 {} 个候选产物）：\n",
+        plan.packages.len(),
+        plan.packages
+            .iter()
+            .map(|package| package.hashes.len())
+            .sum::<usize>()
+    ));
+    for package in plan.packages.iter().take(12) {
+        message.push_str(&format!(
+            "  {}=={} sha256:{}…\n",
+            package.name,
+            package.version,
+            &package.hashes[0][..package.hashes[0].len().min(16)]
+        ));
+    }
+    if plan.packages.len() > 12 {
+        message.push_str(&format!("  …其余 {} 个\n", plan.packages.len() - 12));
+    }
+    message
+        .push_str("安装：只安装上述 digest 的 wheel，在无网络的沙箱内离线安装，不编译源码包。\n");
+    render_impact(&mut message, plan.references.as_ref());
+    message.push_str(if precondition.replacing() {
+        "该名字当前指向别的编号，本次会切换它（旧内容保留）。\n"
+    } else {
+        "这是新名字，不会替换任何现有引用。\n"
+    });
+    message.push_str("发布后内容不可修改；引用它的节点/插件会在下一次接纳时使用这个编号。\n");
+    message
+}
+
+fn abort_environment_provision_plan(
+    tools: &PilotTools,
+    plan: &crate::application::environments::EnvironmentProvisionPlan,
+    reason: &str,
+) {
+    let mut aborted = plan.clone();
+    aborted.status = crate::application::environments::EnvironmentProvisionStatus::Aborted {
+        reason: reason.to_owned(),
+    };
+    if tools
+        .application
+        .write_environment_provision_plan(&aborted)
+        .is_err()
+    {
+        eprintln!(
+            "environment provision plan {} could not be marked aborted",
+            plan.name
+        );
+    }
+}
+
+/// Resolve, build and publish the environment one recorded requirement asks for.
+async fn provision_environment(
+    tools: &PilotTools,
+    arguments: &serde_json::Map<String, Value>,
+    peer: Peer<RoleServer>,
+    cancellation: &Cancellation,
+) -> Result<Vec<ToolResultContent>, ToolError> {
+    let name = provision_arguments(arguments)?;
+    // An environment that provides this assistant's own dependencies would let it
+    // change itself; the operator interface owns that.
+    let own = tools
+        .application
+        .assistant_uses_environment_name(&tools.graph_name, &name)
+        .map_err(|error| match error {
+            crate::application::ApplicationError::Invalid(reason) => failure(reason),
+            _ => failure("the assistant Graph is unavailable"),
+        })?;
+    if own {
+        return Err(failure(format!(
+            "`{name}` provides this assistant's own dependencies; ask the operator to prepare it through the operator interface"
+        )));
+    }
+    let requester = crate::application::environments::EnvironmentPlanRequester {
+        owner: tools.owner.clone(),
+        session: tools.session.clone(),
+        turn: tools.turn.clone(),
+    };
+    let precondition = tools
+        .application
+        .environment_provision_precondition(tools.library_root.clone(), name.clone(), requester)
+        .await
+        .map_err(|error| {
+            failure(format!(
+                "environment preparation was rejected: {}",
+                application_reason(error)
+            ))
+        })?;
+
+    let mut properties = serde_json::Map::new();
+    properties.insert(
+        "confirm".into(),
+        json!({"type":"boolean","title":format!("确认按这个锁定集合准备并发布「{}」", precondition.plan.name),"default":false}),
+    );
+    if precondition.replacing() {
+        properties.insert(
+            "replace_name".into(),
+            json!({"type":"boolean","title":format!("确认切换名字「{}」到新编号", precondition.plan.name),"default":false}),
+        );
+    }
+    let required = properties.keys().cloned().collect::<Vec<_>>();
+    let schema = json!({
+        "type":"object",
+        "properties":Value::Object(properties),
+        "required":required,
+        "additionalProperties":false
+    });
+    let requested_schema = native_schema(schema)?;
+    let elicitation = peer.create_elicitation(ElicitRequestParams::FormElicitationParams {
+        meta: None,
+        message: provision_message(&precondition),
+        requested_schema,
+    });
+    tokio::pin!(elicitation);
+    let result = tokio::select! {
+        result = &mut elicitation => result.map_err(|_| failure("native user confirmation could not complete"))?,
+        _ = async {
+            while !cancellation.load(Ordering::Acquire) {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        } => return Err(failure("Pilot was cancelled while waiting for the user")),
+    };
+    active(tools, cancellation)?;
+    let approved = |field: &str| {
+        result
+            .content
+            .as_ref()
+            .and_then(|content| content.get(field))
+            == Some(&Value::Bool(true))
+    };
+    let accepted = result.action == ElicitationAction::Accept
+        && approved("confirm")
+        && (!precondition.replacing() || approved("replace_name"));
+    if !accepted {
+        // The resolved plan stays durable as a refusal; it is never replayed.
+        let mut refused = precondition.plan.clone();
+        refused.status = crate::application::environments::EnvironmentProvisionStatus::Refused;
+        let recorded = tools
+            .application
+            .write_environment_provision_plan(&refused)
+            .is_ok();
+        return Ok(vec![ToolResultContent::text(
+            json!({
+                "provisioned":false,
+                "name":precondition.plan.name,
+                "action":result.action,
+                "plan_recorded":recorded
+            })
+            .to_string(),
+        )]);
+    }
+    let outcome = match tools
+        .application
+        .provision_environment_if_unchanged(tools.library_root.clone(), precondition.clone())
+        .await
+    {
+        Ok(outcome) => outcome,
+        Err(error) => {
+            let reason = application_reason(error);
+            abort_environment_provision_plan(tools, &precondition.plan, &reason);
+            return Err(failure(format!("environment preparation failed: {reason}")));
+        }
+    };
+    let mut provisioned = precondition.plan.clone();
+    provisioned.status =
+        crate::application::environments::EnvironmentProvisionStatus::Provisioned {
+            id: outcome.id.clone(),
+            name_version: outcome.name_version,
+            files: outcome.files,
+            bytes: outcome.bytes,
+        };
+    let plan_recorded = match tools
+        .application
+        .write_environment_provision_plan(&provisioned)
+    {
+        Ok(()) => true,
+        Err(error) => {
+            eprintln!(
+                "environment provision plan {} could not be finalized: {error:?}",
+                provisioned.name
+            );
+            false
+        }
+    };
+    Ok(vec![ToolResultContent::text(
+        json!({
+            "provisioned":true,
+            "name":precondition.plan.name,
+            "id":outcome.id,
+            "name_version":outcome.name_version,
+            "files":outcome.files,
+            "bytes":outcome.bytes,
+            "packages":precondition.plan.packages.len(),
             "replaced":precondition.replacing(),
             "plan_recorded":plan_recorded
         })
@@ -732,6 +983,38 @@ mod tests {
         ] {
             assert!(
                 install_arguments(&arguments(refused.clone())).is_err(),
+                "{refused} must be refused"
+            );
+        }
+    }
+
+    #[test]
+    fn provision_arguments_are_only_a_name() {
+        let arguments = |value: Value| {
+            value
+                .as_object()
+                .cloned()
+                .expect("test arguments are objects")
+        };
+        assert_eq!(
+            provision_arguments(&arguments(json!({"name":"research"}))).unwrap(),
+            "research".to_owned()
+        );
+        for refused in [
+            // The locked set comes from the recorded requirement, and the
+            // approval comes from the native form: neither is a model argument.
+            json!({"name":"research","packages":["requests"]}),
+            json!({"name":"research","interpreter":"3.12"}),
+            json!({"name":"research","confirm":true}),
+            json!({"name":"research","replace_name":true}),
+            json!({"name":"research","directory":"env"}),
+            json!({}),
+            json!({"name":""}),
+            json!({"name":"../escape"}),
+            json!({"name":"re search"}),
+        ] {
+            assert!(
+                provision_arguments(&arguments(refused.clone())).is_err(),
                 "{refused} must be refused"
             );
         }

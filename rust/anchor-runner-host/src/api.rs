@@ -242,12 +242,33 @@ pub async fn serve() -> io::Result<()> {
     let schedules_path = env::var_os("ANCHOR_RUNNER_SCHEDULES_PATH")
         .map(PathBuf::from)
         .unwrap_or_else(|| data_root.join("state/schedules.json"));
+    // Environment preparation is the one capability that reaches the network.
+    // A deployment that did not authorize sources and a pinned toolchain keeps
+    // exactly the behaviour it had: the steward can still see environments, and
+    // provisioning is refused with a reason.
+    let provisioner = match crate::environment_provision::from_env(
+        &data_root,
+        env::var_os("ANCHOR_BWRAP")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("bwrap")),
+    ) {
+        Ok(Some(config)) => Some(Arc::new(
+            crate::environment_provision::EnvironmentProvisioner::new(config)
+                .map_err(|error| io::Error::other(error.to_string()))?,
+        )),
+        Ok(None) => None,
+        Err(reason) => return Err(io::Error::other(reason)),
+    };
+    let mut application = RunApplication::new(data_root.clone(), catalog_root.clone())
+        .with_configured_graph(graph_name.clone(), bundle_root.clone());
+    if let Some(provisioner) = provisioner {
+        application = application.with_environment_provisioner(provisioner);
+    }
     let mut state = ApiState {
         #[cfg(test)]
         bundle_root: bundle_root.clone(),
         catalog_root: catalog_root.clone(),
-        application: RunApplication::new(data_root.clone(), catalog_root.clone())
-            .with_configured_graph(graph_name.clone(), bundle_root.clone()),
+        application,
         data_root,
         workspace_root,
         graph_name,
@@ -624,6 +645,84 @@ async fn list_environment_publications(
     })))
 }
 
+/// What the assistant asked to have built, and how each attempt ended.
+///
+/// Kept apart from `/environment-publications`: approving a prepared directory
+/// and approving a resolved dependency plan are different objects, and an
+/// operator has to be able to tell which one a name came from.
+async fn list_environment_provisions(
+    State(state): State<ApiState>,
+) -> Result<Json<Value>, HttpResponse> {
+    let listed =
+        crate::application::environments::list_environment_provision_plans(&state.data_root)
+            .map_err(application_error)?;
+    let unreadable = listed.unreadable;
+    let truncated = listed.truncated;
+    let requests = listed
+        .records
+        .into_iter()
+        .map(|plan| {
+            let (status, id, name_version, note, files, bytes) = match &plan.status {
+                crate::application::environments::EnvironmentProvisionStatus::Requested => (
+                    "requested",
+                    Value::Null,
+                    Value::Null,
+                    Value::Null,
+                    None,
+                    None,
+                ),
+                crate::application::environments::EnvironmentProvisionStatus::Provisioned {
+                    id,
+                    name_version,
+                    files,
+                    bytes,
+                } => (
+                    "provisioned",
+                    json!(id),
+                    json!(name_version),
+                    Value::Null,
+                    Some(*files),
+                    Some(*bytes),
+                ),
+                crate::application::environments::EnvironmentProvisionStatus::Refused => {
+                    ("refused", Value::Null, Value::Null, Value::Null, None, None)
+                }
+                crate::application::environments::EnvironmentProvisionStatus::Aborted {
+                    reason,
+                } => (
+                    "aborted",
+                    Value::Null,
+                    Value::Null,
+                    json!(reason),
+                    None,
+                    None,
+                ),
+            };
+            json!({
+                "name": plan.name,
+                // The plan's identity is the lock, because the content digest
+                // cannot exist before the build.
+                "lock_digest": plan.lock_digest,
+                "interpreter": plan.interpreter,
+                "sources": plan.sources,
+                "packages": plan.packages.len(),
+                "status": status,
+                "id": id,
+                "name_version": name_version,
+                "note": note,
+                "files": files,
+                "bytes": bytes,
+                "references": plan.references,
+                "requester": plan.requester,
+            })
+        })
+        .collect::<Vec<_>>();
+    Ok(Json(json!({
+        "requests": requests,
+        "unreadable": unreadable,
+        "truncated": truncated,
+    })))
+}
 async fn graph_relations(State(state): State<ApiState>) -> Result<Json<Value>, HttpResponse> {
     let catalog = state
         .application
@@ -910,6 +1009,7 @@ fn router_with_readiness_and_web_root(
             "/environment-requirements",
             get(list_environment_requirements),
         )
+        .route("/environment-provisions", get(list_environment_provisions))
         .route("/runs", get(list_runs))
         .route("/runs/{run}", get(get_run).delete(delete_run))
         .route("/runs/{run}/channel-reply", get(read_channel_reply))

@@ -67,6 +67,14 @@ pub(crate) struct EnvironmentRequirements {
 }
 
 impl RunApplication {
+    /// The recorded ask for one name, if any.
+    pub(crate) fn environment_requirement(
+        &self,
+        name: &str,
+    ) -> Result<Option<EnvironmentRequirement>, ApplicationError> {
+        read_environment_requirement(&self.environment_requirement_path(name))
+    }
+
     fn environment_requirement_path(&self, name: &str) -> PathBuf {
         self.data_root
             .join("environment-requirements")

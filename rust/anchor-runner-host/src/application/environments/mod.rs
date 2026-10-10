@@ -2,6 +2,8 @@
 //!
 //! Three record families with one shape each:
 //! - `plans` — publishing a prepared directory behind a native approval,
+//! - `provision` — building one from a recorded requirement behind the same kind
+//!   of approval,
 //! - `requirements` — what the assistant needs an environment to provide,
 //! - `references` — who uses a name right now (a derived view, never stored).
 //!
@@ -14,11 +16,16 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 mod plans;
+mod provision;
 mod references;
 mod requirements;
 
 pub(crate) use plans::{
     EnvironmentPlan, EnvironmentPlanStatus, EnvironmentPublishPrecondition, list_environment_plans,
+};
+pub(crate) use provision::{
+    EnvironmentProvisionPlan, EnvironmentProvisionPrecondition, EnvironmentProvisionStatus,
+    list_environment_provision_plans,
 };
 pub(crate) use references::{EnvironmentCoverage, EnvironmentReferences};
 #[cfg(test)]

@@ -5,6 +5,7 @@ mod assistant;
 mod channel_inputs;
 mod channel_supervisor;
 mod channel_tools;
+mod environment_provision;
 mod execution;
 mod goose_acp;
 mod goose_tool_context;

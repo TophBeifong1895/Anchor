@@ -388,3 +388,101 @@ async fn the_operator_can_see_what_environments_the_assistant_asked_for() {
     assert_eq!(open["changed_since_request"], false);
     assert_eq!(open["id"], Value::Null);
 }
+
+#[tokio::test]
+async fn the_operator_can_see_what_environments_were_built_and_how_they_ended() {
+    use crate::application::environments::{EnvironmentProvisionPlan, EnvironmentProvisionStatus};
+    use crate::environment_provision::LockedPackage;
+
+    let (root, state) = fixture();
+    let _env_guard = PROCESS_ENV.lock().await;
+    set_host_env(root.path(), &state.data_root);
+
+    let requester = crate::application::environments::EnvironmentPlanRequester {
+        owner: "local".into(),
+        session: "pilot".into(),
+        turn: "turn-11".into(),
+    };
+    let plan =
+        |name: &str, lock: &str, status: EnvironmentProvisionStatus| EnvironmentProvisionPlan {
+            requester: requester.clone(),
+            name: name.into(),
+            ask: crate::application::environments::EnvironmentRequirementAsk {
+                requester: requester.clone(),
+                purpose: "analyse documents".into(),
+                interpreter: Some("3.12".into()),
+                packages: vec!["pandas==2.2.0".into()],
+                notes: None,
+            },
+            sources: vec!["index:https://pypi.org/simple".into()],
+            interpreter: "3.12.13".into(),
+            interpreter_path: std::path::PathBuf::from("/usr/bin/python3.12"),
+            interpreter_prefix: std::path::PathBuf::from("/usr"),
+            interpreter_digest: "a".repeat(64),
+            lock_digest: lock.into(),
+            lock: "pandas==2.2.0 --hash=sha256:".to_owned() + &"b".repeat(64) + "\n",
+            packages: vec![LockedPackage {
+                name: "pandas".into(),
+                version: "2.2.0".into(),
+                hashes: vec!["b".repeat(64)],
+            }],
+            references: None,
+            observed_id: None,
+            observed_present: false,
+            observed_name_version: None,
+            status,
+        };
+    state
+        .application
+        .write_environment_provision_plan(&plan(
+            "research",
+            &"1".repeat(64),
+            EnvironmentProvisionStatus::Provisioned {
+                id: "3".repeat(64),
+                name_version: 1,
+                files: 42,
+                bytes: 4096,
+            },
+        ))
+        .unwrap();
+    // An approved build that did not finish must be distinguishable from one
+    // nobody answered.
+    state
+        .application
+        .write_environment_provision_plan(&plan(
+            "other",
+            &"2".repeat(64),
+            EnvironmentProvisionStatus::Aborted {
+                reason: "the fetch found no matching digest".into(),
+            },
+        ))
+        .unwrap();
+
+    let app = router(state.clone());
+    let (status, listed) = call(app, "GET", "/environment-provisions", None).await;
+    assert_eq!(status, StatusCode::OK, "{listed}");
+    let requests = listed["requests"].as_array().unwrap();
+    assert_eq!(requests.len(), 2, "{listed}");
+    let built = requests
+        .iter()
+        .find(|request| request["name"] == "research")
+        .unwrap();
+    assert_eq!(built["status"], "provisioned");
+    assert_eq!(built["id"], "3".repeat(64));
+    assert_eq!(built["name_version"], 1);
+    assert_eq!(built["files"], 42);
+    assert_eq!(built["bytes"], 4096);
+    assert_eq!(built["packages"], 1);
+    assert_eq!(built["interpreter"], "3.12.13");
+    assert_eq!(built["lock_digest"], "1".repeat(64));
+    assert_eq!(built["requester"]["turn"], "turn-11");
+    let aborted = requests
+        .iter()
+        .find(|request| request["name"] == "other")
+        .unwrap();
+    assert_eq!(aborted["status"], "aborted");
+    assert_eq!(aborted["note"], "the fetch found no matching digest");
+    assert_eq!(aborted["id"], Value::Null);
+    assert_eq!(listed["unreadable"], 0);
+    assert_eq!(listed["truncated"], false);
+}

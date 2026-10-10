@@ -78,6 +78,15 @@ pub(crate) struct RunApplication {
     /// requirements), which are not guarded by the Library's lock. This one is a
     /// plain mutex because the writers are synchronous.
     state_mutations: Arc<std::sync::Mutex<()>>,
+    /// Serializes environment builds. A build takes minutes, so it must not hold
+    /// the Graph-catalog guard (that would block editing Graphs for the whole
+    /// download); it is only held against another build, and the name switch at
+    /// the end is a compare-and-swap anyway.
+    environment_builds: Arc<Mutex<()>>,
+    /// The deployment's authorized environment preparation, when it configured
+    /// any. Absent means "this deployment does not build environments", which is
+    /// a valid deployment, not an error.
+    environment_provision: Option<Arc<crate::environment_provision::EnvironmentProvisioner>>,
     executor: Option<tokio::runtime::Handle>,
 }
 
@@ -90,8 +99,15 @@ impl RunApplication {
             active: Arc::new(Mutex::new(HashMap::new())),
             catalog_mutations: Arc::new(Mutex::new(())),
             state_mutations: Arc::new(std::sync::Mutex::new(())),
+            environment_builds: Arc::new(Mutex::new(())),
+            environment_provision: None,
             executor: tokio::runtime::Handle::try_current().ok(),
         }
+    }
+
+    /// Serialize environment builds against each other.
+    pub(crate) async fn environment_build_guard(&self) -> OwnedMutexGuard<()> {
+        Arc::clone(&self.environment_builds).lock_owned().await
     }
 
     /// Serialize Graph definition mutations with reference checks and deletion.

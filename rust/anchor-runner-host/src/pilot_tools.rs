@@ -221,6 +221,13 @@ pub(crate) const PILOT_TOOLS: &[PilotToolSpec] = &[
         effect: ToolEffect::Asset,
     },
     PilotToolSpec {
+        name: "environment_provision",
+        description: "Build and publish the dependency environment the recorded requirement asks for. The user approves the exact resolved package set in a native form; approval is never a tool argument. Record the requirement first.",
+        parameters: || single("name"),
+        authority: ToolAuthority::Confirm,
+        effect: ToolEffect::Asset,
+    },
+    PilotToolSpec {
         name: "plugin_install",
         description: "Install a Plugin candidate you prepared inside your own workspace into the Anchor Library. The user approves the exact reviewed content in a native form; approval is never a tool argument.",
         parameters: || json!({"type":"object","properties":{"directory":{"type":"string"},"id":{"type":"string"}},"required":["directory"],"additionalProperties":false}),
@@ -1497,7 +1504,7 @@ mod tests {
                 .count(),
             inspect
         );
-        assert_eq!((inspect, mutate, confirm.len()), (13, 7, 4));
+        assert_eq!((inspect, mutate, confirm.len()), (13, 7, 5));
         // The two axes must agree: everything readable is Inspect, and every
         // Inspect tool is read-only. "Only assets need a human click" is then a
         // property of the table, not a sentence in a document.
