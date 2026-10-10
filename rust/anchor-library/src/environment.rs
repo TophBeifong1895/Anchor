@@ -552,21 +552,6 @@ fn validate_name(name: &str) -> Result<(), EnvironmentError> {
     Ok(())
 }
 
-#[allow(dead_code)]
-fn validate_name_legacy(name: &str) -> Result<(), EnvironmentError> {
-    let valid = !name.is_empty()
-        && name != "."
-        && name != ".."
-        && name
-            .chars()
-            .all(|character| character.is_ascii_alphanumeric() || "-_.".contains(character));
-    if valid {
-        Ok(())
-    } else {
-        Err(EnvironmentError::InvalidName)
-    }
-}
-
 fn validate_id(id: &str) -> Result<(), EnvironmentError> {
     if id.len() == 64 && id.bytes().all(|byte| byte.is_ascii_hexdigit()) {
         Ok(())

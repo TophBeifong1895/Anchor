@@ -491,6 +491,51 @@ impl RunApplication {
     }
 }
 
+/// One tolerant read policy for every host record family: skip what this host
+/// cannot read, count it, and never let one bad file hide the rest.
+pub(crate) struct RecordList<T> {
+    pub(crate) records: Vec<T>,
+    pub(crate) unreadable: usize,
+}
+
+pub(crate) fn list_json_records<T: serde::de::DeserializeOwned>(
+    data_root: &std::path::Path,
+    directory: &str,
+    limit: usize,
+) -> Result<RecordList<T>, ApplicationError> {
+    let directory = data_root.join(directory);
+    let entries = match std::fs::read_dir(&directory) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(RecordList {
+                records: Vec::new(),
+                unreadable: 0,
+            });
+        }
+        Err(error) => return Err(ApplicationError::Storage(error.to_string())),
+    };
+    let mut records = Vec::new();
+    let mut unreadable = 0usize;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().is_none_or(|extension| extension != "json") {
+            continue;
+        }
+        match std::fs::read(&path)
+            .ok()
+            .and_then(|bytes| serde_json::from_slice::<T>(&bytes).ok())
+        {
+            Some(record) => records.push(record),
+            None => unreadable += 1,
+        }
+    }
+    records.truncate(limit);
+    Ok(RecordList {
+        records,
+        unreadable,
+    })
+}
+
 /// Read one requirement record, or `None` when the name was never asked for.
 fn read_environment_requirement(
     path: &std::path::Path,
@@ -511,35 +556,16 @@ fn read_environment_requirement(
 pub(crate) fn list_environment_requirements(
     data_root: &std::path::Path,
 ) -> Result<EnvironmentRequirements, ApplicationError> {
-    let directory = data_root.join("environment-requirements");
-    let entries = match std::fs::read_dir(&directory) {
-        Ok(entries) => entries,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            return Ok(EnvironmentRequirements {
-                requirements: Vec::new(),
-                unreadable: 0,
-            });
-        }
-        Err(error) => return Err(ApplicationError::Storage(error.to_string())),
-    };
-    let mut requirements = Vec::new();
-    let mut unreadable = 0usize;
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.extension().is_none_or(|extension| extension != "json") {
-            continue;
-        }
-        match read_environment_requirement(&path) {
-            Ok(Some(requirement)) => requirements.push(requirement),
-            Ok(None) => {}
-            Err(_) => unreadable += 1,
-        }
-    }
+    let listed = list_json_records::<EnvironmentRequirement>(
+        data_root,
+        "environment-requirements",
+        ENVIRONMENT_RECORD_LIMIT,
+    )?;
+    let mut requirements = listed.records;
     requirements.sort_by(|left, right| left.name.cmp(&right.name));
-    requirements.truncate(200);
     Ok(EnvironmentRequirements {
         requirements,
-        unreadable,
+        unreadable: listed.unreadable,
     })
 }
 
@@ -591,6 +617,9 @@ pub(crate) struct EnvironmentServerReference {
 
 /// The scan bound for a derived impact report.
 const ENVIRONMENT_REFERENCE_LIMIT: usize = 200;
+
+/// How many host records one read model returns.
+pub(crate) const ENVIRONMENT_RECORD_LIMIT: usize = 200;
 
 impl RunApplication {
     /// Who references one environment name right now.
@@ -802,46 +831,19 @@ impl RunApplication {
 /// environment and an unanswered request are indistinguishable to an operator.
 pub(crate) fn list_environment_plans(
     data_root: &std::path::Path,
-) -> Result<Vec<EnvironmentPlan>, ApplicationError> {
-    let directory = data_root.join("environment-plans");
-    let entries = match std::fs::read_dir(&directory) {
-        Ok(entries) => entries,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-        Err(error) => return Err(ApplicationError::Storage(error.to_string())),
-    };
-    let mut plans = Vec::new();
-    let mut unreadable = 0usize;
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path
-            .extension()
-            .is_some_and(|extension| extension == "json")
-        {
-            let bytes = std::fs::read(&path)
-                .map_err(|error| ApplicationError::Storage(error.to_string()))?;
-            match serde_json::from_slice::<EnvironmentPlan>(&bytes) {
-                Ok(plan) => plans.push(plan),
-                // A record this version cannot read is skipped; the projection
-                // reports how many were skipped so it cannot hide a plan.
-                Err(_) => unreadable += 1,
-            }
-        }
-    }
-    // Deterministic order without needing a timestamp in the record.
-    plans.sort_by(|left, right| {
+) -> Result<RecordList<EnvironmentPlan>, ApplicationError> {
+    let mut listed = list_json_records::<EnvironmentPlan>(
+        data_root,
+        "environment-plans",
+        ENVIRONMENT_RECORD_LIMIT,
+    )?;
+    listed.records.sort_by(|left, right| {
         (left.name.as_str(), left.digest.as_str())
             .cmp(&(right.name.as_str(), right.digest.as_str()))
     });
-    if unreadable > 0 {
-        return Err(ApplicationError::Storage(format!(
-            "{unreadable} environment plan record(s) could not be read"
-        )));
-    }
-    plans.truncate(200);
-    Ok(plans)
+    Ok(listed)
 }
 
-/// The durable plan a caller may re-read (used by tests and diagnostics).
 #[cfg(test)]
 pub(crate) fn read_environment_plan(
     data_root: &std::path::Path,
@@ -975,6 +977,7 @@ mod tests {
         assert!(
             list_environment_plans(&root.path().join("state"))
                 .unwrap()
+                .records
                 .is_empty(),
             "no plan is recorded before a human is asked"
         );
@@ -1024,7 +1027,7 @@ mod tests {
         refused_plan.status = EnvironmentPlanStatus::Refused;
         application.write_environment_plan(&refused_plan).unwrap();
 
-        let plans = list_environment_plans(&data_root).unwrap();
+        let plans = list_environment_plans(&data_root).unwrap().records;
         assert_eq!(plans.len(), 2);
         let published = plans
             .iter()

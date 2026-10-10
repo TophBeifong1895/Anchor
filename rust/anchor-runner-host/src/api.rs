@@ -574,9 +574,11 @@ async fn list_environment_requirements(
 async fn list_environment_publications(
     State(state): State<ApiState>,
 ) -> Result<Json<Value>, HttpResponse> {
-    let plans = crate::application::environments::list_environment_plans(&state.data_root)
+    let listed = crate::application::environments::list_environment_plans(&state.data_root)
         .map_err(application_error)?;
-    let requests = plans
+    let unreadable = listed.unreadable;
+    let requests = listed
+        .records
         .into_iter()
         .map(|plan| {
             // `id` is a published identity and is absent unless the plan was
@@ -609,7 +611,9 @@ async fn list_environment_publications(
             })
         })
         .collect::<Vec<_>>();
-    Ok(Json(json!({"requests": requests})))
+    Ok(Json(
+        json!({"requests": requests, "unreadable": unreadable}),
+    ))
 }
 
 async fn graph_relations(State(state): State<ApiState>) -> Result<Json<Value>, HttpResponse> {
