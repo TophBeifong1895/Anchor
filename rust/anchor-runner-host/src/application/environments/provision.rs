@@ -43,6 +43,11 @@ pub(crate) enum EnvironmentProvisionStatus {
     Aborted {
         reason: String,
     },
+    /// Nobody was ever asked, or nobody could answer any more. Kept apart from
+    /// `Aborted` (approved, then not done) and `Refused` (a human answered "no").
+    Cancelled {
+        reason: String,
+    },
 }
 
 /// What a human is asked to approve for one provisioned environment.
@@ -144,16 +149,43 @@ impl RunApplication {
             prune_environment_records(&self.data_root, "environment-provision-plans", |bytes| {
                 serde_json::from_slice::<EnvironmentProvisionPlan>(bytes)
                     .ok()
-                    .map(|plan| {
-                        (
-                            plan.name.clone(),
-                            plan.created,
-                            matches!(plan.status, EnvironmentProvisionStatus::Requested),
-                        )
+                    .map(|plan| Retention {
+                        name: plan.name.clone(),
+                        identity: plan.lock_digest.clone(),
+                        created: plan.created,
+                        pending: matches!(plan.status, EnvironmentProvisionStatus::Requested),
+                        published: match &plan.status {
+                            EnvironmentProvisionStatus::Provisioned { id, .. } => Some(id.clone()),
+                            _ => None,
+                        },
                     })
             })?;
         }
         Ok(())
+    }
+
+    /// Settle every `Requested` build whose asking Turn can no longer be
+    /// answered; see [`RunApplication::settle_abandoned_environment_plans`].
+    pub(crate) fn settle_abandoned_environment_provision_plans(
+        &self,
+        turn_is_running: impl Fn(&EnvironmentPlanRequester) -> Result<bool, ApplicationError>,
+    ) -> Result<usize, ApplicationError> {
+        settle_json_records(
+            &self.data_root,
+            "environment-provision-plans",
+            |plan: EnvironmentProvisionPlan| {
+                if !matches!(plan.status, EnvironmentProvisionStatus::Requested)
+                    || turn_is_running(&plan.requester)?
+                {
+                    return Ok(None);
+                }
+                let mut settled = plan;
+                settled.status = EnvironmentProvisionStatus::Cancelled {
+                    reason: ABANDONED_REQUEST_REASON.to_owned(),
+                };
+                Ok(Some(settled))
+            },
+        )
     }
 
     /// Freeze the plan a human is about to approve.

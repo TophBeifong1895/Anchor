@@ -17,6 +17,14 @@ pub(crate) enum EnvironmentPlanStatus {
     Aborted {
         reason: String,
     },
+    /// Nobody was ever asked, or nobody could answer any more: the Pilot stopped
+    /// while the form was open, the form could not be delivered, or the asking
+    /// Turn was already over when the host started. Kept apart from `Aborted`
+    /// (approved, then not done) and `Refused` (a human answered "no") because
+    /// the three are different facts (§D2B).
+    Cancelled {
+        reason: String,
+    },
 }
 
 /// What a human is asked to approve for one environment candidate.
@@ -67,6 +75,22 @@ impl EnvironmentPublishPrecondition {
     pub(crate) fn replacing(&self) -> bool {
         self.plan.observed_id.is_some()
     }
+
+    /// The published identity the name already points at, when it points at
+    /// exactly this candidate's content.
+    ///
+    /// `already_published` proves the content is present and matches; the name
+    /// table always records the version that goes with an identity, so both are
+    /// there when it is.
+    pub(crate) fn observed_publication(&self) -> Option<(String, u64)> {
+        if !self.already_published() {
+            return None;
+        }
+        Some((
+            self.plan.observed_id.clone()?,
+            self.plan.observed_name_version?,
+        ))
+    }
 }
 
 impl EnvironmentPlan {
@@ -109,16 +133,66 @@ impl RunApplication {
             prune_environment_records(&self.data_root, "environment-plans", |bytes| {
                 serde_json::from_slice::<EnvironmentPlan>(bytes)
                     .ok()
-                    .map(|plan| {
-                        (
-                            plan.name.clone(),
-                            plan.created,
-                            matches!(plan.status, EnvironmentPlanStatus::Requested),
-                        )
+                    .map(|plan| Retention {
+                        name: plan.name.clone(),
+                        identity: plan.digest.clone(),
+                        created: plan.created,
+                        pending: matches!(plan.status, EnvironmentPlanStatus::Requested),
+                        published: match &plan.status {
+                            EnvironmentPlanStatus::Published { id, .. } => Some(id.clone()),
+                            _ => None,
+                        },
                     })
             })?;
         }
         Ok(())
+    }
+
+    /// Record a re-call that found the name already pointing at this content.
+    ///
+    /// The publication really happened — the name resolves to exactly this
+    /// candidate — so the record ends as that fact instead of staying a request
+    /// nobody answered (§D3A).
+    pub(crate) fn record_observed_publication(
+        &self,
+        precondition: &EnvironmentPublishPrecondition,
+    ) -> Result<EnvironmentPlan, ApplicationError> {
+        let (id, name_version) = precondition.observed_publication().ok_or_else(|| {
+            ApplicationError::Conflict(
+                "the environment name table did not confirm what the name points at".to_owned(),
+            )
+        })?;
+        let mut plan = precondition.plan.clone();
+        plan.status = EnvironmentPlanStatus::Published { id, name_version };
+        self.write_environment_plan(&plan)?;
+        Ok(plan)
+    }
+
+    /// Settle every `Requested` plan whose asking Turn can no longer be answered.
+    ///
+    /// Whether a person can still answer is the platform Session's fact, so the
+    /// caller supplies it; the host only reads it. A record this host cannot read
+    /// is left alone. Returns how many records were settled.
+    pub(crate) fn settle_abandoned_environment_plans(
+        &self,
+        turn_is_running: impl Fn(&EnvironmentPlanRequester) -> Result<bool, ApplicationError>,
+    ) -> Result<usize, ApplicationError> {
+        settle_json_records(
+            &self.data_root,
+            "environment-plans",
+            |plan: EnvironmentPlan| {
+                if !matches!(plan.status, EnvironmentPlanStatus::Requested)
+                    || turn_is_running(&plan.requester)?
+                {
+                    return Ok(None);
+                }
+                let mut settled = plan;
+                settled.status = EnvironmentPlanStatus::Cancelled {
+                    reason: ABANDONED_REQUEST_REASON.to_owned(),
+                };
+                Ok(Some(settled))
+            },
+        )
     }
 
     /// Freeze what the operator is about to approve for one candidate.
@@ -573,20 +647,108 @@ mod tests {
 }
 
 #[cfg(test)]
-mod retention_tests {
+mod record_compatibility_tests {
+    use super::super::EnvironmentProvisionPlan;
     use super::*;
-    use crate::application::environments::test_support::*;
 
-    /// Each approval attempt has its own identity, which is why records
-    /// accumulate at all: a new digest (or turn) is a new file.
-    fn plan(name: &str, key: &str, status: EnvironmentPlanStatus, created: u64) -> EnvironmentPlan {
+    /// T8: a *compatibility guard*, not a check of this slice's new behaviour —
+    /// it also passes before the change, and it only goes red when a later slice
+    /// adds a required record field (or drops `#[serde(default)]`).
+    ///
+    /// A deployment that upgrades must keep reading the records it already
+    /// wrote, so every field the code can add stays optional on the wire.
+    ///
+    /// These literals are the exact shape the previous host wrote: no
+    /// `references`, no `created`, and only the four statuses that existed then.
+    #[test]
+    fn records_written_before_this_slice_still_deserialize() {
+        let old_plans = [
+            r#"{"requester":{"owner":"local","session":"pilot","turn":"turn-1"},"directory":"/prepared","name":"research","digest":"aa","bytes":1,"files":1,"observed_id":null,"observed_present":false,"observed_name_version":null,"status":{"status":"requested"}}"#,
+            r#"{"requester":{"owner":"local","session":"pilot","turn":"turn-1"},"directory":"/prepared","name":"research","digest":"aa","bytes":1,"files":1,"observed_id":"aa","observed_present":true,"observed_name_version":1,"status":{"status":"published","id":"aa","name_version":1}}"#,
+            r#"{"requester":{"owner":"local","session":"pilot","turn":"turn-1"},"directory":"/prepared","name":"research","digest":"aa","bytes":1,"files":1,"observed_id":null,"observed_present":false,"observed_name_version":null,"status":{"status":"refused"}}"#,
+            r#"{"requester":{"owner":"local","session":"pilot","turn":"turn-1"},"directory":"/prepared","name":"research","digest":"aa","bytes":1,"files":1,"observed_id":null,"observed_present":false,"observed_name_version":null,"status":{"status":"aborted","reason":"the candidate changed"}}"#,
+        ];
+        for old in old_plans {
+            let plan: EnvironmentPlan = serde_json::from_str(old)
+                .unwrap_or_else(|error| panic!("old plan record no longer reads: {error}: {old}"));
+            assert_eq!(plan.created, 0, "an absent creation time sorts oldest");
+            assert_eq!(plan.references, None);
+        }
+
+        let old_provisions = [
+            r#"{"requester":{"owner":"local","session":"pilot","turn":"turn-1"},"name":"research","ask":{"requester":{"owner":"local","session":"pilot","turn":"turn-1"},"purpose":"analyse documents","packages":["pandas==2.2.0"]},"sources":[],"interpreter":"3.12.13","interpreter_path":"/usr/bin/python3.12","interpreter_prefix":"/usr","interpreter_digest":"aa","lock_digest":"bb","lock":"","packages":[],"observed_id":null,"observed_present":false,"observed_name_version":null,"status":{"status":"requested"}}"#,
+            r#"{"requester":{"owner":"local","session":"pilot","turn":"turn-1"},"name":"research","ask":{"requester":{"owner":"local","session":"pilot","turn":"turn-1"},"purpose":"analyse documents","packages":["pandas==2.2.0"]},"sources":[],"interpreter":"3.12.13","interpreter_path":"/usr/bin/python3.12","interpreter_prefix":"/usr","interpreter_digest":"aa","lock_digest":"bb","lock":"","packages":[],"observed_id":null,"observed_present":false,"observed_name_version":null,"status":{"status":"refused"}}"#,
+            r#"{"requester":{"owner":"local","session":"pilot","turn":"turn-1"},"name":"research","ask":{"requester":{"owner":"local","session":"pilot","turn":"turn-1"},"purpose":"analyse documents","packages":["pandas==2.2.0"]},"sources":[],"interpreter":"3.12.13","interpreter_path":"/usr/bin/python3.12","interpreter_prefix":"/usr","interpreter_digest":"aa","lock_digest":"bb","lock":"","packages":[],"observed_id":null,"observed_present":false,"observed_name_version":null,"status":{"status":"provisioned","id":"cc","name_version":1,"files":2,"bytes":3}}"#,
+            r#"{"requester":{"owner":"local","session":"pilot","turn":"turn-1"},"name":"research","ask":{"requester":{"owner":"local","session":"pilot","turn":"turn-1"},"purpose":"analyse documents","packages":["pandas==2.2.0"]},"sources":[],"interpreter":"3.12.13","interpreter_path":"/usr/bin/python3.12","interpreter_prefix":"/usr","interpreter_digest":"aa","lock_digest":"bb","lock":"","packages":[],"observed_id":null,"observed_present":false,"observed_name_version":null,"status":{"status":"aborted","reason":"the fetch failed"}}"#,
+        ];
+        for old in old_provisions {
+            let plan: EnvironmentProvisionPlan = serde_json::from_str(old)
+                .unwrap_or_else(|error| panic!("old provision record no longer reads: {error}"));
+            assert_eq!(plan.created, 0);
+            assert_eq!(plan.references, None);
+        }
+    }
+
+    /// The new terminal state is a durable fact like the others: it must survive
+    /// a write/read round trip in both record families.
+    #[test]
+    fn the_cancelled_terminal_state_round_trips_in_both_families() {
+        let cancelled_plan = EnvironmentPlan {
+            requester: crate::application::environments::test_support::requester(),
+            directory: PathBuf::from("/prepared"),
+            name: "research".into(),
+            digest: "a".repeat(64),
+            bytes: 1,
+            files: 1,
+            observed_id: None,
+            observed_present: false,
+            observed_name_version: None,
+            references: None,
+            status: EnvironmentPlanStatus::Cancelled {
+                reason: "nobody answered".into(),
+            },
+            created: 7,
+        };
+        let bytes = serde_json::to_vec(&cancelled_plan).unwrap();
+        assert_eq!(
+            serde_json::from_slice::<EnvironmentPlan>(&bytes).unwrap(),
+            cancelled_plan
+        );
+        let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(value["status"]["status"], "cancelled");
+        assert_eq!(value["status"]["reason"], "nobody answered");
+    }
+}
+
+#[cfg(test)]
+mod retention_tests {
+    use super::super::test_support::*;
+    use super::*;
+
+    /// One durable record, as the approval paths write it.
+    ///
+    /// `identity` is the candidate the attempt was about and `turn` is which
+    /// attempt this is: two turns asking about one candidate under one name are
+    /// two records that share a name *and* an identity, which is exactly what
+    /// retention has to collapse.
+    fn plan(
+        name: &str,
+        identity: &str,
+        turn: &str,
+        status: EnvironmentPlanStatus,
+        created: u64,
+    ) -> EnvironmentPlan {
         EnvironmentPlan {
-            requester: requester(),
+            requester: EnvironmentPlanRequester {
+                owner: "local".into(),
+                session: "pilot".into(),
+                turn: turn.into(),
+            },
             directory: PathBuf::from("/prepared"),
             name: name.into(),
-            // A distinct identity per attempt, padded to the 64-hex shape the
-            // record validator expects.
-            digest: format!("{key:0<64}").chars().take(64).collect(),
+            // Padded to the 64-hex shape a content digest has. The fill is a
+            // letter so that `other-1` and `other-10` stay different identities.
+            digest: format!("{identity:x<64}").chars().take(64).collect(),
             bytes: 1,
             files: 1,
             observed_id: None,
@@ -598,74 +760,187 @@ mod retention_tests {
         }
     }
 
+    /// T4: a model that keeps asking about one candidate and never gets an
+    /// answer cannot grow the directory without bound, and each deletion is
+    /// reported as `pruned` instead of being silent.
     #[test]
-    fn one_name_keeps_its_newest_terminal_plans_and_never_drops_a_pending_one() {
+    fn repeated_cancellations_of_one_candidate_are_bounded_and_reported_as_pruned() {
         let root = tempfile::tempdir().unwrap();
         let application = application(root.path());
-        // A pending ask that a human may still answer, recorded first.
-        let pending = plan("research", "a", EnvironmentPlanStatus::Requested, 1);
-        application.write_environment_plan(&pending).unwrap();
-
-        let total = crate::application::environments::ENVIRONMENT_RECORDS_PER_NAME + 5;
-        for index in 0..total {
-            let created = 100 + index as u64;
+        let attempts = 12u64;
+        for index in 0..attempts {
             application
                 .write_environment_plan(&plan(
                     "research",
-                    &format!("{index:064x}").replace('0', "b"),
-                    EnvironmentPlanStatus::Published {
-                        id: "c".repeat(64),
-                        name_version: index as u64 + 1,
+                    "candidate",
+                    &format!("turn-{index}"),
+                    EnvironmentPlanStatus::Cancelled {
+                        reason: "the Pilot stopped".into(),
                     },
-                    created,
+                    100 + index,
                 ))
                 .unwrap();
         }
 
         let listed = list_environment_plans(&root.path().join("state")).unwrap();
-        let pending_now = listed
-            .records
-            .iter()
-            .filter(|plan| matches!(plan.status, EnvironmentPlanStatus::Requested))
-            .count();
-        let terminal = listed.records.len() - pending_now;
-        assert_eq!(pending_now, 1, "a pending record is never pruned");
-        // The bound counts the pending record too: a name keeps at most this
-        // many records, and the pending one is never the one that goes.
         assert_eq!(
-            terminal,
-            crate::application::environments::ENVIRONMENT_RECORDS_PER_NAME - 1,
-            "{:?}",
+            listed.records.len(),
+            1,
+            "one candidate keeps only its newest terminal state: {:?}",
             listed.records
         );
-        // The newest survive, the oldest are the ones that went.
-        let mut created = listed
-            .records
-            .iter()
-            .filter(|plan| !matches!(plan.status, EnvironmentPlanStatus::Requested))
-            .map(|plan| plan.created)
-            .collect::<Vec<_>>();
-        created.sort();
-        let kept = crate::application::environments::ENVIRONMENT_RECORDS_PER_NAME - 1;
-        assert_eq!(created.first().copied(), Some(100 + (total - kept) as u64));
-        assert_eq!(created.last().copied(), Some(100 + total as u64 - 1));
+        assert!(matches!(
+            listed.records[0].status,
+            EnvironmentPlanStatus::Cancelled { .. }
+        ));
+        assert_eq!(listed.records[0].created, 100 + attempts - 1);
+        assert_eq!(listed.pruned, attempts as usize - 1);
     }
 
+    /// I3: a pending ask is a question a human may still answer, so retention
+    /// never drops it — not even when it is the oldest record of its candidate.
     #[test]
-    fn a_bound_that_nothing_reaches_removes_nothing() {
+    fn a_pending_request_is_never_pruned() {
         let root = tempfile::tempdir().unwrap();
         let application = application(root.path());
-        for index in 0..3 {
+        application
+            .write_environment_plan(&plan(
+                "research",
+                "candidate",
+                "turn-pending",
+                EnvironmentPlanStatus::Requested,
+                1,
+            ))
+            .unwrap();
+        for index in 0..5u64 {
             application
                 .write_environment_plan(&plan(
                     "research",
-                    &format!("d{index}"),
+                    "candidate",
+                    &format!("turn-{index}"),
+                    EnvironmentPlanStatus::Refused,
+                    100 + index,
+                ))
+                .unwrap();
+        }
+
+        let listed = list_environment_plans(&root.path().join("state")).unwrap();
+        assert_eq!(
+            listed
+                .records
+                .iter()
+                .filter(|plan| matches!(plan.status, EnvironmentPlanStatus::Requested))
+                .count(),
+            1,
+            "the unanswered question is still there: {:?}",
+            listed.records
+        );
+        assert_eq!(listed.records.len(), 2, "{:?}", listed.records);
+    }
+
+    /// T5/I3: the record a name may currently resolve to is not provably
+    /// redundant, so retention keeps it however many newer terminal records pile
+    /// up beside it — and it keeps records of *other* candidates too, because a
+    /// newer outcome of a different candidate proves nothing about this one.
+    #[test]
+    fn the_publication_a_name_currently_points_at_survives_retention() {
+        let root = tempfile::tempdir().unwrap();
+        let application = application(root.path());
+        let published_id = "a".repeat(64);
+        application
+            .write_environment_plan(&plan(
+                "research",
+                "published-candidate",
+                "turn-published",
+                EnvironmentPlanStatus::Published {
+                    id: published_id.clone(),
+                    name_version: 1,
+                },
+                1,
+            ))
+            .unwrap();
+        for index in 0..25u64 {
+            application
+                .write_environment_plan(&plan(
+                    "research",
+                    &format!("other-{index}"),
+                    &format!("turn-{index}"),
+                    EnvironmentPlanStatus::Refused,
+                    100 + index,
+                ))
+                .unwrap();
+        }
+
+        let listed = list_environment_plans(&root.path().join("state")).unwrap();
+        assert!(
+            listed.records.iter().any(|plan| plan.status
+                == EnvironmentPlanStatus::Published {
+                    id: published_id.clone(),
+                    name_version: 1,
+                }),
+            "the record the name points through must survive: {:?}",
+            listed.records
+        );
+        assert_eq!(
+            listed.pruned, 0,
+            "records of different candidates are not provably redundant"
+        );
+    }
+
+    /// Records of *different* candidates say nothing about each other, so the
+    /// new policy deletes none of them: only a newer terminal state of the same
+    /// name *and* the same candidate is provably redundant (D1B).
+    #[test]
+    fn records_of_different_candidates_are_never_pruned() {
+        let root = tempfile::tempdir().unwrap();
+        let application = application(root.path());
+        for index in 0..3u64 {
+            application
+                .write_environment_plan(&plan(
+                    "research",
+                    &format!("candidate-{index}"),
+                    &format!("turn-{index}"),
                     EnvironmentPlanStatus::Refused,
                     index,
                 ))
                 .unwrap();
         }
+
         let listed = list_environment_plans(&root.path().join("state")).unwrap();
-        assert_eq!(listed.records.len(), 3);
+        assert_eq!(listed.records.len(), 3, "{:?}", listed.records);
+        assert_eq!(listed.pruned, 0);
+    }
+
+    /// T6/I3: retention must not delete what it does not understand, and a
+    /// listing must say that it could not read it.
+    #[test]
+    fn a_record_retention_cannot_read_is_counted_and_never_deleted() {
+        let root = tempfile::tempdir().unwrap();
+        let application = application(root.path());
+        let broken = root.path().join("state/environment-plans/broken.json");
+        std::fs::create_dir_all(broken.parent().unwrap()).unwrap();
+        std::fs::write(&broken, "{ this is not a record").unwrap();
+        for index in 0..5u64 {
+            application
+                .write_environment_plan(&plan(
+                    "research",
+                    "candidate",
+                    &format!("turn-{index}"),
+                    EnvironmentPlanStatus::Cancelled {
+                        reason: "the Pilot stopped".into(),
+                    },
+                    100 + index,
+                ))
+                .unwrap();
+        }
+
+        assert!(
+            broken.is_file(),
+            "an unreadable record is left exactly where it was"
+        );
+        let listed = list_environment_plans(&root.path().join("state")).unwrap();
+        assert_eq!(listed.unreadable, 1);
+        assert_eq!(listed.records.len(), 1, "{:?}", listed.records);
+        assert_eq!(listed.pruned, 4);
     }
 }

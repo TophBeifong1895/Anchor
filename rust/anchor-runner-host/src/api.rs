@@ -602,6 +602,7 @@ async fn list_environment_publications(
         .map_err(application_error)?;
     let unreadable = listed.unreadable;
     let truncated = listed.truncated;
+    let pruned = listed.pruned;
     let requests = listed
         .records
         .into_iter()
@@ -621,6 +622,9 @@ async fn list_environment_publications(
                 }
                 crate::application::environments::EnvironmentPlanStatus::Aborted { reason } => {
                     ("aborted", Value::Null, Value::Null, json!(reason))
+                }
+                crate::application::environments::EnvironmentPlanStatus::Cancelled { reason } => {
+                    ("cancelled", Value::Null, Value::Null, json!(reason))
                 }
             };
             json!({
@@ -642,6 +646,7 @@ async fn list_environment_publications(
         "requests": requests,
         "unreadable": unreadable,
         "truncated": truncated,
+        "pruned": pruned,
     })))
 }
 
@@ -658,6 +663,7 @@ async fn list_environment_provisions(
             .map_err(application_error)?;
     let unreadable = listed.unreadable;
     let truncated = listed.truncated;
+    let pruned = listed.pruned;
     let requests = listed
         .records
         .into_iter()
@@ -697,6 +703,16 @@ async fn list_environment_provisions(
                     None,
                     None,
                 ),
+                crate::application::environments::EnvironmentProvisionStatus::Cancelled {
+                    reason,
+                } => (
+                    "cancelled",
+                    Value::Null,
+                    Value::Null,
+                    json!(reason),
+                    None,
+                    None,
+                ),
             };
             json!({
                 "name": plan.name,
@@ -721,6 +737,7 @@ async fn list_environment_provisions(
         "requests": requests,
         "unreadable": unreadable,
         "truncated": truncated,
+        "pruned": pruned,
     })))
 }
 async fn graph_relations(State(state): State<ApiState>) -> Result<Json<Value>, HttpResponse> {

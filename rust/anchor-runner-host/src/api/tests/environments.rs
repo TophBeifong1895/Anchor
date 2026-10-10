@@ -460,11 +460,23 @@ async fn the_operator_can_see_what_environments_were_built_and_how_they_ended() 
         ))
         .unwrap();
 
+    // A build nobody answered must read as cancelled, never as requested.
+    state
+        .application
+        .write_environment_provision_plan(&plan(
+            "cancelled",
+            &"4".repeat(64),
+            EnvironmentProvisionStatus::Cancelled {
+                reason: "the Pilot was cancelled while the form was open".into(),
+            },
+        ))
+        .unwrap();
+
     let app = router(state.clone());
     let (status, listed) = call(app, "GET", "/environment-provisions", None).await;
     assert_eq!(status, StatusCode::OK, "{listed}");
     let requests = listed["requests"].as_array().unwrap();
-    assert_eq!(requests.len(), 2, "{listed}");
+    assert_eq!(requests.len(), 3, "{listed}");
     let built = requests
         .iter()
         .find(|request| request["name"] == "research")
@@ -485,6 +497,218 @@ async fn the_operator_can_see_what_environments_were_built_and_how_they_ended() 
     assert_eq!(aborted["status"], "aborted");
     assert_eq!(aborted["note"], "the fetch found no matching digest");
     assert_eq!(aborted["id"], Value::Null);
+    let cancelled = requests
+        .iter()
+        .find(|request| request["name"] == "cancelled")
+        .unwrap();
+    assert_eq!(cancelled["status"], "cancelled");
+    assert_eq!(
+        cancelled["note"],
+        "the Pilot was cancelled while the form was open"
+    );
+    assert_eq!(cancelled["id"], Value::Null);
     assert_eq!(listed["unreadable"], 0);
     assert_eq!(listed["truncated"], false);
+    assert_eq!(
+        listed["pruned"], 0,
+        "nothing is deleted while every candidate is distinct: {listed}"
+    );
+}
+
+/// One durable approval record, as the pilot paths write it.
+fn approval_record(
+    name: &str,
+    digest: &str,
+    turn: &str,
+    status: crate::application::environments::EnvironmentPlanStatus,
+    created: u64,
+) -> crate::application::environments::EnvironmentPlan {
+    crate::application::environments::EnvironmentPlan {
+        requester: crate::application::environments::EnvironmentPlanRequester {
+            owner: "local".into(),
+            session: "pilot".into(),
+            turn: turn.into(),
+        },
+        directory: std::path::PathBuf::from("/prepared"),
+        name: name.into(),
+        digest: digest.into(),
+        bytes: 12,
+        files: 2,
+        observed_id: None,
+        observed_present: false,
+        observed_name_version: None,
+        references: None,
+        status,
+        created,
+    }
+}
+
+/// T4's read-model half (§D1B/I4): a cancelled request is reported as
+/// `cancelled` — never as `requested` — and the deletions that bounded the
+/// directory are reported as `pruned` instead of being silent.
+#[tokio::test]
+async fn the_operator_can_see_cancelled_requests_and_what_retention_pruned() {
+    use crate::application::environments::EnvironmentPlanStatus;
+
+    let (root, state) = fixture();
+    let _env_guard = PROCESS_ENV.lock().await;
+    set_host_env(root.path(), &state.data_root);
+
+    let digest = "a".repeat(64);
+    for index in 0..8u64 {
+        state
+            .application
+            .write_environment_plan(&approval_record(
+                "research",
+                &digest,
+                &format!("turn-{index}"),
+                EnvironmentPlanStatus::Cancelled {
+                    reason: "the Pilot was cancelled while the form was open".into(),
+                },
+                100 + index,
+            ))
+            .unwrap();
+    }
+
+    let app = router(state.clone());
+    let (status, listed) = call(app, "GET", "/environment-publications", None).await;
+    assert_eq!(status, StatusCode::OK, "{listed}");
+    let requests = listed["requests"].as_array().unwrap();
+    assert_eq!(requests.len(), 1, "{listed}");
+    assert_eq!(requests[0]["status"], "cancelled");
+    assert_eq!(
+        requests[0]["note"],
+        "the Pilot was cancelled while the form was open"
+    );
+    assert_eq!(requests[0]["id"], Value::Null);
+    assert!(
+        requests
+            .iter()
+            .all(|request| request["status"] != "requested"),
+        "nobody can answer these any more: {listed}"
+    );
+    assert_eq!(
+        listed["pruned"],
+        json!(7),
+        "every deletion is reported: {listed}"
+    );
+}
+
+/// T7 (§D4A): a `requested` record that survives a restart is a request nobody
+/// can answer, so startup settles it into a terminal state instead of reporting
+/// a live question forever.
+#[tokio::test]
+async fn startup_settles_requests_whose_turn_is_over() {
+    use crate::application::environments::{EnvironmentPlanStatus, list_environment_plans};
+    use anchor_platform_session::{CreateSession, TurnStatus};
+
+    let (root, state) = fixture();
+    let _env_guard = PROCESS_ENV.lock().await;
+    set_host_env(root.path(), &state.data_root);
+
+    // The Turn that asked was still running when the host stopped.
+    let sessions = crate::api::sessions::store(&state).unwrap();
+    sessions
+        .create(
+            "local",
+            CreateSession {
+                id: Some("pilot".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    let (running, _) = sessions
+        .create_turn("local", "pilot", "request-1", Some("publish it"))
+        .unwrap();
+    state
+        .application
+        .write_environment_plan(&approval_record(
+            "research",
+            &"a".repeat(64),
+            &running.id,
+            EnvironmentPlanStatus::Requested,
+            0,
+        ))
+        .unwrap();
+    // A Turn this host has no record of cannot be answered either.
+    state
+        .application
+        .write_environment_plan(&approval_record(
+            "forgotten",
+            &"b".repeat(64),
+            "turn-that-never-existed",
+            EnvironmentPlanStatus::Requested,
+            0,
+        ))
+        .unwrap();
+    // A request a human already answered is not reconciliation's business.
+    state
+        .application
+        .write_environment_plan(&approval_record(
+            "answered",
+            &"c".repeat(64),
+            "turn-refused",
+            EnvironmentPlanStatus::Refused,
+            0,
+        ))
+        .unwrap();
+
+    let before = list_environment_plans(&state.data_root).unwrap().records;
+    let created = |name: &str| {
+        before
+            .iter()
+            .find(|plan| plan.name == name)
+            .unwrap()
+            .created
+    };
+
+    crate::api::turns::recover_pilot_turns(&state)
+        .await
+        .expect("startup recovery");
+
+    assert_eq!(
+        sessions
+            .get_turn("local", "pilot", &running.id)
+            .unwrap()
+            .status,
+        TurnStatus::Interrupted,
+        "startup recovery ends the Turn that was running"
+    );
+    let listed = list_environment_plans(&state.data_root).unwrap();
+    for name in ["research", "forgotten"] {
+        let plan = listed
+            .records
+            .iter()
+            .find(|plan| plan.name == name)
+            .unwrap_or_else(|| panic!("{name} is still listed: {:?}", listed.records));
+        assert!(
+            matches!(plan.status, EnvironmentPlanStatus::Cancelled { .. }),
+            "{name} must not stay a live request: {:?}",
+            plan.status
+        );
+        assert_eq!(
+            plan.created,
+            created(name),
+            "reconciliation rewrites the record in place instead of replacing it"
+        );
+    }
+    let answered = listed
+        .records
+        .iter()
+        .find(|plan| plan.name == "answered")
+        .unwrap();
+    assert_eq!(answered.status, EnvironmentPlanStatus::Refused);
+
+    // The operator read model shows the same thing.
+    let app = router(state.clone());
+    let (status, projection) = call(app, "GET", "/environment-publications", None).await;
+    assert_eq!(status, StatusCode::OK, "{projection}");
+    assert!(
+        projection["requests"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|request| request["status"] != "requested"),
+        "{projection}"
+    );
 }

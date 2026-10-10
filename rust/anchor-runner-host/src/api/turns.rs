@@ -69,6 +69,30 @@ pub(super) async fn recover_pilot_turns(state: &ApiState) -> Result<(), String> 
         sessions
             .interrupt_running()
             .map_err(|_| "Pilot startup recovery failed".to_owned())?;
+        // A plan record only ever means "a human is being asked". `interrupt_running`
+        // above already ended every Turn, and it runs *before* this: a Turn that was
+        // still `Running` because the host died mid-answer is settled here too, not
+        // just the ones that were already terminal. So a `Requested` record that
+        // survives startup is a request nobody can answer any more, and leaving it
+        // would report an unanswered question forever (§D4A).
+        let unsettled =
+            |requester: &crate::application::environments::EnvironmentPlanRequester| match sessions
+                .get_turn(&requester.owner, &requester.session, &requester.turn)
+            {
+                Ok(turn) => Ok(turn.status == TurnStatus::Running),
+                Err(anchor_platform_session::SessionError::Missing) => Ok(false),
+                Err(_) => Err(crate::application::ApplicationError::Storage(
+                    "the Pilot Turn store is unavailable".to_owned(),
+                )),
+            };
+        state
+            .application
+            .settle_abandoned_environment_plans(unsettled)
+            .map_err(|_| "Environment plan startup settlement failed".to_owned())?;
+        state
+            .application
+            .settle_abandoned_environment_provision_plans(unsettled)
+            .map_err(|_| "Environment provision startup settlement failed".to_owned())?;
         Ok(())
     })
     .await

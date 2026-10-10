@@ -281,6 +281,65 @@ fn abort_environment_plan(
     }
 }
 
+/// Why a plan holds no answer at all: the form never reached anyone.
+const FORM_UNREACHED: &str = "the native form could not be delivered, so nobody was asked";
+/// Why a plan holds no answer at all: the Pilot stopped with the form open.
+const FORM_ABANDONED: &str = "the Pilot was cancelled while the form was open";
+/// Why an approved act never ran: the Turn ended after the human approved it.
+const TURN_ENDS_BEFORE_APPROVED_ACT: &str =
+    "the human approved, but the Turn ended before the act could run";
+
+/// Record that nobody answered a plan's form, so the record never stays a
+/// request a human can no longer fulfil (§D2B).
+fn cancel_environment_plan(
+    tools: &PilotTools,
+    plan: &crate::application::environments::EnvironmentPlan,
+    reason: &str,
+) {
+    let mut cancelled = plan.clone();
+    cancelled.status = crate::application::environments::EnvironmentPlanStatus::Cancelled {
+        reason: reason.to_owned(),
+    };
+    if tools
+        .application
+        .write_environment_plan(&cancelled)
+        .is_err()
+    {
+        eprintln!(
+            "environment plan {} could not be marked cancelled",
+            plan.name
+        );
+    }
+}
+
+/// Finish a plan whose Turn ended between the human's answer and the act.
+///
+/// The answer is already known here, so the record keeps it: an approval that
+/// never ran is `Aborted`, anything else is `Refused` — the same terminal states
+/// the ordinary paths write. It is never `Cancelled`, which means *nobody
+/// answered* (I2), and it never stays `Requested`, which would report a live
+/// question nobody can answer any more (I1). The act itself is not carried out.
+fn finish_environment_plan_when_turn_is_gone(
+    tools: &PilotTools,
+    plan: &crate::application::environments::EnvironmentPlan,
+    accepted: bool,
+) {
+    let mut finished = plan.clone();
+    finished.status = if accepted {
+        crate::application::environments::EnvironmentPlanStatus::Aborted {
+            reason: TURN_ENDS_BEFORE_APPROVED_ACT.to_owned(),
+        }
+    } else {
+        crate::application::environments::EnvironmentPlanStatus::Refused
+    };
+    if tools.application.write_environment_plan(&finished).is_err() {
+        eprintln!(
+            "environment plan {} could not be finished after its Turn ended",
+            plan.name
+        );
+    }
+}
+
 fn environment_message(precondition: &EnvironmentPublishPrecondition) -> String {
     let plan = &precondition.plan;
     let mut message = format!(
@@ -436,8 +495,16 @@ async fn publish_environment(
             ))
         })?;
     if precondition.already_published() {
+        // The name already points at exactly this content, so the publication is
+        // a fact: the record ends as one instead of staying a request nobody
+        // answered (§D3A). Nothing was changed, so a failed record update is
+        // reported rather than raised.
+        let plan_recorded = tools
+            .application
+            .record_observed_publication(&precondition)
+            .is_ok();
         return Ok(vec![ToolResultContent::text(
-            json!({"published":false,"already_published":true,"name":precondition.plan.name,"id":precondition.plan.digest})
+            json!({"published":false,"already_published":true,"name":precondition.plan.name,"id":precondition.plan.digest,"plan_recorded":plan_recorded})
                 .to_string(),
         )]);
     }
@@ -467,14 +534,24 @@ async fn publish_environment(
     });
     tokio::pin!(elicitation);
     let result = tokio::select! {
-        result = &mut elicitation => result.map_err(|_| failure("native user confirmation could not complete"))?,
+        result = &mut elicitation => match result {
+            Ok(result) => result,
+            // The form never got through: nobody was asked, so the record must
+            // not read as a request still waiting for an answer.
+            Err(_) => {
+                cancel_environment_plan(tools, &precondition.plan, FORM_UNREACHED);
+                return Err(failure("native user confirmation could not complete"));
+            }
+        },
         _ = async {
             while !cancellation.load(Ordering::Acquire) {
                 tokio::time::sleep(Duration::from_millis(10)).await;
             }
-        } => return Err(failure("Pilot was cancelled while waiting for the user")),
+        } => {
+            cancel_environment_plan(tools, &precondition.plan, FORM_ABANDONED);
+            return Err(failure("Pilot was cancelled while waiting for the user"));
+        }
     };
-    active(tools, cancellation)?;
     let approved = |field: &str| {
         result
             .content
@@ -485,6 +562,13 @@ async fn publish_environment(
     let accepted = result.action == ElicitationAction::Accept
         && approved("confirm")
         && (!precondition.replacing() || approved("replace_name"));
+    // The Turn can end between the human's answer and this act. The answer is
+    // known by now, so the record keeps it instead of staying a live request
+    // nobody can answer (I1/I2); the act itself still does not run.
+    if let Err(error) = active(tools, cancellation) {
+        finish_environment_plan_when_turn_is_gone(tools, &precondition.plan, accepted);
+        return Err(error);
+    }
     if !accepted {
         // The plan stays durable as a refusal; it is never replayed automatically.
         // A failure to record it is reported rather than swallowed, because a stale
@@ -636,6 +720,56 @@ fn abort_environment_provision_plan(
     }
 }
 
+/// Record that nobody answered a build's form, so the record never stays a
+/// request a human can no longer fulfil (§D2B).
+fn cancel_environment_provision_plan(
+    tools: &PilotTools,
+    plan: &crate::application::environments::EnvironmentProvisionPlan,
+    reason: &str,
+) {
+    let mut cancelled = plan.clone();
+    cancelled.status = crate::application::environments::EnvironmentProvisionStatus::Cancelled {
+        reason: reason.to_owned(),
+    };
+    if tools
+        .application
+        .write_environment_provision_plan(&cancelled)
+        .is_err()
+    {
+        eprintln!(
+            "environment provision plan {} could not be marked cancelled",
+            plan.name
+        );
+    }
+}
+
+/// Finish a build whose Turn ended between the human's answer and the act; see
+/// [`finish_environment_plan_when_turn_is_gone`].
+fn finish_environment_provision_plan_when_turn_is_gone(
+    tools: &PilotTools,
+    plan: &crate::application::environments::EnvironmentProvisionPlan,
+    accepted: bool,
+) {
+    let mut finished = plan.clone();
+    finished.status = if accepted {
+        crate::application::environments::EnvironmentProvisionStatus::Aborted {
+            reason: TURN_ENDS_BEFORE_APPROVED_ACT.to_owned(),
+        }
+    } else {
+        crate::application::environments::EnvironmentProvisionStatus::Refused
+    };
+    if tools
+        .application
+        .write_environment_provision_plan(&finished)
+        .is_err()
+    {
+        eprintln!(
+            "environment provision plan {} could not be finished after its Turn ended",
+            plan.name
+        );
+    }
+}
+
 /// Resolve, build and publish the environment one recorded requirement asks for.
 async fn provision_environment(
     tools: &PilotTools,
@@ -700,14 +834,22 @@ async fn provision_environment(
     });
     tokio::pin!(elicitation);
     let result = tokio::select! {
-        result = &mut elicitation => result.map_err(|_| failure("native user confirmation could not complete"))?,
+        result = &mut elicitation => match result {
+            Ok(result) => result,
+            Err(_) => {
+                cancel_environment_provision_plan(tools, &precondition.plan, FORM_UNREACHED);
+                return Err(failure("native user confirmation could not complete"));
+            }
+        },
         _ = async {
             while !cancellation.load(Ordering::Acquire) {
                 tokio::time::sleep(Duration::from_millis(10)).await;
             }
-        } => return Err(failure("Pilot was cancelled while waiting for the user")),
+        } => {
+            cancel_environment_provision_plan(tools, &precondition.plan, FORM_ABANDONED);
+            return Err(failure("Pilot was cancelled while waiting for the user"));
+        }
     };
-    active(tools, cancellation)?;
     let approved = |field: &str| {
         result
             .content
@@ -718,6 +860,12 @@ async fn provision_environment(
     let accepted = result.action == ElicitationAction::Accept
         && approved("confirm")
         && (!precondition.replacing() || approved("replace_name"));
+    // The Turn can end between the human's answer and this act; see the publish
+    // path above for why the record keeps the answer it already has.
+    if let Err(error) = active(tools, cancellation) {
+        finish_environment_provision_plan_when_turn_is_gone(tools, &precondition.plan, accepted);
+        return Err(error);
+    }
     if !accepted {
         // The resolved plan stays durable as a refusal; it is never replayed.
         let mut refused = precondition.plan.clone();
@@ -1105,5 +1253,648 @@ mod tests {
                 "{refused} must be refused"
             );
         }
+    }
+}
+
+/// The approval lifecycle, driven through the real tool call over an in-process
+/// MCP pairing: the assistant's confirmed tool asks a native form and the record
+/// it leaves behind is read the way the operator read model reads it.
+#[cfg(test)]
+mod plan_lifecycle_tests {
+    use super::*;
+    use crate::application::RunApplication;
+    use crate::application::environments::{
+        EnvironmentPlan, EnvironmentPlanStatus, list_environment_plans,
+    };
+    use crate::pilot_tools::PilotTools;
+    use anchor_library::EnvironmentStore;
+    use anchor_platform_session::{CreateSession, SessionStore};
+    use rmcp::{
+        ClientHandler, RoleClient, ServerHandler, ServiceExt,
+        model::{
+            CallToolRequestParams, CallToolResult, ContentBlock, ElicitResult, ErrorData,
+            ServerCapabilities, ServerInfo,
+        },
+        service::{RequestContext, RunningService},
+    };
+    use std::sync::Arc;
+    use tokio::sync::mpsc;
+
+    const CANDIDATE: &str = "candidate";
+    const NAME: &str = "research";
+
+    /// How the native form behaves in one test.
+    enum Form {
+        /// The human never answers it.
+        Silent,
+        /// It answers with this content.
+        Accept(Value),
+        /// It answers, but the Turn is already over by the time the answer
+        /// arrives: the client ends the Turn before handing the answer back,
+        /// which is the race the answer-arrives-first branch handles.
+        AcceptAfterTurnEnded(Value),
+        /// It cannot be delivered at all.
+        Unreachable,
+    }
+
+    /// The MCP client of the pairing: it answers (or never answers) the native
+    /// forms the tool asks, and hands each ask to the test.
+    struct FormClient {
+        form: Form,
+        asks: mpsc::UnboundedSender<ElicitRequestParams>,
+        /// The Session the form belongs to, so a test can end its Turn while the
+        /// answer is in flight.
+        sessions: SessionStore,
+        owner: String,
+        session: String,
+        turn: String,
+    }
+
+    impl ClientHandler for FormClient {
+        async fn create_elicitation(
+            &self,
+            request: ElicitRequestParams,
+            _context: RequestContext<RoleClient>,
+        ) -> Result<ElicitResult, ErrorData> {
+            let _ = self.asks.send(request);
+            let accept = |content: &Value| {
+                ElicitResult::new(ElicitationAction::Accept).with_content(content.clone())
+            };
+            match &self.form {
+                Form::Silent => std::future::pending::<Result<ElicitResult, ErrorData>>().await,
+                Form::Accept(content) => Ok(accept(content)),
+                Form::AcceptAfterTurnEnded(content) => {
+                    self.sessions
+                        .finish_turn(
+                            &self.owner,
+                            &self.session,
+                            &self.turn,
+                            anchor_platform_session::TurnStatus::Stopped,
+                            None,
+                        )
+                        .expect("the fixture Turn ends");
+                    Ok(accept(content))
+                }
+                Form::Unreachable => Err(ErrorData::internal_error(
+                    "the native form was lost in transit",
+                    None,
+                )),
+            }
+        }
+    }
+
+    /// The MCP server of the pairing: exactly the host's confirmed-tool entry
+    /// point, holding the peer the tool asks the human through.
+    #[derive(Clone)]
+    struct ConfirmedTools {
+        tools: Arc<PilotTools>,
+        cancellation: Cancellation,
+    }
+
+    impl ServerHandler for ConfirmedTools {
+        fn get_info(&self) -> ServerInfo {
+            ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
+        }
+
+        async fn call_tool(
+            &self,
+            request: CallToolRequestParams,
+            context: RequestContext<RoleServer>,
+        ) -> Result<CallToolResult, ErrorData> {
+            let arguments = Value::Object(request.arguments.unwrap_or_default());
+            match call(
+                &self.tools,
+                &request.name,
+                arguments,
+                context.peer.clone(),
+                &self.cancellation,
+            )
+            .await
+            {
+                Ok(contents) => Ok(CallToolResult::success(
+                    contents
+                        .into_iter()
+                        .filter_map(|content| {
+                            content.as_text().map(ContentBlock::text).or_else(|| {
+                                content
+                                    .as_json()
+                                    .map(|json| ContentBlock::text(json.to_string()))
+                            })
+                        })
+                        .collect(),
+                )),
+                Err(error) => Ok(CallToolResult::error(vec![ContentBlock::text(
+                    error.to_string(),
+                )])),
+            }
+        }
+    }
+
+    struct Fixture {
+        _root: tempfile::TempDir,
+        tools: Arc<PilotTools>,
+        cancellation: Cancellation,
+        client: RunningService<RoleClient, FormClient>,
+        asks: mpsc::UnboundedReceiver<ElicitRequestParams>,
+    }
+
+    impl Fixture {
+        async fn start(form: Form) -> Self {
+            let root = tempfile::tempdir().unwrap();
+            // The assistant Graph the confirmed tools load before they ask.
+            std::fs::create_dir_all(root.path().join("fixture")).unwrap();
+            std::fs::write(
+                root.path().join("fixture/graph.json"),
+                r#"{"entry":"idle","ops":{"idle":{"run":"true"}},"nodes":[{"id":"idle","op":"idle"}],"edges":[]}"#,
+            )
+            .unwrap();
+            std::fs::write(
+                root.path().join("fixture/manifest.json"),
+                r#"{"format":1,"graph":"graph.json","plugins":[]}"#,
+            )
+            .unwrap();
+
+            // A Pilot Session with one running Turn: a confirmed tool refuses to
+            // ask anything once its Turn is over.
+            let sessions = SessionStore::open(root.path().join("sessions.sqlite")).unwrap();
+            sessions
+                .create(
+                    "local",
+                    CreateSession {
+                        id: Some("pilot".into()),
+                        ..Default::default()
+                    },
+                )
+                .unwrap();
+            let (turn, _) = sessions
+                .create_turn("local", "pilot", "request-1", Some("publish it"))
+                .unwrap();
+
+            // The candidate is a prepared directory inside the workspace.
+            let workspace_root = root.path().join("work");
+            let candidate = workspace_root.join(CANDIDATE);
+            std::fs::create_dir_all(candidate.join("bin")).unwrap();
+            std::fs::write(candidate.join("bin/probe"), "#!/bin/sh\n").unwrap();
+
+            let data_root = root.path().join("state");
+            let tools = Arc::new(PilotTools {
+                application: RunApplication::new(data_root.clone(), root.path().to_path_buf()),
+                graph_name: "fixture".into(),
+                catalog_root: root.path().to_path_buf(),
+                library_root: root.path().join("library"),
+                data_root,
+                workspace_root,
+                sessions,
+                owner: "local".into(),
+                session: "pilot".into(),
+                turn: turn.id,
+            });
+
+            let cancellation: Cancellation = Cancellation::default();
+            let (asks_tx, asks) = mpsc::unbounded_channel();
+            let (server_io, client_io) = tokio::io::duplex(16_384);
+            let handler = ConfirmedTools {
+                tools: Arc::clone(&tools),
+                cancellation: Arc::clone(&cancellation),
+            };
+            tokio::spawn(async move {
+                if let Ok(running) = handler.serve(server_io).await {
+                    let _ = running.waiting().await;
+                }
+            });
+            let client = FormClient {
+                form,
+                asks: asks_tx,
+                sessions: tools.sessions.clone(),
+                owner: tools.owner.clone(),
+                session: tools.session.clone(),
+                turn: tools.turn.clone(),
+            }
+            .serve(client_io)
+            .await
+            .expect("the in-process MCP client handshakes");
+
+            Self {
+                _root: root,
+                tools,
+                cancellation,
+                client,
+                asks,
+            }
+        }
+
+        /// Call one confirmed tool; the answer is its text payload.
+        async fn call(&self, name: &str, arguments: Value) -> (bool, Value) {
+            call_tool(&self.client, name, arguments).await
+        }
+
+        /// The one durable plan this deployment recorded.
+        fn only_plan(&self) -> EnvironmentPlan {
+            let listed = list_environment_plans(&self.tools.data_root).unwrap();
+            assert_eq!(listed.records.len(), 1, "{:?}", listed.records);
+            listed.records.into_iter().next().unwrap()
+        }
+    }
+
+    /// Call one confirmed tool on a client whose owner may still be borrowed
+    /// elsewhere (the T1 case waits for the form while the call is in flight).
+    async fn call_tool(
+        client: &RunningService<RoleClient, FormClient>,
+        name: &str,
+        arguments: Value,
+    ) -> (bool, Value) {
+        let mut request = CallToolRequestParams::new(name.to_owned());
+        request.arguments = arguments.as_object().cloned();
+        let result = client
+            .call_tool(request)
+            .await
+            .expect("the confirmed tool answers");
+        let text = result
+            .content
+            .iter()
+            .find_map(|block| match block {
+                ContentBlock::Text(text) => Some(text.text.clone()),
+                _ => None,
+            })
+            .unwrap_or_default();
+        (
+            result.is_error == Some(true),
+            serde_json::from_str(&text).unwrap_or(Value::String(text)),
+        )
+    }
+
+    /// T2 (§D3A): a second call that finds the name already pointing at exactly
+    /// this content records that publication instead of leaving the plan as a
+    /// request nobody answered.
+    #[tokio::test]
+    async fn a_repeat_publish_records_the_publication_it_found() {
+        let mut fixture = Fixture::start(Form::Silent).await;
+        let directory = fixture.tools.workspace_root.join(CANDIDATE);
+        let store = EnvironmentStore::new(&fixture.tools.library_root);
+        let published = store.publish(&directory).unwrap();
+        store.set_name(NAME, &published.id, None).unwrap();
+
+        let (failed, result) = fixture
+            .call(
+                "environment_publish",
+                json!({"directory":CANDIDATE,"name":NAME}),
+            )
+            .await;
+        assert!(!failed, "{result}");
+        assert_eq!(result["already_published"], json!(true), "{result}");
+        assert_eq!(
+            result["plan_recorded"],
+            json!(true),
+            "the observed publication is recorded: {result}"
+        );
+        assert!(
+            fixture.asks.try_recv().is_err(),
+            "no form is shown for content that is already published"
+        );
+        assert_eq!(
+            fixture.only_plan().status,
+            EnvironmentPlanStatus::Published {
+                id: published.id,
+                name_version: 1,
+            }
+        );
+    }
+
+    /// T1 (§D2B): a Pilot cancelled while the form is open leaves a `Cancelled`
+    /// record — never a `requested` one a human can no longer answer.
+    #[tokio::test]
+    async fn a_cancelled_pilot_leaves_a_cancelled_record_not_a_live_request() {
+        let mut fixture = Fixture::start(Form::Silent).await;
+        let call = call_tool(
+            &fixture.client,
+            "environment_publish",
+            json!({"directory":CANDIDATE,"name":NAME}),
+        );
+        tokio::pin!(call);
+        // The tool is now waiting for the native form to be answered.
+        tokio::select! {
+            _ = &mut call => panic!("the tool answered before the form was answered"),
+            ask = fixture.asks.recv() => assert!(ask.is_some(), "the native form was asked"),
+        }
+        fixture.cancellation.store(true, Ordering::SeqCst);
+        let (failed, result) = call.await;
+        assert!(failed, "a cancelled Pilot is a tool failure: {result}");
+        assert_eq!(
+            fixture.only_plan().status,
+            EnvironmentPlanStatus::Cancelled {
+                reason: FORM_ABANDONED.to_owned(),
+            }
+        );
+    }
+
+    /// T3 (§D2B): a form that cannot be transported asked nobody, so the record
+    /// is `Cancelled` too — and never stays `requested`.
+    #[tokio::test]
+    async fn an_undeliverable_form_leaves_a_cancelled_record() {
+        let mut fixture = Fixture::start(Form::Unreachable).await;
+        let (failed, result) = fixture
+            .call(
+                "environment_publish",
+                json!({"directory":CANDIDATE,"name":NAME}),
+            )
+            .await;
+        assert!(failed, "{result}");
+        assert!(
+            result
+                .as_str()
+                .is_some_and(|reason| reason.contains("could not complete")),
+            "{result}"
+        );
+        assert!(
+            fixture.asks.try_recv().is_ok(),
+            "the form really was attempted"
+        );
+        assert_eq!(
+            fixture.only_plan().status,
+            EnvironmentPlanStatus::Cancelled {
+                reason: FORM_UNREACHED.to_owned(),
+            }
+        );
+    }
+
+    /// The build path has the same shape as the publish path: a form nobody
+    /// answered leaves a `Cancelled` build record, never a live request.
+    #[tokio::test]
+    async fn a_cancelled_build_form_leaves_a_cancelled_record() {
+        use crate::application::environments::{
+            EnvironmentProvisionPlan, EnvironmentProvisionStatus, EnvironmentRequirementAsk,
+            list_environment_provision_plans,
+        };
+        use crate::environment_provision::LockedPackage;
+
+        let fixture = Fixture::start(Form::Silent).await;
+        let requester = crate::application::environments::EnvironmentPlanRequester {
+            owner: "local".into(),
+            session: "pilot".into(),
+            turn: "turn-1".into(),
+        };
+        let plan = EnvironmentProvisionPlan {
+            requester: requester.clone(),
+            name: NAME.into(),
+            ask: EnvironmentRequirementAsk {
+                requester,
+                purpose: "analyse documents".into(),
+                interpreter: Some("3.12".into()),
+                packages: vec!["pandas==2.2.0".into()],
+                notes: None,
+            },
+            sources: vec!["index:https://pypi.org/simple".into()],
+            interpreter: "3.12.13".into(),
+            interpreter_path: std::path::PathBuf::from("/usr/bin/python3.12"),
+            interpreter_prefix: std::path::PathBuf::from("/usr"),
+            interpreter_digest: "a".repeat(64),
+            lock_digest: "b".repeat(64),
+            lock: String::new(),
+            packages: vec![LockedPackage {
+                name: "pandas".into(),
+                version: "2.2.0".into(),
+                hashes: vec!["c".repeat(64)],
+            }],
+            references: None,
+            observed_id: None,
+            observed_present: false,
+            observed_name_version: None,
+            status: EnvironmentProvisionStatus::Requested,
+            created: 0,
+        };
+        // The precondition writes it before the human is asked.
+        fixture
+            .tools
+            .application
+            .write_environment_provision_plan(&plan)
+            .unwrap();
+
+        cancel_environment_provision_plan(&fixture.tools, &plan, FORM_ABANDONED);
+
+        let listed = list_environment_provision_plans(&fixture.tools.data_root).unwrap();
+        assert_eq!(listed.records.len(), 1, "{:?}", listed.records);
+        assert_eq!(
+            listed.records[0].status,
+            EnvironmentProvisionStatus::Cancelled {
+                reason: FORM_ABANDONED.to_owned(),
+            }
+        );
+    }
+
+    /// One durable plan record for a test, as the approval paths write it.
+    fn requested_plan(turn: &str, digest: &str) -> EnvironmentPlan {
+        EnvironmentPlan {
+            requester: crate::application::environments::EnvironmentPlanRequester {
+                owner: "local".into(),
+                session: "pilot".into(),
+                turn: turn.into(),
+            },
+            directory: std::path::PathBuf::from("/prepared"),
+            name: NAME.into(),
+            digest: digest.into(),
+            bytes: 1,
+            files: 1,
+            observed_id: None,
+            observed_present: false,
+            observed_name_version: None,
+            references: None,
+            status: EnvironmentPlanStatus::Requested,
+            created: 0,
+        }
+    }
+
+    /// T9: the Turn can end between the human's answer and the act. The answer
+    /// is already known, so the record keeps it — `Aborted` for an approval that
+    /// never ran, `Refused` for a "no" — and never stays a live request.
+    ///
+    /// The race itself (a form answer and a Pilot cancellation becoming ready in
+    /// the same `select!`) is not deterministically reproducible; this covers the
+    /// handler that race calls.
+    #[tokio::test]
+    async fn a_turn_that_ends_after_the_answer_keeps_the_answer() {
+        // Two candidates, so the two records do not collapse into one another.
+        let approved = requested_plan("turn-approved", &"a".repeat(64));
+        let refused = requested_plan("turn-refused", &"b".repeat(64));
+        let fixture = Fixture::start(Form::Silent).await;
+        for plan in [&approved, &refused] {
+            fixture
+                .tools
+                .application
+                .write_environment_plan(plan)
+                .unwrap();
+        }
+
+        finish_environment_plan_when_turn_is_gone(&fixture.tools, &approved, true);
+        finish_environment_plan_when_turn_is_gone(&fixture.tools, &refused, false);
+
+        let listed = list_environment_plans(&fixture.tools.data_root).unwrap();
+        assert_eq!(listed.records.len(), 2, "{:?}", listed.records);
+        let recorded = |turn: &str| {
+            listed
+                .records
+                .iter()
+                .find(|plan| plan.requester.turn == turn)
+                .unwrap()
+        };
+        assert_eq!(
+            recorded("turn-approved").status,
+            EnvironmentPlanStatus::Aborted {
+                reason: TURN_ENDS_BEFORE_APPROVED_ACT.to_owned(),
+            },
+            "an approval that never ran is not a refusal and not a cancellation"
+        );
+        assert_eq!(
+            recorded("turn-refused").status,
+            EnvironmentPlanStatus::Refused
+        );
+        // The operator read model renders `"requested"` exactly when the status
+        // is `Requested`, so a terminal status here is what "no longer shows
+        // requested" means (the HTTP projection for both of these terminal
+        // states is asserted in the api tests).
+        assert!(
+            listed
+                .records
+                .iter()
+                .all(|plan| !matches!(plan.status, EnvironmentPlanStatus::Requested)),
+            "nobody can answer these any more: {:?}",
+            listed.records
+        );
+    }
+
+    /// T9 end to end: the human answers, but the Turn is over by the time the
+    /// answer is handed back. The answer is already known, so it is still
+    /// recorded, and the plan never stays a live request.
+    async fn answer_after_the_turn_ended(content: Value, expected: EnvironmentPlanStatus) {
+        let fixture = Fixture::start(Form::AcceptAfterTurnEnded(content)).await;
+        let (failed, result) = fixture
+            .call(
+                "environment_publish",
+                json!({"directory":CANDIDATE,"name":NAME}),
+            )
+            .await;
+        assert!(
+            failed,
+            "the Turn is gone, so the act does not run: {result}"
+        );
+        assert_eq!(fixture.only_plan().status, expected);
+    }
+
+    #[tokio::test]
+    async fn an_approved_answer_that_arrives_after_its_turn_ended_is_recorded() {
+        answer_after_the_turn_ended(
+            json!({"confirm": true}),
+            EnvironmentPlanStatus::Aborted {
+                reason: TURN_ENDS_BEFORE_APPROVED_ACT.to_owned(),
+            },
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn a_refused_answer_that_arrives_after_its_turn_ended_is_recorded() {
+        answer_after_the_turn_ended(json!({"confirm": false}), EnvironmentPlanStatus::Refused)
+            .await;
+    }
+
+    /// T9 for the build family: the same handler, the same two terminal states.
+    #[tokio::test]
+    async fn a_build_turn_that_ends_after_the_answer_keeps_the_answer() {
+        use crate::application::environments::{
+            EnvironmentProvisionPlan, EnvironmentProvisionStatus, EnvironmentRequirementAsk,
+            list_environment_provision_plans,
+        };
+        use crate::environment_provision::LockedPackage;
+
+        let fixture = Fixture::start(Form::Silent).await;
+        let requester = crate::application::environments::EnvironmentPlanRequester {
+            owner: "local".into(),
+            session: "pilot".into(),
+            turn: "turn-1".into(),
+        };
+        let plan = |lock: &str, status: EnvironmentProvisionStatus| EnvironmentProvisionPlan {
+            requester: requester.clone(),
+            name: NAME.into(),
+            ask: EnvironmentRequirementAsk {
+                requester: requester.clone(),
+                purpose: "analyse documents".into(),
+                interpreter: Some("3.12".into()),
+                packages: vec!["pandas==2.2.0".into()],
+                notes: None,
+            },
+            sources: vec!["index:https://pypi.org/simple".into()],
+            interpreter: "3.12.13".into(),
+            interpreter_path: std::path::PathBuf::from("/usr/bin/python3.12"),
+            interpreter_prefix: std::path::PathBuf::from("/usr"),
+            interpreter_digest: "a".repeat(64),
+            lock_digest: lock.into(),
+            lock: String::new(),
+            packages: vec![LockedPackage {
+                name: "pandas".into(),
+                version: "2.2.0".into(),
+                hashes: vec!["c".repeat(64)],
+            }],
+            references: None,
+            observed_id: None,
+            observed_present: false,
+            observed_name_version: None,
+            status,
+            created: 0,
+        };
+        let approved = plan(&"1".repeat(64), EnvironmentProvisionStatus::Requested);
+        let refused = plan(&"2".repeat(64), EnvironmentProvisionStatus::Requested);
+        for record in [&approved, &refused] {
+            fixture
+                .tools
+                .application
+                .write_environment_provision_plan(record)
+                .unwrap();
+        }
+
+        finish_environment_provision_plan_when_turn_is_gone(&fixture.tools, &approved, true);
+        finish_environment_provision_plan_when_turn_is_gone(&fixture.tools, &refused, false);
+
+        let listed = list_environment_provision_plans(&fixture.tools.data_root).unwrap();
+        assert_eq!(listed.records.len(), 2, "{:?}", listed.records);
+        let recorded = |lock: &str| {
+            listed
+                .records
+                .iter()
+                .find(|plan| plan.lock_digest == lock)
+                .unwrap()
+        };
+        assert_eq!(
+            recorded(&"1".repeat(64)).status,
+            EnvironmentProvisionStatus::Aborted {
+                reason: TURN_ENDS_BEFORE_APPROVED_ACT.to_owned(),
+            }
+        );
+        assert_eq!(
+            recorded(&"2".repeat(64)).status,
+            EnvironmentProvisionStatus::Refused
+        );
+        assert!(
+            listed
+                .records
+                .iter()
+                .all(|plan| !matches!(plan.status, EnvironmentProvisionStatus::Requested)),
+            "{:?}",
+            listed.records
+        );
+    }
+
+    /// A human who answers "no" in the form is recorded as a refusal, not as a
+    /// cancellation: the three terminal states may not be mixed up (I2).
+    #[tokio::test]
+    async fn a_declined_form_is_recorded_as_a_refusal() {
+        let fixture = Fixture::start(Form::Accept(json!({"confirm": false}))).await;
+        let (failed, result) = fixture
+            .call(
+                "environment_publish",
+                json!({"directory":CANDIDATE,"name":NAME}),
+            )
+            .await;
+        assert!(!failed, "{result}");
+        assert_eq!(result["plan_recorded"], json!(true), "{result}");
+        assert_eq!(fixture.only_plan().status, EnvironmentPlanStatus::Refused);
     }
 }
