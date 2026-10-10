@@ -13,6 +13,10 @@ use anchor_runtime::{
 use serde_json::{Value, json};
 
 mod environments;
+mod graphs;
+mod plugins;
+mod runs;
+mod sessions;
 
 use crate::{
     application::{AdmissionOptions, RunApplication, RunTrigger, metadata::PilotRunSource},
@@ -410,317 +414,24 @@ impl PilotTools {
 
     async fn execute(&self, name: &str, arguments: Value) -> Result<Value, ToolError> {
         match name {
-            "graph_create" => {
-                let graph = parameter(&arguments, "name")?;
-                self.refuse_self_graph(&graph)?;
-                self.require_active_turn()?;
-                self.application
-                    .create_graph(&graph, arguments.get("definition").cloned())
-                    .await
-                    .map_err(|failure| {
-                        ToolError::Failed(format!("Graph creation rejected: {failure:?}"))
-                    })
-            }
-            "graph_update" => {
-                let graph = parameter(&arguments, "graph")?;
-                // A self-target is refused before anything else: the Graph that
-                // defines the assistant is not something the assistant may
-                // rewrite, regardless of Turn state.
-                self.refuse_self_graph(&graph)?;
-                self.require_active_turn()?;
-                let definition = arguments
-                    .get("definition")
-                    .filter(|value| value.is_object())
-                    .cloned()
-                    .ok_or_else(|| ToolError::Failed("definition must be an object".into()))?;
-                self.application
-                    .update_graph(&graph, definition)
-                    .await
-                    .map_err(|failure| {
-                        ToolError::Failed(format!("Graph update rejected: {failure:?}"))
-                    })
-            }
-            "graph_run" => {
-                self.require_active_turn()?;
-                let graph = parameter(&arguments, "graph")?;
-                let objective = match arguments.get("objective") {
-                    None | Some(Value::Null) => None,
-                    Some(Value::String(value)) => Some(value.clone()),
-                    _ => return Err(ToolError::Failed("objective must be a string".into())),
-                };
-                let path = self
-                    .application
-                    .graph_path_checked(&graph)
-                    .map_err(|failure| {
-                        ToolError::Failed(format!("Graph unavailable: {failure:?}"))
-                    })?;
-                let lease = self
-                    .application
-                    .graph_admission_lease(&path)
-                    .map_err(|failure| {
-                        ToolError::Failed(format!("Run admission rejected: {failure:?}"))
-                    })?;
-                let (path, bundle) = self.application.load_graph(&graph).map_err(|failure| {
-                    ToolError::Failed(format!("Graph unavailable: {failure:?}"))
-                })?;
-                let run = self
-                    .application
-                    .admit(
-                        graph.clone(),
-                        &path,
-                        bundle,
-                        arguments.get("input").cloned().unwrap_or_else(|| json!({})),
-                        AdmissionOptions {
-                            objective,
-                            trigger: RunTrigger::default(),
-                            pilot: Some(PilotRunSource {
-                                owner: self.owner.clone(),
-                                session: self.session.clone(),
-                                turn: self.turn.clone(),
-                            }),
-                            oauth_owner: Some(crate::api::oauth::binding_owner(&self.owner)),
-                        },
-                        lease,
-                    )
-                    .await
-                    .map_err(|failure| {
-                        ToolError::Failed(format!("Run admission rejected: {failure:?}"))
-                    })?;
-                let mut result =
-                    json!({"run":run,"graph":graph,"session":self.session,"accepted":true});
-                if self
-                    .sessions
-                    .associate_run(&self.owner, &self.session, &self.turn, &run)
-                    .is_err()
-                {
-                    result["association_error"] = json!(
-                        "Run accepted; Session association pending reconciliation. Do not retry graph_run; inspect this Run ID."
-                    );
-                }
-                Ok(result)
-            }
-            "run_pause" | "run_resume" | "run_stop" => {
-                self.require_active_turn()?;
-                let run = parameter(&arguments, "run")?;
-                if !identifier(&run) {
-                    return Err(failed());
-                }
-                let operation = name.strip_prefix("run_").expect("matched Run control");
-                self.application
-                    .control(&run, operation)
-                    .await
-                    .map_err(|failure| {
-                        ToolError::Failed(format!("Run control rejected: {failure:?}"))
-                    })?;
-                Ok(json!({"run":run,"operation":operation,"requested":true}))
-            }
-            "graph_list" => {
-                let mut names = vec![self.graph_name.clone()];
-                if let Ok(entries) = std::fs::read_dir(&self.catalog_root) {
-                    for entry in entries {
-                        let entry = entry.map_err(|_| failed())?;
-                        let name = entry.file_name().to_string_lossy().into_owned();
-                        if identifier(&name)
-                            && !names.contains(&name)
-                            && entry.file_type().is_ok_and(|kind| kind.is_dir())
-                            && entry.path().join("graph.json").is_file()
-                        {
-                            names.push(name);
-                        }
-                    }
-                }
-                names.sort();
-                let mut graphs = Vec::new();
-                for graph in names {
-                    let active = self.application.active_runs(Some(&graph)).await;
-                    graphs.push(json!({"graph":graph,"active_runs":active}));
-                }
-                Ok(json!({"graphs":graphs}))
-            }
-            "graph_read" => {
-                let graph = parameter(&arguments, "graph")?;
-                if !identifier(&graph) {
-                    return Err(failed());
-                }
-                let definition =
-                    text_resource(&self.application.graph_bundle_path(&graph), "graph.json")?;
-                Ok(
-                    json!({"graph":graph,"definition":serde_json::from_str::<Value>(&definition).map_err(|_| failed())?}),
-                )
-            }
-            "graph_validate" => {
-                let definition = arguments
-                    .get("definition")
-                    .filter(|value| value.is_object())
-                    .ok_or_else(failed)?;
-                let validation = (|| {
-                    let snapshot =
-                        GraphSnapshot::from_authoring(definition.clone()).map_err(|_| failed())?;
-                    crate::reject_snapshot(&snapshot).map_err(|_| failed())?;
-                    let ids = snapshot
-                        .nodes
-                        .iter()
-                        .flat_map(|node| node.plugins.iter().cloned())
-                        .collect::<std::collections::BTreeSet<_>>()
-                        .into_iter()
-                        .collect::<Vec<_>>();
-                    FilePluginCatalog::new(&self.library_root)
-                        .resolve(&ids)
-                        .map_err(|_| failed())?;
-                    Ok::<_, ToolError>(snapshot)
-                })();
-                match validation {
-                    Ok(snapshot) => Ok(
-                        json!({"valid":true,"entry":snapshot.entry,"nodes":snapshot.nodes.iter().map(|node| &node.id).collect::<Vec<_>>()}),
-                    ),
-                    Err(_) => {
-                        Ok(json!({"valid":false,"error":"invalid Graph or unavailable Plugin"}))
-                    }
-                }
-            }
-            "plugin_list" => {
-                let catalog = FilePluginCatalog::new(&self.library_root);
-                let mut plugins = Vec::new();
-                match std::fs::read_dir(self.library_root.join("plugins")) {
-                    Ok(entries) => {
-                        for entry in entries {
-                            let entry = entry.map_err(|_| failed())?;
-                            let id = entry.file_name().to_string_lossy().into_owned();
-                            if id.starts_with('.') {
-                                continue;
-                            }
-                            plugins.push(match catalog.definition(&id) {
-                                Ok(definition) => public_plugin(&definition),
-                                Err(_) => json!({"id":id,"available":false}),
-                            });
-                        }
-                    }
-                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-                    Err(_) => return Err(failed()),
-                }
-                plugins.sort_by(|left, right| left["id"].as_str().cmp(&right["id"].as_str()));
-                Ok(json!({"plugins":plugins}))
-            }
-            "plugin_read" => {
-                let plugin = parameter(&arguments, "plugin")?;
-                let definition = FilePluginCatalog::new(&self.library_root)
-                    .definition(&plugin)
-                    .map_err(|_| failed())?;
-                let mut result = public_plugin(&definition);
-                let mut instructions = Vec::new();
-                if definition.directory.join("instructions.md").is_file() {
-                    instructions.push(text_resource(&definition.directory, "instructions.md")?);
-                } else {
-                    for skill in &definition.skills {
-                        instructions.push(text_resource(&definition.directory, skill)?);
-                    }
-                }
-                result["instructions"] = Value::String(instructions.join("\n\n"));
-                Ok(result)
-            }
-            "plugin_review" => {
-                let directory = parameter(&arguments, "directory")?;
-                let candidate = workspace_directory(&self.workspace_root, &directory)?;
-                let id = match arguments.get("id").and_then(Value::as_str) {
-                    Some(id) if identifier(id) => id.to_owned(),
-                    Some(_) => return Err(rejected("id must be a Plugin identifier")),
-                    None => candidate
-                        .file_name()
-                        .and_then(|name| name.to_str())
-                        .filter(|name| identifier(name))
-                        .ok_or_else(|| {
-                            rejected("the directory name is not a usable Plugin id; pass `id`")
-                        })?
-                        .to_owned(),
-                };
-                let review = anchor_library::Library::new(&self.library_root)
-                    .review_directory(&id, &candidate)
-                    .map_err(|failure| match failure {
-                        // The assistant needs the catalog's reason to fix the
-                        // manifest; nothing secret is echoed back.
-                        anchor_library::InstallError::InvalidPluginReason(reason) => {
-                            rejected(format!("Plugin candidate rejected: {reason}"))
-                        }
-                        anchor_library::InstallError::MissingManifest => {
-                            rejected("Plugin candidate has no plugin.json manifest")
-                        }
-                        _ => rejected("Plugin candidate could not be reviewed"),
-                    })?;
-                serde_json::to_value(&review)
-                    .map_err(|_| rejected("Plugin review could not be encoded"))
-            }
+            "graph_create" => self.graph_create(&arguments).await,
+            "graph_update" => self.graph_update(&arguments).await,
+            "graph_run" => self.graph_run(&arguments).await,
+            "run_pause" | "run_resume" | "run_stop" => self.run_control(name, &arguments).await,
+            "graph_list" => self.graph_list(&arguments).await,
+            "graph_read" => self.graph_read(&arguments).await,
+            "graph_validate" => self.graph_validate(&arguments).await,
+            "plugin_list" => self.plugin_list(&arguments).await,
+            "plugin_read" => self.plugin_read(&arguments).await,
+            "plugin_review" => self.plugin_review(&arguments).await,
             "environment_list" => self.environment_list(&arguments).await,
             "environment_request" => self.environment_request(&arguments).await,
             "environment_references" => self.environment_references(&arguments).await,
             "environment_show" => self.environment_show(&arguments).await,
-            "run_list" => {
-                let runs = self
-                    .application
-                    .records()
-                    .map_err(|_| failed())?
-                    .into_iter()
-                    .map(|(id, record)| json!({"run":id,"status":record.status}))
-                    .collect::<Vec<_>>();
-                Ok(json!({"runs":runs}))
-            }
-            "run_status" => {
-                let run = parameter(&arguments, "run")?;
-                if !identifier(&run) {
-                    return Err(failed());
-                }
-                let record = self
-                    .application
-                    .records()
-                    .map_err(|_| failed())?
-                    .into_iter()
-                    .find(|(id, _)| id == &run)
-                    .ok_or_else(failed)?
-                    .1;
-                Ok(json!({"run":run,"record":record}))
-            }
-            "artifact_read" => {
-                let run = parameter(&arguments, "run")?;
-                let node = parameter(&arguments, "node")?;
-                let path = parameter(&arguments, "path")?;
-                if !identifier(&run) {
-                    return Err(failed());
-                }
-                let record = self
-                    .application
-                    .records()
-                    .map_err(|_| failed())?
-                    .into_iter()
-                    .find(|(id, _)| id == &run)
-                    .ok_or_else(failed)?
-                    .1;
-                let result = record
-                    .results
-                    .get(&node)
-                    .and_then(|results| results.last())
-                    .ok_or_else(failed)?;
-                let artifacts = HostArtifacts::new(
-                    self.data_root.join("artifacts"),
-                    self.workspace_root.clone(),
-                );
-                let files = artifacts.files_path(&result.commit).map_err(|_| failed())?;
-                let text = text_resource(&files, &path)?;
-                Ok(json!({"run":run,"node":node,"path":path,"text":text}))
-            }
-            "session_wait" => {
-                let session = self
-                    .sessions
-                    .get(&self.owner, &self.session)
-                    .map_err(|_| failed())?;
-                let retained = self
-                    .application
-                    .records()
-                    .map_err(|_| failed())?
-                    .into_iter()
-                    .filter(|(id, _)| session.run_ids.contains(id))
-                    .map(|(id, record)| json!({"run":id,"record":record}))
-                    .collect::<Vec<_>>();
-                Ok(json!({"session":session,"runs":retained}))
-            }
+            "run_list" => self.run_list(&arguments).await,
+            "run_status" => self.run_status(&arguments).await,
+            "artifact_read" => self.artifact_read(&arguments).await,
+            "session_wait" => self.session_wait(&arguments).await,
             _ => Err(ToolError::Unknown(name.into())),
         }
     }

@@ -779,6 +779,31 @@ fn install_message(precondition: &PluginInstallPrecondition) -> String {
     } else {
         "这是新建，不会覆盖任何现有插件。\n"
     });
+    // Changing a Plugin's manifest changes a binding its Runs already froze, so
+    // the human is told exactly what the replacement reaches.
+    let impact = &precondition.impact;
+    if impact.graphs.is_empty() && impact.unfinished_runs.is_empty() {
+        message.push_str("当前没有 Graph 或未结束的 Run 绑定这个插件。\n");
+    } else {
+        message.push_str(&format!(
+            "当前依赖这个插件：{} 张图{}，{} 个未结束的 Run{}\n",
+            impact.graphs.len(),
+            if impact.graphs.is_empty() {
+                String::new()
+            } else {
+                format!("（{}）", impact.graphs.join(", "))
+            },
+            impact.unfinished_runs.len(),
+            if impact.unfinished_runs.is_empty() {
+                String::new()
+            } else {
+                format!("（{}）", impact.unfinished_runs.join(", "))
+            }
+        ));
+        if !impact.unfinished_runs.is_empty() {
+            message.push_str("未结束的 Run 记录了它被接纳时的插件指纹；替换后它们会拒绝继续，需要先结束或放弃它们。\n");
+        }
+    }
     for server in &review.servers {
         match (&server.command, &server.url) {
             (Some(command), _) if server.args.is_empty() => {
@@ -883,6 +908,12 @@ async fn install(
             json!({"type":"boolean","title":"我接受这些无法阅读源码的编译产物","default":false}),
         );
     }
+    if !precondition.impact.unfinished_runs.is_empty() {
+        properties.insert(
+            "replace_bound_runs".into(),
+            json!({"type":"boolean","title":format!("我确认：{} 个未结束的 Run 仍绑定这个插件，替换后它们会拒绝继续", precondition.impact.unfinished_runs.len()),"default":false}),
+        );
+    }
     let required = properties.keys().cloned().collect::<Vec<_>>();
     let schema = json!({
         "type":"object",
@@ -916,7 +947,8 @@ async fn install(
     let accepted = result.action == ElicitationAction::Accept
         && approved("confirm")
         && (!precondition.replacing() || approved("replace_existing"))
-        && (!precondition.review.binary_without_source || approved("accept_unreadable"));
+        && (!precondition.review.binary_without_source || approved("accept_unreadable"))
+        && (precondition.impact.unfinished_runs.is_empty() || approved("replace_bound_runs"));
     if !accepted {
         return Ok(vec![ToolResultContent::text(
             json!({"installed":false,"id":precondition.review.id,"action":result.action})
@@ -925,7 +957,11 @@ async fn install(
     }
     let outcome = tools
         .application
-        .install_plugin_if_unchanged(tools.library_root.clone(), precondition.clone())
+        .install_plugin_if_unchanged(
+            tools.library_root.clone(),
+            precondition.clone(),
+            approved("replace_bound_runs"),
+        )
         .await
         .map_err(|error| {
             failure(format!(

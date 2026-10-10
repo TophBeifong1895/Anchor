@@ -1707,6 +1707,166 @@ exec ./mcp-fixture --stdio inspect
             Err(error) if error.contains("sandbox launch rejected") && error.contains("command must select")
         ));
     }
+
+    /// The recovery path: the binding comes from the durable Run record, and a
+    /// published tree that changed while the Run was parked refuses *before* the
+    /// server is launched.
+    #[tokio::test]
+    async fn a_resumed_managed_server_re_verifies_its_frozen_environment() {
+        use anchor_library::EnvironmentStore;
+        use anchor_runtime::graph::{
+            EnvironmentBinding, EnvironmentSite, GraphRunRecord, RunStore,
+        };
+        use std::os::unix::fs::PermissionsExt;
+
+        let shell = std::fs::canonicalize("/usr/bin/bash").unwrap();
+        let root = tempfile::tempdir().unwrap();
+        let plugin = root.path().join("plugins/research");
+        std::fs::create_dir_all(plugin.join("nested")).unwrap();
+        std::fs::copy(stdio_fixture_binary(), plugin.join("mcp-fixture")).unwrap();
+        std::fs::write(
+            plugin.join("server.sh"),
+            "set -eu\nexec ../mcp-fixture --stdio echo --prefix managed:\n",
+        )
+        .unwrap();
+        std::fs::write(
+            plugin.join("plugin.json"),
+            json!({
+                "name":"Research",
+                "mcpServers":{
+                    "managed":{
+                        "command": format!("{}/bin/run", PLACEHOLDER),
+                        "args":["../server.sh","echo"],
+                        "cwd":"nested",
+                        "anchor":{"environment":"research"}
+                    }
+                }
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        let library = root.path().join("library");
+        let prepared = root.path().join("prepared");
+        std::fs::create_dir_all(prepared.join("bin")).unwrap();
+        std::fs::write(
+            prepared.join("bin/run"),
+            format!("#!{}\nexec '{}' \"$@\"\n", "/bin/sh", shell.display()),
+        )
+        .unwrap();
+        std::fs::set_permissions(
+            prepared.join("bin/run"),
+            std::fs::Permissions::from_mode(0o755),
+        )
+        .unwrap();
+        let published = EnvironmentStore::new(&library).publish(&prepared).unwrap();
+        let manifest = std::fs::read_to_string(plugin.join("plugin.json")).unwrap();
+        std::fs::write(
+            plugin.join("plugin.json"),
+            manifest.replace(
+                PLACEHOLDER,
+                &library
+                    .join("envs")
+                    .join(&published.id)
+                    .display()
+                    .to_string(),
+            ),
+        )
+        .unwrap();
+
+        // The Run record is the source of truth for a resumed invocation: the
+        // binding is written at admission and read back here, never re-resolved
+        // from the name table.
+        let state = root.path().join("state");
+        let store = anchor_runtime::graph::FileRunStore::new(state.join("runs"));
+        let mut record = GraphRunRecord::create_with_id(
+            serde_json::from_value(json!({
+                "objective": "fixture",
+                "entry": "worker",
+                "agents": {"worker": {"model": "fixture"}},
+                "ops": {},
+                "nodes": [{"id": "worker", "agent": "worker", "plugins": ["research"]}],
+                "edges": []
+            }))
+            .unwrap(),
+            json!({}),
+            "resumed-run",
+        )
+        .unwrap();
+        let binding = FilePluginCatalog::new(root.path())
+            .resolve(&["research".into()])
+            .unwrap()
+            .remove(0);
+        assert_eq!(
+            binding.environments.get("managed").map(String::as_str),
+            Some("research"),
+            "the manifest declares the environment this Run froze"
+        );
+        record.plugin_bindings.insert("research".into(), binding);
+        record.plugin_bindings_initialized = true;
+        let site = EnvironmentSite::PluginServer {
+            node: "worker".into(),
+            plugin: "research".into(),
+            server: "managed".into(),
+        };
+        let frozen = EnvironmentBinding {
+            site: Some(site.clone()),
+            name: "research".into(),
+            id: published.id.clone(),
+        };
+        record.environments.insert(site.key(), frozen);
+        store.save(&record).unwrap();
+
+        let resumed = store.load("resumed-run").unwrap().unwrap();
+        assert_eq!(
+            resumed.environments.len(),
+            1,
+            "the record carries the site binding"
+        );
+        assert!(
+            crate::managed_environment::prepare_servers_async(
+                resumed.environments.clone(),
+                Some(library.clone()),
+            )
+            .await
+            .is_ok(),
+            "the recorded environment still verifies while the tree is intact"
+        );
+
+        // Something changed the published tree while the Run was parked.
+        let tree = EnvironmentStore::new(&library).published_path(&published.id);
+        let mut stack = vec![tree.clone()];
+        while let Some(directory) = stack.pop() {
+            for entry in std::fs::read_dir(&directory).unwrap() {
+                let entry = entry.unwrap();
+                let metadata = std::fs::symlink_metadata(entry.path()).unwrap();
+                if metadata.is_dir() {
+                    stack.push(entry.path());
+                }
+                let mut permissions = metadata.permissions();
+                permissions.set_mode(permissions.mode() | 0o700);
+                std::fs::set_permissions(entry.path(), permissions).unwrap();
+            }
+        }
+        std::fs::write(tree.join("bin/run"), "#!/bin/sh\nexit 99\n").unwrap();
+
+        let unusable = crate::managed_environment::prepare_servers_async(
+            resumed.environments.clone(),
+            Some(library),
+        )
+        .await
+        .expect_err("a changed tree must refuse on resume");
+        assert!(
+            matches!(
+                unusable.into_graph_error(),
+                anchor_runtime::graph::GraphError::CorruptRun(_)
+            ),
+            "a parked Run whose environment changed is corrupt, not unsupported"
+        );
+        // Nothing was launched: the refusal happens while preparing.
+        let workspace = root.path().join("workspace");
+        assert!(!workspace.join("mcp-log").exists());
+    }
 }
 
 #[cfg(test)]

@@ -280,8 +280,7 @@ legacy Run 至少记录 legacy 模式、工具 ID、解析后的路径与当时�
 - **每次节点调用仍复核指纹**，只是搬到 `spawn_blocking`，不再阻塞运行时线程。仍未做：**接纳期**解析名字时的 `show()` 整树哈希仍在运行时线程上（与 `digest_candidate` 已异步化不对称）。
 - **发布计划按「一次批准」建身份**（`digest + name + session + turn`）：同一候选同一名字的两次批准不再互相覆盖终态；表单展示过的**影响范围会写进计划记录**并出现在只读投影里（此前是只写不可读）。
 - **错误分类按原因**：Run 已记录的环境事实无法兑现 → `GraphError::CorruptRun`；接纳期解析不出名字 → `GraphError::Unsupported`；工具边界 → `String`。宿主内部统一为类型化的 `Unusable`，并在 A185 拆成 `Recorded`/`Unconfigured` 两类 + `into_graph_error()`：**AgentNode 路径不再把同一条件重标成 `Unsupported`**——原因穿过了原先的 `String` 缝（`ResolutionError::{Graph, Host}`），现在与 `Op.run` 对同一条件给出同一分类。
-- **仍未做的结构项**：`prepare`/`describe` 的整树哈希与 `list` 的描述成本（**接纳期**已在 A185 移出运行时线程：父 Run 的冻结与子 Run 的端口调用都在阻塞线程上）；
-  `pilot_tools` 里 graph/run/plugin/artifact/session 各族仍在同一处分发（A185 已把环境族与测试移出，登记为已知形状）。
+- **仍未做的结构项**：`prepare`/`describe` 的整树哈希与 `list` 的描述成本（**接纳期**已在 A185 移出运行时线程：父 Run 的冻结与子 Run 的端口调用都在阻塞线程上）。`pilot_tools` 已按族拆开（A186：`graphs`/`runs`/`plugins`/`sessions`/`environments` 各自成模块，表仍在 `pilot_tools.rs`）。
 - **记录保留（A185 决定）**：`state/environment-plans` 与 `state/environment-provision-plans` 每个名字最多保留 20 条（含待批）；
   **待批永不删**，只删最旧的**终态**记录，**读不出的记录不删**；记录带 `created`（旧记录为 0，按最旧处理）。已发布内容的写保护仍是部署边界。
 
