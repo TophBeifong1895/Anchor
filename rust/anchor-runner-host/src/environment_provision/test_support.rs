@@ -166,11 +166,21 @@ pub(crate) fn config(
     toolchain: &Toolchain,
     wheels: PathBuf,
 ) -> EnvironmentProvisionConfig {
+    config_with_sources(root, toolchain, vec![PackageSource::Directory(wheels)])
+}
+
+/// The same deployment configuration with explicit sources, so a case can use a
+/// networked index instead of an offline directory.
+pub(crate) fn config_with_sources(
+    root: &Path,
+    toolchain: &Toolchain,
+    sources: Vec<PackageSource>,
+) -> EnvironmentProvisionConfig {
     EnvironmentProvisionConfig {
         uv_digest: super::config::sha256_file(&toolchain.uv).unwrap(),
         uv: toolchain.uv.clone(),
         python: toolchain.python.clone(),
-        sources: vec![PackageSource::Directory(wheels)],
+        sources,
         build_root: root.join("build"),
         bwrap: std::env::var_os("ANCHOR_TEST_BWRAP")
             .map(PathBuf::from)

@@ -8,8 +8,12 @@
 //! Index and artifact URLs must pass the same URL policy the host already uses
 //! for outbound OAuth requests (public address, no embedded credentials, no
 //! redirects), so an authorized source cannot become a general-purpose fetcher.
+//!
+//! Fetching is asynchronous on purpose. A *blocking* HTTP client builds its own
+//! runtime internally, and dropping one on a runtime thread panics; keeping this
+//! interface async means no caller can land in that trap by calling it from the
+//! wrong place.
 
-use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
 use sha2::{Digest, Sha256};
@@ -35,7 +39,7 @@ pub(crate) struct FetchedArtifact {
 /// Partial downloads are never left behind, and a failure names every source it
 /// tried, because "the package is missing" and "the index is unreachable" are
 /// different problems for whoever has to fix the ask.
-pub(crate) fn fetch_wheelhouse(
+pub(crate) async fn fetch_wheelhouse(
     config: &EnvironmentProvisionConfig,
     packages: &[LockedPackage],
     wheelhouse: &Path,
@@ -50,7 +54,7 @@ pub(crate) fn fetch_wheelhouse(
         for source in &config.sources {
             let result = match source {
                 PackageSource::Directory(path) => from_directory(package, path, wheelhouse),
-                PackageSource::Index(url) => from_index(config, package, url, wheelhouse),
+                PackageSource::Index(url) => from_index(config, package, url, wheelhouse).await,
             };
             match result {
                 Ok(artifact) => {
@@ -126,7 +130,7 @@ fn from_directory(
 }
 
 /// Ask one simple index for the approved artifact.
-fn from_index(
+async fn from_index(
     config: &EnvironmentProvisionConfig,
     package: &LockedPackage,
     index: &str,
@@ -137,19 +141,22 @@ fn from_index(
     let page_url = Url::parse(&page).map_err(|error| format!("{page} is not a URL: {error}"))?;
     crate::oauth_http::validate_oauth_url(&page_url)
         .map_err(|_| format!("{page} is not an authorized index URL"))?;
-    let client = crate::oauth_http::blocking_client(&page_url)
+    let client = crate::oauth_http::async_client(&page_url)
+        .await
         .map_err(|_| format!("{page} could not be reached safely"))?;
     let response = client
         .get(page_url.clone())
         .header("Accept", "application/vnd.pypi.simple.v1+json")
         .timeout(config.http_timeout())
         .send()
+        .await
         .map_err(|error| format!("the index could not be queried: {error}"))?;
     if !response.status().is_success() {
         return Err(format!("the index answered {}", response.status()));
     }
     let body = response
         .text()
+        .await
         .map_err(|error| format!("the index answered unreadable content: {error}"))?;
     let document: serde_json::Value = serde_json::from_str(&body)
         .map_err(|_| "the index did not answer a PEP 691 JSON document".to_owned())?;
@@ -158,15 +165,19 @@ fn from_index(
         .and_then(serde_json::Value::as_array)
         .ok_or_else(|| "the index document has no file list".to_owned())?;
 
-    // Prefer a wheel: the ask is locked with `--only-binary :all:`, and the
-    // build installs with `--require-hashes`, so an artifact that matches is
-    // acceptable, but a wheel is what the lock was resolved for.
+    // A wheel or nothing. `uv pip compile --generate-hashes` also records the
+    // sdist digest of the same version, and installing an sdist would mean
+    // building it — which this slice deliberately does not do, offline or
+    // otherwise. Refusing here keeps "no compilation" structural rather than a
+    // property of whatever the index happens to offer.
     let mut candidate: Option<(String, String, String)> = None;
-    let mut fallback: Option<(String, String, String)> = None;
     for file in files {
         let Some(filename) = file.get("filename").and_then(serde_json::Value::as_str) else {
             continue;
         };
+        if !filename.ends_with(".whl") {
+            continue;
+        }
         let Some(hash) = file
             .get("hashes")
             .and_then(|hashes| hashes.get("sha256"))
@@ -181,16 +192,12 @@ fn from_index(
         let Some(url) = file.get("url").and_then(serde_json::Value::as_str) else {
             continue;
         };
-        let entry = (filename.to_owned(), hash, url.to_owned());
-        if filename.ends_with(".whl") {
-            candidate = Some(entry);
-            break;
-        }
-        fallback.get_or_insert(entry);
+        candidate = Some((filename.to_owned(), hash, url.to_owned()));
+        break;
     }
-    let (filename, digest, url) = candidate.or(fallback).ok_or_else(|| {
+    let (filename, digest, url) = candidate.ok_or_else(|| {
         format!(
-            "`{}=={}` is not published here with the approved digest",
+            "`{}=={}` has no wheel here with the approved digest",
             package.name, package.version
         )
     })?;
@@ -199,12 +206,14 @@ fn from_index(
         Url::parse(&url).map_err(|error| format!("the artifact URL is unusable: {error}"))?;
     crate::oauth_http::validate_oauth_url(&file_url)
         .map_err(|_| "the artifact URL is not an authorized address".to_owned())?;
-    let client = crate::oauth_http::blocking_client(&file_url)
+    let client = crate::oauth_http::async_client(&file_url)
+        .await
         .map_err(|_| "the artifact could not be reached safely".to_owned())?;
     let mut response = client
         .get(file_url)
         .timeout(config.http_timeout())
         .send()
+        .await
         .map_err(|error| format!("the artifact could not be downloaded: {error}"))?;
     if !response.status().is_success() {
         return Err(format!("the artifact answered {}", response.status()));
@@ -222,7 +231,8 @@ fn from_index(
         &temporary,
         &digest,
         config.max_artifact_bytes(),
-    );
+    )
+    .await;
     if let Err(reason) = written {
         let _ = std::fs::remove_file(&temporary);
         return Err(reason);
@@ -240,32 +250,29 @@ fn from_index(
 
 /// Stream a response into a file, refusing anything whose bytes are not the
 /// approved digest or that exceeds the size this host will keep.
-fn write_verified(
-    response: &mut reqwest::blocking::Response,
+async fn write_verified(
+    response: &mut reqwest::Response,
     path: &Path,
     expected: &str,
     limit: u64,
 ) -> Result<(), String> {
-    let mut file = std::fs::File::create(path).map_err(|error| error.to_string())?;
+    use tokio::io::AsyncWriteExt;
+    let mut file = tokio::fs::File::create(path)
+        .await
+        .map_err(|error| error.to_string())?;
     let mut hasher = Sha256::new();
-    let mut buffer = [0u8; 64 * 1024];
     let mut total = 0u64;
-    loop {
-        let read = response
-            .read(&mut buffer)
-            .map_err(|error| error.to_string())?;
-        if read == 0 {
-            break;
-        }
-        total += read as u64;
+    while let Some(chunk) = response.chunk().await.map_err(|error| error.to_string())? {
+        total += chunk.len() as u64;
         if total > limit {
             return Err("the artifact is larger than this host will download".to_owned());
         }
-        hasher.update(&buffer[..read]);
-        file.write_all(&buffer[..read])
+        hasher.update(&chunk);
+        file.write_all(&chunk)
+            .await
             .map_err(|error| error.to_string())?;
     }
-    file.sync_all().map_err(|error| error.to_string())?;
+    file.sync_all().await.map_err(|error| error.to_string())?;
     let observed = format!("{:x}", hasher.finalize());
     if observed != expected {
         return Err(format!(

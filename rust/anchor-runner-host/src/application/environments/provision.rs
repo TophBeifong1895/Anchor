@@ -270,11 +270,8 @@ impl RunApplication {
             .join("wheelhouse")
             .join(&plan.lock_digest);
         let build_wheelhouse = wheelhouse.clone();
-        let packages = plan.packages.clone();
-        let config = provisioner.config.clone();
-        tokio::task::spawn_blocking(move || fetch_wheelhouse(&config, &packages, &wheelhouse))
+        fetch_wheelhouse(&provisioner.config, &plan.packages, &wheelhouse)
             .await
-            .map_err(|_| ApplicationError::Storage("environment fetcher task failed".into()))?
             .map_err(provision_error)?;
         let built = build_environment(
             &provisioner.config,
