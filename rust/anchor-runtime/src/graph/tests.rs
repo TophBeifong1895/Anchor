@@ -4186,6 +4186,77 @@ fn a_format_8_record_migrates_without_inventing_an_environment() {
 }
 
 #[test]
+fn freezing_resolves_exactly_the_sites_this_graph_declares() {
+    // The two must be one enumeration: freezing may not invent or skip a site,
+    // and a host's derived impact report reads the same list.
+    let snapshot = GraphSnapshot::from_authoring(serde_json::json!({
+        "objective": "declared sites",
+        "entry": "worker",
+        "agents": {"worker": {"model": "test"}},
+        "ops": {},
+        "nodes": [
+            {"id": "worker", "agent": "worker", "plugins": ["demo"]},
+            {"id": "other", "agent": "worker", "environment": "research"}
+        ],
+        "edges": []
+    }))
+    .unwrap();
+    let mut bindings = BTreeMap::new();
+    bindings.insert(
+        "demo".into(),
+        PluginBinding {
+            id: "demo".into(),
+            digest: "c".repeat(64),
+            resources: Vec::new(),
+            mcp_servers: vec!["probe".into()],
+            environments: [("probe".to_owned(), "research".to_owned())].into(),
+        },
+    );
+
+    let declared = declared_environment_sites(&snapshot, &bindings);
+    let mut names = declared
+        .iter()
+        .map(|site| (site.site.key(), site.name.clone()))
+        .collect::<Vec<_>>();
+    names.sort();
+    assert_eq!(
+        names,
+        vec![
+            (
+                EnvironmentSite::NodeTask {
+                    node: "other".into()
+                }
+                .key(),
+                "research".to_owned()
+            ),
+            (
+                EnvironmentSite::PluginServer {
+                    node: "worker".into(),
+                    plugin: "demo".into(),
+                    server: "probe".into()
+                }
+                .key(),
+                "research".to_owned()
+            ),
+        ]
+    );
+
+    // Freezing resolves that same list: same keys, one binding each.
+    let resolve = |name: &str| Ok::<String, String>(format!("id-for-{name}"));
+    let frozen = freeze_environments(&snapshot, &bindings, &resolve).unwrap();
+    let mut keys = frozen.keys().cloned().collect::<Vec<_>>();
+    keys.sort();
+    let mut expected = names.iter().map(|(key, _)| key.clone()).collect::<Vec<_>>();
+    expected.sort();
+    assert_eq!(keys, expected);
+    assert!(
+        frozen
+            .values()
+            .all(|binding| binding.id == "id-for-research")
+    );
+}
+
+#[test]
 fn a_bound_plugin_server_environment_must_be_frozen() {
     let snapshot = GraphSnapshot::from_authoring(serde_json::json!({
         "objective": "plugin server environment",

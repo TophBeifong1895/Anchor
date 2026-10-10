@@ -746,7 +746,7 @@ impl PilotTools {
                     })?;
                 let references = self
                     .application
-                    .environment_references(&self.library_root, &name)
+                    .environment_references(&name)
                     .ok()
                     .map(|references| {
                         json!({
@@ -767,7 +767,7 @@ impl PilotTools {
                 let name = parameter(&arguments, "name")?;
                 let references = self
                     .application
-                    .environment_references(&self.library_root, &name)
+                    .environment_references(&name)
                     .map_err(|_| failed())?;
                 serde_json::to_value(&references).map_err(|_| failed())
             }

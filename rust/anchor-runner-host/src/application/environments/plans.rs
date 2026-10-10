@@ -127,7 +127,7 @@ impl RunApplication {
             _ => false,
         };
         // The human is shown the impact range, and the record keeps it.
-        let references = self.environment_references(&library_root, &name).ok();
+        let references = self.environment_references(&name).ok();
         let plan = EnvironmentPlan {
             requester,
             directory,

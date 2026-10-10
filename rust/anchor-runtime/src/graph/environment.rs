@@ -12,6 +12,53 @@ use super::*;
 /// deployment layout out of Runtime.
 pub type NameResolver<'a> = dyn Fn(&str) -> Result<String, String> + 'a;
 
+/// One place a Graph declares a dependency environment.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeclaredEnvironmentSite {
+    pub site: EnvironmentSite,
+    pub name: String,
+}
+
+/// Every place this Graph declares an environment, in a stable order.
+///
+/// This is the one enumeration of use sites: freezing resolves it, validation
+/// requires a binding for each entry, and a host's derived impact report reads
+/// the same list, so the three cannot disagree about what a Graph declares.
+pub fn declared_environment_sites(
+    snapshot: &GraphSnapshot,
+    plugin_bindings: &BTreeMap<String, PluginBinding>,
+) -> Vec<DeclaredEnvironmentSite> {
+    let mut declared = Vec::new();
+    for node in &snapshot.nodes {
+        if let Some(name) = &node.environment {
+            declared.push(DeclaredEnvironmentSite {
+                site: EnvironmentSite::NodeTask {
+                    node: node.id.clone(),
+                },
+                name: name.clone(),
+            });
+        }
+        // A Plugin bound to several nodes declares one site per node: the same
+        // server may run in different environments in different nodes.
+        for plugin in &node.plugins {
+            let Some(bound) = plugin_bindings.get(plugin) else {
+                continue;
+            };
+            for (server, name) in &bound.environments {
+                declared.push(DeclaredEnvironmentSite {
+                    site: EnvironmentSite::PluginServer {
+                        node: node.id.clone(),
+                        plugin: plugin.clone(),
+                        server: server.clone(),
+                    },
+                    name: name.clone(),
+                });
+            }
+        }
+    }
+    declared
+}
+
 /// Freeze every environment this Graph declares, keyed by its use site.
 pub fn freeze_environments(
     snapshot: &GraphSnapshot,
@@ -19,38 +66,17 @@ pub fn freeze_environments(
     resolve: &NameResolver<'_>,
 ) -> Result<BTreeMap<String, EnvironmentBinding>, String> {
     let mut bindings = BTreeMap::new();
-    for node in &snapshot.nodes {
-        if let Some(name) = &node.environment {
-            let id = resolve(name)?;
-            let binding = EnvironmentBinding::node_task(node.id.clone(), name.clone(), id);
-            if let Some(site) = binding.site.clone() {
-                bindings.insert(site.key(), binding);
-            }
-        }
-        // A Plugin bound to several nodes freezes one site per node: the same
-        // server may run in different environments in different nodes.
-        for plugin in &node.plugins {
-            let Some(bound) = plugin_bindings.get(plugin) else {
-                continue;
-            };
-            for (server, name) in &bound.environments {
-                let id = resolve(name)?;
-                let site = EnvironmentSite::PluginServer {
-                    node: node.id.clone(),
-                    plugin: plugin.clone(),
-                    server: server.clone(),
-                };
-                let key = site.key();
-                bindings.insert(
-                    key,
-                    EnvironmentBinding {
-                        site: Some(site),
-                        name: name.clone(),
-                        id,
-                    },
-                );
-            }
-        }
+    for declared in declared_environment_sites(snapshot, plugin_bindings) {
+        let id = resolve(&declared.name)?;
+        let key = declared.site.key();
+        bindings.insert(
+            key,
+            EnvironmentBinding {
+                site: Some(declared.site),
+                name: declared.name,
+                id,
+            },
+        );
     }
     Ok(bindings)
 }
