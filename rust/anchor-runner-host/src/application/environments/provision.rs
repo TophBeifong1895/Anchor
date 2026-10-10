@@ -22,8 +22,8 @@ use std::sync::Arc;
 use super::*;
 use crate::application::graphs::{EnvironmentReferences, ImpactCoverage};
 use crate::environment_provision::{
-    EnvironmentProvisioner, LockedPackage, ProvisionError, ResolvedRequirements, build_environment,
-    fetch_wheelhouse, resolve_requirements, verify_published,
+    EnvironmentProvisioner, LockedPackage, PackageSource, ProvisionError, ResolvedRequirements,
+    build_environment, fetch_wheelhouse, resolve_requirements, verify_index_json, verify_published,
 };
 
 /// What a human is asked to approve for one provisioned environment.
@@ -124,6 +124,20 @@ impl RunApplication {
         )
         .await
         .map_err(provision_error)?;
+
+        // Every authorized index must be able to deliver what this plan will ask
+        // it for, and that is proven now — before a human sees the form. An index
+        // that answers the package page with HTML resolves fine and fetches
+        // never, so approving the plan first would waste the approval.
+        if let Some(package) = resolved.packages.first() {
+            for source in &provisioner.config.sources {
+                if let PackageSource::Index(index) = source {
+                    verify_index_json(index, &package.name)
+                        .await
+                        .map_err(provision_error)?;
+                }
+            }
+        }
 
         let store = EnvironmentStore::new(&library_root);
         let existing = store

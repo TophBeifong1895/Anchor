@@ -212,17 +212,20 @@ fn parse_sources(value: &str) -> Result<Vec<PackageSource>, String> {
             return Err("ANCHOR_ENVIRONMENT_SOURCES has an empty entry".into());
         }
         if entry.starts_with("https://") || entry.starts_with("http://") {
-            // Credentials in a source URL would be written into plan records and
-            // shown in the approval form, and the fetch layer refuses them
-            // anyway. Refuse the deployment instead of leaking them.
-            if url::Url::parse(entry)
-                .map(|url| !url.username().is_empty() || url.password().is_some())
-                .unwrap_or(true)
-            {
-                return Err(format!(
-                    "package source `{entry}` must not carry credentials; give the host only"
-                ));
-            }
+            // The same literal URL policy every outbound host request already
+            // passes: https on a public address, http only for a loopback index,
+            // no credentials, no fragment, a real port. This is a *tightening* —
+            // an arbitrary host over plain http used to be accepted here — and it
+            // is literal only: a host name is not resolved, so startup never
+            // reaches the network.
+            let url = url::Url::parse(entry).map_err(|error| {
+                format!("package source `{entry}` is not a usable URL: {error}")
+            })?;
+            crate::oauth_http::validate_oauth_url(&url).map_err(|_| {
+                format!(
+                    "package source `{entry}` must be an https index on a public address (http is allowed only for a loopback index), with no credentials, no fragment and a valid port"
+                )
+            })?;
             sources.push(PackageSource::Index(entry.trim_end_matches('/').to_owned()));
         } else {
             let path = PathBuf::from(entry);
@@ -387,5 +390,63 @@ mod config_tests {
             .unwrap()
             .expect("a fully configured deployment");
         assert_eq!(config.build_root, build);
+    }
+
+    /// Every source is checked when the host starts, literally and without a
+    /// request: a non-public address and plain http on a public host are refused,
+    /// while a loopback http index and a public https index are accepted.
+    #[test]
+    fn an_index_source_the_host_will_not_reach_is_refused_at_startup() {
+        let _guard = crate::PROCESS_ENV_LOCK.blocking_lock();
+        let _environment = Environment::cleared(&[
+            "ANCHOR_ENVIRONMENT_SOURCES",
+            "ANCHOR_ENVIRONMENT_UV",
+            "ANCHOR_ENVIRONMENT_UV_SHA256",
+            "ANCHOR_ENVIRONMENT_PYTHON",
+            "ANCHOR_ENVIRONMENT_BUILD_ROOT",
+        ]);
+        let root = tempfile::tempdir().unwrap();
+        unsafe {
+            std::env::set_var("ANCHOR_ENVIRONMENT_UV", "/opt/anchor/uv");
+            std::env::set_var("ANCHOR_ENVIRONMENT_UV_SHA256", "a".repeat(64));
+            std::env::set_var("ANCHOR_ENVIRONMENT_PYTHON", "/usr/bin/python3");
+        }
+        let state = root.path().join("state");
+        for sources in [
+            // A literal private address, even over https.
+            "https://10.0.0.1/simple",
+            // Plain http is only for loopback: this used to be accepted.
+            "http://mirror.example/simple",
+            "https://user:secret@mirror.example/simple",
+            "https://mirror.example/simple#fragment",
+        ] {
+            unsafe { std::env::set_var("ANCHOR_ENVIRONMENT_SOURCES", sources) };
+            let error = from_env(&state, PathBuf::from("bwrap"), None).unwrap_err();
+            assert!(
+                error.contains(sources)
+                    && error.contains("must be an https index on a public address"),
+                "{sources}: {error}"
+            );
+        }
+
+        // A loopback http index and a public https index are both allowed, in the
+        // order written, and nothing above resolved a host name or opened a
+        // socket.
+        unsafe {
+            std::env::set_var(
+                "ANCHOR_ENVIRONMENT_SOURCES",
+                "http://127.0.0.1:8080/simple,https://pypi.tuna.tsinghua.edu.cn/simple",
+            );
+        }
+        let config = from_env(&state, PathBuf::from("bwrap"), None)
+            .unwrap()
+            .expect("a fully configured deployment");
+        assert_eq!(
+            config.sources,
+            vec![
+                PackageSource::Index("http://127.0.0.1:8080/simple".to_owned()),
+                PackageSource::Index("https://pypi.tuna.tsinghua.edu.cn/simple".to_owned()),
+            ]
+        );
     }
 }

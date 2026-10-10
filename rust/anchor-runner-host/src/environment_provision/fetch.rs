@@ -34,6 +34,68 @@ pub(crate) struct FetchedArtifact {
     pub(crate) source: String,
 }
 
+/// The content type a PEP 691 JSON package page answers with.
+const PEP691_JSON: &str = "application/vnd.pypi.simple.v1+json";
+
+/// Confirm one authorized index really serves a PEP 691 JSON package page.
+///
+/// This runs while the plan is being frozen, *before* a human is asked to approve
+/// it: many mirrors answer the package page with PEP 503 HTML, which `uv` can
+/// resolve from but this host cannot fetch from. Finding that out after approval
+/// would mean asking somebody to approve a plan that can never be delivered.
+///
+/// `index` is the configured index root (it already ends in `/simple`), exactly
+/// as [`from_index`] uses it. The request goes through the same hardened client as
+/// every other outbound host request, so the address policy is the fetch's own.
+pub(crate) async fn verify_index_json(index: &str, package: &str) -> Result<(), ProvisionError> {
+    let project = normalize_name(package);
+    let page = format!("{index}/{project}/");
+    let page_url = Url::parse(&page).map_err(|error| {
+        ProvisionError::Invalid(format!("package index `{index}` is not a URL: {error}"))
+    })?;
+    let client = crate::oauth_http::async_client(&page_url)
+        .await
+        .map_err(|_| {
+            ProvisionError::Invalid(format!(
+                "package index `{index}` is not an authorized address (a public https index, or http on loopback)"
+            ))
+        })?;
+    let response = client
+        .get(page_url)
+        .header("Accept", PEP691_JSON)
+        .send()
+        .await
+        .map_err(|error| {
+            ProvisionError::Invalid(format!(
+                "package index `{index}` could not be reached to check its JSON interface: {error}"
+            ))
+        })?;
+    if !response.status().is_success() {
+        return Err(ProvisionError::Invalid(format!(
+            "package index `{index}` answered {} for `{project}`, so it cannot be checked for the required JSON interface",
+            response.status()
+        )));
+    }
+    let content_type = response
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default();
+    // PEP 691 allows a charset parameter, so compare the media type only.
+    let media_type = content_type
+        .split(';')
+        .next()
+        .unwrap_or_default()
+        .trim()
+        .to_ascii_lowercase();
+    if media_type != PEP691_JSON {
+        return Err(ProvisionError::Invalid(format!(
+            "package index `{index}` answered `{content_type}` for `{project}`, not `{PEP691_JSON}`; this host needs a PEP 691 JSON index, and a mirror that only serves HTML package pages cannot be used"
+        )));
+    }
+    Ok(())
+}
+
 /// Copy every locked artifact into `wheelhouse`, or fail.
 ///
 /// Partial downloads are never left behind, and a failure names every source it

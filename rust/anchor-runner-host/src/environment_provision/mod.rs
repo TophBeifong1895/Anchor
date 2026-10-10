@@ -32,8 +32,8 @@ mod materialize;
 mod resolve;
 
 pub(crate) use build::{build_environment, provision_sandbox, verify_published};
-pub(crate) use config::{EnvironmentProvisionConfig, ProvisionError, from_env};
-pub(crate) use fetch::fetch_wheelhouse;
+pub(crate) use config::{EnvironmentProvisionConfig, PackageSource, ProvisionError, from_env};
+pub(crate) use fetch::{fetch_wheelhouse, verify_index_json};
 pub(crate) use resolve::{
     LockedPackage, ResolvedRequirements, is_interpreter_constraint, resolve_requirements,
 };

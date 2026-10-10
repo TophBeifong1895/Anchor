@@ -277,6 +277,9 @@ struct IndexState {
     bytes: Arc<std::sync::Mutex<Vec<u8>>>,
     /// Answer a PEP 503 HTML page instead of the JSON document.
     as_html: bool,
+    /// The `content-type` the JSON document is served with. PEP 691 allows a
+    /// charset parameter, so a case can exercise the media-type comparison.
+    json_content_type: String,
     /// Report `404` for the project, as an index without it does.
     missing: Arc<std::sync::atomic::AtomicBool>,
     queried: Arc<std::sync::atomic::AtomicUsize>,
@@ -315,7 +318,7 @@ async fn simple_page(
     .to_string();
     (
         axum::http::StatusCode::OK,
-        [("content-type", "application/vnd.pypi.simple.v1+json")],
+        [("content-type", state.json_content_type.clone())],
         body,
     )
         .into_response()
@@ -353,6 +356,23 @@ async fn index_fixture_missing(wheel: &Path) -> IndexFixture {
 /// The same fixture, optionally advertising a different file name — an sdist, so
 /// a case can prove this host never fetches one.
 async fn index_fixture_named(wheel: &Path, as_html: bool, rename_to: Option<&str>) -> IndexFixture {
+    index_fixture_serving(
+        wheel,
+        as_html,
+        rename_to,
+        "application/vnd.pypi.simple.v1+json",
+    )
+    .await
+}
+
+/// The same fixture with the exact `content-type` the JSON document is served
+/// with, so a case can cover PEP 691's optional `charset` parameter.
+async fn index_fixture_serving(
+    wheel: &Path,
+    as_html: bool,
+    rename_to: Option<&str>,
+    json_content_type: &str,
+) -> IndexFixture {
     let filename = rename_to
         .map(str::to_owned)
         .unwrap_or_else(|| wheel.file_name().unwrap().to_string_lossy().into_owned());
@@ -369,6 +389,7 @@ async fn index_fixture_named(wheel: &Path, as_html: bool, rename_to: Option<&str
         digest,
         bytes: Arc::clone(&bytes),
         as_html,
+        json_content_type: json_content_type.to_owned(),
         missing: Arc::clone(&missing),
         queried: Arc::clone(&queried),
     };
@@ -570,6 +591,106 @@ async fn an_index_that_answers_html_instead_of_json_is_refused_with_a_reason() {
     assert!(
         error.to_string().contains("PEP 691"),
         "the refusal says which document it needed: {error}"
+    );
+}
+
+/// The probe is a capability check, not a blanket refusal of indices: the JSON
+/// fixture passes and the HTML fixture does not.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_json_probe_distinguishes_a_pep_691_index_from_an_html_one() {
+    let root = tempfile::tempdir().unwrap();
+    let wheels = root.path().join("wheels");
+    std::fs::create_dir_all(&wheels).unwrap();
+    let wheel = fixture_wheel(&wheels, "probepkg", "0.1.0");
+
+    let json = index_fixture(&wheel, false).await;
+    verify_index_json(&json.endpoint, "probepkg")
+        .await
+        .expect("a PEP 691 index passes the probe");
+
+    let html = index_fixture(&wheel, true).await;
+    let error = verify_index_json(&html.endpoint, "probepkg")
+        .await
+        .unwrap_err();
+    assert!(
+        error.to_string().contains("PEP 691") && error.to_string().contains(&html.endpoint),
+        "{error}"
+    );
+}
+
+/// PEP 691 allows a `charset` parameter on the JSON document's content type, so
+/// the probe compares the media type rather than the whole header value.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_json_probe_accepts_a_pep_691_content_type_with_parameters() {
+    let root = tempfile::tempdir().unwrap();
+    let wheels = root.path().join("wheels");
+    std::fs::create_dir_all(&wheels).unwrap();
+    let wheel = fixture_wheel(&wheels, "probepkg", "0.1.0");
+    let index = index_fixture_serving(
+        &wheel,
+        false,
+        None,
+        "application/vnd.pypi.simple.v1+json; charset=utf-8",
+    )
+    .await;
+
+    verify_index_json(&index.endpoint, "probepkg")
+        .await
+        .expect("a charset parameter is allowed on the PEP 691 JSON content type");
+}
+
+/// An HTML-only mirror is refused while the plan is being frozen, before a human
+/// is asked to approve it: `uv` resolves that page fine, so without this probe the
+/// approval would be spent on a plan whose artifacts can never be fetched.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_plan_is_refused_before_the_form_when_an_index_serves_html() {
+    use crate::application::environments::EnvironmentRequirementAsk;
+    use crate::application::environments::test_support::{application, requester};
+
+    let Some(toolchain) = toolchain() else {
+        return;
+    };
+    let root = tempfile::tempdir().unwrap();
+    let wheels = root.path().join("wheels");
+    std::fs::create_dir_all(&wheels).unwrap();
+    let wheel = fixture_wheel(&wheels, "probepkg", "0.1.0");
+    let index = index_fixture(&wheel, true).await;
+    let config = config_with_sources(
+        root.path(),
+        &toolchain,
+        vec![PackageSource::Index(index.endpoint.clone())],
+    );
+    let provisioner =
+        EnvironmentProvisioner::new(config).expect("the deployment configuration builds a sandbox");
+    let library = root.path().join("library");
+    let application = application(root.path()).with_environment_provisioner(Arc::new(provisioner));
+    application
+        .ask_environment_requirement(
+            &library,
+            "research",
+            EnvironmentRequirementAsk {
+                requester: requester(),
+                purpose: "analyse documents".into(),
+                interpreter: None,
+                packages: vec!["probepkg==0.1.0".into()],
+                notes: None,
+            },
+        )
+        .unwrap();
+
+    let error = application
+        .environment_provision_precondition(library, "research".into())
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(error, crate::application::ApplicationError::Invalid(ref reason)
+            if reason.contains(&index.endpoint) && reason.contains("PEP 691")),
+        "the refusal names the source and the interface it needs: {error:?}"
+    );
+    assert!(
+        index.queries() >= 2,
+        "the index answered both uv's resolution and the JSON probe: {}",
+        index.queries()
     );
 }
 
