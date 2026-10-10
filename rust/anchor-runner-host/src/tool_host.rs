@@ -52,6 +52,18 @@ pub struct SandboxLaunch<'a> {
     >,
 }
 
+/// The launcher's key for one Plugin server.
+///
+/// This string is also the prefix of every model-visible tool name
+/// (`{key}_{tool}`), so it must stay within the tool-name charset. That means
+/// the separator cannot be a character no provider accepts, and the key is
+/// therefore *not* injective on its own: (plugin `a-b`, server `c`) and
+/// (plugin `a`, server `b-c`) share one. Callers detect that collision and name
+/// both pairs instead of silently launching one server twice.
+fn server_key(plugin: &str, server: &str) -> String {
+    format!("{plugin}-{server}")
+}
+
 #[derive(Clone)]
 struct ResolvedMcpServer {
     plugin_id: String,
@@ -88,7 +100,7 @@ impl McpToolConfig {
     ) -> Result<Self, String> {
         let root = root.into();
         let catalog = FilePluginCatalog::new(root.clone());
-        let mut servers = BTreeMap::new();
+        let mut servers: BTreeMap<String, ResolvedMcpServer> = BTreeMap::new();
         let mut disabled = BTreeSet::new();
         for binding in bindings {
             if binding
@@ -115,7 +127,7 @@ impl McpToolConfig {
                 if server_name == FAKE_SERVER_ID {
                     continue;
                 }
-                let key = format!("{}-{server_name}", binding.id);
+                let key = server_key(&binding.id, server_name);
                 let Some(definition) = by_name.remove(server_name) else {
                     if declared.contains(server_name) {
                         disabled.insert(key);
@@ -126,22 +138,26 @@ impl McpToolConfig {
                         binding.id
                     ));
                 };
-                if servers
-                    .insert(
-                        key.clone(),
-                        ResolvedMcpServer {
-                            plugin_id: binding.id.clone(),
-                            name: server_name.clone(),
-                            plugin_directory: catalog
-                                .plugin_directory(&binding.id)
-                                .map_err(|error| error.to_string())?,
-                            config: definition.config,
-                        },
-                    )
-                    .is_some()
-                {
-                    return Err(format!("duplicate MCP server key `{key}`"));
+                // Two different servers may share the key; that would launch one
+                // of them twice and hide the other, so it is refused by naming
+                // both pairs rather than reporting a bare duplicate.
+                if let Some(existing) = servers.get(&key) {
+                    return Err(format!(
+                        "Plugin servers `{}/{}` and `{}/{}` share the launcher key `{key}`; rename one",
+                        existing.plugin_id, existing.name, binding.id, server_name
+                    ));
                 }
+                servers.insert(
+                    key.clone(),
+                    ResolvedMcpServer {
+                        plugin_id: binding.id.clone(),
+                        name: server_name.clone(),
+                        plugin_directory: catalog
+                            .plugin_directory(&binding.id)
+                            .map_err(|error| error.to_string())?,
+                        config: definition.config,
+                    },
+                );
             }
         }
         Ok(Self {
@@ -305,7 +321,7 @@ impl McpToolConfig {
         let mut hosts = BTreeMap::new();
         for binding in bindings {
             for server_id in &binding.mcp_servers {
-                let key = format!("{}-{server_id}", binding.id);
+                let key = server_key(&binding.id, server_id);
                 // A server this host will not launch may not keep a frozen
                 // environment: the Run would claim an environment nothing used.
                 let skipped = server_id == FAKE_SERVER_ID
@@ -390,7 +406,7 @@ impl McpToolConfig {
                 if !seen_servers.insert((binding.id.as_str(), server_id.as_str())) {
                     continue;
                 }
-                let key = format!("{}-{server_id}", binding.id);
+                let key = server_key(&binding.id, server_id);
                 if self.disabled.contains(&key) {
                     continue;
                 }

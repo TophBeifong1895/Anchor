@@ -64,6 +64,21 @@ impl EnvironmentPublishPrecondition {
     }
 }
 
+impl EnvironmentPlan {
+    /// The identity of one approval attempt.
+    ///
+    /// Content identity plus name is *not* unique: two turns may ask to publish
+    /// the same candidate under the same name, and the second must not overwrite
+    /// the first one's outcome. The asking turn is part of the identity, so each
+    /// attempt keeps its own durable record and its own terminal state.
+    pub(crate) fn key(&self) -> String {
+        format!(
+            "{}-{}-{}-{}",
+            self.digest, self.name, self.requester.session, self.requester.turn
+        )
+    }
+}
+
 impl RunApplication {
     fn environment_plan_path(&self, key: &str) -> PathBuf {
         self.data_root
@@ -76,7 +91,7 @@ impl RunApplication {
         &self,
         plan: &EnvironmentPlan,
     ) -> Result<(), ApplicationError> {
-        let path = self.environment_plan_path(&format!("{}-{}", plan.digest, plan.name));
+        let path = self.environment_plan_path(&plan.key());
         write_json_durable(&path, plan)
     }
 
@@ -126,8 +141,20 @@ impl RunApplication {
             Some(entry) if entry.id == content.id => store.show(&entry.id).is_ok(),
             _ => false,
         };
-        // The human is shown the impact range, and the record keeps it.
-        let references = self.environment_references(&name).ok();
+        // The human is shown the impact range, and the record keeps it. A report
+        // that could not be produced is recorded as exactly that: `None` would be
+        // indistinguishable from a record written before the field existed.
+        let references = Some(match self.environment_references(&name) {
+            Ok(references) => references,
+            Err(error) => EnvironmentReferences {
+                name: name.clone(),
+                nodes: Vec::new(),
+                servers: Vec::new(),
+                coverage: EnvironmentCoverage::Unknown {
+                    reason: format!("the impact report could not be produced: {error:?}"),
+                },
+            },
+        });
         let plan = EnvironmentPlan {
             requester,
             directory,
@@ -206,12 +233,10 @@ impl RunApplication {
 pub(crate) fn list_environment_plans(
     data_root: &std::path::Path,
 ) -> Result<RecordList<EnvironmentPlan>, ApplicationError> {
-    let mut listed = list_json_records::<EnvironmentPlan>(
-        data_root,
-        "environment-plans",
-        ENVIRONMENT_RECORD_LIMIT,
-    )?;
-    listed.records.sort_by(|left, right| {
+    let mut listed = list_json_records::<EnvironmentPlan>(data_root, "environment-plans")?;
+    // Bounded after sorting: which plans a listing shows must not depend on the
+    // order the filesystem happens to return.
+    listed.truncated = bound_projection(&mut listed.records, |left, right| {
         (left.name.as_str(), left.digest.as_str())
             .cmp(&(right.name.as_str(), right.digest.as_str()))
     });
@@ -221,12 +246,11 @@ pub(crate) fn list_environment_plans(
 #[cfg(test)]
 pub(crate) fn read_environment_plan(
     data_root: &std::path::Path,
-    digest: &str,
-    name: &str,
+    plan: &EnvironmentPlan,
 ) -> Result<Option<EnvironmentPlan>, ApplicationError> {
     let path = data_root
         .join("environment-plans")
-        .join(format!("{digest}-{name}.json"));
+        .join(format!("{}.json", plan.key()));
     match std::fs::read(&path) {
         Ok(bytes) => serde_json::from_slice(&bytes)
             .map(Some)
@@ -392,13 +416,9 @@ mod tests {
             .unwrap();
         assert!(!precondition.replacing());
         assert!(!precondition.already_published());
-        let plan = read_environment_plan(
-            &root.path().join("state"),
-            &precondition.plan.digest,
-            "research",
-        )
-        .unwrap()
-        .expect("the plan is durable before the human is asked");
+        let plan = read_environment_plan(&root.path().join("state"), &precondition.plan)
+            .unwrap()
+            .expect("the plan is durable before the human is asked");
         assert_eq!(plan.status, EnvironmentPlanStatus::Requested);
         assert_eq!(plan.requester.turn, "turn-1");
 

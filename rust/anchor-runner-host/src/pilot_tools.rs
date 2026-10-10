@@ -799,19 +799,22 @@ impl PilotTools {
                         .ok_or_else(|| rejected("no dependency environment has that name"))?,
                     _ => return Err(rejected("pass exactly one of `id` or `name`")),
                 };
-                // `show` re-hashes the published tree, so a mismatch is reported
-                // here instead of silently describing content nobody can use.
-                let published = store.show(&id).map_err(|_| {
-                    rejected(
-                        "dependency environment content is missing or does not match its digest",
-                    )
+                // `describe` re-hashes the published tree and reports whether it
+                // is still writable, so an operator can inspect a store that
+                // admission would refuse. The reason names the environment: a
+                // bare "content is missing" tells nobody which one.
+                let published = store.describe(&id).map_err(|error| {
+                    rejected(format!(
+                        "dependency environment `{id}` is not usable: {error}"
+                    ))
                 })?;
                 Ok(json!({
                     "id":published.id,
                     "bytes":published.bytes,
                     "files":published.files,
                     "directories":published.directories,
-                    "verified":true
+                    "verified": !published.writable,
+                    "writable": published.writable,
                 }))
             }
             "run_list" => {

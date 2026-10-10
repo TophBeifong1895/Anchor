@@ -91,12 +91,13 @@ fn write_json_durable(
 pub(crate) struct RecordList<T> {
     pub(crate) records: Vec<T>,
     pub(crate) unreadable: usize,
+    /// Set by the caller's projection when it bounded the list.
+    pub(crate) truncated: bool,
 }
 
 pub(crate) fn list_json_records<T: serde::de::DeserializeOwned>(
     data_root: &std::path::Path,
     directory: &str,
-    limit: usize,
 ) -> Result<RecordList<T>, ApplicationError> {
     let directory = data_root.join(directory);
     let entries = match std::fs::read_dir(&directory) {
@@ -105,6 +106,7 @@ pub(crate) fn list_json_records<T: serde::de::DeserializeOwned>(
             return Ok(RecordList {
                 records: Vec::new(),
                 unreadable: 0,
+                truncated: false,
             });
         }
         Err(error) => return Err(ApplicationError::Storage(error.to_string())),
@@ -124,15 +126,29 @@ pub(crate) fn list_json_records<T: serde::de::DeserializeOwned>(
             None => unreadable += 1,
         }
     }
-    records.truncate(limit);
     Ok(RecordList {
         records,
         unreadable,
+        truncated: false,
     })
 }
 
-/// How many host records one read model returns.
+/// How many host records one read model returns. Bounding happens *after*
+/// sorting, so the subset a caller sees is deterministic, and the caller reports
+/// that it bounded.
 pub(crate) const ENVIRONMENT_RECORD_LIMIT: usize = 200;
+
+/// Sort a projection and keep at most [`ENVIRONMENT_RECORD_LIMIT`] records.
+/// Returns whether anything was left out, so a listing never implies it is whole.
+pub(crate) fn bound_projection<T>(
+    records: &mut Vec<T>,
+    order: impl Fn(&T, &T) -> std::cmp::Ordering,
+) -> bool {
+    records.sort_by(order);
+    let truncated = records.len() > ENVIRONMENT_RECORD_LIMIT;
+    records.truncate(ENVIRONMENT_RECORD_LIMIT);
+    truncated
+}
 
 #[cfg(test)]
 pub(crate) mod test_support {

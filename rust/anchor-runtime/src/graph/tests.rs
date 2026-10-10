@@ -4257,6 +4257,45 @@ fn freezing_resolves_exactly_the_sites_this_graph_declares() {
 }
 
 #[test]
+fn a_site_whose_key_cannot_name_it_back_is_refused() {
+    // `EnvironmentSite::key()` joins names with `/`, and a canonical key is only
+    // trusted because it parses back to the site it belongs to. A site whose
+    // names contain `/` would collide with another site's key, so it must not
+    // round-trip — record validation compares the two and refuses the record.
+    let ambiguous = EnvironmentSite::PluginServer {
+        node: "worker".into(),
+        plugin: "a/b".into(),
+        server: "c".into(),
+    };
+    let key = ambiguous.key();
+    assert_eq!(key, "plugin_server:worker/a/b/c");
+    assert_ne!(EnvironmentSite::from_key(&key), Some(ambiguous));
+    // The same key names a different, honest site, so nothing may accept the
+    // ambiguous one: `validate` refuses it, and the authoring layer never builds
+    // it in the first place.
+    assert_eq!(
+        EnvironmentSite::from_key(&key),
+        Some(EnvironmentSite::PluginServer {
+            node: "worker".into(),
+            plugin: "a".into(),
+            server: "b/c".into(),
+        })
+    );
+    assert!(
+        GraphSnapshot::from_authoring(serde_json::json!({
+            "objective": "collide",
+            "entry": "worker",
+            "agents": {"worker": {"model": "test"}},
+            "ops": {},
+            "nodes": [{"id": "worker", "agent": "worker", "plugins": ["a/b"]}],
+            "edges": []
+        }))
+        .is_err(),
+        "a Plugin reference containing `/` is not addressable"
+    );
+}
+
+#[test]
 fn a_bound_plugin_server_environment_must_be_frozen() {
     let snapshot = GraphSnapshot::from_authoring(serde_json::json!({
         "objective": "plugin server environment",

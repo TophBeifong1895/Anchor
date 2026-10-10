@@ -527,6 +527,7 @@ async fn list_environment_requirements(
     let EnvironmentRequirements {
         requirements,
         unreadable,
+        truncated,
     } = list_environment_requirements(&state.data_root).map_err(application_error)?;
     // A name table this host cannot read must not be rendered as "nothing was
     // provided": that would report every need as unanswered with HTTP 200.
@@ -562,9 +563,11 @@ async fn list_environment_requirements(
             })
         })
         .collect::<Vec<_>>();
-    Ok(Json(
-        json!({"requirements": requirements, "unreadable": unreadable}),
-    ))
+    Ok(Json(json!({
+        "requirements": requirements,
+        "unreadable": unreadable,
+        "truncated": truncated,
+    })))
 }
 
 /// Read-only: what environment publications were requested, and how they ended.
@@ -577,6 +580,7 @@ async fn list_environment_publications(
     let listed = crate::application::environments::list_environment_plans(&state.data_root)
         .map_err(application_error)?;
     let unreadable = listed.unreadable;
+    let truncated = listed.truncated;
     let requests = listed
         .records
         .into_iter()
@@ -600,6 +604,8 @@ async fn list_environment_publications(
             };
             json!({
                 "name": plan.name,
+                // What the human was shown when they approved, as recorded.
+                "references": plan.references,
                 "status": status,
                 "digest": plan.digest,
                 "id": id,
@@ -611,9 +617,11 @@ async fn list_environment_publications(
             })
         })
         .collect::<Vec<_>>();
-    Ok(Json(
-        json!({"requests": requests, "unreadable": unreadable}),
-    ))
+    Ok(Json(json!({
+        "requests": requests,
+        "unreadable": unreadable,
+        "truncated": truncated,
+    })))
 }
 
 async fn graph_relations(State(state): State<ApiState>) -> Result<Json<Value>, HttpResponse> {

@@ -76,9 +76,11 @@ pub(crate) enum EnvironmentCoverage {
     Complete,
     /// The scan stopped early or could not read some definitions.
     Partial {
-        scanned: usize,
+        /// How many Graphs this report considered before its bound.
+        considered: usize,
+        /// How many Graphs a run could come from.
         total: usize,
-        missing: Vec<String>,
+        missing: Vec<EnvironmentMissing>,
     },
     /// The report could not be produced at all.
     Unknown {
@@ -102,79 +104,88 @@ pub(crate) struct EnvironmentServerReference {
     pub(crate) server: String,
 }
 
+/// One Graph this report could not read, and why.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct EnvironmentMissing {
+    pub(crate) graph: String,
+    pub(crate) reason: String,
+}
+
 /// The scan bound for a derived impact report.
 const ENVIRONMENT_REFERENCE_LIMIT: usize = 200;
 
 impl RunApplication {
-    /// Who references one environment name right now.
-    ///
-    /// This reads the *editable* Graph definitions, not the compiled snapshots:
-    /// an impact report may only be a derived view, and the operator's edits are
-    /// what a name switch affects next. No reverse index is stored anywhere.
     /// Who uses this environment name right now.
     ///
     /// The site enumeration is the kernel's (`declared_environment_sites`), so
     /// this report cannot disagree with what admission would freeze: it loads
-    /// each Graph as a bundle and reads the same list freezing resolves.
+    /// each Graph as a bundle and reads the same list freezing resolves. The
+    /// candidate set is the Graphs a run can come from — the editable catalog
+    /// plus the one bundle this deployment is configured to run — and anything
+    /// this host cannot read is reported with its reason rather than dropped.
     pub(crate) fn environment_references(
         &self,
         name: &str,
     ) -> Result<EnvironmentReferences, ApplicationError> {
-        // The deployment's configured bundle may live outside the editable
-        // catalog; both are places a run can come from, so both are scanned.
-        let mut roots = vec![self.catalog_root.clone()];
-        if let Some(bundle) = std::env::var_os("ANCHOR_RUNNER_BUNDLE_ROOT").map(PathBuf::from)
-            && bundle.is_dir()
-            && !roots.contains(&bundle)
-        {
-            roots.push(bundle);
-        }
-        let mut graphs = Vec::new();
-        let mut missing = Vec::new();
-        for root in &roots {
-            let entries = match std::fs::read_dir(root) {
+        let unknown = |reason: String| EnvironmentReferences {
+            name: name.to_owned(),
+            nodes: Vec::new(),
+            servers: Vec::new(),
+            coverage: EnvironmentCoverage::Unknown { reason },
+        };
+        let mut candidates: Vec<String> = Vec::new();
+        if self.catalog_root.is_dir() {
+            let entries = match std::fs::read_dir(&self.catalog_root) {
                 Ok(entries) => entries,
                 Err(error) => {
-                    // An unreadable root is not "nobody uses this".
-                    return Ok(EnvironmentReferences {
-                        name: name.to_owned(),
-                        nodes: Vec::new(),
-                        servers: Vec::new(),
-                        coverage: EnvironmentCoverage::Unknown {
-                            reason: format!("{} could not be read: {error}", root.display()),
-                        },
-                    });
+                    // An unreadable catalog is not "nobody uses this".
+                    return Ok(unknown(format!(
+                        "{} could not be read: {error}",
+                        self.catalog_root.display()
+                    )));
                 }
             };
             for entry in entries.flatten() {
                 let path = entry.path();
-                let graph = entry.file_name().to_string_lossy().into_owned();
-                if !path.join("graph.json").is_file() {
-                    continue;
+                if path.is_dir() && path.join("graph.json").is_file() {
+                    candidates.push(entry.file_name().to_string_lossy().into_owned());
                 }
-                if entry.file_type().is_ok_and(|kind| kind.is_symlink()) {
-                    // A symlinked Graph is a Graph too, but resolving it is the
-                    // loader's business; count it rather than dropping it.
-                    missing.push(graph);
-                    continue;
-                }
-                graphs.push(graph);
             }
+        } else if self.configured_graph.is_none() {
+            return Ok(unknown(format!(
+                "{} is not a readable Graph catalog",
+                self.catalog_root.display()
+            )));
         }
-        graphs.sort();
-        graphs.dedup();
-        let total = graphs.len();
-        let scanned = total.min(ENVIRONMENT_REFERENCE_LIMIT);
-        graphs.truncate(ENVIRONMENT_REFERENCE_LIMIT);
+        if let Some((configured, _)) = &self.configured_graph {
+            candidates.push(configured.clone());
+        }
+        candidates.sort();
+        // The configured bundle may also be a child of the catalog; scanning it
+        // twice would double-count its declarations.
+        let mut seen_paths = std::collections::BTreeSet::new();
+        candidates.retain(|graph| match self.graph_path_checked(graph) {
+            Ok(path) => seen_paths.insert(path.canonicalize().unwrap_or(path)),
+            Err(_) => true,
+        });
+        let total = candidates.len();
+        let considered = total.min(ENVIRONMENT_REFERENCE_LIMIT);
+        candidates.truncate(ENVIRONMENT_REFERENCE_LIMIT);
 
         let mut nodes = Vec::new();
         let mut servers = Vec::new();
-        for graph in &graphs {
+        let mut missing = Vec::new();
+        for graph in &candidates {
             let (_, bundle) = match self.load_graph(graph) {
                 Ok(bundle) => bundle,
-                Err(_) => {
-                    // A Graph this host cannot load is one it cannot report on.
-                    missing.push(graph.clone());
+                Err(error) => {
+                    // A Graph this host cannot load is one it cannot report on,
+                    // and the report says which one and why.
+                    missing.push(EnvironmentMissing {
+                        graph: graph.clone(),
+                        reason: error.to_string(),
+                    });
                     continue;
                 }
             };
@@ -222,7 +233,7 @@ impl RunApplication {
             EnvironmentCoverage::Complete
         } else {
             EnvironmentCoverage::Partial {
-                scanned,
+                considered,
                 total,
                 missing,
             }
@@ -252,30 +263,21 @@ mod tests {
     use super::super::test_support::*;
     use anchor_graph_host::PluginCatalog;
 
-    #[test]
-    fn the_impact_scan_finds_node_and_plugin_server_references() {
-        let root = tempfile::tempdir().unwrap();
-        let application = application(root.path());
-        // The bundle loader needs the run store the application owns.
-        std::fs::create_dir_all(root.path().join("state/runs")).unwrap();
-        // A real, loadable bundle: the Plugin lives in the bundle's own
-        // `plugins/` directory and the manifest summarises its真实 digest, so the
-        // scan reads exactly what admission would freeze.
-        let graph = root.path().join("used");
-        std::fs::create_dir_all(graph.join("plugins/demo")).unwrap();
+    /// Write one loadable bundle that declares the named environment on a node.
+    fn bundle(root: &std::path::Path, graph: &str, environment: &str) -> std::path::PathBuf {
+        let directory = root.join(graph);
+        std::fs::create_dir_all(directory.join("plugins/demo")).unwrap();
         std::fs::write(
-            graph.join("plugins/demo/plugin.json"),
+            directory.join("plugins/demo/plugin.json"),
             r#"{"name":"Demo","mcpServers":{"probe":{"command":"bin/run","anchor":{"environment":"research"}}}}"#,
         )
         .unwrap();
-        std::fs::write(graph.join("plugins/demo/bin/run"), "#!/bin/sh\n").ok();
-        // The manifest must summarise exactly what the catalog resolves.
-        let binding = anchor_graph_host::FilePluginCatalog::new(&graph)
+        let binding = anchor_graph_host::FilePluginCatalog::new(&directory)
             .resolve(&["demo".to_owned()])
             .unwrap()
             .remove(0);
         std::fs::write(
-            graph.join("graph.json"),
+            directory.join("graph.json"),
             serde_json::json!({
                 "objective": "impact",
                 "entry": "worker",
@@ -283,7 +285,7 @@ mod tests {
                 "ops": {},
                 "nodes": [
                     {"id": "worker", "agent": "worker", "plugins": ["demo"]},
-                    {"id": "other", "agent": "worker", "environment": "research"}
+                    {"id": "other", "agent": "worker", "environment": environment}
                 ],
                 "edges": []
             })
@@ -291,7 +293,7 @@ mod tests {
         )
         .unwrap();
         std::fs::write(
-            graph.join("manifest.json"),
+            directory.join("manifest.json"),
             serde_json::json!({
                 "format": 1,
                 "graph": "graph.json",
@@ -305,6 +307,14 @@ mod tests {
             .to_string(),
         )
         .unwrap();
+        directory
+    }
+
+    #[test]
+    fn the_impact_scan_finds_node_and_plugin_server_references() {
+        let root = tempfile::tempdir().unwrap();
+        let application = application(root.path());
+        bundle(root.path(), "used", "research");
 
         let references = application.environment_references("research").unwrap();
         assert!(
@@ -329,5 +339,60 @@ mod tests {
         ));
         let unused = application.environment_references("unused").unwrap();
         assert!(unused.nodes.is_empty() && unused.servers.is_empty());
+    }
+
+    #[test]
+    fn a_configured_bundle_outside_the_catalog_is_still_reported() {
+        // The deployment's bundle lives elsewhere and is ONE bundle, not a
+        // directory of bundles: the Graph that will actually run must appear in
+        // the report, or the approving human is told "nobody uses this".
+        let root = tempfile::tempdir().unwrap();
+        let catalog = root.path().join("catalog");
+        std::fs::create_dir_all(&catalog).unwrap();
+        let deployment = root.path().join("deploy");
+        bundle(root.path(), "deploy", "research");
+        let application =
+            application(&catalog).with_configured_graph("deployed".to_owned(), deployment.clone());
+
+        let references = application.environment_references("research").unwrap();
+        assert!(
+            references
+                .nodes
+                .iter()
+                .any(|reference| reference.graph == "deployed" && reference.node == "other"),
+            "{references:?}"
+        );
+        assert!(
+            matches!(
+                references.coverage,
+                crate::application::environments::EnvironmentCoverage::Complete
+            ),
+            "{references:?}"
+        );
+        assert_eq!(references.servers.len(), 1, "{references:?}");
+    }
+
+    #[test]
+    fn a_graph_that_cannot_be_loaded_is_reported_with_its_reason() {
+        let root = tempfile::tempdir().unwrap();
+        let application = application(root.path());
+        // A Graph directory without a manifest cannot be loaded, so the report
+        // may not claim to be complete, and it must name the Graph.
+        std::fs::create_dir_all(root.path().join("broken")).unwrap();
+        std::fs::write(
+            root.path().join("broken/graph.json"),
+            r#"{"objective":"broken","entry":"only","agents":{"worker":{"model":"test"}},"ops":{},"nodes":[{"id":"only","agent":"worker"}],"edges":[]}"#,
+        )
+        .unwrap();
+
+        let references = application.environment_references("research").unwrap();
+        match references.coverage {
+            crate::application::environments::EnvironmentCoverage::Partial { missing, .. } => {
+                assert_eq!(missing.len(), 1, "{missing:?}");
+                assert_eq!(missing[0].graph, "broken");
+                assert!(!missing[0].reason.is_empty(), "{missing:?}");
+            }
+            other => panic!("expected partial coverage, got {other:?}"),
+        }
     }
 }

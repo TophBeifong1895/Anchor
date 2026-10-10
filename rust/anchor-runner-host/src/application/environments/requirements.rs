@@ -62,6 +62,8 @@ pub(crate) struct EnvironmentRequirements {
     pub(crate) requirements: Vec<EnvironmentRequirement>,
     /// Records this host could not read; a listing must not imply completeness.
     pub(crate) unreadable: usize,
+    /// True when there were more records than this projection returns.
+    pub(crate) truncated: bool,
 }
 
 impl RunApplication {
@@ -181,15 +183,47 @@ fn read_environment_requirement(
 pub(crate) fn list_environment_requirements(
     data_root: &std::path::Path,
 ) -> Result<EnvironmentRequirements, ApplicationError> {
-    let listed = list_json_records::<EnvironmentRequirement>(
-        data_root,
-        "environment-requirements",
-        ENVIRONMENT_RECORD_LIMIT,
-    )?;
+    let listed =
+        list_json_records::<EnvironmentRequirement>(data_root, "environment-requirements")?;
     let mut requirements = listed.records;
-    requirements.sort_by(|left, right| left.name.cmp(&right.name));
+    let truncated = bound_projection(&mut requirements, |left, right| left.name.cmp(&right.name));
     Ok(EnvironmentRequirements {
         requirements,
         unreadable: listed.unreadable,
+        truncated,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_unreadable_record_is_counted_rather_than_hidden() {
+        let root = tempfile::tempdir().unwrap();
+        let directory = root.path().join("state/environment-requirements");
+        std::fs::create_dir_all(&directory).unwrap();
+        // One good record, one a newer host wrote (unknown field), one garbage.
+        std::fs::write(
+            directory.join("good.json"),
+            r#"{"format":1,"name":"good","requests":[],"dropped_asks":0}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            directory.join("newer.json"),
+            r#"{"format":1,"name":"newer","requests":[],"dropped_asks":0,"future_field":true}"#,
+        )
+        .unwrap();
+        std::fs::write(directory.join("garbage.json"), "not json").unwrap();
+        // A record the store never wrote is not content: only `.json` is read.
+        std::fs::write(directory.join("notes.txt"), "not a record").unwrap();
+
+        let listed = list_environment_requirements(&root.path().join("state")).unwrap();
+        assert_eq!(listed.requirements.len(), 1, "{listed:?}");
+        assert_eq!(listed.requirements[0].name, "good");
+        // Two records could not be read, and the listing says so instead of
+        // reporting "one need" over a store the host only half understands.
+        assert_eq!(listed.unreadable, 2);
+        assert!(!listed.truncated);
+    }
 }

@@ -118,8 +118,10 @@ pub(crate) fn prepare_servers(
 ) -> Result<BTreeMap<PluginServerId, PreparedEnvironment>, Unusable> {
     let mut prepared = BTreeMap::new();
     for binding in environments.values() {
-        let Some(anchor_runtime::graph::EnvironmentSite::PluginServer { plugin, server, .. }) =
-            binding.site.as_ref()
+        let Some(server_id) = binding
+            .site
+            .as_ref()
+            .and_then(anchor_runtime::graph::EnvironmentSite::plugin_server_id)
         else {
             continue;
         };
@@ -128,7 +130,7 @@ pub(crate) fn prepare_servers(
                 "no library root is configured for a declared dependency environment",
             ));
         };
-        prepared.insert(PluginServerId::new(plugin, server), prepare(binding, root)?);
+        prepared.insert(server_id, prepare(binding, root)?);
     }
     Ok(prepared)
 }

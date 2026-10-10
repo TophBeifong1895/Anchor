@@ -341,12 +341,19 @@ fn environment_message(precondition: &EnvironmentPublishPrecondition) -> String 
             ));
         }
         Some(crate::application::environments::EnvironmentCoverage::Partial {
-            scanned,
+            considered,
             total,
-            ..
-        }) => message.push_str(&format!(
-            "影响范围只能部分确认（已扫描 {scanned}/{total} 个图），下面这个数字不是全部。\n"
-        )),
+            missing,
+        }) => {
+            message.push_str(&format!(
+                "影响范围只能部分确认（已确认 {considered}/{total} 个图）：{}。下面这个数字不是全部。\n",
+                missing
+                    .iter()
+                    .map(|missing| format!("{}（{}）", missing.graph, missing.reason))
+                    .collect::<Vec<_>>()
+                    .join("、")
+            ));
+        }
         Some(crate::application::environments::EnvironmentCoverage::Unknown { reason }) => {
             message.push_str(&format!("影响范围未知：{reason}（不能读成 0 个引用）。\n"))
         }

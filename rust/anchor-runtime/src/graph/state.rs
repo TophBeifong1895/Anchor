@@ -328,7 +328,7 @@ impl GraphRunRecord {
                     "environment binding `{key}` has no use site"
                 )));
             };
-            if site.key() != *key
+            if EnvironmentSite::from_key(key).as_ref() != Some(site)
                 || binding.name.is_empty()
                 || binding.id.len() != 64
                 || !binding.id.bytes().all(|byte| byte.is_ascii_hexdigit())
@@ -363,46 +363,30 @@ impl GraphRunRecord {
                 }
             }
         }
-        for node in &self.snapshot.nodes {
-            if let Some(name) = node.environment.as_deref() {
-                let key = EnvironmentSite::NodeTask {
-                    node: node.id.clone(),
-                }
-                .key();
-                let frozen = self
-                    .environments
-                    .get(&key)
-                    .is_some_and(|binding| binding.name == name);
-                if !frozen {
-                    return Err(GraphError::CorruptRun(format!(
-                        "node `{}` declares an environment without a frozen binding",
-                        node.id
-                    )));
-                }
+        // The declarations come from the kernel's one enumeration, the same list
+        // freezing resolves and a host's impact report reads; only the *presence*
+        // of a matching binding is checked here.
+        for declared in declared_environment_sites(&self.snapshot, &self.plugin_bindings) {
+            let key = declared.site.key();
+            let frozen = self
+                .environments
+                .get(&key)
+                .is_some_and(|binding| binding.name == declared.name);
+            if frozen {
+                continue;
             }
-            for plugin in &node.plugins {
-                let Some(bound) = self.plugin_bindings.get(plugin) else {
-                    continue;
-                };
-                for (server, name) in &bound.environments {
-                    let key = EnvironmentSite::PluginServer {
-                        node: node.id.clone(),
-                        plugin: plugin.clone(),
-                        server: server.clone(),
-                    }
-                    .key();
-                    let frozen = self
-                        .environments
-                        .get(&key)
-                        .is_some_and(|binding| binding.name == *name);
-                    if !frozen {
-                        return Err(GraphError::CorruptRun(format!(
-                            "Plugin `{plugin}` server `{server}` declares an environment on node `{}` without a frozen binding",
-                            node.id
-                        )));
-                    }
+            return Err(GraphError::CorruptRun(match &declared.site {
+                EnvironmentSite::NodeTask { node } => {
+                    format!("node `{node}` declares an environment without a frozen binding")
                 }
-            }
+                EnvironmentSite::PluginServer {
+                    node,
+                    plugin,
+                    server,
+                } => format!(
+                    "Plugin `{plugin}` server `{server}` declares an environment on node `{node}` without a frozen binding"
+                ),
+            }));
         }
         for (key, call) in &self.graph_calls {
             let spec_exists = self.snapshot.nodes.iter().any(|node| {
@@ -973,28 +957,27 @@ impl GraphRunRecord {
                 self.migrate_format()
             }
             9 => {
-                // Format 10 makes the use site part of the fact. A format-9 record
-                // keyed its bindings by node id; each one is a node task site, so
-                // the site is recovered from the key and no identity is invented.
+                // Format 10 makes the use site part of the fact. A format-9
+                // binding was keyed either by bare node id or already by a
+                // canonical site key; both recover the site from the key, so no
+                // identity is invented. A key that names neither is corrupt.
                 let legacy = std::mem::take(&mut self.environments);
-                self.environments = legacy
-                    .into_iter()
-                    .map(|(node, binding)| {
-                        let site = match binding.site {
-                            Some(site) => site,
-                            None => EnvironmentSite::NodeTask { node: node.clone() },
-                        };
-                        let key = site.key();
-                        (
-                            key,
-                            EnvironmentBinding {
-                                site: Some(site),
-                                name: binding.name,
-                                id: binding.id,
-                            },
-                        )
-                    })
-                    .collect();
+                for (key, binding) in legacy {
+                    let site = match binding.site {
+                        Some(site) => site,
+                        None => EnvironmentSite::from_key(&key)
+                            .unwrap_or(EnvironmentSite::NodeTask { node: key.clone() }),
+                    };
+                    let canonical = site.key();
+                    self.environments.insert(
+                        canonical,
+                        EnvironmentBinding {
+                            site: Some(site),
+                            name: binding.name,
+                            id: binding.id,
+                        },
+                    );
+                }
                 self.format = 10;
                 Ok(())
             }

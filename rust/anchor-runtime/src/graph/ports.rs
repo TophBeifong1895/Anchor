@@ -233,6 +233,36 @@ impl EnvironmentSite {
         }
     }
 
+    /// The Plugin server this site names, if it names one.
+    pub fn plugin_server_id(&self) -> Option<PluginServerId> {
+        match self {
+            EnvironmentSite::PluginServer { plugin, server, .. } => {
+                Some(PluginServerId::new(plugin, server))
+            }
+            EnvironmentSite::NodeTask { .. } => None,
+        }
+    }
+
+    /// The site a canonical key names, if it names one.
+    ///
+    /// `key` is injective because Plugin and server references cannot contain
+    /// `/` while node ids are not part of a `plugin_server:` key's tail.
+    pub fn from_key(key: &str) -> Option<EnvironmentSite> {
+        if let Some(node) = key.strip_prefix("node_task:") {
+            return Some(EnvironmentSite::NodeTask {
+                node: node.to_owned(),
+            });
+        }
+        let rest = key.strip_prefix("plugin_server:")?;
+        let (node, rest) = rest.split_once('/')?;
+        let (plugin, server) = rest.split_once('/')?;
+        Some(EnvironmentSite::PluginServer {
+            node: node.to_owned(),
+            plugin: plugin.to_owned(),
+            server: server.to_owned(),
+        })
+    }
+
     /// The canonical key used in the persisted binding map.
     pub fn key(&self) -> String {
         match self {
@@ -252,24 +282,6 @@ impl NodeExecutionRequest {
         self.environments
             .values()
             .find(|binding| matches!(binding.site, Some(EnvironmentSite::NodeTask { .. })))
-    }
-
-    /// The environment for one local stdio MCP server of a bound Plugin.
-    pub fn plugin_server_environment(
-        &self,
-        plugin: &str,
-        server: &str,
-    ) -> Option<&EnvironmentBinding> {
-        self.environments.values().find(|binding| {
-            matches!(
-                binding.site.as_ref(),
-                Some(EnvironmentSite::PluginServer {
-                    plugin: bound_plugin,
-                    server: bound_server,
-                    ..
-                }) if bound_plugin == plugin && bound_server == server
-            )
-        })
     }
 }
 

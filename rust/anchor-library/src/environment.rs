@@ -90,6 +90,10 @@ pub struct PublishedEnvironment {
     pub bytes: u64,
     pub files: usize,
     pub directories: usize,
+    /// Whether the published tree is still writable. `show` refuses such a tree;
+    /// `describe` reports it so an operator can see the store's real state.
+    #[serde(default)]
+    pub writable: bool,
 }
 
 /// What a candidate directory would publish as, before it is published.
@@ -171,13 +175,13 @@ impl EnvironmentStore {
         self.root.join(ENVS)
     }
 
-    /// The library root this store reads, for diagnostics.
     /// Where one published environment lives. The store owns its own layout,
     /// so a caller never re-derives `<root>/envs/<id>` itself.
     pub fn published_path(&self, id: &str) -> PathBuf {
         self.root.join(ENVS).join(id)
     }
 
+    /// The library root this store reads, for diagnostics.
     pub fn root(&self) -> &Path {
         &self.root
     }
@@ -370,12 +374,13 @@ impl EnvironmentStore {
         };
         let mut published = Vec::new();
         for directory in published_directories(&envs)? {
-            let totals = measure(&directory)?.totals;
+            let measure = measure(&directory)?;
             published.push(PublishedEnvironment {
                 id: file_name(&directory),
-                bytes: totals.bytes,
-                files: totals.files,
-                directories: totals.directories,
+                bytes: measure.totals.bytes,
+                files: measure.totals.files,
+                directories: measure.totals.directories,
+                writable: measure.write_bits,
             });
         }
         Ok(published)
@@ -391,20 +396,48 @@ impl EnvironmentStore {
         if !directory.is_dir() {
             return Err(EnvironmentError::Unknown(id.to_owned()));
         }
-        let (digest, totals) = digest_tree(&directory)?;
+        let (digest, measure) = digest_tree(&directory)?;
         if digest != id {
             return Err(EnvironmentError::Corrupt(id.to_owned()));
         }
         // `show` is what admission calls before running, so a published tree that
         // became writable again must be refused here too, not only by `verify`.
-        if measure(&directory)?.write_bits {
+        if measure.write_bits {
             return Err(EnvironmentError::Writable(id.to_owned()));
         }
         Ok(PublishedEnvironment {
             id: id.to_owned(),
-            bytes: totals.bytes,
-            files: totals.files,
-            directories: totals.directories,
+            bytes: measure.totals.bytes,
+            files: measure.totals.files,
+            directories: measure.totals.directories,
+            writable: false,
+        })
+    }
+
+    /// Describe one published environment without refusing a writable tree.
+    ///
+    /// Admission uses [`EnvironmentStore::show`], which must refuse content
+    /// anyone can still change. An operator inspecting the store needs the
+    /// opposite: the facts, plus whether the tree is still writable.
+    pub fn describe(&self, id: &str) -> Result<PublishedEnvironment, EnvironmentError> {
+        validate_id(id)?;
+        let Some((envs, _lease)) = self.locked(false)? else {
+            return Err(EnvironmentError::Unknown(id.to_owned()));
+        };
+        let directory = envs.join(id);
+        if !directory.is_dir() {
+            return Err(EnvironmentError::Unknown(id.to_owned()));
+        }
+        let (digest, measure) = digest_tree(&directory)?;
+        if digest != id {
+            return Err(EnvironmentError::Corrupt(id.to_owned()));
+        }
+        Ok(PublishedEnvironment {
+            id: id.to_owned(),
+            bytes: measure.totals.bytes,
+            files: measure.totals.files,
+            directories: measure.totals.directories,
+            writable: measure.write_bits,
         })
     }
 
@@ -533,14 +566,13 @@ impl EnvironmentStore {
         for directory in published_directories(&envs)? {
             let id = file_name(&directory);
             match digest_tree(&directory) {
-                Ok((digest, _)) if digest == id => {}
+                Ok((digest, measure)) if digest == id => {
+                    if measure.write_bits {
+                        problems.push(format!("{id}: published content is still writable"));
+                    }
+                }
                 Ok(_) => problems.push(format!("{id}: content does not match its digest")),
                 Err(error) => problems.push(format!("{id}: {error}")),
-            }
-            if let Ok(measure) = measure(&directory)
-                && measure.write_bits
-            {
-                problems.push(format!("{id}: published content is still writable"));
             }
         }
         let table = read_names(&envs)?;
@@ -721,11 +753,22 @@ fn copy_directory(
 }
 
 /// Re-hash a published tree with exactly the rules publication used.
-fn digest_tree(root: &Path) -> Result<(String, Totals), EnvironmentError> {
+fn digest_tree(root: &Path) -> Result<(String, Measure), EnvironmentError> {
     let mut hash = Sha256::new();
     let mut totals = Totals::default();
-    hash_directory(root, &RelativePath::root(), &mut hash, &mut totals)?;
-    Ok((format!("{:x}", hash.finalize()), totals))
+    // The walk already stats every entry, so writability costs nothing extra.
+    let mut write_bits = root.metadata()?.mode() & 0o222 != 0;
+    hash_directory(
+        root,
+        &RelativePath::root(),
+        &mut hash,
+        &mut totals,
+        &mut write_bits,
+    )?;
+    Ok((
+        format!("{:x}", hash.finalize()),
+        Measure { totals, write_bits },
+    ))
 }
 
 fn hash_directory(
@@ -733,14 +776,16 @@ fn hash_directory(
     relative: &RelativePath,
     hash: &mut Sha256,
     totals: &mut Totals,
+    write_bits: &mut bool,
 ) -> Result<(), EnvironmentError> {
     for (name, path) in sorted_entries(directory)? {
         let metadata = fs::symlink_metadata(&path)?;
+        *write_bits |= metadata.mode() & 0o222 != 0;
         let child = relative.join(&name);
         if metadata.is_dir() {
             totals.directories += 1;
             hash_entry(hash, b'd', &child, published_mode(metadata.mode()));
-            hash_directory(&path, &child, hash, totals)?;
+            hash_directory(&path, &child, hash, totals, write_bits)?;
             continue;
         }
         if !metadata.is_file() {
