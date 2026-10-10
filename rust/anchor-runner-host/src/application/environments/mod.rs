@@ -23,7 +23,7 @@ mod provision;
 mod requirements;
 
 pub(crate) use plans::EnvironmentPublishPrecondition;
-pub(crate) use provision::EnvironmentProvisionPrecondition;
+pub(crate) use provision::EnvironmentProvisionPlan;
 #[cfg(test)]
 pub(crate) use requirements::EnvironmentRequirement;
 pub(crate) use requirements::{

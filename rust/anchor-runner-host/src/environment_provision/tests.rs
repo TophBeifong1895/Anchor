@@ -1,6 +1,6 @@
 //! The builder's regression surface.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anchor_runtime::{NetworkPolicy, ReadOnlyInput, SandboxPort, SandboxRequest, SandboxStatus};
@@ -280,9 +280,36 @@ struct IndexState {
     /// The `content-type` the JSON document is served with. PEP 691 allows a
     /// charset parameter, so a case can exercise the media-type comparison.
     json_content_type: String,
+    /// The shape of the `files[].url` the fixture advertises.
+    url_style: IndexUrlStyle,
     /// Report `404` for the project, as an index without it does.
     missing: Arc<std::sync::atomic::AtomicBool>,
     queried: Arc<std::sync::atomic::AtomicUsize>,
+}
+
+/// How the fixture's file list names its artifact URL.
+///
+/// The real mirrors use a URL relative to the package page, so that is the
+/// default: a fixture with absolute URLs would let a relative-URL regression pass
+/// the whole suite again.
+#[derive(Clone)]
+enum IndexUrlStyle {
+    /// What TUNA and USTC serve: `../../files/<name>` from the package page.
+    Relative,
+    /// The shape the first fixtures used: an absolute URL.
+    Absolute,
+    /// An exact value, for a URL the outbound policy must refuse.
+    Exact(String),
+}
+
+impl IndexState {
+    fn artifact_url(&self) -> String {
+        match &self.url_style {
+            IndexUrlStyle::Relative => format!("../../files/{}", self.filename),
+            IndexUrlStyle::Absolute => format!("{}/files/{}", self.endpoint, self.filename),
+            IndexUrlStyle::Exact(value) => value.clone(),
+        }
+    }
 }
 
 async fn simple_page(
@@ -300,8 +327,9 @@ async fn simple_page(
             axum::http::StatusCode::OK,
             [("content-type", "text/html")],
             format!(
-                "<html><body><a href=\"{}/files/{}\">{}</a></body></html>",
-                state.endpoint, state.filename, state.filename
+                "<html><body><a href=\"{}\">{}</a></body></html>",
+                state.artifact_url(),
+                state.filename
             ),
         )
             .into_response();
@@ -311,7 +339,7 @@ async fn simple_page(
         "name": "probepkg",
         "files": [{
             "filename": state.filename,
-            "url": format!("{}/files/{}", state.endpoint, state.filename),
+            "url": state.artifact_url(),
             "hashes": {"sha256": state.digest},
         }],
     })
@@ -324,13 +352,25 @@ async fn simple_page(
         .into_response()
 }
 
+/// The file endpoint of a real mirror: TUNA answers `403` to a request that
+/// carries no `User-Agent` at all and `200` to any non-empty one, so the fixture
+/// does the same. Without this the suite would not notice a client that looks
+/// like an anonymous downloader.
 async fn distribution(
     axum::extract::State(state): axum::extract::State<IndexState>,
+    headers: axum::http::HeaderMap,
 ) -> axum::response::Response {
     use axum::response::IntoResponse;
     state
         .queried
         .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    let user_agent = headers
+        .get(axum::http::header::USER_AGENT)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default();
+    if user_agent.trim().is_empty() {
+        return axum::http::StatusCode::FORBIDDEN.into_response();
+    }
     let bytes = state.bytes.lock().unwrap().clone();
     (
         axum::http::StatusCode::OK,
@@ -354,13 +394,40 @@ async fn index_fixture_missing(wheel: &Path) -> IndexFixture {
 }
 
 /// The same fixture, optionally advertising a different file name — an sdist, so
-/// a case can prove this host never fetches one.
+/// a case can prove this host never fetches one. Its artifact URL is relative,
+/// which is the shape the real mirrors serve.
 async fn index_fixture_named(wheel: &Path, as_html: bool, rename_to: Option<&str>) -> IndexFixture {
     index_fixture_serving(
         wheel,
         as_html,
         rename_to,
         "application/vnd.pypi.simple.v1+json",
+        IndexUrlStyle::Relative,
+    )
+    .await
+}
+
+/// The older shape: an absolute artifact URL. Kept so both forms stay proven.
+async fn index_fixture_absolute(wheel: &Path) -> IndexFixture {
+    index_fixture_serving(
+        wheel,
+        false,
+        None,
+        "application/vnd.pypi.simple.v1+json",
+        IndexUrlStyle::Absolute,
+    )
+    .await
+}
+
+/// The same fixture offering an exact artifact URL, so a case can prove the
+/// outbound policy refuses it instead of requesting it.
+async fn index_fixture_offering(wheel: &Path, url: &str) -> IndexFixture {
+    index_fixture_serving(
+        wheel,
+        false,
+        None,
+        "application/vnd.pypi.simple.v1+json",
+        IndexUrlStyle::Exact(url.to_owned()),
     )
     .await
 }
@@ -372,6 +439,7 @@ async fn index_fixture_serving(
     as_html: bool,
     rename_to: Option<&str>,
     json_content_type: &str,
+    url_style: IndexUrlStyle,
 ) -> IndexFixture {
     let filename = rename_to
         .map(str::to_owned)
@@ -390,6 +458,7 @@ async fn index_fixture_serving(
         bytes: Arc::clone(&bytes),
         as_html,
         json_content_type: json_content_type.to_owned(),
+        url_style,
         missing: Arc::clone(&missing),
         queried: Arc::clone(&queried),
     };
@@ -631,12 +700,112 @@ async fn the_json_probe_accepts_a_pep_691_content_type_with_parameters() {
         false,
         None,
         "application/vnd.pypi.simple.v1+json; charset=utf-8",
+        IndexUrlStyle::Relative,
     )
     .await;
 
     verify_index_json(&index.endpoint, "probepkg")
         .await
         .expect("a charset parameter is allowed on the PEP 691 JSON content type");
+}
+
+/// A deployment config for fetching only: nothing here executes `uv` or the
+/// interpreter, so these cases do not need the builder toolchain.
+fn fetch_only_config(root: &Path, index: &str) -> EnvironmentProvisionConfig {
+    EnvironmentProvisionConfig {
+        uv: PathBuf::from("/nonexistent/uv"),
+        uv_digest: "a".repeat(64),
+        python: PathBuf::from("/usr/bin/python3"),
+        sources: vec![PackageSource::Index(index.to_owned())],
+        build_root: root.join("build"),
+        bwrap: PathBuf::from("bwrap"),
+    }
+}
+
+/// The lock entry for one package, as resolution would have produced it.
+fn locked_package(name: &str, version: &str, digest: &str) -> LockedPackage {
+    LockedPackage {
+        name: name.to_owned(),
+        version: version.to_owned(),
+        hashes: vec![digest.to_owned()],
+    }
+}
+
+/// The real mirrors offer the artifact as a path relative to the package page
+/// (`../../packages/…`), so the fetch has to resolve it against that page.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_relative_artifact_url_is_resolved_against_the_package_page() {
+    let root = tempfile::tempdir().unwrap();
+    let wheels = root.path().join("wheels");
+    std::fs::create_dir_all(&wheels).unwrap();
+    let wheel = fixture_wheel(&wheels, "probepkg", "0.1.0");
+    let digest = super::config::sha256_file(&wheel).unwrap();
+    let index = index_fixture(&wheel, false).await;
+    let config = fetch_only_config(root.path(), &index.endpoint);
+    let wheelhouse = root.path().join("wheelhouse");
+
+    let fetched = fetch_wheelhouse(
+        &config,
+        &[locked_package("probepkg", "0.1.0", &digest)],
+        &wheelhouse,
+    )
+    .await
+    .expect("a relative artifact URL resolves against its package page");
+    assert_eq!(fetched[0].sha256, digest, "{fetched:?}");
+    assert!(fetched[0].source.starts_with("index:"), "{fetched:?}");
+    assert!(wheelhouse.join(&fetched[0].filename).is_file());
+}
+
+/// An absolute artifact URL keeps working: both shapes are legal PEP 691.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_absolute_artifact_url_is_still_fetched() {
+    let root = tempfile::tempdir().unwrap();
+    let wheels = root.path().join("wheels");
+    std::fs::create_dir_all(&wheels).unwrap();
+    let wheel = fixture_wheel(&wheels, "probepkg", "0.1.0");
+    let digest = super::config::sha256_file(&wheel).unwrap();
+    let index = index_fixture_absolute(&wheel).await;
+    let config = fetch_only_config(root.path(), &index.endpoint);
+
+    let fetched = fetch_wheelhouse(
+        &config,
+        &[locked_package("probepkg", "0.1.0", &digest)],
+        &root.path().join("wheelhouse"),
+    )
+    .await
+    .expect("an absolute artifact URL is fetched as it stands");
+    assert_eq!(fetched[0].sha256, digest, "{fetched:?}");
+}
+
+/// A relative slot must not become a way around the outbound policy: the page
+/// offers a protocol-relative address to a private host, and it is refused
+/// without the artifact being requested at all.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_artifact_url_the_policy_refuses_is_never_requested() {
+    let root = tempfile::tempdir().unwrap();
+    let wheels = root.path().join("wheels");
+    std::fs::create_dir_all(&wheels).unwrap();
+    let wheel = fixture_wheel(&wheels, "probepkg", "0.1.0");
+    let digest = super::config::sha256_file(&wheel).unwrap();
+    let index = index_fixture_offering(&wheel, "//10.0.0.1/packages/probepkg-0.1.0.whl").await;
+    let config = fetch_only_config(root.path(), &index.endpoint);
+
+    let error = fetch_wheelhouse(
+        &config,
+        &[locked_package("probepkg", "0.1.0", &digest)],
+        &root.path().join("wheelhouse"),
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        error.to_string().contains("is not an authorized address"),
+        "the policy refuses the resolved address: {error}"
+    );
+    assert_eq!(
+        index.queries(),
+        1,
+        "only the package page was read; the refused artifact was never requested"
+    );
 }
 
 /// An HTML-only mirror is refused while the plan is being frozen, before a human

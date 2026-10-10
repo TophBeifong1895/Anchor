@@ -524,12 +524,18 @@ fn provision_arguments(arguments: &serde_json::Map<String, Value>) -> Result<Str
 /// What the human is shown before approving a resolved dependency plan.
 ///
 /// The point is that they approve the *content*: the interpreter, the sources,
-/// and every pinned package with its digest — not a request like "install what
-/// the assistant asked for".
+/// and every pinned package with every digest the lock accepts — not a request
+/// like "install what the assistant asked for".
+///
+/// Every candidate digest is listed, because the lock records hashes but not file
+/// names: it does not say which of them is the wheel, and this form refuses to
+/// guess. What gets installed is whichever candidate arrives as a wheel with a
+/// matching digest from an authorized source, which is what the closing line
+/// says.
 fn provision_message(
-    precondition: &crate::application::environments::EnvironmentProvisionPrecondition,
+    plan: &crate::application::environments::EnvironmentProvisionPlan,
+    replacing: bool,
 ) -> String {
-    let plan = &precondition.plan;
     let mut message = format!(
         "确认按下面这个已解析的锁定集合准备并发布依赖环境「{}」？\n解释器：Python {}（{}，sha256 {}…）\n",
         plan.name,
@@ -548,19 +554,23 @@ fn provision_message(
     ));
     for package in plan.packages.iter().take(12) {
         message.push_str(&format!(
-            "  {}=={} sha256:{}…\n",
+            "  {}=={}（{} 个候选）\n",
             package.name,
             package.version,
-            &package.hashes[0][..package.hashes[0].len().min(16)]
+            package.hashes.len()
         ));
+        for hash in &package.hashes {
+            message.push_str(&format!("    sha256:{}…\n", &hash[..hash.len().min(16)]));
+        }
     }
     if plan.packages.len() > 12 {
         message.push_str(&format!("  …其余 {} 个\n", plan.packages.len() - 12));
     }
-    message
-        .push_str("安装：只安装上述 digest 的 wheel，在无网络的沙箱内离线安装，不编译源码包。\n");
+    message.push_str(
+        "安装：宿主只安装候选里那个来自上述授权来源、且字节与候选摘要相符的 wheel；本表单不预判哪个候选是 wheel，锁里没有文件名。安装发生在无网络的沙箱内，不编译源码包。\n",
+    );
     render_impact(&mut message, plan.references.as_ref());
-    message.push_str(if precondition.replacing() {
+    message.push_str(if replacing {
         "该名字当前指向别的编号，本次会切换它（旧内容保留）。\n"
     } else {
         "这是新名字，不会替换任何现有引用。\n"
@@ -623,7 +633,7 @@ async fn provision_environment(
     let requested_schema = native_schema(schema)?;
     let elicitation = peer.create_elicitation(ElicitRequestParams::FormElicitationParams {
         meta: None,
-        message: provision_message(&precondition),
+        message: provision_message(&precondition.plan, precondition.replacing()),
         requested_schema,
     });
     tokio::pin!(elicitation);
@@ -900,6 +910,63 @@ async fn install(
 mod tests {
     use super::*;
     use serde_json::json;
+
+    /// The plan the form renders: two candidate digests for one package, the way
+    /// a real lock records a wheel and an sdist.
+    fn provision_plan() -> crate::application::environments::EnvironmentProvisionPlan {
+        use crate::environment_provision::LockedPackage;
+        crate::application::environments::EnvironmentProvisionPlan {
+            name: "research".into(),
+            sources: vec!["index:https://pypi.tuna.tsinghua.edu.cn/simple".into()],
+            interpreter: "3.12.13".into(),
+            interpreter_path: std::path::PathBuf::from("/usr/bin/python3.12"),
+            interpreter_digest: "f".repeat(64),
+            lock_digest: "a".repeat(64),
+            packages: vec![LockedPackage {
+                name: "pygments".into(),
+                version: "2.20.0".into(),
+                // What a real lock records: the sdist digest hashes smaller.
+                hashes: vec![
+                    "6757cd03768053ff99f3039c1a36d6c0aa0b263438fcab17520b30a303a82b5f".into(),
+                    "81a9e26dd42fd28a23a2d169d86d7ac03b46e2f8b59ed4698fb4785f946d0176".into(),
+                ],
+            }],
+            references: None,
+            observed_id: None,
+            observed_name_version: None,
+        }
+    }
+
+    #[test]
+    fn the_provision_form_lists_every_candidate_and_claims_no_wheel() {
+        let plan = provision_plan();
+        let message = provision_message(&plan, false);
+
+        // Both candidate digests are shown, not just the first one.
+        for hash in &plan.packages[0].hashes {
+            assert!(
+                message.contains(&format!("sha256:{}…", &hash[..16])),
+                "{message}"
+            );
+        }
+        assert!(
+            message.contains("pygments==2.20.0（2 个候选）"),
+            "{message}"
+        );
+        assert!(
+            message.contains("锁定集合（1 个包，共 2 个候选产物）"),
+            "{message}"
+        );
+        // And the form does not pretend the first digest is the installed one.
+        assert!(
+            message.contains("本表单不预判哪个候选是 wheel，锁里没有文件名"),
+            "{message}"
+        );
+        assert!(
+            !message.contains("pygments==2.20.0 sha256:"),
+            "the old single-digest line implied the first candidate is the artifact: {message}"
+        );
+    }
 
     #[test]
     fn native_form_cannot_silently_drop_schema_constraints() {

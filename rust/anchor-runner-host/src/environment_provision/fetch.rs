@@ -37,6 +37,15 @@ pub(crate) struct FetchedArtifact {
 /// The content type a PEP 691 JSON package page answers with.
 const PEP691_JSON: &str = "application/vnd.pypi.simple.v1+json";
 
+/// What this host calls itself on an environment index request.
+///
+/// A mirror's file endpoint may refuse a request that carries no `User-Agent` at
+/// all — TUNA answers `403` to one and `200` to any non-empty value (measured),
+/// and `uv` sends its own — so the host identifies itself instead of looking like
+/// an anonymous client. This is a request header, not an address-policy change:
+/// the URL is still checked by [`crate::oauth_http::validate_oauth_url`].
+const USER_AGENT: &str = concat!(env!("CARGO_PKG_NAME"), "/", env!("CARGO_PKG_VERSION"));
+
 /// Confirm one authorized index really serves a PEP 691 JSON package page.
 ///
 /// This runs while the plan is being frozen, *before* a human is asked to approve
@@ -63,6 +72,7 @@ pub(crate) async fn verify_index_json(index: &str, package: &str) -> Result<(), 
     let response = client
         .get(page_url)
         .header("Accept", PEP691_JSON)
+        .header(reqwest::header::USER_AGENT, USER_AGENT)
         .send()
         .await
         .map_err(|error| {
@@ -191,6 +201,24 @@ fn from_directory(
     Err("no distribution with the approved digest".to_owned())
 }
 
+/// The absolute URL of one artifact, resolved against the page that offered it.
+///
+/// PEP 691 lets the file list carry a URL relative to the package page, and the
+/// real mirrors use that shape (`../../packages/…`), so the page URL is the base.
+/// Resolving first and checking second is what keeps a relative slot from being a
+/// way around the outbound policy: a protocol-relative (`//host/…`) or absolute
+/// private address becomes an absolute URL here and is then refused by the same
+/// rule every other host request uses.
+fn artifact_url(page_url: &Url, value: &str) -> Result<Url, String> {
+    let resolved = page_url.join(value).map_err(|error| {
+        format!("the artifact URL `{value}` is unusable relative to the index page: {error}")
+    })?;
+    crate::oauth_http::validate_oauth_url(&resolved).map_err(|_| {
+        format!("the artifact URL `{value}` is not an authorized address (a public https or loopback address is required)")
+    })?;
+    Ok(resolved)
+}
+
 /// Ask one simple index for the approved artifact.
 async fn from_index(
     config: &EnvironmentProvisionConfig,
@@ -209,6 +237,7 @@ async fn from_index(
     let response = client
         .get(page_url.clone())
         .header("Accept", "application/vnd.pypi.simple.v1+json")
+        .header(reqwest::header::USER_AGENT, USER_AGENT)
         .timeout(config.http_timeout())
         .send()
         .await
@@ -264,15 +293,13 @@ async fn from_index(
         )
     })?;
     safe_filename(&filename)?;
-    let file_url =
-        Url::parse(&url).map_err(|error| format!("the artifact URL is unusable: {error}"))?;
-    crate::oauth_http::validate_oauth_url(&file_url)
-        .map_err(|_| "the artifact URL is not an authorized address".to_owned())?;
+    let file_url = artifact_url(&page_url, &url)?;
     let client = crate::oauth_http::async_client(&file_url)
         .await
         .map_err(|_| "the artifact could not be reached safely".to_owned())?;
     let mut response = client
         .get(file_url)
+        .header(reqwest::header::USER_AGENT, USER_AGENT)
         .timeout(config.http_timeout())
         .send()
         .await
@@ -398,5 +425,93 @@ mod fetch_tests {
         assert!(safe_filename("/etc/passwd").is_err());
         assert!(safe_filename(".hidden.whl").is_err());
         assert!(safe_filename("").is_err());
+    }
+
+    /// The real mirrors offer the artifact as a path relative to the package
+    /// page, and the resolved address must pass the same policy as any absolute
+    /// one — a relative slot is not a way around it.
+    #[test]
+    fn an_artifact_url_is_resolved_against_the_page_and_then_policed() {
+        let page = Url::parse("https://pypi.tuna.tsinghua.edu.cn/simple/pygments/").unwrap();
+
+        // What the mirrors actually serve.
+        let relative = artifact_url(
+            &page,
+            "../../packages/aa/bb/cc/pygments-2.20.0-py3-none-any.whl",
+        )
+        .unwrap();
+        assert_eq!(
+            relative.as_str(),
+            "https://pypi.tuna.tsinghua.edu.cn/packages/aa/bb/cc/pygments-2.20.0-py3-none-any.whl"
+        );
+
+        // An absolute authorized URL is used as it stands.
+        let absolute =
+            artifact_url(&page, "https://files.pythonhosted.org/packages/x.whl").unwrap();
+        assert_eq!(
+            absolute.as_str(),
+            "https://files.pythonhosted.org/packages/x.whl"
+        );
+
+        // A relative path cannot leave the authority the page belongs to: the
+        // policy checks scheme, host and port, never the path.
+        let traversed = artifact_url(&page, "../../../../etc/passwd").unwrap();
+        assert_eq!(traversed.host_str(), Some("pypi.tuna.tsinghua.edu.cn"));
+
+        // Protocol-relative and absolute private targets are refused by the
+        // policy itself, not silently fetched.
+        for value in [
+            "//10.0.0.1/packages/x.whl",
+            "//169.254.169.254/latest/meta-data/",
+            "http://10.0.0.1/x.whl",
+            "file:///etc/passwd",
+            "https://user:secret@10.0.0.1/x.whl",
+        ] {
+            let error = artifact_url(&page, value).unwrap_err();
+            assert!(
+                error.contains("is not an authorized address"),
+                "{value}: {error}"
+            );
+        }
+    }
+
+    /// Opt-in: the recommended mirror really serves a *relative* artifact URL,
+    /// and the fetch turns it into the approved bytes. Run it with
+    /// `ANCHOR_ENVIRONMENT_LIVE_MIRROR=1`.
+    ///
+    /// The digest is the one a lock for `idna==3.7` contains, which is what makes
+    /// this the fetch path rather than a plain download: the candidate is chosen
+    /// by the approved hash, exactly as a real plan does.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn live_the_recommended_mirror_yields_the_approved_bytes_from_a_relative_url() {
+        if std::env::var("ANCHOR_ENVIRONMENT_LIVE_MIRROR").as_deref() != Ok("1") {
+            eprintln!("SKIPPED (by design): set ANCHOR_ENVIRONMENT_LIVE_MIRROR=1 to run it");
+            return;
+        }
+        let index = "https://pypi.tuna.tsinghua.edu.cn/simple";
+        let root = tempfile::tempdir().unwrap();
+        let wheelhouse = root.path().join("wheelhouse");
+        std::fs::create_dir_all(&wheelhouse).unwrap();
+        let config = EnvironmentProvisionConfig {
+            uv: std::path::PathBuf::from("/nonexistent/uv"),
+            uv_digest: "a".repeat(64),
+            python: std::path::PathBuf::from("/usr/bin/python3"),
+            sources: vec![PackageSource::Index(index.to_owned())],
+            build_root: root.path().join("build"),
+            bwrap: std::path::PathBuf::from("bwrap"),
+        };
+        let package = LockedPackage {
+            name: "idna".to_owned(),
+            version: "3.7".to_owned(),
+            hashes: vec![
+                "82fee1fc78add43492d3a1898bfa6d8a904cc97d8427f683ed8e798d07761aa0".to_owned(),
+            ],
+        };
+
+        let fetched = from_index(&config, &package, index, &wheelhouse)
+            .await
+            .expect("the mirror's relative artifact URL yields the approved bytes");
+        assert_eq!(fetched.sha256, package.hashes[0]);
+        assert!(wheelhouse.join(&fetched.filename).is_file(), "{fetched:?}");
     }
 }
