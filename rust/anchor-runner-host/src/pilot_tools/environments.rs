@@ -55,6 +55,16 @@ impl PilotTools {
             return Err(rejected("purpose must be non-empty and bounded"));
         }
         let interpreter = optional_bounded(arguments, "interpreter", 128)?;
+        if let Some(constraint) = interpreter.as_deref()
+            && !crate::environment_provision::is_interpreter_constraint(constraint)
+        {
+            // The deployment builds on one interpreter, so this names the version
+            // it must be. A specifier like `>=3.11` could never be satisfied and
+            // would only be discovered when someone asked to provision it.
+            return Err(rejected(
+                "interpreter must be a version prefix like `3.12`, not a specifier",
+            ));
+        }
         let notes = optional_bounded(arguments, "notes", 4096)?;
         let packages = match arguments.get("packages") {
             None => Vec::new(),
@@ -117,9 +127,12 @@ impl PilotTools {
             .environment_references(&name)
             .ok()
             .map(|references| {
+                // The coverage travels with the counts: `{nodes:0,servers:0}` from
+                // a partial scan must not read as "nobody uses it".
                 json!({
                     "nodes": references.nodes.len(),
-                    "servers": references.servers.len()
+                    "servers": references.servers.len(),
+                    "coverage": references.coverage
                 })
             })
             .unwrap_or(Value::Null);

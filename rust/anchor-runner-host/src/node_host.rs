@@ -683,18 +683,19 @@ impl HostNodes {
             cancellation: request.cancellation.clone(),
         };
         let deployments = crate::deployment_library_root();
-        // A Run whose recorded environment cannot be used is a corrupt Run: the
-        // fact it recorded cannot be honored.
+        // The same cause gets the same class here as on the AgentNode path: a Run
+        // whose recorded content cannot be honored is corrupt, while a deployment
+        // that cannot serve environments at all is unsupported.
         let prepared = crate::managed_environment::prepare_for_async(
             request.task_environment().cloned(),
             deployments.clone(),
         )
         .await
-        .map_err(|error| GraphError::CorruptRun(error.to_string()))?;
+        .map_err(crate::managed_environment::Unusable::into_graph_error)?;
         let sandbox = match prepared.as_ref() {
             Some(prepared) => prepared
                 .authorize(std::sync::Arc::new(sandbox))
-                .map_err(GraphError::CorruptRun)?,
+                .map_err(GraphError::Unsupported)?,
             None => std::sync::Arc::new(sandbox),
         };
         match prepared.as_ref() {

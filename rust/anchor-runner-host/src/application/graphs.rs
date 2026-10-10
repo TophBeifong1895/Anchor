@@ -14,9 +14,7 @@ mod references;
 #[cfg(test)]
 mod tests;
 
-pub(crate) use references::{
-    EnvironmentReferences, ImpactCoverage, ImpactScan, coverage_of,
-};
+pub(crate) use references::{EnvironmentReferences, ImpactCoverage, ImpactScan, coverage_of};
 
 #[derive(Debug)]
 pub(crate) enum GraphManagementError {

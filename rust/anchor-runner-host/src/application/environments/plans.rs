@@ -129,6 +129,15 @@ impl RunApplication {
         name: String,
         requester: EnvironmentPlanRequester,
     ) -> Result<EnvironmentPublishPrecondition, ApplicationError> {
+        // The name is validated *before* the form, not after publication:
+        // publishing content and only then failing to point a name at it would
+        // leave an unnamed tree in the Library behind an approved form.
+        if !anchor_runtime::graph::is_environment_name(&name) {
+            return Err(ApplicationError::Invalid(
+                "environment name must be at most 64 characters of letters, digits, dot, dash and underscore"
+                    .to_owned(),
+            ));
+        }
         // A published environment contributes commands only through `bin/`, so a
         // candidate without one could never be used and would only record a false
         // fact. This is the same rule Run admission enforces, checked before a

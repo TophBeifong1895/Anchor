@@ -401,6 +401,32 @@ async fn a_requirement_for_a_name_the_assistants_called_subgraph_uses_is_refused
 }
 
 #[tokio::test]
+async fn a_requirement_refuses_an_interpreter_specifier_it_could_never_satisfy() {
+    let (root, mut tools) = fixture();
+    std::fs::create_dir_all(root.path().join("state/runs")).unwrap();
+    let (turn, _) = tools
+        .sessions
+        .create_turn("local", "pilot", "fixture-specifier", Some("fixture"))
+        .unwrap();
+    tools.turn = turn.id;
+    let failure = tools
+        .execute(
+            "environment_request",
+            json!({
+                "name": "research",
+                "purpose": "analysis",
+                "interpreter": "python>=3.11",
+            }),
+        )
+        .await
+        .expect_err("a specifier must be refused when it is recorded");
+    assert!(
+        failure.to_string().contains("version prefix"),
+        "the refusal explains the accepted shape: {failure}"
+    );
+}
+
+#[tokio::test]
 async fn the_assistant_records_an_environment_requirement_without_publishing() {
     let (root, mut tools) = fixture();
     // The own-dependency guard loads bundles, which needs the run store.
@@ -417,7 +443,7 @@ async fn the_assistant_records_an_environment_requirement_without_publishing() {
             json!({
                 "name":"research",
                 "purpose":"parse the weekly reports",
-                "interpreter":"python>=3.11",
+                "interpreter":"3.11",
                 "packages":["pandas"]
             }),
         )

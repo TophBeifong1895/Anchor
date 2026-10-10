@@ -119,9 +119,15 @@ async fn the_build_sandbox_refuses_network_and_has_none() {
     let wheels = root.path().join("wheels");
     std::fs::create_dir_all(&wheels).unwrap();
     let config = config(root.path(), &toolchain, wheels);
-    let Ok(sandbox) = provision_sandbox(&config) else {
-        eprintln!("skipping the sandbox boundary test: bubblewrap is unavailable");
-        return;
+    let sandbox = match provision_sandbox(&config) {
+        Ok(sandbox) => sandbox,
+        Err(error) if builder_required() => {
+            panic!("ANCHOR_REQUIRE_ENV_BUILDER=1 but the sandbox is unavailable: {error}")
+        }
+        Err(error) => {
+            eprintln!("SKIPPED (no verification): bubblewrap is unavailable: {error}");
+            return;
+        }
     };
     std::fs::create_dir_all(&config.build_root).unwrap();
 
@@ -241,6 +247,7 @@ struct IndexFixture {
     /// The index root, the way a deployment would configure it.
     endpoint: String,
     bytes: Arc<std::sync::Mutex<Vec<u8>>>,
+    missing: Arc<std::sync::atomic::AtomicBool>,
     queried: Arc<std::sync::atomic::AtomicUsize>,
     task: tokio::task::JoinHandle<()>,
 }
@@ -270,6 +277,8 @@ struct IndexState {
     bytes: Arc<std::sync::Mutex<Vec<u8>>>,
     /// Answer a PEP 503 HTML page instead of the JSON document.
     as_html: bool,
+    /// Report `404` for the project, as an index without it does.
+    missing: Arc<std::sync::atomic::AtomicBool>,
     queried: Arc<std::sync::atomic::AtomicUsize>,
 }
 
@@ -280,6 +289,9 @@ async fn simple_page(
     state
         .queried
         .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    if state.missing.load(std::sync::atomic::Ordering::SeqCst) {
+        return axum::http::StatusCode::NOT_FOUND.into_response();
+    }
     if state.as_html {
         return (
             axum::http::StatusCode::OK,
@@ -329,6 +341,15 @@ async fn index_fixture(wheel: &Path, as_html: bool) -> IndexFixture {
     index_fixture_named(wheel, as_html, None).await
 }
 
+/// An index that reports it does not have the project at all.
+async fn index_fixture_missing(wheel: &Path) -> IndexFixture {
+    let fixture = index_fixture_named(wheel, false, None).await;
+    fixture
+        .missing
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    fixture
+}
+
 /// The same fixture, optionally advertising a different file name — an sdist, so
 /// a case can prove this host never fetches one.
 async fn index_fixture_named(wheel: &Path, as_html: bool, rename_to: Option<&str>) -> IndexFixture {
@@ -338,6 +359,7 @@ async fn index_fixture_named(wheel: &Path, as_html: bool, rename_to: Option<&str
     let digest = super::config::sha256_file(wheel).unwrap();
     let bytes = Arc::new(std::sync::Mutex::new(std::fs::read(wheel).unwrap()));
     let queried = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let missing = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     let endpoint = format!("http://{address}/simple");
@@ -347,6 +369,7 @@ async fn index_fixture_named(wheel: &Path, as_html: bool, rename_to: Option<&str
         digest,
         bytes: Arc::clone(&bytes),
         as_html,
+        missing: Arc::clone(&missing),
         queried: Arc::clone(&queried),
     };
     let app = axum::Router::new()
@@ -360,9 +383,47 @@ async fn index_fixture_named(wheel: &Path, as_html: bool, rename_to: Option<&str
     IndexFixture {
         endpoint,
         bytes,
+        missing,
         queried,
         task,
     }
+}
+
+/// A package the authorized index does not serve must fail, not be resolved
+/// somewhere else.
+///
+/// `uv`'s `--index` *adds to* its default index, so this is the behavioral half
+/// of the boundary the argument construction above pins: measured before the
+/// fix, this exact shape produced a lock whose digest came from PyPI.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_package_the_authorized_index_lacks_is_not_resolved_elsewhere() {
+    let Some(toolchain) = toolchain() else {
+        return;
+    };
+    let root = tempfile::tempdir().unwrap();
+    let wheels = root.path().join("wheels");
+    std::fs::create_dir_all(&wheels).unwrap();
+    let wheel = fixture_wheel(&wheels, "probepkg", "0.1.0");
+    let index = index_fixture_missing(&wheel).await;
+    let config = config_with_sources(
+        root.path(),
+        &toolchain,
+        vec![PackageSource::Index(index.endpoint.clone())],
+    );
+    // A package the authorized index answers 404 for. If the resolver could fall
+    // back to an implicit default index, this would resolve from the internet and
+    // the plan the human approves would name digests nobody authorized.
+    let error = resolve_requirements(&config, None, &["six==1.16.0".to_owned()])
+        .await
+        .expect_err("an authorized index that lacks the package must refuse");
+    assert!(
+        matches!(error, ProvisionError::Failed(_)),
+        "the refusal is a resolution failure, not a fallback: {error:?}"
+    );
+    assert!(
+        index.queries() > 0,
+        "the authorized index was actually consulted"
+    );
 }
 
 /// The networked source, end to end: resolve against a real index, fetch the
@@ -505,8 +566,9 @@ async fn an_index_that_answers_html_instead_of_json_is_refused_with_a_reason() {
 /// rather than a fixture. Run it with `ANCHOR_ENVIRONMENT_LIVE_PYPI=1`.
 #[tokio::test(flavor = "multi_thread")]
 async fn live_the_public_index_builds_and_publishes_a_real_package() {
-    if std::env::var_os("ANCHOR_ENVIRONMENT_LIVE_PYPI").is_none() {
-        eprintln!("skipping the live index smoke: set ANCHOR_ENVIRONMENT_LIVE_PYPI=1 to run it");
+    if std::env::var("ANCHOR_ENVIRONMENT_LIVE_PYPI").as_deref() != Ok("1") {
+        // `=0` must not run it: this case reaches the public internet.
+        eprintln!("SKIPPED (by design): set ANCHOR_ENVIRONMENT_LIVE_PYPI=1 to run it");
         return;
     }
     let Some(toolchain) = toolchain() else {

@@ -145,10 +145,19 @@ fn copy_directory(from: &Path, to: &Path) -> Result<(), ProvisionError> {
     {
         let source = entry.path();
         let destination = to.join(entry.file_name());
-        // Follow links here: a later pass would find them, but copying what they
-        // point at keeps one published tree free of indirection.
-        let metadata = std::fs::metadata(&source)
+        // A link *inside* a directory being materialized is refused rather than
+        // followed: following it would copy whatever it points at — including a
+        // link back to an ancestor, which would recurse until the disk complains
+        // — into published content. Top-level links are the ones this pass is
+        // here to resolve, and they are handled before this point.
+        let metadata = std::fs::symlink_metadata(&source)
             .map_err(|error| ProvisionError::Failed(error.to_string()))?;
+        if metadata.file_type().is_symlink() {
+            return Err(ProvisionError::Failed(format!(
+                "{} is a link inside a directory being materialized; published content must not contain indirection",
+                source.display()
+            )));
+        }
         if metadata.is_dir() {
             copy_directory(&source, &destination)?;
         } else {

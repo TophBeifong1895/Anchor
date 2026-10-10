@@ -135,6 +135,15 @@ pub(crate) struct Toolchain {
     pub(crate) python: PathBuf,
 }
 
+/// Whether a missing toolchain must fail the run instead of skipping it.
+///
+/// The builder cases genuinely need `uv`, `bwrap` and a `/usr/bin/python3.8+`.
+/// Without this gate a machine that has none of them reports them as `ok` while
+/// verifying nothing, which is how a green suite can mean nothing at all.
+pub(crate) fn builder_required() -> bool {
+    std::env::var("ANCHOR_REQUIRE_ENV_BUILDER").is_ok_and(|value| value == "1")
+}
+
 pub(crate) fn toolchain() -> Option<Toolchain> {
     let uv = tool("uv");
     // The base interpreter must be one a Run's sandbox already mounts, so this
@@ -153,9 +162,11 @@ pub(crate) fn toolchain() -> Option<Toolchain> {
     match (uv, python) {
         (Some(uv), Some(python)) => Some(Toolchain { uv, python }),
         _ => {
-            eprintln!(
-                "skipping the environment builder test: uv is not on PATH or no /usr/bin/python3.8+ exists"
-            );
+            let reason = "uv is not on PATH or no /usr/bin/python3.8+ exists";
+            if builder_required() {
+                panic!("ANCHOR_REQUIRE_ENV_BUILDER=1 but {reason}");
+            }
+            eprintln!("SKIPPED (no verification): {reason}");
             None
         }
     }

@@ -820,8 +820,10 @@ fn install_message(precondition: &PluginInstallPrecondition) -> String {
         if !impact.unfinished_runs.is_empty() {
             message.push_str("未结束的 Run 记录了它被接纳时的插件指纹；替换后它们会拒绝继续，需要先结束或放弃它们。\n");
         }
-        render_coverage(&mut message, &impact.coverage);
     }
+    // Outside the branch on purpose: an empty count beside a partial scan would
+    // otherwise read as "nothing depends on it" when a Graph could not be read.
+    render_coverage(&mut message, &impact.coverage);
     for server in &review.servers {
         match (&server.command, &server.url) {
             (Some(command), _) if server.args.is_empty() => {

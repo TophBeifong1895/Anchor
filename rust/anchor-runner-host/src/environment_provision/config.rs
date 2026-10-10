@@ -190,6 +190,17 @@ fn parse_sources(value: &str) -> Result<Vec<PackageSource>, String> {
             return Err("ANCHOR_ENVIRONMENT_SOURCES has an empty entry".into());
         }
         if entry.starts_with("https://") || entry.starts_with("http://") {
+            // Credentials in a source URL would be written into plan records and
+            // shown in the approval form, and the fetch layer refuses them
+            // anyway. Refuse the deployment instead of leaking them.
+            if url::Url::parse(entry)
+                .map(|url| !url.username().is_empty() || url.password().is_some())
+                .unwrap_or(true)
+            {
+                return Err(format!(
+                    "package source `{entry}` must not carry credentials; give the host only"
+                ));
+            }
             sources.push(PackageSource::Index(entry.trim_end_matches('/').to_owned()));
         } else {
             let path = PathBuf::from(entry);

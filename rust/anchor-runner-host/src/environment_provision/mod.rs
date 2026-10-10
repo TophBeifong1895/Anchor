@@ -34,7 +34,9 @@ mod resolve;
 pub(crate) use build::{build_environment, provision_sandbox, verify_published};
 pub(crate) use config::{EnvironmentProvisionConfig, ProvisionError, from_env};
 pub(crate) use fetch::fetch_wheelhouse;
-pub(crate) use resolve::{LockedPackage, ResolvedRequirements, resolve_requirements};
+pub(crate) use resolve::{
+    LockedPackage, ResolvedRequirements, is_interpreter_constraint, resolve_requirements,
+};
 
 use anchor_sandbox_bwrap::BubblewrapSandbox;
 

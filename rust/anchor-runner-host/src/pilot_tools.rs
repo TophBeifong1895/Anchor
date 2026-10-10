@@ -151,7 +151,7 @@ pub(crate) const PILOT_TOOLS: &[PilotToolSpec] = &[
     },
     PilotToolSpec {
         name: "environment_request",
-        description: "Record what you need a dependency environment to provide (interpreter, packages, why) under a deployment name, so the operator can provide it. It publishes nothing and installs nothing.",
+        description: "Record what you need a dependency environment to provide (interpreter version prefix like `3.12`, package names, why) under a deployment name, so the operator can provide it. It publishes nothing and installs nothing.",
         parameters: || json!({"type":"object","properties":{"name":{"type":"string"},"purpose":{"type":"string"},"interpreter":{"type":"string"},"packages":{"type":"array","items":{"type":"string"}},"notes":{"type":"string"}},"required":["name","purpose"],"additionalProperties":false}),
         authority: ToolAuthority::Mutate,
         effect: ToolEffect::HostFact,

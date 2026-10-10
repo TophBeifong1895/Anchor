@@ -66,6 +66,88 @@ pub(crate) fn verify_interpreter(resolved: &ResolvedRequirements) -> Result<(), 
     Ok(())
 }
 
+/// Whether a recorded interpreter constraint is a plain version prefix.
+///
+/// The deployment builds on one interpreter, so the field names the version it
+/// must be — `3`, `3.12`, `3.12.13` — not a PEP 440 specifier. Accepting
+/// `>=3.11` here and rejecting it later would record a requirement that can
+/// never be provided.
+pub(crate) fn is_interpreter_constraint(value: &str) -> bool {
+    let value = value.trim();
+    let parts = value.split('.').collect::<Vec<_>>();
+    !value.is_empty()
+        && value.len() <= 16
+        && parts.len() <= 3
+        && parts
+            .iter()
+            .all(|part| !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit()))
+}
+///
+/// `uv`'s `--index` *adds to* its default index rather than replacing it, so a
+/// first authorized index given as `--index` leaves PyPI reachable: a package
+/// missing from the authorized source is then resolved against an index the
+/// deployment never authorized, and the digests in the plan the human approves
+/// come from there. Measured with uv 0.11.6: `--index` against an index that
+/// answers 404 produced a lock with PyPI's digest for the package, while
+/// `--default-index` refused instead. The first index therefore *replaces* the
+/// default, the rest extend it, and directories stay `--find-links`.
+fn source_arguments(sources: &[PackageSource]) -> Result<Vec<String>, ProvisionError> {
+    let mut arguments = Vec::new();
+    let mut indexes = 0usize;
+    for source in sources {
+        match source {
+            PackageSource::Directory(path) => {
+                if !path.is_dir() {
+                    return Err(ProvisionError::Failed(format!(
+                        "the authorized package directory {} does not exist",
+                        path.display()
+                    )));
+                }
+                arguments.push("--find-links".to_owned());
+                arguments.push(path.to_string_lossy().into_owned());
+            }
+            PackageSource::Index(url) => {
+                indexes += 1;
+                // The first index replaces the implicit default; nothing may be
+                // reachable that the deployment did not write down.
+                arguments.push(
+                    if indexes == 1 {
+                        "--default-index"
+                    } else {
+                        "--index"
+                    }
+                    .to_owned(),
+                );
+                arguments.push(url.clone());
+            }
+        }
+    }
+    if indexes == 0 {
+        // With only directories authorized, an implicit PyPI lookup would be a
+        // network call the operator never allowed.
+        arguments.push("--no-index".to_owned());
+    }
+    Ok(arguments)
+}
+
+/// Exactly what the resolver process may see.
+///
+/// A source set is only a boundary if nothing else can widen it: `UV_INDEX`,
+/// `UV_DEFAULT_INDEX`, `PIP_INDEX_URL`, a proxy, a TLS opt-in or `UV_OFFLINE`
+/// inherited from the host would each change which indexes are consulted. So the
+/// child gets this list and nothing else.
+pub(crate) fn resolver_environment(cache: &Path, build_root: &Path) -> Vec<(String, String)> {
+    vec![
+        ("PATH".to_owned(), "/usr/bin:/bin".to_owned()),
+        ("HOME".to_owned(), build_root.to_string_lossy().into_owned()),
+        (
+            "UV_CACHE_DIR".to_owned(),
+            cache.to_string_lossy().into_owned(),
+        ),
+        ("UV_PYTHON_DOWNLOADS".to_owned(), "never".to_owned()),
+    ]
+}
+
 /// The major and minor release of a reported interpreter version.
 fn release(version: &str) -> (u32, u32) {
     let mut parts = version
@@ -122,29 +204,16 @@ pub(crate) async fn resolve_requirements(
     let major_minor = interpreter.split('.').take(2).collect::<Vec<_>>().join(".");
     let mut command = tokio::process::Command::new(&uv);
     command.arg("pip").arg("compile");
-    let mut indexes = 0usize;
-    for source in &config.sources {
-        match source {
-            PackageSource::Directory(path) => {
-                if !path.is_dir() {
-                    return Err(ProvisionError::Failed(format!(
-                        "the authorized package directory {} does not exist",
-                        path.display()
-                    )));
-                }
-                command.arg("--find-links").arg(path);
-            }
-            PackageSource::Index(url) => {
-                indexes += 1;
-                command.arg("--index").arg(url);
-            }
-        }
+    for argument in source_arguments(&config.sources)? {
+        command.arg(argument);
     }
-    if indexes == 0 {
-        // With only directories authorized, an implicit PyPI lookup would be a
-        // network call the operator never allowed.
-        command.arg("--no-index");
-    }
+    let cache = config.build_root.join("cache");
+    std::fs::create_dir_all(&cache).map_err(|error| {
+        ProvisionError::Failed(format!(
+            "the uv cache {} is unavailable: {error}",
+            cache.display()
+        ))
+    })?;
     command
         .arg("--generate-hashes")
         .arg("--only-binary")
@@ -156,8 +225,13 @@ pub(crate) async fn resolve_requirements(
         .arg("--output-file")
         .arg(&output)
         .arg(&input)
-        .env("UV_CACHE_DIR", config.build_root.join("cache"))
-        .env("UV_PYTHON_DOWNLOADS", "never")
+        // Nothing from the host environment may reach the resolver: the source
+        // set is whatever the deployment wrote down. The working directory is
+        // the staging directory, so no `uv.toml` or `pyproject.toml` above it
+        // can add sources either.
+        .env_clear()
+        .envs(resolver_environment(&cache, &config.build_root))
+        .current_dir(staging.path())
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
@@ -212,6 +286,11 @@ async fn observed_interpreter(
         tokio::process::Command::new(&python)
             .arg("-c")
             .arg("import sys; print('%d.%d.%d' % sys.version_info[:3]); print(sys.base_prefix)")
+            // The probe must see what a Run would see: `PYTHONPATH`,
+            // `PYTHONHOME` or a startup hook would change the version and prefix
+            // this plan records as a fact.
+            .env_clear()
+            .env("PATH", "/usr/bin:/bin")
             .env("PYTHONDONTWRITEBYTECODE", "1")
             .stdin(std::process::Stdio::null())
             .kill_on_drop(true)
@@ -460,6 +539,83 @@ idna==3.7 \\
         assert_eq!(packages[0].version, "2.32.3");
         assert_eq!(packages[0].hashes.len(), 2);
         assert_eq!(packages[1].name, "idna");
+    }
+
+    #[test]
+    fn an_interpreter_constraint_is_a_version_prefix_not_a_specifier() {
+        for accepted in ["3", "3.12", "3.12.13", " 3.12 "] {
+            assert!(is_interpreter_constraint(accepted), "{accepted}");
+        }
+        for refused in [
+            "python>=3.11",
+            ">=3.11",
+            "~=3.12",
+            "3.x",
+            "",
+            ".",
+            "3.",
+            "3.12.13.1",
+        ] {
+            assert!(!is_interpreter_constraint(refused), "{refused}");
+        }
+    }
+
+    #[test]
+    fn the_first_authorized_index_replaces_the_default_one() {
+        // A directory source must exist to be named, so the case uses a real one.
+        let root = tempfile::tempdir().unwrap();
+        let directory = root.path().to_path_buf();
+        let first = PackageSource::Index("https://mirror.internal/simple".to_owned());
+        let second = PackageSource::Index("https://mirror.other/simple".to_owned());
+
+        // One index: it must *replace* uv's default, or a package missing from
+        // it would be resolved against PyPI, which nobody authorized.
+        let arguments = source_arguments(std::slice::from_ref(&first)).unwrap();
+        assert_eq!(
+            arguments,
+            vec![
+                "--default-index".to_owned(),
+                "https://mirror.internal/simple".to_owned()
+            ]
+        );
+        assert!(
+            !arguments.iter().any(|argument| argument == "--no-index"),
+            "an authorized index means an index is allowed"
+        );
+
+        // More than one: the first replaces, the rest extend.
+        let arguments = source_arguments(&[first.clone(), second.clone()]).unwrap();
+        assert_eq!(arguments[0], "--default-index");
+        assert_eq!(arguments[2], "--index");
+        assert_eq!(arguments[3], "https://mirror.other/simple");
+
+        // Directories only: no index at all, implicit or otherwise.
+        let arguments = source_arguments(&[PackageSource::Directory(directory)]).unwrap();
+        assert!(
+            arguments.contains(&"--no-index".to_owned()),
+            "{arguments:?}"
+        );
+        assert!(
+            !arguments
+                .iter()
+                .any(|argument| argument == "--default-index" || argument == "--index"),
+            "a directory-only deployment must not consult any index: {arguments:?}"
+        );
+    }
+
+    #[test]
+    fn the_resolver_sees_only_the_deployment_and_the_staging_directory() {
+        let environment = resolver_environment(Path::new("/build/cache"), Path::new("/build"));
+        let mut names = environment
+            .iter()
+            .map(|(name, _)| name.as_str())
+            .collect::<Vec<_>>();
+        names.sort_unstable();
+        assert_eq!(
+            names,
+            vec!["HOME", "PATH", "UV_CACHE_DIR", "UV_PYTHON_DOWNLOADS"],
+            "anything else could widen the authorized source set"
+        );
     }
 
     #[test]
