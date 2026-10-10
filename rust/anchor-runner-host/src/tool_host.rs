@@ -1802,7 +1802,9 @@ exec ./mcp-fixture --stdio inspect
             Some("research"),
             "the manifest declares the environment this Run froze"
         );
-        record.plugin_bindings.insert("research".into(), binding);
+        record
+            .plugin_bindings
+            .insert("research".into(), binding.clone());
         record.plugin_bindings_initialized = true;
         let site = EnvironmentSite::PluginServer {
             node: "worker".into(),
@@ -1823,15 +1825,42 @@ exec ./mcp-fixture --stdio inspect
             1,
             "the record carries the site binding"
         );
-        assert!(
-            crate::managed_environment::prepare_servers_async(
-                resumed.environments.clone(),
-                Some(library.clone()),
+        let prepared = crate::managed_environment::prepare_servers_async(
+            resumed.environments.clone(),
+            Some(library.clone()),
+        )
+        .await
+        .expect("the recorded environment still verifies while the tree is intact");
+
+        // Launch the resumed server for real, so the refusal below has a trace to
+        // leave alone: this fixture appends every MCP method it answers to
+        // `/workspace/mcp-log` inside the invocation's own workspace.
+        use anchor_sandbox_bwrap::BubblewrapPolicy;
+        let workspace = root.path().join("workspace");
+        std::fs::create_dir(&workspace).unwrap();
+        let sandbox = BubblewrapSandbox::new(
+            BubblewrapPolicy::new("bwrap", ["run"]).authorize_workspace_root(&workspace),
+        )
+        .unwrap();
+        let config =
+            McpToolConfig::from_catalog(root.path(), std::slice::from_ref(&binding)).unwrap();
+        let tools = config
+            .bind_with_node_inputs(
+                std::slice::from_ref(&binding),
+                false,
+                SandboxLaunch {
+                    sandbox: &sandbox,
+                    workspace: &workspace,
+                    readonly_inputs: &[],
+                    server_environments: &prepared,
+                },
             )
             .await
-            .is_ok(),
-            "the recorded environment still verifies while the tree is intact"
-        );
+            .expect("the frozen environment launches the managed server");
+        let launched = std::fs::read_to_string(workspace.join("mcp-log"))
+            .expect("a real launch leaves the fixture's trace");
+        assert!(launched.contains("initialize"), "{launched}");
+        drop(tools);
 
         // Something changed the published tree while the Run was parked.
         let tree = EnvironmentStore::new(&library).published_path(&published.id);
@@ -1863,9 +1892,13 @@ exec ./mcp-fixture --stdio inspect
             ),
             "a parked Run whose environment changed is corrupt, not unsupported"
         );
-        // Nothing was launched: the refusal happens while preparing.
-        let workspace = root.path().join("workspace");
-        assert!(!workspace.join("mcp-log").exists());
+        // The refusal happens while preparing, so no second server was started:
+        // the only launch trace on disk is still exactly the first launch's.
+        assert_eq!(
+            std::fs::read_to_string(workspace.join("mcp-log")).unwrap(),
+            launched,
+            "a refused resume must not start another server"
+        );
     }
 }
 

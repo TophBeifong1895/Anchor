@@ -362,7 +362,7 @@ fn render_coverage(message: &mut String, coverage: &crate::application::graphs::
             missing,
         } => {
             message.push_str(&format!(
-                "影响范围只能部分确认（已确认 {considered}/{total} 个图）：{}。下面这个数字不是全部。\n",
+                "影响范围只能部分确认（已考察 {considered}/{total} 个图）：{}。下面这个数字不是全部。\n",
                 missing
                     .iter()
                     .map(|missing| format!("{}（{}）", missing.graph, missing.reason))

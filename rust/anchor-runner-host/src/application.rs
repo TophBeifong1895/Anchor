@@ -16,9 +16,7 @@ pub(crate) use metadata::RunMetadata;
 pub(crate) use metadata::RunTrigger;
 
 use crate::{HostControl, create_durable_directory, execution::PreparedExecution, run_data};
-use anchor_graph_host::{
-    FileGraphBundleLoader, FilePluginCatalog, LoadedGraphBundle, PluginCatalog,
-};
+use anchor_graph_host::{FilePluginCatalog, LoadedGraphBundle, PluginCatalog};
 use anchor_library::EnvironmentStore;
 use anchor_runtime::graph::{
     EnvironmentBinding, FileRunStore, GraphError, GraphRunRecord, GraphSnapshot, InvocationKey,
@@ -415,39 +413,29 @@ impl RunApplication {
         Ok(false)
     }
 
-    fn graph_bundles(&self) -> Result<Vec<(String, LoadedGraphBundle)>, ApplicationError> {
-        let mut candidates = Vec::new();
-        if self.catalog_root.is_dir() {
-            for entry in std::fs::read_dir(&self.catalog_root).map_err(storage)? {
-                let entry = entry.map_err(storage)?;
-                if entry.file_type().map_err(storage)?.is_dir() {
-                    let name = entry.file_name().to_string_lossy().into_owned();
-                    candidates.push((name, entry.path()));
-                }
-            }
-        }
-        if let Some((name, path)) = &self.configured_graph {
-            candidates.push((name.clone(), path.clone()));
-        }
-        candidates.sort_by(|left, right| left.0.cmp(&right.0));
-
-        let mut seen = BTreeSet::new();
-        let mut bundles = Vec::new();
-        for (name, path) in candidates {
-            let identity = Self::graph_identity(&path)?;
-            if !seen.insert(identity) {
-                continue;
-            }
-            if let Ok(bundle) = FileGraphBundleLoader::new(path).load() {
-                bundles.push((name, bundle));
-            }
-        }
-        Ok(bundles)
-    }
-
+    /// Every Graph that calls `target_path`, or a refusal when the catalog could
+    /// not be read completely.
+    ///
+    /// Deletion protection may not read an unreadable Graph as "nobody calls
+    /// this": the candidate set is the one impact scan, which names every Graph
+    /// it could not load, and an incomplete scan refuses the deletion instead of
+    /// allowing it.
     fn graph_callers(&self, target_path: &Path) -> Result<Vec<String>, ApplicationError> {
         let mut callers = BTreeSet::new();
-        for (name, bundle) in self.graph_bundles()? {
+        let (bundles, considered, total, missing) = match self.impact_scan() {
+            graphs::ImpactScan::Read {
+                bundles,
+                considered,
+                total,
+                missing,
+            } => (bundles, considered, total, missing),
+            graphs::ImpactScan::Unreadable(reason) => {
+                return Err(ApplicationError::Conflict(format!(
+                    "cannot delete this Graph: the Graph catalog could not be read to find out who calls it ({reason})"
+                )));
+            }
+        };
+        for (name, bundle) in &bundles {
             if self.snapshot_calls_graph(&bundle.snapshot, target_path)? {
                 callers.insert(format!("Graph `{name}`"));
             }
@@ -461,6 +449,33 @@ impl RunApplication {
                     .map(|metadata| metadata.graph)
                     .unwrap_or_else(|| "unknown Graph".into());
                 callers.insert(format!("unfinished Run `{run_id}` of `{graph}`"));
+            }
+        }
+        // A named caller already refuses the deletion. With no caller found, an
+        // unreadable Graph is the difference between "nobody calls this" and "we
+        // could not tell", and only the first may delete.
+        if callers.is_empty() {
+            match graphs::coverage_of(considered, total, missing) {
+                graphs::ImpactCoverage::Complete => {}
+                graphs::ImpactCoverage::Partial {
+                    considered,
+                    total,
+                    missing,
+                } => {
+                    return Err(ApplicationError::Conflict(format!(
+                        "cannot delete this Graph: considered {considered} of {total} Graphs and could not read {}, which may call it",
+                        missing
+                            .iter()
+                            .map(|gap| format!("`{}` ({})", gap.graph, gap.reason))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    )));
+                }
+                graphs::ImpactCoverage::Unknown { reason } => {
+                    return Err(ApplicationError::Conflict(format!(
+                        "cannot delete this Graph: who calls it could not be determined ({reason})"
+                    )));
+                }
             }
         }
         Ok(callers.into_iter().collect())
@@ -1573,17 +1588,13 @@ pub(crate) async fn resolve_record_environments(
     record: &mut GraphRunRecord,
 ) -> Result<(), ApplicationError> {
     // A Run that declares nothing never needs a store, so a deployment without a
-    // Library root keeps working for every ordinary Graph.
-    let declares = record
-        .snapshot
-        .nodes
-        .iter()
-        .any(|node| node.environment.is_some())
-        || record
-            .plugin_bindings
-            .values()
-            .any(|binding| !binding.environments.is_empty());
-    if !declares {
+    // Library root keeps working for every ordinary Graph. "Declares" is the
+    // kernel's own site enumeration — the same list freezing resolves and record
+    // validation requires — so admission cannot disagree with either of them
+    // about what this Graph declares.
+    if anchor_runtime::graph::declared_environment_sites(&record.snapshot, &record.plugin_bindings)
+        .is_empty()
+    {
         record.environments = BTreeMap::new();
         return Ok(());
     }
@@ -1801,6 +1812,112 @@ mod environment_resolution_tests {
             .insert("probe".into(), "missing".into());
         let error = freeze_environments(&snapshot, &plugin_bindings, &store).unwrap_err();
         assert!(error.contains("unknown dependency environment"), "{error}");
+    }
+
+    /// Saves and restores the deployment variables a test has to change.
+    struct Environment(Vec<(&'static str, Option<std::ffi::OsString>)>);
+
+    impl Environment {
+        fn cleared(names: &[&'static str]) -> Self {
+            let previous = names
+                .iter()
+                .map(|name| (*name, std::env::var_os(name)))
+                .collect();
+            for name in names {
+                unsafe { std::env::remove_var(name) };
+            }
+            Self(previous)
+        }
+    }
+
+    impl Drop for Environment {
+        fn drop(&mut self) {
+            for (name, value) in &self.0 {
+                unsafe {
+                    match value {
+                        Some(value) => std::env::set_var(name, value),
+                        None => std::env::remove_var(name),
+                    }
+                }
+            }
+        }
+    }
+
+    /// A record whose node references the `demo` Plugin when `bound`, and whose
+    /// binding always declares `research` on its `probe` server.
+    fn record_with_plugin_binding(bound: bool) -> GraphRunRecord {
+        let node = if bound {
+            json!({"id": "worker", "agent": "worker", "plugins": ["demo"]})
+        } else {
+            json!({"id": "worker", "agent": "worker"})
+        };
+        let mut record = GraphRunRecord::create_with_id(
+            GraphSnapshot::from_authoring(json!({
+                "objective": "plugin server environment",
+                "entry": "worker",
+                "agents": {"worker": {"model": "test"}},
+                "ops": {},
+                "nodes": [node],
+                "edges": []
+            }))
+            .unwrap(),
+            json!({}),
+            "run-plugin",
+        )
+        .unwrap();
+        record.plugin_bindings.insert(
+            "demo".to_owned(),
+            anchor_runtime::graph::PluginBinding {
+                id: "demo".into(),
+                digest: "c".repeat(64),
+                resources: Vec::new(),
+                mcp_servers: vec!["probe".into()],
+                environments: [("probe".to_owned(), "research".to_owned())].into(),
+            },
+        );
+        record.plugin_bindings_initialized = true;
+        record
+    }
+
+    /// What a record declares is exactly the kernel's site enumeration: a
+    /// Plugin-server-only declaration freezes, and a binding no node references
+    /// declares nothing. A second hand-written walk disagrees on the last case —
+    /// it would demand a store for content freezing never resolves.
+    #[tokio::test]
+    async fn a_records_declarations_are_the_kernels_site_enumeration() {
+        let _environment_guard = crate::PROCESS_ENV_LOCK.lock().await;
+        let root = tempfile::tempdir().unwrap();
+        let library = root.path().join("library");
+        let (_, id) = store_with_environment(&library, "one");
+        let _environment =
+            Environment::cleared(&["ANCHOR_RUNNER_LIBRARY_ROOT", "ANCHOR_RUNNER_CATALOG_ROOT"]);
+
+        // The node declares no task environment; only the bound Plugin server
+        // does, and that is a declaration, so the Run freezes it.
+        unsafe { std::env::set_var("ANCHOR_RUNNER_LIBRARY_ROOT", &library) };
+        let mut declared = record_with_plugin_binding(true);
+        resolve_record_environments(&mut declared).await.unwrap();
+        assert_eq!(
+            declared.environments.len(),
+            1,
+            "{:?}",
+            declared.environments
+        );
+        let frozen = &declared.environments["plugin_server:worker/demo/probe"];
+        assert_eq!(frozen.name, "research");
+        assert_eq!(frozen.id, id);
+
+        // A record that declares nothing passes with no Library root at all.
+        unsafe { std::env::remove_var("ANCHOR_RUNNER_LIBRARY_ROOT") };
+        let mut undeclared =
+            GraphRunRecord::create_with_id(snapshot(None), json!({}), "run-undeclared").unwrap();
+        resolve_record_environments(&mut undeclared).await.unwrap();
+        assert!(undeclared.environments.is_empty());
+
+        // A binding no node references declares nothing either.
+        let mut unused = record_with_plugin_binding(false);
+        resolve_record_environments(&mut unused).await.unwrap();
+        assert!(unused.environments.is_empty());
     }
 }
 

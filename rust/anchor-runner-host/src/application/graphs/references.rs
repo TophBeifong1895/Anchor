@@ -231,10 +231,13 @@ impl RunApplication {
         }
         candidates.sort();
         // The configured bundle may also be a child of the catalog; scanning it
-        // twice would double-count its declarations.
+        // twice would double-count its declarations. A name whose definition is
+        // gone is not a Graph a run can come from — it has no nodes, so it
+        // neither declares an environment nor calls anything — so only a Graph
+        // that is still *present* and unreadable is a gap.
         let mut seen_paths = std::collections::BTreeSet::new();
         candidates.retain(|graph| match self.graph_path_checked(graph) {
-            Ok(path) => seen_paths.insert(path.canonicalize().unwrap_or(path)),
+            Ok(path) => path.exists() && seen_paths.insert(path.canonicalize().unwrap_or(path)),
             Err(_) => true,
         });
         let total = candidates.len();
@@ -436,6 +439,33 @@ mod tests {
             "{references:?}"
         );
         assert_eq!(references.servers.len(), 1, "{references:?}");
+    }
+
+    #[test]
+    fn a_configured_graph_whose_definition_is_gone_is_not_a_coverage_gap() {
+        // A deployment whose configured bundle was deleted still has a name
+        // pointing at nothing. It has no nodes, so it declares nothing and cannot
+        // call anything: reporting it as an unreadable Graph would make every
+        // unrelated report partial and every unrelated delete fail closed.
+        let root = tempfile::tempdir().unwrap();
+        let catalog = root.path().join("catalog");
+        std::fs::create_dir_all(&catalog).unwrap();
+        bundle(&catalog, "used", "research");
+        let application = application(&catalog)
+            .with_configured_graph("deployed".to_owned(), root.path().join("gone"));
+
+        let references = application.environment_references("research").unwrap();
+        assert!(
+            references
+                .nodes
+                .iter()
+                .any(|reference| reference.graph == "used" && reference.node == "other"),
+            "{references:?}"
+        );
+        assert!(
+            matches!(references.coverage, ImpactCoverage::Complete),
+            "a name with no definition is not an unreadable Graph: {references:?}"
+        );
     }
 
     #[test]

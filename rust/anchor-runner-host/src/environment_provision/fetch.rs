@@ -275,8 +275,11 @@ async fn write_verified(
     file.sync_all().await.map_err(|error| error.to_string())?;
     let observed = format!("{:x}", hasher.finalize());
     if observed != expected {
+        // The observed value is deliberately not echoed: a substituted artifact
+        // must not put response content (or its digest) into a message a model
+        // can read. Only the digest the human approved is named.
         return Err(format!(
-            "the downloaded artifact does not match the approved digest (expected {expected}, found {observed})"
+            "the downloaded artifact does not match the approved digest (expected {expected})"
         ));
     }
     Ok(())

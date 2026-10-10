@@ -188,3 +188,90 @@ fn write_wrapper(path: &Path) -> Result<(), ProvisionError> {
     std::fs::remove_file(path).map_err(|error| ProvisionError::Failed(error.to_string()))?;
     std::fs::rename(&staged, path).map_err(|error| ProvisionError::Failed(error.to_string()))
 }
+
+#[cfg(test)]
+mod materialize_tests {
+    use super::*;
+    use std::os::unix::fs::symlink;
+
+    /// A build tree with an interpreter of its own, which is the one thing every
+    /// publishable environment must have.
+    fn tree(root: &Path) -> PathBuf {
+        let tree = root.join("tree");
+        std::fs::create_dir_all(tree.join("bin")).unwrap();
+        std::fs::write(tree.join("bin/python"), "#!/bin/sh\necho 3.12\n").unwrap();
+        tree
+    }
+
+    /// The interpreter the plan named; materialize copies it into the tree.
+    fn interpreter(root: &Path) -> PathBuf {
+        let path = root.join("planned-python");
+        std::fs::write(&path, "#!/bin/sh\necho 3.12\n").unwrap();
+        path
+    }
+
+    /// A broken link cannot be resolved, so the tree cannot be published: there
+    /// is no content to replace it with.
+    #[test]
+    fn a_broken_link_is_refused_rather_than_published() {
+        let root = tempfile::tempdir().unwrap();
+        let tree = tree(root.path());
+        symlink("../missing-target", tree.join("bin/python3")).unwrap();
+
+        let error = materialize(&tree, &interpreter(root.path())).unwrap_err();
+        assert!(
+            matches!(error, ProvisionError::Failed(ref reason) if reason.contains("broken link")),
+            "{error:?}"
+        );
+    }
+
+    /// A link the materializer cannot replace in place — one nested inside a
+    /// directory it would have to copy — is a refusal, not content published with
+    /// indirection in it.
+    #[test]
+    fn a_link_nested_inside_a_copied_directory_is_refused() {
+        let root = tempfile::tempdir().unwrap();
+        let tree = tree(root.path());
+        let outside = root.path().join("outside");
+        std::fs::create_dir_all(outside.join("nested")).unwrap();
+        symlink("/etc/hostname", outside.join("nested/inner")).unwrap();
+        // The link's name is not `lib64`, so the target directory would be
+        // copied — and copying it would carry a link into published content.
+        symlink(&outside, tree.join("lib")).unwrap();
+
+        let error = materialize(&tree, &interpreter(root.path())).unwrap_err();
+        assert!(
+            matches!(error, ProvisionError::Failed(ref reason)
+                if reason.contains("link inside a directory being materialized")),
+            "{error:?}"
+        );
+        assert!(
+            std::fs::symlink_metadata(tree.join("lib")).is_ok(),
+            "the refused tree is left as it was"
+        );
+    }
+
+    /// The venv layout's `lib64 -> lib` is dropped, not copied: `lib` already
+    /// holds the real path, and duplicating it would double the published tree.
+    #[test]
+    fn the_lib64_layout_link_is_dropped_instead_of_published() {
+        let root = tempfile::tempdir().unwrap();
+        let tree = tree(root.path());
+        std::fs::create_dir_all(tree.join("lib/python3.12/site-packages")).unwrap();
+        std::fs::write(tree.join("lib/python3.12/site-packages/marker.txt"), "real").unwrap();
+        symlink("lib", tree.join("lib64")).unwrap();
+
+        materialize(&tree, &interpreter(root.path())).unwrap();
+
+        assert!(
+            std::fs::symlink_metadata(tree.join("lib64")).is_err(),
+            "the layout link is dropped, not published"
+        );
+        assert_eq!(
+            std::fs::read_to_string(tree.join("lib/python3.12/site-packages/marker.txt")).unwrap(),
+            "real",
+            "the real `lib` content stays exactly where it was"
+        );
+        assert!(tree.join("bin/python").is_file());
+    }
+}

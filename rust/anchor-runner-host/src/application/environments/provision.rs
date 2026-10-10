@@ -408,6 +408,54 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
+    async fn a_published_tree_that_does_not_verify_leaves_the_name_alone() {
+        let Some(toolchain) = toolchain() else {
+            return;
+        };
+        let root = tempfile::tempdir().unwrap();
+        let wheels = root.path().join("wheels");
+        std::fs::create_dir_all(&wheels).unwrap();
+        fixture_wheel(&wheels, "probepkg", "0.1.0");
+        let library = root.path().join("library");
+        let application = provision_application(root.path(), &toolchain, wheels);
+        ask(&application, &library).await;
+
+        let mut precondition = application
+            .environment_provision_precondition(library.clone(), "research".into())
+            .await
+            .unwrap();
+        // The published tree is what has to agree with the approved plan. Here it
+        // cannot: the plan the human approved names an interpreter the published
+        // `bin/python` is not (a changed tree reports exactly this way), so the
+        // verification step must refuse before any name moves.
+        assert!(!precondition.resolved.interpreter.is_empty());
+        precondition.resolved.interpreter = "0.0.0".to_owned();
+
+        let error = application
+            .provision_environment_if_unchanged(library.clone(), precondition)
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(error, ApplicationError::Invalid(ref reason)
+                if reason.contains("did not verify") && reason.contains("left alone")),
+            "{error:?}"
+        );
+
+        let store = EnvironmentStore::new(&library);
+        assert!(
+            store.names().unwrap().is_empty(),
+            "a tree that failed verification gets no name"
+        );
+        let retained = store.list().unwrap();
+        assert_eq!(
+            retained.len(),
+            1,
+            "the unnamed content is retained for inspection, not silently dropped"
+        );
+        assert!(store.show(&retained[0].id).is_ok());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
     async fn a_requirement_without_packages_is_refused_before_anything_exists() {
         let Some(toolchain) = toolchain() else {
             return;

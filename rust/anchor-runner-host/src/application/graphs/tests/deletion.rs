@@ -869,3 +869,75 @@ async fn snapshots_wait_for_the_catalog_gate_and_capture_the_published_definitio
             .unwrap()
     );
 }
+
+/// A Graph the catalog lists but this host cannot read may call the target, so
+/// the delete refuses and names it — and then succeeds once it is gone.
+#[tokio::test]
+async fn a_graph_that_cannot_be_read_refuses_the_delete_and_is_named() {
+    let (root, application) = fixture();
+    let workspace_root = root.path().join("workspaces");
+    let path = application.graph_path_checked("fixture").unwrap();
+    let expected = application
+        .graph_delete_precondition("fixture")
+        .await
+        .unwrap();
+
+    // `broken` has a definition but no manifest, so loading it fails. The report
+    // may not turn that into "nobody calls this".
+    let broken = application.catalog_root.join("broken");
+    std::fs::create_dir_all(&broken).unwrap();
+    std::fs::write(
+        broken.join("graph.json"),
+        r#"{"objective":"broken","entry":"only","agents":{"worker":{"model":"test"}},"ops":{},"nodes":[{"id":"only","agent":"worker"}],"edges":[]}"#,
+    )
+    .unwrap();
+
+    let error = application
+        .remove_graph_if_unchanged("fixture", &workspace_root, &expected)
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(error, GraphManagementError::Conflict(ref message) if message.contains("broken")),
+        "the unreadable Graph must be named: {error:?}"
+    );
+    assert!(path.exists(), "a refused delete removes nothing");
+    assert!(broken.exists());
+
+    // With the unreadable Graph gone the same confirmation deletes: the refusal
+    // was about coverage, not about a caller.
+    std::fs::remove_dir_all(&broken).unwrap();
+    assert_eq!(
+        application
+            .remove_graph_if_unchanged("fixture", &workspace_root, &expected)
+            .await
+            .unwrap(),
+        0
+    );
+    assert!(!path.exists());
+}
+
+/// A completely readable catalog with a caller still refuses by name.
+#[tokio::test]
+async fn a_readable_caller_still_refuses_the_delete_by_name() {
+    let (root, application) = fixture();
+    let workspace_root = root.path().join("workspaces");
+    let path = application.graph_path_checked("fixture").unwrap();
+    let expected = application
+        .graph_delete_precondition("fixture")
+        .await
+        .unwrap();
+    application
+        .create_graph("caller", Some(caller_definition("fixture")))
+        .await
+        .unwrap();
+
+    let error = application
+        .remove_graph_if_unchanged("fixture", &workspace_root, &expected)
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(error, GraphManagementError::Conflict(ref message) if message.contains("Graph `caller`")),
+        "{error:?}"
+    );
+    assert!(path.exists());
+}

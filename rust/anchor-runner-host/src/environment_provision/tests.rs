@@ -516,12 +516,26 @@ async fn an_index_that_serves_other_bytes_than_it_advertised_is_refused() {
 
     // The digest the human approved stays the same; the artifact behind the URL
     // changes.
-    index.replace_bytes(b"not the wheel that was approved".to_vec());
+    let substituted = b"not the wheel that was approved".to_vec();
+    index.replace_bytes(substituted.clone());
     let wheelhouse = root.path().join("wheelhouse");
     let error = fetch_wheelhouse(&config, &resolved.packages, &wheelhouse)
         .await
         .unwrap_err();
     assert!(error.to_string().contains("approved digest"), "{error}");
+    // The refusal names the approved digest, never what the index actually
+    // served: a substituted response must not be echoed to a reader.
+    let observed = super::config::sha256_hex(&substituted);
+    assert!(
+        !error.to_string().contains(&observed),
+        "the observed digest must not be echoed: {error}"
+    );
+    assert!(
+        !error
+            .to_string()
+            .contains("not the wheel that was approved"),
+        "no response content belongs in the refusal: {error}"
+    );
     assert!(
         std::fs::read_dir(&wheelhouse).unwrap().next().is_none(),
         "nothing may be left behind for a build to pick up"

@@ -246,11 +246,17 @@ pub async fn serve() -> io::Result<()> {
     // A deployment that did not authorize sources and a pinned toolchain keeps
     // exactly the behaviour it had: the steward can still see environments, and
     // provisioning is refused with a reason.
+    // The root publication actually writes published environments into: the
+    // explicit Library root, otherwise the Graph catalog the Plugin API also
+    // falls back to. The build root must stay disjoint from it.
+    let environment_library_root =
+        crate::deployment_library_root().unwrap_or_else(|| catalog_root.clone());
     let provisioner = match crate::environment_provision::from_env(
         &data_root,
         env::var_os("ANCHOR_BWRAP")
             .map(PathBuf::from)
             .unwrap_or_else(|| PathBuf::from("bwrap")),
+        Some(&environment_library_root),
     ) {
         Ok(Some(config)) => Some(Arc::new(
             crate::environment_provision::EnvironmentProvisioner::new(config)

@@ -124,9 +124,14 @@ impl EnvironmentProvisionConfig {
 /// later with a worse message, or worse, silently resolve against a default
 /// index the operator never authorized. Setting none of the variables means
 /// "this deployment does not prepare environments", which is not an error.
+///
+/// `library_root` is where published environments live, when this deployment has
+/// one. Staging and published content must stay disjoint, so the deployment is
+/// refused at startup rather than mid-build.
 pub(crate) fn from_env(
     state_root: &Path,
     bwrap: PathBuf,
+    library_root: Option<&Path>,
 ) -> Result<Option<EnvironmentProvisionConfig>, String> {
     const VARIABLES: &[&str] = &[
         "ANCHOR_ENVIRONMENT_SOURCES",
@@ -171,6 +176,23 @@ pub(crate) fn from_env(
         .unwrap_or_else(|| state_root.join("environment-build"));
     if !build_root.is_absolute() {
         return Err("ANCHOR_ENVIRONMENT_BUILD_ROOT must be an absolute path".into());
+    }
+    // The same overlap rule publication enforces on a candidate directory: a
+    // build root inside the Library, or a Library inside the build root, means
+    // staging and published content share a tree. A build that is interrupted
+    // there would leave half-installed files where published environments are
+    // read from, and publishing would copy the Library into itself.
+    if let Some(library_root) = library_root {
+        let build = std::fs::canonicalize(&build_root).unwrap_or_else(|_| build_root.clone());
+        let library =
+            std::fs::canonicalize(library_root).unwrap_or_else(|_| library_root.to_path_buf());
+        if build.starts_with(&library) || library.starts_with(&build) {
+            return Err(format!(
+                "ANCHOR_ENVIRONMENT_BUILD_ROOT ({}) and the environment Library root ({}) must not overlap: staging inside published content (or the reverse) would make an interrupted build and a published environment the same files",
+                build_root.display(),
+                library_root.display()
+            ));
+        }
     }
     Ok(Some(EnvironmentProvisionConfig {
         uv,
@@ -271,5 +293,99 @@ mod config_tests {
             PackageSource::Index("https://pypi.org/simple".to_owned()).as_str(),
             "index:https://pypi.org/simple"
         );
+    }
+
+    /// Saves and restores the deployment variables a test has to change.
+    struct Environment(Vec<(&'static str, Option<std::ffi::OsString>)>);
+
+    impl Environment {
+        fn cleared(names: &[&'static str]) -> Self {
+            let previous = names
+                .iter()
+                .map(|name| (*name, std::env::var_os(name)))
+                .collect();
+            for name in names {
+                unsafe { std::env::remove_var(name) };
+            }
+            Self(previous)
+        }
+    }
+
+    impl Drop for Environment {
+        fn drop(&mut self) {
+            for (name, value) in &self.0 {
+                unsafe {
+                    match value {
+                        Some(value) => std::env::set_var(name, value),
+                        None => std::env::remove_var(name),
+                    }
+                }
+            }
+        }
+    }
+
+    /// A fully authorized deployment whose staging root is `build_root`, read
+    /// against a Library at `library`.
+    fn configured(
+        build_root: &Path,
+        library: &Path,
+    ) -> Result<Option<EnvironmentProvisionConfig>, String> {
+        let sources = build_root.join("wheels");
+        std::fs::create_dir_all(&sources).unwrap();
+        unsafe {
+            std::env::set_var("ANCHOR_ENVIRONMENT_SOURCES", &sources);
+            std::env::set_var("ANCHOR_ENVIRONMENT_UV", "/opt/anchor/uv");
+            std::env::set_var("ANCHOR_ENVIRONMENT_UV_SHA256", "a".repeat(64));
+            std::env::set_var("ANCHOR_ENVIRONMENT_PYTHON", "/usr/bin/python3");
+            std::env::set_var("ANCHOR_ENVIRONMENT_BUILD_ROOT", build_root);
+        }
+        from_env(
+            &build_root.join("state"),
+            PathBuf::from("bwrap"),
+            Some(library),
+        )
+    }
+
+    /// Staging and published content sharing a tree is refused when the host
+    /// starts, whatever the direction of the overlap.
+    #[test]
+    fn a_build_root_that_overlaps_the_library_is_refused_at_startup() {
+        let _guard = crate::PROCESS_ENV_LOCK.blocking_lock();
+        let _environment = Environment::cleared(&[
+            "ANCHOR_ENVIRONMENT_SOURCES",
+            "ANCHOR_ENVIRONMENT_UV",
+            "ANCHOR_ENVIRONMENT_UV_SHA256",
+            "ANCHOR_ENVIRONMENT_PYTHON",
+            "ANCHOR_ENVIRONMENT_BUILD_ROOT",
+        ]);
+        let root = tempfile::tempdir().unwrap();
+
+        // Identical roots.
+        let shared = root.path().join("shared");
+        std::fs::create_dir_all(&shared).unwrap();
+        let error = configured(&shared, &shared).unwrap_err();
+        assert!(error.contains("must not overlap"), "{error}");
+
+        // The build root inside the Library.
+        let library = root.path().join("library");
+        let inside = library.join("build");
+        std::fs::create_dir_all(&inside).unwrap();
+        let error = configured(&inside, &library).unwrap_err();
+        assert!(error.contains("must not overlap"), "{error}");
+
+        // The Library inside the build root.
+        let build = root.path().join("build");
+        let nested_library = build.join("library");
+        std::fs::create_dir_all(&nested_library).unwrap();
+        let error = configured(&build, &nested_library).unwrap_err();
+        assert!(error.contains("must not overlap"), "{error}");
+
+        // Disjoint roots are a working deployment.
+        let disjoint = root.path().join("library-disjoint");
+        std::fs::create_dir_all(&disjoint).unwrap();
+        let config = configured(&build, &disjoint)
+            .unwrap()
+            .expect("a fully configured deployment");
+        assert_eq!(config.build_root, build);
     }
 }
