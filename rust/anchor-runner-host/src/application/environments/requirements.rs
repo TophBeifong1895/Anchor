@@ -1,6 +1,7 @@
 //! What the assistant needs an environment to provide.
 
 use super::*;
+use std::path::PathBuf;
 
 /// A durable *requirement*: what the assistant needs an environment to provide.
 ///
@@ -186,18 +187,17 @@ fn read_environment_requirement(
 
 /// Every durable requirement, ordered by name.
 ///
-/// Unlike the publish plans, this listing tolerates a record it cannot read: the
-/// projection reports how many were skipped instead of failing entirely.
+/// This listing tolerates a record it cannot read: the projection reports how
+/// many were skipped instead of failing entirely.
 pub(crate) fn list_environment_requirements(
     data_root: &std::path::Path,
 ) -> Result<EnvironmentRequirements, ApplicationError> {
-    let listed =
-        list_json_records::<EnvironmentRequirement>(data_root, "environment-requirements")?;
-    let mut requirements = listed.records;
+    let (mut requirements, unreadable) =
+        read_json_records::<EnvironmentRequirement>(data_root, "environment-requirements")?;
     let truncated = bound_projection(&mut requirements, |left, right| left.name.cmp(&right.name));
     Ok(EnvironmentRequirements {
         requirements,
-        unreadable: listed.unreadable,
+        unreadable,
         truncated,
     })
 }

@@ -1,21 +1,22 @@
 //! Turning an approved requirement into a published environment.
 //!
 //! This is the step the environment draft calls the builder. It has two halves
-//! with a human in between, and each half keeps its own facts:
+//! with a human in between, and both halves live inside one call:
 //!
 //! - **before the form**: read the recorded requirement, resolve it against the
-//!   deployment's authorized sources, and write the plan — interpreter, locked
-//!   packages with their digests, the exact `requirements.txt`, and where the
-//!   name points right now. A human then approves *that* plan.
+//!   deployment's authorized sources, and freeze — interpreter, locked packages
+//!   with their digests, the exact `requirements.txt`, and where the name points
+//!   right now. A human then approves *that* resolution.
 //! - **after approval**: re-check that the name is still where they saw it,
 //!   fetch exactly the approved bytes, build offline in the sandbox, verify the
 //!   published tree where it now lives, and only then switch the name.
 //!
-//! The plan's identity is the lock digest, not the finished content: the content
+//! The frozen identity is the lock digest, not the finished content: the content
 //! digest cannot be known before the build, and pretending otherwise would mean
-//! approving something nobody has seen. Everything the human was shown is in the
-//! record, and the fetch is hash-anchored to it.
+//! approving something nobody has seen. Nothing is persisted: the approval is not
+//! a queue, and a restart replays nothing.
 
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use super::*;
@@ -25,59 +26,23 @@ use crate::environment_provision::{
     fetch_wheelhouse, resolve_requirements, verify_published,
 };
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "status", rename_all = "snake_case", deny_unknown_fields)]
-pub(crate) enum EnvironmentProvisionStatus {
-    Requested,
-    Provisioned {
-        id: String,
-        name_version: u64,
-        /// What the published content holds, so an operator sees the size of
-        /// what a name now points at without walking the store.
-        files: usize,
-        bytes: u64,
-    },
-    Refused,
-    /// The human approved, but the act did not complete. Recorded so a failed
-    /// attempt never reads as an unanswered request.
-    Aborted {
-        reason: String,
-    },
-    /// Nobody was ever asked, or nobody could answer any more. Kept apart from
-    /// `Aborted` (approved, then not done) and `Refused` (a human answered "no").
-    Cancelled {
-        reason: String,
-    },
-}
-
 /// What a human is asked to approve for one provisioned environment.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone)]
 pub(crate) struct EnvironmentProvisionPlan {
-    pub(crate) requester: EnvironmentPlanRequester,
     pub(crate) name: String,
-    /// The ask this plan resolved, so the record carries what was requested.
-    pub(crate) ask: EnvironmentRequirementAsk,
     /// The deployment sources the resolution was allowed to use.
     pub(crate) sources: Vec<String>,
     pub(crate) interpreter: String,
     pub(crate) interpreter_path: PathBuf,
-    pub(crate) interpreter_prefix: PathBuf,
     pub(crate) interpreter_digest: String,
-    /// The locked set and the exact file the build installs.
+    /// The locked set and its identity: the file the build installs, and the
+    /// digest that names it.
     pub(crate) lock_digest: String,
-    pub(crate) lock: String,
     pub(crate) packages: Vec<LockedPackage>,
     /// The impact range shown with the form.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) references: Option<EnvironmentReferences>,
     pub(crate) observed_id: Option<String>,
-    pub(crate) observed_present: bool,
     pub(crate) observed_name_version: Option<u64>,
-    pub(crate) status: EnvironmentProvisionStatus,
-    /// When this attempt was first recorded; see `EnvironmentPlan::created`.
-    #[serde(default)]
-    pub(crate) created: u64,
 }
 
 #[derive(Debug, Clone)]
@@ -101,16 +66,6 @@ impl EnvironmentProvisionPrecondition {
     }
 }
 
-impl EnvironmentProvisionPlan {
-    /// One approval attempt: the locked set, the name, and the asking turn.
-    pub(crate) fn key(&self) -> String {
-        format!(
-            "{}-{}-{}-{}",
-            self.lock_digest, self.name, self.requester.session, self.requester.turn
-        )
-    }
-}
-
 impl RunApplication {
     pub(crate) fn with_environment_provisioner(
         mut self,
@@ -128,72 +83,11 @@ impl RunApplication {
         })
     }
 
-    fn environment_provision_plan_path(&self, key: &str) -> PathBuf {
-        self.data_root
-            .join("environment-provision-plans")
-            .join(format!("{key}.json"))
-    }
-
-    pub(crate) fn write_environment_provision_plan(
-        &self,
-        plan: &EnvironmentProvisionPlan,
-    ) -> Result<(), ApplicationError> {
-        let path = self.environment_provision_plan_path(&plan.key());
-        let mut plan = plan.clone();
-        if plan.created == 0 {
-            plan.created = read_created(&path)
-                .unwrap_or_else(|| crate::application::metadata::now_nanos() as u64);
-        }
-        write_json_durable(&path, &plan)?;
-        if !matches!(plan.status, EnvironmentProvisionStatus::Requested) {
-            prune_environment_records(&self.data_root, "environment-provision-plans", |bytes| {
-                serde_json::from_slice::<EnvironmentProvisionPlan>(bytes)
-                    .ok()
-                    .map(|plan| Retention {
-                        name: plan.name.clone(),
-                        identity: plan.lock_digest.clone(),
-                        created: plan.created,
-                        pending: matches!(plan.status, EnvironmentProvisionStatus::Requested),
-                        published: match &plan.status {
-                            EnvironmentProvisionStatus::Provisioned { id, .. } => Some(id.clone()),
-                            _ => None,
-                        },
-                    })
-            })?;
-        }
-        Ok(())
-    }
-
-    /// Settle every `Requested` build whose asking Turn can no longer be
-    /// answered; see [`RunApplication::settle_abandoned_environment_plans`].
-    pub(crate) fn settle_abandoned_environment_provision_plans(
-        &self,
-        turn_is_running: impl Fn(&EnvironmentPlanRequester) -> Result<bool, ApplicationError>,
-    ) -> Result<usize, ApplicationError> {
-        settle_json_records(
-            &self.data_root,
-            "environment-provision-plans",
-            |plan: EnvironmentProvisionPlan| {
-                if !matches!(plan.status, EnvironmentProvisionStatus::Requested)
-                    || turn_is_running(&plan.requester)?
-                {
-                    return Ok(None);
-                }
-                let mut settled = plan;
-                settled.status = EnvironmentProvisionStatus::Cancelled {
-                    reason: ABANDONED_REQUEST_REASON.to_owned(),
-                };
-                Ok(Some(settled))
-            },
-        )
-    }
-
-    /// Freeze the plan a human is about to approve.
+    /// Freeze the resolution a human is about to approve.
     pub(crate) async fn environment_provision_precondition(
         &self,
         library_root: PathBuf,
         name: String,
-        requester: EnvironmentPlanRequester,
     ) -> Result<EnvironmentProvisionPrecondition, ApplicationError> {
         let provisioner = Arc::clone(self.environment_provisioner()?);
         if !anchor_runtime::graph::is_environment_name(&name) {
@@ -201,8 +95,8 @@ impl RunApplication {
                 "environment name must be an identifier of [A-Za-z0-9._-]".to_owned(),
             ));
         }
-        // The plan resolves what was *asked for*; the model cannot add packages
-        // to the approval step.
+        // The precondition resolves what was *asked for*; the model cannot add
+        // packages to the approval step.
         let requirement = self.environment_requirement(&name)?.ok_or_else(|| {
             ApplicationError::Invalid(format!(
                 "no requirement has been recorded for `{name}`; record what it must provide first"
@@ -237,9 +131,6 @@ impl RunApplication {
             .map_err(|error| environment_error("the environment name table is unavailable", error))?
             .into_iter()
             .find(|entry| entry.name == name);
-        let observed_present = existing
-            .as_ref()
-            .is_some_and(|entry| store.show(&entry.id).is_ok());
         let references = Some(match self.environment_references(&name) {
             Ok(references) => references,
             Err(error) => EnvironmentReferences {
@@ -252,29 +143,21 @@ impl RunApplication {
             },
         });
         let plan = EnvironmentProvisionPlan {
-            requester,
             name,
-            ask,
             sources,
             interpreter: resolved.interpreter.clone(),
             interpreter_path: resolved.interpreter_path.clone(),
-            interpreter_prefix: resolved.interpreter_prefix.clone(),
             interpreter_digest: resolved.interpreter_digest.clone(),
             lock_digest: resolved.lock_digest.clone(),
-            lock: resolved.lock.clone(),
             packages: resolved.packages.clone(),
             references,
             observed_id: existing.as_ref().map(|entry| entry.id.clone()),
-            observed_present,
             observed_name_version: existing.as_ref().map(|entry| entry.version),
-            status: EnvironmentProvisionStatus::Requested,
-            created: 0,
         };
-        self.write_environment_provision_plan(&plan)?;
         Ok(EnvironmentProvisionPrecondition { plan, resolved })
     }
 
-    /// Fetch, build, verify and publish the approved plan.
+    /// Fetch, build, verify and publish the approved resolution.
     pub(crate) async fn provision_environment_if_unchanged(
         &self,
         library_root: PathBuf,
@@ -318,9 +201,9 @@ impl RunApplication {
             )
         })?;
 
-        // Fetched artifacts are cached per locked set: the same approved plan
-        // does not download the same bytes twice, and no fetch ever writes into
-        // the staging tree the build then clears.
+        // Fetched artifacts are cached per locked set: the same approved set does
+        // not download the same bytes twice, and no fetch ever writes into the
+        // staging tree the build then clears.
         let wheelhouse = provisioner
             .config
             .build_root
@@ -385,19 +268,6 @@ impl RunApplication {
     }
 }
 
-/// Every durable provision plan, ordered by name and lock identity.
-pub(crate) fn list_environment_provision_plans(
-    data_root: &std::path::Path,
-) -> Result<RecordList<EnvironmentProvisionPlan>, ApplicationError> {
-    let mut listed =
-        list_json_records::<EnvironmentProvisionPlan>(data_root, "environment-provision-plans")?;
-    listed.truncated = bound_projection(&mut listed.records, |left, right| {
-        (left.name.as_str(), left.lock_digest.as_str())
-            .cmp(&(right.name.as_str(), right.lock_digest.as_str()))
-    });
-    Ok(listed)
-}
-
 /// Map the builder's own error classes onto the host's.
 pub(crate) fn provision_error(error: ProvisionError) -> ApplicationError {
     match error {
@@ -458,22 +328,11 @@ mod tests {
         ask(&application, &library).await;
 
         let precondition = application
-            .environment_provision_precondition(
-                library.clone(),
-                "research".into(),
-                crate::application::environments::test_support::requester(),
-            )
+            .environment_provision_precondition(library.clone(), "research".into())
             .await
             .expect("the recorded requirement resolves");
         assert_eq!(precondition.plan.packages.len(), 1);
         assert!(!precondition.replacing());
-        // The plan is durable before anyone is asked to approve it.
-        let listed = list_environment_provision_plans(&root.path().join("state"))
-            .unwrap()
-            .records;
-        assert_eq!(listed.len(), 1);
-        assert_eq!(listed[0].status, EnvironmentProvisionStatus::Requested);
-        assert_eq!(listed[0].lock_digest, precondition.plan.lock_digest);
 
         let provisioned = application
             .provision_environment_if_unchanged(library.clone(), precondition.clone())
@@ -492,17 +351,20 @@ mod tests {
             store.show(&provisioned.id).is_ok(),
             "the name only moved onto verified content"
         );
+        assert!(
+            !root
+                .path()
+                .join("state/environment-provision-plans")
+                .exists(),
+            "the build writes no plan ledger"
+        );
 
         // A second approval of the same requirement sees the name settled.
         let again = application
-            .environment_provision_precondition(
-                library,
-                "research".into(),
-                crate::application::environments::test_support::requester(),
-            )
+            .environment_provision_precondition(library, "research".into())
             .await
             .unwrap();
-        assert!(again.plan.observed_present && again.plan.observed_id.is_some());
+        assert!(again.plan.observed_id.is_some());
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -518,11 +380,7 @@ mod tests {
         let application = provision_application(root.path(), &toolchain, wheels);
         ask(&application, &library).await;
         let precondition = application
-            .environment_provision_precondition(
-                library.clone(),
-                "research".into(),
-                crate::application::environments::test_support::requester(),
-            )
+            .environment_provision_precondition(library.clone(), "research".into())
             .await
             .unwrap();
 
@@ -550,7 +408,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn a_requirement_without_packages_is_refused_before_any_plan_exists() {
+    async fn a_requirement_without_packages_is_refused_before_anything_exists() {
         let Some(toolchain) = toolchain() else {
             return;
         };
@@ -572,19 +430,15 @@ mod tests {
             )
             .unwrap();
         let error = application
-            .environment_provision_precondition(
-                library,
-                "research".into(),
-                crate::application::environments::test_support::requester(),
-            )
+            .environment_provision_precondition(library, "research".into())
             .await
             .unwrap_err();
         assert!(matches!(error, ApplicationError::Invalid(_)), "{error:?}");
         assert!(
-            list_environment_provision_plans(&root.path().join("state"))
-                .unwrap()
-                .records
-                .is_empty(),
+            !root
+                .path()
+                .join("state/environment-provision-plans")
+                .exists(),
             "nothing is recorded before a human could be asked"
         );
     }
@@ -597,11 +451,7 @@ mod tests {
         let application = crate::application::environments::test_support::application(root.path());
         ask(&application, &library).await;
         let error = application
-            .environment_provision_precondition(
-                library,
-                "research".into(),
-                crate::application::environments::test_support::requester(),
-            )
+            .environment_provision_precondition(library, "research".into())
             .await
             .unwrap_err();
         assert!(

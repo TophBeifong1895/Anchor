@@ -294,6 +294,16 @@ legacy Run 至少记录 legacy 模式、工具 ID、解析后的路径与当时�
 - **过期的请求在启动时收尾**：`recover_pilot_turns` 用平台会话事实（`TurnStatus`，`Running` 之外即无人能答）把遗留的 `Requested` 记录就地写成终态；顺序是先 `interrupt_running()` 再收尾，所以宿主崩溃遗留的 `Running` 也在内。
 - **表单已返回答案、但回合在这件事执行前结束**（实施期间发现的第四条早退路径）：按**已知答案**写终态——批准了则 `Aborted`，否则 `Refused`，**不写 `Cancelled`**（人已经回答）。这条路径的到达状态由端到端用例确定性覆盖（测试客户端在交回答案前用同一个会话存储把 Turn 置为 `Stopped`，`active()` 真的失败）；`select!` 在"答案就绪 + 取消同时置位"时的随机 tie-break **本身**未被确定性覆盖，两条路径进入的是同一段处理代码。
 
+### 批准账本删除（设计卡 002，2026-10-10 用户决定 A「删除干净」）
+
+上一节（设计卡 001）以及本文「实施契约」「受授权环境准备的实现决定」里所有关于**计划记录**的内容，均被本节取代：宿主不再把批准状态写进 `state/environment-plans/` 与 `state/environment-provision-plans/`。`EnvironmentPlanStatus`/`EnvironmentProvisionStatus`、`write_*_plan`、`abort_*`/`cancel_*`/`settle_abandoned_*`、`prune_environment_records`/`Retention`/`RecordList`/`pruned.count`、两个只读投影（`GET /environment-publications`、`GET /environment-provisions`）及其映射全部删除。理由是收敛准则：那是在平台会话的 `Question` 之外维护的第二本账，每加一处都要付「两本账必须一致」的利息，而同一事实只应由一个所有者持有。
+
+- **权威所有者只剩两处**：「人被问过什么、答了什么」是平台会话的 `Question`（宿主只读）；「发布了什么内容、名字指向哪个编号」是 Library（已发布树不可变 + `names.json` CAS）。宿主自己拥有的 `state/environment-requirements/<名字>.json` 保留。
+- **批准不再落盘**：两个 precondition（发布候选的内容身份/名字/观测版本；准备路径解析出的锁定集合）只存在于**本次调用**的内存里；跨重启不重放因此是结构性质，而不是一条需要维护的规则。
+- **不变量照旧，且仍在本次调用内判定**：批准不是工具参数；未确认不执行；发布前由 `publish_expecting` 复核内容身份（与批准时一致），不符即拒；名字切换仍是 `observed_name_version` 的 CAS。
+- **旧文件不动**：磁盘上已有的计划文件宿主不再读也不再写，留给操作员自行处置（不是本卡的清理任务）。
+- **后果（如实记录）**：两个跨会话只读投影被删。它们展示的事实仍可从 Library 列表与会话提问路由（`GET /sessions/{s}/turns/{t}/questions`）看到，但「把所有批准历史汇到一处」的视图没有了；要找回它，正确做法是让平台给 `Question` 打类型标签（改 `anchor-platform-session`），而不是在宿主里再记一本账——本卡不做。
+
 ## 受授权环境准备的实现决定（2026-10-10，A182）
 
 **联网边界（用户裁定，2026-10-10）**：构建沙箱**永不联网**——适配器在没有 `allow_network` 的策略上构造，因此一个请求即使写了 `NetworkPolicy::Enabled` 也会被拒绝（有专门用例）。联网只发生在**宿主侧可信适配器**：它按部署授权的源解析与抓取，产物落到准备区，随后沙箱只从那里离线安装。这比「给沙箱开网络 + 源白名单」更强：不依赖被执行的工具自觉遵守代理。
