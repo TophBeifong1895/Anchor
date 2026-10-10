@@ -45,8 +45,11 @@ pub struct SandboxLaunch<'a> {
     pub sandbox: &'a BubblewrapSandbox,
     pub workspace: &'a Path,
     pub readonly_inputs: &'a [ReadOnlyInput],
-    /// Frozen per-server environments, keyed by `<plugin>/<server>`.
-    pub server_environments: &'a BTreeMap<String, crate::managed_environment::PreparedEnvironment>,
+    /// Frozen per-server environments, keyed by the Plugin server they belong to.
+    pub server_environments: &'a BTreeMap<
+        anchor_runtime::graph::PluginServerId,
+        crate::managed_environment::PreparedEnvironment,
+    >,
 }
 
 #[derive(Clone)]
@@ -331,7 +334,10 @@ impl McpToolConfig {
                 let prepared = launch.as_ref().and_then(|launch| {
                     launch
                         .server_environments
-                        .get(&format!("{}/{server_id}", binding.id))
+                        .get(&anchor_runtime::graph::PluginServerId::new(
+                            binding.id.clone(),
+                            server_id.clone(),
+                        ))
                 });
                 // The launcher mounts the Plugin directory for this server, so
                 // the invocation must grant exactly that mount. Nothing else
@@ -1492,7 +1498,10 @@ exec ./mcp-fixture --stdio inspect
         };
         let prepared = crate::managed_environment::prepare(&frozen, &library).unwrap();
         let mut server_environments = BTreeMap::new();
-        server_environments.insert("research/managed".to_owned(), prepared);
+        server_environments.insert(
+            anchor_runtime::graph::PluginServerId::new("research", "managed"),
+            prepared,
+        );
 
         let tools = config
             .bind_with_node_inputs(

@@ -332,6 +332,30 @@ fn verify_reports_names_without_content() {
 }
 
 #[test]
+fn show_refuses_a_published_tree_that_became_writable_again() {
+    // `show` is what admission consults before running, so it must refuse a tree
+    // anyone can still change — not only `verify`.
+    let temporary = tempfile::tempdir().unwrap();
+    let store = store(temporary.path());
+    let published = store.publish(prepared(temporary.path(), "one")).unwrap();
+    assert!(store.show(&published.id).is_ok());
+
+    let environment = temporary.path().join("envs").join(&published.id);
+    force_writable(&environment);
+
+    let refused = store.show(&published.id).unwrap_err();
+    assert!(refused.to_string().contains("still writable"), "{refused}");
+    // verify() keeps reporting the same fact for the whole store.
+    let problems = store.verify().unwrap();
+    assert!(
+        problems
+            .iter()
+            .any(|problem| problem.contains("still writable")),
+        "{problems:?}"
+    );
+}
+
+#[test]
 fn cli_publishes_names_and_verifies() {
     let temporary = tempfile::tempdir().unwrap();
     let root = temporary.path().join("library");

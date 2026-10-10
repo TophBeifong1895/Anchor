@@ -197,6 +197,34 @@ pub enum EnvironmentSite {
     },
 }
 
+/// One Plugin stdio server, as its launcher identifies it.
+///
+/// The frozen map is keyed by [`EnvironmentSite::key`] because a Run records
+/// *where* an environment is used; a launcher only ever starts one server at a
+/// time, so it keys its prepared environments by this pair instead of formatting
+/// a string of its own.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PluginServerId {
+    pub plugin: String,
+    pub server: String,
+}
+
+impl PluginServerId {
+    pub fn new(plugin: impl Into<String>, server: impl Into<String>) -> Self {
+        Self {
+            plugin: plugin.into(),
+            server: server.into(),
+        }
+    }
+}
+
+impl std::fmt::Display for PluginServerId {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "{}/{}", self.plugin, self.server)
+    }
+}
+
 impl EnvironmentSite {
     /// The node this site belongs to.
     pub fn node(&self) -> &str {

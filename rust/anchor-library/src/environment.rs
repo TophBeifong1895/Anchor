@@ -73,6 +73,8 @@ pub enum EnvironmentError {
     InvalidTable,
     #[error("published environment `{0}` does not match its digest")]
     Corrupt(String),
+    #[error("published environment `{0}` is still writable")]
+    Writable(String),
     #[error(
         "environment publication durability is uncertain; inspect the store before retrying: {0}"
     )]
@@ -170,6 +172,12 @@ impl EnvironmentStore {
     }
 
     /// The library root this store reads, for diagnostics.
+    /// Where one published environment lives. The store owns its own layout,
+    /// so a caller never re-derives `<root>/envs/<id>` itself.
+    pub fn published_path(&self, id: &str) -> PathBuf {
+        self.root.join(ENVS).join(id)
+    }
+
     pub fn root(&self) -> &Path {
         &self.root
     }
@@ -386,6 +394,11 @@ impl EnvironmentStore {
         let (digest, totals) = digest_tree(&directory)?;
         if digest != id {
             return Err(EnvironmentError::Corrupt(id.to_owned()));
+        }
+        // `show` is what admission calls before running, so a published tree that
+        // became writable again must be refused here too, not only by `verify`.
+        if measure(&directory)?.write_bits {
+            return Err(EnvironmentError::Writable(id.to_owned()));
         }
         Ok(PublishedEnvironment {
             id: id.to_owned(),

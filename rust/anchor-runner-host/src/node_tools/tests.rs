@@ -861,6 +861,6 @@ async fn a_tampered_environment_refuses_to_run() {
     let failure = crate::managed_environment::prepare(&binding, &library)
         .err()
         .expect("a tampered environment must refuse to run");
-    assert!(failure.contains("not usable"), "{failure}");
+    assert!(failure.to_string().contains("not usable"), "{failure}");
     let _ = sandbox;
 }

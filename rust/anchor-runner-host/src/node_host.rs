@@ -400,10 +400,14 @@ impl NodeHostResolver for HostIoResolver {
             )
             .await?;
             let deployments = crate::deployment_library_root();
-            let server_environments = crate::managed_environment::prepare_servers(
-                &request.environments,
-                deployments.as_deref(),
-            )?;
+            // Verifying a published tree re-hashes it, so this runs off the
+            // runtime thread; the boundary maps the one cause to its own class.
+            let server_environments = crate::managed_environment::prepare_servers_async(
+                request.environments.clone(),
+                deployments.clone(),
+            )
+            .await
+            .map_err(|error| error.to_string())?;
             let plugins = self
                 .tools
                 .assemble_with_sandbox(
@@ -436,10 +440,12 @@ impl NodeHostResolver for HostIoResolver {
             // A declared environment becomes this invocation's authority, so a
             // called Graph's environments work without widening the policy, and
             // the falling back to the global tool aggregate is skipped.
-            let prepared = crate::managed_environment::prepare_for(
-                request.task_environment(),
-                deployments.as_deref(),
-            )?;
+            let prepared = crate::managed_environment::prepare_for_async(
+                request.task_environment().cloned(),
+                deployments.clone(),
+            )
+            .await
+            .map_err(|error| error.to_string())?;
             let sandbox = match prepared.as_ref() {
                 Some(prepared) => prepared.authorize(sandbox)?,
                 None => sandbox,
@@ -659,11 +665,14 @@ impl HostNodes {
             cancellation: request.cancellation.clone(),
         };
         let deployments = crate::deployment_library_root();
-        let prepared = crate::managed_environment::prepare_for(
-            request.task_environment(),
-            deployments.as_deref(),
+        // A Run whose recorded environment cannot be used is a corrupt Run: the
+        // fact it recorded cannot be honored.
+        let prepared = crate::managed_environment::prepare_for_async(
+            request.task_environment().cloned(),
+            deployments.clone(),
         )
-        .map_err(GraphError::CorruptRun)?;
+        .await
+        .map_err(|error| GraphError::CorruptRun(error.to_string()))?;
         let sandbox = match prepared.as_ref() {
             Some(prepared) => prepared
                 .authorize(std::sync::Arc::new(sandbox))
