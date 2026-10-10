@@ -7,6 +7,7 @@ description = "Rust-native operator Plugin installation"
 
 [dependencies]
 anchor-graph-host = { path = "../anchor-graph-host", default-features = false }
+anchor-runtime = { path = "../anchor-runtime", default-features = false }
 base64 = "=0.22.1"
 clap = { version = "=4.5.54", features = ["derive"] }
 rustix = { version = "=1.1.5", features = ["fs", "process", "rand"] }

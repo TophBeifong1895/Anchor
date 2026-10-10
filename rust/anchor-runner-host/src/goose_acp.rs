@@ -5,7 +5,7 @@ pub(crate) use conversation::remove as remove_conversation;
 mod elicitation;
 mod media;
 pub(crate) mod pilot;
-mod pilot_interaction;
+pub(crate) mod pilot_interaction;
 mod trace;
 /// Test-only: lets a test seed the in-process trace of one invocation and
 /// assert what the channel progress projection reports for it.

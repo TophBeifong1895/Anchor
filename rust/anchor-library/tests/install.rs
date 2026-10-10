@@ -148,6 +148,57 @@ fn root_manifest_takes_precedence_over_codex_manifest() {
 }
 
 #[test]
+fn a_skill_only_plugin_installs_and_binds_into_a_graph_bundle() {
+    // The steward Plugin teaches the assistant a contract and exposes no MCP
+    // server, so a Plugin without `mcpServers` has to stay a valid binding.
+    let temporary = tempfile::tempdir().unwrap();
+    let source = temporary.path().join("source");
+    write(
+        source.join("plugin.json"),
+        json!({
+            "name": "Skill only",
+            "description": "no MCP servers",
+            "skills": "skills/"
+        })
+        .to_string(),
+    );
+    write(source.join("skills/authoring/SKILL.md"), "# authoring\n");
+    let root = temporary.path().join("library");
+    let library = Library::new(&root);
+    let installed = library.install_directory("demo", &source, false).unwrap();
+    let binding = FilePluginCatalog::new(&root)
+        .resolve(&["demo".into()])
+        .unwrap()
+        .remove(0);
+    assert!(binding.mcp_servers.is_empty());
+    assert_eq!(
+        binding.resources,
+        ["plugin.json", "skills/authoring/SKILL.md"]
+    );
+
+    let bundle = temporary.path().join("bundle");
+    for relative in &binding.resources {
+        write(
+            bundle.join("plugins/demo").join(relative),
+            fs::read(installed.directory.join(relative)).unwrap(),
+        );
+    }
+    write(bundle.join("graph.json"), support::graph().to_string());
+    write(
+        bundle.join("manifest.json"),
+        json!({
+            "format": 1,
+            "graph": "graph.json",
+            "plugins": [{"id": binding.id, "digest": binding.digest, "resources": binding.resources, "mcp_servers": binding.mcp_servers}]
+        })
+        .to_string(),
+    );
+    let frozen = FileGraphBundleLoader::new(&bundle).load().unwrap();
+    assert_eq!(frozen.plugins[0].digest, installed.digest);
+    assert_clean(&root);
+}
+
+#[test]
 fn explicit_replacement_changes_identity_without_mutating_frozen_graph_bundle() {
     let temporary = tempfile::tempdir().unwrap();
     let source = fixture(temporary.path(), "source", true);

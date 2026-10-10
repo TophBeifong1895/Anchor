@@ -61,6 +61,11 @@ pub struct GraphNode {
     pub plugins: Vec<String>,
     #[serde(default)]
     pub max_rounds: Option<u32>,
+    /// Declared dependency environment name, resolved by the host at admission.
+    /// The declared name is part of the frozen snapshot; the resolved digest is
+    /// recorded separately as a Run fact.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub environment: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

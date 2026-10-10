@@ -455,7 +455,11 @@ impl PilotPort {
                 "toolName":name,"input":arguments}),
         )
         .map_err(failed)?;
-        let result = if matches!(name, "ask_user" | "graph_delete") {
+        // One authority table decides, so a new confirmed tool cannot be added to
+        // the definition list and forgotten here.
+        let result = if crate::pilot_tools::authority(name)
+            == Some(crate::pilot_tools::ToolAuthority::Confirm)
+        {
             match peer {
                 Some(peer) => {
                     pilot_interaction::call(

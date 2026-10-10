@@ -14,6 +14,7 @@ mod channel_attachments;
 mod channel_media;
 mod channel_sessions;
 mod conversations;
+mod environments;
 mod graph_deletion;
 mod graph_listeners;
 mod graph_validation;
@@ -1816,6 +1817,7 @@ async fn graph_delete_is_rejected_while_its_own_run_is_unfinished() {
             digest: "pinned-digest".into(),
             resources: vec!["resource.txt".into()],
             mcp_servers: vec![],
+            environments: Default::default(),
         },
     );
     record.plugin_bindings_initialized = true;

@@ -105,6 +105,17 @@ impl HostIoResolver {
         }
     }
 
+    /// Point the resolver at explicit Plugin roots (tests only).
+    ///
+    /// Production deployments pass their Library root through the environment so
+    /// every host in one process agrees; a test needs the same authority without
+    /// mutating process state.
+    #[cfg(test)]
+    pub(crate) fn with_catalog_roots(mut self, roots: Vec<PathBuf>) -> Self {
+        self.catalog_roots = roots;
+        self
+    }
+
     pub(crate) fn local_inputs_configured(&self) -> bool {
         self.local_inputs.configured()
     }
@@ -360,9 +371,16 @@ impl NodeHostResolver for HostIoResolver {
             {
                 local_inputs.push(mount);
             }
+            // Everything this invocation mounts is granted on the invocation
+            // itself: the Run policy is the deployment floor, not a list of
+            // per-Run trees (a parent Run cannot know its children's Plugins or
+            // environments).
+            let plugin_mounts = self.plugin_mounts(&request.plugins)?;
+            let mut grants = local_inputs.clone();
+            grants.extend(plugin_mounts.iter().cloned());
             let sandbox = std::sync::Arc::new(
                 self.sandbox
-                    .with_readonly_grants(&local_inputs)
+                    .with_readonly_grants(&grants)
                     .map_err(|error| error.to_string())?,
             );
             let mut readonly_inputs = self
@@ -373,7 +391,7 @@ impl NodeHostResolver for HostIoResolver {
                     &request.key.graph_digest,
                 )
                 .map_err(|error| error.to_string())?;
-            readonly_inputs.extend(self.plugin_mounts(&request.plugins)?);
+            readonly_inputs.extend(plugin_mounts);
             readonly_inputs.extend(local_inputs);
             let mut mcp = self.catalog_config(&request.plugins)?;
             mcp.authorize_oauth(
@@ -381,15 +399,23 @@ impl NodeHostResolver for HostIoResolver {
                 request.network,
             )
             .await?;
+            let deployments = crate::deployment_library_root();
+            let server_environments = crate::managed_environment::prepare_servers(
+                &request.environments,
+                deployments.as_deref(),
+            )?;
             let plugins = self
                 .tools
                 .assemble_with_sandbox(
                     &mcp,
                     &request.plugins,
                     request.network,
-                    &sandbox,
-                    &workspace,
-                    &readonly_inputs,
+                    crate::tool_host::SandboxLaunch {
+                        sandbox: &sandbox,
+                        workspace: &workspace,
+                        readonly_inputs: &readonly_inputs,
+                        server_environments: &server_environments,
+                    },
                 )
                 .await?;
             // Output beyond the stream previews is retained host-side and mounted
@@ -407,27 +433,39 @@ impl NodeHostResolver for HostIoResolver {
                     ),
                 "/spill",
             );
-            let tools = std::sync::Arc::new(
-                crate::node_tools::NodeTools::new(
-                    crate::channel_tools::wrap(
-                        plugins,
-                        &request.plugins,
-                        request.key.clone(),
-                        self.local_inputs.state_root().to_path_buf(),
-                        conversation.as_ref().map(|value| value.reply_node.clone()),
-                        workspace.clone(),
-                        readonly_inputs.clone(),
-                        request.cancellation.clone(),
-                    ),
-                    sandbox,
-                    workspace,
-                    readonly_inputs,
+            // A declared environment becomes this invocation's authority, so a
+            // called Graph's environments work without widening the policy, and
+            // the falling back to the global tool aggregate is skipped.
+            let prepared = crate::managed_environment::prepare_for(
+                request.task_environment(),
+                deployments.as_deref(),
+            )?;
+            let sandbox = match prepared.as_ref() {
+                Some(prepared) => prepared.authorize(sandbox)?,
+                None => sandbox,
+            };
+            let node_tools = crate::node_tools::NodeTools::new(
+                crate::channel_tools::wrap(
+                    plugins,
+                    &request.plugins,
+                    request.key.clone(),
+                    self.local_inputs.state_root().to_path_buf(),
+                    conversation.as_ref().map(|value| value.reply_node.clone()),
+                    workspace.clone(),
+                    readonly_inputs.clone(),
                     request.cancellation.clone(),
-                )
-                .with_spill(spill)
-                .with_environment(self.mcp.environment.clone())
-                .with_network(request.network),
-            ) as std::sync::Arc<dyn anchor_runtime::ToolPort>;
+                ),
+                sandbox,
+                workspace,
+                readonly_inputs,
+                request.cancellation.clone(),
+            )
+            .with_spill(spill)
+            .with_environment(self.mcp.environment.clone())
+            .with_network(request.network);
+            let node_tools = node_tools.with_managed_environment(prepared);
+            let tools =
+                std::sync::Arc::new(node_tools) as std::sync::Arc<dyn anchor_runtime::ToolPort>;
             // Tools a node's completion and continuity depend on stay listed; the rest
             // (plugins, channel tools) becomes reachable on demand.
             let mut always_visible = vec![
@@ -620,7 +658,22 @@ impl HostNodes {
             spill: None,
             cancellation: request.cancellation.clone(),
         };
-        self.mcp.environment.apply(&mut sandbox_request);
+        let deployments = crate::deployment_library_root();
+        let prepared = crate::managed_environment::prepare_for(
+            request.task_environment(),
+            deployments.as_deref(),
+        )
+        .map_err(GraphError::CorruptRun)?;
+        let sandbox = match prepared.as_ref() {
+            Some(prepared) => prepared
+                .authorize(std::sync::Arc::new(sandbox))
+                .map_err(GraphError::CorruptRun)?,
+            None => std::sync::Arc::new(sandbox),
+        };
+        match prepared.as_ref() {
+            Some(prepared) => prepared.apply(&mut sandbox_request),
+            None => self.mcp.environment.apply(&mut sandbox_request),
+        }
         op::add_route_helper(&mut sandbox_request, route_helper);
         self.start(&request.key)?;
         let result = match sandbox.run(sandbox_request).await {
@@ -857,6 +910,7 @@ mod resolver_tests {
         assert!(resolver.resolve_plugins(&["missing".into()]).is_err());
 
         let request = NodeExecutionRequest {
+            environments: BTreeMap::new(),
             key: InvocationKey {
                 run_id: admitted.run_id,
                 graph_digest: admitted.graph_digest,
@@ -895,6 +949,117 @@ mod resolver_tests {
         let mut drifted = request;
         drifted.plugins[0].digest = "sha256:drift".into();
         assert!(resolver.tools(&drifted).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn agent_tools_mount_plugins_without_a_run_policy_grant() {
+        let root = tempfile::tempdir().unwrap();
+        let state = root.path().join("state");
+        let workspace = root.path().join("workspaces");
+        let artifacts = root.path().join("artifacts");
+        for path in [&workspace, &artifacts] {
+            std::fs::create_dir_all(path).unwrap();
+        }
+        // A Library Plugin with one real resource file.
+        let library = root.path().join("library");
+        let plugin = library.join("plugins/demo");
+        std::fs::create_dir_all(plugin.join("resources")).unwrap();
+        std::fs::write(
+            plugin.join("plugin.json"),
+            json!({"name":"Demo"}).to_string(),
+        )
+        .unwrap();
+        std::fs::write(plugin.join("resources/note.txt"), "plugin-resource").unwrap();
+        let bindings = anchor_graph_host::PluginCatalog::resolve(
+            &anchor_graph_host::FilePluginCatalog::new(&library),
+            &["demo".into()],
+        )
+        .unwrap();
+        assert_eq!(
+            bindings[0].resources,
+            vec!["plugin.json", "resources/note.txt"]
+        );
+
+        let snapshot = GraphSnapshot::admit(json!({
+            "objective":"plugin mount", "entry":"agent",
+            "agents":{"worker":{"model":"fixture"}},
+            "nodes":[{"id":"agent","agent":"worker","plugins":["demo"]}],
+            "edges":[]
+        }))
+        .unwrap();
+        let mut record =
+            GraphRunRecord::create_with_id(snapshot, json!({}), "agent-plugin-mount").unwrap();
+        record.plugin_bindings = bindings
+            .iter()
+            .cloned()
+            .map(|binding| (binding.id.clone(), binding))
+            .collect();
+        record.plugin_bindings_initialized = true;
+        let store = FileRunStore::new(state.join("runs"));
+        store.save(&record).unwrap();
+        crate::application::metadata::save(
+            &state,
+            &crate::application::RunMetadata::new(
+                record.run_id.clone(),
+                "mount".into(),
+                record.graph_digest.clone(),
+                &library,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+
+        // The Run policy deliberately does not authorize the Library at all: the
+        // invocation grants the Plugin mount it actually made. A Run cannot know
+        // its children's Plugins in advance.
+        let sandbox = std::sync::Arc::new(
+            BubblewrapSandbox::new(
+                BubblewrapPolicy::new("bwrap", ["sh"]).authorize_workspace_root(&workspace),
+            )
+            .unwrap(),
+        );
+        let resolver = HostIoResolver::new(
+            HostArtifacts::new(artifacts, workspace),
+            sandbox,
+            std::sync::Arc::new(tool_host::PluginToolHost::new(Vec::<String>::new())),
+            tool_host::McpToolConfig::default(),
+            BTreeMap::new(),
+            store,
+            LocalInputs::new(state.clone(), None).unwrap(),
+        )
+        .with_catalog_roots(vec![library]);
+        let request = NodeExecutionRequest {
+            environments: BTreeMap::new(),
+            key: InvocationKey {
+                run_id: record.run_id,
+                graph_digest: record.graph_digest,
+                node_id: "agent".into(),
+                invocation: 1,
+            },
+            model: Some("fixture".into()),
+            task: "read the plugin resource".into(),
+            instructions: String::new(),
+            routes: Vec::new(),
+            input: json!({}),
+            input_commits: Vec::new(),
+            plugins: record.plugin_bindings.values().cloned().collect::<Vec<_>>(),
+            max_provider_requests: None,
+            wall_time_limit_seconds: Some(30.0),
+            network: false,
+            kind: NodeKind::Agent,
+            operation: None,
+            cancellation: std::sync::Arc::new(AtomicBool::new(false)),
+        };
+        let tools = resolver.tools(&request).await.unwrap();
+        let result = tools
+            .call(
+                crate::node_tools::RUN_TOOL_NAME,
+                json!({"command":["sh","-c","cat /plugins/demo/resources/note.txt"]}),
+            )
+            .await
+            .unwrap();
+        assert_eq!(result[0].as_json().unwrap()["exit_code"], 0);
+        assert_eq!(result[0].as_json().unwrap()["stdout"], "plugin-resource");
     }
 
     #[tokio::test]
@@ -964,6 +1129,7 @@ mod resolver_tests {
             local,
         );
         let mut request = NodeExecutionRequest {
+            environments: BTreeMap::new(),
             key: InvocationKey {
                 run_id: record.run_id,
                 graph_digest: record.graph_digest,

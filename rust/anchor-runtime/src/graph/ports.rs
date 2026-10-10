@@ -152,6 +152,9 @@ pub struct NodeExecutionRequest {
     pub input_commits: Vec<CommitRef>,
     /// Secret-free Plugin resource identities resolved by the host.
     pub plugins: Vec<PluginBinding>,
+    /// Dependency environments this invocation uses, keyed by site. The host
+    /// freezes them at admission; an empty map keeps the legacy behaviour.
+    pub environments: BTreeMap<String, EnvironmentBinding>,
     /// A cumulative provider-request budget, supported only when the node
     /// adapter advertises exact request accounting.
     pub max_provider_requests: Option<u64>,
@@ -172,6 +175,100 @@ pub struct PluginBinding {
     pub resources: Vec<String>,
     #[serde(default)]
     pub mcp_servers: Vec<String>,
+    /// Environment name declared by each local stdio server, if any. Declarations
+    /// only: the Run resolves them per node and server into its frozen bindings.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub environments: BTreeMap<String, String>,
+}
+
+/// Where a dependency environment is used. The site is part of the persisted
+/// fact: without it a binding cannot be told apart from a binding for another
+/// purpose, and a Run could not be validated against what it declared.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum EnvironmentSite {
+    /// The node's own task commands: AgentNode tools and `Op.run`.
+    NodeTask { node: String },
+    /// One local stdio MCP server of a Plugin bound to a node.
+    PluginServer {
+        node: String,
+        plugin: String,
+        server: String,
+    },
+}
+
+impl EnvironmentSite {
+    /// The node this site belongs to.
+    pub fn node(&self) -> &str {
+        match self {
+            EnvironmentSite::NodeTask { node } | EnvironmentSite::PluginServer { node, .. } => node,
+        }
+    }
+
+    /// The canonical key used in the persisted binding map.
+    pub fn key(&self) -> String {
+        match self {
+            EnvironmentSite::NodeTask { node } => format!("node_task:{node}"),
+            EnvironmentSite::PluginServer {
+                node,
+                plugin,
+                server,
+            } => format!("plugin_server:{node}/{plugin}/{server}"),
+        }
+    }
+}
+
+impl NodeExecutionRequest {
+    /// The environment for this node's own task commands, if it declared one.
+    pub fn task_environment(&self) -> Option<&EnvironmentBinding> {
+        self.environments
+            .values()
+            .find(|binding| matches!(binding.site, Some(EnvironmentSite::NodeTask { .. })))
+    }
+
+    /// The environment for one local stdio MCP server of a bound Plugin.
+    pub fn plugin_server_environment(
+        &self,
+        plugin: &str,
+        server: &str,
+    ) -> Option<&EnvironmentBinding> {
+        self.environments.values().find(|binding| {
+            matches!(
+                binding.site.as_ref(),
+                Some(EnvironmentSite::PluginServer {
+                    plugin: bound_plugin,
+                    server: bound_server,
+                    ..
+                }) if bound_plugin == plugin && bound_server == server
+            )
+        })
+    }
+}
+
+/// A frozen dependency-environment binding: where it is used, the declared name
+/// and the exact published digest the Run resolved it to at admission.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EnvironmentBinding {
+    /// Absent only while a format-9 record is being migrated.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub site: Option<EnvironmentSite>,
+    pub name: String,
+    pub id: String,
+}
+
+impl EnvironmentBinding {
+    pub fn node_task(
+        node: impl Into<String>,
+        name: impl Into<String>,
+        id: impl Into<String>,
+    ) -> Self {
+        Self {
+            site: Some(EnvironmentSite::NodeTask { node: node.into() }),
+            name: name.into(),
+            id: id.into(),
+        }
+    }
 }
 
 /// Persisted, non-secret facts for one unresolved tool call.

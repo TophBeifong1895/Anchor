@@ -66,6 +66,16 @@ pub(crate) struct NodeTools {
     readonly_inputs: Vec<ReadOnlyInput>,
     cancellation: Cancellation,
     environment: crate::tool_environment::ToolEnvironment,
+    /// A frozen dependency environment for this node's task commands. When set,
+    /// the node runs with exactly this environment mounted read-only at its
+    /// published path;
+    /// the global tool-environment aggregate is not applied, so a managed node
+    /// cannot silently keep using operator-registered tool paths.
+    /// The frozen dependency environment for this invocation, already authorized
+    /// by the host. When set, the global tool-environment aggregate is not applied,
+    /// so a managed node cannot silently keep using operator-registered tool paths.
+    managed_environment: Option<crate::managed_environment::PreparedEnvironment>,
+    // (binding, deployment library root)
     network: NetworkPolicy,
     spill: Option<SpillDirectory>,
     timeout: Duration,
@@ -87,6 +97,7 @@ impl NodeTools {
             readonly_inputs,
             cancellation,
             environment: Default::default(),
+            managed_environment: None,
             network: NetworkPolicy::Disabled,
             spill: None,
             timeout: DEFAULT_TIMEOUT,
@@ -99,6 +110,20 @@ impl NodeTools {
         environment: crate::tool_environment::ToolEnvironment,
     ) -> Self {
         self.environment = environment;
+        self
+    }
+
+    /// Run this node's commands inside one published dependency environment.
+    ///
+    /// The recorded digest is verified here, once per invocation: a published
+    /// tree that no longer matches what the Run recorded refuses to run.
+    /// The host prepared and authorized a frozen dependency environment for this
+    /// invocation, so the global tool aggregate must not be applied.
+    pub fn with_managed_environment(
+        mut self,
+        prepared: Option<crate::managed_environment::PreparedEnvironment>,
+    ) -> Self {
+        self.managed_environment = prepared;
         self
     }
 
@@ -652,7 +677,10 @@ impl ToolPort for NodeTools {
                 spill: self.spill_policy()?,
                 cancellation: self.cancellation.clone(),
             };
-            self.environment.apply(&mut request);
+            match self.managed_environment.as_ref() {
+                Some(prepared) => prepared.apply(&mut request),
+                None => self.environment.apply(&mut request),
+            }
             let result = match self.sandbox.run(request).await {
                 Ok(result) => result,
                 // Raised by the adapter before any process launch, so the model

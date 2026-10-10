@@ -6,7 +6,9 @@
 
 Anchor 是本地优先、可观察、可恢复的 Agent 工作系统。用户通过 Graph 表达任务拆分、检查、返工和交付，通过 Plugin 积累可复用能力，通过 Run 检查执行证据，通过 Session 持续协作。
 
-核心对象是 Graph、AgentNode、OpNode、Plugin、Run 和 Session。研究、周报、企业助手与递归改进由普通 Graph/Plugin 表达，不在通用 Runtime 里创建专属业务阶段。
+核心对象是 Graph、AgentNode、OpNode、Plugin、Run 和 Session；依赖环境的一等对象是新增目标，尚未实现。研究、周报、企业助手与递归改进由普通 Graph/Plugin 表达，不在通用 Runtime 里创建专属业务阶段。
+
+2026-10-10 用户明确 Pilot 的管家目标：Anchor 独立部署后，用户通过 Pilot 管理平台全部 Graph、Plugin 与依赖环境的完整生命周期，包括准备、检查、创建/安装、配置与绑定、更新/回退和删除。第一优先级是多 AgentNode 的共享依赖与唯一事实来源，避免逐节点或逐 Plugin 人工维护环境；先验收 Python，概念不限定语言。范围与现状差距见 [依赖环境草稿](dependency-environment-draft.md)。这是一项产品目标，不表示完整管理或环境自动构建已经实现。
 
 后端、共享 Runtime 和官方工具使用 Rust；WebUI 保持 React/TypeScript。AgentNode 与 Pilot 统一使用固定 Goose，通过 ACP 交互、MCP 暴露授权工具。Goose 拥有 Agent loop、Provider、原生历史与 compaction；Anchor 拥有产品事实与宿主权限，不建设第二套通用 Agent 框架。预算控制暂不作为交付门槛，优先完成任务。
 
@@ -34,8 +36,11 @@ Anchor 是本地优先、可观察、可恢复的 Agent 工作系统。用户通
 | Agent/Op 执行、结构化结果、ACP/MCP、通用 host operation 端口 | Node Runtime；具体 host 能力由宿主适配 | invocation 与工具观察 |
 | 文件、网络、进程、凭证和隔离 | Sandbox / 宿主授权 | 获准能力与冻结输入 |
 | Skill、资源、业务工具和外部系统 | Plugin / Library | 可复用能力资产 |
+| 解释器、依赖包与工具链（依赖环境） | 部署者构建与授权；Library 持有登记 | 环境内容指纹与名字解析结果 |
 | 研究、周报、审查目标与内容验收 | 普通 Graph / Plugin | 业务证据与结论 |
 | 画布、时间线、会话与文件展示 | WebUI | 对既有事实的投影 |
+
+三类可复用资产（Graph、Plugin、依赖环境）共用同一个模型：只存一份真身、只认一个编号、只开一个审批口、其余都是引用。已确定的决定、方案边界与待裁定项见 [依赖环境草稿](dependency-environment-draft.md)。
 
 采用 Ports and Adapters 隔离外部入口；遵循 Clean Architecture 依赖方向；用限界上下文明确 Graph/Run、Session/Turn、Library/Plugin、Node Runtime/Sandbox 的事实和不变量。只采用有用的边界，不引入完整 DDD 仪式、微服务、事件溯源、CQRS 或通用依赖注入框架。
 
@@ -46,13 +51,14 @@ Anchor 是本地优先、可观察、可恢复的 Agent 工作系统。用户通
 | 对象 | 内容与生命周期 |
 | --- | --- |
 | Plugin | 独立清单、Skill、资源和工具入口；多个节点可以引用同一资产 |
+| 依赖环境（待实现） | 可复用的解释器/工具链与依赖组合；宿主持有权威身份，多个节点或工具进程引用，Run 冻结确切绑定 |
 | AgentNode | Graph 内角色引用、任务、Plugin 与权限；模型在节点 workspace 执行 |
 | OpNode | Graph 内确定性命令、独立调用、配对并行控制或获授权 host operation |
 | Graph | 可编辑 JSON、节点、边、接口、目标与 layout |
 | Run | 冻结定义、启动输入/资源授权、cursor、节点工作区绑定、逐 invocation Artifact、路由和工具轨迹 |
 | Session | 长期对话、可信来源、Turn、幂等、问题/回答和关联 Run；常驻助手 current/历史 binding 与 retire 事实 |
 | Turn | 一次幂等输入或继续请求，保留事件游标、取消与投递身份 |
-| Pilot | 管理和协作入口；系统级 Graph 与保护策略为后续需求 |
+| Pilot | 管理和协作入口；完整 Graph/Plugin/依赖环境管家能力是明确目标，系统级 Graph 与自升级交接策略尚未冻结 |
 
 共享 `agents` 只是角色配置复用，不是独立 Agent 注册库。Plugin 直接挂在 AgentNode，不通过角色继承、默认合并或复制；OpNode 不隐式取得 Plugin 能力。
 
@@ -92,9 +98,9 @@ Session 与 Run 分别拥有状态。Session 只引用真实 Run，不复制另�
 
 ## Plugin 与能力积累
 
-Plugin 包含渐进披露的 Skill、资源、工具和可选渠道说明。短目录提供名称、描述和入口；完整内容保留在唯一 Plugin 目录，按需只读读取。工具语言由作者决定，官方工具使用 Rust；第三方工具环境与外部依赖由部署者准备并授权。
+Plugin 包含渐进披露的 Skill、资源、工具和可选渠道说明。短目录提供名称、描述和入口；完整内容保留在唯一 Plugin 目录，按需只读读取。工具语言由作者决定，官方工具使用 Rust；第三方依赖受宿主授权，目标是用户可通过 Pilot 准备并管理共享依赖环境，当前仍由部署者登记外部路径。
 
-Plugin 说明不是权限策略。文件路径、网络、工具、凭据和控制动作由 Host/Sandbox 强制校验。Graph/Plugin 包不能包含密钥或扩大宿主授权；模型输出不构成授权。知识库自动编译、通用 Plugin 市场和环境自动安装暂缓。
+Plugin 说明不是权限策略。文件路径、网络、工具、凭据和控制动作由 Host/Sandbox 强制校验。Graph/Plugin 包不能包含密钥或扩大宿主授权；模型输出不构成授权。知识库自动编译与通用 Plugin 市场暂缓；受授权的环境准备与管理已进入管家目标。
 
 Library 拥有已安装能力、来源摘要和 owner-bound 授权事实。API 与 Pilot 通过稳定用例管理，不直接修改其他模块的私有 SQL 表、锁或字典。运行中使用的资源必须可追溯，更新不能静默替换已经冻结的依赖。
 

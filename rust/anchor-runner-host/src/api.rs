@@ -514,6 +514,104 @@ fn graph_projection_error(
     }
 }
 
+/// Read-only: what environments the assistant asked the operator to provide.
+///
+/// Whether a need has been *provided* is derived here from the name table: the
+/// record itself only ever holds the ask, so it cannot go stale or replay.
+async fn list_environment_requirements(
+    State(state): State<ApiState>,
+) -> Result<Json<Value>, HttpResponse> {
+    use crate::application::environments::{
+        EnvironmentRequirements, list_environment_requirements,
+    };
+    let EnvironmentRequirements {
+        requirements,
+        unreadable,
+    } = list_environment_requirements(&state.data_root).map_err(application_error)?;
+    // A name table this host cannot read must not be rendered as "nothing was
+    // provided": that would report every need as unanswered with HTTP 200.
+    // A name table this host cannot read must not be rendered as "nothing was
+    // provided": that would report every need as unanswered with HTTP 200.
+    let names =
+        anchor_library::EnvironmentStore::new(crate::api::library_root(&state.catalog_root))
+            .names()
+            .map_err(|error| {
+                ApplicationError::Storage(format!(
+                    "the environment name table is unavailable: {error}"
+                ))
+            })
+            .map_err(application_error)?;
+    let requirements = requirements
+        .into_iter()
+        .map(|requirement| {
+            let current = names.iter().find(|entry| entry.name == requirement.name);
+            let changed = match (current, requirement.observed.as_ref()) {
+                (Some(current), Some(observed)) => {
+                    current.id != observed.id || current.version > observed.name_version
+                }
+                (Some(_), None) => true,
+                (None, _) => false,
+            };
+            json!({
+                "name": requirement.name,
+                "progress": if changed { "provisioned" } else { "requested" },
+                "changed_since_request": changed,
+                "id": current.map(|entry| entry.id.clone()),
+                "name_version": current.map(|entry| entry.version),
+                "requests": requirement.requests,
+            })
+        })
+        .collect::<Vec<_>>();
+    Ok(Json(
+        json!({"requirements": requirements, "unreadable": unreadable}),
+    ))
+}
+
+/// Read-only: what environment publications were requested, and how they ended.
+///
+/// The approval record is a host fact; this is the only way an operator can tell
+/// a published environment from an unanswered request.
+async fn list_environment_publications(
+    State(state): State<ApiState>,
+) -> Result<Json<Value>, HttpResponse> {
+    let plans = crate::application::environments::list_environment_plans(&state.data_root)
+        .map_err(application_error)?;
+    let requests = plans
+        .into_iter()
+        .map(|plan| {
+            // `id` is a published identity and is absent unless the plan was
+            // published; `digest` is always the content the human was shown.
+            let (status, id, name_version, note) = match &plan.status {
+                crate::application::environments::EnvironmentPlanStatus::Requested => {
+                    ("requested", Value::Null, Value::Null, Value::Null)
+                }
+                crate::application::environments::EnvironmentPlanStatus::Published {
+                    id,
+                    name_version,
+                } => ("published", json!(id), json!(name_version), Value::Null),
+                crate::application::environments::EnvironmentPlanStatus::Refused => {
+                    ("refused", Value::Null, Value::Null, Value::Null)
+                }
+                crate::application::environments::EnvironmentPlanStatus::Aborted { reason } => {
+                    ("aborted", Value::Null, Value::Null, json!(reason))
+                }
+            };
+            json!({
+                "name": plan.name,
+                "status": status,
+                "digest": plan.digest,
+                "id": id,
+                "name_version": name_version,
+                "note": note,
+                "files": plan.files,
+                "bytes": plan.bytes,
+                "requester": plan.requester,
+            })
+        })
+        .collect::<Vec<_>>();
+    Ok(Json(json!({"requests": requests})))
+}
+
 async fn graph_relations(State(state): State<ApiState>) -> Result<Json<Value>, HttpResponse> {
     let catalog = state
         .application
@@ -791,6 +889,14 @@ fn router_with_readiness_and_web_root(
         .route(
             "/schedules/{schedule}",
             axum::routing::delete(delete_schedule),
+        )
+        .route(
+            "/environment-publications",
+            get(list_environment_publications),
+        )
+        .route(
+            "/environment-requirements",
+            get(list_environment_requirements),
         )
         .route("/runs", get(list_runs))
         .route("/runs/{run}", get(get_run).delete(delete_run))

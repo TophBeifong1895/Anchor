@@ -373,6 +373,18 @@ impl FilePluginCatalog {
 
     fn plugin(&self, id: &str) -> Result<anchor_runtime::graph::PluginBinding, GraphError> {
         let definition = self.definition(id)?;
+        let environments = definition
+            .mcp_servers
+            .iter()
+            .filter_map(|server| {
+                server
+                    .config
+                    .get("anchor")
+                    .and_then(|anchor| anchor.get("environment"))
+                    .and_then(Value::as_str)
+                    .map(|environment| (server.name.clone(), environment.to_owned()))
+            })
+            .collect();
         Ok(anchor_runtime::graph::PluginBinding {
             id: definition.id,
             digest: definition.digest,
@@ -382,6 +394,7 @@ impl FilePluginCatalog {
                 .into_iter()
                 .map(|server| server.name)
                 .collect(),
+            environments,
         })
     }
 
@@ -700,6 +713,11 @@ fn validate_mcp(
             "env_vars",
             "optional_env_vars",
             "cwd",
+            // Anchor's own run-time declaration for this server. It is not part of
+            // the MCP protocol and never reaches the transport; it lives here so
+            // the binding sits next to the server it applies to and is covered by
+            // the Plugin digest like every other declared field.
+            "anchor",
         ]
     } else {
         &[
@@ -729,6 +747,28 @@ fn validate_mcp(
         return Err(invalid(format!(
             "Plugin {id}, server {name}: enabled must be boolean"
         )));
+    }
+    if let Some(anchor) = server.get("anchor") {
+        let anchor = anchor.as_object().ok_or_else(|| {
+            invalid(format!(
+                "Plugin {id}, server {name}: anchor must be an object"
+            ))
+        })?;
+        if let Some(key) = anchor.keys().find(|key| key.as_str() != "environment") {
+            return Err(invalid(format!(
+                "Plugin {id}, server {name}: unsupported anchor field: {key}"
+            )));
+        }
+        let valid = anchor.get("environment").is_none_or(|environment| {
+            environment
+                .as_str()
+                .is_some_and(anchor_runtime::graph::is_environment_name)
+        });
+        if !valid {
+            return Err(invalid(format!(
+                "Plugin {id}, server {name}: anchor.environment must be an environment name of [A-Za-z0-9._-]"
+            )));
+        }
     }
     let transport = server
         .get("type")
@@ -1336,6 +1376,21 @@ impl ChildRunControl {
 
 /// Adapts GraphCallPort on top of shared kernel ports. Instantiate one host
 /// around the same store/artifact/node/control ports used by the outer Runner.
+/// Freezes a Graph's declared dependency environments into Run facts.
+///
+/// The runner host implements this over the deployment's environment store; the
+/// Graph-call host only knows the contract, so child Runs can be admitted with
+/// the same identities as their parent without this layer learning where the
+/// store lives.
+pub trait EnvironmentResolver: Send + Sync {
+    /// Resolve one declared environment name to a published identity.
+    ///
+    /// The traversal and the site keys belong to the kernel
+    /// (`anchor_runtime::graph::freeze_environments`), so an implementer only
+    /// answers "which identity does this name mean right now".
+    fn resolve(&self, name: &str) -> Result<String, String>;
+}
+
 pub struct InProcessGraphHost<'a, S, A, N, C> {
     catalog: &'a dyn GraphCatalog,
     store: &'a S,
@@ -1343,6 +1398,7 @@ pub struct InProcessGraphHost<'a, S, A, N, C> {
     nodes: &'a N,
     plugin_catalog: Option<&'a dyn PluginCatalog>,
     _control: std::marker::PhantomData<fn() -> C>,
+    environment_resolver: Option<std::sync::Arc<dyn EnvironmentResolver>>,
 }
 
 struct BoundNodes<'a, N> {
@@ -1430,6 +1486,7 @@ impl<'a, S, A, N, C> InProcessGraphHost<'a, S, A, N, C> {
             artifacts,
             nodes,
             plugin_catalog: None,
+            environment_resolver: None,
             _control: std::marker::PhantomData,
         }
     }
@@ -1437,6 +1494,15 @@ impl<'a, S, A, N, C> InProcessGraphHost<'a, S, A, N, C> {
     /// Configure the filesystem (or other) catalog used to pin Plugin identities.
     pub fn with_plugin_catalog(mut self, catalog: &'a dyn PluginCatalog) -> Self {
         self.plugin_catalog = Some(catalog);
+        self
+    }
+
+    /// Configure how a child Run freezes the dependency environments it declares.
+    pub fn with_environment_resolver(
+        mut self,
+        resolver: std::sync::Arc<dyn EnvironmentResolver>,
+    ) -> Self {
+        self.environment_resolver = Some(resolver);
         self
     }
 }
@@ -1662,6 +1728,61 @@ impl<S: RunStore, A: ArtifactPort, N: NodeExecutionPort, C: RunControl> GraphCal
                             ))
                         })?;
                     let snapshot = bundle.snapshot;
+                    // Everything this layer cannot resolve has to be decided
+                    // before anything durable exists: a node's own environment or
+                    // a Plugin server's declared environment.
+                    let declares = snapshot
+                        .nodes
+                        .iter()
+                        .find(|node| node.environment.is_some())
+                        .map(|node| format!("node `{}`", node.id))
+                        .or_else(|| {
+                            bundle
+                                .plugins
+                                .iter()
+                                .find(|plugin| !plugin.environments.is_empty())
+                                .map(|plugin| {
+                                    let server = plugin
+                                        .environments
+                                        .keys()
+                                        .next()
+                                        .cloned()
+                                        .unwrap_or_default();
+                                    format!("Plugin `{}` server `{server}`", plugin.id)
+                                })
+                        });
+                    if self.environment_resolver.is_none()
+                        && let Some(declaration) = declares
+                    {
+                        // A session handoff for the call may already have been
+                        // authorized remotely; nothing else durable exists yet.
+                        return Err(GraphError::Unsupported(format!(
+                            "called Graph declares a dependency environment for {declaration}, and no environment resolver is configured for child Runs"
+                        )));
+                    }
+                    // Freeze before the durable `/in/call` bundle: a refused
+                    // environment must not leave an orphan call bundle behind.
+                    let frozen_environments = match self.environment_resolver.as_ref() {
+                        Some(resolver) => {
+                            let bindings = bundle
+                                .plugins
+                                .iter()
+                                .cloned()
+                                .map(|plugin| (plugin.id.clone(), plugin))
+                                .collect::<BTreeMap<_, _>>();
+                            anchor_runtime::graph::freeze_environments(
+                                &snapshot,
+                                &bindings,
+                                &|name| resolver.resolve(name),
+                            )
+                            .map_err(|reason| {
+                                GraphError::Unsupported(format!(
+                                    "resolve child Run environments: {reason}"
+                                ))
+                            })?
+                        }
+                        None => BTreeMap::new(),
+                    };
                     // Stage the read-only `/in/call` bundle before the child
                     // becomes durable. A crash can therefore never leave a
                     // Ready child (including a startup-recovered detach child)
@@ -1678,6 +1799,7 @@ impl<S: RunStore, A: ArtifactPort, N: NodeExecutionPort, C: RunControl> GraphCal
                         .map(|plugin| (plugin.id.clone(), plugin))
                         .collect();
                     record.plugin_bindings_initialized = true;
+                    record.environments = frozen_environments;
                     self.catalog
                         .record_child_admission(
                             &run_id,
@@ -1976,6 +2098,86 @@ mod plugin_catalog_tests {
         fs::write(dir.join("skills/example/SKILL.md"), "hello").unwrap();
         let catalog = FilePluginCatalog::new(tmp.path());
         (tmp, catalog)
+    }
+
+    #[test]
+    fn a_server_may_declare_an_environment_inside_the_anchor_extension() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("plugins/demo");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(
+            dir.join("plugin.json"),
+            r#"{"name":"Demo","mcpServers":{"probe":{"command":"run","anchor":{"environment":"research"}}}}"#,
+        )
+        .unwrap();
+        let catalog = FilePluginCatalog::new(tmp.path());
+        let binding = catalog.resolve(&["demo".into()]).unwrap().remove(0);
+        assert_eq!(
+            binding.environments.get("probe").map(String::as_str),
+            Some("research")
+        );
+        // The declaration is a fact of the resource set, so it changes the digest.
+        let without = {
+            fs::write(
+                dir.join("plugin.json"),
+                r#"{"name":"Demo","mcpServers":{"probe":{"command":"run"}}}"#,
+            )
+            .unwrap();
+            FilePluginCatalog::new(tmp.path())
+                .resolve(&["demo".into()])
+                .unwrap()
+                .remove(0)
+                .digest
+        };
+        assert_ne!(binding.digest, without);
+        // The declaration never reaches the MCP transport: no extra keys, no secrets.
+        assert_eq!(
+            binding.mcp_servers,
+            vec!["probe"],
+            "only declared server names travel in the binding"
+        );
+    }
+
+    #[test]
+    fn an_environment_declaration_is_validated() {
+        for (manifest, expectation) in [
+            (
+                r#"{"name":"Demo","mcpServers":{"probe":{"command":"run","anchor":{"environment":""}}}}"#,
+                "anchor.environment must be an environment name",
+            ),
+            (
+                r#"{"name":"Demo","mcpServers":{"probe":{"command":"run","anchor":{"environment":".."}}}}"#,
+                "anchor.environment must be an environment name",
+            ),
+            (
+                r#"{"name":"Demo","mcpServers":{"probe":{"command":"run","anchor":{"environment":"re search"}}}}"#,
+                "anchor.environment must be an environment name",
+            ),
+            (
+                r#"{"name":"Demo","mcpServers":{"probe":{"command":"run","anchor":{"environments":"research"}}}}"#,
+                "unsupported anchor field",
+            ),
+            (
+                r#"{"name":"Demo","mcpServers":{"probe":{"command":"run","anchor":"research"}}}"#,
+                "anchor must be an object",
+            ),
+            (
+                r#"{"name":"Demo","mcpServers":{"probe":{"url":"https://example.test/mcp","anchor":{"environment":"research"}}}}"#,
+                "unsupported MCP field: anchor",
+            ),
+        ] {
+            let tmp = tempfile::tempdir().unwrap();
+            let dir = tmp.path().join("plugins/demo");
+            fs::create_dir_all(&dir).unwrap();
+            fs::write(dir.join("plugin.json"), manifest).unwrap();
+            let error = FilePluginCatalog::new(tmp.path())
+                .resolve(&["demo".into()])
+                .expect_err("the declaration must be validated");
+            assert!(
+                error.to_string().contains(expectation),
+                "unexpected error for {manifest}: {error}"
+            );
+        }
     }
 
     #[test]

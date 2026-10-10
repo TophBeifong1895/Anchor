@@ -658,6 +658,34 @@ pub(crate) fn execution_request(
                 })
             })
             .collect::<Result<Vec<_>, _>>()?,
+        environments: {
+            // Only this node's sites belong to this invocation, and a declared
+            // node task environment must have been frozen at admission.
+            let environments = record
+                .environments
+                .iter()
+                .filter(|(_, binding)| {
+                    binding
+                        .site
+                        .as_ref()
+                        .is_some_and(|site| site.node() == node.id)
+                })
+                .map(|(key, binding)| (key.clone(), binding.clone()))
+                .collect::<BTreeMap<_, _>>();
+            if let Some(name) = node.environment.as_deref() {
+                let key = EnvironmentSite::NodeTask {
+                    node: node.id.clone(),
+                }
+                .key();
+                if environments.get(&key).map(|binding| binding.name.as_str()) != Some(name) {
+                    return Err(GraphError::CorruptRun(format!(
+                        "Run has no frozen environment binding for node `{}`",
+                        node.id
+                    )));
+                }
+            }
+            environments
+        },
         max_provider_requests,
         wall_time_limit_seconds,
         network,

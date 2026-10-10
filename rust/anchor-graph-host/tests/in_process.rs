@@ -12,6 +12,7 @@ use std::{
 };
 
 struct Catalog {
+    bundles: CatalogBundles,
     snapshot: std::sync::Mutex<Option<GraphSnapshot>>,
     graphs: std::sync::Mutex<BTreeMap<String, GraphSnapshot>>,
     child_metadata: std::sync::Mutex<BTreeMap<String, (String, String, CallIdentity, String)>>,
@@ -21,6 +22,7 @@ struct Catalog {
 impl Catalog {
     fn new(snapshot: GraphSnapshot) -> Self {
         Self {
+            bundles: CatalogBundles::default(),
             snapshot: std::sync::Mutex::new(Some(snapshot)),
             graphs: std::sync::Mutex::new(BTreeMap::new()),
             child_metadata: std::sync::Mutex::new(BTreeMap::new()),
@@ -28,6 +30,10 @@ impl Catalog {
         }
     }
 }
+
+/// The Plugin declarations a called Graph carries, if the test sets them.
+#[derive(Default)]
+struct CatalogBundles(std::sync::Mutex<BTreeMap<String, Vec<PluginBinding>>>);
 
 impl GraphCatalog for Catalog {
     fn snapshot(&self, name: &str) -> Result<Option<GraphSnapshot>, GraphError> {
@@ -112,6 +118,24 @@ impl GraphCatalog for Catalog {
     }
     fn has_child_admission(&self, run_id: &str) -> Result<bool, GraphError> {
         Ok(self.child_metadata.lock().unwrap().contains_key(run_id))
+    }
+    fn bundle(
+        &self,
+        name: &str,
+    ) -> Result<Option<anchor_graph_host::LoadedGraphBundle>, GraphError> {
+        let Some(mut bundle) =
+            (self.snapshot(name)?).map(|snapshot| anchor_graph_host::LoadedGraphBundle {
+                authoring_definition: serde_json::to_value(&snapshot).unwrap(),
+                snapshot,
+                plugins: Vec::new(),
+            })
+        else {
+            return Ok(None);
+        };
+        if let Some(plugins) = self.bundles.0.lock().unwrap().get(name) {
+            bundle.plugins = plugins.clone();
+        }
+        Ok(Some(bundle))
     }
 }
 
@@ -330,6 +354,7 @@ fn child_graph() -> GraphSnapshot {
         agents: BTreeMap::new(),
         ops: BTreeMap::from([("work".into(), json!({"run":"true"}))]),
         nodes: vec![GraphNode {
+            environment: None,
             id: "work".into(),
             agent: None,
             op: Some("work".into()),
@@ -353,6 +378,7 @@ fn parent_graph(call_spec: Value) -> GraphSnapshot {
         agents: BTreeMap::new(),
         ops: BTreeMap::from([("invoke".into(), json!({"call":call_spec}))]),
         nodes: vec![GraphNode {
+            environment: None,
             id: "invoke".into(),
             agent: None,
             op: Some("invoke".into()),
@@ -376,6 +402,7 @@ fn graph_call_graph(objective: &str, target: &str, mode: &str) -> GraphSnapshot 
             json!({"call":{"graph":target,"mode":mode}}),
         )]),
         nodes: vec![GraphNode {
+            environment: None,
             id: "invoke".into(),
             agent: None,
             op: Some("invoke".into()),
@@ -1263,4 +1290,159 @@ async fn wait_child_snapshot_drift_fails_closed_without_redispatch() {
         store.load(&child_id).unwrap().unwrap().snapshot.objective,
         "tampered child definition"
     );
+}
+
+/// A stand-in resolver: the Graph-call host must not know where the store lives.
+struct Resolver {
+    calls: AtomicUsize,
+}
+
+impl anchor_graph_host::EnvironmentResolver for Resolver {
+    fn resolve(&self, name: &str) -> Result<String, String> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        let _ = name;
+        Ok("a".repeat(64))
+    }
+}
+
+fn environment_child_graph() -> GraphSnapshot {
+    let mut snapshot = child_graph();
+    snapshot.nodes[0].environment = Some("research".into());
+    snapshot
+}
+
+#[tokio::test]
+async fn a_child_run_freezes_its_declared_environment_through_the_resolver() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = FileRunStore::new(dir.path());
+    let catalog = Catalog::new(environment_child_graph());
+    let count = Arc::new(AtomicUsize::new(0));
+    let nodes = Nodes(count);
+    let artifacts = Artifacts;
+    let control = Control;
+    let parent = GraphRunRecord::create(parent_graph(spec("wait")), json!({})).unwrap();
+    let resolver = Arc::new(Resolver {
+        calls: AtomicUsize::new(0),
+    });
+    let host = InProcessGraphHost::new(&catalog, &store, &artifacts, &nodes, &control)
+        .with_environment_resolver(resolver.clone());
+    let completed = GraphRunner::new(&store, &artifacts, &host, &control)
+        .run(parent)
+        .await
+        .unwrap();
+    assert_eq!(
+        completed.status,
+        RunStatus::Completed,
+        "{:?}",
+        completed.error
+    );
+    assert_eq!(resolver.calls.load(Ordering::SeqCst), 1);
+
+    let child_id = completed
+        .graph_calls
+        .values()
+        .next()
+        .and_then(|call| call.child_run_id.clone())
+        .expect("the call records its child");
+    let child_record = store.load(&child_id).unwrap().unwrap();
+    let frozen = child_record
+        .environments
+        .values()
+        .next()
+        .expect("the child Run froze one environment");
+    assert_eq!(
+        frozen.id,
+        "a".repeat(64),
+        "the child Run freezes the identity the resolver returned"
+    );
+    assert_eq!(
+        frozen.site.as_ref().unwrap().node(),
+        child_record.snapshot.nodes[0].id
+    );
+}
+
+#[tokio::test]
+async fn a_child_run_without_a_resolver_refuses_before_any_durable_fact() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = FileRunStore::new(dir.path());
+    let catalog = Catalog::new(environment_child_graph());
+    let nodes = Nodes(Arc::new(AtomicUsize::new(0)));
+    let artifacts = Artifacts;
+    let control = Control;
+    let parent = GraphRunRecord::create(parent_graph(spec("wait")), json!({})).unwrap();
+    // No resolver is configured: the child declaration must refuse, and nothing
+    // durable may be written for it.
+    let host = InProcessGraphHost::new(&catalog, &store, &artifacts, &nodes, &control);
+    let error = GraphRunner::new(&store, &artifacts, &host, &control)
+        .run(parent)
+        .await
+        .expect_err("a declared environment without a resolver must refuse");
+    assert!(
+        error.to_string().contains("no environment resolver"),
+        "{error}"
+    );
+    // Only the parent Run is durable: the refusal happened before the child's
+    // `/in/call` bundle or child record could be written.
+    let entries = std::fs::read_dir(dir.path())
+        .unwrap()
+        .flatten()
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .collect::<Vec<_>>();
+    let records = entries
+        .iter()
+        .filter(|name| name.ends_with(".json"))
+        .count();
+    assert_eq!(
+        records, 1,
+        "only the parent Run record is durable after the refusal: {entries:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_child_plugin_server_environment_without_a_resolver_leaves_no_durable_fact() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = FileRunStore::new(dir.path());
+    // The child declares no node environment: the declaration lives in its Plugin.
+    let catalog = Catalog::new(child_graph());
+    {
+        let mut child = child_graph();
+        child.nodes[0].plugins = vec!["demo".into()];
+        catalog.graphs.lock().unwrap().insert("child".into(), child);
+        catalog.bundles.0.lock().unwrap().insert(
+            "child".into(),
+            vec![PluginBinding {
+                id: "demo".into(),
+                digest: "d".repeat(64),
+                resources: Vec::new(),
+                mcp_servers: vec!["probe".into()],
+                environments: [("probe".to_owned(), "research".to_owned())].into(),
+            }],
+        );
+    }
+    let nodes = Nodes(Arc::new(AtomicUsize::new(0)));
+    let artifacts = Artifacts;
+    let control = Control;
+    let parent = GraphRunRecord::create(parent_graph(spec("wait")), json!({})).unwrap();
+    // No resolver is configured: a Plugin server declaration must refuse exactly
+    // like a node declaration, before any durable child fact exists.
+    let host = InProcessGraphHost::new(&catalog, &store, &artifacts, &nodes, &control);
+    let error = GraphRunner::new(&store, &artifacts, &host, &control)
+        .run(parent)
+        .await
+        .expect_err("a Plugin server environment without a resolver must refuse");
+    assert!(
+        error.to_string().contains("no environment resolver"),
+        "{error}"
+    );
+    assert!(
+        !catalog.has_child_admission("ignored").unwrap_or(false)
+            || catalog.child_metadata.lock().unwrap().is_empty(),
+        "a refused child leaves no admission metadata"
+    );
+    let records = std::fs::read_dir(dir.path())
+        .unwrap()
+        .flatten()
+        .filter(|entry| entry.file_name().to_string_lossy().ends_with(".json"))
+        .count();
+    assert_eq!(records, 1, "only the parent Run record is durable");
 }

@@ -133,6 +133,7 @@ name = "anchor-library"
 version = "0.1.0"
 dependencies = [
  "anchor-graph-host",
+ "anchor-runtime",
  "base64 0.22.1",
  "clap",
  "rustix",

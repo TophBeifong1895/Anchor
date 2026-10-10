@@ -680,6 +680,7 @@ impl Evidence {
             "decided",
             "graph_calls",
             "plugin_bindings",
+            "environments",
         ];
         projection["projection_omitted"] = json!(
             omitted

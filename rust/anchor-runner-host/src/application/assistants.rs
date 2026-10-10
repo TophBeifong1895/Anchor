@@ -184,6 +184,7 @@ impl RunApplication {
             .map(|plugin| (plugin.id.clone(), plugin))
             .collect();
         record.plugin_bindings_initialized = true;
+        resolve_record_environments(&mut record)?;
         let mut metadata = RunMetadata::new(
             run.clone(),
             graph.clone(),

@@ -817,6 +817,7 @@ impl RunApplication {
             .map(|plugin| (plugin.id.clone(), plugin))
             .collect();
         record.plugin_bindings_initialized = true;
+        resolve_record_environments(&mut record)?;
         self.check_store()?;
         let mut metadata = RunMetadata::new(
             request.run.clone(),

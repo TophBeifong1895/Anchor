@@ -716,3 +716,151 @@ async fn file_tools_declare_read_only_semantics() {
     // The inner fixture port is not read-only, and the wrapper does not change that.
     assert!(!tools.is_read_only("echo"));
 }
+
+#[tokio::test]
+async fn a_managed_environment_is_mounted_and_replaces_the_tool_aggregate() {
+    use anchor_library::EnvironmentStore;
+    use std::os::unix::fs::PermissionsExt;
+
+    let directory = tempfile::tempdir().unwrap();
+    let workspace = directory.path().join("workspace");
+    std::fs::create_dir(&workspace).unwrap();
+    let library = directory.path().join("library");
+
+    // One published dependency environment.
+    let prepared = directory.path().join("prepared");
+    std::fs::create_dir_all(prepared.join("bin")).unwrap();
+    std::fs::write(prepared.join("marker.txt"), "managed").unwrap();
+    std::fs::write(prepared.join("bin/probe"), "#!/bin/sh\necho probe\n").unwrap();
+    std::fs::set_permissions(
+        prepared.join("bin/probe"),
+        std::fs::Permissions::from_mode(0o755),
+    )
+    .unwrap();
+    let published = EnvironmentStore::new(&library).publish(&prepared).unwrap();
+
+    // A registered tool environment that a managed node must not inherit.
+    let tool_root = library.join("tools/probe");
+    std::fs::create_dir_all(&tool_root).unwrap();
+    std::fs::write(tool_root.join("run"), "#!/bin/sh\necho registered\n").unwrap();
+    std::fs::set_permissions(
+        tool_root.join("run"),
+        std::fs::Permissions::from_mode(0o755),
+    )
+    .unwrap();
+    std::fs::write(tool_root.join("tool.json"), r#"{"entrypoint":"run"}"#).unwrap();
+    let tool_environment = crate::tool_environment::ToolEnvironment::load(&library).unwrap();
+
+    let policy = BubblewrapPolicy::new("bwrap", ["sh", "cat"])
+        .authorize_workspace_root(&workspace)
+        .authorize_readonly_input_root(library.join("envs"))
+        .authorize_readonly_destination_root(library.join("envs"))
+        .authorize_tool_dir(library.join("envs").join(&published.id).join("bin"));
+    let sandbox = Arc::new(
+        BubblewrapSandbox::new(tool_environment.authorize(policy))
+            .expect("these integration tests require working Bubblewrap isolation"),
+    );
+
+    let environment = library.join("envs").join(&published.id);
+    let probe = format!(
+        "test -f {environment}/marker.txt && echo ENV || echo NO_ENV; \
+         test -f /tools/probe/run && echo TOOL || echo NO_TOOL; \
+         echo PATH=$PATH",
+        environment = environment.display()
+    );
+    let probe: &str = &probe;
+
+    let binding =
+        anchor_runtime::graph::EnvironmentBinding::node_task("probe", "research", &published.id);
+    let prepared = crate::managed_environment::prepare(&binding, &library)
+        .expect("an intact published environment must verify");
+    let managed_sandbox = prepared
+        .authorize(Arc::clone(&sandbox))
+        .expect("the grant is authorized");
+    let managed = NodeTools::new(
+        Arc::new(Inner),
+        managed_sandbox,
+        workspace.clone(),
+        Vec::new(),
+        cancellation(),
+    )
+    .with_environment(tool_environment.clone())
+    .with_managed_environment(Some(prepared));
+    let output = run(&managed, &["sh", "-c", probe]).await;
+    let stdout = output["stdout"].as_str().unwrap_or_default();
+    assert!(stdout.contains("ENV"), "{stdout}");
+    assert!(
+        stdout.contains("NO_TOOL"),
+        "a managed node must not inherit the tool aggregate: {stdout}"
+    );
+    assert!(
+        stdout.contains(&format!("{}/bin", environment.display())),
+        "the published environment contributes its own bin directory: {stdout}"
+    );
+
+    // Without a binding the same node keeps the legacy aggregate.
+    let aggregate = NodeTools::new(
+        Arc::new(Inner),
+        Arc::clone(&sandbox),
+        workspace,
+        Vec::new(),
+        cancellation(),
+    )
+    .with_environment(tool_environment);
+    let output = run(&aggregate, &["sh", "-c", probe]).await;
+    let stdout = output["stdout"].as_str().unwrap_or_default();
+    assert!(stdout.contains("TOOL"), "{stdout}");
+    assert!(stdout.contains("NO_ENV"), "{stdout}");
+}
+
+#[tokio::test]
+async fn a_tampered_environment_refuses_to_run() {
+    use anchor_library::EnvironmentStore;
+    use std::os::unix::fs::PermissionsExt;
+
+    let directory = tempfile::tempdir().unwrap();
+    let workspace = directory.path().join("workspace");
+    std::fs::create_dir(&workspace).unwrap();
+    let library = directory.path().join("library");
+    let prepared = directory.path().join("prepared");
+    std::fs::create_dir_all(prepared.join("bin")).unwrap();
+    std::fs::write(prepared.join("marker.txt"), "one").unwrap();
+    std::fs::write(prepared.join("bin/probe"), "#!/bin/sh\necho probe\n").unwrap();
+    std::fs::set_permissions(
+        prepared.join("bin/probe"),
+        std::fs::Permissions::from_mode(0o755),
+    )
+    .unwrap();
+    let published = EnvironmentStore::new(&library).publish(&prepared).unwrap();
+    let binding =
+        anchor_runtime::graph::EnvironmentBinding::node_task("probe", "research", &published.id);
+
+    let policy = BubblewrapPolicy::new("bwrap", ["sh", "cat"])
+        .authorize_workspace_root(&workspace)
+        .authorize_readonly_input_root(library.join("envs").join(&published.id))
+        .authorize_readonly_destination_root(library.join("envs").join(&published.id))
+        .authorize_tool_dir(library.join("envs").join(&published.id).join("bin"));
+    let sandbox = Arc::new(
+        BubblewrapSandbox::new(policy)
+            .expect("these integration tests require working Bubblewrap isolation"),
+    );
+
+    // The same owner restores the write bits and rewrites a published file: the
+    // recorded digest no longer describes reality, so the invocation must refuse
+    // before any command runs.
+    let environment = library.join("envs").join(&published.id);
+    let mut permissions = std::fs::metadata(&environment).unwrap().permissions();
+    permissions.set_mode(permissions.mode() | 0o700);
+    std::fs::set_permissions(&environment, permissions).unwrap();
+    let marker = environment.join("marker.txt");
+    let mut permissions = std::fs::metadata(&marker).unwrap().permissions();
+    permissions.set_mode(permissions.mode() | 0o600);
+    std::fs::set_permissions(&marker, permissions).unwrap();
+    std::fs::write(&marker, "two").unwrap();
+
+    let failure = crate::managed_environment::prepare(&binding, &library)
+        .err()
+        .expect("a tampered environment must refuse to run");
+    assert!(failure.contains("not usable"), "{failure}");
+    let _ = sandbox;
+}

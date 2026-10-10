@@ -1,7 +1,9 @@
 #![forbid(unsafe_code)]
 
+mod environment;
 mod filesystem;
 mod oauth;
+mod review;
 mod source;
 
 use std::path::{Path, PathBuf};
@@ -9,12 +11,17 @@ use std::path::{Path, PathBuf};
 use anchor_graph_host::FilePluginCatalog;
 use serde::{Deserialize, Serialize};
 
+pub use environment::{
+    CandidateContent, EnvironmentError, EnvironmentStore, NameEntry, NameSwitch, PublishOutcome,
+    PublishedEnvironment,
+};
 pub use oauth::{
     FileOAuthTokenStore, OAuthAuthorization, OAuthAuthorizationCode, OAuthAuthorizationMetadata,
     OAuthAuthorizationResponse, OAuthAuthorizationTransaction, OAuthBinding, OAuthClient,
     OAuthError, OAuthRefreshRequest, OAuthRefreshTransport, OAuthSecret, OAuthTokenResponse,
     OAuthTransportError,
 };
+pub use review::{ChannelReview, PluginReview, ServerReview};
 pub use source::{Checkout, GitCheckout, GithubSource};
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
@@ -50,6 +57,8 @@ pub enum InstallError {
     MissingManifest,
     #[error("Plugin manifest or resources failed catalog validation")]
     InvalidPlugin,
+    #[error("Plugin manifest or resources failed catalog validation: {0}")]
+    InvalidPluginReason(String),
     #[error("Git checkout failed")]
     CheckoutFailed,
     #[error("Git checkout timed out")]
@@ -120,6 +129,57 @@ impl Library {
         self.install_source(id, replace_existing, |_| Ok(source_dir))
     }
 
+    /// Describe a candidate Plugin without publishing it.
+    ///
+    /// The candidate is staged and validated through the same catalog an
+    /// installation uses, so `PluginReview::digest` is the digest the installed
+    /// Plugin will carry. A review never writes to the Library: it stages in the
+    /// system temporary directory and drops the tree, which is why it also works
+    /// when the Library is read-only for the reviewer.
+    pub fn review_directory(
+        &self,
+        id: &str,
+        source_dir: impl AsRef<Path>,
+    ) -> Result<PluginReview, InstallError> {
+        validate_id(id)?;
+        let source_dir = source_dir.as_ref().to_owned();
+        self.review_candidate(id, &source_dir)
+    }
+
+    /// Review a GitHub tree source without publishing it.
+    pub fn review(&self, request: &InstallRequest) -> Result<PluginReview, InstallError> {
+        self.review_with_checkout(request, &GitCheckout)
+    }
+
+    pub fn review_with_checkout(
+        &self,
+        request: &InstallRequest,
+        checkout: &dyn Checkout,
+    ) -> Result<PluginReview, InstallError> {
+        let source = GithubSource::parse(&request.source)?;
+        let id = request.id.as_deref().unwrap_or_else(|| source.default_id());
+        validate_id(id)?;
+        let transaction = tempfile::tempdir()?;
+        let directory = transaction.path().join("source");
+        checkout.checkout(&source, &directory)?;
+        self.review_candidate(id, &directory.join(source.relative_path()))
+    }
+
+    fn review_candidate(&self, id: &str, source_dir: &Path) -> Result<PluginReview, InstallError> {
+        // A review stages outside the Library, so it never needs write access
+        // to the installed Plugins.
+        let transaction = tempfile::Builder::new()
+            .prefix(".anchor-plugin-review-")
+            .tempdir()?;
+        let (validation_root, _plugins, _staged) =
+            stage_candidate(id, source_dir, transaction.path())?;
+        let catalog = FilePluginCatalog::new(&validation_root);
+        let definition = catalog
+            .definition(id)
+            .map_err(|error| InstallError::InvalidPluginReason(error.to_string()))?;
+        review::summarize(id, &catalog, &definition)
+    }
+
     fn install_source(
         &self,
         id: &str,
@@ -135,11 +195,8 @@ impl Library {
             .prefix(".anchor-plugin-")
             .tempdir_in(&plugins)?;
         let source_dir = prepare(transaction.path())?;
-        let validation_root = transaction.path().join("validation");
-        let (_, validation_plugins) =
-            filesystem::directory(&validation_root.join("plugins"), true)?;
-        let staged = validation_root.join("plugins").join(id);
-        filesystem::stage(&source_dir, &staged)?;
+        let (validation_root, validation_plugins, staged) =
+            stage_candidate(id, &source_dir, transaction.path())?;
         let definition = FilePluginCatalog::new(&validation_root)
             .definition(id)
             .map_err(|_| InstallError::InvalidPlugin)?;
@@ -165,6 +222,24 @@ impl Library {
             directory: destination,
         })
     }
+}
+
+/// Stage a candidate Plugin under `transaction` and return the validation root,
+/// the staged `plugins` directory, and the staged tree.
+///
+/// The caller runs catalog validation so it can map a failure to its own error
+/// contract. Installation and review stage through this single function, which
+/// is what keeps a review's digest identical to the published one.
+fn stage_candidate(
+    id: &str,
+    source_dir: &Path,
+    transaction: &Path,
+) -> Result<(PathBuf, std::fs::File, PathBuf), InstallError> {
+    let validation_root = transaction.join("validation");
+    let (_, validation_plugins) = filesystem::directory(&validation_root.join("plugins"), true)?;
+    let staged = validation_root.join("plugins").join(id);
+    filesystem::stage(source_dir, &staged)?;
+    Ok((validation_root, validation_plugins, staged))
 }
 
 fn validate_id(id: &str) -> Result<(), InstallError> {

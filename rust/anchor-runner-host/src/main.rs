@@ -8,7 +8,11 @@ mod channel_tools;
 mod execution;
 mod goose_acp;
 mod goose_tool_context;
+mod library_environments;
 mod local_inputs;
+
+pub(crate) use library_environments::LibraryEnvironmentResolver;
+mod managed_environment;
 mod pilot_host;
 mod pilot_tools;
 mod resource_read;
@@ -246,6 +250,14 @@ fn reject_standalone_snapshot(snapshot: &GraphSnapshot) -> Result<(), String> {
     Ok(())
 }
 
+/// The deployment's library root: the explicit library root when set, otherwise
+/// the editable Graph catalog root (the same fallback the Plugin API uses).
+pub(crate) fn deployment_library_root() -> Option<PathBuf> {
+    env::var_os("ANCHOR_RUNNER_LIBRARY_ROOT")
+        .map(PathBuf::from)
+        .or_else(|| env::var_os("ANCHOR_RUNNER_CATALOG_ROOT").map(PathBuf::from))
+}
+
 fn env_path(name: &str) -> Result<PathBuf, String> {
     env::var_os(name)
         .map(PathBuf::from)
@@ -299,37 +311,10 @@ fn make_host_with_control(
     .authorize_readonly_destination_root("/spill")
     .authorize_spill_root(state.join("spill"))
     .allow_network();
-    // Plugin bundles are immutable host inputs.  The standalone runner and
-    // the service API both expose their accepted bundle/catalog roots through
-    // these existing deployment settings; no new Plugin protocol is added.
-    let mut policy = policy;
-    for root in [
-        env::var_os("ANCHOR_RUNNER_BUNDLE_ROOT").map(PathBuf::from),
-        env::var_os("ANCHOR_RUNNER_CATALOG_ROOT").map(PathBuf::from),
-    ]
-    .into_iter()
-    .flatten()
-    .filter(|path| path.is_dir())
-    {
-        policy = policy.authorize_readonly_input_root(root);
-    }
-    // Library Plugins may be top-level symlinks to operator-managed source
-    // directories. Authorize each resolved, admitted Plugin root so the
-    // sandbox can mount the same canonical path the catalog resolved.
-    for root in [
-        env::var_os("ANCHOR_RUNNER_BUNDLE_ROOT").map(PathBuf::from),
-        env::var_os("ANCHOR_RUNNER_CATALOG_ROOT").map(PathBuf::from),
-    ]
-    .into_iter()
-    .flatten()
-    {
-        let catalog = anchor_graph_host::FilePluginCatalog::new(&root);
-        for binding in plugin_bindings.values() {
-            if let Ok(directory) = catalog.plugin_directory(&binding.id) {
-                policy = policy.authorize_readonly_input_root(directory);
-            }
-        }
-    }
+    // Frozen dependency environments are NOT authorized here: a Run cannot know
+    // which environments its called Graphs will declare. Each invocation grants
+    // exactly the trees it recorded (see `managed_environment`), so this policy
+    // stays the deployment floor.
     let tool_environment = tool_environment::ToolEnvironment::from_env()?;
     let sandbox = Arc::new(
         BubblewrapSandbox::new(tool_environment.authorize(policy)).map_err(|e| e.to_string())?,
@@ -543,7 +528,7 @@ async fn execute_snapshot_with_control(
             };
         }
     };
-    let expected = match GraphRunRecord::create_with_id(snapshot, input, run_id.clone()) {
+    let mut expected = match GraphRunRecord::create_with_id(snapshot, input, run_id.clone()) {
         Ok(record) => record,
         Err(error) => {
             return Response::Rejected {
@@ -553,6 +538,15 @@ async fn execute_snapshot_with_control(
             };
         }
     };
+    // Resolve declared environments before anything durable is written, so a
+    // refused environment never leaves orphan admission facts behind.
+    if let Err(error) = crate::application::resolve_record_environments(&mut expected) {
+        return Response::Rejected {
+            version: 1,
+            request_id,
+            reason: format!("{error:?}"),
+        };
+    }
     let control = supplied_control.unwrap_or_else(|| HostControl {
         cancellation: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         pause: Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -811,6 +805,19 @@ mod tests {
     }
 
     #[test]
+    fn host_admission_accepts_a_declared_environment_and_defers_to_the_frozen_binding() {
+        // Snapshot-level admission no longer refuses a declaration: admission
+        // resolves it into a frozen binding, and the Run record validates that
+        // binding on every load.
+        let mut graph = snapshot();
+        let mut node = graph.nodes[0].clone();
+        node.id = "environment-probe".into();
+        node.environment = Some("research".into());
+        graph.nodes.push(node);
+        assert!(reject_snapshot(&graph).is_ok());
+    }
+
+    #[test]
     fn host_admission_accepts_op_routes_with_multiple_exits() {
         let mut graph = snapshot();
         graph.nodes.push(anchor_runtime::graph::GraphNode {
@@ -820,6 +827,7 @@ mod tests {
             input: None,
             plugins: Vec::new(),
             max_rounds: None,
+            environment: None,
         });
         graph.nodes.push(anchor_runtime::graph::GraphNode {
             id: "bad".into(),
@@ -828,6 +836,7 @@ mod tests {
             input: None,
             plugins: Vec::new(),
             max_rounds: None,
+            environment: None,
         });
         graph.edges.extend([
             anchor_runtime::graph::GraphEdge {

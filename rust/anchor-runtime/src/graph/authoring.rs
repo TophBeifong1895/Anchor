@@ -27,6 +27,7 @@ struct AuthorNode {
     id: String,
     kind: AuthorNodeKind,
     with: Option<String>,
+    environment: Option<String>,
     plugins: Vec<String>,
     max_rounds: Option<u32>,
 }
@@ -154,6 +155,8 @@ fn files(value: Option<&Value>, where_: &str) -> Result<Vec<String>, GraphError>
     Ok(result)
 }
 
+/// Environment names share the deployment name-table grammar: a non-empty
+/// identifier of `[A-Za-z0-9._-]` that is not a traversal name.
 fn plugin_refs(value: Option<&Value>, where_: &str) -> Result<Vec<String>, GraphError> {
     let Some(value) = value else {
         return Ok(Vec::new());
@@ -440,6 +443,7 @@ fn parse_body(
                 "with",
                 "plugins",
                 "max_rounds",
+                "environment",
             ],
             &node_where,
         )?;
@@ -495,6 +499,25 @@ fn parse_body(
                 "{node_where}: an op node cannot carry `with`"
             )));
         }
+        let environment = match spec.get("environment") {
+            None => None,
+            Some(value) => {
+                let name = value
+                    .as_str()
+                    .filter(|name| is_environment_name(name))
+                    .ok_or_else(|| {
+                        invalid(format!(
+                            "{node_where}.environment must be an environment name of [A-Za-z0-9._-]"
+                        ))
+                    })?;
+                if matches!(kind, AuthorNodeKind::Graph(_)) {
+                    return Err(invalid(format!(
+                        "{node_where}: a graph node cannot carry `environment`; put it on nodes inside that graph"
+                    )));
+                }
+                Some(name.to_owned())
+            }
+        };
         let plugins = plugin_refs(spec.get("plugins"), &format!("{node_where}.plugins"))?;
         if !plugins.is_empty() && !matches!(kind, AuthorNodeKind::Agent(_)) {
             return Err(invalid(format!(
@@ -505,6 +528,7 @@ fn parse_body(
             id,
             kind,
             with,
+            environment,
             plugins,
             max_rounds: optional_rounds(
                 spec.get("max_rounds"),
@@ -666,6 +690,7 @@ fn expand(
                     input: node.with.clone().map(Value::String),
                     plugins: node.plugins.clone(),
                     max_rounds: node.max_rounds.or(ceiling),
+                    environment: node.environment.clone(),
                 });
                 result.scopes.insert(flat.clone(), prefix.to_owned());
                 if let Some(limit) = node.max_rounds.or(ceiling) {
@@ -681,6 +706,7 @@ fn expand(
                     input: None,
                     plugins: Vec::new(),
                     max_rounds: node.max_rounds.or(ceiling),
+                    environment: node.environment.clone(),
                 });
                 result.scopes.insert(flat.clone(), prefix.to_owned());
                 if let Some(limit) = node.max_rounds.or(ceiling) {
@@ -1282,5 +1308,81 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(error.contains("reads input.txt"), "{error}");
+    }
+
+    #[test]
+    fn an_environment_reference_compiles_on_agent_and_op_nodes() {
+        let snapshot = GraphSnapshot::from_authoring(json!({
+            "objective": "environment reference",
+            "entry": "worker",
+            "agents": {"worker": {"model": "test"}},
+            "ops": {"work": {"run": "true"}},
+            "nodes": [
+                {"id": "worker", "agent": "worker", "environment": "research"},
+                {"id": "work", "op": "work", "environment": "tools"}
+            ],
+            "edges": [{"from": "worker", "to": "work"}]
+        }))
+        .unwrap();
+        let environment = |id: &str| {
+            snapshot
+                .nodes
+                .iter()
+                .find(|node| node.id == id)
+                .and_then(|node| node.environment.clone())
+        };
+        assert_eq!(environment("worker").as_deref(), Some("research"));
+        assert_eq!(environment("work").as_deref(), Some("tools"));
+
+        // A node without the field keeps behaving exactly as before.
+        let plain = GraphSnapshot::from_authoring(json!({
+            "objective": "no environment",
+            "entry": "worker",
+            "agents": {"worker": {"model": "test"}},
+            "ops": {},
+            "nodes": [{"id": "worker", "agent": "worker"}],
+            "edges": []
+        }))
+        .unwrap();
+        assert!(plain.nodes[0].environment.is_none());
+    }
+
+    #[test]
+    fn an_environment_reference_is_validated_and_not_allowed_on_module_nodes() {
+        let graph = |node: Value| {
+            json!({
+                "objective": "environment validation",
+                "entry": "worker",
+                "agents": {"worker": {"model": "test"}},
+                "ops": {},
+                "graphs": {"inner": {
+                    "entry": "worker",
+                    "agents": {"worker": {"model": "test"}},
+                    "ops": {},
+                    "nodes": [{"id": "worker", "agent": "worker"}],
+                    "edges": []
+                }},
+                "nodes": [node],
+                "edges": []
+            })
+        };
+        for environment in [json!(""), json!(".."), json!("a/b"), json!("a b"), json!(7)] {
+            let error = GraphSnapshot::from_authoring(graph(
+                json!({"id": "worker", "agent": "worker", "environment": environment}),
+            ))
+            .unwrap_err();
+            assert!(
+                error.to_string().contains("environment"),
+                "unexpected error for {environment}: {error}"
+            );
+        }
+        let error = GraphSnapshot::from_authoring(graph(
+            json!({"id": "worker", "graph": "inner", "environment": "research"}),
+        ))
+        .unwrap_err();
+        assert!(
+            error.to_string().contains("cannot carry `environment`"),
+            "{error}"
+        );
     }
 }

@@ -20,6 +20,8 @@ pub use error::GraphError;
 mod model;
 pub use model::*;
 mod admission;
+mod environment;
+pub use environment::{NameResolver, freeze_environments, is_environment_name};
 mod authoring;
 mod logic;
 pub(crate) use logic::*;

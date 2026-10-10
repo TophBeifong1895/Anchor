@@ -257,6 +257,37 @@ impl BubblewrapSandbox {
         Ok(sandbox)
     }
 
+    /// Add host-authorized executable directories to this sandbox.
+    ///
+    /// Like [`BubblewrapSandbox::with_readonly_grants`], this is the host granting
+    /// authority for one invocation — for example the `bin` of a dependency
+    /// environment the Run froze — not the request asking for it. The policy's
+    /// authorized tool directories stay the default for every other invocation.
+    ///
+    /// This is an *executable* grant, not only a PATH hint: a command whose parent
+    /// is one of these directories bypasses the deployment's command allowlist
+    /// (see `registered_command`), which is what lets a frozen environment provide
+    /// its own interpreter.
+    pub fn with_executable_dirs(&self, dirs: &[PathBuf]) -> Result<Self, SandboxError> {
+        let mut sandbox = self.clone();
+        for directory in dirs {
+            let resolved = fs::canonicalize(directory).map_err(|error| {
+                SandboxError::InvalidRequest(format!(
+                    "host tool directory cannot be resolved: {error}"
+                ))
+            })?;
+            if !resolved.is_dir() {
+                return Err(SandboxError::InvalidRequest(
+                    "host tool directories must be directories".into(),
+                ));
+            }
+            if !sandbox.tool_dirs.contains(&resolved) {
+                sandbox.tool_dirs.push(resolved);
+            }
+        }
+        Ok(sandbox)
+    }
+
     fn validate_authority(
         &self,
         request: &SandboxRequest,
