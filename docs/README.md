@@ -8,7 +8,8 @@
 | [产品与系统架构](product-architecture.md) | 产品目标、执行不变量和未冻结需求 |
 | [开发台账](pilot-development-plan.md) | 实际交付、验收证据和待验收项 |
 | [Plugin](plugins.md) | 清单、Skill、资源、MCP 和权限 |
-| [依赖环境设计草稿](dependency-environment-draft.md) | 完整 Pilot 管家目标、已确认决定与修订候选，尚未冻结实现契约 |
+| [插件依赖与 Python 视图：标准](plugin-dependencies.md) | 依赖属于插件、共享存储 + 视图、run 快照、reload、回收（**现行标准**） |
+| [依赖环境设计草稿](dependency-environment-draft.md) | **已被上述标准取代**；保留为历史与"为什么推翻"的记录 |
 | [小型 Graph 回归](runtime-contract-tests.md) | 确定性运行时检查与证据 |
 | [生产候选回归](rust-production-candidate.md) | release Host/Web/Goose 包的隔离执行 |
 | [生产部署](rust-production-deployment.md) | source-free 包、环境与 systemd |
