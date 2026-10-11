@@ -237,6 +237,28 @@ pub async fn serve() -> io::Result<()> {
     let configured_graph_ready =
         validate_service_configuration(&bundle_root, &data_root, &workspace_root, &catalog_root)?;
     let _writer = crate::acquire_deployment_writer().map_err(io::Error::other)?;
+    // Start-up reclamation is best effort: a Library that cannot be swept (a busy
+    // writer, an unreadable manifest) must never keep the host from starting, and
+    // the sweep only deletes what it can prove is unreferenced.
+    {
+        let root = crate::library_root(&catalog_root);
+        match anchor_library::reclaim(&root, true) {
+            // Anything that happened, or was refused, is worth one line; a Library
+            // with nothing to reclaim stays quiet.
+            Ok(report)
+                if report.removed_views.is_empty()
+                    && report.removed_package_versions.is_empty()
+                    && report.deferred.is_none()
+                    && report.store_phase_abandoned.is_none() => {}
+            Ok(report) => eprintln!(
+                "anchor-runner-host: dependency reclamation: {}",
+                serde_json::to_string(&anchor_library::summarize(&report)).unwrap_or_default()
+            ),
+            Err(error) => {
+                eprintln!("anchor-runner-host: dependency reclamation did not run: {error}")
+            }
+        }
+    }
     let schedules_path = env::var_os("ANCHOR_RUNNER_SCHEDULES_PATH")
         .map(PathBuf::from)
         .unwrap_or_else(|| data_root.join("state/schedules.json"));

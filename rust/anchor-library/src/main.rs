@@ -39,6 +39,13 @@ enum Operation {
         #[arg(long)]
         review: bool,
     },
+    /// Remove dependency views and store entries no living view references.
+    ///
+    /// Reports by default; `--apply` performs the deletion.
+    Reclaim {
+        #[arg(long)]
+        apply: bool,
+    },
     /// Publish dependency environments and manage the deployment name table.
     Env {
         #[command(subcommand)]
@@ -133,7 +140,7 @@ fn refuse_declared_dependencies(review: &anchor_library::PluginReview) -> Result
 fn run(cli: Cli) -> Result<(Value, ExitCode), String> {
     let root = cli.root;
     let library = Library::new(root.clone());
-    let environments = EnvironmentStore::new(root);
+    let environments = EnvironmentStore::new(root.clone());
     match cli.command {
         Operation::Install {
             source,
@@ -189,6 +196,14 @@ fn run(cli: Cli) -> Result<(Value, ExitCode), String> {
                 .map(|value| (value, ExitCode::SUCCESS))
                 .map_err(|error| error.to_string())
         }
+        Operation::Reclaim { apply } => anchor_library::reclaim(&root, apply)
+            .map(|report| {
+                (
+                    serde_json::to_value(report).unwrap_or(Value::Null),
+                    ExitCode::SUCCESS,
+                )
+            })
+            .map_err(|error| error.to_string()),
         Operation::Env { command } => {
             let outcome: Result<Value, anchor_library::EnvironmentError> = match command {
                 EnvOperation::Publish { directory } => environments.publish(&directory).map(value),

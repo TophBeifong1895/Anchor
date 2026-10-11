@@ -3,6 +3,7 @@
 mod environment;
 mod filesystem;
 mod oauth;
+mod reclaim;
 mod review;
 mod source;
 
@@ -21,8 +22,19 @@ pub use oauth::{
     OAuthError, OAuthRefreshRequest, OAuthRefreshTransport, OAuthSecret, OAuthTokenResponse,
     OAuthTransportError,
 };
+pub use reclaim::{ReclaimError, ReclaimReport, reclaim, reclaim_after_install, summarize};
 pub use review::{ChannelReview, PluginReview, ServerReview};
 pub use source::{Checkout, GitCheckout, GithubSource};
+
+/// Proof that this process holds the Library's Plugin installation lock.
+///
+/// Only [`Library::install_lease`] hands one out, and it is what
+/// [`Library::install_directory_locked`] requires, so a caller cannot claim the lock
+/// it does not hold. Dropping it releases the lock.
+#[derive(Debug)]
+pub struct InstallLease {
+    _lease: std::fs::File,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -119,7 +131,7 @@ impl Library {
         let source = GithubSource::parse(&request.source)?;
         let id = request.id.as_deref().unwrap_or_else(|| source.default_id());
         validate_id(id)?;
-        self.install_source(id, request.replace_existing, |transaction| {
+        self.install_source(id, request.replace_existing, None, |transaction: &Path| {
             let directory = transaction.join("source");
             checkout.checkout(&source, &directory)?;
             Ok(directory.join(source.relative_path()))
@@ -134,7 +146,35 @@ impl Library {
     ) -> Result<InstallOutcome, InstallError> {
         validate_id(id)?;
         let source_dir = source_dir.as_ref().to_owned();
-        self.install_source(id, replace_existing, |_| Ok(source_dir))
+        self.install_source(id, replace_existing, None, |_| Ok(source_dir))
+    }
+
+    /// Take the Library's Plugin installation lock for a longer operation.
+    ///
+    /// A host that lands dependency views *and then* publishes the Plugin must hold
+    /// this across both: a reclamation running in between would see a view whose
+    /// Plugin is not installed yet and judge it an orphan. The lock is the same one
+    /// installation and reclamation use, so the three can never overlap. It does not
+    /// wait: a busy Library is reported as [`InstallError::CatalogBusy`].
+    pub fn install_lease(&self) -> Result<InstallLease, InstallError> {
+        let (root, _) = filesystem::directory(&self.root, true)?;
+        let (plugins, plugins_file) = filesystem::directory(&root.join("plugins"), true)?;
+        let _ = plugins;
+        let lease = filesystem::lease(&plugins_file, rustix::fs::FlockOperation::LockExclusive)?;
+        Ok(InstallLease { _lease: lease })
+    }
+
+    /// Install while the caller holds [`Library::install_lease`].
+    pub fn install_directory_locked(
+        &self,
+        id: &str,
+        source_dir: impl AsRef<Path>,
+        replace_existing: bool,
+        lease: &InstallLease,
+    ) -> Result<InstallOutcome, InstallError> {
+        validate_id(id)?;
+        let source_dir = source_dir.as_ref().to_owned();
+        self.install_source(id, replace_existing, Some(lease), |_| Ok(source_dir))
     }
 
     /// Describe a candidate Plugin without publishing it.
@@ -192,11 +232,22 @@ impl Library {
         &self,
         id: &str,
         replace_existing: bool,
+        held: Option<&InstallLease>,
         prepare: impl FnOnce(&Path) -> Result<PathBuf, InstallError>,
     ) -> Result<InstallOutcome, InstallError> {
         let (root, _) = filesystem::directory(&self.root, true)?;
         let (plugins, plugins_file) = filesystem::directory(&root.join("plugins"), true)?;
-        let _lease = filesystem::lease(&plugins_file, rustix::fs::FlockOperation::LockExclusive)?;
+        // The caller may already hold the lock (a host that must cover its whole
+        // land-then-publish window). Taking it twice would deadlock against itself.
+        let _acquired;
+        let _lease = match held {
+            Some(lease) => &lease._lease,
+            None => {
+                _acquired =
+                    filesystem::lease(&plugins_file, rustix::fs::FlockOperation::LockExclusive)?;
+                &_acquired
+            }
+        };
         let destination = plugins.join(id);
         let replacing = filesystem::existing_destination(&destination, replace_existing)?;
         let transaction = tempfile::Builder::new()
@@ -245,6 +296,32 @@ impl Library {
             provide_mutable_paths(&destination, &definition.mutable)?;
             sync_tree_entries(&destination)?;
             plugins_file.sync_all()?;
+        }
+        // Reclaiming here is opportunistic and must never turn a successful
+        // installation into a failure: the previous view of this Plugin is garbage
+        // the moment this declaration is published, and its exclusive packages go
+        // with it. The Plugin lock is already held, so no other writer is inside.
+        // A Library that never landed a dependency has no store to sweep.
+        if self.root.join("dependencies").is_dir() {
+            match reclaim_after_install(&self.root, true) {
+                // Silence only when there was nothing to say: a removal is an
+                // operator-visible fact, and a refused pass says why.
+                Ok(report)
+                    if report.removed_views.is_empty()
+                        && report.removed_package_versions.is_empty()
+                        && report.deferred.is_none()
+                        && report.store_phase_abandoned.is_none() => {}
+                Ok(report) => eprintln!(
+                    "anchor-library: reclamation after installing `{id}`: {}",
+                    serde_json::to_string(&crate::reclaim::summarize(&report))
+                        .unwrap_or_else(|_| "{}".to_owned())
+                ),
+                Err(error) => {
+                    eprintln!(
+                        "anchor-library: reclamation after installing `{id}` did not run: {error}"
+                    )
+                }
+            }
         }
         Ok(InstallOutcome {
             id: id.to_owned(),

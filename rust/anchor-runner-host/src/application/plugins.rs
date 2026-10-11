@@ -290,6 +290,20 @@ impl RunApplication {
             .await
             .map_err(|_| ApplicationError::Storage("Plugin installer task failed".into()))??;
         }
+        // The installation lock is taken *before* the dependencies land and held
+        // until the Plugin is published. The two steps are otherwise independent,
+        // and in the window between them a concurrent reclamation would see a view
+        // whose Plugin is not installed yet and judge it an orphan (the install
+        // would then succeed with a missing view). Reclamation takes the same lock
+        // without waiting, so this cannot deadlock.
+        let lease_root = library_root.clone();
+        let lease = tokio::task::spawn_blocking(move || {
+            Library::new(&lease_root)
+                .install_lease()
+                .map_err(plugin_error)
+        })
+        .await
+        .map_err(|_| ApplicationError::Storage("Plugin installer task failed".into()))??;
         // Dependencies land before the Plugin is published: a failed solve,
         // fetch, unpack or verification must leave the Library and every
         // existing view exactly as they were.
@@ -352,7 +366,7 @@ impl RunApplication {
         let published = tokio::task::spawn_blocking(move || {
             let _catalog_guard = catalog_guard;
             Library::new(&library_root)
-                .install_directory(&id, &directory, replacing)
+                .install_directory_locked(&id, &directory, replacing, &lease)
                 .map_err(plugin_error)
         })
         .await
