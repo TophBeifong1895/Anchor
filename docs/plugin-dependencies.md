@@ -2,7 +2,7 @@
 
 本文是**标准**：它规定依赖属于谁、插件与它的字节存在哪、视图怎么生成、生命周期按什么判据走、迁移按什么顺序做。后续实现以本文为准。
 
-[当前架构](architecture.md) 记录"当前实现进度"；本文与它不一致时以进度为准，但**不得改变本文的不变量**。[依赖环境与资产闭环：设计决定与方案复核](dependency-environment-draft.md)（ADR-001）里"环境名字 + 内容寻址 + 每 run 冻结绑定"的模型**已被本文取代**，该文件只作历史与"为什么推翻"的记录。
+[当前架构](architecture.md) 记录"当前实现进度"；本文与它不一致时以进度为准，但**不得改变本文的不变量**。被本文取代的旧模型（"环境名字 + 内容寻址 + 每 run 冻结绑定"，ADR-001）已随实现整片删除，其设计草稿也一并删除：本文「背景与动机」保留了**为什么推翻它**的三条根因。
 
 本文所有内容都是**已定的决定**，不是待批准材料；只有最后一节"开放问题"列出的内容未定。文中不声称任何东西已经实现；尚未开始的部分见最后一节与[开发台账](pilot-development-plan.md)。
 
@@ -150,7 +150,7 @@
 - **授权来源抓包与哈希校验**：现位于 `rust/anchor-runner-host/src/environment_provision/fetch.rs`，迁进插件安装路径（索引只是投递手段，摘要才是权威；只抓 wheel）。
 - **无网沙箱**：`rust/anchor-sandbox-bwrap`，构建与执行都不联网。
 - **插件安装确认与影响检查**：`rust/anchor-runner-host/src/pilot_tools/plugins.rs` 与 `rust/anchor-runner-host/src/application/graphs/references.rs` 的 `impact_scan`（表单要如实报覆盖度，读不到的图算缺口）。**去掉**其中"未结束 run 会被搁浅"的那一半。
-- **部署配置项**：`ANCHOR_ENVIRONMENT_SOURCES`（来源）、`ANCHOR_ENVIRONMENT_UV` + `..._UV_SHA256`（固定 bootstrap，用前复核 digest）、`ANCHOR_ENVIRONMENT_PYTHON`（基础解释器）、`ANCHOR_ENVIRONMENT_BUILD_ROOT`（准备区）。含义随新模型调整，但不新增隐式来源。
+- **部署配置项**：`ANCHOR_DEPENDENCIES_SOURCES`（来源）、`ANCHOR_DEPENDENCIES_UV` + `..._UV_SHA256`（固定 bootstrap，用前复核 digest）、`ANCHOR_DEPENDENCIES_PYTHON`（基础解释器）、`ANCHOR_DEPENDENCIES_BUILD_ROOT`（准备区）。含义随新模型调整，但不新增隐式来源。
 - **代码摘要校验（只对代码）**：`rust/anchor-graph-host/src/lib.rs` 的 `PluginDefinition::digest` 继续是"这份代码是哪一份"的凭据，但只覆盖 `mutable` 之外的路径。
 - **暂存 + 原子改名**：`rust/anchor-library/src/filesystem.rs` 的做法保留，作用域从"整树"缩小到"代码"。
 
@@ -203,4 +203,4 @@
 - **升级即刻生效与 MCP 工具集重协商**：插件工具清单变化时怎么重协商，没定。
 - **清单存哪**：进 run 记录、独立文件还是只读投影，没定。
 - **python 插件的能力边界**：要不要限制它能在自己的视图里做什么（装包、改 `pyvenv.cfg`、写存储），没定。
-- **旧数据的处理**：磁盘上已有的 `library/envs/`、`names.json`、图包里已有的插件副本，以及格式 9/10 的 run 记录是留、是迁、还是只读保留，没定。
+- **旧数据的处理（已定）**：旧机制已随实现整片删除，磁盘上可能残留的 `library/envs/`、`names.json` 之类**不再被任何代码读取**，惰性存在即可——开发阶段、没有用户，不做迁移、不做清理（要清也只是删目录）。

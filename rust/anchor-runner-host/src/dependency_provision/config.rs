@@ -134,11 +134,11 @@ pub(crate) fn from_env(
     library_root: Option<&Path>,
 ) -> Result<Option<DependencyProvisionConfig>, String> {
     const VARIABLES: &[&str] = &[
-        "ANCHOR_ENVIRONMENT_SOURCES",
-        "ANCHOR_ENVIRONMENT_UV",
-        "ANCHOR_ENVIRONMENT_UV_SHA256",
-        "ANCHOR_ENVIRONMENT_PYTHON",
-        "ANCHOR_ENVIRONMENT_BUILD_ROOT",
+        "ANCHOR_DEPENDENCIES_SOURCES",
+        "ANCHOR_DEPENDENCIES_UV",
+        "ANCHOR_DEPENDENCIES_UV_SHA256",
+        "ANCHOR_DEPENDENCIES_PYTHON",
+        "ANCHOR_DEPENDENCIES_BUILD_ROOT",
     ];
     let mut values = std::collections::BTreeMap::new();
     for name in VARIABLES {
@@ -153,29 +153,29 @@ pub(crate) fn from_env(
     }
     let required = |name: &str| -> Result<String, String> {
         values.get(name).cloned().ok_or_else(|| {
-            format!("{name} is required once any ANCHOR_ENVIRONMENT_* variable is set")
+            format!("{name} is required once any ANCHOR_DEPENDENCIES_* variable is set")
         })
     };
 
-    let sources = parse_sources(&required("ANCHOR_ENVIRONMENT_SOURCES")?)?;
-    let uv = PathBuf::from(required("ANCHOR_ENVIRONMENT_UV")?);
+    let sources = parse_sources(&required("ANCHOR_DEPENDENCIES_SOURCES")?)?;
+    let uv = PathBuf::from(required("ANCHOR_DEPENDENCIES_UV")?);
     if !uv.is_absolute() {
-        return Err("ANCHOR_ENVIRONMENT_UV must be an absolute path".into());
+        return Err("ANCHOR_DEPENDENCIES_UV must be an absolute path".into());
     }
-    let uv_digest = required("ANCHOR_ENVIRONMENT_UV_SHA256")?;
+    let uv_digest = required("ANCHOR_DEPENDENCIES_UV_SHA256")?;
     if uv_digest.len() != 64 || !uv_digest.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-        return Err("ANCHOR_ENVIRONMENT_UV_SHA256 must be a 64-character hex digest".into());
+        return Err("ANCHOR_DEPENDENCIES_UV_SHA256 must be a 64-character hex digest".into());
     }
-    let python = PathBuf::from(required("ANCHOR_ENVIRONMENT_PYTHON")?);
+    let python = PathBuf::from(required("ANCHOR_DEPENDENCIES_PYTHON")?);
     if !python.is_absolute() {
-        return Err("ANCHOR_ENVIRONMENT_PYTHON must be an absolute path".into());
+        return Err("ANCHOR_DEPENDENCIES_PYTHON must be an absolute path".into());
     }
     let build_root = values
-        .get("ANCHOR_ENVIRONMENT_BUILD_ROOT")
+        .get("ANCHOR_DEPENDENCIES_BUILD_ROOT")
         .map(PathBuf::from)
         .unwrap_or_else(|| state_root.join("environment-build"));
     if !build_root.is_absolute() {
-        return Err("ANCHOR_ENVIRONMENT_BUILD_ROOT must be an absolute path".into());
+        return Err("ANCHOR_DEPENDENCIES_BUILD_ROOT must be an absolute path".into());
     }
     // The same overlap rule publication enforces on a candidate directory: a
     // build root inside the Library, or a Library inside the build root, means
@@ -188,7 +188,7 @@ pub(crate) fn from_env(
             std::fs::canonicalize(library_root).unwrap_or_else(|_| library_root.to_path_buf());
         if build.starts_with(&library) || library.starts_with(&build) {
             return Err(format!(
-                "ANCHOR_ENVIRONMENT_BUILD_ROOT ({}) and the environment Library root ({}) must not overlap: staging inside published content (or the reverse) would make an interrupted build and a published environment the same files",
+                "ANCHOR_DEPENDENCIES_BUILD_ROOT ({}) and the environment Library root ({}) must not overlap: staging inside published content (or the reverse) would make an interrupted build and a published environment the same files",
                 build_root.display(),
                 library_root.display()
             ));
@@ -203,7 +203,7 @@ pub(crate) fn from_env(
             && build_device != library_device
         {
             return Err(format!(
-                "ANCHOR_ENVIRONMENT_BUILD_ROOT ({}) and the environment Library root ({}) are on different filesystems, so a built dependency set could not be moved into the Library atomically",
+                "ANCHOR_DEPENDENCIES_BUILD_ROOT ({}) and the environment Library root ({}) are on different filesystems, so a built dependency set could not be moved into the Library atomically",
                 build_root.display(),
                 library_root.display()
             ));
@@ -242,7 +242,7 @@ fn parse_sources(value: &str) -> Result<Vec<PackageSource>, String> {
     for entry in value.split(',') {
         let entry = entry.trim();
         if entry.is_empty() {
-            return Err("ANCHOR_ENVIRONMENT_SOURCES has an empty entry".into());
+            return Err("ANCHOR_DEPENDENCIES_SOURCES has an empty entry".into());
         }
         if entry.starts_with("https://") || entry.starts_with("http://") {
             // The same literal URL policy every outbound host request already
@@ -271,7 +271,7 @@ fn parse_sources(value: &str) -> Result<Vec<PackageSource>, String> {
         }
     }
     if sources.is_empty() {
-        return Err("ANCHOR_ENVIRONMENT_SOURCES must name at least one source".into());
+        return Err("ANCHOR_DEPENDENCIES_SOURCES must name at least one source".into());
     }
     Ok(sources)
 }
@@ -369,11 +369,11 @@ mod config_tests {
         let sources = build_root.join("wheels");
         std::fs::create_dir_all(&sources).unwrap();
         unsafe {
-            std::env::set_var("ANCHOR_ENVIRONMENT_SOURCES", &sources);
-            std::env::set_var("ANCHOR_ENVIRONMENT_UV", "/opt/anchor/uv");
-            std::env::set_var("ANCHOR_ENVIRONMENT_UV_SHA256", "a".repeat(64));
-            std::env::set_var("ANCHOR_ENVIRONMENT_PYTHON", "/usr/bin/python3");
-            std::env::set_var("ANCHOR_ENVIRONMENT_BUILD_ROOT", build_root);
+            std::env::set_var("ANCHOR_DEPENDENCIES_SOURCES", &sources);
+            std::env::set_var("ANCHOR_DEPENDENCIES_UV", "/opt/anchor/uv");
+            std::env::set_var("ANCHOR_DEPENDENCIES_UV_SHA256", "a".repeat(64));
+            std::env::set_var("ANCHOR_DEPENDENCIES_PYTHON", "/usr/bin/python3");
+            std::env::set_var("ANCHOR_DEPENDENCIES_BUILD_ROOT", build_root);
         }
         from_env(
             &build_root.join("state"),
@@ -388,11 +388,11 @@ mod config_tests {
     fn a_build_root_that_overlaps_the_library_is_refused_at_startup() {
         let _guard = crate::PROCESS_ENV_LOCK.blocking_lock();
         let _environment = Environment::cleared(&[
-            "ANCHOR_ENVIRONMENT_SOURCES",
-            "ANCHOR_ENVIRONMENT_UV",
-            "ANCHOR_ENVIRONMENT_UV_SHA256",
-            "ANCHOR_ENVIRONMENT_PYTHON",
-            "ANCHOR_ENVIRONMENT_BUILD_ROOT",
+            "ANCHOR_DEPENDENCIES_SOURCES",
+            "ANCHOR_DEPENDENCIES_UV",
+            "ANCHOR_DEPENDENCIES_UV_SHA256",
+            "ANCHOR_DEPENDENCIES_PYTHON",
+            "ANCHOR_DEPENDENCIES_BUILD_ROOT",
         ]);
         let root = tempfile::tempdir().unwrap();
 
@@ -438,11 +438,11 @@ mod config_tests {
         }
         let _guard = crate::PROCESS_ENV_LOCK.blocking_lock();
         let _environment = Environment::cleared(&[
-            "ANCHOR_ENVIRONMENT_SOURCES",
-            "ANCHOR_ENVIRONMENT_UV",
-            "ANCHOR_ENVIRONMENT_UV_SHA256",
-            "ANCHOR_ENVIRONMENT_PYTHON",
-            "ANCHOR_ENVIRONMENT_BUILD_ROOT",
+            "ANCHOR_DEPENDENCIES_SOURCES",
+            "ANCHOR_DEPENDENCIES_UV",
+            "ANCHOR_DEPENDENCIES_UV_SHA256",
+            "ANCHOR_DEPENDENCIES_PYTHON",
+            "ANCHOR_DEPENDENCIES_BUILD_ROOT",
         ]);
         let root = tempfile::tempdir().unwrap();
         let library = root.path().join("library");
@@ -453,7 +453,7 @@ mod config_tests {
         assert!(same.unwrap().is_some());
 
         // A build root on another filesystem is refused, whatever the overlap.
-        unsafe { std::env::set_var("ANCHOR_ENVIRONMENT_BUILD_ROOT", "/dev/shm") };
+        unsafe { std::env::set_var("ANCHOR_DEPENDENCIES_BUILD_ROOT", "/dev/shm") };
         let error = from_env(
             &root.path().join("state"),
             PathBuf::from("bwrap"),
@@ -470,17 +470,17 @@ mod config_tests {
     fn an_index_source_the_host_will_not_reach_is_refused_at_startup() {
         let _guard = crate::PROCESS_ENV_LOCK.blocking_lock();
         let _environment = Environment::cleared(&[
-            "ANCHOR_ENVIRONMENT_SOURCES",
-            "ANCHOR_ENVIRONMENT_UV",
-            "ANCHOR_ENVIRONMENT_UV_SHA256",
-            "ANCHOR_ENVIRONMENT_PYTHON",
-            "ANCHOR_ENVIRONMENT_BUILD_ROOT",
+            "ANCHOR_DEPENDENCIES_SOURCES",
+            "ANCHOR_DEPENDENCIES_UV",
+            "ANCHOR_DEPENDENCIES_UV_SHA256",
+            "ANCHOR_DEPENDENCIES_PYTHON",
+            "ANCHOR_DEPENDENCIES_BUILD_ROOT",
         ]);
         let root = tempfile::tempdir().unwrap();
         unsafe {
-            std::env::set_var("ANCHOR_ENVIRONMENT_UV", "/opt/anchor/uv");
-            std::env::set_var("ANCHOR_ENVIRONMENT_UV_SHA256", "a".repeat(64));
-            std::env::set_var("ANCHOR_ENVIRONMENT_PYTHON", "/usr/bin/python3");
+            std::env::set_var("ANCHOR_DEPENDENCIES_UV", "/opt/anchor/uv");
+            std::env::set_var("ANCHOR_DEPENDENCIES_UV_SHA256", "a".repeat(64));
+            std::env::set_var("ANCHOR_DEPENDENCIES_PYTHON", "/usr/bin/python3");
         }
         let state = root.path().join("state");
         for sources in [
@@ -491,7 +491,7 @@ mod config_tests {
             "https://user:secret@mirror.example/simple",
             "https://mirror.example/simple#fragment",
         ] {
-            unsafe { std::env::set_var("ANCHOR_ENVIRONMENT_SOURCES", sources) };
+            unsafe { std::env::set_var("ANCHOR_DEPENDENCIES_SOURCES", sources) };
             let error = from_env(&state, PathBuf::from("bwrap"), None).unwrap_err();
             assert!(
                 error.contains(sources)
@@ -505,7 +505,7 @@ mod config_tests {
         // socket.
         unsafe {
             std::env::set_var(
-                "ANCHOR_ENVIRONMENT_SOURCES",
+                "ANCHOR_DEPENDENCIES_SOURCES",
                 "http://127.0.0.1:8080/simple,https://pypi.tuna.tsinghua.edu.cn/simple",
             );
         }

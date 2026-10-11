@@ -8,7 +8,7 @@ Anchor 是本地优先、可观察、可恢复的 Agent 工作系统。用户通
 
 核心对象是 Graph、AgentNode、OpNode、Plugin、Run 和 Session；依赖**不再**是一等对象——依赖声明属于插件，平台只提供共享存储与每插件版本一份视图（见 [插件依赖与 Python 视图：标准](plugin-dependencies.md)），迁移尚未开始。研究、周报、企业助手与递归改进由普通 Graph/Plugin 表达，不在通用 Runtime 里创建专属业务阶段。
 
-2026-10-10 用户明确 Pilot 的管家目标：Anchor 独立部署后，用户通过 Pilot 管理平台全部 Graph、Plugin 与它们所依赖内容的完整生命周期，包括安装、检查、更新/回退和删除。第一优先级是多 AgentNode 的共享依赖与唯一事实来源，避免逐节点或逐 Plugin 人工维护环境；先验收 Python，概念不限定语言。2026-10-11 起，"依赖环境"不再是独立资产：依赖声明属于插件，安装/升级插件就是批准它带来的依赖，平台只提供共享存储与视图（[标准](plugin-dependencies.md)）。这是一项产品目标，当前代码仍是旧模型，不表示完整管理、环境自动构建或迁移已经实现。旧模型与被取代的决定见 [依赖环境草稿](dependency-environment-draft.md)。
+2026-10-10 用户明确 Pilot 的管家目标：Anchor 独立部署后，用户通过 Pilot 管理平台全部 Graph、Plugin 与它们所依赖内容的完整生命周期，包括安装、检查、更新/回退和删除。第一优先级是多 AgentNode 的共享依赖与唯一事实来源，避免逐节点或逐 Plugin 人工维护环境；先验收 Python，概念不限定语言。2026-10-11 起，"依赖环境"不再是独立资产：依赖声明属于插件（`plugin.json` 顶层 `dependencies`），安装/升级插件就是批准它带来的依赖，平台只提供共享存储 + 每插件版本一份视图 + 回收（[标准](plugin-dependencies.md)）。**这项模型已整片落地**：旧的"环境名字 + 内容寻址 + 每 run 冻结绑定"机制连同其节点字段、内核枚举、宿主按名字解析、发布环境 store 与管家工具一并删除，旧图/旧插件仍声明 `environment` 时加载具名拒绝；完整的管理（更新/回退、卸载与数据处置、真实 provider 端到端）仍按标准与[开发台账](pilot-development-plan.md)推进。
 
 后端、共享 Runtime 和官方工具使用 Rust；WebUI 保持 React/TypeScript。AgentNode 与 Pilot 统一使用固定 Goose，通过 ACP 交互、MCP 暴露授权工具。Goose 拥有 Agent loop、Provider、原生历史与 compaction；Anchor 拥有产品事实与宿主权限，不建设第二套通用 Agent 框架。预算控制暂不作为交付门槛，优先完成任务。
 
@@ -40,7 +40,7 @@ Anchor 是本地优先、可观察、可恢复的 Agent 工作系统。用户通
 | 研究、周报、审查目标与内容验收 | 普通 Graph / Plugin | 业务证据与结论 |
 | 画布、时间线、会话与文件展示 | WebUI | 对既有事实的投影 |
 
-两类可复用资产（Graph、Plugin）共用同一个模型：只存一份真身、只认一个编号、只开一个审批口、其余都是引用。**依赖不是第三个资产**：依赖声明属于插件，平台只提供共享存储与每插件版本一份视图，见 [插件依赖与 Python 视图：标准](plugin-dependencies.md)；旧的三资产模型与被取代的决定留在 [依赖环境草稿](dependency-environment-draft.md)。
+两类可复用资产（Graph、Plugin）共用同一个模型：只存一份真身、只认一个编号、只开一个审批口、其余都是引用。**依赖不是第三个资产**：依赖声明属于插件，平台只提供共享存储与每插件版本一份视图，见 [插件依赖与 Python 视图：标准](plugin-dependencies.md)；旧的三资产模型已被推翻并删除，推翻它的三条根因写在标准的「背景与动机」里。
 
 采用 Ports and Adapters 隔离外部入口；遵循 Clean Architecture 依赖方向；用限界上下文明确 Graph/Run、Session/Turn、Library/Plugin、Node Runtime/Sandbox 的事实和不变量。只采用有用的边界，不引入完整 DDD 仪式、微服务、事件溯源、CQRS 或通用依赖注入框架。
 

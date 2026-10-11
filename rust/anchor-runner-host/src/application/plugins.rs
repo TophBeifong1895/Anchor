@@ -141,7 +141,7 @@ impl RunApplication {
         // its tools could never start.
         let provisioner = self.dependency_provisioner().map_err(|_| {
             ApplicationError::Invalid(format!(
-                "Plugin `{}` declares dependencies, but this deployment does not authorize installing them (no ANCHOR_ENVIRONMENT_* configuration)",
+                "Plugin `{}` declares dependencies, but this deployment does not authorize installing them (no ANCHOR_DEPENDENCIES_* configuration)",
                 review.id
             ))
         })?;

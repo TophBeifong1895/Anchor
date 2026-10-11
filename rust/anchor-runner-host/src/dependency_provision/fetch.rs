@@ -594,15 +594,15 @@ mod fetch_tests {
 
     /// Opt-in: the recommended mirror really serves a *relative* artifact URL,
     /// and the fetch turns it into the approved bytes. Run it with
-    /// `ANCHOR_ENVIRONMENT_LIVE_MIRROR=1`.
+    /// `ANCHOR_DEPENDENCIES_LIVE_MIRROR=1`.
     ///
     /// The digest is the one a lock for `idna==3.7` contains, which is what makes
     /// this the fetch path rather than a plain download: the candidate is chosen
     /// by the approved hash, exactly as a real plan does.
     #[tokio::test(flavor = "multi_thread")]
     async fn live_the_recommended_mirror_yields_the_approved_bytes_from_a_relative_url() {
-        if std::env::var("ANCHOR_ENVIRONMENT_LIVE_MIRROR").as_deref() != Ok("1") {
-            eprintln!("SKIPPED (by design): set ANCHOR_ENVIRONMENT_LIVE_MIRROR=1 to run it");
+        if std::env::var("ANCHOR_DEPENDENCIES_LIVE_MIRROR").as_deref() != Ok("1") {
+            eprintln!("SKIPPED (by design): set ANCHOR_DEPENDENCIES_LIVE_MIRROR=1 to run it");
             return;
         }
         let index = "https://pypi.tuna.tsinghua.edu.cn/simple";
