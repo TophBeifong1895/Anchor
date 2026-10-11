@@ -627,3 +627,145 @@ async fn a_pilot_graph_named_by_the_bundle_root_keeps_its_lock() {
     .await;
     assert_eq!(status, StatusCode::CONFLICT, "{refused}");
 }
+
+/// The page's own URL, through the router `serve()` actually serves.
+///
+/// A handler test cannot catch this class of failure: the route has to exist in
+/// the assembled router, behind the authentication layer, with the same
+/// root-relative, unprefixed path the web app fetches (`api()` adds no prefix, and
+/// the page and the API share one origin).
+#[cfg(test)]
+mod served_router_tests {
+    use super::*;
+    use axum::body::{Body, to_bytes};
+    use axum::http::Request;
+    use tower::ServiceExt;
+
+    /// One request with a Bearer key, exactly as the page's `api()` sends it.
+    async fn authorized(
+        app: Router,
+        method: &str,
+        uri: &str,
+        key: &str,
+        body: Option<&str>,
+    ) -> (StatusCode, Value) {
+        let request = Request::builder()
+            .method(method)
+            .uri(uri)
+            .header(header::CONTENT_TYPE, "application/json")
+            .header(header::AUTHORIZATION, format!("Bearer {key}"))
+            .body(body.map_or_else(Body::empty, |body| Body::from(body.to_owned())))
+            .unwrap();
+        let response = app.oneshot(request).await.unwrap();
+        let status = response.status();
+        let bytes = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
+        let value = if bytes.is_empty() {
+            Value::Null
+        } else {
+            serde_json::from_slice(&bytes).unwrap()
+        };
+        (status, value)
+    }
+
+    #[tokio::test]
+    async fn the_session_page_url_reaches_the_plugin_route_through_the_served_router() {
+        let (root, mut state) = fixture();
+        let key = "k".repeat(32);
+        state.api_keys = vec![key.clone()];
+        let app = router_with_readiness_and_web_root(
+            state.clone(),
+            Arc::new(std::sync::atomic::AtomicBool::new(true)),
+            root.path().join("web"),
+        );
+        // The Session id from the report.
+        let session = "7d18d00b-0325-4e74-9707-5ffcce71cc25";
+        let (status, created) = authorized(
+            app.clone(),
+            "POST",
+            "/sessions",
+            &key,
+            Some(&json!({"id": session}).to_string()),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED, "{created}");
+        let plugin = state.catalog_root.join("plugins/demo");
+        std::fs::create_dir_all(&plugin).unwrap();
+        std::fs::write(
+            plugin.join("plugin.json"),
+            json!({"name":"Demo"}).to_string(),
+        )
+        .unwrap();
+
+        // The exact URL `SessionPlugins.tsx` builds, and its already-shipped
+        // sibling for contrast: same router, same layer, same shape.
+        let (status, listed) = authorized(
+            app.clone(),
+            "GET",
+            &format!("/sessions/{session}/plugins"),
+            &key,
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{listed}");
+        assert!(listed["plugins"].is_array(), "{listed}");
+        let (status, events) = authorized(
+            app.clone(),
+            "GET",
+            &format!("/sessions/{session}/events"),
+            &key,
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{events}");
+        let (status, switched) = authorized(
+            app.clone(),
+            "POST",
+            &format!("/sessions/{session}/plugins/demo"),
+            &key,
+            Some(r#"{"on":true}"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{switched}");
+        assert_eq!(switched["plugin"]["on"], true);
+
+        // The two 404s are not the same 404, and the page shows which one it got: a
+        // path the router does not know falls through to the static fallback, which
+        // answers with no JSON body at all (the page shows `GET … → 404`), while a
+        // Session the caller does not have answers a named reason.
+        let (status, unknown) = authorized(
+            app.clone(),
+            "GET",
+            &format!("/sessions/{session}/plugins-typo"),
+            &key,
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{unknown}");
+        assert!(
+            unknown.is_null(),
+            "the fallback has no error body: {unknown}"
+        );
+        let (status, missing) = authorized(
+            app.clone(),
+            "GET",
+            "/sessions/00000000-0000-0000-0000-000000000000/plugins",
+            &key,
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{missing}");
+        assert_eq!(missing["error"], "no such session");
+
+        // Without the key the same URL is refused before routing, so a 401 is never
+        // evidence about whether the route exists.
+        let request = Request::builder()
+            .method("GET")
+            .uri(format!("/sessions/{session}/plugins"))
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(
+            app.oneshot(request).await.unwrap().status(),
+            StatusCode::UNAUTHORIZED
+        );
+    }
+}
