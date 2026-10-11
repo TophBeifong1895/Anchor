@@ -261,6 +261,25 @@ pub(crate) fn deployment_library_root() -> Option<PathBuf> {
         .or_else(|| env::var_os("ANCHOR_RUNNER_CATALOG_ROOT").map(PathBuf::from))
 }
 
+/// The one Library root this deployment resolves Plugins from.
+///
+/// Every caller takes its answer from here, so the API that installs a Plugin and
+/// the node call that runs it can never disagree about where the Plugin lives.
+///
+/// The explicit Library root wins. Otherwise the *caller's* configured Graph
+/// catalog is the answer: a single-root deployment puts both in one directory, and
+/// the catalog is configuration rather than a guess about a path. The environment
+/// is deliberately not consulted a second time here — a caller that derived its
+/// catalog root from `ANCHOR_RUNNER_CATALOG_ROOT` or from its bundle has already
+/// made that decision, and re-reading it deeper in the stack would let one host's
+/// configuration leak into another's. There is likewise **no** fallback derived
+/// from a bundle path: a bundle is a Graph, not a Plugin home.
+pub(crate) fn library_root(configured_catalog_root: &std::path::Path) -> PathBuf {
+    std::env::var_os("ANCHOR_RUNNER_LIBRARY_ROOT")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| configured_catalog_root.to_path_buf())
+}
+
 fn env_path(name: &str) -> Result<PathBuf, String> {
     env::var_os(name)
         .map(PathBuf::from)
@@ -277,6 +296,7 @@ fn make_host_with_control(
     run_id: &str,
     plugin_bindings: BTreeMap<String, anchor_runtime::graph::PluginBinding>,
     control: HostControl,
+    library_root: Option<PathBuf>,
 ) -> Result<
     (
         anchor_runtime::graph::FileRunStore,
@@ -332,15 +352,18 @@ fn make_host_with_control(
     mcp.environment = tool_environment;
     let artifacts = HostArtifacts::new(state.join("artifacts"), work_root.clone());
     let tools = tool_host::PluginToolHost::new(fake_plugin_ids);
-    let io_resolver = Arc::new(node_host::HostIoResolver::new(
-        artifacts.clone(),
-        Arc::clone(&sandbox),
-        Arc::new(tools.clone()),
-        mcp.clone(),
-        plugin_bindings.clone(),
-        anchor_runtime::graph::FileRunStore::new(state.join("runs")),
-        local_inputs::LocalInputs::from_env(state.clone())?,
-    ));
+    let io_resolver = Arc::new(
+        node_host::HostIoResolver::new(
+            artifacts.clone(),
+            Arc::clone(&sandbox),
+            Arc::new(tools.clone()),
+            mcp.clone(),
+            plugin_bindings.clone(),
+            anchor_runtime::graph::FileRunStore::new(state.join("runs")),
+            local_inputs::LocalInputs::from_env(state.clone())?,
+        )
+        .with_library_root(library_root),
+    );
     let goose_nodes = goose_acp::GooseNodePort::from_env(
         &state,
         &work_root,
@@ -393,17 +416,24 @@ async fn handle(request: Request) -> Response {
                     };
                 }
             };
-            let bundle =
-                match anchor_graph_host::FileGraphBundleLoader::new(bundle_root.clone()).load() {
-                    Ok(bundle) => bundle,
-                    Err(error) => {
-                        return Response::Rejected {
-                            version: 1,
-                            request_id,
-                            reason: error.to_string(),
-                        };
-                    }
-                };
+            let library_root = crate::library_root(
+                bundle_root
+                    .parent()
+                    .unwrap_or_else(|| std::path::Path::new(".")),
+            );
+            let bundle = match anchor_graph_host::FileGraphBundleLoader::new(bundle_root.clone())
+                .with_library_root(library_root.clone())
+                .load()
+            {
+                Ok(bundle) => bundle,
+                Err(error) => {
+                    return Response::Rejected {
+                        version: 1,
+                        request_id,
+                        reason: error.to_string(),
+                    };
+                }
+            };
             if let Err(reason) = reject_standalone_snapshot(&bundle.snapshot) {
                 return Response::Rejected {
                     version: 1,
@@ -411,16 +441,29 @@ async fn handle(request: Request) -> Response {
                     reason,
                 };
             }
+            // A bundle references its Plugins; the code lives in the Library.
+            let plugin_bindings = match crate::application::graphs::referenced_plugin_bindings(
+                &library_root,
+                &bundle.plugins,
+            ) {
+                Ok(bindings) => bindings,
+                Err(error) => {
+                    return Response::Rejected {
+                        version: 1,
+                        request_id,
+                        reason: format!(
+                            "the Plugins this Graph references could not be resolved from {}: {error}",
+                            library_root.display()
+                        ),
+                    };
+                }
+            };
             execute_snapshot(
                 bundle.snapshot,
                 input,
                 run_id,
                 request_id,
-                bundle
-                    .plugins
-                    .into_iter()
-                    .map(|binding| (binding.id.clone(), binding))
-                    .collect(),
+                plugin_bindings,
                 Some(bundle_root),
             )
             .await
@@ -554,12 +597,19 @@ async fn execute_snapshot_with_control(
         cancellation: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         pause: Arc::new(std::sync::atomic::AtomicBool::new(false)),
     });
+    // The stdio host resolves Plugins from the deployment's one Library root; the
+    // bundle's own directory is the last resort only because a single-root
+    // deployment puts the Library there.
+    let library_root = bundle_root
+        .as_ref()
+        .map(|root| crate::library_root(root.parent().unwrap_or(root.as_path())));
     let execution = match PreparedExecution::prepare_with_bindings(
         &expected,
         control,
         plugin_bindings,
         None,
         None,
+        library_root,
     ) {
         Ok(execution) => execution,
         Err(reason) => {

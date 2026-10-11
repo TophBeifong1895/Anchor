@@ -4,7 +4,7 @@
 //! credential capability. A Plugin identity must name its server and the host
 //! must independently enable that Plugin before any tool is advertised.
 
-use anchor_graph_host::{FilePluginCatalog, PluginCatalog};
+use anchor_graph_host::FilePluginCatalog;
 use anchor_library::{
     FileOAuthTokenStore, OAuthBinding, OAuthClient, OAuthRefreshRequest, OAuthRefreshTransport,
     OAuthTokenResponse, OAuthTransportError,
@@ -206,7 +206,6 @@ impl McpToolConfig {
                 &root,
                 std::env::var_os("ANCHOR_RUNNER_LIBRARY_ROOT").map(PathBuf::from),
                 std::env::var_os("ANCHOR_RUNNER_CATALOG_ROOT").map(PathBuf::from),
-                std::env::var_os("ANCHOR_RUNNER_BUNDLE_ROOT").map(PathBuf::from),
             )),
         })
     }
@@ -282,20 +281,10 @@ impl McpToolConfig {
             if binding.id == "fake-tools" && binding.resources.is_empty() {
                 continue;
             }
-            let current = catalog
-                .resolve(std::slice::from_ref(&binding.id))
-                .map_err(|error| {
-                    format!("Plugin `{}` resource lookup failed: {error}", binding.id)
-                })?
-                .into_iter()
-                .next()
-                .ok_or_else(|| format!("Plugin `{}` is not installed", binding.id))?;
-            if current != *binding {
-                return Err(format!(
-                    "Plugin `{}` changed since Run admission",
-                    binding.id
-                ));
-            }
+            // No digest comparison: a Run uses the *current* Plugin (standard
+            // invariant 6), so a Plugin that changed while the Run was parked is
+            // not a reason to refuse. What the invocation actually used is
+            // recorded as an observation instead.
             mounts.push(ReadOnlyInput::new(
                 catalog
                     .plugin_directory(&binding.id)
@@ -573,27 +562,18 @@ impl McpToolConfig {
     }
 }
 
+/// Where an OAuth token for a remote Plugin server lives.
+///
+/// The deployment's own answer, or the Graph catalog it configured — never a path
+/// guessed from the bundle. The bundle is where the Graph is; the Library is where
+/// a Plugin is, and this must agree with the node call that runs it.
 fn resolve_oauth_library_root(
     catalog: &Path,
     library_root: Option<PathBuf>,
     configured_catalog_root: Option<PathBuf>,
-    bundle_root: Option<PathBuf>,
 ) -> PathBuf {
     library_root
         .or(configured_catalog_root)
-        .or_else(|| {
-            bundle_root.map(|bundle| {
-                let parent = bundle.parent().unwrap_or(bundle.as_path());
-                if parent
-                    .file_name()
-                    .is_some_and(|name| name.to_string_lossy() == "bundles")
-                {
-                    parent.parent().unwrap_or(parent).to_path_buf()
-                } else {
-                    parent.to_path_buf()
-                }
-            })
-        })
         .unwrap_or_else(|| catalog.to_path_buf())
 }
 
@@ -1204,6 +1184,8 @@ mod oauth_tests;
 
 #[cfg(test)]
 mod tests {
+    use anchor_graph_host::PluginCatalog;
+
     use super::*;
 
     #[tokio::test]

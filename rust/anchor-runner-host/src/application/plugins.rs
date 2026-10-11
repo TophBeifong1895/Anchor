@@ -1,5 +1,5 @@
 use super::graphs::{ImpactCoverage, ImpactScan, coverage_of};
-use super::{ApplicationError, RunApplication, is_unfinished};
+use super::{ApplicationError, RunApplication};
 use crate::environment_provision::{
     LockedPackage, PackageSource, ProvisionError, ResolvedRequirements, resolve_requirements,
     verify_index_json,
@@ -63,9 +63,6 @@ pub(crate) struct PluginDependencyPlan {
 pub(crate) struct PluginImpact {
     /// Saved Graphs that bind this Plugin.
     pub(crate) graphs: Vec<String>,
-    /// Runs that are not terminal and froze a binding for this Plugin. These are
-    /// the ones a replacement can strand.
-    pub(crate) unfinished_runs: Vec<String>,
     /// How much of the catalog this report actually saw. A Graph this host
     /// cannot load is a gap, never a silent omission: the operator is being
     /// asked to trust a count.
@@ -228,23 +225,15 @@ impl RunApplication {
         };
         let mut graphs = Vec::new();
         for (name, bundle) in &bundles {
-            if bundle.plugins.iter().any(|binding| binding.id == id) {
+            if bundle.plugins.iter().any(|plugin| plugin == id) {
                 graphs.push(name.clone());
             }
         }
         graphs.sort();
-        let mut unfinished_runs = Vec::new();
-        for (run_id, record) in self.records()? {
-            if is_unfinished(record.status) && record.plugin_bindings.contains_key(id) {
-                unfinished_runs.push(run_id);
-            }
-        }
-        unfinished_runs.sort();
-        Ok(PluginImpact {
-            graphs,
-            unfinished_runs,
-            coverage,
-        })
+        // Upgrading is always allowed (standard invariant 7): a Run uses the
+        // *current* Plugin and observes it from its next node call, so there is no
+        // stranded-Run question to ask and nothing to confirm.
+        Ok(PluginImpact { graphs, coverage })
     }
 
     /// Publish the reviewed candidate only if nothing moved since the review.
@@ -252,30 +241,16 @@ impl RunApplication {
     /// A confirmation the operator gave for one digest must never install a
     /// different tree, so the candidate is reviewed again and the Library state
     /// is re-read before anything is written.
-    /// `acknowledged_bound_runs` is the operator's separate decision about the
-    /// non-terminal Runs this replacement strands: a Plugin manifest is part of
-    /// the binding those Runs froze, so replacing it needs more than the
-    /// approval to overwrite the id. Keeping the decision here rather than only
-    /// in the form makes it a property of the operation.
+    /// An upgrade needs no second decision: a Run uses the current Plugin and
+    /// takes the new code from its next node call (standard invariants 6 and 7).
     pub(crate) async fn install_plugin_if_unchanged(
         &self,
         library_root: PathBuf,
         precondition: PluginInstallPrecondition,
-        acknowledged_bound_runs: bool,
     ) -> Result<InstallOutcome, ApplicationError> {
-        // Repairing the view of an already-published tree changes no binding, so
-        // it is not a replacement and does not need the stranded-Run decision.
+        // Repairing the view of an already-published tree publishes nothing, so
+        // it is not a replacement.
         let already_installed = precondition.already_installed();
-        if !already_installed
-            && !precondition.impact.unfinished_runs.is_empty()
-            && !acknowledged_bound_runs
-        {
-            return Err(ApplicationError::Conflict(format!(
-                "{} unfinished Run(s) bind Plugin `{}`; confirm that they will refuse to continue",
-                precondition.impact.unfinished_runs.len(),
-                precondition.review.id
-            )));
-        }
         // One writer for the whole operation: the catalog guard covers the
         // dependency landing as well as the Plugin publication, so two installs
         // cannot interleave their renames.
@@ -465,7 +440,7 @@ mod tests {
         assert!(!before.already_installed());
 
         application
-            .install_plugin_if_unchanged(library_root.clone(), before.clone(), false)
+            .install_plugin_if_unchanged(library_root.clone(), before.clone())
             .await
             .unwrap();
         assert_eq!(
@@ -503,7 +478,7 @@ mod tests {
         .unwrap();
 
         let failure = application
-            .install_plugin_if_unchanged(library_root.clone(), precondition, false)
+            .install_plugin_if_unchanged(library_root.clone(), precondition)
             .await
             .unwrap_err();
         assert!(
@@ -532,7 +507,7 @@ mod tests {
         let installed = installed_digest(&library_root, "demo");
 
         let failure = application
-            .install_plugin_if_unchanged(library_root.clone(), precondition, false)
+            .install_plugin_if_unchanged(library_root.clone(), precondition)
             .await
             .unwrap_err();
         assert!(
@@ -553,7 +528,7 @@ mod tests {
             .await
             .unwrap();
         application
-            .install_plugin_if_unchanged(library_root.clone(), first_precondition, false)
+            .install_plugin_if_unchanged(library_root.clone(), first_precondition)
             .await
             .unwrap();
 
@@ -565,7 +540,7 @@ mod tests {
         assert!(precondition.replacing());
         assert!(!precondition.already_installed());
         let outcome = application
-            .install_plugin_if_unchanged(library_root.clone(), precondition.clone(), false)
+            .install_plugin_if_unchanged(library_root.clone(), precondition.clone())
             .await
             .unwrap();
         assert_eq!(outcome.digest, precondition.review.digest);
@@ -634,7 +609,7 @@ mod impact_tests {
     }
 
     #[tokio::test]
-    async fn replacing_a_plugin_that_unfinished_runs_bind_needs_a_second_decision() {
+    async fn replacing_a_plugin_takes_effect_without_a_second_decision() {
         let root = tempfile::tempdir().unwrap();
         let library_root = root.path().join("library");
         let application = RunApplication::new(root.path().join("state"), root.path().to_path_buf());
@@ -650,33 +625,23 @@ mod impact_tests {
                     )
                     .await
                     .unwrap(),
-                false,
             )
             .await
             .unwrap();
+        // A Run that is not terminal binds the Plugin. Upgrading is always
+        // allowed (standard invariant 7), so the impact report says nothing about
+        // it and the replacement happens.
         let run = unfinished_run(root.path(), "demo");
+        assert!(!run.is_empty());
 
-        // A candidate that differs from what is installed is a binding change.
         let next = candidate(root.path(), "second");
         let precondition = application
             .plugin_install_precondition(library_root.clone(), next, "demo".into())
             .await
             .unwrap();
-        assert_eq!(precondition.impact.unfinished_runs, vec![run.clone()]);
         assert!(precondition.impact.graphs.is_empty());
-
-        // Without the acknowledgement the replacement is refused...
-        let error = application
-            .install_plugin_if_unchanged(library_root.clone(), precondition.clone(), false)
-            .await
-            .unwrap_err();
-        assert!(
-            matches!(error, ApplicationError::Conflict(ref reason) if reason.contains("unfinished Run")),
-            "{error:?}"
-        );
-        // ...and with it, it happens.
         application
-            .install_plugin_if_unchanged(library_root.clone(), precondition.clone(), true)
+            .install_plugin_if_unchanged(library_root.clone(), precondition.clone())
             .await
             .unwrap();
         assert_eq!(
@@ -686,6 +651,74 @@ mod impact_tests {
                 .digest,
             precondition.review.digest
         );
+    }
+
+    /// Only `ANCHOR_RUNNER_BUNDLE_ROOT` is set — the distribution's documented
+    /// minimum. The deployment has no separate Library root, so the Graph catalog
+    /// (here: the bundle's parent) *is* the Plugin home, and every caller takes that
+    /// answer from one place: the API that installs a Plugin and the node call that
+    /// runs it cannot disagree.
+    ///
+    /// A bundle directory itself is never the Library: the Plugin home is
+    /// `<bundle parent>/plugins`.
+    #[tokio::test]
+    async fn a_deployment_with_only_a_bundle_root_has_one_library_root() {
+        let root = tempfile::tempdir().unwrap();
+        let state = root.path().join("state");
+        let bundle = root.path().join("bundles/main");
+        fs::create_dir_all(&bundle).unwrap();
+        let _guard = crate::PROCESS_ENV_LOCK.lock().await;
+        let previous = (
+            std::env::var_os("ANCHOR_RUNNER_LIBRARY_ROOT"),
+            std::env::var_os("ANCHOR_RUNNER_CATALOG_ROOT"),
+            std::env::var_os("ANCHOR_RUNNER_BUNDLE_ROOT"),
+        );
+        unsafe {
+            std::env::remove_var("ANCHOR_RUNNER_LIBRARY_ROOT");
+            std::env::remove_var("ANCHOR_RUNNER_CATALOG_ROOT");
+            std::env::set_var("ANCHOR_RUNNER_BUNDLE_ROOT", &bundle);
+        }
+        // The same root the API serves and the resolver binds from.
+        let catalog_root = bundle.parent().unwrap();
+        let library_root = crate::library_root(catalog_root);
+        let application = RunApplication::new(state.clone(), catalog_root.to_path_buf());
+        let source = candidate(root.path(), "only-bundle");
+        let installed = application
+            .install_plugin_if_unchanged(
+                library_root.clone(),
+                application
+                    .plugin_install_precondition(library_root.clone(), source, "demo".into())
+                    .await
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        // The Plugin landed in the one Plugin home, not beside the bundle.
+        assert_eq!(installed.directory, catalog_root.join("plugins/demo"));
+        assert!(!bundle.join("plugins").exists());
+        assert!(
+            crate::application::graphs::referenced_plugin_bindings(
+                &library_root,
+                &["demo".to_owned()]
+            )
+            .is_ok(),
+            "the node call resolves the Plugin the API installed"
+        );
+        let (library, catalog, bundle) = previous;
+        unsafe {
+            match library {
+                Some(value) => std::env::set_var("ANCHOR_RUNNER_LIBRARY_ROOT", value),
+                None => std::env::remove_var("ANCHOR_RUNNER_LIBRARY_ROOT"),
+            }
+            match catalog {
+                Some(value) => std::env::set_var("ANCHOR_RUNNER_CATALOG_ROOT", value),
+                None => std::env::remove_var("ANCHOR_RUNNER_CATALOG_ROOT"),
+            }
+            match bundle {
+                Some(value) => std::env::set_var("ANCHOR_RUNNER_BUNDLE_ROOT", value),
+                None => std::env::remove_var("ANCHOR_RUNNER_BUNDLE_ROOT"),
+            }
+        }
     }
 
     /// A Graph this host cannot load is a *gap* in the report, never a silent
@@ -698,16 +731,17 @@ mod impact_tests {
 
         // A loadable bundle that binds the Plugin.
         let bound = catalog.join("bound");
-        fs::create_dir_all(bound.join("plugins/demo")).unwrap();
+        fs::create_dir_all(&bound).unwrap();
+        // The Plugin lives in the Library, not in the bundle.
+        fs::create_dir_all(catalog.join("plugins/demo")).unwrap();
         fs::write(
-            bound.join("plugins/demo/plugin.json"),
+            catalog.join("plugins/demo/plugin.json"),
             json!({"name":"Demo","mcpServers":{"probe":{"command":"bin/run"}}}).to_string(),
         )
         .unwrap();
-        let binding = FilePluginCatalog::new(&bound)
+        FilePluginCatalog::new(&catalog)
             .resolve(&["demo".to_owned()])
-            .unwrap()
-            .remove(0);
+            .unwrap();
         fs::write(
             bound.join("graph.json"),
             json!({
@@ -726,12 +760,7 @@ mod impact_tests {
             json!({
                 "format": 1,
                 "graph": "graph.json",
-                "plugins": [{
-                    "id": "demo",
-                    "digest": binding.digest,
-                    "resources": binding.resources,
-                    "mcp_servers": binding.mcp_servers,
-                }]
+                "plugins": [{"id": "demo"}]
             })
             .to_string(),
         )
@@ -821,7 +850,7 @@ mod impact_tests {
         let installer = application.clone();
         let installing = tokio::spawn(async move {
             installer
-                .install_plugin_if_unchanged(library_root, precondition, false)
+                .install_plugin_if_unchanged(library_root, precondition)
                 .await
         });
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
@@ -846,9 +875,8 @@ mod impact_tests {
             )
             .await
             .unwrap();
-        assert!(precondition.impact.unfinished_runs.is_empty());
         application
-            .install_plugin_if_unchanged(library_root, precondition, false)
+            .install_plugin_if_unchanged(library_root, precondition)
             .await
             .unwrap();
     }

@@ -151,28 +151,47 @@ pub(crate) struct Snapshot {
     stamps: BTreeMap<String, Stamp>,
     files: BTreeMap<String, ResourceFile>,
     tree: bool,
+    /// The mode a single-file snapshot was created with (unused for a tree).
+    mode: u32,
+    /// A shallow listing of an input directory: children only, for verification.
+    shallow: bool,
 }
 
 impl Snapshot {
     pub(crate) fn file(source: &Path, staging: &Path, relative: &str) -> Result<Self> {
+        Self::single(source, staging, relative, true)
+    }
+
+    /// A single input file that is not an executable: the Graph and its manifest.
+    pub(crate) fn resource(source: &Path, staging: &Path, relative: &str) -> Result<Self> {
+        Self::single(source, staging, relative, false)
+    }
+
+    fn single(source: &Path, staging: &Path, relative: &str, executable: bool) -> Result<Self> {
         let source_path = absolute(source)?;
         let mut source = open_path(&source_path)?;
         let metadata = source.metadata()?;
         require_regular(&metadata)?;
-        require_executable(&metadata)?;
+        if executable {
+            require_executable(&metadata)?;
+        }
         let before = Stamp::from(&metadata);
         let destination = staging.join(relative);
+        if let Some(parent) = destination.parent() {
+            fs::create_dir_all(parent)?;
+        }
         let mut target = File::create(&destination)?;
         let (sha256, size) = hash_copy(&mut source, &mut target, metadata.len())?;
         if Stamp::from(&source.metadata()?) != before || size != metadata.len() {
             return Err(PackageError::Drift(source_path));
         }
-        fs::set_permissions(&destination, fs::Permissions::from_mode(0o755))?;
+        let mode = if executable { 0o755 } else { 0o644 };
+        fs::set_permissions(&destination, fs::Permissions::from_mode(mode))?;
         let resource = ResourceFile {
             path: relative.into(),
             sha256,
             size,
-            mode: 0o755,
+            mode,
         };
         Ok(Self {
             source: source_path,
@@ -180,7 +199,52 @@ impl Snapshot {
             stamps: BTreeMap::from([(relative.into(), before)]),
             files: BTreeMap::from([(relative.into(), resource)]),
             tree: false,
+            mode,
+            shallow: false,
         })
+    }
+
+    /// The immediate children of one input directory, for verification only.
+    ///
+    /// Nothing is staged and no archive entry is contributed: this is how an
+    /// addition to the input between preparation and publication is a drift
+    /// rather than a silent copy. Contents are covered by the snapshots of what is
+    /// actually shipped.
+    pub(crate) fn listing(source: &Path, prefix: &str) -> Result<Self> {
+        let source = absolute(source)?;
+        let metadata = open_path(&source)?.metadata()?;
+        if !metadata.is_dir() {
+            return Err(PackageError::Invalid(
+                "an input directory was expected".into(),
+            ));
+        }
+        let mut snapshot = Self {
+            source,
+            prefix: prefix.into(),
+            stamps: BTreeMap::new(),
+            files: BTreeMap::new(),
+            tree: false,
+            mode: 0o644,
+            shallow: true,
+        };
+        snapshot.record_children()?;
+        Ok(snapshot)
+    }
+
+    fn record_children(&mut self) -> Result<()> {
+        self.stamps.insert(
+            self.prefix.clone(),
+            Stamp::from(&open_path(&self.source)?.metadata()?),
+        );
+        for entry in fs::read_dir(&self.source)? {
+            let entry = entry?;
+            let name = entry.file_name().to_string_lossy().into_owned();
+            self.stamps.insert(
+                format!("{}/{name}", self.prefix),
+                Stamp::from(&entry.metadata()?),
+            );
+        }
+        Ok(())
     }
 
     pub(crate) fn tree(source: &Path, staging: &Path, prefix: &str) -> Result<Self> {
@@ -190,6 +254,8 @@ impl Snapshot {
             stamps: BTreeMap::new(),
             files: BTreeMap::new(),
             tree: true,
+            mode: 0o755,
+            shallow: false,
         };
         let root = open_path(&snapshot.source)?;
         snapshot.walk(root, prefix, Some(staging))?;
@@ -255,6 +321,22 @@ impl Snapshot {
     }
 
     pub(crate) fn verify(&self) -> Result<()> {
+        if self.shallow {
+            let mut current = Self {
+                source: self.source.clone(),
+                prefix: self.prefix.clone(),
+                stamps: BTreeMap::new(),
+                files: BTreeMap::new(),
+                tree: false,
+                mode: self.mode,
+                shallow: true,
+            };
+            current.record_children()?;
+            if current.stamps != self.stamps {
+                return Err(PackageError::Drift(self.source.clone()));
+            }
+            return Ok(());
+        }
         let current = if self.tree {
             let mut current = Self {
                 source: self.source.clone(),
@@ -262,6 +344,8 @@ impl Snapshot {
                 stamps: BTreeMap::new(),
                 files: BTreeMap::new(),
                 tree: true,
+                mode: self.mode,
+                shallow: false,
             };
             current.walk(open_path(&self.source)?, &self.prefix, None)?;
             current
@@ -285,9 +369,11 @@ impl Snapshot {
                         path: self.prefix.clone(),
                         sha256,
                         size,
-                        mode: 0o755,
+                        mode: self.mode,
                     },
                 )]),
+                mode: self.mode,
+                shallow: false,
             }
         };
         if current.stamps != self.stamps || current.files != self.files {

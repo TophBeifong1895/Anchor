@@ -449,6 +449,7 @@ impl<'a, S: RunStore, A: ArtifactPort, N: NodeExecutionPort, C: RunControl>
             .push(RunResult {
                 node_id: cursor.node_id.clone(),
                 key: cursor.key.clone(),
+                plugin_views: self.nodes.observed_plugin_views(&cursor.key),
                 completion,
                 interruption: None,
                 commit: commit.clone(),

@@ -17,7 +17,7 @@ use std::sync::Arc;
 
 use anchor_graph_host::{FilePluginCatalog, plugin_view_path, resolved_library_root, store_root};
 use anchor_runtime::graph::PluginBinding;
-use anchor_runtime::{ReadOnlyInput, SandboxRequest};
+use anchor_runtime::{ReadOnlyInput, SandboxRequest, WritableInput};
 use anchor_sandbox_bwrap::BubblewrapSandbox;
 
 use crate::managed_environment::Unusable;
@@ -29,13 +29,24 @@ pub(crate) const VIEW_CONFIGURATION: &str = "pyvenv.cfg";
 #[derive(Debug, Clone)]
 pub(crate) struct PreparedView {
     view: PathBuf,
+    /// The declaration this view belongs to: the identity a Run records as the
+    /// view it actually used.
+    declaration_digest: String,
     grants: Vec<ReadOnlyInput>,
+    /// The narrow write authority this Plugin declared: one exact pair per
+    /// `mutable` path, never a root.
+    writable: Vec<WritableInput>,
 }
 
 impl PreparedView {
     /// The view this server launches on. Absolute and canonical.
     pub(crate) fn view(&self) -> &Path {
         &self.view
+    }
+
+    /// The declaration this view belongs to, as the run record observes it.
+    pub(crate) fn declaration_digest(&self) -> &str {
+        &self.declaration_digest
     }
 
     /// The directory that provides the view's own interpreter.
@@ -51,6 +62,9 @@ impl PreparedView {
         let extended = sandbox
             .with_readonly_grants(&self.grants)
             .map_err(|error| error.to_string())?;
+        let extended = extended
+            .with_writable_grants(&self.writable)
+            .map_err(|error| error.to_string())?;
         extended
             .with_executable_dirs(&[self.bin()])
             .map(Arc::new)
@@ -62,6 +76,11 @@ impl PreparedView {
         for grant in &self.grants {
             if !request.readonly_inputs.contains(grant) {
                 request.readonly_inputs.push(grant.clone());
+            }
+        }
+        for writable in &self.writable {
+            if !request.writable_inputs.contains(writable) {
+                request.writable_inputs.push(writable.clone());
             }
         }
         let bin = self.bin();
@@ -81,24 +100,9 @@ pub(crate) fn prepare(
     library_root: &Path,
     binding: &PluginBinding,
 ) -> Result<Option<PreparedView>, Unusable> {
-    let catalog = FilePluginCatalog::new(library_root);
-    let definition = match catalog.definition(&binding.id) {
-        Ok(definition) => definition,
-        // The Plugin is not installed under this Library root — a bundle-provided
-        // or fixture Plugin, or one this deployment keeps elsewhere. There is no
-        // view to mount. A manifest that named `${ANCHOR_PLUGIN_VIEW}` anyway is
-        // still refused at launch: the only path the host ever substitutes is one
-        // it granted.
-        Err(_) => return Ok(None),
-    };
-    if definition.digest != binding.digest {
-        // The Run froze a digest; the installed Plugin is not it. The launcher
-        // refuses rather than running bytes the Run never recorded.
-        return Err(Unusable::recorded(format!(
-            "Plugin `{}` changed since Run admission",
-            binding.id
-        )));
-    }
+    // The binding names which Plugin this invocation is for. There is no digest
+    // comparison: the Run uses the *current* Plugin (standard invariant 6), and
+    // the version it actually used is recorded as an observation instead.
     prepare_for_plugin(library_root, &binding.id)
 }
 
@@ -159,7 +163,34 @@ pub(crate) fn prepare_for_plugin(
             grants.push(grant);
         }
     }
-    Ok(Some(PreparedView { view, grants }))
+    // The Plugin's own declaration says what it may write. One exact pair per
+    // declared path, resolved under the Plugin directory with symlink checks, so a
+    // declaration can never reach outside it.
+    let plugin_directory = catalog
+        .plugin_directory(plugin)
+        .map_err(|error| Unusable::recorded(error.to_string()))?;
+    let mut writable = Vec::with_capacity(definition.mutable.paths().len());
+    let resolved = definition
+        .mutable
+        .resolve(&plugin_directory)
+        .map_err(Unusable::recorded)?;
+    for (declared, path) in definition.mutable.paths().iter().zip(resolved) {
+        if !path.exists() {
+            return Err(Unusable::recorded(format!(
+                "Plugin `{plugin}` declares mutable path `{declared}`, which does not exist; install the Plugin again to provide it"
+            )));
+        }
+        writable.push(WritableInput::new(
+            &path,
+            format!("/plugins/{plugin}/{}", declared.trim_end_matches('/')),
+        ));
+    }
+    Ok(Some(PreparedView {
+        view,
+        declaration_digest: definition.dependencies.declaration_digest(),
+        grants,
+        writable,
+    }))
 }
 
 /// The `(package, version)` directories one view's pointers actually name.
@@ -400,8 +431,11 @@ mod tests {
         assert!(prepare(root.path(), &binding).unwrap().is_none());
     }
 
+    /// A digest the Run recorded no longer matching the installed code is not a
+    /// refusal: the Run uses the *current* Plugin (standard invariant 6), and the
+    /// view it actually used is recorded as an observation instead.
     #[test]
-    fn a_digest_that_no_longer_matches_the_installed_plugin_refuses() {
+    fn a_changed_digest_binds_to_the_current_plugin_and_its_current_view() {
         let root = tempfile::tempdir().unwrap();
         let plugin = root.path().join("plugins/probe");
         fs::create_dir_all(&plugin).unwrap();
@@ -413,10 +447,39 @@ mod tests {
         let catalog = FilePluginCatalog::new(root.path());
         let mut binding = catalog.resolve(&["probe".into()]).unwrap().remove(0);
         binding.digest = "b".repeat(64);
+        // Nothing about the view itself changed, so the only failure left is that
+        // the view has not been built yet — never "the Plugin changed".
         let unusable = prepare(root.path(), &binding).unwrap_err();
         assert!(
-            matches!(unusable, Unusable::Recorded(ref reason) if reason.contains("changed since Run admission")),
+            matches!(unusable, Unusable::Recorded(ref reason) if reason.contains("is missing")),
             "{unusable:?}"
+        );
+        // With the view in place the changed digest prepares normally.
+        let root_path = root.path().canonicalize().unwrap();
+        let declaration = catalog
+            .definition("probe")
+            .unwrap()
+            .dependencies
+            .declaration_digest();
+        let store = anchor_graph_host::store_root(&root_path);
+        std::fs::create_dir_all(store.join("idna/3.6/idna")).unwrap();
+        let view = anchor_graph_host::plugin_view_path(&root_path, "probe", &declaration);
+        let site = view.join("lib/python3.12/site-packages");
+        std::fs::create_dir_all(&site).unwrap();
+        std::fs::create_dir_all(view.join("bin")).unwrap();
+        fs::write(view.join(VIEW_CONFIGURATION), "home = /usr/bin").unwrap();
+        std::os::unix::fs::symlink("/bin/sh", view.join("bin/python")).unwrap();
+        std::os::unix::fs::symlink(store.join("idna/3.6/idna"), site.join("idna")).unwrap();
+        let prepared = prepare(root.path(), &binding)
+            .unwrap()
+            .expect("the current declaration's view");
+        assert_eq!(
+            prepared.declaration_digest(),
+            catalog
+                .definition("probe")
+                .unwrap()
+                .dependencies
+                .declaration_digest()
         );
     }
 }

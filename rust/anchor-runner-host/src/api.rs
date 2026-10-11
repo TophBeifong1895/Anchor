@@ -247,8 +247,7 @@ pub async fn serve() -> io::Result<()> {
     // The root publication actually writes published environments into: the
     // explicit Library root, otherwise the Graph catalog the Plugin API also
     // falls back to. The build root must stay disjoint from it.
-    let environment_library_root =
-        crate::deployment_library_root().unwrap_or_else(|| catalog_root.clone());
+    let environment_library_root = crate::library_root(&catalog_root);
     let provisioner = match crate::environment_provision::from_env(
         &data_root,
         env::var_os("ANCHOR_BWRAP")
@@ -306,6 +305,7 @@ pub async fn serve() -> io::Result<()> {
     let callback_listen = listener.local_addr()?.to_string();
     let mut channel_supervisor = crate::channel_supervisor::ChannelSupervisor::start(
         &bundle_root,
+        &crate::library_root(&state.catalog_root),
         &state.data_root,
         &callback_listen,
         &state.api_keys,
@@ -556,15 +556,14 @@ async fn list_environment_requirements(
     // provided": that would report every need as unanswered with HTTP 200.
     // A name table this host cannot read must not be rendered as "nothing was
     // provided": that would report every need as unanswered with HTTP 200.
-    let names =
-        anchor_library::EnvironmentStore::new(crate::api::library_root(&state.catalog_root))
-            .names()
-            .map_err(|error| {
-                ApplicationError::Storage(format!(
-                    "the environment name table is unavailable: {error}"
-                ))
-            })
-            .map_err(application_error)?;
+    let names = anchor_library::EnvironmentStore::new(crate::library_root(&state.catalog_root))
+        .names()
+        .map_err(|error| {
+            ApplicationError::Storage(format!(
+                "the environment name table is unavailable: {error}"
+            ))
+        })
+        .map_err(application_error)?;
     let requirements = requirements
         .into_iter()
         .map(|requirement| {

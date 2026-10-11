@@ -51,6 +51,7 @@ const MANIFEST_FIELDS: &[&str] = &[
     "skills",
     "mcpServers",
     "dependencies",
+    "mutable",
     "hooks",
     "commands",
     "agents",
@@ -96,6 +97,151 @@ impl PluginDependencies {
         }
         format!("{:x}", hasher.finalize())
     }
+}
+
+/// The paths a Plugin declares as its own mutable state.
+///
+/// The platform provides the location and nothing else: it never copies,
+/// rewrites or verifies these paths, and the code digest does not cover them.
+/// That is why the declaration is explicit — the platform does not predict what a
+/// Plugin does.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+pub struct MutablePaths {
+    paths: Vec<String>,
+}
+
+impl MutablePaths {
+    pub fn paths(&self) -> &[String] {
+        &self.paths
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.paths.is_empty()
+    }
+
+    /// Whether one Plugin-relative path is inside a declared mutable path.
+    ///
+    /// A declaration that ends in `/` covers the whole subtree; one that does not
+    /// covers exactly that path.
+    pub fn covers(&self, relative: &str) -> bool {
+        let relative = relative.trim_start_matches("./");
+        self.paths.iter().any(|declared| {
+            if let Some(subtree) = declared.strip_suffix('/') {
+                relative == subtree || relative.starts_with(declared)
+            } else {
+                relative == declared
+            }
+        })
+    }
+
+    /// The declared paths as absolute paths under one Plugin directory.
+    ///
+    /// Fails closed on anything that would leave the Plugin directory: a
+    /// declaration that is not a plain relative path, or one whose existing
+    /// components include a symlink (which could point anywhere). The caller gets
+    /// a reason, never a widened path.
+    pub fn resolve(&self, plugin_directory: &Path) -> Result<Vec<PathBuf>, String> {
+        let mut resolved = Vec::with_capacity(self.paths.len());
+        for declared in &self.paths {
+            let relative = Path::new(declared);
+            if relative.is_absolute()
+                || declared.contains('\0')
+                || relative
+                    .components()
+                    .any(|component| !matches!(component, std::path::Component::Normal(_)))
+            {
+                return Err(format!("`{declared}` is not a plain relative mutable path"));
+            }
+            // Every existing component must be a real directory: a symlink here
+            // would let a declaration write outside the Plugin directory.
+            let mut current = plugin_directory.to_path_buf();
+            for component in relative.components() {
+                let std::path::Component::Normal(name) = component else {
+                    continue;
+                };
+                current.push(name);
+                match std::fs::symlink_metadata(&current) {
+                    Ok(metadata) if metadata.file_type().is_symlink() => {
+                        return Err(format!(
+                            "mutable path `{declared}` contains the symlink {}",
+                            current.display()
+                        ));
+                    }
+                    Ok(_) => {}
+                    // The rest does not exist yet; the host may create it.
+                    Err(_) => break,
+                }
+            }
+            let canonical = plugin_directory
+                .canonicalize()
+                .map_err(|error| format!("Plugin directory cannot be resolved: {error}"))?;
+            if !current.starts_with(&canonical) {
+                return Err(format!(
+                    "mutable path `{declared}` escapes the Plugin directory"
+                ));
+            }
+            resolved.push(current);
+        }
+        Ok(resolved)
+    }
+}
+
+/// Read `mutable` from an already-parsed manifest.
+/// The declared mutable paths of one manifest, for callers outside the catalog.
+///
+/// A caller that has to decide what is *code* in a tree the catalog is not reading
+/// (the installer validating an installed Plugin, for instance) uses the same
+/// parsing and the same rules as the catalog, so the two can never disagree.
+pub fn mutable_paths_from_manifest(value: &Value) -> Result<MutablePaths, String> {
+    let manifest = value
+        .as_object()
+        .ok_or_else(|| "a Plugin manifest must be an object".to_owned())?;
+    parse_mutable("the Plugin", manifest).map_err(|error| error.to_string())
+}
+
+pub(crate) fn parse_mutable(
+    id: &str,
+    manifest: &Map<String, Value>,
+) -> Result<MutablePaths, GraphError> {
+    let Some(value) = manifest.get("mutable") else {
+        return Ok(MutablePaths::default());
+    };
+    let entries = value.as_array().ok_or_else(|| {
+        invalid(format!(
+            "Plugin {id}: mutable must be a list of Plugin-relative paths"
+        ))
+    })?;
+    let mut paths = Vec::with_capacity(entries.len());
+    for entry in entries {
+        let text = entry.as_str().ok_or_else(|| {
+            invalid(format!(
+                "Plugin {id}: mutable must be a list of Plugin-relative paths"
+            ))
+        })?;
+        if !valid_mutable_path(text) {
+            return Err(invalid(format!(
+                "Plugin {id}: `{text}` is not a Plugin-relative mutable path (relative, no `..`, not `plugin.json`)"
+            )));
+        }
+        paths.push(text.to_owned());
+    }
+    Ok(MutablePaths { paths })
+}
+
+/// The shape rule for one declared mutable path.
+fn valid_mutable_path(value: &str) -> bool {
+    if value.is_empty() || value.len() > 200 || value.contains('\0') {
+        return false;
+    }
+    let trimmed = value.strip_suffix('/').unwrap_or(value);
+    if trimmed.is_empty() || trimmed == "plugin.json" {
+        return false;
+    }
+    let path = Path::new(trimmed);
+    !path.is_absolute()
+        && path
+            .components()
+            .all(|component| matches!(component, std::path::Component::Normal(_)))
 }
 
 /// Refuse a manifest field this catalog does not act on.

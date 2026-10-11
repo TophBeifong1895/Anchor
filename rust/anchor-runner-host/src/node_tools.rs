@@ -664,6 +664,7 @@ impl ToolPort for NodeTools {
                 return Err(self.invalid_arguments("command must contain at least one element"));
             }
             let mut request = SandboxRequest {
+                writable_inputs: Vec::new(),
                 workspace: self.workspace.clone(),
                 working_directory: None,
                 command: arguments.command,

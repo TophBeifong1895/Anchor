@@ -45,6 +45,7 @@ fn installed_plugin_is_frozen_before_library_replacement_and_native_execution() 
     }))
     .default_runtime();
     let root = host.base.root.path();
+    let library_root = root.to_path_buf();
     let source = root.join("checkout/demo");
     fs::create_dir_all(source.join(".codex-plugin")).unwrap();
     fs::create_dir_all(source.join("skills/demo")).unwrap();
@@ -67,8 +68,14 @@ fn installed_plugin_is_frozen_before_library_replacement_and_native_execution() 
     );
     assert_eq!(status, 201, "{created}");
     let bundle_root = root.join("installed");
-    let frozen = FileGraphBundleLoader::new(&bundle_root).load().unwrap();
-    assert_eq!(frozen.plugins[0].digest, installed.digest);
+    // A bundle references the Plugin by id: the Plugin's code and digest live in
+    // the Library, and upgrading it needs no bundle change at all.
+    let frozen = FileGraphBundleLoader::new(&bundle_root)
+        .with_library_root(&library_root)
+        .load()
+        .unwrap();
+    assert_eq!(frozen.plugins, ["demo"]);
+    assert!(!bundle_root.join("plugins").exists());
     fs::write(source.join("skills/demo/SKILL.md"), REPLACEMENT).unwrap();
     let replaced = library.install_directory("demo", &source, true).unwrap();
     assert_ne!(installed.digest, replaced.digest);
@@ -76,7 +83,10 @@ fn installed_plugin_is_frozen_before_library_replacement_and_native_execution() 
     assert_eq!(status, 200, "{current}");
     assert_eq!(current["digest"], replaced.digest);
     assert_eq!(current["instructions"], REPLACEMENT);
-    let preserved = FileGraphBundleLoader::new(&bundle_root).load().unwrap();
+    let preserved = FileGraphBundleLoader::new(&bundle_root)
+        .with_library_root(&library_root)
+        .load()
+        .unwrap();
     assert_eq!(frozen.plugins, preserved.plugins);
     let (status, accepted) =
         server.request("POST", "/trigger", Some(&json!({"graph":"installed"})));

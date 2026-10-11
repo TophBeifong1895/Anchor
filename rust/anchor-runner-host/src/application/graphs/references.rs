@@ -41,7 +41,7 @@ impl RunApplication {
                     "Graph `{graph}` could not be read to verify the assistant's own dependencies: {error:?}"
                 ))
             })?;
-            let bindings = plugin_bindings(&bundle);
+            let bindings = self.bundle_plugin_bindings(&bundle)?;
             if anchor_runtime::graph::declared_environment_sites(&bundle.snapshot, &bindings)
                 .iter()
                 .any(|declared| declared.name == name)
@@ -158,7 +158,7 @@ impl RunApplication {
         let mut nodes = Vec::new();
         let mut servers = Vec::new();
         for (graph, bundle) in &bundles {
-            let bindings = plugin_bindings(bundle);
+            let bindings = self.bundle_plugin_bindings(bundle)?;
             for declared in
                 anchor_runtime::graph::declared_environment_sites(&bundle.snapshot, &bindings)
             {
@@ -321,15 +321,24 @@ pub(crate) fn sorted_servers(
     servers
 }
 
-/// The bundle's Plugin bindings, keyed by id.
-fn plugin_bindings(
-    bundle: &anchor_graph_host::LoadedGraphBundle,
-) -> std::collections::BTreeMap<String, anchor_runtime::graph::PluginBinding> {
-    bundle
-        .plugins
-        .iter()
-        .map(|binding| (binding.id.clone(), binding.clone()))
-        .collect()
+impl RunApplication {
+    /// The current bindings of the Plugins one bundle references.
+    ///
+    /// A bundle carries ids only; the code and the views live in the Library, so
+    /// this is where every consumer resolves what a Run will actually use.
+    pub(crate) fn bundle_plugin_bindings(
+        &self,
+        bundle: &anchor_graph_host::LoadedGraphBundle,
+    ) -> Result<
+        std::collections::BTreeMap<String, anchor_runtime::graph::PluginBinding>,
+        ApplicationError,
+    > {
+        crate::application::graphs::referenced_plugin_bindings(
+            &crate::library_root(&self.catalog_root),
+            &bundle.plugins,
+        )
+        .map_err(ApplicationError::from)
+    }
 }
 
 #[cfg(test)]
@@ -339,18 +348,24 @@ mod tests {
     use anchor_graph_host::PluginCatalog;
 
     /// Write one loadable bundle that declares the named environment on a node.
-    fn bundle(root: &std::path::Path, graph: &str, environment: &str) -> std::path::PathBuf {
-        let directory = root.join(graph);
-        std::fs::create_dir_all(directory.join("plugins/demo")).unwrap();
+    fn bundle(
+        library_root: &std::path::Path,
+        bundle_parent: &std::path::Path,
+        graph: &str,
+        environment: &str,
+    ) -> std::path::PathBuf {
+        let directory = bundle_parent.join(graph);
+        std::fs::create_dir_all(&directory).unwrap();
+        // The Plugin lives in the Library; the bundle references it by id.
+        std::fs::create_dir_all(library_root.join("plugins/demo")).unwrap();
         std::fs::write(
-            directory.join("plugins/demo/plugin.json"),
+            library_root.join("plugins/demo/plugin.json"),
             r#"{"name":"Demo","mcpServers":{"probe":{"command":"bin/run","anchor":{"environment":"research"}}}}"#,
         )
         .unwrap();
-        let binding = anchor_graph_host::FilePluginCatalog::new(&directory)
+        anchor_graph_host::FilePluginCatalog::new(library_root)
             .resolve(&["demo".to_owned()])
-            .unwrap()
-            .remove(0);
+            .unwrap();
         std::fs::write(
             directory.join("graph.json"),
             serde_json::json!({
@@ -372,12 +387,7 @@ mod tests {
             serde_json::json!({
                 "format": 1,
                 "graph": "graph.json",
-                "plugins": [{
-                    "id": "demo",
-                    "digest": binding.digest,
-                    "resources": binding.resources,
-                    "mcp_servers": binding.mcp_servers,
-                }]
+                "plugins": [{"id": "demo"}]
             })
             .to_string(),
         )
@@ -389,7 +399,7 @@ mod tests {
     fn the_impact_scan_finds_node_and_plugin_server_references() {
         let root = tempfile::tempdir().unwrap();
         let application = application(root.path());
-        bundle(root.path(), "used", "research");
+        bundle(root.path(), root.path(), "used", "research");
 
         let references = application.environment_references("research").unwrap();
         assert!(
@@ -422,7 +432,7 @@ mod tests {
         let catalog = root.path().join("catalog");
         std::fs::create_dir_all(&catalog).unwrap();
         let deployment = root.path().join("deploy");
-        bundle(root.path(), "deploy", "research");
+        bundle(&catalog, root.path(), "deploy", "research");
         let application =
             application(&catalog).with_configured_graph("deployed".to_owned(), deployment.clone());
 
@@ -450,7 +460,7 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let catalog = root.path().join("catalog");
         std::fs::create_dir_all(&catalog).unwrap();
-        bundle(&catalog, "used", "research");
+        bundle(&catalog, &catalog, "used", "research");
         let application = application(&catalog)
             .with_configured_graph("deployed".to_owned(), root.path().join("gone"));
 

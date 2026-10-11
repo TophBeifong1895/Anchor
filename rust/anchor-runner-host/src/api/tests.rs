@@ -341,16 +341,16 @@ async fn graph_crud_binds_plugin_resources_and_removes_stale_bundle_plugins() {
     .await;
     assert_eq!(status, StatusCode::OK, "{value}");
     let bundle = FileGraphBundleLoader::new(&state.bundle_root)
+        .with_library_root(&state.catalog_root)
         .load()
         .unwrap();
-    assert_eq!(bundle.plugins.len(), 1);
-    assert_eq!(bundle.plugins[0].id, "demo");
+    // The bundle references the Plugin by id and carries no Plugin bytes.
+    assert_eq!(bundle.plugins, vec!["demo".to_owned()]);
     assert!(
-        state
-            .bundle_root
-            .join("plugins/demo/skills/example/SKILL.md")
-            .is_file()
+        !state.bundle_root.join("plugins").exists(),
+        "a bundle must not carry Plugin bytes"
     );
+    assert!(plugin.join("skills/example/SKILL.md").is_file());
 
     std::fs::write(plugin.join(".env"), "TOKEN=must-not-copy").unwrap();
     let (status, failure) = call(
@@ -363,6 +363,7 @@ async fn graph_crud_binds_plugin_resources_and_removes_stale_bundle_plugins() {
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{failure}");
     assert!(
         FileGraphBundleLoader::new(&state.bundle_root)
+            .with_library_root(&state.catalog_root)
             .load()
             .is_ok()
     );
@@ -2440,17 +2441,17 @@ async fn downstream_failure_does_not_reclassify_committed_upstream_result() {
 }
 
 #[tokio::test]
-async fn changed_plugin_and_mismatched_metadata_block_resume_without_starting_work() {
+async fn a_changed_plugin_does_not_block_resume_but_mismatched_metadata_does() {
     use anchor_graph_host::{FilePluginCatalog, PluginCatalog};
     let (_root, state) = fixture();
-    let plugin = state.bundle_root.join("plugins/fixture");
+    let plugin = state.catalog_root.join("plugins/fixture");
     std::fs::create_dir_all(&plugin).unwrap();
     std::fs::write(
         plugin.join("plugin.json"),
         r#"{"name":"Fixture","description":"test"}"#,
     )
     .unwrap();
-    let bindings = FilePluginCatalog::new(&state.bundle_root)
+    let bindings = FilePluginCatalog::new(&state.catalog_root)
         .resolve(&["fixture".into()])
         .unwrap();
     let snapshot = GraphSnapshot::admit(json!({"objective":"plugin","entry":"work",
@@ -2481,12 +2482,14 @@ async fn changed_plugin_and_mismatched_metadata_block_resume_without_starting_wo
     .unwrap();
     let app = router(state.clone());
     let (status, error) = call(app.clone(), "POST", "/runs/paused-plugin/resume", None).await;
-    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    // A Run uses the *current* Plugin: a Plugin that changed while the Run was
+    // parked is an observation, not a refusal.
     assert!(
-        error["error"]
+        !error["error"]
             .as_str()
-            .unwrap()
-            .contains("Plugin manifest changed")
+            .unwrap_or_default()
+            .contains("Plugin manifest changed"),
+        "a changed Plugin must not block resume: {status} {error}"
     );
     metadata["graph_digest"] = json!("wrong-digest");
     std::fs::write(&metadata_path, metadata.to_string()).unwrap();

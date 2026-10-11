@@ -302,6 +302,7 @@ mod tests {
             FileRunStore::new(root.join("runs")),
             LocalInputs::new(root.to_owned(), None).unwrap(),
         )
+        .with_library_root(Some(root.to_path_buf()))
     }
 
     fn admit(
@@ -607,6 +608,7 @@ mod tests {
         previous.results.insert(
             "agent".into(),
             vec![RunResult {
+                plugin_views: Default::default(),
                 sequence: 1,
                 node_id: "agent".into(),
                 key: prior.clone(),

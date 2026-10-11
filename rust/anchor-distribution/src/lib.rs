@@ -189,17 +189,57 @@ fn prepare(request: &PackageRequest, goose_sha256: &str) -> Result<PreparedPacka
         ));
     }
     let platform = validation::elf(&root.join("bin/goose"))?;
-    snapshots.push(Snapshot::tree(&request.bundle, root, "bundle")?);
+    // A Graph bundle carries a Graph and its Plugin *references*; the Plugin code
+    // ships beside it as importable sources, because a Plugin exists once, in the
+    // deployment's Library (standard invariant 13).
+    snapshots.push(Snapshot::resource(
+        &request.bundle.join("graph.json"),
+        root,
+        "bundle/graph.json",
+    )?);
+    snapshots.push(Snapshot::resource(
+        &request.bundle.join("manifest.json"),
+        root,
+        "bundle/manifest.json",
+    )?);
+    entries.insert("bundle".into(), None);
+    if request.bundle.join("plugins").is_dir() {
+        snapshots.push(Snapshot::tree(
+            &request.bundle.join("plugins"),
+            root,
+            "plugins",
+        )?);
+    }
     if let Some(web) = &request.web {
         snapshots.push(Snapshot::tree(web, root, "web")?);
     }
     add_snapshots(&mut entries, &snapshots[tools.len() + 3..])?;
+    // Not an archive entry: the input directory's own stamp, so an addition to it
+    // between preparation and publication is a drift rather than a silent copy.
+    snapshots.push(Snapshot::listing(&request.bundle, "bundle")?);
     let bundle_root = root.join("bundle");
+    let plugin_root = root.join("plugins");
+    // What may travel: the Graph, its manifest, and the Plugin sources that ship
+    // beside the bundle. Anything else in the input would reach the archive
+    // without being named, so it is refused here.
+    let mut input_entries = Vec::new();
+    for entry in fs::read_dir(&request.bundle)? {
+        input_entries.push(entry?.file_name().to_string_lossy().into_owned());
+    }
+    input_entries.sort();
+    if let Some(extra) = input_entries
+        .iter()
+        .find(|name| !matches!(name.as_str(), "graph.json" | "manifest.json" | "plugins"))
+    {
+        return Err(PackageError::Invalid(format!(
+            "the input carries an undeclared addition: {extra}"
+        )));
+    }
     // A channel entrypoint is itself part of the closed Plugin bundle. Read
     // the manifest first so the reviewed channel binary can be staged before
     // shared admission checks that entrypoint existence.
     let manifest: GraphBundleManifest = serde_json::from_slice(
-        &fs::read(bundle_root.join("manifest.json")).map_err(|_| PackageError::Bundle)?,
+        &fs::read(request.bundle.join("manifest.json")).map_err(|_| PackageError::Bundle)?,
     )
     .map_err(|_| PackageError::Bundle)?;
     let plugin_ids = manifest
@@ -229,7 +269,8 @@ fn prepare(request: &PackageRequest, goose_sha256: &str) -> Result<PreparedPacka
             (true, Some(source)) => {
                 let mut files = BinaryInstallContext {
                     root,
-                    bundle_root: &bundle_root,
+                    source_root: root,
+                    plugin_root: &plugin_root,
                     entries: &mut entries,
                     snapshots: &mut snapshots,
                 };
@@ -254,7 +295,8 @@ fn prepare(request: &PackageRequest, goose_sha256: &str) -> Result<PreparedPacka
         (true, Some(source)) => {
             let mut files = BinaryInstallContext {
                 root,
-                bundle_root: &bundle_root,
+                source_root: root,
+                plugin_root: &plugin_root,
                 entries: &mut entries,
                 snapshots: &mut snapshots,
             };
@@ -282,26 +324,25 @@ fn prepare(request: &PackageRequest, goose_sha256: &str) -> Result<PreparedPacka
         (false, None) => {}
     }
     if first_party_added {
-        refresh_bundle_manifest(&bundle_root, &plugin_ids, &mut entries)?;
+        refresh_bundle_manifest(&bundle_root, root, &plugin_ids, &mut entries)?;
     }
     let admitted = FileGraphBundleLoader::new(&bundle_root)
         .load()
-        .map_err(|_| PackageError::Bundle)?;
+        .map_err(|error| {
+            PackageError::Invalid(format!("Graph bundle failed shared admission: {error}"))
+        })?;
+    let plugin_ids = admitted.plugins.clone();
     let scholarly_plugin = admitted
         .plugins
         .iter()
-        .any(|plugin| plugin.id == "academic-research");
+        .any(|plugin| plugin == "academic-research");
     match (scholarly_plugin, request.scholarly.as_ref()) {
         (true, Some(binary)) => {
-            let plugin_ids = admitted
-                .plugins
-                .iter()
-                .map(|plugin| plugin.id.clone())
-                .collect::<Vec<_>>();
             install_scholarly_binary(
                 binary,
                 &plugin_ids,
-                &bundle_root,
+                &request.bundle,
+                &plugin_root,
                 &mut entries,
                 &mut snapshots,
             )?;
@@ -321,18 +362,24 @@ fn prepare(request: &PackageRequest, goose_sha256: &str) -> Result<PreparedPacka
     }
     let admitted = FileGraphBundleLoader::new(&bundle_root)
         .load()
-        .map_err(|_| PackageError::Bundle)?;
+        .map_err(|error| {
+            PackageError::Invalid(format!("Graph bundle failed shared admission: {error}"))
+        })?;
+    // The inventory describes the code the deployment will import, read from the
+    // source tree that was shipped beside the bundle.
+    let source_catalog = FilePluginCatalog::new(root);
     let bundle = BundleInventory {
         graph_sha256: resource(&entries, "bundle/graph.json")?.sha256.clone(),
         manifest_sha256: resource(&entries, "bundle/manifest.json")?.sha256.clone(),
-        plugins: admitted
-            .plugins
+        plugins: source_catalog
+            .resolve(&admitted.plugins)
+            .map_err(|_| PackageError::Bundle)?
             .into_iter()
-            .map(|plugin| PluginInventory {
-                id: plugin.id,
-                digest: plugin.digest,
-                resources: plugin.resources,
-                mcp_servers: plugin.mcp_servers,
+            .map(|binding| PluginInventory {
+                id: binding.id,
+                digest: binding.digest,
+                resources: binding.resources,
+                mcp_servers: binding.mcp_servers,
             })
             .collect(),
     };
@@ -389,11 +436,12 @@ fn prepare(request: &PackageRequest, goose_sha256: &str) -> Result<PreparedPacka
 fn install_scholarly_binary(
     binary: &Path,
     plugin_ids: &[String],
-    bundle_root: &Path,
+    source_root: &Path,
+    plugin_root: &Path,
     entries: &mut BTreeMap<String, Option<ResourceFile>>,
     snapshots: &mut Vec<Snapshot>,
 ) -> Result<()> {
-    let catalog = FilePluginCatalog::new(bundle_root);
+    let catalog = FilePluginCatalog::new(source_root);
     let servers = catalog
         .mcp_servers("academic-research", false)
         .map_err(|_| PackageError::Bundle)?;
@@ -413,17 +461,17 @@ fn install_scholarly_binary(
         ));
     }
 
-    let relative = "bundle/plugins/academic-research/bin/anchor-scholarly";
+    let relative = "plugins/academic-research/bin/anchor-scholarly";
     if entries.contains_key(relative) {
         return Err(PackageError::Invalid(
-            "academic-research bundle already contains bin/anchor-scholarly".into(),
+            "academic-research sources already contain bin/anchor-scholarly".into(),
         ));
     }
-    let directory = "bundle/plugins/academic-research/bin";
+    let directory = "plugins/academic-research/bin";
     if !entries.contains_key(directory) {
-        fs::create_dir(bundle_root.join("plugins/academic-research/bin"))?;
+        fs::create_dir(plugin_root.join("academic-research/bin"))?;
         fs::set_permissions(
-            bundle_root.join("plugins/academic-research/bin"),
+            plugin_root.join("academic-research/bin"),
             fs::Permissions::from_mode(0o755),
         )?;
         entries.insert(directory.into(), None);
@@ -433,35 +481,30 @@ fn install_scholarly_binary(
         ));
     }
 
-    let snapshot = Snapshot::file(binary, bundle_root.parent().unwrap(), relative)?;
-    let destination = bundle_root.join("plugins/academic-research/bin/anchor-scholarly");
+    let snapshot = Snapshot::file(binary, plugin_root.parent().unwrap(), relative)?;
+    let destination = plugin_root.join("academic-research/bin/anchor-scholarly");
     validation::elf(&destination)?;
     add_snapshots(entries, std::slice::from_ref(&snapshot))?;
     snapshots.push(snapshot);
 
-    let bindings = catalog
+    // The declarations are validated against the source tree, and the bundle keeps
+    // referencing them by id.
+    catalog
         .resolve(plugin_ids)
         .map_err(|_| PackageError::Bundle)?;
-    let plugins = bindings
-        .into_iter()
-        .map(|binding| {
-            serde_json::json!({
-                "id": binding.id,
-                "digest": binding.digest,
-                "resources": binding.resources,
-                "mcp_servers": binding.mcp_servers
-            })
-        })
-        .collect::<Vec<_>>();
     let mut bytes = serde_json::to_vec_pretty(&serde_json::json!({
         "format": 1,
         "graph": "graph.json",
-        "plugins": plugins
+        "plugins": plugin_ids
+            .iter()
+            .map(|id| serde_json::json!({"id": id}))
+            .collect::<Vec<_>>()
     }))?;
     bytes.push(b'\n');
-    fs::write(bundle_root.join("manifest.json"), &bytes)?;
+    let output_bundle = plugin_root.parent().unwrap().join("bundle");
+    fs::write(output_bundle.join("manifest.json"), &bytes)?;
     fs::set_permissions(
-        bundle_root.join("manifest.json"),
+        output_bundle.join("manifest.json"),
         fs::Permissions::from_mode(0o644),
     )?;
     let manifest_resource = entries
@@ -475,7 +518,10 @@ fn install_scholarly_binary(
 
 struct BinaryInstallContext<'a> {
     root: &'a Path,
-    bundle_root: &'a Path,
+    /// Where the Plugin declarations are read from: the input source tree.
+    source_root: &'a Path,
+    /// Where Plugin sources are shipped, for the deployment to import.
+    plugin_root: &'a Path,
     entries: &'a mut BTreeMap<String, Option<ResourceFile>>,
     snapshots: &'a mut Vec<Snapshot>,
 }
@@ -487,7 +533,7 @@ fn install_plugin_binary(
     binary_name: &str,
     files: &mut BinaryInstallContext<'_>,
 ) -> Result<()> {
-    let catalog = FilePluginCatalog::new(files.bundle_root);
+    let catalog = FilePluginCatalog::new(files.source_root);
     let servers = catalog
         .mcp_servers(plugin_id, false)
         .map_err(|_| PackageError::Bundle)?;
@@ -523,7 +569,7 @@ fn install_channel_binary(
     let channel: serde_json::Value = serde_json::from_slice(
         &fs::read(
             files
-                .bundle_root
+                .source_root
                 .join("plugins")
                 .join(plugin_id)
                 .join("channel.json"),
@@ -545,7 +591,7 @@ fn install_channel_binary(
         .strip_prefix("bin/")
         .ok_or_else(|| PackageError::Invalid("channel binary must be under bin/".into()))?;
     install_bundle_binary(binary, plugin_id, binary_name, files)?;
-    FilePluginCatalog::new(files.bundle_root)
+    FilePluginCatalog::new(files.source_root)
         .channels(plugin_id)
         .map_err(|_| PackageError::Bundle)?;
     Ok(())
@@ -557,13 +603,13 @@ fn install_bundle_binary(
     binary_name: &str,
     files: &mut BinaryInstallContext<'_>,
 ) -> Result<()> {
-    let relative = format!("bundle/plugins/{plugin_id}/bin/{binary_name}");
+    let relative = format!("plugins/{plugin_id}/bin/{binary_name}");
     if files.entries.contains_key(&relative) {
         return Err(PackageError::Invalid(format!(
-            "{plugin_id} bundle already contains bin/{binary_name}"
+            "{plugin_id} sources already contain bin/{binary_name}"
         )));
     }
-    let directory = format!("bundle/plugins/{plugin_id}/bin");
+    let directory = format!("plugins/{plugin_id}/bin");
     match files.entries.get(&directory) {
         Some(None) => {}
         Some(Some(_)) => {
@@ -572,18 +618,10 @@ fn install_bundle_binary(
             )));
         }
         None => {
-            let path = files
-                .bundle_root
-                .join("plugins")
-                .join(plugin_id)
-                .join("bin");
+            let path = files.plugin_root.join(plugin_id).join("bin");
             fs::create_dir(path)?;
             fs::set_permissions(
-                files
-                    .bundle_root
-                    .join("plugins")
-                    .join(plugin_id)
-                    .join("bin"),
+                files.plugin_root.join(plugin_id).join("bin"),
                 fs::Permissions::from_mode(0o755),
             )?;
             files.entries.insert(directory, None);
@@ -597,24 +635,20 @@ fn install_bundle_binary(
     Ok(())
 }
 
+/// Rewrite the bundle's manifest as references, validating them against the
+/// Plugin sources that ship beside the bundle.
 fn refresh_bundle_manifest(
     bundle_root: &Path,
+    source_root: &Path,
     plugin_ids: &[String],
     entries: &mut BTreeMap<String, Option<ResourceFile>>,
 ) -> Result<()> {
-    let bindings = FilePluginCatalog::new(bundle_root)
+    FilePluginCatalog::new(source_root)
         .resolve(plugin_ids)
         .map_err(|_| PackageError::Bundle)?;
-    let plugins = bindings
-        .into_iter()
-        .map(|binding| {
-            serde_json::json!({
-                "id": binding.id,
-                "digest": binding.digest,
-                "resources": binding.resources,
-                "mcp_servers": binding.mcp_servers
-            })
-        })
+    let plugins = plugin_ids
+        .iter()
+        .map(|id| serde_json::json!({"id": id}))
         .collect::<Vec<_>>();
     let mut bytes = serde_json::to_vec_pretty(&serde_json::json!({
         "format": 1,
@@ -678,7 +712,7 @@ fn validate_bundle_closure(
     ]);
     for plugin in plugins {
         for resource in &plugin.resources {
-            declared.insert(format!("bundle/plugins/{}/{resource}", plugin.id));
+            declared.insert(format!("plugins/{}/{resource}", plugin.id));
         }
     }
     for file in declared.clone() {
@@ -690,7 +724,12 @@ fn validate_bundle_closure(
     }
     let actual = entries
         .keys()
-        .filter(|path| path.as_str() == "bundle" || path.starts_with("bundle/"))
+        .filter(|path| {
+            path.as_str() == "bundle"
+                || path.starts_with("bundle/")
+                || path.as_str() == "plugins"
+                || path.starts_with("plugins/")
+        })
         .cloned()
         .collect::<BTreeSet<_>>();
     if actual != declared {

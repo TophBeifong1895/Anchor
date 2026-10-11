@@ -1,5 +1,6 @@
 use super::*;
 use crate::PROCESS_ENV_LOCK;
+use anchor_graph_host::PluginCatalog;
 use anchor_library::{
     FileOAuthTokenStore, OAuthAuthorizationMetadata, OAuthBinding, OAuthClient,
     OAuthRefreshRequest, OAuthRefreshTransport, OAuthTokenResponse, OAuthTransportError,
@@ -228,24 +229,26 @@ async fn expired_oauth_token_refreshes_through_pinned_loopback_transport() {
 }
 
 #[test]
-fn oauth_token_store_follows_the_host_catalog_fallback() {
+fn oauth_token_store_follows_the_deployment_library_root() {
     let catalog = Path::new("/srv/anchor/catalog");
-    assert_eq!(
-        resolve_oauth_library_root(
-            catalog,
-            None,
-            None,
-            Some(PathBuf::from("/srv/anchor/catalog/bundles/main")),
-        ),
-        catalog
-    );
+    // The deployment's Library root, when it configured one.
     assert_eq!(
         resolve_oauth_library_root(
             catalog,
             Some(PathBuf::from("/srv/anchor/library")),
             Some(PathBuf::from("/srv/anchor/catalog")),
-            None,
         ),
         PathBuf::from("/srv/anchor/library")
+    );
+    // Otherwise the Graph catalog it configured — never a path inferred from the
+    // bundle, which is where the Graph is, not where a Plugin is.
+    assert_eq!(resolve_oauth_library_root(catalog, None, None), catalog);
+    assert_eq!(
+        resolve_oauth_library_root(
+            catalog,
+            None,
+            Some(PathBuf::from("/srv/anchor/catalog/bundles/main")),
+        ),
+        PathBuf::from("/srv/anchor/catalog/bundles/main")
     );
 }

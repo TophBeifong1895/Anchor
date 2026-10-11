@@ -33,7 +33,25 @@ impl Catalog {
 
 /// The Plugin declarations a called Graph carries, if the test sets them.
 #[derive(Default)]
-struct CatalogBundles(std::sync::Mutex<BTreeMap<String, Vec<PluginBinding>>>);
+struct CatalogBundles(std::sync::Mutex<BTreeMap<String, Vec<String>>>);
+
+/// The Plugins one test catalog can resolve, keyed by id: the same shape the host
+/// uses, where a bundle references an id and the Library owns the code.
+#[derive(Default)]
+struct FixturePlugins(std::sync::Mutex<BTreeMap<String, PluginBinding>>);
+
+impl anchor_graph_host::PluginCatalog for FixturePlugins {
+    fn resolve(&self, ids: &[String]) -> Result<Vec<PluginBinding>, GraphError> {
+        let plugins = self.0.lock().unwrap();
+        ids.iter()
+            .map(|id| {
+                plugins.get(id).cloned().ok_or_else(|| {
+                    GraphError::InvalidSnapshot(format!("fixture Plugin `{id}` is not installed"))
+                })
+            })
+            .collect()
+    }
+}
 
 impl GraphCatalog for Catalog {
     fn snapshot(&self, name: &str) -> Result<Option<GraphSnapshot>, GraphError> {
@@ -1408,24 +1426,32 @@ async fn a_child_plugin_server_environment_without_a_resolver_leaves_no_durable_
         let mut child = child_graph();
         child.nodes[0].plugins = vec!["demo".into()];
         catalog.graphs.lock().unwrap().insert("child".into(), child);
-        catalog.bundles.0.lock().unwrap().insert(
-            "child".into(),
-            vec![PluginBinding {
-                id: "demo".into(),
-                digest: "d".repeat(64),
-                resources: Vec::new(),
-                mcp_servers: vec!["probe".into()],
-                environments: [("probe".to_owned(), "research".to_owned())].into(),
-            }],
-        );
+        catalog
+            .bundles
+            .0
+            .lock()
+            .unwrap()
+            .insert("child".into(), vec!["demo".into()]);
     }
+    let plugins = FixturePlugins::default();
+    plugins.0.lock().unwrap().insert(
+        "demo".into(),
+        PluginBinding {
+            id: "demo".into(),
+            digest: "d".repeat(64),
+            resources: Vec::new(),
+            mcp_servers: vec!["probe".into()],
+            environments: [("probe".to_owned(), "research".to_owned())].into(),
+        },
+    );
     let nodes = Nodes(Arc::new(AtomicUsize::new(0)));
     let artifacts = Artifacts;
     let control = Control;
     let parent = GraphRunRecord::create(parent_graph(spec("wait")), json!({})).unwrap();
     // No resolver is configured: a Plugin server declaration must refuse exactly
     // like a node declaration, before any durable child fact exists.
-    let host = InProcessGraphHost::new(&catalog, &store, &artifacts, &nodes, &control);
+    let host = InProcessGraphHost::new(&catalog, &store, &artifacts, &nodes, &control)
+        .with_plugin_catalog(&plugins);
     let error = GraphRunner::new(&store, &artifacts, &host, &control)
         .run(parent)
         .await

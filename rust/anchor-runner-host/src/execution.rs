@@ -28,12 +28,16 @@ impl PreparedExecution {
         catalog_root: std::path::PathBuf,
         application: RunApplication,
     ) -> Result<Self, String> {
+        // One answer for "where does a Plugin live": the deployment's Library root,
+        // or the catalog this application was configured with.
+        let library_root = Some(crate::library_root(&catalog_root));
         Self::prepare_with_bindings(
             record,
             control,
             bindings,
             Some(catalog_root),
             Some(application),
+            library_root,
         )
     }
 
@@ -43,10 +47,11 @@ impl PreparedExecution {
         bindings: BTreeMap<String, PluginBinding>,
         catalog_root: Option<std::path::PathBuf>,
         application: Option<RunApplication>,
+        library_root: Option<std::path::PathBuf>,
     ) -> Result<Self, String> {
         reject_snapshot(&record.snapshot)?;
         let (store, artifacts, nodes, control) =
-            make_host_with_control(&record.run_id, bindings.clone(), control)?;
+            make_host_with_control(&record.run_id, bindings.clone(), control, library_root)?;
         // Admission validates the Plugin declarations and host wiring. The
         // per-node network flag is enforced when the node is dispatched.
         nodes

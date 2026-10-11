@@ -727,30 +727,24 @@ fn install_message(precondition: &PluginInstallPrecondition) -> String {
             "这是新建，不会覆盖任何现有插件。\n"
         },
     );
-    // Changing a Plugin's manifest changes a binding its Runs already froze, so
-    // the human is told exactly what the replacement reaches.
+    // Which Graphs bind the Plugin is still worth showing; what it does to Runs
+    // is not a question any more. Upgrading takes effect from each Run's next node
+    // call and strands nothing, so there is nothing to confirm and nothing that
+    // will refuse to continue.
     let impact = &precondition.impact;
-    if impact.graphs.is_empty() && impact.unfinished_runs.is_empty() {
-        message.push_str("当前没有 Graph 或未结束的 Run 绑定这个插件。\n");
+    if impact.graphs.is_empty() {
+        message.push_str("当前没有 Graph 绑定这个插件。\n");
     } else {
         message.push_str(&format!(
-            "当前依赖这个插件：{} 张图{}，{} 个未结束的 Run{}\n",
+            "当前依赖这个插件：{} 张图（{}）\n",
             impact.graphs.len(),
-            if impact.graphs.is_empty() {
-                String::new()
-            } else {
-                format!("（{}）", impact.graphs.join(", "))
-            },
-            impact.unfinished_runs.len(),
-            if impact.unfinished_runs.is_empty() {
-                String::new()
-            } else {
-                format!("（{}）", impact.unfinished_runs.join(", "))
-            }
+            impact.graphs.join(", ")
         ));
-        if !impact.unfinished_runs.is_empty() {
-            message.push_str("未结束的 Run 记录了它被接纳时的插件指纹；替换后它们会拒绝继续，需要先结束或放弃它们。\n");
-        }
+    }
+    if precondition.replacing() && !precondition.already_installed() {
+        message.push_str(
+            "升级从每个正在跑的 Run 的**下一次节点调用**起生效；已完成的步骤不回滚、不重放。\n",
+        );
     }
     // Outside the branch on purpose: an empty count beside a partial scan would
     // otherwise read as "nothing depends on it" when a Graph could not be read.
@@ -854,7 +848,7 @@ async fn install(
         .application
         .load_graph(&tools.graph_name)
         .map_err(|error| failure(format!("the assistant Graph is unavailable: {error:?}")))?;
-    if bundle.plugins.iter().any(|binding| binding.id == id) {
+    if bundle.plugins.iter().any(|plugin| plugin == &id) {
         return Err(failure(format!(
             "`{id}` provides this assistant's own instructions; ask the operator to install it through the operator interface"
         )));
@@ -904,12 +898,7 @@ async fn install(
             json!({"type":"boolean","title":"我接受这些无法阅读源码的编译产物","default":false}),
         );
     }
-    if !precondition.impact.unfinished_runs.is_empty() && replacing {
-        properties.insert(
-            "replace_bound_runs".into(),
-            json!({"type":"boolean","title":format!("我确认：{} 个未结束的 Run 仍绑定这个插件，替换后它们会拒绝继续", precondition.impact.unfinished_runs.len()),"default":false}),
-        );
-    }
+
     let required = properties.keys().cloned().collect::<Vec<_>>();
     let schema = json!({
         "type":"object",
@@ -943,10 +932,7 @@ async fn install(
     let accepted = result.action == ElicitationAction::Accept
         && approved("confirm")
         && (!replacing || approved("replace_existing"))
-        && (!precondition.review.binary_without_source || approved("accept_unreadable"))
-        && (!replacing
-            || precondition.impact.unfinished_runs.is_empty()
-            || approved("replace_bound_runs"));
+        && (!precondition.review.binary_without_source || approved("accept_unreadable"));
     if !accepted {
         return Ok(vec![ToolResultContent::text(
             json!({"installed":false,"id":precondition.review.id,"action":result.action})
@@ -955,11 +941,7 @@ async fn install(
     }
     let outcome = tools
         .application
-        .install_plugin_if_unchanged(
-            tools.library_root.clone(),
-            precondition.clone(),
-            approved("replace_bound_runs"),
-        )
+        .install_plugin_if_unchanged(tools.library_root.clone(), precondition.clone())
         .await
         .map_err(|error| {
             failure(format!(
@@ -1088,7 +1070,6 @@ mod tests {
             existing_digest: None,
             impact: PluginImpact {
                 graphs: Vec::new(),
-                unfinished_runs: Vec::new(),
                 coverage: ImpactCoverage::Complete,
             },
             dependencies: Some(PluginDependencyPlan {

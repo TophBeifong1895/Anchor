@@ -23,7 +23,8 @@ fn save_run(application: &RunApplication, name: &str, run_id: &str, status: RunS
 
 fn plugin_bundle(application: &RunApplication) -> PathBuf {
     let path = application.graph_path_checked("fixture").unwrap();
-    let plugin = path.join("plugins/demo");
+    // The Plugin exists once, in the Library; the bundle references it by id.
+    let plugin = application.catalog_root.join("plugins/demo");
     std::fs::create_dir_all(plugin.join("skills")).unwrap();
     std::fs::write(plugin.join("plugin.json"), r#"{"name":"Demo"}"#).unwrap();
     std::fs::write(plugin.join("skills/SKILL.md"), "safe resource").unwrap();
@@ -32,13 +33,13 @@ fn plugin_bundle(application: &RunApplication) -> PathBuf {
     authoring["ops"] = json!({});
     authoring["nodes"] = json!([{"id": "work", "agent": "worker", "plugins": ["demo"]}]);
     std::fs::write(path.join("graph.json"), authoring.to_string()).unwrap();
-    seal_plugin_bundle(&path);
+    seal_plugin_bundle(&application.catalog_root, &path);
     application.load_graph("fixture").unwrap();
     path
 }
 
-fn seal_plugin_bundle(path: &Path) {
-    let binding = FilePluginCatalog::new(path)
+fn seal_plugin_bundle(library_root: &Path, path: &Path) {
+    let binding = FilePluginCatalog::new(library_root)
         .resolve(&["demo".into()])
         .unwrap()
         .remove(0);
@@ -47,12 +48,7 @@ fn seal_plugin_bundle(path: &Path) {
         json!({
             "format": 1,
             "graph": "graph.json",
-            "plugins": [{
-                "id": binding.id,
-                "digest": binding.digest,
-                "resources": binding.resources,
-                "mcp_servers": binding.mcp_servers
-            }]
+            "plugins": [{"id": binding.id}]
         })
         .to_string(),
     )
@@ -237,7 +233,7 @@ async fn identical_resource_replacement_refuses_the_old_confirmation() {
         .graph_delete_precondition("fixture")
         .await
         .unwrap();
-    let resource = path.join("plugins/demo/skills/SKILL.md");
+    let resource = path.join("graph.json");
     let replacement = root.path().join("replacement");
     std::fs::write(&replacement, std::fs::read(&resource).unwrap()).unwrap();
     std::fs::rename(replacement, &resource).unwrap();
@@ -259,12 +255,11 @@ async fn valid_resource_updates_refuse_the_old_confirmation() {
         .graph_delete_precondition("fixture")
         .await
         .unwrap();
-    std::fs::write(
-        path.join("plugins/demo/skills/SKILL.md"),
-        "updated resource",
-    )
-    .unwrap();
-    seal_plugin_bundle(&path);
+    // A changed but still valid Graph: the same Plugin reference, a new objective.
+    let mut updated: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(path.join("graph.json")).unwrap()).unwrap();
+    updated["objective"] = json!("fixture updated");
+    std::fs::write(path.join("graph.json"), updated.to_string()).unwrap();
     application.load_graph("fixture").unwrap();
     assert_conflict_unchanged(
         &application,
@@ -289,8 +284,8 @@ async fn invalid_and_changed_resources_fail_closed_without_cleanup() {
         "retained-run",
         RunStatus::Completed,
     );
-    let resource = path.join("plugins/demo/skills/SKILL.md");
-    std::fs::write(&resource, "changed resource").unwrap();
+    let resource = path.join("graph.json");
+    std::fs::write(&resource, "not a graph").unwrap();
     let before = files(root.path());
     assert!(matches!(
         application
@@ -458,7 +453,7 @@ async fn resource_symlinks_and_special_files_are_rejected_without_following_them
         .graph_delete_precondition("fixture")
         .await
         .unwrap();
-    let resource = path.join("plugins/demo/skills/SKILL.md");
+    let resource = path.join("graph.json");
     let outside = root.path().join("outside");
     std::fs::write(&outside, "safe resource").unwrap();
     std::fs::remove_file(&resource).unwrap();

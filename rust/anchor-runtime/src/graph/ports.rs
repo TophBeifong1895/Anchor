@@ -404,6 +404,18 @@ pub trait NodeExecutionPort: Send + Sync {
         &'a self,
         request: NodeExecutionRequest,
     ) -> Pin<Box<dyn Future<Output = Result<NodeExecutionOutcome, GraphError>> + Send + 'a>>;
+
+    /// The dependency views this invocation actually used, keyed by Plugin id.
+    ///
+    /// Read once when the node's result is written, so a Run records which view
+    /// each step used. It is an observation: returning nothing is not a failure,
+    /// and nothing here may refuse an invocation (standard invariant 6).
+    fn observed_plugin_views(
+        &self,
+        _key: &InvocationKey,
+    ) -> std::collections::BTreeMap<String, String> {
+        std::collections::BTreeMap::new()
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default)]

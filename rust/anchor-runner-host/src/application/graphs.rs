@@ -68,7 +68,10 @@ impl RunApplication {
         if !path.exists() {
             return Err(GraphManagementError::Missing("no such graph".into()));
         }
-        let bundle = FileGraphBundleLoader::new(&path).load().map_err(invalid)?;
+        let bundle = FileGraphBundleLoader::new(&path)
+            .with_library_root(crate::library_root(&self.catalog_root))
+            .load()
+            .map_err(invalid)?;
         Ok((path, bundle))
     }
 
@@ -103,7 +106,10 @@ impl RunApplication {
                     let name = entry.file_name().to_string_lossy().into_owned();
                     if valid_graph_name(&name)
                         && !names.contains(&name)
-                        && FileGraphBundleLoader::new(entry.path()).load().is_ok()
+                        && FileGraphBundleLoader::new(entry.path())
+                            .with_library_root(crate::library_root(&self.catalog_root))
+                            .load()
+                            .is_ok()
                     {
                         names.push(name);
                     }
@@ -247,10 +253,19 @@ fn storage(failure: impl std::fmt::Display) -> GraphManagementError {
     GraphManagementError::Storage(failure.to_string())
 }
 
-fn library_root(catalog_root: &Path) -> PathBuf {
-    std::env::var_os("ANCHOR_RUNNER_LIBRARY_ROOT")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| catalog_root.to_path_buf())
+/// The current bindings of the Plugins one Graph bundle references.
+///
+/// A bundle carries ids only, so every consumer that needs the code a Run will
+/// actually use resolves it here — from the Library.
+pub(crate) fn referenced_plugin_bindings(
+    library_root: &Path,
+    ids: &[String],
+) -> Result<std::collections::BTreeMap<String, PluginBinding>, GraphError> {
+    Ok(FilePluginCatalog::new(library_root)
+        .resolve(ids)?
+        .into_iter()
+        .map(|binding| (binding.id.clone(), binding))
+        .collect())
 }
 
 fn resolve_graph_definition(
@@ -265,7 +280,7 @@ fn resolve_graph_definition(
         .collect::<std::collections::BTreeSet<_>>()
         .into_iter()
         .collect::<Vec<_>>();
-    let catalog = FilePluginCatalog::new(library_root(catalog_root));
+    let catalog = FilePluginCatalog::new(crate::library_root(catalog_root));
     let bindings = catalog.resolve(&ids)?;
     Ok((snapshot, catalog, bindings))
 }
@@ -350,10 +365,7 @@ fn write_graph_bundle_from_catalog(
     definition: &Value,
     catalog_root: &Path,
 ) -> Result<(), GraphManagementError> {
-    use std::sync::atomic::{AtomicU64, Ordering};
-
-    static STAGING_ID: AtomicU64 = AtomicU64::new(0);
-    let _library_guard = anchor_library::Library::new(library_root(catalog_root))
+    let _library_guard = anchor_library::Library::new(crate::library_root(catalog_root))
         .catalog_read_guard()
         .map_err(|failure| match failure {
             anchor_library::InstallError::CatalogBusy => {
@@ -361,123 +373,47 @@ fn write_graph_bundle_from_catalog(
             }
             _ => GraphManagementError::Storage(failure.to_string()),
         })?;
-    let (_, catalog, bindings) =
+    // Resolving here is a validation of the export, not a copy: the Plugin stays
+    // in the Library, which is the only place it exists.
+    let (_, _catalog, bindings) =
         resolve_graph_definition(definition, catalog_root).map_err(invalid)?;
     std::fs::create_dir_all(path).map_err(storage)?;
-
-    let staging_id = STAGING_ID.fetch_add(1, Ordering::Relaxed);
-    let staged_plugins = path.join(format!(
-        ".plugins-stage-{}-{staging_id}",
-        std::process::id()
-    ));
-    let old_plugins = path.join(format!(".plugins-old-{}-{staging_id}", std::process::id()));
-    let graph_tmp = path.join(format!(".graph-stage-{}-{staging_id}", std::process::id()));
-    let manifest_tmp = path.join(format!(
-        ".manifest-stage-{}-{staging_id}",
-        std::process::id()
-    ));
-    for temporary in [&staged_plugins, &old_plugins, &graph_tmp, &manifest_tmp] {
-        if temporary.is_dir() {
-            std::fs::remove_dir_all(temporary).map_err(storage)?;
-        } else if temporary.exists() {
-            std::fs::remove_file(temporary).map_err(storage)?;
-        }
+    // A bundle exported by the previous model carries copies of its Plugins. This
+    // export is exactly the fix, so a stale copy is removed rather than left to
+    // make the bundle unloadable.
+    if path.join("plugins").exists() {
+        std::fs::remove_dir_all(path.join("plugins")).map_err(storage)?;
     }
-
+    let graph_tmp = path.join(".graph.json.tmp");
+    let manifest_tmp = path.join(".manifest.json.tmp");
+    let references = bindings
+        .iter()
+        .map(|binding| json!({"id": binding.id}))
+        .collect::<Vec<_>>();
     let write_result = (|| -> Result<(), String> {
-        for binding in &bindings {
-            let source = catalog
-                .plugin_directory(&binding.id)
-                .map_err(|failure| failure.to_string())?;
-            let plugin_stage = staged_plugins.join(&binding.id);
-            for resource in &binding.resources {
-                let relative = Path::new(resource);
-                if relative.is_absolute()
-                    || relative
-                        .components()
-                        .any(|component| !matches!(component, std::path::Component::Normal(_)))
-                {
-                    return Err(format!("Plugin {} has an unsafe resource path", binding.id));
-                }
-                let source_file = source.join(relative);
-                let metadata = std::fs::symlink_metadata(&source_file)
-                    .map_err(|failure| failure.to_string())?;
-                if !metadata.is_file() || metadata.file_type().is_symlink() {
-                    return Err(format!(
-                        "Plugin {} resource is not a regular file",
-                        binding.id
-                    ));
-                }
-                let destination = plugin_stage.join(relative);
-                if let Some(parent) = destination.parent() {
-                    std::fs::create_dir_all(parent).map_err(|failure| failure.to_string())?;
-                }
-                std::fs::copy(source_file, destination).map_err(|failure| failure.to_string())?;
-            }
-        }
         std::fs::write(
             &graph_tmp,
             serde_json::to_vec_pretty(definition).map_err(|failure| failure.to_string())?,
         )
         .map_err(|failure| failure.to_string())?;
-        let plugins = bindings
-            .iter()
-            .map(|binding| {
-                json!({
-                    "id":binding.id,
-                    "digest":binding.digest,
-                    "resources":binding.resources,
-                    "mcp_servers":binding.mcp_servers
-                })
-            })
-            .collect::<Vec<_>>();
         std::fs::write(
             &manifest_tmp,
             serde_json::to_vec_pretty(&json!({
-                "format":1,
-                "graph":"graph.json",
-                "plugins":plugins
+                "format": 1,
+                "graph": "graph.json",
+                "plugins": references
             }))
             .map_err(|failure| failure.to_string())?,
         )
         .map_err(|failure| failure.to_string())?;
         Ok(())
     })();
-
     if let Err(message) = write_result {
-        let _ = std::fs::remove_dir_all(&staged_plugins);
         let _ = std::fs::remove_file(&graph_tmp);
         let _ = std::fs::remove_file(&manifest_tmp);
         return Err(GraphManagementError::Invalid(message));
     }
-
-    let plugin_root = path.join("plugins");
-    let had_plugins = plugin_root.exists();
-    if had_plugins {
-        std::fs::rename(&plugin_root, &old_plugins).map_err(storage)?;
-    }
-    let publish_result = (|| -> std::io::Result<()> {
-        if !bindings.is_empty() {
-            std::fs::rename(&staged_plugins, &plugin_root)?;
-        }
-        std::fs::rename(&graph_tmp, path.join("graph.json"))?;
-        std::fs::rename(&manifest_tmp, path.join("manifest.json"))?;
-        Ok(())
-    })();
-    if let Err(failure) = publish_result {
-        if plugin_root.exists() {
-            let _ = std::fs::remove_dir_all(&plugin_root);
-        }
-        if had_plugins && old_plugins.exists() {
-            let _ = std::fs::rename(&old_plugins, &plugin_root);
-        }
-        let _ = std::fs::remove_dir_all(&staged_plugins);
-        let _ = std::fs::remove_file(&graph_tmp);
-        let _ = std::fs::remove_file(&manifest_tmp);
-        return Err(storage(failure));
-    }
-    if had_plugins {
-        std::fs::remove_dir_all(&old_plugins).map_err(storage)?;
-    }
+    std::fs::rename(&graph_tmp, path.join("graph.json")).map_err(storage)?;
+    std::fs::rename(&manifest_tmp, path.join("manifest.json")).map_err(storage)?;
     Ok(())
 }

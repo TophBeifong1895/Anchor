@@ -333,15 +333,18 @@ async fn create_graph_publishes_initial_authoring_definition_and_plugins() {
     assert_eq!(fetched["definition"], definition);
     assert_eq!(fetched["node_plugins"]["work"], json!(["demo"]));
     let bundle = FileGraphBundleLoader::new(state.catalog_root.join("initial"))
+        .with_library_root(&state.catalog_root)
         .load()
         .unwrap();
     assert_eq!(bundle.authoring_definition, definition);
-    assert_eq!(bundle.plugins[0].id, "demo");
+    // A reference, not a copy: the Plugin stays in the Library.
+    assert_eq!(bundle.plugins[0], "demo");
+    assert!(!state.catalog_root.join("initial/plugins").exists());
     assert_eq!(
         std::fs::read_to_string(
             state
                 .catalog_root
-                .join("initial/plugins/demo/skills/example/SKILL.md")
+                .join("plugins/demo/skills/example/SKILL.md")
         )
         .unwrap(),
         "initial skill"

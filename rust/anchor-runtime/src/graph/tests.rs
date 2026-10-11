@@ -60,6 +60,7 @@ fn executed_nodes_follow_first_durable_completion_order() {
     )
     .unwrap();
     let make_result = |node: &str, sequence: u64| RunResult {
+        plugin_views: Default::default(),
         node_id: node.into(),
         interruption: None,
         key: InvocationKey {
@@ -441,6 +442,89 @@ async fn plugin_manifest_is_pinned_to_run_and_drift_fails_before_dispatch() {
     assert_eq!(nodes.calls.lock().unwrap().len(), 1);
 }
 
+/// The Run record carries the view each node call actually used.
+///
+/// This goes through `GraphRunner`, so it asserts the *record* the operator can
+/// inspect, not a `prepare` call: the observation is written when the node's
+/// result is settled, and reading it consumes it so a long-lived host does not
+/// accumulate one entry per call.
+#[tokio::test]
+async fn a_node_call_records_the_dependency_view_it_used() {
+    let snapshot = graph(&["work"], &[], "work");
+    let record = GraphRunRecord::create(snapshot, Value::Null).unwrap();
+    let key = InvocationKey {
+        run_id: record.run_id.clone(),
+        graph_digest: record.graph_digest.clone(),
+        node_id: "work".into(),
+        invocation: 1,
+    };
+    let views = BTreeMap::from([("review".to_owned(), "/library/views/review/abc".to_owned())]);
+    let nodes = FakeNodes {
+        observed_views: Mutex::new(BTreeMap::from([(key.durable_key(), views.clone())])),
+        ..Default::default()
+    };
+    let store = MemStore::default();
+    let artifacts = MemoryArtifacts::default();
+    let control = Control::default();
+    let finished = GraphRunner::new(&store, &artifacts, &nodes, &control)
+        .run(record)
+        .await
+        .unwrap();
+    assert_eq!(finished.status, RunStatus::Completed);
+    assert_eq!(
+        finished.results["work"][0].plugin_views, views,
+        "the observation is part of the settled result"
+    );
+    assert!(
+        nodes.observed_views.lock().unwrap().is_empty(),
+        "reading the observation consumes it"
+    );
+}
+
+/// A record written before the observation existed still loads.
+#[tokio::test]
+async fn a_format_ten_record_loads_without_inventing_plugin_views() {
+    let snapshot = graph(&["work"], &[], "work");
+    let record = GraphRunRecord::create(snapshot, Value::Null).unwrap();
+    let key = InvocationKey {
+        run_id: record.run_id.clone(),
+        graph_digest: record.graph_digest.clone(),
+        node_id: "work".into(),
+        invocation: 1,
+    };
+    let nodes = FakeNodes {
+        observed_views: Mutex::new(BTreeMap::from([(
+            key.durable_key(),
+            BTreeMap::from([("review".to_owned(), "/library/views/review/abc".to_owned())]),
+        )])),
+        ..Default::default()
+    };
+    let store = MemStore::default();
+    let artifacts = MemoryArtifacts::default();
+    let control = Control::default();
+    let finished = GraphRunner::new(&store, &artifacts, &nodes, &control)
+        .run(record)
+        .await
+        .unwrap();
+    // The same record as the previous format wrote it: no `plugin_views` anywhere.
+    let mut value = serde_json::to_value(&finished).unwrap();
+    value["format"] = serde_json::json!(10);
+    for results in value["results"].as_object_mut().unwrap().values_mut() {
+        for result in results.as_array_mut().unwrap() {
+            result.as_object_mut().unwrap().remove("plugin_views");
+        }
+    }
+    let mut loaded: GraphRunRecord = serde_json::from_value(value).unwrap();
+    assert!(loaded.results["work"][0].plugin_views.is_empty());
+    loaded.migrate_format().unwrap();
+    assert_eq!(loaded.format, RUN_RECORD_FORMAT);
+    assert!(
+        loaded.results["work"][0].plugin_views.is_empty(),
+        "an old record has no observation, and migration must not invent one"
+    );
+    assert!(loaded.validate().is_ok());
+}
+
 #[tokio::test]
 async fn legacy_in_progress_plugin_run_without_binding_fails_closed() {
     let mut snapshot = graph(&["work"], &[], "work");
@@ -566,6 +650,9 @@ struct FakeNodes {
     max_active_calls: std::sync::atomic::AtomicUsize,
     graph_call_port: Option<Arc<FakeGraphCalls>>,
     resolved_plugins: Mutex<Vec<PluginBinding>>,
+    /// What a node call observed: the dependency view it actually used, by Plugin
+    /// id. Empty means "this host observed nothing", which is not a failure.
+    observed_views: Mutex<BTreeMap<String, BTreeMap<String, String>>>,
 }
 impl NodeExecutionPort for FakeNodes {
     fn capabilities(&self) -> NodeExecutionCapabilities {
@@ -580,6 +667,15 @@ impl NodeExecutionPort for FakeNodes {
         self.graph_call_port
             .as_deref()
             .map(|port| port as &dyn GraphCallPort)
+    }
+    fn observed_plugin_views(&self, key: &InvocationKey) -> BTreeMap<String, String> {
+        // Reading consumes it, exactly as the host's resolver does: one entry per
+        // call, not one per call ever made.
+        self.observed_views
+            .lock()
+            .unwrap()
+            .remove(&key.durable_key())
+            .unwrap_or_default()
     }
     fn resolve_plugins(&self, ids: &[String]) -> Result<Vec<PluginBinding>, GraphError> {
         let bindings = self.resolved_plugins.lock().unwrap();
@@ -1301,6 +1397,7 @@ fn false_ingress_closes_cascaded_sccs_deterministically() {
     record.results.insert(
         "entry".into(),
         vec![RunResult {
+            plugin_views: Default::default(),
             node_id: "entry".into(),
             interruption: None,
             key: entry_key,
@@ -1321,6 +1418,7 @@ fn false_ingress_closes_cascaded_sccs_deterministically() {
     record.results.insert(
         "source".into(),
         vec![RunResult {
+            plugin_views: Default::default(),
             node_id: "source".into(),
             interruption: None,
             key: source_key,
@@ -1448,6 +1546,7 @@ fn later_false_loop_input_retires_stale_selected_output() {
     record.results.insert(
         "branch".into(),
         vec![RunResult {
+            plugin_views: Default::default(),
             node_id: "branch".into(),
             interruption: None,
             key: key("branch", 1),
@@ -2224,6 +2323,7 @@ fn parallel_activation_facts_bind_pair_branch_paths_and_active_cursors() {
     record.results.insert(
         "start".into(),
         vec![RunResult {
+            plugin_views: Default::default(),
             node_id: "start".into(),
             interruption: None,
             key: fanout_key,
@@ -3237,6 +3337,7 @@ fn file_run_store_rejects_edge_decision_not_newer_than_its_result() {
     record.results.insert(
         "spin".into(),
         vec![RunResult {
+            plugin_views: Default::default(),
             node_id: "spin".into(),
             interruption: None,
             key: key.clone(),

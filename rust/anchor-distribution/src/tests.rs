@@ -56,26 +56,22 @@ impl Fixture {
             })
         };
         fs::write(self.request.bundle.join("graph.json"), graph.to_string()).unwrap();
-        let ids = plugins
-            .iter()
-            .map(|id| (*id).to_owned())
-            .collect::<Vec<_>>();
-        let bindings = FilePluginCatalog::new(&self.request.bundle)
-            .resolve(&ids)
+        // The Plugin sources are valid declarations...
+        FilePluginCatalog::new(&self.request.bundle)
+            .resolve(
+                plugins
+                    .iter()
+                    .map(|id| (*id).to_owned())
+                    .collect::<Vec<_>>()
+                    .as_slice(),
+            )
             .unwrap();
-        let plugins = bindings
-            .into_iter()
-            .map(|binding| {
-                json!({
-                    "id":binding.id,"digest":binding.digest,"resources":binding.resources,
-                    "mcp_servers":binding.mcp_servers
-                })
-            })
-            .collect::<Vec<_>>();
+        // ...and the bundle references them by id only.
         fs::write(
             self.request.bundle.join("manifest.json"),
             json!({
-                "format":1,"graph":"graph.json","plugins":plugins
+                "format":1,"graph":"graph.json",
+                "plugins":plugins.iter().map(|id| json!({"id":id})).collect::<Vec<_>>()
             })
             .to_string(),
         )
@@ -272,12 +268,12 @@ fn deterministic_archive_has_exact_layout_normalized_headers_and_verified_invent
             "anchor-runtime/bundle",
             "anchor-runtime/bundle/graph.json",
             "anchor-runtime/bundle/manifest.json",
-            "anchor-runtime/bundle/plugins",
-            "anchor-runtime/bundle/plugins/demo",
-            "anchor-runtime/bundle/plugins/demo/plugin.json",
-            "anchor-runtime/bundle/plugins/demo/skills",
-            "anchor-runtime/bundle/plugins/demo/skills/inspect",
-            "anchor-runtime/bundle/plugins/demo/skills/inspect/SKILL.md",
+            "anchor-runtime/plugins",
+            "anchor-runtime/plugins/demo",
+            "anchor-runtime/plugins/demo/plugin.json",
+            "anchor-runtime/plugins/demo/skills",
+            "anchor-runtime/plugins/demo/skills/inspect",
+            "anchor-runtime/plugins/demo/skills/inspect/SKILL.md",
             "anchor-runtime/runtime-manifest.json",
             "anchor-runtime/web",
             "anchor-runtime/web/app.js",
@@ -343,7 +339,7 @@ fn native_plugin_elf_keeps_execute_mode_and_environment_references_are_not_expan
         .unwrap();
     let helper = extracted
         .path()
-        .join("anchor-runtime/bundle/plugins/demo/bin/helper");
+        .join("anchor-runtime/plugins/demo/bin/helper");
     assert_eq!(
         fs::metadata(&helper).unwrap().permissions().mode() & 0o777,
         0o755
@@ -360,7 +356,7 @@ fn academic_plugin_package_includes_scholarly_binary_and_refreshes_frozen_resour
     academic_plugin(&fixture);
     fixture.request.scholarly = Some(fixture.request.host.clone());
     let report = fixture.package().unwrap();
-    let scholarly_path = "bundle/plugins/academic-research/bin/anchor-scholarly";
+    let scholarly_path = "plugins/academic-research/bin/anchor-scholarly";
     let scholarly = report
         .inventory
         .files
@@ -399,7 +395,7 @@ fn academic_plugin_package_includes_scholarly_binary_and_refreshes_frozen_resour
         .unwrap();
     let runtime = extracted
         .path()
-        .join("anchor-runtime/bundle/plugins/academic-research/bin/anchor-scholarly");
+        .join("anchor-runtime/plugins/academic-research/bin/anchor-scholarly");
     assert_eq!(
         fs::read(runtime).unwrap(),
         fs::read(&fixture.request.host).unwrap()
@@ -598,17 +594,17 @@ fn referenced_first_party_plugins_include_exact_native_binaries_in_the_frozen_cl
         (
             "docmost",
             "anchor-docmost-tools",
-            "bundle/plugins/docmost/bin/anchor-docmost-tools",
+            "plugins/docmost/bin/anchor-docmost-tools",
         ),
         (
             "wecom",
             "anchor-wecom-tools",
-            "bundle/plugins/wecom/bin/anchor-wecom-tools",
+            "plugins/wecom/bin/anchor-wecom-tools",
         ),
         (
             "wecom",
             "anchor-wecom-gateway",
-            "bundle/plugins/wecom/bin/anchor-wecom-gateway",
+            "plugins/wecom/bin/anchor-wecom-gateway",
         ),
     ];
     for (plugin_id, binary_name, path) in expected {
@@ -744,18 +740,17 @@ fn first_party_binary_inputs_are_required_only_for_referenced_plugins() {
     assert!(
         error
             .to_string()
-            .contains("wecom Plugin requires --wecom-gateway")
+            .contains("wecom Plugin requires --wecom-gateway"),
+        "DEBUG {error}"
     );
 }
 
 #[test]
 fn rejects_undeclared_bundle_files_plugin_files_and_empty_directories() {
-    for extra in [
-        "note.txt",
-        "plugins/demo/unlisted.txt",
-        "plugins/demo/empty",
-        "plugins/unknown",
-    ] {
+    // A Plugin's own files are its *code* now (its digest follows them), so what
+    // is refused is an undeclared entry in the input, an empty directory that
+    // belongs to no Plugin, and a Plugin the Graph never references.
+    for extra in ["note.txt", "plugins/demo/empty", "plugins/unknown"] {
         let fixture = Fixture::new();
         fixture.plugin();
         let path = fixture.request.bundle.join(extra);
@@ -775,7 +770,7 @@ fn rejects_graph_plugin_digest_and_manifest_admission_errors() {
         "digest",
         "graph",
         "unknown_manifest_field",
-        "resource_bytes",
+        "missing_declaration",
         "plugin_set",
     ] {
         let fixture = Fixture::new();
@@ -786,9 +781,7 @@ fn rejects_graph_plugin_digest_and_manifest_admission_errors() {
             "digest" => manifest["plugins"][0]["digest"] = json!("invalid"),
             "graph" => manifest["graph"] = json!("../outside.json"),
             "unknown_manifest_field" => manifest["unknown"] = json!(true),
-            "resource_bytes" => {
-                fs::write(plugin.join("skills/inspect/SKILL.md"), "changed").unwrap()
-            }
+            "missing_declaration" => fs::remove_file(plugin.join("plugin.json")).unwrap(),
             "plugin_set" => manifest["plugins"] = json!([]),
             _ => unreachable!(),
         }

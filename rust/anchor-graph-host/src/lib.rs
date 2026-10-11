@@ -9,8 +9,9 @@
 mod dependencies;
 
 pub use dependencies::{
-    DEPENDENCIES_DIRECTORY, PluginDependencies, STORE_DIRECTORY, VIEW_TOKEN, VIEWS_DIRECTORY,
-    plugin_view_path, resolved_library_root, store_root, views_root,
+    DEPENDENCIES_DIRECTORY, MutablePaths, PluginDependencies, STORE_DIRECTORY, VIEW_TOKEN,
+    VIEWS_DIRECTORY, mutable_paths_from_manifest, plugin_view_path, resolved_library_root,
+    store_root, views_root,
 };
 
 use anchor_runtime::Cancellation;
@@ -39,16 +40,19 @@ use std::{
 pub struct GraphBundleManifest {
     pub format: u32,
     pub graph: String,
-    pub plugins: Vec<BundlePluginSummary>,
+    pub plugins: Vec<BundlePluginReference>,
 }
 
+/// One Plugin a Graph bundle *references*.
+///
+/// A bundle never carries Plugin bytes or digests: the Plugin exists exactly once,
+/// in the Library's `plugins/<id>`, and the runtime resolves it there. A bundle
+/// that still holds `digest`/`resources`/`mcp_servers` (or a `plugins/`
+/// directory) is refused, because it would be a second copy of the Plugin.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct BundlePluginSummary {
+pub struct BundlePluginReference {
     pub id: String,
-    pub digest: String,
-    pub resources: Vec<String>,
-    pub mcp_servers: Vec<String>,
 }
 
 /// Admitted expanded Graph snapshot and secret-free Plugin identities.
@@ -59,17 +63,36 @@ pub struct LoadedGraphBundle {
     /// author-only fields without feeding them into Runtime execution.
     pub authoring_definition: Value,
     pub snapshot: GraphSnapshot,
-    pub plugins: Vec<anchor_runtime::graph::PluginBinding>,
+    /// The Plugin ids this bundle references. Their code and their views live in
+    /// the Library, which is the only place the runtime resolves them from.
+    pub plugins: Vec<String>,
 }
 
 /// Read-only loader for a single standalone Graph bundle directory.
 pub struct FileGraphBundleLoader {
     root: PathBuf,
+    /// The deployment's Library root, when the caller knows it.
+    ///
+    /// A deployment may use the Library root itself as a Graph bundle directory
+    /// (a single-root development deployment does); in that case `plugins/` is the
+    /// Library's own Plugin home rather than Plugin bytes carried by the bundle.
+    /// With three separate roots — the standard deployment — the bundle is a
+    /// different directory and any `plugins/` in it is refused.
+    library_root: Option<PathBuf>,
 }
 
 impl FileGraphBundleLoader {
     pub fn new(root: impl Into<PathBuf>) -> Self {
-        Self { root: root.into() }
+        Self {
+            root: root.into(),
+            library_root: None,
+        }
+    }
+
+    /// Tell the loader where the Library's Plugin home is.
+    pub fn with_library_root(mut self, root: impl Into<PathBuf>) -> Self {
+        self.library_root = Some(root.into());
+        self
     }
 
     /// Load and admit `manifest.json`, `graph.json`, and explicitly declared
@@ -81,8 +104,19 @@ impl FileGraphBundleLoader {
         }
         let manifest_path = root.join("manifest.json");
         reject_symlink_components(&root, &manifest_path)?;
-        let manifest: GraphBundleManifest = serde_json::from_slice(&std::fs::read(&manifest_path)?)
-            .map_err(GraphError::SnapshotDecode)?;
+        let raw = std::fs::read(&manifest_path)?;
+        let manifest_value: Value =
+            serde_json::from_slice(&raw).map_err(GraphError::SnapshotDecode)?;
+        // A bundle from the previous model carries the Plugins themselves. That is
+        // a second copy of a Plugin that must exist exactly once, so it is refused
+        // with the one thing the operator can do about it.
+        if let Some(fields) = legacy_plugin_fields(&manifest_value) {
+            return Err(invalid(format!(
+                "this Graph bundle still carries Plugin {fields}; a bundle references Plugins by id only, so re-export the Graph from the current host"
+            )));
+        }
+        let manifest: GraphBundleManifest =
+            serde_json::from_value(manifest_value).map_err(GraphError::SnapshotDecode)?;
         if manifest.format != 1 || manifest.graph != "graph.json" {
             return Err(invalid(
                 "unsupported Graph bundle format or graph path".into(),
@@ -114,58 +148,42 @@ impl FileGraphBundleLoader {
             ));
         }
 
-        let catalog = FilePluginCatalog::new(&root);
-        let bindings = catalog.resolve(&ids)?;
-        for (summary, binding) in manifest.plugins.iter().zip(&bindings) {
-            if summary.digest != binding.digest
-                || summary.resources != binding.resources
-                || summary.mcp_servers != binding.mcp_servers
-            {
-                return Err(invalid(format!(
-                    "Plugin `{}` summary does not match bundled resources",
-                    summary.id
-                )));
-            }
+        // A bundle holds a Graph and nothing else: no Plugin bytes, no extra
+        // top-level payload that could be carried into deployment unnoticed. The
+        // one exception is a deployment that uses its Library root as the bundle
+        // directory: there `plugins/` *is* the Library's Plugin home.
+        let library_here = self
+            .library_root
+            .as_ref()
+            .and_then(|library| library.canonicalize().ok())
+            .is_some_and(|library| library == root);
+        if root.join("plugins").exists() && !library_here {
+            return Err(invalid(
+                "this Graph bundle carries Plugin bytes under `plugins/`; a Plugin exists once, in the Library, so re-export the Graph from the current host"
+                    .to_owned(),
+            ));
         }
-
-        // A bundle is deliberately closed: no undeclared payload, plugin, or
-        // extra top-level config can be silently carried into deployment.
-        let mut allowed = vec!["graph.json", "manifest.json"];
-        if !ids.is_empty() {
-            allowed.push("plugins");
-        }
-        allowed.sort_unstable();
         let mut actual = std::fs::read_dir(&root)?
             .map(|entry| entry.map(|entry| entry.file_name().to_string_lossy().into_owned()))
             .collect::<Result<Vec<_>, _>>()?;
         actual.sort_unstable();
+        let mut allowed = vec!["graph.json".to_owned(), "manifest.json".to_owned()];
+        // A deployment that uses its Library root as the bundle directory has the
+        // Plugin home next to the Graph; it is not part of the bundle's own
+        // content, and a bundle without it is perfectly valid.
+        if library_here && root.join("plugins").is_dir() {
+            allowed.push("plugins".to_owned());
+        }
+        allowed.sort_unstable();
         if actual != allowed {
             return Err(invalid(
                 "Graph bundle contains undeclared top-level resources".into(),
             ));
         }
-        if !ids.is_empty() {
-            let plugin_root = root.join("plugins");
-            reject_symlink_components(&root, &plugin_root)?;
-            for id in &ids {
-                reject_symlink_components(&root, &plugin_root.join(id))?;
-            }
-            let mut actual = std::fs::read_dir(plugin_root)?
-                .map(|entry| entry.map(|entry| entry.file_name().to_string_lossy().into_owned()))
-                .collect::<Result<Vec<_>, _>>()?;
-            actual.sort_unstable();
-            let mut declared = ids;
-            declared.sort_unstable();
-            if actual != declared {
-                return Err(invalid(
-                    "bundle contains undeclared Plugin directories".into(),
-                ));
-            }
-        }
         Ok(LoadedGraphBundle {
             authoring_definition,
             snapshot,
-            plugins: bindings,
+            plugins: ids,
         })
     }
 }
@@ -199,6 +217,9 @@ pub struct PluginDefinition {
     pub channels: Vec<ChannelDefinition>,
     /// The Plugin's own run-time dependencies. Empty when it declares none.
     pub dependencies: PluginDependencies,
+    /// The paths the Plugin declares as its own mutable state: the platform
+    /// provides the location and never copies, rewrites or verifies them.
+    pub mutable: MutablePaths,
     pub digest: String,
 }
 
@@ -241,6 +262,7 @@ impl FilePluginCatalog {
         // a mistyped `dependencies` must not look like it took effect.
         dependencies::reject_unknown_fields(id, &manifest)?;
         let dependencies = dependencies::parse(id, &manifest)?;
+        let mutable = dependencies::parse_mutable(id, &manifest)?;
 
         let name = manifest
             .get("name")
@@ -314,7 +336,9 @@ impl FilePluginCatalog {
             skills.push("instructions.md".into());
         }
 
-        let resources = resource_files(&dir)?;
+        // The digest covers *code* only: a declared mutable path changes while
+        // the Plugin runs, so it can never be part of "which code is this".
+        let resources = resource_files(&dir, &mutable)?;
         let mut hash = Sha256::new();
         for relative in &resources {
             let content = std::fs::read(dir.join(relative))?;
@@ -345,6 +369,7 @@ impl FilePluginCatalog {
             mcp_servers,
             channels,
             dependencies,
+            mutable,
             digest,
         })
     }
@@ -396,7 +421,15 @@ impl FilePluginCatalog {
         }
         let root = self.root.canonicalize()?;
         let plugins = root.join("plugins");
-        let dir = plugins.join(id).canonicalize()?;
+        // Name the Plugin and the Library root: a caller that resolved an id from a
+        // bundle needs to know *where* it looked, not just that an open failed.
+        let candidate = plugins.join(id);
+        let dir = candidate.canonicalize().map_err(|_| {
+            invalid(format!(
+                "Plugin `{id}` is not installed in the Library at {}",
+                candidate.display()
+            ))
+        })?;
         if !dir.is_dir() {
             return Err(invalid(format!("unknown Plugin `{id}`")));
         }
@@ -420,7 +453,9 @@ impl FilePluginCatalog {
         Ok(anchor_runtime::graph::PluginBinding {
             id: definition.id,
             digest: definition.digest,
-            resources: resource_files(&definition.directory)?,
+            // Code only: a mutable path is the Plugin's own state, not a resource
+            // the platform distributes or verifies.
+            resources: resource_files(&definition.directory, &definition.mutable)?,
             mcp_servers: definition
                 .mcp_servers
                 .into_iter()
@@ -503,6 +538,24 @@ impl PluginCatalog for FilePluginCatalog {
 fn invalid(message: String) -> GraphError {
     GraphError::InvalidSnapshot(message)
 }
+
+/// The Plugin fields a pre-reference bundle's manifest carries, if any.
+///
+/// Reported so the refusal can name what is wrong instead of a serde message
+/// about an unexpected field.
+fn legacy_plugin_fields(manifest: &Value) -> Option<String> {
+    let plugins = manifest.get("plugins")?.as_array()?;
+    let mut found = Vec::new();
+    for plugin in plugins {
+        let object = plugin.as_object()?;
+        for key in object.keys() {
+            if key != "id" && !found.contains(key) {
+                found.push(key.clone());
+            }
+        }
+    }
+    (!found.is_empty()).then(|| found.join(", "))
+}
 fn valid_reference(value: &str) -> bool {
     !value.is_empty()
         && value.as_bytes()[0].is_ascii_alphanumeric()
@@ -537,10 +590,18 @@ fn reject_symlink_components(root: &Path, path: &Path) -> Result<(), GraphError>
     }
     Ok(())
 }
-fn collect_files(root: &Path, current: &Path, out: &mut Vec<String>) -> Result<(), GraphError> {
+fn collect_files(
+    root: &Path,
+    current: &Path,
+    mutable: &MutablePaths,
+    out: &mut Vec<String>,
+) -> Result<(), GraphError> {
     for entry in std::fs::read_dir(current)? {
         let entry = entry?;
         let path = entry.path();
+        if mutable.covers(&relative_of(root, &path)) {
+            continue;
+        }
         let ty = entry.file_type()?;
         if ty.is_symlink() {
             return Err(invalid(format!(
@@ -557,7 +618,7 @@ fn collect_files(root: &Path, current: &Path, out: &mut Vec<String>) -> Result<(
             )));
         }
         if ty.is_dir() {
-            collect_files(root, &path, out)?;
+            collect_files(root, &path, mutable, out)?;
         } else if ty.is_file() {
             out.push(
                 path.strip_prefix(root)
@@ -568,6 +629,14 @@ fn collect_files(root: &Path, current: &Path, out: &mut Vec<String>) -> Result<(
         }
     }
     Ok(())
+}
+
+/// The Plugin-relative slash path of one entry, as `covers` expects.
+fn relative_of(root: &Path, path: &Path) -> String {
+    path.strip_prefix(root)
+        .unwrap_or(path)
+        .to_string_lossy()
+        .replace('\\', "/")
 }
 
 fn manifest_value_is_present(value: &Value) -> bool {
@@ -641,9 +710,15 @@ fn collect_skill_files(
     Ok(())
 }
 
-fn resource_files(root: &Path) -> Result<Vec<String>, GraphError> {
+/// Every code resource of a Plugin tree.
+///
+/// A declared mutable path is pruned *before* anything looks at it: it is the
+/// Plugin's own state (invariant 9), so neither enumeration nor the symlink and
+/// credential checks below may touch it — a symlink or a `.env` the Plugin itself
+/// put in its data directory is its business, not a malformed Plugin.
+fn resource_files(root: &Path, mutable: &MutablePaths) -> Result<Vec<String>, GraphError> {
     let mut resources = Vec::new();
-    collect_files(root, root, &mut resources)?;
+    collect_files(root, root, mutable, &mut resources)?;
     resources.sort();
     Ok(resources)
 }
@@ -1403,20 +1478,19 @@ pub trait GraphCatalog: Send + Sync {
         Ok(false)
     }
 
-    /// Plugin-bearing children need their pinned resources rechecked before
-    /// resuming. Implementations should inspect Plugin resources directly and
-    /// must not use the current Graph definition as execution truth.
+    /// A child Graph must still exist before a Run resumes into it.
+    ///
+    /// The Plugin bindings themselves are no longer compared: a Run uses the
+    /// *current* Plugin (standard invariant 6), so a Plugin that changed while the
+    /// Run was parked is not a reason to refuse — the next node call simply uses
+    /// what is installed now, and the run record observes which view that was.
     fn verify_child_plugins(
         &self,
         graph: &str,
-        bindings: &[anchor_runtime::graph::PluginBinding],
+        _bindings: &[anchor_runtime::graph::PluginBinding],
     ) -> Result<(), GraphError> {
-        let current = self
-            .bundle(graph)?
+        self.bundle(graph)?
             .ok_or_else(|| GraphError::InvalidSnapshot(format!("unknown child graph `{graph}`")))?;
-        if current.plugins != bindings {
-            return Err(GraphError::RunConflict);
-        }
         Ok(())
     }
 }
@@ -1488,6 +1562,12 @@ impl<N: NodeExecutionPort> NodeExecutionPort for BoundNodes<'_, N> {
             })
             .collect()
     }
+    fn observed_plugin_views(
+        &self,
+        key: &anchor_runtime::graph::InvocationKey,
+    ) -> std::collections::BTreeMap<String, String> {
+        self.nodes.observed_plugin_views(key)
+    }
     fn completion_fact<'b>(
         &'b self,
         key: &'b anchor_runtime::graph::InvocationKey,
@@ -1557,6 +1637,26 @@ impl<'a, S, A, N, C> InProcessGraphHost<'a, S, A, N, C> {
     }
 
     /// Configure the filesystem (or other) catalog used to pin Plugin identities.
+    /// The current bindings of the Plugins one bundle references.
+    ///
+    /// A bundle carries ids only, so this is the one resolution path: the Plugin
+    /// catalog the host configured (the Library's `plugins/<id>`).
+    fn resolve_bundle_plugins(
+        &self,
+        ids: &[String],
+    ) -> Result<Vec<anchor_runtime::graph::PluginBinding>, GraphError> {
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let catalog = self.plugin_catalog.ok_or_else(|| {
+            GraphError::Unsupported(
+                "a called Graph references Plugins, and no Plugin catalog is configured for child Runs"
+                    .to_owned(),
+            )
+        })?;
+        catalog.resolve(ids)
+    }
+
     pub fn with_plugin_catalog(mut self, catalog: &'a dyn PluginCatalog) -> Self {
         self.plugin_catalog = Some(catalog);
         self
@@ -1793,6 +1893,10 @@ impl<S: RunStore, A: ArtifactPort, N: NodeExecutionPort, C: RunControl> GraphCal
                             ))
                         })?;
                     let snapshot = bundle.snapshot;
+                    // A bundle references Plugins by id; the current code and view
+                    // live in the Library, which is the only place this layer
+                    // resolves them from.
+                    let referenced = self.resolve_bundle_plugins(&bundle.plugins)?;
                     // Everything this layer cannot resolve has to be decided
                     // before anything durable exists: a node's own environment or
                     // a Plugin server's declared environment.
@@ -1802,8 +1906,7 @@ impl<S: RunStore, A: ArtifactPort, N: NodeExecutionPort, C: RunControl> GraphCal
                         .find(|node| node.environment.is_some())
                         .map(|node| format!("node `{}`", node.id))
                         .or_else(|| {
-                            bundle
-                                .plugins
+                            referenced
                                 .iter()
                                 .find(|plugin| !plugin.environments.is_empty())
                                 .map(|plugin| {
@@ -1829,8 +1932,7 @@ impl<S: RunStore, A: ArtifactPort, N: NodeExecutionPort, C: RunControl> GraphCal
                     // environment must not leave an orphan call bundle behind.
                     let frozen_environments = match self.environment_resolver.as_ref() {
                         Some(resolver) => {
-                            let bindings = bundle
-                                .plugins
+                            let bindings = referenced
                                 .iter()
                                 .cloned()
                                 .map(|plugin| (plugin.id.clone(), plugin))
@@ -1882,8 +1984,7 @@ impl<S: RunStore, A: ArtifactPort, N: NodeExecutionPort, C: RunControl> GraphCal
                         .await?;
                     let mut record = GraphRunRecord::create(snapshot.clone(), child_input)?;
                     record.run_id = run_id.clone();
-                    record.plugin_bindings = bundle
-                        .plugins
+                    record.plugin_bindings = referenced
                         .iter()
                         .cloned()
                         .map(|plugin| (plugin.id.clone(), plugin))
@@ -2297,6 +2398,80 @@ mod plugin_catalog_tests {
             .mcp_servers("orphan", true)
             .unwrap_err();
         assert!(error.to_string().contains("dependencies.python"), "{error}");
+    }
+
+    /// The digest covers code only: a declared mutable path is the Plugin's own
+    /// state, and what it contains is never part of "which code is this".
+    #[test]
+    fn writing_into_a_declared_mutable_path_does_not_change_the_digest() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("plugins/probe");
+        fs::create_dir_all(dir.join("skills")).unwrap();
+        fs::write(
+            dir.join("plugin.json"),
+            r#"{"name":"Probe","mutable":["data/","cache.db"],"skills":"skills/"}"#,
+        )
+        .unwrap();
+        fs::write(dir.join("skills/SKILL.md"), "code").unwrap();
+        let catalog = FilePluginCatalog::new(tmp.path());
+        let before = catalog.definition("probe").unwrap();
+        assert_eq!(before.mutable.paths(), ["data/", "cache.db"]);
+        // The mutable paths are not resources either.
+        assert_eq!(before.digest.len(), 64);
+        assert!(before.mutable.covers("data/state.json"));
+        assert!(before.mutable.covers("cache.db"));
+        assert!(!before.mutable.covers("cache.db.bak"));
+        assert!(!before.mutable.covers("skills/SKILL.md"));
+        // The Plugin writes its state, and the code digest does not move. Its own
+        // state may even contain what the platform refuses in *code*: a symlink and
+        // a credentials file are the Plugin's business inside a declared mutable
+        // path (invariant 9).
+        fs::create_dir_all(dir.join("data")).unwrap();
+        fs::write(dir.join("data/state.json"), "state").unwrap();
+        std::os::unix::fs::symlink("/etc/passwd", dir.join("data/link")).unwrap();
+        fs::write(dir.join("data/.env"), "TOKEN=plugin-own").unwrap();
+        fs::write(dir.join("cache.db"), "cache").unwrap();
+        let after = catalog.definition("probe").unwrap();
+        assert_eq!(after.digest, before.digest);
+        // The reading of resources is on the binding; the definition carries the
+        // declaration, so check the declaration here and the resources below.
+        let binding = catalog.resolve(&["probe".into()]).unwrap().remove(0);
+        assert!(
+            !binding
+                .resources
+                .iter()
+                .any(|path| path.starts_with("data/"))
+        );
+        assert!(!binding.resources.contains(&"cache.db".to_owned()));
+        // A code change does move it.
+        fs::write(dir.join("skills/SKILL.md"), "changed").unwrap();
+        assert_ne!(catalog.definition("probe").unwrap().digest, before.digest);
+    }
+
+    /// A mutable declaration that could leave the Plugin directory is refused.
+    #[test]
+    fn an_escaping_or_mistyped_mutable_declaration_is_refused() {
+        let tmp = tempfile::tempdir().unwrap();
+        for (field, declared) in [
+            ("absolute", "/etc/passwd"),
+            ("traversal", "../outside"),
+            ("the manifest itself", "plugin.json"),
+            ("empty", ""),
+        ] {
+            let dir = tmp.path().join("plugins/escaping");
+            fs::create_dir_all(&dir).unwrap();
+            fs::write(
+                dir.join("plugin.json"),
+                serde_json::json!({"name":"Probe","mutable":[declared]}).to_string(),
+            )
+            .unwrap();
+            assert!(
+                FilePluginCatalog::new(tmp.path())
+                    .definition("escaping")
+                    .is_err(),
+                "{field} was accepted"
+            );
+        }
     }
 
     #[test]
@@ -3106,51 +3281,65 @@ mod bundle_loader_tests {
         graph
     }
 
+    /// A bundle the current host exports: a Graph and the ids it references.
     fn bundle() -> tempfile::TempDir {
         let tmp = tempfile::tempdir().unwrap();
-        fs::create_dir_all(tmp.path().join("plugins/demo/skills")).unwrap();
-        fs::write(
-            tmp.path().join("plugins/demo/plugin.json"),
-            r#"{"name":"Demo"}"#,
-        )
-        .unwrap();
-        fs::write(
-            tmp.path().join("plugins/demo/skills/SKILL.md"),
-            "safe resource",
-        )
-        .unwrap();
         fs::write(
             tmp.path().join("graph.json"),
             graph_json(&["demo"]).to_string(),
         )
         .unwrap();
-        let binding = FilePluginCatalog::new(tmp.path())
-            .resolve(&["demo".into()])
-            .unwrap()
-            .remove(0);
         let manifest = serde_json::json!({
             "format":1,
             "graph":"graph.json",
-            "plugins":[{
-                "id":binding.id,
-                "digest":binding.digest,
-                "resources":binding.resources,
-                "mcp_servers":binding.mcp_servers
-            }]
+            "plugins":[{"id":"demo"}]
         });
         fs::write(tmp.path().join("manifest.json"), manifest.to_string()).unwrap();
         tmp
     }
 
     #[test]
-    fn loads_graph_through_shared_admission_and_returns_only_plugin_summary() {
+    fn loads_graph_through_shared_admission_and_returns_only_plugin_references() {
         let tmp = bundle();
         let loaded = FileGraphBundleLoader::new(tmp.path()).load().unwrap();
         assert_eq!(loaded.snapshot.objective, "demo");
         assert_eq!(loaded.authoring_definition, graph_json(&["demo"]));
-        assert_eq!(loaded.plugins.len(), 1);
-        assert_eq!(loaded.plugins[0].id, "demo");
-        assert!(loaded.plugins[0].resources.contains(&"plugin.json".into()));
+        // A reference, not a copy: the id is all a bundle carries.
+        assert_eq!(loaded.plugins, vec!["demo".to_owned()]);
+    }
+
+    /// A bundle from the previous model is refused, and the refusal names the one
+    /// thing the operator can do about it.
+    #[test]
+    fn a_bundle_that_still_carries_plugin_bytes_is_refused_with_a_re_export_hint() {
+        // Plugin directories inside the bundle.
+        let tmp = bundle();
+        fs::create_dir_all(tmp.path().join("plugins/demo/skills")).unwrap();
+        fs::write(
+            tmp.path().join("plugins/demo/plugin.json"),
+            r#"{"name":"Demo"}"#,
+        )
+        .unwrap();
+        fs::write(tmp.path().join("plugins/demo/skills/SKILL.md"), "safe").unwrap();
+        let error = FileGraphBundleLoader::new(tmp.path()).load().unwrap_err();
+        assert!(error.to_string().contains("re-export"), "{error}");
+        assert!(error.to_string().contains("plugins/"), "{error}");
+
+        // The previous manifest shape: digested Plugin summaries.
+        let tmp = bundle();
+        fs::write(
+            tmp.path().join("manifest.json"),
+            serde_json::json!({
+                "format":1,
+                "graph":"graph.json",
+                "plugins":[{"id":"demo","digest":"a".repeat(64),"resources":[],"mcp_servers":[]}]
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let error = FileGraphBundleLoader::new(tmp.path()).load().unwrap_err();
+        assert!(error.to_string().contains("re-export"), "{error}");
+        assert!(error.to_string().contains("digest"), "{error}");
     }
 
     #[test]
@@ -3220,21 +3409,12 @@ mod bundle_loader_tests {
             serde_json::to_vec(&authoring).unwrap(),
         )
         .unwrap();
-        let binding = FilePluginCatalog::new(tmp.path())
-            .resolve(&["demo".into()])
-            .unwrap()
-            .remove(0);
         fs::write(
             tmp.path().join("manifest.json"),
             serde_json::to_vec(&serde_json::json!({
                 "format":1,
                 "graph":"graph.json",
-                "plugins":[{
-                    "id":binding.id,
-                    "digest":binding.digest,
-                    "resources":binding.resources,
-                    "mcp_servers":binding.mcp_servers
-                }]
+                "plugins":[{"id":"demo"}]
             }))
             .unwrap(),
         )
@@ -3244,7 +3424,7 @@ mod bundle_loader_tests {
         assert_eq!(loaded.authoring_definition, authoring);
         assert_eq!(loaded.snapshot.nodes[0].id, "stage/inside");
         assert_eq!(loaded.snapshot.nodes[0].plugins, ["demo"]);
-        assert_eq!(loaded.plugins.len(), 1);
+        assert_eq!(loaded.plugins, vec!["demo".to_owned()]);
     }
 
     #[test]
@@ -3283,23 +3463,22 @@ mod bundle_loader_tests {
     }
 
     #[test]
-    fn rejects_resource_digest_drift_extra_files_and_credentials() {
-        let tmp = bundle();
-        fs::write(tmp.path().join("plugins/demo/skills/SKILL.md"), "tampered").unwrap();
-        assert!(FileGraphBundleLoader::new(tmp.path()).load().is_err());
-
+    fn rejects_extra_top_level_files_and_the_old_manifest_shape() {
         let tmp = bundle();
         fs::write(tmp.path().join("unexpected.txt"), "payload").unwrap();
         assert!(FileGraphBundleLoader::new(tmp.path()).load().is_err());
 
+        // Plugin credentials cannot arrive through a bundle any more, because a
+        // bundle carries no Plugin content at all.
         let tmp = bundle();
+        fs::create_dir_all(tmp.path().join("plugins/demo")).unwrap();
         fs::write(tmp.path().join("plugins/demo/.env"), "TOKEN=secret").unwrap();
         assert!(FileGraphBundleLoader::new(tmp.path()).load().is_err());
     }
 
     #[cfg(unix)]
     #[test]
-    fn rejects_graph_and_plugin_symlinks() {
+    fn rejects_graph_symlinks_and_any_plugin_directory() {
         use std::os::unix::fs::symlink;
 
         let tmp = bundle();
@@ -3309,18 +3488,17 @@ mod bundle_loader_tests {
         symlink(&outside, tmp.path().join("graph.json")).unwrap();
         assert!(FileGraphBundleLoader::new(tmp.path()).load().is_err());
 
+        // Even an empty or symlinked `plugins/` is Plugin content in a bundle, and
+        // a bundle carries references only.
+        let tmp = bundle();
+        fs::create_dir(tmp.path().join("plugins")).unwrap();
+        let error = FileGraphBundleLoader::new(tmp.path()).load().unwrap_err();
+        assert!(error.to_string().contains("re-export"), "{error}");
+
         let tmp = bundle();
         let outside = tmp.path().join("outside");
         fs::create_dir(&outside).unwrap();
-        fs::remove_dir_all(tmp.path().join("plugins/demo/skills")).unwrap();
-        symlink(&outside, tmp.path().join("plugins/demo/skills")).unwrap();
-        assert!(FileGraphBundleLoader::new(tmp.path()).load().is_err());
-
-        let tmp = bundle();
-        let outside = tmp.path().join("outside/demo");
-        fs::create_dir_all(outside.parent().unwrap()).unwrap();
-        fs::rename(tmp.path().join("plugins/demo"), &outside).unwrap();
-        symlink(&outside, tmp.path().join("plugins/demo")).unwrap();
+        symlink(&outside, tmp.path().join("plugins")).unwrap();
         assert!(FileGraphBundleLoader::new(tmp.path()).load().is_err());
     }
 }

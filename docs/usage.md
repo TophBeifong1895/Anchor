@@ -69,7 +69,7 @@ ANCHOR_GOOSE_RELAY_BINARY=/absolute/path/to/anchor-net-relay
 | `ANCHOR_RUNNER_CATALOG_ROOT` | 可编辑 Graph catalog |
 | `ANCHOR_RUNNER_STATE_ROOT` | RunStore、Session/Turn、计划、渠道和锁 |
 | `ANCHOR_RUNNER_WORKSPACE_ROOT` | 节点 workspace、Artifact、输入与原生会话 |
-| `ANCHOR_RUNNER_LIBRARY_ROOT` | 已安装 Plugin/tool 与授权资源 |
+| `ANCHOR_RUNNER_LIBRARY_ROOT` | 已安装 Plugin/tool 与授权资源；**插件只有这一处家**。未设置时回退到 `CATALOG_ROOT`（单根部署把库根与图目录放同一处）；两者都没设的部署没有插件家，插件相关操作具名拒绝——**不会**退到 `BUNDLE_ROOT` 旁边（图包只带引用，不是插件家） |
 | `ANCHOR_RUNNER_WEB_ROOT` | `apps/web/dist` 或发行 Web 目录 |
 | `ANCHOR_RUNNER_GRAPH_NAME` | 初始 bundle 对应 Graph 名 |
 | `ANCHOR_RUNNER_LISTEN` | 默认 `127.0.0.1:8077` |

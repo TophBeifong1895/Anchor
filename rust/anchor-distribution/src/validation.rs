@@ -162,13 +162,16 @@ pub(crate) fn resource_extension(relative: &str) -> Result<()> {
     Ok(())
 }
 
+/// A native Plugin binary: `plugins/<id>/bin/<name>` beside the Graph bundle.
+///
+/// Plugin sources are shipped next to the bundle, not inside it: a bundle
+/// references Plugins by id and never carries their bytes.
 pub(crate) fn native_resource(relative: &str) -> bool {
     let parts = relative.split('/').collect::<Vec<_>>();
-    parts.len() == 5
-        && parts[0] == "bundle"
-        && parts[1] == "plugins"
-        && parts[3] == "bin"
-        && Path::new(parts[4]).extension().is_none()
+    parts.len() == 4
+        && parts[0] == "plugins"
+        && parts[2] == "bin"
+        && Path::new(parts[3]).extension().is_none()
 }
 
 fn sensitive(key: &str) -> bool {

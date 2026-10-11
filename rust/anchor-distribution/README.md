@@ -21,12 +21,20 @@ references `academic-research`, `--scholarly` becomes required. If it references
 `--wecom-tools` and `--wecom-gateway` become required. Each first-party binary
 must be supplied separately; passing one without its Plugin is rejected. The
 builder places the scholarly ELF at
-`bundle/plugins/academic-research/bin/anchor-scholarly`, updates the frozen
-Plugin summary and validates the resulting bundle. Native first-party MCP and
-channel entrypoints are placed under their declared Plugin `bin/` paths and do
-not use an interpreter or host `PATH`. The builder consumes reviewed,
+`plugins/academic-research/bin/anchor-scholarly` (beside the bundle, in the
+shipped Plugin sources), writes the frozen manifest's Plugin *references*
+(`{"id": …}` — a bundle never carries Plugin bytes) and validates the resulting
+bundle. Native first-party MCP and channel entrypoints are placed under their
+declared Plugin `bin/` paths and do not use an interpreter or host `PATH`. The builder consumes reviewed,
 already-built target ELFs; it does not build workspace crates or resolve a
 cross-crate install manifest.
+
+The archive ships a Graph bundle that *references* its Plugins and the Plugin
+sources beside it. A deployment that runs it must therefore point the host at the
+one Library root those Plugins are imported into (`ANCHOR_RUNNER_LIBRARY_ROOT`,
+or `ANCHOR_RUNNER_CATALOG_ROOT` when the deployment keeps one root); the bundle
+directory is a Graph, not a Plugin home, and the host never infers a Library root
+from it.
 
 Output must be a new
 `.tar.gz` file under an existing, non-symlink directory. Success prints a JSON
@@ -58,22 +66,24 @@ anchor-runtime/
   bin/goose
   bin/<explicit-tool>
   bundle/graph.json
-  bundle/manifest.json
-  bundle/plugins/<declared-plugin>/<declared-resource>
-  bundle/plugins/academic-research/bin/anchor-scholarly # when referenced
-  bundle/plugins/docmost/bin/anchor-docmost-tools       # when referenced
-  bundle/plugins/wecom/bin/anchor-wecom-tools           # when referenced
-  bundle/plugins/wecom/bin/anchor-wecom-gateway         # when referenced
+  bundle/manifest.json          # Plugin *references* only: {"id": …}
+  plugins/<declared-plugin>/<declared-resource>          # imported into the Library
+  plugins/academic-research/bin/anchor-scholarly # when referenced
+  plugins/docmost/bin/anchor-docmost-tools       # when referenced
+  plugins/wecom/bin/anchor-wecom-tools           # when referenced
+  plugins/wecom/bin/anchor-wecom-gateway         # when referenced
   web/                         # optional compiled assets
   README.md
   runtime-manifest.json
 ```
 
 Input resources are copied into a private snapshot using component-wise
-`NOFOLLOW` opens. Shared `FileGraphBundleLoader` admission runs on that snapshot.
-Bundle files must exactly match graph/manifest and the admitted Plugin resource
-pins; only their parent directories are allowed, so unknown empty directories
-are rejected as well. Extensionless native Plugin executables are supported only
+`NOFOLLOW` opens. Shared `FileGraphBundleLoader` admission runs on that snapshot:
+the input bundle directory holds exactly `graph.json`, `manifest.json` and a
+`plugins/` tree of Plugin *sources* (a Plugin's own files are its code), and the
+shipped `bundle/` holds exactly `graph.json` and `manifest.json`. Only those
+parents' directories are allowed, so unknown empty directories are rejected as
+well. Extensionless native Plugin executables are supported only
 under `plugins/<id>/bin/`, validated as ELF, and retain normalized execute mode.
 Scripts and source files are not supported; compiled JS/Wasm are accepted only
 in the explicitly supplied Web tree. Source maps are rejected.

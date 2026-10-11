@@ -23,7 +23,7 @@ use std::{
 
 use anchor_runtime::{
     NetworkPolicy, ReadOnlyInput, SandboxError, SandboxPort, SandboxRequest, SandboxResult,
-    SandboxStatus, SpillPolicy,
+    SandboxStatus, SpillPolicy, WritableInput,
 };
 use tokio::{
     io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, BufReader},
@@ -62,6 +62,12 @@ pub struct BubblewrapPolicy {
     /// Exact host directories that may be added to the sandbox PATH.
     pub tool_dirs: Vec<PathBuf>,
     pub spill_roots: Vec<PathBuf>,
+    /// Exact host paths this policy may ever mount writable. Unlike read-only
+    /// inputs there is no root-based fallback: a writable mount is a decision the
+    /// host makes per invocation, for one declared path.
+    pub writable_input_roots: Vec<PathBuf>,
+    /// Sandbox-namespace destinations this policy may ever mount writable.
+    pub writable_destination_roots: Vec<PathBuf>,
 }
 
 impl BubblewrapPolicy {
@@ -78,6 +84,8 @@ impl BubblewrapPolicy {
             readonly_destination_roots: Vec::new(),
             tool_dirs: Vec::new(),
             spill_roots: Vec::new(),
+            writable_input_roots: Vec::new(),
+            writable_destination_roots: Vec::new(),
         }
     }
 
@@ -101,6 +109,14 @@ impl BubblewrapPolicy {
         self.spill_roots.push(path.into());
         self
     }
+    pub fn authorize_writable_input_root(mut self, path: impl Into<PathBuf>) -> Self {
+        self.writable_input_roots.push(path.into());
+        self
+    }
+    pub fn authorize_writable_destination_root(mut self, path: impl Into<PathBuf>) -> Self {
+        self.writable_destination_roots.push(path.into());
+        self
+    }
     pub fn allow_network(mut self) -> Self {
         self.allow_network = true;
         self
@@ -117,6 +133,11 @@ pub struct BubblewrapSandbox {
     readonly_input_roots: Vec<PathBuf>,
     readonly_destination_roots: Vec<PathBuf>,
     readonly_grants: Vec<(PathBuf, PathBuf)>,
+    /// Exact writable pairs this host granted. A writable mount is never
+    /// authorized by a root, only by one of these pairs.
+    writable_grants: Vec<(PathBuf, PathBuf)>,
+    writable_input_roots: Vec<PathBuf>,
+    writable_destination_roots: Vec<PathBuf>,
     tool_dirs: Vec<PathBuf>,
     spill_roots: Vec<PathBuf>,
 }
@@ -134,6 +155,7 @@ impl std::fmt::Debug for BubblewrapSandbox {
                 &self.readonly_destination_roots,
             )
             .field("readonly_grants", &self.readonly_grants)
+            .field("writable_grants", &self.writable_grants)
             .field("tool_dirs", &self.tool_dirs)
             .field("spill_roots", &self.spill_roots)
             .finish()
@@ -191,11 +213,21 @@ impl BubblewrapSandbox {
                 ));
             }
         }
+        for destination_root in &policy.writable_destination_roots {
+            normalized_destination(destination_root)?;
+            if is_reserved_mount(destination_root) {
+                return Err(SandboxError::InvalidRequest(
+                    "host-authorized writable destination roots must not overlap reserved sandbox mounts"
+                        .into(),
+                ));
+            }
+        }
         let workspace_roots = canonical_roots(policy.workspace_roots, "workspace")?;
         let readonly_input_roots = canonical_roots(policy.readonly_input_roots, "read-only input")?;
         let readonly_destination_roots = policy.readonly_destination_roots;
         let tool_dirs = canonical_roots(policy.tool_dirs, "tool directory")?;
         let spill_roots = canonical_roots(policy.spill_roots, "spill")?;
+        let writable_input_roots = canonical_roots(policy.writable_input_roots, "writable input")?;
         let binary = if policy.binary.components().count() == 1 {
             find_on_path(&policy.binary).ok_or_else(|| {
                 SandboxError::Unavailable(format!(
@@ -217,6 +249,9 @@ impl BubblewrapSandbox {
             readonly_input_roots,
             readonly_destination_roots,
             readonly_grants: Vec::new(),
+            writable_grants: Vec::new(),
+            writable_input_roots,
+            writable_destination_roots: policy.writable_destination_roots,
             tool_dirs,
             spill_roots,
         })
@@ -253,6 +288,69 @@ impl BubblewrapSandbox {
                 continue;
             }
             sandbox.readonly_grants.push((source, destination));
+        }
+        Ok(sandbox)
+    }
+
+    /// Grant exact host paths this invocation may write, and only these.
+    ///
+    /// Unlike [`BubblewrapSandbox::with_readonly_grants`] there is no root-based
+    /// fallback behind this: a request may only mount writable a pair the host
+    /// granted here, and the pair must also appear in the request. One half alone
+    /// is refused (a request without the grant) or mounts nothing (a grant the
+    /// request never asks for).
+    pub fn with_writable_grants(&self, grants: &[WritableInput]) -> Result<Self, SandboxError> {
+        let mut sandbox = self.clone();
+        for grant in grants {
+            let declared = absolute_lexical(&grant.source)?;
+            let source = fs::canonicalize(&declared).map_err(|error| {
+                SandboxError::InvalidRequest(format!(
+                    "host writable grant cannot be resolved: {error}"
+                ))
+            })?;
+            // Resolve *again* here and refuse a moved path. The host checks the
+            // declaration for symlinks when it builds the grant, but another
+            // instance writable on the parent can swap a component in between
+            // (TOCTOU); mounting the resolved target would then hand out a
+            // writable path the host never granted. The granted path's own
+            // directory is the authority: the resolved path must still be a child
+            // of it. Ancestors (a symlinked temporary root, for example) resolve on
+            // both sides and are therefore not an error.
+            let parent = declared.parent().ok_or_else(|| {
+                SandboxError::InvalidRequest("a writable grant needs a parent directory".into())
+            })?;
+            let canonical_parent = fs::canonicalize(parent).map_err(|error| {
+                SandboxError::InvalidRequest(format!(
+                    "host writable grant directory cannot be resolved: {error}"
+                ))
+            })?;
+            if source.parent() != Some(canonical_parent.as_path()) {
+                return Err(SandboxError::InvalidRequest(format!(
+                    "host writable grant `{}` resolves outside the directory that grants it (`{}`); a component is a symlink, so the granted path moved",
+                    declared.display(),
+                    source.display()
+                )));
+            }
+            let destination = normalized_destination(&grant.destination)?;
+            if is_reserved_mount(&destination) {
+                return Err(SandboxError::InvalidRequest(
+                    "host writable grant overlaps a reserved sandbox mount".into(),
+                ));
+            }
+            if sandbox
+                .readonly_grants
+                .iter()
+                .any(|(_, target)| *target == destination)
+                || sandbox
+                    .writable_grants
+                    .iter()
+                    .any(|(_, target)| *target == destination)
+            {
+                return Err(SandboxError::InvalidRequest(
+                    "host grants have conflicting destinations".into(),
+                ));
+            }
+            sandbox.writable_grants.push((source, destination));
         }
         Ok(sandbox)
     }
@@ -398,6 +496,38 @@ impl BubblewrapSandbox {
             }
             readonly_inputs.push((source, destination));
         }
+        let mut writable_inputs = Vec::with_capacity(request.writable_inputs.len());
+        for input in &request.writable_inputs {
+            let source = fs::canonicalize(&input.source).map_err(|error| {
+                SandboxError::InvalidRequest(format!("writable input cannot be resolved: {error}"))
+            })?;
+            let destination = normalized_destination(&input.destination)?;
+            // The two halves must both be present: the host granted exactly this
+            // pair, and this request asks for exactly it. A broad root is not a
+            // writable authority, so it never substitutes for the grant.
+            let granted = self
+                .writable_grants
+                .iter()
+                .any(|grant| grant == &(source.clone(), destination.clone()));
+            if !granted {
+                let covered = self
+                    .writable_input_roots
+                    .iter()
+                    .any(|root| source.starts_with(root))
+                    && self
+                        .writable_destination_roots
+                        .iter()
+                        .any(|root| destination.starts_with(root))
+                    && !is_reserved_mount(&destination);
+                return Err(SandboxError::InvalidRequest(if covered {
+                    "a writable mount needs this invocation's host grant, not only an authorized root"
+                        .into()
+                } else {
+                    "writable input is not authorized by the host for this invocation".to_owned()
+                }));
+            }
+            writable_inputs.push((source, destination));
+        }
         let working_directory = request
             .working_directory
             .clone()
@@ -463,6 +593,7 @@ impl BubblewrapSandbox {
             workspace,
             working_directory,
             readonly_inputs,
+            writable_inputs,
             workspace_readonly,
             tool_dirs,
             spill,
@@ -518,6 +649,14 @@ impl BubblewrapSandbox {
             add_mount_parent_dirs(&mut args, destination, &mut made_dirs);
             args.extend([
                 "--ro-bind".into(),
+                path_string(source),
+                path_string(destination),
+            ]);
+        }
+        for (source, destination) in &resolved.writable_inputs {
+            add_mount_parent_dirs(&mut args, destination, &mut made_dirs);
+            args.extend([
+                "--bind".into(),
                 path_string(source),
                 path_string(destination),
             ]);
@@ -788,6 +927,7 @@ struct ResolvedRequest {
     workspace: PathBuf,
     working_directory: PathBuf,
     readonly_inputs: Vec<(PathBuf, PathBuf)>,
+    writable_inputs: Vec<(PathBuf, PathBuf)>,
     workspace_readonly: Vec<(PathBuf, PathBuf)>,
     tool_dirs: Vec<PathBuf>,
     spill: Option<ResolvedSpill>,
@@ -823,6 +963,37 @@ fn resolve_spill(
 
 fn spill_budget(policy: Option<&SpillPolicy>) -> usize {
     policy.and_then(|p| p.max_bytes).unwrap_or(0)
+}
+
+/// Make one host path absolute without resolving symlinks.
+///
+/// Writable grants name exact paths; the lexical form is what the host granted,
+/// and it is compared against the resolved form so a symlinked component cannot
+/// silently redirect the mount.
+fn absolute_lexical(path: &Path) -> Result<PathBuf, SandboxError> {
+    let absolute = if path.is_absolute() {
+        path.to_owned()
+    } else {
+        std::env::current_dir()
+            .map_err(|error| SandboxError::InvalidRequest(error.to_string()))?
+            .join(path)
+    };
+    let mut normalized = PathBuf::from("/");
+    for component in absolute.components() {
+        match component {
+            std::path::Component::RootDir | std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                normalized.pop();
+            }
+            std::path::Component::Normal(name) => normalized.push(name),
+            std::path::Component::Prefix(_) => {
+                return Err(SandboxError::InvalidRequest(
+                    "a writable grant must be a plain path".into(),
+                ));
+            }
+        }
+    }
+    Ok(normalized)
 }
 
 fn normalized_destination(path: &Path) -> Result<PathBuf, SandboxError> {
@@ -1283,6 +1454,9 @@ mod tests {
             readonly_input_roots: vec![root.clone()],
             readonly_destination_roots: vec![PathBuf::from("/in"), PathBuf::from("/spill")],
             readonly_grants: Vec::new(),
+            writable_grants: Vec::new(),
+            writable_input_roots: Vec::new(),
+            writable_destination_roots: Vec::new(),
             tool_dirs: Vec::new(),
             spill_roots: vec![root],
         }
@@ -1805,6 +1979,120 @@ mod tests {
 
     fn symlink_dir(target: &Path, link: &Path) {
         std::os::unix::fs::symlink(target, link).unwrap();
+    }
+
+    /// The writable half of the authority: one exact pair, granted by the host and
+    /// asked for by the request. Neither half alone is enough.
+    #[tokio::test]
+    async fn a_writable_grant_needs_both_halves_and_stays_inside_it() {
+        let dir = temp_dir("writable-grant");
+        let workspace = dir.join("ws");
+        let data = dir.join("plugin/data");
+        let code = dir.join("plugin/bin");
+        fs::create_dir_all(&workspace).unwrap();
+        fs::create_dir_all(&data).unwrap();
+        fs::create_dir_all(&code).unwrap();
+        fs::write(code.join("run"), "code").unwrap();
+        let base = BubblewrapSandbox::new(
+            BubblewrapPolicy::new("bwrap", ["sh"]).authorize_workspace_root(&workspace),
+        )
+        .unwrap();
+        let grant = WritableInput::new(&data, "/plugins/demo/data");
+        let node = base
+            .with_writable_grants(std::slice::from_ref(&grant))
+            .unwrap();
+
+        let mut request = SandboxRequest::new(
+            &workspace,
+            ["sh", "-c", "printf written > /plugins/demo/data/kept.txt"],
+        );
+        request.writable_inputs.push(grant.clone());
+        // The request half without the host grant is refused, even when the
+        // deployment authorized a broad root for other purposes.
+        assert!(matches!(
+            base.run(request.clone()).await,
+            Err(SandboxError::InvalidRequest(_))
+        ));
+        let result = node.run(request.clone()).await.unwrap();
+        assert_eq!(result.exit_code, Some(0), "{result:?}");
+        assert_eq!(
+            fs::read_to_string(data.join("kept.txt")).unwrap(),
+            "written"
+        );
+
+        // A destination the host never granted is refused.
+        let mut elsewhere = request.clone();
+        elsewhere.writable_inputs[0].destination = "/plugins/demo/elsewhere".into();
+        assert!(matches!(
+            node.run(elsewhere).await,
+            Err(SandboxError::InvalidRequest(_))
+        ));
+
+        // A source outside the granted path is refused.
+        let mut widened = request.clone();
+        widened.writable_inputs[0].source = code.clone();
+        assert!(matches!(
+            node.run(widened).await,
+            Err(SandboxError::InvalidRequest(_))
+        ));
+
+        // A *broad* authority is not a grant: authorizing the Plugin directory as
+        // a writable root does not let a request mount a path inside it.
+        let broad = BubblewrapSandbox::new(
+            BubblewrapPolicy::new("bwrap", ["sh"])
+                .authorize_workspace_root(&workspace)
+                .authorize_writable_input_root(dir.join("plugin"))
+                .authorize_writable_destination_root("/plugins"),
+        )
+        .unwrap();
+        let outside_declaration = broad.run(request.clone()).await.unwrap_err();
+        assert!(
+            matches!(outside_declaration, SandboxError::InvalidRequest(ref reason)
+                if reason.contains("needs this invocation's host grant, not only an authorized root")),
+            "{outside_declaration:?}"
+        );
+
+        // A component swapped for a symlink after the host's own check resolves
+        // elsewhere, so the grant is refused instead of mounting the target.
+        let nested = data.join("sub");
+        std::os::unix::fs::symlink(dir.join("outside"), &nested).unwrap();
+        fs::create_dir_all(dir.join("outside")).unwrap();
+        let moved = WritableInput::new(&nested, "/plugins/demo/data/sub");
+        let error = base
+            .with_writable_grants(std::slice::from_ref(&moved))
+            .unwrap_err();
+        assert!(
+            matches!(error, SandboxError::InvalidRequest(ref reason)
+                if reason.contains("resolves outside the directory that grants it")),
+            "{error:?}"
+        );
+        fs::remove_file(&nested).unwrap();
+
+        // The host grant alone mounts nothing: without the request half the path
+        // is simply not there, so a write cannot land anywhere.
+        let ungranted =
+            SandboxRequest::new(&workspace, ["sh", "-c", "! test -d /plugins/demo/data"]);
+        assert_eq!(node.run(ungranted).await.unwrap().exit_code, Some(0));
+
+        // The read-only half is untouched: a granted read-only path stays
+        // read-only next to a writable one.
+        let read = ReadOnlyInput::new(code.join("run"), "/plugins/demo/code");
+        let node = node
+            .with_readonly_grants(std::slice::from_ref(&read))
+            .unwrap();
+        let mut both = SandboxRequest::new(
+            &workspace,
+            [
+                "sh",
+                "-c",
+                "cat /plugins/demo/code; ! printf x > /plugins/demo/code",
+            ],
+        );
+        both.readonly_inputs.push(read);
+        both.writable_inputs.push(grant);
+        assert_eq!(node.run(both).await.unwrap().exit_code, Some(0));
+        assert_eq!(fs::read_to_string(code.join("run")).unwrap(), "code");
+        let _ = fs::remove_dir_all(dir);
     }
 
     #[tokio::test]

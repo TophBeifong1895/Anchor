@@ -92,6 +92,27 @@ impl ReadOnlyInput {
     }
 }
 
+/// A host path mounted **writable** inside a sandbox invocation.
+///
+/// This is the narrow authority a Plugin gets over its own declared mutable
+/// paths: the host grants one exact `(source, destination)` pair, never a root,
+/// so a request can never widen it. `source` must be a path the host itself
+/// resolved (a Plugin's declared mutable path), never a model argument.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WritableInput {
+    pub source: PathBuf,
+    pub destination: PathBuf,
+}
+
+impl WritableInput {
+    pub fn new(source: impl Into<PathBuf>, destination: impl Into<PathBuf>) -> Self {
+        Self {
+            source: source.into(),
+            destination: destination.into(),
+        }
+    }
+}
+
 /// Whether the process namespace may reach the network.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum NetworkPolicy {
@@ -114,6 +135,9 @@ pub struct SandboxRequest {
     pub working_directory: Option<PathBuf>,
     pub command: Vec<String>,
     pub readonly_inputs: Vec<ReadOnlyInput>,
+    /// Host paths mounted writable. Each entry needs a matching host grant: a
+    /// writable mount is never authorized by a broad root.
+    pub writable_inputs: Vec<WritableInput>,
     /// Workspace-relative paths mounted read-only after the workspace bind.
     pub workspace_readonly: Vec<PathBuf>,
     /// Absolute host paths prepended to the command's PATH. They do not imply
@@ -138,6 +162,7 @@ impl fmt::Debug for SandboxRequest {
             .field("working_directory", &self.working_directory)
             .field("command", &self.command)
             .field("readonly_inputs", &self.readonly_inputs)
+            .field("writable_inputs", &self.writable_inputs)
             .field("workspace_readonly", &self.workspace_readonly)
             .field("tool_dirs", &self.tool_dirs)
             .field("environment", &self.environment)
@@ -160,6 +185,7 @@ impl SandboxRequest {
             working_directory: None,
             command: command.into_iter().map(Into::into).collect(),
             readonly_inputs: Vec::new(),
+            writable_inputs: Vec::new(),
             workspace_readonly: Vec::new(),
             tool_dirs: Vec::new(),
             environment: Vec::new(),
@@ -212,6 +238,26 @@ impl SandboxRequest {
                 return Err(SandboxError::InvalidRequest(
                     "read-only input destination must be an absolute path without `..` components"
                         .to_owned(),
+                ));
+            }
+        }
+        for input in &self.writable_inputs {
+            // The same shape rule as a read-only input; whether this pair may be
+            // mounted at all is the sandbox adapter's decision, because only it
+            // knows the host's grants.
+            if !is_safe_absolute(&input.source) || !is_safe_absolute(&input.destination) {
+                return Err(SandboxError::InvalidRequest(
+                    "writable input source and destination must be absolute paths without `..` components"
+                        .to_owned(),
+                ));
+            }
+            if self
+                .readonly_inputs
+                .iter()
+                .any(|readonly| readonly.destination == input.destination)
+            {
+                return Err(SandboxError::InvalidRequest(
+                    "a destination cannot be mounted both read-only and writable".to_owned(),
                 ));
             }
         }

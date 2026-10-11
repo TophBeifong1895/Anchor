@@ -78,6 +78,14 @@ pub struct RunCursor {
 pub struct RunResult {
     pub node_id: String,
     pub key: InvocationKey,
+    /// The dependency view this invocation actually used, keyed by Plugin id:
+    /// the declaration digest the view belongs to.
+    ///
+    /// An observation, never a gate (standard invariant 10): it is how
+    /// "from which step did this Run use a different view" is readable from the
+    /// results, and a Plugin that changed under a parked Run does not refuse it.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub plugin_views: BTreeMap<String, String>,
     pub completion: NodeCompletion,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub interruption: Option<String>,
@@ -169,7 +177,7 @@ pub struct ParallelActivation {
 
 /// Current persisted Graph Run record format. Readers migrate older formats and
 /// reject newer ones instead of guessing what changed.
-pub const RUN_RECORD_FORMAT: u32 = 10;
+pub const RUN_RECORD_FORMAT: u32 = 11;
 
 /// RFC 3339 UTC timestamp used for `started`/`updated` on Run records.
 pub(crate) fn timestamp_now() -> String {
@@ -979,9 +987,16 @@ impl GraphRunRecord {
                     );
                 }
                 self.format = 10;
+                self.migrate_format()
+            }
+            10 => {
+                // Format 11 adds the observed dependency views to each result.
+                // Nothing has to be rewritten: a record written before it simply
+                // has no observation for steps that already ran.
+                self.format = 11;
                 Ok(())
             }
-            10 => Ok(()),
+            11 => Ok(()),
             other => Err(GraphError::CorruptRun(format!(
                 "unsupported graph run format {other}"
             ))),

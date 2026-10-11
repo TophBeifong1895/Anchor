@@ -351,7 +351,14 @@ async fn abandon_unblocks_plugin_resource_replacement_and_leaves_stopped_runs_bl
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{created}");
-    assert!(state.bundle_root.join("plugins/demo/plugin.json").is_file());
+    // The Plugin exists once, in the Library.
+    assert!(
+        state
+            .catalog_root
+            .join("plugins/demo/plugin.json")
+            .is_file()
+    );
+    assert!(!state.bundle_root.join("plugins").exists());
 
     let bundle = FileGraphBundleLoader::new(&state.bundle_root)
         .load()

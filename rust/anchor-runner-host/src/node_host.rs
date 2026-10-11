@@ -61,7 +61,12 @@ pub(crate) struct HostIoResolver {
     mcp: tool_host::McpToolConfig,
     plugin_bindings: BTreeMap<String, PluginBinding>,
     run_store: FileRunStore,
-    catalog_roots: Vec<PathBuf>,
+    /// The one place Plugins exist: the deployment's Library root. There is no
+    /// second resolution path (no bundle-first, no catalog-first fallback).
+    library_root: Option<PathBuf>,
+    /// Which view each invocation actually resolved, keyed by the invocation's
+    /// durable key. Read once when the node's result is written.
+    observed_views: std::sync::Mutex<BTreeMap<String, BTreeMap<String, String>>>,
     local_inputs: LocalInputs,
 }
 
@@ -75,26 +80,6 @@ impl HostIoResolver {
         run_store: FileRunStore,
         local_inputs: LocalInputs,
     ) -> Self {
-        let mut catalog_roots = Vec::new();
-        for root in [
-            std::env::var_os("ANCHOR_RUNNER_BUNDLE_ROOT").map(PathBuf::from),
-            std::env::var_os("ANCHOR_RUNNER_CATALOG_ROOT").map(PathBuf::from),
-        ]
-        .into_iter()
-        .flatten()
-        {
-            if root.is_dir() && !catalog_roots.contains(&root) {
-                catalog_roots.push(root.clone());
-            }
-            if let Ok(entries) = std::fs::read_dir(&root) {
-                for entry in entries.flatten() {
-                    let path = entry.path();
-                    if path.is_dir() && !catalog_roots.contains(&path) {
-                        catalog_roots.push(path);
-                    }
-                }
-            }
-        }
         Self {
             artifacts,
             sandbox,
@@ -102,20 +87,49 @@ impl HostIoResolver {
             mcp,
             plugin_bindings,
             run_store,
-            catalog_roots,
+            library_root: None,
+            observed_views: std::sync::Mutex::new(BTreeMap::new()),
             local_inputs,
         }
     }
 
-    /// Point the resolver at explicit Plugin roots (tests only).
+    /// Remember which view this invocation resolved, for the Run's own record.
+    fn remember_plugin_views(&self, key: &InvocationKey, views: BTreeMap<String, String>) {
+        if views.is_empty() {
+            return;
+        }
+        if let Ok(mut observed) = self.observed_views.lock() {
+            observed.insert(key.durable_key(), views);
+        }
+    }
+
+    /// Take the observation for one invocation (reading it consumes it, so a long
+    /// lived host does not accumulate one entry per node call).
+    pub(crate) fn observed_plugin_views(&self, key: &InvocationKey) -> BTreeMap<String, String> {
+        self.observed_views
+            .lock()
+            .ok()
+            .and_then(|mut observed| observed.remove(&key.durable_key()))
+            .unwrap_or_default()
+    }
+
+    /// Point the resolver at the deployment's Library root.
     ///
-    /// Production deployments pass their Library root through the environment so
-    /// every host in one process agrees; a test needs the same authority without
-    /// mutating process state.
-    #[cfg(test)]
-    pub(crate) fn with_catalog_roots(mut self, roots: Vec<PathBuf>) -> Self {
-        self.catalog_roots = roots;
+    /// The caller that wires the host decides this once (`crate::library_root`) and
+    /// hands the same answer to every host in the process, so the API that installs
+    /// a Plugin and the node call that runs it cannot disagree. `None` means the
+    /// deployment configured no Library root: a Plugin-bearing call then refuses
+    /// with a named error instead of guessing a path.
+    pub(crate) fn with_library_root(mut self, root: Option<PathBuf>) -> Self {
+        self.library_root = root;
         self
+    }
+
+    /// The Library root Plugins are resolved from, or a reason there is none.
+    fn plugin_library_root(&self) -> Result<&Path, String> {
+        self.library_root.as_deref().ok_or_else(|| {
+            "Plugin-bearing execution requires the deployment's Library root (ANCHOR_RUNNER_LIBRARY_ROOT or ANCHOR_RUNNER_CATALOG_ROOT)".to_owned()
+        })
     }
 
     pub(crate) fn local_inputs_configured(&self) -> bool {
@@ -244,23 +258,10 @@ impl HostIoResolver {
         }) {
             return Ok(self.mcp.clone());
         }
-        let mut last_error = None;
-        for root in &self.catalog_roots {
-            if let Err(error) = tool_host::McpToolConfig::plugin_mounts(root, bindings) {
-                last_error = Some(error);
-                continue;
-            }
-            match tool_host::McpToolConfig::from_catalog(root, bindings) {
-                Ok(mut config) => {
-                    config.environment = self.mcp.environment.clone();
-                    return Ok(config);
-                }
-                Err(error) => last_error = Some(error),
-            }
-        }
-        Err(last_error.unwrap_or_else(|| {
-            "Plugin-bearing Agent requires an accepted bundle/catalog root".into()
-        }))
+        let root = self.plugin_library_root()?;
+        let mut config = tool_host::McpToolConfig::from_catalog(root, bindings)?;
+        config.environment = self.mcp.environment.clone();
+        Ok(config)
     }
 
     fn oauth_owner_for_run(&self, run_id: &str) -> Result<Option<String>, String> {
@@ -279,14 +280,7 @@ impl HostIoResolver {
         {
             return Ok(Vec::new());
         }
-        let mut last_error = None;
-        for root in &self.catalog_roots {
-            match tool_host::McpToolConfig::plugin_mounts(root, bindings) {
-                Ok(mounts) => return Ok(mounts),
-                Err(error) => last_error = Some(error),
-            }
-        }
-        Err(last_error.unwrap_or_else(|| "Plugin resource root is unavailable".into()))
+        tool_host::McpToolConfig::plugin_mounts(self.plugin_library_root()?, bindings)
     }
 }
 
@@ -422,22 +416,24 @@ impl NodeHostResolver for HostIoResolver {
                     )
                     .await
                     .map_err(|error| ResolutionError::Graph(error.into_graph_error()))?;
-                    // A Plugin's own declaration maps to exactly one view. A view
-                    // that is missing while a Run admitted the declaration is a
-                    // corrupt Run, not a deployment that merely lacks a capability,
-                    // and the boundary keeps that class.
-                    //
-                    // Slice note: a Run does not pin the view yet. Replacing a
-                    // Plugin while a Run is in flight is refused by
-                    // `plugin_mounts` ("Plugin `x` changed since Run admission")
-                    // before this point, so an in-flight Run never silently
-                    // switches to a newer view.
+                    // A Plugin's own declaration maps to exactly one view, and the
+                    // Run uses the *current* Plugin: an upgrade takes effect at its
+                    // next node call and nothing is refused for having changed. A
+                    // declaration that needs a view which is not there is a
+                    // deployment problem, not a corrupt Run.
                     let plugin_views = crate::plugin_view::prepare_views_async(
                         request.plugins.clone(),
                         deployments.clone(),
                     )
                     .await
                     .map_err(|error| ResolutionError::Graph(error.into_graph_error()))?;
+                    self.remember_plugin_views(
+                        &request.key,
+                        plugin_views
+                            .iter()
+                            .map(|(id, view)| (id.clone(), view.declaration_digest().to_owned()))
+                            .collect(),
+                    );
                     let plugins = self
                         .tools
                         .assemble_with_sandbox(
@@ -678,6 +674,7 @@ impl HostNodes {
             .and_then(|sandbox| sandbox.with_readonly_grants(std::slice::from_ref(&route_helper)))
             .map_err(|error| GraphError::Unsupported(error.to_string()))?;
         let mut sandbox_request = SandboxRequest {
+            writable_inputs: Vec::new(),
             workspace,
             working_directory: None,
             command: argv,
@@ -824,6 +821,9 @@ impl NodeExecutionPort for HostNodes {
             "legacy Agent recovery is disabled in the standard Goose Host".into(),
         ))
     }
+    fn observed_plugin_views(&self, key: &InvocationKey) -> BTreeMap<String, String> {
+        self.io_resolver.observed_plugin_views(key)
+    }
     fn execute<'a>(
         &'a self,
         request: NodeExecutionRequest,
@@ -946,7 +946,8 @@ mod resolver_tests {
                 .collect(),
             store,
             LocalInputs::new(root.path().to_path_buf(), None).unwrap(),
-        );
+        )
+        .with_library_root(Some(root.path().to_path_buf()));
 
         assert_eq!(
             resolver.resolve_plugins(&["fake-tools".into()]).unwrap(),
@@ -1072,7 +1073,7 @@ mod resolver_tests {
             store,
             LocalInputs::new(state.clone(), None).unwrap(),
         )
-        .with_catalog_roots(vec![library]);
+        .with_library_root(Some(library));
         let request = NodeExecutionRequest {
             environments: BTreeMap::new(),
             key: InvocationKey {

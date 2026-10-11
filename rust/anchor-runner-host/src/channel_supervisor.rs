@@ -55,11 +55,12 @@ pub(crate) struct ChannelSupervisor {
 impl ChannelSupervisor {
     pub(crate) async fn start(
         bundle_root: &Path,
+        library_root: &Path,
         state_root: &Path,
         listen: &str,
         api_keys: &[String],
     ) -> io::Result<Option<Self>> {
-        let discovered = discover(bundle_root)?;
+        let discovered = discover(bundle_root, library_root)?;
         if discovered.is_empty() {
             return Ok(None);
         }
@@ -204,8 +205,13 @@ impl Drop for ChannelSupervisor {
     }
 }
 
-fn discover(bundle_root: &Path) -> io::Result<Vec<DiscoveredChannel>> {
+fn discover(bundle_root: &Path, library_root: &Path) -> io::Result<Vec<DiscoveredChannel>> {
+    // The Graph bundle references its Plugins; the code — and the channel
+    // declaration and entrypoint — live in the Library. A bundle carries no Plugin
+    // bytes, so resolving them from the bundle root would find nothing (or, worse,
+    // a stale copy).
     let bundle = FileGraphBundleLoader::new(bundle_root)
+        .with_library_root(library_root)
         .load()
         .map_err(|error| io::Error::other(format!("channel Graph admission failed: {error}")))?;
     let ids = bundle
@@ -214,7 +220,7 @@ fn discover(bundle_root: &Path) -> io::Result<Vec<DiscoveredChannel>> {
         .iter()
         .flat_map(|node| node.plugins.iter().cloned())
         .collect::<BTreeSet<_>>();
-    let catalog = FilePluginCatalog::new(bundle_root);
+    let catalog = FilePluginCatalog::new(library_root);
     let mut channels = BTreeMap::<String, DiscoveredChannel>::new();
     for id in ids {
         let plugin_dir = catalog
@@ -491,12 +497,7 @@ mod tests {
             .resolve(&plugin_ids)
             .unwrap();
         for binding in bindings {
-            summaries.push(json!({
-                "id": binding.id,
-                "digest": binding.digest,
-                "resources": binding.resources,
-                "mcp_servers": binding.mcp_servers
-            }));
+            summaries.push(json!({"id": binding.id}));
         }
         fs::write(
             root.path().join("manifest.json"),
@@ -517,14 +518,7 @@ mod tests {
             .unwrap();
         let summaries = bindings
             .into_iter()
-            .map(|binding| {
-                json!({
-                    "id": binding.id,
-                    "digest": binding.digest,
-                    "resources": binding.resources,
-                    "mcp_servers": binding.mcp_servers
-                })
-            })
+            .map(|binding| json!({"id": binding.id}))
             .collect::<Vec<_>>();
         fs::write(
             root.join("manifest.json"),
@@ -562,10 +556,81 @@ mod tests {
         );
     }
 
+    /// The standard deployment's three roots: the Graph bundle is one directory,
+    /// the Library — with the Plugin's home — is another, and the bundle carries no
+    /// Plugin bytes at all. Discovery must resolve the channel from the Library.
+    #[test]
+    fn discovers_a_channel_from_the_library_when_the_bundle_carries_no_plugins() {
+        let root = tempfile::tempdir().unwrap();
+        let library = root.path().join("library");
+        let bundle = root.path().join("catalog/used");
+        fs::create_dir_all(&bundle).unwrap();
+        // The Plugin, with its channel declaration and entrypoint, lives once.
+        let plugin = library.join("plugins/wecom");
+        fs::create_dir_all(&plugin).unwrap();
+        fs::write(
+            plugin.join("plugin.json"),
+            json!({"name":"WeCom","skills":"skills/"}).to_string(),
+        )
+        .unwrap();
+        fs::create_dir_all(plugin.join("skills")).unwrap();
+        fs::write(plugin.join("skills/SKILL.md"), "code").unwrap();
+        fs::write(
+            plugin.join("channel.json"),
+            json!({"platform":"wecom","transport":"websocket","entrypoint":"bin/gateway"})
+                .to_string(),
+        )
+        .unwrap();
+        fs::create_dir_all(plugin.join("bin")).unwrap();
+        fs::write(plugin.join("bin/gateway"), "#!/bin/sh\nexit 0\n").unwrap();
+        fs::set_permissions(
+            plugin.join("bin/gateway"),
+            fs::Permissions::from_mode(0o700),
+        )
+        .unwrap();
+        fs::write(
+            bundle.join("graph.json"),
+            json!({
+                "objective": "channel",
+                "entry": "worker",
+                "agents": {"worker": {"model": "fixture", "instructions": "work"}},
+                "ops": {},
+                "nodes": [{"id": "worker", "agent": "worker", "plugins": ["wecom"]}],
+                "edges": []
+            })
+            .to_string(),
+        )
+        .unwrap();
+        fs::write(
+            bundle.join("manifest.json"),
+            json!({"format":1,"graph":"graph.json","plugins":[{"id":"wecom"}]}).to_string(),
+        )
+        .unwrap();
+        assert!(!bundle.join("plugins").exists());
+
+        let discovered = discover(&bundle, &library).unwrap();
+        assert_eq!(discovered.len(), 1, "{discovered:?}");
+        assert_eq!(discovered[0].definition.platform, "wecom");
+        assert_eq!(
+            discovered[0].executable,
+            plugin.join("bin/gateway").canonicalize().unwrap(),
+            "the entrypoint comes from the Library"
+        );
+        // With the bundle root as the Library root there is nothing to find: this
+        // is the shape that used to make the host fail to start.
+        let missing = discover(&bundle, &bundle).unwrap_err();
+        assert!(
+            missing
+                .to_string()
+                .contains("Plugin `wecom` is not installed in the Library at"),
+            "resolving from the bundle must name the Plugin and the root it looked in: {missing}"
+        );
+    }
+
     #[test]
     fn discovers_only_channels_mounted_by_the_graph() {
         let root = bundle(&[("mounted", "wecom", "bin/gateway")]);
-        let discovered = discover(root.path()).unwrap();
+        let discovered = discover(root.path(), root.path()).unwrap();
         assert_eq!(discovered.len(), 1);
         assert_eq!(discovered[0].definition.platform, "wecom");
         assert!(
@@ -581,7 +646,8 @@ mod tests {
             ("first", "wecom", "bin/gateway"),
             ("second", "wecom", "bin/gateway"),
         ]);
-        let error = discover(root.path()).expect_err("duplicate channel must fail closed");
+        let error =
+            discover(root.path(), root.path()).expect_err("duplicate channel must fail closed");
         assert!(
             error
                 .to_string()
@@ -600,29 +666,12 @@ mod tests {
             value.to_string(),
         )
         .unwrap();
-        let binding = FilePluginCatalog::new(root.path())
-            .resolve(&["mounted".into()])
-            .unwrap()
-            .remove(0);
-        fs::write(
-            root.path().join("manifest.json"),
-            json!({
-                "format": 1,
-                "graph": "graph.json",
-                "plugins": [{
-                    "id": binding.id,
-                    "digest": binding.digest,
-                    "resources": binding.resources,
-                    "mcp_servers": binding.mcp_servers
-                }]
-            })
-            .to_string(),
-        )
-        .unwrap();
+        refresh_manifest(root.path(), &["mounted"]);
         let _guard = crate::PROCESS_ENV_LOCK.lock().await;
         let previous = env::var_os("ANCHOR_CHANNEL_TEST_REQUIRED");
         unsafe { env::remove_var("ANCHOR_CHANNEL_TEST_REQUIRED") };
         let result = ChannelSupervisor::start(
+            root.path(),
             root.path(),
             &root.path().join("state"),
             "127.0.0.1:8077",
@@ -652,6 +701,7 @@ mod tests {
         for blank in ["", "   "] {
             unsafe { env::set_var("ANCHOR_CHANNEL_TEST_REQUIRED", blank) };
             let result = ChannelSupervisor::start(
+                root.path(),
                 root.path(),
                 &root.path().join("state"),
                 "127.0.0.1:8077",
@@ -684,10 +734,11 @@ mod tests {
         let state = root
             .path()
             .join(format!("state-{}", TEST_ID.fetch_add(1, Ordering::Relaxed)));
-        let mut supervisor = ChannelSupervisor::start(root.path(), &state, "127.0.0.1:8077", &[])
-            .await
-            .unwrap()
-            .unwrap();
+        let mut supervisor =
+            ChannelSupervisor::start(root.path(), root.path(), &state, "127.0.0.1:8077", &[])
+                .await
+                .unwrap()
+                .unwrap();
         tokio::time::sleep(POLL_INTERVAL * 2 + restart_delay() * 2).await;
         supervisor.shutdown().await;
         let count = fs::read_to_string(root.path().join("plugins/mounted/restart-count"))
@@ -716,10 +767,11 @@ mod tests {
         .unwrap();
         fs::set_permissions(&executable, fs::Permissions::from_mode(0o700)).unwrap();
         refresh_manifest(root.path(), &["mounted"]);
-        let mut supervisor = ChannelSupervisor::start(root.path(), &state, "127.0.0.1:8077", &[])
-            .await
-            .unwrap()
-            .unwrap();
+        let mut supervisor =
+            ChannelSupervisor::start(root.path(), root.path(), &state, "127.0.0.1:8077", &[])
+                .await
+                .unwrap()
+                .unwrap();
         tokio::time::sleep(POLL_INTERVAL * 2 + restart_delay() * 2).await;
         supervisor.shutdown().await;
         assert!(!descriptor.exists());

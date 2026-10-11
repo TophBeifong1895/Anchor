@@ -6,7 +6,7 @@ pub mod tools;
 
 pub use sandbox::{
     NetworkPolicy, NoopSandbox, ReadOnlyInput, SandboxEnvironment, SandboxError, SandboxPort,
-    SandboxRequest, SandboxResult, SandboxStatus, SpillPolicy,
+    SandboxRequest, SandboxResult, SandboxStatus, SpillPolicy, WritableInput,
 };
 pub use tools::{EmptyToolName, ToolDefinition, ToolError, ToolName, ToolPort, ToolResultContent};
 

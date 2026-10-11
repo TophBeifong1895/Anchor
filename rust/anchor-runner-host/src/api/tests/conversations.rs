@@ -1,4 +1,5 @@
 use super::*;
+use anchor_graph_host::{FilePluginCatalog, PluginCatalog};
 use anchor_runtime::graph::{PendingRecovery, RecoveryAttempt, RunCursor};
 use std::time::Duration;
 
@@ -757,8 +758,10 @@ fn seed_call_fixture(
         anchor_runtime::graph::GraphRunRecord::create_with_id(bundle.snapshot, Value::Null, run)
             .unwrap();
     record.status = RunStatus::Stopped;
-    record.plugin_bindings = bundle
-        .plugins
+    // A bundle references Plugins by id; the code lives in the Library.
+    record.plugin_bindings = FilePluginCatalog::new(&state.catalog_root)
+        .resolve(&bundle.plugins)
+        .unwrap()
         .into_iter()
         .map(|plugin| (plugin.id.clone(), plugin))
         .collect();
@@ -912,8 +915,9 @@ async fn sealed_plugin_conversation_history_does_not_permanently_block_graph_upd
     )
     .unwrap();
     first.status = RunStatus::Stopped;
-    first.plugin_bindings = bundle
-        .plugins
+    first.plugin_bindings = FilePluginCatalog::new(&state.catalog_root)
+        .resolve(&bundle.plugins)
+        .unwrap()
         .into_iter()
         .map(|plugin| (plugin.id.clone(), plugin))
         .collect();

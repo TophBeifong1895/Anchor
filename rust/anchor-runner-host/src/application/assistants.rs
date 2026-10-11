@@ -173,16 +173,13 @@ impl RunApplication {
                 ));
             }
         }
+        let plugin_bindings = self.bundle_plugin_bindings(&bundle)?;
         let mut record = GraphRunRecord::create_with_id(
             bundle.snapshot,
             serde_json::json!({"session":session}),
             run.clone(),
         )?;
-        record.plugin_bindings = bundle
-            .plugins
-            .into_iter()
-            .map(|plugin| (plugin.id.clone(), plugin))
-            .collect();
+        record.plugin_bindings = plugin_bindings;
         record.plugin_bindings_initialized = true;
         resolve_record_environments(&mut record).await?;
         let mut metadata = RunMetadata::new(

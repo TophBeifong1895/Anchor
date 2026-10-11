@@ -53,6 +53,8 @@ pub enum InstallError {
     CatalogBusy,
     #[error("Plugin installation paths must contain only real directories and regular files")]
     UnsafePath,
+    #[error("a declared mutable path is not usable: {0}")]
+    UnsafeMutablePath(String),
     #[error("Plugin source has no plugin.json or .codex-plugin/plugin.json manifest")]
     MissingManifest,
     #[error("Plugin manifest or resources failed catalog validation")]
@@ -67,6 +69,12 @@ pub enum InstallError {
     Io(#[source] std::io::Error),
     #[error("Plugin publication durability is uncertain; inspect the Library before retrying")]
     PublicationUncertain,
+    #[error(
+        "replacing Plugin code would touch the mutable path `{entry}`; nothing was changed{changed}"
+    )]
+    MutableConflict { entry: String, changed: String },
+    #[error("replacing Plugin code stopped after [{changed}]: {reason}")]
+    PartialReplacement { changed: String, reason: String },
 }
 
 impl From<std::io::Error> for InstallError {
@@ -205,23 +213,91 @@ impl Library {
         std::fs::File::open(&validation_root)?.sync_all()?;
         std::fs::File::open(transaction.path())?.sync_all()?;
         plugins_file.sync_all()?;
-        let result = filesystem::publish(
-            &validation_plugins,
-            &plugins_file,
-            id,
-            replacing,
-            filesystem::sync_publication,
-        );
-        if matches!(result, Err(InstallError::PublicationUncertain)) {
-            let _ = transaction.keep();
+        if !replacing {
+            // An import: the source is copied once, into the one place the Plugin
+            // exists, in a single atomic rename.
+            filesystem::publish(
+                &validation_plugins,
+                &plugins_file,
+                id,
+                false,
+                filesystem::sync_publication,
+            )?;
+            // The locations the declaration names are provided, empty, so the
+            // Plugin's process has somewhere to write from its first run.
+            provide_mutable_paths(&destination, &definition.mutable)?;
+        } else {
+            // An upgrade: only code is replaced. Everything the Plugin declared as
+            // its own (the *old* declaration and the new one) is left alone, and
+            // the mutable locations the new declaration needs are provided if they
+            // do not exist yet.
+            let installed = FilePluginCatalog::new(&root)
+                .definition(id)
+                .map_err(|_| InstallError::InvalidPlugin)?;
+            filesystem::replace_code(
+                &staged,
+                &destination,
+                &installed.mutable,
+                &definition.mutable,
+            )?;
+            // Provided *after* the plan: a location the new declaration adds must
+            // not look like an installed code entry the plan would remove.
+            provide_mutable_paths(&destination, &definition.mutable)?;
+            sync_tree_entries(&destination)?;
+            plugins_file.sync_all()?;
         }
-        result?;
         Ok(InstallOutcome {
             id: id.to_owned(),
             digest: definition.digest,
             directory: destination,
         })
     }
+}
+
+/// Provide the mutable locations a declaration names, without touching content.
+///
+/// The platform never reads, copies or rewrites a mutable path; it does have to
+/// make sure the location exists, because that is what the Plugin's process is
+/// granted write access to. An existing path is left exactly as it is.
+fn provide_mutable_paths(
+    plugin_directory: &Path,
+    mutable: &anchor_graph_host::MutablePaths,
+) -> Result<(), InstallError> {
+    let resolved = mutable
+        .resolve(plugin_directory)
+        .map_err(InstallError::UnsafeMutablePath)?;
+    for (declared, path) in mutable.paths().iter().zip(resolved) {
+        if path.exists() {
+            continue;
+        }
+        if declared.ends_with('/') {
+            std::fs::create_dir_all(&path)?;
+        } else if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+            std::fs::File::create(&path)?;
+        }
+    }
+    Ok(())
+}
+
+/// Sync the files a code replacement just wrote, without descending into data.
+fn sync_tree_entries(destination: &Path) -> Result<(), InstallError> {
+    for entry in std::fs::read_dir(destination)? {
+        let entry = entry?;
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if name.starts_with(".removed-") {
+            continue;
+        }
+        let path = entry.path();
+        let metadata = std::fs::symlink_metadata(&path)?;
+        if metadata.is_dir() {
+            filesystem::sync_tree(&path)?;
+        } else {
+            std::fs::File::open(&path)?.sync_all()?;
+        }
+    }
+    std::fs::File::open(destination)?.sync_all()?;
+    Ok(())
 }
 
 /// Stage a candidate Plugin under `transaction` and return the validation root,

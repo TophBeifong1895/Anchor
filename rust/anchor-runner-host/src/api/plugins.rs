@@ -5,12 +5,6 @@ use anchor_runtime::graph::GraphError;
 use std::io::Read;
 use std::path::Path;
 
-pub(super) fn library_root(catalog_root: &Path) -> PathBuf {
-    std::env::var_os("ANCHOR_RUNNER_LIBRARY_ROOT")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| catalog_root.to_path_buf())
-}
-
 fn plugin_record(definition: &PluginDefinition) -> Value {
     let mcp_servers = definition
         .mcp_servers
@@ -70,7 +64,7 @@ fn unavailable_record(id: String, error: impl ToString) -> Value {
 pub(super) async fn plugin_catalog(
     State(state): State<ApiState>,
 ) -> Result<Json<Value>, HttpResponse> {
-    let root = library_root(&state.catalog_root);
+    let root = crate::library_root(&state.catalog_root);
     let catalog = FilePluginCatalog::new(&root);
     let entries = match std::fs::read_dir(root.join("plugins")) {
         Ok(entries) => entries,
@@ -109,7 +103,7 @@ pub(super) async fn plugin_detail(
     State(state): State<ApiState>,
     AxumPath(plugin): AxumPath<String>,
 ) -> Result<Json<Value>, HttpResponse> {
-    let catalog = FilePluginCatalog::new(library_root(&state.catalog_root));
+    let catalog = FilePluginCatalog::new(crate::library_root(&state.catalog_root));
     let definition = catalog
         .definition(&plugin)
         .map_err(|failure| error(StatusCode::BAD_REQUEST, public_catalog_error(failure)))?;
@@ -124,7 +118,7 @@ pub(super) async fn plugin_file(
     State(state): State<ApiState>,
     AxumPath((plugin, path)): AxumPath<(String, String)>,
 ) -> Result<HttpResponse, HttpResponse> {
-    let catalog = FilePluginCatalog::new(library_root(&state.catalog_root));
+    let catalog = FilePluginCatalog::new(crate::library_root(&state.catalog_root));
     let definition = catalog
         .definition(&plugin)
         .map_err(|failure| error(StatusCode::BAD_REQUEST, public_catalog_error(failure)))?;

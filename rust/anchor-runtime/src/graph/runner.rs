@@ -732,6 +732,8 @@ impl<'a, S: RunStore, A: ArtifactPort, N: NodeExecutionPort, C: RunControl>
             let result = RunResult {
                 node_id: cursor.node_id.clone(),
                 key: cursor.key.clone(),
+                // Observed, not enforced: which view this step actually used.
+                plugin_views: self.nodes.observed_plugin_views(&cursor.key),
                 completion,
                 interruption,
                 commit,

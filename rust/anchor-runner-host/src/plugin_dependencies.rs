@@ -717,7 +717,7 @@ mod tests {
         assert_eq!(plan.sources.len(), 1);
 
         let outcome = application
-            .install_plugin_if_unchanged(library.clone(), precondition, false)
+            .install_plugin_if_unchanged(library.clone(), precondition)
             .await
             .unwrap();
         assert_eq!(outcome.id, "python-probe");
@@ -859,6 +859,192 @@ mod tests {
         );
     }
 
+    /// A Plugin with a declared mutable path, whose tool writes into it and into a
+    /// path it never declared, and reports the package its view provides.
+    const WRITING_SERVER: &str = r#"import json, socket, sys
+
+import idna
+
+import os
+
+data = os.path.join(os.getcwd(), "data")
+os.makedirs(data, exist_ok=True)
+with open(os.path.join(data, "kept.txt"), "w") as handle:
+    handle.write("written by " + idna.__version__)
+try:
+    with open(os.path.join(os.getcwd(), "code.txt"), "w") as handle:
+        handle.write("must not be writable")
+    undeclared = "writable"
+except OSError as error:
+    undeclared = "denied: " + type(error).__name__
+
+
+def report():
+    return json.dumps({
+        "version": idna.__version__,
+        "prefix": sys.prefix,
+        "undeclared_write": undeclared,
+    })
+
+
+def send(message):
+    sys.stdout.write(json.dumps(message) + "\n")
+    sys.stdout.flush()
+
+
+for line in sys.stdin:
+    line = line.strip()
+    if not line:
+        continue
+    request = json.loads(line)
+    method = request.get("method")
+    if method == "initialize":
+        result = {
+            "protocolVersion": request["params"]["protocolVersion"],
+            "capabilities": {"tools": {}},
+            "serverInfo": {"name": "anchor-probe", "version": "1.0.0"},
+        }
+    elif method == "tools/list":
+        result = {"tools": [{
+            "name": "version",
+            "description": "The declared package this view provides",
+            "inputSchema": {"type": "object", "properties": {}},
+        }]}
+    elif method == "tools/call":
+        result = {"content": [{"type": "text", "text": report()}]}
+    else:
+        continue
+    send({"jsonrpc": "2.0", "id": request.get("id"), "result": result})
+"#;
+
+    /// The same candidate, declaring a mutable path and a server that writes.
+    fn write_writing_candidate(directory: &Path, declaration: &[&str]) {
+        std::fs::create_dir_all(directory).unwrap();
+        std::fs::write(
+            directory.join("plugin.json"),
+            serde_json::json!({
+                "name": "Probe",
+                "dependencies": {"python": declaration},
+                "mutable": ["data/"],
+                "mcpServers": {
+                    "probe": {
+                        "command": "${ANCHOR_PLUGIN_VIEW}/bin/python",
+                        "args": ["server.py"]
+                    }
+                }
+            })
+            .to_string(),
+        )
+        .unwrap();
+        std::fs::write(directory.join("server.py"), WRITING_SERVER).unwrap();
+    }
+
+    /// Bind the installed Plugin's server and ask its one tool.
+    async fn report_from(
+        deployment: &Deployment,
+        binding: &anchor_runtime::graph::PluginBinding,
+    ) -> serde_json::Value {
+        let prepared = crate::plugin_view::prepare(&deployment.library, binding)
+            .unwrap()
+            .expect("the installed Plugin has a view");
+        let mcp = McpToolConfig::from_catalog(&deployment.library, std::slice::from_ref(binding))
+            .unwrap();
+        let server_environments = BTreeMap::new();
+        let plugin_views = BTreeMap::from([("python-probe".to_owned(), prepared)]);
+        let tools = mcp
+            .bind_with_node_inputs(
+                std::slice::from_ref(binding),
+                false,
+                SandboxLaunch {
+                    sandbox: &deployment.sandbox,
+                    workspace: &deployment.workspace,
+                    readonly_inputs: &[],
+                    server_environments: &server_environments,
+                    plugin_views: &plugin_views,
+                },
+            )
+            .await
+            .unwrap_or_else(|error| panic!("the Plugin server did not bind: {error}"));
+        let result = tools
+            .call("python-probe-probe_version", serde_json::json!({}))
+            .await
+            .unwrap();
+        serde_json::from_str(result[0].as_text().unwrap()).unwrap()
+    }
+
+    /// The same Run uses the **current** Plugin: its first call reads the 3.6 its
+    /// declaration resolved to, and after the declaration is upgraded to 3.7 the
+    /// same frozen binding's next call reads 3.7 — without a refusal — while the
+    /// data the Plugin wrote into its declared mutable path is still there.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn an_upgrade_takes_effect_at_the_next_call_and_keeps_the_plugins_data() {
+        let Some(deployment) = deploy().await else {
+            return;
+        };
+        write_writing_candidate(&deployment.candidate, &["idna==3.6"]);
+        deployment.install().await.unwrap();
+
+        // The Run froze this binding when the declaration was 3.6.
+        let binding = FilePluginCatalog::new(&deployment.library)
+            .resolve(&["python-probe".into()])
+            .unwrap()
+            .remove(0);
+        let first = report_from(&deployment, &binding).await;
+        assert_eq!(first["version"], "3.6", "{first}");
+        assert!(
+            first["undeclared_write"]
+                .as_str()
+                .unwrap()
+                .starts_with("denied"),
+            "a path the declaration never named must not be writable: {first}"
+        );
+        let data = deployment
+            .library
+            .join("plugins/python-probe/data/kept.txt");
+        assert_eq!(
+            std::fs::read_to_string(&data).unwrap(),
+            "written by 3.6",
+            "the Plugin wrote into its declared mutable path"
+        );
+
+        // Upgrade: the same Plugin, a new declaration and a new resolution.
+        write_writing_candidate(&deployment.candidate, &["idna==3.7"]);
+        let wheels = deployment.root.path().join("wheels");
+        std::fs::remove_file(wheels.join("idna-3.6-py3-none-any.whl")).unwrap();
+        fixture_wheel(&wheels, "idna", "3.7");
+        let precondition = deployment.precondition().await.unwrap();
+        deployment
+            .application
+            .install_plugin_if_unchanged(deployment.library.clone(), precondition)
+            .await
+            .expect("an upgrade is always allowed");
+
+        // The platform replaced code and left the declared mutable path alone: the
+        // data is still exactly what the previous version wrote.
+        assert_eq!(
+            std::fs::read_to_string(&data).unwrap(),
+            "written by 3.6",
+            "an upgrade replaces code, never data"
+        );
+
+        // The *same* binding, the next call: the current Plugin, not a refusal.
+        let second = report_from(&deployment, &binding).await;
+        assert_eq!(second["version"], "3.7", "{second}");
+        assert!(
+            second["prefix"]
+                .as_str()
+                .unwrap()
+                .contains(deployment.view().file_name().unwrap().to_str().unwrap()),
+            "the new call used the new view: {second}"
+        );
+        // The Plugin still writes into the same declared path, in place.
+        assert_eq!(
+            std::fs::read_to_string(&data).unwrap(),
+            "written by 3.7",
+            "the new version keeps using the same data file"
+        );
+    }
+
     /// The built-in Python Plugin this slice ships stays well formed: it declares
     /// exactly the package its server imports and launches on its own view's
     /// interpreter, so a deployment can install it as it stands.
@@ -970,7 +1156,7 @@ mod tests {
         ) -> Result<anchor_library::InstallOutcome, crate::application::ApplicationError> {
             let precondition = self.precondition().await?;
             self.application
-                .install_plugin_if_unchanged(self.library.clone(), precondition, false)
+                .install_plugin_if_unchanged(self.library.clone(), precondition)
                 .await
         }
     }
@@ -1061,7 +1247,7 @@ mod tests {
         );
         let outcome = deployment
             .application
-            .install_plugin_if_unchanged(deployment.library.clone(), precondition, false)
+            .install_plugin_if_unchanged(deployment.library.clone(), precondition)
             .await
             .expect("a missing view is rebuilt through the one gate");
         assert_eq!(outcome.id, "python-probe");
@@ -1119,7 +1305,7 @@ mod tests {
 
         match deployment
             .application
-            .install_plugin_if_unchanged(deployment.library.clone(), precondition, false)
+            .install_plugin_if_unchanged(deployment.library.clone(), precondition)
             .await
         {
             Ok(_) => {

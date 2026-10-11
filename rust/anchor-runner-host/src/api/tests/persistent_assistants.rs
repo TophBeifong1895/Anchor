@@ -74,7 +74,8 @@ async fn claimed_input_survives_restart_before_artifact_even_after_new_input_arr
             pause: std::sync::Arc::new(AtomicBool::new(false)),
         };
         let (_, _, nodes, _) =
-            crate::make_host_with_control(&record.run_id, Default::default(), control).unwrap();
+            crate::make_host_with_control(&record.run_id, Default::default(), control, None)
+                .unwrap();
         let NodeExecutionOutcome::Completed(completion) = nodes.execute(request()).await.unwrap()
         else {
             panic!("claimed input did not complete");
@@ -164,6 +165,7 @@ async fn yielded_invocation_projection_never_claims_successful_submission() {
     record.results.insert(
         "assistant".into(),
         vec![RunResult {
+            plugin_views: Default::default(),
             sequence: 1,
             key,
             node_id: "assistant".into(),
@@ -301,6 +303,7 @@ async fn unbound_host_operation_is_rejected_before_a_run_is_saved() {
         Default::default(),
         None,
         None,
+        None,
     );
     assert!(matches!(rejected, Err(message) if message.contains("explicitly admitted assistant")));
     assert!(
@@ -385,7 +388,7 @@ async fn pending_input_scope_reports_truncation_and_authorizes_only_the_latest_e
         pause: std::sync::Arc::new(AtomicBool::new(false)),
     };
     let (_, _, nodes, _) =
-        crate::make_host_with_control(&record.run_id, Default::default(), control).unwrap();
+        crate::make_host_with_control(&record.run_id, Default::default(), control, None).unwrap();
     let NodeExecutionOutcome::Completed(completion) = nodes.execute(request).await.unwrap() else {
         panic!("waiting input did not complete");
     };

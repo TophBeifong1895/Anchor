@@ -16,7 +16,7 @@ pub(crate) use metadata::RunMetadata;
 pub(crate) use metadata::RunTrigger;
 
 use crate::{HostControl, create_durable_directory, execution::PreparedExecution, run_data};
-use anchor_graph_host::{FilePluginCatalog, LoadedGraphBundle, PluginCatalog};
+use anchor_graph_host::LoadedGraphBundle;
 use anchor_library::EnvironmentStore;
 use anchor_runtime::graph::{
     EnvironmentBinding, FileRunStore, GraphError, GraphRunRecord, GraphSnapshot, InvocationKey,
@@ -737,12 +737,9 @@ impl RunApplication {
             }
         }
         let run_id = format!("rust-{:x}", metadata::now_nanos());
+        let plugin_bindings = self.bundle_plugin_bindings(&bundle)?;
         let mut record = GraphRunRecord::create_with_id(bundle.snapshot, input, run_id.clone())?;
-        record.plugin_bindings = bundle
-            .plugins
-            .into_iter()
-            .map(|p| (p.id.clone(), p))
-            .collect();
+        record.plugin_bindings = plugin_bindings;
         record.plugin_bindings_initialized = true;
         // Dependency environments are named in the Graph and resolved here, once:
         // the Run then carries the digest it actually ran with, and restoring it
@@ -1020,20 +1017,9 @@ impl RunApplication {
                 "budget-stopped Run requires an explicit budget policy".into(),
             ));
         }
-        let ids = record.plugin_bindings.keys().cloned().collect::<Vec<_>>();
-        if !ids.is_empty() {
-            let resolved = FilePluginCatalog::new(&metadata.bundle_source)
-                .resolve(&ids)
-                .map_err(|e| {
-                    ApplicationError::Invalid(format!("original Plugin resources unavailable: {e}"))
-                })?;
-            let bindings = resolved.into_iter().map(|p| (p.id.clone(), p)).collect();
-            if record.plugin_bindings != bindings {
-                return Err(ApplicationError::Invalid(
-                    "Plugin manifest changed since this Run was admitted".into(),
-                ));
-            }
-        }
+        // No Plugin re-check on resume: a Run uses the *current* Plugin
+        // (standard invariant 6). The bindings the record carries are the
+        // observation of what it used, not a gate that a later Plugin edit breaks.
         let control = new_control();
         let execution = PreparedExecution::prepare_with_catalog(
             &record,
@@ -1276,20 +1262,8 @@ impl RunApplication {
         control: HostControl,
     ) -> Result<PreparedExecution, ApplicationError> {
         self.ensure_current_assistant(metadata)?;
-        let ids = record.plugin_bindings.keys().cloned().collect::<Vec<_>>();
-        if !ids.is_empty() {
-            let resolved = FilePluginCatalog::new(&metadata.bundle_source)
-                .resolve(&ids)
-                .map_err(|e| {
-                    ApplicationError::Invalid(format!("original Plugin resources unavailable: {e}"))
-                })?;
-            let bindings = resolved.into_iter().map(|p| (p.id.clone(), p)).collect();
-            if record.plugin_bindings != bindings {
-                return Err(ApplicationError::Invalid(
-                    "Plugin manifest changed since this Run was admitted".into(),
-                ));
-            }
-        }
+        // Resuming never re-checks the Plugin: the next node call uses whatever is
+        // installed now, and records which view that was.
         PreparedExecution::prepare_with_catalog(
             record,
             control,

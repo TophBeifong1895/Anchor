@@ -89,7 +89,11 @@ pub(crate) fn existing_destination(
                 return Err(InstallError::AlreadyExists);
             }
             let (_, existing) = directory(destination, false)?;
-            validate_tree(&existing)?;
+            // Only the *declared* mutable paths are pruned: everything else, and
+            // everything when there is no declaration, stays under the platform's
+            // checks. The declaration read here is the installed one — it is the
+            // only authority for what the tree that exists means.
+            validate_tree(&existing, "", &installed_mutable_paths(destination)?)?;
             Ok(true)
         }
         Ok(_) => Err(InstallError::UnsafePath),
@@ -148,10 +152,47 @@ fn regular_file(parent: &File, name: &str) -> Result<File, InstallError> {
     Ok(file)
 }
 
-fn validate_tree(source: &File) -> Result<(), InstallError> {
+/// The mutable paths the *installed* Plugin declared, if it is readable.
+///
+/// An unreadable or missing manifest means "no declaration": the platform then
+/// validates the whole tree, which is the fail-closed direction.
+fn installed_mutable_paths(
+    destination: &Path,
+) -> Result<anchor_graph_host::MutablePaths, InstallError> {
+    let manifest = match fs::read(destination.join("plugin.json")) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            return Ok(anchor_graph_host::MutablePaths::default());
+        }
+        Err(error) => return Err(error.into()),
+    };
+    let value: serde_json::Value = match serde_json::from_slice(&manifest) {
+        Ok(value) => value,
+        Err(_) => return Ok(anchor_graph_host::MutablePaths::default()),
+    };
+    // A declaration that cannot be parsed is *no* declaration here: the tree is
+    // then validated in full (fail-closed), and the catalog reports the malformed
+    // manifest with its own error instead of this check preempting it.
+    Ok(anchor_graph_host::mutable_paths_from_manifest(&value).unwrap_or_default())
+}
+
+/// Check one installed tree, skipping the declared mutable paths.
+fn validate_tree(
+    source: &File,
+    prefix: &str,
+    mutable: &anchor_graph_host::MutablePaths,
+) -> Result<(), InstallError> {
     for (name, kind) in entries(source)? {
+        let relative = if prefix.is_empty() {
+            name.clone()
+        } else {
+            format!("{prefix}/{name}")
+        };
+        if mutable.covers(&relative) {
+            continue;
+        }
         if kind == FileType::Directory {
-            validate_tree(&child_directory(source, &name)?)?;
+            validate_tree(&child_directory(source, &name)?, &relative, mutable)?;
         }
     }
     Ok(())
@@ -162,7 +203,7 @@ pub(crate) fn stage(source: &Path, destination: &Path) -> Result<(), InstallErro
     if destination.starts_with(&source) {
         return Err(InstallError::UnsafePath);
     }
-    validate_tree(&source_file)?;
+    validate_tree(&source_file, "", &installed_mutable_paths(&source)?)?;
     if let Ok(metadata) = statat(&source_file, ".codex-plugin", AtFlags::SYMLINK_NOFOLLOW)
         && FileType::from_raw_mode(metadata.st_mode) != FileType::Directory
     {
@@ -282,6 +323,186 @@ pub(crate) fn publish(
             return Err(InstallError::PublicationUncertain);
         }
         return Err(error);
+    }
+    Ok(())
+}
+
+/// One top-most entry of a Plugin tree that is not a declared mutable path.
+///
+/// A code replacement works on these, never on a file inside a mutable subtree:
+/// the platform replaces code and leaves everything the Plugin declared as its own
+/// data exactly where it is.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct CodeEntry {
+    pub(crate) relative: PathBuf,
+}
+
+/// The top-most entries of one Plugin tree that are not mutable.
+///
+/// "Top-most" means an entry is returned instead of its children, except where a
+/// declared mutable path lives *under* it: then the directory is descended into,
+/// because exchanging it whole would move the Plugin's data. An entry that is
+/// itself mutable is never returned.
+pub(crate) fn code_entries(
+    root: &Path,
+    mutable: &anchor_graph_host::MutablePaths,
+) -> Result<Vec<CodeEntry>, InstallError> {
+    let mut entries = Vec::new();
+    let mut pending = vec![PathBuf::new()];
+    while let Some(relative) = pending.pop() {
+        let directory = root.join(&relative);
+        for entry in fs::read_dir(&directory)? {
+            let entry = entry?;
+            let name = entry.file_name();
+            let child = relative.join(&name);
+            let relative_text = child.to_string_lossy().into_owned();
+            if mutable.covers(&relative_text) {
+                continue;
+            }
+            if entry.file_type()?.is_dir() && mutable_under(mutable, &relative_text) {
+                pending.push(child);
+                continue;
+            }
+            entries.push(CodeEntry { relative: child });
+        }
+    }
+    entries.sort_by(|left, right| left.relative.cmp(&right.relative));
+    Ok(entries)
+}
+
+/// Whether a declared mutable path lives strictly under this relative path.
+fn mutable_under(mutable: &anchor_graph_host::MutablePaths, relative: &str) -> bool {
+    let prefix = format!("{relative}/");
+    mutable
+        .paths()
+        .iter()
+        .any(|declared| declared.starts_with(&prefix))
+}
+
+/// Replace a Plugin's code in place, one entry at a time.
+///
+/// Mutable paths are neither listed, renamed, copied nor verified: they stay
+/// exactly as the Plugin left them. Each code entry is exchanged atomically
+/// (`RENAME_EXCHANGE`) or created/removed, so a crash can leave a mix of old and
+/// new code entries — the standard records that as an accepted cost — but never a
+/// touched mutable path.
+pub(crate) fn replace_code(
+    staged_root: &Path,
+    destination: &Path,
+    old_mutable: &anchor_graph_host::MutablePaths,
+    new_mutable: &anchor_graph_host::MutablePaths,
+) -> Result<(), InstallError> {
+    let staged = code_entries(staged_root, new_mutable)?;
+    let installed = code_entries(destination, old_mutable)?;
+    let mut plan = Vec::new();
+    for entry in &staged {
+        let relative_text = entry.relative.to_string_lossy().into_owned();
+        // A code entry may not land inside a mutable path *either* declaration
+        // names: the older declaration's data would be overwritten, or the newer
+        // declaration's data would be replaced by code the author no longer
+        // declares as code. That is a decision for a human, not for a rename.
+        if old_mutable.covers(&relative_text) {
+            // New code wants a path the *previous* declaration designated as the
+            // Plugin's own data. Replacing it would destroy data, so a human
+            // decides instead.
+            return Err(InstallError::MutableConflict {
+                entry: relative_text,
+                changed: String::new(),
+            });
+        }
+        plan.push(CodeStep::Place(entry.relative.clone()));
+    }
+    let staged_relative = staged
+        .iter()
+        .map(|entry| entry.relative.clone())
+        .collect::<std::collections::BTreeSet<_>>();
+    for entry in &installed {
+        if staged_relative.contains(&entry.relative) {
+            continue;
+        }
+        let relative_text = entry.relative.to_string_lossy().into_owned();
+        if new_mutable.covers(&relative_text) {
+            // It was code and is now the Plugin's own data: leave it where it is.
+            continue;
+        }
+        plan.push(CodeStep::Remove(entry.relative.clone()));
+    }
+
+    let mut changed = Vec::new();
+    for step in plan {
+        let outcome = match &step {
+            CodeStep::Place(relative) => place(staged_root, destination, relative),
+            CodeStep::Remove(relative) => remove(destination, relative),
+        };
+        if let Err(error) = outcome {
+            return Err(InstallError::PartialReplacement {
+                changed: changed.join(", "),
+                reason: describe(&error),
+            });
+        }
+        changed.push(step.relative().to_string_lossy().into_owned());
+    }
+    Ok(())
+}
+
+/// A step failure's reason, with the filesystem detail that the public error text
+/// deliberately keeps out of its own message.
+fn describe(error: &InstallError) -> String {
+    match error {
+        InstallError::Io(io) => format!("filesystem operation failed: {io}"),
+        other => other.to_string(),
+    }
+}
+
+enum CodeStep {
+    Place(PathBuf),
+    Remove(PathBuf),
+}
+
+impl CodeStep {
+    fn relative(&self) -> &Path {
+        match self {
+            Self::Place(relative) | Self::Remove(relative) => relative,
+        }
+    }
+}
+
+/// Put one staged code entry in place, exchanging an existing one atomically.
+fn place(staged_root: &Path, destination: &Path, relative: &Path) -> Result<(), InstallError> {
+    let source = staged_root.join(relative);
+    let target = destination.join(relative);
+    if let Some(parent) = target.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let paired = if target.symlink_metadata().is_ok() {
+        RenameFlags::EXCHANGE
+    } else {
+        RenameFlags::NOREPLACE
+    };
+    rustix::fs::renameat_with(rustix::fs::CWD, &source, rustix::fs::CWD, &target, paired).map_err(
+        |error| match error {
+            rustix::io::Errno::EXIST => InstallError::AlreadyExists,
+            error => io::Error::from(error).into(),
+        },
+    )
+}
+
+/// Move one obsolete code entry out of the Plugin tree.
+fn remove(destination: &Path, relative: &Path) -> Result<(), InstallError> {
+    let target = destination.join(relative);
+    let discarded = destination.join(format!(
+        ".removed-{}-{}",
+        std::process::id(),
+        relative
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_default()
+    ));
+    fs::rename(&target, &discarded)?;
+    if discarded.is_dir() {
+        fs::remove_dir_all(&discarded)?;
+    } else {
+        fs::remove_file(&discarded)?;
     }
     Ok(())
 }

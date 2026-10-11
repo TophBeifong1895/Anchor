@@ -162,7 +162,11 @@ fn a_skill_only_plugin_installs_and_binds_into_a_graph_bundle() {
         })
         .to_string(),
     );
-    write(source.join("skills/authoring/SKILL.md"), "# authoring\n");
+    write(
+        source.join("skills/authoring/SKILL.md"),
+        "# authoring
+",
+    );
     let root = temporary.path().join("library");
     let library = Library::new(&root);
     let installed = library.install_directory("demo", &source, false).unwrap();
@@ -176,70 +180,158 @@ fn a_skill_only_plugin_installs_and_binds_into_a_graph_bundle() {
         ["plugin.json", "skills/authoring/SKILL.md"]
     );
 
+    // A bundle elsewhere references the Plugin by id: it carries no Plugin bytes,
+    // and it needs no update when the Plugin changes.
     let bundle = temporary.path().join("bundle");
-    for relative in &binding.resources {
-        write(
-            bundle.join("plugins/demo").join(relative),
-            fs::read(installed.directory.join(relative)).unwrap(),
-        );
-    }
     write(bundle.join("graph.json"), support::graph().to_string());
     write(
         bundle.join("manifest.json"),
-        json!({
-            "format": 1,
-            "graph": "graph.json",
-            "plugins": [{"id": binding.id, "digest": binding.digest, "resources": binding.resources, "mcp_servers": binding.mcp_servers}]
-        })
-        .to_string(),
+        json!({"format": 1, "graph": "graph.json", "plugins": [{"id": "demo"}]}).to_string(),
     );
-    let frozen = FileGraphBundleLoader::new(&bundle).load().unwrap();
-    assert_eq!(frozen.plugins[0].digest, installed.digest);
+    let frozen = FileGraphBundleLoader::new(&bundle)
+        .with_library_root(&root)
+        .load()
+        .unwrap();
+    assert_eq!(frozen.plugins, ["demo"]);
+    assert!(!bundle.join("plugins").exists());
+    assert!(
+        installed
+            .directory
+            .join("skills/authoring/SKILL.md")
+            .is_file()
+    );
     assert_clean(&root);
 }
 
 #[test]
-fn explicit_replacement_changes_identity_without_mutating_frozen_graph_bundle() {
+fn replacing_code_keeps_the_data_the_plugin_declared_and_the_bundle_reference() {
     let temporary = tempfile::tempdir().unwrap();
-    let source = fixture(temporary.path(), "source", true);
+    let source = temporary.path().join("source");
+    let manifest = |description: &str, mutable: serde_json::Value| {
+        json!({
+            "name": "demo",
+            "description": description,
+            "skills": "skills/",
+            "mutable": mutable,
+            "mcpServers": {"probe": {"command": "fixture-never-executed", "args": []}}
+        })
+        .to_string()
+    };
+    // Version one: one code file, one variable path that does not exist yet.
+    write(
+        source.join("plugin.json"),
+        manifest("v1", json!(["data/", "cache.db"])),
+    );
+    write(
+        source.join("skills/check/SKILL.md"),
+        "# v1
+",
+    );
+    write(source.join("notes/old.txt"), "old code");
     let root = temporary.path().join("library");
     let library = Library::new(&root);
     let before = library.install_directory("demo", &source, false).unwrap();
-    let catalog = FilePluginCatalog::new(&root);
-    let binding = catalog.resolve(&["demo".into()]).unwrap().remove(0);
+    let installed = before.directory.clone();
+    // The locations the declaration names exist, empty, and the Plugin writes
+    // its own state there.
+    assert!(installed.join("data").is_dir());
+    assert!(installed.join("cache.db").is_file());
+    write(installed.join("data/state.json"), "kept");
+    write(installed.join("cache.db"), "cached");
+    // The Plugin's own state may hold things the platform refuses in code: a
+    // symlink and a credentials file inside a declared mutable path must not stop
+    // an upgrade of the code around it.
+    std::os::unix::fs::symlink("/etc/passwd", installed.join("data/link")).unwrap();
+    write(installed.join("data/.env"), "TOKEN=plugin-own");
+
     let bundle = temporary.path().join("bundle");
-    for relative in &binding.resources {
-        write(
-            bundle.join("plugins/demo").join(relative),
-            fs::read(before.directory.join(relative)).unwrap(),
-        );
-    }
     write(bundle.join("graph.json"), support::graph().to_string());
-    write(bundle.join("manifest.json"), json!({
-        "format": 1,
-        "graph": "graph.json",
-        "plugins": [{"id": binding.id, "digest": binding.digest, "resources": binding.resources, "mcp_servers": binding.mcp_servers}]
-    }).to_string());
-    let loader = FileGraphBundleLoader::new(&bundle);
+    write(
+        bundle.join("manifest.json"),
+        json!({"format": 1, "graph": "graph.json", "plugins": [{"id": "demo"}]}).to_string(),
+    );
+    let loader = FileGraphBundleLoader::new(&bundle).with_library_root(&root);
     let frozen = loader.load().unwrap();
-    assert_eq!(frozen.plugins[0].digest, before.digest);
+
+    // Version two: new code, one obsolete code file gone, and a source that
+    // *also* carries data files — which the platform must not copy over the
+    // Plugin's own state.
     write(
-        source.join("resources/evidence.txt"),
-        "new mutable source content",
+        source.join("plugin.json"),
+        manifest("v2", json!(["data/", "cache.db", "provided/"])),
     );
+    write(
+        source.join("skills/check/SKILL.md"),
+        "# v2
+",
+    );
+    write(source.join("notes/new.txt"), "new code");
+    std::fs::remove_file(source.join("notes/old.txt")).unwrap();
+    write(source.join("data/state.json"), "from source");
+    write(source.join("cache.db"), "from source");
+
     let after = library.install_directory("demo", &source, true).unwrap();
-    assert_ne!(after.digest, before.digest);
-    assert_eq!(catalog.definition("demo").unwrap().digest, after.digest);
-    assert_eq!(loader.load().unwrap().plugins, frozen.plugins);
+    assert_ne!(after.digest, before.digest, "code changed");
     assert_eq!(
-        fs::read(bundle.join("plugins/demo/resources/evidence.txt")).unwrap(),
-        b"source"
+        FilePluginCatalog::new(&root)
+            .definition("demo")
+            .unwrap()
+            .digest,
+        after.digest
     );
+    // The Plugin's own data is untouched; the source's copy never wins.
+    assert_eq!(
+        std::fs::read_to_string(installed.join("data/state.json")).unwrap(),
+        "kept"
+    );
+    assert_eq!(
+        std::fs::read_to_string(installed.join("cache.db")).unwrap(),
+        "cached"
+    );
+    // Code was replaced: the obsolete file is gone, the new one is there.
+    assert!(!installed.join("notes/old.txt").exists());
+    assert_eq!(
+        std::fs::read_to_string(installed.join("notes/new.txt")).unwrap(),
+        "new code"
+    );
+    // The Plugin's own state survived an upgrade that had to walk past it.
+    assert_eq!(
+        std::fs::read_link(installed.join("data/link")).unwrap(),
+        std::path::PathBuf::from("/etc/passwd")
+    );
+    assert_eq!(
+        std::fs::read_to_string(installed.join("data/.env")).unwrap(),
+        "TOKEN=plugin-own"
+    );
+    // A mutable path the new declaration adds is provided, empty.
+    assert!(installed.join("provided").is_dir());
+    assert_eq!(
+        std::fs::read_dir(installed.join("provided"))
+            .unwrap()
+            .count(),
+        0
+    );
+    // The bundle is a reference: it never had to change.
+    assert_eq!(loader.load().unwrap().plugins, frozen.plugins);
+
+    // Version three stops declaring `data/` as mutable. Data would become code,
+    // which is a human decision: the replacement is refused and nothing moves.
     write(
-        bundle.join("plugins/demo/resources/evidence.txt"),
-        "drift inside frozen bundle",
+        source.join("plugin.json"),
+        manifest("v3", json!(["cache.db"])),
     );
-    assert!(loader.load().is_err());
+    let failure = library
+        .install_directory("demo", &source, true)
+        .unwrap_err();
+    assert!(
+        failure.to_string().contains("mutable path `data`"),
+        "{failure}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(installed.join("data/state.json")).unwrap(),
+        "kept",
+        "a refused replacement changes nothing"
+    );
     assert_clean(&root);
 }
 
