@@ -3,111 +3,12 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use anchor_runtime::{NetworkPolicy, ReadOnlyInput, SandboxPort, SandboxRequest, SandboxStatus};
+use anchor_runtime::{NetworkPolicy, SandboxPort, SandboxRequest};
 
 use super::config::PackageSource;
 use super::fetch::{FetchedArtifact, fetch_wheelhouse_reporting};
 use super::test_support::*;
 use super::*;
-
-/// The whole builder: resolve against a local wheel, fetch it, build it inside a
-/// network-disabled sandbox, and run the result where it was published.
-#[tokio::test(flavor = "multi_thread")]
-async fn a_locked_set_is_resolved_fetched_built_and_verified_after_it_moves() {
-    let Some(toolchain) = toolchain() else {
-        return;
-    };
-    let root = tempfile::tempdir().unwrap();
-    let wheels = root.path().join("wheels");
-    std::fs::create_dir_all(&wheels).unwrap();
-    fixture_wheel(&wheels, "probepkg", "0.1.0");
-    let config = config(root.path(), &toolchain, wheels);
-
-    let resolved = resolve_requirements(&config, None, &["probepkg==0.1.0".to_owned()])
-        .await
-        .expect("the ask resolves against the authorized directory");
-    assert_eq!(resolved.packages.len(), 1, "{resolved:?}");
-    assert_eq!(resolved.packages[0].name, "probepkg");
-    assert_eq!(resolved.packages[0].version, "0.1.0");
-    assert_eq!(resolved.packages[0].hashes.len(), 1);
-    assert!(resolved.lock.contains("--hash=sha256:"));
-    assert_eq!(resolved.lock_digest.len(), 64);
-
-    let wheelhouse = root.path().join("wheelhouse");
-    let fetched = fetch_wheelhouse(&config, &resolved.packages, &wheelhouse)
-        .await
-        .unwrap();
-    assert_eq!(fetched.len(), 1, "{fetched:?}");
-    assert_eq!(
-        fetched[0].sha256, resolved.packages[0].hashes[0],
-        "the fetched bytes are the ones the human approved"
-    );
-
-    let sandbox = provision_sandbox(&config).expect("bubblewrap is available");
-    let built = build_environment(&config, &sandbox, &resolved, &wheelhouse)
-        .await
-        .expect("the locked set builds inside the sandbox");
-    assert!(
-        built.tree.join("bin").is_dir(),
-        "the tree provides commands"
-    );
-    assert!(built.files > 0 && built.bytes > 0, "{built:?}");
-
-    // The Library publishes only regular files and directories, so a materialized
-    // build is what makes a virtual environment publishable at all.
-    let store = anchor_library::EnvironmentStore::new(root.path().join("library"));
-    let outcome = store
-        .publish_expecting(&built.tree, None)
-        .expect("the built tree is publishable as it stands");
-    assert!(!outcome.reused);
-    let published = store.published_path(&outcome.id);
-    assert!(
-        store.show(&outcome.id).is_ok(),
-        "the published environment verifies on its own identity"
-    );
-    verify_published(&config, &sandbox, &published, &resolved)
-        .await
-        .expect("the published tree runs where it was published");
-
-    // The published environment is not just readable: it provides the command it
-    // was built for, and the approved package is importable.
-    let output = command_output(
-        &config,
-        &sandbox,
-        &published,
-        &[
-            published.join("bin/python").to_string_lossy().into_owned(),
-            "-c".into(),
-            "import probepkg; print(probepkg.VALUE)".into(),
-        ],
-    )
-    .await;
-    assert_eq!(output.trim(), "0.1.0");
-
-    // The other half of the boundary: this environment runs with no network at
-    // all, so a package that tries to fetch something mid-run cannot.
-    let probe = command_output(
-        &config,
-        &sandbox,
-        &published,
-        &[
-            published.join("bin/python").to_string_lossy().into_owned(),
-            "-c".into(),
-            "import socket\n\
-             try:\n\
-             \x20   socket.create_connection(('one.one.one.one', 443), timeout=3)\n\
-             \x20   print('REACHABLE')\n\
-             except Exception as error:\n\
-             \x20   print('BLOCKED', type(error).__name__)\n"
-                .into(),
-        ],
-    )
-    .await;
-    assert!(
-        probe.contains("BLOCKED"),
-        "a published environment must not reach the network: {probe}"
-    );
-}
 
 /// The boundary the whole design rests on: this sandbox cannot reach the network
 /// even when a request asks for it.
@@ -204,38 +105,6 @@ async fn an_ask_that_is_not_a_package_requirement_never_reaches_uv() {
             "{ask}: {error:?}"
         );
     }
-}
-
-/// Run one command in the build sandbox with `tree` granted read-only and its
-/// `bin` authorized, exactly as an execution request would describe it.
-async fn command_output(
-    config: &EnvironmentProvisionConfig,
-    sandbox: &anchor_sandbox_bwrap::BubblewrapSandbox,
-    tree: &Path,
-    command: &[String],
-) -> String {
-    let workspace = config.build_root.join("probe-workspace");
-    std::fs::create_dir_all(&workspace).unwrap();
-    let bin = tree.join("bin");
-    let authority = super::build::authority(
-        sandbox,
-        vec![ReadOnlyInput::new(tree, tree)],
-        std::slice::from_ref(&bin),
-    )
-    .unwrap();
-    let mut request = authority.request(&workspace, command);
-    request.timeout = config.step_timeout();
-    request.max_output_bytes = config.max_step_output();
-    let result = authority.sandbox.run(request).await.unwrap();
-    assert_eq!(result.status, SandboxStatus::Completed, "{}", result.reason);
-    assert_eq!(
-        result.exit_code,
-        Some(0),
-        "{}{}",
-        result.stdout,
-        result.stderr
-    );
-    result.stdout
 }
 
 /// A PEP 691 index served on loopback.
@@ -533,74 +402,6 @@ async fn a_package_the_authorized_index_lacks_is_not_resolved_elsewhere() {
     );
 }
 
-/// The networked source, end to end: resolve against a real index, fetch the
-/// artifact over HTTP, then build and publish exactly as the offline case does.
-#[tokio::test(flavor = "multi_thread")]
-async fn an_authorized_index_is_resolved_fetched_and_built() {
-    let Some(toolchain) = toolchain() else {
-        return;
-    };
-    let root = tempfile::tempdir().unwrap();
-    let wheels = root.path().join("wheels");
-    std::fs::create_dir_all(&wheels).unwrap();
-    let wheel = fixture_wheel(&wheels, "probepkg", "0.1.0");
-    let index = index_fixture(&wheel, false).await;
-    let config = config_with_sources(
-        root.path(),
-        &toolchain,
-        vec![PackageSource::Index(index.endpoint.clone())],
-    );
-
-    let resolved = resolve_requirements(&config, None, &["probepkg==0.1.0".to_owned()])
-        .await
-        .expect("uv resolves against the authorized index");
-    assert_eq!(resolved.packages.len(), 1, "{resolved:?}");
-    assert_eq!(resolved.packages[0].version, "0.1.0");
-
-    let wheelhouse = root.path().join("wheelhouse");
-    let fetched = fetch_wheelhouse(&config, &resolved.packages, &wheelhouse)
-        .await
-        .unwrap();
-    assert_eq!(fetched.len(), 1, "{fetched:?}");
-    assert!(fetched[0].source.starts_with("index:"), "{fetched:?}");
-    assert_eq!(
-        fetched[0].sha256, resolved.packages[0].hashes[0],
-        "the artifact came from the index and matched the approved digest"
-    );
-    assert!(
-        index.queries() >= 2,
-        "the index really answered both the page and the artifact: {}",
-        index.queries()
-    );
-
-    // Everything after the fetch is identical to the offline case, but running it
-    // here is what makes this an end-to-end proof of the networked shape.
-    let sandbox = provision_sandbox(&config).expect("bubblewrap is available");
-    let built = build_environment(&config, &sandbox, &resolved, &wheelhouse)
-        .await
-        .expect("the locked set builds inside the sandbox");
-    let store = anchor_library::EnvironmentStore::new(root.path().join("library"));
-    let outcome = store
-        .publish_expecting(&built.tree, None)
-        .expect("the built tree is publishable");
-    let published = store.published_path(&outcome.id);
-    verify_published(&config, &sandbox, &published, &resolved)
-        .await
-        .expect("the published tree runs where it was published");
-    let output = command_output(
-        &config,
-        &sandbox,
-        &published,
-        &[
-            published.join("bin/python").to_string_lossy().into_owned(),
-            "-c".into(),
-            "import probepkg; print(probepkg.VALUE)".into(),
-        ],
-    )
-    .await;
-    assert_eq!(output.trim(), "0.1.0");
-}
-
 /// An index can lie about, or simply change, what it serves. The bytes decide.
 #[tokio::test(flavor = "multi_thread")]
 async fn an_index_that_serves_other_bytes_than_it_advertised_is_refused() {
@@ -728,13 +529,13 @@ async fn the_json_probe_accepts_a_pep_691_content_type_with_parameters() {
 
 /// A deployment config for fetching only: nothing here executes `uv` or the
 /// interpreter, so these cases do not need the builder toolchain.
-fn fetch_only_config(root: &Path, index: &str) -> EnvironmentProvisionConfig {
+fn fetch_only_config(root: &Path, index: &str) -> DependencyProvisionConfig {
     fetch_only_config_for(root, vec![PackageSource::Index(index.to_owned())])
 }
 
 /// The same config with the sources a case wants to see tried, in order.
-fn fetch_only_config_for(root: &Path, sources: Vec<PackageSource>) -> EnvironmentProvisionConfig {
-    EnvironmentProvisionConfig {
+fn fetch_only_config_for(root: &Path, sources: Vec<PackageSource>) -> DependencyProvisionConfig {
+    DependencyProvisionConfig {
         uv: PathBuf::from("/nonexistent/uv"),
         uv_digest: "a".repeat(64),
         python: PathBuf::from("/usr/bin/python3"),
@@ -747,7 +548,7 @@ fn fetch_only_config_for(root: &Path, sources: Vec<PackageSource>) -> Environmen
 /// Run one fetch with its per-source report collected, so a case can read exactly
 /// the lines the host writes to its stderr.
 async fn fetch_with_report(
-    config: &EnvironmentProvisionConfig,
+    config: &DependencyProvisionConfig,
     packages: &[LockedPackage],
     wheelhouse: &Path,
 ) -> (Result<Vec<FetchedArtifact>, ProvisionError>, Vec<String>) {
@@ -764,7 +565,7 @@ async fn fetch_with_report(
 /// Run one production fetch with this process's stderr descriptor captured, so a
 /// case can prove the report reaches stderr and not only an in-process buffer.
 async fn fetch_capturing_descriptor(
-    config: &EnvironmentProvisionConfig,
+    config: &DependencyProvisionConfig,
     packages: &[LockedPackage],
     wheelhouse: &Path,
 ) -> (Result<Vec<FetchedArtifact>, ProvisionError>, String) {
@@ -978,124 +779,6 @@ async fn a_source_that_was_not_needed_is_recorded_as_such() {
     );
 }
 
-/// An HTML-only mirror is refused while the plan is being frozen, before a human
-/// is asked to approve it: `uv` resolves that page fine, so without this probe the
-/// approval would be spent on a plan whose artifacts can never be fetched.
-#[tokio::test(flavor = "multi_thread")]
-async fn a_plan_is_refused_before_the_form_when_an_index_serves_html() {
-    use crate::application::environments::EnvironmentRequirementAsk;
-    use crate::application::environments::test_support::{application, requester};
-
-    let Some(toolchain) = toolchain() else {
-        return;
-    };
-    let root = tempfile::tempdir().unwrap();
-    let wheels = root.path().join("wheels");
-    std::fs::create_dir_all(&wheels).unwrap();
-    let wheel = fixture_wheel(&wheels, "probepkg", "0.1.0");
-    let index = index_fixture(&wheel, true).await;
-    let config = config_with_sources(
-        root.path(),
-        &toolchain,
-        vec![PackageSource::Index(index.endpoint.clone())],
-    );
-    let provisioner =
-        EnvironmentProvisioner::new(config).expect("the deployment configuration builds a sandbox");
-    let library = root.path().join("library");
-    let application = application(root.path()).with_environment_provisioner(Arc::new(provisioner));
-    application
-        .ask_environment_requirement(
-            &library,
-            "research",
-            EnvironmentRequirementAsk {
-                requester: requester(),
-                purpose: "analyse documents".into(),
-                interpreter: None,
-                packages: vec!["probepkg==0.1.0".into()],
-                notes: None,
-            },
-        )
-        .unwrap();
-
-    let error = application
-        .environment_provision_precondition(library, "research".into())
-        .await
-        .unwrap_err();
-    assert!(
-        matches!(error, crate::application::ApplicationError::Invalid(ref reason)
-            if reason.contains(&index.endpoint) && reason.contains("PEP 691")),
-        "the refusal names the source and the interface it needs: {error:?}"
-    );
-    assert!(
-        index.queries() >= 2,
-        "the index answered both uv's resolution and the JSON probe: {}",
-        index.queries()
-    );
-}
-
-/// The same path against the real package index.
-///
-/// Opt-in, because the default suite must not need the internet: this is the
-/// only case that proves the online shape against a real deployment's source
-/// rather than a fixture. Run it with `ANCHOR_ENVIRONMENT_LIVE_PYPI=1`.
-#[tokio::test(flavor = "multi_thread")]
-async fn live_the_public_index_builds_and_publishes_a_real_package() {
-    if std::env::var("ANCHOR_ENVIRONMENT_LIVE_PYPI").as_deref() != Ok("1") {
-        // `=0` must not run it: this case reaches the public internet.
-        eprintln!("SKIPPED (by design): set ANCHOR_ENVIRONMENT_LIVE_PYPI=1 to run it");
-        return;
-    }
-    let Some(toolchain) = toolchain() else {
-        return;
-    };
-    let root = tempfile::tempdir().unwrap();
-    let config = config_with_sources(
-        root.path(),
-        &toolchain,
-        vec![PackageSource::Index("https://pypi.org/simple".to_owned())],
-    );
-    let resolved = resolve_requirements(&config, None, &["idna==3.7".to_owned()])
-        .await
-        .expect("the public index resolves idna");
-    assert_eq!(resolved.packages.len(), 1, "{resolved:?}");
-
-    let wheelhouse = root.path().join("wheelhouse");
-    let fetched = fetch_wheelhouse(&config, &resolved.packages, &wheelhouse)
-        .await
-        .expect("the artifact downloads and matches the approved digest");
-    // A real lock approves more than one artifact for a version (the index also
-    // records the sdist digest), so the invariant is membership, not which one.
-    assert!(
-        resolved.packages[0].hashes.contains(&fetched[0].sha256),
-        "{fetched:?} vs {:?}",
-        resolved.packages[0].hashes
-    );
-    assert!(fetched[0].filename.ends_with(".whl"), "{fetched:?}");
-
-    let sandbox = provision_sandbox(&config).expect("bubblewrap is available");
-    let built = build_environment(&config, &sandbox, &resolved, &wheelhouse)
-        .await
-        .expect("the locked set builds inside the offline sandbox");
-    let store = anchor_library::EnvironmentStore::new(root.path().join("library"));
-    let outcome = store.publish_expecting(&built.tree, None).unwrap();
-    let published = store.published_path(&outcome.id);
-    verify_published(&config, &sandbox, &published, &resolved)
-        .await
-        .expect("the published tree runs where it was published");
-    let output = command_output(
-        &config,
-        &sandbox,
-        &published,
-        &[
-            published.join("bin/python").to_string_lossy().into_owned(),
-            "-c".into(),
-            "import idna; print(idna.__version__)".into(),
-        ],
-    )
-    .await;
-    assert_eq!(output.trim(), "3.7");
-}
-
 /// `uv pip compile --generate-hashes` records the sdist digest of a version too,
 /// and fetching one would mean compiling it. The approved-lock entry here is the
 /// file's real digest, so only the "wheels only" rule can refuse it.
@@ -1213,7 +896,7 @@ async fn a_directory_source_keeps_a_plugin_package_deliverable_when_an_index_ans
         ],
     );
     let provisioner = Arc::new(
-        EnvironmentProvisioner::new(config).expect("the deployment configuration builds a sandbox"),
+        DependencyProvisioner::new(config).expect("the deployment configuration builds a sandbox"),
     );
     let library = root.path().join("library");
     let candidate = root.path().join("candidate");
@@ -1231,7 +914,7 @@ async fn a_directory_source_keeps_a_plugin_package_deliverable_when_an_index_ans
         root.path().join("state"),
         root.path().to_path_buf(),
     )
-    .with_environment_provisioner(provisioner);
+    .with_dependency_provisioner(provisioner);
 
     let precondition = application
         .plugin_install_precondition(library, candidate, "with-directory".into())

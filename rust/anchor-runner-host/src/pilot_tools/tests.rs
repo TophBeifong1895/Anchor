@@ -169,14 +169,15 @@ async fn assistant_refuses_to_rewrite_or_delete_its_own_graph() {
 async fn read_tools_do_not_create_runs_or_modify_definitions() {
     let (root, tools) = fixture();
     let original = std::fs::read(root.path().join("fixture/graph.json")).unwrap();
-    assert_eq!(tools.definitions().len(), 20);
+    assert_eq!(tools.definitions().len(), 16);
     assert_eq!(
         tools
             .definitions()
             .iter()
             .filter(|tool| tools.is_read_only(&tool.name))
             .count(),
-        13
+        10,
+        "the retired environment reads took three read-only tools with them"
     );
     assert!(!tools.is_read_only("graph_run"));
     assert_eq!(
@@ -336,296 +337,25 @@ async fn graph_paths_symlinks_and_plugin_credentials_fail_closed() {
         "{public}"
     );
 }
+
+/// The retired environment tools are gone, not merely disabled: an unknown name
+/// is refused by the dispatcher and no definition advertises them.
 #[tokio::test]
-async fn a_requirement_for_a_name_the_assistants_called_subgraph_uses_is_refused() {
-    let (root, mut tools) = fixture();
-    // The own-dependency guard loads bundles, which needs the run store.
-    std::fs::create_dir_all(root.path().join("state/runs")).unwrap();
-    // Recording a need is a host fact a turn owns, so the turn must run.
-    let (turn, _) = tools
-        .sessions
-        .create_turn("local", "pilot", "fixture-request", Some("fixture"))
-        .unwrap();
-    tools.turn = turn.id;
-    // The assistant's own Graph calls `sub`, and `sub` declares the name.
-    std::fs::create_dir_all(root.path().join("sub")).unwrap();
-    std::fs::write(
-        root.path().join("sub/graph.json"),
-        json!({
-            "objective": "sub",
-            "entry": "inside",
-            "agents": {"worker": {"model": "test"}},
-            "ops": {},
-            "nodes": [{"id": "inside", "agent": "worker", "environment": "research"}],
-            "edges": []
-        })
-        .to_string(),
-    )
-    .unwrap();
-    std::fs::write(
-        root.path().join("sub/manifest.json"),
-        json!({"format": 1, "graph": "graph.json", "plugins": []}).to_string(),
-    )
-    .unwrap();
-    std::fs::write(
-        root.path().join("fixture/graph.json"),
-        json!({
-            "objective": "assistant",
-            "entry": "work",
-            "agents": {"worker": {"model": "test"}},
-            "ops": {"work": {"call": {"graph": "sub", "mode": "wait"}}},
-            "nodes": [{"id": "work", "op": "work"}],
-            "edges": []
-        })
-        .to_string(),
-    )
-    .unwrap();
-
-    // Asking for the name its called Graph uses would let the assistant choose
-    // its own dependency content, so it is refused.
-    let refused = tools
-        .execute(
-            "environment_request",
-            json!({"name":"research","purpose":"would change itself"}),
-        )
-        .await;
-    assert!(refused.is_err(), "{refused:?}");
-    // A name nobody in its execution closure uses is still allowed.
-    let allowed = tools
-        .execute(
-            "environment_request",
-            json!({"name":"unrelated","purpose":"a real need"}),
-        )
-        .await;
-    assert!(allowed.is_ok(), "{allowed:?}");
-}
-
-#[tokio::test]
-async fn a_requirement_refuses_an_interpreter_specifier_it_could_never_satisfy() {
-    let (root, mut tools) = fixture();
-    std::fs::create_dir_all(root.path().join("state/runs")).unwrap();
-    let (turn, _) = tools
-        .sessions
-        .create_turn("local", "pilot", "fixture-specifier", Some("fixture"))
-        .unwrap();
-    tools.turn = turn.id;
-    let failure = tools
-        .execute(
-            "environment_request",
-            json!({
-                "name": "research",
-                "purpose": "analysis",
-                "interpreter": "python>=3.11",
-            }),
-        )
-        .await
-        .expect_err("a specifier must be refused when it is recorded");
-    assert!(
-        failure.to_string().contains("version prefix"),
-        "the refusal explains the accepted shape: {failure}"
-    );
-}
-
-#[tokio::test]
-async fn the_assistant_records_an_environment_requirement_without_publishing() {
-    let (root, mut tools) = fixture();
-    // The own-dependency guard loads bundles, which needs the run store.
-    std::fs::create_dir_all(root.path().join("state/runs")).unwrap();
-    // Recording a need is a host fact a turn owns, so the turn must run.
-    let (turn, _) = tools
-        .sessions
-        .create_turn("local", "pilot", "fixture-request", Some("fixture"))
-        .unwrap();
-    tools.turn = turn.id;
-    let requested = tools
-        .execute(
-            "environment_request",
-            json!({
-                "name":"research",
-                "purpose":"parse the weekly reports",
-                "interpreter":"3.11",
-                "packages":["pandas"]
-            }),
-        )
-        .await
-        .unwrap();
-    assert_eq!(requested["requested"], true);
-    assert_eq!(requested["name"], "research");
-    let recorded =
-        crate::application::environments::list_environment_requirements(&root.path().join("state"))
-            .unwrap();
-    assert_eq!(recorded.unreadable, 0);
-    assert_eq!(recorded.requirements.len(), 1);
-    assert_eq!(recorded.requirements[0].name, "research");
-    assert_eq!(recorded.requirements[0].requests.len(), 1);
-    assert_eq!(
-        recorded.requirements[0].requests[0].packages,
-        vec!["pandas"]
-    );
-    assert_eq!(recorded.requirements[0].format, 1);
-    assert!(recorded.requirements[0].observed.is_none());
-
-    // A model-supplied approval field, or a malformed ask, is refused.
-    for refused in [
-        json!({"name":"research","purpose":"x","confirm":true}),
-        json!({"name":"research"}),
-        json!({"name":"re search","purpose":"x"}),
-        json!({"name":"research","purpose":""}),
-        json!({"name":"research","purpose":"x","packages":"pandas"}),
-        json!({"name":"research","purpose":"x","packages":["bad package!"]}),
-        json!({"name":"research","purpose":"x","interpreter":""}),
+async fn the_retired_environment_tools_no_longer_exist() {
+    let (_root, tools) = fixture();
+    for name in [
+        "environment_list",
+        "environment_request",
+        "environment_references",
+        "environment_show",
+        "environment_publish",
+        "dependency_provision",
     ] {
+        let error = tools.execute(name, json!({})).await.unwrap_err();
         assert!(
-            tools
-                .execute("environment_request", refused.clone())
-                .await
-                .is_err(),
-            "{refused} must be refused"
+            error.to_string().contains("is not registered")
+                || error.to_string().contains("unknown tool"),
+            "`{name}` must not be a tool any more, got {error}"
         );
     }
-    // Nothing was published: the requirement is a request, not an asset.
-    let store = anchor_library::EnvironmentStore::new(root.path());
-    assert!(store.names().unwrap().is_empty());
-    assert!(
-        store.list().unwrap().is_empty(),
-        "recording a need must not publish any content"
-    );
-}
-
-#[tokio::test]
-async fn the_assistant_sees_environments_without_changing_them() {
-    let (root, tools) = fixture();
-    let prepared = root.path().join("prepared");
-    std::fs::create_dir_all(prepared.join("bin")).unwrap();
-    std::fs::write(prepared.join("marker.txt"), "one").unwrap();
-    let store = anchor_library::EnvironmentStore::new(root.path());
-    let published = store.publish(&prepared).unwrap();
-    store.set_name("research", &published.id, None).unwrap();
-
-    let listed = tools.execute("environment_list", json!({})).await.unwrap();
-    assert_eq!(listed["names"][0]["name"], "research");
-    assert_eq!(listed["names"][0]["id"], published.id);
-    assert_eq!(listed["names"][0]["version"], 1);
-    assert_eq!(listed["environments"][0]["id"], published.id);
-
-    // By name and by id describe the same published content, and the digest is
-    // re-verified rather than assumed.
-    let by_name = tools
-        .execute("environment_show", json!({"name":"research"}))
-        .await
-        .unwrap();
-    assert_eq!(by_name["id"], published.id);
-    assert_eq!(by_name["verified"], true);
-    let by_id = tools
-        .execute("environment_show", json!({"id":published.id}))
-        .await
-        .unwrap();
-    assert_eq!(by_id["id"], published.id);
-
-    // Unknown or ambiguous requests are refused, and neither tool writes.
-    let missing = tools
-        .execute("environment_show", json!({"name":"missing"}))
-        .await
-        .unwrap_err();
-    assert!(
-        missing.to_string().contains("no dependency environment"),
-        "{missing}"
-    );
-    let both = tools
-        .execute(
-            "environment_show",
-            json!({"id":published.id,"name":"research"}),
-        )
-        .await
-        .unwrap_err();
-    assert!(both.to_string().contains("exactly one"), "{both}");
-    assert!(!tools.is_read_only("plugin_install"));
-    assert!(tools.is_read_only("environment_list"));
-    assert!(tools.is_read_only("environment_show"));
-}
-
-#[test]
-fn the_tool_table_is_the_only_source_of_authority() {
-    let names = PILOT_TOOLS.iter().map(|tool| tool.name).collect::<Vec<_>>();
-    let unique = names.iter().collect::<std::collections::BTreeSet<_>>();
-    assert_eq!(names.len(), unique.len(), "tool names must be unique");
-
-    let inspect = PILOT_TOOLS
-        .iter()
-        .filter(|tool| tool.authority == ToolAuthority::Inspect)
-        .count();
-    let mutate = PILOT_TOOLS
-        .iter()
-        .filter(|tool| tool.authority == ToolAuthority::Mutate)
-        .count();
-    let confirm = PILOT_TOOLS
-        .iter()
-        .filter(|tool| tool.authority == ToolAuthority::Confirm)
-        .map(|tool| tool.name.to_owned())
-        .collect::<std::collections::BTreeSet<_>>();
-    // The confirmed tools are exactly the ones the interaction layer owns, so
-    // a new confirmed tool cannot be added to one list and forgotten in the
-    // other — which is what made "approval is never a tool argument" a
-    // property of a list rather than of the design.
-    let interactive = crate::goose_acp::pilot_interaction::definitions();
-    let interactive = interactive
-        .into_iter()
-        .map(|definition| definition.name.to_string())
-        .collect::<std::collections::BTreeSet<_>>();
-    assert_eq!(confirm, interactive);
-
-    // The advertised schema of a confirmed tool must be the one the
-    // interaction layer shows, or the model is told something else than the
-    // human is asked.
-    for tool in PILOT_TOOLS
-        .iter()
-        .filter(|tool| tool.authority == ToolAuthority::Confirm)
-    {
-        let advertised = crate::goose_acp::pilot_interaction::definitions()
-            .into_iter()
-            .find(|definition| definition.name == tool.name)
-            .unwrap_or_else(|| panic!("{} is not advertised", tool.name));
-        assert_eq!(
-            advertised.parameters,
-            (tool.parameters)(),
-            "{} schema drifted",
-            tool.name
-        );
-    }
-
-    let (root, tools) = fixture();
-    let _ = root;
-    assert_eq!(tools.definitions().len(), inspect + mutate);
-    assert_eq!(
-        tools
-            .definitions()
-            .iter()
-            .filter(|tool| tools.is_read_only(&tool.name))
-            .count(),
-        inspect
-    );
-    assert_eq!((inspect, mutate, confirm.len()), (13, 7, 5));
-    // The two axes must agree: everything readable is Inspect, and every
-    // Inspect tool is read-only. "Only assets need a human click" is then a
-    // property of the table, not a sentence in a document.
-    for tool in PILOT_TOOLS {
-        assert_eq!(
-            tool.authority == ToolAuthority::Inspect,
-            tool.effect == ToolEffect::Read,
-            "{} authority and effect disagree",
-            tool.name
-        );
-    }
-    let host_facts = PILOT_TOOLS
-        .iter()
-        .filter(|tool| tool.effect == ToolEffect::HostFact)
-        .map(|tool| tool.name)
-        .collect::<std::collections::BTreeSet<_>>();
-    assert_eq!(
-        host_facts,
-        ["ask_user", "environment_request"]
-            .into_iter()
-            .collect::<std::collections::BTreeSet<_>>(),
-        "a host fact changes no asset and needs no approval"
-    );
 }

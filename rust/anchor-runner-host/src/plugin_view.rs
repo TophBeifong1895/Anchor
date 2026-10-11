@@ -20,7 +20,47 @@ use anchor_runtime::graph::PluginBinding;
 use anchor_runtime::{ReadOnlyInput, SandboxRequest, WritableInput};
 use anchor_sandbox_bwrap::BubblewrapSandbox;
 
-use crate::managed_environment::Unusable;
+/// Why one Plugin's dependency view cannot be used.
+///
+/// The boundary keeps two causes apart: a view this invocation needs but cannot
+/// build or find is a deployment problem, while content that is present but not
+/// usable is corruption. Collapsing them into one string is how the path used to
+/// relabel the first as the second.
+#[derive(Debug)]
+pub(crate) enum Unusable {
+    /// The recorded fact cannot be honored: the content is missing, changed, or
+    /// writable again.
+    Recorded(String),
+    /// This host cannot serve the view at all.
+    Unconfigured(String),
+}
+
+impl std::fmt::Display for Unusable {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Recorded(reason) | Self::Unconfigured(reason) => formatter.write_str(reason),
+        }
+    }
+}
+
+impl Unusable {
+    /// The GraphRunner's class for this cause, so every path agrees.
+    pub(crate) fn into_graph_error(self) -> anchor_runtime::graph::GraphError {
+        use anchor_runtime::graph::GraphError;
+        match self {
+            Self::Recorded(reason) => GraphError::CorruptRun(reason),
+            Self::Unconfigured(reason) => GraphError::Unsupported(reason),
+        }
+    }
+
+    pub(crate) fn recorded(message: impl Into<String>) -> Self {
+        Self::Recorded(message.into())
+    }
+
+    pub(crate) fn unconfigured(message: impl Into<String>) -> Self {
+        Self::Unconfigured(message.into())
+    }
+}
 
 /// The file that makes a directory a Python environment. Without it `sys.prefix`
 /// collapses to the interpreter's own prefix and the view imports nothing.

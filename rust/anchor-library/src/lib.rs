@@ -1,6 +1,5 @@
 #![forbid(unsafe_code)]
 
-mod environment;
 mod filesystem;
 mod oauth;
 mod reclaim;
@@ -12,10 +11,6 @@ use std::path::{Path, PathBuf};
 use anchor_graph_host::FilePluginCatalog;
 use serde::{Deserialize, Serialize};
 
-pub use environment::{
-    CandidateContent, EnvironmentError, EnvironmentStore, NameEntry, NameSwitch, PublishOutcome,
-    PublishedEnvironment,
-};
 pub use oauth::{
     FileOAuthTokenStore, OAuthAuthorization, OAuthAuthorizationCode, OAuthAuthorizationMetadata,
     OAuthAuthorizationResponse, OAuthAuthorizationTransaction, OAuthBinding, OAuthClient,

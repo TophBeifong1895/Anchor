@@ -71,7 +71,7 @@ const MAX_ARTIFACT_BYTES: u64 = 512 * 1024 * 1024;
 
 /// The deployment's authorized preparation.
 #[derive(Debug, Clone)]
-pub(crate) struct EnvironmentProvisionConfig {
+pub(crate) struct DependencyProvisionConfig {
     /// The pinned `uv` executable.
     pub(crate) uv: PathBuf,
     /// Its expected SHA-256, checked before every use.
@@ -87,7 +87,7 @@ pub(crate) struct EnvironmentProvisionConfig {
     pub(crate) bwrap: PathBuf,
 }
 
-impl EnvironmentProvisionConfig {
+impl DependencyProvisionConfig {
     pub(crate) fn step_timeout(&self) -> Duration {
         STEP_TIMEOUT
     }
@@ -132,7 +132,7 @@ pub(crate) fn from_env(
     state_root: &Path,
     bwrap: PathBuf,
     library_root: Option<&Path>,
-) -> Result<Option<EnvironmentProvisionConfig>, String> {
+) -> Result<Option<DependencyProvisionConfig>, String> {
     const VARIABLES: &[&str] = &[
         "ANCHOR_ENVIRONMENT_SOURCES",
         "ANCHOR_ENVIRONMENT_UV",
@@ -209,7 +209,7 @@ pub(crate) fn from_env(
             ));
         }
     }
-    Ok(Some(EnvironmentProvisionConfig {
+    Ok(Some(DependencyProvisionConfig {
         uv,
         uv_digest,
         python,
@@ -365,7 +365,7 @@ mod config_tests {
     fn configured(
         build_root: &Path,
         library: &Path,
-    ) -> Result<Option<EnvironmentProvisionConfig>, String> {
+    ) -> Result<Option<DependencyProvisionConfig>, String> {
         let sources = build_root.join("wheels");
         std::fs::create_dir_all(&sources).unwrap();
         unsafe {

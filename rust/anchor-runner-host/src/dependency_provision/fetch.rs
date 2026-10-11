@@ -19,7 +19,7 @@ use std::path::{Path, PathBuf};
 use sha2::{Digest, Sha256};
 use url::Url;
 
-use super::config::{EnvironmentProvisionConfig, PackageSource, ProvisionError};
+use super::config::{DependencyProvisionConfig, PackageSource, ProvisionError};
 use super::resolve::LockedPackage;
 
 /// One artifact written into the wheelhouse.
@@ -112,7 +112,7 @@ pub(crate) async fn verify_index_json(index: &str, package: &str) -> Result<(), 
 /// tried, because "the package is missing" and "the index is unreachable" are
 /// different problems for whoever has to fix the ask.
 pub(crate) async fn fetch_wheelhouse(
-    config: &EnvironmentProvisionConfig,
+    config: &DependencyProvisionConfig,
     packages: &[LockedPackage],
     wheelhouse: &Path,
 ) -> Result<Vec<FetchedArtifact>, ProvisionError> {
@@ -124,7 +124,7 @@ pub(crate) async fn fetch_wheelhouse(
 /// The host passes its stderr, so the report lands in the deployment's host log;
 /// the seam exists so a test can read exactly the lines that go there.
 pub(super) async fn fetch_wheelhouse_reporting(
-    config: &EnvironmentProvisionConfig,
+    config: &DependencyProvisionConfig,
     packages: &[LockedPackage],
     wheelhouse: &Path,
     sink: &mut (dyn std::io::Write + Send),
@@ -338,7 +338,7 @@ fn artifact_url(page_url: &Url, value: &str) -> Result<Url, String> {
 
 /// Ask one simple index for the approved artifact.
 async fn from_index(
-    config: &EnvironmentProvisionConfig,
+    config: &DependencyProvisionConfig,
     package: &LockedPackage,
     index: &str,
     wheelhouse: &Path,
@@ -609,7 +609,7 @@ mod fetch_tests {
         let root = tempfile::tempdir().unwrap();
         let wheelhouse = root.path().join("wheelhouse");
         std::fs::create_dir_all(&wheelhouse).unwrap();
-        let config = EnvironmentProvisionConfig {
+        let config = DependencyProvisionConfig {
             uv: std::path::PathBuf::from("/nonexistent/uv"),
             uv_digest: "a".repeat(64),
             python: std::path::PathBuf::from("/usr/bin/python3"),

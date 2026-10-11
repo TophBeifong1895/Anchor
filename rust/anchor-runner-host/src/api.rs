@@ -264,21 +264,21 @@ pub async fn serve() -> io::Result<()> {
         .unwrap_or_else(|| data_root.join("state/schedules.json"));
     // Environment preparation is the one capability that reaches the network.
     // A deployment that did not authorize sources and a pinned toolchain keeps
-    // exactly the behaviour it had: the steward can still see environments, and
+    // exactly the behaviour it had: the steward prepares packages, and
     // provisioning is refused with a reason.
-    // The root publication actually writes published environments into: the
+    // The root dependency preparation writes its wheelhouse into: the
     // explicit Library root, otherwise the Graph catalog the Plugin API also
     // falls back to. The build root must stay disjoint from it.
-    let environment_library_root = crate::library_root(&catalog_root);
-    let provisioner = match crate::environment_provision::from_env(
+    let dependency_library_root = crate::library_root(&catalog_root);
+    let provisioner = match crate::dependency_provision::from_env(
         &data_root,
         env::var_os("ANCHOR_BWRAP")
             .map(PathBuf::from)
             .unwrap_or_else(|| PathBuf::from("bwrap")),
-        Some(&environment_library_root),
+        Some(&dependency_library_root),
     ) {
         Ok(Some(config)) => Some(Arc::new(
-            crate::environment_provision::EnvironmentProvisioner::new(config)
+            crate::dependency_provision::DependencyProvisioner::new(config)
                 .map_err(|error| io::Error::other(error.to_string()))?,
         )),
         Ok(None) => None,
@@ -287,7 +287,7 @@ pub async fn serve() -> io::Result<()> {
     let mut application = RunApplication::new(data_root.clone(), catalog_root.clone())
         .with_configured_graph(graph_name.clone(), bundle_root.clone());
     if let Some(provisioner) = provisioner {
-        application = application.with_environment_provisioner(provisioner);
+        application = application.with_dependency_provisioner(provisioner);
     }
     let mut state = ApiState {
         #[cfg(test)]
@@ -542,148 +542,6 @@ async fn shutdown_signal() {
     }
 }
 
-fn graph_projection_error(
-    failure: crate::application::graphs::GraphManagementError,
-) -> HttpResponse {
-    use crate::application::graphs::GraphManagementError;
-
-    match failure {
-        GraphManagementError::BadRequest(message) => error(StatusCode::BAD_REQUEST, message),
-        GraphManagementError::Missing(message) => error(StatusCode::NOT_FOUND, message),
-        GraphManagementError::Conflict(message) => error(StatusCode::CONFLICT, message),
-        GraphManagementError::Invalid(message) => error(StatusCode::UNPROCESSABLE_ENTITY, message),
-        GraphManagementError::Storage(_) => error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "Graph catalog unavailable",
-        ),
-    }
-}
-
-/// Read-only: what environments the assistant asked the operator to provide.
-///
-/// Whether a need has been *provided* is derived here from the name table: the
-/// record itself only ever holds the ask, so it cannot go stale or replay.
-async fn list_environment_requirements(
-    State(state): State<ApiState>,
-) -> Result<Json<Value>, HttpResponse> {
-    use crate::application::environments::{
-        EnvironmentRequirements, list_environment_requirements,
-    };
-    let EnvironmentRequirements {
-        requirements,
-        unreadable,
-        truncated,
-    } = list_environment_requirements(&state.data_root).map_err(application_error)?;
-    // A name table this host cannot read must not be rendered as "nothing was
-    // provided": that would report every need as unanswered with HTTP 200.
-    // A name table this host cannot read must not be rendered as "nothing was
-    // provided": that would report every need as unanswered with HTTP 200.
-    let names = anchor_library::EnvironmentStore::new(crate::library_root(&state.catalog_root))
-        .names()
-        .map_err(|error| {
-            ApplicationError::Storage(format!(
-                "the environment name table is unavailable: {error}"
-            ))
-        })
-        .map_err(application_error)?;
-    let requirements = requirements
-        .into_iter()
-        .map(|requirement| {
-            let current = names.iter().find(|entry| entry.name == requirement.name);
-            let changed = match (current, requirement.observed.as_ref()) {
-                (Some(current), Some(observed)) => {
-                    current.id != observed.id || current.version > observed.name_version
-                }
-                (Some(_), None) => true,
-                (None, _) => false,
-            };
-            json!({
-                "name": requirement.name,
-                "progress": if changed { "provisioned" } else { "requested" },
-                "changed_since_request": changed,
-                "id": current.map(|entry| entry.id.clone()),
-                "name_version": current.map(|entry| entry.version),
-                "requests": requirement.requests,
-            })
-        })
-        .collect::<Vec<_>>();
-    Ok(Json(json!({
-        "requirements": requirements,
-        "unreadable": unreadable,
-        "truncated": truncated,
-    })))
-}
-
-async fn graph_relations(State(state): State<ApiState>) -> Result<Json<Value>, HttpResponse> {
-    let catalog = state
-        .application
-        .list_graphs()
-        .await
-        .map_err(graph_projection_error)?;
-    let names = catalog["graphs"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(|graph| graph["graph"].as_str().map(str::to_owned))
-        .collect::<Vec<_>>();
-    let mut graphs = Vec::with_capacity(names.len());
-    let mut calls = Vec::new();
-    for name in names {
-        match state.application.load_graph(&name) {
-            Ok((_, bundle)) => {
-                for node in &bundle.snapshot.nodes {
-                    let Some(op_name) = node.op.as_deref() else {
-                        continue;
-                    };
-                    let Some(call) = bundle
-                        .snapshot
-                        .ops
-                        .get(op_name)
-                        .and_then(|op| op.get("call"))
-                        .and_then(Value::as_object)
-                    else {
-                        continue;
-                    };
-                    let (Some(target), Some(mode)) = (
-                        call.get("graph").and_then(Value::as_str),
-                        call.get("mode").and_then(Value::as_str),
-                    ) else {
-                        continue;
-                    };
-                    calls.push(json!({
-                        "graph": name,
-                        "node": node.id,
-                        "op": op_name,
-                        "target": target,
-                        "mode": mode,
-                    }));
-                }
-            }
-            Err(crate::application::graphs::GraphManagementError::Missing(_)) => {}
-            Err(failure) => return Err(graph_projection_error(failure)),
-        }
-        graphs.push(name);
-    }
-    let schedules = state.schedules.lock().map_err(|_| {
-        error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "schedule store unavailable",
-        )
-    })?;
-    let graphs = graphs
-        .into_iter()
-        .map(|graph| {
-            let count = schedules
-                .items
-                .iter()
-                .filter(|item| item.graph == graph)
-                .count();
-            json!({"graph":graph,"schedules":count})
-        })
-        .collect::<Vec<_>>();
-    Ok(Json(json!({"graphs":graphs,"calls":calls})))
-}
-
 #[allow(clippy::result_large_err)]
 async fn channel_sessions_projection(
     State(state): State<ApiState>,
@@ -792,8 +650,8 @@ fn router_with_readiness_and_web_root(
                 }
             }),
         )
-        .route("/plugins", get(plugin_catalog))
         .route("/graph-relations", get(graph_relations))
+        .route("/plugins", get(plugin_catalog))
         .route("/plugins/{plugin}", get(plugin_detail))
         .route("/plugins/{plugin}/files/{*path}", get(plugin_file))
         .route(
@@ -891,10 +749,6 @@ fn router_with_readiness_and_web_root(
             "/schedules/{schedule}",
             axum::routing::delete(delete_schedule),
         )
-        .route(
-            "/environment-requirements",
-            get(list_environment_requirements),
-        )
         .route("/runs", get(list_runs))
         .route("/runs/{run}", get(get_run).delete(delete_run))
         .route("/runs/{run}/channel-reply", get(read_channel_reply))
@@ -928,5 +782,92 @@ fn application_error(failure: ApplicationError) -> HttpResponse {
         ApplicationError::Conflict(message) => error(StatusCode::CONFLICT, message),
         ApplicationError::Invalid(message) => error(StatusCode::UNPROCESSABLE_ENTITY, message),
         ApplicationError::Storage(message) => error(StatusCode::INTERNAL_SERVER_ERROR, message),
+    }
+}
+
+async fn graph_relations(State(state): State<ApiState>) -> Result<Json<Value>, HttpResponse> {
+    let catalog = state
+        .application
+        .list_graphs()
+        .await
+        .map_err(graph_projection_error)?;
+    let names = catalog["graphs"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|graph| graph["graph"].as_str().map(str::to_owned))
+        .collect::<Vec<_>>();
+    let mut graphs = Vec::with_capacity(names.len());
+    let mut calls = Vec::new();
+    for name in names {
+        match state.application.load_graph(&name) {
+            Ok((_, bundle)) => {
+                for node in &bundle.snapshot.nodes {
+                    let Some(op_name) = node.op.as_deref() else {
+                        continue;
+                    };
+                    let Some(call) = bundle
+                        .snapshot
+                        .ops
+                        .get(op_name)
+                        .and_then(|op| op.get("call"))
+                        .and_then(Value::as_object)
+                    else {
+                        continue;
+                    };
+                    let (Some(target), Some(mode)) = (
+                        call.get("graph").and_then(Value::as_str),
+                        call.get("mode").and_then(Value::as_str),
+                    ) else {
+                        continue;
+                    };
+                    calls.push(json!({
+                        "graph": name,
+                        "node": node.id,
+                        "op": op_name,
+                        "target": target,
+                        "mode": mode,
+                    }));
+                }
+            }
+            Err(crate::application::graphs::GraphManagementError::Missing(_)) => {}
+            Err(failure) => return Err(graph_projection_error(failure)),
+        }
+        graphs.push(name);
+    }
+    let schedules = state.schedules.lock().map_err(|_| {
+        error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "schedule store unavailable",
+        )
+    })?;
+    let graphs = graphs
+        .into_iter()
+        .map(|graph| {
+            let count = schedules
+                .items
+                .iter()
+                .filter(|item| item.graph == graph)
+                .count();
+            json!({"graph":graph,"schedules":count})
+        })
+        .collect::<Vec<_>>();
+    Ok(Json(json!({"graphs":graphs,"calls":calls})))
+}
+
+fn graph_projection_error(
+    failure: crate::application::graphs::GraphManagementError,
+) -> HttpResponse {
+    use crate::application::graphs::GraphManagementError;
+
+    match failure {
+        GraphManagementError::BadRequest(message) => error(StatusCode::BAD_REQUEST, message),
+        GraphManagementError::Missing(message) => error(StatusCode::NOT_FOUND, message),
+        GraphManagementError::Conflict(message) => error(StatusCode::CONFLICT, message),
+        GraphManagementError::Invalid(message) => error(StatusCode::UNPROCESSABLE_ENTITY, message),
+        GraphManagementError::Storage(_) => error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Graph catalog unavailable",
+        ),
     }
 }

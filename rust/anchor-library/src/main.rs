@@ -2,7 +2,7 @@
 
 use std::{path::PathBuf, process::ExitCode};
 
-use anchor_library::{EnvironmentStore, InstallRequest, Library};
+use anchor_library::{InstallRequest, Library};
 use clap::{Parser, Subcommand};
 use serde_json::Value;
 
@@ -46,59 +46,9 @@ enum Operation {
         #[arg(long)]
         apply: bool,
     },
-    /// Publish dependency environments and manage the deployment name table.
-    Env {
-        #[command(subcommand)]
-        command: EnvOperation,
-    },
 }
 
-#[derive(Subcommand)]
-enum EnvOperation {
-    /// Publish a prepared tree as one immutable, content-addressed environment.
-    Publish {
-        #[arg(long)]
-        directory: PathBuf,
-    },
-    /// List published environments without re-hashing them.
-    List,
-    /// Re-hash one published environment.
-    Show {
-        #[arg(long)]
-        id: String,
-    },
-    /// Re-hash every environment and check every name target.
-    Verify,
-    /// Read or change the deployment name table.
-    Name {
-        #[command(subcommand)]
-        command: EnvNameOperation,
-    },
-}
-
-#[derive(Subcommand)]
-enum EnvNameOperation {
-    List,
-    /// Point a name at a published environment.
-    Set {
-        name: String,
-        #[arg(long)]
-        id: String,
-        /// The version you saw; omit to assert the name does not exist yet.
-        #[arg(long)]
-        expect_version: Option<u64>,
-    },
-    /// Detach a name. This never deletes published content, and it always
-    /// states the version that was observed.
-    Remove {
-        name: String,
-        /// The version you saw; obtain it from `env name list`.
-        #[arg(long)]
-        expect_version: u64,
-    },
-}
-
-/// Everything the CLI can print is JSON; `verify` also decides the exit status.
+/// Everything the CLI can print is JSON.
 fn main() -> ExitCode {
     let cli = Cli::parse();
     let (value, status) = match run(cli) {
@@ -140,7 +90,6 @@ fn refuse_declared_dependencies(review: &anchor_library::PluginReview) -> Result
 fn run(cli: Cli) -> Result<(Value, ExitCode), String> {
     let root = cli.root;
     let library = Library::new(root.clone());
-    let environments = EnvironmentStore::new(root.clone());
     match cli.command {
         Operation::Install {
             source,
@@ -204,48 +153,5 @@ fn run(cli: Cli) -> Result<(Value, ExitCode), String> {
                 )
             })
             .map_err(|error| error.to_string()),
-        Operation::Env { command } => {
-            let outcome: Result<Value, anchor_library::EnvironmentError> = match command {
-                EnvOperation::Publish { directory } => environments.publish(&directory).map(value),
-                EnvOperation::List => environments.list().map(value),
-                EnvOperation::Show { id } => environments.show(&id).map(value),
-                EnvOperation::Verify => {
-                    // A non-empty problem list is a failing check, not a result,
-                    // and "the check could not run" is a third outcome.
-                    let problems = environments.verify().map_err(|error| error.to_string())?;
-                    let status = if problems.is_empty() {
-                        ExitCode::SUCCESS
-                    } else {
-                        ExitCode::FAILURE
-                    };
-                    return Ok((
-                        serde_json::json!({"ok": problems.is_empty(), "problems": problems}),
-                        status,
-                    ));
-                }
-                EnvOperation::Name { command } => match command {
-                    EnvNameOperation::List => environments.names().map(value),
-                    EnvNameOperation::Set {
-                        name,
-                        id,
-                        expect_version,
-                    } => environments.set_name(&name, &id, expect_version).map(value),
-                    EnvNameOperation::Remove {
-                        name,
-                        expect_version,
-                    } => environments
-                        .remove_name(&name, Some(expect_version))
-                        .map(value),
-                },
-            };
-            outcome
-                .map(|value| (value, ExitCode::SUCCESS))
-                .map_err(|error| error.to_string())
-        }
     }
-}
-
-/// JSON for CLI output; a value that cannot be encoded must not look like success.
-fn value<T: serde::Serialize>(input: T) -> Value {
-    serde_json::to_value(input).unwrap_or(Value::Null)
 }

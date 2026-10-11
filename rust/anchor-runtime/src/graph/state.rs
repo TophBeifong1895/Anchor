@@ -177,7 +177,7 @@ pub struct ParallelActivation {
 
 /// Current persisted Graph Run record format. Readers migrate older formats and
 /// reject newer ones instead of guessing what changed.
-pub const RUN_RECORD_FORMAT: u32 = 11;
+pub const RUN_RECORD_FORMAT: u32 = 12;
 
 /// RFC 3339 UTC timestamp used for `started`/`updated` on Run records.
 pub(crate) fn timestamp_now() -> String {
@@ -187,6 +187,13 @@ pub(crate) fn timestamp_now() -> String {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct GraphRunRecord {
+    /// The managed-environment era's frozen bindings, accepted and dropped.
+    ///
+    /// A record written before format 12 carries `environments`; the mechanism is
+    /// gone, so the field is read and discarded rather than reinterpreted, and an
+    /// old record stays loadable.
+    #[serde(default, skip_serializing, rename = "environments")]
+    legacy_environments: BTreeMap<String, Value>,
     pub format: u32,
     /// RFC 3339 UTC when the record was created. Absent on records written
     /// before format 8: the real creation time is unknown and is deliberately
@@ -222,7 +229,6 @@ pub struct GraphRunRecord {
     /// with a matching name: the record never invents an environment after the
     /// fact, and a restored Run never re-resolves the name.
     #[serde(default)]
-    pub environments: BTreeMap<String, EnvironmentBinding>,
     pub invocations: BTreeMap<String, u64>,
     pub passes: BTreeMap<String, u64>,
     pub module_activations: BTreeMap<String, u64>,
@@ -264,6 +270,7 @@ impl GraphRunRecord {
         let now = timestamp_now();
         Ok(Self {
             format: RUN_RECORD_FORMAT,
+            legacy_environments: BTreeMap::new(),
             started: Some(now.clone()),
             updated: Some(now),
             run_id,
@@ -278,7 +285,6 @@ impl GraphRunRecord {
             graph_calls: BTreeMap::new(),
             plugin_bindings: BTreeMap::new(),
             plugin_bindings_initialized: false,
-            environments: BTreeMap::new(),
             invocations: BTreeMap::new(),
             passes: BTreeMap::new(),
             module_activations: BTreeMap::new(),
@@ -324,77 +330,6 @@ impl GraphRunRecord {
         self.snapshot.validate()?;
         if self.snapshot.digest()? != self.graph_digest {
             return Err(GraphError::CorruptRun("snapshot digest mismatch".into()));
-        }
-        // Environment bindings are facts: each one names its site, the site must
-        // match its key and an existing node, and the name must be the one that
-        // site declared. Every declaration must be frozen — the record never
-        // leaves a declaration to be resolved later.
-        let node_of = |id: &str| self.snapshot.nodes.iter().find(|node| node.id == id);
-        for (key, binding) in &self.environments {
-            let Some(site) = binding.site.as_ref() else {
-                return Err(GraphError::CorruptRun(format!(
-                    "environment binding `{key}` has no use site"
-                )));
-            };
-            if EnvironmentSite::from_key(key).as_ref() != Some(site)
-                || binding.name.is_empty()
-                || binding.id.len() != 64
-                || !binding.id.bytes().all(|byte| byte.is_ascii_hexdigit())
-            {
-                return Err(GraphError::CorruptRun(format!(
-                    "environment binding `{key}` is malformed"
-                )));
-            }
-            let Some(node) = node_of(site.node()) else {
-                return Err(GraphError::CorruptRun(format!(
-                    "environment binding `{key}` names an unknown node"
-                )));
-            };
-            match site {
-                EnvironmentSite::NodeTask { .. } => {
-                    if node.environment.as_deref() != Some(binding.name.as_str()) {
-                        return Err(GraphError::CorruptRun(format!(
-                            "environment binding `{key}` does not match its node declaration"
-                        )));
-                    }
-                }
-                EnvironmentSite::PluginServer { plugin, server, .. } => {
-                    let bound = self.plugin_bindings.get(plugin);
-                    let declared = bound
-                        .and_then(|bound| bound.environments.get(server))
-                        .is_some_and(|name| name == &binding.name);
-                    if !declared || !node.plugins.contains(plugin) {
-                        return Err(GraphError::CorruptRun(format!(
-                            "environment binding `{key}` does not match a Plugin server declaration"
-                        )));
-                    }
-                }
-            }
-        }
-        // The declarations come from the kernel's one enumeration, the same list
-        // freezing resolves and a host's impact report reads; only the *presence*
-        // of a matching binding is checked here.
-        for declared in declared_environment_sites(&self.snapshot, &self.plugin_bindings) {
-            let key = declared.site.key();
-            let frozen = self
-                .environments
-                .get(&key)
-                .is_some_and(|binding| binding.name == declared.name);
-            if frozen {
-                continue;
-            }
-            return Err(GraphError::CorruptRun(match &declared.site {
-                EnvironmentSite::NodeTask { node } => {
-                    format!("node `{node}` declares an environment without a frozen binding")
-                }
-                EnvironmentSite::PluginServer {
-                    node,
-                    plugin,
-                    server,
-                } => format!(
-                    "Plugin `{plugin}` server `{server}` declares an environment on node `{node}` without a frozen binding"
-                ),
-            }));
         }
         for (key, call) in &self.graph_calls {
             let spec_exists = self.snapshot.nodes.iter().any(|node| {
@@ -956,36 +891,10 @@ impl GraphRunRecord {
                 self.format = 8;
                 self.migrate_format()
             }
-            8 => {
-                // Format 9 adds frozen environment bindings. Migrated records
-                // keep none: their executions never used a managed environment,
-                // and resolving a name now would invent an identity they never had.
-                self.environments = BTreeMap::new();
-                self.format = 9;
-                self.migrate_format()
-            }
-            9 => {
-                // Format 10 makes the use site part of the fact. A format-9
-                // binding was keyed either by bare node id or already by a
-                // canonical site key; both recover the site from the key, so no
-                // identity is invented. A key that names neither is corrupt.
-                let legacy = std::mem::take(&mut self.environments);
-                for (key, binding) in legacy {
-                    let site = match binding.site {
-                        Some(site) => site,
-                        None => EnvironmentSite::from_key(&key)
-                            .unwrap_or(EnvironmentSite::NodeTask { node: key.clone() }),
-                    };
-                    let canonical = site.key();
-                    self.environments.insert(
-                        canonical,
-                        EnvironmentBinding {
-                            site: Some(site),
-                            name: binding.name,
-                            id: binding.id,
-                        },
-                    );
-                }
+            8 | 9 => {
+                // Formats 9 and 10 are the managed-environment era. The mechanism
+                // is gone, and the field is simply dropped: a migrated record has
+                // no bindings because nothing resolves environments any more.
                 self.format = 10;
                 self.migrate_format()
             }
@@ -994,9 +903,16 @@ impl GraphRunRecord {
                 // Nothing has to be rewritten: a record written before it simply
                 // has no observation for steps that already ran.
                 self.format = 11;
+                self.migrate_format()
+            }
+            11 => {
+                // Format 12 removes the frozen environment bindings entirely. The
+                // field is dropped, not reinterpreted: a Run uses its Plugin's
+                // views, and the environment mechanism no longer exists.
+                self.format = 12;
                 Ok(())
             }
-            11 => Ok(()),
+            12 => Ok(()),
             other => Err(GraphError::CorruptRun(format!(
                 "unsupported graph run format {other}"
             ))),

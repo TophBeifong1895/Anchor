@@ -45,24 +45,15 @@ pub struct SandboxLaunch<'a> {
     pub sandbox: &'a BubblewrapSandbox,
     pub workspace: &'a Path,
     pub readonly_inputs: &'a [ReadOnlyInput],
-    /// Frozen per-server environments, keyed by the Plugin server they belong to.
-    pub server_environments: &'a BTreeMap<
-        anchor_runtime::graph::PluginServerId,
-        crate::managed_environment::PreparedEnvironment,
-    >,
     /// Prepared dependency views, keyed by Plugin. A declaration is the Plugin's
     /// own, so every server of that Plugin launches on the same view.
     pub plugin_views: &'a BTreeMap<String, crate::plugin_view::PreparedView>,
 }
 
-/// The read-only authority one Plugin server launches with.
-///
-/// A server has at most one: either the environment its own declaration froze
-/// (the older, per-server model) or the view its Plugin declares. Keeping them in
-/// one value is what makes "mount it and put it in the request" a single step.
+/// The read-only authority one Plugin server launches with: the view its Plugin
+/// declares. Wrapping it keeps "mount it and put it in the request" one step.
 #[derive(Clone, Copy)]
 enum ServerGrant<'a> {
-    Environment(&'a crate::managed_environment::PreparedEnvironment),
     View(&'a crate::plugin_view::PreparedView),
 }
 
@@ -70,21 +61,18 @@ impl<'a> ServerGrant<'a> {
     /// The dependency view this server launches on, when it has one.
     fn view(&self) -> Option<&'a crate::plugin_view::PreparedView> {
         match self {
-            Self::Environment(_) => None,
             Self::View(view) => Some(view),
         }
     }
 
     fn authorize(&self, sandbox: Arc<BubblewrapSandbox>) -> Result<Arc<BubblewrapSandbox>, String> {
         match self {
-            Self::Environment(prepared) => prepared.authorize(sandbox),
             Self::View(view) => view.authorize(sandbox),
         }
     }
 
     fn apply(&self, request: &mut SandboxRequest) {
         match self {
-            Self::Environment(prepared) => prepared.apply(request),
             Self::View(view) => view.apply(request),
         }
     }
@@ -314,7 +302,6 @@ impl McpToolConfig {
         sandbox: &BubblewrapSandbox,
         workspace: &Path,
     ) -> Result<LiveMcpTools, String> {
-        let server_environments = BTreeMap::new();
         let plugin_views = BTreeMap::new();
         self.bind_with_node_inputs(
             bindings,
@@ -323,7 +310,6 @@ impl McpToolConfig {
                 sandbox,
                 workspace,
                 readonly_inputs: &[],
-                server_environments: &server_environments,
                 plugin_views: &plugin_views,
             },
         )
@@ -351,19 +337,9 @@ impl McpToolConfig {
         for binding in bindings {
             for server_id in &binding.mcp_servers {
                 let key = server_key(&binding.id, server_id);
-                // A server this host will not launch may not keep a frozen
-                // environment: the Run would claim an environment nothing used.
-                let skipped = server_id == FAKE_SERVER_ID
-                    || self.disabled.contains(&key)
-                    || binding.environments.contains_key(server_id)
-                        && !self.servers.contains_key(&key);
+                // A server this host will not launch is skipped.
+                let skipped = server_id == FAKE_SERVER_ID || self.disabled.contains(&key);
                 if skipped {
-                    if let Some(name) = binding.environments.get(server_id) {
-                        return Err(format!(
-                            "Plugin `{}` server `{server_id}` declares dependency environment `{name}`, but this host does not launch that server",
-                            binding.id
-                        ));
-                    }
                     continue;
                 }
                 if hosts.contains_key(&key) {
@@ -373,28 +349,13 @@ impl McpToolConfig {
                     .servers
                     .get(&key)
                     .ok_or_else(|| format!("MCP server `{key}` is not configured"))?;
-                // A server that declared an environment launches in a sandbox that
-                // authorizes exactly that environment; every other server keeps the
-                // host's authority.
-                let prepared = launch.as_ref().and_then(|launch| {
-                    launch
-                        .server_environments
-                        .get(&anchor_runtime::graph::PluginServerId::new(
-                            binding.id.clone(),
-                            server_id.clone(),
-                        ))
-                });
-                // The Plugin's own declaration owns its interpreter, so a view
-                // wins over a per-server environment declaration when a Plugin
-                // has both.
-                let view = launch
+                // A server launches in a sandbox that authorizes exactly its
+                // Plugin's view; a Plugin without a declaration keeps the host's
+                // authority.
+                let grant = launch
                     .as_ref()
-                    .and_then(|launch| launch.plugin_views.get(&binding.id));
-                let grant = match (view, prepared) {
-                    (Some(view), _) => Some(ServerGrant::View(view)),
-                    (None, Some(prepared)) => Some(ServerGrant::Environment(prepared)),
-                    (None, None) => None,
-                };
+                    .and_then(|launch| launch.plugin_views.get(&binding.id))
+                    .map(ServerGrant::View);
                 // The launcher mounts the Plugin directory for this server, so
                 // the invocation must grant exactly that mount. Nothing else
                 // authorizes it: the Run policy no longer lists per-Run trees.
@@ -419,7 +380,6 @@ impl McpToolConfig {
                     sandbox: authorized.as_deref().unwrap_or(launch.sandbox),
                     workspace: launch.workspace,
                     readonly_inputs: launch.readonly_inputs,
-                    server_environments: launch.server_environments,
                     plugin_views: launch.plugin_views,
                 });
                 let host = self
@@ -1091,7 +1051,6 @@ impl PluginToolHost {
                     digest: "anchor.fake.echo.v1".into(),
                     resources: Vec::new(),
                     mcp_servers: vec![FAKE_SERVER_ID.into()],
-                    environments: Default::default(),
                 })
             })
             .collect()
@@ -1281,7 +1240,6 @@ mod tests {
             digest: "digest".into(),
             resources: Vec::new(),
             mcp_servers: vec!["docmost".into()],
-            environments: Default::default(),
         };
         assert!(
             fake_host
@@ -1310,7 +1268,6 @@ mod tests {
             digest: String::new(),
             resources: vec!["plugin.json".into()],
             mcp_servers: vec!["papers".into()],
-            environments: Default::default(),
         };
         let config = McpToolConfig::from_catalog(root.path(), &[binding]).unwrap();
         assert!(config.servers.contains_key("research-papers"));
@@ -1327,7 +1284,6 @@ mod tests {
             digest: "anchor.fake.echo.v1".into(),
             resources: Vec::new(),
             mcp_servers: vec![FAKE_SERVER_ID.into()],
-            environments: Default::default(),
         };
         let config = McpToolConfig::from_catalog("/does/not/exist", &[binding]).unwrap();
         assert!(config.servers.is_empty());
@@ -1345,7 +1301,6 @@ mod tests {
             digest: String::new(),
             resources: vec!["plugin.json".into()],
             mcp_servers: vec!["api".into()],
-            environments: Default::default(),
         };
         let config =
             McpToolConfig::from_catalog(root.path(), std::slice::from_ref(&binding)).unwrap();
@@ -1364,7 +1319,6 @@ mod tests {
                 root.path(),
                 &[PluginBinding {
                     mcp_servers: vec!["not-declared".into()],
-                    environments: Default::default(),
                     ..binding
                 }]
             )
@@ -1413,9 +1367,6 @@ mod tests {
             })
             .clone()
     }
-
-    /// Replaced with the published environment path once it is known.
-    const PLACEHOLDER: &str = "__MANAGED_ENVIRONMENT__";
 
     const STDIO_FIXTURE: &str = r#"set -eu
 mode="$1"
@@ -1475,7 +1426,6 @@ exec ./mcp-fixture --stdio inspect
                     sandbox: &node_sandbox,
                     workspace: &workspace,
                     readonly_inputs: &grants,
-                    server_environments: &BTreeMap::new(),
                     plugin_views: &BTreeMap::new(),
                 },
             )
@@ -1495,165 +1445,6 @@ exec ./mcp-fixture --stdio inspect
         let result = tools.call("reader-stdio_inspect", json!({})).await.unwrap();
         let value: Value = serde_json::from_str(result[0].as_text().unwrap()).unwrap();
         assert_eq!(value, json!({"visible":false}));
-    }
-
-    #[cfg(unix)]
-
-    /// A declared server environment is mounted and *is* the server's world: the
-    /// command exists only inside the published tree, and the global tool
-    /// aggregate is not applied.
-    #[tokio::test]
-    async fn a_managed_stdio_server_runs_in_its_frozen_environment() {
-        use anchor_library::EnvironmentStore;
-        use anchor_runtime::graph::{EnvironmentBinding, EnvironmentSite};
-        use anchor_sandbox_bwrap::BubblewrapPolicy;
-        use std::os::unix::fs::PermissionsExt;
-
-        let shell = std::fs::canonicalize("/usr/bin/bash").unwrap();
-        let root = tempfile::tempdir().unwrap();
-        let plugin = root.path().join("plugins/research");
-        std::fs::create_dir_all(plugin.join("nested")).unwrap();
-        std::fs::copy(stdio_fixture_binary(), plugin.join("mcp-fixture")).unwrap();
-        // This fixture needs nothing from an operator-registered tool environment.
-        std::fs::write(
-            plugin.join("server.sh"),
-            "set -eu\nexec ../mcp-fixture --stdio echo --prefix managed:\n",
-        )
-        .unwrap();
-        std::fs::write(
-            plugin.join("plugin.json"),
-            json!({
-                "name":"Research",
-                "mcpServers":{
-                    "managed":{
-                        "command": format!("{}/bin/run", PLACEHOLDER),
-                        "args":["../server.sh","echo"],
-                        "cwd":"nested",
-                        "anchor":{"environment":"research"}
-                    }
-                }
-            })
-            .to_string(),
-        )
-        .unwrap();
-
-        // Publish the environment that owns the server's command.
-        let library = root.path().join("library");
-        let prepared = root.path().join("prepared");
-        std::fs::create_dir_all(prepared.join("bin")).unwrap();
-        std::fs::write(
-            prepared.join("bin/run"),
-            format!("#!{}\nexec '{}' \"$@\"\n", "/bin/sh", shell.display()),
-        )
-        .unwrap();
-        std::fs::set_permissions(
-            prepared.join("bin/run"),
-            std::fs::Permissions::from_mode(0o755),
-        )
-        .unwrap();
-        let published = EnvironmentStore::new(&library).publish(&prepared).unwrap();
-
-        // The manifest is written once the published path is known.
-        let manifest = std::fs::read_to_string(plugin.join("plugin.json")).unwrap();
-        std::fs::write(
-            plugin.join("plugin.json"),
-            manifest.replace(
-                PLACEHOLDER,
-                &library
-                    .join("envs")
-                    .join(&published.id)
-                    .display()
-                    .to_string(),
-            ),
-        )
-        .unwrap();
-
-        let binding = FilePluginCatalog::new(root.path())
-            .resolve(&["research".into()])
-            .unwrap()
-            .remove(0);
-        assert_eq!(
-            binding.environments.get("managed").map(String::as_str),
-            Some("research")
-        );
-        let mut config =
-            McpToolConfig::from_catalog(root.path(), std::slice::from_ref(&binding)).unwrap();
-        // Deliberately empty: nothing but the frozen environment can provide the
-        // server's command.
-        config.environment = crate::tool_environment::ToolEnvironment::default();
-        let workspace = root.path().join("workspace");
-        std::fs::create_dir(&workspace).unwrap();
-        // Deliberately no Plugin-root authorization: the launcher grants the
-        // Plugin mount for this invocation, exactly as it grants a frozen
-        // environment. A Run policy that had to list every tree would have to
-        // know its children's Plugins and environments in advance.
-        let sandbox = BubblewrapSandbox::new(
-            BubblewrapPolicy::new("bwrap", ["run"]).authorize_workspace_root(&workspace),
-        )
-        .unwrap();
-
-        let site = EnvironmentSite::PluginServer {
-            node: "worker".into(),
-            plugin: "research".into(),
-            server: "managed".into(),
-        };
-        let frozen = EnvironmentBinding {
-            site: Some(site),
-            name: "research".into(),
-            id: published.id.clone(),
-        };
-        let prepared = crate::managed_environment::prepare(&frozen, &library).unwrap();
-        let mut server_environments = BTreeMap::new();
-        server_environments.insert(
-            anchor_runtime::graph::PluginServerId::new("research", "managed"),
-            prepared,
-        );
-
-        let tools = config
-            .bind_with_node_inputs(
-                std::slice::from_ref(&binding),
-                false,
-                SandboxLaunch {
-                    sandbox: &sandbox,
-                    workspace: &workspace,
-                    readonly_inputs: &[],
-                    server_environments: &server_environments,
-                    plugin_views: &BTreeMap::new(),
-                },
-            )
-            .await
-            .unwrap_or_else(|error| {
-                panic!(
-                    "managed stdio MCP handshake failed: {error}; child log: {:?}",
-                    std::fs::read_to_string(workspace.join("mcp-log"))
-                )
-            });
-        assert!(
-            tools
-                .definitions()
-                .iter()
-                .any(|definition| definition.name.to_string().contains("managed_echo")),
-            "the managed server exposes its tool"
-        );
-
-        // Control: without the frozen environment the command is not mounted, so
-        // the same manifest cannot launch.
-        let failure = config
-            .bind_with_node_inputs(
-                std::slice::from_ref(&binding),
-                false,
-                SandboxLaunch {
-                    sandbox: &sandbox,
-                    workspace: &workspace,
-                    readonly_inputs: &[],
-                    server_environments: &BTreeMap::new(),
-                    plugin_views: &BTreeMap::new(),
-                },
-            )
-            .await
-            .err()
-            .expect("without the frozen environment the server cannot launch");
-        assert!(!failure.is_empty());
     }
 
     #[tokio::test]
@@ -1798,200 +1589,6 @@ exec ./mcp-fixture --stdio inspect
             config.bind_with_sandbox(&[binding], false, &sandbox, &workspace).await,
             Err(error) if error.contains("sandbox launch rejected") && error.contains("command must select")
         ));
-    }
-
-    /// The recovery path: the binding comes from the durable Run record, and a
-    /// published tree that changed while the Run was parked refuses *before* the
-    /// server is launched.
-    #[tokio::test]
-    async fn a_resumed_managed_server_re_verifies_its_frozen_environment() {
-        use anchor_library::EnvironmentStore;
-        use anchor_runtime::graph::{
-            EnvironmentBinding, EnvironmentSite, GraphRunRecord, RunStore,
-        };
-        use std::os::unix::fs::PermissionsExt;
-
-        let shell = std::fs::canonicalize("/usr/bin/bash").unwrap();
-        let root = tempfile::tempdir().unwrap();
-        let plugin = root.path().join("plugins/research");
-        std::fs::create_dir_all(plugin.join("nested")).unwrap();
-        std::fs::copy(stdio_fixture_binary(), plugin.join("mcp-fixture")).unwrap();
-        std::fs::write(
-            plugin.join("server.sh"),
-            "set -eu\nexec ../mcp-fixture --stdio echo --prefix managed:\n",
-        )
-        .unwrap();
-        std::fs::write(
-            plugin.join("plugin.json"),
-            json!({
-                "name":"Research",
-                "mcpServers":{
-                    "managed":{
-                        "command": format!("{}/bin/run", PLACEHOLDER),
-                        "args":["../server.sh","echo"],
-                        "cwd":"nested",
-                        "anchor":{"environment":"research"}
-                    }
-                }
-            })
-            .to_string(),
-        )
-        .unwrap();
-
-        let library = root.path().join("library");
-        let prepared = root.path().join("prepared");
-        std::fs::create_dir_all(prepared.join("bin")).unwrap();
-        std::fs::write(
-            prepared.join("bin/run"),
-            format!("#!{}\nexec '{}' \"$@\"\n", "/bin/sh", shell.display()),
-        )
-        .unwrap();
-        std::fs::set_permissions(
-            prepared.join("bin/run"),
-            std::fs::Permissions::from_mode(0o755),
-        )
-        .unwrap();
-        let published = EnvironmentStore::new(&library).publish(&prepared).unwrap();
-        let manifest = std::fs::read_to_string(plugin.join("plugin.json")).unwrap();
-        std::fs::write(
-            plugin.join("plugin.json"),
-            manifest.replace(
-                PLACEHOLDER,
-                &library
-                    .join("envs")
-                    .join(&published.id)
-                    .display()
-                    .to_string(),
-            ),
-        )
-        .unwrap();
-
-        // The Run record is the source of truth for a resumed invocation: the
-        // binding is written at admission and read back here, never re-resolved
-        // from the name table.
-        let state = root.path().join("state");
-        let store = anchor_runtime::graph::FileRunStore::new(state.join("runs"));
-        let mut record = GraphRunRecord::create_with_id(
-            serde_json::from_value(json!({
-                "objective": "fixture",
-                "entry": "worker",
-                "agents": {"worker": {"model": "fixture"}},
-                "ops": {},
-                "nodes": [{"id": "worker", "agent": "worker", "plugins": ["research"]}],
-                "edges": []
-            }))
-            .unwrap(),
-            json!({}),
-            "resumed-run",
-        )
-        .unwrap();
-        let binding = FilePluginCatalog::new(root.path())
-            .resolve(&["research".into()])
-            .unwrap()
-            .remove(0);
-        assert_eq!(
-            binding.environments.get("managed").map(String::as_str),
-            Some("research"),
-            "the manifest declares the environment this Run froze"
-        );
-        record
-            .plugin_bindings
-            .insert("research".into(), binding.clone());
-        record.plugin_bindings_initialized = true;
-        let site = EnvironmentSite::PluginServer {
-            node: "worker".into(),
-            plugin: "research".into(),
-            server: "managed".into(),
-        };
-        let frozen = EnvironmentBinding {
-            site: Some(site.clone()),
-            name: "research".into(),
-            id: published.id.clone(),
-        };
-        record.environments.insert(site.key(), frozen);
-        store.save(&record).unwrap();
-
-        let resumed = store.load("resumed-run").unwrap().unwrap();
-        assert_eq!(
-            resumed.environments.len(),
-            1,
-            "the record carries the site binding"
-        );
-        let prepared = crate::managed_environment::prepare_servers_async(
-            resumed.environments.clone(),
-            Some(library.clone()),
-        )
-        .await
-        .expect("the recorded environment still verifies while the tree is intact");
-
-        // Launch the resumed server for real, so the refusal below has a trace to
-        // leave alone: this fixture appends every MCP method it answers to
-        // `/workspace/mcp-log` inside the invocation's own workspace.
-        use anchor_sandbox_bwrap::BubblewrapPolicy;
-        let workspace = root.path().join("workspace");
-        std::fs::create_dir(&workspace).unwrap();
-        let sandbox = BubblewrapSandbox::new(
-            BubblewrapPolicy::new("bwrap", ["run"]).authorize_workspace_root(&workspace),
-        )
-        .unwrap();
-        let config =
-            McpToolConfig::from_catalog(root.path(), std::slice::from_ref(&binding)).unwrap();
-        let tools = config
-            .bind_with_node_inputs(
-                std::slice::from_ref(&binding),
-                false,
-                SandboxLaunch {
-                    sandbox: &sandbox,
-                    workspace: &workspace,
-                    readonly_inputs: &[],
-                    server_environments: &prepared,
-                    plugin_views: &BTreeMap::new(),
-                },
-            )
-            .await
-            .expect("the frozen environment launches the managed server");
-        let launched = std::fs::read_to_string(workspace.join("mcp-log"))
-            .expect("a real launch leaves the fixture's trace");
-        assert!(launched.contains("initialize"), "{launched}");
-        drop(tools);
-
-        // Something changed the published tree while the Run was parked.
-        let tree = EnvironmentStore::new(&library).published_path(&published.id);
-        let mut stack = vec![tree.clone()];
-        while let Some(directory) = stack.pop() {
-            for entry in std::fs::read_dir(&directory).unwrap() {
-                let entry = entry.unwrap();
-                let metadata = std::fs::symlink_metadata(entry.path()).unwrap();
-                if metadata.is_dir() {
-                    stack.push(entry.path());
-                }
-                let mut permissions = metadata.permissions();
-                permissions.set_mode(permissions.mode() | 0o700);
-                std::fs::set_permissions(entry.path(), permissions).unwrap();
-            }
-        }
-        std::fs::write(tree.join("bin/run"), "#!/bin/sh\nexit 99\n").unwrap();
-
-        let unusable = crate::managed_environment::prepare_servers_async(
-            resumed.environments.clone(),
-            Some(library),
-        )
-        .await
-        .expect_err("a changed tree must refuse on resume");
-        assert!(
-            matches!(
-                unusable.into_graph_error(),
-                anchor_runtime::graph::GraphError::CorruptRun(_)
-            ),
-            "a parked Run whose environment changed is corrupt, not unsupported"
-        );
-        // The refusal happens while preparing, so no second server was started:
-        // the only launch trace on disk is still exactly the first launch's.
-        assert_eq!(
-            std::fs::read_to_string(workspace.join("mcp-log")).unwrap(),
-            launched,
-            "a refused resume must not start another server"
-        );
     }
 }
 

@@ -814,7 +814,6 @@ impl RunApplication {
             GraphRunRecord::create_with_id(bundle.snapshot, request.input, request.run.clone())?;
         record.plugin_bindings = plugin_bindings;
         record.plugin_bindings_initialized = true;
-        resolve_record_environments(&mut record).await?;
         self.check_store()?;
         let mut metadata = RunMetadata::new(
             request.run.clone(),

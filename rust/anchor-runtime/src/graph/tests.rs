@@ -404,7 +404,6 @@ async fn plugin_manifest_is_pinned_to_run_and_drift_fails_before_dispatch() {
         digest: "manifest-v1".into(),
         resources: vec!["instructions.md".into()],
         mcp_servers: vec!["search".into()],
-        environments: BTreeMap::new(),
     };
     let nodes = FakeNodes {
         resolved_plugins: Mutex::new(vec![binding.clone()]),
@@ -535,7 +534,6 @@ async fn legacy_in_progress_plugin_run_without_binding_fails_closed() {
             digest: "manifest-v1".into(),
             resources: vec![],
             mcp_servers: vec![],
-            environments: BTreeMap::new(),
         }]),
         ..Default::default()
     };
@@ -1111,7 +1109,6 @@ fn graph(nodes: &[&str], edges: &[(&str, &str)], entry: &str) -> GraphSnapshot {
         nodes: nodes
             .iter()
             .map(|id| GraphNode {
-                environment: None,
                 id: (*id).into(),
                 agent: Some("worker".into()),
                 op: None,
@@ -2211,7 +2208,6 @@ fn parallel_admission_rejects_orphan_reused_and_malformed_pairs() {
         .ops
         .insert("lonely".into(), serde_json::json!({"join":{}}));
     orphan.nodes.push(GraphNode {
-        environment: None,
         id: "orphan".into(),
         agent: None,
         op: Some("lonely".into()),
@@ -2229,7 +2225,6 @@ fn parallel_admission_rejects_orphan_reused_and_malformed_pairs() {
         .ops
         .insert("other".into(), serde_json::json!({"join":{}}));
     wrong_pair.nodes.push(GraphNode {
-        environment: None,
         id: "other-join".into(),
         agent: None,
         op: Some("other".into()),
@@ -2242,7 +2237,6 @@ fn parallel_admission_rejects_orphan_reused_and_malformed_pairs() {
         serde_json::json!({"fanout":{"join":"collect"}}),
     );
     wrong_pair.nodes.push(GraphNode {
-        environment: None,
         id: "split2".into(),
         agent: None,
         op: Some("fanout2".into()),
@@ -4062,6 +4056,29 @@ fn created_records_carry_started_and_updated_timestamps() {
     record.validate().unwrap();
 }
 
+/// A record from the managed-environment era still loads: the field is accepted
+/// and dropped, never reinterpreted.
+#[test]
+fn a_managed_environment_record_migrates_by_dropping_the_field() {
+    let record = GraphRunRecord::create(graph(&["one"], &[], "one"), Value::Null).unwrap();
+    let mut value = serde_json::to_value(&record).unwrap();
+    value["format"] = serde_json::json!(9);
+    value["environments"] = serde_json::json!({
+        "one": {"site": {"kind": "node_task", "node": "one"}, "name": "research", "id": "a".repeat(64)}
+    });
+    let mut loaded: GraphRunRecord = serde_json::from_value(value).unwrap();
+    loaded.migrate_format().unwrap();
+    assert_eq!(loaded.format, RUN_RECORD_FORMAT);
+    assert!(loaded.validate().is_ok());
+    assert!(
+        !serde_json::to_value(&loaded)
+            .unwrap()
+            .to_string()
+            .contains("environments"),
+        "the field is gone from what we write next"
+    );
+}
+
 #[test]
 fn format_seven_migrates_to_current_without_inventing_timestamps() {
     let mut original = GraphRunRecord::create(graph(&["one"], &[], "one"), Value::Null).unwrap();
@@ -4166,290 +4183,4 @@ async fn persist_stamps_updated_and_keeps_memory_in_step_with_disk() {
     assert_eq!(loaded.started, started, "started is never rewritten");
     assert_eq!(loaded.format, RUN_RECORD_FORMAT);
     let _ = fs::remove_dir_all(&root);
-}
-
-#[test]
-fn environment_bindings_are_persisted_facts_that_must_match_their_declaration() {
-    let authoring = |environment: Option<&str>| {
-        let node = match environment {
-            Some(name) => {
-                serde_json::json!({"id": "worker", "agent": "worker", "environment": name})
-            }
-            None => serde_json::json!({"id": "worker", "agent": "worker"}),
-        };
-        GraphSnapshot::from_authoring(serde_json::json!({
-            "objective": "environment binding",
-            "entry": "worker",
-            "agents": {"worker": {"model": "test"}},
-            "ops": {},
-            "nodes": [node],
-            "edges": []
-        }))
-        .unwrap()
-    };
-    let digest = "a".repeat(64);
-    let frozen = |name: &str, id: &str| EnvironmentBinding::node_task("worker", name, id);
-
-    // A declared environment without a frozen binding is corruption: the record
-    // must never resolve the name again to fill the gap.
-    let mut record = GraphRunRecord::create(authoring(Some("research")), Value::Null).unwrap();
-    assert!(matches!(record.validate(), Err(GraphError::CorruptRun(_))));
-
-    // The binding must carry the declared name and a digest.
-    record
-        .environments
-        .insert("node_task:worker".into(), frozen("other", &digest));
-    assert!(matches!(record.validate(), Err(GraphError::CorruptRun(_))));
-    record.environments.insert(
-        "node_task:worker".into(),
-        frozen("research", "not-a-digest"),
-    );
-    assert!(matches!(record.validate(), Err(GraphError::CorruptRun(_))));
-
-    record
-        .environments
-        .insert("node_task:worker".into(), frozen("research", &digest));
-    assert!(record.validate().is_ok());
-
-    // A binding for a node that declares nothing is also refused, as is a key
-    // that does not match the site it claims.
-    let mut stray = GraphRunRecord::create(authoring(None), Value::Null).unwrap();
-    stray
-        .environments
-        .insert("node_task:worker".into(), frozen("research", &digest));
-    assert!(matches!(stray.validate(), Err(GraphError::CorruptRun(_))));
-
-    let mut mismatched = GraphRunRecord::create(authoring(Some("research")), Value::Null).unwrap();
-    mismatched
-        .environments
-        .insert("node_task:other".into(), frozen("research", &digest));
-    assert!(matches!(
-        mismatched.validate(),
-        Err(GraphError::CorruptRun(_))
-    ));
-}
-
-#[test]
-fn a_record_without_a_site_or_a_frozen_plugin_server_refuses_to_validate() {
-    // A format-10 binding with no site cannot be validated, because nothing says
-    // what it belongs to.
-    let snapshot = graph(&["one"], &[], "one");
-    let mut record = GraphRunRecord::create(snapshot, Value::Null).unwrap();
-    assert_eq!(record.format, RUN_RECORD_FORMAT);
-    record.environments.insert(
-        "node_task:one".into(),
-        EnvironmentBinding {
-            site: None,
-            name: "research".into(),
-            id: "d".repeat(64),
-        },
-    );
-    assert!(matches!(record.validate(), Err(GraphError::CorruptRun(_))));
-}
-
-#[test]
-fn a_format_8_record_migrates_without_inventing_an_environment() {
-    let mut record = GraphRunRecord::create(graph(&["one"], &[], "one"), Value::Null).unwrap();
-    assert_eq!(record.format, RUN_RECORD_FORMAT);
-
-    // A format-9 record keyed its bindings by node id and had no site field.
-    record.environments.clear();
-    record.environments.insert(
-        "one".into(),
-        EnvironmentBinding {
-            site: None,
-            name: "research".into(),
-            id: "b".repeat(64),
-        },
-    );
-    record.format = 9;
-    record.migrate_format().unwrap();
-    assert_eq!(record.format, RUN_RECORD_FORMAT);
-    let binding = &record.environments["node_task:one"];
-    assert_eq!(
-        binding.site,
-        Some(EnvironmentSite::NodeTask { node: "one".into() }),
-        "the site is recovered from the legacy key, not invented"
-    );
-    assert_eq!(binding.name, "research");
-
-    // A format-8 record keeps no environment at all: resolving a name now would
-    // invent an identity its execution never had.
-    let mut legacy = GraphRunRecord::create(graph(&["one"], &[], "one"), Value::Null).unwrap();
-    legacy.environments.insert(
-        "node_task:one".into(),
-        EnvironmentBinding::node_task("one", "research", "b".repeat(64)),
-    );
-    legacy.format = 8;
-    legacy.migrate_format().unwrap();
-    assert_eq!(legacy.format, RUN_RECORD_FORMAT);
-    assert!(legacy.environments.is_empty());
-}
-
-#[test]
-fn freezing_resolves_exactly_the_sites_this_graph_declares() {
-    // The two must be one enumeration: freezing may not invent or skip a site,
-    // and a host's derived impact report reads the same list.
-    let snapshot = GraphSnapshot::from_authoring(serde_json::json!({
-        "objective": "declared sites",
-        "entry": "worker",
-        "agents": {"worker": {"model": "test"}},
-        "ops": {},
-        "nodes": [
-            {"id": "worker", "agent": "worker", "plugins": ["demo"]},
-            {"id": "other", "agent": "worker", "environment": "research"}
-        ],
-        "edges": []
-    }))
-    .unwrap();
-    let mut bindings = BTreeMap::new();
-    bindings.insert(
-        "demo".into(),
-        PluginBinding {
-            id: "demo".into(),
-            digest: "c".repeat(64),
-            resources: Vec::new(),
-            mcp_servers: vec!["probe".into()],
-            environments: [("probe".to_owned(), "research".to_owned())].into(),
-        },
-    );
-
-    let declared = declared_environment_sites(&snapshot, &bindings);
-    let mut names = declared
-        .iter()
-        .map(|site| (site.site.key(), site.name.clone()))
-        .collect::<Vec<_>>();
-    names.sort();
-    assert_eq!(
-        names,
-        vec![
-            (
-                EnvironmentSite::NodeTask {
-                    node: "other".into()
-                }
-                .key(),
-                "research".to_owned()
-            ),
-            (
-                EnvironmentSite::PluginServer {
-                    node: "worker".into(),
-                    plugin: "demo".into(),
-                    server: "probe".into()
-                }
-                .key(),
-                "research".to_owned()
-            ),
-        ]
-    );
-
-    // Freezing resolves that same list: same keys, one binding each.
-    let resolve = |name: &str| Ok::<String, String>(format!("id-for-{name}"));
-    let frozen = freeze_environments(&snapshot, &bindings, &resolve).unwrap();
-    let mut keys = frozen.keys().cloned().collect::<Vec<_>>();
-    keys.sort();
-    let mut expected = names.iter().map(|(key, _)| key.clone()).collect::<Vec<_>>();
-    expected.sort();
-    assert_eq!(keys, expected);
-    assert!(
-        frozen
-            .values()
-            .all(|binding| binding.id == "id-for-research")
-    );
-}
-
-#[test]
-fn a_site_whose_key_cannot_name_it_back_is_refused() {
-    // `EnvironmentSite::key()` joins names with `/`, and a canonical key is only
-    // trusted because it parses back to the site it belongs to. A site whose
-    // names contain `/` would collide with another site's key, so it must not
-    // round-trip — record validation compares the two and refuses the record.
-    let ambiguous = EnvironmentSite::PluginServer {
-        node: "worker".into(),
-        plugin: "a/b".into(),
-        server: "c".into(),
-    };
-    let key = ambiguous.key();
-    assert_eq!(key, "plugin_server:worker/a/b/c");
-    assert_ne!(EnvironmentSite::from_key(&key), Some(ambiguous));
-    // The same key names a different, honest site, so nothing may accept the
-    // ambiguous one: `validate` refuses it, and the authoring layer never builds
-    // it in the first place.
-    assert_eq!(
-        EnvironmentSite::from_key(&key),
-        Some(EnvironmentSite::PluginServer {
-            node: "worker".into(),
-            plugin: "a".into(),
-            server: "b/c".into(),
-        })
-    );
-    assert!(
-        GraphSnapshot::from_authoring(serde_json::json!({
-            "objective": "collide",
-            "entry": "worker",
-            "agents": {"worker": {"model": "test"}},
-            "ops": {},
-            "nodes": [{"id": "worker", "agent": "worker", "plugins": ["a/b"]}],
-            "edges": []
-        }))
-        .is_err(),
-        "a Plugin reference containing `/` is not addressable"
-    );
-}
-
-#[test]
-fn a_bound_plugin_server_environment_must_be_frozen() {
-    let snapshot = GraphSnapshot::from_authoring(serde_json::json!({
-        "objective": "plugin server environment",
-        "entry": "worker",
-        "agents": {"worker": {"model": "test"}},
-        "ops": {},
-        "nodes": [{"id": "worker", "agent": "worker", "plugins": ["demo"]}],
-        "edges": []
-    }))
-    .unwrap();
-    let mut record = GraphRunRecord::create(snapshot, Value::Null).unwrap();
-    record.plugin_bindings.insert(
-        "demo".into(),
-        PluginBinding {
-            id: "demo".into(),
-            digest: "c".repeat(64),
-            resources: Vec::new(),
-            mcp_servers: vec!["probe".into()],
-            environments: [("probe".to_owned(), "research".to_owned())].into(),
-        },
-    );
-    // The Plugin declares an environment for its server, so the Run must have
-    // frozen that site before it can run.
-    assert!(matches!(record.validate(), Err(GraphError::CorruptRun(_))));
-
-    let site = EnvironmentSite::PluginServer {
-        node: "worker".into(),
-        plugin: "demo".into(),
-        server: "probe".into(),
-    };
-    record.environments.insert(
-        site.key(),
-        EnvironmentBinding {
-            site: Some(site),
-            name: "research".into(),
-            id: "d".repeat(64),
-        },
-    );
-    assert!(record.validate().is_ok());
-
-    // A binding for a server the Plugin does not declare is refused.
-    let stray = EnvironmentSite::PluginServer {
-        node: "worker".into(),
-        plugin: "demo".into(),
-        server: "other".into(),
-    };
-    record.environments.insert(
-        stray.key(),
-        EnvironmentBinding {
-            site: Some(stray),
-            name: "research".into(),
-            id: "d".repeat(64),
-        },
-    );
-    assert!(matches!(record.validate(), Err(GraphError::CorruptRun(_))));
 }

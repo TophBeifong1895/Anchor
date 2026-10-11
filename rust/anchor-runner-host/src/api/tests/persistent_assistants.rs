@@ -51,7 +51,6 @@ async fn claimed_input_survives_restart_before_artifact_even_after_new_input_arr
         .unwrap();
     assert_ne!(first.turn.id, newer.turn.id);
     let request = || NodeExecutionRequest {
-        environments: BTreeMap::new(),
         key: key.clone(),
         kind: NodeKind::OpHost,
         model: None,
@@ -367,7 +366,6 @@ async fn pending_input_scope_reports_truncation_and_authorizes_only_the_latest_e
         invocation: 2,
     };
     let request = NodeExecutionRequest {
-        environments: BTreeMap::new(),
         key: key.clone(),
         kind: NodeKind::OpHost,
         model: None,

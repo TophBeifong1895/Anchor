@@ -19,8 +19,8 @@ use anchor_graph_host::{
 };
 use anchor_runtime::ReadOnlyInput;
 
-use crate::environment_provision::{
-    EnvironmentProvisioner, LockedPackage, ProvisionError, ResolvedRequirements, authority,
+use crate::dependency_provision::{
+    DependencyProvisioner, LockedPackage, ProvisionError, ResolvedRequirements, authority,
     fetch_wheelhouse, normalize_name, run_step,
 };
 use crate::plugin_view::{
@@ -38,7 +38,7 @@ pub(crate) struct LandedView {
 
 /// Publish the shared store and the view for one Plugin declaration.
 pub(crate) async fn land(
-    provisioner: &EnvironmentProvisioner,
+    provisioner: &DependencyProvisioner,
     library_root: &Path,
     plugin: &str,
     declaration_digest: &str,
@@ -184,7 +184,7 @@ pub(crate) async fn land(
 /// it really holds that set. It is never rewritten in place: that could change an
 /// environment a Run is already using, and switching views is a later slice.
 async fn reuse_existing(
-    provisioner: &EnvironmentProvisioner,
+    provisioner: &DependencyProvisioner,
     library_root: &Path,
     plugin: &str,
     view: &Path,
@@ -467,7 +467,7 @@ fn publish_view(workspace: &Path, view: &Path) -> Result<(), ProvisionError> {
 
 /// Run the published view at its final path and report what it actually holds.
 async fn verify_view(
-    provisioner: &EnvironmentProvisioner,
+    provisioner: &DependencyProvisioner,
     library_root: &Path,
     view: &Path,
     resolved: &ResolvedRequirements,
@@ -595,7 +595,7 @@ fn cleanup(path: &Path) -> Result<(), ProvisionError> {
 mod tests {
     use super::*;
     use crate::application::RunApplication;
-    use crate::environment_provision::test_support::{
+    use crate::dependency_provision::test_support::{
         builder_required, config, fixture_wheel, toolchain,
     };
     use crate::tool_host::{McpToolConfig, SandboxLaunch};
@@ -667,7 +667,7 @@ mod tests {
         fixture_wheel(&wheels, "idna", "3.6");
         let build_root = root.path().join("environment-build");
         let provisioner = Arc::new(
-            crate::environment_provision::EnvironmentProvisioner::new(config(
+            crate::dependency_provision::DependencyProvisioner::new(config(
                 &build_root,
                 &toolchain,
                 wheels,
@@ -694,7 +694,7 @@ mod tests {
         let candidate = root.path().join("probe-candidate");
         write_candidate(&candidate, &probe_address);
         let application = RunApplication::new(root.path().join("state"), root.path().to_path_buf())
-            .with_environment_provisioner(Arc::clone(&provisioner));
+            .with_dependency_provisioner(Arc::clone(&provisioner));
 
         // 1. The declaration is solved before a human is asked anything.
         let precondition = application
@@ -770,7 +770,6 @@ mod tests {
             .expect("the installed Plugin has a view");
         assert_eq!(prepared.view(), view);
         let mcp = McpToolConfig::from_catalog(&library, std::slice::from_ref(&binding)).unwrap();
-        let server_environments = BTreeMap::new();
         let plugin_views = BTreeMap::from([("python-probe".to_owned(), prepared)]);
         let tools = mcp
             .bind_with_node_inputs(
@@ -780,7 +779,6 @@ mod tests {
                     sandbox: &sandbox,
                     workspace: &workspace,
                     readonly_inputs: &[],
-                    server_environments: &server_environments,
                     plugin_views: &plugin_views,
                 },
             )
@@ -949,7 +947,6 @@ for line in sys.stdin:
             .expect("the installed Plugin has a view");
         let mcp = McpToolConfig::from_catalog(&deployment.library, std::slice::from_ref(binding))
             .unwrap();
-        let server_environments = BTreeMap::new();
         let plugin_views = BTreeMap::from([("python-probe".to_owned(), prepared)]);
         let tools = mcp
             .bind_with_node_inputs(
@@ -959,7 +956,6 @@ for line in sys.stdin:
                     sandbox: &deployment.sandbox,
                     workspace: &deployment.workspace,
                     readonly_inputs: &[],
-                    server_environments: &server_environments,
                     plugin_views: &plugin_views,
                 },
             )
@@ -1085,7 +1081,7 @@ for line in sys.stdin:
         library: PathBuf,
         workspace: PathBuf,
         sandbox: BubblewrapSandbox,
-        provisioner: Arc<crate::environment_provision::EnvironmentProvisioner>,
+        provisioner: Arc<crate::dependency_provision::DependencyProvisioner>,
         application: RunApplication,
         candidate: PathBuf,
         /// Kept alive so the address the server is told to reach answers.
@@ -1103,7 +1099,7 @@ for line in sys.stdin:
         std::fs::create_dir_all(&wheels).unwrap();
         fixture_wheel(&wheels, "idna", "3.6");
         let provisioner = Arc::new(
-            crate::environment_provision::EnvironmentProvisioner::new(config(
+            crate::dependency_provision::DependencyProvisioner::new(config(
                 &root.path().join("environment-build"),
                 &toolchain,
                 wheels,
@@ -1114,7 +1110,7 @@ for line in sys.stdin:
         let candidate = root.path().join("probe-candidate");
         write_candidate(&candidate, &listener.local_addr().unwrap().to_string());
         let application = RunApplication::new(root.path().join("state"), root.path().to_path_buf())
-            .with_environment_provisioner(Arc::clone(&provisioner));
+            .with_dependency_provisioner(Arc::clone(&provisioner));
         Some(Deployment {
             root,
             library,
@@ -1188,7 +1184,7 @@ for line in sys.stdin:
 
     /// A wheel for the same (package, version) with different bytes.
     fn write_other_wheel(directory: &Path, name: &str, version: &str) -> PathBuf {
-        use crate::environment_provision::test_support::write_zip;
+        use crate::dependency_provision::test_support::write_zip;
         use base64::Engine;
         use sha2::Digest;
         let dist = format!("{name}-{version}");
@@ -1430,7 +1426,6 @@ for line in sys.stdin:
         assert_eq!(prepared.view(), library_view);
 
         let mcp = McpToolConfig::from_catalog(&bundle, std::slice::from_ref(&binding)).unwrap();
-        let server_environments = BTreeMap::new();
         let plugin_views = BTreeMap::from([("python-probe".to_owned(), prepared)]);
         let tools = mcp
             .bind_with_node_inputs(
@@ -1440,7 +1435,6 @@ for line in sys.stdin:
                     sandbox: &deployment.sandbox,
                     workspace: &deployment.workspace,
                     readonly_inputs: &[],
-                    server_environments: &server_environments,
                     plugin_views: &plugin_views,
                 },
             )
@@ -1466,7 +1460,7 @@ for line in sys.stdin:
     /// The interpreter version the fixture wheel was built for, as the plan
     /// reports it.
     fn resolved_interpreter(
-        toolchain: &crate::environment_provision::test_support::Toolchain,
+        toolchain: &crate::dependency_provision::test_support::Toolchain,
     ) -> String {
         let output = std::process::Command::new(&toolchain.python)
             .arg("-c")

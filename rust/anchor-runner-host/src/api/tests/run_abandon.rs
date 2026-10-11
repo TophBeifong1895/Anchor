@@ -374,7 +374,6 @@ async fn abandon_unblocks_plugin_resource_replacement_and_leaves_stopped_runs_bl
             digest: "a".repeat(64),
             resources: vec!["skills/example/SKILL.md".into()],
             mcp_servers: Vec::new(),
-            environments: Default::default(),
         },
     );
     run_store(&state).save(&record).unwrap();

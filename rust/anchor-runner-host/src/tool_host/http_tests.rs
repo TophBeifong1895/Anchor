@@ -139,7 +139,6 @@ fn binding(server: &str) -> PluginBinding {
         digest: "fixture-digest".into(),
         resources: vec![],
         mcp_servers: vec![server.into()],
-        environments: Default::default(),
     }
 }
 

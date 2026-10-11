@@ -47,7 +47,6 @@ pub(crate) struct HostNodes {
     pub(crate) artifacts: HostArtifacts,
     pub(crate) facts_root: PathBuf,
     pub(crate) io_resolver: std::sync::Arc<HostIoResolver>,
-    pub(crate) mcp: tool_host::McpToolConfig,
     pub(crate) goose_nodes: Option<crate::goose_acp::GooseNodePort>,
 }
 
@@ -408,14 +407,6 @@ impl NodeHostResolver for HostIoResolver {
                     )
                     .await?;
                     let deployments = crate::deployment_library_root();
-                    // Verifying a published tree re-hashes it, so this runs off the
-                    // runtime thread; the boundary maps the one cause to its own class.
-                    let server_environments = crate::managed_environment::prepare_servers_async(
-                        request.environments.clone(),
-                        deployments.clone(),
-                    )
-                    .await
-                    .map_err(|error| ResolutionError::Graph(error.into_graph_error()))?;
                     // A Plugin's own declaration maps to exactly one view, and the
                     // Run uses the *current* Plugin: an upgrade takes effect at its
                     // next node call and nothing is refused for having changed. A
@@ -444,7 +435,6 @@ impl NodeHostResolver for HostIoResolver {
                                 sandbox: &sandbox,
                                 workspace: &workspace,
                                 readonly_inputs: &readonly_inputs,
-                                server_environments: &server_environments,
                                 plugin_views: &plugin_views,
                             },
                         )
@@ -464,19 +454,6 @@ impl NodeHostResolver for HostIoResolver {
                             ),
                         "/spill",
                     );
-                    // A declared environment becomes this invocation's authority, so a
-                    // called Graph's environments work without widening the policy, and
-                    // the falling back to the global tool aggregate is skipped.
-                    let prepared = crate::managed_environment::prepare_for_async(
-                        request.task_environment().cloned(),
-                        deployments.clone(),
-                    )
-                    .await
-                    .map_err(|error| ResolutionError::Graph(error.into_graph_error()))?;
-                    let sandbox = match prepared.as_ref() {
-                        Some(prepared) => prepared.authorize(sandbox)?,
-                        None => sandbox,
-                    };
                     let node_tools = crate::node_tools::NodeTools::new(
                         crate::channel_tools::wrap(
                             plugins,
@@ -496,7 +473,6 @@ impl NodeHostResolver for HostIoResolver {
                     .with_spill(spill)
                     .with_environment(self.mcp.environment.clone())
                     .with_network(request.network);
-                    let node_tools = node_tools.with_managed_environment(prepared);
                     let tools = std::sync::Arc::new(node_tools)
                         as std::sync::Arc<dyn anchor_runtime::ToolPort>;
                     // Tools a node's completion and continuity depend on stay listed; the rest
@@ -696,26 +672,10 @@ impl HostNodes {
             spill: None,
             cancellation: request.cancellation.clone(),
         };
-        let deployments = crate::deployment_library_root();
-        // The same cause gets the same class here as on the AgentNode path: a Run
-        // whose recorded content cannot be honored is corrupt, while a deployment
-        // that cannot serve environments at all is unsupported.
-        let prepared = crate::managed_environment::prepare_for_async(
-            request.task_environment().cloned(),
-            deployments.clone(),
-        )
-        .await
-        .map_err(crate::managed_environment::Unusable::into_graph_error)?;
-        let sandbox = match prepared.as_ref() {
-            Some(prepared) => prepared
-                .authorize(std::sync::Arc::new(sandbox))
-                .map_err(GraphError::Unsupported)?,
-            None => std::sync::Arc::new(sandbox),
-        };
-        match prepared.as_ref() {
-            Some(prepared) => prepared.apply(&mut sandbox_request),
-            None => self.mcp.environment.apply(&mut sandbox_request),
-        }
+        // The deployment's operator-registered tool paths are this invocation's
+        // authority: an Op.run reaches them by absolute path, and nothing else
+        // grants them.
+        self.io_resolver.mcp.environment.apply(&mut sandbox_request);
         op::add_route_helper(&mut sandbox_request, route_helper);
         self.start(&request.key)?;
         let result = match sandbox.run(sandbox_request).await {
@@ -956,7 +916,6 @@ mod resolver_tests {
         assert!(resolver.resolve_plugins(&["missing".into()]).is_err());
 
         let request = NodeExecutionRequest {
-            environments: BTreeMap::new(),
             key: InvocationKey {
                 run_id: admitted.run_id,
                 graph_digest: admitted.graph_digest,
@@ -1075,7 +1034,6 @@ mod resolver_tests {
         )
         .with_library_root(Some(library));
         let request = NodeExecutionRequest {
-            environments: BTreeMap::new(),
             key: InvocationKey {
                 run_id: record.run_id,
                 graph_digest: record.graph_digest,
@@ -1175,7 +1133,6 @@ mod resolver_tests {
             local,
         );
         let mut request = NodeExecutionRequest {
-            environments: BTreeMap::new(),
             key: InvocationKey {
                 run_id: record.run_id,
                 graph_digest: record.graph_digest,

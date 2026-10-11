@@ -203,3 +203,20 @@ async fn the_plugin_install_route_does_not_exist() {
     assert_eq!(status, StatusCode::OK, "{catalog}");
     assert_eq!(catalog["plugins"][0]["id"], "demo");
 }
+
+/// The retired environment routes are gone, exactly like the install route.
+#[tokio::test]
+async fn the_environment_routes_do_not_exist() {
+    let _environment = PROCESS_ENV.lock().await;
+    let (_root, state) = fixture();
+    for path in ["/environment-requirements"] {
+        let (status, _) = call(router(state.clone()), "GET", path, None).await;
+        assert!(
+            matches!(
+                status,
+                StatusCode::NOT_FOUND | StatusCode::METHOD_NOT_ALLOWED
+            ),
+            "GET {path} must not exist, got {status}"
+        );
+    }
+}

@@ -1,6 +1,6 @@
 use super::graphs::{ImpactCoverage, ImpactScan, coverage_of};
 use super::{ApplicationError, RunApplication};
-use crate::environment_provision::{
+use crate::dependency_provision::{
     LockedPackage, PackageSource, ProvisionError, ResolvedRequirements, resolve_requirements,
     verify_index_json,
 };
@@ -139,7 +139,7 @@ impl RunApplication {
         // Fail closed with a reason the operator can act on: a Plugin whose
         // dependencies cannot be installed must not be installed at all, because
         // its tools could never start.
-        let provisioner = self.environment_provisioner().map_err(|_| {
+        let provisioner = self.dependency_provisioner().map_err(|_| {
             ApplicationError::Invalid(format!(
                 "Plugin `{}` declares dependencies, but this deployment does not authorize installing them (no ANCHOR_ENVIRONMENT_* configuration)",
                 review.id
@@ -309,7 +309,7 @@ impl RunApplication {
         // existing view exactly as they were.
         let mut landed = None;
         if let Some(resolved) = precondition.resolved.clone() {
-            let provisioner = Arc::clone(self.environment_provisioner()?);
+            let provisioner = Arc::clone(self.dependency_provisioner()?);
             let declaration_digest = precondition
                 .dependencies
                 .as_ref()
@@ -614,7 +614,6 @@ mod impact_tests {
                 digest: "a".repeat(64),
                 resources: Vec::new(),
                 mcp_servers: vec!["probe".into()],
-                environments: Default::default(),
             },
         );
         record.plugin_bindings_initialized = true;

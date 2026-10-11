@@ -214,20 +214,13 @@ impl PreparedExecution {
                 state: state_root,
                 application: self.application.clone(),
             };
-            let mut host = InProcessGraphHost::new(
+            let host = InProcessGraphHost::new(
                 &catalog,
                 &self.store,
                 &self.artifacts,
                 &self.nodes,
                 &self.control,
             );
-            // A child Run must freeze the environments it declares with the same
-            // store its parent used, or refuse.
-            if let Some(root) = crate::deployment_library_root() {
-                host = host.with_environment_resolver(std::sync::Arc::new(
-                    crate::LibraryEnvironmentResolver::new(root),
-                ));
-            }
             GraphRunner::new(&self.store, &self.artifacts, &host, &self.control)
                 .run(record)
                 .await

@@ -28,17 +28,12 @@
 mod build;
 mod config;
 mod fetch;
-mod materialize;
 mod resolve;
 
-pub(crate) use build::{
-    authority, build_environment, provision_sandbox, run_step, verify_published,
-};
-pub(crate) use config::{EnvironmentProvisionConfig, PackageSource, ProvisionError, from_env};
+pub(crate) use build::{authority, provision_sandbox, run_step};
+pub(crate) use config::{DependencyProvisionConfig, PackageSource, ProvisionError, from_env};
 pub(crate) use fetch::{fetch_wheelhouse, normalize_name, verify_index_json};
-pub(crate) use resolve::{
-    LockedPackage, ResolvedRequirements, is_interpreter_constraint, resolve_requirements,
-};
+pub(crate) use resolve::{LockedPackage, ResolvedRequirements, resolve_requirements};
 
 use anchor_sandbox_bwrap::BubblewrapSandbox;
 
@@ -46,13 +41,13 @@ use anchor_sandbox_bwrap::BubblewrapSandbox;
 ///
 /// Built once, when the host starts, so a deployment that configured sources but
 /// no usable sandbox refuses preparation instead of failing halfway through one.
-pub(crate) struct EnvironmentProvisioner {
-    pub(crate) config: EnvironmentProvisionConfig,
+pub(crate) struct DependencyProvisioner {
+    pub(crate) config: DependencyProvisionConfig,
     pub(crate) sandbox: BubblewrapSandbox,
 }
 
-impl EnvironmentProvisioner {
-    pub(crate) fn new(config: EnvironmentProvisionConfig) -> Result<Self, ProvisionError> {
+impl DependencyProvisioner {
+    pub(crate) fn new(config: DependencyProvisionConfig) -> Result<Self, ProvisionError> {
         let sandbox = provision_sandbox(&config)?;
         Ok(Self { config, sandbox })
     }

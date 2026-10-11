@@ -5,15 +5,12 @@ mod assistant;
 mod channel_inputs;
 mod channel_supervisor;
 mod channel_tools;
-mod environment_provision;
+mod dependency_provision;
 mod execution;
 mod goose_acp;
 mod goose_tool_context;
-mod library_environments;
 mod local_inputs;
 
-pub(crate) use library_environments::LibraryEnvironmentResolver;
-mod managed_environment;
 mod pilot_host;
 mod pilot_tools;
 mod plugin_dependencies;
@@ -268,7 +265,7 @@ pub(crate) fn deployment_library_root() -> Option<PathBuf> {
 ///
 /// The explicit Library root wins. Otherwise the *caller's* configured Graph
 /// catalog is the answer: a single-root deployment puts both in one directory, and
-/// the catalog is configuration rather than a guess about a path. The environment
+/// the catalog is configuration rather than a guess about a path. The Library
 /// is deliberately not consulted a second time here — a caller that derived its
 /// catalog root from `ANCHOR_RUNNER_CATALOG_ROOT` or from its bundle has already
 /// made that decision, and re-reading it deeper in the stack would let one host's
@@ -334,7 +331,7 @@ fn make_host_with_control(
     .authorize_readonly_destination_root("/spill")
     .authorize_spill_root(state.join("spill"))
     .allow_network();
-    // Frozen dependency environments are NOT authorized here: a Run cannot know
+    // Plugin views are NOT authorized here: a Run cannot know
     // which environments its called Graphs will declare. Each invocation grants
     // exactly the trees it recorded (see `managed_environment`), so this policy
     // stays the deployment floor.
@@ -384,7 +381,6 @@ fn make_host_with_control(
             artifacts,
             facts_root: state.join("facts"),
             io_resolver,
-            mcp,
             goose_nodes,
         },
         control,
@@ -574,7 +570,7 @@ async fn execute_snapshot_with_control(
             };
         }
     };
-    let mut expected = match GraphRunRecord::create_with_id(snapshot, input, run_id.clone()) {
+    let expected = match GraphRunRecord::create_with_id(snapshot, input, run_id.clone()) {
         Ok(record) => record,
         Err(error) => {
             return Response::Rejected {
@@ -584,15 +580,6 @@ async fn execute_snapshot_with_control(
             };
         }
     };
-    // Resolve declared environments before anything durable is written, so a
-    // refused environment never leaves orphan admission facts behind.
-    if let Err(error) = crate::application::resolve_record_environments(&mut expected).await {
-        return Response::Rejected {
-            version: 1,
-            request_id,
-            reason: format!("{error:?}"),
-        };
-    }
     let control = supplied_control.unwrap_or_else(|| HostControl {
         cancellation: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         pause: Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -858,19 +845,6 @@ mod tests {
     }
 
     #[test]
-    fn host_admission_accepts_a_declared_environment_and_defers_to_the_frozen_binding() {
-        // Snapshot-level admission no longer refuses a declaration: admission
-        // resolves it into a frozen binding, and the Run record validates that
-        // binding on every load.
-        let mut graph = snapshot();
-        let mut node = graph.nodes[0].clone();
-        node.id = "environment-probe".into();
-        node.environment = Some("research".into());
-        graph.nodes.push(node);
-        assert!(reject_snapshot(&graph).is_ok());
-    }
-
-    #[test]
     fn host_admission_accepts_op_routes_with_multiple_exits() {
         let mut graph = snapshot();
         graph.nodes.push(anchor_runtime::graph::GraphNode {
@@ -880,7 +854,6 @@ mod tests {
             input: None,
             plugins: Vec::new(),
             max_rounds: None,
-            environment: None,
         });
         graph.nodes.push(anchor_runtime::graph::GraphNode {
             id: "bad".into(),
@@ -889,7 +862,6 @@ mod tests {
             input: None,
             plugins: Vec::new(),
             max_rounds: None,
-            environment: None,
         });
         graph.edges.extend([
             anchor_runtime::graph::GraphEdge {

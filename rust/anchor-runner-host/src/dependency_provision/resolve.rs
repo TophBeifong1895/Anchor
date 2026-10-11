@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use super::config::{
-    EnvironmentProvisionConfig, PackageSource, ProvisionError, sha256_file, sha256_hex,
+    DependencyProvisionConfig, PackageSource, ProvisionError, sha256_file, sha256_hex,
 };
 
 /// One distribution in the locked set.
@@ -48,40 +48,12 @@ pub(crate) struct ResolvedRequirements {
     pub(crate) packages: Vec<LockedPackage>,
 }
 
-/// Confirm the interpreter is still the build the plan recorded.
-///
-/// The digest is taken while resolving and written into the plan; a binary that
-/// changed in between would make the plan's own fact false, and the published
-/// content would carry a different interpreter than the human approved.
-pub(crate) fn verify_interpreter(resolved: &ResolvedRequirements) -> Result<(), ProvisionError> {
-    let observed = sha256_file(&resolved.interpreter_path).map_err(|error| {
-        ProvisionError::Failed(format!("the planned interpreter cannot be read: {error}"))
-    })?;
-    if observed != resolved.interpreter_digest {
-        return Err(ProvisionError::Failed(format!(
-            "the planned interpreter changed since it was resolved (approved {}, found {observed})",
-            resolved.interpreter_digest
-        )));
-    }
-    Ok(())
-}
-
 /// Whether a recorded interpreter constraint is a plain version prefix.
 ///
 /// The deployment builds on one interpreter, so the field names the version it
 /// must be — `3`, `3.12`, `3.12.13` — not a PEP 440 specifier. Accepting
 /// `>=3.11` here and rejecting it later would record a requirement that can
 /// never be provided.
-pub(crate) fn is_interpreter_constraint(value: &str) -> bool {
-    let value = value.trim();
-    let parts = value.split('.').collect::<Vec<_>>();
-    !value.is_empty()
-        && value.len() <= 16
-        && parts.len() <= 3
-        && parts
-            .iter()
-            .all(|part| !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit()))
-}
 ///
 /// `uv`'s `--index` *adds to* its default index rather than replacing it, so a
 /// first authorized index given as `--index` leaves PyPI reachable: a package
@@ -162,7 +134,7 @@ const SANDBOX_VISIBLE_ROOTS: &[&str] = &["/usr", "/bin", "/lib", "/lib64", "/sbi
 
 /// Resolve an ask into one locked set, using only authorized sources.
 pub(crate) async fn resolve_requirements(
-    config: &EnvironmentProvisionConfig,
+    config: &DependencyProvisionConfig,
     constraint: Option<&str>,
     packages: &[String],
 ) -> Result<ResolvedRequirements, ProvisionError> {
@@ -269,7 +241,7 @@ pub(crate) async fn resolve_requirements(
 /// The base interpreter the plan will name: its version, its binary, the prefix
 /// it needs to run, and the digest that identifies the build.
 async fn observed_interpreter(
-    config: &EnvironmentProvisionConfig,
+    config: &DependencyProvisionConfig,
     constraint: Option<&str>,
 ) -> Result<(String, PathBuf, PathBuf, String), ProvisionError> {
     let python = std::fs::canonicalize(&config.python).map_err(|error| {
@@ -497,11 +469,31 @@ pub(crate) fn tail(output: &str) -> String {
     lines[start..].join("; ")
 }
 
-/// Where the lock file lives inside a staging directory.
-pub(crate) fn lock_path(input_root: &Path) -> PathBuf {
-    input_root.join("requirements.txt")
+#[cfg(test)]
+fn verify_interpreter(resolved: &ResolvedRequirements) -> Result<(), ProvisionError> {
+    let observed = sha256_file(&resolved.interpreter_path).map_err(|error| {
+        ProvisionError::Failed(format!("the planned interpreter cannot be read: {error}"))
+    })?;
+    if observed != resolved.interpreter_digest {
+        return Err(ProvisionError::Failed(format!(
+            "the planned interpreter changed since it was resolved (approved {}, found {observed})",
+            resolved.interpreter_digest
+        )));
+    }
+    Ok(())
 }
 
+#[cfg(test)]
+fn is_interpreter_constraint(value: &str) -> bool {
+    let value = value.trim();
+    let parts = value.split('.').collect::<Vec<_>>();
+    !value.is_empty()
+        && value.len() <= 16
+        && parts.len() <= 3
+        && parts
+            .iter()
+            .all(|part| !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit()))
+}
 #[cfg(test)]
 mod resolve_tests {
     use super::*;

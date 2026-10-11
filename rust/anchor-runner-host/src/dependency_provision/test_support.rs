@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use base64::Engine;
 use sha2::{Digest, Sha256};
 
-use super::config::{EnvironmentProvisionConfig, PackageSource};
+use super::config::{DependencyProvisionConfig, PackageSource};
 
 pub(crate) fn crc32(data: &[u8]) -> u32 {
     let mut crc = 0xFFFF_FFFFu32;
@@ -176,7 +176,7 @@ pub(crate) fn config(
     root: &Path,
     toolchain: &Toolchain,
     wheels: PathBuf,
-) -> EnvironmentProvisionConfig {
+) -> DependencyProvisionConfig {
     config_with_sources(root, toolchain, vec![PackageSource::Directory(wheels)])
 }
 
@@ -186,8 +186,8 @@ pub(crate) fn config_with_sources(
     root: &Path,
     toolchain: &Toolchain,
     sources: Vec<PackageSource>,
-) -> EnvironmentProvisionConfig {
-    EnvironmentProvisionConfig {
+) -> DependencyProvisionConfig {
+    DependencyProvisionConfig {
         uv_digest: super::config::sha256_file(&toolchain.uv).unwrap(),
         uv: toolchain.uv.clone(),
         python: toolchain.python.clone(),

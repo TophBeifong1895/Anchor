@@ -68,17 +68,6 @@ impl GraphSnapshot {
                         "op `{op_name}` must declare exactly one execution operation"
                     )));
                 }
-                // Only an Op.run command executes inside a managed dependency
-                // environment. A call/fanout/join/host node would freeze a binding
-                // that nothing mounts (and a `call` node would silently leave its
-                // child on the legacy tool aggregate), so it is refused here rather
-                // than recorded as an inert fact.
-                if node.environment.is_some() && op.get("run").is_none() {
-                    return Err(GraphError::InvalidSnapshot(format!(
-                        "node `{}` declares an environment but op `{op_name}` is not `run`; only Op.run commands execute in a managed environment",
-                        node.id
-                    )));
-                }
                 if let Some(call) = op.get("call") {
                     validate_graph_call(call, op_name)?;
                 }

@@ -1,7 +1,6 @@
 //! Run admission and control. Graph routing and node scheduling belong to GraphRunner.
 pub(crate) mod abandon;
 mod assistants;
-pub(crate) mod environments;
 pub(crate) use abandon::AbandonAction;
 mod conversations;
 pub(crate) use assistants::AssistantAdmission;
@@ -17,14 +16,12 @@ pub(crate) use metadata::RunTrigger;
 
 use crate::{HostControl, create_durable_directory, execution::PreparedExecution, run_data};
 use anchor_graph_host::LoadedGraphBundle;
-use anchor_library::EnvironmentStore;
 use anchor_runtime::graph::{
-    EnvironmentBinding, FileRunStore, GraphError, GraphRunRecord, GraphSnapshot, InvocationKey,
-    RecoveryDecision, RunLease, RunStatus, RunStore,
+    FileRunStore, GraphError, GraphRunRecord, GraphSnapshot, InvocationKey, RecoveryDecision,
+    RunLease, RunStatus, RunStore,
 };
 use serde_json::Value;
 use sha2::{Digest, Sha256};
-use std::collections::BTreeMap;
 use std::{
     collections::{BTreeSet, HashMap, VecDeque},
     path::{Path, PathBuf},
@@ -72,23 +69,38 @@ pub(crate) struct RunApplication {
     configured_graph: Option<(String, PathBuf)>,
     active: Arc<Mutex<HashMap<String, ActiveRun>>>,
     catalog_mutations: Arc<Mutex<()>>,
-    /// Serializes read-modify-write of the host's own state records (environment
-    /// requirements), which are not guarded by the Library's lock. This one is a
-    /// plain mutex because the writers are synchronous.
-    state_mutations: Arc<std::sync::Mutex<()>>,
-    /// Serializes environment builds. A build takes minutes, so it must not hold
-    /// the Graph-catalog guard (that would block editing Graphs for the whole
-    /// download); it is only held against another build, and the name switch at
-    /// the end is a compare-and-swap anyway.
-    environment_builds: Arc<Mutex<()>>,
-    /// The deployment's authorized environment preparation, when it configured
-    /// any. Absent means "this deployment does not build environments", which is
+    /// The deployment's authorized dependency preparation, when it configured
+    /// any. Absent means "this deployment cannot fetch or build dependencies", which is
     /// a valid deployment, not an error.
-    environment_provision: Option<Arc<crate::environment_provision::EnvironmentProvisioner>>,
+    dependency_provision: Option<Arc<crate::dependency_provision::DependencyProvisioner>>,
     executor: Option<tokio::runtime::Handle>,
 }
 
 impl RunApplication {
+    /// Wire the deployment's authorized dependency preparation.
+    pub(crate) fn with_dependency_provisioner(
+        mut self,
+        provisioner: std::sync::Arc<crate::dependency_provision::DependencyProvisioner>,
+    ) -> Self {
+        self.dependency_provision = Some(provisioner);
+        self
+    }
+
+    /// The deployment's authorized dependency preparation, when it configured any.
+    ///
+    /// Absent means "this deployment does not prepare dependencies",
+    /// which is a valid deployment, not an error.
+    pub(crate) fn dependency_provisioner(
+        &self,
+    ) -> Result<&std::sync::Arc<crate::dependency_provision::DependencyProvisioner>, ApplicationError>
+    {
+        self.dependency_provision.as_ref().ok_or_else(|| {
+            ApplicationError::Invalid(
+                "this deployment does not authorize dependency preparation".to_owned(),
+            )
+        })
+    }
+
     pub(crate) fn new(data_root: PathBuf, catalog_root: PathBuf) -> Self {
         Self {
             data_root,
@@ -96,16 +108,9 @@ impl RunApplication {
             configured_graph: None,
             active: Arc::new(Mutex::new(HashMap::new())),
             catalog_mutations: Arc::new(Mutex::new(())),
-            state_mutations: Arc::new(std::sync::Mutex::new(())),
-            environment_builds: Arc::new(Mutex::new(())),
-            environment_provision: None,
+            dependency_provision: None,
             executor: tokio::runtime::Handle::try_current().ok(),
         }
-    }
-
-    /// Serialize environment builds against each other.
-    pub(crate) async fn environment_build_guard(&self) -> OwnedMutexGuard<()> {
-        Arc::clone(&self.environment_builds).lock_owned().await
     }
 
     /// Serialize Graph definition mutations with reference checks and deletion.
@@ -741,11 +746,10 @@ impl RunApplication {
         let mut record = GraphRunRecord::create_with_id(bundle.snapshot, input, run_id.clone())?;
         record.plugin_bindings = plugin_bindings;
         record.plugin_bindings_initialized = true;
-        // Dependency environments are named in the Graph and resolved here, once:
+        // A Run's Plugins are resolved here, once:
         // the Run then carries the digest it actually ran with, and restoring it
         // never re-reads the name table. Resolving re-hashes a published tree, so
         // it runs off the runtime thread.
-        resolve_record_environments(&mut record).await?;
         let control = new_control();
         let execution = PreparedExecution::prepare_with_catalog(
             &record,
@@ -1551,348 +1555,6 @@ fn wait_child_ids(record: &GraphRunRecord) -> Vec<String> {
 
 fn storage(error: impl std::fmt::Display) -> ApplicationError {
     ApplicationError::Storage(error.to_string())
-}
-
-/// Resolve every declared environment name into a new Run's frozen facts.
-///
-/// Every Run-creation path must call this before persisting: a Run that declares
-/// an environment and records no binding is corruption, not a permission to look
-/// one up later.
-pub(crate) async fn resolve_record_environments(
-    record: &mut GraphRunRecord,
-) -> Result<(), ApplicationError> {
-    // A Run that declares nothing never needs a store, so a deployment without a
-    // Library root keeps working for every ordinary Graph. "Declares" is the
-    // kernel's own site enumeration — the same list freezing resolves and record
-    // validation requires — so admission cannot disagree with either of them
-    // about what this Graph declares.
-    if anchor_runtime::graph::declared_environment_sites(&record.snapshot, &record.plugin_bindings)
-        .is_empty()
-    {
-        record.environments = BTreeMap::new();
-        return Ok(());
-    }
-    let root = crate::deployment_library_root().ok_or_else(|| {
-        ApplicationError::Invalid(
-            "no library root is configured, so a declared dependency environment cannot be resolved"
-                .to_owned(),
-        )
-    })?;
-    // The host freezes directly from its store; the Graph-call layer uses the
-    // port, and both go through the same kernel traversal. Verifying a published
-    // environment hashes its whole tree, which must not block a runtime worker.
-    let snapshot = record.snapshot.clone();
-    let bindings = record.plugin_bindings.clone();
-    record.environments = tokio::task::spawn_blocking(move || {
-        freeze_environments(&snapshot, &bindings, &EnvironmentStore::new(root))
-    })
-    .await
-    .map_err(|_| ApplicationError::Storage("environment resolution task failed".into()))?
-    .map_err(ApplicationError::Invalid)?;
-    Ok(())
-}
-
-/// Resolve one declared name to a published digest, or explain why it cannot.
-pub(crate) fn resolve_name(store: &EnvironmentStore, name: &str) -> Result<String, String> {
-    let table = store
-        .names()
-        .map_err(|error| format!("dependency environment table is unavailable: {error}"))?;
-    let id = table
-        .iter()
-        .find(|entry| entry.name == name)
-        .map(|entry| entry.id.clone())
-        .ok_or_else(|| {
-            format!(
-                "unknown dependency environment `{name}` in {}/envs",
-                store.root().display()
-            )
-        })?;
-    store
-        .show(&id)
-        .map_err(|error| format!("dependency environment `{name}` is not usable: {error}"))?;
-    Ok(id)
-}
-
-/// Freeze every environment a Graph Run declares.
-///
-/// The traversal and the site keys live in the kernel
-/// (`anchor_runtime::graph::freeze_environments`), so parent admission, child-Run
-/// admission and record validation cannot drift; this function supplies the
-/// deployment's store as the name resolver.
-pub(crate) fn freeze_environments(
-    snapshot: &GraphSnapshot,
-    plugin_bindings: &BTreeMap<String, anchor_runtime::graph::PluginBinding>,
-    store: &EnvironmentStore,
-) -> Result<BTreeMap<String, EnvironmentBinding>, String> {
-    anchor_runtime::graph::freeze_environments(snapshot, plugin_bindings, &|name| {
-        resolve_name(store, name)
-    })
-}
-
-/// The node-task view used by admission tests: the same kernel traversal with no
-/// Plugin bindings.
-#[cfg(test)]
-pub(crate) fn resolve_environments(
-    snapshot: &GraphSnapshot,
-    store: &EnvironmentStore,
-) -> Result<BTreeMap<String, EnvironmentBinding>, String> {
-    anchor_runtime::graph::freeze_environments(snapshot, &BTreeMap::new(), &|name| {
-        resolve_name(store, name)
-    })
-}
-
-#[cfg(test)]
-mod environment_resolution_tests {
-    use super::*;
-    use serde_json::json;
-
-    fn snapshot(environment: Option<&str>) -> GraphSnapshot {
-        let node = match environment {
-            Some(name) => json!({"id": "worker", "agent": "worker", "environment": name}),
-            None => json!({"id": "worker", "agent": "worker"}),
-        };
-        GraphSnapshot::from_authoring(json!({
-            "objective": "environment resolution",
-            "entry": "worker",
-            "agents": {"worker": {"model": "test"}},
-            "ops": {},
-            "nodes": [node],
-            "edges": []
-        }))
-        .unwrap()
-    }
-
-    fn store_with_environment(root: &std::path::Path, marker: &str) -> (EnvironmentStore, String) {
-        let prepared = root.join(format!("prepared-{marker}"));
-        std::fs::create_dir_all(prepared.join("bin")).unwrap();
-        std::fs::write(prepared.join("bin/python"), "#!/bin/sh\n").unwrap();
-        std::fs::write(prepared.join("marker.txt"), marker).unwrap();
-        let store = EnvironmentStore::new(root);
-        let published = store.publish(&prepared).unwrap();
-        store.set_name("research", &published.id, None).unwrap();
-        (store, published.id)
-    }
-
-    /// Published trees are read-only; removing one in a test needs the bits back.
-    fn force_writable(root: &std::path::Path) {
-        use std::os::unix::fs::PermissionsExt;
-        let mut stack = vec![root.to_path_buf()];
-        while let Some(directory) = stack.pop() {
-            let mut permissions = std::fs::metadata(&directory).unwrap().permissions();
-            permissions.set_mode(permissions.mode() | 0o700);
-            std::fs::set_permissions(&directory, permissions).unwrap();
-            for entry in std::fs::read_dir(&directory).unwrap() {
-                let entry = entry.unwrap();
-                let metadata = entry.metadata().unwrap();
-                if metadata.is_dir() {
-                    stack.push(entry.path());
-                } else {
-                    let mut permissions = metadata.permissions();
-                    permissions.set_mode(permissions.mode() | 0o600);
-                    std::fs::set_permissions(entry.path(), permissions).unwrap();
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn a_declared_environment_resolves_to_a_published_digest() {
-        let root = tempfile::tempdir().unwrap();
-        let (store, id) = store_with_environment(root.path(), "one");
-        let bindings = resolve_environments(&snapshot(Some("research")), &store).unwrap();
-        assert_eq!(bindings.len(), 1);
-        let binding = &bindings["node_task:worker"];
-        assert_eq!(binding.name, "research");
-        assert_eq!(binding.id, id);
-        assert_eq!(
-            binding.site,
-            Some(anchor_runtime::graph::EnvironmentSite::NodeTask {
-                node: "worker".into()
-            })
-        );
-
-        // No declaration means no binding, and no table read at all.
-        assert!(
-            resolve_environments(&snapshot(None), &store)
-                .unwrap()
-                .is_empty()
-        );
-    }
-
-    #[test]
-    fn an_unknown_or_unusable_environment_refuses_admission() {
-        let root = tempfile::tempdir().unwrap();
-        let (store, id) = store_with_environment(root.path(), "one");
-
-        let error = resolve_environments(&snapshot(Some("missing")), &store).unwrap_err();
-        assert!(error.contains("unknown dependency environment"), "{error}");
-
-        // Content that disappeared after the name was set is not usable. The
-        // published tree is read-only, so restore the write bits first, exactly
-        // as an operator would before pruning a broken environment.
-        force_writable(&root.path().join("envs").join(&id));
-        std::fs::remove_dir_all(root.path().join("envs").join(&id)).unwrap();
-        let error = resolve_environments(&snapshot(Some("research")), &store).unwrap_err();
-        assert!(error.contains("not usable"), "{error}");
-    }
-
-    #[test]
-    fn a_plugin_server_environment_is_frozen_per_node_and_server() {
-        let root = tempfile::tempdir().unwrap();
-        let (store, id) = store_with_environment(root.path(), "one");
-        let snapshot = GraphSnapshot::from_authoring(serde_json::json!({
-            "objective": "plugin server environment",
-            "entry": "worker",
-            "agents": {"worker": {"model": "test"}},
-            "ops": {},
-            "nodes": [{"id": "worker", "agent": "worker", "plugins": ["demo"]}],
-            "edges": []
-        }))
-        .unwrap();
-        let mut plugin_bindings = BTreeMap::new();
-        plugin_bindings.insert(
-            "demo".to_owned(),
-            anchor_runtime::graph::PluginBinding {
-                id: "demo".into(),
-                digest: "c".repeat(64),
-                resources: Vec::new(),
-                mcp_servers: vec!["probe".into()],
-                environments: [("probe".to_owned(), "research".to_owned())].into(),
-            },
-        );
-
-        let frozen = freeze_environments(&snapshot, &plugin_bindings, &store).unwrap();
-        let binding = &frozen["plugin_server:worker/demo/probe"];
-        assert_eq!(binding.name, "research");
-        assert_eq!(binding.id, id);
-        assert_eq!(
-            binding.site,
-            Some(anchor_runtime::graph::EnvironmentSite::PluginServer {
-                node: "worker".into(),
-                plugin: "demo".into(),
-                server: "probe".into(),
-            })
-        );
-        assert!(
-            !frozen.contains_key("node_task:worker"),
-            "a node that declares no task environment freezes no node task site"
-        );
-
-        // An unknown declared name refuses the whole freeze.
-        plugin_bindings
-            .get_mut("demo")
-            .unwrap()
-            .environments
-            .insert("probe".into(), "missing".into());
-        let error = freeze_environments(&snapshot, &plugin_bindings, &store).unwrap_err();
-        assert!(error.contains("unknown dependency environment"), "{error}");
-    }
-
-    /// Saves and restores the deployment variables a test has to change.
-    struct Environment(Vec<(&'static str, Option<std::ffi::OsString>)>);
-
-    impl Environment {
-        fn cleared(names: &[&'static str]) -> Self {
-            let previous = names
-                .iter()
-                .map(|name| (*name, std::env::var_os(name)))
-                .collect();
-            for name in names {
-                unsafe { std::env::remove_var(name) };
-            }
-            Self(previous)
-        }
-    }
-
-    impl Drop for Environment {
-        fn drop(&mut self) {
-            for (name, value) in &self.0 {
-                unsafe {
-                    match value {
-                        Some(value) => std::env::set_var(name, value),
-                        None => std::env::remove_var(name),
-                    }
-                }
-            }
-        }
-    }
-
-    /// A record whose node references the `demo` Plugin when `bound`, and whose
-    /// binding always declares `research` on its `probe` server.
-    fn record_with_plugin_binding(bound: bool) -> GraphRunRecord {
-        let node = if bound {
-            json!({"id": "worker", "agent": "worker", "plugins": ["demo"]})
-        } else {
-            json!({"id": "worker", "agent": "worker"})
-        };
-        let mut record = GraphRunRecord::create_with_id(
-            GraphSnapshot::from_authoring(json!({
-                "objective": "plugin server environment",
-                "entry": "worker",
-                "agents": {"worker": {"model": "test"}},
-                "ops": {},
-                "nodes": [node],
-                "edges": []
-            }))
-            .unwrap(),
-            json!({}),
-            "run-plugin",
-        )
-        .unwrap();
-        record.plugin_bindings.insert(
-            "demo".to_owned(),
-            anchor_runtime::graph::PluginBinding {
-                id: "demo".into(),
-                digest: "c".repeat(64),
-                resources: Vec::new(),
-                mcp_servers: vec!["probe".into()],
-                environments: [("probe".to_owned(), "research".to_owned())].into(),
-            },
-        );
-        record.plugin_bindings_initialized = true;
-        record
-    }
-
-    /// What a record declares is exactly the kernel's site enumeration: a
-    /// Plugin-server-only declaration freezes, and a binding no node references
-    /// declares nothing. A second hand-written walk disagrees on the last case —
-    /// it would demand a store for content freezing never resolves.
-    #[tokio::test]
-    async fn a_records_declarations_are_the_kernels_site_enumeration() {
-        let _environment_guard = crate::PROCESS_ENV_LOCK.lock().await;
-        let root = tempfile::tempdir().unwrap();
-        let library = root.path().join("library");
-        let (_, id) = store_with_environment(&library, "one");
-        let _environment =
-            Environment::cleared(&["ANCHOR_RUNNER_LIBRARY_ROOT", "ANCHOR_RUNNER_CATALOG_ROOT"]);
-
-        // The node declares no task environment; only the bound Plugin server
-        // does, and that is a declaration, so the Run freezes it.
-        unsafe { std::env::set_var("ANCHOR_RUNNER_LIBRARY_ROOT", &library) };
-        let mut declared = record_with_plugin_binding(true);
-        resolve_record_environments(&mut declared).await.unwrap();
-        assert_eq!(
-            declared.environments.len(),
-            1,
-            "{:?}",
-            declared.environments
-        );
-        let frozen = &declared.environments["plugin_server:worker/demo/probe"];
-        assert_eq!(frozen.name, "research");
-        assert_eq!(frozen.id, id);
-
-        // A record that declares nothing passes with no Library root at all.
-        unsafe { std::env::remove_var("ANCHOR_RUNNER_LIBRARY_ROOT") };
-        let mut undeclared =
-            GraphRunRecord::create_with_id(snapshot(None), json!({}), "run-undeclared").unwrap();
-        resolve_record_environments(&mut undeclared).await.unwrap();
-        assert!(undeclared.environments.is_empty());
-
-        // A binding no node references declares nothing either.
-        let mut unused = record_with_plugin_binding(false);
-        resolve_record_environments(&mut unused).await.unwrap();
-        assert!(unused.environments.is_empty());
-    }
 }
 
 #[cfg(test)]

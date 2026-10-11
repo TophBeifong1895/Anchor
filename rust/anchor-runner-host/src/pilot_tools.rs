@@ -12,7 +12,6 @@ use anchor_runtime::{
 };
 use serde_json::{Value, json};
 
-mod environments;
 mod graphs;
 mod plugins;
 mod runs;
@@ -59,7 +58,7 @@ pub(crate) enum ToolEffect {
     Read,
     /// Writes a host-side fact a human consumes (a request, a question).
     HostFact,
-    /// Changes a saved asset: a Graph, a Plugin, a published environment.
+    /// Changes a saved asset: a Graph or a Plugin.
     Asset,
     /// Creates an execution.
     Execution,
@@ -143,34 +142,6 @@ pub(crate) const PILOT_TOOLS: &[PilotToolSpec] = &[
         effect: ToolEffect::Read,
     },
     PilotToolSpec {
-        name: "environment_list",
-        description: "List published dependency environments and the names that point at them. It prepares nothing.",
-        parameters: || object(),
-        authority: ToolAuthority::Inspect,
-        effect: ToolEffect::Read,
-    },
-    PilotToolSpec {
-        name: "environment_request",
-        description: "Record what you need a dependency environment to provide (interpreter version prefix like `3.12`, package names, why) under a deployment name, so the operator can provide it. It publishes nothing and installs nothing.",
-        parameters: || json!({"type":"object","properties":{"name":{"type":"string"},"purpose":{"type":"string"},"interpreter":{"type":"string"},"packages":{"type":"array","items":{"type":"string"}},"notes":{"type":"string"}},"required":["name","purpose"],"additionalProperties":false}),
-        authority: ToolAuthority::Mutate,
-        effect: ToolEffect::HostFact,
-    },
-    PilotToolSpec {
-        name: "environment_references",
-        description: "Report where one dependency environment name is used right now: the Graph nodes that declare it and the Plugin servers whose manifest declares it. Derived from the Graph catalog, changes nothing.",
-        parameters: || single("name"),
-        authority: ToolAuthority::Inspect,
-        effect: ToolEffect::Read,
-    },
-    PilotToolSpec {
-        name: "environment_show",
-        description: "Read one published dependency environment by `id` or by the name it is published under; the content digest is re-verified before it is described. It changes nothing.",
-        parameters: || json!({"type":"object","properties":{"id":{"type":"string"},"name":{"type":"string"}},"additionalProperties":false}),
-        authority: ToolAuthority::Inspect,
-        effect: ToolEffect::Read,
-    },
-    PilotToolSpec {
         name: "run_list",
         description: "List durable Graph Runs",
         parameters: || object(),
@@ -218,20 +189,6 @@ pub(crate) const PILOT_TOOLS: &[PilotToolSpec] = &[
         parameters: object,
         authority: ToolAuthority::Inspect,
         effect: ToolEffect::Read,
-    },
-    PilotToolSpec {
-        name: "environment_publish",
-        description: "Publish a dependency environment you prepared inside your own workspace and point a deployment name at it. The user approves the exact content in a native form; approval is never a tool argument.",
-        parameters: || json!({"type":"object","properties":{"directory":{"type":"string"},"name":{"type":"string"}},"required":["directory","name"],"additionalProperties":false}),
-        authority: ToolAuthority::Confirm,
-        effect: ToolEffect::Asset,
-    },
-    PilotToolSpec {
-        name: "environment_provision",
-        description: "Build and publish the dependency environment the recorded requirement asks for. The user approves the exact resolved package set in a native form; approval is never a tool argument. Record the requirement first.",
-        parameters: || single("name"),
-        authority: ToolAuthority::Confirm,
-        effect: ToolEffect::Asset,
     },
     PilotToolSpec {
         name: "plugin_install",
@@ -292,23 +249,6 @@ pub(crate) fn identifier(value: &str) -> bool {
         && value
             .chars()
             .all(|character| character.is_ascii_alphanumeric() || "-_.".contains(character))
-}
-
-/// An optional string argument that must be non-empty and bounded when present.
-fn optional_bounded(
-    arguments: &Value,
-    name: &str,
-    limit: usize,
-) -> Result<Option<String>, ToolError> {
-    match arguments.get(name) {
-        None | Some(Value::Null) => Ok(None),
-        Some(Value::String(value)) if !value.trim().is_empty() && value.len() <= limit => {
-            Ok(Some(value.clone()))
-        }
-        Some(_) => Err(rejected(format!(
-            "`{name}` must be a non-empty string of at most {limit} characters"
-        ))),
-    }
 }
 
 fn parameter(arguments: &Value, name: &str) -> Result<String, ToolError> {
@@ -424,10 +364,6 @@ impl PilotTools {
             "plugin_list" => self.plugin_list(&arguments).await,
             "plugin_read" => self.plugin_read(&arguments).await,
             "plugin_review" => self.plugin_review(&arguments).await,
-            "environment_list" => self.environment_list(&arguments).await,
-            "environment_request" => self.environment_request(&arguments).await,
-            "environment_references" => self.environment_references(&arguments).await,
-            "environment_show" => self.environment_show(&arguments).await,
             "run_list" => self.run_list(&arguments).await,
             "run_status" => self.run_status(&arguments).await,
             "artifact_read" => self.artifact_read(&arguments).await,
