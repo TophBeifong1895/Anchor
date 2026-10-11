@@ -88,7 +88,7 @@ pub(crate) fn fixture_wheel(directory: &Path, name: &str, version: &str) -> Path
     let mut files: Vec<(String, Vec<u8>)> = vec![
         (
             format!("{name}/__init__.py"),
-            format!("VALUE = {version:?}\n").into_bytes(),
+            format!("VALUE = {version:?}\n__version__ = {version:?}\n").into_bytes(),
         ),
         (
             format!("{name}/__main__.py"),

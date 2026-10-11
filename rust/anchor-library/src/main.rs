@@ -113,6 +113,23 @@ fn main() -> ExitCode {
     }
 }
 
+/// Refuse a Plugin whose run-time dependencies no host in this command can serve.
+///
+/// Dependencies belong to the Plugin, and the host solves them when a human
+/// confirms the installation. The operator CLI is not that host: it has no
+/// authorized sources, no approved set and nowhere to publish a view, so it
+/// refuses the candidate instead of installing something that cannot run.
+fn refuse_declared_dependencies(review: &anchor_library::PluginReview) -> Result<(), String> {
+    if review.dependencies.is_empty() {
+        return Ok(());
+    }
+    Err(format!(
+        "Plugin `{}` declares run-time dependencies ({}); only the host can solve them and land their view, so install this Plugin through the steward's confirmed installation",
+        review.id,
+        review.dependencies.python.join(", ")
+    ))
+}
+
 fn run(cli: Cli) -> Result<(Value, ExitCode), String> {
     let root = cli.root;
     let library = Library::new(root.clone());
@@ -125,6 +142,27 @@ fn run(cli: Cli) -> Result<(Value, ExitCode), String> {
             replace_existing,
             review,
         } => {
+            // Installing is the operator's second door, and this one has no host
+            // that could solve a Plugin's declared dependencies or land their
+            // view. Such a Plugin is refused here (after the same read-only
+            // review every installation performs), because publishing it would
+            // produce a Plugin whose tools can never start. `--review` still
+            // describes it in full.
+            if !review {
+                let declared = match (&directory, id.as_deref()) {
+                    (Some(directory), Some(id)) => library.review_directory(id, directory),
+                    (Some(_), None) => {
+                        return Err("--directory requires --id".to_owned());
+                    }
+                    (None, _) => library.review(&InstallRequest {
+                        source: source.clone().unwrap_or_default(),
+                        id: id.clone(),
+                        replace_existing,
+                    }),
+                }
+                .map_err(|error| error.to_string())?;
+                refuse_declared_dependencies(&declared)?;
+            }
             let report = match (directory, review) {
                 (Some(directory), true) => library
                     .review_directory(id.as_deref().unwrap(), directory)

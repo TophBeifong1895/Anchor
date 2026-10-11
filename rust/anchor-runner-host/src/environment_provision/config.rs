@@ -193,6 +193,21 @@ pub(crate) fn from_env(
                 library_root.display()
             ));
         }
+        // What actually needs one filesystem is the *publish* rename: staging is
+        // moved into the shared store and a view is moved to its final path, and
+        // `rename` cannot cross devices. Views and the store themselves may live
+        // on different devices — views are symlinks — so this is the only device
+        // rule, and it is refused now rather than mid-install.
+        if let (Some(build_device), Some(library_device)) =
+            (device_of(&build_root), device_of(library_root))
+            && build_device != library_device
+        {
+            return Err(format!(
+                "ANCHOR_ENVIRONMENT_BUILD_ROOT ({}) and the environment Library root ({}) are on different filesystems, so a built dependency set could not be moved into the Library atomically",
+                build_root.display(),
+                library_root.display()
+            ));
+        }
     }
     Ok(Some(EnvironmentProvisionConfig {
         uv,
@@ -202,6 +217,24 @@ pub(crate) fn from_env(
         build_root,
         bwrap,
     }))
+}
+
+/// The device a path lives on, resolved through its deepest existing ancestor.
+///
+/// A build root or a Library root may not exist yet when the deployment is
+/// checked, but the directory a missing leaf would be created in already names
+/// the filesystem it would land on.
+fn device_of(path: &Path) -> Option<u64> {
+    use std::os::unix::fs::MetadataExt;
+    let mut candidate = path.to_path_buf();
+    loop {
+        if let Ok(metadata) = std::fs::metadata(&candidate) {
+            return Some(metadata.dev());
+        }
+        if !candidate.pop() {
+            return None;
+        }
+    }
 }
 
 fn parse_sources(value: &str) -> Result<Vec<PackageSource>, String> {
@@ -390,6 +423,44 @@ mod config_tests {
             .unwrap()
             .expect("a fully configured deployment");
         assert_eq!(config.build_root, build);
+    }
+
+    /// What must share a filesystem is the publish rename: staging is moved into
+    /// the shared store and a view is moved to its final path. Views and the
+    /// store themselves are linked, so they may live on different devices.
+    #[test]
+    fn a_build_root_on_another_filesystem_is_refused_at_startup() {
+        if device_of(Path::new("/dev/shm")) == device_of(Path::new("/tmp"))
+            || !Path::new("/dev/shm").is_dir()
+        {
+            eprintln!("SKIPPED (no verification): this host has one filesystem");
+            return;
+        }
+        let _guard = crate::PROCESS_ENV_LOCK.blocking_lock();
+        let _environment = Environment::cleared(&[
+            "ANCHOR_ENVIRONMENT_SOURCES",
+            "ANCHOR_ENVIRONMENT_UV",
+            "ANCHOR_ENVIRONMENT_UV_SHA256",
+            "ANCHOR_ENVIRONMENT_PYTHON",
+            "ANCHOR_ENVIRONMENT_BUILD_ROOT",
+        ]);
+        let root = tempfile::tempdir().unwrap();
+        let library = root.path().join("library");
+        std::fs::create_dir_all(&library).unwrap();
+
+        // Same filesystem: accepted.
+        let same = configured(&root.path().join("build"), &library);
+        assert!(same.unwrap().is_some());
+
+        // A build root on another filesystem is refused, whatever the overlap.
+        unsafe { std::env::set_var("ANCHOR_ENVIRONMENT_BUILD_ROOT", "/dev/shm") };
+        let error = from_env(
+            &root.path().join("state"),
+            PathBuf::from("bwrap"),
+            Some(&library),
+        )
+        .unwrap_err();
+        assert!(error.contains("different filesystems"), "{error}");
     }
 
     /// Every source is checked when the host starts, literally and without a

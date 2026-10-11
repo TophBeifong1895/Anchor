@@ -75,7 +75,9 @@ impl RunApplication {
         self
     }
 
-    fn environment_provisioner(&self) -> Result<&Arc<EnvironmentProvisioner>, ApplicationError> {
+    pub(crate) fn environment_provisioner(
+        &self,
+    ) -> Result<&Arc<EnvironmentProvisioner>, ApplicationError> {
         self.environment_provision.as_ref().ok_or_else(|| {
             ApplicationError::Invalid(
                 "this deployment does not authorize environment preparation".to_owned(),

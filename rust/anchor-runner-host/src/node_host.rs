@@ -422,6 +422,22 @@ impl NodeHostResolver for HostIoResolver {
                     )
                     .await
                     .map_err(|error| ResolutionError::Graph(error.into_graph_error()))?;
+                    // A Plugin's own declaration maps to exactly one view. A view
+                    // that is missing while a Run admitted the declaration is a
+                    // corrupt Run, not a deployment that merely lacks a capability,
+                    // and the boundary keeps that class.
+                    //
+                    // Slice note: a Run does not pin the view yet. Replacing a
+                    // Plugin while a Run is in flight is refused by
+                    // `plugin_mounts` ("Plugin `x` changed since Run admission")
+                    // before this point, so an in-flight Run never silently
+                    // switches to a newer view.
+                    let plugin_views = crate::plugin_view::prepare_views_async(
+                        request.plugins.clone(),
+                        deployments.clone(),
+                    )
+                    .await
+                    .map_err(|error| ResolutionError::Graph(error.into_graph_error()))?;
                     let plugins = self
                         .tools
                         .assemble_with_sandbox(
@@ -433,6 +449,7 @@ impl NodeHostResolver for HostIoResolver {
                                 workspace: &workspace,
                                 readonly_inputs: &readonly_inputs,
                                 server_environments: &server_environments,
+                                plugin_views: &plugin_views,
                             },
                         )
                         .await?;

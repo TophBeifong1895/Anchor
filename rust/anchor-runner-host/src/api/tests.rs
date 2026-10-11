@@ -21,7 +21,6 @@ mod graph_validation;
 mod oauth;
 mod persistent_assistants;
 mod platform_contract;
-mod plugin_installation;
 mod plugin_library;
 mod production_readiness;
 mod questions;
@@ -97,7 +96,6 @@ fn fixture() -> (tempfile::TempDir, ApiState) {
         },
         channel_descriptors: Default::default(),
         channel_event_locks: Default::default(),
-        plugin_checkout: None,
         response_fixture: Some("deterministic response fixture".into()),
     };
     (root, state)

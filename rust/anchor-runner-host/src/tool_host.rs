@@ -50,6 +50,44 @@ pub struct SandboxLaunch<'a> {
         anchor_runtime::graph::PluginServerId,
         crate::managed_environment::PreparedEnvironment,
     >,
+    /// Prepared dependency views, keyed by Plugin. A declaration is the Plugin's
+    /// own, so every server of that Plugin launches on the same view.
+    pub plugin_views: &'a BTreeMap<String, crate::plugin_view::PreparedView>,
+}
+
+/// The read-only authority one Plugin server launches with.
+///
+/// A server has at most one: either the environment its own declaration froze
+/// (the older, per-server model) or the view its Plugin declares. Keeping them in
+/// one value is what makes "mount it and put it in the request" a single step.
+#[derive(Clone, Copy)]
+enum ServerGrant<'a> {
+    Environment(&'a crate::managed_environment::PreparedEnvironment),
+    View(&'a crate::plugin_view::PreparedView),
+}
+
+impl<'a> ServerGrant<'a> {
+    /// The dependency view this server launches on, when it has one.
+    fn view(&self) -> Option<&'a crate::plugin_view::PreparedView> {
+        match self {
+            Self::Environment(_) => None,
+            Self::View(view) => Some(view),
+        }
+    }
+
+    fn authorize(&self, sandbox: Arc<BubblewrapSandbox>) -> Result<Arc<BubblewrapSandbox>, String> {
+        match self {
+            Self::Environment(prepared) => prepared.authorize(sandbox),
+            Self::View(view) => view.authorize(sandbox),
+        }
+    }
+
+    fn apply(&self, request: &mut SandboxRequest) {
+        match self {
+            Self::Environment(prepared) => prepared.apply(request),
+            Self::View(view) => view.apply(request),
+        }
+    }
 }
 
 /// The launcher's key for one Plugin server.
@@ -288,6 +326,7 @@ impl McpToolConfig {
         workspace: &Path,
     ) -> Result<LiveMcpTools, String> {
         let server_environments = BTreeMap::new();
+        let plugin_views = BTreeMap::new();
         self.bind_with_node_inputs(
             bindings,
             network,
@@ -296,12 +335,13 @@ impl McpToolConfig {
                 workspace,
                 readonly_inputs: &[],
                 server_environments: &server_environments,
+                plugin_views: &plugin_views,
             },
         )
         .await
     }
 
-    async fn bind_with_node_inputs(
+    pub(crate) async fn bind_with_node_inputs(
         &self,
         bindings: &[PluginBinding],
         network: bool,
@@ -355,6 +395,17 @@ impl McpToolConfig {
                             server_id.clone(),
                         ))
                 });
+                // The Plugin's own declaration owns its interpreter, so a view
+                // wins over a per-server environment declaration when a Plugin
+                // has both.
+                let view = launch
+                    .as_ref()
+                    .and_then(|launch| launch.plugin_views.get(&binding.id));
+                let grant = match (view, prepared) {
+                    (Some(view), _) => Some(ServerGrant::View(view)),
+                    (None, Some(prepared)) => Some(ServerGrant::Environment(prepared)),
+                    (None, None) => None,
+                };
                 // The launcher mounts the Plugin directory for this server, so
                 // the invocation must grant exactly that mount. Nothing else
                 // authorizes it: the Run policy no longer lists per-Run trees.
@@ -368,8 +419,8 @@ impl McpToolConfig {
                         let base = base
                             .with_readonly_grants(std::slice::from_ref(&plugin_mount))
                             .map_err(|error| error.to_string())?;
-                        match prepared {
-                            Some(prepared) => Some(prepared.authorize(Arc::new(base))?),
+                        match grant {
+                            Some(grant) => Some(grant.authorize(Arc::new(base))?),
                             None => Some(Arc::new(base)),
                         }
                     }
@@ -380,9 +431,10 @@ impl McpToolConfig {
                     workspace: launch.workspace,
                     readonly_inputs: launch.readonly_inputs,
                     server_environments: launch.server_environments,
+                    plugin_views: launch.plugin_views,
                 });
                 let host = self
-                    .connect_one(&key, definition, network, server_launch, prepared)
+                    .connect_one(&key, definition, network, server_launch, grant)
                     .await?;
                 hosts.insert(key, Arc::new(host));
             }
@@ -429,7 +481,7 @@ impl McpToolConfig {
         definition: &ResolvedMcpServer,
         network: bool,
         sandbox: Option<SandboxLaunch<'_>>,
-        prepared: Option<&crate::managed_environment::PreparedEnvironment>,
+        grant: Option<ServerGrant<'_>>,
     ) -> Result<McpHost, String> {
         let transport = transport_name(&definition.config)?;
         match transport {
@@ -458,12 +510,14 @@ impl McpToolConfig {
                 } = sandbox.ok_or_else(|| {
                     format!("MCP server `{key}` requires the host sandbox launcher")
                 })?;
-                let (mut program, args, environment, working_directory) = stdio_config(
+                let config = named_view(
                     &definition.config,
-                    &definition.plugin_directory,
+                    grant.and_then(|grant| grant.view()),
                     &definition.plugin_id,
                 )?;
-                if prepared.is_none()
+                let (mut program, args, environment, working_directory) =
+                    stdio_config(&config, &definition.plugin_directory, &definition.plugin_id)?;
+                if grant.is_none()
                     && let Some(command) = definition.config.get("command").and_then(Value::as_str)
                     && Path::new(command).is_absolute()
                     && !Path::new(command).starts_with(&definition.plugin_directory)
@@ -492,11 +546,11 @@ impl McpToolConfig {
                     }
                 }
                 request.environment = environment;
-                // A managed server runs in exactly its frozen environment and must
-                // not also inherit the operator's global tool aggregate; every
-                // other server keeps today's behaviour.
-                match prepared {
-                    Some(prepared) => prepared.apply(&mut request),
+                // A server with a grant runs in exactly that environment or view
+                // and must not also inherit the operator's global tool aggregate;
+                // every other server keeps today's behaviour.
+                match grant {
+                    Some(grant) => grant.apply(&mut request),
                     None => self.environment.apply(&mut request),
                 }
                 request.network = if network {
@@ -636,6 +690,59 @@ fn read_oauth_response(response: reqwest::blocking::Response) -> Result<Vec<u8>,
         return Err(());
     }
     Ok(bytes)
+}
+
+/// Name the Plugin's own view inside one server declaration.
+///
+/// The token is a deployment path, so only the host that *granted* the view may
+/// substitute it: the path written here is exactly the path granted to this
+/// launch, which is why the command the sandbox authorizes and the environment it
+/// mounts can never be two different things.
+fn named_view(
+    config: &Value,
+    view: Option<&crate::plugin_view::PreparedView>,
+    plugin: &str,
+) -> Result<Value, String> {
+    if !mentions_view_token(config) {
+        return Ok(config.clone());
+    }
+    let Some(view) = view else {
+        return Err(format!(
+            "Plugin `{plugin}` names ${{{}}} but this host has no usable dependency view for it; install the Plugin on a deployment that authorizes dependency installation, or repair its view",
+            anchor_graph_host::VIEW_TOKEN
+        ));
+    };
+    let mut named = config.clone();
+    replace_view_token(&mut named, &view.view().to_string_lossy());
+    Ok(named)
+}
+
+fn mentions_view_token(value: &Value) -> bool {
+    match value {
+        Value::String(text) => text.contains(&format!("${{{}}}", anchor_graph_host::VIEW_TOKEN)),
+        Value::Array(items) => items.iter().any(mentions_view_token),
+        Value::Object(items) => items.values().any(mentions_view_token),
+        _ => false,
+    }
+}
+
+fn replace_view_token(value: &mut Value, view: &str) {
+    match value {
+        Value::String(text) => {
+            *text = text.replace(&format!("${{{}}}", anchor_graph_host::VIEW_TOKEN), view);
+        }
+        Value::Array(items) => {
+            for item in items {
+                replace_view_token(item, view);
+            }
+        }
+        Value::Object(items) => {
+            for item in items.values_mut() {
+                replace_view_token(item, view);
+            }
+        }
+        _ => {}
+    }
 }
 
 fn transport_name(config: &Value) -> Result<&str, String> {
@@ -1387,6 +1494,7 @@ exec ./mcp-fixture --stdio inspect
                     workspace: &workspace,
                     readonly_inputs: &grants,
                     server_environments: &BTreeMap::new(),
+                    plugin_views: &BTreeMap::new(),
                 },
             )
             .await
@@ -1528,6 +1636,7 @@ exec ./mcp-fixture --stdio inspect
                     workspace: &workspace,
                     readonly_inputs: &[],
                     server_environments: &server_environments,
+                    plugin_views: &BTreeMap::new(),
                 },
             )
             .await
@@ -1556,6 +1665,7 @@ exec ./mcp-fixture --stdio inspect
                     workspace: &workspace,
                     readonly_inputs: &[],
                     server_environments: &BTreeMap::new(),
+                    plugin_views: &BTreeMap::new(),
                 },
             )
             .await
@@ -1853,6 +1963,7 @@ exec ./mcp-fixture --stdio inspect
                     workspace: &workspace,
                     readonly_inputs: &[],
                     server_environments: &prepared,
+                    plugin_views: &BTreeMap::new(),
                 },
             )
             .await

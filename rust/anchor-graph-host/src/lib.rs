@@ -6,6 +6,13 @@
 //! `GraphRunner` implementation. Bundle loading is read-only; result
 //! materialization, session handoff, and platform APIs are outside this adapter.
 
+mod dependencies;
+
+pub use dependencies::{
+    DEPENDENCIES_DIRECTORY, PluginDependencies, STORE_DIRECTORY, VIEW_TOKEN, VIEWS_DIRECTORY,
+    plugin_view_path, resolved_library_root, store_root, views_root,
+};
+
 use anchor_runtime::Cancellation;
 use anchor_runtime::graph::{
     ArtifactPort, CallFileSelection, CallIdentity, CommitRef, GraphCallOutcome, GraphCallPort,
@@ -190,6 +197,8 @@ pub struct PluginDefinition {
     pub unsupported: Vec<String>,
     pub mcp_servers: Vec<McpServerDefinition>,
     pub channels: Vec<ChannelDefinition>,
+    /// The Plugin's own run-time dependencies. Empty when it declares none.
+    pub dependencies: PluginDependencies,
     pub digest: String,
 }
 
@@ -228,6 +237,10 @@ impl FilePluginCatalog {
         let manifest_path = dir.join("plugin.json");
         reject_symlink_components(&dir, &manifest_path)?;
         let manifest = read_object(&manifest_path)?;
+        // A field this catalog does not act on is refused rather than ignored:
+        // a mistyped `dependencies` must not look like it took effect.
+        dependencies::reject_unknown_fields(id, &manifest)?;
+        let dependencies = dependencies::parse(id, &manifest)?;
 
         let name = manifest
             .get("name")
@@ -331,6 +344,7 @@ impl FilePluginCatalog {
             unsupported,
             mcp_servers,
             channels,
+            dependencies,
             digest,
         })
     }
@@ -356,6 +370,24 @@ impl FilePluginCatalog {
     /// reference and all path components.
     pub fn plugin_directory(&self, id: &str) -> Result<PathBuf, GraphError> {
         self.plugin_dir(id).map(|(_, dir)| dir)
+    }
+
+    /// The view this Plugin's declaration maps to, if it declares dependencies.
+    ///
+    /// Absolute and canonical, because it is both what `${ANCHOR_PLUGIN_VIEW}`
+    /// expands to and the path the sandbox mounts. `None` means the Plugin needs
+    /// no dependency environment at all.
+    pub fn view_path(&self, id: &str) -> Result<Option<PathBuf>, GraphError> {
+        let (root, _dir) = self.plugin_dir(id)?;
+        let dependencies = self.definition(id)?.dependencies;
+        if dependencies.is_empty() {
+            return Ok(None);
+        }
+        Ok(Some(plugin_view_path(
+            &resolved_library_root(&root),
+            id,
+            &dependencies.declaration_digest(),
+        )))
     }
 
     fn plugin_dir(&self, id: &str) -> Result<(PathBuf, PathBuf), GraphError> {
@@ -408,6 +440,11 @@ impl FilePluginCatalog {
         let manifest_path = dir.join("plugin.json");
         reject_symlink_components(dir, &manifest_path)?;
         let manifest = read_object(&manifest_path)?;
+        // A manifest field this catalog does not act on is refused here as well
+        // as in `definition`, so no caller can read a declaration that
+        // `definition` would have rejected.
+        dependencies::reject_unknown_fields(id, &manifest)?;
+        let dependencies = dependencies::parse(id, &manifest)?;
         let mut servers = serde_json::Map::new();
         let dot_mcp = dir.join(".mcp.json");
         if dot_mcp.exists() {
@@ -428,6 +465,15 @@ impl FilePluginCatalog {
         }
         let mut result = Vec::new();
         for (name, value) in servers {
+            // `${ANCHOR_PLUGIN_VIEW}` names the view the Plugin's own declaration
+            // produces. A Plugin that uses it without declaring anything has
+            // nothing to point at, so the declaration is refused here rather
+            // than launched on the deployment's interpreter by accident.
+            if dependencies.is_empty() && mentions_view_token(&value) {
+                return Err(invalid(format!(
+                    "Plugin {id}: server {name}: ${{{VIEW_TOKEN}}} needs a `dependencies.python` declaration"
+                )));
+            }
             let Some(config) = mcp_server(
                 id,
                 &name,
@@ -898,6 +944,16 @@ fn validate_mcp(
     Ok(())
 }
 
+/// Whether a server declaration names its own dependency view.
+pub(crate) fn mentions_view_token(value: &Value) -> bool {
+    match value {
+        Value::String(text) => text.contains(&format!("${{{VIEW_TOKEN}}}")),
+        Value::Array(items) => items.iter().any(mentions_view_token),
+        Value::Object(items) => items.values().any(mentions_view_token),
+        _ => false,
+    }
+}
+
 fn expand_env(value: Value, plugin_dir: &Path, plugin_id: &str) -> Result<Value, GraphError> {
     match value {
         Value::String(text) => {
@@ -918,6 +974,15 @@ fn expand_env(value: Value, plugin_dir: &Path, plugin_id: &str) -> Result<Value,
                         .map(|(key, default)| (key, Some(default)))
                         .unwrap_or((token, None));
                     if !valid_environment_key(key) {
+                        output.push_str(&text[index..=end]);
+                        index = end + 1;
+                        continue;
+                    }
+                    // The dependency view is a deployment path, not a path inside
+                    // the Plugin: only the host that grants the view's read-only
+                    // authority may name it, so the declaration is kept as
+                    // written and substituted at launch.
+                    if key == VIEW_TOKEN {
                         output.push_str(&text[index..=end]);
                         index = end + 1;
                         continue;
@@ -2109,6 +2174,149 @@ fn expected_input(snapshot: &GraphSnapshot, provided: &Value) -> Value {
 mod plugin_catalog_tests {
     use super::*;
     use std::fs;
+
+    /// A Plugin that declares Python dependencies and launches its server on the
+    /// interpreter of the view that declaration maps to.
+    fn catalog_with_dependency_plugin() -> (tempfile::TempDir, FilePluginCatalog) {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("plugins/probe");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(
+            dir.join("plugin.json"),
+            r#"{"name":"Probe","dependencies":{"python":["idna==3.6"]},"mcpServers":{"probe":{"command":"${ANCHOR_PLUGIN_VIEW}/bin/python","args":["server.py"]}}}"#,
+        )
+        .unwrap();
+        let catalog = FilePluginCatalog::new(tmp.path());
+        (tmp, catalog)
+    }
+
+    #[test]
+    fn a_view_path_is_derived_from_the_declaration_both_halves_agree_on() {
+        let (tmp, catalog) = catalog_with_dependency_plugin();
+        let definition = catalog.definition("probe").unwrap();
+        assert_eq!(definition.dependencies.python, vec!["idna==3.6"]);
+        let view = catalog.view_path("probe").unwrap().expect("a view path");
+        let root = tmp.path().canonicalize().unwrap();
+        assert_eq!(
+            view,
+            plugin_view_path(
+                &root,
+                "probe",
+                &definition.dependencies.declaration_digest()
+            )
+        );
+        assert!(view.starts_with(views_root(&root)));
+        // The same declaration in a different order is the same view; a changed
+        // one is not.
+        let dir = tmp.path().join("plugins/other");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(
+            dir.join("plugin.json"),
+            r#"{"name":"Other","dependencies":{"python":["idna==3.6"]}}"#,
+        )
+        .unwrap();
+        // The same declaration is the same store content, but a view belongs to
+        // one Plugin: `other` gets its own directory under the same digest.
+        assert_eq!(
+            view.file_name(),
+            catalog.view_path("other").unwrap().unwrap().file_name()
+        );
+        assert_ne!(catalog.view_path("other").unwrap(), Some(view));
+
+        // Declaring nothing means no view at all.
+        let plain = tmp.path().join("plugins/plain");
+        fs::create_dir_all(&plain).unwrap();
+        fs::write(plain.join("plugin.json"), r#"{"name":"Plain"}"#).unwrap();
+        assert_eq!(catalog.view_path("plain").unwrap(), None);
+    }
+
+    #[test]
+    fn the_view_token_is_kept_verbatim_and_requires_a_declaration() {
+        let (_tmp, catalog) = catalog_with_dependency_plugin();
+        // The declaration names exactly one view...
+        let view = catalog.view_path("probe").unwrap().unwrap();
+        assert!(!view.ends_with("bin/python"));
+        // ...but the token inside the manifest is a *deployment* path: the
+        // catalog keeps it as written, because only the host that grants the view
+        // may name it. The catalog root a Plugin happens to be read through must
+        // never become part of the command.
+        for resolve_env in [true, false] {
+            let servers = catalog.mcp_servers("probe", resolve_env).unwrap();
+            assert_eq!(
+                servers[0].config.get("command").and_then(Value::as_str),
+                Some("${ANCHOR_PLUGIN_VIEW}/bin/python")
+            );
+            assert_eq!(
+                servers[0].config.get("args").unwrap(),
+                &serde_json::json!(["server.py"])
+            );
+        }
+
+        // Using the token without declaring anything cannot point anywhere.
+        let empty = catalog_with_dependency_plugin().0;
+        fs::create_dir_all(empty.path().join("plugins/empty")).unwrap();
+        fs::write(
+            empty.path().join("plugins/empty/plugin.json"),
+            r#"{"name":"Empty","mcpServers":{"probe":{"command":"${ANCHOR_PLUGIN_VIEW}/bin/python"}}}"#,
+        )
+        .unwrap();
+        let error = FilePluginCatalog::new(empty.path())
+            .mcp_servers("empty", true)
+            .unwrap_err();
+        assert!(error.to_string().contains("dependencies.python"), "{error}");
+    }
+
+    /// The strict key check also guards the path that reads MCP declarations, so
+    /// no caller can act on a manifest `definition` would have rejected.
+    #[test]
+    fn a_mistyped_manifest_field_is_refused_on_the_mcp_read_path_too() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("plugins/typo");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(
+            dir.join("plugin.json"),
+            r#"{"name":"Typo","dependencie":{},"mcpServers":{"probe":{"command":"run"}}}"#,
+        )
+        .unwrap();
+        let error = FilePluginCatalog::new(tmp.path())
+            .mcp_servers("typo", true)
+            .unwrap_err();
+        assert!(
+            error.to_string().contains("unsupported manifest field"),
+            "{error}"
+        );
+        // Without the declaration the token still cannot point anywhere.
+        let dir = tmp.path().join("plugins/orphan");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(
+            dir.join("plugin.json"),
+            r#"{"name":"Orphan","mcpServers":{"probe":{"command":"${ANCHOR_PLUGIN_VIEW}/bin/python"}}}"#,
+        )
+        .unwrap();
+        let error = FilePluginCatalog::new(tmp.path())
+            .mcp_servers("orphan", true)
+            .unwrap_err();
+        assert!(error.to_string().contains("dependencies.python"), "{error}");
+    }
+
+    #[test]
+    fn a_mistyped_dependencies_field_is_refused_by_the_catalog() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("plugins/typo");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(
+            dir.join("plugin.json"),
+            r#"{"name":"Typo","dependencie":{"python":["idna==3.6"]}}"#,
+        )
+        .unwrap();
+        let error = FilePluginCatalog::new(tmp.path())
+            .definition("typo")
+            .unwrap_err();
+        assert!(
+            error.to_string().contains("unsupported manifest field"),
+            "{error}"
+        );
+    }
 
     fn catalog_with_plugin() -> (tempfile::TempDir, FilePluginCatalog) {
         let tmp = tempfile::tempdir().unwrap();

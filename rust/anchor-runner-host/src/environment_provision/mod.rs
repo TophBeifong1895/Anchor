@@ -31,9 +31,11 @@ mod fetch;
 mod materialize;
 mod resolve;
 
-pub(crate) use build::{build_environment, provision_sandbox, verify_published};
+pub(crate) use build::{
+    authority, build_environment, provision_sandbox, run_step, verify_published,
+};
 pub(crate) use config::{EnvironmentProvisionConfig, PackageSource, ProvisionError, from_env};
-pub(crate) use fetch::{fetch_wheelhouse, verify_index_json};
+pub(crate) use fetch::{fetch_wheelhouse, normalize_name, verify_index_json};
 pub(crate) use resolve::{
     LockedPackage, ResolvedRequirements, is_interpreter_constraint, resolve_requirements,
 };

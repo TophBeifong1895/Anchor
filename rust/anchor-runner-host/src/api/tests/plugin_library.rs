@@ -167,3 +167,39 @@ async fn plugin_internal_symlink_is_rejected() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body, b"linked");
 }
+
+/// Plugin installation has exactly one entry point — the steward's confirmation
+/// flow — so the HTTP route is gone and stays gone. The catalog stays readable.
+#[tokio::test]
+async fn the_plugin_install_route_does_not_exist() {
+    let _environment = PROCESS_ENV.lock().await;
+    let (_root, state) = fixture();
+    write_plugin(&state);
+    let body = json!({"source":"https://github.com/fixture/plugins/tree/main/demo"}).to_string();
+    let (status, _) = call(
+        router(state.clone()),
+        "POST",
+        "/plugins/install",
+        Some(&body),
+    )
+    .await;
+    assert!(
+        matches!(
+            status,
+            StatusCode::NOT_FOUND | StatusCode::METHOD_NOT_ALLOWED
+        ),
+        "POST /plugins/install must not exist, got {status}"
+    );
+    assert!(
+        state
+            .catalog_root
+            .join("plugins/demo/plugin.json")
+            .is_file(),
+        "the route removal must not have installed anything"
+    );
+
+    // The read paths the operator UI still uses are unaffected.
+    let (status, catalog) = call(router(state), "GET", "/plugins", None).await;
+    assert_eq!(status, StatusCode::OK, "{catalog}");
+    assert_eq!(catalog["plugins"][0]["id"], "demo");
+}

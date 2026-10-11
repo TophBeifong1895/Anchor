@@ -1187,3 +1187,65 @@ async fn the_fetch_report_reaches_this_process_stderr() {
         "{captured:?}"
     );
 }
+
+/// A deployment may authorize an index that cannot serve a package *and* a
+/// directory that can. The interface check mirrors the fetch — a package is
+/// deliverable as soon as one authorized source can serve it — so a Plugin whose
+/// packages the directory holds must not be refused before a human ever sees it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_directory_source_keeps_a_plugin_package_deliverable_when_an_index_answers_html() {
+    let Some(toolchain) = toolchain() else {
+        return;
+    };
+    let root = tempfile::tempdir().unwrap();
+    let wheels = root.path().join("wheels");
+    std::fs::create_dir_all(&wheels).unwrap();
+    let wheel = fixture_wheel(&wheels, "probepkg", "0.1.0");
+    // The index answers PEP 503 HTML, which this host cannot fetch from; the
+    // directory can still deliver the artifact.
+    let index = index_fixture(&wheel, true).await;
+    let config = config_with_sources(
+        &root.path().join("build"),
+        &toolchain,
+        vec![
+            PackageSource::Index(index.endpoint.clone()),
+            PackageSource::Directory(wheels),
+        ],
+    );
+    let provisioner = Arc::new(
+        EnvironmentProvisioner::new(config).expect("the deployment configuration builds a sandbox"),
+    );
+    let library = root.path().join("library");
+    let candidate = root.path().join("candidate");
+    std::fs::create_dir_all(&candidate).unwrap();
+    std::fs::write(
+        candidate.join("plugin.json"),
+        serde_json::json!({
+            "name": "WithDirectory",
+            "dependencies": {"python": ["probepkg==0.1.0"]},
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let application = crate::application::RunApplication::new(
+        root.path().join("state"),
+        root.path().to_path_buf(),
+    )
+    .with_environment_provisioner(provisioner);
+
+    let precondition = application
+        .plugin_install_precondition(library, candidate, "with-directory".into())
+        .await
+        .expect("the authorized directory keeps the package deliverable");
+    assert_eq!(
+        precondition
+            .dependencies
+            .expect("the declaration resolved to a plan")
+            .packages
+            .len(),
+        1
+    );
+    // The index really was consulted and really answered HTML, so this case is
+    // about the directory saving the package rather than about skipping the check.
+    assert!(index.queries() >= 1);
+}

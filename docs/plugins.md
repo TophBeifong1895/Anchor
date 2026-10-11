@@ -20,7 +20,7 @@ stdio server 在现有 Bubblewrap 节点边界中运行，Plugin 挂载只读；
 
 当前兼容根清单、Skill/资源读取、只读挂载和 MCP；来源中的 `hooks`、`commands`、`agents` 不作为额外执行入口。当前产品不依赖旧 Tool Search、CodeMode 或另一套 Agent loop。
 
-通过 `POST /plugins/install` 可安装受支持的社区来源。OAuth 从 Plugin 面板显式授权，owner-bound token 保存在操作员 Library，凭证不进入 Graph 包。授权、刷新与 MCP 连接有确定性本地测试；真实 provider 和回调部署需独立验收，不能声明所有社区 server 兼容。
+安装没有 HTTP 入口：Plugin 只能由管家走 `plugin_install` 的人工确认流程安装（见下节）；插件页只读，不提供安装表单。操作员 CLI（`anchor-library --root <Library> install --directory <候选目录> --id <id>`）**拒绝**安装声明了运行期依赖的插件——它没有求解依赖、落地视图的宿主能力，装了也起不来；`--review` 仍可完整查看该候选。Plugin 自己声明运行期依赖时，宿主在安装时按部署授权的来源求解并落地到共享存储，再为该插件版本生成视图；求解或取包失败就不装，并把工具原文报给人。声明写在清单顶层：`"dependencies": {"python": ["idna==3.6"]}`（清单顶层字段是**封闭白名单**：`name`/`description`/`version`/`author`/`homepage`/`repository`/`license`/`keywords`/`interface`/`skills`/`mcpServers`/`dependencies`/`hooks`/`commands`/`agents`/`apps`，其他键一律拒绝；这是有意的，宁可让作者发现问题，也不要静默忽略一个拼错的字段），要用视图的解释器就把 server 的 `command` 写成 `${ANCHOR_PLUGIN_VIEW}/bin/python`。OAuth 从 Plugin 面板显式授权，owner-bound token 保存在操作员 Library，凭证不进入 Graph 包。授权、刷新与 MCP 连接有确定性本地测试；真实 provider 和回调部署需独立验收，不能声明所有社区 server 兼容。
 
 ## 官方工具和外部工具环境
 
@@ -36,7 +36,7 @@ stdio server 在现有 Bubblewrap 节点边界中运行，Plugin 挂载只读；
 2. **审查（只读）**：管家用 `plugin_review`（宿主工具）或操作员用 `anchor-library --root <Library> install --directory <候选目录> --id <id> --review` 得到审查单——内容指纹、文件清单、每个 server 的传输方式/命令/参数或 URL 与授权方式、需要的环境变量**名字**，以及「内联字面值」和「缺少源码的编译产物」告警。两条路径共用同一套校验，`--review` 不写 Library。管家只能用工作区内的相对目录，绝对路径、`..` 和指向工作区外的符号链接都被拒绝。
 3. **安装（需要人确认）**：管家调用 `plugin_install`。它**只接受** `{directory, id}`，接受不了任何模型提供的确认字段；系统先把待批内容冻结成「指纹 + 新建还是覆盖 + 将执行什么 + 环境变量名 + 告警」，弹原生表单，由操作员点确认。取消、忽略、超时都算不批。答完还会再核对一次：候选或 Library 在确认期间变了就拒绝并要求重新确认（"你批的和装的不一样"装不进去）。同一指纹已安装时直接回「已是最新」，不打扰人。缺少源码的编译产物默认拒绝，除非表单里额外勾一次「接受无法阅读的产物」。
 4. **留痕**：问题与答案本身是持久事实（指纹写在问题文本里），工具调用与结果也写进 Turn 的持久事实，因此「谁批的、批的哪份、装成的指纹」都可查。
-5. **自升级禁止**：管家不能修改或删除定义它自己的那张图（`graph_create`/`graph_update`/`graph_delete` 均拒绝），也不能安装为它自己提供指令的 Plugin——这些只能由操作员通过操作员接口完成。
+5. **自升级禁止**：管家不能修改或删除定义它自己的那张图（`graph_create`/`graph_update`/`graph_delete` 均拒绝），也不能安装为它自己提供指令的 Plugin——这些只能由操作员用 `anchor-library install` 命令行完成。
 
 管家节点需要的部署配置（均由部署者提供，Graph/Plugin 不自行扩大）：节点 `network: true`；一份操作员登记的工具环境（`tools/<id>/tool.json` 的 `environment`）提供 git、解释器与构建工具；绑定 `plugins/anchor-steward`（只含适配契约说明，没有 MCP server）以及需要的检索 Plugin。插件安装后按 id 绑定到节点，Run 冻结该 id 与摘要，之后 Library 更换不影响已有 Run。
 

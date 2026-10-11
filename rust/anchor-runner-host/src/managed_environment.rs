@@ -59,11 +59,11 @@ impl Unusable {
         }
     }
 
-    fn recorded(message: impl Into<String>) -> Self {
+    pub(crate) fn recorded(message: impl Into<String>) -> Self {
         Self::Recorded(message.into())
     }
 
-    fn unconfigured(message: impl Into<String>) -> Self {
+    pub(crate) fn unconfigured(message: impl Into<String>) -> Self {
         Self::Unconfigured(message.into())
     }
 }

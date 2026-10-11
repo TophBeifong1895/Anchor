@@ -1,0 +1,14 @@
+{
+  "name": "Python 依赖探针",
+  "version": "1.0.0",
+  "description": "内置 Python 插件：在清单里声明运行期依赖，工具返回它在自己视图里真正导入到的包版本与位置。用于验证「插件声明 → 安装时求解 → 落地共享存储 → 生成视图 → 无网沙箱里可 import」。",
+  "dependencies": {
+    "python": ["idna==3.6"]
+  },
+  "mcpServers": {
+    "probe": {
+      "command": "${ANCHOR_PLUGIN_VIEW}/bin/python",
+      "args": ["server.py"]
+    }
+  }
+}

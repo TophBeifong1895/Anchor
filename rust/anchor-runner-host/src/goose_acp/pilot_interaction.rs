@@ -696,17 +696,37 @@ async fn provision_environment(
     )])
 }
 
+/// Whether an already-published Plugin still has work for this gate.
+///
+/// An already-installed Plugin normally means "nothing to do", but a dependency
+/// view that is missing or unusable is exactly what a repair has to fix — and the
+/// confirmation flow is the only installation entry point there is.
+fn needs_view_repair(
+    already_installed: bool,
+    dependencies: &anchor_graph_host::PluginDependencies,
+    library_root: &std::path::Path,
+    id: &str,
+) -> bool {
+    already_installed
+        && !dependencies.is_empty()
+        && crate::plugin_view::view_needs_repair(library_root, id)
+}
+
 fn install_message(precondition: &PluginInstallPrecondition) -> String {
     let review = &precondition.review;
     let mut message = format!(
         "确认把插件「{}」安装进 Anchor 插件库？\n内容指纹：{}\n",
         review.id, review.digest
     );
-    message.push_str(if precondition.replacing() {
-        "该 id 已安装，本次会覆盖现有版本。\n"
-    } else {
-        "这是新建，不会覆盖任何现有插件。\n"
-    });
+    message.push_str(
+        if precondition.already_installed() && precondition.dependencies.is_some() {
+            "该 id 已安装且内容指纹相同；本次不会改写插件，只补建它声明的依赖视图。\n"
+        } else if precondition.replacing() {
+            "该 id 已安装，本次会覆盖现有版本。\n"
+        } else {
+            "这是新建，不会覆盖任何现有插件。\n"
+        },
+    );
     // Changing a Plugin's manifest changes a binding its Runs already froze, so
     // the human is told exactly what the replacement reaches.
     let impact = &precondition.impact;
@@ -735,15 +755,48 @@ fn install_message(precondition: &PluginInstallPrecondition) -> String {
     // Outside the branch on purpose: an empty count beside a partial scan would
     // otherwise read as "nothing depends on it" when a Graph could not be read.
     render_coverage(&mut message, &impact.coverage);
+    // A view placeholder stands for a deployment path, and the human is being
+    // asked to approve that path: show the interpreter the server will run on,
+    // and the packages the declaration resolves to.
+    let view = precondition
+        .dependencies
+        .as_ref()
+        .map(|plan| plan.view.clone());
+    let shown = |value: &str| match view.as_ref() {
+        Some(view) => value.replace("${ANCHOR_PLUGIN_VIEW}", &view.to_string_lossy()),
+        None => value.to_owned(),
+    };
+    if let Some(plan) = &precondition.dependencies {
+        message.push_str(&format!(
+            "该插件声明了 Python 依赖，宿主按部署授权的来源解析并安装：\n解释器：{}（{}）\n来源：{}\n视图：{}\n",
+            plan.interpreter,
+            plan.interpreter_path.display(),
+            if plan.sources.is_empty() {
+                "部署未列出来源".to_owned()
+            } else {
+                plan.sources.join(", ")
+            },
+            plan.view.display(),
+        ));
+        for package in &plan.packages {
+            message.push_str(&format!("  - {}=={}\n", package.name, package.version));
+        }
+    }
     for server in &review.servers {
         match (&server.command, &server.url) {
             (Some(command), _) if server.args.is_empty() => {
-                message.push_str(&format!("会运行：{command}（{}）\n", server.name));
+                message.push_str(&format!("会运行：{}（{}）\n", shown(command), server.name));
             }
             (Some(command), _) => {
                 message.push_str(&format!(
-                    "会运行：{command} {}（{}）\n",
-                    server.args.join(" "),
+                    "会运行：{} {}（{}）\n",
+                    shown(command),
+                    server
+                        .args
+                        .iter()
+                        .map(|argument| shown(argument))
+                        .collect::<Vec<_>>()
+                        .join(" "),
                     server.name
                 ));
             }
@@ -816,18 +869,30 @@ async fn install(
                 application_reason(error)
             ))
         })?;
-    if precondition.already_installed() {
+    // An already-published tree normally means there is nothing to do. The one
+    // exception is a dependency view that is missing or unusable: that is exactly
+    // the state a repair has to go through, so it is not reported as "up to date".
+    let repairing = needs_view_repair(
+        precondition.already_installed(),
+        &precondition.review.dependencies,
+        &tools.library_root,
+        &precondition.review.id,
+    );
+    if precondition.already_installed() && !repairing {
         return Ok(vec![ToolResultContent::text(
             json!({"installed":false,"already_installed":true,"id":precondition.review.id,"digest":precondition.review.digest})
                 .to_string(),
         )]);
     }
+    // Repairing a view rewrites no Plugin bytes, so it is not a replacement and
+    // must not be confirmed as one.
+    let replacing = precondition.replacing() && !precondition.already_installed();
     let mut properties = serde_json::Map::new();
     properties.insert(
         "confirm".into(),
         json!({"type":"boolean","title":"确认安装这个插件","default":false}),
     );
-    if precondition.replacing() {
+    if replacing {
         properties.insert(
             "replace_existing".into(),
             json!({"type":"boolean","title":format!("确认覆盖已安装的 {}", precondition.review.id),"default":false}),
@@ -839,7 +904,7 @@ async fn install(
             json!({"type":"boolean","title":"我接受这些无法阅读源码的编译产物","default":false}),
         );
     }
-    if !precondition.impact.unfinished_runs.is_empty() {
+    if !precondition.impact.unfinished_runs.is_empty() && replacing {
         properties.insert(
             "replace_bound_runs".into(),
             json!({"type":"boolean","title":format!("我确认：{} 个未结束的 Run 仍绑定这个插件，替换后它们会拒绝继续", precondition.impact.unfinished_runs.len()),"default":false}),
@@ -877,9 +942,11 @@ async fn install(
     };
     let accepted = result.action == ElicitationAction::Accept
         && approved("confirm")
-        && (!precondition.replacing() || approved("replace_existing"))
+        && (!replacing || approved("replace_existing"))
         && (!precondition.review.binary_without_source || approved("accept_unreadable"))
-        && (precondition.impact.unfinished_runs.is_empty() || approved("replace_bound_runs"));
+        && (!replacing
+            || precondition.impact.unfinished_runs.is_empty()
+            || approved("replace_bound_runs"));
     if !accepted {
         return Ok(vec![ToolResultContent::text(
             json!({"installed":false,"id":precondition.review.id,"action":result.action})
@@ -900,10 +967,29 @@ async fn install(
                 application_reason(error)
             ))
         })?;
-    Ok(vec![ToolResultContent::text(
-        json!({"installed":true,"id":outcome.id,"digest":outcome.digest,"replaced":precondition.replacing()})
-            .to_string(),
-    )])
+    // The answer names what the install produced, including the view and the
+    // packages it landed, so an operator can see the solved set without reading
+    // the host's filesystem.
+    let mut result = json!({
+        "installed":true,
+        "id":outcome.id,
+        "digest":outcome.digest,
+        "replaced":precondition.replacing()
+    });
+    if let Some(plan) = &precondition.dependencies {
+        result["dependencies"] = json!({
+            "view": plan.view,
+            "declaration_digest": plan.declaration_digest,
+            "interpreter": plan.interpreter,
+            "lock_digest": plan.lock_digest,
+            "packages": plan
+                .packages
+                .iter()
+                .map(|package| json!({"name":package.name,"version":package.version}))
+                .collect::<Vec<_>>(),
+        });
+    }
+    Ok(vec![ToolResultContent::text(result.to_string())])
 }
 
 #[cfg(test)]
@@ -966,6 +1052,149 @@ mod tests {
             !message.contains("pygments==2.20.0 sha256:"),
             "the old single-digest line implied the first candidate is the artifact: {message}"
         );
+    }
+
+    /// The form shows what will actually run: a dependency view is a real path,
+    /// not the placeholder the manifest declares, and the packages the
+    /// declaration resolved to are named before anybody approves them.
+    #[test]
+    fn the_install_form_expands_the_dependency_view_for_the_human() {
+        use crate::application::graphs::ImpactCoverage;
+        use crate::application::plugins::{PluginDependencyPlan, PluginImpact};
+        use crate::environment_provision::LockedPackage;
+
+        let root = tempfile::tempdir().unwrap();
+        let candidate = root.path().join("candidate");
+        std::fs::create_dir_all(&candidate).unwrap();
+        std::fs::write(
+            candidate.join("plugin.json"),
+            json!({
+                "name": "Probe",
+                "dependencies": {"python": ["idna==3.6"]},
+                "mcpServers": {
+                    "probe": {"command": "${ANCHOR_PLUGIN_VIEW}/bin/python", "args": ["server.py"]}
+                }
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let review = anchor_library::Library::new(root.path().join("library"))
+            .review_directory("probe", &candidate)
+            .unwrap();
+        let view = root.path().join("library/dependencies/views/probe/abc123");
+        let precondition = PluginInstallPrecondition {
+            review,
+            directory: candidate,
+            existing_digest: None,
+            impact: PluginImpact {
+                graphs: Vec::new(),
+                unfinished_runs: Vec::new(),
+                coverage: ImpactCoverage::Complete,
+            },
+            dependencies: Some(PluginDependencyPlan {
+                sources: vec!["directory:/opt/wheels".into()],
+                interpreter: "3.12.13".into(),
+                interpreter_path: std::path::PathBuf::from("/usr/bin/python3.12"),
+                interpreter_digest: "f".repeat(64),
+                lock_digest: "a".repeat(64),
+                packages: vec![LockedPackage {
+                    name: "idna".into(),
+                    version: "3.6".into(),
+                    hashes: vec!["b".repeat(64)],
+                }],
+                view: view.clone(),
+                declaration_digest: "c".repeat(64),
+            }),
+            resolved: None,
+        };
+
+        let message = install_message(&precondition);
+        assert!(
+            message.contains(&view.join("bin/python").to_string_lossy().into_owned()),
+            "the form must show the interpreter the server will run on: {message}"
+        );
+        assert!(
+            !message.contains("ANCHOR_PLUGIN_VIEW"),
+            "the placeholder must not reach the human: {message}"
+        );
+        assert!(message.contains("idna==3.6"), "{message}");
+        assert!(message.contains("directory:/opt/wheels"), "{message}");
+    }
+
+    /// An already-installed Plugin whose view is gone is not "up to date": the
+    /// confirmation gate is the only installation entry point, so it is the one
+    /// that has to offer the repair.
+    #[test]
+    fn an_already_installed_plugin_without_its_view_is_repair_work() {
+        let root = tempfile::tempdir().unwrap();
+        let library = root.path().join("library");
+        let plugin = library.join("plugins/probe");
+        std::fs::create_dir_all(&plugin).unwrap();
+        std::fs::write(
+            plugin.join("plugin.json"),
+            json!({
+                "name": "Probe",
+                "dependencies": {"python": ["idna==3.6"]},
+                "mcpServers": {"probe": {"command": "${ANCHOR_PLUGIN_VIEW}/bin/python"}}
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let dependencies = crate::plugin_view::prepare_for_plugin(&library, "probe");
+        assert!(
+            dependencies.is_err(),
+            "no view exists yet: {dependencies:?}"
+        );
+        assert!(needs_view_repair(
+            true,
+            &anchor_graph_host::PluginDependencies {
+                python: vec!["idna==3.6".to_owned()]
+            },
+            &library,
+            "probe"
+        ));
+
+        // A Plugin that declares nothing needs no repair, and neither does one
+        // whose view is complete.
+        assert!(!needs_view_repair(
+            true,
+            &anchor_graph_host::PluginDependencies::default(),
+            &library,
+            "probe"
+        ));
+        assert!(!needs_view_repair(
+            false,
+            &Default::default(),
+            &library,
+            "probe"
+        ));
+
+        // A complete view: the file the standard requires, an interpreter, and a
+        // pointer into the shared store.
+        let store = anchor_graph_host::store_root(&library.canonicalize().unwrap());
+        std::fs::create_dir_all(store.join("idna/3.6/idna")).unwrap();
+        let view = anchor_graph_host::plugin_view_path(
+            &library.canonicalize().unwrap(),
+            "probe",
+            &anchor_graph_host::PluginDependencies {
+                python: vec!["idna==3.6".to_owned()],
+            }
+            .declaration_digest(),
+        );
+        let site = view.join("lib/python3.12/site-packages");
+        std::fs::create_dir_all(&site).unwrap();
+        std::fs::create_dir_all(view.join("bin")).unwrap();
+        std::fs::write(view.join("pyvenv.cfg"), "home = /usr/bin").unwrap();
+        std::os::unix::fs::symlink("/bin/sh", view.join("bin/python")).unwrap();
+        std::os::unix::fs::symlink(store.join("idna/3.6/idna"), site.join("idna")).unwrap();
+        assert!(!needs_view_repair(
+            true,
+            &anchor_graph_host::PluginDependencies {
+                python: vec!["idna==3.6".to_owned()]
+            },
+            &library,
+            "probe"
+        ));
     }
 
     #[test]

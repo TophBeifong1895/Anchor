@@ -77,8 +77,6 @@ struct ApiState {
     channel_event_locks:
         std::sync::Arc<tokio::sync::Mutex<HashMap<String, std::sync::Arc<tokio::sync::Mutex<()>>>>>,
     #[cfg(test)]
-    plugin_checkout: Option<std::sync::Arc<dyn anchor_library::Checkout>>,
-    #[cfg(test)]
     response_fixture: Option<String>,
 }
 
@@ -285,8 +283,6 @@ pub async fn serve() -> io::Result<()> {
         wecom: WecomSettings::from_env(),
         channel_descriptors: Default::default(),
         channel_event_locks: Default::default(),
-        #[cfg(test)]
-        plugin_checkout: None,
         #[cfg(test)]
         response_fixture: None,
     };
@@ -777,7 +773,6 @@ fn router_with_readiness_and_web_root(
         )
         .route("/plugins", get(plugin_catalog))
         .route("/graph-relations", get(graph_relations))
-        .route("/plugins/install", post(install_plugin))
         .route("/plugins/{plugin}", get(plugin_detail))
         .route("/plugins/{plugin}/files/{*path}", get(plugin_file))
         .route(

@@ -9,7 +9,7 @@
 
 use std::{fs::File, io::Read, path::Path};
 
-use anchor_graph_host::{FilePluginCatalog, PluginCatalog, PluginDefinition};
+use anchor_graph_host::{FilePluginCatalog, PluginCatalog, PluginDefinition, PluginDependencies};
 use serde::Serialize;
 
 use crate::InstallError;
@@ -85,6 +85,10 @@ pub struct PluginReview {
     pub servers: Vec<ServerReview>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub channels: Vec<ChannelReview>,
+    /// The Plugin's own run-time dependencies. What these resolve to is a
+    /// separate, deployment-authorized step; the review shows the declaration.
+    #[serde(skip_serializing_if = "PluginDependencies::is_empty")]
+    pub dependencies: PluginDependencies,
     /// Files that look like compiled output.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub binaries: Vec<String>,
@@ -130,6 +134,10 @@ pub(crate) fn summarize(
 
     let mut servers = Vec::new();
     let mut inline_values = Vec::new();
+    // The dependency-view token is left as declared here: a review stages the
+    // candidate under a temporary root, so any path derived from this catalog
+    // would name the staging directory rather than the deployment's view. The
+    // approval form expands it against the real Library root.
     for server in &definition.mcp_servers {
         let config = &server.config;
         let command = config.get("command").and_then(serde_json::Value::as_str);
@@ -234,6 +242,7 @@ pub(crate) fn summarize(
         resource_bytes,
         servers,
         channels,
+        dependencies: definition.dependencies.clone(),
         binaries,
         sources,
         binary_without_source,

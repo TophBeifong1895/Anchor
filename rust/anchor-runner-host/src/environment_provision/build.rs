@@ -333,7 +333,7 @@ fn same_distribution(left: &(String, String), right: &(String, String)) -> bool 
 /// `tool_dirs` are the directories this exact request is allowed to resolve a
 /// command from; the adapter accepts them only because the sandbox already
 /// carries the matching host grant.
-async fn run_step(
+pub(crate) async fn run_step(
     config: &EnvironmentProvisionConfig,
     authority: &Authority,
     workspace: &Path,

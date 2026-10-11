@@ -5,9 +5,6 @@ use anchor_runtime::graph::GraphError;
 use std::io::Read;
 use std::path::Path;
 
-mod installation;
-pub(super) use installation::install_plugin;
-
 pub(super) fn library_root(catalog_root: &Path) -> PathBuf {
     std::env::var_os("ANCHOR_RUNNER_LIBRARY_ROOT")
         .map(PathBuf::from)

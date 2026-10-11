@@ -26,8 +26,6 @@ export function Plugins({ selected, onChange, disabled = false, recorded }:
   const [revision, setRevision] = useState(0);
   const [query, setQuery] = useState('');
   const [filter, setFilter] = useState<PluginFilter>('all');
-  const [installSource, setInstallSource] = useState('');
-  const [installing, setInstalling] = useState(false);
   const [authorizing, setAuthorizing] = useState('');
   const [oauthStatuses, setOauthStatuses] = useState<Record<string, boolean>>({});
   useEffect(() => {
@@ -114,21 +112,6 @@ export function Plugins({ selected, onChange, disabled = false, recorded }:
             aria-pressed={filter === value} onClick={() => setFilter(value)}>{label}</button>)}
       </div>
     </div>}
-    {recorded === undefined && onChange && <form className="plugin-install" onSubmit={async event => {
-      event.preventDefault(); setInstalling(true); setError('');
-      try {
-        await api('/plugins/install', 'POST', { source: installSource });
-        catalogCache = null; setInstallSource(''); setRevision(v => v + 1);
-        setCatalog(await loadCatalog());
-      } catch (e) { setError(reason(e)); } finally { setInstalling(false); }
-    }}>
-      <label>安装社区 Plugin
-        <input type="url" required placeholder="https://github.com/owner/repo/tree/ref/path"
-          value={installSource} onChange={event => setInstallSource(event.target.value)} />
-      </label>
-      <button type="submit" disabled={installing}>{installing ? '安装中…' : '安装'}</button>
-      <small>Skills/资源与 MCP 可用；hooks、commands、agents 暂不执行。</small>
-    </form>}
     {loading && <p role="status">正在读取 Plugin 库…</p>}
     {error && <p role="alert" className="plugin-error">{error}</p>}
     {!loading && !items.length && <p className="inspector-note">{recorded !== undefined

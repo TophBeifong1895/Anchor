@@ -16,6 +16,8 @@ pub(crate) use library_environments::LibraryEnvironmentResolver;
 mod managed_environment;
 mod pilot_host;
 mod pilot_tools;
+mod plugin_dependencies;
+mod plugin_view;
 mod resource_read;
 use artifacts::HostArtifacts;
 mod node_host;

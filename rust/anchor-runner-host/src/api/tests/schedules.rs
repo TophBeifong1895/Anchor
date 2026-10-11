@@ -182,7 +182,6 @@ fn reload_accepts_legacy_schedule_array_and_skips_downtime_occurrences() {
         wecom: Default::default(),
         channel_descriptors: Default::default(),
         channel_event_locks: Default::default(),
-        plugin_checkout: None,
         response_fixture: None,
     };
     let now = NaiveDateTime::parse_from_str("2026-10-06T09:01:00", "%Y-%m-%dT%H:%M:%S").unwrap();
