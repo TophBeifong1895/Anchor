@@ -6,6 +6,7 @@ use std::sync::Arc;
 use anchor_runtime::{NetworkPolicy, ReadOnlyInput, SandboxPort, SandboxRequest, SandboxStatus};
 
 use super::config::PackageSource;
+use super::fetch::{FetchedArtifact, fetch_wheelhouse_reporting};
 use super::test_support::*;
 use super::*;
 
@@ -298,6 +299,8 @@ enum IndexUrlStyle {
     Relative,
     /// The shape the first fixtures used: an absolute URL.
     Absolute,
+    /// A path this fixture does not serve, so the artifact answers `404`.
+    AbsentPath,
     /// An exact value, for a URL the outbound policy must refuse.
     Exact(String),
 }
@@ -307,6 +310,7 @@ impl IndexState {
         match &self.url_style {
             IndexUrlStyle::Relative => format!("../../files/{}", self.filename),
             IndexUrlStyle::Absolute => format!("{}/files/{}", self.endpoint, self.filename),
+            IndexUrlStyle::AbsentPath => format!("{}/absent/{}", self.endpoint, self.filename),
             IndexUrlStyle::Exact(value) => value.clone(),
         }
     }
@@ -428,6 +432,19 @@ async fn index_fixture_offering(wheel: &Path, url: &str) -> IndexFixture {
         None,
         "application/vnd.pypi.simple.v1+json",
         IndexUrlStyle::Exact(url.to_owned()),
+    )
+    .await
+}
+
+/// The same fixture whose artifact path does not exist, so the download answers
+/// `404` — a source with the package page but not the bytes.
+async fn index_fixture_without_the_artifact(wheel: &Path) -> IndexFixture {
+    index_fixture_serving(
+        wheel,
+        false,
+        None,
+        "application/vnd.pypi.simple.v1+json",
+        IndexUrlStyle::AbsentPath,
     )
     .await
 }
@@ -712,14 +729,57 @@ async fn the_json_probe_accepts_a_pep_691_content_type_with_parameters() {
 /// A deployment config for fetching only: nothing here executes `uv` or the
 /// interpreter, so these cases do not need the builder toolchain.
 fn fetch_only_config(root: &Path, index: &str) -> EnvironmentProvisionConfig {
+    fetch_only_config_for(root, vec![PackageSource::Index(index.to_owned())])
+}
+
+/// The same config with the sources a case wants to see tried, in order.
+fn fetch_only_config_for(root: &Path, sources: Vec<PackageSource>) -> EnvironmentProvisionConfig {
     EnvironmentProvisionConfig {
         uv: PathBuf::from("/nonexistent/uv"),
         uv_digest: "a".repeat(64),
         python: PathBuf::from("/usr/bin/python3"),
-        sources: vec![PackageSource::Index(index.to_owned())],
+        sources,
         build_root: root.join("build"),
         bwrap: PathBuf::from("bwrap"),
     }
+}
+
+/// Run one fetch with its per-source report collected, so a case can read exactly
+/// the lines the host writes to its stderr.
+async fn fetch_with_report(
+    config: &EnvironmentProvisionConfig,
+    packages: &[LockedPackage],
+    wheelhouse: &Path,
+) -> (Result<Vec<FetchedArtifact>, ProvisionError>, Vec<String>) {
+    let mut report = Vec::new();
+    let result = fetch_wheelhouse_reporting(config, packages, wheelhouse, &mut report).await;
+    let lines = String::from_utf8(report)
+        .unwrap()
+        .lines()
+        .map(str::to_owned)
+        .collect();
+    (result, lines)
+}
+
+/// Run one production fetch with this process's stderr descriptor captured, so a
+/// case can prove the report reaches stderr and not only an in-process buffer.
+async fn fetch_capturing_descriptor(
+    config: &EnvironmentProvisionConfig,
+    packages: &[LockedPackage],
+    wheelhouse: &Path,
+) -> (Result<Vec<FetchedArtifact>, ProvisionError>, String) {
+    use std::os::fd::AsFd;
+    let log = tempfile::NamedTempFile::new().unwrap();
+    let sink = std::fs::OpenOptions::new()
+        .write(true)
+        .open(log.path())
+        .unwrap();
+    let saved = rustix::io::dup(std::io::stderr().as_fd()).unwrap();
+    rustix::stdio::dup2_stderr(sink.as_fd()).unwrap();
+    let result = fetch_wheelhouse(config, packages, wheelhouse).await;
+    rustix::stdio::dup2_stderr(&saved).unwrap();
+    let captured = std::fs::read_to_string(log.path()).unwrap();
+    (result, captured)
 }
 
 /// The lock entry for one package, as resolution would have produced it.
@@ -805,6 +865,116 @@ async fn an_artifact_url_the_policy_refuses_is_never_requested() {
         index.queries(),
         1,
         "only the package page was read; the refused artifact was never requested"
+    );
+}
+
+/// Two authorized sources, the first without the bytes: the host log must say so
+/// per source, and the artifact must come from the second one.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_fetch_reports_every_source_and_serves_from_the_one_that_has_the_bytes() {
+    let root = tempfile::tempdir().unwrap();
+    let wheels = root.path().join("wheels");
+    std::fs::create_dir_all(&wheels).unwrap();
+    let wheel = fixture_wheel(&wheels, "probepkg", "0.1.0");
+    let digest = super::config::sha256_file(&wheel).unwrap();
+    // The first source lists the package but not the artifact; the second serves it.
+    let broken = index_fixture_without_the_artifact(&wheel).await;
+    let good = index_fixture(&wheel, false).await;
+    let config = fetch_only_config_for(
+        root.path(),
+        vec![
+            PackageSource::Index(broken.endpoint.clone()),
+            PackageSource::Index(good.endpoint.clone()),
+        ],
+    );
+
+    let (result, lines) = fetch_with_report(
+        &config,
+        &[locked_package("probepkg", "0.1.0", &digest)],
+        &root.path().join("wheelhouse"),
+    )
+    .await;
+    let fetched = result.expect("the second source supplies the bytes");
+    assert_eq!(fetched[0].sha256, digest, "{fetched:?}");
+    assert_eq!(fetched[0].source, format!("index:{}", good.endpoint));
+
+    assert_eq!(lines.len(), 2, "one line per source: {lines:?}");
+    assert!(
+        lines[0].contains(&broken.endpoint)
+            && lines[0].contains("failed 1 package(s)")
+            && lines[0].contains("probepkg==0.1.0")
+            && lines[0].contains("404"),
+        "{lines:?}"
+    );
+    assert!(
+        lines[1].contains(&good.endpoint)
+            && lines[1].contains("served 1 package(s)")
+            && lines[1].contains("probepkg==0.1.0"),
+        "{lines:?}"
+    );
+}
+
+/// One source that has the bytes: exactly one line, marked as serving them.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_single_source_fetch_reports_one_served_line() {
+    let root = tempfile::tempdir().unwrap();
+    let wheels = root.path().join("wheels");
+    std::fs::create_dir_all(&wheels).unwrap();
+    let wheel = fixture_wheel(&wheels, "probepkg", "0.1.0");
+    let digest = super::config::sha256_file(&wheel).unwrap();
+    let index = index_fixture(&wheel, false).await;
+    let config = fetch_only_config(root.path(), &index.endpoint);
+
+    let (result, lines) = fetch_with_report(
+        &config,
+        &[locked_package("probepkg", "0.1.0", &digest)],
+        &root.path().join("wheelhouse"),
+    )
+    .await;
+    assert!(result.is_ok(), "{result:?}");
+
+    assert_eq!(lines.len(), 1, "one line per source: {lines:?}");
+    assert!(
+        lines[0].contains(&index.endpoint)
+            && lines[0].contains("served 1 package(s)")
+            && lines[0].contains("probepkg==0.1.0"),
+        "{lines:?}"
+    );
+}
+
+/// A source an earlier one made unnecessary is still recorded, as "not used":
+/// the log then says which mirror was skipped rather than leaving it to inference.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_source_that_was_not_needed_is_recorded_as_such() {
+    let root = tempfile::tempdir().unwrap();
+    let wheels = root.path().join("wheels");
+    std::fs::create_dir_all(&wheels).unwrap();
+    let wheel = fixture_wheel(&wheels, "probepkg", "0.1.0");
+    let digest = super::config::sha256_file(&wheel).unwrap();
+    let first = index_fixture(&wheel, false).await;
+    let unused = index_fixture(&wheel, false).await;
+    let config = fetch_only_config_for(
+        root.path(),
+        vec![
+            PackageSource::Index(first.endpoint.clone()),
+            PackageSource::Index(unused.endpoint.clone()),
+        ],
+    );
+
+    let (result, lines) = fetch_with_report(
+        &config,
+        &[locked_package("probepkg", "0.1.0", &digest)],
+        &root.path().join("wheelhouse"),
+    )
+    .await;
+    assert!(result.is_ok(), "{result:?}");
+    assert_eq!(unused.queries(), 0, "the second source is never queried");
+
+    assert_eq!(lines.len(), 2, "{lines:?}");
+    assert!(lines[0].contains("served 1 package(s)"), "{lines:?}");
+    assert!(
+        lines[1].contains(&unused.endpoint) && lines[1].contains("not used"),
+        "{lines:?}"
     );
 }
 
@@ -983,5 +1153,37 @@ async fn a_source_that_offers_only_source_distributions_is_refused_at_resolution
     assert!(
         matches!(error, ProvisionError::Failed(ref reason) if reason.contains("probepkg")),
         "{error:?}"
+    );
+}
+
+/// The production entry point writes that report to this process's stderr, which
+/// is what the deployment's host log records.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_fetch_report_reaches_this_process_stderr() {
+    let root = tempfile::tempdir().unwrap();
+    let wheels = root.path().join("wheels");
+    std::fs::create_dir_all(&wheels).unwrap();
+    let wheel = fixture_wheel(&wheels, "probepkg", "0.1.0");
+    let digest = super::config::sha256_file(&wheel).unwrap();
+    let index = index_fixture(&wheel, false).await;
+    let config = fetch_only_config(root.path(), &index.endpoint);
+
+    let (result, captured) = fetch_capturing_descriptor(
+        &config,
+        &[locked_package("probepkg", "0.1.0", &digest)],
+        &root.path().join("wheelhouse"),
+    )
+    .await;
+    assert!(result.is_ok(), "{result:?}");
+    // Another case's report may share this descriptor, so the assertion is scoped
+    // to this fixture's own address.
+    let mine = captured
+        .lines()
+        .filter(|line| line.contains(&index.endpoint))
+        .collect::<Vec<_>>();
+    assert_eq!(mine.len(), 1, "stderr carried: {captured:?}");
+    assert!(
+        mine[0].contains("served 1 package(s)") && mine[0].contains("probepkg==0.1.0"),
+        "{captured:?}"
     );
 }

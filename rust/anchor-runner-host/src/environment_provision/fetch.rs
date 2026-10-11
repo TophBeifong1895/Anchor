@@ -116,39 +116,156 @@ pub(crate) async fn fetch_wheelhouse(
     packages: &[LockedPackage],
     wheelhouse: &Path,
 ) -> Result<Vec<FetchedArtifact>, ProvisionError> {
+    fetch_wheelhouse_reporting(config, packages, wheelhouse, &mut std::io::stderr()).await
+}
+
+/// The same fetch, with the per-source report going to `sink`.
+///
+/// The host passes its stderr, so the report lands in the deployment's host log;
+/// the seam exists so a test can read exactly the lines that go there.
+pub(super) async fn fetch_wheelhouse_reporting(
+    config: &EnvironmentProvisionConfig,
+    packages: &[LockedPackage],
+    wheelhouse: &Path,
+    sink: &mut (dyn std::io::Write + Send),
+) -> Result<Vec<FetchedArtifact>, ProvisionError> {
     std::fs::create_dir_all(wheelhouse).map_err(|error| {
         ProvisionError::Failed(format!("the wheelhouse could not be created: {error}"))
     })?;
     let mut fetched = Vec::new();
+    let mut outcomes: Vec<SourceOutcome> = config
+        .sources
+        .iter()
+        .map(|_| SourceOutcome::default())
+        .collect();
+    let mut failure = None;
     for package in packages {
+        let spec = format!("{}=={}", package.name, package.version);
         let mut reasons = Vec::new();
         let mut found = None;
-        for source in &config.sources {
+        for (index, source) in config.sources.iter().enumerate() {
             let result = match source {
                 PackageSource::Directory(path) => from_directory(package, path, wheelhouse),
                 PackageSource::Index(url) => from_index(config, package, url, wheelhouse).await,
             };
             match result {
                 Ok(artifact) => {
+                    outcomes[index].served.push(spec.clone());
                     found = Some(artifact);
                     break;
                 }
-                Err(reason) => reasons.push(format!("{}: {reason}", source.as_str())),
+                Err(reason) => {
+                    outcomes[index]
+                        .failed
+                        .push((spec.clone(), reason_summary(&reason)));
+                    reasons.push(format!("{}: {reason}", source.as_str()));
+                }
             }
         }
         match found {
             Some(artifact) => fetched.push(artifact),
+            // The report is written even when nothing could be fetched: that is
+            // the case an operator most needs to see per source.
             None => {
-                return Err(ProvisionError::Failed(format!(
+                failure = Some(ProvisionError::Failed(format!(
                     "no authorized source has `{}=={}` with the approved digest ({})",
                     package.name,
                     package.version,
                     reasons.join("; ")
                 )));
+                break;
             }
         }
     }
-    Ok(fetched)
+    report_sources(sink, &config.sources, &outcomes);
+    match failure {
+        Some(error) => Err(error),
+        None => Ok(fetched),
+    }
+}
+
+/// What one authorized source did while a fetch ran.
+#[derive(Default)]
+struct SourceOutcome {
+    /// The package specs this source supplied.
+    served: Vec<String>,
+    /// The package specs it did not supply, each with a one-line reason.
+    failed: Vec<(String, String)>,
+}
+
+impl SourceOutcome {
+    fn line(&self) -> String {
+        if self.served.is_empty() && self.failed.is_empty() {
+            return "not used; no package needed it".to_owned();
+        }
+        let mut parts = Vec::new();
+        if !self.served.is_empty() {
+            parts.push(format!(
+                "served {} package(s): {}",
+                self.served.len(),
+                list(&self.served)
+            ));
+        }
+        if !self.failed.is_empty() {
+            parts.push(format!(
+                "failed {} package(s): {}",
+                self.failed.len(),
+                self.failed
+                    .iter()
+                    .map(|(spec, reason)| format!("{spec} ({reason})"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ));
+        }
+        parts.join("; ")
+    }
+}
+
+/// Write one line per configured source, so the host log records which source
+/// actually supplied the bytes instead of leaving it to be inferred.
+///
+/// Only the source address (credential-free by validation), the outcome and a
+/// bounded reason are written: never a response body. A write failure is ignored
+/// — the report may not turn a successful fetch into a failed one.
+fn report_sources(
+    sink: &mut (dyn std::io::Write + Send),
+    sources: &[PackageSource],
+    outcomes: &[SourceOutcome],
+) {
+    for (source, outcome) in sources.iter().zip(outcomes) {
+        let _ = writeln!(
+            sink,
+            "anchor environment fetch: {} {}",
+            source.as_str(),
+            outcome.line()
+        );
+    }
+}
+
+/// A bounded, single-line list of package specs.
+fn list(specs: &[String]) -> String {
+    const SHOWN: usize = 6;
+    let mut shown = specs
+        .iter()
+        .take(SHOWN)
+        .cloned()
+        .collect::<Vec<_>>()
+        .join(", ");
+    if specs.len() > SHOWN {
+        shown.push_str(&format!(", +{} more", specs.len() - SHOWN));
+    }
+    shown
+}
+
+/// A failure reason as one bounded line: whitespace collapsed, no response body.
+fn reason_summary(reason: &str) -> String {
+    const MAX_CHARS: usize = 160;
+    let mut summary = reason.split_whitespace().collect::<Vec<_>>().join(" ");
+    if let Some((cut, _)) = summary.char_indices().nth(MAX_CHARS) {
+        summary.truncate(cut);
+        summary.push('…');
+    }
+    summary
 }
 
 /// Find the approved artifact in a directory of already-built distributions.
