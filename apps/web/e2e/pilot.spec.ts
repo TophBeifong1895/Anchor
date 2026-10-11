@@ -150,6 +150,9 @@ test('Pilot renders rich replies, restores drafts and selection, and handles Chi
   await page.route('**/timeline*', route => route.fulfill({ json: { runs: [], scheduled: [], schedules: [] } }));
   await page.route('**/sessions', route => route.fulfill({ json: { sessions } }));
   await page.route('**/sessions/*/messages', route => route.fulfill({ json: { messages } }));
+  // This is a browser fixture: the plugin panel must not contact whichever Host backs the dev proxy
+  // and open its authentication dialog in the middle of testing drafts and Chinese input.
+  await page.route('**/sessions/*/plugins', route => route.fulfill({ json: { plugins: [] } }));
   await page.route('**/sessions/*/turns', async route => {
     if (route.request().method() !== 'POST') return route.fulfill({ json: { turns } });
     sent++;

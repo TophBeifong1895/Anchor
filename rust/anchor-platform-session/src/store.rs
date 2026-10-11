@@ -184,6 +184,30 @@ impl SessionStore {
         Ok(session.plugin_mounts)
     }
 
+    /// Every Session that mounts this Plugin, across every owner.
+    ///
+    /// Uninstalling a Plugin has to know who still holds it, and a node call only
+    /// ever needs one Session: this is the one read that must not be owner-scoped.
+    /// A switch that is explicitly off is not a holder.
+    pub fn sessions_mounting(&self, plugin: &str) -> Result<Vec<String>, SessionError> {
+        validate_identity(plugin, "plugin")?;
+        let connection = self.lock()?;
+        let mut statement = connection.prepare("SELECT id, data FROM sessions")?;
+        let rows = statement.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?;
+        let mut sessions = Vec::new();
+        for row in rows {
+            let (id, data) = row?;
+            let session: Session = serde_json::from_str(&data)?;
+            if session.plugin_mounts.get(plugin).copied().unwrap_or(false) {
+                sessions.push(id);
+            }
+        }
+        sessions.sort();
+        Ok(sessions)
+    }
+
     /// Append one audit event to a Session the caller already authorized.
     pub fn append_event(
         &self,

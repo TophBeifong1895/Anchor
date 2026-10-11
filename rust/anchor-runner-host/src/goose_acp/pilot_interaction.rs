@@ -21,6 +21,11 @@ pub(crate) fn definitions() -> Vec<ToolDefinition> {
             parameters: json!({"type":"object","properties":{"graph":{"type":"string"}},"required":["graph"],"additionalProperties":false}),
         },
         ToolDefinition {
+            name: "plugin_uninstall".into(),
+            description: "Uninstall a Plugin after a fresh native user confirmation of the Plugin, its declared mutable paths and their size. Never infer confirmation from a chat message.".into(),
+            parameters: json!({"type":"object","properties":{"plugin":{"type":"string"}},"required":["plugin"],"additionalProperties":false}),
+        },
+        ToolDefinition {
             name: "plugin_install".into(),
             description: "Install a Plugin candidate you prepared inside your own workspace into the Anchor Library. The user approves the exact reviewed content in a native form; approval is never a tool argument. Fetch, adapt, build and self-test the candidate first, then review it.".into(),
             parameters: json!({"type":"object","properties":{"directory":{"type":"string"},"id":{"type":"string"}},"required":["directory"],"additionalProperties":false}),
@@ -92,6 +97,9 @@ pub(super) async fn call(
         .ok_or_else(|| failure("tool arguments must be an object"))?;
     if name == "plugin_install" {
         return install(tools, arguments, peer, cancellation).await;
+    }
+    if name == "plugin_uninstall" {
+        return uninstall(tools, arguments, peer, cancellation).await;
     }
     if !matches!(name, "ask_user" | "graph_delete") {
         // Falling through to ask_user would show a generic form the model fills
@@ -186,6 +194,242 @@ pub(super) async fn call(
     } else {
         serde_json::to_value(result).map_err(|_| failure("native answer serialization failed"))?
     };
+    Ok(vec![ToolResultContent::text(value.to_string())])
+}
+
+/// The user's answer to the uninstall form, as data.
+///
+/// Split from the elicitation so the decision can be tested without a native
+/// form: the tool path passes what the form returned, and the tests pass what a
+/// human would have clicked.
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct UninstallAnswer {
+    /// The elicitation was accepted at all.
+    pub(crate) accepted: bool,
+    /// "确认卸载"
+    pub(crate) confirm: bool,
+    /// "确认删除这个插件唯一的一份数据（不可恢复）" — without this nothing is deleted.
+    pub(crate) confirm_data_loss: bool,
+}
+
+impl UninstallAnswer {
+    fn authorized(&self) -> bool {
+        self.accepted && self.confirm && self.confirm_data_loss
+    }
+}
+
+/// One checkbox of a native form answer.
+fn checked(content: Option<&Value>, field: &str) -> bool {
+    content.and_then(|content| content.get(field)) == Some(&Value::Bool(true))
+}
+
+/// The form the human sees, and the facts it must state.
+///
+/// Pure, so its content is testable. The Plugin has exactly one copy in the
+/// world, so the form says plainly that deleting it deletes the data, lists what
+/// the Plugin itself declared as mutable with the bytes each path holds, and
+/// requires an explicit box for the data.
+pub(crate) fn uninstall_form(
+    precondition: &crate::application::plugins::PluginUninstallPrecondition,
+) -> (String, Value) {
+    let mut message = format!(
+        "确认卸载插件「{} ({})」？\n内容指纹：{}\n",
+        precondition.name, precondition.id, precondition.digest
+    );
+    if precondition.mutable.is_empty() {
+        message.push_str("该插件没有声明可变路径（mutable）：它只有代码。\n");
+    } else {
+        message.push_str("这个插件自己会改写、因此不会被平台替换的路径（mutable）与当前体积：\n");
+        for (path, size) in &precondition.mutable {
+            message.push_str(&format!(
+                "- {path}：{}\n",
+                match size {
+                    Some(bytes) => format!("{bytes} 字节"),
+                    None => "体积未知（无法读取）".to_owned(),
+                }
+            ));
+        }
+    }
+    message.push_str(
+        "**这会删掉这个插件唯一的一份数据，不可恢复**：插件在库里只有一份，平台不留历史版本，也没有第二个副本。\n",
+    );
+    if precondition.graphs.is_empty() {
+        message.push_str("当前没有 Graph 引用这个插件。\n");
+    } else {
+        message.push_str(&format!(
+            "当前 {} 张图引用它（{}）；卸载后这些图的下一次接纳会失败。\n",
+            precondition.graphs.len(),
+            precondition.graphs.join(", ")
+        ));
+    }
+    render_coverage(&mut message, &precondition.coverage);
+    let schema = json!({
+        "type":"object",
+        "properties":{
+            "confirm":{"type":"boolean","title":format!("确认卸载插件 {}", precondition.id),"default":false},
+            "confirm_data_loss":{"type":"boolean","title":"确认删除这个插件唯一的一份数据（不可恢复）","default":false}
+        },
+        "required":["confirm","confirm_data_loss"],
+        "additionalProperties":false
+    });
+    (message, schema)
+}
+
+/// The uninstall, with the user's answer already resolved.
+///
+/// Split from the elicitation so the preconditions, the deletion, the audit fact
+/// and the refusal are all reachable from a test. Approval is checked here, and
+/// everything else is re-read here: an answer given for one state must never
+/// delete a different one.
+pub(crate) async fn uninstall_with_answer(
+    tools: &PilotTools,
+    plugin: &str,
+    answer: UninstallAnswer,
+) -> Result<Value, ToolError> {
+    if !identifier(plugin) {
+        return Err(failure("plugin must be a Plugin identifier"));
+    }
+    // Uninstalling the Plugin that provides this assistant's own instructions is
+    // self-modification; the operator interface owns that.
+    let (_path, bundle) = tools
+        .application
+        .load_graph(&tools.graph_name)
+        .map_err(|error| failure(format!("the assistant Graph is unavailable: {error:?}")))?;
+    if bundle.plugins.iter().any(|id| id == plugin) {
+        return Err(failure(format!(
+            "`{plugin}` provides this assistant's own instructions; ask the operator to uninstall it through the operator interface"
+        )));
+    }
+    let precondition = tools
+        .application
+        .plugin_uninstall_precondition(&tools.library_root, plugin, &tools.sessions)
+        .await
+        .map_err(|error| {
+            failure(format!(
+                "Plugin uninstall was rejected: {}",
+                application_reason(error)
+            ))
+        })?;
+    if let Some(refusal) = precondition.refusal() {
+        return Err(failure(format!(
+            "Plugin `{plugin}` cannot be uninstalled: {refusal}"
+        )));
+    }
+    if !answer.authorized() {
+        // Nothing was deleted, and the reason says which box was missing. This is
+        // the fail-closed half of "只有勾选才删数据": the safe outcome is "no
+        // uninstall", because there is no uninstall that keeps the data.
+        return Ok(json!({
+            "uninstalled":false,
+            "plugin":plugin,
+            "reason":"没有勾选「确认删除这个插件唯一的一份数据」：未卸载任何内容，插件目录与数据原样保留"
+        }));
+    }
+    let outcome = tools
+        .application
+        .uninstall_plugin_if_unchanged(&tools.library_root, &precondition, &tools.sessions)
+        .await
+        .map_err(|error| {
+            failure(format!(
+                "Plugin uninstall was rejected: {}",
+                application_reason(error)
+            ))
+        })?;
+    // The audit fact: who, which Plugin, that its data went with it, and what was
+    // freed. It lives on the Session that asked, which is where this host keeps
+    // its durable, owner-scoped audit trail.
+    let mut audit = std::collections::BTreeMap::new();
+    audit.insert("plugin".into(), json!(outcome.id));
+    audit.insert("name".into(), json!(precondition.name));
+    audit.insert("digest".into(), json!(precondition.digest));
+    audit.insert("actor".into(), json!(tools.owner));
+    audit.insert("turn".into(), json!(tools.turn));
+    audit.insert("data_removed".into(), json!(true));
+    audit.insert("removed_bytes".into(), json!(outcome.removed_bytes));
+    audit.insert("removed_views".into(), json!(outcome.removed_views));
+    audit.insert(
+        "reclaimed_package_versions".into(),
+        json!(outcome.reclaimed_package_versions),
+    );
+    audit.insert("reclaimed_bytes".into(), json!(outcome.reclaimed_bytes));
+    if let Some(reason) = &outcome.reclamation {
+        audit.insert("reclamation_error".into(), json!(reason));
+    }
+    tools
+        .sessions
+        .append_event(&tools.owner, &tools.session, "plugin.uninstalled", audit)
+        .map_err(|_| {
+            failure("the Plugin was uninstalled, but its audit fact could not be recorded")
+        })?;
+    Ok(json!({
+        "uninstalled":true,
+        "plugin":outcome.id,
+        "data_removed":true,
+        "removed_bytes":outcome.removed_bytes,
+        "removed_views":outcome.removed_views,
+        "reclaimed_package_versions":outcome.reclaimed_package_versions,
+        "reclaimed_bytes":outcome.reclaimed_bytes,
+        "reclamation_error":outcome.reclamation,
+    }))
+}
+
+/// Confirm and uninstall one Plugin.
+async fn uninstall(
+    tools: &PilotTools,
+    arguments: &serde_json::Map<String, Value>,
+    peer: Peer<RoleServer>,
+    cancellation: &Cancellation,
+) -> Result<Vec<ToolResultContent>, ToolError> {
+    // Only the target is a model argument: approval is not.
+    if let Some(key) = arguments.keys().find(|key| key.as_str() != "plugin") {
+        return Err(failure(format!(
+            "plugin_uninstall does not accept `{key}`; the user approves the deletion, not the model"
+        )));
+    }
+    let plugin = arguments
+        .get("plugin")
+        .and_then(Value::as_str)
+        .ok_or_else(|| failure("plugin must be a string"))?
+        .to_owned();
+    // The form is built from the current facts, and a refusal means no form at all.
+    let precondition = tools
+        .application
+        .plugin_uninstall_precondition(&tools.library_root, &plugin, &tools.sessions)
+        .await
+        .map_err(|error| {
+            failure(format!(
+                "Plugin uninstall was rejected: {}",
+                application_reason(error)
+            ))
+        })?;
+    if let Some(refusal) = precondition.refusal() {
+        return Err(failure(format!(
+            "Plugin `{plugin}` cannot be uninstalled: {refusal}"
+        )));
+    }
+    let (message, schema) = uninstall_form(&precondition);
+    let requested_schema = native_schema(schema)?;
+    let elicitation = peer.create_elicitation(ElicitRequestParams::FormElicitationParams {
+        meta: None,
+        message,
+        requested_schema,
+    });
+    tokio::pin!(elicitation);
+    let result = tokio::select! {
+        result = &mut elicitation => result.map_err(|_| failure("native user confirmation could not complete"))?,
+        _ = async {
+            while !cancellation.load(Ordering::Acquire) {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        } => return Err(failure("Pilot was cancelled while waiting for the user")),
+    };
+    active(tools, cancellation)?;
+    let answer = UninstallAnswer {
+        accepted: result.action == ElicitationAction::Accept,
+        confirm: checked(result.content.as_ref(), "confirm"),
+        confirm_data_loss: checked(result.content.as_ref(), "confirm_data_loss"),
+    };
+    let value = uninstall_with_answer(tools, &plugin, answer).await?;
     Ok(vec![ToolResultContent::text(value.to_string())])
 }
 
@@ -706,5 +950,289 @@ mod tests {
                 "{refused} must be refused"
             );
         }
+    }
+}
+
+/// `plugin_uninstall`: the form's facts, the data checkbox, and the audit fact.
+#[cfg(test)]
+mod uninstall_tool_tests {
+    use super::*;
+    use crate::application::RunApplication;
+    use anchor_graph_host::{plugin_view_path, resolved_library_root, store_root, views_root};
+    use anchor_platform_session::{CreateSession, SessionStore};
+    use std::path::{Path, PathBuf};
+
+    fn fixture() -> (tempfile::TempDir, PilotTools) {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir(root.path().join("fixture")).unwrap();
+        std::fs::write(
+            root.path().join("fixture/graph.json"),
+            r#"{"entry":"idle","ops":{"idle":{"run":"true"}},"nodes":[{"id":"idle","op":"idle"}],"edges":[]}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            root.path().join("fixture/manifest.json"),
+            r#"{"format":1,"graph":"graph.json","plugins":[]}"#,
+        )
+        .unwrap();
+        let sessions = SessionStore::open(root.path().join("sessions.sqlite")).unwrap();
+        sessions
+            .create(
+                "local",
+                CreateSession {
+                    id: Some("pilot".into()),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        let tools = PilotTools {
+            application: RunApplication::new(root.path().join("state"), root.path().to_path_buf()),
+            graph_name: "fixture".into(),
+            catalog_root: root.path().to_path_buf(),
+            library_root: root.path().to_path_buf(),
+            data_root: root.path().join("state"),
+            workspace_root: root.path().join("work"),
+            sessions,
+            owner: "local".into(),
+            session: "pilot".into(),
+            turn: "turn-1".into(),
+        };
+        (root, tools)
+    }
+
+    fn candidate(root: &Path, name: &str, data: &[u8]) -> PathBuf {
+        let directory = root.join(format!("candidate-{name}"));
+        std::fs::create_dir_all(directory.join("state")).unwrap();
+        std::fs::write(
+            directory.join("plugin.json"),
+            json!({"name": name, "mutable": ["state/"]}).to_string(),
+        )
+        .unwrap();
+        std::fs::write(directory.join("state/data.bin"), data).unwrap();
+        directory
+    }
+
+    async fn install(tools: &PilotTools, directory: PathBuf, id: &str) {
+        let precondition = tools
+            .application
+            .plugin_install_precondition(tools.library_root.clone(), directory, id.into())
+            .await
+            .unwrap();
+        tools
+            .application
+            .install_plugin_if_unchanged(tools.library_root.clone(), precondition)
+            .await
+            .unwrap();
+    }
+
+    fn library_bytes(root: &Path) -> Vec<(String, Vec<u8>)> {
+        fn walk(root: &Path, directory: &Path, files: &mut Vec<(String, Vec<u8>)>) {
+            let mut entries = std::fs::read_dir(directory)
+                .unwrap()
+                .map(|entry| entry.unwrap().path())
+                .collect::<Vec<_>>();
+            entries.sort();
+            for path in entries {
+                if path.is_dir() {
+                    walk(root, &path, files);
+                } else {
+                    let relative = path
+                        .strip_prefix(root)
+                        .unwrap()
+                        .to_string_lossy()
+                        .into_owned();
+                    files.push((relative, std::fs::read(&path).unwrap()));
+                }
+            }
+        }
+        let mut files = Vec::new();
+        for subtree in ["plugins", "dependencies"] {
+            let path = root.join(subtree);
+            if path.is_dir() {
+                walk(root, &path, &mut files);
+            }
+        }
+        files
+    }
+
+    fn approved() -> UninstallAnswer {
+        UninstallAnswer {
+            accepted: true,
+            confirm: true,
+            confirm_data_loss: true,
+        }
+    }
+
+    #[tokio::test]
+    async fn the_uninstall_form_states_the_data_loss_and_the_declared_bytes() {
+        let (root, tools) = fixture();
+        install(
+            &tools,
+            candidate(root.path(), "Demo", b"0123456789"),
+            "demo",
+        )
+        .await;
+        let precondition = tools
+            .application
+            .plugin_uninstall_precondition(&tools.library_root, "demo", &tools.sessions)
+            .await
+            .unwrap();
+        let (message, schema) = uninstall_form(&precondition);
+        assert!(message.contains("demo"), "{message}");
+        assert!(message.contains("Demo"), "{message}");
+        assert!(message.contains("state/"), "{message}");
+        assert!(message.contains("10 字节"), "{message}");
+        assert!(
+            message.contains("这会删掉这个插件唯一的一份数据，不可恢复"),
+            "{message}"
+        );
+        assert_eq!(
+            schema["required"],
+            json!(["confirm", "confirm_data_loss"]),
+            "{schema}"
+        );
+        assert!(
+            schema["properties"]["confirm_data_loss"]["title"]
+                .as_str()
+                .is_some_and(|title| title.contains("不可恢复")),
+            "{schema}"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_unchecked_data_box_uninstalls_nothing() {
+        let (root, tools) = fixture();
+        install(&tools, candidate(root.path(), "Demo", b"precious"), "demo").await;
+        let before = library_bytes(root.path());
+        let value = uninstall_with_answer(
+            &tools,
+            "demo",
+            UninstallAnswer {
+                accepted: true,
+                confirm: true,
+                confirm_data_loss: false,
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(value["uninstalled"], false, "{value}");
+        assert!(
+            value["reason"]
+                .as_str()
+                .is_some_and(|reason| reason.contains("数据")),
+            "{value}"
+        );
+        assert_eq!(library_bytes(root.path()), before);
+        assert_eq!(
+            std::fs::read(root.path().join("plugins/demo/state/data.bin")).unwrap(),
+            b"precious"
+        );
+        assert!(
+            tools
+                .sessions
+                .events("local", "pilot", 0)
+                .unwrap()
+                .iter()
+                .all(|event| event.kind != "plugin.uninstalled"),
+            "nothing happened, so there is nothing to audit"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_session_mounted_plugin_is_refused_and_moves_no_bytes() {
+        let (root, tools) = fixture();
+        install(&tools, candidate(root.path(), "Demo", b"precious"), "demo").await;
+        tools
+            .sessions
+            .set_plugin_mount("local", "pilot", "demo", true, "operator", "click")
+            .unwrap();
+        let before = library_bytes(root.path());
+        let error = uninstall_with_answer(&tools, "demo", approved())
+            .await
+            .unwrap_err();
+        let message = error.to_string();
+        assert!(message.contains("先在所有会话里卸载它"), "{message}");
+        assert!(message.contains("pilot"), "{message}");
+        assert_eq!(library_bytes(root.path()), before);
+        assert_eq!(
+            std::fs::read(root.path().join("plugins/demo/state/data.bin")).unwrap(),
+            b"precious"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_confirmed_uninstall_removes_the_plugin_reclaims_and_audits() {
+        let (root, tools) = fixture();
+        install(&tools, candidate(root.path(), "Demo", b"precious"), "demo").await;
+        // A second Plugin stays installed, so the reclaimer's "nothing installed"
+        // guard does not fire and the sweep really runs.
+        install(&tools, candidate(root.path(), "Other", b"x"), "other").await;
+        let resolved = resolved_library_root(&tools.library_root);
+        let view = plugin_view_path(
+            &resolved,
+            "demo",
+            &anchor_graph_host::FilePluginCatalog::new(&tools.library_root)
+                .definition("demo")
+                .unwrap()
+                .dependencies
+                .declaration_digest(),
+        );
+        std::fs::create_dir_all(view.join("bin")).unwrap();
+        std::fs::write(view.join("pyvenv.cfg"), "home = /usr/bin\n").unwrap();
+        let store = store_root(&resolved);
+        let orphan = store.join("idna/3.6");
+        std::fs::create_dir_all(&orphan).unwrap();
+        std::fs::write(orphan.join("idna.py"), "IDNA = 1\n").unwrap();
+        let keeper = store.join("requests/2.32");
+        std::fs::create_dir_all(&keeper).unwrap();
+        std::fs::write(keeper.join("requests.py"), "REQUESTS = 1\n").unwrap();
+        let keeper_view = views_root(&resolved).join("keeper/aaaa");
+        std::fs::create_dir_all(keeper_view.join("lib/python3.12/site-packages")).unwrap();
+        std::fs::write(keeper_view.join("pyvenv.cfg"), "home = /usr/bin\n").unwrap();
+        std::os::unix::fs::symlink(
+            &keeper,
+            keeper_view.join("lib/python3.12/site-packages/requests"),
+        )
+        .unwrap();
+
+        let value = uninstall_with_answer(&tools, "demo", approved())
+            .await
+            .unwrap();
+        assert_eq!(value["uninstalled"], true, "{value}");
+        assert_eq!(value["data_removed"], true, "{value}");
+        assert!(value["removed_bytes"].as_u64().unwrap() > 0, "{value}");
+        assert!(!root.path().join("plugins/demo").exists());
+        assert!(root.path().join("plugins/other").is_dir());
+        assert!(!view.exists());
+        assert!(
+            !orphan.exists(),
+            "the freed package version must be reclaimed: {value}"
+        );
+        assert!(keeper.is_dir(), "a referenced package version must be kept");
+        assert!(
+            value["reclaimed_package_versions"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|version| version == "idna/3.6"),
+            "{value}"
+        );
+        // The audit fact names who, which Plugin, that the data went with it, and
+        // what was freed.
+        let events = tools.sessions.events("local", "pilot", 0).unwrap();
+        let audit = events
+            .iter()
+            .find(|event| event.kind == "plugin.uninstalled")
+            .expect("the uninstall must leave an audit fact");
+        assert_eq!(audit.data["plugin"], "demo");
+        assert_eq!(audit.data["actor"], "local");
+        assert_eq!(audit.data["data_removed"], true);
+        assert!(audit.data["removed_bytes"].as_u64().unwrap() > 0);
+
+        // A second attempt is a named refusal, not a second success.
+        let error = uninstall_with_answer(&tools, "demo", approved())
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("not installed"), "{error}");
     }
 }

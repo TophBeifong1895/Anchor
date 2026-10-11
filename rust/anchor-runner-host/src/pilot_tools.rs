@@ -407,6 +407,13 @@ pub(crate) const PILOT_TOOLS: &[PilotToolSpec] = &[
         effect: ToolEffect::Asset,
     },
     PilotToolSpec {
+        name: "plugin_uninstall",
+        description: "Uninstall a Plugin from the Anchor Library after a fresh native user confirmation. The user approves deleting the Plugin and its only copy of its data in a native form; approval is never a tool argument. Refused while any Session mounts it or an unfinished Run binds it.",
+        parameters: || json!({"type":"object","properties":{"plugin":{"type":"string"}},"required":["plugin"],"additionalProperties":false}),
+        authority: ToolAuthority::Confirm,
+        effect: ToolEffect::Asset,
+    },
+    PilotToolSpec {
         name: "graph_delete",
         description: "Delete a saved Graph only after a fresh native user confirmation of its exact current contents.",
         parameters: || json!({"type":"object","properties":{"graph":{"type":"string"}},"required":["graph"],"additionalProperties":false}),

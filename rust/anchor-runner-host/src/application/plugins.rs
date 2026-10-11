@@ -4,7 +4,7 @@ use crate::dependency_provision::{
     LockedPackage, PackageSource, ProvisionError, ResolvedRequirements, resolve_requirements,
     verify_index_json,
 };
-use anchor_graph_host::{FilePluginCatalog, plugin_view_path, resolved_library_root};
+use anchor_graph_host::{FilePluginCatalog, plugin_view_path, resolved_library_root, views_root};
 use anchor_library::{InstallError, InstallOutcome, Library, PluginReview};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -401,6 +401,274 @@ fn plugin_error(failure: InstallError) -> ApplicationError {
         | InstallError::CheckoutFailed
         | InstallError::CheckoutTimedOut => ApplicationError::Storage(failure.to_string()),
         _ => ApplicationError::Invalid(failure.to_string()),
+    }
+}
+
+/// What a human is asked to approve before one Plugin is uninstalled.
+///
+/// The Plugin has exactly one copy in the world (standard invariant 13): its code
+/// and its data live in the same directory, so uninstalling it deletes the data
+/// too. That is what the form says, and what the data checkbox authorizes.
+#[derive(Debug, Clone)]
+pub(crate) struct PluginUninstallPrecondition {
+    pub(crate) id: String,
+    pub(crate) name: String,
+    pub(crate) digest: String,
+    /// The Plugin's own `mutable` declarations with the bytes each one holds.
+    /// `None` is an honest "could not be measured", never a made-up 0.
+    pub(crate) mutable: Vec<(String, Option<u64>)>,
+    /// Sessions whose switches mount it, across every owner.
+    pub(crate) sessions: Vec<String>,
+    /// Attached Runs that are not terminal and bind it.
+    pub(crate) unfinished_runs: Vec<String>,
+    /// Saved Graphs that reference it. Shown on the form, not a refusal: a Graph
+    /// that loses a Plugin fails its own next admission, and Graphs are the
+    /// operator's to change.
+    pub(crate) graphs: Vec<String>,
+    /// How much of the Graph catalog the reference count actually saw.
+    pub(crate) coverage: ImpactCoverage,
+}
+
+impl PluginUninstallPrecondition {
+    /// Why this Plugin may not be uninstalled right now, naming the holder.
+    pub(crate) fn refusal(&self) -> Option<String> {
+        if !self.sessions.is_empty() {
+            return Some(format!(
+                "还有 {} 个会话挂着它（{}）：先在所有会话里卸载它，再卸载插件",
+                self.sessions.len(),
+                self.sessions.join("、")
+            ));
+        }
+        if !self.unfinished_runs.is_empty() {
+            return Some(format!(
+                "还有 {} 个未结束的 Run 绑定它（{}）：等它们结束或先停止/放弃它们，再卸载插件",
+                self.unfinished_runs.len(),
+                self.unfinished_runs.join("、")
+            ));
+        }
+        None
+    }
+}
+
+/// What one uninstall actually did.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(crate) struct PluginUninstallOutcome {
+    pub(crate) id: String,
+    /// Bytes the Plugin directory and its views held.
+    pub(crate) removed_bytes: u64,
+    /// The Plugin's views, removed with it.
+    pub(crate) removed_views: Vec<String>,
+    /// Package versions this uninstall freed from the shared store.
+    pub(crate) reclaimed_package_versions: Vec<String>,
+    /// Store bytes the reclamation pass actually freed.
+    pub(crate) reclaimed_bytes: u64,
+    /// Why the reclamation pass could not finish, when it could not. The Plugin
+    /// itself is gone; that is reported rather than hidden behind a bare success.
+    pub(crate) reclamation: Option<String>,
+}
+
+/// The bytes one path holds without following symlinks, or `None` if unreadable.
+fn path_bytes(path: &Path) -> Option<u64> {
+    let metadata = std::fs::symlink_metadata(path).ok()?;
+    if !metadata.is_dir() {
+        return Some(metadata.len());
+    }
+    let mut total = 0u64;
+    for entry in std::fs::read_dir(path).ok()? {
+        total = total.checked_add(path_bytes(&entry.ok()?.path())?)?;
+    }
+    Some(total)
+}
+
+impl RunApplication {
+    /// What uninstalling one Plugin would delete, and who still holds it.
+    ///
+    /// Read-only, and fail-closed: an id that is not a Plugin id, or a Plugin the
+    /// Library does not have, is a named refusal rather than an empty plan.
+    pub(crate) async fn plugin_uninstall_precondition(
+        &self,
+        library_root: &Path,
+        id: &str,
+        sessions: &anchor_platform_session::SessionStore,
+    ) -> Result<PluginUninstallPrecondition, ApplicationError> {
+        let root = library_root.to_path_buf();
+        let plugin = id.to_owned();
+        let definition =
+            tokio::task::spawn_blocking(move || FilePluginCatalog::new(&root).definition(&plugin))
+                .await
+                .map_err(|_| ApplicationError::Storage("Plugin uninstall task failed".into()))?
+                .map_err(|error| ApplicationError::Invalid(error.to_string()))?;
+        let directory = definition.directory.clone();
+        let declared = definition.mutable.paths().to_vec();
+        let mutable_paths = definition.mutable.clone();
+        let mutable = tokio::task::spawn_blocking(move || {
+            match mutable_paths.resolve(&directory) {
+                Ok(resolved) => declared
+                    .iter()
+                    .cloned()
+                    .zip(resolved.iter().map(|path| path_bytes(path)))
+                    .collect::<Vec<_>>(),
+                // A declaration this host cannot resolve is shown with an unknown
+                // size; the whole Plugin directory is removed either way.
+                Err(_) => declared
+                    .iter()
+                    .cloned()
+                    .map(|declared| (declared, None))
+                    .collect::<Vec<_>>(),
+            }
+        })
+        .await
+        .map_err(|_| ApplicationError::Storage("Plugin uninstall task failed".into()))?;
+        let mut sessions_mounting = sessions.sessions_mounting(id).map_err(|error| {
+            ApplicationError::Storage(format!("Session Plugin mounts are unavailable: {error}"))
+        })?;
+        sessions_mounting.sort();
+        let unfinished_runs = self.unfinished_runs_binding(id)?;
+        let impact = self.plugin_impact(id)?;
+        Ok(PluginUninstallPrecondition {
+            id: definition.id,
+            name: definition.name,
+            digest: definition.digest,
+            mutable,
+            sessions: sessions_mounting,
+            unfinished_runs,
+            graphs: impact.graphs,
+            coverage: impact.coverage,
+        })
+    }
+
+    /// Attached Runs that are not terminal and bind this Plugin.
+    fn unfinished_runs_binding(&self, id: &str) -> Result<Vec<String>, ApplicationError> {
+        let mut runs = Vec::new();
+        for (run, record) in self.records()? {
+            if !super::is_unfinished(record.status) {
+                continue;
+            }
+            let binds = record.plugin_bindings.contains_key(id)
+                || record
+                    .snapshot
+                    .nodes
+                    .iter()
+                    .any(|node| node.plugins.iter().any(|reference| reference.id == id));
+            if binds {
+                runs.push(run);
+            }
+        }
+        runs.sort();
+        Ok(runs)
+    }
+
+    /// Remove one Plugin — its views, then its one directory, data included —
+    /// under the Library's one write lock, then reclaim what nothing references.
+    ///
+    /// The preconditions are re-read here: the human approved one exact state, and
+    /// a Plugin that changed or an owner that appeared while they were deciding
+    /// asks again instead of proceeding.
+    pub(crate) async fn uninstall_plugin_if_unchanged(
+        &self,
+        library_root: &Path,
+        precondition: &PluginUninstallPrecondition,
+        sessions: &anchor_platform_session::SessionStore,
+    ) -> Result<PluginUninstallOutcome, ApplicationError> {
+        let current = self
+            .plugin_uninstall_precondition(library_root, &precondition.id, sessions)
+            .await?;
+        if current.digest != precondition.digest {
+            return Err(ApplicationError::Conflict(
+                "the installed Plugin changed while the user was deciding; ask again".into(),
+            ));
+        }
+        if let Some(refusal) = current.refusal() {
+            return Err(ApplicationError::Conflict(format!(
+                "{refusal}（确认期间状态变了；请重新确认）"
+            )));
+        }
+        // One writer for the whole operation, and the same lock an install takes:
+        // an uninstall and an install must not interleave. Reclamation takes the
+        // same lock, so it runs while this one is held.
+        let lease_root = library_root.to_path_buf();
+        let lease = tokio::task::spawn_blocking(move || {
+            Library::new(&lease_root)
+                .install_lease()
+                .map_err(plugin_error)
+        })
+        .await
+        .map_err(|_| ApplicationError::Storage("Plugin uninstall task failed".into()))??;
+        let root = resolved_library_root(library_root);
+        let plugins_root = library_root.join("plugins");
+        let id = precondition.id.clone();
+        let (removed, reclamation) = tokio::task::spawn_blocking(move || {
+            let _lease = lease;
+            let mut removed_views = Vec::new();
+            let mut removed_bytes = 0u64;
+            // Views first: they are derived from the declaration, and removing the
+            // Plugin directory first would only make them orphans for the pass
+            // below. A failure here leaves the Plugin installed and is reported.
+            let views = views_root(&root).join(&id);
+            if views.exists() {
+                removed_views = std::fs::read_dir(&views)
+                    .map(|entries| {
+                        entries
+                            .flatten()
+                            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default();
+                removed_views.sort();
+                removed_bytes += path_bytes(&views).unwrap_or(0);
+                if let Err(error) = std::fs::remove_dir_all(&views) {
+                    return (
+                        Err(format!(
+                            "plugin `{id}` view `{}` could not be removed: {error}",
+                            views.display()
+                        )),
+                        None,
+                    );
+                }
+            }
+            // The one directory, data included. The human's checkbox authorized
+            // exactly this: the Plugin has no second copy anywhere.
+            let directory = plugins_root.join(&id);
+            removed_bytes += path_bytes(&directory).unwrap_or(0);
+            if let Err(error) = std::fs::remove_dir_all(&directory) {
+                return (
+                    Err(format!(
+                        "plugin `{id}` directory `{}` could not be removed: {error}",
+                        directory.display()
+                    )),
+                    None,
+                );
+            }
+            let reclamation = anchor_library::reclaim_after_install(&root, true)
+                .map_err(|error| error.to_string());
+            (Ok((removed_bytes, removed_views)), Some(reclamation))
+        })
+        .await
+        .map_err(|_| ApplicationError::Storage("Plugin uninstall task failed".into()))?;
+        let (removed_bytes, removed_views) = removed.map_err(ApplicationError::Storage)?;
+        let (reclaimed_package_versions, reclaimed_bytes, reclamation) = match reclamation {
+            Some(Ok(report)) => (
+                report.removed_package_versions.clone(),
+                report.reclaimed_bytes,
+                // A sweep that refused to run, or abandoned its second pass, is a
+                // reclamation that did not happen: the outcome says so instead of
+                // reporting a clean success.
+                report
+                    .deferred
+                    .clone()
+                    .or_else(|| report.store_phase_abandoned.clone()),
+            ),
+            Some(Err(reason)) => (Vec::new(), 0, Some(reason)),
+            None => (Vec::new(), 0, None),
+        };
+        Ok(PluginUninstallOutcome {
+            id: precondition.id.clone(),
+            removed_bytes,
+            removed_views,
+            reclaimed_package_versions,
+            reclaimed_bytes,
+            reclamation,
+        })
     }
 }
 
@@ -892,5 +1160,286 @@ mod impact_tests {
             .install_plugin_if_unchanged(library_root, precondition)
             .await
             .unwrap();
+    }
+}
+
+/// Uninstalling a Plugin: what it refuses, what it deletes, what it frees.
+#[cfg(test)]
+mod uninstall_tests {
+    use super::*;
+    use anchor_graph_host::{plugin_view_path, store_root, views_root};
+    use anchor_platform_session::{CreateSession, SessionStore};
+    use anchor_runtime::graph::{FileRunStore, GraphRunRecord, GraphSnapshot, RunStatus, RunStore};
+    use serde_json::json;
+    use std::{collections::BTreeMap, fs, path::Path};
+
+    /// Every byte the Library owns: Plugin directories, views and the store.
+    fn library_bytes(root: &Path) -> Vec<(String, Vec<u8>)> {
+        fn walk(root: &Path, directory: &Path, files: &mut Vec<(String, Vec<u8>)>) {
+            let mut entries = fs::read_dir(directory)
+                .unwrap()
+                .map(|entry| entry.unwrap().path())
+                .collect::<Vec<_>>();
+            entries.sort();
+            for path in entries {
+                if path.is_dir() {
+                    walk(root, &path, files);
+                } else {
+                    let relative = path
+                        .strip_prefix(root)
+                        .unwrap()
+                        .to_string_lossy()
+                        .into_owned();
+                    files.push((relative, fs::read(&path).unwrap()));
+                }
+            }
+        }
+        let mut files = Vec::new();
+        for subtree in ["plugins", "dependencies"] {
+            let path = root.join(subtree);
+            if path.is_dir() {
+                walk(root, &path, &mut files);
+            }
+        }
+        files
+    }
+
+    fn write_candidate(root: &Path, data: &[u8]) -> PathBuf {
+        let candidate = root.join("candidate");
+        fs::create_dir_all(candidate.join("state")).unwrap();
+        fs::write(
+            candidate.join("plugin.json"),
+            json!({"name":"Demo","mutable":["state/"]}).to_string(),
+        )
+        .unwrap();
+        fs::write(candidate.join("state/data.bin"), data).unwrap();
+        candidate
+    }
+
+    /// Install `demo` (data included) and return a precondition for uninstalling it.
+    async fn installed(
+        root: &Path,
+        sessions: &SessionStore,
+        data: &[u8],
+    ) -> (FileRunStore, PluginUninstallPrecondition) {
+        let library_root = root.join("library");
+        let application = RunApplication::new(root.join("state"), root.to_path_buf());
+        let precondition = application
+            .plugin_install_precondition(
+                library_root.clone(),
+                write_candidate(root, data),
+                "demo".into(),
+            )
+            .await
+            .unwrap();
+        application
+            .install_plugin_if_unchanged(library_root.clone(), precondition)
+            .await
+            .unwrap();
+        let runs = FileRunStore::new(root.join("state/runs"));
+        let uninstall = application
+            .plugin_uninstall_precondition(&library_root, "demo", sessions)
+            .await
+            .unwrap();
+        (runs, uninstall)
+    }
+
+    fn session_store(root: &Path) -> SessionStore {
+        fs::create_dir_all(root.join("state/platform")).unwrap();
+        let sessions = SessionStore::open(root.join("state/platform/sessions.sqlite")).unwrap();
+        sessions
+            .create(
+                "local",
+                CreateSession {
+                    id: Some("sess".into()),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        sessions
+    }
+
+    #[tokio::test]
+    async fn a_session_mounting_the_plugin_refuses_the_uninstall_and_moves_no_bytes() {
+        let root = tempfile::tempdir().unwrap();
+        let root = root.path();
+        let sessions = session_store(root);
+        installed(root, &sessions, b"precious").await;
+        sessions
+            .set_plugin_mount("local", "sess", "demo", true, "operator", "click")
+            .unwrap();
+        let application = RunApplication::new(root.join("state"), root.to_path_buf());
+        let precondition = application
+            .plugin_uninstall_precondition(&root.join("library"), "demo", &sessions)
+            .await
+            .unwrap();
+        let refusal = precondition.refusal().expect("a mounted Plugin refuses");
+        assert!(refusal.contains("sess"), "{refusal}");
+        assert!(refusal.contains("先在所有会话里卸载它"), "{refusal}");
+
+        let before = library_bytes(&root.join("library"));
+        let error = application
+            .uninstall_plugin_if_unchanged(&root.join("library"), &precondition, &sessions)
+            .await
+            .unwrap_err();
+        let message = format!("{error:?}");
+        assert!(message.contains("先在所有会话里卸载它"), "{message}");
+        assert_eq!(library_bytes(&root.join("library")), before);
+        assert_eq!(
+            fs::read(root.join("library/plugins/demo/state/data.bin")).unwrap(),
+            b"precious"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_unfinished_run_binding_the_plugin_refuses_the_uninstall() {
+        let root = tempfile::tempdir().unwrap();
+        let root = root.path();
+        let sessions = session_store(root);
+        let (runs, _) = installed(root, &sessions, b"data").await;
+        let snapshot = GraphSnapshot::admit(json!({
+            "objective":"uninstall","entry":"work",
+            "agents":{"worker":{"model":"fixture"}},
+            "nodes":[{"id":"work","agent":"worker","plugins":["demo"]}],
+            "edges":[]
+        }))
+        .unwrap();
+        let mut running =
+            GraphRunRecord::create_with_id(snapshot.clone(), json!({}), "running").unwrap();
+        running.status = RunStatus::Running;
+        runs.save(&running).unwrap();
+        let application = RunApplication::new(root.join("state"), root.to_path_buf());
+        let precondition = application
+            .plugin_uninstall_precondition(&root.join("library"), "demo", &sessions)
+            .await
+            .unwrap();
+        assert_eq!(precondition.unfinished_runs, ["running"]);
+        let refusal = precondition.refusal().expect("an unfinished Run refuses");
+        assert!(refusal.contains("running"), "{refusal}");
+        assert!(refusal.contains("未结束的 Run"), "{refusal}");
+
+        // A terminal Run is history, not a holder.
+        let mut finished = GraphRunRecord::create_with_id(snapshot, json!({}), "finished").unwrap();
+        finished.status = RunStatus::Completed;
+        runs.save(&finished).unwrap();
+        let precondition = application
+            .plugin_uninstall_precondition(&root.join("library"), "demo", &sessions)
+            .await
+            .unwrap();
+        assert_eq!(precondition.unfinished_runs, ["running"]);
+    }
+
+    #[tokio::test]
+    async fn a_confirmed_uninstall_removes_the_plugin_its_view_and_frees_its_store_version() {
+        let root = tempfile::tempdir().unwrap();
+        let root = root.path();
+        let sessions = session_store(root);
+        let library_root = root.join("library");
+        let application = RunApplication::new(root.join("state"), root.to_path_buf());
+        let (_runs, precondition) = installed(root, &sessions, b"precious").await;
+        // One other Plugin stays installed: the reclaimer conservatively refuses to
+        // delete anything when the Library holds no Plugin at all, and that guard
+        // is the reclaimer's, not something an uninstall may bypass.
+        let other = root.join("candidate-other");
+        fs::create_dir_all(&other).unwrap();
+        fs::write(
+            other.join("plugin.json"),
+            json!({"name":"Other"}).to_string(),
+        )
+        .unwrap();
+        let keep = application
+            .plugin_install_precondition(library_root.clone(), other, "other".into())
+            .await
+            .unwrap();
+        application
+            .install_plugin_if_unchanged(library_root.clone(), keep)
+            .await
+            .unwrap();
+
+        // Built after every install: an install already sweeps, and a view or a
+        // store entry created before it would be reclaimed as an orphan.
+        let resolved = resolved_library_root(&library_root);
+        let view = plugin_view_path(
+            &resolved,
+            "demo",
+            &FilePluginCatalog::new(&library_root)
+                .definition("demo")
+                .unwrap()
+                .dependencies
+                .declaration_digest(),
+        );
+        fs::create_dir_all(view.join("bin")).unwrap();
+        fs::write(view.join("pyvenv.cfg"), "home = /usr/bin\n").unwrap();
+        let store = store_root(&resolved);
+        let orphan = store.join("idna/3.6");
+        fs::create_dir_all(&orphan).unwrap();
+        fs::write(orphan.join("idna.py"), "IDNA = 1\n").unwrap();
+        // One package version a surviving view still points at: the sweep must keep
+        // it, or the assertion below would pass for the wrong reason.
+        let keeper = store.join("requests/2.32");
+        fs::create_dir_all(&keeper).unwrap();
+        fs::write(keeper.join("requests.py"), "REQUESTS = 1\n").unwrap();
+        let keeper_view = views_root(&resolved).join("keeper/aaaa");
+        fs::create_dir_all(keeper_view.join("lib/python3.12/site-packages")).unwrap();
+        fs::write(keeper_view.join("pyvenv.cfg"), "home = /usr/bin\n").unwrap();
+        std::os::unix::fs::symlink(
+            &keeper,
+            keeper_view.join("lib/python3.12/site-packages/requests"),
+        )
+        .unwrap();
+
+        let outcome = application
+            .uninstall_plugin_if_unchanged(&library_root, &precondition, &sessions)
+            .await
+            .unwrap();
+        assert!(!library_root.join("plugins/demo").exists());
+        assert!(library_root.join("plugins/other").is_dir());
+        assert!(!view.exists(), "the Plugin's view goes with it");
+        assert!(
+            !orphan.exists(),
+            "the freed package version must be reclaimed: {outcome:?}"
+        );
+        assert!(keeper.is_dir(), "a referenced package version must be kept");
+        assert!(outcome.reclamation.is_none(), "{outcome:?}");
+        assert!(
+            outcome
+                .reclaimed_package_versions
+                .iter()
+                .any(|version| version == "idna/3.6"),
+            "{outcome:?}"
+        );
+        assert!(outcome.removed_bytes > 0);
+        assert_eq!(outcome.removed_views.len(), 1, "{outcome:?}");
+    }
+
+    #[tokio::test]
+    async fn a_second_uninstall_is_a_named_refusal() {
+        let root = tempfile::tempdir().unwrap();
+        let root = root.path();
+        let sessions = session_store(root);
+        let (_runs, precondition) = installed(root, &sessions, b"data").await;
+        let application = RunApplication::new(root.join("state"), root.to_path_buf());
+        application
+            .uninstall_plugin_if_unchanged(&root.join("library"), &precondition, &sessions)
+            .await
+            .unwrap();
+        let error = application
+            .plugin_uninstall_precondition(&root.join("library"), "demo", &sessions)
+            .await
+            .unwrap_err();
+        let message = format!("{error:?}");
+        assert!(message.contains("not installed"), "{message}");
+    }
+
+    #[tokio::test]
+    async fn the_precondition_lists_the_declared_mutable_paths_with_their_bytes() {
+        let root = tempfile::tempdir().unwrap();
+        let root = root.path();
+        let sessions = session_store(root);
+        let (_runs, precondition) = installed(root, &sessions, b"0123456789").await;
+        let _ = BTreeMap::<String, bool>::new();
+        assert_eq!(precondition.id, "demo");
+        assert_eq!(precondition.name, "Demo");
+        assert_eq!(precondition.mutable, vec![("state/".to_owned(), Some(10))]);
     }
 }

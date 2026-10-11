@@ -64,7 +64,7 @@ describe('the session plugin panel', () => {
     expect(container.textContent).toContain('核心能力');
     expect(container.textContent).toContain('core');
     expect(container.textContent).toContain('必需');
-    expect(container.textContent).toContain('图里声明为必需，开关固定为开，点不动。');
+    expect(container.textContent).toContain('工作流需要此插件，保持挂载。');
     expect(container.textContent).toContain('1 Skills');
     expect(container.textContent).toContain('MCP search、fetch');
     // The disabled attribute is what makes it unclickable in a browser; jsdom would not deliver a
@@ -121,7 +121,7 @@ describe('the session plugin panel', () => {
     expect(switches()[0].getAttribute('aria-checked')).toBe('true');
     expect(switches()[0].textContent).toBe('已挂载');
     expect(container.textContent).toContain('已切换 · 将在下一个回合生效');
-    expect(container.textContent).toContain('开关从下一个回合起生效');
+    expect(container.textContent).toContain('从下一个回合起生效');
     expect(container.textContent).not.toContain('已生效');
   });
 

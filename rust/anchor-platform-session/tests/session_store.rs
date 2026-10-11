@@ -131,6 +131,31 @@ fn plugin_mounts_are_read_by_session_id_and_an_absent_session_is_no_override() {
 }
 
 #[test]
+fn sessions_mounting_counts_every_owner_and_ignores_switches_that_are_off() {
+    let (_directory, _path, store) = fixture();
+    create(&store, "owner-a", "session-a");
+    create(&store, "owner-b", "session-b");
+    store
+        .set_plugin_mount("owner-a", "session-a", "demo", true, "operator", "on")
+        .unwrap();
+    store
+        .set_plugin_mount("owner-b", "session-b", "demo", false, "operator", "off")
+        .unwrap();
+    assert_eq!(store.sessions_mounting("demo").unwrap(), ["session-a"]);
+    store
+        .set_plugin_mount("owner-b", "session-b", "demo", true, "operator", "on")
+        .unwrap();
+    assert_eq!(
+        store.sessions_mounting("demo").unwrap(),
+        ["session-a", "session-b"]
+    );
+    // A Plugin nobody mounts, and an id that is not a Plugin id, are both empty
+    // or refused rather than a made-up answer.
+    assert!(store.sessions_mounting("ghost").unwrap().is_empty());
+    assert_invalid(store.sessions_mounting(""));
+}
+
+#[test]
 fn create_get_list_rename_status_and_events_form_one_lifecycle() {
     let (_directory, _, store) = fixture();
     let first = store
