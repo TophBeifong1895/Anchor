@@ -68,7 +68,7 @@ pub struct GraphNode {
 /// The Graph says what it needs; a deployment or a session may switch an
 /// *optional* Plugin off, but never a required one. A bare string in an older
 /// Graph means `required: true`, which is what "declared" always meant.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(from = "PluginRefRepr")]
 pub struct PluginRef {
     pub id: String,
@@ -92,6 +92,32 @@ enum PluginRefRepr {
         #[serde(default)]
         default: Option<bool>,
     },
+}
+
+/// A `PluginRef` whose meaning is exactly the old bare id **writes** the bare id
+/// back.
+///
+/// `GraphSnapshot::digest()` hashes the snapshot's serialization, so a record
+/// written before the object form existed can only reproduce its own digest if a
+/// declaration that says nothing beyond "required" serializes the way it was
+/// written. `required: true` with no `default` is precisely the old form --
+/// whether it arrived as a string or as `{"id":…,"required":true}` -- so both
+/// collapse to `"id"` and old records keep validating. An optional reference, or
+/// one that names a default, still writes the object.
+impl Serialize for PluginRef {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        if self.required && self.default.is_none() {
+            return serializer.serialize_str(&self.id);
+        }
+        use serde::ser::SerializeStruct;
+        let mut state = serializer.serialize_struct("PluginRef", 3)?;
+        state.serialize_field("id", &self.id)?;
+        state.serialize_field("required", &self.required)?;
+        if let Some(default) = self.default {
+            state.serialize_field("default", &default)?;
+        }
+        state.end()
+    }
 }
 
 impl From<PluginRefRepr> for PluginRef {

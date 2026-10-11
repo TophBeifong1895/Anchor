@@ -4056,6 +4056,58 @@ fn created_records_carry_started_and_updated_timestamps() {
     record.validate().unwrap();
 }
 
+/// A snapshot written before Plugin references became objects must still hash to
+/// the digest its record stored: the digest is taken over the serialization, so a
+/// reference that means exactly the old form has to *write* the old form.
+#[test]
+fn an_old_shape_snapshot_reproduces_its_stored_digest() {
+    // A format-11-era record: bare ids, and the digest the old host computed.
+    let stored = serde_json::json!({
+        "objective": "old shape",
+        "entry": "work",
+        "agents": {"worker": {"model": "fixture"}},
+        "ops": {},
+        "nodes": [{"id": "work", "agent": "worker", "plugins": ["demo"]}],
+        "edges": []
+    });
+    let snapshot = GraphSnapshot::admit(stored.clone()).unwrap();
+    // The serialized shape is unchanged, which is what makes the digest match.
+    let written = serde_json::to_value(&snapshot).unwrap();
+    assert_eq!(
+        written["nodes"][0]["plugins"],
+        serde_json::json!(["demo"]),
+        "a required reference with no default writes the bare id again"
+    );
+    // The digest the old host stored is the digest of exactly these bytes.
+    use sha2::Digest;
+    let expected = format!(
+        "{:x}",
+        sha2::Sha256::digest(serde_json::to_vec(&snapshot).unwrap())
+    );
+    assert_eq!(snapshot.digest().unwrap(), expected);
+    // ...and a record carrying it validates, which is what `records()` needs.
+    let mut record = GraphRunRecord::create_with_id(snapshot, Value::Null, "legacy-shape").unwrap();
+    record.graph_digest = expected;
+    assert!(record.validate().is_ok(), "{:?}", record.validate());
+
+    // An optional or defaulted reference is a *new* declaration, and keeps a shape
+    // of its own: it does not have to match the old bytes.
+    let optional = GraphSnapshot::admit(serde_json::json!({
+        "objective": "new shape",
+        "entry": "work",
+        "agents": {"worker": {"model": "fixture"}},
+        "ops": {},
+        "nodes": [{"id": "work", "agent": "worker",
+                   "plugins": [{"id": "demo", "required": false, "default": false}]}],
+        "edges": []
+    }))
+    .unwrap();
+    assert_eq!(
+        serde_json::to_value(&optional).unwrap()["nodes"][0]["plugins"],
+        serde_json::json!([{"id": "demo", "required": false, "default": false}])
+    );
+}
+
 /// A record from the managed-environment era still loads: the field is accepted
 /// and dropped, never reinterpreted.
 #[test]
