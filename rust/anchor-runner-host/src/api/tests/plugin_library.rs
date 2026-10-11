@@ -43,6 +43,10 @@ async fn raw(
 
 #[tokio::test]
 async fn plugin_catalog_detail_and_file_projection_are_read_only() {
+    // The Library root is process configuration: another test that sets
+    // `ANCHOR_RUNNER_LIBRARY_ROOT` must not be able to swap this test's Library
+    // out from under it.
+    let _environment = PROCESS_ENV.lock().await;
     let (_root, state) = fixture();
     write_plugin(&state);
     let app = router(state.clone());
@@ -78,6 +82,10 @@ async fn plugin_catalog_detail_and_file_projection_are_read_only() {
 
 #[tokio::test]
 async fn malformed_plugin_is_unavailable_without_exposing_manifest_values() {
+    // The Library root is process configuration: another test that sets
+    // `ANCHOR_RUNNER_LIBRARY_ROOT` must not be able to swap this test's Library
+    // out from under it.
+    let _environment = PROCESS_ENV.lock().await;
     let (_root, state) = fixture();
     let plugin = state.catalog_root.join("plugins/broken");
     std::fs::create_dir_all(&plugin).unwrap();
@@ -98,6 +106,10 @@ async fn malformed_plugin_is_unavailable_without_exposing_manifest_values() {
 
 #[tokio::test]
 async fn plugin_routes_require_bearer_auth_when_configured() {
+    // The Library root is process configuration: another test that sets
+    // `ANCHOR_RUNNER_LIBRARY_ROOT` must not be able to swap this test's Library
+    // out from under it.
+    let _environment = PROCESS_ENV.lock().await;
     let (_root, mut state) = fixture();
     write_plugin(&state);
     let key = "k".repeat(32);
@@ -114,6 +126,10 @@ async fn plugin_routes_require_bearer_auth_when_configured() {
 #[tokio::test]
 async fn plugin_internal_symlink_is_rejected() {
     use std::os::unix::fs::symlink;
+    // The Library root is process configuration: another test that sets
+    // `ANCHOR_RUNNER_LIBRARY_ROOT` must not be able to swap this test's Library
+    // out from under it.
+    let _environment = PROCESS_ENV.lock().await;
     let (_root, state) = fixture();
     write_plugin(&state);
     let plugin = state.catalog_root.join("plugins/demo");

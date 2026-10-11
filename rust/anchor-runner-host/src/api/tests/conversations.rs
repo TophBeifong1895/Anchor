@@ -1584,7 +1584,12 @@ async fn graph_node_plugins_project_expanded_nodes_and_legacy_metadata_remains_r
     let (status, graph) = call(app, "GET", "/graphs/fixture", None).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(graph["definition"], authoring);
-    assert_eq!(graph["node_plugins"], json!({"stage/inside":["demo"]}));
+    // The projection carries the declaration, and a bare id in an older Graph
+    // reads as `required: true`.
+    assert_eq!(
+        graph["node_plugins"],
+        json!({"stage/inside":[{"id":"demo","required":true}]})
+    );
     let metadata = RunMetadata::new(
         "legacy-run".into(),
         "fixture".into(),

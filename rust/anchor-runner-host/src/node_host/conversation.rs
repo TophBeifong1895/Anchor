@@ -301,6 +301,7 @@ mod tests {
             BTreeMap::new(),
             FileRunStore::new(root.join("runs")),
             LocalInputs::new(root.to_owned(), None).unwrap(),
+            Arc::new(crate::plugin_mounts::SessionMounts::open(root).unwrap()),
         )
         .with_library_root(Some(root.to_path_buf()))
     }

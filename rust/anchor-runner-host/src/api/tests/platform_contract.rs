@@ -331,7 +331,10 @@ async fn create_graph_publishes_initial_authoring_definition_and_plugins() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(fetched["graph"], "initial");
     assert_eq!(fetched["definition"], definition);
-    assert_eq!(fetched["node_plugins"]["work"], json!(["demo"]));
+    assert_eq!(
+        fetched["node_plugins"]["work"],
+        json!([{"id":"demo","required":true}])
+    );
     let bundle = FileGraphBundleLoader::new(state.catalog_root.join("initial"))
         .with_library_root(&state.catalog_root)
         .load()

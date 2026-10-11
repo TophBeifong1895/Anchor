@@ -116,6 +116,34 @@ impl PilotService {
         let execution_sessions = admission.sessions.clone();
         let execution_owner = admission.owner.clone();
         let execution_session = admission.session.id.clone();
+        // Freeze this Turn's Session Plugin mounts now, once, against the new Turn
+        // id: the Pilot's tool list must not change when the human clicks mount
+        // mid-Turn, and the next Turn picks the click up. A failure here leaves the
+        // Turn without Plugin tools — never with a capability it could not justify.
+        let data_root = admission.tools.data_root.clone();
+        let library_root = admission.tools.library_root.clone();
+        let workspace_root = admission.tools.workspace_root.clone();
+        let plugin_tools = match crate::pilot_tools::frozen_plugin_tools(
+            &data_root,
+            &library_root,
+            &workspace_root,
+            &admission.owner,
+            &admission.session.id,
+            &turn_id,
+        )
+        .await
+        {
+            Ok((ports, reasons)) => {
+                for reason in reasons {
+                    eprintln!("anchor-runner-host: Pilot Turn {turn_id} Plugin: {reason}");
+                }
+                ports
+            }
+            Err(reason) => {
+                eprintln!("anchor-runner-host: Pilot Turn {turn_id} has no Plugin tools: {reason}");
+                Vec::new()
+            }
+        };
         let tools = Arc::new(admission.tools.for_turn(&turn_id));
         let service = self.clone();
         tokio::spawn(async move {
@@ -132,7 +160,7 @@ impl PilotService {
                     prompt: admission.prompt.unwrap_or_else(|| "继续这个会话。先核查中断前的事实和现场，不要重放结果未知的操作。".into()),
                     instructions: INSTRUCTIONS.into(),
                     cancellation,
-                }, tools)).map(|status| (status, None::<String>))
+                }, tools, plugin_tools)).map(|status| (status, None::<String>))
             }).await;
             let (status, failure) = match result {
                 Ok(Ok(outcome)) => outcome,

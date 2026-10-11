@@ -652,10 +652,17 @@ pub(crate) fn execution_request(
         plugins: node
             .plugins
             .iter()
-            .map(|id| {
-                record.plugin_bindings.get(id).cloned().ok_or_else(|| {
-                    GraphError::CorruptRun(format!("Run has no frozen Plugin binding for `{id}`"))
-                })
+            .map(|reference| {
+                record
+                    .plugin_bindings
+                    .get(&reference.id)
+                    .cloned()
+                    .ok_or_else(|| {
+                        GraphError::CorruptRun(format!(
+                            "Run has no frozen Plugin binding for `{}`",
+                            reference.id
+                        ))
+                    })
             })
             .collect::<Result<Vec<_>, _>>()?,
         max_provider_requests,

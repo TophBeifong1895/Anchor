@@ -87,7 +87,10 @@ export type OurGraph = {
  * separately from its nodes worth doing: two nodes can share one and still be asked for different
  * things. It belongs to agents: an op has no instructions to add to, and the loader refuses it there.
  */
-export type OurNode = { id: string; agent?: string; op?: string; graph?: string; with?: string; plugins?: string[] };
+/// A node's Plugin declaration: a bare id (older Graphs, and what the editor
+/// writes) or the object form that says whether the Graph needs it.
+export type NodePluginRef = string | { id: string; required?: boolean; default?: boolean };
+export type OurNode = { id: string; agent?: string; op?: string; graph?: string; with?: string; plugins?: NodePluginRef[] };
 
 export type Plugin = {
   id: string; name: string; description: string; digest?: string;
@@ -217,7 +220,7 @@ export type OurRunDetail = {
 
 export type FlowNode = Node<{
   name: string; kind: string; state: string; detail: string;
-  plugins?: string[];
+  plugins?: NodePluginRef[];
   call?: GraphCall;
   control?: 'fanout' | 'join';
   /** Which of the two it is, so a component can choose an icon without parsing the label. */

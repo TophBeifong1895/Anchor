@@ -71,6 +71,8 @@ fn public_types_and_default_dto_match_legacy_initial_shape() {
         "questions",
         "operation",
         "operations",
+        // The Session-level Plugin mount overrides: absent means "no override".
+        "plugin_mounts",
         "created_at",
         "updated_at",
     ]);
@@ -102,6 +104,30 @@ fn public_types_and_default_dto_match_legacy_initial_shape() {
         );
     }
     assert!(serde_json::from_value::<SessionStatus>(json!("running")).is_err());
+}
+
+#[test]
+fn plugin_mounts_are_read_by_session_id_and_an_absent_session_is_no_override() {
+    let (_directory, _path, store) = fixture();
+    create(&store, "owner-a", "session-a");
+    create(&store, "owner-b", "session-b");
+    store
+        .set_plugin_mount("owner-a", "session-a", "demo", true, "operator", "mounted")
+        .unwrap();
+    store
+        .set_plugin_mount("owner-a", "session-a", "research", false, "operator", "off")
+        .unwrap();
+    assert_eq!(
+        store.plugin_mounts("session-a").unwrap(),
+        BTreeMap::from([("demo".into(), true), ("research".into(), false)])
+    );
+    // A node call learns the Session from its Run, not from an owner, and another
+    // Session keeps its own answer.
+    assert!(store.plugin_mounts("session-b").unwrap().is_empty());
+    // An id no Session has is "no override": an old Run whose Session is gone
+    // still runs, mounting only what its Graph declares.
+    assert!(store.plugin_mounts("gone").unwrap().is_empty());
+    assert_invalid(store.plugin_mounts(""));
 }
 
 #[test]

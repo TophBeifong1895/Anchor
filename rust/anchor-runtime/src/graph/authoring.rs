@@ -27,7 +27,7 @@ struct AuthorNode {
     id: String,
     kind: AuthorNodeKind,
     with: Option<String>,
-    plugins: Vec<String>,
+    plugins: Vec<PluginRef>,
     max_rounds: Option<u32>,
 }
 
@@ -156,32 +156,88 @@ fn files(value: Option<&Value>, where_: &str) -> Result<Vec<String>, GraphError>
 
 /// Environment names share the deployment name-table grammar: a non-empty
 /// identifier of `[A-Za-z0-9._-]` that is not a traversal name.
-fn plugin_refs(value: Option<&Value>, where_: &str) -> Result<Vec<String>, GraphError> {
+fn plugin_refs(value: Option<&Value>, where_: &str) -> Result<Vec<PluginRef>, GraphError> {
     let Some(value) = value else {
         return Ok(Vec::new());
     };
     let values = value
         .as_array()
         .ok_or_else(|| invalid(format!("{where_} must be a list of Plugin references")))?;
-    let mut result = Vec::new();
+    let mut result: Vec<PluginRef> = Vec::new();
     for value in values {
-        let name = value.as_str().filter(|name| {
-            let mut chars = name.chars();
-            chars
-                .next()
-                .is_some_and(|first| first.is_ascii_alphanumeric())
-                && chars.all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-' | '.'))
-        });
-        let Some(name) = name else {
-            return Err(invalid(format!(
-                "{where_} contains an invalid Plugin reference"
-            )));
+        let reference = match value {
+            // An older Graph writes a bare id: it declared the Plugin, and a
+            // declaration has always meant "this Graph needs it".
+            Value::String(name) => PluginRef::required(valid_plugin_ref(name, where_)?),
+            Value::Object(object) => {
+                let unknown = object
+                    .keys()
+                    .find(|key| !matches!(key.as_str(), "id" | "required" | "default"));
+                if let Some(key) = unknown {
+                    return Err(invalid(format!(
+                        "{where_}: unsupported Plugin reference field: {key}"
+                    )));
+                }
+                let id = object
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| invalid(format!("{where_}: a Plugin reference needs an id")))?;
+                let id = valid_plugin_ref(id, where_)?;
+                let required = match object.get("required") {
+                    None => true,
+                    Some(Value::Bool(required)) => *required,
+                    Some(_) => {
+                        return Err(invalid(format!("{where_}: `required` must be a boolean")));
+                    }
+                };
+                let default = match object.get("default") {
+                    None => None,
+                    Some(Value::Bool(value)) => Some(*value),
+                    Some(_) => {
+                        return Err(invalid(format!(
+                            "{where_}: `default` must be `on` or `off`"
+                        )));
+                    }
+                };
+                if required && default == Some(false) {
+                    return Err(invalid(format!(
+                        "{where_}: a required Plugin cannot default to off"
+                    )));
+                }
+                PluginRef {
+                    id,
+                    required,
+                    default,
+                }
+            }
+            _ => {
+                return Err(invalid(format!(
+                    "{where_} contains an invalid Plugin reference"
+                )));
+            }
         };
-        if !result.iter().any(|prior| prior == name) {
-            result.push(name.to_owned());
+        if !result.iter().any(|prior| prior.id == reference.id) {
+            result.push(reference);
         }
     }
     Ok(result)
+}
+
+fn valid_plugin_ref(name: &str, where_: &str) -> Result<String, GraphError> {
+    let valid = {
+        let mut chars = name.chars();
+        chars
+            .next()
+            .is_some_and(|first| first.is_ascii_alphanumeric())
+            && chars.all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-' | '.'))
+    };
+    if valid {
+        Ok(name.to_owned())
+    } else {
+        Err(invalid(format!(
+            "{where_} contains an invalid Plugin reference"
+        )))
+    }
 }
 
 fn validate_time(value: Option<&Value>, where_: &str) -> Result<Option<f64>, GraphError> {
@@ -1291,6 +1347,51 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(error.contains("reads input.txt"), "{error}");
+    }
+
+    /// A Plugin reference may be a bare id (required, as it always meant) or an
+    /// object that says whether the Graph can run without it.
+    #[test]
+    fn a_plugin_reference_carries_its_own_requirement() {
+        let parse = |plugins: Value| {
+            GraphSnapshot::from_authoring(json!({
+                "objective": "plugin references",
+                "entry": "worker",
+                "agents": {"worker": {"model": "test"}},
+                "ops": {},
+                "nodes": [{"id": "worker", "agent": "worker", "plugins": plugins}],
+                "edges": []
+            }))
+        };
+        let snapshot = parse(json!([
+            "required-by-string",
+            {"id": "optional-one", "required": false, "default": false},
+            {"id": "optional-default-on", "required": false, "default": true}
+        ]))
+        .unwrap();
+        let declared = &snapshot.nodes[0].plugins;
+        assert!(declared[0].required, "a bare id is required");
+        assert!(!declared[1].required);
+        assert_eq!(declared[1].default, Some(false));
+        assert_eq!(declared[2].default, Some(true));
+
+        // A required Plugin cannot be declared off by default: the two statements
+        // contradict each other.
+        let error = parse(json!([{"id": "x", "required": true, "default": false}])).unwrap_err();
+        assert!(
+            error.to_string().contains("cannot default to off"),
+            "{error}"
+        );
+        // Unknown fields and malformed shapes are refused, not ignored.
+        for bad in [
+            json!([{"id": "x", "requird": false}]),
+            json!([{"required": false}]),
+            json!([{"id": "x", "required": "no"}]),
+            json!([{"id": "x", "default": "off"}]),
+            json!([{"id": "in valid"}]),
+        ] {
+            assert!(parse(bad.clone()).is_err(), "{bad} must be refused");
+        }
     }
 
     /// The old declaration is refused by name, and the refusal says what replaced it.

@@ -99,6 +99,27 @@ pub(super) async fn graph(
         .map_err(graph_management_error)
 }
 
+/// The Graph the deployment configures as its pilot Graph is the deployment's.
+///
+/// Rewriting it through this API would let any caller rewrite the assistant's own
+/// role, instructions and Plugin declarations — including handing out a
+/// `required: true` that no human clicked and no audit event records. The
+/// in-assistant `graph_update`/`graph_delete` tools already refuse it; this path
+/// must refuse it for **every** caller, whatever the authentication mode happens
+/// to be, because the deployment owns that Graph and changes it on disk.
+#[allow(clippy::result_large_err)]
+fn refuse_pilot_graph(graph: &str) -> Result<(), HttpResponse> {
+    if configured_pilot_graph().as_deref() != Some(graph) {
+        return Ok(());
+    }
+    Err(error(
+        StatusCode::CONFLICT,
+        format!(
+            "Graph `{graph}` is the deployment's pilot Graph: the deployment owns it, so it cannot be rewritten through this API"
+        ),
+    ))
+}
+
 pub(super) async fn create_graph(
     State(state): State<ApiState>,
     Json(body): Json<Value>,
@@ -107,6 +128,7 @@ pub(super) async fn create_graph(
         .get("name")
         .and_then(Value::as_str)
         .ok_or_else(|| error(StatusCode::BAD_REQUEST, "name is required"))?;
+    refuse_pilot_graph(name)?;
     let created = state
         .application
         .create_graph(name, body.get("definition").cloned())
@@ -120,6 +142,7 @@ pub(super) async fn update_graph(
     AxumPath(name): AxumPath<String>,
     Json(body): Json<Value>,
 ) -> Result<Json<Value>, HttpResponse> {
+    refuse_pilot_graph(&name)?;
     let definition = body
         .get("definition")
         .cloned()
@@ -155,6 +178,7 @@ pub(super) async fn delete_graph(
     AxumPath(name): AxumPath<String>,
     headers: HeaderMap,
 ) -> Result<StatusCode, HttpResponse> {
+    refuse_pilot_graph(&name)?;
     let conditions = headers.get_all(header::IF_MATCH).iter().collect::<Vec<_>>();
     let removed_runs = match conditions.as_slice() {
         [] => {

@@ -60,6 +60,7 @@ impl SessionStore {
             questions: Vec::new(),
             operation: None,
             operations: BTreeMap::new(),
+            plugin_mounts: BTreeMap::new(),
             created_at: now,
             updated_at: now,
         };
@@ -126,6 +127,73 @@ impl SessionStore {
             };
             Ok(Some((status.event_kind(), data)))
         })
+    }
+
+    /// Set one Plugin's mount switch for this Session, and record who did it.
+    ///
+    /// `required` is decided by the caller from the Graph the Session runs: a
+    /// required Plugin is never switched off. The event is the audit fact the
+    /// authorization rests on, so it is written in the same transaction.
+    pub fn set_plugin_mount(
+        &self,
+        owner: &str,
+        id: &str,
+        plugin: &str,
+        on: bool,
+        actor: &str,
+        reason: &str,
+    ) -> Result<Session, SessionError> {
+        validate_identity(plugin, "plugin")?;
+        self.mutate(owner, id, |_, session| {
+            if session.plugin_mounts.get(plugin) == Some(&on) {
+                return Ok(None);
+            }
+            session.plugin_mounts.insert(plugin.to_owned(), on);
+            Ok(Some((
+                "session.plugin_mount.changed",
+                BTreeMap::from([
+                    ("plugin".into(), json!(plugin)),
+                    ("on".into(), json!(on)),
+                    ("actor".into(), json!(actor)),
+                    ("at".into(), json!(Utc::now().to_rfc3339())),
+                    ("reason".into(), json!(reason)),
+                ]),
+            )))
+        })
+    }
+
+    /// The Plugin mount switches of one Session, read by its id alone.
+    ///
+    /// A node call learns the Session from its Run's immutable metadata, not from
+    /// the caller's owner, and `sessions.id` is the primary key: the host does not
+    /// need the owner to answer what that Session mounted. A Session that is gone
+    /// reads as "no override" rather than an error, so an older Run stays runnable
+    /// and mounts only what its Graph declares.
+    pub fn plugin_mounts(&self, id: &str) -> Result<BTreeMap<String, bool>, SessionError> {
+        validate_identity(id, "session id")?;
+        let connection = self.lock()?;
+        let data: Option<String> = connection
+            .query_row("SELECT data FROM sessions WHERE id = ?1", [id], |row| {
+                row.get(0)
+            })
+            .optional()?;
+        let Some(data) = data else {
+            return Ok(BTreeMap::new());
+        };
+        let session: Session = serde_json::from_str(&data)?;
+        Ok(session.plugin_mounts)
+    }
+
+    /// Append one audit event to a Session the caller already authorized.
+    pub fn append_event(
+        &self,
+        owner: &str,
+        id: &str,
+        kind: &'static str,
+        data: BTreeMap<String, Value>,
+    ) -> Result<(), SessionError> {
+        self.mutate(owner, id, |_, _| Ok(Some((kind, data))))?;
+        Ok(())
     }
 
     pub fn events(

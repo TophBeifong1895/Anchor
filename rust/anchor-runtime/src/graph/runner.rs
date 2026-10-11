@@ -878,7 +878,7 @@ impl<'a, S: RunStore, A: ArtifactPort, N: NodeExecutionPort, C: RunControl>
             .snapshot
             .nodes
             .iter()
-            .flat_map(|node| node.plugins.iter().cloned())
+            .flat_map(|node| node.plugins.iter().map(|reference| reference.id.clone()))
             .collect::<BTreeSet<_>>()
             .into_iter()
             .collect::<Vec<_>>();

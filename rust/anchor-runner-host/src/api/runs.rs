@@ -390,7 +390,7 @@ pub(super) async fn get_run(
             let bindings = node
                 .plugins
                 .iter()
-                .filter_map(|id| record.plugin_bindings.get(id))
+                .filter_map(|reference| record.plugin_bindings.get(&reference.id))
                 .map(|binding| {
                     json!({
                         "id":binding.id,

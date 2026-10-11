@@ -930,6 +930,7 @@ fn create_channel_session(
         questions: Vec::new(),
         operation: None,
         operations: BTreeMap::new(),
+        plugin_mounts: BTreeMap::new(),
         created_at: now,
         updated_at: now,
     };

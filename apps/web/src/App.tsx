@@ -10,7 +10,7 @@ import { WorkflowCanvas } from './WorkflowCanvas';
 import { GraphActions } from './GraphActions';
 import { label } from './execution';
 import {
-  type OurAgent, type OurGraph, type OurOp, type OurRun, type OurRunDetail,
+  type NodePluginRef, type OurAgent, type OurGraph, type OurOp, type OurRun, type OurRunDetail,
   type TimelineData, type GraphSummary, listenerLabel,
 } from './model';
 import { validateCallTargets } from './calls';
@@ -358,7 +358,17 @@ export function App() {
   const selectedAgent = pick?.kind === 'agent' && doc ? doc.agents?.[pick.id] : undefined;
   const selectedEdge = pick?.kind === 'edge' && doc ? doc.edges[Number(pick.id)] : undefined;
 
-  const patchNode = (fields: Partial<{ id: string; agent: string; with: string; plugins: string[] }>) => {
+  // A node's `plugins` may be written as bare ids or as `{id, required, default}`;
+  // the editor works on ids and preserves whatever declaration each keeps.
+  const pluginRefs: NodePluginRef[] = selectedNode?.plugins ?? [];
+  const selectedPlugins = pluginRefs.map(item => typeof item === 'string' ? item : item.id);
+  const setPlugins = (ids: string[]) => patchNode({
+    plugins: ids.map(id => {
+      const prior = pluginRefs.find(item => (typeof item === 'string' ? item : item.id) === id);
+      return prior ?? id;
+    }),
+  });
+  const patchNode = (fields: Partial<{ id: string; agent: string; with: string; plugins: NodePluginRef[] }>) => {
     if (!doc || !selectedNode) return;
     patch({ ...doc, nodes: doc.nodes.map(item =>
       item.id === selectedNode.id ? { ...item, ...fields } : item) });
@@ -738,8 +748,8 @@ export function App() {
                   以 <code>{selectedNode.id}/…</code> 命名，各自在自己的目录里，父图只看得到它的
                   <code>exit</code> 节点。
                 </p> : <>
-                <Plugins selected={selectedNode.plugins} disabled={!editable}
-                  onChange={plugins => patchNode({ plugins })} />
+                <Plugins selected={selectedPlugins} disabled={!editable}
+                  onChange={setPlugins} />
                 <label>使用角色
                   <select value={selectedNode.agent}
                           onChange={event => patchNode({ agent: event.target.value })}>

@@ -1,6 +1,12 @@
 //! Executes one node request; graph scheduling remains in the shared Runner.
 use super::{HostArtifacts, create_durable_directory, write_durable};
-use crate::{local_inputs::LocalInputs, op, tool_host};
+use crate::{
+    local_inputs::LocalInputs,
+    op,
+    plugin_mounts::{self, MountSnapshot, PluginMountSource},
+    tool_host,
+};
+use anchor_graph_host::PluginCatalog;
 use anchor_runtime::graph::{
     CommitRef, CompletionFact, FileRunStore, GraphError, GraphRunRecord, InvocationKey,
     NodeCompletion, NodeExecutionCapabilities, NodeExecutionOutcome, NodeExecutionPort,
@@ -67,9 +73,142 @@ pub(crate) struct HostIoResolver {
     /// durable key. Read once when the node's result is written.
     observed_views: std::sync::Mutex<BTreeMap<String, BTreeMap<String, String>>>,
     local_inputs: LocalInputs,
+    /// The read-only view of Session Plugin switches, injected by the host that
+    /// owns the Session store. The resolver never opens that database itself.
+    mounts: std::sync::Arc<dyn PluginMountSource>,
+}
+
+/// The reserved evidence key for a call's Plugin *mounting*, next to the
+/// per-Plugin view digests: where the switches came from, and why a Plugin the
+/// call named is not mounted. It is deliberately not a Plugin id.
+const MOUNT_EVIDENCE_KEY: &str = "plugin-mounts";
+
+/// The Plugin set one node call mounts, and the Session facts behind it.
+struct MountedPlugins {
+    bindings: Vec<PluginBinding>,
+    /// One line per Plugin the call named that is *not* mounted, and why.
+    reasons: Vec<String>,
+    /// The Session whose switches applied, when the Run belongs to one.
+    session: Option<String>,
+    /// Whether a Turn snapshot pinned those switches.
+    snapshot: bool,
+    /// Plugins the Graph's declaration defaulted on (no click, no audit event).
+    by_declaration: Vec<String>,
+    /// Plugins a human's Session switch turned on (the audit event's subject).
+    by_switch: Vec<String>,
+    /// A snapshot file exists but could not be read: the switches are live and the
+    /// observation says so, rather than claiming they were frozen.
+    snapshot_unreadable: bool,
+}
+
+/// The deployment's in-process fake fixture. It is a binding the host enabled by
+/// configuration, not a Plugin the Library has on disk.
+pub(crate) fn is_fake_fixture(binding: &PluginBinding) -> bool {
+    binding
+        .mcp_servers
+        .iter()
+        .any(|server| server == tool_host::FAKE_SERVER_ID)
+}
+
+/// One Turn's Session switches, frozen when the Turn starts.
+///
+/// Run-independent on purpose. A node call reads them from its Run; the Pilot's
+/// own Turn has no Run at all, and it must freeze exactly the same way: the first
+/// caller of a Turn writes the snapshot, and every later caller — including a
+/// retry — reads it, so a click made mid-Turn cannot change what that Turn uses.
+pub(crate) struct FrozenSwitches {
+    /// The switches this Turn applies: the snapshot's, once it exists.
+    pub(crate) switches: BTreeMap<String, bool>,
+    /// The snapshot itself, which is what `resolve` reads.
+    pub(crate) snapshot: MountSnapshot,
+    /// A snapshot file exists but could not be read: the switches above are the
+    /// Session's *current* ones and the call must say so.
+    pub(crate) snapshot_unreadable: bool,
+}
+
+/// Freeze (or read) one Turn's Session switches.
+pub(crate) fn freeze_session_switches(
+    state_root: &Path,
+    session: &str,
+    turn: &str,
+    source: &dyn PluginMountSource,
+) -> Result<FrozenSwitches, String> {
+    let switches = source.session_mounts(session)?;
+    // The Turn's snapshot is written by its **first** caller, whatever that call
+    // needs: a Turn whose first node has no Plugins must still pin the switches it
+    // started with, or a click made mid-Turn would take effect immediately.
+    let path = plugin_mounts::snapshot_path(state_root, session, turn);
+    let existing = plugin_mounts::read_snapshot(&path, session, turn);
+    let snapshot_unreadable = existing.is_none() && path.exists();
+    let snapshot = match existing {
+        Some(snapshot) => snapshot,
+        None => {
+            let candidate = MountSnapshot::new(session, turn, &switches);
+            plugin_mounts::write_snapshot(&path, &candidate)
+                .map_err(|error| format!("Turn Plugin mount snapshot is unavailable: {error}"))?;
+            // Another attempt of this Turn may have won the race; the snapshot on
+            // disk is the one this Turn uses.
+            plugin_mounts::read_snapshot(&path, session, turn).unwrap_or(candidate)
+        }
+    };
+    Ok(FrozenSwitches {
+        switches: snapshot.mounts.clone(),
+        snapshot,
+        snapshot_unreadable,
+    })
+}
+
+/// The Plugins one frozen Session turn mounts, without a Run and without a Graph.
+///
+/// The Pilot's own Turn has neither: a Plugin reaches it because a human mounted
+/// it in the Session. The rules are the node call's rules — the Library must have
+/// it (or the deployment's fake fixture must be enabled), and the view its own
+/// declaration maps to must be usable. Nothing here builds, repairs or installs
+/// anything, and `reasons` says why a switched-on Plugin is absent.
+pub(crate) fn session_plugin_mounts(
+    library_root: &Path,
+    fixture: &tool_host::PluginToolHost,
+    switches: &BTreeMap<String, bool>,
+) -> Result<(Vec<PluginBinding>, Vec<String>), String> {
+    let catalog = anchor_graph_host::FilePluginCatalog::new(library_root);
+    let mut installed = BTreeMap::new();
+    for id in switches.keys() {
+        let fake = fixture
+            .resolve_fixture_plugins(std::slice::from_ref(id))
+            .is_ok();
+        installed.insert(id.clone(), fake || catalog.definition(id).is_ok());
+    }
+    let resolved = plugin_mounts::resolve(None, switches, &[], &installed);
+    let mut reasons = resolved.reasons;
+    let mut bindings = Vec::new();
+    for id in resolved.mounts.keys() {
+        // A Plugin whose own declaration's view is not usable does not appear: a
+        // mount never becomes a view build.
+        if let Err(unusable) = crate::plugin_view::prepare_for_plugin(library_root, id) {
+            reasons.push(unusable.to_string());
+            continue;
+        }
+        let binding = fixture
+            .resolve_fixture_plugins(std::slice::from_ref(id))
+            .ok()
+            .and_then(|mut bindings| bindings.pop())
+            .map(Ok)
+            .unwrap_or_else(|| {
+                catalog
+                    .resolve(std::slice::from_ref(id))
+                    .map_err(|error| format!("Plugin `{id}` is not available: {error}"))?
+                    .pop()
+                    .ok_or_else(|| format!("Plugin `{id}` is not available in this Library"))
+            })?;
+        bindings.push(binding);
+    }
+    Ok((bindings, reasons))
 }
 
 impl HostIoResolver {
+    // One argument per host capability the resolver is allowed to reach; the host
+    // that owns them wires them all at once.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         artifacts: HostArtifacts,
         sandbox: std::sync::Arc<BubblewrapSandbox>,
@@ -78,6 +217,7 @@ impl HostIoResolver {
         plugin_bindings: BTreeMap<String, PluginBinding>,
         run_store: FileRunStore,
         local_inputs: LocalInputs,
+        mounts: std::sync::Arc<dyn PluginMountSource>,
     ) -> Self {
         Self {
             artifacts,
@@ -89,16 +229,51 @@ impl HostIoResolver {
             library_root: None,
             observed_views: std::sync::Mutex::new(BTreeMap::new()),
             local_inputs,
+            mounts,
         }
     }
 
-    /// Remember which view this invocation resolved, for the Run's own record.
-    fn remember_plugin_views(&self, key: &InvocationKey, views: BTreeMap<String, String>) {
-        if views.is_empty() {
+    /// Remember what this invocation observed about its Plugins, for the Run's
+    /// own record: which view each one resolved, and where its mount switches
+    /// came from together with why a Plugin the call named is not mounted.
+    fn remember_plugin_observation(
+        &self,
+        key: &InvocationKey,
+        views: BTreeMap<String, String>,
+        mounted: &MountedPlugins,
+    ) {
+        let mut observed = views;
+        if let Some(session) = &mounted.session {
+            let source = if mounted.snapshot {
+                "this Turn's snapshot"
+            } else if mounted.snapshot_unreadable {
+                // A snapshot exists but could not be read: the switches are live,
+                // and the observation says so instead of claiming they were frozen.
+                "no snapshot (unreadable); the Session's current switches"
+            } else {
+                "the Session's current switches"
+            };
+            let mut value = format!("source={source}; session={session}");
+            if !mounted.by_declaration.is_empty() {
+                value.push_str(&format!(
+                    "; by-declaration=[{}]",
+                    mounted.by_declaration.join(",")
+                ));
+            }
+            if !mounted.by_switch.is_empty() {
+                value.push_str(&format!("; by-switch=[{}]", mounted.by_switch.join(",")));
+            }
+            if !mounted.reasons.is_empty() {
+                value.push_str("; ");
+                value.push_str(&mounted.reasons.join("; "));
+            }
+            observed.insert(MOUNT_EVIDENCE_KEY.to_owned(), value);
+        }
+        if observed.is_empty() {
             return;
         }
-        if let Ok(mut observed) = self.observed_views.lock() {
-            observed.insert(key.durable_key(), views);
+        if let Ok(mut views) = self.observed_views.lock() {
+            views.insert(key.durable_key(), observed);
         }
     }
 
@@ -269,17 +444,220 @@ impl HostIoResolver {
             .map_err(|error| format!("OAuth Run owner is unavailable: {error:?}"))
     }
 
+    /// The Plugin directories this invocation mounts.
+    ///
+    /// The fake fixture is not a filesystem Plugin, so it is never mounted; the
+    /// others mount exactly the directory the Library resolved.
     fn plugin_mounts(
         &self,
         bindings: &[PluginBinding],
     ) -> Result<Vec<anchor_runtime::ReadOnlyInput>, String> {
-        if bindings
+        let mountable = bindings
             .iter()
-            .all(|binding| binding.id == "fake-tools" && binding.resources.is_empty())
-        {
+            .filter(|binding| !is_fake_fixture(binding))
+            .cloned()
+            .collect::<Vec<_>>();
+        if mountable.is_empty() {
             return Ok(Vec::new());
         }
-        tool_host::McpToolConfig::plugin_mounts(self.plugin_library_root()?, bindings)
+        tool_host::McpToolConfig::plugin_mounts(self.plugin_library_root()?, &mountable)
+    }
+
+    /// The Session and Turn this Run's mount switches come from.
+    ///
+    /// The immutable Run metadata is the only place that says which Session a Run
+    /// belongs to: a pilot Run and a channel Run record Session and Turn, a
+    /// persistent assistant records the Session and takes its Turn from the
+    /// assistant invocation's own immutable binding, and a plain conversation
+    /// records the Session only. When no Turn id is recorded, this Run *is* the
+    /// unit whose switches are frozen, so it names itself. A Run in no Session
+    /// mounts only what its Graph declares.
+    fn session_turn(&self, key: &InvocationKey) -> Result<Option<(String, String)>, String> {
+        let root = self.local_inputs.state_root();
+        let Some(metadata) = crate::application::metadata::load(root, &key.run_id)
+            .map_err(|error| format!("Run Session metadata unavailable: {error:?}"))?
+        else {
+            return Ok(None);
+        };
+        if let Some(source) = &metadata.pilot {
+            return Ok(Some((source.session.clone(), source.turn.clone())));
+        }
+        if let Some(source) = &metadata.channel {
+            return Ok(Some((source.session.clone(), source.turn.clone())));
+        }
+        if let Some(source) = &metadata.assistant {
+            let turn = crate::assistant::binding(root, key)?
+                .map(|binding| binding.turn)
+                .unwrap_or_else(|| key.run_id.clone());
+            return Ok(Some((source.session.clone(), turn)));
+        }
+        if let Some(call) = &metadata.session_call {
+            return Ok(Some((call.context.session.clone(), key.run_id.clone())));
+        }
+        if let Some(source) = &metadata.conversation {
+            return Ok(Some((source.session.clone(), key.run_id.clone())));
+        }
+        Ok(None)
+    }
+
+    /// The Plugins this node call actually mounts, and why the others are off.
+    ///
+    /// The Graph's declaration is a *default*: a required Plugin is always
+    /// mounted, an optional one follows the Session's switches, and a Plugin the
+    /// human mounted in the Session is mounted even though no Graph named it. A
+    /// Plugin the Library does not have is not mounted, and `reasons` says so.
+    ///
+    /// The switches are frozen per Turn: the first call of a Turn writes the
+    /// snapshot, and a retry of that Turn reuses it instead of reading a Session
+    /// that changed in between.
+    ///
+    /// `required`/`default` come from the Graph's own declaration, read back out
+    /// of the admitted Run by node: `required: true` is always mounted and cannot
+    /// be switched off, an optional one follows "the Session's explicit value,
+    /// else its `default`, else on". A bare id in an older Graph is required, which
+    /// is what a declaration has always meant.
+    fn mounted_plugins(&self, request: &NodeExecutionRequest) -> Result<MountedPlugins, String> {
+        let key = &request.key;
+        let admitted = self
+            .run_store
+            .load(&key.run_id)
+            .map_err(|error| format!("load admitted Run Plugin bindings: {error}"))?
+            .ok_or_else(|| {
+                format!(
+                    "Plugin mount resolution requires a durable admitted Run `{}`",
+                    key.run_id
+                )
+            })?;
+        let session_turn = self.session_turn(key)?;
+        let frozen = match &session_turn {
+            Some((session, turn)) => Some(freeze_session_switches(
+                self.local_inputs.state_root(),
+                session,
+                turn,
+                self.mounts.as_ref(),
+            )?),
+            None => None,
+        };
+        let switches = frozen
+            .as_ref()
+            .map(|frozen| frozen.switches.clone())
+            .unwrap_or_default();
+        let snapshot_unreadable = frozen
+            .as_ref()
+            .is_some_and(|frozen| frozen.snapshot_unreadable);
+        let snapshot = frozen.as_ref().map(|frozen| &frozen.snapshot);
+        if request.plugins.is_empty() && switches.is_empty() {
+            return Ok(MountedPlugins {
+                bindings: Vec::new(),
+                reasons: Vec::new(),
+                session: session_turn.map(|(session, _)| session),
+                snapshot: snapshot.is_some(),
+                snapshot_unreadable,
+                by_declaration: Vec::new(),
+                by_switch: Vec::new(),
+            });
+        }
+        let mut reasons = Vec::new();
+        let catalog = anchor_graph_host::FilePluginCatalog::new(self.plugin_library_root()?);
+        // `declared` only scopes the reasons; the mounted set may name a Plugin
+        // the Graph never declared, which is exactly the point.
+        // A `required: true` declaration is an authorization, so only the
+        // deployment's own pilot Graph may hand it out: that is the Graph an
+        // operator authors and reviews. Any *other* Graph -- one an assistant
+        // created or edited in this Session -- has its `required` downgraded to
+        // optional, so the assistant cannot grant itself a Plugin the human cannot
+        // switch off. It still mounts when the Session's switches say so.
+        // The one authority the API's graph routes and the Session view also read.
+        let configured_pilot_graph = crate::api::configured_pilot_graph();
+        let declaring_graph =
+            crate::application::metadata::load(self.local_inputs.state_root(), &key.run_id)
+                .ok()
+                .flatten()
+                .map(|metadata| metadata.graph);
+        let required_is_authoritative = declaring_graph.is_some()
+            && declaring_graph.as_deref() == configured_pilot_graph.as_deref();
+        if !required_is_authoritative
+            && admitted
+                .snapshot
+                .nodes
+                .iter()
+                .any(|node| node.plugins.iter().any(|reference| reference.required))
+        {
+            reasons.push(
+                "a `required: true` declaration from a Graph that is not the deployment's pilot Graph is treated as optional"
+                    .to_owned(),
+            );
+        }
+        let declared = admitted
+            .snapshot
+            .nodes
+            .iter()
+            .find(|node| node.id == key.node_id)
+            .map(|node| {
+                node.plugins
+                    .iter()
+                    .map(|reference| {
+                        (
+                            reference.id.as_str(),
+                            reference.required && required_is_authoritative,
+                            reference.default,
+                        )
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        let mut installed = BTreeMap::new();
+        for id in declared
+            .iter()
+            .map(|(id, _, _)| *id)
+            .chain(switches.keys().map(String::as_str))
+        {
+            if installed.contains_key(id) {
+                continue;
+            }
+            let fake = self.tools.resolve_fixture_plugins(&[id.to_owned()]).is_ok()
+                || request
+                    .plugins
+                    .iter()
+                    .any(|binding| binding.id == id && is_fake_fixture(binding));
+            installed.insert(id.to_owned(), fake || catalog.definition(id).is_ok());
+        }
+        let mut resolved = plugin_mounts::resolve(snapshot, &switches, &declared, &installed);
+        resolved.reasons.splice(0..0, reasons);
+        if snapshot_unreadable {
+            resolved.snapshot = false;
+            resolved.reasons.push("no snapshot (unreadable)".to_owned());
+        }
+        let mut bindings = Vec::new();
+        for id in resolved.mounts.keys() {
+            // The invocation's own frozen binding comes first, the Run's admitted
+            // binding next; a Plugin the Session added was never frozen, so the
+            // Library answers for it.
+            let binding = request
+                .plugins
+                .iter()
+                .find(|binding| &binding.id == id)
+                .or_else(|| admitted.plugin_bindings.get(id))
+                .cloned()
+                .map(Ok)
+                .unwrap_or_else(|| {
+                    catalog
+                        .resolve(std::slice::from_ref(id))
+                        .map_err(|error| format!("Plugin `{id}` is not available: {error}"))?
+                        .pop()
+                        .ok_or_else(|| format!("Plugin `{id}` is not available in this Library"))
+                })?;
+            bindings.push(binding);
+        }
+        Ok(MountedPlugins {
+            bindings,
+            reasons: resolved.reasons,
+            session: session_turn.map(|(session, _)| session),
+            snapshot: resolved.snapshot,
+            snapshot_unreadable,
+            by_declaration: resolved.by_declaration,
+            by_switch: resolved.by_switch,
+        })
     }
 }
 
@@ -356,18 +734,37 @@ impl NodeHostResolver for HostIoResolver {
                             request.key.run_id
                         )));
                     }
-                    for binding in &request.plugins {
-                        let Some(frozen) = admitted.plugin_bindings.get(&binding.id) else {
-                            return Err(ResolutionError::Host(format!(
-                                "Plugin `{}` is not bound by the admitted Run",
-                                binding.id,
-                            )));
-                        };
-                        if frozen != binding {
-                            return Err(ResolutionError::Host(format!(
-                                "Plugin `{}` differs from the frozen Run binding",
-                                binding.id
-                            )));
+                    // The set this invocation actually mounts: the Graph's
+                    // defaults filtered by the Session's switches and frozen for
+                    // this Turn. Everything below uses this set, so there is one
+                    // filter point and not several.
+                    let mounted = self.mounted_plugins(request)?;
+                    for binding in &mounted.bindings {
+                        let declared = request
+                            .plugins
+                            .iter()
+                            .any(|declared| declared.id == binding.id);
+                        match (admitted.plugin_bindings.get(&binding.id), declared) {
+                            (Some(frozen), _) => {
+                                if frozen != binding {
+                                    return Err(ResolutionError::Host(format!(
+                                        "Plugin `{}` differs from the frozen Run binding",
+                                        binding.id
+                                    )));
+                                }
+                            }
+                            // The Graph declared it but the Run never froze it:
+                            // a corrupt admission, not a Session mount.
+                            (None, true) => {
+                                return Err(ResolutionError::Host(format!(
+                                    "Plugin `{}` is not bound by the admitted Run",
+                                    binding.id,
+                                )));
+                            }
+                            // The Session mounted it. The filter above already
+                            // proved the Library has it; the human's click in the
+                            // Session is its authorization.
+                            (None, false) => {}
                         }
                     }
                     let workspace = self.workspace(request)?;
@@ -382,7 +779,7 @@ impl NodeHostResolver for HostIoResolver {
                     // itself: the Run policy is the deployment floor, not a list of
                     // per-Run trees (a parent Run cannot know its children's Plugins or
                     // environments).
-                    let plugin_mounts = self.plugin_mounts(&request.plugins)?;
+                    let plugin_mounts = self.plugin_mounts(&mounted.bindings)?;
                     let mut grants = local_inputs.clone();
                     grants.extend(plugin_mounts.iter().cloned());
                     let sandbox = std::sync::Arc::new(
@@ -400,7 +797,7 @@ impl NodeHostResolver for HostIoResolver {
                         .map_err(|error| error.to_string())?;
                     readonly_inputs.extend(plugin_mounts);
                     readonly_inputs.extend(local_inputs);
-                    let mut mcp = self.catalog_config(&request.plugins)?;
+                    let mut mcp = self.catalog_config(&mounted.bindings)?;
                     mcp.authorize_oauth(
                         self.oauth_owner_for_run(&request.key.run_id)?,
                         request.network,
@@ -413,23 +810,24 @@ impl NodeHostResolver for HostIoResolver {
                     // declaration that needs a view which is not there is a
                     // deployment problem, not a corrupt Run.
                     let plugin_views = crate::plugin_view::prepare_views_async(
-                        request.plugins.clone(),
+                        mounted.bindings.clone(),
                         deployments.clone(),
                     )
                     .await
                     .map_err(|error| ResolutionError::Graph(error.into_graph_error()))?;
-                    self.remember_plugin_views(
+                    self.remember_plugin_observation(
                         &request.key,
                         plugin_views
                             .iter()
                             .map(|(id, view)| (id.clone(), view.declaration_digest().to_owned()))
                             .collect(),
+                        &mounted,
                     );
                     let plugins = self
                         .tools
                         .assemble_with_sandbox(
                             &mcp,
-                            &request.plugins,
+                            &mounted.bindings,
                             request.network,
                             crate::tool_host::SandboxLaunch {
                                 sandbox: &sandbox,
@@ -457,7 +855,7 @@ impl NodeHostResolver for HostIoResolver {
                     let node_tools = crate::node_tools::NodeTools::new(
                         crate::channel_tools::wrap(
                             plugins,
-                            &request.plugins,
+                            &mounted.bindings,
                             request.key.clone(),
                             self.local_inputs.state_root().to_path_buf(),
                             conversation.as_ref().map(|value| value.reply_node.clone()),
@@ -860,6 +1258,388 @@ mod resolver_tests {
     use anchor_sandbox_bwrap::BubblewrapPolicy;
     use std::sync::atomic::AtomicBool;
 
+    /// A Session mount source a test can fix, and then change under a Turn.
+    struct FixedMounts(std::sync::Mutex<BTreeMap<String, bool>>);
+
+    impl FixedMounts {
+        fn new(entries: &[(&str, bool)]) -> Self {
+            Self(std::sync::Mutex::new(
+                entries
+                    .iter()
+                    .map(|(id, on)| ((*id).to_owned(), *on))
+                    .collect(),
+            ))
+        }
+
+        fn set(&self, id: &str, on: bool) {
+            self.0.lock().unwrap().insert(id.to_owned(), on);
+        }
+    }
+
+    impl PluginMountSource for FixedMounts {
+        fn session_mounts(&self, _session: &str) -> Result<BTreeMap<String, bool>, String> {
+            Ok(self.0.lock().unwrap().clone())
+        }
+    }
+
+    fn fixed(entries: &[(&str, bool)]) -> std::sync::Arc<dyn PluginMountSource> {
+        std::sync::Arc::new(FixedMounts::new(entries))
+    }
+
+    fn sandbox(workspace: &Path) -> std::sync::Arc<BubblewrapSandbox> {
+        std::sync::Arc::new(
+            BubblewrapSandbox::new(
+                BubblewrapPolicy::new("bwrap", ["sh"]).authorize_workspace_root(workspace),
+            )
+            .unwrap(),
+        )
+    }
+
+    fn library_with(root: &Path, ids: &[&str]) -> PathBuf {
+        let library = root.join("library");
+        std::fs::create_dir_all(library.join("plugins")).unwrap();
+        for id in ids {
+            let directory = library.join("plugins").join(id);
+            std::fs::create_dir_all(&directory).unwrap();
+            std::fs::write(
+                directory.join("plugin.json"),
+                json!({"name": id}).to_string(),
+            )
+            .unwrap();
+        }
+        library
+    }
+
+    /// A Run in one pilot Session/Turn whose Graph declares `declared`, with
+    /// `installed` present in the Library and `switches` set on the Session.
+    /// `declared` is `(id, required, default)`: what the *Graph* says, which is
+    /// the default the Session's switches are applied to.
+    fn session_fixture(
+        installed: &[&str],
+        declared: &[(&str, bool, Option<bool>)],
+        switches: &[(&str, bool)],
+    ) -> (
+        tempfile::TempDir,
+        HostIoResolver,
+        std::sync::Arc<FixedMounts>,
+        NodeExecutionRequest,
+    ) {
+        let root = tempfile::tempdir().unwrap();
+        let state = root.path().join("state");
+        let workspace = root.path().join("workspaces");
+        let artifacts = root.path().join("artifacts");
+        std::fs::create_dir_all(&workspace).unwrap();
+        std::fs::create_dir_all(&artifacts).unwrap();
+        let library = library_with(root.path(), installed);
+        let declared_json = declared
+            .iter()
+            .map(|(id, required, default)| {
+                let mut item = json!({"id": id, "required": required});
+                if let Some(default) = default {
+                    item["default"] = json!(default);
+                }
+                item
+            })
+            .collect::<Vec<_>>();
+        let snapshot = GraphSnapshot::admit(json!({
+            "objective":"session mounts","entry":"agent",
+            "agents":{"worker":{"model":"fixture"}},
+            "nodes":[{"id":"agent","agent":"worker","plugins":declared_json}],"edges":[]
+        }))
+        .unwrap();
+        let mut record =
+            GraphRunRecord::create_with_id(snapshot, json!({}), "session-mounts").unwrap();
+        record.plugin_bindings = declared
+            .iter()
+            .map(|(id, _, _)| {
+                (
+                    (*id).to_owned(),
+                    PluginBinding {
+                        id: (*id).to_owned(),
+                        digest: format!("digest-{id}"),
+                        resources: Vec::new(),
+                        mcp_servers: Vec::new(),
+                    },
+                )
+            })
+            .collect();
+        record.plugin_bindings_initialized = true;
+        let store = FileRunStore::new(state.join("runs"));
+        store.save(&record).unwrap();
+        let mut metadata = crate::application::RunMetadata::new(
+            record.run_id.clone(),
+            "session-mounts".into(),
+            record.graph_digest.clone(),
+            &library,
+        )
+        .unwrap();
+        metadata.pilot = Some(crate::application::metadata::PilotRunSource {
+            owner: "alice".into(),
+            session: "session-one".into(),
+            turn: "turn-one".into(),
+        });
+        crate::application::metadata::save(&state, &metadata).unwrap();
+        let mounts = std::sync::Arc::new(FixedMounts::new(switches));
+        let resolver = HostIoResolver::new(
+            HostArtifacts::new(artifacts, workspace.clone()),
+            sandbox(&workspace),
+            std::sync::Arc::new(tool_host::PluginToolHost::new(Vec::<String>::new())),
+            tool_host::McpToolConfig::default(),
+            record.plugin_bindings.clone(),
+            store,
+            LocalInputs::new(state, None).unwrap(),
+            mounts.clone(),
+        )
+        .with_library_root(Some(library));
+        let request = NodeExecutionRequest {
+            key: InvocationKey {
+                run_id: record.run_id,
+                graph_digest: record.graph_digest,
+                node_id: "agent".into(),
+                invocation: 1,
+            },
+            model: Some("fixture".into()),
+            task: String::new(),
+            instructions: String::new(),
+            routes: Vec::new(),
+            input: json!({}),
+            input_commits: Vec::new(),
+            plugins: record.plugin_bindings.values().cloned().collect(),
+            max_provider_requests: None,
+            wall_time_limit_seconds: Some(30.0),
+            network: false,
+            kind: NodeKind::Agent,
+            operation: None,
+            cancellation: std::sync::Arc::new(AtomicBool::new(false)),
+        };
+        (root, resolver, mounts, request)
+    }
+
+    fn mounted_ids(mounted: &MountedPlugins) -> Vec<String> {
+        mounted
+            .bindings
+            .iter()
+            .map(|binding| binding.id.clone())
+            .collect()
+    }
+
+    #[test]
+    fn a_session_mounted_plugin_the_graph_never_declared_is_mounted() {
+        let (_root, resolver, _mounts, request) =
+            session_fixture(&["side"], &[], &[("side", true)]);
+        let mounted = resolver.mounted_plugins(&request).unwrap();
+        assert_eq!(mounted_ids(&mounted), ["side"]);
+        // The human's click authorized it, not the Graph: the binding came from
+        // the Library, with the identity the catalog resolved.
+        assert!(!mounted.bindings[0].digest.is_empty());
+        assert_eq!(mounted.session.as_deref(), Some("session-one"));
+        assert!(mounted.snapshot, "the Turn's switches are pinned");
+    }
+
+    #[test]
+    fn a_session_switched_off_plugin_is_not_mounted() {
+        let (_root, resolver, _mounts, request) = session_fixture(
+            &["side", "kept"],
+            &[("side", false, None), ("kept", true, None)],
+            &[("side", false)],
+        );
+        let mounted = resolver.mounted_plugins(&request).unwrap();
+        // An optional Plugin the Session switched off stays off; a required one
+        // is mounted regardless of the switch.
+        assert_eq!(mounted_ids(&mounted), ["kept"]);
+        assert!(
+            mounted
+                .reasons
+                .iter()
+                .any(|reason| reason.contains("`side`") && reason.contains("switched off")),
+            "{:?}",
+            mounted.reasons
+        );
+    }
+
+    /// An optional Plugin follows "the Session's explicit value, else its
+    /// `default`, else on" -- and a required one ignores the Session entirely.
+    #[test]
+    fn an_optional_default_decides_until_the_session_says_otherwise() {
+        // `default: true` and no Session value: mounted.
+        let (_root, resolver, _mounts, request) =
+            session_fixture(&["opt-on"], &[("opt-on", false, Some(true))], &[]);
+        assert_eq!(
+            mounted_ids(&resolver.mounted_plugins(&request).unwrap()),
+            ["opt-on"]
+        );
+
+        // `default: false` and no Session value: not mounted.
+        let (_root, resolver, _mounts, request) =
+            session_fixture(&["opt-off"], &[("opt-off", false, Some(false))], &[]);
+        let mounted = resolver.mounted_plugins(&request).unwrap();
+        assert!(mounted_ids(&mounted).is_empty(), "{:?}", mounted.reasons);
+        assert!(
+            mounted
+                .reasons
+                .iter()
+                .any(|reason| reason.contains("opt-off")),
+            "{:?}",
+            mounted.reasons
+        );
+
+        // The Session's explicit value beats a `default: false`.
+        let (_root, resolver, _mounts, request) = session_fixture(
+            &["opt-off"],
+            &[("opt-off", false, Some(false))],
+            &[("opt-off", true)],
+        );
+        assert_eq!(
+            mounted_ids(&resolver.mounted_plugins(&request).unwrap()),
+            ["opt-off"]
+        );
+
+        // ...and `default: true` does not survive an explicit off.
+        let (_root, resolver, _mounts, request) = session_fixture(
+            &["opt-on"],
+            &[("opt-on", false, Some(true))],
+            &[("opt-on", false)],
+        );
+        let mounted = resolver.mounted_plugins(&request).unwrap();
+        assert!(mounted_ids(&mounted).is_empty(), "{:?}", mounted.reasons);
+        assert!(
+            mounted
+                .reasons
+                .iter()
+                .any(|reason| reason.contains("switched off")),
+            "{:?}",
+            mounted.reasons
+        );
+    }
+
+    /// Run one body with `ANCHOR_RUNNER_GRAPH_NAME` set: the configured pilot Graph
+    /// is the only Graph whose `required: true` is an authorization.
+    fn with_configured_pilot_graph<T>(graph: Option<&str>, body: impl FnOnce() -> T) -> T {
+        let _guard = crate::PROCESS_ENV_LOCK.blocking_lock();
+        let previous = std::env::var_os("ANCHOR_RUNNER_GRAPH_NAME");
+        unsafe {
+            match graph {
+                Some(graph) => std::env::set_var("ANCHOR_RUNNER_GRAPH_NAME", graph),
+                None => std::env::remove_var("ANCHOR_RUNNER_GRAPH_NAME"),
+            }
+        }
+        let result = body();
+        unsafe {
+            match previous {
+                Some(value) => std::env::set_var("ANCHOR_RUNNER_GRAPH_NAME", value),
+                None => std::env::remove_var("ANCHOR_RUNNER_GRAPH_NAME"),
+            }
+        }
+        result
+    }
+
+    #[test]
+    fn a_required_plugin_from_the_pilot_graph_cannot_be_switched_off() {
+        with_configured_pilot_graph(Some("session-mounts"), || {
+            let (_root, resolver, _mounts, request) =
+                session_fixture(&["must"], &[("must", true, None)], &[("must", false)]);
+            let mounted = resolver.mounted_plugins(&request).unwrap();
+            assert_eq!(mounted_ids(&mounted), ["must"]);
+            assert!(
+                !mounted
+                    .reasons
+                    .iter()
+                    .any(|reason| reason.contains("`must`")),
+                "a mounted Plugin needs no reason: {:?}",
+                mounted.reasons
+            );
+        });
+    }
+
+    /// The assistant can create or edit a Graph in this Session, so a
+    /// `required: true` in *another* Graph must not be an authorization: it is a
+    /// default, and the Session's switch still wins.
+    #[test]
+    fn a_required_declaration_from_another_graph_is_only_a_default() {
+        with_configured_pilot_graph(Some("the-pilot-graph"), || {
+            let (_root, resolver, _mounts, request) =
+                session_fixture(&["must"], &[("must", true, None)], &[("must", false)]);
+            let mounted = resolver.mounted_plugins(&request).unwrap();
+            assert!(
+                mounted_ids(&mounted).is_empty(),
+                "another Graph's required must not defeat the Session: {:?}",
+                mounted.reasons
+            );
+            assert!(
+                mounted
+                    .reasons
+                    .iter()
+                    .any(|reason| reason.contains("treated as optional")),
+                "{:?}",
+                mounted.reasons
+            );
+            assert!(
+                mounted
+                    .reasons
+                    .iter()
+                    .any(|reason| reason.contains("switched off")),
+                "{:?}",
+                mounted.reasons
+            );
+        });
+    }
+
+    #[tokio::test]
+    async fn an_uninstalled_plugin_is_not_mounted_and_says_so() {
+        let (_root, resolver, _mounts, request) =
+            session_fixture(&["installed"], &[], &[("ghost", true), ("installed", true)]);
+        let mounted = resolver.mounted_plugins(&request).unwrap();
+        assert_eq!(mounted_ids(&mounted), ["installed"]);
+        assert!(
+            mounted
+                .reasons
+                .iter()
+                .any(|reason| reason.contains("`ghost`")
+                    && reason.contains("is not available in this Library")),
+            "{:?}",
+            mounted.reasons
+        );
+        // The same reason reaches the Run's own record of what this call observed.
+        resolver.tools(&request).await.unwrap();
+        let observed = resolver.observed_plugin_views(&request.key);
+        assert!(
+            observed.get(MOUNT_EVIDENCE_KEY).is_some_and(|value| {
+                value.contains("this Turn's snapshot")
+                    && value.contains("`ghost` is not available in this Library")
+                    // A Plugin mounted by a click is named as such, so "why is this
+                    // mounted" is answerable without reading the absence of reasons.
+                    && value.contains("by-switch=[installed]")
+            }),
+            "{observed:?}"
+        );
+    }
+
+    #[test]
+    fn a_turn_keeps_the_first_snapshot_when_the_session_switch_changes() {
+        let (_root, resolver, mounts, request) = session_fixture(&["side"], &[], &[("side", true)]);
+        assert_eq!(
+            mounted_ids(&resolver.mounted_plugins(&request).unwrap()),
+            ["side"]
+        );
+        mounts.set("side", false);
+        // The Turn already started: the tool set must not change under it.
+        assert_eq!(
+            mounted_ids(&resolver.mounted_plugins(&request).unwrap()),
+            ["side"]
+        );
+        let path = plugin_mounts::snapshot_path(
+            resolver.local_inputs.state_root(),
+            "session-one",
+            "turn-one",
+        );
+        assert_eq!(
+            plugin_mounts::read_snapshot(&path, "session-one", "turn-one")
+                .unwrap()
+                .mounts,
+            BTreeMap::from([("side".to_owned(), true)])
+        );
+    }
+
     #[tokio::test]
     async fn resolver_returns_owned_anchor_tools_from_frozen_plugin_bindings() {
         let root = tempfile::tempdir().unwrap();
@@ -906,6 +1686,7 @@ mod resolver_tests {
                 .collect(),
             store,
             LocalInputs::new(root.path().to_path_buf(), None).unwrap(),
+            fixed(&[]),
         )
         .with_library_root(Some(root.path().to_path_buf()));
 
@@ -1031,6 +1812,7 @@ mod resolver_tests {
             BTreeMap::new(),
             store,
             LocalInputs::new(state.clone(), None).unwrap(),
+            fixed(&[]),
         )
         .with_library_root(Some(library));
         let request = NodeExecutionRequest {
@@ -1131,6 +1913,7 @@ mod resolver_tests {
             BTreeMap::new(),
             store,
             local,
+            fixed(&[]),
         );
         let mut request = NodeExecutionRequest {
             key: InvocationKey {

@@ -14,6 +14,7 @@ mod local_inputs;
 mod pilot_host;
 mod pilot_tools;
 mod plugin_dependencies;
+mod plugin_mounts;
 mod plugin_view;
 mod resource_read;
 use artifacts::HostArtifacts;
@@ -349,6 +350,9 @@ fn make_host_with_control(
     mcp.environment = tool_environment;
     let artifacts = HostArtifacts::new(state.join("artifacts"), work_root.clone());
     let tools = tool_host::PluginToolHost::new(fake_plugin_ids);
+    // The Session store is the platform's; this host only asks it what the
+    // Session mounted. The resolver never opens that database itself.
+    let session_mounts = Arc::new(plugin_mounts::SessionMounts::open(&state)?);
     let io_resolver = Arc::new(
         node_host::HostIoResolver::new(
             artifacts.clone(),
@@ -358,6 +362,7 @@ fn make_host_with_control(
             plugin_bindings.clone(),
             anchor_runtime::graph::FileRunStore::new(state.join("runs")),
             local_inputs::LocalInputs::from_env(state.clone())?,
+            session_mounts,
         )
         .with_library_root(library_root),
     );

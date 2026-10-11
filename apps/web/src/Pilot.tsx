@@ -4,6 +4,7 @@ import { api, ApiError } from './api';
 import { Markdown } from './markdown';
 import { PilotTurn, type Turn } from './PilotTurn';
 import { SessionActions } from './SessionActions';
+import { SessionPlugins } from './SessionPlugins';
 import { PilotQuestionHistory } from './PilotQuestionHistory';
 
 type Session = {
@@ -330,6 +331,9 @@ export function Pilot({ session = '', onSession }: { session?: string; onSession
         <div><strong title={selected || undefined}>{heading}</strong><span>{stopping ? '正在停止执行' : waitingQuestion ? '等待你的答复' : busy ? '正在处理你的请求' : loading ? '正在加载对话' : current ? labels[current.status] : '和 Anchor 一起开展研究'}</span></div>
         {current?.status === 'interrupted' && <button onClick={() => void resume()} disabled={busy || loading}>继续上次回复</button>}
       </header>
+      {/* Mounting a Plugin belongs to the session, not to one Turn: it is set up here and takes
+          effect from the next Turn. */}
+      <SessionPlugins key={selected} session={selected} />
       <div className="pilot-messages" ref={scroller} role="log" aria-label="对话消息" aria-live="polite" onScroll={() => {
         const el = scroller.current;
         if (!el) return;

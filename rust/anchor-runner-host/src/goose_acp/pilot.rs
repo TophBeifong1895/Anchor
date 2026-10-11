@@ -137,6 +137,9 @@ impl GoosePilot {
         self,
         request: PilotTurn,
         tools: Arc<PilotTools>,
+        // The Plugin tools this Turn froze when it was admitted. Empty is the
+        // normal case for a Session that mounted nothing.
+        plugin_tools: Vec<Arc<dyn ToolPort>>,
     ) -> Result<TurnStatus, String> {
         directory(&request.root)?;
         fs::set_permissions(&request.root, fs::Permissions::from_mode(0o700))
@@ -165,6 +168,7 @@ impl GoosePilot {
         let request = Arc::new(request);
         let guarded = Arc::new(PilotPort {
             tools,
+            plugin_tools,
             request: request.clone(),
             fact: fact.clone(),
             sequence: AtomicU64::new(0),
@@ -394,14 +398,49 @@ fn emit(request: &PilotTurn, event: Value) -> Result<(), String> {
 
 pub(super) struct PilotPort {
     tools: Arc<PilotTools>,
+    /// The Plugin tool ports this Turn froze when it was admitted. They are part
+    /// of the Pilot's tool list, never rebuilt from live Session state: a click
+    /// made during this Turn must not change what this Turn can call.
+    plugin_tools: Vec<Arc<dyn ToolPort>>,
     request: Arc<PilotTurn>,
     fact: Arc<Mutex<PilotFact>>,
     sequence: AtomicU64,
 }
 
+/// The Pilot's tool list: the built-in tools, then the Plugin tools this Turn
+/// froze. A Plugin tool may never shadow a built-in one, so the built-ins win.
+pub(crate) fn plugin_definitions(
+    mut definitions: Vec<ToolDefinition>,
+    plugin_tools: &[Arc<dyn ToolPort>],
+) -> Vec<ToolDefinition> {
+    for port in plugin_tools {
+        for definition in port.definitions() {
+            if !definitions
+                .iter()
+                .any(|existing| existing.name == definition.name)
+            {
+                definitions.push(definition);
+            }
+        }
+    }
+    definitions
+}
+
+/// The frozen Plugin port that owns this tool name, if any.
+pub(crate) fn plugin_port<'ports>(
+    plugin_tools: &'ports [Arc<dyn ToolPort>],
+    name: &str,
+) -> Option<&'ports Arc<dyn ToolPort>> {
+    plugin_tools.iter().find(|port| {
+        port.definitions()
+            .iter()
+            .any(|definition| definition.name == name)
+    })
+}
+
 impl ToolPort for PilotPort {
     fn definitions(&self) -> Vec<ToolDefinition> {
-        let mut definitions = self.tools.definitions();
+        let mut definitions = plugin_definitions(self.tools.definitions(), &self.plugin_tools);
         definitions.extend(pilot_interaction::definitions());
         definitions
     }
@@ -475,6 +514,10 @@ impl PilotPort {
                     "interactive tools require native MCP elicitation".into(),
                 )),
             }
+        } else if let Some(port) = plugin_port(&self.plugin_tools, name) {
+            // A frozen Plugin tool: the human's mount is its authorization, so it
+            // is called like the Pilot's own Mutate tools.
+            port.call(name, arguments).await
         } else {
             self.tools.call(name, arguments).await
         };

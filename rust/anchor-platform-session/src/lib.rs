@@ -217,6 +217,14 @@ pub struct Session {
     pub questions: Vec<Value>,
     pub operation: Option<Value>,
     pub operations: BTreeMap<String, Value>,
+    /// Whether this Session mounts one installed Plugin, by id.
+    ///
+    /// The authorization is the human's click in the Session view plus the audit
+    /// event it writes -- not the Graph's declaration. The Graph's declaration is
+    /// only the *default* (`required` cannot be switched off at all). Stored in
+    /// `sessions.data`: an older row has no key and reads as "no override".
+    #[serde(default)]
+    pub plugin_mounts: BTreeMap<String, bool>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }

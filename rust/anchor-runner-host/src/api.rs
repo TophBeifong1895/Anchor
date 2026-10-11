@@ -24,7 +24,7 @@ mod wecom;
 mod wecom_progress;
 use super::*;
 use crate::application::{ApplicationError, RunApplication};
-use anchor_graph_host::FileGraphBundleLoader;
+use anchor_graph_host::{FileGraphBundleLoader, FilePluginCatalog, PluginDefinition};
 use anchor_runtime::graph::{FileRunStore, RunStatus};
 use axum::{
     Json, Router,
@@ -45,7 +45,7 @@ use schedules::*;
 use serde_json::{Value, json};
 use sessions::*;
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet},
     env, io,
     path::{Path, PathBuf},
     sync::{
@@ -198,6 +198,33 @@ fn status(value: RunStatus) -> &'static str {
     }
 }
 
+/// The one Graph this deployment configures as its pilot Graph.
+///
+/// It is the Graph whose `required: true` declarations are an authorization, the
+/// Graph the in-assistant tools may not rewrite, and the Graph the HTTP graph
+/// routes refuse to touch. Every one of those decisions must read *this* answer:
+/// the explicit `ANCHOR_RUNNER_GRAPH_NAME`, else the configured bundle's own
+/// directory name. A second derivation (an env read here, a default there) is how
+/// one side starts trusting a Graph the other does not.
+///
+/// `None` means the deployment named no Graph and its bundle has no usable name:
+/// then no Graph may hand out `required`, which is the fail-closed direction.
+pub(crate) fn configured_pilot_graph() -> Option<String> {
+    env::var("ANCHOR_RUNNER_GRAPH_NAME")
+        .ok()
+        .map(|name| name.trim().to_owned())
+        .filter(|name| !name.is_empty())
+        .or_else(|| {
+            env::var_os("ANCHOR_RUNNER_BUNDLE_ROOT")
+                .map(PathBuf::from)
+                .and_then(|root| {
+                    root.file_name()
+                        .map(|name| name.to_string_lossy().into_owned())
+                })
+                .filter(|name| !name.is_empty())
+        })
+}
+
 pub async fn serve() -> io::Result<()> {
     let bundle_root = env::var_os("ANCHOR_RUNNER_BUNDLE_ROOT")
         .map(PathBuf::from)
@@ -208,13 +235,8 @@ pub async fn serve() -> io::Result<()> {
     let workspace_root = env::var_os("ANCHOR_RUNNER_WORKSPACE_ROOT")
         .map(PathBuf::from)
         .ok_or_else(|| io::Error::other("ANCHOR_RUNNER_WORKSPACE_ROOT is required"))?;
-    let graph_name = env::var("ANCHOR_RUNNER_GRAPH_NAME").unwrap_or_else(|_| {
-        bundle_root
-            .file_name()
-            .unwrap_or_default()
-            .to_string_lossy()
-            .into_owned()
-    });
+    // The same single authority the node call and the graph routes read.
+    let graph_name = configured_pilot_graph().unwrap_or_default();
     let listen = env::var("ANCHOR_RUNNER_LISTEN").unwrap_or_else(|_| "127.0.0.1:8077".into());
     let loopback = listen
         .parse::<std::net::SocketAddr>()
@@ -575,6 +597,286 @@ async fn channel_sessions_projection(
     .await
 }
 
+/// What one Session's current Run froze about one Plugin.
+///
+/// Several nodes of the same snapshot may declare the same Plugin, and the
+/// Session view cannot know which node the next Turn starts at, so both fields
+/// aggregate over the whole frozen snapshot: **any** node declaring `required`
+/// makes it required, and it counts as mounted by default when **some** node
+/// would mount it with no Session switch (it is required, or its `default` is
+/// not explicitly false). For a single declaring node this is exactly what the
+/// mount filter does for that node.
+#[derive(Debug, Clone, Copy, Default)]
+struct PluginDeclaration {
+    required: bool,
+    mounts_by_default: bool,
+}
+
+/// The declarations the Session's **attached Runs froze**, by Plugin id.
+///
+/// Deliberately not the Graph on disk: the mount filter reads the admitted Run's
+/// frozen snapshot (`node_host::mounted_plugins`), so this page has to answer
+/// from the same facts or it would promise a mount that Run never makes.
+///
+/// The answer is the **union over every Run this Session attached**, not the most
+/// recent one. An assistant's `graph_run` attaches a Run of a Graph it made
+/// itself, so "the last Run" is something the assistant can choose: reading only
+/// that Run would let it hide a Plugin the operator's pilot Graph declares
+/// required, the page would offer the switch, and a human click would write a
+/// `session.plugin_mount.changed` event authorizing a switch-off that the filter
+/// then ignores. A Plugin is therefore only "not required" when **no** attached
+/// Run requires it, and a Run that cannot be read (a deleted Run still listed)
+/// contributes nothing rather than an unlock.
+///
+/// `required: true` is an authorization, and the filter recognizes exactly one
+/// source for it: `configured_pilot_graph()`, the deployment's own pilot Graph. A
+/// Run whose metadata names any other Graph — one an assistant created or edited,
+/// or a Session's own choice — has its `required` downgraded to optional here
+/// too, by the same comparison. The two sides must never disagree about who may
+/// hand out a lock.
+///
+/// Aggregation is per Plugin across the whole frozen snapshots: **any** declaring
+/// node/run makes it required, and it counts as mounted by default when **some**
+/// declaration would mount it with no Session switch (it is required, or its
+/// `default` is not explicitly false). For a single declaring node this is
+/// exactly what the mount filter does for that node.
+///
+/// A Session with no attached Run froze no declarations. Then nothing is reported
+/// as required, and `on` follows only the Session's own switches: unknown is
+/// reported as "not mounted by any Run's declaration", never as a promise.
+///
+/// Note for readers of the audit trail: mounting has two distinct sources. A
+/// Plugin the Session switched on is authorized by the human's click plus the
+/// `session.plugin_mount.changed` event; a Plugin mounted because a declaration
+/// says so (required, or `default`) was never clicked and writes no such event.
+fn session_plugin_declarations(
+    state: &ApiState,
+    session: &anchor_platform_session::Session,
+) -> BTreeMap<String, PluginDeclaration> {
+    let configured_pilot_graph = configured_pilot_graph();
+    let runs = FileRunStore::new(state.data_root.join("runs"));
+    let mut declarations: BTreeMap<String, PluginDeclaration> = BTreeMap::new();
+    for run in &session.run_ids {
+        let Ok(Some(record)) = runs.load(run) else {
+            continue;
+        };
+        // A Run that declares no Plugin cannot contribute a declaration, so its
+        // Graph name does not matter either.
+        if record
+            .snapshot
+            .nodes
+            .iter()
+            .all(|node| node.plugins.is_empty())
+        {
+            continue;
+        }
+        // The same comparison, from the same two facts, as `mounted_plugins`: the
+        // Run's own recorded Graph name, and the deployment's configured pilot
+        // Graph.
+        let declaring_graph = crate::application::metadata::load(&state.data_root, run)
+            .ok()
+            .flatten()
+            .map(|metadata| metadata.graph);
+        let required_is_authoritative = declaring_graph.is_some()
+            && declaring_graph.as_deref() == configured_pilot_graph.as_deref();
+        for node in &record.snapshot.nodes {
+            for reference in &node.plugins {
+                let required = reference.required && required_is_authoritative;
+                let entry = declarations.entry(reference.id.clone()).or_default();
+                entry.required |= required;
+                entry.mounts_by_default |= required || reference.default.unwrap_or(true);
+            }
+        }
+    }
+    declarations
+}
+
+/// The same Plugin-id rule the Library catalog applies to `plugins/<id>`.
+fn valid_plugin_id(value: &str) -> bool {
+    !value.is_empty()
+        && value.as_bytes()[0].is_ascii_alphanumeric()
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || b"_.-".contains(&byte))
+}
+
+/// One installed Plugin's row for the Session view.
+///
+/// `available` is a report, not an action: this reads whether the view the
+/// Plugin's own declaration maps to is usable right now, and never builds,
+/// repairs, downloads or installs anything.
+fn session_plugin_row(
+    library_root: &Path,
+    definition: &PluginDefinition,
+    declaration: Option<PluginDeclaration>,
+    mounts: &BTreeMap<String, bool>,
+) -> Value {
+    let declaration = declaration.unwrap_or_default();
+    let required = declaration.required;
+    // The Session's own switch wins; otherwise the frozen declaration decides,
+    // exactly as the mount filter does for the node that declaration belongs to.
+    let on = required
+        || mounts
+            .get(&definition.id)
+            .copied()
+            .unwrap_or(declaration.mounts_by_default);
+    let (available, error) =
+        match crate::plugin_view::prepare_for_plugin(library_root, &definition.id) {
+            Ok(_) => (true, Value::Null),
+            Err(unusable) => (false, Value::String(unusable.to_string())),
+        };
+    json!({
+        "id": definition.id,
+        "name": definition.name,
+        "description": definition.description,
+        "skills": definition.skills,
+        // Named apart from the `/plugins` catalog's `mcpServers` object: this one
+        // is the plain list of server names the Session row shows.
+        "mcpServerNames": definition
+            .mcp_servers
+            .iter()
+            .map(|server| server.name.clone())
+            .collect::<Vec<_>>(),
+        "required": required,
+        "on": on,
+        "available": available,
+        "error": error,
+    })
+}
+
+/// Every installed Plugin, for one Session. A directory the catalog cannot
+/// resolve is not installed and is not listed.
+#[allow(clippy::result_large_err)]
+fn session_plugin_rows(
+    state: &ApiState,
+    session: &anchor_platform_session::Session,
+) -> Result<Vec<Value>, HttpResponse> {
+    let root = crate::library_root(&state.catalog_root);
+    let catalog = FilePluginCatalog::new(&root);
+    let declarations = session_plugin_declarations(state, session);
+    let entries = match std::fs::read_dir(root.join("plugins")) {
+        Ok(entries) => entries,
+        Err(failure) if failure.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(_) => {
+            return Err(error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "cannot read Plugin catalog",
+            ));
+        }
+    };
+    let mut rows = Vec::new();
+    for entry in entries {
+        let entry = entry.map_err(|_| {
+            error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "cannot read Plugin catalog",
+            )
+        })?;
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if name.starts_with('.') {
+            continue;
+        }
+        let Ok(definition) = catalog.definition(&name) else {
+            continue;
+        };
+        rows.push(session_plugin_row(
+            &root,
+            &definition,
+            declarations.get(&name).copied(),
+            &session.plugin_mounts,
+        ));
+    }
+    rows.sort_by(|left, right| left["id"].as_str().cmp(&right["id"].as_str()));
+    Ok(rows)
+}
+
+/// Which installed Plugins this Session can mount, and which it already has on.
+#[allow(clippy::result_large_err)]
+async fn session_plugins(
+    State(state): State<ApiState>,
+    headers: HeaderMap,
+    AxumPath(identifier): AxumPath<String>,
+) -> Result<Json<Value>, HttpResponse> {
+    blocking(move || {
+        let (_, _, session) = owned_session(&state, &headers, &identifier)?;
+        let plugins = session_plugin_rows(&state, &session)?;
+        Ok(Json(json!({"plugins": plugins})))
+    })
+    .await
+}
+
+/// One Plugin's mount switch for a Session.
+///
+/// The authorization is this click plus the audit event the store writes with
+/// it. Mounting never installs: the Plugin must already be installed with a
+/// usable view, and a Plugin the Graph declares `required` cannot be switched
+/// off at all.
+#[allow(clippy::result_large_err)]
+async fn set_session_plugin(
+    State(state): State<ApiState>,
+    headers: HeaderMap,
+    AxumPath((identifier, plugin)): AxumPath<(String, String)>,
+    Json(body): Json<Value>,
+) -> Result<Json<Value>, HttpResponse> {
+    blocking(move || {
+        let fields = body
+            .as_object()
+            .filter(|fields| fields.len() == 1 && fields.contains_key("on"))
+            .ok_or_else(|| error(StatusCode::BAD_REQUEST, "provide on only"))?;
+        let on = fields
+            .get("on")
+            .and_then(Value::as_bool)
+            .ok_or_else(|| error(StatusCode::BAD_REQUEST, "on must be a boolean"))?;
+        if !valid_plugin_id(&plugin) {
+            return Err(error(
+                StatusCode::BAD_REQUEST,
+                format!("插件 id `{plugin}` 不合法"),
+            ));
+        }
+        let (sessions, owner, session) = owned_session(&state, &headers, &identifier)?;
+        if session.status == anchor_platform_session::SessionStatus::Archived {
+            return Err(error(
+                StatusCode::CONFLICT,
+                "该会话已归档，不能再改变插件挂载",
+            ));
+        }
+        let root = crate::library_root(&state.catalog_root);
+        let definition = FilePluginCatalog::new(&root)
+            .definition(&plugin)
+            .map_err(|_| {
+                error(
+                    StatusCode::BAD_REQUEST,
+                    format!("插件 `{plugin}` 尚未安装，不能挂载"),
+                )
+            })?;
+        let declaration = session_plugin_declarations(&state, &session)
+            .get(&plugin)
+            .copied();
+        if declaration.is_some_and(|declaration| declaration.required) {
+            return Err(error(
+                StatusCode::CONFLICT,
+                "该插件在图里被声明为必需（required: true）",
+            ));
+        }
+        if let Err(unusable) = crate::plugin_view::prepare_for_plugin(&root, &plugin) {
+            return Err(error(StatusCode::CONFLICT, unusable.to_string()));
+        }
+        let updated = sessions
+            .set_plugin_mount(
+                &owner,
+                &identifier,
+                &plugin,
+                on,
+                &owner,
+                "the Session view switched this Plugin",
+            )
+            .map_err(session_error)?;
+        let row = session_plugin_row(&root, &definition, declaration, &updated.plugin_mounts);
+        Ok(Json(json!({"plugin": row})))
+    })
+    .await
+}
+
 fn parse_api_keys(raw: &str) -> io::Result<Vec<String>> {
     let raw = raw.trim();
     if raw.is_empty() {
@@ -683,6 +985,11 @@ fn router_with_readiness_and_web_root(
         )
         .route("/sessions/{session}/status", post(set_session_status))
         .route("/sessions/{session}/events", get(session_events))
+        .route("/sessions/{session}/plugins", get(session_plugins))
+        .route(
+            "/sessions/{session}/plugins/{plugin}",
+            post(set_session_plugin),
+        )
         .route(
             "/sessions/{session}/messages",
             get(pilot_messages).post(session_execution_unavailable),

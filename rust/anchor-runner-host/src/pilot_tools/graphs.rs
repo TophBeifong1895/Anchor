@@ -135,7 +135,7 @@ impl PilotTools {
             let ids = snapshot
                 .nodes
                 .iter()
-                .flat_map(|node| node.plugins.iter().cloned())
+                .flat_map(|node| node.plugins.iter().map(|reference| reference.id.clone()))
                 .collect::<std::collections::BTreeSet<_>>()
                 .into_iter()
                 .collect::<Vec<_>>();

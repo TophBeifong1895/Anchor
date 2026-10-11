@@ -981,6 +981,7 @@ fn v1_fixture() -> (TempDir, PathBuf, Session) {
         questions: vec![],
         operation: None,
         operations: BTreeMap::new(),
+        plugin_mounts: BTreeMap::new(),
         created_at: now,
         updated_at: now,
     };

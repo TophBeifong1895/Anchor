@@ -131,7 +131,7 @@ impl FileGraphBundleLoader {
         let expected = snapshot
             .nodes
             .iter()
-            .flat_map(|node| node.plugins.iter().cloned())
+            .flat_map(|node| node.plugins.iter().map(|reference| reference.id.clone()))
             .collect::<std::collections::BTreeSet<_>>();
         let ids = manifest
             .plugins
@@ -441,6 +441,8 @@ impl FilePluginCatalog {
         Ok(anchor_runtime::graph::PluginBinding {
             id: definition.id,
             digest: definition.digest,
+            // The catalog resolves what a Graph *reference* asked for; the
+            // declaration itself decides whether it can be switched off.
             // Code only: a mutable path is the Plugin's own state, not a resource
             // the platform distributes or verifies.
             resources: resource_files(&definition.directory, &definition.mutable)?,
@@ -3269,7 +3271,11 @@ mod bundle_loader_tests {
         let loaded = FileGraphBundleLoader::new(tmp.path()).load().unwrap();
         assert_eq!(loaded.authoring_definition, authoring);
         assert_eq!(loaded.snapshot.nodes[0].id, "stage/inside");
-        assert_eq!(loaded.snapshot.nodes[0].plugins, ["demo"]);
+        assert_eq!(loaded.snapshot.nodes[0].plugins[0].id, "demo");
+        assert!(
+            loaded.snapshot.nodes[0].plugins[0].required,
+            "a declared Plugin is required unless the Graph says otherwise"
+        );
         assert_eq!(loaded.plugins, vec!["demo".to_owned()]);
     }
 
