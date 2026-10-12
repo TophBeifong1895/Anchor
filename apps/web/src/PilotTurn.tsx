@@ -37,6 +37,7 @@ export function PilotTurn({ turn, saved = false, stopping = false, onComplete, o
   }, [turn.session, turn.id, onQuestions]);
   useEffect(() => { setStatus(turn.status); }, [turn.status]);
   useEffect(() => {
+    if (saved && turn.status !== 'running') return;
     const controller = new AbortController();
     setQuestionProblem('');
     void api<{ questions: Question[] }>(questionsPath(turn.session, turn.id), 'GET', undefined, controller.signal).then(result => {
@@ -45,7 +46,7 @@ export function PilotTurn({ turn, saved = false, stopping = false, onComplete, o
       if (!controller.signal.aborted) setQuestionProblem((error as Error).message);
     });
     return () => controller.abort();
-  }, [turn.session, turn.id, questionReload, updateQuestions]);
+  }, [turn.session, turn.id, turn.status, saved, questionReload, updateQuestions]);
   useEffect(() => {
     if (status !== 'running') return;
     const timer = window.setInterval(() => setNow(Date.now()), 1000);
@@ -178,9 +179,9 @@ export function PilotTurn({ turn, saved = false, stopping = false, onComplete, o
       <div className="pilot-message-author"><Anchor size={16} />Anchor Pilot{['failed', 'stopped', 'interrupted'].includes(status) && <small> · 未完成的回复</small>}</div>
       <Markdown text={text} prefix={`turn-${turn.id}`} />
     </article>}
-    {questions.map(question => <PilotQuestion key={question.id} question={question} enabled={status === 'running' && !stopping} stopping={stopping}
+    {(!saved || status === 'running') && questions.map(question => <PilotQuestion key={question.id} question={question} enabled={status === 'running' && !stopping} stopping={stopping}
       onAnswered={answered => updateQuestions([answered])} />)}
-    {questionProblem && <p className="pilot-error" role="alert">无法加载提问：{questionProblem}
+    {(!saved || status === 'running') && questionProblem && <p className="pilot-error" role="alert">无法加载提问：{questionProblem}
       <button type="button" onClick={() => setQuestionReload(previous => previous + 1)}>重新加载问题</button>
     </p>}
     {status === 'running' && !questions.some(question => question.status === 'pending') && <div className="pilot-thinking" role="status"><LoaderCircle size={16} />

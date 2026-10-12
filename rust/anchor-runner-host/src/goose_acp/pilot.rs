@@ -22,6 +22,8 @@ use std::{
     },
 };
 
+mod transcript;
+
 pub(crate) struct GoosePilot {
     binary: PathBuf,
     binary_sha256: String,
@@ -569,27 +571,7 @@ pub(crate) fn messages(
     owner: &str,
     session: &str,
 ) -> Result<Vec<Value>, String> {
-    let turns = sessions
-        .list_turns(owner, session)
-        .map_err(|_| "Pilot history unavailable")?;
-    let mut messages = Vec::new();
-    for turn in turns.into_iter().rev() {
-        if let Some(prompt) = turn.prompt {
-            messages.push(json!({"role":"user","text":prompt}));
-        }
-        let events = sessions
-            .turn_events(owner, session, &turn.id, 0)
-            .map_err(|_| "Pilot history unavailable")?;
-        let text = events
-            .iter()
-            .filter(|event| event.data["type"] == "text-delta")
-            .filter_map(|event| event.data["delta"].as_str())
-            .collect::<String>();
-        if !text.is_empty() {
-            messages.push(json!({"role":"assistant","text":text}));
-        }
-    }
-    Ok(messages)
+    transcript::messages(sessions, owner, session)
 }
 
 #[cfg(test)]

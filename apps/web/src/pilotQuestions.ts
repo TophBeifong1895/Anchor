@@ -85,13 +85,6 @@ export function mergeQuestions(previous: Question[], incoming: Question[], sessi
 export function questionsPath(session: string, turn: string): string {
   return `/sessions/${encodeURIComponent(session)}/turns/${encodeURIComponent(turn)}/questions`;
 }
-export async function loadQuestionHistory(session: string, turns: string[], signal: AbortSignal): Promise<Question[]> {
-  const questions = await Promise.all(turns.map(async turn => {
-    const result = await api<{ questions: Question[] }>(questionsPath(session, turn), 'GET', undefined, signal);
-    return mergeQuestions([], result.questions, session, turn);
-  }));
-  return questions.flat();
-}
 export async function answerQuestion(question: Question, answer: QuestionAnswer, signal: AbortSignal): Promise<Question> {
   const result = await api<{ question: Question }>(`${questionsPath(question.session, question.turn)}/${encodeURIComponent(question.id)}/answer`, 'POST', answer, signal);
   if (result.question.id !== question.id || result.question.session !== question.session || result.question.turn !== question.turn) {

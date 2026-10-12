@@ -219,6 +219,83 @@ async fn native_pilot_validates_inputs_and_reads_durable_turns_without_executing
 }
 
 #[tokio::test]
+async fn pilot_transcript_includes_saved_question_and_answer_in_event_order() {
+    use anchor_platform_session::{QuestionAction, QuestionAnswer, TurnStatus};
+    let (root, state) = fixture();
+    let sessions = store(&state).unwrap();
+    sessions
+        .create(
+            "local",
+            CreateSession {
+                id: Some("question-transcript".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    let (turn, _) = sessions
+        .create_turn(
+            "local",
+            "question-transcript",
+            "request",
+            Some("先询问报告名称"),
+        )
+        .unwrap();
+    sessions
+        .append_turn_event(
+            "local",
+            "question-transcript",
+            &turn.id,
+            json!({"type":"text-delta","delta":"我需要一点信息。"}),
+        )
+        .unwrap();
+    let question = sessions.create_question("local", "question-transcript", &turn.id, "需要哪份报告？", json!({
+        "type":"object", "properties":{"report":{"type":"string","title":"报告名称"}}, "required":["report"]
+    })).unwrap();
+    let question = sessions
+        .answer_question(
+            "local",
+            "question-transcript",
+            &turn.id,
+            &question.id,
+            QuestionAnswer {
+                action: QuestionAction::Accept,
+                content: Some(json!({"report":"季度报告"})),
+            },
+        )
+        .unwrap();
+    sessions
+        .append_turn_event(
+            "local",
+            "question-transcript",
+            &turn.id,
+            json!({"type":"text-delta","delta":"我会使用季度报告。"}),
+        )
+        .unwrap();
+    sessions
+        .finish_turn(
+            "local",
+            "question-transcript",
+            &turn.id,
+            TurnStatus::Completed,
+            None,
+        )
+        .unwrap();
+    let app = router_with_web_root(state, root.path().join("web"));
+    let (status, response) = call(app, "GET", "/sessions/question-transcript/messages", None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        response["messages"],
+        json!([
+            {"role":"user","text":"先询问报告名称"},
+            {"role":"assistant","text":"我需要一点信息。"},
+            {"role":"assistant","text":"需要哪份报告？","question":question},
+            {"role":"user","text":"报告名称：季度报告","question_answer":question},
+            {"role":"assistant","text":"我会使用季度报告。"}
+        ])
+    );
+}
+
+#[tokio::test]
 async fn native_session_create_supports_the_existing_web_composers_empty_post() {
     let (root, state) = fixture();
     let app = router_with_web_root(state, root.path().join("web"));

@@ -5,14 +5,14 @@ import { Markdown } from './markdown';
 import { PilotTurn, type Turn } from './PilotTurn';
 import { SessionActions } from './SessionActions';
 import { SessionPlugins } from './SessionPlugins';
-import { PilotQuestionHistory } from './PilotQuestionHistory';
 import { PilotCredentials } from './PilotCredentials';
+import type { Question } from './pilotQuestions';
 
 type Session = {
   id: string; title?: string; status: string; waiting_reason: string; updated_at: string;
   approval: { action: string; key: string; status: string; target?: string; proposal?: unknown } | null;
 };
-type Message = { role: 'user' | 'assistant'; text: string };
+type Message = { role: 'user' | 'assistant'; text: string; question?: Question; question_answer?: Question };
 const labels: Record<string, string> = { active: '可以继续对话', interrupted: '回复已中断', waiting_user: '等待你的答复', archived: '已归档' };
 const starters = ['查看现有的研究工作流', '帮我梳理一个研究问题', '查看最近运行的结果'];
 const title = (session: Session) => session.title || '新对话';
@@ -39,7 +39,6 @@ export function Pilot({ session = '', onSession }: { session?: string; onSession
   const selectedRef = useRef('');
   const [messages, setMessages] = useState<Message[]>([]);
   const [turn, setTurn] = useState<Turn | null>(null);
-  const [turns, setTurns] = useState<Turn[]>([]);
   const turnRef = useRef<Turn | null>(null);
   const [waitingQuestion, setWaitingQuestion] = useState(false);
   const [stopping, setStopping] = useState(false);
@@ -81,7 +80,7 @@ export function Pilot({ session = '', onSession }: { session?: string; onSession
     selectedRef.current = id;
     setSelected(id); cached('selected', id); onSessionRef.current?.(id);
     setDraft(cached(`draft:${id || 'new'}`));
-    setMessages([]); setCurrentTurn(null); setTurns([]); setWaitingQuestion(false); setStopping(false); setSyncedTurn(''); setContinuation(null); setCopied(null); setProblem('');
+    setMessages([]); setCurrentTurn(null); setWaitingQuestion(false); setStopping(false); setSyncedTurn(''); setContinuation(null); setCopied(null); setProblem('');
     setBusy(submissions.current.has(id));
     follow.current = true; setAtBottom(true);
   };
@@ -98,6 +97,9 @@ export function Pilot({ session = '', onSession }: { session?: string; onSession
       ]);
       if (!mounted.current || controller.signal.aborted || selectedRef.current !== id) return;
       const latest = execution.turns[0];
+      // The running Turn owns its live form; its saved questions join the transcript after it ends.
+      const savedMessages = history.messages.filter(message => latest?.status !== 'running'
+        || (message.question?.turn !== latest.id && message.question_answer?.turn !== latest.id));
       const pending = pendingSubmission(id);
       if (pending && execution.turns.some(item => item.request_id === pending.request_id)) {
         cached(`submission:${id}`, '');
@@ -107,15 +109,14 @@ export function Pilot({ session = '', onSession }: { session?: string; onSession
       }
       // The turn is accepted before its prompt is saved. Keep that accepted message visible
       // when reopening a session during this window, without duplicating an already saved prompt.
-      const last = history.messages.at(-1);
+      const last = savedMessages.at(-1);
       const prompt = latest?.status === 'running' ? latest.prompt : pendingSubmission(id)?.message;
       setMessages(prompt && !(last?.role === 'user' && last.text === prompt)
-        ? [...history.messages, { role: 'user', text: prompt }] : history.messages);
+        ? [...savedMessages, { role: 'user', text: prompt }] : savedMessages);
       if (version === listVersion.current) setSessions(result.sessions);
       setCurrentTurn(latest ?? null);
-      setTurns(execution.turns);
       if (latest?.status !== 'running') { setWaitingQuestion(false); setStopping(false); }
-      setSyncedTurn(latest && ['completed', 'waiting_user', 'waiting_approval'].includes(latest.status) ? latest.id : '');
+      setSyncedTurn(latest && latest.status !== 'running' ? latest.id : '');
       setBusy(submissions.current.has(id) || latest?.status === 'running');
     } catch (error) {
       if (!controller.signal.aborted) throw error;
@@ -167,7 +168,6 @@ export function Pilot({ session = '', onSession }: { session?: string; onSession
     if (mounted.current && selectedRef.current === id) {
       historyRequest.current?.abort();
       setLoading(false); setCurrentTurn(result.turn); setWaitingQuestion(false); setStopping(false); setSyncedTurn('');
-      setTurns(previous => [result.turn, ...previous.filter(item => item.id !== result.turn.id)]);
       setBusy(result.turn.status === 'running');
     }
   };
@@ -374,11 +374,10 @@ export function Pilot({ session = '', onSession }: { session?: string; onSession
         {messages.map((message, index) => <article key={`${selected}-${index}`} className={`pilot-message ${message.role}`}>
           <div className="pilot-message-author">{message.role === 'assistant' && <Anchor size={16} />}<span>{message.role === 'user' ? '你' : 'Anchor Pilot'}</span></div>
           {message.role === 'assistant' ? <Markdown text={message.text} prefix={`pilot-${selected}-${index}`} /> : <p className="pilot-user-text">{message.text}</p>}
+          {message.question?.status === 'interrupted' && <p className="pilot-muted">这条提问已中断。</p>}
           <button className="pilot-copy" aria-label={`复制${message.role === 'assistant' ? '回复' : '消息'} ${index + 1}`}
             onClick={() => void copy(message, index)}>{copied === index ? <Check size={14} /> : <Copy size={14} />}{copied === index ? '已复制' : '复制'}</button>
         </article>)}
-        {turns.some(item => item.id !== turn?.id) && <PilotQuestionHistory key={`questions-${selected}`} session={selected}
-          turns={turns.filter(item => item.id !== turn?.id).map(item => item.id).reverse()} />}
         {turn && <PilotTurn key={`${turn.session}-${turn.id}`} turn={turn} saved={syncedTurn === turn.id} stopping={stopping} onComplete={complete} onQuestions={questionState} />}
         {selected && <PilotCredentials key={`credentials-${selected}`} session={selected} onConfigured={() => {
           void refresh(selected).catch(error => { if (selectedRef.current === selected) setProblem((error as Error).message); });

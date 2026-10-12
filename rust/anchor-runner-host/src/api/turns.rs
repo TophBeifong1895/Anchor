@@ -247,7 +247,6 @@ pub(super) async fn pilot_messages(
                         .as_str()
                         .is_some_and(|text| !text.is_empty())
             })
-            .map(|message| json!({"role":message["role"],"text":message["text"]}))
             .collect::<Vec<_>>();
         Ok(Json(json!({"messages":messages})))
     })

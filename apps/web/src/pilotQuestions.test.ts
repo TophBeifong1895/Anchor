@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import * as transport from './api';
-import { answerQuestion, loadQuestionHistory, mergeQuestions, questionContent, questionFields, questionsPath, type Question } from './pilotQuestions';
+import { answerQuestion, mergeQuestions, questionContent, questionFields, questionsPath, type Question } from './pilotQuestions';
 
 const question: Question = {
   id: 'q-1', session: 's-1', turn: 't-1', message: '确认删除这个工作流？',
@@ -96,23 +96,6 @@ describe('same-turn answer request', () => {
   it.each(['id', 'session', 'turn'] as const)('rejects a response for another %s', async key => {
     vi.spyOn(transport, 'api').mockResolvedValue({ question: { ...question, [key]: 'other' } });
     await expect(answerQuestion(question, { action: 'decline' }, new AbortController().signal)).rejects.toThrow('不同的问题');
-  });
-});
-describe('saved question history', () => {
-  afterEach(() => vi.restoreAllMocks());
-  it('loads past turns in order and rejects foreign questions', async () => {
-    const first: Question = { ...question, status: 'answered', answer: { action: 'decline' } };
-    const second: Question = { ...question, id: 'q-2', turn: 't-2', status: 'interrupted' };
-    const request = vi.spyOn(transport, 'api').mockResolvedValueOnce({ questions: [first, { ...first, session: 'other' }] })
-      .mockResolvedValueOnce({ questions: [second, { ...second, turn: 'wrong' }] });
-    const controller = new AbortController();
-    await expect(loadQuestionHistory('s-1', ['t-1', 't-2'], controller.signal)).resolves.toEqual([first, second]);
-    expect(request).toHaveBeenNthCalledWith(1, '/sessions/s-1/turns/t-1/questions', 'GET', undefined, controller.signal);
-    expect(request).toHaveBeenNthCalledWith(2, '/sessions/s-1/turns/t-2/questions', 'GET', undefined, controller.signal);
-  });
-  it('does not replace a failed history request with invented empty history', async () => {
-    vi.spyOn(transport, 'api').mockRejectedValue(new Error('history unavailable'));
-    await expect(loadQuestionHistory('s-1', ['t-1'], new AbortController().signal)).rejects.toThrow('history unavailable');
   });
 });
 describe('question history projection', () => {
