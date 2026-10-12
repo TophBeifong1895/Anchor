@@ -4,7 +4,7 @@
 //! credential capability. A Plugin identity must name its server and the host
 //! must independently enable that Plugin before any tool is advertised.
 
-use anchor_graph_host::FilePluginCatalog;
+use anchor_graph_host::{FilePluginCatalog, PluginDefinition};
 use anchor_library::{
     FileOAuthTokenStore, OAuthBinding, OAuthClient, OAuthRefreshRequest, OAuthRefreshTransport,
     OAuthTokenResponse, OAuthTransportError,
@@ -30,6 +30,21 @@ use std::{
 pub const FAKE_SERVER_ID: &str = "anchor.fake";
 pub const FAKE_ECHO_TOOL: &str = "anchor_fake__echo";
 
+fn fake_binding() -> PluginBinding {
+    PluginBinding {
+        id: "fake-tools".into(),
+        digest: "anchor.fake.echo.v1".into(),
+        resources: Vec::new(),
+        mcp_servers: vec![FAKE_SERVER_ID.into()],
+        authorization_digest: "anchor.fake.echo.authorization.v1".into(),
+    }
+}
+
+pub(crate) fn is_fake_fixture(binding: &PluginBinding) -> bool {
+    let fixture = fake_binding();
+    binding == &fixture || binding.can_upgrade_legacy_authorization(&fixture)
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct McpToolConfig {
     servers: BTreeMap<String, ResolvedMcpServer>,
@@ -38,6 +53,7 @@ pub struct McpToolConfig {
     disabled: BTreeSet<String>,
     pub(crate) environment: crate::tool_environment::ToolEnvironment,
     oauth_library_root: Option<PathBuf>,
+    pub(crate) startup_cancellation: Option<anchor_runtime::Cancellation>,
 }
 
 /// Everything one node invocation provides to a sandboxed MCP launch.
@@ -47,21 +63,21 @@ pub struct SandboxLaunch<'a> {
     pub readonly_inputs: &'a [ReadOnlyInput],
     /// Prepared dependency views, keyed by Plugin. A declaration is the Plugin's
     /// own, so every server of that Plugin launches on the same view.
-    pub plugin_views: &'a BTreeMap<String, crate::plugin_view::PreparedView>,
+    pub plugin_views: &'a BTreeMap<String, crate::plugin_view::PreparedPlugin>,
 }
 
 /// The read-only authority one Plugin server launches with: the view its Plugin
 /// declares. Wrapping it keeps "mount it and put it in the request" one step.
 #[derive(Clone, Copy)]
 enum ServerGrant<'a> {
-    View(&'a crate::plugin_view::PreparedView),
+    View(&'a crate::plugin_view::PreparedPlugin),
 }
 
 impl<'a> ServerGrant<'a> {
     /// The dependency view this server launches on, when it has one.
-    fn view(&self) -> Option<&'a crate::plugin_view::PreparedView> {
+    fn view(&self) -> Option<&'a Path> {
         match self {
-            Self::View(view) => Some(view),
+            Self::View(view) => view.view(),
         }
     }
 
@@ -126,24 +142,85 @@ impl McpToolConfig {
     ) -> Result<Self, String> {
         let root = root.into();
         let catalog = FilePluginCatalog::new(root.clone());
+        let mut definitions = BTreeMap::new();
+        // This is preliminary wiring validation. Its caller owns any admission
+        // publication lease; invocation preparation uses `from_definitions`
+        // under the shared Host preparation lease.
+        for binding in bindings.iter().filter(|binding| !is_fake_fixture(binding)) {
+            let definition = catalog
+                .definition(&binding.id)
+                .map_err(|error| format!("Plugin `{}` MCP catalog failed: {error}", binding.id))?;
+            definitions.insert(binding.id.clone(), definition);
+        }
+        Self::from_definitions(&root, bindings, &definitions)
+    }
+
+    /// Turn one lease-protected catalog read into live connection declarations.
+    /// This method never reloads a Plugin manifest or re-resolves its directory.
+    pub(crate) fn from_definitions(
+        root: &Path,
+        bindings: &[PluginBinding],
+        definitions: &BTreeMap<String, PluginDefinition>,
+    ) -> Result<Self, String> {
+        Self::from_definitions_for_owner(root, bindings, definitions, None)
+    }
+
+    pub(crate) fn from_definitions_for_owner(
+        root: &Path,
+        bindings: &[PluginBinding],
+        definitions: &BTreeMap<String, PluginDefinition>,
+        credentials: Option<(&Path, &str)>,
+    ) -> Result<Self, String> {
+        let catalog = FilePluginCatalog::new(root);
         let mut servers: BTreeMap<String, ResolvedMcpServer> = BTreeMap::new();
         let mut disabled = BTreeSet::new();
         for binding in bindings {
-            if binding
-                .mcp_servers
-                .iter()
-                .all(|server| server == FAKE_SERVER_ID)
-            {
+            if is_fake_fixture(binding) {
                 continue;
             }
-            let definitions = catalog
-                .mcp_servers(&binding.id, true)
-                .map_err(|error| format!("Plugin `{}` MCP catalog failed: {error}", binding.id))?;
-            let declared = catalog
-                .mcp_servers(&binding.id, false)
-                .map_err(|error| format!("Plugin `{}` MCP catalog failed: {error}", binding.id))?
-                .into_iter()
-                .map(|definition| definition.name)
+            let declaration = definitions
+                .get(&binding.id)
+                .ok_or_else(|| format!("Plugin `{}` MCP definition is unavailable", binding.id))?;
+            let current = declaration.binding();
+            if !binding.same_authorization(&current)
+                && !binding.can_upgrade_legacy_authorization(&current)
+            {
+                return Err(format!(
+                    "Plugin `{}` Host authorization changed before MCP assembly",
+                    binding.id
+                ));
+            }
+            let definitions = if let Some((state, owner)) = credentials {
+                let mut resolved = Vec::new();
+                for server in &declaration.mcp_servers {
+                    let values = crate::credential_store::environment_values(
+                        state,
+                        owner,
+                        declaration,
+                        &server.name,
+                    )?;
+                    let mut single = declaration.clone();
+                    single.mcp_servers = vec![server.clone()];
+                    let environment =
+                        |key: &str| values.get(key).cloned().or_else(|| std::env::var(key).ok());
+                    resolved.extend(
+                        catalog
+                            .resolve_mcp_servers_with(&single, &environment)
+                            .map_err(|error| {
+                                format!("Plugin `{}` MCP catalog failed: {error}", binding.id)
+                            })?,
+                    );
+                }
+                resolved
+            } else {
+                catalog.resolve_mcp_servers(declaration).map_err(|error| {
+                    format!("Plugin `{}` MCP catalog failed: {error}", binding.id)
+                })?
+            };
+            let declared = declaration
+                .mcp_servers
+                .iter()
+                .map(|definition| definition.name.clone())
                 .collect::<BTreeSet<_>>();
             let mut by_name = definitions
                 .into_iter()
@@ -178,9 +255,7 @@ impl McpToolConfig {
                     ResolvedMcpServer {
                         plugin_id: binding.id.clone(),
                         name: server_name.clone(),
-                        plugin_directory: catalog
-                            .plugin_directory(&binding.id)
-                            .map_err(|error| error.to_string())?,
+                        plugin_directory: declaration.directory.clone(),
                         config: definition.config,
                     },
                 );
@@ -191,10 +266,18 @@ impl McpToolConfig {
             disabled,
             environment: Default::default(),
             oauth_library_root: Some(resolve_oauth_library_root(
-                &root,
+                root,
                 std::env::var_os("ANCHOR_RUNNER_LIBRARY_ROOT").map(PathBuf::from),
                 std::env::var_os("ANCHOR_RUNNER_CATALOG_ROOT").map(PathBuf::from),
             )),
+            startup_cancellation: None,
+        })
+    }
+
+    pub(crate) fn declares_stdio(&self, binding: &PluginBinding) -> bool {
+        self.servers.values().any(|server| {
+            server.plugin_id == binding.id
+                && transport_name(&server.config).is_ok_and(|transport| transport == "stdio")
         })
     }
 
@@ -253,34 +336,6 @@ impl McpToolConfig {
             self.servers.insert(key, server);
         }
         Ok(())
-    }
-
-    /// Resolve the same immutable Plugin directories as the catalog and map
-    /// them into the node namespace. The fake fixture has no filesystem
-    /// resources and therefore does not need a mount.
-    pub fn plugin_mounts(
-        root: impl Into<PathBuf>,
-        bindings: &[PluginBinding],
-    ) -> Result<Vec<ReadOnlyInput>, String> {
-        let root = root.into();
-        let catalog = FilePluginCatalog::new(root);
-        let mut mounts = Vec::new();
-        for binding in bindings {
-            if binding.id == "fake-tools" && binding.resources.is_empty() {
-                continue;
-            }
-            // No digest comparison: a Run uses the *current* Plugin (standard
-            // invariant 6), so a Plugin that changed while the Run was parked is
-            // not a reason to refuse. What the invocation actually used is
-            // recorded as an observation instead.
-            mounts.push(ReadOnlyInput::new(
-                catalog
-                    .plugin_directory(&binding.id)
-                    .map_err(|error| error.to_string())?,
-                format!("/plugins/{}", binding.id),
-            ));
-        }
-        Ok(mounts)
     }
 
     #[allow(dead_code)]
@@ -345,51 +400,87 @@ impl McpToolConfig {
                 if hosts.contains_key(&key) {
                     continue;
                 }
-                let definition = self
-                    .servers
-                    .get(&key)
-                    .ok_or_else(|| format!("MCP server `{key}` is not configured"))?;
-                // A server launches in a sandbox that authorizes exactly its
-                // Plugin's view; a Plugin without a declaration keeps the host's
-                // authority.
-                let grant = launch
-                    .as_ref()
-                    .and_then(|launch| launch.plugin_views.get(&binding.id))
-                    .map(ServerGrant::View);
-                // The launcher mounts the Plugin directory for this server, so
-                // the invocation must grant exactly that mount. Nothing else
-                // authorizes it: the Run policy no longer lists per-Run trees.
-                let plugin_mount = ReadOnlyInput::new(
-                    &definition.plugin_directory,
-                    format!("/plugins/{}", definition.plugin_id),
-                );
-                let authorized = match sandbox {
-                    Some(sandbox) => {
-                        let base = Arc::new(sandbox.clone());
-                        let base = base
-                            .with_readonly_grants(std::slice::from_ref(&plugin_mount))
-                            .map_err(|error| error.to_string())?;
-                        match grant {
-                            Some(grant) => Some(grant.authorize(Arc::new(base))?),
-                            None => Some(Arc::new(base)),
+                let connected = async {
+                    let definition = self
+                        .servers
+                        .get(&key)
+                        .ok_or_else(|| format!("MCP server `{key}` is not configured"))?;
+                    // A server launches in a sandbox that authorizes exactly its
+                    // Plugin's view; a Plugin without a declaration keeps the host's
+                    // authority.
+                    let grant = launch
+                        .as_ref()
+                        .and_then(|launch| launch.plugin_views.get(&binding.id))
+                        .map(ServerGrant::View);
+                    // The launcher mounts the Plugin directory for this server, so
+                    // the invocation must grant exactly that mount. Nothing else
+                    // authorizes it: the Run policy no longer lists per-Run trees.
+                    let plugin_mount = ReadOnlyInput::new(
+                        &definition.plugin_directory,
+                        format!("/plugins/{}", definition.plugin_id),
+                    );
+                    let authorized = match sandbox {
+                        Some(sandbox) => {
+                            let base = Arc::new(sandbox.clone());
+                            let base = base
+                                .with_readonly_grants(std::slice::from_ref(&plugin_mount))
+                                .map_err(|error| error.to_string())?;
+                            match grant {
+                                Some(grant) => Some(grant.authorize(Arc::new(base))?),
+                                None => Some(Arc::new(base)),
+                            }
                         }
+                        None => None,
+                    };
+                    let server_launch = launch.as_ref().map(|launch| SandboxLaunch {
+                        sandbox: authorized.as_deref().unwrap_or(launch.sandbox),
+                        workspace: launch.workspace,
+                        readonly_inputs: launch.readonly_inputs,
+                        plugin_views: launch.plugin_views,
+                    });
+                    self.connect_one(&key, definition, network, server_launch, grant)
+                        .await
+                }
+                .await;
+                let host = match connected {
+                    Ok(host) => host,
+                    Err(reason) => {
+                        let cleanup = LiveMcpTools {
+                            hosts,
+                            _environment: self.environment.clone(),
+                        }
+                        .shutdown()
+                        .await
+                        .err();
+                        return Err(cleanup.map_or(reason.clone(), |cleanup| {
+                            format!("{reason}; cleanup failed: {cleanup}")
+                        }));
                     }
-                    None => None,
                 };
-                let server_launch = launch.as_ref().map(|launch| SandboxLaunch {
-                    sandbox: authorized.as_deref().unwrap_or(launch.sandbox),
-                    workspace: launch.workspace,
-                    readonly_inputs: launch.readonly_inputs,
-                    plugin_views: launch.plugin_views,
-                });
-                let host = self
-                    .connect_one(&key, definition, network, server_launch, grant)
-                    .await?;
                 hosts.insert(key, Arc::new(host));
             }
         }
-        let live = LiveMcpTools { hosts };
-        live.validate_exposed_names()?;
+        let live = LiveMcpTools {
+            hosts,
+            _environment: self.environment.clone(),
+        };
+        if self
+            .startup_cancellation
+            .as_ref()
+            .is_some_and(|cancellation| cancellation.load(std::sync::atomic::Ordering::Acquire))
+        {
+            let reason = "MCP tool startup was cancelled".to_owned();
+            let cleanup = live.shutdown().await.err();
+            return Err(cleanup.map_or(reason.clone(), |cleanup| {
+                format!("{reason}; cleanup failed: {cleanup}")
+            }));
+        }
+        if let Err(reason) = live.validate_exposed_names() {
+            let cleanup = live.shutdown().await.err();
+            return Err(cleanup.map_or(reason.clone(), |cleanup| {
+                format!("{reason}; cleanup failed: {cleanup}")
+            }));
+        }
         Ok(live)
     }
 
@@ -402,6 +493,12 @@ impl McpToolConfig {
         for binding in bindings {
             for server_id in &binding.mcp_servers {
                 if server_id == FAKE_SERVER_ID {
+                    if !is_fake_fixture(binding) {
+                        return Err(format!(
+                            "Plugin `{}` has an invalid fake fixture binding",
+                            binding.id
+                        ));
+                    }
                     continue;
                 }
                 if !seen_servers.insert((binding.id.as_str(), server_id.as_str())) {
@@ -436,16 +533,30 @@ impl McpToolConfig {
         match transport {
             "http" => {
                 let (endpoint, bearer_token, headers) = http_config(&definition.config)?;
-                McpHost::connect(McpServerConfig {
+                let connect = McpHost::connect(McpServerConfig {
                     server_id: key.into(),
                     transport: McpTransportConfig::StreamableHttp {
                         endpoint,
                         bearer_token,
                         headers,
                     },
-                })
-                .await
-                .map_err(|error| format!("MCP server `{key}` failed to bind: {error}"))
+                });
+                let result = if let Some(cancellation) = &self.startup_cancellation {
+                    tokio::select! {
+                        result = tokio::time::timeout(std::time::Duration::from_secs(120), connect) => result
+                            .map_err(|_| format!("MCP server `{key}` startup timed out after 120s"))?,
+                        _ = async {
+                            while !cancellation.load(std::sync::atomic::Ordering::Acquire) {
+                                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+                            }
+                        } => return Err(format!("MCP server `{key}` startup was cancelled")),
+                    }
+                } else {
+                    tokio::time::timeout(std::time::Duration::from_secs(120), connect)
+                        .await
+                        .map_err(|_| format!("MCP server `{key}` startup timed out after 120s"))?
+                };
+                result.map_err(|error| format!("MCP server `{key}` failed to bind: {error}"))
             }
             "sse" => Err(format!(
                 "MCP server `{key}` uses legacy SSE, which RMCP 2.2 does not provide"
@@ -466,7 +577,7 @@ impl McpToolConfig {
                 )?;
                 let (mut program, args, environment, working_directory) =
                     stdio_config(&config, &definition.plugin_directory, &definition.plugin_id)?;
-                if grant.is_none()
+                if grant.and_then(|grant| grant.view()).is_none()
                     && let Some(command) = definition.config.get("command").and_then(Value::as_str)
                     && Path::new(command).is_absolute()
                     && !Path::new(command).starts_with(&definition.plugin_directory)
@@ -499,7 +610,12 @@ impl McpToolConfig {
                 // and must not also inherit the operator's global tool aggregate;
                 // every other server keeps today's behaviour.
                 match grant {
-                    Some(grant) => grant.apply(&mut request),
+                    Some(grant) => {
+                        if grant.view().is_none() {
+                            self.environment.apply(&mut request);
+                        }
+                        grant.apply(&mut request);
+                    }
                     None => self.environment.apply(&mut request),
                 }
                 request.network = if network {
@@ -507,12 +623,28 @@ impl McpToolConfig {
                 } else {
                     NetworkPolicy::Disabled
                 };
+                let sandbox = if grant.and_then(|grant| grant.view()).is_none() {
+                    self.environment
+                        .grant_mcp_python(sandbox, &mut request)
+                        .map_err(|error| {
+                            format!("MCP server `{key}` Python grant failed: {error}")
+                        })?
+                } else {
+                    sandbox.clone()
+                };
                 let command = sandbox.isolated_command(request).map_err(|error| {
                     format!("MCP server `{key}` sandbox launch rejected: {error}")
                 })?;
-                McpHost::connect_sandboxed_stdio(key.into(), command)
-                    .await
-                    .map_err(|error| format!("MCP server `{key}` failed to bind: {error}"))
+                McpHost::connect_sandboxed_stdio_controlled(
+                    key.into(),
+                    command,
+                    self.startup_cancellation
+                        .clone()
+                        .unwrap_or_else(|| Arc::new(std::sync::atomic::AtomicBool::new(false))),
+                    std::time::Duration::from_secs(120),
+                )
+                .await
+                .map_err(|error| format!("MCP server `{key}` failed to bind: {error}"))
             }
             other => Err(format!(
                 "Plugin `{}` server `{}` has unsupported transport `{other}`",
@@ -638,11 +770,7 @@ fn read_oauth_response(response: reqwest::blocking::Response) -> Result<Vec<u8>,
 /// substitute it: the path written here is exactly the path granted to this
 /// launch, which is why the command the sandbox authorizes and the environment it
 /// mounts can never be two different things.
-fn named_view(
-    config: &Value,
-    view: Option<&crate::plugin_view::PreparedView>,
-    plugin: &str,
-) -> Result<Value, String> {
+fn named_view(config: &Value, view: Option<&Path>, plugin: &str) -> Result<Value, String> {
     if !mentions_view_token(config) {
         return Ok(config.clone());
     }
@@ -653,7 +781,7 @@ fn named_view(
         ));
     };
     let mut named = config.clone();
-    replace_view_token(&mut named, &view.view().to_string_lossy());
+    replace_view_token(&mut named, &view.to_string_lossy());
     Ok(named)
 }
 
@@ -859,6 +987,8 @@ fn visible_plugin_value(value: &str, plugin_directory: &Path, plugin_id: &str) -
 
 pub struct LiveMcpTools {
     hosts: BTreeMap<String, Arc<McpHost>>,
+    // Host-owned launcher files must live as long as the formal MCP server.
+    _environment: crate::tool_environment::ToolEnvironment,
 }
 
 impl ToolPort for LiveMcpTools {
@@ -898,6 +1028,24 @@ impl ToolPort for LiveMcpTools {
 }
 
 impl LiveMcpTools {
+    pub(crate) async fn shutdown(self) -> Result<(), String> {
+        let mut errors = Vec::new();
+        for host in self.hosts.into_values() {
+            match Arc::try_unwrap(host) {
+                Ok(host) => {
+                    if let Err(error) = host.shutdown().await {
+                        errors.push(error.to_string());
+                    }
+                }
+                Err(_) => errors.push("MCP probe still has an active reference".to_owned()),
+            }
+        }
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors.join("; "))
+        }
+    }
     fn validate_exposed_names(&self) -> Result<(), String> {
         let mut names = BTreeSet::new();
         for (server_id, host) in &self.hosts {
@@ -947,6 +1095,10 @@ pub struct CombinedPluginTools {
 impl CombinedPluginTools {
     pub fn new(fake: BoundPluginTools, live: LiveMcpTools) -> Self {
         Self { fake, live }
+    }
+
+    pub(crate) async fn shutdown(self) -> Result<(), String> {
+        self.live.shutdown().await
     }
 }
 
@@ -1046,12 +1198,7 @@ impl PluginToolHost {
                         "Plugin `{id}` is not enabled by the fake tool host"
                     ));
                 }
-                Ok(PluginBinding {
-                    id: id.clone(),
-                    digest: "anchor.fake.echo.v1".into(),
-                    resources: Vec::new(),
-                    mcp_servers: vec![FAKE_SERVER_ID.into()],
-                })
+                Ok(fake_binding())
             })
             .collect()
     }
@@ -1064,7 +1211,7 @@ impl PluginToolHost {
                 .iter()
                 .any(|server| server == FAKE_SERVER_ID)
             {
-                if !self.plugin_ids.contains(&binding.id) {
+                if !is_fake_fixture(binding) || !self.plugin_ids.contains(&binding.id) {
                     return Err(ToolError::Unknown(binding.id.clone()));
                 }
                 enabled = true;
@@ -1085,7 +1232,7 @@ impl PluginToolHost {
         mcp: &McpToolConfig,
         bindings: &[PluginBinding],
         network: bool,
-    ) -> Result<Arc<dyn ToolPort>, String> {
+    ) -> Result<Arc<CombinedPluginTools>, String> {
         let fake = self
             .for_bindings(bindings)
             .map_err(|error| error.to_string())?;
@@ -1101,7 +1248,7 @@ impl PluginToolHost {
         bindings: &[PluginBinding],
         network: bool,
         launch: SandboxLaunch<'_>,
-    ) -> Result<Arc<dyn ToolPort>, String> {
+    ) -> Result<Arc<CombinedPluginTools>, String> {
         let fake = self
             .for_bindings(bindings)
             .map_err(|error| error.to_string())?;
@@ -1140,6 +1287,12 @@ impl ToolPort for BoundPluginTools {
 
 #[cfg(test)]
 mod oauth_tests;
+
+#[cfg(test)]
+mod preparation_tests;
+
+#[cfg(test)]
+mod python_runtime_tests;
 
 #[cfg(test)]
 mod tests {
@@ -1240,6 +1393,7 @@ mod tests {
             digest: "digest".into(),
             resources: Vec::new(),
             mcp_servers: vec!["docmost".into()],
+            authorization_digest: String::new(),
         };
         assert!(
             fake_host
@@ -1263,12 +1417,10 @@ mod tests {
             r#"{"name":"Research","mcpServers":{"papers":{"type":"http","url":"http://127.0.0.1:9/mcp"}}}"#,
         )
         .unwrap();
-        let binding = PluginBinding {
-            id: "research".into(),
-            digest: String::new(),
-            resources: vec!["plugin.json".into()],
-            mcp_servers: vec!["papers".into()],
-        };
+        let binding = anchor_graph_host::FilePluginCatalog::new(root.path())
+            .resolve(&["research".into()])
+            .unwrap()
+            .remove(0);
         let config = McpToolConfig::from_catalog(root.path(), &[binding]).unwrap();
         assert!(config.servers.contains_key("research-papers"));
         assert_eq!(
@@ -1284,6 +1436,7 @@ mod tests {
             digest: "anchor.fake.echo.v1".into(),
             resources: Vec::new(),
             mcp_servers: vec![FAKE_SERVER_ID.into()],
+            authorization_digest: String::new(),
         };
         let config = McpToolConfig::from_catalog("/does/not/exist", &[binding]).unwrap();
         assert!(config.servers.is_empty());
@@ -1296,12 +1449,10 @@ mod tests {
         std::fs::create_dir_all(&plugin).unwrap();
         std::fs::write(plugin.join("plugin.json"),
             r#"{"name":"Optional","mcpServers":{"api":{"command":"bash5","args":["server.sh","inspect"],"optional_env_vars":["ANCHOR_TEST_UNCONFIGURED_OPTIONAL_MCP_7F90"]}}}"#).unwrap();
-        let binding = PluginBinding {
-            id: "optional".into(),
-            digest: String::new(),
-            resources: vec!["plugin.json".into()],
-            mcp_servers: vec!["api".into()],
-        };
+        let binding = anchor_graph_host::FilePluginCatalog::new(root.path())
+            .resolve(&["optional".into()])
+            .unwrap()
+            .remove(0);
         let config =
             McpToolConfig::from_catalog(root.path(), std::slice::from_ref(&binding)).unwrap();
         assert!(config.servers.is_empty());
@@ -1319,6 +1470,7 @@ mod tests {
                 root.path(),
                 &[PluginBinding {
                     mcp_servers: vec!["not-declared".into()],
+                    authorization_digest: String::new(),
                     ..binding
                 }]
             )

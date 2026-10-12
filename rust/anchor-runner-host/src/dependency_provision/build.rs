@@ -95,14 +95,17 @@ pub(crate) fn authority(
 /// `tool_dirs` are the directories this exact request is allowed to resolve a
 /// command from; the adapter accepts them only because the sandbox already
 /// carries the matching host grant.
-pub(crate) async fn run_step(
+pub(crate) async fn run_step_with_access(
     config: &DependencyProvisionConfig,
     authority: &Authority,
     workspace: &Path,
     command: &[String],
     what: &str,
+    access: &super::DependencyAccess,
 ) -> Result<String, ProvisionError> {
+    access.check()?;
     let mut request = authority.request(workspace, command);
+    request.cancellation = access.cancellation.clone();
     request.timeout = config.step_timeout();
     request.max_output_bytes = config.max_step_output();
     request.environment = [

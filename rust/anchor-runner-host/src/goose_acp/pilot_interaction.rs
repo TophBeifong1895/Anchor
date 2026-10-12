@@ -1,4 +1,4 @@
-use crate::application::plugins::PluginInstallPrecondition;
+use crate::application::plugins::{PluginInstallPrecondition, PluginUninstallPrecondition};
 use crate::pilot_tools::{PilotTools, identifier, workspace_directory};
 use anchor_runtime::{Cancellation, ToolDefinition, ToolError, ToolResultContent};
 use rmcp::{
@@ -7,9 +7,11 @@ use rmcp::{
 };
 use serde_json::{Value, json};
 use std::{sync::atomic::Ordering, time::Duration};
+mod channel_management;
+mod initialization;
 
 pub(crate) fn definitions() -> Vec<ToolDefinition> {
-    vec![
+    let mut definitions=vec![
         ToolDefinition {
             name: "ask_user".into(),
             description: "Ask the user for necessary information using a native form; the current Turn waits for their answer. Decline/cancel is not consent.".into(),
@@ -30,11 +32,49 @@ pub(crate) fn definitions() -> Vec<ToolDefinition> {
             description: "Install a Plugin candidate you prepared inside your own workspace into the Anchor Library. The user approves the exact reviewed content in a native form; approval is never a tool argument. Fetch, adapt, build and self-test the candidate first, then review it.".into(),
             parameters: json!({"type":"object","properties":{"directory":{"type":"string"},"id":{"type":"string"}},"required":["directory"],"additionalProperties":false}),
         },
-    ]
+    ];
+    definitions.extend(
+        crate::pilot_tools::PILOT_TOOLS
+            .iter()
+            .filter(|tool| {
+                matches!(
+                    tool.name,
+                    "session_network" | "plugin_mount" | "channel_configure" | "channel_enable"
+                )
+            })
+            .map(|tool| ToolDefinition {
+                name: tool.name.into(),
+                description: tool.description.into(),
+                parameters: (tool.parameters)(),
+            }),
+    );
+    definitions
 }
 
 fn failure(message: impl Into<String>) -> ToolError {
     ToolError::Failed(message.into())
+}
+
+/// Only a configured assistant Graph can depend on Library Plugins for its
+/// instructions. The platform Pilot's built-in instructions have no Graph.
+fn refuse_instruction_plugin(
+    tools: &PilotTools,
+    plugin: &str,
+    operation: &str,
+) -> Result<(), ToolError> {
+    if tools.graph_name.is_empty() {
+        return Ok(());
+    }
+    let (_path, bundle) = tools
+        .application
+        .load_graph(&tools.graph_name)
+        .map_err(|error| failure(format!("the assistant Graph is unavailable: {error:?}")))?;
+    if bundle.plugins.iter().any(|id| id == plugin) {
+        return Err(failure(format!(
+            "`{plugin}` provides this assistant's own instructions; ask the operator to {operation} it through the operator interface"
+        )));
+    }
+    Ok(())
 }
 
 /// The assistant needs the concrete reason (for example a catalog field it has
@@ -95,6 +135,12 @@ pub(super) async fn call(
     let arguments = arguments
         .as_object()
         .ok_or_else(|| failure("tool arguments must be an object"))?;
+    if matches!(name, "session_network" | "plugin_mount") {
+        return initialization::policy(tools, name, arguments, peer, cancellation).await;
+    }
+    if matches!(name, "channel_configure" | "channel_enable") {
+        return channel_management::policy(tools, name, arguments, peer, cancellation).await;
+    }
     if name == "plugin_install" {
         return install(tools, arguments, peer, cancellation).await;
     }
@@ -278,38 +324,22 @@ pub(crate) fn uninstall_form(
 /// The uninstall, with the user's answer already resolved.
 ///
 /// Split from the elicitation so the preconditions, the deletion, the audit fact
-/// and the refusal are all reachable from a test. Approval is checked here, and
-/// everything else is re-read here: an answer given for one state must never
-/// delete a different one.
+/// and the refusal are all reachable from a test. The original form's state is
+/// passed through unchanged; the application rechecks current facts under its
+/// publication guards before deleting anything.
 pub(crate) async fn uninstall_with_answer(
     tools: &PilotTools,
-    plugin: &str,
+    precondition: &PluginUninstallPrecondition,
     answer: UninstallAnswer,
+    cancellation: &Cancellation,
 ) -> Result<Value, ToolError> {
+    let plugin = &precondition.id;
     if !identifier(plugin) {
         return Err(failure("plugin must be a Plugin identifier"));
     }
     // Uninstalling the Plugin that provides this assistant's own instructions is
     // self-modification; the operator interface owns that.
-    let (_path, bundle) = tools
-        .application
-        .load_graph(&tools.graph_name)
-        .map_err(|error| failure(format!("the assistant Graph is unavailable: {error:?}")))?;
-    if bundle.plugins.iter().any(|id| id == plugin) {
-        return Err(failure(format!(
-            "`{plugin}` provides this assistant's own instructions; ask the operator to uninstall it through the operator interface"
-        )));
-    }
-    let precondition = tools
-        .application
-        .plugin_uninstall_precondition(&tools.library_root, plugin, &tools.sessions)
-        .await
-        .map_err(|error| {
-            failure(format!(
-                "Plugin uninstall was rejected: {}",
-                application_reason(error)
-            ))
-        })?;
+    refuse_instruction_plugin(tools, plugin, "uninstall")?;
     if let Some(refusal) = precondition.refusal() {
         return Err(failure(format!(
             "Plugin `{plugin}` cannot be uninstalled: {refusal}"
@@ -327,7 +357,15 @@ pub(crate) async fn uninstall_with_answer(
     }
     let outcome = tools
         .application
-        .uninstall_plugin_if_unchanged(&tools.library_root, &precondition, &tools.sessions)
+        .uninstall_plugin_if_unchanged_with_access(
+            &tools.library_root,
+            precondition,
+            &tools.sessions,
+            &crate::dependency_provision::DependencyAccess {
+                network: false,
+                cancellation: cancellation.clone(),
+            },
+        )
         .await
         .map_err(|error| {
             failure(format!(
@@ -429,7 +467,12 @@ async fn uninstall(
         confirm: checked(result.content.as_ref(), "confirm"),
         confirm_data_loss: checked(result.content.as_ref(), "confirm_data_loss"),
     };
-    let value = uninstall_with_answer(tools, &plugin, answer).await?;
+    let operation_cancellation = tools
+        .context
+        .as_ref()
+        .map(|context| &context.cancellation)
+        .unwrap_or(cancellation);
+    let value = uninstall_with_answer(tools, &precondition, answer, operation_cancellation).await?;
     Ok(vec![ToolResultContent::text(value.to_string())])
 }
 
@@ -619,7 +662,7 @@ async fn install(
     cancellation: &Cancellation,
 ) -> Result<Vec<ToolResultContent>, ToolError> {
     let (directory, id) = install_arguments(arguments)?;
-    let candidate = workspace_directory(&tools.workspace_root, &directory)?;
+    let candidate = workspace_directory(&tools.task_workspace(), &directory)?;
     let id = match id {
         Some(id) => id,
         None => candidate
@@ -631,18 +674,19 @@ async fn install(
     };
     // Installing a Plugin that provides this assistant's own instructions would
     // let the assistant change itself; the operator interface owns that.
-    let (_path, bundle) = tools
-        .application
-        .load_graph(&tools.graph_name)
-        .map_err(|error| failure(format!("the assistant Graph is unavailable: {error:?}")))?;
-    if bundle.plugins.iter().any(|plugin| plugin == &id) {
-        return Err(failure(format!(
-            "`{id}` provides this assistant's own instructions; ask the operator to install it through the operator interface"
-        )));
-    }
+    refuse_instruction_plugin(tools, &id, "install")?;
     let precondition = tools
         .application
-        .plugin_install_precondition(tools.library_root.clone(), candidate, id)
+        .plugin_install_precondition_with_access(
+            tools.library_root.clone(),
+            candidate,
+            id,
+            tools
+                .context
+                .as_ref()
+                .ok_or_else(|| failure("Pilot Turn context unavailable"))?
+                .dependency_access(),
+        )
         .await
         .map_err(|error| {
             failure(format!(
@@ -758,6 +802,33 @@ async fn install(
                 .collect::<Vec<_>>(),
         });
     }
+    if let Some(prepared) = crate::application::plugin_candidates::load_fact(
+        &tools.preparation_root()?,
+        &precondition.review.id,
+        &precondition.review.digest,
+    )
+    .map_err(|error| {
+        failure(format!(
+            "Plugin installed but preparation comparison is unavailable: {error:?}"
+        ))
+    })? {
+        result["prepared_lock_digest"] = json!(
+            prepared
+                .resolved
+                .as_ref()
+                .map(|resolved| &resolved.lock_digest)
+        );
+        result["prepared_dependency_set_matches"] = json!(
+            prepared
+                .resolved
+                .as_ref()
+                .map(|resolved| &resolved.packages)
+                == precondition
+                    .resolved
+                    .as_ref()
+                    .map(|resolved| &resolved.packages)
+        );
+    }
     Ok(vec![ToolResultContent::text(result.to_string())])
 }
 
@@ -817,6 +888,7 @@ mod tests {
                 declaration_digest: "c".repeat(64),
             }),
             resolved: None,
+            access: crate::dependency_provision::DependencyAccess::default(),
         };
 
         let message = install_message(&precondition);
@@ -996,6 +1068,7 @@ mod uninstall_tool_tests {
             owner: "local".into(),
             session: "pilot".into(),
             turn: "turn-1".into(),
+            context: None,
         };
         (root, tools)
     }
@@ -1013,6 +1086,9 @@ mod uninstall_tool_tests {
     }
 
     async fn install(tools: &PilotTools, directory: PathBuf, id: &str) {
+        let installed = tools.library_root.join("plugins").join(id);
+        let first_install = !installed.exists();
+        let runtime_data = std::fs::read(directory.join("state/data.bin")).unwrap();
         let precondition = tools
             .application
             .plugin_install_precondition(tools.library_root.clone(), directory, id.into())
@@ -1023,6 +1099,13 @@ mod uninstall_tool_tests {
             .install_plugin_if_unchanged(tools.library_root.clone(), precondition)
             .await
             .unwrap();
+        if first_install {
+            // Import provides empty data locations. Model the Plugin writing
+            // its runtime state only after installation; upgrades keep it.
+            let data = installed.join("state/data.bin");
+            assert!(!data.exists(), "source data must not be imported");
+            std::fs::write(data, runtime_data).unwrap();
+        }
     }
 
     fn library_bytes(root: &Path) -> Vec<(String, Vec<u8>)> {
@@ -1061,6 +1144,135 @@ mod uninstall_tool_tests {
             confirm: true,
             confirm_data_loss: true,
         }
+    }
+
+    async fn uninstall_current(
+        tools: &PilotTools,
+        id: &str,
+        answer: UninstallAnswer,
+    ) -> Result<Value, ToolError> {
+        let precondition = tools
+            .application
+            .plugin_uninstall_precondition(&tools.library_root, id, &tools.sessions)
+            .await
+            .map_err(|error| failure(application_reason(error)))?;
+        uninstall_with_answer(
+            tools,
+            &precondition,
+            answer,
+            &std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        )
+        .await
+    }
+
+    #[tokio::test]
+    async fn platform_pilot_without_a_graph_can_confirm_a_plugin_uninstall() {
+        let (root, mut tools) = fixture();
+        tools.graph_name.clear();
+        std::fs::remove_dir_all(root.path().join("fixture")).unwrap();
+        install(&tools, candidate(root.path(), "Demo", b"precious"), "demo").await;
+        let value = uninstall_current(&tools, "demo", approved()).await.unwrap();
+        assert_eq!(value["uninstalled"], true, "{value}");
+        assert_eq!(value["data_removed"], true, "{value}");
+        assert!(!root.path().join("plugins/demo").exists());
+        assert!(
+            tools
+                .sessions
+                .events("local", "pilot", 0)
+                .unwrap()
+                .iter()
+                .any(|event| event.kind == "plugin.uninstalled")
+        );
+    }
+
+    #[tokio::test]
+    async fn configured_instruction_plugins_remain_protected_for_install_and_uninstall() {
+        let (root, tools) = fixture();
+        install(&tools, candidate(root.path(), "Demo", b"precious"), "demo").await;
+        tools.application.update_graph(
+            "fixture",
+            json!({"entry":"pilot","agents":{"pilot":{"model":"models.worker","instructions":"Protected legacy assistant"}},"nodes":[{"id":"pilot","agent":"pilot","plugins":["demo"]}],"edges":[]}),
+        ).await.unwrap();
+        let before = library_bytes(root.path());
+        for operation in ["install", "uninstall"] {
+            let error = refuse_instruction_plugin(&tools, "demo", operation).unwrap_err();
+            assert!(
+                error
+                    .to_string()
+                    .contains("provides this assistant's own instructions"),
+                "{error}"
+            );
+            assert!(error.to_string().contains(operation), "{error}");
+            assert!(refuse_instruction_plugin(&tools, "unrelated", operation).is_ok());
+        }
+        let error = uninstall_current(&tools, "demo", approved())
+            .await
+            .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("provides this assistant's own instructions"),
+            "{error}"
+        );
+        assert_eq!(library_bytes(root.path()), before);
+        std::fs::remove_dir_all(root.path().join("fixture")).unwrap();
+        for operation in ["install", "uninstall"] {
+            let error = refuse_instruction_plugin(&tools, "demo", operation).unwrap_err();
+            assert!(
+                error.to_string().contains("assistant Graph is unavailable"),
+                "{error}"
+            );
+        }
+        assert_eq!(library_bytes(root.path()), before);
+    }
+
+    #[tokio::test]
+    async fn an_answer_for_the_original_form_cannot_uninstall_a_replacement() {
+        let (root, tools) = fixture();
+        install(
+            &tools,
+            candidate(root.path(), "Original", b"precious"),
+            "demo",
+        )
+        .await;
+        let approved_state = tools
+            .application
+            .plugin_uninstall_precondition(&tools.library_root, "demo", &tools.sessions)
+            .await
+            .unwrap();
+        let (message, _) = uninstall_form(&approved_state);
+        assert!(message.contains("Original"), "{message}");
+        // A second Session can install a replacement while the original native
+        // form is open. Its answer must remain bound to the original digest.
+        install(
+            &tools,
+            candidate(root.path(), "Replacement", b"unused"),
+            "demo",
+        )
+        .await;
+        let before = library_bytes(root.path());
+        let error = uninstall_with_answer(
+            &tools,
+            &approved_state,
+            approved(),
+            &std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        )
+        .await
+        .unwrap_err();
+        assert!(error.to_string().contains("changed"), "{error}");
+        assert_eq!(library_bytes(root.path()), before);
+        assert_eq!(
+            std::fs::read(root.path().join("plugins/demo/state/data.bin")).unwrap(),
+            b"precious"
+        );
+        assert!(
+            tools
+                .sessions
+                .events("local", "pilot", 0)
+                .unwrap()
+                .iter()
+                .all(|event| event.kind != "plugin.uninstalled")
+        );
     }
 
     #[tokio::test]
@@ -1104,7 +1316,7 @@ mod uninstall_tool_tests {
         let (root, tools) = fixture();
         install(&tools, candidate(root.path(), "Demo", b"precious"), "demo").await;
         let before = library_bytes(root.path());
-        let value = uninstall_with_answer(
+        let value = uninstall_current(
             &tools,
             "demo",
             UninstallAnswer {
@@ -1147,7 +1359,7 @@ mod uninstall_tool_tests {
             .set_plugin_mount("local", "pilot", "demo", true, "operator", "click")
             .unwrap();
         let before = library_bytes(root.path());
-        let error = uninstall_with_answer(&tools, "demo", approved())
+        let error = uninstall_current(&tools, "demo", approved())
             .await
             .unwrap_err();
         let message = error.to_string();
@@ -1195,9 +1407,7 @@ mod uninstall_tool_tests {
         )
         .unwrap();
 
-        let value = uninstall_with_answer(&tools, "demo", approved())
-            .await
-            .unwrap();
+        let value = uninstall_current(&tools, "demo", approved()).await.unwrap();
         assert_eq!(value["uninstalled"], true, "{value}");
         assert_eq!(value["data_removed"], true, "{value}");
         assert!(value["removed_bytes"].as_u64().unwrap() > 0, "{value}");
@@ -1230,7 +1440,7 @@ mod uninstall_tool_tests {
         assert!(audit.data["removed_bytes"].as_u64().unwrap() > 0);
 
         // A second attempt is a named refusal, not a second success.
-        let error = uninstall_with_answer(&tools, "demo", approved())
+        let error = uninstall_current(&tools, "demo", approved())
             .await
             .unwrap_err();
         assert!(error.to_string().contains("not installed"), "{error}");

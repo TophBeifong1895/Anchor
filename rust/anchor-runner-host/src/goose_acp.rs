@@ -18,7 +18,7 @@ mod usage;
 
 use crate::{
     create_durable_directory,
-    node_host::{HostIoResolver, NodeHostResolver},
+    node_host::{HostIoResolver, NodeHostResolver, ResolvedNodeTools, ToolResolution},
     write_durable,
 };
 use anchor_runtime::{
@@ -244,6 +244,36 @@ fn failure_outcome(
     }
 }
 
+async fn resolve_node_tools(
+    mut resolving: ToolResolution<'_>,
+    cancellation: &Cancellation,
+    tool_cancellation: &Cancellation,
+    deadline: Option<tokio::time::Instant>,
+) -> Result<Option<ResolvedNodeTools>, GraphError> {
+    // Keep the resolver's completed result separate from interruption of its
+    // wait. A completed error must never cause this future to be polled again.
+    let result = transport::bounded(
+        async { Ok::<_, String>(resolving.as_mut().await) },
+        cancellation,
+        deadline,
+    )
+    .await;
+    match result {
+        Ok(resolved) => resolved.map(Some).map_err(|error| error.into_graph_error()),
+        Err(error) => {
+            // Only an interrupted, unfinished resolver needs draining. It owns
+            // any MCP child and must receive cancellation before reaping it.
+            tool_cancellation.store(true, Ordering::SeqCst);
+            let _ = resolving.await;
+            if cancellation.load(Ordering::Acquire) {
+                Ok(None)
+            } else {
+                Err(GraphError::Unsupported(error))
+            }
+        }
+    }
+}
+
 impl GooseNodePort {
     pub(crate) fn from_env(
         state: &Path,
@@ -343,7 +373,7 @@ impl GooseNodePort {
 
     pub(crate) async fn execute(
         &self,
-        request: NodeExecutionRequest,
+        mut request: NodeExecutionRequest,
     ) -> Result<NodeExecutionOutcome, GraphError> {
         match self.completion_fact(&request.key)? {
             CompletionFact::Completed(completion) => {
@@ -448,26 +478,24 @@ impl GooseNodePort {
         let mut tool_request = request.clone();
         tool_request.cancellation = Arc::new(AtomicBool::new(false));
         let _stop_tools = CancelTools(tool_request.cancellation.clone());
-        let tools = match transport::bounded(
+        let Some(resolved) = resolve_node_tools(
             self.resolver.tools(&tool_request),
             &request.cancellation,
+            &tool_request.cancellation,
             deadline,
         )
-        .await
-        {
-            Ok(tools) => tools,
-            Err(_) if request.cancellation.load(Ordering::Acquire) => {
-                return Ok(NodeExecutionOutcome::Cancelled);
-            }
-            // The resolver distinguishes a Run whose recorded environment cannot
-            // be honored from a host that cannot assemble tools at all.
-            Err(error) => return Err(error.into_graph_error()),
+        .await?
+        else {
+            return Ok(NodeExecutionOutcome::Cancelled);
         };
+        // Tools and the Skill paths in the prompt come from one Host preparation.
+        // This includes Session mounts and Library updates since dispatch.
+        request.plugins = resolved.plugins;
         let mut random = [0u8; 32];
         fs::File::open("/dev/urandom")?.read_exact(&mut random)?;
         let token = format!("{:x}", Sha256::digest(random));
         let bridge = bridge::Bridge::start(
-            tools,
+            resolved.tools,
             request.routes.clone(),
             tool_request.cancellation.clone(),
             self.models.model_upstream(),
@@ -796,6 +824,78 @@ impl GooseNodePort {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::node_host::ResolutionError;
+
+    #[tokio::test]
+    async fn completed_tool_resolution_errors_are_returned_without_repolling() {
+        for cause in [
+            ResolutionError::Host("MCP command is not authorized".into()),
+            ResolutionError::Graph(GraphError::CorruptRun("frozen Plugin changed".into())),
+        ] {
+            let cancellation = Cancellation::default();
+            let tool_cancellation = Cancellation::default();
+            let expected = cause.to_string();
+            let graph_error = matches!(cause, ResolutionError::Graph(_));
+            let resolving = Box::pin(async move { Err(cause) });
+            let error = resolve_node_tools(resolving, &cancellation, &tool_cancellation, None)
+                .await
+                .err()
+                .expect("resolver failure must be returned");
+            assert!(error.to_string().contains(&expected));
+            assert_eq!(matches!(error, GraphError::CorruptRun(_)), graph_error);
+            assert!(!tool_cancellation.load(Ordering::Acquire));
+        }
+    }
+
+    #[tokio::test]
+    async fn interrupted_tool_resolution_is_cancelled_and_drained_before_returning() {
+        for expired in [false, true] {
+            let cancellation = Cancellation::default();
+            let tool_cancellation = Cancellation::default();
+            let settled = Arc::new(AtomicBool::new(false));
+            let (started, entered) = tokio::sync::oneshot::channel();
+            let operation_stop = tool_cancellation.clone();
+            let operation_settled = settled.clone();
+            let resolving = Box::pin(async move {
+                started.send(()).unwrap();
+                while !operation_stop.load(Ordering::Acquire) {
+                    tokio::time::sleep(Duration::from_millis(1)).await;
+                }
+                tokio::task::yield_now().await;
+                operation_settled.store(true, Ordering::SeqCst);
+                Err(ResolutionError::Host("MCP child reaped".into()))
+            });
+            let outer_stop = cancellation.clone();
+            let cancel = async move {
+                entered.await.unwrap();
+                if !expired {
+                    outer_stop.store(true, Ordering::SeqCst);
+                }
+            };
+            let deadline = expired.then(|| tokio::time::Instant::now() + Duration::from_millis(20));
+            let (result, ()) = tokio::time::timeout(Duration::from_secs(1), async {
+                tokio::join!(
+                    resolve_node_tools(resolving, &cancellation, &tool_cancellation, deadline),
+                    cancel,
+                )
+            })
+            .await
+            .expect("interrupted resolver must settle");
+            assert!(tool_cancellation.load(Ordering::Acquire));
+            assert!(settled.load(Ordering::Acquire));
+            if expired {
+                assert!(
+                    result
+                        .err()
+                        .unwrap()
+                        .to_string()
+                        .contains("deadline exceeded")
+                );
+            } else {
+                assert!(result.unwrap().is_none());
+            }
+        }
+    }
 
     #[test]
     fn provider_fixture_must_be_explicit_loopback_without_credentials() {

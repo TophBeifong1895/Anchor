@@ -94,6 +94,11 @@ impl RunApplication {
             run,
             previous_run,
         } = request;
+        let plugin_lease = if bundle.plugins.is_empty() {
+            None
+        } else {
+            Some(self.plugin_reference_lease().await?)
+        };
         let mut active = self.active.lock().await;
         let graph_path = Self::graph_identity(source)?;
         if let Some(saved) = self.metadata(&run)? {
@@ -242,6 +247,7 @@ impl RunApplication {
             },
         );
         drop(lease);
+        drop(plugin_lease);
         drop(graph_lease);
         self.spawn(record, execution)?;
         Ok(run)

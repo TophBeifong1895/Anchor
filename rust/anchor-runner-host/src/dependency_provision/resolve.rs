@@ -8,10 +8,14 @@
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
+use tokio::io::AsyncReadExt;
 
 use super::config::{
     DependencyProvisionConfig, PackageSource, ProvisionError, sha256_file, sha256_hex,
 };
+
+#[cfg(test)]
+mod command_tests;
 
 /// One distribution in the locked set.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -128,16 +132,29 @@ fn release(version: &str) -> (u32, u32) {
     (parts.next().unwrap_or(0), parts.next().unwrap_or(0))
 }
 
-/// Directories the host's execution sandbox mounts for every invocation. A
-/// published environment's base interpreter must come from one of them.
-const SANDBOX_VISIBLE_ROOTS: &[&str] = &["/usr", "/bin", "/lib", "/lib64", "/sbin"];
-
 /// Resolve an ask into one locked set, using only authorized sources.
+#[cfg(test)]
 pub(crate) async fn resolve_requirements(
     config: &DependencyProvisionConfig,
     constraint: Option<&str>,
     packages: &[String],
 ) -> Result<ResolvedRequirements, ProvisionError> {
+    resolve_requirements_with_access(
+        config,
+        constraint,
+        packages,
+        &super::DependencyAccess::default(),
+    )
+    .await
+}
+
+pub(crate) async fn resolve_requirements_with_access(
+    config: &DependencyProvisionConfig,
+    constraint: Option<&str>,
+    packages: &[String],
+    access: &super::DependencyAccess,
+) -> Result<ResolvedRequirements, ProvisionError> {
+    access.check()?;
     if packages.is_empty() {
         return Err(ProvisionError::Invalid(
             "the requirement names no packages, so there is nothing to resolve".to_owned(),
@@ -158,7 +175,7 @@ pub(crate) async fn resolve_requirements(
     })?;
 
     let (interpreter, interpreter_path, interpreter_prefix, interpreter_digest) =
-        observed_interpreter(config, constraint).await?;
+        observed_interpreter(config, constraint, access).await?;
     let uv = config.verified_uv()?;
 
     // The lock must not depend on where the ask happened to be resolved, or two
@@ -176,6 +193,9 @@ pub(crate) async fn resolve_requirements(
     let major_minor = interpreter.split('.').take(2).collect::<Vec<_>>().join(".");
     let mut command = tokio::process::Command::new(&uv);
     command.arg("pip").arg("compile");
+    if !access.network {
+        command.arg("--offline");
+    }
     for argument in source_arguments(&config.sources)? {
         command.arg(argument);
     }
@@ -208,13 +228,17 @@ pub(crate) async fn resolve_requirements(
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .kill_on_drop(true);
-    let result = tokio::time::timeout(config.step_timeout(), command.output())
-        .await
-        .map_err(|_| ProvisionError::Failed("resolving dependencies timed out".to_owned()))?
-        .map_err(|error| ProvisionError::Failed(format!("uv could not be run: {error}")))?;
+    let result = command_output(
+        &mut command,
+        config.step_timeout(),
+        access,
+        "resolving dependencies",
+    )
+    .await?;
     if !result.status.success() {
         return Err(ProvisionError::Failed(format!(
-            "dependency resolution failed: {}",
+            "dependency resolution failed (task network={}): {}",
+            access.network,
             tail(&String::from_utf8_lossy(&result.stderr))
         )));
     }
@@ -238,11 +262,101 @@ pub(crate) async fn resolve_requirements(
     })
 }
 
+/// Own and reap the deployment's resolver/probe process before returning on a
+/// timeout or cancellation. The pipes are drained concurrently, retaining only
+/// a bounded tail; even a foreign child holding a pipe cannot stall cleanup.
+async fn command_output(
+    command: &mut tokio::process::Command,
+    timeout: Duration,
+    access: &super::DependencyAccess,
+    activity: &str,
+) -> Result<std::process::Output, ProvisionError> {
+    use std::os::unix::process::CommandExt;
+    command.as_std_mut().process_group(0);
+    command
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .kill_on_drop(true);
+    let mut child = command
+        .spawn()
+        .map_err(|error| ProvisionError::Failed(format!("{activity} could not start: {error}")))?;
+    let process_group = child
+        .id()
+        .and_then(|pid| rustix::process::Pid::from_raw(pid as i32));
+    let mut stdout = tokio::spawn(bounded_output(child.stdout.take().expect("piped stdout")));
+    let mut stderr = tokio::spawn(bounded_output(child.stderr.take().expect("piped stderr")));
+    let waited = tokio::select! {
+        result = tokio::time::timeout(timeout, child.wait()) => result
+            .map_err(|_| ProvisionError::Failed(format!("{activity} timed out")))
+            .and_then(|status| status.map_err(|error| ProvisionError::Failed(format!("{activity} did not exit: {error}")))),
+        _ = access.cancelled() => Err(ProvisionError::Failed(format!("{activity} was cancelled"))),
+    };
+    if waited.is_err() {
+        if let Some(pid) = process_group {
+            let _ = rustix::process::kill_process_group(pid, rustix::process::Signal::KILL);
+        }
+        let _ = child.kill().await;
+        let _ = child.wait().await;
+        stdout.abort();
+        stderr.abort();
+        let _ = stdout.await;
+        let _ = stderr.await;
+        return Err(waited.expect_err("failure branch"));
+    }
+    let streams = tokio::time::timeout(Duration::from_secs(5), async {
+        let out = (&mut stdout)
+            .await
+            .map_err(|error| ProvisionError::Failed(error.to_string()))??;
+        let err = (&mut stderr)
+            .await
+            .map_err(|error| ProvisionError::Failed(error.to_string()))??;
+        Ok::<_, ProvisionError>((out, err))
+    })
+    .await;
+    if streams.is_err() {
+        if let Some(pid) = process_group {
+            let _ = rustix::process::kill_process_group(pid, rustix::process::Signal::KILL);
+        }
+        stdout.abort();
+        stderr.abort();
+    }
+    let streams = streams
+        .map_err(|_| ProvisionError::Failed(format!("{activity} output did not close")))??;
+    Ok(std::process::Output {
+        status: waited.expect("successful wait"),
+        stdout: streams.0,
+        stderr: streams.1,
+    })
+}
+
+async fn bounded_output(
+    mut stream: impl tokio::io::AsyncRead + Unpin,
+) -> Result<Vec<u8>, ProvisionError> {
+    const LIMIT: usize = 1024 * 1024;
+    let mut tail = Vec::new();
+    let mut buffer = [0u8; 8192];
+    loop {
+        let count = stream
+            .read(&mut buffer)
+            .await
+            .map_err(|error| ProvisionError::Failed(error.to_string()))?;
+        if count == 0 {
+            return Ok(tail);
+        }
+        let excess = (tail.len() + count).saturating_sub(LIMIT);
+        if excess > 0 {
+            tail.drain(..excess);
+        }
+        tail.extend_from_slice(&buffer[..count]);
+    }
+}
+
 /// The base interpreter the plan will name: its version, its binary, the prefix
 /// it needs to run, and the digest that identifies the build.
 async fn observed_interpreter(
     config: &DependencyProvisionConfig,
     constraint: Option<&str>,
+    access: &super::DependencyAccess,
 ) -> Result<(String, PathBuf, PathBuf, String), ProvisionError> {
     let python = std::fs::canonicalize(&config.python).map_err(|error| {
         ProvisionError::Failed(format!(
@@ -253,26 +367,25 @@ async fn observed_interpreter(
     let digest = sha256_file(&python).map_err(|error| {
         ProvisionError::Failed(format!("the interpreter cannot be read: {error}"))
     })?;
-    let output = tokio::time::timeout(
+    let mut command = tokio::process::Command::new(&python);
+    command
+        .arg("-c")
+        .arg("import sys; print('%d.%d.%d' % sys.version_info[:3]); print(sys.base_prefix)")
+        // The probe must see what a Run would see: `PYTHONPATH`,
+        // `PYTHONHOME` or a startup hook would change the version and prefix
+        // this plan records as a fact.
+        .env_clear()
+        .env("PATH", "/usr/bin:/bin")
+        .env("PYTHONDONTWRITEBYTECODE", "1")
+        .stdin(std::process::Stdio::null())
+        .kill_on_drop(true);
+    let output = command_output(
+        &mut command,
         Duration::from_secs(30),
-        tokio::process::Command::new(&python)
-            .arg("-c")
-            .arg("import sys; print('%d.%d.%d' % sys.version_info[:3]); print(sys.base_prefix)")
-            // The probe must see what a Run would see: `PYTHONPATH`,
-            // `PYTHONHOME` or a startup hook would change the version and prefix
-            // this plan records as a fact.
-            .env_clear()
-            .env("PATH", "/usr/bin:/bin")
-            .env("PYTHONDONTWRITEBYTECODE", "1")
-            .stdin(std::process::Stdio::null())
-            .kill_on_drop(true)
-            .output(),
+        access,
+        "observing the interpreter",
     )
-    .await
-    .map_err(|_| ProvisionError::Failed("the interpreter did not answer in time".to_owned()))?
-    .map_err(|error| {
-        ProvisionError::Failed(format!("the interpreter could not be run: {error}"))
-    })?;
+    .await?;
     if !output.status.success() {
         return Err(ProvisionError::Failed(format!(
             "the configured interpreter reported no version: {}",
@@ -296,19 +409,12 @@ async fn observed_interpreter(
             "the interpreter reported an unusable prefix `{prefix}`: {error}"
         ))
     })?;
-    // A Run's sandbox mounts these roots for every invocation. If the base
-    // interpreter lives outside them, the environment would build here and then
-    // fail to run where it was published — so refuse now, while a human can
-    // still change the deployment.
-    if !SANDBOX_VISIBLE_ROOTS
-        .iter()
-        .any(|root| prefix.starts_with(root))
-    {
-        return Err(ProvisionError::Unconfigured(format!(
-            "the configured interpreter runs from {}, which a Run's sandbox does not mount; put the base interpreter under one of {} so the published environment can run",
-            prefix.display(),
-            SANDBOX_VISIBLE_ROOTS.join(", ")
-        )));
+    crate::tool_environment::validate_installation_prefix(&prefix)
+        .map_err(ProvisionError::Unconfigured)?;
+    if !python.starts_with(&prefix) {
+        return Err(ProvisionError::Unconfigured(
+            "the interpreter binary does not belong to its reported prefix".into(),
+        ));
     }
     if release(&version) < (3, 8) {
         // `importlib.metadata` is how the published environment reports what it

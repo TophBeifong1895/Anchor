@@ -2,8 +2,19 @@
 
 mod archive;
 mod filesystem;
+mod install;
+mod platform;
 mod validation;
 
+pub use install::{
+    PlatformInstallReport, PlatformInstallRequest, install_platform, platform_command,
+    platform_command_with_listen,
+};
+pub use platform::{
+    BootstrapInventory, BootstrapTool, PlatformPackageInventory, PlatformPackageReport,
+    PlatformPackageRequest, RUSTUP_INIT_SHA256, RUSTUP_INIT_SOURCE, RUSTUP_INIT_VERSION, UV_SHA256,
+    UV_SOURCE, UV_VERSION, build_platform_package,
+};
 pub use validation::{ElfIdentity, ElfRuntime};
 
 use anchor_graph_host::{
@@ -172,6 +183,11 @@ fn prepare(request: &PackageRequest, goose_sha256: &str) -> Result<PreparedPacka
             root,
             "bin/anchor-net-relay",
         )?,
+        Snapshot::file(
+            &request.host.with_file_name("anchor-sandbox-network"),
+            root,
+            "bin/anchor-sandbox-network",
+        )?,
     ];
     for tool in &tools {
         snapshots.push(Snapshot::file(
@@ -213,7 +229,7 @@ fn prepare(request: &PackageRequest, goose_sha256: &str) -> Result<PreparedPacka
     if let Some(web) = &request.web {
         snapshots.push(Snapshot::tree(web, root, "web")?);
     }
-    add_snapshots(&mut entries, &snapshots[tools.len() + 3..])?;
+    add_snapshots(&mut entries, &snapshots[tools.len() + 4..])?;
     // Not an archive entry: the input directory's own stamp, so an addition to it
     // between preparation and publication is a drift rather than a silent copy.
     snapshots.push(Snapshot::listing(&request.bundle, "bundle")?);

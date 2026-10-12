@@ -16,6 +16,8 @@ use std::{
     time::Duration,
 };
 
+mod workspace_files;
+
 pub(crate) const RUN_TOOL_NAME: &str = "anchor_run";
 pub(crate) const READ_TOOL_NAME: &str = "anchor_read";
 pub(crate) const EDIT_TOOL_NAME: &str = "anchor_edit";
@@ -97,9 +99,9 @@ pub(crate) struct NodeTools {
     network: NetworkPolicy,
     spill: Option<SpillDirectory>,
     timeout: Duration,
-    /// Largest per-command timeout the model may request for this node.
     timeout_ceiling: Duration,
     preview_bytes: usize,
+    development_projects: Option<(PathBuf, PathBuf)>,
 }
 
 impl NodeTools {
@@ -122,14 +124,8 @@ impl NodeTools {
             timeout: DEFAULT_TIMEOUT,
             timeout_ceiling: DEFAULT_TIMEOUT,
             preview_bytes: DEFAULT_PREVIEW_BYTES,
+            development_projects: None,
         }
-    }
-
-    /// Raise the per-command ceiling. A deployment grants it through the node's
-    /// wall-clock budget; a command can never outlive its node.
-    pub fn with_timeout_ceiling(mut self, ceiling: Duration) -> Self {
-        self.timeout_ceiling = ceiling.max(self.timeout);
-        self
     }
 
     pub fn with_environment(
@@ -149,6 +145,16 @@ impl NodeTools {
         self
     }
 
+    pub(crate) fn with_development_projects(mut self, library: PathBuf, scope: PathBuf) -> Self {
+        self.development_projects = Some((library, scope));
+        self
+    }
+
+    pub(crate) fn with_timeout_ceiling(mut self, ceiling: Duration) -> Self {
+        self.timeout_ceiling = ceiling.max(self.timeout);
+        self
+    }
+
     /// Retain output beyond the previews at a host-owned, read-only location.
     pub fn with_spill(mut self, spill: SpillDirectory) -> Self {
         self.spill = Some(spill);
@@ -156,7 +162,11 @@ impl NodeTools {
     }
 
     fn authorized_commands_summary(&self) -> String {
-        let commands = self.sandbox.allowed_commands();
+        let mut commands = self.sandbox.allowed_commands();
+        commands.extend(self.environment.pilot_command_aliases());
+        commands.extend(self.environment.pilot_rust_command_aliases());
+        commands.sort();
+        commands.dedup();
         if commands.is_empty() {
             return "none".to_owned();
         }
@@ -196,8 +206,7 @@ impl NodeTools {
             "Run an authorized command as an argv array (no shell) in the node sandbox. \
              The working directory is /workspace and is writable; /in and /plugins are read-only inputs. \
              Authorized commands: {}. \
-             The command defaults to {}s and timeout_seconds may request up to {}s; \
-             each stream keeps a {} KiB preview{}. \
+             The command defaults to {}s; timeout_seconds may request up to {}s. Each stream keeps a {} KiB preview{}. \
              A non-zero exit code is a normal result: read `status`, `exit_code`, `stdout`, `stderr` and `incomplete`.",
             self.authorized_commands_summary(),
             self.timeout.as_secs(),
@@ -253,12 +262,18 @@ impl NodeTools {
         }))
     }
 
-    fn hint(&self, status: &str, incomplete: bool, retained: bool) -> Option<String> {
+    fn hint(
+        &self,
+        status: &str,
+        incomplete: bool,
+        retained: bool,
+        timeout: Duration,
+    ) -> Option<String> {
         if status == "timed_out" {
             return Some(format!(
                 "the command was killed after the {}s wall-clock limit and did not finish; narrow it, \
                  or write its output to a file under /workspace and read that file in parts.",
-                self.timeout.as_secs()
+                timeout.as_secs()
             ));
         }
         if retained {
@@ -283,6 +298,8 @@ impl NodeTools {
 #[serde(deny_unknown_fields)]
 struct RunArguments {
     command: Vec<String>,
+    #[serde(default)]
+    project: Option<String>,
     #[serde(default)]
     timeout_seconds: Option<u64>,
 }
@@ -343,55 +360,10 @@ fn prune_spill(directory: &Path, keep: usize) -> std::io::Result<()> {
 }
 
 impl NodeTools {
-    /// Resolve a workspace-relative path that must already exist.
-    ///
-    /// Canonicalizing rejects symlinks that would leave the workspace, which is the
-    /// only writable area a node owns.
-    fn workspace_read_path(&self, path: &str) -> Result<PathBuf, ToolError> {
-        let candidate = self.relative_candidate(path)?;
-        let workspace = std::fs::canonicalize(&self.workspace).map_err(|error| {
+    fn workspace_files(&self) -> Result<workspace_files::WorkspaceFiles, ToolError> {
+        workspace_files::WorkspaceFiles::open(&self.workspace).map_err(|error| {
             ToolError::Failed(format!("anchor file access is unavailable: {error}"))
-        })?;
-        let resolved = std::fs::canonicalize(self.workspace.join(&candidate)).map_err(|error| {
-            ToolError::Failed(format!("`{path}` cannot be read in /workspace: {error}"))
-        })?;
-        if !resolved.starts_with(&workspace) {
-            return Err(ToolError::Failed(format!(
-                "`{path}` resolves outside /workspace; only the node workspace is available"
-            )));
-        }
-        if !resolved.is_file() {
-            return Err(ToolError::Failed(format!(
-                "`{path}` is not a regular file in /workspace"
-            )));
-        }
-        Ok(resolved)
-    }
-
-    /// Resolve a workspace-relative path that may not exist yet.
-    fn workspace_write_path(&self, path: &str) -> Result<PathBuf, ToolError> {
-        let candidate = self.relative_candidate(path)?;
-        let workspace = std::fs::canonicalize(&self.workspace).map_err(|error| {
-            ToolError::Failed(format!("anchor file access is unavailable: {error}"))
-        })?;
-        let target = self.workspace.join(&candidate);
-        let parent = target.parent().ok_or_else(|| {
-            ToolError::Failed(format!("`{path}` has no parent directory in /workspace"))
-        })?;
-        let resolved_parent = std::fs::canonicalize(parent).map_err(|error| {
-            ToolError::Failed(format!(
-                "`{path}` cannot be written: its directory does not exist in /workspace ({error})"
-            ))
-        })?;
-        if !resolved_parent.starts_with(&workspace) {
-            return Err(ToolError::Failed(format!(
-                "`{path}` resolves outside /workspace; only the node workspace is writable"
-            )));
-        }
-        let name = target
-            .file_name()
-            .ok_or_else(|| self.invalid_arguments("path must name a file"))?;
-        Ok(resolved_parent.join(name))
+        })
     }
 
     fn relative_candidate(&self, path: &str) -> Result<PathBuf, ToolError> {
@@ -435,8 +407,8 @@ impl NodeTools {
     fn read_file(&self, arguments: Value) -> Result<Vec<ToolResultContent>, ToolError> {
         let arguments: ReadArguments =
             serde_json::from_value(arguments).map_err(|error| self.invalid_arguments(error))?;
-        let path = self.workspace_read_path(&arguments.path)?;
-        let bytes = std::fs::read(&path).map_err(|error| {
+        let candidate = self.relative_candidate(&arguments.path)?;
+        let bytes = self.workspace_files()?.read(&candidate).map_err(|error| {
             ToolError::Failed(format!("anchor_read failed: `{}`: {error}", arguments.path))
         })?;
         let sha256 = format!("{:x}", Sha256::digest(&bytes));
@@ -463,11 +435,19 @@ impl NodeTools {
             if lines.len() >= limit {
                 break;
             }
-            if !lines.is_empty() && bytes_used + line.len() > READ_MAX_BYTES {
+            let line_bytes = line.len().saturating_add(1);
+            if bytes_used.saturating_add(line_bytes) > READ_MAX_BYTES {
+                if lines.is_empty() {
+                    return Err(ToolError::Failed(format!(
+                        "anchor_read refused: `{}` line {} exceeds the {READ_MAX_BYTES} byte page limit including its counted newline; use anchor_run to inspect a bounded byte range",
+                        arguments.path,
+                        index + 1,
+                    )));
+                }
                 truncated_for_bytes = true;
                 break;
             }
-            bytes_used += line.len() + 1;
+            bytes_used += line_bytes;
             lines.push(json!({"line": index + 1, "text": line}));
         }
         let returned = lines.len();
@@ -490,8 +470,14 @@ impl NodeTools {
     fn edit_file(&self, arguments: Value) -> Result<Vec<ToolResultContent>, ToolError> {
         let arguments: EditArguments =
             serde_json::from_value(arguments).map_err(|error| self.invalid_arguments(error))?;
-        let path = self.workspace_write_path(&arguments.path)?;
-        let existing = std::fs::read(&path).ok();
+        let candidate = self.relative_candidate(&arguments.path)?;
+        let read_error =
+            |error| ToolError::Failed(format!("anchor_edit failed: `{}`: {error}", arguments.path));
+        let target = self
+            .workspace_files()?
+            .edit_target(&candidate)
+            .map_err(read_error)?;
+        let existing = target.read_existing().map_err(read_error)?;
         let current_hash = existing
             .as_ref()
             .map(|bytes| format!("{:x}", Sha256::digest(bytes)));
@@ -561,27 +547,12 @@ impl NodeTools {
                 ));
             }
         };
-        let temporary = path.with_file_name(format!(
-            ".{}.anchor-edit-{}",
-            path.file_name()
-                .map(|name| name.to_string_lossy().into_owned())
-                .unwrap_or_else(|| "file".to_owned()),
-            std::process::id()
-        ));
-        let write = || -> std::io::Result<()> {
-            use std::io::Write;
-            let mut file = std::fs::File::create(&temporary)?;
-            file.write_all(&after)?;
-            file.sync_all()?;
-            std::fs::rename(&temporary, &path)
-        };
-        if let Err(error) = write() {
-            let _ = std::fs::remove_file(&temporary);
-            return Err(ToolError::Failed(format!(
+        target.replace(&after).map_err(|error| {
+            ToolError::Failed(format!(
                 "anchor_edit failed to write `{}`: {error}",
                 arguments.path
-            )));
-        }
+            ))
+        })?;
         Ok(vec![ToolResultContent::json(json!({
             "path": arguments.path,
             "created": created,
@@ -611,7 +582,8 @@ impl ToolPort for NodeTools {
                 "type": "object",
                 "properties": {
                     "command": {"type": "array", "items": {"type": "string"}, "minItems": 1},
-                    "timeout_seconds": {"type": "integer", "minimum": 1, "maximum": self.timeout_ceiling.as_secs()}
+                    "project": {"type":"string","description":"Prepared workspace-relative Python project; runs inside this directory and uses its read-only development dependency view. Use '.' for workspace root."},
+                    "timeout_seconds": {"type":"integer", "minimum":1, "maximum":self.timeout_ceiling.as_secs()}
                 },
                 "required": ["command"],
                 "additionalProperties": false
@@ -681,22 +653,45 @@ impl ToolPort for NodeTools {
             if arguments.command.is_empty() {
                 return Err(self.invalid_arguments("command must contain at least one element"));
             }
-            let timeout = match arguments.timeout_seconds {
-                None => self.timeout,
-                Some(seconds) if seconds >= 1 && seconds <= self.timeout_ceiling.as_secs() => {
-                    Duration::from_secs(seconds)
+            let timeout =
+                Duration::from_secs(arguments.timeout_seconds.unwrap_or(self.timeout.as_secs()));
+            if timeout.is_zero() || timeout > self.timeout_ceiling {
+                return Err(self.invalid_arguments(format!(
+                    "timeout_seconds must be between 1 and {}",
+                    self.timeout_ceiling.as_secs()
+                )));
+            }
+            let development = if let Some(project) = &arguments.project {
+                let (library, scope) = self.development_projects.as_ref().ok_or_else(|| {
+                    self.refusal("development projects are available only in a Pilot Session")
+                })?;
+                if project != "." {
+                    crate::pilot_tools::workspace_directory(&self.workspace, project)?;
                 }
-                Some(_) => {
-                    return Err(self.invalid_arguments(format!(
-                        "timeout_seconds must be between 1 and {}",
-                        self.timeout_ceiling.as_secs()
-                    )));
-                }
+                Some(
+                    crate::application::development_dependencies::select_development_view(
+                        library, scope, project,
+                    )
+                    .map_err(|error| self.refusal(error))?,
+                )
+            } else {
+                None
             };
+            let python_alias = arguments
+                .command
+                .first()
+                .filter(|command| {
+                    command.starts_with("python")
+                        && self.environment.pilot_command_aliases().contains(command)
+                })
+                .cloned();
             let mut request = SandboxRequest {
                 writable_inputs: Vec::new(),
                 workspace: self.workspace.clone(),
-                working_directory: None,
+                working_directory: arguments
+                    .project
+                    .as_ref()
+                    .map(|project| PathBuf::from("/workspace").join(project)),
                 command: arguments.command,
                 readonly_inputs: self.readonly_inputs.clone(),
                 workspace_readonly: Vec::new(),
@@ -710,13 +705,61 @@ impl ToolPort for NodeTools {
                 cancellation: self.cancellation.clone(),
             };
             self.environment.apply(&mut request);
-            let result = match self.sandbox.run(request).await {
+            let sandbox = self
+                .environment
+                .sandbox_for_command(&self.sandbox, &mut request)
+                .map_err(|reason| self.refusal(reason))?;
+            let mut sandbox = Arc::new(sandbox);
+            if let Some(development) = &development {
+                sandbox = development
+                    .view
+                    .authorize(sandbox)
+                    .map_err(|reason| self.refusal(reason))?;
+                development.view.apply(&mut request);
+                let bin = development.view.view().join("bin");
+                let previous = request
+                    .environment
+                    .iter()
+                    .find(|value| value.key == "PATH")
+                    .map(|value| value.value().to_owned())
+                    .unwrap_or_else(|| "/usr/bin:/bin".into());
+                request.environment.retain(|value| value.key != "PATH");
+                request
+                    .environment
+                    .push(anchor_runtime::SandboxEnvironment::new(
+                        "PATH",
+                        format!("{}:{previous}", bin.display()),
+                    ));
+                request
+                    .environment
+                    .push(anchor_runtime::SandboxEnvironment::new(
+                        "PYTHONNOUSERSITE",
+                        "1",
+                    ));
+                if python_alias.is_some() {
+                    request.command[0] = bin.join("python").to_string_lossy().into_owned();
+                } else if let Some(command) = request
+                    .command
+                    .first()
+                    .filter(|command| !command.contains('/') && !command.is_empty())
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    let executable = bin.join(command);
+                    if std::fs::metadata(&executable).is_ok_and(|metadata| {
+                        metadata.is_file() && metadata.permissions().mode() & 0o111 != 0
+                    }) {
+                        request.command[0] = executable.to_string_lossy().into_owned();
+                    }
+                }
+            }
+            let result = match sandbox.run(request).await {
                 Ok(result) => result,
                 // Raised by the adapter before any process launch, so the model
                 // can safely correct its command.
                 Err(SandboxError::InvalidRequest(reason)) => return Err(self.refusal(reason)),
                 Err(error) => return Err(ToolError::Failed(error.to_string())),
             };
+            drop(development);
             let status = match result.status {
                 SandboxStatus::Completed => "completed",
                 SandboxStatus::TimedOut => "timed_out",
@@ -742,7 +785,9 @@ impl ToolPort for NodeTools {
             if !retained.is_empty() {
                 output["full_output"] = json!(retained);
             }
-            if let Some(hint) = self.hint(status, result.incomplete, !retained.is_empty()) {
+            output["timeout_seconds"] = json!(timeout.as_secs());
+            if let Some(hint) = self.hint(status, result.incomplete, !retained.is_empty(), timeout)
+            {
                 output["hint"] = json!(hint);
             }
             Ok(vec![ToolResultContent::json(output)])

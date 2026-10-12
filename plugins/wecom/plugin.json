@@ -1,5 +1,6 @@
 {
   "name": "企业微信",
+  "network": true,
   "description": "企业微信机器人长连接私聊、主动通知、附件分析与图文回复；可选自建应用消息和成员查询 API。",
   "skills": "skills/",
   "mcpServers": {

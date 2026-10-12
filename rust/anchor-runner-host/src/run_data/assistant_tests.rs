@@ -31,6 +31,7 @@ fn cursor(key: InvocationKey) -> RunCursor {
 fn result(key: InvocationKey) -> RunResult {
     RunResult {
         plugin_views: Default::default(),
+        plugin_digests: Default::default(),
         node_id: key.node_id.clone(),
         completion: NodeCompletion {
             submission: "fixture".into(),

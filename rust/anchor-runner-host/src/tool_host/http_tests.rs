@@ -139,6 +139,7 @@ fn binding(server: &str) -> PluginBinding {
         digest: "fixture-digest".into(),
         resources: vec![],
         mcp_servers: vec![server.into()],
+        authorization_digest: String::new(),
     }
 }
 
@@ -147,6 +148,7 @@ fn config(endpoint: &str, _names: &[&str]) -> McpToolConfig {
         environment: Default::default(),
         disabled: Default::default(),
         oauth_library_root: None,
+        startup_cancellation: None,
         servers: BTreeMap::from([(
             "fixture-plugin-fixture".into(),
             ResolvedMcpServer {
@@ -175,6 +177,7 @@ async fn authenticated_http_tools_are_exposed_as_server_prefixed_names() {
         .unwrap();
         let tools = LiveMcpTools {
             hosts: BTreeMap::from([("fixture-plugin-fixture".into(), Arc::new(host))]),
+            _environment: Default::default(),
         };
         let definitions = tools.definitions();
         assert_eq!(
@@ -219,6 +222,54 @@ async fn wrong_credentials_fail_before_tool_registration() {
     })
     .await;
     assert!(result.is_err());
+}
+
+#[tokio::test]
+async fn candidate_http_startup_cancels_while_initialize_is_pending_and_can_retry() {
+    let entered = Arc::new(tokio::sync::Notify::new());
+    let waiting = entered.clone();
+    let app = Router::new().route(
+        "/mcp",
+        axum::routing::post(move || {
+            let waiting = waiting.clone();
+            async move {
+                waiting.notify_one();
+                std::future::pending::<StatusCode>().await
+            }
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let endpoint = format!("http://{}/mcp", listener.local_addr().unwrap());
+    let task = tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+    let cancellation = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let mut candidate = config(&endpoint, &[]);
+    candidate.startup_cancellation = Some(cancellation.clone());
+    let cancel = async {
+        entered.notified().await;
+        cancellation.store(true, Ordering::Release);
+    };
+    let bindings = [binding("fixture")];
+    let (result, ()) = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        tokio::join!(candidate.bind(&bindings, true), cancel)
+    })
+    .await
+    .expect("candidate HTTP initialization must respond to cancellation");
+    assert!(result.err().unwrap().contains("startup was cancelled"));
+    task.abort();
+    let _ = task.await;
+    let healthy = fixture(false).await;
+    let mut retry = config(&healthy.endpoint, &[]);
+    retry.startup_cancellation = Some(Arc::new(std::sync::atomic::AtomicBool::new(false)));
+    let tools = retry.bind(&bindings, true).await.unwrap();
+    assert!(
+        tools
+            .definitions()
+            .iter()
+            .any(|tool| tool.name == "fixture-plugin-fixture_echo")
+    );
+    tools.shutdown().await.unwrap();
 }
 
 #[tokio::test]

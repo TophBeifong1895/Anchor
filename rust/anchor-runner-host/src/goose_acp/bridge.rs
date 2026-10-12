@@ -17,7 +17,7 @@ use rmcp::{
     service::RequestContext,
     transport::{
         StreamableHttpServerConfig, StreamableHttpService,
-        streamable_http_server::session::local::LocalSessionManager,
+        streamable_http_server::session::{SessionManager, local::LocalSessionManager},
     },
 };
 use serde_json::{Value, json};
@@ -27,7 +27,7 @@ use std::sync::{
     Arc,
     atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
 };
-use tokio::sync::{Mutex, Notify};
+use tokio::sync::{Mutex, Notify, oneshot};
 use tokio_util::sync::CancellationToken;
 
 /// Everything one bridge invocation needs that is not the tool port itself.
@@ -54,7 +54,9 @@ pub(super) struct Bridge {
     /// UNIX socket this bridge is additionally exposed on, if any.
     socket: std::sync::Mutex<Option<PathBuf>>,
     stop: CancellationToken,
-    task: tokio::task::JoinHandle<()>,
+    task: Mutex<Option<tokio::task::JoinHandle<std::io::Result<()>>>>,
+    sessions: Arc<LocalSessionManager>,
+    handler_closed: Mutex<Option<oneshot::Receiver<()>>>,
 }
 
 pub(super) struct BridgeState {
@@ -94,7 +96,22 @@ impl Drop for ActiveCall {
 }
 
 #[derive(Clone)]
-struct McpBridge(Arc<BridgeState>);
+struct McpBridge {
+    state: Arc<BridgeState>,
+    _release: Arc<HandlerRelease>,
+}
+
+/// rmcp owns session workers independently of Axum's HTTP connection tasks.
+/// Signal when both have released the handler, before the owner closes tools.
+struct HandlerRelease(Option<oneshot::Sender<()>>);
+
+impl Drop for HandlerRelease {
+    fn drop(&mut self) {
+        if let Some(closed) = self.0.take() {
+            let _ = closed.send(());
+        }
+    }
+}
 
 impl ServerHandler for McpBridge {
     fn get_info(&self) -> ServerInfo {
@@ -107,7 +124,7 @@ impl ServerHandler for McpBridge {
         _: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, ErrorData> {
         let mut tools = Vec::new();
-        for definition in self.0.tools.definitions() {
+        for definition in self.state.tools.definitions() {
             tools.push(Tool::new(
                 definition.name,
                 definition.description,
@@ -121,11 +138,11 @@ impl ServerHandler for McpBridge {
                 ),
             ));
         }
-        if self.0.node_completion {
+        if self.state.node_completion {
             tools.push(Tool::new(
             "final_result",
             "Complete this Anchor node after inspecting all business tool results. Call alone with a nonempty summary and a legal route.",
-            Arc::new(serde_json::from_value(self.0.completion_schema()).unwrap()),
+            Arc::new(serde_json::from_value(self.state.completion_schema()).unwrap()),
         ));
         }
         Ok(ListToolsResult {
@@ -140,56 +157,56 @@ impl ServerHandler for McpBridge {
         request: CallToolRequestParams,
         context: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, ErrorData> {
-        self.0.active_calls.fetch_add(1, Ordering::SeqCst);
-        let _active = ActiveCall(self.0.clone());
-        if !self.0.accepting.load(Ordering::SeqCst) {
+        self.state.active_calls.fetch_add(1, Ordering::SeqCst);
+        let _active = ActiveCall(self.state.clone());
+        if !self.state.accepting.load(Ordering::SeqCst) {
             return Err(ErrorData::internal_error(
                 "Anchor invocation is closing",
                 None,
             ));
         }
-        let _guard = self.0.call_lock.lock().await;
+        let _guard = self.state.call_lock.lock().await;
         let arguments = Value::Object(request.arguments.unwrap_or_default());
-        let epoch = self.0.provider_calls.load(Ordering::SeqCst);
+        let epoch = self.state.provider_calls.load(Ordering::SeqCst);
         let mut media = None;
-        let result = if self.0.cancellation.load(Ordering::Relaxed) {
+        let result = if self.state.cancellation.load(Ordering::Relaxed) {
             Err("Anchor invocation was cancelled".to_owned())
-        } else if self.0.completion.lock().await.is_some() {
-            *self.0.after_completion.lock().await = true;
+        } else if self.state.completion.lock().await.is_some() {
+            *self.state.after_completion.lock().await = true;
             Err("tools after node completion are refused".to_owned())
-        } else if self.0.node_completion && request.name == "final_result" {
-            let mixed_batch = if self.0.fixture {
-                let response_tools = self.0.response_tools.lock().await;
+        } else if self.state.node_completion && request.name == "final_result" {
+            let mixed_batch = if self.state.fixture {
+                let response_tools = self.state.response_tools.lock().await;
                 response_tools.len() != 1 || !response_tools[0].ends_with("__final_result")
             } else {
-                let receipt = self.0.receipt.lock().await;
+                let receipt = self.state.receipt.lock().await;
                 match receipt.as_deref() {
                     Some(receipt) => {
                         arguments.get("observed_receipt").and_then(Value::as_str) != Some(receipt)
                     }
                     None => self
-                        .0
+                        .state
                         .load_fact()?
                         .is_some_and(|fact| fact.tool_observation.is_some()),
                 }
             };
-            let same_round = self.0.fixture
-                && self.0.calls.lock().await.iter().any(|call| {
+            let same_round = self.state.fixture
+                && self.state.calls.lock().await.iter().any(|call| {
                     call["provider_request"] == epoch && call["tool"] != "final_result"
                 });
             if same_round || mixed_batch {
                 Err("final_result must be called alone after observing business results".to_owned())
             } else {
                 let mut completion = arguments.clone();
-                if !self.0.fixture {
+                if !self.state.fixture {
                     completion
                         .as_object_mut()
                         .unwrap()
                         .remove("observed_receipt");
                 }
-                match validate_completion(&completion, &self.0.routes) {
+                match validate_completion(&completion, &self.state.routes) {
                     Ok(completion) => {
-                        *self.0.completion.lock().await = Some(completion.clone());
+                        *self.state.completion.lock().await = Some(completion.clone());
                         Ok(completion)
                     }
                     Err(error) => Err(error),
@@ -197,7 +214,7 @@ impl ServerHandler for McpBridge {
             }
         } else {
             let identity = self
-                .0
+                .state
                 .load_fact()?
                 .and_then(|fact| native_tool_identity(&fact, request.meta.as_ref(), &context.meta));
             let mut observation = json!({"tool":request.name,"arguments":arguments,"result":null});
@@ -207,15 +224,20 @@ impl ServerHandler for McpBridge {
                     "tool_call": identity.tool_call
                 });
             }
-            self.0.store_observation(&observation)?;
+            self.state.store_observation(&observation)?;
             let tool = async {
-                match &self.0.pilot {
+                match &self.state.pilot {
                     Some(pilot) => {
                         pilot
                             .call_mcp(&request.name, arguments.clone(), Some(context.peer.clone()))
                             .await
                     }
-                    None => self.0.tools.call(&request.name, arguments.clone()).await,
+                    None => {
+                        self.state
+                            .tools
+                            .call(&request.name, arguments.clone())
+                            .await
+                    }
                 }
             };
             let tool = crate::goose_tool_context::scope(identity, tool);
@@ -223,7 +245,7 @@ impl ServerHandler for McpBridge {
             let result = tokio::select! {
                 result = &mut tool => result,
                 _ = context.ct.cancelled() => {
-                    self.0.cancellation.store(true, Ordering::SeqCst);
+                    self.state.cancellation.store(true, Ordering::SeqCst);
                     tool.await
                 }
             };
@@ -234,7 +256,7 @@ impl ServerHandler for McpBridge {
                     media = output.media;
                     output.observation
                 });
-            let result = if self.0.node_completion && !self.0.fixture {
+            let result = if self.state.node_completion && !self.state.fixture {
                 let mut bytes = [0u8; 32];
                 std::fs::File::open("/dev/urandom")
                     .and_then(|mut file| file.read_exact(&mut bytes))
@@ -243,7 +265,7 @@ impl ServerHandler for McpBridge {
                     .iter()
                     .map(|byte| format!("{byte:02x}"))
                     .collect::<String>();
-                *self.0.receipt.lock().await = Some(receipt.clone());
+                *self.state.receipt.lock().await = Some(receipt.clone());
                 match result {
                     Ok(output) => Ok(json!({"ok":true,"output":output,"anchor_receipt":receipt})),
                     Err(error) => {
@@ -255,14 +277,14 @@ impl ServerHandler for McpBridge {
             }
             .inspect(|output| observation["result"] = json!({"ok":true,"output":output}))
             .inspect_err(|error| observation["result"] = json!({"ok":false,"error":error}));
-            self.0.store_observation(&observation)?;
+            self.state.store_observation(&observation)?;
             result
         };
         let evidence = match &result {
             Ok(output) => json!({"ok":true,"output":output}),
             Err(error) => json!({"ok":false,"error":error}),
         };
-        self.0
+        self.state
             .record_call(json!({
                 "provider_request":epoch,"tool":request.name,"arguments":arguments,"result":evidence
             }))
@@ -656,11 +678,16 @@ impl Bridge {
         });
         let stop = CancellationToken::new();
         let stopped = stop.clone();
-        let handler = McpBridge(state.clone());
+        let (handler_released, handler_closed) = oneshot::channel();
+        let handler = McpBridge {
+            state: state.clone(),
+            _release: Arc::new(HandlerRelease(Some(handler_released))),
+        };
+        let sessions = Arc::new(LocalSessionManager::default());
         let service: StreamableHttpService<McpBridge, LocalSessionManager> =
             StreamableHttpService::new(
                 move || Ok(handler.clone()),
-                Default::default(),
+                sessions.clone(),
                 StreamableHttpServerConfig::default()
                     .with_sse_keep_alive(None)
                     .with_cancellation_token(stop.child_token()),
@@ -676,9 +703,9 @@ impl Bridge {
             .layer(middleware::from_fn_with_state(state.clone(), authorize))
             .with_state(state.clone());
         let task = tokio::spawn(async move {
-            let _ = axum::serve(listener, app)
+            axum::serve(listener, app)
                 .with_graceful_shutdown(stopped.cancelled_owned())
-                .await;
+                .await
         });
         Ok(Self {
             url: format!("http://{address}"),
@@ -687,7 +714,9 @@ impl Bridge {
             address,
             socket: std::sync::Mutex::new(None),
             stop,
-            task,
+            task: Mutex::new(Some(task)),
+            sessions,
+            handler_closed: Mutex::new(Some(handler_closed)),
         })
     }
 
@@ -721,12 +750,11 @@ impl Bridge {
         }
     }
 
-    pub(super) fn stop(&self) {
+    fn cancel(&self) {
         self.remove_socket();
         self.state.accepting.store(false, Ordering::SeqCst);
         self.state.cancellation.store(true, Ordering::SeqCst);
         self.stop.cancel();
-        self.task.abort();
     }
 
     pub(super) async fn close(&self) -> Result<(), String> {
@@ -752,14 +780,84 @@ impl Bridge {
             settle.await;
             Ok(())
         };
-        self.stop();
+        self.cancel();
+        let timeout = std::time::Duration::from_secs(if self.state.fixture { 3 } else { 10 });
+        // Axum joins its own HTTP connections during graceful shutdown. Aborting
+        // only the serve task would leave keepalive/SSE handlers owning tools.
+        let http_closed = {
+            let mut task = self.task.lock().await;
+            let result = if let Some(task) = task.as_mut() {
+                match tokio::time::timeout(timeout, &mut *task).await {
+                    Ok(Ok(Ok(()))) => Ok(()),
+                    Ok(Ok(Err(error))) => Err(format!("MCP bridge HTTP shutdown failed: {error}")),
+                    Ok(Err(error)) => Err(format!("MCP bridge task failed: {error}")),
+                    Err(_) => {
+                        task.abort();
+                        let _ = task.await;
+                        Err("MCP bridge HTTP connections did not close; tool ownership remains uncertain".into())
+                    }
+                }
+            } else {
+                Ok(())
+            };
+            task.take();
+            result
+        };
+        // The fixed rmcp release cancels SSE streams through the token above,
+        // but native session workers must also receive its close_session call.
+        let session_ids = self
+            .sessions
+            .sessions
+            .read()
+            .await
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>();
+        let sessions_closed = async {
+            for id in session_ids {
+                self.sessions
+                    .close_session(&id)
+                    .await
+                    .map_err(|error| format!("MCP session shutdown failed: {error}"))?;
+            }
+            Ok::<_, String>(())
+        };
+        let sessions_closed = tokio::time::timeout(timeout, sessions_closed)
+            .await
+            .unwrap_or_else(|_| {
+                Err("MCP sessions did not close; tool ownership remains uncertain".into())
+            });
+        let handlers_closed = {
+            let mut closed = self.handler_closed.lock().await;
+            if let Some(receiver) = closed.as_mut() {
+                match tokio::time::timeout(timeout, receiver).await {
+                    Ok(Ok(())) => {
+                        closed.take();
+                        Ok(())
+                    }
+                    Ok(Err(error)) => Err(format!("MCP handler shutdown unavailable: {error}")),
+                    Err(_) => Err(
+                        "MCP handlers did not release tools; tool ownership remains uncertain"
+                            .into(),
+                    ),
+                }
+            } else {
+                Ok(())
+            }
+        };
         settled
+            .and(http_closed)
+            .and(sessions_closed)
+            .and(handlers_closed)
     }
 }
 
 impl Drop for Bridge {
     fn drop(&mut self) {
-        self.stop();
+        self.cancel();
+        if let Some(task) = self.task.get_mut().take() {
+            task.abort();
+        }
     }
 }
 
@@ -893,6 +991,57 @@ mod tests {
         .await
         .unwrap();
         (bridge, tools)
+    }
+
+    #[tokio::test]
+    async fn close_releases_tools_while_http_keepalive_and_mcp_clients_remain_open() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let (bridge, tools) = slow_bridge(false).await;
+        let config = StreamableHttpClientTransportConfig::with_uri(format!("{}/mcp", bridge.url))
+            .auth_header(bridge.token.clone());
+        let client = ().serve(StreamableHttpClientTransport::from_config(config)).await.unwrap();
+        client.list_all_tools().await.unwrap();
+
+        let mut stream = tokio::net::TcpStream::connect(bridge.address)
+            .await
+            .unwrap();
+        stream.write_all(format!(
+            "GET /unknown HTTP/1.1\r\nhost: bridge\r\nauthorization: Bearer {}\r\nconnection: keep-alive\r\n\r\n",
+            bridge.token
+        ).as_bytes()).await.unwrap();
+        let mut response = Vec::new();
+        tokio::time::timeout(std::time::Duration::from_secs(3), async {
+            while !response.ends_with(b"\r\n\r\n") {
+                let byte = stream.read_u8().await.unwrap();
+                response.push(byte);
+            }
+        })
+        .await
+        .unwrap();
+        assert!(response.starts_with(b"HTTP/1.1 404"));
+
+        bridge.close().await.unwrap();
+        assert_eq!(
+            Arc::strong_count(&bridge.state),
+            1,
+            "server tasks still own the tools"
+        );
+        drop(bridge);
+        assert_eq!(
+            Arc::strong_count(&tools),
+            1,
+            "tool shutdown cannot obtain exclusive ownership"
+        );
+        let mut remaining = Vec::new();
+        tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            stream.read_to_end(&mut remaining),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        let _ = client.cancel().await;
     }
 
     #[tokio::test]

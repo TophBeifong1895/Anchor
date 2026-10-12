@@ -628,7 +628,7 @@ impl<'a, S: RunStore, A: ArtifactPort, N: NodeExecutionPort, C: RunControl>
                     self.persist(&mut record)?;
                     return Ok(record);
                 }
-                let request = execution_request(&record, &cursor, self.control.cancellation())?;
+                let request = self.current_execution_request(&record, &cursor)?;
                 match self.nodes.execute(request).await? {
                     NodeExecutionOutcome::Completed(c) => {
                         record.recovery.retain(|pending| pending.key != cursor.key);
@@ -734,6 +734,7 @@ impl<'a, S: RunStore, A: ArtifactPort, N: NodeExecutionPort, C: RunControl>
                 key: cursor.key.clone(),
                 // Observed, not enforced: which view this step actually used.
                 plugin_views: self.nodes.observed_plugin_views(&cursor.key),
+                plugin_digests: self.nodes.observed_plugin_digests(&cursor.key),
                 completion,
                 interruption,
                 commit,
@@ -896,13 +897,15 @@ impl<'a, S: RunStore, A: ArtifactPort, N: NodeExecutionPort, C: RunControl>
             .resolve_plugins(&ids)
             .map_err(|error| format!("Plugin manifest resolution failed: {error}"))?;
         let valid = resolved.len() == ids.len()
-            && resolved
-                .iter()
-                .zip(&ids)
-                .all(|(binding, id)| binding.id == *id && !binding.digest.is_empty());
+            && resolved.iter().zip(&ids).all(|(binding, id)| {
+                binding.id == *id
+                    && !binding.digest.is_empty()
+                    && !binding.authorization_digest.is_empty()
+            });
         if !valid {
             return Err(
-                "Plugin resolver returned incomplete, reordered, or unhashed bindings".into(),
+                "Plugin resolver returned incomplete, reordered, unhashed, or unauthorized bindings"
+                    .into(),
             );
         }
         let bindings = resolved
@@ -926,10 +929,71 @@ impl<'a, S: RunStore, A: ArtifactPort, N: NodeExecutionPort, C: RunControl>
             self.store
                 .save(record)
                 .map_err(|error| format!("failed to persist Plugin manifest bindings: {error}"))?;
-        } else if record.plugin_bindings != bindings {
-            return Err("Plugin manifest changed since this Graph Run was admitted".into());
+        } else {
+            let same_ids = record.plugin_bindings.keys().eq(bindings.keys());
+            if !same_ids {
+                return Err("Plugin references changed since this Graph Run was admitted".into());
+            }
+            let mut upgrades = Vec::new();
+            for (id, current) in &bindings {
+                let admitted = record.plugin_bindings.get(id).expect("keys were compared");
+                if admitted.authorization_digest.is_empty() {
+                    // Old Run records have no stable authorization summary. Their
+                    // historic digest covered manifest/config bytes, so accept a
+                    // migration only when every old field is unchanged and refuse
+                    // changed/ambiguous records rather than inferring authority.
+                    if !admitted.can_upgrade_legacy_authorization(current) {
+                        return Err(format!(
+                            "Plugin `{id}` authorization baseline is unavailable for this legacy Run"
+                        ));
+                    }
+                    upgrades.push((id.clone(), current.clone()));
+                } else if !admitted.same_authorization(current) {
+                    return Err(format!(
+                        "Plugin `{id}` Host authorization changed since this Graph Run was admitted"
+                    ));
+                }
+            }
+            // A rejected Plugin must not leave a partially migrated authority
+            // baseline in the failed Run's durable facts.
+            record.plugin_bindings.extend(upgrades);
         }
         Ok(())
+    }
+
+    /// Build each dispatch from the current Library identity. The durable Run
+    /// keeps its admitted authority; current resource paths also reach the
+    /// Agent prompt and both serial and parallel node adapters.
+    pub(super) fn current_execution_request(
+        &self,
+        record: &GraphRunRecord,
+        cursor: &RunCursor,
+    ) -> Result<NodeExecutionRequest, GraphError> {
+        let mut request = execution_request(record, cursor, self.control.cancellation())?;
+        if request.plugins.is_empty() {
+            return Ok(request);
+        }
+        let ids = request
+            .plugins
+            .iter()
+            .map(|binding| binding.id.clone())
+            .collect::<Vec<_>>();
+        let current = self.nodes.resolve_plugins(&ids)?;
+        if current.len() != request.plugins.len()
+            || request
+                .plugins
+                .iter()
+                .zip(&current)
+                .any(|(admitted, current)| {
+                    current.digest.is_empty() || !admitted.same_authorization(current)
+                })
+        {
+            return Err(GraphError::Unsupported(
+                "Plugin Host authorization changed before node dispatch".into(),
+            ));
+        }
+        request.plugins = current;
+        Ok(request)
     }
     fn fail(
         &self,

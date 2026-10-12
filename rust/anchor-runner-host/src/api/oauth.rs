@@ -20,6 +20,10 @@ use std::{
 };
 use url::Url;
 
+mod pilot;
+
+pub(crate) use pilot::OAuthManagementAdapter;
+
 const OAUTH_TRANSACTION_TTL_SECONDS: u64 = 600;
 const MAX_OAUTH_RESPONSE_BYTES: usize = 128 * 1024;
 const OAUTH_CALLBACK_PATH: &str = "/oauth/callback";
@@ -29,6 +33,8 @@ struct OAuthRouteBinding {
     binding: OAuthBinding,
     library_root: PathBuf,
     config: Value,
+    digest: String,
+    authorization_digest: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -100,12 +106,30 @@ async fn authorize_oauth_inner(
     let owner = binding_owner(&private_owner(&state, &headers));
     let route_state = state.clone();
     let route = blocking(move || resolve_binding(&route_state, &plugin, &server, &owner)).await?;
-    let redirect_uri = std::env::var("ANCHOR_OAUTH_REDIRECT_URI").map_err(|_| {
-        error(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "ANCHOR_OAUTH_REDIRECT_URI must configure the registered OAuth callback URL",
-        )
-    })?;
+    let redirect_uri = state
+        .application
+        .oauth_callback_uri()
+        .map(str::to_owned)
+        .map(Ok)
+        .unwrap_or_else(|| std::env::var("ANCHOR_OAUTH_REDIRECT_URI"))
+        .map_err(|_| {
+            error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "ANCHOR_OAUTH_REDIRECT_URI must configure the registered OAuth callback URL",
+            )
+        })?;
+    let result = begin_authorization_route(route, redirect_uri, None).await?;
+    Ok(Json(result).into_response())
+}
+
+async fn begin_authorization_route(
+    route: OAuthRouteBinding,
+    redirect_uri: String,
+    origin: Option<(
+        PathBuf,
+        crate::application::oauth_management::PilotOAuthOrigin,
+    )>,
+) -> Result<Value, HttpResponse> {
     validate_callback_uri(&redirect_uri).map_err(|_| {
         error(
             StatusCode::SERVICE_UNAVAILABLE,
@@ -149,7 +173,7 @@ async fn authorize_oauth_inner(
         .checked_add(OAUTH_TRANSACTION_TTL_SECONDS)
         .ok_or_else(|| oauth_error(OAuthError::Storage))?;
     let transaction = OAuthAuthorizationTransaction::new(
-        route.binding,
+        route.binding.clone(),
         &endpoints.authorization_endpoint,
         redirect_uri,
         client_id,
@@ -159,7 +183,11 @@ async fn authorize_oauth_inner(
     )
     .and_then(|transaction| transaction.with_resource(resource))
     .map_err(oauth_error)?;
-    let authorization_url = transaction.authorization_url().to_string();
+    let authorization_url = transaction.authorization_url();
+    if let Some((data, origin)) = origin {
+        pilot::register(&data, &origin, &route, &authorization_url, expires_at)
+            .map_err(|_| oauth_error(OAuthError::Storage))?;
+    }
     let store = anchor_library::FileOAuthTokenStore::new(route.library_root);
     blocking(move || {
         store
@@ -167,12 +195,7 @@ async fn authorize_oauth_inner(
             .map_err(oauth_error)
     })
     .await?;
-    let response = Json(json!({
-        "authorization_url": authorization_url,
-        "expires_at": expires_at,
-    }))
-    .into_response();
-    Ok(response)
+    Ok(json!({"authorization_url":authorization_url.as_str(),"expires_at":expires_at}))
 }
 
 pub(super) async fn oauth_callback(
@@ -226,9 +249,21 @@ pub(super) async fn oauth_callback(
             Ok(Ok(pending)) => pending,
             Ok(Err(_)) | Err(_) => return callback_error_response(StatusCode::BAD_REQUEST),
         };
-        exchange_authorization_code(pending.0, pending.1, root)
-            .await
-            .map_err(|_| StatusCode::BAD_GATEWAY)
+        let link = match crate::oauth_links::load(&state.data_root, state_value) {
+            Ok(link) => link,
+            Err(_) => return callback_error_response(StatusCode::BAD_REQUEST),
+        };
+        if let Some(link) = &link
+            && pilot::validate_link(&state, link, pending.0.binding()).is_err()
+        {
+            return callback_error_response(StatusCode::BAD_REQUEST);
+        }
+        match exchange_authorization_code(pending.0, pending.1).await {
+            Ok(grant) => pilot::publish_and_continue(&state, state_value, grant, link)
+                .await
+                .map_err(|_| StatusCode::BAD_GATEWAY),
+            Err(_) => Err(StatusCode::BAD_GATEWAY),
+        }
     };
     match callback_result {
         Ok(()) => secure_callback_response(callback_success_html().into_response()),
@@ -259,8 +294,16 @@ fn resolve_binding(
     server: &str,
     owner: &str,
 ) -> Result<OAuthRouteBinding, HttpResponse> {
-    let library_root = library_root(&state.catalog_root);
-    let definition = FilePluginCatalog::new(&library_root)
+    resolve_binding_at_root(&library_root(&state.catalog_root), plugin, server, owner)
+}
+
+fn resolve_binding_at_root(
+    library_root: &Path,
+    plugin: &str,
+    server: &str,
+    owner: &str,
+) -> Result<OAuthRouteBinding, HttpResponse> {
+    let definition = FilePluginCatalog::new(library_root)
         .definition(plugin)
         .map_err(|_| error(StatusCode::NOT_FOUND, "no such Plugin"))?;
     let declaration = definition
@@ -288,17 +331,15 @@ fn resolve_binding(
         .map_err(|_| error(StatusCode::BAD_REQUEST, "invalid OAuth binding"))?;
     Ok(OAuthRouteBinding {
         binding,
-        library_root,
+        library_root: library_root.to_path_buf(),
         config: config.clone(),
+        digest: definition.digest.clone(),
+        authorization_digest: definition.binding().authorization_digest,
     })
 }
 
 pub(crate) fn binding_owner(owner: &str) -> String {
-    if owner == "local" {
-        owner.to_owned()
-    } else {
-        format!("{:x}", Sha256::digest(owner.as_bytes()))
-    }
+    crate::credential_store::binding_owner(owner)
 }
 
 async fn discover_oauth_provider(
@@ -430,8 +471,7 @@ async fn register_public_client(
 async fn exchange_authorization_code(
     code: anchor_library::OAuthAuthorizationCode,
     metadata: OAuthAuthorizationMetadata,
-    library_root: PathBuf,
-) -> Result<(), OAuthError> {
+) -> Result<OAuthGrant, OAuthError> {
     let endpoint = metadata.token_endpoint().to_owned();
     let client_id = code.client_id().to_owned();
     let redirect_uri = code.redirect_uri().to_owned();
@@ -482,7 +522,25 @@ async fn exchange_authorization_code(
     if let Some(scope) = token.scope {
         response = response.with_scope(scope)?;
     }
-    let binding = code.binding().clone();
+    Ok(OAuthGrant {
+        binding: code.binding().clone(),
+        metadata,
+        response,
+    })
+}
+
+struct OAuthGrant {
+    binding: OAuthBinding,
+    metadata: OAuthAuthorizationMetadata,
+    response: OAuthTokenResponse,
+}
+
+async fn persist_authorization(grant: OAuthGrant, library_root: PathBuf) -> Result<(), OAuthError> {
+    let OAuthGrant {
+        binding,
+        metadata,
+        response,
+    } = grant;
     let store = anchor_library::FileOAuthTokenStore::new(library_root);
     tokio::task::spawn_blocking(move || {
         anchor_library::OAuthClient::new(store, NoRefreshTransport).authorize(

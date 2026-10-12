@@ -15,7 +15,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use anchor_graph_host::{FilePluginCatalog, plugin_view_path, resolved_library_root, store_root};
+use anchor_graph_host::{
+    FilePluginCatalog, PluginDefinition, plugin_view_path, resolved_library_root, store_root,
+};
 use anchor_runtime::graph::PluginBinding;
 use anchor_runtime::{ReadOnlyInput, SandboxRequest, WritableInput};
 use anchor_sandbox_bwrap::BubblewrapSandbox;
@@ -73,12 +75,31 @@ pub(crate) struct PreparedView {
     /// view it actually used.
     declaration_digest: String,
     grants: Vec<ReadOnlyInput>,
-    /// The narrow write authority this Plugin declared: one exact pair per
-    /// `mutable` path, never a root.
-    writable: Vec<WritableInput>,
 }
 
 impl PreparedView {
+    pub(crate) fn for_candidate(
+        view: &Path,
+        store: &Path,
+        declaration_digest: &str,
+    ) -> Result<Self, String> {
+        let view = view.canonicalize().map_err(|error| error.to_string())?;
+        let configuration = std::fs::symlink_metadata(view.join(VIEW_CONFIGURATION))
+            .map_err(|error| error.to_string())?;
+        if !configuration.is_file() || configuration.file_type().is_symlink() {
+            return Err("dependency view has no regular pyvenv.cfg".into());
+        }
+        let mut grants = vec![ReadOnlyInput::new(&view, &view)];
+        for directory in referenced_store_directories(&view, store)? {
+            grants.push(ReadOnlyInput::new(&directory, &directory));
+        }
+        grants.extend(interpreter_grants(&view)?);
+        Ok(Self {
+            view,
+            declaration_digest: declaration_digest.into(),
+            grants,
+        })
+    }
     /// The view this server launches on. Absolute and canonical.
     pub(crate) fn view(&self) -> &Path {
         &self.view
@@ -102,9 +123,6 @@ impl PreparedView {
         let extended = sandbox
             .with_readonly_grants(&self.grants)
             .map_err(|error| error.to_string())?;
-        let extended = extended
-            .with_writable_grants(&self.writable)
-            .map_err(|error| error.to_string())?;
         extended
             .with_executable_dirs(&[self.bin()])
             .map(Arc::new)
@@ -116,11 +134,6 @@ impl PreparedView {
         for grant in &self.grants {
             if !request.readonly_inputs.contains(grant) {
                 request.readonly_inputs.push(grant.clone());
-            }
-        }
-        for writable in &self.writable {
-            if !request.writable_inputs.contains(writable) {
-                request.writable_inputs.push(writable.clone());
             }
         }
         let bin = self.bin();
@@ -136,6 +149,7 @@ impl PreparedView {
 /// Everything else fails closed: a declared view that is missing, incomplete, or
 /// points outside the shared store refuses the invocation instead of silently
 /// running the server on the deployment's own interpreter.
+#[cfg(test)]
 pub(crate) fn prepare(
     library_root: &Path,
     binding: &PluginBinding,
@@ -165,10 +179,17 @@ pub(crate) fn prepare_for_plugin(
     plugin: &str,
 ) -> Result<Option<PreparedView>, Unusable> {
     let catalog = FilePluginCatalog::new(library_root);
-    let definition = match catalog.definition(plugin) {
-        Ok(definition) => definition,
-        Err(_) => return Ok(None),
-    };
+    let definition = catalog
+        .definition(plugin)
+        .map_err(|error| Unusable::recorded(error.to_string()))?;
+    prepare_definition_view(library_root, &definition)
+}
+
+fn prepare_definition_view(
+    library_root: &Path,
+    definition: &PluginDefinition,
+) -> Result<Option<PreparedView>, Unusable> {
+    let plugin = &definition.id;
     if definition.dependencies.is_empty() {
         return Ok(None);
     }
@@ -197,22 +218,93 @@ pub(crate) fn prepare_for_plugin(
         .canonicalize()
         .map_err(|_| Unusable::recorded("the shared dependency store is missing".to_owned()))?;
     let mut grants = vec![ReadOnlyInput::new(&view, &view)];
+    grants.extend(interpreter_grants(&view).map_err(Unusable::recorded)?);
     for directory in referenced_store_directories(&view, &store).map_err(Unusable::recorded)? {
         let grant = ReadOnlyInput::new(&directory, &directory);
         if !grants.contains(&grant) {
             grants.push(grant);
         }
     }
-    // The Plugin's own declaration says what it may write. One exact pair per
-    // declared path, resolved under the Plugin directory with symlink checks, so a
-    // declaration can never reach outside it.
-    let plugin_directory = catalog
-        .plugin_directory(plugin)
-        .map_err(|error| Unusable::recorded(error.to_string()))?;
+    Ok(Some(PreparedView {
+        view,
+        declaration_digest: definition.dependencies.declaration_digest(),
+        grants,
+    }))
+}
+
+/// Per-Plugin filesystem authority, independent of its implementation language.
+/// Python views are optional; declared data paths keep the same write contract.
+#[derive(Debug, Clone)]
+pub(crate) struct PreparedPlugin {
+    dependency_view: Option<PreparedView>,
+    writable: Vec<WritableInput>,
+}
+
+impl PreparedPlugin {
+    pub(crate) fn from_definition(
+        library_root: &Path,
+        definition: &PluginDefinition,
+    ) -> Result<Self, Unusable> {
+        Ok(Self {
+            dependency_view: prepare_definition_view(library_root, definition)?,
+            writable: mutable_grants(definition)?,
+        })
+    }
+
+    pub(crate) fn for_candidate(
+        catalog: &FilePluginCatalog,
+        id: &str,
+        dependency_view: Option<PreparedView>,
+    ) -> Result<Self, String> {
+        let definition = catalog.definition(id).map_err(|error| error.to_string())?;
+        Ok(Self {
+            dependency_view,
+            writable: mutable_grants(&definition).map_err(|error| error.to_string())?,
+        })
+    }
+
+    pub(crate) fn view(&self) -> Option<&Path> {
+        self.dependency_view.as_ref().map(PreparedView::view)
+    }
+
+    pub(crate) fn declaration_digest(&self) -> Option<&str> {
+        self.dependency_view
+            .as_ref()
+            .map(PreparedView::declaration_digest)
+    }
+
+    pub(crate) fn authorize(
+        &self,
+        sandbox: Arc<BubblewrapSandbox>,
+    ) -> Result<Arc<BubblewrapSandbox>, String> {
+        let sandbox = match &self.dependency_view {
+            Some(view) => view.authorize(sandbox)?,
+            None => sandbox,
+        };
+        sandbox
+            .with_writable_grants(&self.writable)
+            .map(Arc::new)
+            .map_err(|error| error.to_string())
+    }
+
+    pub(crate) fn apply(&self, request: &mut SandboxRequest) {
+        if let Some(view) = &self.dependency_view {
+            view.apply(request);
+        }
+        for grant in &self.writable {
+            if !request.writable_inputs.contains(grant) {
+                request.writable_inputs.push(grant.clone());
+            }
+        }
+    }
+}
+
+fn mutable_grants(definition: &PluginDefinition) -> Result<Vec<WritableInput>, Unusable> {
+    let plugin = &definition.id;
     let mut writable = Vec::with_capacity(definition.mutable.paths().len());
     let resolved = definition
         .mutable
-        .resolve(&plugin_directory)
+        .resolve(&definition.directory)
         .map_err(Unusable::recorded)?;
     for (declared, path) in definition.mutable.paths().iter().zip(resolved) {
         if !path.exists() {
@@ -225,12 +317,32 @@ pub(crate) fn prepare_for_plugin(
             format!("/plugins/{plugin}/{}", declared.trim_end_matches('/')),
         ));
     }
-    Ok(Some(PreparedView {
-        view,
-        declaration_digest: definition.dependencies.declaration_digest(),
-        grants,
-        writable,
-    }))
+    Ok(writable)
+}
+
+/// Mount only the deployment interpreter's installation prefix, preserving the
+/// original path needed by its shared libraries. No home or tool-cache grant.
+pub(crate) fn interpreter_grants(view: &Path) -> Result<Vec<ReadOnlyInput>, String> {
+    let interpreter = view
+        .join("bin/python")
+        .canonicalize()
+        .map_err(|error| error.to_string())?;
+    let prefix = interpreter
+        .parent()
+        .and_then(Path::parent)
+        .ok_or("interpreter has no installation prefix")?;
+    interpreter_prefix_grants(prefix)
+}
+
+pub(crate) fn interpreter_prefix_grants(prefix: &Path) -> Result<Vec<ReadOnlyInput>, String> {
+    if ["/usr", "/bin", "/lib", "/lib64", "/sbin"]
+        .iter()
+        .any(|root| prefix.starts_with(root))
+    {
+        return Ok(Vec::new());
+    }
+    crate::tool_environment::validate_installation_prefix(prefix)?;
+    Ok(vec![ReadOnlyInput::new(prefix, prefix)])
 }
 
 /// The `(package, version)` directories one view's pointers actually name.
@@ -246,13 +358,20 @@ pub(crate) fn referenced_store_directories(
         .canonicalize()
         .map_err(|error| format!("the shared dependency store is unusable: {error}"))?;
     let mut referenced = BTreeSet::new();
-    for site_packages in site_packages_directories(view)? {
+    let mut pending = site_packages_directories(view)?;
+    while let Some(site_packages) = pending.pop() {
         let entries = std::fs::read_dir(&site_packages)
             .map_err(|error| format!("{} is not readable: {error}", site_packages.display()))?;
-        for entry in entries.flatten() {
+        for entry in entries {
+            let entry = entry
+                .map_err(|error| format!("{} is not readable: {error}", site_packages.display()))?;
             let path = entry.path();
             let metadata = std::fs::symlink_metadata(&path)
                 .map_err(|error| format!("{} is not readable: {error}", path.display()))?;
+            if metadata.is_dir() {
+                pending.push(path);
+                continue;
+            }
             if !metadata.file_type().is_symlink() {
                 // A view seeds its own files (`_virtualenv.py` and friends); they
                 // live inside the view and need no store grant.
@@ -315,7 +434,9 @@ pub(crate) fn site_packages_directories(view: &Path) -> Result<Vec<PathBuf>, Str
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
             Err(error) => return Err(format!("{} is not readable: {error}", lib.display())),
         };
-        for entry in entries.flatten() {
+        for entry in entries {
+            let entry =
+                entry.map_err(|error| format!("{} is not readable: {error}", lib.display()))?;
             let candidate = entry.path().join("site-packages");
             if candidate.is_dir() {
                 found.insert(candidate.canonicalize().unwrap_or(candidate));
@@ -331,28 +452,121 @@ pub(crate) fn site_packages_directories(view: &Path) -> Result<Vec<PathBuf>, Str
     Ok(found.into_iter().collect())
 }
 
-/// The same preparation for a node invocation's Plugins, off the async worker.
-pub(crate) async fn prepare_views_async(
+/// Everything a Host invocation derives from its verified Plugin definitions.
+/// The bindings, MCP declarations, mounts and views all describe the same read.
+pub(crate) struct PreparedPlugins {
+    pub(crate) bindings: Vec<PluginBinding>,
+    pub(crate) mcp: crate::tool_host::McpToolConfig,
+    pub(crate) mounts: Vec<ReadOnlyInput>,
+    pub(crate) views: BTreeMap<String, PreparedPlugin>,
+}
+
+/// Prepare current Library code under the selected authorization baseline.
+/// The publication lease covers every filesystem read and is released before
+/// callers perform OAuth authorization or start any MCP connection.
+#[cfg(test)]
+pub(crate) async fn prepare_plugins_async(
     bindings: Vec<PluginBinding>,
     library_root: Option<PathBuf>,
-) -> Result<BTreeMap<String, PreparedView>, Unusable> {
-    tokio::task::spawn_blocking(move || {
-        let Some(root) = library_root else {
-            return Ok(BTreeMap::new());
+    fixture: crate::tool_host::PluginToolHost,
+    cancellation: anchor_runtime::Cancellation,
+) -> Result<PreparedPlugins, Unusable> {
+    prepare_plugins_for_owner_async(bindings, library_root, fixture, cancellation, None).await
+}
+
+pub(crate) async fn prepare_plugins_for_owner_async(
+    bindings: Vec<PluginBinding>,
+    library_root: Option<PathBuf>,
+    fixture: crate::tool_host::PluginToolHost,
+    cancellation: anchor_runtime::Cancellation,
+    credentials: Option<(PathBuf, String)>,
+) -> Result<PreparedPlugins, Unusable> {
+    fixture
+        .for_bindings(&bindings)
+        .map_err(|error| Unusable::recorded(error.to_string()))?;
+    let needs_library = bindings
+        .iter()
+        .any(|binding| !crate::tool_host::is_fake_fixture(binding));
+    let lease = if needs_library {
+        let root = library_root.as_ref().ok_or_else(|| {
+            Unusable::unconfigured("Plugin preparation requires the deployment Library root")
+        })?;
+        let access = crate::dependency_provision::DependencyAccess {
+            network: false,
+            cancellation: cancellation.clone(),
         };
-        let mut prepared = BTreeMap::new();
+        Some(
+            crate::application::plugins::plugin_publication_lease(
+                root,
+                &access,
+                "invocation preparation",
+            )
+            .await
+            .map_err(|error| Unusable::unconfigured(format!("{error:?}")))?,
+        )
+    } else {
+        None
+    };
+    tokio::task::spawn_blocking(move || {
+        let _lease = lease;
+        let root = library_root.unwrap_or_default();
+        let catalog = FilePluginCatalog::new(&root);
+        let mut definitions = BTreeMap::new();
+        let mut current = Vec::with_capacity(bindings.len());
+        let mut mounts = Vec::new();
+        let mut views = BTreeMap::new();
         for binding in &bindings {
-            if let Some(view) = prepare(&root, binding)? {
-                prepared.insert(binding.id.clone(), view);
+            if cancellation.load(std::sync::atomic::Ordering::Acquire) {
+                return Err(Unusable::unconfigured("Plugin preparation was cancelled"));
             }
+            if crate::tool_host::is_fake_fixture(binding) {
+                current.extend(
+                    fixture
+                        .resolve_fixture_plugins(std::slice::from_ref(&binding.id))
+                        .map_err(Unusable::recorded)?,
+                );
+                continue;
+            }
+            let definition = catalog
+                .definition(&binding.id)
+                .map_err(|error| Unusable::recorded(error.to_string()))?;
+            let current_binding = definition.binding();
+            if !binding.same_authorization(&current_binding) {
+                return Err(Unusable::recorded(format!(
+                    "Plugin `{}` authorization changed during preparation",
+                    binding.id
+                )));
+            }
+            views.insert(
+                binding.id.clone(),
+                PreparedPlugin::from_definition(&root, &definition)?,
+            );
+            mounts.push(ReadOnlyInput::new(
+                &definition.directory,
+                format!("/plugins/{}", definition.id),
+            ));
+            current.push(current_binding);
+            definitions.insert(binding.id.clone(), definition);
         }
-        Ok(prepared)
+        let mcp = crate::tool_host::McpToolConfig::from_definitions_for_owner(
+            &root,
+            &current,
+            &definitions,
+            credentials
+                .as_ref()
+                .map(|(data, owner)| (data.as_path(), owner.as_str())),
+        )
+        .map_err(Unusable::unconfigured)?;
+        Ok(PreparedPlugins {
+            bindings: current,
+            mcp,
+            mounts,
+            views,
+        })
     })
     .await
     .map_err(|error| {
-        Unusable::unconfigured(format!(
-            "Plugin dependency view preparation failed: {error}"
-        ))
+        Unusable::unconfigured(format!("Plugin invocation preparation failed: {error}"))
     })?
 }
 
@@ -360,7 +574,71 @@ pub(crate) async fn prepare_views_async(
 mod tests {
     use super::*;
     use anchor_graph_host::PluginCatalog;
+    use anchor_runtime::SandboxPort;
+    use anchor_sandbox_bwrap::BubblewrapPolicy;
     use std::fs;
+
+    #[tokio::test]
+    async fn mutable_authority_works_without_a_python_view_for_installed_and_candidate_plugins() {
+        let root = tempfile::tempdir().unwrap();
+        let plugin = root.path().join("plugins/stateful");
+        let workspace = root.path().join("work");
+        fs::create_dir_all(plugin.join("data")).unwrap();
+        fs::create_dir(&workspace).unwrap();
+        fs::write(
+            plugin.join("plugin.json"),
+            r#"{"name":"Stateful","mutable":["data/"]}"#,
+        )
+        .unwrap();
+        fs::write(plugin.join("code.txt"), "unchanged").unwrap();
+        let catalog = FilePluginCatalog::new(root.path());
+        let binding = catalog.resolve(&["stateful".into()]).unwrap().remove(0);
+        let prepared = prepare_plugins_async(
+            vec![binding],
+            Some(root.path().to_path_buf()),
+            crate::tool_host::PluginToolHost::new(Vec::<String>::new()),
+            Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        )
+        .await
+        .unwrap();
+        let installed = &prepared.views["stateful"];
+        let candidate = PreparedPlugin::for_candidate(&catalog, "stateful", None).unwrap();
+        assert!(installed.view().is_none());
+        assert!(installed.declaration_digest().is_none());
+        for authority in [installed, &candidate] {
+            let mount = ReadOnlyInput::new(&plugin, "/plugins/stateful");
+            let sandbox = Arc::new(
+                BubblewrapSandbox::new(
+                    BubblewrapPolicy::new("bwrap", ["sh"])
+                        .authorize_workspace_root(&workspace)
+                        .authorize_readonly_input_root(&plugin)
+                        .authorize_readonly_destination_root("/plugins/stateful"),
+                )
+                .unwrap(),
+            );
+            let sandbox = authority.authorize(sandbox).unwrap();
+            let mut request = SandboxRequest::new(
+                &workspace,
+                [
+                    "sh",
+                    "-c",
+                    "printf mutable > /plugins/stateful/data/result; if printf forbidden > /plugins/stateful/code.txt 2>/dev/null; then exit 1; fi",
+                ],
+            );
+            request.readonly_inputs.push(mount);
+            authority.apply(&mut request);
+            let result = sandbox.run(request).await.unwrap();
+            assert_eq!(result.exit_code, Some(0), "{}", result.stderr);
+            assert_eq!(
+                fs::read_to_string(plugin.join("data/result")).unwrap(),
+                "mutable"
+            );
+            assert_eq!(
+                fs::read_to_string(plugin.join("code.txt")).unwrap(),
+                "unchanged"
+            );
+        }
+    }
 
     /// A view whose single pointer names a stored (package, version).
     fn fixture(root: &Path) -> (PathBuf, PathBuf) {
@@ -457,11 +735,11 @@ mod tests {
             anchor_runtime::graph::GraphError::CorruptRun(_)
         ));
 
-        // A binding this Library root cannot read at all gets no view: bundles
-        // and fixtures carry their own Plugin trees.
+        // A missing Library Plugin is an unavailable authority, not a Plugin
+        // with an empty dependency declaration.
         let mut elsewhere = binding.clone();
         elsewhere.id = "not-installed-here".to_owned();
-        assert!(prepare(root.path(), &elsewhere).unwrap().is_none());
+        assert!(prepare(root.path(), &elsewhere).is_err());
 
         // A Plugin that declares nothing needs no view at all.
         let plain = root.path().join("plugins/plain");

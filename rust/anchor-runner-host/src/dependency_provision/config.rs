@@ -11,6 +11,10 @@ use std::time::Duration;
 
 use sha2::{Digest, Sha256};
 
+/// The one deployment-owned Python interpreter used by dependency preparation
+/// and, when explicitly granted, Pilot authoring.
+pub(crate) const PYTHON_INTERPRETER_ENV: &str = "ANCHOR_DEPENDENCIES_PYTHON";
+
 /// Why preparation could not proceed.
 ///
 /// One variant per *reason*, because the boundaries that surface it map it
@@ -133,11 +137,17 @@ pub(crate) fn from_env(
     bwrap: PathBuf,
     library_root: Option<&Path>,
 ) -> Result<Option<DependencyProvisionConfig>, String> {
+    const PREPARATION_VARIABLES: &[&str] = &[
+        "ANCHOR_DEPENDENCIES_SOURCES",
+        "ANCHOR_DEPENDENCIES_UV",
+        "ANCHOR_DEPENDENCIES_UV_SHA256",
+        "ANCHOR_DEPENDENCIES_BUILD_ROOT",
+    ];
     const VARIABLES: &[&str] = &[
         "ANCHOR_DEPENDENCIES_SOURCES",
         "ANCHOR_DEPENDENCIES_UV",
         "ANCHOR_DEPENDENCIES_UV_SHA256",
-        "ANCHOR_DEPENDENCIES_PYTHON",
+        PYTHON_INTERPRETER_ENV,
         "ANCHOR_DEPENDENCIES_BUILD_ROOT",
     ];
     let mut values = std::collections::BTreeMap::new();
@@ -148,13 +158,20 @@ pub(crate) fn from_env(
             values.insert(*name, value);
         }
     }
-    if values.is_empty() {
+    // The interpreter is a shared runtime setting. It does not by itself grant
+    // package resolution, downloads, or builds; those require a preparation
+    // setting from the separate deployment capability.
+    if !PREPARATION_VARIABLES
+        .iter()
+        .any(|name| values.contains_key(*name))
+    {
         return Ok(None);
     }
     let required = |name: &str| -> Result<String, String> {
-        values.get(name).cloned().ok_or_else(|| {
-            format!("{name} is required once any ANCHOR_DEPENDENCIES_* variable is set")
-        })
+        values
+            .get(name)
+            .cloned()
+            .ok_or_else(|| format!("{name} is required once dependency preparation is configured"))
     };
 
     let sources = parse_sources(&required("ANCHOR_DEPENDENCIES_SOURCES")?)?;
@@ -166,9 +183,9 @@ pub(crate) fn from_env(
     if uv_digest.len() != 64 || !uv_digest.bytes().all(|byte| byte.is_ascii_hexdigit()) {
         return Err("ANCHOR_DEPENDENCIES_UV_SHA256 must be a 64-character hex digest".into());
     }
-    let python = PathBuf::from(required("ANCHOR_DEPENDENCIES_PYTHON")?);
+    let python = PathBuf::from(required(PYTHON_INTERPRETER_ENV)?);
     if !python.is_absolute() {
-        return Err("ANCHOR_DEPENDENCIES_PYTHON must be an absolute path".into());
+        return Err(format!("{PYTHON_INTERPRETER_ENV} must be an absolute path"));
     }
     let build_root = values
         .get("ANCHOR_DEPENDENCIES_BUILD_ROOT")
@@ -358,6 +375,29 @@ mod config_tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn configuring_the_shared_python_interpreter_does_not_enable_preparation() {
+        let _guard = crate::PROCESS_ENV_LOCK.blocking_lock();
+        let _environment = Environment::cleared(&[
+            "ANCHOR_DEPENDENCIES_SOURCES",
+            "ANCHOR_DEPENDENCIES_UV",
+            "ANCHOR_DEPENDENCIES_UV_SHA256",
+            PYTHON_INTERPRETER_ENV,
+            "ANCHOR_DEPENDENCIES_BUILD_ROOT",
+        ]);
+        unsafe { std::env::set_var(PYTHON_INTERPRETER_ENV, "/opt/anchor/python/bin/python3") };
+
+        assert!(
+            from_env(
+                Path::new("/var/lib/anchor/state"),
+                PathBuf::from("bwrap"),
+                None,
+            )
+            .unwrap()
+            .is_none()
+        );
     }
 
     /// A fully authorized deployment whose staging root is `build_root`, read

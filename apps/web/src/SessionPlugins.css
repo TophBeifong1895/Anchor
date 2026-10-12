@@ -124,3 +124,7 @@
   .switch-track::after { transition: none; }
   .session-plugin-switch[aria-busy="true"] .switch-track::after { animation: none; }
 }
+/* Capability state and permission share the networking Plugin card. */
+.session-plugin-network { grid-column: 1 / -1; display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; }
+.session-plugin-network p { flex: 1; margin: 0; font-size: .75rem; color: var(--muted); }
+.session-plugin-network button { font-size: .75rem; }

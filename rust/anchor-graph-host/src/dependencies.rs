@@ -51,6 +51,7 @@ const MANIFEST_FIELDS: &[&str] = &[
     "skills",
     "mcpServers",
     "dependencies",
+    "network",
     "mutable",
     "hooks",
     "commands",
@@ -155,7 +156,8 @@ impl MutablePaths {
             // Every existing component must be a real directory: a symlink here
             // would let a declaration write outside the Plugin directory.
             let mut current = plugin_directory.to_path_buf();
-            for component in relative.components() {
+            let mut components = relative.components();
+            while let Some(component) = components.next() {
                 let std::path::Component::Normal(name) = component else {
                     continue;
                 };
@@ -168,8 +170,18 @@ impl MutablePaths {
                         ));
                     }
                     Ok(_) => {}
-                    // The rest does not exist yet; the host may create it.
-                    Err(_) => break,
+                    // The host may create the missing tail, but it still needs
+                    // the complete declaration rather than just its first gap.
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                        current.extend(components);
+                        break;
+                    }
+                    Err(error) => {
+                        return Err(format!(
+                            "mutable path `{declared}` cannot be resolved at {}: {error}",
+                            current.display()
+                        ));
+                    }
                 }
             }
             let canonical = plugin_directory
@@ -223,9 +235,36 @@ pub(crate) fn parse_mutable(
                 "Plugin {id}: `{text}` is not a Plugin-relative mutable path (relative, no `..`, not `plugin.json`)"
             )));
         }
-        paths.push(text.to_owned());
+        // Path components normalize repeated separators and interior `.` just
+        // as filesystem access does, so a mutable declaration cannot conceal
+        // its coverage of a protected declaration file behind an alias.
+        let mut normalized = Path::new(text)
+            .components()
+            .collect::<PathBuf>()
+            .to_string_lossy()
+            .into_owned();
+        if text.ends_with('/') {
+            normalized.push('/');
+        }
+        paths.push(normalized);
     }
-    Ok(MutablePaths { paths })
+    let mutable = MutablePaths { paths };
+    if mutable.covers(".mcp.json") {
+        return Err(invalid(format!(
+            "Plugin {id}: MCP declaration `.mcp.json` cannot be mutable"
+        )));
+    }
+    if let Some(Value::String(relative)) = manifest.get("mcpServers") {
+        let normalized = super::normalize_inside(Path::new(""), relative)
+            .filter(|_| !relative.contains('\0'))
+            .ok_or_else(|| invalid(format!("Plugin {id}: unsafe MCP config path")))?;
+        if mutable.covers(&normalized.to_string_lossy()) {
+            return Err(invalid(format!(
+                "Plugin {id}: MCP declaration `{relative}` cannot be mutable"
+            )));
+        }
+    }
+    Ok(mutable)
 }
 
 /// The shape rule for one declared mutable path.
@@ -234,7 +273,7 @@ fn valid_mutable_path(value: &str) -> bool {
         return false;
     }
     let trimmed = value.strip_suffix('/').unwrap_or(value);
-    if trimmed.is_empty() || trimmed == "plugin.json" {
+    if trimmed.is_empty() || Path::new(trimmed) == Path::new("plugin.json") {
         return false;
     }
     let path = Path::new(trimmed);
@@ -258,6 +297,15 @@ pub(crate) fn reject_unknown_fields(
         )));
     }
     Ok(())
+}
+
+/// Networking requirements are declarations, never Host authorization.
+pub(crate) fn parse_network(id: &str, manifest: &Map<String, Value>) -> Result<bool, GraphError> {
+    match manifest.get("network") {
+        None => Ok(false),
+        Some(Value::Bool(enabled)) => Ok(*enabled),
+        Some(_) => Err(invalid(format!("Plugin {id}: network must be a boolean"))),
+    }
 }
 
 /// Read `dependencies` from an already-parsed manifest.
@@ -384,6 +432,93 @@ mod tests {
 
     fn manifest(value: Value) -> Map<String, Value> {
         value.as_object().unwrap().clone()
+    }
+
+    #[test]
+    fn the_default_mcp_declaration_cannot_be_mutable() {
+        for path in [".mcp.json", ".mcp.json/", ".mcp.json//"] {
+            let error = parse_mutable("demo", &manifest(json!({"mutable":[path]}))).unwrap_err();
+            assert!(error.to_string().contains("MCP declaration"), "{error}");
+        }
+    }
+
+    #[test]
+    fn a_manifest_mcp_declaration_cannot_be_inside_mutable_state() {
+        for (declared, config) in [
+            ("data/mcp.json", "data/mcp.json"),
+            ("data/", "data/mcp.json"),
+            ("data/", "./data/mcp.json"),
+            ("data/", "other/../data/mcp.json"),
+            ("data//", "data/mcp.json"),
+            ("data/./mcp.json", "data/mcp.json"),
+        ] {
+            let error = parse_mutable(
+                "demo",
+                &manifest(json!({"mutable":[declared],"mcpServers":config})),
+            )
+            .unwrap_err();
+            assert!(error.to_string().contains("MCP declaration"), "{error}");
+        }
+    }
+
+    #[test]
+    fn ordinary_mutable_state_remains_available_beside_mcp_declarations() {
+        let parsed = parse_mutable(
+            "demo",
+            &manifest(json!({
+                "mutable":["data/","cache.bin"],
+                "mcpServers":"data/../mcp-config.json"
+            })),
+        )
+        .unwrap();
+        assert!(parsed.covers("data/results.json"));
+        assert!(parsed.covers("cache.bin"));
+        assert!(!parsed.covers("mcp-config.json"));
+        assert!(!parsed.covers(".mcp.json"));
+        assert!(
+            parse_mutable(
+                "demo",
+                &manifest(json!({"mutable":["data/"],"mcpServers":{"inline":{}}}))
+            )
+            .is_ok()
+        );
+        for path in ["plugin.json", "plugin.json/", "plugin.json//"] {
+            assert!(parse_mutable("demo", &manifest(json!({"mutable":[path]}))).is_err());
+        }
+    }
+
+    #[test]
+    fn mutable_resolution_keeps_missing_tails_and_refuses_unsafe_existing_components() {
+        let temporary = tempfile::tempdir().unwrap();
+        let plugin = temporary.path().join("plugin");
+        std::fs::create_dir(&plugin).unwrap();
+        let mutable = parse_mutable(
+            "demo",
+            &manifest(json!({
+                "mutable":["absent-file/parents/cache.db", "absent-dir/parents/data/"]
+            })),
+        )
+        .unwrap();
+        assert_eq!(
+            mutable.resolve(&plugin).unwrap(),
+            [
+                plugin.join("absent-file/parents/cache.db"),
+                plugin.join("absent-dir/parents/data"),
+            ]
+        );
+
+        std::fs::write(plugin.join("file"), "not a directory").unwrap();
+        let mutable = parse_mutable("demo", &manifest(json!({"mutable":["file/state/"]}))).unwrap();
+        let error = mutable.resolve(&plugin).unwrap_err();
+        assert!(error.contains("cannot be resolved"), "{error}");
+
+        let outside = temporary.path().join("outside");
+        std::fs::create_dir(&outside).unwrap();
+        std::os::unix::fs::symlink(&outside, plugin.join("link")).unwrap();
+        let mutable = parse_mutable("demo", &manifest(json!({"mutable":["link/state/"]}))).unwrap();
+        let error = mutable.resolve(&plugin).unwrap_err();
+        assert!(error.contains("symlink"), "{error}");
+        assert!(!outside.join("state").exists());
     }
 
     #[test]

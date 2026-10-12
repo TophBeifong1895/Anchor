@@ -331,6 +331,7 @@ pub(super) async fn create_response(
             owner: owner.clone(),
             session: session.id.clone(),
             turn: String::new(),
+            context: None,
         };
         state
             .pilots

@@ -1,16 +1,18 @@
 use super::graphs::{ImpactCoverage, ImpactScan, coverage_of};
 use super::{ApplicationError, RunApplication};
 use crate::dependency_provision::{
-    LockedPackage, PackageSource, ProvisionError, ResolvedRequirements, resolve_requirements,
-    verify_index_json,
+    DependencyAccess, LockedPackage, PackageSource, ProvisionError, ResolvedRequirements,
+    resolve_requirements_with_access, verify_index_json,
 };
 use anchor_graph_host::{FilePluginCatalog, plugin_view_path, resolved_library_root, views_root};
 use anchor_library::{InstallError, InstallOutcome, Library, PluginReview};
 use serde::{Deserialize, Serialize};
-use std::{
-    path::{Path, PathBuf},
-    sync::Arc,
-};
+use std::path::{Path, PathBuf};
+#[cfg(test)]
+use std::sync::Arc;
+
+#[cfg(test)]
+mod reference_tests;
 
 /// What a human is asked to approve for one Plugin candidate.
 ///
@@ -23,9 +25,8 @@ pub(crate) struct PluginInstallPrecondition {
     pub(crate) review: PluginReview,
     pub(crate) directory: PathBuf,
     pub(crate) existing_digest: Option<String>,
-    /// What replacing this Plugin touches. Changing a Plugin's manifest is a
-    /// *binding* change: the Runs below froze the digest they were admitted
-    /// with, so they will refuse to continue until the operator decides.
+    /// Saved Graphs affected by replacing this Plugin. Runs resolve the current
+    /// Plugin at their next node call and retain their admission authorization.
     pub(crate) impact: PluginImpact,
     /// The resolved dependency set this approval covers, if the Plugin declares
     /// one. The resolution is frozen here: what the human approves is what gets
@@ -34,6 +35,7 @@ pub(crate) struct PluginInstallPrecondition {
     /// The same resolution in the shape the install step consumes. Carried, not
     /// displayed: it is what the approved set will be reproduced from.
     pub(crate) resolved: Option<ResolvedRequirements>,
+    pub(crate) access: DependencyAccess,
 }
 
 /// The deployment-authorized, resolved answer to one Plugin's declaration.
@@ -84,12 +86,30 @@ impl RunApplication {
     /// Review a candidate and freeze what the operator is about to approve.
     ///
     /// Read-only: it publishes nothing and needs no Library write access.
+    #[cfg(test)]
     pub(crate) async fn plugin_install_precondition(
         &self,
         library_root: PathBuf,
         directory: PathBuf,
         id: String,
     ) -> Result<PluginInstallPrecondition, ApplicationError> {
+        self.plugin_install_precondition_with_access(
+            library_root,
+            directory,
+            id,
+            DependencyAccess::default(),
+        )
+        .await
+    }
+
+    pub(crate) async fn plugin_install_precondition_with_access(
+        &self,
+        library_root: PathBuf,
+        directory: PathBuf,
+        id: String,
+        access: DependencyAccess,
+    ) -> Result<PluginInstallPrecondition, ApplicationError> {
+        access.check().map_err(plugin_dependency_error)?;
         let reviewed = directory.clone();
         let review_root = library_root.clone();
         let (review, existing_digest) = tokio::task::spawn_blocking(move || {
@@ -110,7 +130,9 @@ impl RunApplication {
         // A declaration is solved before anybody is asked to approve anything:
         // approving a Plugin whose packages cannot be resolved would be
         // approving an installation that cannot happen.
-        let (dependencies, resolved) = self.plugin_dependency_plan(&library_root, &review).await?;
+        let (dependencies, resolved) = self
+            .plugin_dependency_plan(&library_root, &review, &access)
+            .await?;
         Ok(PluginInstallPrecondition {
             review,
             directory,
@@ -118,6 +140,7 @@ impl RunApplication {
             impact,
             dependencies,
             resolved,
+            access,
         })
     }
 
@@ -127,10 +150,11 @@ impl RunApplication {
     /// authorizes no package installation is refused here, before anything is
     /// written, instead of being installed into a state where its tools can
     /// never start.
-    async fn plugin_dependency_plan(
+    pub(crate) async fn plugin_dependency_plan(
         &self,
         library_root: &Path,
         review: &PluginReview,
+        access: &DependencyAccess,
     ) -> Result<(Option<PluginDependencyPlan>, Option<ResolvedRequirements>), ApplicationError>
     {
         if review.dependencies.is_empty() {
@@ -152,14 +176,19 @@ impl RunApplication {
             .iter()
             .map(|source| source.as_str())
             .collect::<Vec<_>>();
-        let resolved = resolve_requirements(&provisioner.config, None, &review.dependencies.python)
-            .await
-            .map_err(|error| {
-                ApplicationError::Invalid(format!(
-                    "Plugin `{}` dependency resolution failed: {error}",
-                    review.id
-                ))
-            })?;
+        let resolved = resolve_requirements_with_access(
+            &provisioner.config,
+            None,
+            &review.dependencies.python,
+            access,
+        )
+        .await
+        .map_err(|error| {
+            ApplicationError::Invalid(format!(
+                "Plugin `{}` dependency resolution failed: {error}",
+                review.id
+            ))
+        })?;
         // An index that answers the package page with HTML resolves fine and
         // fetches never, so that is found now — with the failure the operator can
         // act on, before they are asked to approve the set.
@@ -174,12 +203,18 @@ impl RunApplication {
             .sources
             .iter()
             .any(|source| matches!(source, PackageSource::Directory(_)));
-        for package in &resolved.packages {
+        for package in resolved.packages.iter().filter(|_| access.network) {
             let mut reasons = Vec::new();
             let mut served = false;
             for source in &provisioner.config.sources {
                 if let PackageSource::Index(index) = source {
-                    match verify_index_json(index, &package.name).await {
+                    access.check().map_err(plugin_dependency_error)?;
+                    let verification = tokio::select! {
+                        result = tokio::time::timeout(std::time::Duration::from_secs(20), verify_index_json(index, &package.name)) => result
+                            .map_err(|_| plugin_dependency_error(ProvisionError::Failed(format!("package index `{index}` JSON verification timed out"))))?,
+                        _ = access.cancelled() => return Err(ApplicationError::Invalid("Plugin dependency planning was cancelled while checking its package index".into())),
+                    };
+                    match verification {
                         Ok(()) => {
                             served = true;
                             break;
@@ -248,13 +283,24 @@ impl RunApplication {
         library_root: PathBuf,
         precondition: PluginInstallPrecondition,
     ) -> Result<InstallOutcome, ApplicationError> {
+        precondition
+            .access
+            .check()
+            .map_err(plugin_dependency_error)?;
         // Repairing the view of an already-published tree publishes nothing, so
         // it is not a replacement.
         let already_installed = precondition.already_installed();
         // One writer for the whole operation: the catalog guard covers the
         // dependency landing as well as the Plugin publication, so two installs
         // cannot interleave their renames.
-        let catalog_guard = self.graph_catalog_mutation_guard().await;
+        let catalog_guard = tokio::select! {
+            guard = self.graph_catalog_mutation_guard() => guard,
+            _ = precondition.access.cancelled() => return Err(ApplicationError::Invalid("Plugin installation was cancelled while waiting for its catalog guard".into())),
+        };
+        precondition
+            .access
+            .check()
+            .map_err(plugin_dependency_error)?;
         let id = precondition.review.id.clone();
         let directory = precondition.directory.clone();
         let replacing = precondition.replacing() && !already_installed;
@@ -296,20 +342,39 @@ impl RunApplication {
         // whose Plugin is not installed yet and judge it an orphan (the install
         // would then succeed with a missing view). Reclamation takes the same lock
         // without waiting, so this cannot deadlock.
-        let lease_root = library_root.clone();
-        let lease = tokio::task::spawn_blocking(move || {
-            Library::new(&lease_root)
-                .install_lease()
-                .map_err(plugin_error)
-        })
-        .await
-        .map_err(|_| ApplicationError::Storage("Plugin installer task failed".into()))??;
+        let lease =
+            plugin_publication_lease(&library_root, &precondition.access, "installation").await?;
+        precondition
+            .access
+            .check()
+            .map_err(plugin_dependency_error)?;
+        // Copy into a private Host transaction, then validate those copied
+        // bytes against the approval while holding the publication lease. The
+        // workspace remains editable during dependency preparation, but none
+        // of its later bytes can become this installation's input.
+        let (approved_snapshot, directory) = tokio::task::spawn_blocking({
+            let (library_root, id, source) = (library_root.clone(), id.clone(), directory.clone());
+            let (expected_digest, expected_existing) = (precondition.review.digest.clone(), precondition.existing_digest.clone());
+            move || {
+                let transaction = tempfile::Builder::new().prefix(".anchor-plugin-approved-").tempdir()
+                    .map_err(|error| ApplicationError::Storage(error.to_string()))?;
+                let (root, review) = Library::new(&library_root).stage_directory(&id, &source, transaction.path()).map_err(plugin_error)?;
+                if review.digest != expected_digest {
+                    return Err(ApplicationError::Conflict("the Plugin candidate changed before publication; review and confirm its current content".into()));
+                }
+                let existing = FilePluginCatalog::new(&library_root).definition(&id).ok().map(|definition| definition.digest);
+                if existing != expected_existing {
+                    return Err(ApplicationError::Conflict("the installed Plugin changed before publication; review and confirm again".into()));
+                }
+                Ok::<_, ApplicationError>((transaction, root.join("plugins").join(&id)))
+            }
+        }).await.map_err(|_| ApplicationError::Storage("Plugin staging task failed".into()))??;
         // Dependencies land before the Plugin is published: a failed solve,
         // fetch, unpack or verification must leave the Library and every
         // existing view exactly as they were.
         let mut landed = None;
         if let Some(resolved) = precondition.resolved.clone() {
-            let provisioner = Arc::clone(self.dependency_provisioner()?);
+            let provisioner = self.dependency_provisioner()?;
             let declaration_digest = precondition
                 .dependencies
                 .as_ref()
@@ -321,12 +386,13 @@ impl RunApplication {
                 })?;
             let landing_root = library_root.clone();
             landed = Some(
-                crate::plugin_dependencies::land(
+                crate::plugin_dependencies::land_with_access(
                     &provisioner,
                     &landing_root,
                     &id,
                     &declaration_digest,
                     &resolved,
+                    &precondition.access,
                 )
                 .await
                 .map_err(plugin_dependency_error)?,
@@ -363,23 +429,116 @@ impl RunApplication {
         let created_view = landed
             .filter(|landed| !landed.reused)
             .map(|landed| landed.view);
-        let published = tokio::task::spawn_blocking(move || {
+        tokio::task::spawn_blocking(move || {
             let _catalog_guard = catalog_guard;
-            Library::new(&library_root)
-                .install_directory_locked(&id, &directory, replacing, &lease)
-                .map_err(plugin_error)
+            let _approved_snapshot = approved_snapshot;
+            let published = precondition
+                .access
+                .check()
+                .map_err(plugin_dependency_error)
+                .and_then(|()| {
+                    Library::new(&library_root)
+                        .install_directory_locked(&id, &directory, replacing, &lease)
+                        .map_err(plugin_error)
+                });
+            if let Err(error) = &published
+                && let Some(view) = created_view
+            {
+                // Rollback is part of publication: another installer must not
+                // reuse this view between releasing the lease and removing it.
+                // A partial publication may already reference the view, in which
+                // case it belongs to the installed Plugin and must be retained.
+                if let Err(cleanup) = remove_unreferenced_view(&library_root, &id, &view, &lease) {
+                    return Err(ApplicationError::Storage(format!(
+                        "Plugin installation failed ({error:?}); dependency view cleanup failed: {cleanup}"
+                    )));
+                }
+            }
+            published
         })
         .await
-        .map_err(|_| ApplicationError::Storage("Plugin installer task failed".into()))?;
-        match published {
-            Ok(outcome) => Ok(outcome),
-            Err(error) => {
-                if let Some(view) = created_view {
-                    let _ = std::fs::remove_dir_all(&view);
-                }
-                Err(error)
+        .map_err(|_| ApplicationError::Storage("Plugin installer task failed".into()))?
+    }
+}
+
+impl RunApplication {
+    /// Protect reading a Plugin until its durable Run or Session reference is saved.
+    /// This is the same Library lease installation and uninstall use, not a
+    /// separate reference lock. Run admission takes graph -> Library -> active;
+    /// mount/uninstall take catalog -> Library. Admissions must never acquire
+    /// catalog while holding a graph lease: Graph deletion waits in the reverse
+    /// order. Drop this lease before spawning execution or doing network work.
+    pub(crate) async fn plugin_reference_lease(
+        &self,
+    ) -> Result<anchor_library::InstallLease, ApplicationError> {
+        plugin_publication_lease(
+            &crate::library_root(&self.catalog_root),
+            &DependencyAccess::default(),
+            "reference publication",
+        )
+        .await
+    }
+}
+
+pub(crate) async fn plugin_publication_lease(
+    library_root: &Path,
+    access: &DependencyAccess,
+    operation: &str,
+) -> Result<anchor_library::InstallLease, ApplicationError> {
+    loop {
+        access.check().map_err(plugin_dependency_error)?;
+        let lease_root = library_root.to_path_buf();
+        let result =
+            tokio::task::spawn_blocking(move || Library::new(&lease_root).try_install_lease())
+                .await
+                .map_err(|_| {
+                    ApplicationError::Storage("Plugin publication lease task failed".into())
+                })?;
+        match result {
+            Ok(lease) => return Ok(lease),
+            Err(InstallError::CatalogBusy) => tokio::select! {
+                _ = tokio::time::sleep(std::time::Duration::from_millis(20)) => {},
+                _ = access.cancelled() => return Err(ApplicationError::Invalid(format!(
+                    "Plugin {operation} was cancelled while waiting for its publication lease"
+                ))),
+            },
+            Err(error) => return Err(plugin_error(error)),
+        }
+    }
+}
+
+/// Called only while the Library publication lease is held. An uncertain
+/// publication keeps its view if the current Plugin references it; unreadable
+/// installed content also prevents destructive cleanup.
+fn remove_unreferenced_view(
+    library_root: &Path,
+    id: &str,
+    view: &Path,
+    _lease: &anchor_library::InstallLease,
+) -> Result<(), String> {
+    match std::fs::symlink_metadata(library_root.join("plugins").join(id)) {
+        Ok(_) => {
+            let definition = FilePluginCatalog::new(library_root)
+                .definition(id)
+                .map_err(|error| {
+                    format!("current Plugin is unavailable; view retained: {error}")
+                })?;
+            let current = plugin_view_path(
+                &resolved_library_root(library_root),
+                id,
+                &definition.dependencies.declaration_digest(),
+            );
+            if !definition.dependencies.is_empty() && current == view {
+                return Ok(());
             }
         }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(format!("current Plugin could not be inspected: {error}")),
+    }
+    match std::fs::remove_dir_all(view) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error.to_string()),
     }
 }
 
@@ -522,9 +681,37 @@ impl RunApplication {
         let mut sessions_mounting = sessions.sessions_mounting(id).map_err(|error| {
             ApplicationError::Storage(format!("Session Plugin mounts are unavailable: {error}"))
         })?;
+        let mut unfinished_runs = self.unfinished_runs_binding(id)?;
+        let mut impact = self.plugin_impact(id)?;
+        if id == crate::plugin_network::NETWORK_PLUGIN {
+            let catalog = FilePluginCatalog::new(library_root);
+            let entries = std::fs::read_dir(library_root.join("plugins"))
+                .map_err(|error| ApplicationError::Storage(error.to_string()))?;
+            for entry in entries {
+                let entry = entry.map_err(|error| ApplicationError::Storage(error.to_string()))?;
+                let dependent = entry.file_name().to_string_lossy().into_owned();
+                if dependent == id
+                    || !catalog
+                        .definition(&dependent)
+                        .is_ok_and(|plugin| crate::plugin_network::requires_network(&plugin))
+                {
+                    continue;
+                }
+                sessions_mounting.extend(
+                    sessions
+                        .sessions_mounting(&dependent)
+                        .map_err(|error| ApplicationError::Storage(error.to_string()))?,
+                );
+                unfinished_runs.extend(self.unfinished_runs_binding(&dependent)?);
+                impact.graphs.extend(self.plugin_impact(&dependent)?.graphs);
+            }
+        }
         sessions_mounting.sort();
-        let unfinished_runs = self.unfinished_runs_binding(id)?;
-        let impact = self.plugin_impact(id)?;
+        sessions_mounting.dedup();
+        unfinished_runs.sort();
+        unfinished_runs.dedup();
+        impact.graphs.sort();
+        impact.graphs.dedup();
         Ok(PluginUninstallPrecondition {
             id: definition.id,
             name: definition.name,
@@ -564,12 +751,43 @@ impl RunApplication {
     /// The preconditions are re-read here: the human approved one exact state, and
     /// a Plugin that changed or an owner that appeared while they were deciding
     /// asks again instead of proceeding.
+    #[cfg(test)]
     pub(crate) async fn uninstall_plugin_if_unchanged(
         &self,
         library_root: &Path,
         precondition: &PluginUninstallPrecondition,
         sessions: &anchor_platform_session::SessionStore,
     ) -> Result<PluginUninstallOutcome, ApplicationError> {
+        self.uninstall_plugin_if_unchanged_with_access(
+            library_root,
+            precondition,
+            sessions,
+            &DependencyAccess::default(),
+        )
+        .await
+    }
+
+    pub(crate) async fn uninstall_plugin_if_unchanged_with_access(
+        &self,
+        library_root: &Path,
+        precondition: &PluginUninstallPrecondition,
+        sessions: &anchor_platform_session::SessionStore,
+        access: &DependencyAccess,
+    ) -> Result<PluginUninstallOutcome, ApplicationError> {
+        access.check().map_err(plugin_dependency_error)?;
+        if let Some(refusal) = precondition.refusal() {
+            // A known refusal must not even create a Library lock file. The
+            // fresh holder check below still runs for an admissible approval.
+            return Err(ApplicationError::Conflict(refusal));
+        }
+        let catalog_guard = tokio::select! {
+            guard = self.graph_catalog_mutation_guard() => guard,
+            _ = access.cancelled() => return Err(ApplicationError::Invalid("Plugin uninstall was cancelled while waiting for its catalog guard".into())),
+        };
+        let lease = plugin_publication_lease(library_root, access, "uninstall").await?;
+        access.check().map_err(plugin_dependency_error)?;
+        // Recheck only after both writers' guards have been acquired: waiting
+        // for publication may have allowed another host to replace the Plugin.
         let current = self
             .plugin_uninstall_precondition(library_root, &precondition.id, sessions)
             .await?;
@@ -583,22 +801,17 @@ impl RunApplication {
                 "{refusal}（确认期间状态变了；请重新确认）"
             )));
         }
-        // One writer for the whole operation, and the same lock an install takes:
-        // an uninstall and an install must not interleave. Reclamation takes the
-        // same lock, so it runs while this one is held.
-        let lease_root = library_root.to_path_buf();
-        let lease = tokio::task::spawn_blocking(move || {
-            Library::new(&lease_root)
-                .install_lease()
-                .map_err(plugin_error)
-        })
-        .await
-        .map_err(|_| ApplicationError::Storage("Plugin uninstall task failed".into()))??;
         let root = resolved_library_root(library_root);
         let plugins_root = library_root.join("plugins");
+        let credential_root = self.data_root.clone();
         let id = precondition.id.clone();
+        let access = access.clone();
         let (removed, reclamation) = tokio::task::spawn_blocking(move || {
+            let _catalog_guard = catalog_guard;
             let _lease = lease;
+            if let Err(error) = access.check() {
+                return (Err(error.to_string()), None);
+            }
             let mut removed_views = Vec::new();
             let mut removed_bytes = 0u64;
             // Views first: they are derived from the declaration, and removing the
@@ -638,6 +851,9 @@ impl RunApplication {
                     )),
                     None,
                 );
+            }
+            if let Err(error)=crate::credential_store::delete_plugin(&credential_root,&id) {
+                return (Err(format!("plugin `{id}` was uninstalled but its private credentials could not be removed: {error}")),None);
             }
             let reclamation = anchor_library::reclaim_after_install(&root, true)
                 .map_err(|error| error.to_string());
@@ -705,6 +921,540 @@ mod tests {
             .definition(id)
             .ok()
             .map(|definition| definition.digest)
+    }
+
+    #[tokio::test]
+    async fn installation_waiting_for_a_library_lease_cancels_and_a_later_install_can_continue() {
+        let temporary = tempfile::tempdir().unwrap();
+        let library_root = temporary.path().join("library");
+        let application = application(temporary.path());
+        let source = candidate(temporary.path(), "lease");
+        let access = DependencyAccess::default();
+        let precondition = application
+            .plugin_install_precondition_with_access(
+                library_root.clone(),
+                source.clone(),
+                "demo".into(),
+                access.clone(),
+            )
+            .await
+            .unwrap();
+        let lease = Library::new(&library_root).install_lease().unwrap();
+        let cancel = async {
+            tokio::time::sleep(std::time::Duration::from_millis(60)).await;
+            access
+                .cancellation
+                .store(true, std::sync::atomic::Ordering::Release);
+        };
+        let (result, ()) = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            tokio::join!(
+                application.install_plugin_if_unchanged(library_root.clone(), precondition),
+                cancel
+            )
+        })
+        .await
+        .expect("waiting for the Library publication lease must be cancellable");
+        assert!(format!("{:?}", result.unwrap_err()).contains("cancel"));
+        assert!(installed_digest(&library_root, "demo").is_none());
+        drop(lease);
+        let next = application
+            .plugin_install_precondition(library_root.clone(), source, "demo".into())
+            .await
+            .unwrap();
+        let installed = application
+            .install_plugin_if_unchanged(library_root.clone(), next)
+            .await
+            .unwrap();
+        assert_eq!(
+            installed_digest(&library_root, "demo"),
+            Some(installed.digest)
+        );
+    }
+
+    #[tokio::test]
+    async fn installation_waiting_for_the_catalog_guard_cancels_without_publishing() {
+        let temporary = tempfile::tempdir().unwrap();
+        let library_root = temporary.path().join("library");
+        let application = application(temporary.path());
+        let source = candidate(temporary.path(), "catalog");
+        let access = DependencyAccess::default();
+        let precondition = application
+            .plugin_install_precondition_with_access(
+                library_root.clone(),
+                source.clone(),
+                "demo".into(),
+                access.clone(),
+            )
+            .await
+            .unwrap();
+        let held = application.graph_catalog_mutation_guard().await;
+        let cancel = async {
+            tokio::time::sleep(std::time::Duration::from_millis(60)).await;
+            access
+                .cancellation
+                .store(true, std::sync::atomic::Ordering::Release);
+        };
+        let (result, ()) = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            tokio::join!(
+                application.install_plugin_if_unchanged(library_root.clone(), precondition),
+                cancel
+            )
+        })
+        .await
+        .expect("waiting for the catalog guard must be cancellable");
+        assert!(format!("{:?}", result.unwrap_err()).contains("catalog guard"));
+        assert!(installed_digest(&library_root, "demo").is_none());
+        drop(held);
+        let next = application
+            .plugin_install_precondition(library_root.clone(), source, "demo".into())
+            .await
+            .unwrap();
+        application
+            .install_plugin_if_unchanged(library_root.clone(), next)
+            .await
+            .unwrap();
+        assert!(installed_digest(&library_root, "demo").is_some());
+    }
+
+    #[tokio::test]
+    async fn a_candidate_changed_while_waiting_for_the_library_lease_is_not_installed() {
+        let temporary = tempfile::tempdir().unwrap();
+        let library_root = temporary.path().join("library");
+        let application = application(temporary.path());
+        let source = candidate(temporary.path(), "approved");
+        let precondition = application
+            .plugin_install_precondition(library_root.clone(), source.clone(), "demo".into())
+            .await
+            .unwrap();
+        let lease = Library::new(&library_root).install_lease().unwrap();
+        let installation = tokio::spawn({
+            let (application, library_root) = (application.clone(), library_root.clone());
+            async move {
+                application
+                    .install_plugin_if_unchanged(library_root, precondition)
+                    .await
+            }
+        });
+        tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            while application.catalog_mutations.try_lock().is_ok() {
+                tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .unwrap();
+        // The existing early validation is tiny; wait for the installer to reach
+        // the externally held Library lease before changing its candidate.
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        fs::write(
+            source.join("skills/check/UNAPPROVED.md"),
+            "not in the approval\n",
+        )
+        .unwrap();
+        drop(lease);
+        let result = tokio::time::timeout(std::time::Duration::from_secs(3), installation)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(
+            matches!(result, Err(ApplicationError::Conflict(_))),
+            "{result:?}"
+        );
+        assert!(installed_digest(&library_root, "demo").is_none());
+    }
+
+    #[tokio::test]
+    async fn an_installed_version_changed_during_the_library_lease_wait_is_not_overwritten() {
+        let temporary = tempfile::tempdir().unwrap();
+        let library_root = temporary.path().join("library");
+        let application = application(temporary.path());
+        let first = candidate(temporary.path(), "first");
+        Library::new(&library_root)
+            .install_directory("demo", &first, false)
+            .unwrap();
+        let approved = candidate(temporary.path(), "approved");
+        let precondition = application
+            .plugin_install_precondition(library_root.clone(), approved, "demo".into())
+            .await
+            .unwrap();
+        let lease = Library::new(&library_root).install_lease().unwrap();
+        let installation = tokio::spawn({
+            let (application, library_root) = (application.clone(), library_root.clone());
+            async move {
+                application
+                    .install_plugin_if_unchanged(library_root, precondition)
+                    .await
+            }
+        });
+        tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            while application.catalog_mutations.try_lock().is_ok() {
+                tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        let external = candidate(temporary.path(), "external");
+        let published = Library::new(&library_root)
+            .install_directory_locked("demo", &external, true, &lease)
+            .unwrap();
+        drop(lease);
+        let result = tokio::time::timeout(std::time::Duration::from_secs(3), installation)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(
+            matches!(result, Err(ApplicationError::Conflict(_))),
+            "{result:?}"
+        );
+        assert_eq!(
+            installed_digest(&library_root, "demo"),
+            Some(published.digest)
+        );
+    }
+
+    #[tokio::test]
+    async fn dependency_preparation_publishes_only_the_private_approved_snapshot() {
+        use crate::dependency_provision::{DependencyProvisioner, test_support};
+        let Some(toolchain) = test_support::toolchain() else {
+            return;
+        };
+        let temporary = tempfile::tempdir().unwrap();
+        let library_root = temporary.path().join("library");
+        let wheels = temporary.path().join("wheels");
+        fs::create_dir_all(&wheels).unwrap();
+        test_support::fixture_wheel(&wheels, "probepkg", "0.1.0");
+        let provisioner = Arc::new(
+            DependencyProvisioner::new(test_support::config(temporary.path(), &toolchain, wheels))
+                .unwrap(),
+        );
+        let application = application(temporary.path()).with_dependency_provisioner(provisioner);
+        let source = candidate(temporary.path(), "approved");
+        let mut manifest: serde_json::Value =
+            serde_json::from_slice(&fs::read(source.join("plugin.json")).unwrap()).unwrap();
+        manifest["dependencies"] = json!({"python":["probepkg==0.1.0"]});
+        fs::write(source.join("plugin.json"), manifest.to_string()).unwrap();
+        let access = DependencyAccess {
+            network: false,
+            ..Default::default()
+        };
+        let precondition = application
+            .plugin_install_precondition_with_access(
+                library_root.clone(),
+                source.clone(),
+                "demo".into(),
+                access,
+            )
+            .await
+            .unwrap();
+        let expected = precondition.review.digest.clone();
+        let dependencies = library_root.join("dependencies");
+        fs::create_dir_all(&dependencies).unwrap();
+        let lock_path = dependencies.join(".lock");
+        let held = fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(&lock_path)
+            .unwrap();
+        rustix::fs::flock(&held, rustix::fs::FlockOperation::LockExclusive).unwrap();
+        let installation = tokio::spawn({
+            let (application, library_root) = (application.clone(), library_root.clone());
+            async move {
+                application
+                    .install_plugin_if_unchanged(library_root, precondition)
+                    .await
+            }
+        });
+        // The second lock descriptor proves dependency preparation has reached
+        // its wait, after the candidate was copied and validated.
+        tokio::time::timeout(std::time::Duration::from_secs(3), async {
+            loop {
+                let waiting = fs::read_dir("/proc/self/fd")
+                    .unwrap()
+                    .filter_map(Result::ok)
+                    .filter_map(|entry| fs::read_link(entry.path()).ok())
+                    .filter(|path| path == &lock_path)
+                    .count()
+                    > 1;
+                if waiting {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("dependency preparation did not reach the held store lease");
+        fs::write(
+            source.join("skills/check/UNAPPROVED.md"),
+            "after snapshot\n",
+        )
+        .unwrap();
+        drop(held);
+        let result = tokio::time::timeout(std::time::Duration::from_secs(15), installation)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert_eq!(result.digest, expected);
+        assert!(!result.directory.join("skills/check/UNAPPROVED.md").exists());
+        assert!(source.join("skills/check/UNAPPROVED.md").exists());
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn failed_publication_removes_its_new_view_before_releasing_the_library_lease() {
+        use crate::dependency_provision::{DependencyProvisioner, test_support};
+        let Some(toolchain) = test_support::toolchain() else {
+            return;
+        };
+        let root = tempfile::tempdir().unwrap();
+        let library_root = root.path().join("library");
+        let original = candidate(root.path(), "original");
+        fs::write(
+            original.join("plugin.json"),
+            json!({"name":"Original","mutable":["state/"]}).to_string(),
+        )
+        .unwrap();
+        Library::new(&library_root)
+            .install_directory("demo", original, false)
+            .unwrap();
+        fs::write(library_root.join("plugins/demo/state/data"), "keep").unwrap();
+        let before = fs::read(library_root.join("plugins/demo/plugin.json")).unwrap();
+
+        let wheels = root.path().join("wheels");
+        fs::create_dir(&wheels).unwrap();
+        // This fixture pauses the real Python verification at a visible marker.
+        // It lets an independent Library writer wait on the actual flock before
+        // publication fails, without timers or a production-only test hook.
+        let files = vec![
+            ("holdpkg/__init__.py".into(), b"VALUE = '0.1.0'\n".to_vec()),
+            ("holdpkg-0.1.0.dist-info/METADATA".into(), b"Metadata-Version: 2.1\nName: holdpkg\nVersion: 0.1.0\n".to_vec()),
+            ("holdpkg-0.1.0.dist-info/WHEEL".into(), b"Wheel-Version: 1.0\nRoot-Is-Purelib: true\nTag: py3-none-any\n".to_vec()),
+            ("holdpkg-0.1.0.dist-info/RECORD".into(), Vec::new()),
+            ("hold-verification.pth".into(), b"import os, sys, time; open('/workspace/verification-ready', 'w').close(); exec(\"while not os.path.exists(os.path.join(sys.prefix, 'release-verification')):\\n time.sleep(0.005)\")\n".to_vec()),
+        ];
+        fs::write(
+            wheels.join("holdpkg-0.1.0-py3-none-any.whl"),
+            test_support::write_zip(&files),
+        )
+        .unwrap();
+        let provisioner = Arc::new(
+            DependencyProvisioner::new(test_support::config(root.path(), &toolchain, wheels))
+                .unwrap(),
+        );
+        let verification_ready = provisioner
+            .config
+            .build_root
+            .join("plugin-dependencies/verify/verification-ready");
+        let application = application(root.path()).with_dependency_provisioner(provisioner);
+        let replacement = candidate(root.path(), "replacement");
+        fs::create_dir(replacement.join("state")).unwrap();
+        fs::write(
+            replacement.join("state/unapproved-code"),
+            "must not overwrite data",
+        )
+        .unwrap();
+        fs::write(
+            replacement.join("plugin.json"),
+            json!({"name":"Replacement","dependencies":{"python":["holdpkg==0.1.0"]}}).to_string(),
+        )
+        .unwrap();
+        let precondition = application
+            .plugin_install_precondition_with_access(
+                library_root.clone(),
+                replacement,
+                "demo".into(),
+                DependencyAccess {
+                    network: false,
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        let view = precondition.dependencies.as_ref().unwrap().view.clone();
+        let installation = tokio::spawn({
+            let library_root = library_root.clone();
+            async move {
+                application
+                    .install_plugin_if_unchanged(library_root, precondition)
+                    .await
+            }
+        });
+        tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            while !verification_ready.is_file() {
+                assert!(
+                    !installation.is_finished(),
+                    "installer ended before verification"
+                );
+                tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("real dependency verification did not reach its marker");
+        let slow_cleanup = view.join("rollback-fixture");
+        fs::create_dir(&slow_cleanup).unwrap();
+        for index in 0..2048 {
+            fs::write(slow_cleanup.join(index.to_string()), []).unwrap();
+        }
+        let waiting_writer = tokio::task::spawn_blocking({
+            let (library_root, view) = (library_root.clone(), view.clone());
+            move || {
+                let _lease = Library::new(&library_root).install_lease().unwrap();
+                view.exists()
+            }
+        });
+        let lock_path = library_root.join("plugins/.install.lock");
+        tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            while fs::read_dir("/proc/self/fd")
+                .unwrap()
+                .filter_map(Result::ok)
+                .filter_map(|entry| fs::read_link(entry.path()).ok())
+                .filter(|path| path == &lock_path)
+                .count()
+                < 2
+            {
+                tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("independent Library writer did not reach the publication lease");
+        fs::write(view.join("release-verification"), []).unwrap();
+        let result = tokio::time::timeout(std::time::Duration::from_secs(15), installation)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(
+            matches!(result, Err(ApplicationError::Invalid(ref reason)) if reason.contains("mutable path")),
+            "{result:?}"
+        );
+        assert!(
+            !waiting_writer.await.unwrap(),
+            "another writer acquired the Library lease before rollback removed the view"
+        );
+        assert!(!view.exists());
+        assert_eq!(
+            fs::read(library_root.join("plugins/demo/plugin.json")).unwrap(),
+            before
+        );
+        assert_eq!(
+            fs::read(library_root.join("plugins/demo/state/data")).unwrap(),
+            b"keep"
+        );
+    }
+
+    #[test]
+    fn rollback_preserves_a_view_referenced_by_the_current_plugin() {
+        let root = tempfile::tempdir().unwrap();
+        let library_root = root.path().join("library");
+        let source = candidate(root.path(), "referenced");
+        fs::write(
+            source.join("plugin.json"),
+            json!({"name":"Referenced","dependencies":{"python":["holdpkg==0.1.0"]}}).to_string(),
+        )
+        .unwrap();
+        Library::new(&library_root)
+            .install_directory("demo", source, false)
+            .unwrap();
+        let definition = FilePluginCatalog::new(&library_root)
+            .definition("demo")
+            .unwrap();
+        let view = plugin_view_path(
+            &resolved_library_root(&library_root),
+            "demo",
+            &definition.dependencies.declaration_digest(),
+        );
+        fs::create_dir_all(&view).unwrap();
+        fs::write(
+            view.join("keep"),
+            "a partial publication already references this view",
+        )
+        .unwrap();
+        let lease = Library::new(&library_root).install_lease().unwrap();
+        remove_unreferenced_view(&library_root, "demo", &view, &lease).unwrap();
+        assert!(view.join("keep").is_file());
+    }
+
+    #[tokio::test]
+    async fn dependency_index_planning_cancels_a_pending_http_probe_and_can_retry() {
+        use crate::dependency_provision::{DependencyProvisioner, test_support};
+        use sha2::Digest;
+        use std::{
+            os::unix::fs::PermissionsExt,
+            sync::atomic::{AtomicBool, Ordering},
+        };
+        let Some(toolchain) = test_support::toolchain() else {
+            return;
+        };
+        let root = tempfile::tempdir().unwrap();
+        let uv = root.path().join("uv");
+        // Freeze one fixture lock so this case targets the Host's HTTP probe,
+        // independent of how many index requests a resolver release performs.
+        fs::write(&uv, "#!/bin/sh\nwhile [ \"$1\" != \"--output-file\" ]; do shift; done\nshift\nprintf 'probepkg==0.1.0 --hash=sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\\n' > \"$1\"\n").unwrap();
+        fs::set_permissions(&uv, fs::Permissions::from_mode(0o755)).unwrap();
+        let entered = Arc::new(tokio::sync::Notify::new());
+        let blocked = Arc::new(AtomicBool::new(true));
+        let (notification, hold) = (entered.clone(), blocked.clone());
+        let app = axum::Router::new().route(
+            "/simple/probepkg/",
+            axum::routing::get(move || {
+                let (notification, hold) = (notification.clone(), hold.clone());
+                async move {
+                    notification.notify_one();
+                    if hold.load(Ordering::Acquire) {
+                        std::future::pending::<()>().await;
+                    }
+                    (
+                        [("content-type", "application/vnd.pypi.simple.v1+json")],
+                        "{}",
+                    )
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let index = format!("http://{}/simple", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        let mut config = test_support::config_with_sources(
+            root.path(),
+            &toolchain,
+            vec![PackageSource::Index(index)],
+        );
+        config.uv_digest = format!("{:x}", sha2::Sha256::digest(fs::read(&uv).unwrap()));
+        config.uv = uv;
+        let application = application(root.path())
+            .with_dependency_provisioner(Arc::new(DependencyProvisioner::new(config).unwrap()));
+        let source = candidate(root.path(), "http");
+        let mut manifest: serde_json::Value =
+            serde_json::from_slice(&fs::read(source.join("plugin.json")).unwrap()).unwrap();
+        manifest["dependencies"] = json!({"python":["probepkg==0.1.0"]});
+        fs::write(source.join("plugin.json"), manifest.to_string()).unwrap();
+        let library = root.path().join("library");
+        let review = Library::new(&library)
+            .review_directory("demo", &source)
+            .unwrap();
+        let access = DependencyAccess::default();
+        let cancel = async {
+            entered.notified().await;
+            access.cancellation.store(true, Ordering::Release);
+        };
+        let (result, ()) = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            tokio::join!(
+                application.plugin_dependency_plan(&library, &review, &access),
+                cancel
+            )
+        })
+        .await
+        .expect("pending dependency index probe must respond to cancellation");
+        assert!(format!("{:?}", result.unwrap_err()).contains("cancelled"));
+        blocked.store(false, Ordering::Release);
+        let (plan, _) = application
+            .plugin_dependency_plan(&library, &review, &DependencyAccess::default())
+            .await
+            .unwrap();
+        assert!(plan.is_some());
+        server.abort();
+        let _ = server.await;
     }
 
     #[tokio::test]
@@ -882,6 +1632,7 @@ mod impact_tests {
                 digest: "a".repeat(64),
                 resources: Vec::new(),
                 mcp_servers: vec!["probe".into()],
+                authorization_digest: String::new(),
             },
         );
         record.plugin_bindings_initialized = true;
@@ -1216,7 +1967,7 @@ mod uninstall_tests {
         candidate
     }
 
-    /// Install `demo` (data included) and return a precondition for uninstalling it.
+    /// Install `demo`, populate its own data, and prepare to uninstall it.
     async fn installed(
         root: &Path,
         sessions: &SessionStore,
@@ -1236,6 +1987,7 @@ mod uninstall_tests {
             .install_plugin_if_unchanged(library_root.clone(), precondition)
             .await
             .unwrap();
+        fs::write(library_root.join("plugins/demo/state/data.bin"), data).unwrap();
         let runs = FileRunStore::new(root.join("state/runs"));
         let uninstall = application
             .plugin_uninstall_precondition(&library_root, "demo", sessions)
@@ -1257,6 +2009,184 @@ mod uninstall_tests {
             )
             .unwrap();
         sessions
+    }
+
+    async fn wait_for_uninstall_guard(application: &RunApplication) {
+        tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            while application.catalog_mutations.try_lock().is_ok() {
+                tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("uninstall did not acquire the catalog guard");
+    }
+
+    #[tokio::test]
+    async fn uninstall_rechecks_the_approved_version_after_waiting_for_publication() {
+        let root = tempfile::tempdir().unwrap();
+        let sessions = session_store(root.path());
+        let (_runs, precondition) = installed(root.path(), &sessions, b"precious").await;
+        let library_root = root.path().join("library");
+        let application = RunApplication::new(root.path().join("state"), root.path().to_path_buf());
+        let lease = Library::new(&library_root).install_lease().unwrap();
+        let deletion = tokio::spawn({
+            let (application, library_root, sessions) =
+                (application.clone(), library_root.clone(), sessions.clone());
+            async move {
+                application
+                    .uninstall_plugin_if_unchanged(&library_root, &precondition, &sessions)
+                    .await
+            }
+        });
+        wait_for_uninstall_guard(&application).await;
+        let replacement = write_candidate(root.path(), b"unused");
+        fs::write(
+            replacement.join("plugin.json"),
+            json!({"name":"Replacement","mutable":["state/"]}).to_string(),
+        )
+        .unwrap();
+        Library::new(&library_root)
+            .install_directory_locked("demo", &replacement, true, &lease)
+            .unwrap();
+        let before = library_bytes(&library_root);
+        drop(lease);
+        let error = tokio::time::timeout(std::time::Duration::from_secs(3), deletion)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap_err();
+        assert!(
+            matches!(error, ApplicationError::Conflict(ref reason) if reason.contains("changed")),
+            "{error:?}"
+        );
+        assert_eq!(library_bytes(&library_root), before);
+        assert_eq!(
+            fs::read(library_root.join("plugins/demo/state/data.bin")).unwrap(),
+            b"precious"
+        );
+    }
+
+    #[tokio::test]
+    async fn uninstall_rechecks_holders_after_waiting_for_publication() {
+        let root = tempfile::tempdir().unwrap();
+        let sessions = session_store(root.path());
+        let (_runs, precondition) = installed(root.path(), &sessions, b"precious").await;
+        let library_root = root.path().join("library");
+        let application = RunApplication::new(root.path().join("state"), root.path().to_path_buf());
+        let lease = Library::new(&library_root).install_lease().unwrap();
+        let before = library_bytes(&library_root);
+        let deletion = tokio::spawn({
+            let (application, library_root, sessions) =
+                (application.clone(), library_root.clone(), sessions.clone());
+            async move {
+                application
+                    .uninstall_plugin_if_unchanged(&library_root, &precondition, &sessions)
+                    .await
+            }
+        });
+        wait_for_uninstall_guard(&application).await;
+        sessions
+            .set_plugin_mount("local", "sess", "demo", true, "operator", "click")
+            .unwrap();
+        drop(lease);
+        let error = tokio::time::timeout(std::time::Duration::from_secs(3), deletion)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap_err();
+        assert!(
+            matches!(error, ApplicationError::Conflict(ref reason) if reason.contains("sess")),
+            "{error:?}"
+        );
+        assert_eq!(library_bytes(&library_root), before);
+    }
+
+    #[tokio::test]
+    async fn uninstall_waits_can_be_cancelled_without_deleting_and_then_retried() {
+        for publication_wait in [false, true] {
+            let root = tempfile::tempdir().unwrap();
+            let sessions = session_store(root.path());
+            let (_runs, precondition) = installed(root.path(), &sessions, b"precious").await;
+            let library_root = root.path().join("library");
+            let application =
+                RunApplication::new(root.path().join("state"), root.path().to_path_buf());
+            let held_catalog = if publication_wait {
+                None
+            } else {
+                Some(application.graph_catalog_mutation_guard().await)
+            };
+            let held_library = if publication_wait {
+                Some(Library::new(&library_root).install_lease().unwrap())
+            } else {
+                None
+            };
+            let before = library_bytes(&library_root);
+            let access = DependencyAccess::default();
+            let cancel = async {
+                tokio::time::sleep(std::time::Duration::from_millis(60)).await;
+                access
+                    .cancellation
+                    .store(true, std::sync::atomic::Ordering::Release);
+            };
+            let (result, ()) = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+                tokio::join!(
+                    application.uninstall_plugin_if_unchanged_with_access(
+                        &library_root,
+                        &precondition,
+                        &sessions,
+                        &access
+                    ),
+                    cancel
+                )
+            })
+            .await
+            .expect("pending uninstall must remain cancellable");
+            let error = result.unwrap_err();
+            assert!(
+                matches!(error, ApplicationError::Invalid(ref reason) if reason.contains("cancelled")),
+                "{error:?}"
+            );
+            assert_eq!(library_bytes(&library_root), before);
+            drop(held_catalog);
+            drop(held_library);
+            application
+                .uninstall_plugin_if_unchanged(&library_root, &precondition, &sessions)
+                .await
+                .unwrap();
+            assert!(!library_root.join("plugins/demo").exists());
+        }
+    }
+
+    #[tokio::test]
+    async fn a_session_using_a_network_dependent_plugin_holds_the_network_provider() {
+        let root = tempfile::tempdir().unwrap();
+        let sessions = session_store(root.path());
+        let library = root.path().join("library");
+        for id in ["network", "research"] {
+            fs::create_dir_all(library.join("plugins").join(id)).unwrap();
+            fs::write(
+                library.join("plugins").join(id).join("plugin.json"),
+                json!({"name":id,"network":true}).to_string(),
+            )
+            .unwrap();
+        }
+        sessions
+            .set_plugin_mount("local", "sess", "research", true, "operator", "click")
+            .unwrap();
+        let application = RunApplication::new(root.path().join("state"), root.path().to_path_buf());
+        let precondition = application
+            .plugin_uninstall_precondition(&library, "network", &sessions)
+            .await
+            .unwrap();
+        assert_eq!(precondition.sessions, ["sess"]);
+        let before = library_bytes(&library);
+        assert!(
+            application
+                .uninstall_plugin_if_unchanged(&library, &precondition, &sessions)
+                .await
+                .is_err()
+        );
+        assert_eq!(library_bytes(&library), before);
     }
 
     #[tokio::test]

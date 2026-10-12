@@ -61,6 +61,7 @@ impl SessionStore {
             operation: None,
             operations: BTreeMap::new(),
             plugin_mounts: BTreeMap::new(),
+            network_allowed: true,
             created_at: now,
             updated_at: now,
         };
@@ -170,6 +171,11 @@ impl SessionStore {
     /// reads as "no override" rather than an error, so an older Run stays runnable
     /// and mounts only what its Graph declares.
     pub fn plugin_mounts(&self, id: &str) -> Result<BTreeMap<String, bool>, SessionError> {
+        self.plugin_policy(id).map(|(mounts, _)| mounts)
+    }
+
+    /// Read mounts and the network ceiling from the same persisted Session row.
+    pub fn plugin_policy(&self, id: &str) -> Result<(BTreeMap<String, bool>, bool), SessionError> {
         validate_identity(id, "session id")?;
         let connection = self.lock()?;
         let data: Option<String> = connection
@@ -178,10 +184,32 @@ impl SessionStore {
             })
             .optional()?;
         let Some(data) = data else {
-            return Ok(BTreeMap::new());
+            return Ok((BTreeMap::new(), true));
         };
         let session: Session = serde_json::from_str(&data)?;
-        Ok(session.plugin_mounts)
+        Ok((session.plugin_mounts, session.network_allowed))
+    }
+
+    pub fn set_network_allowed(
+        &self,
+        owner: &str,
+        id: &str,
+        allowed: bool,
+        actor: &str,
+    ) -> Result<Session, SessionError> {
+        self.mutate(owner, id, |_, session| {
+            if session.network_allowed == allowed {
+                return Ok(None);
+            }
+            session.network_allowed = allowed;
+            Ok(Some((
+                "session.network.changed",
+                BTreeMap::from([
+                    ("allowed".into(), json!(allowed)),
+                    ("actor".into(), json!(actor)),
+                ]),
+            )))
+        })
     }
 
     /// Every Session that mounts this Plugin, across every owner.
@@ -280,6 +308,18 @@ impl SessionStore {
     }
 
     pub fn delete(&self, owner: &str, id: &str) -> Result<(), SessionError> {
+        self.delete_with_cleanup(owner, id, || Ok(()))
+    }
+
+    /// The Host may remove owned files only after the same transactional
+    /// channel/Turn/Run checks that protect Session facts. A cleanup failure
+    /// retains the row so the operator can inspect and retry.
+    pub fn delete_with_cleanup(
+        &self,
+        owner: &str,
+        id: &str,
+        cleanup: impl FnOnce() -> Result<(), SessionError>,
+    ) -> Result<(), SessionError> {
         validate_lookup(owner, id)?;
         let mut connection = self.lock()?;
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -300,6 +340,7 @@ impl SessionStore {
                 "sessions with retained runs cannot be deleted".into(),
             ));
         }
+        cleanup()?;
         transaction.execute(
             "DELETE FROM sessions WHERE owner = ?1 AND id = ?2",
             params![owner, id],

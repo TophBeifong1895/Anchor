@@ -163,6 +163,118 @@ async fn create_session(app: Router, id: &str) {
     assert_eq!(status, StatusCode::CREATED, "{created}");
 }
 
+async fn wait_for_plugin_writer(application: &RunApplication) {
+    use std::time::Duration;
+    tokio::time::timeout(Duration::from_secs(3), async {
+        loop {
+            match tokio::time::timeout(
+                Duration::from_millis(20),
+                application.graph_catalog_mutation_guard(),
+            )
+            .await
+            {
+                Ok(guard) => drop(guard),
+                Err(_) => return,
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("the Plugin writer did not acquire the catalog guard");
+}
+
+#[tokio::test]
+async fn concurrent_session_mount_and_uninstall_publish_one_consistent_result() {
+    use anchor_library::Library;
+    use std::time::Duration;
+
+    let _env_guard = PROCESS_ENV.lock().await;
+    for mount_first in [true, false] {
+        let (root, state) = fixture();
+        let _library = EnvVar::set("ANCHOR_RUNNER_LIBRARY_ROOT", root.path());
+        write_plugin(&state, "demo", json!({"name":"Demo"}));
+        let app = router(state.clone());
+        create_session(app.clone(), "sess").await;
+        let sessions = session_store(&state);
+        let precondition = state
+            .application
+            .plugin_uninstall_precondition(root.path(), "demo", &sessions)
+            .await
+            .unwrap();
+        assert!(precondition.refusal().is_none());
+        let lease = Library::new(root.path()).install_lease().unwrap();
+        let before = library_bytes(&state);
+        let mount = async move {
+            call(
+                app,
+                "POST",
+                "/sessions/sess/plugins/demo",
+                Some(r#"{"on":true}"#),
+            )
+            .await
+        };
+        let uninstall = {
+            let (application, library, sessions) = (
+                state.application.clone(),
+                root.path().to_path_buf(),
+                sessions.clone(),
+            );
+            async move {
+                application
+                    .uninstall_plugin_if_unchanged(&library, &precondition, &sessions)
+                    .await
+            }
+        };
+        let (mounting, deleting) = if mount_first {
+            let mounting = tokio::spawn(mount);
+            wait_for_plugin_writer(&state.application).await;
+            (mounting, tokio::spawn(uninstall))
+        } else {
+            let deleting = tokio::spawn(uninstall);
+            wait_for_plugin_writer(&state.application).await;
+            (tokio::spawn(mount), deleting)
+        };
+        assert!(!mounting.is_finished());
+        assert!(!deleting.is_finished());
+        drop(lease);
+        let ((status, response), deletion) = tokio::time::timeout(Duration::from_secs(5), async {
+            (mounting.await.unwrap(), deleting.await.unwrap())
+        })
+        .await
+        .expect("mount/uninstall did not release their publication guards");
+        let session = sessions.get("local", "sess").unwrap();
+        let changed = sessions
+            .events("local", "sess", 0)
+            .unwrap()
+            .into_iter()
+            .filter(|event| event.kind == "session.plugin_mount.changed")
+            .count();
+        if mount_first {
+            assert_eq!(status, StatusCode::OK, "{response}");
+            let error = deletion.unwrap_err();
+            assert!(
+                matches!(error, ApplicationError::Conflict(ref reason) if reason.contains("sess")),
+                "{error:?}"
+            );
+            assert_eq!(session.plugin_mounts.get("demo"), Some(&true));
+            assert_eq!(changed, 1);
+            assert_eq!(library_bytes(&state), before);
+        } else {
+            deletion.unwrap();
+            assert_eq!(status, StatusCode::BAD_REQUEST, "{response}");
+            assert!(
+                response["error"]
+                    .as_str()
+                    .is_some_and(|error| error.contains("尚未安装")),
+                "{response}"
+            );
+            assert!(session.plugin_mounts.is_empty());
+            assert_eq!(changed, 0);
+            assert!(!root.path().join("plugins/demo").exists());
+        }
+    }
+}
+
 #[tokio::test]
 async fn a_session_lists_installed_plugins_from_the_frozen_run_not_the_graph_file() {
     let (root, state) = fixture();
@@ -255,6 +367,134 @@ async fn a_session_lists_installed_plugins_from_the_frozen_run_not_the_graph_fil
         row("needsview")
     );
     assert!(root.path().join("plugins/needsview").is_dir());
+}
+
+#[tokio::test]
+async fn networking_is_enabled_by_dependencies_without_writing_a_provider_switch_and_denial_wins() {
+    let (_root, state) = fixture();
+    let _env = PROCESS_ENV.lock().await;
+    write_plugin(&state, "network", json!({"name":"联网","network":true}));
+    write_plugin(
+        &state,
+        "research",
+        json!({"name":"学术调研","network":true}),
+    );
+    write_plugin(
+        &state,
+        "remote",
+        json!({"name":"Remote","mcpServers":{"api":{"type":"http","url":"http://127.0.0.1:1/mcp"}}}),
+    );
+    let app = router(state.clone());
+    create_session(app.clone(), "sess").await;
+    let (status, result) = call(
+        app.clone(),
+        "POST",
+        "/sessions/sess/plugins/research",
+        Some(r#"{"on":true}"#),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let provider = |result: &Value| {
+        result["plugins"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["id"] == "network")
+            .unwrap()
+            .clone()
+    };
+    assert_eq!(provider(&result)["on"], true);
+    assert_eq!(provider(&result)["explicitOn"], false);
+    assert_eq!(provider(&result)["enabledBy"], json!(["research"]));
+    assert_eq!(provider(&result)["networkAllowed"], true);
+    assert!(
+        !session_store(&state)
+            .get("local", "sess")
+            .unwrap()
+            .plugin_mounts
+            .contains_key("network")
+    );
+    let (_, result) = call(
+        app.clone(),
+        "POST",
+        "/sessions/sess/plugins/remote",
+        Some(r#"{"on":true}"#),
+    )
+    .await;
+    assert_eq!(
+        provider(&result)["enabledBy"],
+        json!(["remote", "research"])
+    );
+    let (_, result) = call(
+        app.clone(),
+        "POST",
+        "/sessions/sess/plugins/research",
+        Some(r#"{"on":false}"#),
+    )
+    .await;
+    assert_eq!(provider(&result)["on"], true);
+    let (_, result) = call(
+        app.clone(),
+        "POST",
+        "/sessions/sess/network",
+        Some(r#"{"allowed":false}"#),
+    )
+    .await;
+    assert_eq!(provider(&result)["networkAllowed"], false);
+    let remote = result["plugins"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["id"] == "remote")
+        .unwrap();
+    assert_eq!(remote["available"], false);
+    assert!(remote["error"].as_str().unwrap().contains("禁止联网"));
+    // Permission survives a mount change; a dependency cannot turn it back on.
+    let (_, result) = call(
+        app.clone(),
+        "POST",
+        "/sessions/sess/plugins/research",
+        Some(r#"{"on":true}"#),
+    )
+    .await;
+    assert_eq!(provider(&result)["networkPermission"], false);
+    let (_, result) = call(
+        app.clone(),
+        "POST",
+        "/sessions/sess/network",
+        Some(r#"{"allowed":true}"#),
+    )
+    .await;
+    assert_eq!(provider(&result)["networkAllowed"], true);
+    for id in ["remote", "research"] {
+        let (_, result) = call(
+            app.clone(),
+            "POST",
+            &format!("/sessions/sess/plugins/{id}"),
+            Some(r#"{"on":false}"#),
+        )
+        .await;
+        if id == "research" {
+            assert_eq!(provider(&result)["on"], false);
+        }
+    }
+    let (_, result) = call(
+        app.clone(),
+        "POST",
+        "/sessions/sess/plugins/network",
+        Some(r#"{"on":true}"#),
+    )
+    .await;
+    assert_eq!(provider(&result)["explicitOn"], true);
+    assert_eq!(provider(&result)["networkAllowed"], true);
+    let (status, _) = call(
+        app,
+        "POST",
+        "/sessions/sess/network",
+        Some(r#"{"allowed":true,"grant":true}"#),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
 }
 
 #[tokio::test]
@@ -669,7 +909,9 @@ mod served_router_tests {
 
     #[tokio::test]
     async fn the_session_page_url_reaches_the_plugin_route_through_the_served_router() {
+        let _env_guard = PROCESS_ENV.lock().await;
         let (root, mut state) = fixture();
+        let _library = EnvVar::set("ANCHOR_RUNNER_LIBRARY_ROOT", root.path());
         let key = "k".repeat(32);
         state.api_keys = vec![key.clone()];
         let app = router_with_readiness_and_web_root(

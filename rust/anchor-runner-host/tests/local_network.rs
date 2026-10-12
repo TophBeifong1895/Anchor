@@ -5,7 +5,13 @@
 
 use anchor_runtime::{NetworkPolicy, ReadOnlyInput, SandboxPort, SandboxRequest, SandboxStatus};
 use anchor_sandbox_bwrap::{BubblewrapPolicy, BubblewrapSandbox};
-use std::{path::Path, path::PathBuf, sync::Arc, time::Duration};
+use std::{
+    net::{IpAddr, Ipv4Addr, UdpSocket},
+    path::Path,
+    path::PathBuf,
+    sync::Arc,
+    time::Duration,
+};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 /// Port the relay listens on inside the sandbox.
@@ -13,8 +19,8 @@ const RELAY_PORT: u16 = 9080;
 const BODY: &str = "relay-reached";
 
 /// A host-side HTTP responder every request answers with `BODY`.
-async fn host_responder() -> u16 {
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+async fn host_responder(address: IpAddr) -> u16 {
+    let listener = tokio::net::TcpListener::bind((address, 0)).await.unwrap();
     let port = listener.local_addr().unwrap().port();
     tokio::spawn(async move {
         loop {
@@ -87,7 +93,7 @@ async fn an_isolated_sandbox_reaches_the_host_only_through_the_relay() {
     let directory = tempfile::tempdir().unwrap();
     let workspace = directory.path().join("workspace");
     std::fs::create_dir(&workspace).unwrap();
-    let port = host_responder().await;
+    let port = host_responder(Ipv4Addr::LOCALHOST.into()).await;
     let socket = directory.path().join("bridge.sock");
     forward_socket(socket.clone(), port);
     let relay = ReadOnlyInput::new(
@@ -99,7 +105,7 @@ async fn an_isolated_sandbox_reaches_the_host_only_through_the_relay() {
             .authorize_workspace_root(&workspace)
             .authorize_readonly_input_root(directory.path())
             .authorize_readonly_destination_root("/in")
-            // Only the control case below asks for the host network.
+            // Only the online control below asks for task egress.
             .allow_network(),
     )
     .expect("these tests require working Bubblewrap isolation")
@@ -152,9 +158,13 @@ async fn an_isolated_sandbox_reaches_the_host_only_through_the_relay() {
     assert_ne!(direct.exit_code, Some(0), "{:?}", direct.stderr);
     assert!(!direct.stdout.contains(BODY), "{:?}", direct.stdout);
 
-    // The control: sharing the host network is exactly what makes that port
-    // reachable, so the negative above is not vacuous.
-    let shared = sandbox
+    // Online task egress reaches an authorized business endpoint on the Host's
+    // routable interface while the management listener stays on loopback.
+    let route = UdpSocket::bind("0.0.0.0:0").unwrap();
+    route.connect("192.0.2.1:9").unwrap();
+    let business_address = route.local_addr().unwrap().ip();
+    let business_port = host_responder(business_address).await;
+    let online = sandbox
         .run(request(
             &workspace,
             directory.path(),
@@ -164,11 +174,12 @@ async fn an_isolated_sandbox_reaches_the_host_only_through_the_relay() {
                 "-s".to_owned(),
                 "--max-time".to_owned(),
                 "5".to_owned(),
-                format!("http://127.0.0.1:{port}/"),
+                format!("http://{business_address}:{business_port}/"),
             ],
             NetworkPolicy::Enabled,
         ))
         .await
         .unwrap();
-    assert!(shared.stdout.contains(BODY), "{:?}", shared.stdout);
+    assert_eq!(online.exit_code, Some(0), "{online:?}");
+    assert!(online.stdout.contains(BODY), "{:?}", online.stdout);
 }

@@ -1,0 +1,13 @@
+{
+  "name": "联网",
+  "description": "为 Agent 和任务工具启用网络访问，也可由学术调研等插件依赖启用。提供通用 HTTP 请求与文件下载。",
+  "network": true,
+  "skills": "skills/",
+  "mcpServers": {
+    "http": {
+      "command": "bin/anchor-network-tools",
+      "cwd": ".",
+      "env": { "ANCHOR_NETWORK_WORKSPACE": "/workspace" }
+    }
+  }
+}

@@ -54,6 +54,28 @@ describe('the session plugin panel', () => {
     expect(POLL_MS).toBeLessThanOrEqual(5000);
   });
 
+  it('shows dependency activation separately from the direct switch and applies network denial to every row', async () => {
+    const networking = plugin({ id: 'network', name: '联网', on: true, explicitOn: false,
+      networkProvider: true, networkAllowed: true, networkPermission: true, enabledBy: ['research'] });
+    const research = plugin({ id: 'research', name: '学术调研', on: true, requiresNetwork: true, networkAllowed: true });
+    fetchMock.mockResolvedValueOnce(response(200, { plugins: [networking, research] }));
+    fetchMock.mockResolvedValueOnce(response(200, { plugins: [
+      { ...networking, networkAllowed: false, networkPermission: false, available: false, error: '当前任务已禁止联网' },
+      { ...research, networkAllowed: false, available: false, error: '该插件需要联网：当前任务已禁止联网' },
+    ] }));
+    await draw();
+    expect(container.textContent).toContain('由学术调研依赖启用');
+    expect(switches()[0].getAttribute('aria-checked')).toBe('false');
+    expect(container.textContent).toContain('2 已挂载');
+    const deny = [...container.querySelectorAll<HTMLButtonElement>('button')].find(button => button.textContent === '禁止联网')!;
+    await act(async () => { deny.click(); });
+    expect(posts()[0][0]).toBe('/sessions/s-1/network');
+    expect(posts()[0][1]).toMatchObject({ body: JSON.stringify({ allowed: false }) });
+    expect(container.textContent).toContain('已禁止联网');
+    expect(container.textContent).toContain('该插件需要联网：当前任务已禁止联网');
+    expect(container.textContent).toContain('允许联网');
+  });
+
   it('renders a required Plugin as a switch that cannot move, and lets no switch past the guard', async () => {
     fetchMock.mockResolvedValue(response(200, { plugins: [plugin({
       id: 'core', name: '核心能力', description: '图里预置的能力', skills: ['搜索'],

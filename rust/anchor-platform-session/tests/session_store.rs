@@ -73,6 +73,7 @@ fn public_types_and_default_dto_match_legacy_initial_shape() {
         "operations",
         // The Session-level Plugin mount overrides: absent means "no override".
         "plugin_mounts",
+        "network_allowed",
         "created_at",
         "updated_at",
     ]);
@@ -153,6 +154,46 @@ fn sessions_mounting_counts_every_owner_and_ignores_switches_that_are_off() {
     // or refused rather than a made-up answer.
     assert!(store.sessions_mounting("ghost").unwrap().is_empty());
     assert_invalid(store.sessions_mounting(""));
+}
+
+#[test]
+fn network_denial_is_owner_bound_persistent_and_audited_once() {
+    let (_directory, path, store) = fixture();
+    let original = create(&store, "owner", "session");
+    assert!(original.network_allowed);
+    assert!(
+        store
+            .set_network_allowed("other-owner", "session", false, "other-owner")
+            .is_err()
+    );
+    let denied = store
+        .set_network_allowed("owner", "session", false, "operator")
+        .unwrap();
+    assert!(!denied.network_allowed);
+    let events = store.events("owner", "session", 0).unwrap();
+    assert_eq!(events.last().unwrap().kind, "session.network.changed");
+    assert_eq!(events.last().unwrap().data["allowed"], false);
+    assert_eq!(
+        store
+            .set_network_allowed("owner", "session", false, "operator")
+            .unwrap(),
+        denied
+    );
+    assert_eq!(store.events("owner", "session", 0).unwrap(), events);
+    assert!(
+        !SessionStore::open(path)
+            .unwrap()
+            .plugin_policy("session")
+            .unwrap()
+            .1
+    );
+    let mut old = serde_json::to_value(original).unwrap();
+    old.as_object_mut().unwrap().remove("network_allowed");
+    assert!(
+        serde_json::from_value::<Session>(old)
+            .unwrap()
+            .network_allowed
+    );
 }
 
 #[test]
@@ -691,6 +732,77 @@ fn busy_timeout_allows_a_writer_to_wait_for_another_connection() {
     thread::sleep(Duration::from_millis(100));
     connection.execute_batch("COMMIT").unwrap();
     assert_eq!(writer.join().unwrap().unwrap().title, "after-lock");
+}
+
+#[test]
+fn opening_a_current_database_for_turn_reads_does_not_wait_for_a_writer() {
+    let (_directory, path, store) = fixture();
+    create(&store, "local", "reader");
+    let (turn, _) = store
+        .create_turn("local", "reader", "request", Some("fixture"))
+        .unwrap();
+    let writer = Connection::open(&path).unwrap();
+    writer.execute_batch("BEGIN IMMEDIATE").unwrap();
+    let (sender, receiver) = std::sync::mpsc::channel();
+    let reader = thread::spawn(move || {
+        let opened = SessionStore::open(&path)
+            .and_then(|opened| opened.get_turn("local", "reader", &turn.id));
+        sender.send(opened).unwrap();
+    });
+    let while_locked = receiver.recv_timeout(Duration::from_millis(300));
+    writer.execute_batch("COMMIT").unwrap();
+    reader.join().unwrap();
+    assert!(
+        while_locked.is_ok(),
+        "opening an already current WAL database acquired a writer lease"
+    );
+    assert!(while_locked.unwrap().is_ok());
+}
+
+#[test]
+fn concurrent_turn_polling_and_event_writes_keep_connections_usable() {
+    let (_directory, path, store) = fixture();
+    create(&store, "local", "polled");
+    let (turn, _) = store
+        .create_turn("local", "polled", "request", Some("fixture"))
+        .unwrap();
+    let start = Arc::new(Barrier::new(7));
+    let workers = (0..6)
+        .map(|_| {
+            let start = start.clone();
+            let path = path.clone();
+            let turn = turn.id.clone();
+            thread::spawn(move || {
+                start.wait();
+                for _ in 0..40 {
+                    let opened = SessionStore::open(&path).unwrap();
+                    assert_eq!(opened.get_turn("local", "polled", &turn).unwrap().id, turn);
+                    opened.turn_events("local", "polled", &turn, 0).unwrap();
+                }
+            })
+        })
+        .collect::<Vec<_>>();
+    start.wait();
+    for sequence in 0..240 {
+        store
+            .append_turn_event(
+                "local",
+                "polled",
+                &turn.id,
+                json!({"type":"fixture","sequence":sequence}),
+            )
+            .unwrap();
+    }
+    for worker in workers {
+        worker.join().unwrap();
+    }
+    assert_eq!(
+        store
+            .turn_events("local", "polled", &turn.id, 0)
+            .unwrap()
+            .len(),
+        241
+    );
 }
 
 #[test]

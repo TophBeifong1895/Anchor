@@ -772,6 +772,13 @@ impl Host {
             "Goose binary differs from the pinned Anchor-built lean v1.53.0 ACP binary (scripts/build-goose-acp.sh)"
         );
         let base = crate::fixture::Host::new(graph);
+        if let Ok(expected) = std::env::var("ANCHOR_TEST_HOST_BINARY_SHA256") {
+            assert_eq!(
+                digest(&base.root.path().join("anchor-runner-host")),
+                expected,
+                "fixture Host differs from the selected frozen build"
+            );
+        }
         let version = Command::new(&goose)
             .arg("--version")
             .env_clear()
@@ -858,7 +865,7 @@ impl Host {
             .env("XDG_DATA_HOME", root.join("xdg/data"))
             .env("XDG_STATE_HOME", root.join("xdg/state"))
             .env("XDG_CACHE_HOME", root.join("xdg/cache"))
-            .env("ANCHOR_RUNNER_STATE_ROOT", root.join("state"))
+            .env("ANCHOR_RUNNER_STATE_ROOT", self.base.state_root())
             .env("ANCHOR_RUNNER_WORKSPACE_ROOT", root.join("work"))
             .env("ANCHOR_RUNNER_BUNDLE_ROOT", root.join("bundle"))
             .env("ANCHOR_RUNNER_CATALOG_ROOT", root)
@@ -1226,10 +1233,23 @@ impl HttpHost {
         path: &str,
         body: Option<&Value>,
     ) -> Result<(u16, Value), reqwest::Error> {
+        self.try_request_with_timeout(method, path, body, None)
+    }
+
+    fn try_request_with_timeout(
+        &self,
+        method: &str,
+        path: &str,
+        body: Option<&Value>,
+        timeout: Option<Duration>,
+    ) -> Result<(u16, Value), reqwest::Error> {
         self.runtime.block_on(async {
             let mut request = self
                 .client
                 .request(method.parse().unwrap(), format!("{}{path}", self.url));
+            if let Some(timeout) = timeout {
+                request = request.timeout(timeout);
+            }
             if let Some(body) = body {
                 request = request.json(body);
             }
@@ -1249,6 +1269,17 @@ impl HttpHost {
 
     pub fn request(&self, method: &str, path: &str, body: Option<&Value>) -> (u16, Value) {
         self.try_request(method, path, body).unwrap()
+    }
+
+    pub fn request_with_timeout(
+        &self,
+        method: &str,
+        path: &str,
+        body: Option<&Value>,
+        timeout: Duration,
+    ) -> (u16, Value) {
+        self.try_request_with_timeout(method, path, body, Some(timeout))
+            .unwrap()
     }
 
     #[allow(dead_code)]

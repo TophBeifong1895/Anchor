@@ -6,6 +6,62 @@
 use super::*;
 
 impl PilotTools {
+    pub(super) async fn plugin_candidate(
+        &self,
+        name: &str,
+        arguments: &Value,
+    ) -> Result<Value, ToolError> {
+        self.require_active_turn()?;
+        let context = self
+            .context
+            .as_ref()
+            .ok_or_else(|| rejected("Pilot Turn context unavailable"))?;
+        let directory = parameter(arguments, "directory")?;
+        let candidate = workspace_directory(&self.task_workspace(), &directory)?;
+        let id = arguments
+            .get("id")
+            .and_then(Value::as_str)
+            .or_else(|| candidate.file_name().and_then(|name| name.to_str()))
+            .filter(|id| identifier(id))
+            .ok_or_else(|| rejected("id must be a Plugin identifier"))?;
+        let invocation = match (arguments.get("server"), arguments.get("tool")) {
+            (None, None) if arguments.get("arguments").is_none() => None,
+            (Some(Value::String(server)), Some(Value::String(tool))) => Some((
+                server.as_str(),
+                tool.as_str(),
+                arguments
+                    .get("arguments")
+                    .cloned()
+                    .unwrap_or_else(|| json!({})),
+            )),
+            _ => {
+                return Err(rejected(
+                    "pass server and tool together, with optional object arguments",
+                ));
+            }
+        };
+        let prepared = self
+            .application
+            .prepare_plugin_candidate(
+                &self.library_root,
+                &candidate,
+                id,
+                &self.preparation_root()?,
+                &context.dependency_access(),
+            )
+            .await
+            .map_err(|error| rejected(format!("Plugin preparation failed: {error:?}")))?;
+        if name == "plugin_prepare" {
+            let mut result = prepared.result(context.network);
+            result["rust_development"] = context.rust_status();
+            result["python_development"] = context.python_status();
+            return Ok(result);
+        }
+        self.application
+            .test_plugin_candidate(&prepared, context, invocation)
+            .await
+            .map_err(|error| rejected(format!("Plugin candidate test failed: {error:?}")))
+    }
     pub(super) async fn plugin_list(&self, _arguments: &Value) -> Result<Value, ToolError> {
         let catalog = FilePluginCatalog::new(&self.library_root);
         let mut plugins = Vec::new();
@@ -44,13 +100,33 @@ impl PilotTools {
                 instructions.push(text_resource(&definition.directory, skill)?);
             }
         }
+        result["dependencies"] =
+            serde_json::to_value(&definition.dependencies).map_err(|_| failed())?;
+        let review = anchor_library::Library::new(&self.library_root)
+            .review_directory(&plugin, &definition.directory)
+            .map_err(|_| failed())?;
+        result["resources"] = json!(review.resources);
+        result["servers"] = json!(review.servers);
+        if let Some(resource) = arguments.get("resource").and_then(Value::as_str) {
+            if !review.resources.iter().any(|entry| entry == resource) {
+                return Err(rejected("resource is not part of this Plugin"));
+            }
+            if resource != "plugin.json" && resource != ".mcp.json" {
+                result["resource"] =
+                    json!({"path":resource,"text":text_resource(&definition.directory, resource)?});
+            } else {
+                return Err(rejected(
+                    "manifest resource reads are not exposed; use dependency and resource facts",
+                ));
+            }
+        }
         result["instructions"] = Value::String(instructions.join("\n\n"));
         Ok(result)
     }
 
     pub(super) async fn plugin_review(&self, arguments: &Value) -> Result<Value, ToolError> {
         let directory = parameter(arguments, "directory")?;
-        let candidate = workspace_directory(&self.workspace_root, &directory)?;
+        let candidate = workspace_directory(&self.task_workspace(), &directory)?;
         let id = match arguments.get("id").and_then(Value::as_str) {
             Some(id) if identifier(id) => id.to_owned(),
             Some(_) => return Err(rejected("id must be a Plugin identifier")),

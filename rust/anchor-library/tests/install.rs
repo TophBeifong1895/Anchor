@@ -2,7 +2,7 @@ mod support;
 
 use std::{
     fs,
-    os::unix::fs::{PermissionsExt, symlink},
+    os::unix::fs::{FileTypeExt, PermissionsExt, symlink},
     path::Path,
 };
 
@@ -204,6 +204,172 @@ fn a_skill_only_plugin_installs_and_binds_into_a_graph_bundle() {
 }
 
 #[test]
+fn mutable_data_is_never_imported_by_review_preparation_install_or_upgrade() {
+    for hidden in [false, true] {
+        let temporary = tempfile::tempdir().unwrap();
+        let source = temporary.path().join("source");
+        let manifest = if hidden {
+            ".codex-plugin/plugin.json"
+        } else {
+            "plugin.json"
+        };
+        let manifest_bytes = json!({
+            "name":"Mutable source",
+            "mutable":[
+                "data/","cache.db","nested/state/","nested/live.db","missing/",
+                "absent-file/parents/cache.db","absent-dir/parents/data/"
+            ]
+        })
+        .to_string();
+        write(source.join(manifest), &manifest_bytes);
+        fs::set_permissions(source.join(manifest), fs::Permissions::from_mode(0o640)).unwrap();
+        write(source.join("code.txt"), "code v1");
+        write(source.join("nested/code.txt"), "nested code");
+        write(source.join("data/.env"), "source credential sentinel");
+        write(source.join("nested/state/results.json"), "source results");
+        let outside = temporary.path().join("outside");
+        write(&outside, "external sentinel");
+        symlink(&outside, source.join("data/link")).unwrap();
+        symlink(&outside, source.join("cache.db")).unwrap();
+        rustix::fs::mknodat(
+            rustix::fs::CWD,
+            source.join("nested/live.db"),
+            FileType::Fifo,
+            Mode::from_bits_truncate(0o600),
+            0,
+        )
+        .unwrap();
+        rustix::fs::mknodat(
+            rustix::fs::CWD,
+            source.join("data/events"),
+            FileType::Fifo,
+            Mode::from_bits_truncate(0o600),
+            0,
+        )
+        .unwrap();
+        let root = temporary.path().join("library");
+        let library = Library::new(&root);
+        let review = library.review_directory("demo", &source).unwrap();
+        assert_eq!(
+            review.resources,
+            ["code.txt", "nested/code.txt", "plugin.json"]
+        );
+        assert!(!root.exists(), "review must not publish anything");
+
+        // This is the exact stage_directory entrypoint used for private Pilot
+        // candidate preparation, including the flattened community manifest.
+        let transaction = tempfile::tempdir().unwrap();
+        let (layout, prepared) = library
+            .stage_directory("demo", &source, transaction.path())
+            .unwrap();
+        assert_eq!(prepared.digest, review.digest);
+        let staged = layout.join("plugins/demo");
+        let assert_empty_data = |directory: &Path| {
+            for subtree in ["data", "nested/state", "missing", "absent-dir/parents/data"] {
+                assert_eq!(fs::read_dir(directory.join(subtree)).unwrap().count(), 0);
+            }
+            for file in ["cache.db", "nested/live.db", "absent-file/parents/cache.db"] {
+                let metadata = fs::symlink_metadata(directory.join(file)).unwrap();
+                assert!(metadata.is_file());
+                assert_eq!(metadata.len(), 0);
+            }
+            assert_eq!(
+                fs::read(directory.join("nested/code.txt")).unwrap(),
+                b"nested code"
+            );
+            assert!(!directory.join(".codex-plugin").exists());
+            assert_eq!(
+                fs::read(directory.join("plugin.json")).unwrap(),
+                manifest_bytes.as_bytes()
+            );
+            assert_eq!(
+                fs::metadata(directory.join("plugin.json"))
+                    .unwrap()
+                    .permissions()
+                    .mode()
+                    & 0o777,
+                0o640
+            );
+        };
+        assert_empty_data(&staged);
+        let installed = library.install_directory("demo", &source, false).unwrap();
+        assert_eq!(installed.digest, review.digest);
+        assert_empty_data(&installed.directory);
+
+        // Source data can change independently of the approved code and never
+        // enters a subsequent review, preparation, or installation.
+        write(
+            source.join("data/.env"),
+            "changed source credential sentinel",
+        );
+        assert_eq!(
+            library.review_directory("demo", &source).unwrap().digest,
+            review.digest
+        );
+        write(
+            installed.directory.join("data/state.json"),
+            "plugin-owned state",
+        );
+        write(
+            installed.directory.join("data/.env"),
+            "plugin-owned credential",
+        );
+        write(installed.directory.join("cache.db"), "plugin-owned cache");
+        write(
+            installed.directory.join("nested/live.db"),
+            "plugin-owned nested state",
+        );
+        // A dangling data link also proves the upgrade's durability walk never
+        // opens data: opening it would fail even without reading file content.
+        symlink("not-present", installed.directory.join("data/link")).unwrap();
+        write(source.join("code.txt"), "code v2");
+        let upgraded = library.install_directory("demo", &source, true).unwrap();
+        assert_ne!(upgraded.digest, review.digest);
+        assert_eq!(
+            fs::read(installed.directory.join("code.txt")).unwrap(),
+            b"code v2"
+        );
+        for (file, contents) in [
+            ("data/state.json", "plugin-owned state"),
+            ("data/.env", "plugin-owned credential"),
+            ("cache.db", "plugin-owned cache"),
+            ("nested/live.db", "plugin-owned nested state"),
+        ] {
+            assert_eq!(
+                fs::read_to_string(installed.directory.join(file)).unwrap(),
+                contents
+            );
+        }
+        assert_eq!(
+            fs::read_link(installed.directory.join("data/link")).unwrap(),
+            Path::new("not-present")
+        );
+        assert_eq!(
+            fs::read(source.join("data/.env")).unwrap(),
+            b"changed source credential sentinel"
+        );
+        assert_eq!(fs::read_link(source.join("cache.db")).unwrap(), outside);
+        assert!(
+            fs::symlink_metadata(source.join("nested/live.db"))
+                .unwrap()
+                .file_type()
+                .is_fifo()
+        );
+        assert!(
+            fs::symlink_metadata(source.join("data/events"))
+                .unwrap()
+                .file_type()
+                .is_fifo()
+        );
+        assert_eq!(
+            fs::read(temporary.path().join("outside")).unwrap(),
+            b"external sentinel"
+        );
+        assert_clean(&root);
+    }
+}
+
+#[test]
 fn replacing_code_keeps_the_data_the_plugin_declared_and_the_bundle_reference() {
     let temporary = tempfile::tempdir().unwrap();
     let source = temporary.path().join("source");
@@ -258,7 +424,16 @@ fn replacing_code_keeps_the_data_the_plugin_declared_and_the_bundle_reference() 
     // Plugin's own state.
     write(
         source.join("plugin.json"),
-        manifest("v2", json!(["data/", "cache.db", "provided/"])),
+        manifest(
+            "v2",
+            json!([
+                "data/",
+                "cache.db",
+                "provided/",
+                "new-file/parents/cache.db",
+                "new-dir/parents/data/"
+            ]),
+        ),
     );
     write(
         source.join("skills/check/SKILL.md"),
@@ -311,6 +486,15 @@ fn replacing_code_keeps_the_data_the_plugin_declared_and_the_bundle_reference() 
             .count(),
         0
     );
+    assert_eq!(
+        std::fs::read_dir(installed.join("new-dir/parents/data"))
+            .unwrap()
+            .count(),
+        0
+    );
+    let provided_file = std::fs::metadata(installed.join("new-file/parents/cache.db")).unwrap();
+    assert!(provided_file.is_file());
+    assert_eq!(provided_file.len(), 0);
     // The bundle is a reference: it never had to change.
     assert_eq!(loader.load().unwrap().plugins, frozen.plugins);
 

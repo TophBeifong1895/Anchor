@@ -115,7 +115,6 @@ impl BubblewrapPolicy {
         self.device_grants.push(path.into());
         self
     }
-
     pub fn authorize_spill_root(mut self, path: impl Into<PathBuf>) -> Self {
         self.spill_roots.push(path.into());
         self
@@ -140,6 +139,7 @@ pub struct BubblewrapSandbox {
     binary: PathBuf,
     allowed_commands: HashSet<String>,
     allow_network: bool,
+    pid_namespace_proc: bool,
     workspace_roots: Vec<PathBuf>,
     readonly_input_roots: Vec<PathBuf>,
     readonly_destination_roots: Vec<PathBuf>,
@@ -160,6 +160,7 @@ impl std::fmt::Debug for BubblewrapSandbox {
             .field("binary", &self.binary)
             .field("allowed_commands", &self.allowed_commands)
             .field("allow_network", &self.allow_network)
+            .field("pid_namespace_proc", &self.pid_namespace_proc)
             .field("workspace_roots", &self.workspace_roots)
             .field("readonly_input_roots", &self.readonly_input_roots)
             .field(
@@ -180,24 +181,6 @@ impl BubblewrapSandbox {
     ///
     /// The allowlist itself is host authority; exposing the names lets the tool
     /// layer tell a model which commands it may actually use.
-    /// Grant exact host device nodes to invocations of the derived sandbox.
-    ///
-    /// A device is never reachable because a request asked for it: the derived
-    /// sandbox only accepts devices an operator recorded on the tool
-    /// environment, and the request must name exactly those paths.
-    pub fn with_device_grants(&self, devices: &[PathBuf]) -> Result<Self, SandboxError> {
-        let sandbox = self.clone();
-        for device in devices {
-            let resolved = resolve_device_grant(device)?;
-            if !sandbox.device_grants.contains(&resolved) {
-                return Err(SandboxError::InvalidRequest(
-                    "device node is not explicitly authorized by host policy".to_owned(),
-                ));
-            }
-        }
-        Ok(sandbox)
-    }
-
     pub fn allowed_commands(&self) -> Vec<String> {
         let mut commands = self.allowed_commands.iter().cloned().collect::<Vec<_>>();
         commands.sort();
@@ -281,6 +264,7 @@ impl BubblewrapSandbox {
             binary,
             allowed_commands: policy.allowed_commands,
             allow_network: policy.allow_network,
+            pid_namespace_proc: false,
             workspace_roots,
             readonly_input_roots,
             readonly_destination_roots,
@@ -292,6 +276,32 @@ impl BubblewrapSandbox {
             device_grants,
             spill_roots,
         })
+    }
+
+    /// Mount proc for this sandbox's isolated PID namespace. This is a host
+    /// invocation grant, never a request option or a bind of the host's proc.
+    pub fn with_pid_namespace_proc(&self) -> Self {
+        let mut sandbox = self.clone();
+        sandbox.pid_namespace_proc = true;
+        sandbox
+    }
+
+    /// Grant exact host device nodes to invocations of the derived sandbox.
+    ///
+    /// A device is never reachable because a request asked for it: the derived
+    /// sandbox only accepts devices an operator recorded on the tool
+    /// environment, and the request must name exactly those paths.
+    pub fn with_device_grants(&self, devices: &[PathBuf]) -> Result<Self, SandboxError> {
+        let sandbox = self.clone();
+        for device in devices {
+            let resolved = resolve_device_grant(device)?;
+            if !sandbox.device_grants.contains(&resolved) {
+                return Err(SandboxError::InvalidRequest(
+                    "device node is not explicitly authorized by host policy".to_owned(),
+                ));
+            }
+        }
+        Ok(sandbox)
     }
 
     /// Derive a node sandbox with exact host-approved read-only mounts.
@@ -619,13 +629,6 @@ impl BubblewrapSandbox {
             }
             tool_dirs.push(resolved);
         }
-        let spill = resolve_spill(request.spill.as_ref(), &self.spill_roots)?;
-        if let Some(mount) = spill
-            .as_ref()
-            .and_then(|spill| spill.sandbox_mount.as_ref())
-        {
-            self.authorize_destination(mount)?;
-        }
         let mut devices = Vec::with_capacity(request.devices.len());
         for device in &request.devices {
             let resolved = resolve_device_grant(device)?;
@@ -637,6 +640,13 @@ impl BubblewrapSandbox {
             if !devices.contains(&resolved) {
                 devices.push(resolved);
             }
+        }
+        let spill = resolve_spill(request.spill.as_ref(), &self.spill_roots)?;
+        if let Some(mount) = spill
+            .as_ref()
+            .and_then(|spill| spill.sandbox_mount.as_ref())
+        {
+            self.authorize_destination(mount)?;
         }
         Ok(ResolvedRequest {
             workspace,
@@ -671,10 +681,10 @@ impl BubblewrapSandbox {
         include_info_fd: bool,
     ) -> Vec<String> {
         let mut args = vec!["--unshare-all".to_owned(), "--die-with-parent".to_owned()];
-        let mut made_dirs = HashSet::new();
-        if request.network == NetworkPolicy::Enabled {
-            args.push("--share-net".into());
+        if self.pid_namespace_proc {
+            args.extend(["--proc".into(), "/proc".into()]);
         }
+        let mut made_dirs = HashSet::new();
         for path in SYSTEM_DIRS.iter().filter(|p| Path::new(p).exists()) {
             args.extend(["--ro-bind".into(), (*path).into(), (*path).into()]);
         }
@@ -730,8 +740,6 @@ impl BubblewrapSandbox {
             "--dev".into(),
             "/dev".into(),
         ]);
-        // A granted device is bound at the same absolute path. A sandbox without
-        // a device grant keeps the minimal /dev devtmpfs.
         for device in &resolved.devices {
             args.extend([
                 "--dev-bind".into(),
@@ -740,7 +748,8 @@ impl BubblewrapSandbox {
             ]);
         }
         // A granted accelerator device comes with the read-only /sys view its
-        // driver enumerates devices through.
+        // driver enumerates devices through. Sandboxes without a device grant
+        // keep the minimal mount set.
         if !resolved.devices.is_empty() && Path::new("/sys").exists() {
             args.extend(["--ro-bind".into(), "/sys".into(), "/sys".into()]);
         }
@@ -765,7 +774,7 @@ impl BubblewrapSandbox {
             ));
         }
         let argv = self.argv(&request, &resolved, false);
-        let mut command = Command::new(&self.binary);
+        let mut command = self.execution_command(&request)?;
         command
             .args(argv)
             .env_clear()
@@ -781,6 +790,31 @@ impl BubblewrapSandbox {
         }
         command.as_std_mut().process_group(0);
         command.kill_on_drop(true);
+        Ok(command)
+    }
+
+    fn execution_command(&self, request: &SandboxRequest) -> Result<Command, SandboxError> {
+        if request.network == NetworkPolicy::Disabled {
+            return Ok(Command::new(&self.binary));
+        }
+        // Online commands keep their private network namespace. slirp4netns
+        // provides egress without forwarding the host's loopback, so a local
+        // management API is not exposed to user-controlled code.
+        let helper = network_helper().ok_or_else(|| {
+            SandboxError::Unavailable(
+                "anchor-sandbox-network is required for isolated task networking".into(),
+            )
+        })?;
+        let slirp = find_on_path(Path::new("slirp4netns")).ok_or_else(|| {
+            SandboxError::Unavailable("slirp4netns is required for isolated task networking".into())
+        })?;
+        let mut command = Command::new(helper);
+        command
+            .arg("--bwrap")
+            .arg(&self.binary)
+            .arg("--slirp")
+            .arg(slirp)
+            .arg("--");
         Ok(command)
     }
 }
@@ -807,7 +841,7 @@ impl SandboxPort for BubblewrapSandbox {
                 });
             }
             let argv = self.argv(&request, &resolved, true);
-            let mut command = Command::new(&self.binary);
+            let mut command = self.execution_command(&request)?;
             command
                 .args(argv)
                 .env_clear()
@@ -1087,9 +1121,9 @@ fn canonical_roots(roots: Vec<PathBuf>, label: &str) -> Result<Vec<PathBuf>, San
         .collect()
 }
 
-/// A device grant names one host device node. The node itself is the authority:
-/// the path must be a character or block device below `/dev`, and the resolved
-/// path is what gets bound.
+/// A device grant names one host device node. The node itself is the
+/// authority: the resolved path must be a character device, and the sandbox
+/// refuses anything that is not a child of `/dev`.
 fn resolve_device_grant(device: &Path) -> Result<PathBuf, SandboxError> {
     let lexical = absolute_lexical(device)?;
     if lexical == Path::new("/dev") || !lexical.starts_with("/dev/") {
@@ -1196,6 +1230,24 @@ fn find_on_path(binary: &Path) -> Option<PathBuf> {
     std::env::split_paths(&std::env::var_os("PATH")?)
         .map(|dir| dir.join(binary))
         .find(|candidate| candidate.is_file())
+}
+
+fn network_helper() -> Option<PathBuf> {
+    let executable = std::env::current_exe().ok()?;
+    let directory = executable.parent()?;
+    let adjacent = directory.join("anchor-sandbox-network");
+    if adjacent.is_file() {
+        return Some(adjacent);
+    }
+    // Cargo's test executables are in target/{profile}/deps; the packaged
+    // runtime always resolves the adjacent binary above.
+    if directory.file_name().is_some_and(|name| name == "deps") {
+        let helper = directory.parent()?.join("anchor-sandbox-network");
+        if helper.is_file() {
+            return Some(helper);
+        }
+    }
+    find_on_path(Path::new("anchor-sandbox-network"))
 }
 
 fn probe(binary: &Path) -> Result<(), SandboxError> {
@@ -1539,6 +1591,7 @@ mod tests {
             binary,
             allowed_commands: ["printf".into(), "sleep".into(), "cat".into(), "true".into()].into(),
             allow_network: false,
+            pid_namespace_proc: false,
             workspace_roots: vec![root.clone()],
             readonly_input_roots: vec![root.clone()],
             readonly_destination_roots: vec![PathBuf::from("/in"), PathBuf::from("/spill")],
@@ -1546,8 +1599,8 @@ mod tests {
             writable_grants: Vec::new(),
             writable_input_roots: Vec::new(),
             writable_destination_roots: Vec::new(),
-            device_grants: Vec::new(),
             tool_dirs: Vec::new(),
+            device_grants: Vec::new(),
             spill_roots: vec![root],
         }
     }
@@ -1557,6 +1610,34 @@ mod tests {
         fs::write(&script, "#!/bin/bash\nprintf '{\\\"child-pid\\\":1}\\n' >&200 || echo infofd-failed >&2\nwhile [ \"$1\" != \"--\" ]; do shift; done\nshift\nexec \"$@\"\n").unwrap();
         fs::set_permissions(&script, fs::Permissions::from_mode(0o700)).unwrap();
         script
+    }
+
+    #[tokio::test]
+    async fn host_proc_grant_mounts_only_the_private_pid_namespace() {
+        let dir = temp_dir("private-proc");
+        let sandbox = BubblewrapSandbox::new(
+            BubblewrapPolicy::new("bwrap", ["sh"]).authorize_workspace_root(&dir),
+        )
+        .unwrap();
+        let request = SandboxRequest::new(&dir, ["sh", "-c", "test ! -e /proc/self/exe"]);
+        assert_eq!(sandbox.run(request).await.unwrap().exit_code, Some(0));
+        let script = format!(
+            "test -e /proc/self/exe && test ! -e /proc/{}/status",
+            std::process::id()
+        );
+        let request = SandboxRequest::new(&dir, ["sh", "-c", &script]);
+        let result = sandbox
+            .with_pid_namespace_proc()
+            .run(request)
+            .await
+            .unwrap();
+        assert_eq!(result.exit_code, Some(0), "{result:?}");
+        assert!(
+            sandbox
+                .with_readonly_grants(&[ReadOnlyInput::new("/proc", "/proc")])
+                .is_err()
+        );
+        let _ = fs::remove_dir_all(dir);
     }
 
     #[tokio::test]

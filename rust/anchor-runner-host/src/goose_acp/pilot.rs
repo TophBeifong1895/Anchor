@@ -87,7 +87,7 @@ fn load(root: &Path) -> Result<Option<PilotFact>, String> {
     }
 }
 
-pub(super) fn directory(root: &Path) -> Result<(), String> {
+pub(crate) fn directory(root: &Path) -> Result<(), String> {
     use rustix::fs::{Mode, OFlags, fsync, mkdirat, open, openat};
     let flags = OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC;
     let mut parent = open("/", flags, Mode::empty()).map_err(|_| "Pilot directory unavailable")?;
@@ -109,6 +109,29 @@ pub(super) fn directory(root: &Path) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+pub(crate) fn execution_lease(root: &Path) -> Result<File, String> {
+    directory(root)?;
+    let lease = OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .mode(0o600)
+        .custom_flags(rustix::fs::OFlags::NOFOLLOW.bits() as i32)
+        .open(root.join("execution.lock"))
+        .map_err(|_| "Pilot execution lease unavailable")?;
+    if !lease
+        .metadata()
+        .map_err(|_| "Pilot execution lease unavailable")?
+        .is_file()
+    {
+        return Err("Pilot execution lease is not a regular file".into());
+    }
+    rustix::fs::flock(&lease, rustix::fs::FlockOperation::NonBlockingLockExclusive)
+        .map_err(|_| "Pilot Session is already executing")?;
+    Ok(lease)
 }
 
 impl GoosePilot {
@@ -144,17 +167,7 @@ impl GoosePilot {
         directory(&request.root)?;
         fs::set_permissions(&request.root, fs::Permissions::from_mode(0o700))
             .map_err(|error| error.to_string())?;
-        let lease = OpenOptions::new()
-            .create(true)
-            .truncate(false)
-            .read(true)
-            .write(true)
-            .mode(0o600)
-            .custom_flags(rustix::fs::OFlags::NOFOLLOW.bits() as i32)
-            .open(request.root.join("execution.lock"))
-            .map_err(|_| "Pilot execution lease unavailable")?;
-        rustix::fs::flock(&lease, rustix::fs::FlockOperation::NonBlockingLockExclusive)
-            .map_err(|_| "Pilot Session is already executing")?;
+        let lease = execution_lease(&request.root)?;
         let binding = self.models.resolve(None)?;
         let fact = load(&request.root)?.unwrap_or(PilotFact {
             version: 1,
@@ -199,7 +212,6 @@ impl GoosePilot {
         }
         result
     }
-
     async fn execute(
         &self,
         request: &Arc<PilotTurn>,
@@ -301,6 +313,11 @@ impl GoosePilot {
         .await?;
         let observation = {
             let mut fact = fact.lock().map_err(|_| "Pilot fact lock unavailable")?;
+            // A Goose binary upgrade may keep the same native Session.  We only
+            // update the durable runtime binding after `session/load` has
+            // succeeded above; a failed load therefore cannot silently replace
+            // the retained Session.
+            fact.binary_sha256 = self.binary_sha256.clone();
             fact.session_id = Some(opened.id.clone());
             save(&request.root, &fact)?;
             fact.tool_observation.clone()
@@ -373,17 +390,20 @@ fn validate_binding(
     binary_sha256: &str,
     model_binding: &str,
 ) -> Result<(), String> {
-    if fact.is_some_and(|fact| {
-        fact.version != 1
-            || fact.binary_sha256 != binary_sha256
-            || fact.model_binding != model_binding
-    }) {
-        return Err("Goose Pilot binary or model binding changed".into());
+    if fact.is_some_and(|fact| fact.version != 1 || fact.model_binding != model_binding) {
+        return Err("Goose Pilot fact or model binding changed".into());
     }
     if retained.is_some_and(|retained| {
         fact.and_then(|fact| fact.session_id.as_deref()) != Some(retained.session.as_str())
     }) {
         return Err("retained Goose Pilot identity has no matching durable Session fact".into());
+    }
+    // The binary digest is an audit fact, while the opaque Goose Session is the
+    // recovery cursor.  A deployment may replace a compatible Goose binary; the
+    // successful `session/load` above rebinds the fact.  A fact without a
+    // retained Session still cannot be used to invent a replacement cursor.
+    if fact.is_some_and(|fact| fact.binary_sha256 != binary_sha256) && retained.is_none() {
+        return Err("Goose Pilot binary changed without a retained Session identity".into());
     }
     Ok(())
 }
@@ -686,6 +706,7 @@ mod tests {
             session: "native-session".into(),
         };
         assert!(validate_binding(Some(&fact()), Some(&retained), "binary", "model").is_ok());
+        assert!(validate_binding(Some(&fact()), Some(&retained), "new-binary", "model").is_ok());
         assert!(validate_binding(None, Some(&retained), "binary", "model").is_err());
         let mut changed = fact();
         changed.session_id = Some("replacement-session".into());

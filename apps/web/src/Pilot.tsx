@@ -6,6 +6,7 @@ import { PilotTurn, type Turn } from './PilotTurn';
 import { SessionActions } from './SessionActions';
 import { SessionPlugins } from './SessionPlugins';
 import { PilotQuestionHistory } from './PilotQuestionHistory';
+import { PilotCredentials } from './PilotCredentials';
 
 type Session = {
   id: string; title?: string; status: string; waiting_reason: string; updated_at: string;
@@ -43,6 +44,7 @@ export function Pilot({ session = '', onSession }: { session?: string; onSession
   const [waitingQuestion, setWaitingQuestion] = useState(false);
   const [stopping, setStopping] = useState(false);
   const [syncedTurn, setSyncedTurn] = useState('');
+  const [continuation, setContinuation] = useState<{ session: string; turn: string } | null>(null);
   const [draft, setDraft] = useState(() => cached('draft:new'));
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -79,7 +81,7 @@ export function Pilot({ session = '', onSession }: { session?: string; onSession
     selectedRef.current = id;
     setSelected(id); cached('selected', id); onSessionRef.current?.(id);
     setDraft(cached(`draft:${id || 'new'}`));
-    setMessages([]); setCurrentTurn(null); setTurns([]); setWaitingQuestion(false); setStopping(false); setSyncedTurn(''); setCopied(null); setProblem('');
+    setMessages([]); setCurrentTurn(null); setTurns([]); setWaitingQuestion(false); setStopping(false); setSyncedTurn(''); setContinuation(null); setCopied(null); setProblem('');
     setBusy(submissions.current.has(id));
     follow.current = true; setAtBottom(true);
   };
@@ -122,10 +124,32 @@ export function Pilot({ session = '', onSession }: { session?: string; onSession
   const complete = useCallback((final: Turn) => {
     if (!mounted.current || selectedRef.current !== final.session) return;
     setCurrentTurn(final); setBusy(false); setWaitingQuestion(false); setStopping(false);
+    if (final.continuation?.status === 'scheduled') setContinuation({ session: final.session, turn: final.id });
     void refresh(final.session).catch(error => {
       if (mounted.current && selectedRef.current === final.session) setProblem((error as Error).message);
     });
   }, [refresh, setCurrentTurn]);
+  useEffect(() => {
+    if (!continuation || continuation.session !== selected) return;
+    const controller = new AbortController();
+    let closed = false;
+    let timer: ReturnType<typeof setTimeout>;
+    const followContinuation = async () => {
+      try {
+        const result = await api<{ turn: Turn; continuation: Turn['continuation'] }>(`/sessions/${encodeURIComponent(continuation.session)}/turns/${encodeURIComponent(continuation.turn)}`, 'GET', undefined, controller.signal);
+        if (closed) return;
+        if (result.continuation?.status === 'admitted') {
+          await refresh(continuation.session);
+          if (!closed) setContinuation(null);
+          return;
+        }
+        if (result.continuation?.status !== 'scheduled') { setContinuation(null); return; }
+      } catch { if (closed) return; }
+      if (!closed) timer = setTimeout(() => void followContinuation(), 1000);
+    };
+    void followContinuation();
+    return () => { closed = true; controller.abort(); clearTimeout(timer); };
+  }, [continuation, selected, refresh]);
   const submit = async (id: string, message: string | null) => {
     const key = `submission:${id}`;
     const pending = pendingSubmission(id);
@@ -356,7 +380,11 @@ export function Pilot({ session = '', onSession }: { session?: string; onSession
         {turns.some(item => item.id !== turn?.id) && <PilotQuestionHistory key={selected} session={selected}
           turns={turns.filter(item => item.id !== turn?.id).map(item => item.id).reverse()} />}
         {turn && <PilotTurn key={`${turn.session}-${turn.id}`} turn={turn} saved={syncedTurn === turn.id} stopping={stopping} onComplete={complete} onQuestions={questionState} />}
+        {selected && <PilotCredentials key={selected} session={selected} onConfigured={() => {
+          void refresh(selected).catch(error => { if (selectedRef.current === selected) setProblem((error as Error).message); });
+        }} />}
         {busy && !turn && <div className="pilot-thinking" role="status"><LoaderCircle size={16} />正在提交…</div>}
+        {continuation && <p className="pilot-muted" role="status">正在应用配置，Pilot 将继续当前任务…</p>}
         </div>
       </div>
       {!atBottom && <button className="pilot-latest" onClick={() => {

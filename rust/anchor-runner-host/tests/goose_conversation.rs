@@ -17,6 +17,22 @@ use std::{
 
 const CASE_SOURCE: &str = "tests/goose_conversation.rs";
 
+fn editable_host() -> Host {
+    let host = Host::new(&graph(false))
+        .default_runtime()
+        .with_extra_environment([("ANCHOR_RUNNER_GRAPH_NAME", "pilot-control")]);
+    let fixture = host.base.root.path().join("fixture");
+    fs::create_dir(&fixture).unwrap();
+    for file in ["graph.json", "manifest.json"] {
+        fs::copy(
+            host.base.root.path().join("bundle").join(file),
+            fixture.join(file),
+        )
+        .unwrap();
+    }
+    host
+}
+
 fn nonce(label: &str) -> String {
     static SERIAL: AtomicU64 = AtomicU64::new(0);
     format!(
@@ -788,7 +804,7 @@ fn frozen_channel_image_reaches_native_prompt_without_host_path_grants() {
 #[ignore = "requires pinned Goose binary"]
 fn graph_delete_cleans_all_conversation_scopes_and_keeps_another_graph() {
     let provider = Provider::new("goose-conversation-delete", vec![]);
-    let host = Host::new(&graph(false)).default_runtime();
+    let host = editable_host();
     let server = host.serve(&provider);
     let mut scopes = Vec::new();
     let mut runs = Vec::new();
@@ -829,6 +845,95 @@ fn graph_delete_cleans_all_conversation_scopes_and_keeps_another_graph() {
     assert_artifact(&host, &other, "worker", b"other-graph-kept");
     assert_artifact(&host, &other, "verify", b"other-graph-kept");
     host.evidence(&provider, &other, json!({"case_source":CASE_SOURCE,"deleted_runs":runs,"deleted_scopes":scopes,"retained_other_graph_fact":other_fact,"graph_cleanup_verified":true}));
+}
+
+#[test]
+#[ignore = "requires pinned Goose binary"]
+fn deleting_all_runs_releases_scope_and_same_session_can_start_a_new_chain() {
+    let provider = Provider::new(
+        "goose-conversation-last-reference",
+        node_steps("first-lineage", "verify", None),
+    );
+    let host = editable_host();
+    let server = host.serve(&provider);
+    let first = submit(&server, &turn("scope-user", "first message", None));
+    server.wait_status(&first, "completed");
+    let (first_fact, scope) = assert_scope(&host, &first, "worker");
+    let native_root = scope.parent().unwrap().to_owned();
+    let (status, result) = server.request("DELETE", &format!("/runs/{first}"), None);
+    assert_eq!(status, 204, "{result}");
+    assert!(!native_root.exists());
+    assert!(host.base.root.path().join("state/run-deletions").is_dir());
+    provider.append(node_steps("fresh-lineage", "verify", None));
+    let next = submit(
+        &server,
+        &turn("scope-user", "new message after all Runs deleted", None),
+    );
+    server.wait_status(&next, "completed");
+    let (next_fact, next_scope) = assert_scope(&host, &next, "worker");
+    assert_eq!(
+        first_fact["conversation_scope"],
+        next_fact["conversation_scope"]
+    );
+    let history = host.native_conversation(&next, "worker", 1).to_string();
+    assert!(
+        !history.contains("first-lineage"),
+        "fresh Session unexpectedly retained removed native history"
+    );
+    assert_artifact(&host, &next, "worker", b"fresh-lineage");
+    let (status, result) = server.request("DELETE", &format!("/runs/{next}"), None);
+    assert_eq!(status, 204, "{result}");
+    assert!(!next_scope.parent().unwrap().exists());
+    let (status, result) = server.request("DELETE", "/graphs/fixture", None);
+    assert_eq!(status, 204, "{result}");
+    provider.assert_consumed();
+    fs::write(provider.root.join("evidence.json"),serde_json::to_vec_pretty(&json!({"case_source":CASE_SOURCE,
+        "last_reference_released":true,"same_session_new_chain_completed":true,
+        "graph_after_all_runs_deleted":true,"real_model_requests":0,"provider_requests":provider.requests()})).unwrap()).unwrap();
+}
+
+#[test]
+#[ignore = "requires pinned Goose binary"]
+fn deleting_a_last_run_obeys_native_scope_lease_and_can_retry() {
+    let provider = Provider::new(
+        "goose-conversation-native-delete-lease",
+        node_steps("lease-lineage", "verify", None),
+    );
+    let host = editable_host();
+    let server = host.serve(&provider);
+    let run = submit(
+        &server,
+        &turn("scope-user", "lease-protected message", None),
+    );
+    server.wait_status(&run, "completed");
+    let (fact, process) = assert_scope(&host, &run, "worker");
+    let scope = fact["conversation_scope"].as_str().unwrap();
+    let lock = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(
+            host.base
+                .root
+                .path()
+                .join("work/.goose-process/conversation-locks")
+                .join(format!("{scope}.lock")),
+        )
+        .unwrap();
+    rustix::fs::flock(&lock, rustix::fs::FlockOperation::NonBlockingLockExclusive).unwrap();
+    let (status, rejected) = server.request("DELETE", &format!("/runs/{run}"), None);
+    assert!(status == 409 || status == 500, "{rejected}");
+    assert!(process.join("data/sessions/sessions.db").is_file());
+    assert_eq!(server.request("GET", &format!("/runs/{run}"), None).0, 200);
+    drop(lock);
+    let (status, deleted) = server.request("DELETE", &format!("/runs/{run}"), None);
+    assert_eq!(status, 204, "{deleted}");
+    assert!(!process.parent().unwrap().exists());
+    let (status, deleted) = server.request("DELETE", "/graphs/fixture", None);
+    assert_eq!(status, 204, "{deleted}");
+    provider.assert_consumed();
+    fs::write(provider.root.join("evidence.json"),serde_json::to_vec_pretty(&json!({"case_source":CASE_SOURCE,
+        "native_lease_kept_scope":true,"partial_cleanup_retry_completed":true,
+        "graph_after_all_runs_deleted":true,"real_model_requests":0,"provider_requests":provider.requests()})).unwrap()).unwrap();
 }
 
 fn fact_path_for_request(host: &Host, request: &Value, previous_fact: &Value) -> PathBuf {

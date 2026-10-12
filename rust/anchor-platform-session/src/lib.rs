@@ -225,8 +225,16 @@ pub struct Session {
     /// `sessions.data`: an older row has no key and reads as "no override".
     #[serde(default)]
     pub plugin_mounts: BTreeMap<String, bool>,
+    /// A human may deny task-tool networking even when a Plugin requires it.
+    /// Mounting a network-dependent Plugin otherwise authorizes its requirement.
+    #[serde(default = "network_allowed_default")]
+    pub network_allowed: bool,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+}
+
+pub fn network_allowed_default() -> bool {
+    true
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]

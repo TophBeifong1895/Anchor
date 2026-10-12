@@ -38,8 +38,10 @@ pub(super) fn store(state: &ApiState) -> Result<SessionStore, HttpResponse> {
             }
         }
     }
-    SessionStore::open(state.data_root.join("platform/sessions.sqlite"))
-        .map_err(|_| error(StatusCode::INTERNAL_SERVER_ERROR, "Session storage failed"))
+    SessionStore::open(state.data_root.join("platform/sessions.sqlite")).map_err(|reason| {
+        eprintln!("anchor-runner-host: Session database open failed: {reason}");
+        error(StatusCode::INTERNAL_SERVER_ERROR, "Session storage failed")
+    })
 }
 
 pub(super) async fn blocking<Value: Send + 'static>(
@@ -55,21 +57,25 @@ pub(super) fn session_error(failure: SessionError) -> HttpResponse {
         SessionError::Missing => error(StatusCode::NOT_FOUND, "no such session"),
         SessionError::Invalid(message) => error(StatusCode::BAD_REQUEST, message),
         SessionError::Conflict(message) => error(StatusCode::CONFLICT, message),
-        SessionError::Storage(_) => {
+        SessionError::Storage(reason) => {
+            eprintln!("anchor-runner-host: Session storage operation failed: {reason}");
             error(StatusCode::INTERNAL_SERVER_ERROR, "Session storage failed")
         }
     }
 }
 
 pub(super) fn private_owner(state: &ApiState, headers: &HeaderMap) -> String {
-    if state.api_keys.is_empty() && state.loopback {
-        return "local".to_owned();
-    }
     let key = headers
         .get(header::AUTHORIZATION)
         .and_then(|value| value.to_str().ok())
         .and_then(|value| value.strip_prefix("Bearer "))
         .unwrap_or_default();
+    if let Some(owner) = state.application.channel_callback_owner("wecom", key) {
+        return owner;
+    }
+    if state.api_keys.is_empty() && state.loopback {
+        return "local".to_owned();
+    }
     format!("api:{:x}", Sha256::digest(key.as_bytes()))
 }
 
@@ -292,20 +298,31 @@ pub(super) async fn delete_session(
     headers: HeaderMap,
     AxumPath(identifier): AxumPath<String>,
 ) -> Result<Json<Value>, HttpResponse> {
-    blocking(move || {
-        let (sessions, owner, _) = owned_session(&state, &headers, &identifier)?;
-        if has_retained_session_run(&state, &identifier)? {
+    let lookup = state.clone();
+    let (sessions, owner, session) = blocking(move || {
+        let owned = owned_session(&lookup, &headers, &identifier)?;
+        if has_retained_session_run(&lookup, &identifier)? {
             return Err(error(
                 StatusCode::CONFLICT,
                 "Session has retained runtime history",
             ));
         }
-        sessions
-            .delete(&owner, &identifier)
-            .map_err(session_error)?;
-        Ok(Json(json!({"deleted":identifier})))
+        Ok(owned)
     })
-    .await
+    .await?;
+    state
+        .pilots
+        .delete_session(
+            sessions,
+            state.data_root,
+            state.workspace_root,
+            crate::library_root(&state.catalog_root),
+            owner,
+            session.clone(),
+        )
+        .await
+        .map_err(session_error)?;
+    Ok(Json(json!({"deleted":session.id})))
 }
 
 pub(super) async fn session_execution_unavailable(

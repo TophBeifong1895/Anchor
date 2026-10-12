@@ -52,17 +52,16 @@ pub(super) async fn open(
     }
     let server = json!({"type":"http","name":"anchor", "url":format!("{endpoint}/mcp"),
         "headers":[{"name":"Authorization","value":format!("Bearer {}", bridge.token)}]});
-    // `enabledExtensions` restricts the session to exactly these extensions, so the
-    // builtin that injects the per-turn persistent instructions (`tom`, "Top Of
-    // Mind") must be listed explicitly; otherwise the host boundary never reaches
-    // the model even though `GOOSE_MOIM_MESSAGE_TEXT` is set. Further builtins are
-    // opt-in disclosure layers.
+    // Goose 1.53 adds its default builtins when creating a session and retains
+    // extensions when loading one; enabledExtensions alone is not an allowlist.
+    // Reconcile through its native extension API before any model prompt. `tom`
+    // supplies the persistent boundary text; other builtins are deployment opt-ins.
     let mut enabled = vec![json!({"type":"mcp","server":server})];
     for name in configuration::enabled_builtins()? {
         enabled.push(json!({"type":"builtin","name":name}));
     }
     let mut params = json!({"cwd":"/workspace","mcpServers":[server.clone()],
-        "_meta":{"hidden":true,"sessionTitle":"Anchor","enabledExtensions":enabled}});
+        "_meta":{"hidden":true,"sessionTitle":"Anchor","enabledExtensions":enabled.clone()}});
     if let Some(id) = restored {
         params["sessionId"] = json!(id);
     }
@@ -83,10 +82,66 @@ pub(super) async fn open(
         .filter(|id| !id.is_empty())
         .ok_or("Goose returned no sessionId")?
         .to_owned();
+    let (listed, _) = connection
+        .request(
+            "_goose/unstable/session/extensions/list",
+            json!({"sessionId":id}),
+            cancellation,
+            handshake_deadline,
+        )
+        .await?;
+    let extensions = listed["extensions"]
+        .as_array()
+        .ok_or("Goose returned no session extension list")?;
+    let mut retained = vec![false; enabled.len()];
+    for entry in extensions {
+        if let Some(index) = enabled
+            .iter()
+            .position(|requested| matches_extension(requested, &entry["extension"]))
+        {
+            retained[index] = true;
+            continue;
+        }
+        let key = entry["extensionKey"]
+            .as_str()
+            .filter(|key| !key.is_empty())
+            .ok_or("Goose returned an extension without a key")?;
+        connection
+            .request(
+                "_goose/unstable/session/extensions/remove",
+                json!({"sessionId":id,"extensionKey":key}),
+                cancellation,
+                handshake_deadline,
+            )
+            .await?;
+    }
+    for (requested, retained) in enabled.iter().zip(retained) {
+        if !retained {
+            connection
+                .request(
+                    "_goose/unstable/session/extensions/add",
+                    json!({"sessionId":id,"extension":requested}),
+                    cancellation,
+                    handshake_deadline,
+                )
+                .await?;
+        }
+    }
     Ok(OpenedSession {
         id,
         initialize,
         response,
         history,
     })
+}
+
+fn matches_extension(requested: &Value, actual: &Value) -> bool {
+    match requested["type"].as_str() {
+        Some("builtin") => {
+            matches!(actual["type"].as_str(), Some("builtin" | "platform"))
+                && actual["name"] == requested["name"]
+        }
+        Some("mcp") => actual["type"] == "mcp" && actual["server"] == requested["server"],
+        _ => false,
+    }
 }

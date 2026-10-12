@@ -111,12 +111,60 @@ pub(crate) async fn verify_index_json(index: &str, package: &str) -> Result<(), 
 /// Partial downloads are never left behind, and a failure names every source it
 /// tried, because "the package is missing" and "the index is unreachable" are
 /// different problems for whoever has to fix the ask.
+#[cfg(test)]
 pub(crate) async fn fetch_wheelhouse(
     config: &DependencyProvisionConfig,
     packages: &[LockedPackage],
     wheelhouse: &Path,
 ) -> Result<Vec<FetchedArtifact>, ProvisionError> {
-    fetch_wheelhouse_reporting(config, packages, wheelhouse, &mut std::io::stderr()).await
+    fetch_wheelhouse_with_access(
+        config,
+        packages,
+        wheelhouse,
+        &super::DependencyAccess::default(),
+    )
+    .await
+}
+
+pub(crate) async fn fetch_wheelhouse_with_access(
+    config: &DependencyProvisionConfig,
+    packages: &[LockedPackage],
+    wheelhouse: &Path,
+    access: &super::DependencyAccess,
+) -> Result<Vec<FetchedArtifact>, ProvisionError> {
+    access.check()?;
+    let cache = config.build_root.join("artifacts");
+    std::fs::create_dir_all(&cache).map_err(|error| ProvisionError::Failed(error.to_string()))?;
+    let mut scoped = config.clone();
+    if !access.network {
+        scoped
+            .sources
+            .retain(|source| matches!(source, PackageSource::Directory(_)));
+    }
+    scoped
+        .sources
+        .insert(0, PackageSource::Directory(cache.clone()));
+    let mut sink = std::io::stderr();
+    let artifacts = tokio::select! {
+        result = fetch_wheelhouse_reporting(&scoped, packages, wheelhouse, &mut sink) => result?,
+        _ = access.cancelled() => return Err(ProvisionError::Failed("fetching dependencies was cancelled".into())),
+    };
+    // Only verified wheels reach the cache; each write is atomic, so concurrent
+    // preparation and cancellation never expose partial artifacts.
+    for artifact in &artifacts {
+        let source = wheelhouse.join(&artifact.filename);
+        let destination = cache.join(&artifact.filename);
+        let mut temporary = tempfile::NamedTempFile::new_in(&cache)
+            .map_err(|error| ProvisionError::Failed(error.to_string()))?;
+        let mut input = std::fs::File::open(source)
+            .map_err(|error| ProvisionError::Failed(error.to_string()))?;
+        std::io::copy(&mut input, &mut temporary)
+            .map_err(|error| ProvisionError::Failed(error.to_string()))?;
+        temporary
+            .persist(destination)
+            .map_err(|error| ProvisionError::Failed(error.to_string()))?;
+    }
+    Ok(artifacts)
 }
 
 /// The same fetch, with the per-source report going to `sink`.

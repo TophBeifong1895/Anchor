@@ -982,6 +982,7 @@ fn v1_fixture() -> (TempDir, PathBuf, Session) {
         operation: None,
         operations: BTreeMap::new(),
         plugin_mounts: BTreeMap::new(),
+        network_allowed: true,
         created_at: now,
         updated_at: now,
     };

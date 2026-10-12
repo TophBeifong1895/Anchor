@@ -35,6 +35,7 @@ fn plugin_record(definition: &PluginDefinition) -> Value {
         "skills": definition.skills,
         "unsupported": definition.unsupported,
         "mcpServers": mcp_servers,
+        "requiresNetwork": crate::plugin_network::requires_network(definition),
         "channels": definition.channels.iter().map(|channel| json!({
             "plugin": channel.plugin,
             "platform": channel.platform,

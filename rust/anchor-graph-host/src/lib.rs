@@ -25,7 +25,7 @@ use serde::Deserialize;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     future::Future,
     path::{Component, Path, PathBuf},
     pin::Pin,
@@ -204,7 +204,7 @@ pub struct FilePluginCatalog {
 /// The installed, canonical Plugin definition.  This is the runtime shape of
 /// a Plugin after installation has moved its manifest to the bundle root.
 /// `mcp_servers` contains validated, unexpanded declarations; use
-/// [`FilePluginCatalog::mcp_servers`] when a host is ready to resolve secrets.
+/// [`FilePluginCatalog::resolve_mcp_servers`] when a host is ready to resolve secrets.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PluginDefinition {
     pub id: String,
@@ -217,10 +217,33 @@ pub struct PluginDefinition {
     pub channels: Vec<ChannelDefinition>,
     /// The Plugin's own run-time dependencies. Empty when it declares none.
     pub dependencies: PluginDependencies,
+    /// This Plugin needs task-tool network access. HTTP MCP also implies it.
+    pub network: bool,
     /// The paths the Plugin declares as its own mutable state: the platform
     /// provides the location and never copies, rewrites or verifies them.
     pub mutable: MutablePaths,
+    /// The code resources covered by `digest`, from this same catalog read.
+    pub resources: Vec<String>,
     pub digest: String,
+    /// Secret-free digest of the declarations that authorize Host capabilities.
+    pub authorization_digest: String,
+}
+
+impl PluginDefinition {
+    /// Derive the secret-free identity without reading the Library again.
+    pub fn binding(&self) -> anchor_runtime::graph::PluginBinding {
+        anchor_runtime::graph::PluginBinding {
+            id: self.id.clone(),
+            digest: self.digest.clone(),
+            resources: self.resources.clone(),
+            mcp_servers: self
+                .mcp_servers
+                .iter()
+                .map(|server| server.name.clone())
+                .collect(),
+            authorization_digest: self.authorization_digest.clone(),
+        }
+    }
 }
 
 /// One validated MCP server declaration from `.mcp.json` or `plugin.json`.
@@ -257,11 +280,12 @@ impl FilePluginCatalog {
         let (root, dir) = self.plugin_dir(id)?;
         let manifest_path = dir.join("plugin.json");
         reject_symlink_components(&dir, &manifest_path)?;
-        let manifest = read_object(&manifest_path)?;
+        let (manifest, manifest_bytes) = read_object_bytes(&manifest_path)?;
         // A field this catalog does not act on is refused rather than ignored:
         // a mistyped `dependencies` must not look like it took effect.
         dependencies::reject_unknown_fields(id, &manifest)?;
         let dependencies = dependencies::parse(id, &manifest)?;
+        let network = dependencies::parse_network(id, &manifest)?;
         let mutable = dependencies::parse_mutable(id, &manifest)?;
 
         let name = manifest
@@ -341,13 +365,17 @@ impl FilePluginCatalog {
         let resources = resource_files(&dir, &mutable)?;
         let mut hash = Sha256::new();
         for relative in &resources {
-            let content = std::fs::read(dir.join(relative))?;
             hash.update(relative.as_bytes());
-            hash.update(Sha256::digest(content));
+            if relative == "plugin.json" {
+                hash.update(Sha256::digest(&manifest_bytes));
+            } else {
+                hash.update(Sha256::digest(std::fs::read(dir.join(relative))?));
+            }
         }
         let digest = format!("{:x}", hash.finalize());
 
-        let mcp_servers = self.mcp_servers_from_dir(id, &root, &dir, false)?;
+        let mcp_servers =
+            self.mcp_servers_from_manifest(id, &root, &dir, &manifest, &dependencies, false)?;
         let channels = channels_from_dir(id, &dir)?;
         let unsupported = ["hooks", "commands", "agents", "apps"]
             .into_iter()
@@ -359,6 +387,9 @@ impl FilePluginCatalog {
             .map(str::to_owned)
             .collect();
 
+        let authorization_digest =
+            plugin_authorization_digest(&mcp_servers, network, mutable.paths());
+
         Ok(PluginDefinition {
             id: id.into(),
             directory: dir,
@@ -369,8 +400,11 @@ impl FilePluginCatalog {
             mcp_servers,
             channels,
             dependencies,
+            network,
             mutable,
+            resources,
             digest,
+            authorization_digest,
         })
     }
 
@@ -383,6 +417,44 @@ impl FilePluginCatalog {
     ) -> Result<Vec<McpServerDefinition>, GraphError> {
         let (root, dir) = self.plugin_dir(id)?;
         self.mcp_servers_from_dir(id, &root, &dir, resolve_env)
+    }
+
+    /// Expand a previously read declaration without consulting its files again.
+    /// Callers can check the authority of exactly the configuration they launch.
+    pub fn resolve_mcp_servers(
+        &self,
+        definition: &PluginDefinition,
+    ) -> Result<Vec<McpServerDefinition>, GraphError> {
+        self.resolve_mcp_servers_with(definition, &|key| std::env::var(key).ok())
+    }
+
+    /// Resolve an already validated declaration through the Host's scoped
+    /// credential lookup. The resolver does not modify process environment or
+    /// reread mutable Plugin files; the Host owns identity and authorization.
+    pub fn resolve_mcp_servers_with(
+        &self,
+        definition: &PluginDefinition,
+        environment: &dyn Fn(&str) -> Option<String>,
+    ) -> Result<Vec<McpServerDefinition>, GraphError> {
+        let root = self.root.canonicalize()?;
+        let mut servers = Vec::new();
+        for server in &definition.mcp_servers {
+            if let Some(config) = mcp_server(
+                &definition.id,
+                &server.name,
+                server.config.clone(),
+                &definition.directory,
+                true,
+                root.parent().unwrap_or(&root),
+                environment,
+            )? {
+                servers.push(McpServerDefinition {
+                    name: server.name.clone(),
+                    config,
+                });
+            }
+        }
+        Ok(servers)
     }
 
     /// Return validated service-level channel declarations from `channel.json`.
@@ -437,21 +509,7 @@ impl FilePluginCatalog {
     }
 
     fn plugin(&self, id: &str) -> Result<anchor_runtime::graph::PluginBinding, GraphError> {
-        let definition = self.definition(id)?;
-        Ok(anchor_runtime::graph::PluginBinding {
-            id: definition.id,
-            digest: definition.digest,
-            // The catalog resolves what a Graph *reference* asked for; the
-            // declaration itself decides whether it can be switched off.
-            // Code only: a mutable path is the Plugin's own state, not a resource
-            // the platform distributes or verifies.
-            resources: resource_files(&definition.directory, &definition.mutable)?,
-            mcp_servers: definition
-                .mcp_servers
-                .into_iter()
-                .map(|server| server.name)
-                .collect(),
-        })
+        Ok(self.definition(id)?.binding())
     }
 
     fn mcp_servers_from_dir(
@@ -469,6 +527,20 @@ impl FilePluginCatalog {
         // `definition` would have rejected.
         dependencies::reject_unknown_fields(id, &manifest)?;
         let dependencies = dependencies::parse(id, &manifest)?;
+        dependencies::parse_network(id, &manifest)?;
+        dependencies::parse_mutable(id, &manifest)?;
+        self.mcp_servers_from_manifest(id, root, dir, &manifest, &dependencies, resolve_env)
+    }
+
+    fn mcp_servers_from_manifest(
+        &self,
+        id: &str,
+        root: &Path,
+        dir: &Path,
+        manifest: &serde_json::Map<String, Value>,
+        dependencies: &PluginDependencies,
+        resolve_env: bool,
+    ) -> Result<Vec<McpServerDefinition>, GraphError> {
         let mut servers = serde_json::Map::new();
         let dot_mcp = dir.join(".mcp.json");
         if dot_mcp.exists() {
@@ -505,6 +577,7 @@ impl FilePluginCatalog {
                 dir,
                 resolve_env,
                 root.parent().unwrap_or(root),
+                &|key| std::env::var(key).ok(),
             )?
             else {
                 continue;
@@ -526,6 +599,104 @@ impl PluginCatalog for FilePluginCatalog {
 
 fn invalid(message: String) -> GraphError {
     GraphError::InvalidSnapshot(message)
+}
+
+/// Persist the Host grants a declaration can request, not its code/configuration
+/// revision or resolved credential values. Changes to dependencies, local
+/// entrypoints and business arguments stay within the same sandbox authority.
+fn plugin_authorization_digest(
+    servers: &[McpServerDefinition],
+    network: bool,
+    mutable: &[String],
+) -> String {
+    let declarations = serde_json::json!({
+        "format": 1,
+        "mcp_servers": servers.iter().map(|server| {
+            let config = &server.config;
+            let command = config.get("command").and_then(Value::as_str);
+            let entrypoint = command.map(|command| {
+                if (command.contains('/') && !Path::new(command).is_absolute())
+                    || ["PLUGIN_ROOT", "CODEX_PLUGIN_ROOT", "CLAUDE_PLUGIN_ROOT", VIEW_TOKEN]
+                        .iter().any(|key| command.starts_with(&format!("${{{key}}}/")))
+                {
+                    "<plugin-entrypoint>"
+                } else {
+                    command
+                }
+            });
+            let mut references = BTreeSet::new();
+            environment_references(config, &mut references);
+            serde_json::json!({
+                "name": server.name,
+                "transport": config.get("type").and_then(Value::as_str)
+                    .unwrap_or(if command.is_some() { "stdio" } else { "http" }),
+                "host_entrypoint": entrypoint,
+                "environment_references": references,
+                "env_vars": config.get("env_vars"),
+                "optional_env_vars": config.get("optional_env_vars"),
+                "env_http_headers": config.get("env_http_headers"),
+                "bearer_token_env_var": config.get("bearer_token_env_var"),
+                "url": config.get("url"),
+                "auth": config.get("auth"),
+                "oauth_resource": config.get("oauth_resource"),
+                "oauth_client_id": config.get("oauth_client_id"),
+                "oauth_scope": config.get("oauth_scope"),
+            })
+        }).collect::<Vec<_>>(),
+        "network": network,
+        "mutable": mutable,
+    });
+    let bytes = serde_json::to_vec(&declarations)
+        .expect("Plugin authorization declaration serialization is infallible");
+    format!("{:x}", Sha256::digest(bytes))
+}
+
+/// The non-path Host environment keys used by `${NAME}` / `${NAME:-default}`
+/// templates anywhere in a MCP configuration. This is the same projection that
+/// binds Plugin authorization; callers can reject Host access before expansion.
+pub fn host_environment_references(value: &Value) -> BTreeSet<String> {
+    let mut references = BTreeSet::new();
+    environment_references(value, &mut references);
+    references
+}
+
+/// The same `${NAME}` / `${NAME:-default}` syntax the catalog expands. Names
+/// matter for Host access; values and fallback literals do not become Run facts.
+fn environment_references(value: &Value, references: &mut BTreeSet<String>) {
+    match value {
+        Value::String(text) => {
+            for part in text.split("${").skip(1) {
+                let Some((expression, _)) = part.split_once('}') else {
+                    continue;
+                };
+                let key = expression
+                    .split_once(":-")
+                    .map_or(expression, |(key, _)| key);
+                if valid_environment_key(key)
+                    && ![
+                        "PLUGIN_ROOT",
+                        "CODEX_PLUGIN_ROOT",
+                        "CLAUDE_PLUGIN_ROOT",
+                        VIEW_TOKEN,
+                    ]
+                    .contains(&key)
+                {
+                    references.insert(key.to_owned());
+                }
+            }
+        }
+        Value::Array(values) => {
+            for value in values {
+                environment_references(value, references);
+            }
+        }
+        Value::Object(values) => {
+            for value in values.values() {
+                environment_references(value, references);
+            }
+        }
+        _ => {}
+    }
 }
 
 /// The Plugin fields a pre-reference bundle's manifest carries, if any.
@@ -553,12 +724,17 @@ fn valid_reference(value: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || b"_.-".contains(&b))
 }
 fn read_object(path: &Path) -> Result<serde_json::Map<String, Value>, GraphError> {
-    let value: Value =
-        serde_json::from_slice(&std::fs::read(path)?).map_err(GraphError::SnapshotDecode)?;
-    value
+    read_object_bytes(path).map(|(object, _)| object)
+}
+
+fn read_object_bytes(path: &Path) -> Result<(serde_json::Map<String, Value>, Vec<u8>), GraphError> {
+    let bytes = std::fs::read(path)?;
+    let value: Value = serde_json::from_slice(&bytes).map_err(GraphError::SnapshotDecode)?;
+    let object = value
         .as_object()
         .cloned()
-        .ok_or_else(|| invalid(format!("{} must contain a JSON object", path.display())))
+        .ok_or_else(|| invalid(format!("{} must contain a JSON object", path.display())))?;
+    Ok((object, bytes))
 }
 fn reject_symlink_components(root: &Path, path: &Path) -> Result<(), GraphError> {
     let root = root.canonicalize()?;
@@ -741,13 +917,17 @@ fn valid_environment_key(value: &str) -> bool {
         && chars.all(|character| character == '_' || character.is_ascii_alphanumeric())
 }
 
-fn environment(plugin: &str, key: &str) -> Result<String, GraphError> {
+fn scoped_environment(
+    plugin: &str,
+    key: &str,
+    lookup: &dyn Fn(&str) -> Option<String>,
+) -> Result<String, GraphError> {
     if !valid_environment_key(key) {
         return Err(invalid(format!(
             "Plugin {plugin}: invalid MCP environment variable name"
         )));
     }
-    std::env::var(key).map_err(|_| {
+    lookup(key).ok_or_else(|| {
         invalid(format!(
             "Plugin {plugin}: MCP environment variable {key} is not set"
         ))
@@ -1013,7 +1193,12 @@ pub(crate) fn mentions_view_token(value: &Value) -> bool {
     }
 }
 
-fn expand_env(value: Value, plugin_dir: &Path, plugin_id: &str) -> Result<Value, GraphError> {
+fn expand_env(
+    value: Value,
+    plugin_dir: &Path,
+    plugin_id: &str,
+    environment: &dyn Fn(&str) -> Option<String>,
+) -> Result<Value, GraphError> {
     match value {
         Value::String(text) => {
             let mut output = String::with_capacity(text.len());
@@ -1050,10 +1235,10 @@ fn expand_env(value: Value, plugin_dir: &Path, plugin_id: &str) -> Result<Value,
                         "CODEX_PLUGIN_ROOT" | "CLAUDE_PLUGIN_ROOT" | "PLUGIN_ROOT" => {
                             plugin_dir.to_string_lossy().into_owned()
                         }
-                        _ => match std::env::var(key) {
-                            Ok(value) if !value.is_empty() => value,
-                            Ok(value) => default.unwrap_or(&value).to_owned(),
-                            Err(_) => default.map(str::to_owned).ok_or_else(|| {
+                        _ => match environment(key) {
+                            Some(value) if !value.is_empty() => value,
+                            Some(value) => default.unwrap_or(&value).to_owned(),
+                            None => default.map(str::to_owned).ok_or_else(|| {
                                 invalid(format!(
                                     "Plugin {plugin_id}: MCP environment variable {key} is not set"
                                 ))
@@ -1072,12 +1257,12 @@ fn expand_env(value: Value, plugin_dir: &Path, plugin_id: &str) -> Result<Value,
         }
         Value::Array(items) => items
             .into_iter()
-            .map(|item| expand_env(item, plugin_dir, plugin_id))
+            .map(|item| expand_env(item, plugin_dir, plugin_id, environment))
             .collect::<Result<Vec<_>, _>>()
             .map(Value::Array),
         Value::Object(items) => items
             .into_iter()
-            .map(|(key, item)| Ok((key, expand_env(item, plugin_dir, plugin_id)?)))
+            .map(|(key, item)| Ok((key, expand_env(item, plugin_dir, plugin_id, environment)?)))
             .collect::<Result<serde_json::Map<_, _>, GraphError>>()
             .map(Value::Object),
         other => Ok(other),
@@ -1091,6 +1276,7 @@ fn mcp_server(
     plugin_dir: &Path,
     resolve_env: bool,
     data_root: &Path,
+    environment_lookup: &dyn Fn(&str) -> Option<String>,
 ) -> Result<Option<Value>, GraphError> {
     let mut server = value
         .as_object()
@@ -1102,7 +1288,7 @@ fn mcp_server(
     }
 
     if resolve_env {
-        server = expand_env(Value::Object(server), plugin_dir, id)?
+        server = expand_env(Value::Object(server), plugin_dir, id, environment_lookup)?
             .as_object()
             .cloned()
             .ok_or_else(|| invalid("expanded MCP server is not an object".into()))?;
@@ -1122,9 +1308,7 @@ fn mcp_server(
             }
             if let Some(Value::Array(values)) = server.get("optional_env_vars")
                 && values.iter().filter_map(Value::as_str).any(|name| {
-                    std::env::var(name)
-                        .ok()
-                        .is_none_or(|value| value.trim().is_empty())
+                    environment_lookup(name).is_none_or(|value| value.trim().is_empty())
                 })
             {
                 return Ok(None);
@@ -1148,10 +1332,12 @@ fn mcp_server(
         } else {
             path
         };
-        server.insert(
-            "cwd".into(),
-            Value::String(path.to_string_lossy().into_owned()),
-        );
+        if resolve_env {
+            server.insert(
+                "cwd".into(),
+                Value::String(path.to_string_lossy().into_owned()),
+            );
+        }
     }
 
     if resolve_env {
@@ -1176,7 +1362,7 @@ fn mcp_server(
                 )
                 .filter_map(Value::as_str);
             for key in names {
-                let value = environment(id, key)?;
+                let value = scoped_environment(id, key, environment_lookup)?;
                 env.insert(key.into(), Value::String(value));
             }
             server.insert("env".into(), Value::Object(env));
@@ -1196,7 +1382,10 @@ fn mcp_server(
                             "Plugin {id}: invalid MCP environment variable name"
                         ))
                     })?;
-                    headers.insert(header.clone(), Value::String(environment(id, variable)?));
+                    headers.insert(
+                        header.clone(),
+                        Value::String(scoped_environment(id, variable, environment_lookup)?),
+                    );
                 }
             }
             if let Some(variable) = server.get("bearer_token_env_var").and_then(Value::as_str) {
@@ -1208,7 +1397,7 @@ fn mcp_server(
                         "Plugin {id}: duplicate MCP authorization configuration"
                     )));
                 }
-                let token = environment(id, variable)?;
+                let token = scoped_environment(id, variable, environment_lookup)?;
                 headers.insert(
                     "Authorization".into(),
                     Value::String(format!("Bearer {token}")),
@@ -1321,6 +1510,10 @@ fn channels_from_dir(id: &str, dir: &Path) -> Result<Vec<ChannelDefinition>, Gra
     }])
 }
 
+/// Acquisition of the short Library lease protecting durable child references.
+pub type PluginReferenceLeaseFuture<'a> =
+    Pin<Box<dyn Future<Output = Result<Box<dyn RunLease>, GraphError>> + Send + 'a>>;
+
 pub trait GraphCatalog: Send + Sync {
     fn snapshot(&self, name: &str) -> Result<Option<GraphSnapshot>, GraphError>;
 
@@ -1337,6 +1530,16 @@ pub trait GraphCatalog: Send + Sync {
     /// released before child execution; child execution uses only its Run lease.
     fn lock_admission(&self, _name: &str) -> Result<Box<dyn RunLease>, GraphError> {
         Ok(Box::new(NoopLease))
+    }
+
+    /// Protect Plugin resolution through durable child admission against
+    /// Library publication/deletion. Hosts share their publication lease here;
+    /// it is released before model execution.
+    fn lock_plugin_references<'a>(
+        &'a self,
+        _cancellation: Cancellation,
+    ) -> PluginReferenceLeaseFuture<'a> {
+        Box::pin(async { Ok(Box::new(NoopLease) as Box<dyn RunLease>) })
     }
 
     /// Resolve one immutable child bundle. Catalogs that only provide snapshots
@@ -1499,21 +1702,6 @@ impl ChildRunControl {
 
 /// Adapts GraphCallPort on top of shared kernel ports. Instantiate one host
 /// around the same store/artifact/node/control ports used by the outer Runner.
-/// Freezes a Graph's declared dependency environments into Run facts.
-///
-/// The runner host implements this over the deployment's environment store; the
-/// Graph-call host only knows the contract, so child Runs can be admitted with
-/// the same identities as their parent without this layer learning where the
-/// store lives.
-pub trait EnvironmentResolver: Send + Sync {
-    /// Resolve one declared environment name to a published identity.
-    ///
-    /// The traversal and the site keys belong to the kernel
-    /// (`anchor_runtime::graph::freeze_environments`), so an implementer only
-    /// answers "which identity does this name mean right now".
-    fn resolve(&self, name: &str) -> Result<String, String>;
-}
-
 pub struct InProcessGraphHost<'a, S, A, N, C> {
     catalog: &'a dyn GraphCatalog,
     store: &'a S,
@@ -1521,12 +1709,11 @@ pub struct InProcessGraphHost<'a, S, A, N, C> {
     nodes: &'a N,
     plugin_catalog: Option<&'a dyn PluginCatalog>,
     _control: std::marker::PhantomData<fn() -> C>,
-    environment_resolver: Option<std::sync::Arc<dyn EnvironmentResolver>>,
 }
 
 struct BoundNodes<'a, N> {
     nodes: &'a N,
-    plugins: std::collections::BTreeMap<String, anchor_runtime::graph::PluginBinding>,
+    plugin_catalog: Option<&'a dyn PluginCatalog>,
     graph_calls: &'a dyn GraphCallPort,
 }
 
@@ -1538,19 +1725,22 @@ impl<N: NodeExecutionPort> NodeExecutionPort for BoundNodes<'_, N> {
         &self,
         ids: &[String],
     ) -> Result<Vec<anchor_runtime::graph::PluginBinding>, GraphError> {
-        ids.iter()
-            .map(|id| {
-                self.plugins.get(id).cloned().ok_or_else(|| {
-                    GraphError::InvalidSnapshot(format!("child Plugin `{id}` is not bundle-bound"))
-                })
-            })
-            .collect()
+        match self.plugin_catalog {
+            Some(catalog) => catalog.resolve(ids),
+            None => self.nodes.resolve_plugins(ids),
+        }
     }
     fn observed_plugin_views(
         &self,
         key: &anchor_runtime::graph::InvocationKey,
     ) -> std::collections::BTreeMap<String, String> {
         self.nodes.observed_plugin_views(key)
+    }
+    fn observed_plugin_digests(
+        &self,
+        key: &anchor_runtime::graph::InvocationKey,
+    ) -> std::collections::BTreeMap<String, String> {
+        self.nodes.observed_plugin_digests(key)
     }
     fn completion_fact<'b>(
         &'b self,
@@ -1615,7 +1805,6 @@ impl<'a, S, A, N, C> InProcessGraphHost<'a, S, A, N, C> {
             artifacts,
             nodes,
             plugin_catalog: None,
-            environment_resolver: None,
             _control: std::marker::PhantomData,
         }
     }
@@ -1645,15 +1834,6 @@ impl<'a, S, A, N, C> InProcessGraphHost<'a, S, A, N, C> {
         self.plugin_catalog = Some(catalog);
         self
     }
-
-    /// Configure how a child Run freezes the dependency environments it declares.
-    pub fn with_environment_resolver(
-        mut self,
-        resolver: std::sync::Arc<dyn EnvironmentResolver>,
-    ) -> Self {
-        self.environment_resolver = Some(resolver);
-        self
-    }
 }
 
 impl<S: RunStore, A: ArtifactPort, N: NodeExecutionPort, C: RunControl> NodeExecutionPort
@@ -1670,6 +1850,18 @@ impl<S: RunStore, A: ArtifactPort, N: NodeExecutionPort, C: RunControl> NodeExec
             Some(catalog) => catalog.resolve(ids),
             None => self.nodes.resolve_plugins(ids),
         }
+    }
+    fn observed_plugin_views(
+        &self,
+        key: &anchor_runtime::graph::InvocationKey,
+    ) -> std::collections::BTreeMap<String, String> {
+        self.nodes.observed_plugin_views(key)
+    }
+    fn observed_plugin_digests(
+        &self,
+        key: &anchor_runtime::graph::InvocationKey,
+    ) -> std::collections::BTreeMap<String, String> {
+        self.nodes.observed_plugin_digests(key)
     }
     fn completion_fact<'b>(
         &'b self,
@@ -1877,6 +2069,15 @@ impl<S: RunStore, A: ArtifactPort, N: NodeExecutionPort, C: RunControl> GraphCal
                             ))
                         })?;
                     let snapshot = bundle.snapshot;
+                    let _plugin_lease = if bundle.plugins.is_empty() {
+                        None
+                    } else {
+                        Some(
+                            self.catalog
+                                .lock_plugin_references(cancellation.clone())
+                                .await?,
+                        )
+                    };
                     // A bundle references Plugins by id; the current code and view
                     // live in the Library, which is the only place this layer
                     // resolves them from.
@@ -1970,7 +2171,7 @@ impl<S: RunStore, A: ArtifactPort, N: NodeExecutionPort, C: RunControl> GraphCal
                 );
                 let child_nodes = BoundNodes {
                     nodes: self.nodes,
-                    plugins: child.plugin_bindings.clone(),
+                    plugin_catalog: self.plugin_catalog,
                     graph_calls: self,
                 };
                 child = GraphRunner::new(self.store, self.artifacts, &child_nodes, &child_control)
@@ -2181,6 +2382,70 @@ mod plugin_catalog_tests {
     use super::*;
     use std::fs;
 
+    #[test]
+    fn authorization_tracks_host_grants_without_freezing_business_code() {
+        let declaration = |config| {
+            vec![McpServerDefinition {
+                name: "api".into(),
+                config,
+            }]
+        };
+        let original = declaration(
+            serde_json::json!({"command":"${PLUGIN_ROOT}/bin/v1", "args":["old.json"], "cwd":"old", "env":{"KEY":"${TOKEN_A}"}}),
+        );
+        let updated = declaration(
+            serde_json::json!({"command":"${PLUGIN_ROOT}/bin/v2", "args":["new.json"], "cwd":"new", "env":{"KEY":"${TOKEN_A}"}}),
+        );
+        let authority = plugin_authorization_digest(&original, false, &["data/".into()]);
+        assert_eq!(
+            authority,
+            plugin_authorization_digest(&updated, false, &["data/".into()])
+        );
+        let other_secret = declaration(
+            serde_json::json!({"command":"${PLUGIN_ROOT}/bin/v1", "env":{"KEY":"${TOKEN_B}"}}),
+        );
+        assert_ne!(
+            authority,
+            plugin_authorization_digest(&other_secret, false, &["data/".into()])
+        );
+        assert_ne!(
+            authority,
+            plugin_authorization_digest(&original, true, &["data/".into()])
+        );
+        assert_ne!(
+            authority,
+            plugin_authorization_digest(&original, false, &["other/".into()])
+        );
+        let host_command =
+            declaration(serde_json::json!({"command":"/usr/bin/sh", "env":{"KEY":"${TOKEN_A}"}}));
+        assert_ne!(
+            authority,
+            plugin_authorization_digest(&host_command, false, &["data/".into()])
+        );
+    }
+
+    #[test]
+    fn remote_authority_keeps_credential_selectors_but_ignores_literal_rotation() {
+        let server = |header| {
+            vec![McpServerDefinition {
+                name: "api".into(),
+                config: serde_json::json!({"url":"https://example.test/mcp", "headers":{"Authorization":header}}),
+            }]
+        };
+        assert_eq!(
+            plugin_authorization_digest(&server("Bearer literal-a"), true, &[]),
+            plugin_authorization_digest(&server("Bearer literal-b"), true, &[])
+        );
+        assert_ne!(
+            plugin_authorization_digest(&server("Bearer ${TOKEN_A}"), true, &[]),
+            plugin_authorization_digest(&server("Bearer ${TOKEN_B}"), true, &[])
+        );
+        let mut scope = server("Bearer ${TOKEN_A}");
+        let before = plugin_authorization_digest(&scope, true, &[]);
+        scope[0].config["oauth_scope"] = serde_json::json!("write");
+        assert_ne!(before, plugin_authorization_digest(&scope, true, &[]));
+    }
+
     /// A Plugin that declares Python dependencies and launches its server on the
     /// interpreter of the view that declaration maps to.
     fn catalog_with_dependency_plugin() -> (tempfile::TempDir, FilePluginCatalog) {
@@ -2194,6 +2459,36 @@ mod plugin_catalog_tests {
         .unwrap();
         let catalog = FilePluginCatalog::new(tmp.path());
         (tmp, catalog)
+    }
+
+    #[test]
+    fn a_network_requirement_is_strict_and_part_of_the_approved_plugin_code() {
+        let (tmp, catalog) = catalog_with_dependency_plugin();
+        let path = tmp.path().join("plugins/probe/plugin.json");
+        let mut manifest: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        let original = catalog.definition("probe").unwrap();
+        assert!(!original.network);
+        manifest["network"] = Value::Bool(true);
+        fs::write(&path, manifest.to_string()).unwrap();
+        let networked = catalog.definition("probe").unwrap();
+        assert!(networked.network);
+        assert_ne!(original.digest, networked.digest);
+        manifest["network"] = "true".into();
+        fs::write(path, manifest.to_string()).unwrap();
+        assert!(
+            catalog
+                .definition("probe")
+                .unwrap_err()
+                .to_string()
+                .contains("network must be a boolean")
+        );
+        assert!(
+            catalog
+                .mcp_servers("probe", false)
+                .unwrap_err()
+                .to_string()
+                .contains("network must be a boolean")
+        );
     }
 
     #[test]
@@ -2338,8 +2633,7 @@ mod plugin_catalog_tests {
         fs::write(dir.join("cache.db"), "cache").unwrap();
         let after = catalog.definition("probe").unwrap();
         assert_eq!(after.digest, before.digest);
-        // The reading of resources is on the binding; the definition carries the
-        // declaration, so check the declaration here and the resources below.
+        assert_eq!(after.resources, before.resources);
         let binding = catalog.resolve(&["probe".into()]).unwrap().remove(0);
         assert!(
             !binding
@@ -2598,6 +2892,63 @@ mod plugin_catalog_tests {
         )
         .unwrap();
         assert!(catalog.mcp_servers("invalid", true).is_err());
+    }
+
+    #[test]
+    fn host_scoped_mcp_credentials_do_not_change_the_declaration_or_process_environment() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("plugins/scoped");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("plugin.json"), serde_json::json!({"name":"Scoped","mcpServers":{
+            "stdio":{"command":"echo","env":{"DIRECT":"${ANCHOR_SCOPED_SECRET}","DEFAULT":"${ANCHOR_SCOPED_MISSING:-fallback}"},"env_vars":["ANCHOR_SCOPED_SECRET"],"optional_env_vars":["ANCHOR_SCOPED_OPTIONAL"]},
+            "http":{"url":"https://example.test/mcp","bearer_token_env_var":"ANCHOR_SCOPED_SECRET","env_http_headers":{"X-Token":"ANCHOR_SCOPED_OPTIONAL"}}
+        }}).to_string()).unwrap();
+        let catalog = FilePluginCatalog::new(tmp.path());
+        let declaration = catalog.definition("scoped").unwrap();
+        let before = declaration.mcp_servers.clone();
+        let lookup = |key: &str| match key {
+            "ANCHOR_SCOPED_SECRET" => Some("owner-a-token".into()),
+            "ANCHOR_SCOPED_OPTIONAL" => Some("owner-a-optional".into()),
+            _ => None,
+        };
+        let resolved = catalog
+            .resolve_mcp_servers_with(&declaration, &lookup)
+            .unwrap();
+        let stdio = resolved
+            .iter()
+            .find(|server| server.name == "stdio")
+            .unwrap();
+        assert_eq!(stdio.config["env"]["DIRECT"], "owner-a-token");
+        assert_eq!(stdio.config["env"]["DEFAULT"], "fallback");
+        assert_eq!(stdio.config["env"]["ANCHOR_SCOPED_SECRET"], "owner-a-token");
+        let http = resolved
+            .iter()
+            .find(|server| server.name == "http")
+            .unwrap();
+        assert_eq!(
+            http.config["headers"]["Authorization"],
+            "Bearer owner-a-token"
+        );
+        assert_eq!(http.config["headers"]["X-Token"], "owner-a-optional");
+        assert_eq!(declaration.mcp_servers, before);
+        assert!(
+            catalog
+                .resolve_mcp_servers_with(&declaration, &|_| None)
+                .is_err()
+        );
+        let other = catalog
+            .resolve_mcp_servers_with(&declaration, &|key| {
+                lookup(key).map(|_| "owner-b-token".into())
+            })
+            .unwrap();
+        assert_eq!(
+            other
+                .iter()
+                .find(|server| server.name == "http")
+                .unwrap()
+                .config["headers"]["Authorization"],
+            "Bearer owner-b-token"
+        );
     }
 }
 
@@ -2947,6 +3298,124 @@ mod session_call_tests {
             "input":{"session":"forged", "channel":{"sender_id":"forged"}},
             "input_map":{"session":"/session", "channel":"/channel"}
         })
+    }
+
+    #[tokio::test]
+    async fn an_existing_child_resolves_current_library_code_and_records_its_observations() {
+        struct Catalog;
+        impl GraphCatalog for Catalog {
+            fn snapshot(&self, _: &str) -> Result<Option<GraphSnapshot>, GraphError> {
+                GraphSnapshot::from_authoring(json!({"objective":"child", "entry":"work",
+                    "agents":{"worker":{"model":"fixture"}}, "nodes":[{"id":"work","agent":"worker","plugins":["review"]}], "edges":[]})).map(Some)
+            }
+            fn graph_ancestry(&self, _: &str) -> Result<Vec<String>, GraphError> {
+                Ok(vec!["parent".into()])
+            }
+            fn bundle(&self, name: &str) -> Result<Option<LoadedGraphBundle>, GraphError> {
+                let snapshot = self.snapshot(name)?.unwrap();
+                Ok(Some(LoadedGraphBundle {
+                    authoring_definition: serde_json::to_value(&snapshot)
+                        .map_err(GraphError::SnapshotDecode)?,
+                    snapshot,
+                    plugins: vec!["review".into()],
+                }))
+            }
+        }
+        #[derive(Default)]
+        struct HotNodes(Mutex<Vec<NodeExecutionRequest>>);
+        impl NodeExecutionPort for HotNodes {
+            fn capabilities(&self) -> NodeExecutionCapabilities {
+                NodeExecutionCapabilities {
+                    agent: true,
+                    op_run: true,
+                    host_operations: false,
+                    exact_provider_request_budget: true,
+                }
+            }
+            fn completion_fact<'a>(
+                &'a self,
+                _: &'a InvocationKey,
+            ) -> Pin<Box<dyn Future<Output = Result<CompletionFact, GraphError>> + Send + 'a>>
+            {
+                Box::pin(async { Ok(CompletionFact::NotStarted) })
+            }
+            fn execute<'a>(
+                &'a self,
+                request: NodeExecutionRequest,
+            ) -> Pin<Box<dyn Future<Output = Result<NodeExecutionOutcome, GraphError>> + Send + 'a>>
+            {
+                Box::pin(async move {
+                    let mut calls = self.0.lock().unwrap();
+                    calls.push(request);
+                    Ok(if calls.len() == 1 {
+                        NodeExecutionOutcome::BudgetExhausted { model_requests: 0 }
+                    } else {
+                        NodeExecutionOutcome::Completed(NodeCompletion {
+                            submission: "done".into(),
+                            route: None,
+                            model_requests: 0,
+                            output: json!({}),
+                        })
+                    })
+                })
+            }
+            fn observed_plugin_digests(&self, key: &InvocationKey) -> BTreeMap<String, String> {
+                self.0
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .rev()
+                    .find(|call| &call.key == key)
+                    .map(|call| {
+                        call.plugins
+                            .iter()
+                            .map(|plugin| (plugin.id.clone(), plugin.digest.clone()))
+                            .collect()
+                    })
+                    .unwrap_or_default()
+            }
+            fn observed_plugin_views(&self, _: &InvocationKey) -> BTreeMap<String, String> {
+                BTreeMap::from([("review".into(), "observed-view".into())])
+            }
+        }
+        let root = tempfile::tempdir().unwrap();
+        let plugin = root.path().join("plugins/review");
+        std::fs::create_dir_all(&plugin).unwrap();
+        std::fs::write(plugin.join("plugin.json"), r#"{"name":"Review"}"#).unwrap();
+        std::fs::write(plugin.join("instructions.md"), "original").unwrap();
+        let plugins = FilePluginCatalog::new(root.path());
+        let original = plugins.resolve(&["review".into()]).unwrap().remove(0);
+        let store = FileRunStore::new(root.path().join("runs"));
+        let artifacts = Artifacts::default();
+        let nodes = HotNodes::default();
+        let host = InProcessGraphHost::new(&Catalog, &store, &artifacts, &nodes, &Control)
+            .with_plugin_catalog(&plugins);
+        let spec = json!({"graph":"child", "mode":"wait"});
+        let (identity, input) = parent_call(&store, &spec);
+        let first = host
+            .call(&identity, &spec, &input, &[], Cancellation::default())
+            .await
+            .unwrap();
+        assert!(matches!(first, GraphCallOutcome::Waiting { .. }));
+        std::fs::create_dir_all(plugin.join("skills/new")).unwrap();
+        std::fs::write(plugin.join("skills/new/SKILL.md"), "current").unwrap();
+        let current = plugins.resolve(&["review".into()]).unwrap().remove(0);
+        let next = host
+            .call(&identity, &spec, &input, &[], Cancellation::default())
+            .await
+            .unwrap();
+        assert!(matches!(next, GraphCallOutcome::Completed { .. }));
+        assert_eq!(nodes.0.lock().unwrap()[1].plugins, vec![current.clone()]);
+        let child = store.load(&child_run_id(&identity)).unwrap().unwrap();
+        assert_eq!(child.plugin_bindings["review"], original);
+        assert_eq!(
+            child.results["work"][0].plugin_digests["review"],
+            current.digest
+        );
+        assert_eq!(
+            child.results["work"][0].plugin_views["review"],
+            "observed-view"
+        );
     }
 
     #[tokio::test]

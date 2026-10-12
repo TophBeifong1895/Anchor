@@ -35,6 +35,22 @@ fn graph(token: &str) -> Value {
         "nodes":[{"id":"seed","op":"seed"}],"edges":[]})
 }
 
+fn host_with_editable_fixture(graph: &Value) -> Host {
+    let host = Host::new(graph)
+        .default_runtime()
+        .with_extra_environment([("ANCHOR_RUNNER_GRAPH_NAME", "pilot-control")]);
+    let editable = host.base.root.path().join("fixture");
+    fs::create_dir(&editable).unwrap();
+    for file in ["graph.json", "manifest.json"] {
+        fs::copy(
+            host.base.root.path().join("bundle").join(file),
+            editable.join(file),
+        )
+        .unwrap();
+    }
+    host
+}
+
 fn summary(token: &str) -> String {
     format!(
         "Pilot compacted fixture: graph_read observed the saved Graph fixture with a seed Op writing {token} to seed.txt. No Run was requested or started. Re-read saved Graphs to check actual state before continuing."
@@ -287,7 +303,7 @@ fn goose_pilot_auto_compaction_followup_restart_preserves_native_and_display_his
                 .expect_request_contains(&changed_token),
         ],
     );
-    let host = Host::new(&graph(&original_token)).default_runtime();
+    let host = host_with_editable_fixture(&graph(&original_token));
     let mut server = host.serve(&provider);
     create(&server);
     let first_prompt =
@@ -434,7 +450,7 @@ fn goose_pilot_cancel_native_summary_preserves_facts_and_continues_same_session(
                 .expect_request_contains(&changed_token),
         ],
     );
-    let host = Host::new(&graph(&original_token)).default_runtime();
+    let host = host_with_editable_fixture(&graph(&original_token));
     let server = host.serve(&provider);
     create(&server);
     let first = submit(

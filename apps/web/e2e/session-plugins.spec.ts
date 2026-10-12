@@ -28,9 +28,51 @@ async function openPilot(page: Page) {
     { role: 'assistant', text: '可以。我们可以从三个角度展开：\n\n- **共享与隔离**：哪些信息需要共享，哪些只保留在当前角色的上下文里。\n- **交接方式**：直接传递历史，还是用结构化产物交接。\n- **证据质量**：如何检查摘要遗漏和信息失真。\n\n你可以在插件面板中挂载学术检索能力，再告诉我希望覆盖的时间范围。' },
   ] } }));
   await page.route('**/sessions/*/turns', route => route.fulfill({ json: { turns: [] } }));
+  await page.route('**/sessions/*/credential-requests', route => route.fulfill({ json: { requests: [] } }));
   await page.goto('/');
   await expect(page.getByLabel('发送给 Anchor Pilot')).toBeEnabled();
 }
+
+test('networking shows dependency activation and updates authorization for the whole Plugin list', async ({ page }) => {
+  let direct = false;
+  let research = false;
+  let permission = true;
+  const rows = (): SessionPlugin[] => [
+    { id: 'academic-research', name: '学术调研', on: research, explicitOn: research,
+      requiresNetwork: true, available: permission || !research, networkAllowed: permission && (direct || research),
+      error: permission || !research ? null : '该插件需要联网：当前任务已禁止联网' },
+    { id: 'network', name: '联网', description: '启用任务工具的网络访问。', networkProvider: true,
+      on: direct || research, explicitOn: direct, enabledBy: research ? ['academic-research'] : [],
+      networkPermission: permission, networkAllowed: permission && (direct || research), available: permission,
+      error: permission ? null : '当前任务已禁止联网' },
+  ];
+  await page.route('**/sessions/*/plugins', route => route.fulfill({ json: { plugins: rows() } }));
+  await page.route('**/sessions/*/plugins/*', route => {
+    const id = new URL(route.request().url()).pathname.split('/').at(-1)!;
+    if (id === 'network') direct = route.request().postDataJSON().on;
+    else research = route.request().postDataJSON().on;
+    return route.fulfill({ json: { plugin: rows().find(row => row.id === id), plugins: rows() } });
+  });
+  await page.route('**/sessions/*/network', route => {
+    permission = route.request().postDataJSON().allowed;
+    return route.fulfill({ json: { plugins: rows() } });
+  });
+  await openPilot(page);
+  const rail = page.getByRole('complementary', { name: '会话插件挂载' });
+  await rail.getByRole('switch', { name: '挂载 学术调研', exact: true }).click();
+  await expect(rail.getByText('由学术调研依赖启用 · 网络访问已允许')).toBeVisible();
+  await expect(rail.getByRole('switch', { name: '挂载 联网', exact: true })).toHaveAttribute('aria-checked', 'false');
+  await rail.getByRole('switch', { name: '挂载 联网', exact: true }).click();
+  await expect(rail.getByText('主动启用 · 由学术调研依赖启用 · 网络访问已允许')).toBeVisible();
+  await rail.getByRole('switch', { name: '取消挂载 联网', exact: true }).click();
+  await expect(rail.getByText('由学术调研依赖启用 · 网络访问已允许')).toBeVisible();
+  await rail.getByRole('button', { name: '禁止联网', exact: true }).click();
+  await expect(rail.getByText('不可用：该插件需要联网：当前任务已禁止联网')).toBeVisible();
+  await rail.getByRole('button', { name: '允许联网', exact: true }).click();
+  await rail.getByRole('switch', { name: '取消挂载 学术调研', exact: true }).click();
+  await expect(rail.getByText('未启用 · 网络访问未启用')).toBeVisible();
+  await page.screenshot({ path: test.info().outputPath('network-plugin.png') });
+});
 
 test('the capability rail leaves room to read, searches resources and syncs new installations independently', async ({ page }) => {
   const errors: string[] = [];

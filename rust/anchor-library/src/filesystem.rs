@@ -1,7 +1,7 @@
 use std::{
     ffi::OsStr,
     fs::{self, File},
-    io,
+    io::{self, Read},
     os::unix::{ffi::OsStrExt, fs::PermissionsExt},
     path::{Component, Path, PathBuf},
 };
@@ -100,7 +100,11 @@ pub(crate) fn existing_destination(
     }
 }
 
-fn entries(directory: &File) -> Result<Vec<(String, FileType)>, InstallError> {
+fn entries(
+    directory: &File,
+    prefix: &str,
+    mutable: &anchor_graph_host::MutablePaths,
+) -> Result<Vec<(String, FileType)>, InstallError> {
     let mut entries = Vec::new();
     for entry in Dir::read_from(directory).map_err(io::Error::from)? {
         let entry = entry.map_err(io::Error::from)?;
@@ -110,8 +114,16 @@ fn entries(directory: &File) -> Result<Vec<(String, FileType)>, InstallError> {
         }
         let name = OsStr::from_bytes(bytes)
             .to_str()
-            .filter(|name| !name.contains('\\'))
             .ok_or(InstallError::UnsafePath)?;
+        let relative = relative_path(prefix, name);
+        // The declaration owns this location. Do not even inspect its type:
+        // Plugin data can include links, credentials, FIFOs, or live files.
+        if mutable.covers(&relative) {
+            continue;
+        }
+        if name.contains('\\') {
+            return Err(InstallError::UnsafePath);
+        }
         let metadata =
             statat(directory, name, AtFlags::SYMLINK_NOFOLLOW).map_err(io::Error::from)?;
         let kind = FileType::from_raw_mode(metadata.st_mode);
@@ -122,6 +134,14 @@ fn entries(directory: &File) -> Result<Vec<(String, FileType)>, InstallError> {
     }
     entries.sort_by(|left, right| left.0.cmp(&right.0));
     Ok(entries)
+}
+
+fn relative_path(prefix: &str, name: &str) -> String {
+    if prefix.is_empty() {
+        name.to_owned()
+    } else {
+        format!("{prefix}/{name}")
+    }
 }
 
 fn child_directory(parent: &File, name: &str) -> Result<File, InstallError> {
@@ -182,15 +202,8 @@ fn validate_tree(
     prefix: &str,
     mutable: &anchor_graph_host::MutablePaths,
 ) -> Result<(), InstallError> {
-    for (name, kind) in entries(source)? {
-        let relative = if prefix.is_empty() {
-            name.clone()
-        } else {
-            format!("{prefix}/{name}")
-        };
-        if mutable.covers(&relative) {
-            continue;
-        }
+    for (name, kind) in entries(source, prefix, mutable)? {
+        let relative = relative_path(prefix, &name);
         if kind == FileType::Directory {
             validate_tree(&child_directory(source, &name)?, &relative, mutable)?;
         }
@@ -203,13 +216,12 @@ pub(crate) fn stage(source: &Path, destination: &Path) -> Result<(), InstallErro
     if destination.starts_with(&source) {
         return Err(InstallError::UnsafePath);
     }
-    validate_tree(&source_file, "", &installed_mutable_paths(&source)?)?;
     if let Ok(metadata) = statat(&source_file, ".codex-plugin", AtFlags::SYMLINK_NOFOLLOW)
         && FileType::from_raw_mode(metadata.st_mode) != FileType::Directory
     {
         return Err(InstallError::UnsafePath);
     }
-    let manifest = match statat(&source_file, "plugin.json", AtFlags::SYMLINK_NOFOLLOW) {
+    let mut manifest = match statat(&source_file, "plugin.json", AtFlags::SYMLINK_NOFOLLOW) {
         Ok(metadata) if FileType::from_raw_mode(metadata.st_mode) == FileType::RegularFile => {
             regular_file(&source_file, "plugin.json")?
         }
@@ -233,13 +245,29 @@ pub(crate) fn stage(source: &Path, destination: &Path) -> Result<(), InstallErro
         }
         Err(error) => return Err(io::Error::from(error).into()),
     };
+    // Use the manifest actually selected above, including the community layout
+    // with `.codex-plugin/plugin.json`. Invalid declarations provide no pruning;
+    // the catalog still reports them through each caller's existing error map.
+    // The workspace can still be changing while it is staged. Read the selected
+    // manifest once so the declaration used for pruning is also the one we publish.
+    let mut manifest_bytes = Vec::new();
+    manifest.read_to_end(&mut manifest_bytes)?;
+    let manifest_mode = manifest.metadata()?.permissions().mode() & 0o777;
+    let mutable = serde_json::from_slice::<serde_json::Value>(&manifest_bytes)
+        .ok()
+        .and_then(|value| anchor_graph_host::mutable_paths_from_manifest(&value).ok())
+        .unwrap_or_default();
+    validate_tree(&source_file, "", &mutable)?;
     fs::create_dir(destination)?;
     fs::set_permissions(destination, fs::Permissions::from_mode(0o700))?;
-    copy_tree(&source_file, destination, true)?;
+    copy_tree(&source_file, destination, "", &mutable)?;
     let root_manifest = destination.join("plugin.json");
-    copy_file(manifest, &root_manifest)?;
+    write_file(manifest_bytes.as_slice(), manifest_mode, &root_manifest)?;
     let mode = (source_file.metadata()?.permissions().mode() & 0o777) | 0o700;
     fs::set_permissions(destination, fs::Permissions::from_mode(mode))?;
+    // Staging serves review and candidate execution as well as publication.
+    // Each gets empty data locations; no source data enters any of these trees.
+    crate::provide_mutable_paths(destination, &mutable)?;
     Ok(())
 }
 
@@ -247,16 +275,23 @@ pub(crate) fn stage(source: &Path, destination: &Path) -> Result<(), InstallErro
 #[path = "filesystem/tests.rs"]
 mod tests;
 
-fn copy_tree(source: &File, destination: &Path, root: bool) -> Result<(), InstallError> {
-    for (name, kind) in entries(source)? {
-        if name == ".git" || (root && (name == ".codex-plugin" || name == "plugin.json")) {
+fn copy_tree(
+    source: &File,
+    destination: &Path,
+    prefix: &str,
+    mutable: &anchor_graph_host::MutablePaths,
+) -> Result<(), InstallError> {
+    for (name, kind) in entries(source, prefix, mutable)? {
+        if name == ".git"
+            || (prefix.is_empty() && (name == ".codex-plugin" || name == "plugin.json"))
+        {
             continue;
         }
         let target = destination.join(&name);
         if kind == FileType::Directory {
             let child = child_directory(source, &name)?;
             fs::create_dir(&target)?;
-            copy_tree(&child, &target, false)?;
+            copy_tree(&child, &target, &relative_path(prefix, &name), mutable)?;
             let mode = (child.metadata()?.permissions().mode() & 0o777) | 0o700;
             fs::set_permissions(&target, fs::Permissions::from_mode(mode))?;
         } else {
@@ -266,13 +301,17 @@ fn copy_tree(source: &File, destination: &Path, root: bool) -> Result<(), Instal
     Ok(())
 }
 
-fn copy_file(mut source: File, destination: &Path) -> Result<(), InstallError> {
+fn copy_file(source: File, destination: &Path) -> Result<(), InstallError> {
+    let mode = source.metadata()?.permissions().mode() & 0o777;
+    write_file(source, mode, destination)
+}
+
+fn write_file(mut source: impl Read, mode: u32, destination: &Path) -> Result<(), InstallError> {
     let mut target = fs::OpenOptions::new()
         .write(true)
         .create_new(true)
         .open(destination)?;
     io::copy(&mut source, &mut target)?;
-    let mode = source.metadata()?.permissions().mode() & 0o777;
     target.set_permissions(fs::Permissions::from_mode(mode))?;
     target.sync_all()?;
     Ok(())

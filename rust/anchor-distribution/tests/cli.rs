@@ -34,11 +34,52 @@ fn cli_exposes_the_agreed_inputs_without_a_pin_bypass() {
         "--docmost-tools",
         "--wecom-tools",
         "--wecom-gateway",
+        "--platform",
+        "--net-relay",
+        "--sandbox-network",
+        "--platform-launcher",
+        "--network-tools",
+        "--uv",
+        "--rustup-init",
         "--output",
     ] {
         assert!(help.contains(argument), "{argument}");
     }
     assert!(!help.contains("skip"));
+}
+
+#[test]
+fn cli_platform_requires_native_bootstrap_and_rejects_graph_mode_inputs() {
+    let result = command()
+        .args([
+            "--platform",
+            "--host",
+            "/unused/host",
+            "--goose",
+            "/unused/goose",
+            "--output",
+            "/unused/platform.tar.gz",
+        ])
+        .output()
+        .unwrap();
+    assert!(String::from_utf8_lossy(&result.stderr).contains("--platform requires --net-relay"));
+    assert_failure(result);
+    assert_failure(
+        command()
+            .args([
+                "--platform",
+                "--bundle",
+                "/unused/bundle",
+                "--host",
+                "/unused/host",
+                "--goose",
+                "/unused/goose",
+                "--output",
+                "/unused/platform.tar.gz",
+            ])
+            .output()
+            .unwrap(),
+    );
 }
 
 #[test]
@@ -94,6 +135,11 @@ fn cli_rejects_an_unpinned_elf_without_creating_output() {
     fs::copy("/usr/bin/true", &host).unwrap();
     fs::copy("/usr/bin/true", &goose).unwrap();
     fs::copy("/usr/bin/true", directory.path().join("anchor-net-relay")).unwrap();
+    fs::copy(
+        "/usr/bin/true",
+        directory.path().join("anchor-sandbox-network"),
+    )
+    .unwrap();
     let output = directory.path().join("runtime.tar.gz");
     let result = command()
         .arg("--host")
@@ -119,6 +165,11 @@ fn cli_packages_pinned_goose_and_reports_archive_hash_without_executing_inputs()
     let host = directory.path().join("host");
     fs::copy("/usr/bin/true", &host).unwrap();
     fs::copy("/usr/bin/true", directory.path().join("anchor-net-relay")).unwrap();
+    fs::copy(
+        "/usr/bin/true",
+        directory.path().join("anchor-sandbox-network"),
+    )
+    .unwrap();
     let bundle = directory.path().join("bundle");
     fs::create_dir(&bundle).unwrap();
     fs::write(bundle.join("graph.json"), r#"{"objective":"package smoke","entry":"work","agents":{},"ops":{"work":{"run":"true"}},"nodes":[{"id":"work","op":"work"}],"edges":[]}"#).unwrap();
@@ -159,7 +210,7 @@ fn cli_packages_pinned_goose_and_reports_archive_hash_without_executing_inputs()
         hash.update(&buffer[..count]);
     }
     assert_eq!(report.sha256, format!("{:x}", hash.finalize()));
-    assert_eq!(report.inventory.executables.len(), 2);
+    assert_eq!(report.inventory.executables.len(), 4);
     let goose = report
         .inventory
         .executables

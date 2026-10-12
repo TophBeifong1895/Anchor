@@ -18,6 +18,8 @@ import './SessionPlugins.css';
 export type SessionPlugin = {
   id: string; name: string; description?: string; skills?: string[]; mcpServerNames?: string[];
   required?: boolean; on?: boolean; available?: boolean; error?: string | null;
+  explicitOn?: boolean; requiresNetwork?: boolean; networkProvider?: boolean;
+  networkAllowed?: boolean; networkPermission?: boolean; enabledBy?: string[];
 };
 
 /** Long enough that a session is not one request per blink, short enough that a fresh install shows up. */
@@ -99,13 +101,28 @@ export function SessionPlugins({ session }: { session: string }) {
     setSwitched('');
     setRowError(current => { const next = { ...current }; delete next[plugin.id]; return next; });
     try {
-      const result = await api<{ plugin: SessionPlugin }>(
-        `/sessions/${encodeURIComponent(session)}/plugins/${encodeURIComponent(plugin.id)}`, 'POST', { on: !plugin.on });
-      setPlugins(current => withPlugin(current, result.plugin));
+      const result = await api<{ plugin: SessionPlugin; plugins?: SessionPlugin[] }>(
+        `/sessions/${encodeURIComponent(session)}/plugins/${encodeURIComponent(plugin.id)}`, 'POST', { on: !(plugin.explicitOn ?? plugin.on) });
+      setPlugins(current => result.plugins ?? withPlugin(current, result.plugin));
       setSwitched(plugin.id);
     } catch (error) {
       // No optimistic flip: the row keeps the state the Host last confirmed, and the reason is the
       // Host's own sentence rather than a paraphrase written here.
+      setRowError(current => ({ ...current, [plugin.id]: mountProblem(error) }));
+    } finally { inFlight.current = false; setPending(''); }
+  };
+  const changeNetwork = async (plugin: SessionPlugin) => {
+    if (inFlight.current) return;
+    inFlight.current = true;
+    setPending(plugin.id);
+    setSwitched('');
+    setRowError(current => { const next = { ...current }; delete next[plugin.id]; return next; });
+    try {
+      const result = await api<{ plugins: SessionPlugin[] }>(
+        `/sessions/${encodeURIComponent(session)}/network`, 'POST', { allowed: !plugin.networkPermission });
+      setPlugins(result.plugins);
+      setSwitched(plugin.id);
+    } catch (error) {
       setRowError(current => ({ ...current, [plugin.id]: mountProblem(error) }));
     } finally { inFlight.current = false; setPending(''); }
   };
@@ -145,6 +162,8 @@ export function SessionPlugins({ session }: { session: string }) {
         const servers = plugin.mcpServerNames ?? [];
         const unavailable = plugin.available === false;
         const initial = (plugin.name || plugin.id).trim().slice(0, 1).toUpperCase();
+        const direct = plugin.explicitOn ?? plugin.on;
+        const dependents = (plugin.enabledBy ?? []).map(id => plugins.find(item => item.id === id)?.name || id);
         return <article key={plugin.id} className={`session-plugin-card${plugin.on ? ' attached' : ''}${unavailable ? ' unavailable' : ''}`}>
           <div className="plugin-row-main">
             <span className="plugin-avatar" aria-hidden="true">{initial || '?'}</span>
@@ -154,12 +173,19 @@ export function SessionPlugins({ session }: { session: string }) {
             </div>
           </div>
           <div className="plugin-row-actions">
-            <button type="button" role="switch" aria-checked={plugin.on === true} aria-label={`${plugin.on ? '取消挂载' : '挂载'} ${plugin.name || plugin.id}`}
-              className={`session-plugin-switch${plugin.on ? ' on' : ''}`} disabled={plugin.required === true || pending === plugin.id}
+            <button type="button" role="switch" aria-checked={direct === true} aria-label={`${direct ? '取消挂载' : '挂载'} ${plugin.name || plugin.id}`}
+              className={`session-plugin-switch${direct ? ' on' : ''}`} disabled={plugin.required === true || pending === plugin.id}
               title={plugin.required ? '图里声明为必需，无法关闭' : undefined}
-              aria-busy={pending === plugin.id} onClick={() => void toggle(plugin)}><span className="switch-track" aria-hidden="true" />{plugin.on ? '已挂载' : '未挂载'}</button>
+              aria-busy={pending === plugin.id} onClick={() => void toggle(plugin)}><span className="switch-track" aria-hidden="true" />{plugin.networkProvider ? direct ? '主动启用' : '未主动启用' : plugin.on ? '已挂载' : '未挂载'}</button>
           </div>
           {plugin.description && <p className="session-plugin-description">{plugin.description}</p>}
+          {plugin.networkProvider && <div className="session-plugin-network">
+            <p>{dependents.length ? `${direct ? '主动启用 · ' : ''}由${dependents.join('、')}依赖启用` : direct ? '已主动启用' : '未启用'}
+              {' · '}{plugin.networkPermission === false ? '已禁止联网' : plugin.networkAllowed ? '网络访问已允许' : '网络访问未启用'}</p>
+            <button type="button" disabled={pending === plugin.id} onClick={() => void changeNetwork(plugin)}>
+              {plugin.networkPermission === false ? '允许联网' : '禁止联网'}</button>
+          </div>}
+          {plugin.requiresNetwork && !plugin.networkProvider && <p className="plugin-note">需要联网能力{plugin.on && plugin.networkAllowed ? ' · 网络访问已允许' : ''}</p>}
           {!plugin.description && !skills.length && !servers.length && !unavailable && <p className="inspector-note">没有声明 Skills 或 MCP 服务。</p>}
           {!!(skills.length || servers.length) && <details className="session-plugin-details">
             <summary aria-label={`查看 ${plugin.name || plugin.id} 的能力详情`}><span className="plugin-row-meta">

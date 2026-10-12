@@ -134,6 +134,107 @@ fn command_ceiling_stays_thirty_seconds_unless_the_deployment_raises_it() {
 }
 
 #[tokio::test]
+async fn direct_rustc_uses_the_frozen_grant_and_rejects_unrelated_host_commands() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let fixture = Fixture::new();
+    let bin = fixture.directory.path().join("shared-rust/bin");
+    let home = fixture.directory.path().join("shared-rust/rustup");
+    let cargo = fixture.directory.path().join("shared-rust/cargo");
+    let other = fixture.directory.path().join("other/bin");
+    for directory in [&bin, &home, &cargo, &other] {
+        std::fs::create_dir_all(directory).unwrap();
+    }
+    for name in ["cargo", "rustup", "rustc"] {
+        let entry = bin.join(name);
+        std::fs::write(
+            &entry,
+            "#!/bin/sh\nset -eu\nif [ \"$1\" = --version ]; then printf '%s|%s|%s\\n' \"$RUSTUP_TOOLCHAIN\" \"$CARGO_HOME\" \"$CARGO_NET_OFFLINE\"; else exit 1; fi\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&entry, std::fs::Permissions::from_mode(0o555)).unwrap();
+    }
+    std::fs::copy("/usr/bin/false", other.join("rustc")).unwrap();
+    std::fs::copy("/usr/bin/true", bin.join("unrelated")).unwrap();
+    std::fs::write(cargo.join("credentials.toml"), "private-host-credential").unwrap();
+    let snapshot = crate::runtime_configuration::RuntimeSnapshot {
+        python: None,
+        python_enabled: false,
+        rust: Some(crate::runtime_configuration::RustInstallation {
+            proxy: bin.join("rustup"),
+            home: home.clone(),
+            cargo: cargo.clone(),
+            toolchain: Some("stable-x86_64-unknown-linux-gnu".into()),
+        }),
+        provisioner: None,
+    };
+    let environment = crate::tool_environment::ToolEnvironment::default()
+        .with_runtime_snapshot(&snapshot)
+        .unwrap();
+    let tools = fixture.tools(cancellation()).with_environment(environment);
+    for command in [
+        "rustc".to_owned(),
+        bin.join("rustc").to_string_lossy().into_owned(),
+    ] {
+        let result = run(&tools, &[&command, "--version"]).await;
+        assert_eq!(result["exit_code"], 0, "{result}");
+        assert_eq!(
+            result["stdout"],
+            "stable-x86_64-unknown-linux-gnu|/workspace/.anchor-rust/cargo|true\n"
+        );
+    }
+    let definitions = tools.definitions();
+    let description = &definitions
+        .iter()
+        .find(|definition| definition.name == RUN_TOOL_NAME)
+        .unwrap()
+        .description;
+    assert!(
+        description.contains("Authorized commands: cargo, cat, rustc, rustup, sh"),
+        "{description}"
+    );
+    for command in [
+        "/usr/bin/true".to_owned(),
+        other.join("rustc").to_string_lossy().into_owned(),
+    ] {
+        let refused = tools
+            .call(RUN_TOOL_NAME, json!({"command": [command, "--version"]}))
+            .await
+            .expect_err("an unrelated host executable must remain unavailable")
+            .to_string();
+        assert!(refused.contains("not_executed"), "{refused}");
+    }
+    // The existing Rust bin PATH grant only mounts known proxies. A sibling
+    // file on the Host remains unavailable inside the sandbox.
+    let unavailable = tools
+        .call(
+            RUN_TOOL_NAME,
+            json!({"command": [bin.join("unrelated").to_string_lossy(), "--version"]}),
+        )
+        .await;
+    if let Ok(result) = unavailable {
+        assert_ne!(result[0].as_json().unwrap()["exit_code"], 0);
+    }
+    let refused = fixture
+        .tools(cancellation())
+        .call(RUN_TOOL_NAME, json!({"command": ["rustc", "--version"]}))
+        .await
+        .expect_err("an unconfigured Turn must not gain Rust execution")
+        .to_string();
+    assert!(refused.contains("not_executed"), "{refused}");
+    let shared_home = home.to_string_lossy();
+    let shared_cargo = cargo.to_string_lossy();
+    let shared_rustc = bin.join("rustc").to_string_lossy().into_owned();
+    let script = format!(
+        "set -eu\ntest ! -e '{shared_cargo}/credentials.toml'\nif printf pollution > '{shared_home}/pollution'; then exit 10; fi\nif printf pollution > '{shared_rustc}'; then exit 11; fi\nif printf pollution > /tools/anchor-pilot-rust/bin/rustc; then exit 12; fi\nprintf readonly"
+    );
+    let result = run(&tools, &["sh", "-c", &script]).await;
+    assert_eq!(result["exit_code"], 0, "{result}");
+    assert_eq!(result["stdout"], "readonly");
+    assert!(!home.join("pollution").exists());
+}
+
+#[tokio::test]
 async fn graph_network_intent_is_applied_and_host_authority_still_limits_it() {
     use tokio::io::AsyncWriteExt;
     let fixture = Fixture::new();
@@ -146,7 +247,12 @@ async fn graph_network_intent_is_applied_and_host_authority_still_limits_it() {
         .to_string();
     assert!(refused.contains("not_executed"), "{refused}");
     assert!(refused.contains("not authorized"), "{refused}");
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let route = std::net::UdpSocket::bind("0.0.0.0:0").unwrap();
+    route.connect("192.0.2.1:9").unwrap();
+    let host_address = route.local_addr().unwrap().ip();
+    let listener = tokio::net::TcpListener::bind((host_address, 0))
+        .await
+        .unwrap();
     let port = listener.local_addr().unwrap().port();
     let server = tokio::spawn(async move {
         let (mut socket, _) = listener.accept().await.unwrap();
@@ -166,7 +272,7 @@ async fn graph_network_intent_is_applied_and_host_authority_still_limits_it() {
         .unwrap(),
     );
     let script = format!(
-        "set -e; printf 'network-probe-started\\n'; exec 3<>/dev/tcp/127.0.0.1/{port}; cat <&3"
+        "set -e; printf 'network-probe-started\\n'; exec 3<>/dev/tcp/{host_address}/{port}; cat <&3"
     );
     let tools = || {
         NodeTools::new(
@@ -364,6 +470,63 @@ async fn cancellation_remains_an_error_before_argument_validation() {
 }
 
 #[tokio::test]
+async fn requested_timeout_reports_the_actual_limit_and_preserves_node_ceiling() {
+    let fixture = Fixture::new();
+    let node = fixture.tools(cancellation());
+    assert!(
+        node.call(
+            RUN_TOOL_NAME,
+            json!({"command":["sh","-c","true"],"timeout_seconds":31})
+        )
+        .await
+        .is_err()
+    );
+    let pilot = node.with_timeout_ceiling(Duration::from_secs(600));
+    for timeout in [0, 601] {
+        assert!(
+            pilot
+                .call(
+                    RUN_TOOL_NAME,
+                    json!({"command":["sh","-c","true"],"timeout_seconds":timeout})
+                )
+                .await
+                .is_err()
+        );
+    }
+    let result = pilot
+        .call(
+            RUN_TOOL_NAME,
+            json!({"command":["sh","-c","sleep 5"],"timeout_seconds":1}),
+        )
+        .await
+        .unwrap();
+    let result = result[0].as_json().unwrap();
+    assert_eq!(result["status"], "timed_out");
+    assert_eq!(result["timeout_seconds"], 1);
+    assert!(
+        result["hint"]
+            .as_str()
+            .unwrap()
+            .contains("1s wall-clock limit")
+    );
+}
+
+#[tokio::test]
+#[ignore = "takes 31s to prove the Pilot command exceeds the original Node limit"]
+async fn pilot_command_can_complete_after_the_original_thirty_second_node_limit() {
+    let fixture = Fixture::new();
+    let tools = fixture
+        .tools(cancellation())
+        .with_timeout_ceiling(Duration::from_secs(600));
+    let result = tools.call(RUN_TOOL_NAME, json!({"command":["sh","-c","sleep 31; printf long-pilot-command-completed"],"timeout_seconds":35})).await.unwrap();
+    let result = result[0].as_json().unwrap();
+    assert_eq!(result["status"], "completed");
+    assert_eq!(result["exit_code"], 0);
+    assert_eq!(result["stdout"], "long-pilot-command-completed");
+    assert_eq!(result["timeout_seconds"], 35);
+}
+
+#[tokio::test]
 async fn real_bwrap_cancellation_is_an_error_after_command_starts() {
     let fixture = Fixture::new();
     let cancellation = cancellation();
@@ -401,10 +564,7 @@ async fn run_description_states_limits_authorized_commands_and_retention() {
         "{description}"
     );
     assert!(description.contains("defaults to 30s"), "{description}");
-    assert!(
-        description.contains("may request up to 30s"),
-        "{description}"
-    );
+    assert!(description.contains("up to 30s"), "{description}");
     assert!(description.contains("64 KiB preview"), "{description}");
     assert!(description.contains("/spill"), "{description}");
     assert!(
@@ -589,6 +749,136 @@ async fn read_returns_numbered_pages_and_a_content_hash() {
 }
 
 #[tokio::test]
+async fn read_refuses_a_first_line_over_the_byte_limit() {
+    let fixture = Fixture::new();
+    let tools = fixture.tools(cancellation());
+    std::fs::write(
+        fixture.workspace.join("notes.txt"),
+        "x".repeat(READ_MAX_BYTES),
+    )
+    .unwrap();
+
+    let error = call_tool_error(&tools, READ_TOOL_NAME, json!({"path":"notes.txt"})).await;
+    assert!(error.contains("line 1"), "{error}");
+    assert!(
+        error.contains(&format!("{READ_MAX_BYTES} byte page limit")),
+        "{error}"
+    );
+    assert!(error.contains("counted newline"), "{error}");
+    assert!(error.contains("anchor_run"), "{error}");
+}
+
+#[tokio::test]
+async fn read_advances_before_a_later_line_over_the_byte_limit() {
+    let fixture = Fixture::new();
+    let tools = fixture.tools(cancellation());
+    let content = format!("short\n{}\n", "x".repeat(READ_MAX_BYTES));
+    std::fs::write(fixture.workspace.join("notes.txt"), &content).unwrap();
+
+    let page = call_tool(&tools, READ_TOOL_NAME, json!({"path":"notes.txt"})).await;
+    assert_eq!(page["lines"], json!([{"line":1,"text":"short"}]));
+    assert_eq!(page["returned_lines"], 1);
+    assert_eq!(page["truncated"], true);
+    assert_eq!(page["next_offset"], 1);
+    assert_eq!(
+        page["sha256"],
+        format!("{:x}", Sha256::digest(content.as_bytes()))
+    );
+
+    let error = call_tool_error(
+        &tools,
+        READ_TOOL_NAME,
+        json!({"path":"notes.txt","offset":page["next_offset"]}),
+    )
+    .await;
+    assert!(error.contains("line 2"), "{error}");
+    assert!(error.contains("anchor_run"), "{error}");
+}
+
+#[tokio::test]
+async fn read_accepts_an_exact_utf8_byte_limit_and_refuses_one_byte_more() {
+    let fixture = Fixture::new();
+    let tools = fixture.tools(cancellation());
+    let line = "界".repeat((READ_MAX_BYTES - 1) / 3);
+    assert_eq!(line.len() + 1, READ_MAX_BYTES);
+    let content = format!("{line}\ntail\n");
+    std::fs::write(fixture.workspace.join("notes.txt"), &content).unwrap();
+
+    let page = call_tool(&tools, READ_TOOL_NAME, json!({"path":"notes.txt"})).await;
+    assert_eq!(page["returned_lines"], 1);
+    assert_eq!(page["lines"][0]["line"], 1);
+    assert_eq!(page["lines"][0]["text"].as_str(), Some(line.as_str()));
+    assert_eq!(page["truncated"], true);
+    assert_eq!(page["next_offset"], 1);
+    assert_eq!(
+        page["sha256"],
+        format!("{:x}", Sha256::digest(content.as_bytes()))
+    );
+    let tail = call_tool(
+        &tools,
+        READ_TOOL_NAME,
+        json!({"path":"notes.txt","offset":page["next_offset"]}),
+    )
+    .await;
+    assert_eq!(tail["lines"], json!([{"line":2,"text":"tail"}]));
+    assert_eq!(tail["truncated"], false);
+    assert_eq!(tail["next_offset"], Value::Null);
+    assert_eq!(tail["sha256"], page["sha256"]);
+
+    std::fs::write(fixture.workspace.join("notes.txt"), format!("{line}x\n")).unwrap();
+    let error = call_tool_error(&tools, READ_TOOL_NAME, json!({"path":"notes.txt"})).await;
+    assert!(error.contains("line 1"), "{error}");
+    assert!(error.contains("anchor_run"), "{error}");
+}
+
+#[tokio::test]
+async fn read_counts_newlines_when_paginating_utf8_lines() {
+    let fixture = Fixture::new();
+    let tools = fixture.tools(cancellation());
+    let first_line = "界".repeat((READ_MAX_BYTES - 4) / 3);
+    assert_eq!(first_line.len() + 1 + "é".len() + 1, READ_MAX_BYTES);
+    std::fs::write(
+        fixture.workspace.join("notes.txt"),
+        format!("{first_line}\né\ntail\n"),
+    )
+    .unwrap();
+
+    let exact = call_tool(&tools, READ_TOOL_NAME, json!({"path":"notes.txt"})).await;
+    assert_eq!(exact["returned_lines"], 2);
+    assert_eq!(
+        exact["lines"][0]["text"].as_str(),
+        Some(first_line.as_str())
+    );
+    assert_eq!(exact["lines"][1], json!({"line":2,"text":"é"}));
+    assert_eq!(exact["truncated"], true);
+    assert_eq!(exact["next_offset"], 2);
+
+    std::fs::write(
+        fixture.workspace.join("notes.txt"),
+        format!("{first_line}\néx\ntail\n"),
+    )
+    .unwrap();
+    let over = call_tool(&tools, READ_TOOL_NAME, json!({"path":"notes.txt"})).await;
+    assert_eq!(over["returned_lines"], 1);
+    assert_eq!(over["lines"][0]["text"].as_str(), Some(first_line.as_str()));
+    assert_eq!(over["truncated"], true);
+    assert_eq!(over["next_offset"], 1);
+    let remainder = call_tool(
+        &tools,
+        READ_TOOL_NAME,
+        json!({"path":"notes.txt","offset":over["next_offset"]}),
+    )
+    .await;
+    assert_eq!(
+        remainder["lines"],
+        json!([{"line":2,"text":"éx"},{"line":3,"text":"tail"}])
+    );
+    assert_eq!(remainder["truncated"], false);
+    assert_eq!(remainder["next_offset"], Value::Null);
+    assert_eq!(remainder["sha256"], over["sha256"]);
+}
+
+#[tokio::test]
 async fn file_tools_stay_inside_the_workspace() {
     let fixture = Fixture::new();
     let tools = fixture.tools(cancellation());
@@ -609,6 +899,264 @@ async fn file_tools_stay_inside_the_workspace() {
     .unwrap();
     let error = call_tool_error(&tools, READ_TOOL_NAME, json!({"path":"link.txt"})).await;
     assert!(error.contains("outside /workspace"), "{error}");
+}
+
+#[tokio::test]
+async fn reads_preserve_relative_and_absolute_symlinks_inside_the_workspace() {
+    let fixture = Fixture::new();
+    let tools = fixture.tools(cancellation());
+    std::fs::create_dir(fixture.workspace.join("actual")).unwrap();
+    std::fs::write(
+        fixture.workspace.join("actual/notes.txt"),
+        "workspace text\n",
+    )
+    .unwrap();
+    std::os::unix::fs::symlink("actual/notes.txt", fixture.workspace.join("relative.txt")).unwrap();
+    std::os::unix::fs::symlink(
+        fixture.workspace.join("actual/notes.txt"),
+        fixture.workspace.join("absolute.txt"),
+    )
+    .unwrap();
+    std::os::unix::fs::symlink("actual", fixture.workspace.join("directory")).unwrap();
+    let original = call_tool(&tools, READ_TOOL_NAME, json!({"path":"actual/notes.txt"})).await;
+    for path in ["relative.txt", "absolute.txt", "directory/notes.txt"] {
+        let read = call_tool(&tools, READ_TOOL_NAME, json!({"path":path})).await;
+        assert_eq!(read["lines"], original["lines"], "{path}");
+        assert_eq!(read["sha256"], original["sha256"], "{path}");
+    }
+}
+
+#[tokio::test]
+async fn edits_refuse_terminal_symlinks_without_reading_their_targets() {
+    let fixture = Fixture::new();
+    let tools = fixture.tools(cancellation());
+    let outside = fixture.directory.path().join("outside.txt");
+    let outside_bytes = b"isolated outside fixture";
+    std::fs::write(&outside, outside_bytes).unwrap();
+    std::fs::write(fixture.workspace.join("inside.txt"), "inside fixture").unwrap();
+    for (name, target) in [
+        ("outside-link.txt", outside.clone()),
+        ("inside-link.txt", fixture.workspace.join("inside.txt")),
+        (
+            "dangling-link.txt",
+            fixture.directory.path().join("absent.txt"),
+        ),
+    ] {
+        let link = fixture.workspace.join(name);
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+        for edit in [
+            json!({"path":name,"content":"replacement"}),
+            json!({"path":name,"content":"replacement","base_sha256":"0".repeat(64)}),
+            json!({"path":name,"old_string":"fixture","new_string":"changed"}),
+        ] {
+            let error = call_tool_error(&tools, EDIT_TOOL_NAME, edit).await;
+            assert!(
+                !error.contains(&format!("{:x}", Sha256::digest(outside_bytes))),
+                "{error}"
+            );
+            assert_eq!(std::fs::read_link(&link).unwrap(), target);
+        }
+    }
+    assert_eq!(std::fs::read(&outside).unwrap(), outside_bytes);
+    assert_eq!(
+        std::fs::read_to_string(fixture.workspace.join("inside.txt")).unwrap(),
+        "inside fixture"
+    );
+    assert!(!fixture.directory.path().join("absent.txt").exists());
+}
+
+#[tokio::test]
+async fn file_tools_refuse_parent_symlinks_outside_the_workspace() {
+    let fixture = Fixture::new();
+    let tools = fixture.tools(cancellation());
+    let outside = fixture.directory.path().join("outside");
+    std::fs::create_dir(&outside).unwrap();
+    std::fs::write(outside.join("notes.txt"), "isolated outside fixture").unwrap();
+    std::os::unix::fs::symlink(&outside, fixture.workspace.join("escape")).unwrap();
+    let read = call_tool_error(&tools, READ_TOOL_NAME, json!({"path":"escape/notes.txt"})).await;
+    assert!(read.contains("outside /workspace"), "{read}");
+    for path in ["escape/notes.txt", "escape/new.txt"] {
+        let edit = call_tool_error(
+            &tools,
+            EDIT_TOOL_NAME,
+            json!({"path":path,"content":"replacement"}),
+        )
+        .await;
+        assert!(edit.contains("outside /workspace"), "{edit}");
+    }
+    assert_eq!(
+        std::fs::read_to_string(outside.join("notes.txt")).unwrap(),
+        "isolated outside fixture"
+    );
+    assert!(!outside.join("new.txt").exists());
+}
+
+#[tokio::test]
+async fn file_tools_refuse_directories_fifos_and_sockets_without_replacing_them() {
+    let fixture = Fixture::new();
+    let tools = fixture.tools(cancellation());
+    std::fs::create_dir(fixture.workspace.join("directory")).unwrap();
+    rustix::fs::mkfifoat(
+        rustix::fs::CWD,
+        fixture.workspace.join("fifo"),
+        rustix::fs::Mode::RUSR | rustix::fs::Mode::WUSR,
+    )
+    .unwrap();
+    let _socket = std::os::unix::net::UnixListener::bind(fixture.workspace.join("socket")).unwrap();
+    for path in ["directory", "fifo", "socket"] {
+        let before = std::fs::symlink_metadata(fixture.workspace.join(path))
+            .unwrap()
+            .file_type();
+        call_tool_error(&tools, READ_TOOL_NAME, json!({"path":path})).await;
+        call_tool_error(
+            &tools,
+            EDIT_TOOL_NAME,
+            json!({"path":path,"content":"replacement"}),
+        )
+        .await;
+        let after = std::fs::symlink_metadata(fixture.workspace.join(path))
+            .unwrap()
+            .file_type();
+        assert_eq!(before, after, "{path} must not be replaced");
+    }
+}
+
+#[tokio::test]
+async fn edits_do_not_follow_or_overwrite_conflicting_legacy_temporary_files() {
+    let fixture = Fixture::new();
+    let tools = fixture.tools(cancellation());
+    let outside = fixture.directory.path().join("outside.txt");
+    std::fs::write(&outside, "isolated outside fixture").unwrap();
+    std::fs::write(fixture.workspace.join("notes.txt"), "old\n").unwrap();
+    let symlink = fixture
+        .workspace
+        .join(format!(".notes.txt.anchor-edit-{}", std::process::id()));
+    std::os::unix::fs::symlink(&outside, &symlink).unwrap();
+    let conflict = fixture
+        .workspace
+        .join(format!(".new.txt.anchor-edit-{}", std::process::id()));
+    std::fs::write(&conflict, "unrelated temporary file").unwrap();
+
+    let before = call_tool(&tools, READ_TOOL_NAME, json!({"path":"notes.txt"})).await;
+    let replaced = call_tool(
+        &tools,
+        EDIT_TOOL_NAME,
+        json!({
+            "path":"notes.txt","content":"new\n","base_sha256":before["sha256"]
+        }),
+    )
+    .await;
+    assert_eq!(replaced["bytes_before"], 4);
+    assert_eq!(replaced["bytes_after"], 4);
+    assert_eq!(replaced["sha256_before"], before["sha256"]);
+    assert_eq!(
+        replaced["sha256_after"],
+        format!("{:x}", Sha256::digest(b"new\n"))
+    );
+    let created = call_tool(
+        &tools,
+        EDIT_TOOL_NAME,
+        json!({"path":"new.txt","content":"created\n"}),
+    )
+    .await;
+    assert_eq!(created["created"], true);
+    assert_eq!(
+        std::fs::read_to_string(fixture.workspace.join("notes.txt")).unwrap(),
+        "new\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&outside).unwrap(),
+        "isolated outside fixture"
+    );
+    assert_eq!(std::fs::read_link(&symlink).unwrap(), outside);
+    assert_eq!(
+        std::fs::read_to_string(&conflict).unwrap(),
+        "unrelated temporary file"
+    );
+    assert!(
+        std::fs::read_dir(&fixture.workspace).unwrap().all(|entry| {
+            !entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .starts_with(".anchor-edit-")
+        }),
+        "successful edits must remove their private temporary entries"
+    );
+}
+
+#[test]
+fn editing_uses_the_open_parent_when_its_workspace_name_is_replaced() {
+    let fixture = Fixture::new();
+    let parent = fixture.workspace.join("parent");
+    let moved = fixture.workspace.join("moved");
+    let outside = fixture.directory.path().join("outside");
+    std::fs::create_dir(&parent).unwrap();
+    std::fs::create_dir(&outside).unwrap();
+    std::fs::write(parent.join("notes.txt"), "workspace fixture").unwrap();
+    std::fs::write(outside.join("notes.txt"), "isolated outside fixture").unwrap();
+    let files = workspace_files::WorkspaceFiles::open(&fixture.workspace).unwrap();
+    let target = files.edit_target(Path::new("parent/notes.txt")).unwrap();
+    std::fs::rename(&parent, &moved).unwrap();
+    std::os::unix::fs::symlink(&outside, &parent).unwrap();
+    assert_eq!(
+        target.read_existing().unwrap().unwrap(),
+        b"workspace fixture"
+    );
+    target.replace(b"changed workspace fixture").unwrap();
+    assert_eq!(
+        std::fs::read(moved.join("notes.txt")).unwrap(),
+        b"changed workspace fixture"
+    );
+    assert_eq!(
+        std::fs::read(outside.join("notes.txt")).unwrap(),
+        b"isolated outside fixture"
+    );
+    assert!(std::fs::read_dir(&moved).unwrap().all(|entry| {
+        !entry
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .starts_with(".anchor-edit-")
+    }));
+}
+
+#[tokio::test]
+async fn reads_cannot_escape_during_concurrent_directory_symlink_replacement() {
+    let fixture = Fixture::new();
+    let tools = fixture.tools(cancellation());
+    let inside = fixture.workspace.join("inside");
+    let parked = fixture.workspace.join("parked");
+    let outside = fixture.directory.path().join("outside");
+    std::fs::create_dir(&inside).unwrap();
+    std::fs::create_dir(&outside).unwrap();
+    std::fs::write(inside.join("notes.txt"), "workspace fixture\n").unwrap();
+    std::fs::write(outside.join("notes.txt"), "isolated outside fixture\n").unwrap();
+    let start = Arc::new(std::sync::Barrier::new(2));
+    let other_start = Arc::clone(&start);
+    let replacement = std::thread::spawn(move || {
+        other_start.wait();
+        for _ in 0..256 {
+            std::fs::rename(&inside, &parked).unwrap();
+            std::os::unix::fs::symlink(&outside, &inside).unwrap();
+            std::thread::yield_now();
+            std::fs::remove_file(&inside).unwrap();
+            std::fs::rename(&parked, &inside).unwrap();
+        }
+    });
+    start.wait();
+    let expected = format!("{:x}", Sha256::digest(b"workspace fixture\n"));
+    for _ in 0..512 {
+        if let Ok(result) = tools
+            .call(READ_TOOL_NAME, json!({"path":"inside/notes.txt"}))
+            .await
+        {
+            assert_eq!(result[0].as_json().unwrap()["sha256"], expected);
+        }
+    }
+    replacement.join().unwrap();
+    let read = call_tool(&tools, READ_TOOL_NAME, json!({"path":"inside/notes.txt"})).await;
+    assert_eq!(read["sha256"], expected);
 }
 
 #[tokio::test]

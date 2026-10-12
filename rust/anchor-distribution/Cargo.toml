@@ -5,6 +5,10 @@ edition.workspace = true
 license.workspace = true
 description = "Source-free Goose Runtime distribution builder"
 
+[[bin]]
+name = "anchor-platform"
+path = "src/bin/anchor-platform.rs"
+
 [dependencies]
 anchor-graph-host = { path = "../anchor-graph-host" }
 clap = { version = "=4.5.54", features = ["derive"] }

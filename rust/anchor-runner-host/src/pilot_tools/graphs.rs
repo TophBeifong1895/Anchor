@@ -5,6 +5,22 @@
 
 use super::*;
 
+pub(super) fn definition_parameter() -> Value {
+    let example = json!({
+        "entry":"hello",
+        "ops":{"hello":{"run":"printf 'hello\\n' > hello.txt","writes":["hello.txt"]}},
+        "nodes":[{"id":"hello","op":"hello"}],
+        "edges":[]
+    });
+    json!({
+        "type":"object",
+        "description":format!(
+            "Graph authoring JSON. ops and agents are objects keyed by definition name. Each agent requires model; instructions is optional. nodes is a list of {{id,op}} or {{id,agent}} referencing those names; entry is a node ID; edges is a list of {{from,to}}. Op run is a shell command string, not an argv array. Put reads, writes and network on the op/agent definition; put installed Plugin IDs in an AgentNode's plugins list. Commands run in /workspace; writes lists relative output files. Minimal definition: {example}"
+        ),
+        "examples":[example]
+    })
+}
+
 impl PilotTools {
     pub(super) async fn graph_create(&self, arguments: &Value) -> Result<Value, ToolError> {
         let graph = parameter(arguments, "name")?;
@@ -89,7 +105,11 @@ impl PilotTools {
     }
 
     pub(super) async fn graph_list(&self, _arguments: &Value) -> Result<Value, ToolError> {
-        let mut names = vec![self.graph_name.clone()];
+        let mut names = if self.graph_name.is_empty() {
+            Vec::new()
+        } else {
+            vec![self.graph_name.clone()]
+        };
         if let Ok(entries) = std::fs::read_dir(&self.catalog_root) {
             for entry in entries {
                 let entry = entry.map_err(|_| failed())?;
@@ -127,28 +147,31 @@ impl PilotTools {
         let definition = arguments
             .get("definition")
             .filter(|value| value.is_object())
-            .ok_or_else(failed)?;
-        let validation = (|| {
-            let snapshot =
-                GraphSnapshot::from_authoring(definition.clone()).map_err(|_| failed())?;
-            crate::reject_snapshot(&snapshot).map_err(|_| failed())?;
-            let ids = snapshot
-                .nodes
-                .iter()
-                .flat_map(|node| node.plugins.iter().map(|reference| reference.id.clone()))
-                .collect::<std::collections::BTreeSet<_>>()
-                .into_iter()
-                .collect::<Vec<_>>();
-            FilePluginCatalog::new(&self.library_root)
+            .ok_or_else(|| rejected("definition must be an object"))?;
+        // Kernel diagnostics describe only this authoring input. Keep them
+        // actionable without exposing errors from private Host/Plugin state.
+        let snapshot = match GraphSnapshot::from_authoring(definition.clone()) {
+            Ok(snapshot) => snapshot,
+            Err(failure) => {
+                return Ok(json!({"valid":false,"error":failure.to_string()}));
+            }
+        };
+        let ids = snapshot
+            .nodes
+            .iter()
+            .flat_map(|node| node.plugins.iter().map(|reference| reference.id.clone()))
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>();
+        if crate::reject_snapshot(&snapshot).is_err()
+            || FilePluginCatalog::new(&self.library_root)
                 .resolve(&ids)
-                .map_err(|_| failed())?;
-            Ok::<_, ToolError>(snapshot)
-        })();
-        match validation {
-            Ok(snapshot) => Ok(
-                json!({"valid":true,"entry":snapshot.entry,"nodes":snapshot.nodes.iter().map(|node| &node.id).collect::<Vec<_>>()}),
-            ),
-            Err(_) => Ok(json!({"valid":false,"error":"invalid Graph or unavailable Plugin"})),
+                .is_err()
+        {
+            return Ok(json!({"valid":false,"error":"invalid Graph or unavailable Plugin"}));
         }
+        Ok(
+            json!({"valid":true,"entry":snapshot.entry,"nodes":snapshot.nodes.iter().map(|node| &node.id).collect::<Vec<_>>()}),
+        )
     }
 }

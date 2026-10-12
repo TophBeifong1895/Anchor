@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+mod development;
 mod filesystem;
 mod oauth;
 mod reclaim;
@@ -11,6 +12,7 @@ use std::path::{Path, PathBuf};
 use anchor_graph_host::FilePluginCatalog;
 use serde::{Deserialize, Serialize};
 
+pub use development::{DevelopmentError, DevelopmentScope};
 pub use oauth::{
     FileOAuthTokenStore, OAuthAuthorization, OAuthAuthorizationCode, OAuthAuthorizationMetadata,
     OAuthAuthorizationResponse, OAuthAuthorizationTransaction, OAuthBinding, OAuthClient,
@@ -149,13 +151,27 @@ impl Library {
     /// A host that lands dependency views *and then* publishes the Plugin must hold
     /// this across both: a reclamation running in between would see a view whose
     /// Plugin is not installed yet and judge it an orphan. The lock is the same one
-    /// installation and reclamation use, so the three can never overlap. It does not
-    /// wait: a busy Library is reported as [`InstallError::CatalogBusy`].
+    /// installation and reclamation use, so the three can never overlap. This
+    /// operator-facing method waits; a cancellable host uses
+    /// [`Library::try_install_lease`] instead.
     pub fn install_lease(&self) -> Result<InstallLease, InstallError> {
+        self.install_lease_with(rustix::fs::FlockOperation::LockExclusive)
+    }
+
+    /// The same publication lease without blocking, for hosts whose pending
+    /// installation must remain cancellable while another installer runs.
+    pub fn try_install_lease(&self) -> Result<InstallLease, InstallError> {
+        self.install_lease_with(rustix::fs::FlockOperation::NonBlockingLockExclusive)
+    }
+
+    fn install_lease_with(
+        &self,
+        operation: rustix::fs::FlockOperation,
+    ) -> Result<InstallLease, InstallError> {
         let (root, _) = filesystem::directory(&self.root, true)?;
         let (plugins, plugins_file) = filesystem::directory(&root.join("plugins"), true)?;
         let _ = plugins;
-        let lease = filesystem::lease(&plugins_file, rustix::fs::FlockOperation::LockExclusive)?;
+        let lease = filesystem::lease(&plugins_file, operation)?;
         Ok(InstallLease { _lease: lease })
     }
 
@@ -187,6 +203,25 @@ impl Library {
         validate_id(id)?;
         let source_dir = source_dir.as_ref().to_owned();
         self.review_candidate(id, &source_dir)
+    }
+
+    /// Stage a confined, non-published candidate using the installer's exact
+    /// file rules. The caller owns the temporary transaction and its cleanup.
+    pub fn stage_directory(
+        &self,
+        id: &str,
+        source_dir: impl AsRef<Path>,
+        transaction: impl AsRef<Path>,
+    ) -> Result<(PathBuf, PluginReview), InstallError> {
+        validate_id(id)?;
+        let (root, _plugins, _staged) =
+            stage_candidate(id, source_dir.as_ref(), transaction.as_ref())?;
+        let catalog = FilePluginCatalog::new(&root);
+        let definition = catalog
+            .definition(id)
+            .map_err(|error| InstallError::InvalidPluginReason(error.to_string()))?;
+        let review = review::summarize(id, &catalog, &definition)?;
+        Ok((root, review))
     }
 
     /// Review a GitHub tree source without publishing it.
@@ -289,7 +324,7 @@ impl Library {
             // Provided *after* the plan: a location the new declaration adds must
             // not look like an installed code entry the plan would remove.
             provide_mutable_paths(&destination, &definition.mutable)?;
-            sync_tree_entries(&destination)?;
+            sync_tree_entries(&destination, &definition.mutable)?;
             plugins_file.sync_all()?;
         }
         // Reclaiming here is opportunistic and must never turn a successful
@@ -353,19 +388,33 @@ fn provide_mutable_paths(
 }
 
 /// Sync the files a code replacement just wrote, without descending into data.
-fn sync_tree_entries(destination: &Path) -> Result<(), InstallError> {
-    for entry in std::fs::read_dir(destination)? {
-        let entry = entry?;
-        let name = entry.file_name().to_string_lossy().into_owned();
-        if name.starts_with(".removed-") {
+fn sync_tree_entries(
+    destination: &Path,
+    mutable: &anchor_graph_host::MutablePaths,
+) -> Result<(), InstallError> {
+    for entry in filesystem::code_entries(destination, mutable)? {
+        if entry
+            .relative
+            .file_name()
+            .is_some_and(|name| name.to_string_lossy().starts_with(".removed-"))
+        {
             continue;
         }
-        let path = entry.path();
+        let path = destination.join(entry.relative);
         let metadata = std::fs::symlink_metadata(&path)?;
         if metadata.is_dir() {
             filesystem::sync_tree(&path)?;
         } else {
             std::fs::File::open(&path)?.sync_all()?;
+        }
+        // A code entry can sit beside mutable children in a shared parent.
+        // Sync those ancestor directories without opening any data child.
+        let mut parent = path.parent();
+        while let Some(directory) = parent
+            && directory != destination
+        {
+            std::fs::File::open(directory)?.sync_all()?;
+            parent = directory.parent();
         }
     }
     std::fs::File::open(destination)?.sync_all()?;

@@ -14,6 +14,10 @@ const MAX_INTERRUPTED_MESSAGES: usize = 8;
 const MAX_INTERRUPTED_MESSAGE_CHARS: usize = 500;
 const RUN_POLL: Duration = Duration::from_millis(50);
 
+#[cfg(test)]
+#[path = "wecom_channel_management_tests.rs"]
+mod channel_management_tests;
+
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct EventEnvelope {
@@ -134,6 +138,41 @@ pub(super) fn inbound_id_for(source: &str, event_id: &str) -> String {
     format!("wecom-{:x}", digest.finalize())
 }
 
+#[allow(clippy::result_large_err)]
+fn current_settings(state: &ApiState, owner: &str) -> Result<WecomSettings, HttpResponse> {
+    if state.application.channel_management().is_err() {
+        return Ok(state.wecom.clone());
+    }
+    let channel = state
+        .application
+        .channel_snapshot("wecom")
+        .map_err(application_error)?
+        .ok_or_else(|| {
+            error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "WeCom channel is not configured",
+            )
+        })?;
+    if channel.owner != owner {
+        return Err(error(
+            StatusCode::FORBIDDEN,
+            "WeCom channel belongs to another owner",
+        ));
+    }
+    if !channel.enabled {
+        return Err(error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "WeCom channel is stopped",
+        ));
+    }
+    Ok(WecomSettings {
+        graph: channel.binding.graph,
+        reply_node: channel.binding.reply_node,
+        account: channel.account,
+        users: channel.binding.users.into_iter().collect(),
+    })
+}
+
 pub(super) async fn receive_event(
     State(state): State<ApiState>,
     headers: HeaderMap,
@@ -149,7 +188,9 @@ pub(super) async fn receive_event(
     }
     let envelope: EventEnvelope = serde_json::from_value(payload)
         .map_err(|_| error(StatusCode::BAD_REQUEST, "invalid WeCom event envelope"))?;
-    envelope.event.validate(&state.wecom)?;
+    let owner = private_owner(&state, &headers);
+    let config = current_settings(&state, &owner)?;
+    envelope.event.validate(&config)?;
     let prepared_attachments = crate::channel_inputs::prepare(&envelope.event.attachments)
         .map_err(|failure| error(StatusCode::BAD_REQUEST, failure))?;
     let attachment_entries = prepared_attachments.manifest();
@@ -179,20 +220,19 @@ pub(super) async fn receive_event(
             })
             .collect(),
     };
-    let (bundle_path, bundle) =
-        load_graph_definition(&state, &state.wecom.graph).map_err(|_| {
-            error(
-                StatusCode::SERVICE_UNAVAILABLE,
-                "configured WeCom Graph is unavailable",
-            )
-        })?;
+    let (bundle_path, bundle) = load_graph_definition(&state, &config.graph).map_err(|_| {
+        error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "configured WeCom Graph is unavailable",
+        )
+    })?;
     let assistant_plan =
-        crate::assistant::AssistantPlan::from_snapshot(&bundle.snapshot, &state.wecom.reply_node);
+        crate::assistant::AssistantPlan::from_snapshot(&bundle.snapshot, &config.reply_node);
     if !bundle
         .snapshot
         .nodes
         .iter()
-        .any(|node| node.id == state.wecom.reply_node)
+        .any(|node| node.id == config.reply_node)
     {
         return Err(error(
             StatusCode::SERVICE_UNAVAILABLE,
@@ -206,12 +246,11 @@ pub(super) async fn receive_event(
     } else {
         event.text.clone()
     };
-    let owner = private_owner(&state, &headers);
     let lock_key = format!(
         "{}\0{}\0{}\0{}\0{}",
         owner,
-        state.wecom.graph,
-        state.wecom.account.as_deref().unwrap_or(""),
+        config.graph,
+        config.account.as_deref().unwrap_or(""),
         event.conversation_id,
         event.sender_id
     );
@@ -227,12 +266,12 @@ pub(super) async fn receive_event(
         inbound_id: inbound_id.clone(),
         identity: ChannelIdentity {
             source: "wecom".into(),
-            account: state.wecom.account.clone(),
+            account: config.account.clone(),
             conversation_id: event.conversation_id.clone(),
             sender_id: event.sender_id.clone(),
         },
-        graph: state.wecom.graph.clone(),
-        reply_node: state.wecom.reply_node.clone(),
+        graph: config.graph.clone(),
+        reply_node: config.reply_node.clone(),
         text: Some(input_message.clone()),
         attachments: channel_attachments.clone(),
         run_id: None,
@@ -295,7 +334,7 @@ pub(super) async fn receive_event(
                         .application
                         .admit_assistant(
                             crate::application::AssistantAdmission {
-                                graph: state.wecom.graph.clone(),
+                                graph: config.graph.clone(),
                                 session: admission.session.id.clone(),
                                 owner: owner.clone(),
                                 oauth_owner: super::oauth::binding_owner(&owner),
@@ -362,10 +401,10 @@ pub(super) async fn receive_event(
                 input["interrupted_messages"] = json!(interrupted);
             }
             let request = crate::application::ConversationAdmission {
-                graph: state.wecom.graph.clone(),
+                graph: config.graph.clone(),
                 run: run.clone(),
                 session: admission.session.id.clone(),
-                reply_node: state.wecom.reply_node.clone(),
+                reply_node: config.reply_node.clone(),
                 input,
                 previous_run,
                 attachments: std::mem::take(&mut event.attachments),
@@ -393,7 +432,7 @@ pub(super) async fn receive_event(
     let Some(reply) = wait_for_channel_reply(
         &state,
         &owner,
-        &state.wecom.reply_node,
+        &config.reply_node,
         &admitted.session,
         &event.inbound_id(),
         &admitted.run_id,

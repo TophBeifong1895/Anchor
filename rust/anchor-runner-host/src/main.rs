@@ -11,12 +11,18 @@ mod goose_acp;
 mod goose_tool_context;
 mod local_inputs;
 
+mod conversation_resources;
+mod credential_store;
+mod oauth_links;
 mod pilot_host;
+mod pilot_resources;
 mod pilot_tools;
 mod plugin_dependencies;
 mod plugin_mounts;
+mod plugin_network;
 mod plugin_view;
 mod resource_read;
+mod runtime_configuration;
 use artifacts::HostArtifacts;
 mod node_host;
 mod node_tools;
@@ -251,31 +257,18 @@ fn reject_standalone_snapshot(snapshot: &GraphSnapshot) -> Result<(), String> {
     Ok(())
 }
 
-/// The deployment's library root: the explicit library root when set, otherwise
-/// the editable Graph catalog root (the same fallback the Plugin API uses).
-pub(crate) fn deployment_library_root() -> Option<PathBuf> {
-    env::var_os("ANCHOR_RUNNER_LIBRARY_ROOT")
-        .map(PathBuf::from)
-        .or_else(|| env::var_os("ANCHOR_RUNNER_CATALOG_ROOT").map(PathBuf::from))
-}
-
-/// The one Library root this deployment resolves Plugins from.
-///
-/// Every caller takes its answer from here, so the API that installs a Plugin and
-/// the node call that runs it can never disagree about where the Plugin lives.
-///
-/// The explicit Library root wins. Otherwise the *caller's* configured Graph
-/// catalog is the answer: a single-root deployment puts both in one directory, and
-/// the catalog is configuration rather than a guess about a path. The Library
-/// is deliberately not consulted a second time here — a caller that derived its
-/// catalog root from `ANCHOR_RUNNER_CATALOG_ROOT` or from its bundle has already
-/// made that decision, and re-reading it deeper in the stack would let one host's
-/// configuration leak into another's. There is likewise **no** fallback derived
-/// from a bundle path: a bundle is a Graph, not a Plugin home.
+/// The one Library root this deployment resolves Plugins from. The caller
+/// supplies its configured catalog; lower layers do not read it again.
 pub(crate) fn library_root(configured_catalog_root: &std::path::Path) -> PathBuf {
     std::env::var_os("ANCHOR_RUNNER_LIBRARY_ROOT")
         .map(PathBuf::from)
         .unwrap_or_else(|| configured_catalog_root.to_path_buf())
+}
+
+fn standalone_library_root() -> Option<PathBuf> {
+    env::var_os("ANCHOR_RUNNER_LIBRARY_ROOT")
+        .or_else(|| env::var_os("ANCHOR_RUNNER_CATALOG_ROOT"))
+        .map(PathBuf::from)
 }
 
 fn env_path(name: &str) -> Result<PathBuf, String> {
@@ -292,9 +285,9 @@ fn acquire_deployment_writer() -> Result<Box<dyn anchor_runtime::graph::RunLease
 }
 fn make_host_with_control(
     run_id: &str,
-    plugin_bindings: BTreeMap<String, anchor_runtime::graph::PluginBinding>,
     control: HostControl,
     library_root: Option<PathBuf>,
+    runtime_configuration: Option<Arc<runtime_configuration::RuntimeConfiguration>>,
 ) -> Result<
     (
         anchor_runtime::graph::FileRunStore,
@@ -332,10 +325,8 @@ fn make_host_with_control(
     .authorize_readonly_destination_root("/spill")
     .authorize_spill_root(state.join("spill"))
     .allow_network();
-    // Plugin views are NOT authorized here: a Run cannot know
-    // which environments its called Graphs will declare. Each invocation grants
-    // exactly the trees it recorded (see `managed_environment`), so this policy
-    // stays the deployment floor.
+    // Each invocation authorizes its current Plugin views and mutable paths;
+    // the deployment policy does not grant the entire Library.
     let tool_environment = tool_environment::ToolEnvironment::from_env()?;
     let sandbox = Arc::new(
         BubblewrapSandbox::new(tool_environment.authorize(policy)).map_err(|e| e.to_string())?,
@@ -359,12 +350,12 @@ fn make_host_with_control(
             Arc::clone(&sandbox),
             Arc::new(tools.clone()),
             mcp.clone(),
-            plugin_bindings.clone(),
             anchor_runtime::graph::FileRunStore::new(state.join("runs")),
             local_inputs::LocalInputs::from_env(state.clone())?,
             session_mounts,
         )
-        .with_library_root(library_root),
+        .with_library_root(library_root)
+        .with_runtime_configuration(runtime_configuration),
     );
     let goose_nodes = goose_acp::GooseNodePort::from_env(
         &state,
@@ -417,15 +408,11 @@ async fn handle(request: Request) -> Response {
                     };
                 }
             };
-            let library_root = crate::library_root(
-                bundle_root
-                    .parent()
-                    .unwrap_or_else(|| std::path::Path::new(".")),
-            );
-            let bundle = match anchor_graph_host::FileGraphBundleLoader::new(bundle_root.clone())
-                .with_library_root(library_root.clone())
-                .load()
-            {
+            let mut loader = anchor_graph_host::FileGraphBundleLoader::new(bundle_root.clone());
+            if let Some(root) = standalone_library_root() {
+                loader = loader.with_library_root(root);
+            }
+            let bundle = match loader.load() {
                 Ok(bundle) => bundle,
                 Err(error) => {
                     return Response::Rejected {
@@ -442,29 +429,11 @@ async fn handle(request: Request) -> Response {
                     reason,
                 };
             }
-            // A bundle references its Plugins; the code lives in the Library.
-            let plugin_bindings = match crate::application::graphs::referenced_plugin_bindings(
-                &library_root,
-                &bundle.plugins,
-            ) {
-                Ok(bindings) => bindings,
-                Err(error) => {
-                    return Response::Rejected {
-                        version: 1,
-                        request_id,
-                        reason: format!(
-                            "the Plugins this Graph references could not be resolved from {}: {error}",
-                            library_root.display()
-                        ),
-                    };
-                }
-            };
             execute_snapshot(
                 bundle.snapshot,
                 input,
                 run_id,
                 request_id,
-                plugin_bindings,
                 Some(bundle_root),
             )
             .await
@@ -531,7 +500,7 @@ async fn handle(request: Request) -> Response {
                     reason,
                 };
             }
-            execute_snapshot(*snapshot, input, run_id, request_id, BTreeMap::new(), None).await
+            execute_snapshot(*snapshot, input, run_id, request_id, None).await
         }
     }
 }
@@ -541,19 +510,9 @@ async fn execute_snapshot(
     input: Value,
     run_id: String,
     request_id: String,
-    plugin_bindings: BTreeMap<String, anchor_runtime::graph::PluginBinding>,
     bundle_root: Option<PathBuf>,
 ) -> Response {
-    execute_snapshot_with_control(
-        snapshot,
-        input,
-        run_id,
-        request_id,
-        None,
-        plugin_bindings,
-        bundle_root,
-    )
-    .await
+    execute_snapshot_with_control(snapshot, input, run_id, request_id, None, bundle_root).await
 }
 
 async fn execute_snapshot_with_control(
@@ -562,7 +521,6 @@ async fn execute_snapshot_with_control(
     run_id: String,
     request_id: String,
     supplied_control: Option<HostControl>,
-    plugin_bindings: BTreeMap<String, anchor_runtime::graph::PluginBinding>,
     bundle_root: Option<PathBuf>,
 ) -> Response {
     let _writer = match acquire_deployment_writer() {
@@ -575,7 +533,7 @@ async fn execute_snapshot_with_control(
             };
         }
     };
-    let expected = match GraphRunRecord::create_with_id(snapshot, input, run_id.clone()) {
+    let mut expected = match GraphRunRecord::create_with_id(snapshot, input, run_id.clone()) {
         Ok(record) => record,
         Err(error) => {
             return Response::Rejected {
@@ -589,12 +547,65 @@ async fn execute_snapshot_with_control(
         cancellation: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         pause: Arc::new(std::sync::atomic::AtomicBool::new(false)),
     });
-    // The stdio host resolves Plugins from the deployment's one Library root; the
-    // bundle's own directory is the last resort only because a single-root
-    // deployment puts the Library there.
-    let library_root = bundle_root
-        .as_ref()
-        .map(|root| crate::library_root(root.parent().unwrap_or(root.as_path())));
+    let library_root = standalone_library_root();
+    let plugin_ids = expected
+        .snapshot
+        .nodes
+        .iter()
+        .flat_map(|node| node.plugins.iter().map(|plugin| plugin.id.clone()))
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+    let reference_lease = if plugin_ids.is_empty() {
+        None
+    } else {
+        let Some(root) = library_root.as_ref() else {
+            return Response::Rejected {
+                version: 1,
+                request_id,
+                reason: "Plugin admission requires the Library root".into(),
+            };
+        };
+        let access = crate::dependency_provision::DependencyAccess {
+            network: false,
+            cancellation: control.cancellation.clone(),
+        };
+        match crate::application::plugins::plugin_publication_lease(
+            root,
+            &access,
+            "standalone reference publication",
+        )
+        .await
+        {
+            Ok(lease) => Some(lease),
+            Err(error) => {
+                return Response::Rejected {
+                    version: 1,
+                    request_id,
+                    reason: format!("Plugin admission failed: {error:?}"),
+                };
+            }
+        }
+    };
+    // Resolve under the publication lease and hold it until the durable Run
+    // reference is saved, so uninstall cannot pass between those two facts.
+    let plugin_bindings = match library_root.as_ref() {
+        Some(root) => {
+            match crate::application::graphs::referenced_plugin_bindings(root, &plugin_ids) {
+                Ok(bindings) => bindings,
+                Err(error) => {
+                    return Response::Rejected {
+                        version: 1,
+                        request_id,
+                        reason: error.to_string(),
+                    };
+                }
+            }
+        }
+        None => BTreeMap::new(),
+    };
+    expected.plugin_bindings = plugin_bindings.clone();
+    expected.plugin_bindings_initialized = true;
     let execution = match PreparedExecution::prepare_with_bindings(
         &expected,
         control,
@@ -612,11 +623,11 @@ async fn execute_snapshot_with_control(
             };
         }
     };
-    let record = match execution.store.load(&run_id) {
+    let (record, newly_admitted) = match execution.store.load(&run_id) {
         Ok(Some(record))
             if record.snapshot == expected.snapshot && record.input == expected.input =>
         {
-            record
+            (record, false)
         }
         Ok(Some(_)) => {
             return Response::Rejected {
@@ -625,7 +636,7 @@ async fn execute_snapshot_with_control(
                 reason: "run identity is already bound to a different snapshot or input".into(),
             };
         }
-        Ok(None) => expected,
+        Ok(None) => (expected, true),
         Err(error) => {
             return Response::Rejected {
                 version: 1,
@@ -641,6 +652,14 @@ async fn execute_snapshot_with_control(
             reason,
         };
     }
+    if newly_admitted && let Err(error) = execution.store.save(&record) {
+        return Response::Rejected {
+            version: 1,
+            request_id,
+            reason: error.to_string(),
+        };
+    }
+    drop(reference_lease);
     match execution.run(record).await {
         Ok(record) => Response::Run {
             version: 1,

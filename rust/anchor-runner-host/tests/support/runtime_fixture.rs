@@ -24,6 +24,7 @@ pub fn wait_until(description: &str, mut condition: impl FnMut() -> bool) {
 
 pub struct Host {
     pub root: tempfile::TempDir,
+    state: tempfile::TempDir,
     binary: PathBuf,
     allowed_commands: String,
 }
@@ -31,8 +32,11 @@ pub struct Host {
 impl Host {
     pub fn new(graph: &Value) -> Self {
         let root = tempfile::tempdir().unwrap();
+        let state = tempfile::tempdir().unwrap();
         let bundle = root.path().join("bundle");
-        fs::create_dir_all(root.path().join("state")).unwrap();
+        // Library and Host-managed installations must remain disjoint. Keep
+        // the old test reading path while product IO uses the real state root.
+        std::os::unix::fs::symlink(state.path(), root.path().join("state")).unwrap();
         fs::create_dir_all(root.path().join("work")).unwrap();
         fs::create_dir_all(&bundle).unwrap();
         fs::write(bundle.join("graph.json"), graph.to_string()).unwrap();
@@ -42,14 +46,35 @@ impl Host {
         )
         .unwrap();
         let binary = root.path().join("anchor-runner-host");
-        if fs::hard_link(env!("CARGO_BIN_EXE_anchor-runner-host"), &binary).is_err() {
-            fs::copy(env!("CARGO_BIN_EXE_anchor-runner-host"), &binary).unwrap();
+        let source = std::env::var_os("ANCHOR_TEST_HOST_BINARY")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from(env!("CARGO_BIN_EXE_anchor-runner-host")));
+        assert!(
+            source.is_absolute() && source.is_file(),
+            "fixture Host binary must be an existing absolute path"
+        );
+        if fs::hard_link(&source, &binary).is_err() {
+            fs::copy(&source, &binary).unwrap();
+        }
+        // Packaged task networking uses the helper next to its Host. Preserve
+        // that relationship when a fixture stages the selected runtime bytes.
+        let helper = source.parent().unwrap().join("anchor-sandbox-network");
+        if helper.is_file() {
+            let staged = root.path().join("anchor-sandbox-network");
+            if fs::hard_link(&helper, &staged).is_err() {
+                fs::copy(&helper, &staged).unwrap();
+            }
         }
         Self {
             root,
+            state,
             binary,
             allowed_commands: "sh,cat,git,true".into(),
         }
+    }
+
+    pub fn state_root(&self) -> &Path {
+        self.state.path()
     }
 
     #[allow(dead_code)]
@@ -65,7 +90,7 @@ impl Host {
             .env("PATH", "/usr/bin:/bin")
             .env("LANG", "C.UTF-8")
             .env("TZ", "UTC")
-            .env("ANCHOR_RUNNER_STATE_ROOT", self.root.path().join("state"))
+            .env("ANCHOR_RUNNER_STATE_ROOT", self.state_root())
             .env(
                 "ANCHOR_RUNNER_WORKSPACE_ROOT",
                 self.root.path().join("work"),
@@ -173,6 +198,7 @@ impl Drop for Host {
     fn drop(&mut self) {
         if thread::panicking() {
             self.root.disable_cleanup(true);
+            self.state.disable_cleanup(true);
             eprintln!(
                 "failed Runtime fixture retained: {}",
                 self.root.path().display()

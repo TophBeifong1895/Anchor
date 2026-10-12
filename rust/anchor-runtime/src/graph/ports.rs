@@ -172,6 +172,33 @@ pub struct PluginBinding {
     pub resources: Vec<String>,
     #[serde(default)]
     pub mcp_servers: Vec<String>,
+    /// Stable, secret-free digest of declarations that grant Host authority.
+    /// Missing on legacy Run records; those may only be upgraded after exact
+    /// equality with the current legacy binding has been established.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub authorization_digest: String,
+}
+
+impl PluginBinding {
+    /// An old binding can acquire an authorization baseline only while every
+    /// fact it originally recorded still matches the current installation.
+    pub fn can_upgrade_legacy_authorization(&self, current: &Self) -> bool {
+        self.authorization_digest.is_empty()
+            && !current.authorization_digest.is_empty()
+            && self.id == current.id
+            && self.digest == current.digest
+            && self.resources == current.resources
+            && self.mcp_servers == current.mcp_servers
+    }
+
+    /// Compare the Host authorization baseline without pinning executable code
+    /// or resource contents. Legacy bindings require an explicit upgrade first.
+    pub fn same_authorization(&self, current: &Self) -> bool {
+        self.id == current.id
+            && !self.authorization_digest.is_empty()
+            && self.authorization_digest == current.authorization_digest
+            && self.mcp_servers == current.mcp_servers
+    }
 }
 
 /// Persisted, non-secret facts for one unresolved tool call.
@@ -274,6 +301,15 @@ pub trait NodeExecutionPort: Send + Sync {
     /// each step used. It is an observation: returning nothing is not a failure,
     /// and nothing here may refuse an invocation (standard invariant 6).
     fn observed_plugin_views(
+        &self,
+        _key: &InvocationKey,
+    ) -> std::collections::BTreeMap<String, String> {
+        std::collections::BTreeMap::new()
+    }
+
+    /// Code identity actually used by this invocation, keyed by Plugin id.
+    /// This is an observation, never a gate on resuming a Run.
+    fn observed_plugin_digests(
         &self,
         _key: &InvocationKey,
     ) -> std::collections::BTreeMap<String, String> {

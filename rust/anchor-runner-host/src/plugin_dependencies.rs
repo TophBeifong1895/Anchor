@@ -20,8 +20,8 @@ use anchor_graph_host::{
 use anchor_runtime::ReadOnlyInput;
 
 use crate::dependency_provision::{
-    DependencyProvisioner, LockedPackage, ProvisionError, ResolvedRequirements, authority,
-    fetch_wheelhouse, normalize_name, run_step,
+    DependencyAccess, DependencyProvisioner, LockedPackage, ProvisionError, ResolvedRequirements,
+    authority, fetch_wheelhouse_with_access, normalize_name, run_step_with_access,
 };
 use crate::plugin_view::{
     VIEW_CONFIGURATION, referenced_store_directories, site_packages_directories,
@@ -37,6 +37,7 @@ pub(crate) struct LandedView {
 }
 
 /// Publish the shared store and the view for one Plugin declaration.
+#[cfg(test)]
 pub(crate) async fn land(
     provisioner: &DependencyProvisioner,
     library_root: &Path,
@@ -44,37 +45,169 @@ pub(crate) async fn land(
     declaration_digest: &str,
     resolved: &ResolvedRequirements,
 ) -> Result<LandedView, ProvisionError> {
+    land_with_access(
+        provisioner,
+        library_root,
+        plugin,
+        declaration_digest,
+        resolved,
+        &DependencyAccess::default(),
+    )
+    .await
+}
+
+pub(crate) async fn land_with_access(
+    provisioner: &DependencyProvisioner,
+    library_root: &Path,
+    plugin: &str,
+    declaration_digest: &str,
+    resolved: &ResolvedRequirements,
+    access: &DependencyAccess,
+) -> Result<LandedView, ProvisionError> {
+    let root = resolved_library_root(library_root);
+    land_at(
+        provisioner,
+        &root,
+        &store_root(&root),
+        &plugin_view_path(&root, plugin, declaration_digest),
+        plugin,
+        resolved,
+        access,
+        None,
+    )
+    .await
+}
+
+/// Candidate and development views use the same Library package bytes as a
+/// formal Plugin. Their exact references are published under the writer lock.
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn prepare_candidate(
+    provisioner: &DependencyProvisioner,
+    library_root: &Path,
+    scope: &anchor_library::DevelopmentScope,
+    plugin: &str,
+    declaration_digest: &str,
+    resolved: &ResolvedRequirements,
+    access: &DependencyAccess,
+) -> Result<LandedView, ProvisionError> {
+    let root = resolved_library_root(library_root);
+    let view = scope
+        .root()
+        .join("candidates")
+        .join(plugin)
+        .join(declaration_digest)
+        .join(resolved_view_key(resolved))
+        .join("view");
+    land_at(
+        provisioner,
+        &root,
+        &store_root(&root),
+        &view,
+        plugin,
+        resolved,
+        access,
+        Some(scope),
+    )
+    .await
+}
+
+pub(crate) async fn prepare_development(
+    provisioner: &DependencyProvisioner,
+    library_root: &Path,
+    scope: &anchor_library::DevelopmentScope,
+    project_key: &str,
+    resolved: &ResolvedRequirements,
+    access: &DependencyAccess,
+) -> Result<LandedView, ProvisionError> {
+    let root = resolved_library_root(library_root);
+    let view = scope
+        .root()
+        .join("projects")
+        .join(project_key)
+        .join(resolved_view_key(resolved))
+        .join("view");
+    land_at(
+        provisioner,
+        &root,
+        &store_root(&root),
+        &view,
+        project_key,
+        resolved,
+        access,
+        Some(scope),
+    )
+    .await
+}
+
+/// A temporary view identifies the actual solve and the shared interpreter;
+/// changing the base build must not silently reuse an older Python view.
+pub(crate) fn resolved_view_key(resolved: &ResolvedRequirements) -> String {
+    use sha2::{Digest, Sha256};
+    let bytes = serde_json::to_vec(&(
+        "anchor.development-view.v1",
+        &resolved.lock_digest,
+        &resolved.interpreter_path,
+        &resolved.interpreter_digest,
+    ))
+    .expect("view identity encoding");
+    format!("{:x}", Sha256::digest(bytes))
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn land_at(
+    provisioner: &DependencyProvisioner,
+    library_root: &Path,
+    store: &Path,
+    view: &Path,
+    plugin: &str,
+    resolved: &ResolvedRequirements,
+    access: &DependencyAccess,
+    scope: Option<&anchor_library::DevelopmentScope>,
+) -> Result<LandedView, ProvisionError> {
+    access.check()?;
     let config = &provisioner.config;
-    let library_root = resolved_library_root(library_root);
-    let store = store_root(&library_root);
-    let view = plugin_view_path(&library_root, plugin, declaration_digest);
-    if let Some(landed) =
-        reuse_existing(provisioner, &library_root, plugin, &view, &store, resolved).await?
+    let current_interpreter = std::fs::canonicalize(&config.python).map_err(failure)?;
+    if current_interpreter != resolved.interpreter_path
+        || file_digest(&current_interpreter)? != resolved.interpreter_digest
     {
-        return Ok(landed);
+        return Err(failure(
+            "the shared Python interpreter changed after dependency resolution; prepare again with its current identity",
+        ));
     }
+    let library_root = library_root.to_path_buf();
+    let store = store.to_path_buf();
+    let view = view.to_path_buf();
 
     // One writer for the shared store and the views, held across the whole
     // landing so two installs cannot interleave their renames.
     let dependencies_root = library_root.join(DEPENDENCIES_DIRECTORY);
     let lock_root = dependencies_root.clone();
-    let _lock = tokio::task::spawn_blocking(move || write_lock(&lock_root))
-        .await
-        .map_err(|error| {
-            ProvisionError::Failed(format!("dependency store lock failed: {error}"))
-        })??;
+    let _lock = write_lock(&lock_root, access).await?;
+    if let Some(scope) = scope {
+        scope
+            .register()
+            .map_err(|error| ProvisionError::Failed(error.to_string()))?;
+    }
     // Another install may have landed the same declaration while we waited.
     if let Some(landed) =
-        reuse_existing(provisioner, &library_root, plugin, &view, &store, resolved).await?
+        reuse_existing(provisioner, plugin, &view, &store, resolved, access).await?
     {
+        if let Some(scope) = scope {
+            scope
+                .record_view(&view)
+                .map_err(|error| ProvisionError::Failed(error.to_string()))?;
+        }
         return Ok(landed);
     }
 
-    let staging = config
-        .build_root
-        .join("plugin-dependencies")
-        .join(resolved.lock_digest.chars().take(32).collect::<String>());
-    cleanup(&staging)?;
+    let staging_parent = config.build_root.join("plugin-dependencies");
+    std::fs::create_dir_all(&staging_parent)
+        .map_err(|error| ProvisionError::Failed(error.to_string()))?;
+    let staging_directory = tempfile::Builder::new()
+        .prefix("prepare-")
+        .tempdir_in(&staging_parent)
+        .map_err(|error| ProvisionError::Failed(error.to_string()))?;
+    let staging = staging_directory.path();
     let workspace = staging.join("run");
     let input = workspace.join("input");
     let wheelhouse = staging.join("wheelhouse");
@@ -82,8 +215,17 @@ pub(crate) async fn land(
         .and_then(|_| std::fs::create_dir_all(&workspace))
         .map_err(|error| ProvisionError::Failed(format!("dependency staging failed: {error}")))?;
 
-    fetch_wheelhouse(config, &resolved.packages, &wheelhouse).await?;
+    // A verified stored artifact needs neither another download nor another
+    // unpack. Older stores without provenance are compared after a real build
+    // before they acquire this marker; their bytes are never silently trusted.
+    let mut needed = Vec::new();
     for package in &resolved.packages {
+        if !stored_artifact_matches(&store, package, resolved)? {
+            needed.push(package.clone());
+        }
+    }
+    let artifacts = fetch_wheelhouse_with_access(config, &needed, &wheelhouse, access).await?;
+    for package in &needed {
         write_requirement(&input, package)?;
     }
 
@@ -100,21 +242,22 @@ pub(crate) async fn land(
     })?;
     // The wheelhouse is a delivery mechanism, not an authority: it is mounted
     // read-only and the install still runs with `--require-hashes`.
-    let build = authority(
-        &provisioner.sandbox,
-        vec![
-            ReadOnlyInput::new(&uv, &uv),
-            ReadOnlyInput::new(&wheelhouse, &wheelhouse),
-        ],
-        &[uv_dir],
-    )?;
+    let mut grants = vec![
+        ReadOnlyInput::new(&uv, &uv),
+        ReadOnlyInput::new(&wheelhouse, &wheelhouse),
+    ];
+    grants.extend(
+        crate::plugin_view::interpreter_prefix_grants(&resolved.interpreter_prefix)
+            .map_err(ProvisionError::Failed)?,
+    );
+    let build = authority(&provisioner.sandbox, grants, &[uv_dir])?;
 
     let uv_arg = uv.to_string_lossy().into_owned();
     let python_arg = interpreter.to_string_lossy().into_owned();
     let wheelhouse_arg = wheelhouse.to_string_lossy().into_owned();
-    for package in &resolved.packages {
+    for package in &needed {
         let name = normalize_name(&package.name);
-        run_step(
+        run_step_with_access(
             config,
             &build,
             &workspace,
@@ -135,12 +278,13 @@ pub(crate) async fn land(
                 format!("/workspace/input/{name}.txt"),
             ],
             &format!("unpacking `{}=={}`", package.name, package.version),
+            access,
         )
         .await?;
     }
     // A view is created here and published at its final path, so the interpreter
     // it names is the deployment's own — one Python, many views.
-    run_step(
+    run_step_with_access(
         config,
         &build,
         &workspace,
@@ -152,22 +296,40 @@ pub(crate) async fn land(
             "/workspace/view".into(),
         ],
         "creating the Plugin dependency view",
+        access,
     )
     .await?;
 
     assert_interpreter(&workspace.join("view"), &interpreter)?;
-    pointer_into_store(&workspace, &store, &resolved.packages)?;
-    publish_store(&workspace, &store, &library_root, &resolved.packages)?;
+    pointer_into_store(&workspace, &store, &view, &resolved.packages)?;
+    publish_store(&workspace, &store, &library_root, &needed)?;
+    for package in &needed {
+        let artifact = artifacts
+            .iter()
+            .find(|artifact| {
+                normalize_name(&artifact.name) == normalize_name(&package.name)
+                    && artifact.version == package.version
+            })
+            .ok_or_else(|| {
+                ProvisionError::Failed("landed package has no verified source artifact".into())
+            })?;
+        record_stored_artifact(&store, package, &artifact.sha256, resolved)?;
+    }
     publish_view(&workspace, &view)?;
 
     // The view is only proven where it now lives: a Python environment can carry
     // absolute paths that break the moment it moves.
-    if let Err(error) = verify_view(provisioner, &library_root, &view, resolved).await {
+    if let Err(error) = verify_view(provisioner, &store, &view, resolved, access).await {
         // Nothing else references the view yet — the Plugin is published after
         // this returns — so an unusable one is removed rather than left to look
         // installed.
         let _ = std::fs::remove_dir_all(&view);
         return Err(error);
+    }
+    if let Some(scope) = scope {
+        scope
+            .record_view(&view)
+            .map_err(|error| ProvisionError::Failed(error.to_string()))?;
     }
     Ok(LandedView {
         view,
@@ -185,11 +347,11 @@ pub(crate) async fn land(
 /// environment a Run is already using, and switching views is a later slice.
 async fn reuse_existing(
     provisioner: &DependencyProvisioner,
-    library_root: &Path,
     plugin: &str,
     view: &Path,
     store: &Path,
     resolved: &ResolvedRequirements,
+    access: &DependencyAccess,
 ) -> Result<Option<LandedView>, ProvisionError> {
     if !view.exists() {
         return Ok(None);
@@ -202,7 +364,20 @@ async fn reuse_existing(
             view.display()
         )));
     }
-    verify_view(provisioner, library_root, view, resolved)
+    for package in &resolved.packages {
+        let provenance = store
+            .join(normalize_name(&package.name))
+            .join(&package.version)
+            .join(STORED_ARTIFACT);
+        if std::fs::symlink_metadata(&provenance).is_ok()
+            && !stored_artifact_matches(store, package, resolved)?
+        {
+            return Err(failure(format!(
+                "Plugin `{plugin}` view references a package that does not match the resolved artifact or interpreter"
+            )));
+        }
+    }
+    verify_view(provisioner, store, view, resolved, access)
         .await
         .map_err(|error| {
             ProvisionError::Failed(format!(
@@ -275,6 +450,7 @@ fn write_requirement(input: &Path, package: &LockedPackage) -> Result<(), Provis
 fn pointer_into_store(
     workspace: &Path,
     store: &Path,
+    final_view: &Path,
     packages: &[LockedPackage],
 ) -> Result<(), ProvisionError> {
     let staged_view = workspace.join("view");
@@ -288,31 +464,171 @@ fn pointer_into_store(
     for package in packages {
         let name = normalize_name(&package.name);
         let staged = workspace.join("store").join(&name).join(&package.version);
+        let content = if staged.is_dir() {
+            staged.clone()
+        } else {
+            store.join(&name).join(&package.version)
+        };
         // `uv pip install --target` leaves its own lock file behind; it is not
         // part of the distribution.
         let _ = std::fs::remove_file(staged.join(".lock"));
-        let entries = std::fs::read_dir(&staged).map_err(|error| {
-            ProvisionError::Failed(format!("{} is not readable: {error}", staged.display()))
+        let entries = std::fs::read_dir(&content).map_err(|error| {
+            ProvisionError::Failed(format!("{} is not readable: {error}", content.display()))
         })?;
         for entry in entries {
             let entry = entry.map_err(|error| {
                 ProvisionError::Failed(format!("{} is not readable: {error}", staged.display()))
             })?;
             let name_of_entry = entry.file_name();
-            let link = site_packages.join(&name_of_entry);
-            if link.exists() {
+            if name_of_entry == STORED_ARTIFACT || name_of_entry == ".lock" {
                 continue;
             }
             let target = store
                 .join(&name)
                 .join(&package.version)
                 .join(&name_of_entry);
-            std::os::unix::fs::symlink(&target, &link).map_err(|error| {
-                ProvisionError::Failed(format!(
-                    "{} could not be pointed at the shared store: {error}",
-                    link.display()
-                ))
-            })?;
+            if name_of_entry == "bin" && entry.path().is_dir() {
+                install_console_scripts(
+                    &entry.path(),
+                    &target,
+                    &staged_view.join("bin"),
+                    &final_view.join("bin/python"),
+                )?;
+                continue;
+            }
+            link_entry(
+                workspace,
+                store,
+                &entry.path(),
+                &target,
+                &site_packages.join(&name_of_entry),
+            )?;
+        }
+    }
+    Ok(())
+}
+
+fn failure(error: impl std::fmt::Display) -> ProvisionError {
+    ProvisionError::Failed(error.to_string())
+}
+
+/// Keep normal package directories as one pointer. When two distributions share
+/// a namespace directory, merge only its pointers; conflicting file bytes fail.
+fn link_entry(
+    workspace: &Path,
+    store: &Path,
+    source: &Path,
+    target: &Path,
+    link: &Path,
+) -> Result<(), ProvisionError> {
+    let existing = match std::fs::symlink_metadata(link) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return std::os::unix::fs::symlink(target, link).map_err(failure);
+        }
+        Err(error) => return Err(failure(error)),
+    };
+    let previous = if existing.file_type().is_symlink() {
+        let destination = std::fs::read_link(link).map_err(failure)?;
+        if destination == target {
+            return Ok(());
+        }
+        if destination.exists() {
+            destination
+        } else {
+            workspace
+                .join("store")
+                .join(destination.strip_prefix(store).map_err(failure)?)
+        }
+    } else {
+        link.to_path_buf()
+    };
+    if !source.is_dir() || !previous.is_dir() {
+        if source.is_file()
+            && previous.is_file()
+            && std::fs::read(source).map_err(failure)?
+                == std::fs::read(&previous).map_err(failure)?
+        {
+            return Ok(());
+        }
+        return Err(failure(format!(
+            "distributions contain conflicting entries at {}",
+            link.display()
+        )));
+    }
+    if existing.file_type().is_symlink() {
+        let old_target = std::fs::read_link(link).map_err(failure)?;
+        std::fs::remove_file(link).map_err(failure)?;
+        std::fs::create_dir(link).map_err(failure)?;
+        for entry in std::fs::read_dir(&previous).map_err(failure)? {
+            let entry = entry.map_err(failure)?;
+            std::os::unix::fs::symlink(
+                old_target.join(entry.file_name()),
+                link.join(entry.file_name()),
+            )
+            .map_err(failure)?;
+        }
+    }
+    for entry in std::fs::read_dir(source).map_err(failure)? {
+        let entry = entry.map_err(failure)?;
+        link_entry(
+            workspace,
+            store,
+            &entry.path(),
+            &target.join(entry.file_name()),
+            &link.join(entry.file_name()),
+        )?;
+    }
+    Ok(())
+}
+
+/// uv's target install writes script files with the base Python shebang. A view
+/// launcher chooses its own interpreter while keeping the distribution script
+/// bytes only in the shared store.
+fn install_console_scripts(
+    source: &Path,
+    target: &Path,
+    bin: &Path,
+    python: &Path,
+) -> Result<(), ProvisionError> {
+    use std::os::unix::fs::PermissionsExt;
+    fn quoted(path: &Path) -> String {
+        format!("'{}'", path.to_string_lossy().replace('\'', "'\\''"))
+    }
+    for entry in std::fs::read_dir(source).map_err(failure)? {
+        let entry = entry.map_err(failure)?;
+        if !entry.file_type().map_err(failure)?.is_file() {
+            return Err(failure("distribution scripts must be regular files"));
+        }
+        let name = entry.file_name();
+        let destination = bin.join(&name);
+        if std::fs::symlink_metadata(&destination).is_ok() {
+            return Err(failure(format!(
+                "distributions contain conflicting console scripts at {}",
+                destination.display()
+            )));
+        }
+        let bytes = std::fs::read(entry.path()).map_err(failure)?;
+        let shebang = bytes
+            .split(|byte| *byte == b'\n')
+            .next()
+            .unwrap_or_default();
+        if (shebang.starts_with(b"#!") && String::from_utf8_lossy(shebang).contains("python"))
+            || generated_console_script_body(&bytes).is_some()
+        {
+            std::fs::write(
+                &destination,
+                format!(
+                    "#!/bin/sh\nexec {} {} \"$@\"\n",
+                    quoted(python),
+                    quoted(&target.join(name))
+                ),
+            )
+            .map_err(failure)?;
+            std::fs::set_permissions(&destination, std::fs::Permissions::from_mode(0o755))
+                .map_err(failure)?;
+        } else {
+            std::os::unix::fs::symlink(target.join(name), destination).map_err(failure)?;
         }
     }
     Ok(())
@@ -371,6 +687,7 @@ const INSTALLER_METADATA: &[&str] = &[
     "REQUESTED",
     "uv_cache.json",
     "direct_url.json",
+    STORED_ARTIFACT,
 ];
 
 fn is_installer_metadata(relative: &Path) -> bool {
@@ -381,16 +698,204 @@ fn is_installer_metadata(relative: &Path) -> bool {
         return false;
     }
     name == ".lock"
+        || (name == STORED_ARTIFACT && relative.parent() == Some(Path::new("")))
         || relative
             .parent()
             .and_then(Path::extension)
             .is_some_and(|extension| extension == "dist-info")
 }
 
+const STORED_ARTIFACT: &str = ".anchor-package.json";
+
+#[derive(serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct StoredArtifact {
+    format: u32,
+    name: String,
+    version: String,
+    artifact_digest: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    verified_artifact_digests: Vec<String>,
+    interpreter_digest: String,
+    bytes_digest: String,
+}
+
+fn read_stored_artifact(path: &Path) -> Result<Option<StoredArtifact>, ProvisionError> {
+    let metadata = match std::fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(ProvisionError::Failed(error.to_string())),
+    };
+    if !metadata.is_file() || metadata.file_type().is_symlink() || metadata.len() > 16 * 1024 {
+        return Err(ProvisionError::Failed(
+            "stored package provenance is not a bounded regular file".into(),
+        ));
+    }
+    let fact = serde_json::from_slice(
+        &std::fs::read(path).map_err(|error| ProvisionError::Failed(error.to_string()))?,
+    )
+    .map_err(|error| {
+        ProvisionError::Failed(format!("stored package provenance is unreadable: {error}"))
+    })?;
+    Ok(Some(fact))
+}
+
+fn stored_artifact_matches(
+    store: &Path,
+    package: &LockedPackage,
+    resolved: &ResolvedRequirements,
+) -> Result<bool, ProvisionError> {
+    let path = store
+        .join(normalize_name(&package.name))
+        .join(&package.version)
+        .join(STORED_ARTIFACT);
+    let Some(fact) = read_stored_artifact(&path)? else {
+        return Ok(false);
+    };
+    if fact.format != 1
+        || fact.name != normalize_name(&package.name)
+        || fact.version != package.version
+    {
+        return Err(ProvisionError::Failed(
+            "stored package provenance identity changed".into(),
+        ));
+    }
+    if fact.bytes_digest != package_bytes_digest(path.parent().expect("stored package directory"))?
+    {
+        return Err(failure(
+            "shared package bytes changed after their verified publication",
+        ));
+    }
+    Ok(resolved.interpreter_digest == fact.interpreter_digest
+        && (package.hashes.contains(&fact.artifact_digest)
+            || fact
+                .verified_artifact_digests
+                .iter()
+                .any(|hash| package.hashes.contains(hash))))
+}
+
+fn record_stored_artifact(
+    store: &Path,
+    package: &LockedPackage,
+    artifact_digest: &str,
+    resolved: &ResolvedRequirements,
+) -> Result<(), ProvisionError> {
+    use std::io::Write;
+    let directory = store
+        .join(normalize_name(&package.name))
+        .join(&package.version);
+    let bytes_digest = package_bytes_digest(&directory)?;
+    let mut verified_artifact_digests = Vec::new();
+    if let Some(previous) = read_stored_artifact(&directory.join(STORED_ARTIFACT))? {
+        if previous.format != 1
+            || previous.name != normalize_name(&package.name)
+            || previous.version != package.version
+            || previous.bytes_digest != bytes_digest
+        {
+            return Err(failure(
+                "shared package provenance changed before publication",
+            ));
+        }
+        if previous.interpreter_digest == resolved.interpreter_digest {
+            verified_artifact_digests.push(previous.artifact_digest);
+            verified_artifact_digests.extend(previous.verified_artifact_digests);
+        }
+    }
+    verified_artifact_digests.sort();
+    verified_artifact_digests.dedup();
+    verified_artifact_digests.retain(|digest| digest != artifact_digest);
+    let fact = StoredArtifact {
+        format: 1,
+        name: normalize_name(&package.name),
+        version: package.version.clone(),
+        artifact_digest: artifact_digest.into(),
+        verified_artifact_digests,
+        interpreter_digest: resolved.interpreter_digest.clone(),
+        bytes_digest,
+    };
+    let mut temporary = tempfile::NamedTempFile::new_in(&directory)
+        .map_err(|error| ProvisionError::Failed(error.to_string()))?;
+    temporary
+        .write_all(
+            &serde_json::to_vec(&fact)
+                .map_err(|error| ProvisionError::Failed(error.to_string()))?,
+        )
+        .and_then(|_| temporary.as_file().sync_all())
+        .map_err(|error| ProvisionError::Failed(error.to_string()))?;
+    temporary
+        .persist(directory.join(STORED_ARTIFACT))
+        .map_err(|error| ProvisionError::Failed(error.to_string()))?;
+    std::fs::File::open(directory)
+        .and_then(|file| file.sync_all())
+        .map_err(|error| ProvisionError::Failed(error.to_string()))
+}
+
+fn file_digest(path: &Path) -> Result<String, ProvisionError> {
+    use sha2::{Digest, Sha256};
+    use std::io::Read;
+    let mut file = std::fs::File::open(path).map_err(failure)?;
+    let mut digest = Sha256::new();
+    let mut buffer = [0u8; 64 * 1024];
+    loop {
+        let bytes = file.read(&mut buffer).map_err(failure)?;
+        if bytes == 0 {
+            break;
+        }
+        digest.update(&buffer[..bytes]);
+    }
+    Ok(format!("{:x}", digest.finalize()))
+}
+
+/// Verification metadata only: it does not name an environment or create
+/// another storage key. Package directories remain `(package, version)`.
+fn package_bytes_digest(root: &Path) -> Result<String, ProvisionError> {
+    use sha2::{Digest, Sha256};
+    let mut pending = vec![root.to_owned()];
+    let mut files = std::collections::BTreeMap::new();
+    while let Some(directory) = pending.pop() {
+        for entry in std::fs::read_dir(&directory).map_err(failure)? {
+            let entry = entry.map_err(failure)?;
+            let path = entry.path();
+            let relative = path
+                .strip_prefix(root)
+                .expect("stored package child")
+                .to_owned();
+            if is_installer_metadata(&relative) {
+                continue;
+            }
+            let kind = entry.file_type().map_err(failure)?;
+            if kind.is_dir() {
+                pending.push(path);
+                files.insert(relative, None);
+            } else if kind.is_file() {
+                files.insert(relative, Some(file_digest(&path)?));
+            } else {
+                return Err(failure("shared package contains a symlink or special file"));
+            }
+        }
+    }
+    let mut digest = Sha256::new();
+    for (relative, content) in files {
+        let path = relative.as_os_str().as_encoded_bytes();
+        digest.update((path.len() as u64).to_le_bytes());
+        digest.update(path);
+        match content {
+            Some(content) => {
+                digest.update(b"file\0");
+                digest.update(content.as_bytes());
+            }
+            None => digest.update(b"directory\0"),
+        }
+    }
+    Ok(format!("{:x}", digest.finalize()))
+}
+
 /// Whether two stored trees hold the same distribution bytes.
 ///
 /// The installer's own metadata is ignored on both sides (see
-/// [`INSTALLER_METADATA`]); everything else must match file for file.
+/// [`INSTALLER_METADATA`]). A uv-generated entry-point script may also carry a
+/// different base Python shebang: its view launcher selects the interpreter,
+/// and its declared entry point and complete script body must still match.
 fn same_tree(left: &Path, right: &Path) -> Result<bool, ProvisionError> {
     fn entries(
         root: &Path,
@@ -429,6 +934,8 @@ fn same_tree(left: &Path, right: &Path) -> Result<bool, ProvisionError> {
         }
         Ok(found)
     }
+    let left_scripts = generated_console_scripts(left)?;
+    let right_scripts = generated_console_scripts(right)?;
     let left = entries(left)?;
     let right = entries(right)?;
     if left.keys().ne(right.keys()) {
@@ -446,10 +953,88 @@ fn same_tree(left: &Path, right: &Path) -> Result<bool, ProvisionError> {
             ProvisionError::Failed(format!("{} is not readable: {error}", right_path.display()))
         })?;
         if left_bytes != right_bytes {
-            return Ok(false);
+            if !left_scripts.contains(relative) || !right_scripts.contains(relative) {
+                return Ok(false);
+            }
+            match (
+                generated_console_script_body(&left_bytes),
+                generated_console_script_body(&right_bytes),
+            ) {
+                (Some(left), Some(right)) if left == right => {}
+                _ => return Ok(false),
+            }
         }
     }
     Ok(true)
+}
+
+fn generated_console_scripts(
+    root: &Path,
+) -> Result<std::collections::BTreeSet<PathBuf>, ProvisionError> {
+    let mut scripts = std::collections::BTreeSet::new();
+    for entry in std::fs::read_dir(root).map_err(failure)? {
+        let path = entry.map_err(failure)?.path();
+        if path
+            .extension()
+            .is_none_or(|extension| extension != "dist-info")
+        {
+            continue;
+        }
+        let text = match std::fs::read_to_string(path.join("entry_points.txt")) {
+            Ok(text) => text,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => return Err(failure(error)),
+        };
+        let mut console = false;
+        for line in text.lines().map(str::trim) {
+            if line.starts_with('[') && line.ends_with(']') {
+                console = matches!(line, "[console_scripts]" | "[gui_scripts]");
+            } else if console
+                && !line.starts_with(['#', ';'])
+                && let Some((name, _)) = line.split_once('=')
+            {
+                let name = name.trim();
+                if Path::new(name).file_name() == Some(std::ffi::OsStr::new(name)) {
+                    scripts.insert(Path::new("bin").join(name));
+                }
+            }
+        }
+    }
+    Ok(scripts)
+}
+
+fn generated_console_script_body(bytes: &[u8]) -> Option<&[u8]> {
+    let newline = bytes.iter().position(|byte| *byte == b'\n')?;
+    let shebang = std::str::from_utf8(&bytes[..newline]).ok()?;
+    let mut body = &bytes[newline + 1..];
+    // uv uses this exact shell/Python wrapper when an interpreter path is too
+    // long for an OS shebang. The view must still launch its own Python.
+    let python = if shebang == "#!/bin/sh" {
+        let newline = body.iter().position(|byte| *byte == b'\n')?;
+        let command = std::str::from_utf8(&body[..newline])
+            .ok()?
+            .strip_prefix("'''exec' ")?
+            .strip_suffix(" \"$0\" \"$@\"")?;
+        let arguments = shlex::split(command)?;
+        if arguments.len() != 1 {
+            return None;
+        }
+        body = body[newline + 1..].strip_prefix(b"' '''\n")?;
+        arguments.into_iter().next()?
+    } else {
+        shebang.strip_prefix("#!")?.to_owned()
+    };
+    let path = Path::new(&python);
+    let suffix = path.file_name()?.to_str()?.strip_prefix("python")?;
+    if !path.is_absolute()
+        || !suffix
+            .chars()
+            .all(|character| character.is_ascii_digit() || character == '.')
+    {
+        return None;
+    }
+    body.starts_with(b"# -*- coding: utf-8 -*-\nimport sys\nfrom ")
+        .then_some(body)
 }
 
 fn publish_view(workspace: &Path, view: &Path) -> Result<(), ProvisionError> {
@@ -468,14 +1053,18 @@ fn publish_view(workspace: &Path, view: &Path) -> Result<(), ProvisionError> {
 /// Run the published view at its final path and report what it actually holds.
 async fn verify_view(
     provisioner: &DependencyProvisioner,
-    library_root: &Path,
+    store: &Path,
     view: &Path,
     resolved: &ResolvedRequirements,
+    access: &DependencyAccess,
 ) -> Result<(), ProvisionError> {
     let config = &provisioner.config;
-    let store = store_root(library_root);
     let mut grants = vec![ReadOnlyInput::new(view, view)];
-    for directory in referenced_store_directories(view, &store).map_err(ProvisionError::Failed)? {
+    grants.extend(
+        crate::plugin_view::interpreter_prefix_grants(&resolved.interpreter_prefix)
+            .map_err(ProvisionError::Failed)?,
+    );
+    for directory in referenced_store_directories(view, store).map_err(ProvisionError::Failed)? {
         grants.push(ReadOnlyInput::new(&directory, &directory));
     }
     let bin = view.join("bin");
@@ -496,7 +1085,7 @@ async fn verify_view(
          \x20   report['error'] = repr(error)\n\
          print(json.dumps(report))";
 
-    let output = run_step(
+    let output = run_step_with_access(
         config,
         &build,
         &workspace,
@@ -506,6 +1095,7 @@ async fn verify_view(
             probe.to_owned(),
         ],
         "running the Plugin dependency view",
+        access,
     )
     .await?;
     let report: serde_json::Value = serde_json::from_str(output.trim()).map_err(|error| {
@@ -557,38 +1147,44 @@ async fn verify_view(
 }
 
 /// Take the one write lock that store and view publication share.
-fn write_lock(root: &Path) -> Result<std::fs::File, ProvisionError> {
-    std::fs::create_dir_all(root).map_err(|error| {
-        ProvisionError::Failed(format!("{} is unusable: {error}", root.display()))
-    })?;
+pub(crate) async fn write_lock(
+    root: &Path,
+    access: &DependencyAccess,
+) -> Result<std::fs::File, ProvisionError> {
+    use std::os::unix::fs::OpenOptionsExt;
+    crate::goose_acp::pilot::directory(root).map_err(ProvisionError::Failed)?;
     let path = root.join(".lock");
     let file = std::fs::OpenOptions::new()
         .create(true)
         .read(true)
         .write(true)
         .truncate(false)
+        .custom_flags(
+            rustix::fs::OFlags::NOFOLLOW.bits() as i32 | rustix::fs::OFlags::NONBLOCK.bits() as i32,
+        )
         .open(&path)
         .map_err(|error| {
             ProvisionError::Failed(format!("{} is unusable: {error}", path.display()))
         })?;
-    rustix::fs::flock(&file, rustix::fs::FlockOperation::LockExclusive).map_err(|error| {
-        ProvisionError::Failed(format!("the dependency store lock failed: {error}"))
-    })?;
-    Ok(file)
-}
-
-fn cleanup(path: &Path) -> Result<(), ProvisionError> {
-    match std::fs::remove_dir_all(path) {
-        Ok(()) => (),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => (),
-        Err(error) => {
-            return Err(ProvisionError::Failed(format!(
-                "the staging directory {} could not be cleared: {error}",
-                path.display()
-            )));
+    if !file.metadata().map_err(failure)?.is_file() {
+        return Err(failure("dependency writer lease is not a regular file"));
+    }
+    loop {
+        access.check()?;
+        match rustix::fs::flock(&file, rustix::fs::FlockOperation::NonBlockingLockExclusive) {
+            Ok(()) => break,
+            Err(error) if error == rustix::io::Errno::WOULDBLOCK => tokio::select! {
+                _ = tokio::time::sleep(std::time::Duration::from_millis(20)) => {},
+                _ = access.cancelled() => return Err(ProvisionError::Failed("dependency preparation was cancelled while waiting for its store lock".into())),
+            },
+            Err(error) => {
+                return Err(ProvisionError::Failed(format!(
+                    "the dependency store lock failed: {error}"
+                )));
+            }
         }
     }
-    Ok(())
+    Ok(file)
 }
 
 #[cfg(test)]
@@ -604,6 +1200,111 @@ mod tests {
     use anchor_sandbox_bwrap::{BubblewrapPolicy, BubblewrapSandbox};
     use std::collections::BTreeMap;
     use std::sync::Arc;
+
+    #[test]
+    fn only_generated_entry_point_interpreter_bindings_are_ignored_when_comparing_store_bytes() {
+        let root = tempfile::tempdir().unwrap();
+        let left = root.path().join("left");
+        let right = root.path().join("right");
+        for tree in [&left, &right] {
+            std::fs::create_dir_all(tree.join("bin")).unwrap();
+            std::fs::create_dir_all(tree.join("fixture-1.dist-info")).unwrap();
+            std::fs::write(
+                tree.join("fixture-1.dist-info/entry_points.txt"),
+                "[console_scripts]\ntool = fixture.cli:main\n",
+            )
+            .unwrap();
+        }
+        let body = "# -*- coding: utf-8 -*-\nimport sys\nfrom fixture.cli import main\nif __name__ == \"__main__\":\n    sys.exit(main())\n";
+        let short = format!("#!/usr/bin/python3.12\n{body}");
+        let long = format!(
+            "#!/bin/sh\n'''exec' '/a long managed prefix/bin/python3.12' \"$0\" \"$@\"\n' '''\n{body}"
+        );
+        std::fs::write(left.join("bin/tool"), &short).unwrap();
+        std::fs::write(right.join("bin/tool"), &long).unwrap();
+        assert!(same_tree(&left, &right).unwrap());
+        assert_ne!(
+            package_bytes_digest(&left).unwrap(),
+            package_bytes_digest(&right).unwrap(),
+            "provenance continues to check every stored byte"
+        );
+
+        std::fs::write(right.join("bin/tool"), long.replace("main()", "other()")).unwrap();
+        assert!(
+            !same_tree(&left, &right).unwrap(),
+            "script bodies must match"
+        );
+        std::fs::write(
+            right.join("bin/tool"),
+            long.replace("' \"$0\"", "' -O \"$0\""),
+        )
+        .unwrap();
+        assert!(
+            !same_tree(&left, &right).unwrap(),
+            "interpreter arguments cannot be ignored"
+        );
+        std::fs::write(right.join("bin/tool"), &long).unwrap();
+
+        std::fs::write(left.join("bin/undeclared"), &short).unwrap();
+        std::fs::write(right.join("bin/undeclared"), &long).unwrap();
+        assert!(
+            !same_tree(&left, &right).unwrap(),
+            "arbitrary bin files remain payload"
+        );
+        std::fs::remove_file(left.join("bin/undeclared")).unwrap();
+        std::fs::remove_file(right.join("bin/undeclared")).unwrap();
+
+        std::fs::write(
+            left.join("bin/tool"),
+            "#!/usr/bin/python3.12\nprint('wheel script')\n",
+        )
+        .unwrap();
+        std::fs::write(
+            right.join("bin/tool"),
+            "#!/a/bin/python3.12\nprint('wheel script')\n",
+        )
+        .unwrap();
+        assert!(
+            !same_tree(&left, &right).unwrap(),
+            "only the uv-generated script format is normalized"
+        );
+        std::fs::write(left.join("bin/tool"), &short).unwrap();
+        std::fs::write(right.join("bin/tool"), &long).unwrap();
+        std::fs::write(
+            right.join("fixture-1.dist-info/entry_points.txt"),
+            "[other]\ntool = fixture.cli:main\n",
+        )
+        .unwrap();
+        assert!(
+            !same_tree(&left, &right).unwrap(),
+            "entry-point declarations remain payload"
+        );
+    }
+
+    #[tokio::test]
+    async fn store_lease_wait_cancels_and_a_later_preparation_can_continue() {
+        let root = tempfile::tempdir().unwrap();
+        let active = DependencyAccess::default();
+        let held = write_lock(root.path(), &active).await.unwrap();
+        let access = DependencyAccess::default();
+        let cancel = async {
+            tokio::time::sleep(std::time::Duration::from_millis(60)).await;
+            access
+                .cancellation
+                .store(true, std::sync::atomic::Ordering::Release);
+        };
+        let (result, ()) = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            tokio::join!(write_lock(root.path(), &access), cancel)
+        })
+        .await
+        .expect("waiting for the package-store lease must be cancellable");
+        assert!(result.unwrap_err().to_string().contains("cancel"));
+        drop(held);
+        let next = write_lock(root.path(), &DependencyAccess::default())
+            .await
+            .unwrap();
+        drop(next);
+    }
 
     /// The built-in Plugin this slice ships, in the repository next to the others.
     fn built_in_probe() -> std::path::PathBuf {
@@ -770,7 +1471,15 @@ mod tests {
             .expect("the installed Plugin has a view");
         assert_eq!(prepared.view(), view);
         let mcp = McpToolConfig::from_catalog(&library, std::slice::from_ref(&binding)).unwrap();
-        let plugin_views = BTreeMap::from([("python-probe".to_owned(), prepared)]);
+        let plugin_views = BTreeMap::from([(
+            "python-probe".to_owned(),
+            crate::plugin_view::PreparedPlugin::for_candidate(
+                &FilePluginCatalog::new(&library),
+                "python-probe",
+                Some(prepared),
+            )
+            .unwrap(),
+        )]);
         let tools = mcp
             .bind_with_node_inputs(
                 std::slice::from_ref(&binding),
@@ -947,7 +1656,15 @@ for line in sys.stdin:
             .expect("the installed Plugin has a view");
         let mcp = McpToolConfig::from_catalog(&deployment.library, std::slice::from_ref(binding))
             .unwrap();
-        let plugin_views = BTreeMap::from([("python-probe".to_owned(), prepared)]);
+        let plugin_views = BTreeMap::from([(
+            "python-probe".to_owned(),
+            crate::plugin_view::PreparedPlugin::for_candidate(
+                &FilePluginCatalog::new(&deployment.library),
+                "python-probe",
+                Some(prepared),
+            )
+            .unwrap(),
+        )]);
         let tools = mcp
             .bind_with_node_inputs(
                 std::slice::from_ref(binding),
@@ -1280,9 +1997,10 @@ for line in sys.stdin:
         assert_eq!(first_plan.packages[0].version, "3.6");
         verify_view(
             &deployment.provisioner,
-            &deployment.library,
+            &store_root(&resolved_library_root(&deployment.library)),
             &view,
             &resolved_of(&first_plan),
+            &DependencyAccess::default(),
         )
         .await
         .expect("the landed view holds the first resolution");
@@ -1308,9 +2026,10 @@ for line in sys.stdin:
                 // If reuse was allowed, the view must really hold the new set.
                 verify_view(
                     &deployment.provisioner,
-                    &deployment.library,
+                    &store_root(&resolved_library_root(&deployment.library)),
                     &view,
                     &resolved_of(&plan),
+                    &DependencyAccess::default(),
                 )
                 .await
                 .expect("a reused view must hold the set this declaration resolved to");
@@ -1323,6 +2042,100 @@ for line in sys.stdin:
             }
             Err(other) => panic!("unexpected failure: {other:?}"),
         }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn identical_package_bytes_from_two_artifacts_keep_both_locks_reusable_offline() {
+        let Some(deployment) = deploy().await else {
+            return;
+        };
+        deployment.install().await.unwrap();
+        let first = resolved_of(
+            &deployment
+                .precondition()
+                .await
+                .unwrap()
+                .dependencies
+                .unwrap(),
+        );
+        let wheel = deployment
+            .root
+            .path()
+            .join("wheels/idna-3.6-py3-none-any.whl");
+        let original_hash = file_digest(&wheel).unwrap();
+        let mut archive = std::fs::read(&wheel).unwrap();
+        assert_eq!(
+            &archive[archive.len() - 22..archive.len() - 18],
+            b"PK\x05\x06"
+        );
+        assert_eq!(&archive[archive.len() - 2..], &[0, 0]);
+        // A ZIP comment changes the approved artifact hash while delivering
+        // exactly the same distribution members and installed package bytes.
+        let comment = b"second authorized artifact";
+        let end = archive.len();
+        archive[end - 2..].copy_from_slice(&(comment.len() as u16).to_le_bytes());
+        archive.extend_from_slice(comment);
+        std::fs::write(&wheel, archive).unwrap();
+        let second_hash = file_digest(&wheel).unwrap();
+        assert_ne!(original_hash, second_hash);
+        let mut second = first.clone();
+        second.packages[0].hashes = vec![second_hash.clone()];
+        second.lock = second.lock.replace(&original_hash, &second_hash);
+        second.lock_digest = {
+            use sha2::{Digest, Sha256};
+            format!("{:x}", Sha256::digest(second.lock.as_bytes()))
+        };
+        let offline = DependencyAccess {
+            network: false,
+            ..Default::default()
+        };
+        land_with_access(
+            &deployment.provisioner,
+            &deployment.library,
+            "second",
+            "second",
+            &second,
+            &offline,
+        )
+        .await
+        .unwrap();
+        std::fs::remove_dir_all(deployment.root.path().join("wheels")).unwrap();
+        std::fs::remove_dir_all(deployment.provisioner.config.build_root.join("artifacts"))
+            .unwrap();
+        let existing = land_with_access(
+            &deployment.provisioner,
+            &deployment.library,
+            "python-probe",
+            &FilePluginCatalog::new(&deployment.library)
+                .definition("python-probe")
+                .unwrap()
+                .dependencies
+                .declaration_digest(),
+            &first,
+            &offline,
+        )
+        .await
+        .unwrap();
+        assert!(
+            existing.reused,
+            "the first lock remains valid after verifying an equivalent artifact"
+        );
+        land_with_access(
+            &deployment.provisioner,
+            &deployment.library,
+            "third",
+            "third",
+            &first,
+            &offline,
+        )
+        .await
+        .expect("a new view can reuse either verified artifact's shared bytes without downloads");
+        assert_eq!(
+            std::fs::read_dir(store_root(&deployment.library).join("idna"))
+                .unwrap()
+                .count(),
+            1
+        );
     }
 
     /// The shared store is keyed by (package, version), so two different byte sets
@@ -1426,7 +2239,15 @@ for line in sys.stdin:
         assert_eq!(prepared.view(), library_view);
 
         let mcp = McpToolConfig::from_catalog(&bundle, std::slice::from_ref(&binding)).unwrap();
-        let plugin_views = BTreeMap::from([("python-probe".to_owned(), prepared)]);
+        let plugin_views = BTreeMap::from([(
+            "python-probe".to_owned(),
+            crate::plugin_view::PreparedPlugin::for_candidate(
+                &FilePluginCatalog::new(&deployment.library),
+                "python-probe",
+                Some(prepared),
+            )
+            .unwrap(),
+        )]);
         let tools = mcp
             .bind_with_node_inputs(
                 std::slice::from_ref(&binding),

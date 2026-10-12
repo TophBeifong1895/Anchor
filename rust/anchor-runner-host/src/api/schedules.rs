@@ -18,6 +18,95 @@ static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 pub(super) type ScheduleStoreHandle = Arc<Mutex<ScheduleStore>>;
 
+/// Both HTTP and Pilot use this adapter over the same Host-owned store. The
+/// adapter adds no execution grant and never starts a Run while creating a plan.
+pub(super) struct ScheduleManagementAdapter {
+    store: ScheduleStoreHandle,
+}
+
+impl ScheduleManagementAdapter {
+    pub(super) fn new(store: ScheduleStoreHandle) -> Self {
+        Self { store }
+    }
+}
+
+impl crate::application::scheduling::ScheduleManagementPort for ScheduleManagementAdapter {
+    fn list(&self) -> Result<Value, ApplicationError> {
+        let store = self
+            .store
+            .lock()
+            .map_err(|_| schedule_store_unavailable())?;
+        Ok(json!({"schedules": &store.items}))
+    }
+
+    fn create(&self, graph: &str, rule: &Value, input: &Value) -> Result<Value, ApplicationError> {
+        if graph.trim().is_empty() {
+            return Err(ApplicationError::Invalid("graph is required".into()));
+        }
+        if !input.is_object() {
+            return Err(ApplicationError::Invalid("input must be an object".into()));
+        }
+        let precise_now = Local::now().naive_local();
+        let normalized_rule =
+            normalize_rule(rule, Some(precise_now)).map_err(ApplicationError::Invalid)?;
+        let next_at =
+            next_after(&normalized_rule, precise_now).map_err(ApplicationError::Invalid)?;
+        let created_at = precise_now
+            .with_nanosecond(0)
+            .expect("zero nanoseconds is valid");
+        let item = ScheduleItem {
+            id: unique_schedule_id(),
+            graph: graph.into(),
+            rule: normalized_rule,
+            input: input.clone(),
+            created_at: format_local_datetime(created_at),
+            next_at: format_local_datetime(next_at),
+            enabled: true,
+        };
+        let mut store = self
+            .store
+            .lock()
+            .map_err(|_| schedule_store_unavailable())?;
+        let previous = store.items.clone();
+        store.items.push(item.clone());
+        if let Err(message) = store.persist() {
+            store.items = previous;
+            return Err(ApplicationError::Storage(message));
+        }
+        Ok(json!({"schedule": item}))
+    }
+
+    fn delete(&self, id: &str) -> Result<Value, ApplicationError> {
+        let mut store = self
+            .store
+            .lock()
+            .map_err(|_| schedule_store_unavailable())?;
+        let previous = store.items.clone();
+        store.items.retain(|item| item.id != id);
+        if store.items.len() == previous.len() {
+            return Err(ApplicationError::Missing);
+        }
+        if let Err(message) = store.persist() {
+            store.items = previous;
+            return Err(ApplicationError::Storage(message));
+        }
+        Ok(json!({"schedule": id, "deleted": true}))
+    }
+}
+
+fn schedule_store_unavailable() -> ApplicationError {
+    ApplicationError::Storage("schedule store unavailable".into())
+}
+
+fn management_error(failure: ApplicationError, missing: &str) -> HttpResponse {
+    match failure {
+        ApplicationError::Missing => error(StatusCode::NOT_FOUND, missing),
+        ApplicationError::Invalid(message) => error(StatusCode::BAD_REQUEST, message),
+        ApplicationError::Conflict(message) => error(StatusCode::CONFLICT, message),
+        ApplicationError::Storage(message) => error(StatusCode::INTERNAL_SERVER_ERROR, message),
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct ScheduleItem {
@@ -151,13 +240,11 @@ impl ScheduleStore {
 pub(super) async fn list_schedules(
     State(state): State<ApiState>,
 ) -> Result<Json<Value>, HttpResponse> {
-    let schedules = state.schedules.lock().map_err(|_| {
-        error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "schedule store unavailable",
-        )
-    })?;
-    Ok(Json(json!({"schedules": &schedules.items})))
+    state
+        .application
+        .list_schedules()
+        .map(Json)
+        .map_err(|failure| management_error(failure, "no such schedule"))
 }
 
 pub(super) async fn create_schedule(
@@ -193,61 +280,23 @@ pub(super) async fn create_schedule(
         .filter(|rule| rule.is_object())
         .ok_or_else(|| error(StatusCode::BAD_REQUEST, "rule must be an object"))?;
 
-    load_graph_definition(&state, graph)
-        .map_err(|_| error(StatusCode::NOT_FOUND, format!("no such graph: {graph}")))?;
-    let precise_now = Local::now().naive_local();
-    let normalized_rule = normalize_rule(rule, Some(precise_now))
-        .map_err(|message| error(StatusCode::BAD_REQUEST, message))?;
-    let next_at = next_after(&normalized_rule, precise_now)
-        .map_err(|message| error(StatusCode::BAD_REQUEST, message))?;
-    let created_at = precise_now
-        .with_nanosecond(0)
-        .expect("zero nanoseconds is valid");
-    let item = ScheduleItem {
-        id: unique_schedule_id(),
-        graph: graph.to_owned(),
-        rule: normalized_rule,
-        input,
-        created_at: format_local_datetime(created_at),
-        next_at: format_local_datetime(next_at),
-        enabled: true,
-    };
-    let mut store = state.schedules.lock().map_err(|_| {
-        error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "schedule store unavailable",
-        )
-    })?;
-    let previous = store.items.clone();
-    store.items.push(item.clone());
-    if let Err(message) = store.persist() {
-        store.items = previous;
-        return Err(error(StatusCode::INTERNAL_SERVER_ERROR, message));
-    }
-    Ok((StatusCode::CREATED, Json(json!({"schedule": item}))))
+    let created = state
+        .application
+        .create_schedule(graph, rule, &input)
+        .await
+        .map_err(|failure| management_error(failure, &format!("no such graph: {graph}")))?;
+    Ok((StatusCode::CREATED, Json(created)))
 }
 
 pub(super) async fn delete_schedule(
     State(state): State<ApiState>,
     AxumPath(identifier): AxumPath<String>,
 ) -> Result<Json<Value>, HttpResponse> {
-    let mut store = state.schedules.lock().map_err(|_| {
-        error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "schedule store unavailable",
-        )
-    })?;
-    let old_len = store.items.len();
-    let previous = store.items.clone();
-    store.items.retain(|item| item.id != identifier);
-    if store.items.len() == old_len {
-        return Err(error(StatusCode::NOT_FOUND, "no such schedule"));
-    }
-    if let Err(message) = store.persist() {
-        store.items = previous;
-        return Err(error(StatusCode::INTERNAL_SERVER_ERROR, message));
-    }
-    Ok(Json(json!({"schedule": identifier, "deleted": true})))
+    state
+        .application
+        .delete_schedule(&identifier)
+        .map(Json)
+        .map_err(|failure| management_error(failure, "no such schedule"))
 }
 
 pub(super) fn skip_missed_schedules(state: &ApiState, now: NaiveDateTime) -> Result<(), String> {
@@ -681,3 +730,7 @@ fn unique_schedule_id() -> String {
 #[cfg(test)]
 #[path = "schedules_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "schedules_management_tests.rs"]
+mod management_tests;

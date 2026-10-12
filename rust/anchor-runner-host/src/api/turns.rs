@@ -102,7 +102,10 @@ pub(super) async fn get_pilot_turn(
         let turn = sessions
             .get_turn(&owner, &identifier, &turn)
             .map_err(session_error)?;
-        Ok(Json(json!({"turn":turn})))
+        let continuation =
+            crate::pilot_host::continuation_status(&sessions, &owner, &identifier, &turn.id)
+                .map_err(session_error)?;
+        Ok(Json(json!({"turn":turn,"continuation":continuation})))
     })
     .await
 }
@@ -197,6 +200,7 @@ pub(super) async fn create_pilot_turn(
         owner: owner.clone(),
         session: session.id.clone(),
         turn: String::new(),
+        context: None,
     };
     let turn = state
         .pilots
@@ -337,11 +341,13 @@ pub(super) async fn pilot_turn_events(
             let loaded = tokio::task::spawn_blocking(move || {
                 let turn_record = sessions.get_turn(&owner, &session, &turn)?;
                 let events = sessions.turn_events(&owner, &session, &turn, after)?;
-                Ok::<_, anchor_platform_session::SessionError>((turn_record, events))
+                let continuation =
+                    crate::pilot_host::continuation_status(&sessions, &owner, &session, &turn)?;
+                Ok::<_, anchor_platform_session::SessionError>((turn_record, events, continuation))
             })
             .await;
             match loaded {
-                Ok(Ok((turn, events))) => {
+                Ok(Ok((turn, events, continuation))) => {
                     for event in events {
                         cursor.after = event.seq;
                         cursor.pending.push_back(
@@ -351,11 +357,11 @@ pub(super) async fn pilot_turn_events(
                         );
                     }
                     if turn.status != TurnStatus::Running {
-                        cursor.pending.push_back(
-                            Event::default()
-                                .event("turn")
-                                .data(serde_json::to_string(&turn).expect("Turn is JSON")),
-                        );
+                        let mut value = serde_json::to_value(&turn).expect("Turn is JSON");
+                        value["continuation"] = continuation;
+                        cursor
+                            .pending
+                            .push_back(Event::default().event("turn").data(value.to_string()));
                         cursor.ended = true;
                     }
                 }

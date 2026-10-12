@@ -86,6 +86,10 @@ pub struct RunResult {
     /// results, and a Plugin that changed under a parked Run does not refuse it.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub plugin_views: BTreeMap<String, String>,
+    /// The Plugin code digest actually used by this invocation, keyed by Plugin
+    /// id. Like dependency views, this is an observation and never a gate.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub plugin_digests: BTreeMap<String, String>,
     pub completion: NodeCompletion,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub interruption: Option<String>,
@@ -177,7 +181,7 @@ pub struct ParallelActivation {
 
 /// Current persisted Graph Run record format. Readers migrate older formats and
 /// reject newer ones instead of guessing what changed.
-pub const RUN_RECORD_FORMAT: u32 = 12;
+pub const RUN_RECORD_FORMAT: u32 = 13;
 
 /// RFC 3339 UTC timestamp used for `started`/`updated` on Run records.
 pub(crate) fn timestamp_now() -> String {
@@ -910,9 +914,16 @@ impl GraphRunRecord {
                 // field is dropped, not reinterpreted: a Run uses its Plugin's
                 // views, and the environment mechanism no longer exists.
                 self.format = 12;
+                self.migrate_format()
+            }
+            12 => {
+                // Format 13 separates the admitted Plugin authorization from
+                // observed code digests. Old records have neither: never infer
+                // authority from whatever code is installed during migration.
+                self.format = 13;
                 Ok(())
             }
-            12 => Ok(()),
+            13 => Ok(()),
             other => Err(GraphError::CorruptRun(format!(
                 "unsupported graph run format {other}"
             ))),

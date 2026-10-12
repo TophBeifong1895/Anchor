@@ -37,14 +37,47 @@ fn fixture() -> (tempfile::TempDir, PilotTools) {
         owner: "local".into(),
         session: "pilot".into(),
         turn: String::new(),
+        context: None,
     };
     (root, tools)
 }
 
 #[tokio::test]
+async fn platform_status_is_advertised_as_a_read_only_pilot_tool_and_fails_closed() {
+    let (_root, tools) = fixture();
+    let definition = tools
+        .definitions()
+        .into_iter()
+        .find(|definition| definition.name == "platform_status")
+        .expect("platform status is part of the common Pilot tool table");
+    assert_eq!(
+        definition.parameters,
+        json!({
+            "type":"object",
+            "properties":{},
+            "additionalProperties":false
+        })
+    );
+    assert!(tools.is_read_only("platform_status"));
+
+    let status = tools.execute("platform_status", json!({})).await.unwrap();
+    assert_eq!(status["python"]["shared_interpreter_configured"], false);
+    assert_eq!(status["python"]["shared_interpreter_available"], false);
+    assert_eq!(status["python"]["authoring_granted"], false);
+    assert_eq!(
+        status["python"]["dependency_preparation"]["configured"],
+        false
+    );
+    assert_eq!(status["rust"]["configured"], false);
+    assert_eq!(status["rust"]["installed_toolchains"], json!([]));
+    assert_eq!(status["network"]["allowed_this_turn"], false);
+    assert_eq!(status["mutations_performed"], false);
+}
+
+#[tokio::test]
 async fn assistant_reviews_a_workspace_candidate_without_installing_it() {
     let (root, tools) = fixture();
-    let candidate = root.path().join("work/candidate");
+    let candidate = tools.task_workspace().join("candidate");
     std::fs::create_dir_all(candidate.join("skills/check")).unwrap();
     std::fs::write(
             candidate.join("plugin.json"),
@@ -77,7 +110,7 @@ async fn assistant_reviews_a_workspace_candidate_without_installing_it() {
 #[tokio::test]
 async fn assistant_review_refuses_paths_outside_its_workspace() {
     let (root, tools) = fixture();
-    let workspace = root.path().join("work");
+    let workspace = tools.task_workspace();
     std::fs::create_dir_all(workspace.join("candidate")).unwrap();
     std::fs::write(
         workspace.join("candidate/plugin.json"),
@@ -169,16 +202,24 @@ async fn assistant_refuses_to_rewrite_or_delete_its_own_graph() {
 async fn read_tools_do_not_create_runs_or_modify_definitions() {
     let (root, tools) = fixture();
     let original = std::fs::read(root.path().join("fixture/graph.json")).unwrap();
-    assert_eq!(tools.definitions().len(), 16);
-    assert_eq!(
-        tools
-            .definitions()
-            .iter()
-            .filter(|tool| tools.is_read_only(&tool.name))
-            .count(),
-        10,
-        "the retired environment reads took three read-only tools with them"
-    );
+    for name in [
+        "platform_status",
+        "graph_read",
+        "plugin_list",
+        "run_list",
+        "schedule_list",
+    ] {
+        assert!(tools.is_read_only(name), "{name} must stay read-only");
+    }
+    for name in [
+        "runtime_prepare",
+        "development_prepare",
+        "credential_request",
+        "schedule_create",
+        "schedule_delete",
+    ] {
+        assert!(!tools.is_read_only(name), "{name} changes Host facts");
+    }
     assert!(!tools.is_read_only("graph_run"));
     assert_eq!(
         tools
@@ -220,6 +261,160 @@ async fn read_tools_do_not_create_runs_or_modify_definitions() {
         original
     );
     assert!(!root.path().join("state").exists());
+}
+
+#[tokio::test]
+async fn graph_authoring_tools_share_a_usable_example_on_an_empty_catalog() {
+    let (root, mut tools) = fixture();
+    let catalog = root.path().join("empty-catalog");
+    std::fs::create_dir(&catalog).unwrap();
+    tools.application = RunApplication::new(root.path().join("state"), catalog.clone());
+    tools.catalog_root = catalog;
+    tools.graph_name.clear();
+    assert_eq!(
+        tools.execute("graph_list", json!({})).await.unwrap(),
+        json!({"graphs":[]})
+    );
+    let definitions = tools.definitions();
+    let parameter = &definitions
+        .iter()
+        .find(|tool| tool.name == "graph_validate")
+        .unwrap()
+        .parameters["properties"]["definition"];
+    for name in ["graph_create", "graph_update"] {
+        assert_eq!(
+            &definitions
+                .iter()
+                .find(|tool| tool.name == name)
+                .unwrap()
+                .parameters["properties"]["definition"],
+            parameter
+        );
+    }
+    let definition = parameter["examples"][0].clone();
+    let description = parameter["description"].as_str().unwrap();
+    assert!(description.contains(&definition.to_string()));
+    let snapshot = GraphSnapshot::from_authoring(definition.clone()).unwrap();
+    assert_eq!(snapshot.ops["hello"]["writes"], json!(["hello.txt"]));
+    assert_eq!(
+        tools
+            .execute("graph_validate", json!({"definition":definition}))
+            .await
+            .unwrap(),
+        json!({"valid":true,"entry":"hello","nodes":["hello"]})
+    );
+    let (turn, _) = tools
+        .sessions
+        .create_turn("local", "pilot", "author", Some("create a Graph"))
+        .unwrap();
+    let tools = tools.for_turn(&turn.id);
+    tools
+        .execute(
+            "graph_create",
+            json!({"name":"hello","definition":definition}),
+        )
+        .await
+        .unwrap();
+    let mut updated = definition;
+    updated["objective"] = json!("updated without running");
+    tools
+        .execute(
+            "graph_update",
+            json!({"graph":"hello","definition":updated}),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        tools
+            .execute("graph_read", json!({"graph":"hello"}))
+            .await
+            .unwrap()["definition"],
+        updated
+    );
+    assert!(tools.application.records().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn graph_validate_preserves_kernel_authoring_diagnostics() {
+    let (_root, tools) = fixture();
+    let example = graphs::definition_parameter()["examples"][0].clone();
+    let mut argv = example.clone();
+    argv["ops"]["hello"]["run"] = json!(["printf", "hello"]);
+    let mut inline_op = example.clone();
+    inline_op["nodes"][0]["op"] = json!({"run":"true"});
+    let mut misplaced_writes = example.clone();
+    misplaced_writes["nodes"][0]["writes"] = json!(["hello.txt"]);
+    let mut unknown_op = example;
+    unknown_op["nodes"][0]["op"] = json!("missing");
+    for (definition, diagnostic) in [
+        (argv, "op \"hello\".run must be a non-empty command string"),
+        (inline_op, ".op must be a non-empty string"),
+        (misplaced_writes, "unknown field `writes`"),
+        (unknown_op, "references undeclared op \"missing\""),
+    ] {
+        let expected = GraphSnapshot::from_authoring(definition.clone())
+            .unwrap_err()
+            .to_string();
+        assert!(expected.contains(diagnostic), "{expected}");
+        let report = tools
+            .execute("graph_validate", json!({"definition":definition}))
+            .await
+            .unwrap();
+        assert_eq!(report, json!({"valid":false,"error":expected}));
+    }
+    let error = tools
+        .execute("graph_validate", json!({"definition":[]}))
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("definition must be an object"));
+}
+
+#[tokio::test]
+async fn graph_validate_hides_private_plugin_paths_and_host_configuration_failures() {
+    let (root, tools) = fixture();
+    let plugin = root.path().join("plugins/private");
+    std::fs::create_dir_all(&plugin).unwrap();
+    let private = root.path().join("host-private-config.json");
+    std::fs::write(&private, r#"{"name":"Private","secret":"private-key"}"#).unwrap();
+    std::os::unix::fs::symlink(&private, plugin.join("plugin.json")).unwrap();
+    let raw = FilePluginCatalog::new(root.path())
+        .resolve(&["private".into()])
+        .unwrap_err()
+        .to_string();
+    assert!(raw.contains(root.path().to_str().unwrap()));
+    let definition = json!({
+        "entry":"worker",
+        "agents":{"worker":{"model":"fixture"}},
+        "nodes":[{"id":"worker","agent":"worker","plugins":["private"]}],
+        "edges":[]
+    });
+    GraphSnapshot::from_authoring(definition.clone()).unwrap();
+    let plugin_report = tools
+        .execute("graph_validate", json!({"definition":definition}))
+        .await
+        .unwrap();
+    assert_eq!(
+        plugin_report,
+        json!({"valid":false,"error":"invalid Graph or unavailable Plugin"})
+    );
+    assert!(
+        !plugin_report
+            .to_string()
+            .contains(root.path().to_str().unwrap())
+    );
+    assert!(!plugin_report.to_string().contains("private-key"));
+    let mut unsupported = definition;
+    unsupported["nodes"][0]["plugins"] = json!([]);
+    unsupported["agents"]["worker"]["max_steps"] = json!(1);
+    let snapshot = GraphSnapshot::from_authoring(unsupported.clone()).unwrap();
+    assert!(crate::reject_snapshot(&snapshot).is_err());
+    assert_eq!(
+        tools
+            .execute("graph_validate", json!({"definition":unsupported}))
+            .await
+            .unwrap(),
+        plugin_report
+    );
 }
 
 #[tokio::test]

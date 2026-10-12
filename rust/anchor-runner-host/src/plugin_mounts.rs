@@ -34,6 +34,10 @@ pub(crate) trait PluginMountSource: Send + Sync {
     /// This Session's switches, by Plugin id. A Session that does not exist is
     /// "no override" rather than an error.
     fn session_mounts(&self, session: &str) -> Result<BTreeMap<String, bool>, String>;
+
+    fn session_policy(&self, session: &str) -> Result<(BTreeMap<String, bool>, bool), String> {
+        self.session_mounts(session).map(|mounts| (mounts, true))
+    }
 }
 
 /// The production source: the platform Session store, read by Session id.
@@ -64,15 +68,19 @@ impl SessionMounts {
 
 impl PluginMountSource for SessionMounts {
     fn session_mounts(&self, session: &str) -> Result<BTreeMap<String, bool>, String> {
+        self.session_policy(session).map(|(mounts, _)| mounts)
+    }
+
+    fn session_policy(&self, session: &str) -> Result<(BTreeMap<String, bool>, bool), String> {
         if !self.database.is_file() {
             // No Session store at all: no Session mounted anything.
-            return Ok(BTreeMap::new());
+            return Ok((BTreeMap::new(), true));
         }
         let switches = match &self.store {
-            Some(store) => store.plugin_mounts(session),
+            Some(store) => store.plugin_policy(session),
             // The platform created its store after this host was built.
             None => {
-                SessionStore::open(&self.database).and_then(|store| store.plugin_mounts(session))
+                SessionStore::open(&self.database).and_then(|store| store.plugin_policy(session))
             }
         };
         switches.map_err(|error| format!("Session Plugin mounts unavailable: {error}"))
@@ -91,15 +99,18 @@ pub(crate) struct MountSnapshot {
     pub(crate) turn: String,
     /// What the Session's switches were when this Turn started.
     pub(crate) mounts: BTreeMap<String, bool>,
+    #[serde(default = "anchor_platform_session::network_allowed_default")]
+    pub(crate) network_allowed: bool,
 }
 
 impl MountSnapshot {
     pub(crate) fn new(session: &str, turn: &str, mounts: &BTreeMap<String, bool>) -> Self {
         Self {
-            format: 1,
+            format: 2,
             session: session.to_owned(),
             turn: turn.to_owned(),
             mounts: mounts.clone(),
+            network_allowed: true,
         }
     }
 }
@@ -176,13 +187,113 @@ pub(crate) fn write_snapshot(
 /// missing snapshot must not stop an old Run from running.
 pub(crate) fn read_snapshot(path: &Path, session: &str, turn: &str) -> Option<MountSnapshot> {
     let bytes = std::fs::read(path).ok()?;
-    let snapshot: MountSnapshot = serde_json::from_slice(&bytes).ok()?;
+    parse_snapshot(&bytes, session, turn)
+}
+
+fn parse_snapshot(bytes: &[u8], session: &str, turn: &str) -> Option<MountSnapshot> {
+    let snapshot: MountSnapshot = serde_json::from_slice(bytes).ok()?;
     // A snapshot belongs to exactly one Turn of one Session: a file that names
     // something else is not this Turn's snapshot, and must not be presented as one.
-    if snapshot.session != session || snapshot.turn != turn {
+    if !matches!(snapshot.format, 1 | 2) || snapshot.session != session || snapshot.turn != turn {
         return None;
     }
     Some(snapshot)
+}
+
+/// Reclaim only snapshots whose exact identity agrees with the Session store.
+/// The legacy path encoding is shared by ids such as `a:b` and `a_b`: neither
+/// the directory name nor a JSON identity without a real Turn proves ownership.
+pub(crate) fn cleanup_snapshots(
+    state_root: &Path,
+    session: &str,
+    turns: &[String],
+) -> std::io::Result<()> {
+    use rustix::fs::{AtFlags, FileType, Mode, OFlags, fsync, openat, statat, unlinkat};
+    use rustix::io::Errno;
+    use std::io::Read;
+
+    let Some(root) = open_snapshot_directory(&state_root.join(SNAPSHOT_DIR))? else {
+        return Ok(());
+    };
+    let session_component = component(session);
+    let directory = match openat(
+        &root,
+        session_component.as_str(),
+        OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+        Mode::empty(),
+    ) {
+        Ok(directory) => directory,
+        Err(Errno::NOENT) => return Ok(()),
+        Err(error) => return Err(error.into()),
+    };
+    for turn in turns {
+        let path = snapshot_path(state_root, session, turn);
+        let name = path.file_name().expect("snapshot file name");
+        let metadata = match statat(&directory, name, AtFlags::SYMLINK_NOFOLLOW) {
+            Ok(metadata) => metadata,
+            Err(Errno::NOENT) => continue,
+            Err(error) => return Err(error.into()),
+        };
+        if FileType::from_raw_mode(metadata.st_mode) != FileType::RegularFile {
+            continue;
+        }
+        let file = match openat(
+            &directory,
+            name,
+            OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC,
+            Mode::empty(),
+        ) {
+            Ok(file) => file,
+            Err(Errno::NOENT | Errno::LOOP) => continue,
+            Err(error) => return Err(error.into()),
+        };
+        let mut file = std::fs::File::from(file);
+        if !file.metadata()?.is_file() {
+            continue;
+        }
+        let mut bytes = Vec::new();
+        file.read_to_end(&mut bytes)?;
+        if parse_snapshot(&bytes, session, turn).is_none() {
+            continue;
+        }
+        match unlinkat(&directory, name, AtFlags::empty()) {
+            Ok(()) | Err(Errno::NOENT) => {}
+            Err(error) => return Err(error.into()),
+        }
+    }
+    fsync(&directory)?;
+    // Unknown files, malformed facts and another Session's snapshots keep this
+    // shared directory alive. Never remove its contents recursively.
+    match unlinkat(&root, session_component.as_str(), AtFlags::REMOVEDIR) {
+        Ok(()) => fsync(&root).map_err(Into::into),
+        Err(Errno::NOENT | Errno::NOTEMPTY) => Ok(()),
+        Err(error) => Err(error.into()),
+    }
+}
+
+fn open_snapshot_directory(path: &Path) -> std::io::Result<Option<rustix::fd::OwnedFd>> {
+    use rustix::fs::{Mode, OFlags, open, openat};
+    use std::path::Component;
+
+    let flags = OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC;
+    let mut directory = open("/", flags, Mode::empty())?;
+    for component in std::path::absolute(path)?.components() {
+        match component {
+            Component::RootDir => {}
+            Component::Normal(name) => match openat(&directory, name, flags, Mode::empty()) {
+                Ok(child) => directory = child,
+                Err(rustix::io::Errno::NOENT) => return Ok(None),
+                Err(error) => return Err(error.into()),
+            },
+            _ => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "snapshot directory must be an absolute host path without symlinks",
+                ));
+            }
+        }
+    }
+    Ok(Some(directory))
 }
 
 /// The mounts one Plugin-bearing call actually uses, and why the others are off.

@@ -19,7 +19,9 @@ mod graph_listeners;
 mod graph_validation;
 mod oauth;
 mod persistent_assistants;
+mod pilot_credentials;
 mod pilot_graph;
+mod pilot_oauth;
 mod platform_contract;
 mod plugin_library;
 mod production_readiness;
@@ -75,11 +77,15 @@ fn fixture() -> (tempfile::TempDir, ApiState) {
         r#"{"format":1,"graph":"graph.json","plugins":[]}"#,
     )
     .unwrap();
+    let schedules = ScheduleStore::open(root.path().join("schedules.json")).unwrap();
     let state = ApiState {
         bundle_root: bundle.clone(),
         catalog_root: root.path().to_path_buf(),
         application: RunApplication::new(root.path().join("state"), root.path().to_path_buf())
-            .with_configured_graph("fixture".into(), bundle),
+            .with_configured_graph("fixture".into(), bundle)
+            .with_schedule_management(Arc::new(
+                crate::api::schedules::ScheduleManagementAdapter::new(schedules.clone()),
+            )),
         data_root: root.path().join("state"),
         workspace_root: root.path().join("workspaces"),
         graph_name: "fixture".into(),
@@ -87,7 +93,7 @@ fn fixture() -> (tempfile::TempDir, ApiState) {
         api_keys: Vec::new(),
         // Keep the schedule fixture outside data_root: static graph validation
         // must leave that root absent and otherwise unchanged.
-        schedules: ScheduleStore::open(root.path().join("schedules.json")).unwrap(),
+        schedules,
         pilots: crate::pilot_host::PilotService::default(),
         wecom: WecomSettings {
             graph: "fixture".into(),
@@ -1817,6 +1823,7 @@ async fn graph_delete_is_rejected_while_its_own_run_is_unfinished() {
             digest: "pinned-digest".into(),
             resources: vec!["resource.txt".into()],
             mcp_servers: vec![],
+            authorization_digest: String::new(),
         },
     );
     record.plugin_bindings_initialized = true;

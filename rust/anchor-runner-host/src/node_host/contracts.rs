@@ -53,8 +53,14 @@ impl ResolutionError {
     }
 }
 
+/// The tools and Plugin identities prepared for the same invocation.
+pub(crate) struct ResolvedNodeTools {
+    pub(crate) tools: Arc<dyn ToolPort>,
+    pub(crate) plugins: Vec<PluginBinding>,
+}
+
 pub(crate) type ToolResolution<'resolver> =
-    Pin<Box<dyn Future<Output = Result<Arc<dyn ToolPort>, ResolutionError>> + Send + 'resolver>>;
+    Pin<Box<dyn Future<Output = Result<ResolvedNodeTools, ResolutionError>> + Send + 'resolver>>;
 
 pub(crate) trait NodeHostResolver: Send + Sync {
     fn prompt_images(&self, request: &NodeExecutionRequest) -> Result<Vec<NodeImage>, String>;

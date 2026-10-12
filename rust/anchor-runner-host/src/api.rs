@@ -1,6 +1,7 @@
 mod assistant_recovery;
 #[allow(clippy::result_large_err)]
 mod channel_sessions;
+mod credential_requests;
 mod files;
 mod graphs;
 #[allow(clippy::result_large_err)]
@@ -129,14 +130,43 @@ async fn auth(
     next: Next,
 ) -> HttpResponse {
     let oauth_request = is_oauth_path(request.uri().path());
-    if state.api_keys.is_empty() && state.loopback {
-        return next.run(request).await;
-    }
     let key = headers
         .get(header::AUTHORIZATION)
         .and_then(|v| v.to_str().ok())
         .and_then(|v| v.strip_prefix("Bearer "))
         .unwrap_or("");
+    if key.starts_with("anchor-channel-api-")
+        || state
+            .application
+            .channel_callback_owner("wecom", key)
+            .is_some()
+    {
+        let path = request.uri().path();
+        let allowed = (request.method() == axum::http::Method::POST
+            && matches!(
+                path,
+                "/channels/wecom/events" | "/channels/wecom/settlements"
+            ))
+            || (request.method() == axum::http::Method::GET
+                && path
+                    .strip_prefix("/channels/wecom/progress/")
+                    .is_some_and(|event| !event.is_empty() && !event.contains('/')));
+        if !allowed
+            || state
+                .application
+                .channel_callback_owner("wecom", key)
+                .is_none()
+        {
+            return error(
+                StatusCode::UNAUTHORIZED,
+                "invalid channel callback authorization",
+            );
+        }
+        return next.run(request).await;
+    }
+    if state.api_keys.is_empty() && state.loopback {
+        return next.run(request).await;
+    }
     if !state
         .api_keys
         .iter()
@@ -152,11 +182,14 @@ async fn auth(
     next.run(request).await
 }
 
-async fn secure_oauth_responses(request: axum::extract::Request, next: Next) -> HttpResponse {
+async fn secure_private_responses(request: axum::extract::Request, next: Next) -> HttpResponse {
     let oauth_request = is_oauth_path(request.uri().path());
+    let credential_request = credential_requests::is_private_path(request.uri().path());
     let response = next.run(request).await;
     if oauth_request {
         oauth::secure_oauth_response(response)
+    } else if credential_request {
+        credential_requests::secure_private_response(response)
     } else {
         response
     }
@@ -226,15 +259,18 @@ pub(crate) fn configured_pilot_graph() -> Option<String> {
 }
 
 pub async fn serve() -> io::Result<()> {
-    let bundle_root = env::var_os("ANCHOR_RUNNER_BUNDLE_ROOT")
-        .map(PathBuf::from)
-        .ok_or_else(|| io::Error::other("ANCHOR_RUNNER_BUNDLE_ROOT is required"))?;
+    let configured_bundle = env::var_os("ANCHOR_RUNNER_BUNDLE_ROOT")
+        .filter(|path| !path.is_empty())
+        .map(PathBuf::from);
     let data_root = env::var_os("ANCHOR_RUNNER_STATE_ROOT")
         .map(PathBuf::from)
         .ok_or_else(|| io::Error::other("ANCHOR_RUNNER_STATE_ROOT is required"))?;
     let workspace_root = env::var_os("ANCHOR_RUNNER_WORKSPACE_ROOT")
         .map(PathBuf::from)
         .ok_or_else(|| io::Error::other("ANCHOR_RUNNER_WORKSPACE_ROOT is required"))?;
+    let bundle_root = configured_bundle
+        .clone()
+        .unwrap_or_else(|| data_root.join("unconfigured-graph"));
     // The same single authority the node call and the graph routes read.
     let graph_name = configured_pilot_graph().unwrap_or_default();
     let listen = env::var("ANCHOR_RUNNER_LISTEN").unwrap_or_else(|_| "127.0.0.1:8077".into());
@@ -251,14 +287,22 @@ pub async fn serve() -> io::Result<()> {
     let catalog_root = env::var_os("ANCHOR_RUNNER_CATALOG_ROOT")
         .map(PathBuf::from)
         .unwrap_or_else(|| {
+            if configured_bundle.is_none() {
+                return data_root.join("catalog");
+            }
             bundle_root
                 .parent()
                 .unwrap_or_else(|| std::path::Path::new("."))
                 .to_path_buf()
         });
+    for root in [&data_root, &workspace_root, &catalog_root] {
+        crate::goose_acp::pilot::directory(root).map_err(io::Error::other)?;
+    }
     let configured_graph_ready =
         validate_service_configuration(&bundle_root, &data_root, &workspace_root, &catalog_root)?;
     let _writer = crate::acquire_deployment_writer().map_err(io::Error::other)?;
+    crate::runtime_configuration::install_release_network(&crate::library_root(&catalog_root))
+        .map_err(io::Error::other)?;
     // Start-up reclamation is best effort: a Library that cannot be swept (a busy
     // writer, an unreadable manifest) must never keep the host from starting, and
     // the sweep only deletes what it can prove is unreferenced.
@@ -292,25 +336,25 @@ pub async fn serve() -> io::Result<()> {
     // explicit Library root, otherwise the Graph catalog the Plugin API also
     // falls back to. The build root must stay disjoint from it.
     let dependency_library_root = crate::library_root(&catalog_root);
-    let provisioner = match crate::dependency_provision::from_env(
-        &data_root,
-        env::var_os("ANCHOR_BWRAP")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| PathBuf::from("bwrap")),
-        Some(&dependency_library_root),
-    ) {
-        Ok(Some(config)) => Some(Arc::new(
-            crate::dependency_provision::DependencyProvisioner::new(config)
-                .map_err(|error| io::Error::other(error.to_string()))?,
-        )),
-        Ok(None) => None,
-        Err(reason) => return Err(io::Error::other(reason)),
-    };
+    let runtime_configuration = Arc::new(
+        crate::runtime_configuration::RuntimeConfiguration::from_env(
+            &data_root,
+            &dependency_library_root,
+            env::var_os("ANCHOR_BWRAP")
+                .map(PathBuf::from)
+                .unwrap_or_else(|| PathBuf::from("bwrap")),
+        )
+        .map_err(io::Error::other)?,
+    );
     let mut application = RunApplication::new(data_root.clone(), catalog_root.clone())
-        .with_configured_graph(graph_name.clone(), bundle_root.clone());
-    if let Some(provisioner) = provisioner {
-        application = application.with_dependency_provisioner(provisioner);
+        .with_runtime_configuration(runtime_configuration);
+    if configured_bundle.is_some() {
+        application = application.with_configured_graph(graph_name.clone(), bundle_root.clone());
     }
+    let schedules = ScheduleStore::open(schedules_path).map_err(io::Error::other)?;
+    application = application.with_schedule_management(Arc::new(
+        schedules::ScheduleManagementAdapter::new(schedules.clone()),
+    ));
     let mut state = ApiState {
         #[cfg(test)]
         bundle_root: bundle_root.clone(),
@@ -321,7 +365,7 @@ pub async fn serve() -> io::Result<()> {
         graph_name,
         loopback,
         api_keys,
-        schedules: ScheduleStore::open(schedules_path).map_err(io::Error::other)?,
+        schedules,
         pilots: crate::pilot_host::PilotService::default(),
         wecom: WecomSettings::from_env(),
         channel_descriptors: Default::default(),
@@ -347,14 +391,25 @@ pub async fn serve() -> io::Result<()> {
     }
     let listener = tokio::net::TcpListener::bind(&listen).await?;
     let callback_listen = listener.local_addr()?.to_string();
-    let mut channel_supervisor = crate::channel_supervisor::ChannelSupervisor::start(
-        &bundle_root,
-        &crate::library_root(&state.catalog_root),
-        &state.data_root,
-        &callback_listen,
-        &state.api_keys,
-    )
-    .await?;
+    state.application = state.application.clone().with_oauth_management(Arc::new(
+        oauth::OAuthManagementAdapter::new(
+            state.data_root.clone(),
+            crate::library_root(&state.catalog_root),
+            &callback_listen,
+        ),
+    ));
+    let mut channel_supervisor = if configured_bundle.is_some() {
+        crate::channel_supervisor::ChannelSupervisor::start(
+            &bundle_root,
+            &crate::library_root(&state.catalog_root),
+            &state.data_root,
+            &callback_listen,
+            &state.api_keys,
+        )
+        .await?
+    } else {
+        None
+    };
     if let Some(supervisor) = channel_supervisor.as_ref()
         && let Some(descriptor) = supervisor.descriptor("wecom")
         && let Some(existing) = env::var_os("ANCHOR_CHANNEL_CONTROL_DESCRIPTOR")
@@ -381,7 +436,37 @@ pub async fn serve() -> io::Result<()> {
     if let Some(supervisor) = channel_supervisor.as_ref() {
         state.channel_descriptors = supervisor.descriptors();
     }
-    let ready = Arc::new(AtomicBool::new(configured_graph_ready));
+    let deployment_headers = state
+        .api_keys
+        .first()
+        .and_then(|key| axum::http::HeaderValue::from_str(&format!("Bearer {key}")).ok())
+        .map(|value| HeaderMap::from_iter([(header::AUTHORIZATION, value)]))
+        .unwrap_or_default();
+    let deployment_owner = private_owner(&state, &deployment_headers);
+    let channel_manager = Arc::new(
+        crate::channel_supervisor::management::ChannelManagementAdapter::open(
+            crate::channel_supervisor::management::ChannelHostConfiguration::from_env(
+                state.data_root.clone(),
+                state.catalog_root.clone(),
+                crate::library_root(&state.catalog_root),
+                callback_listen,
+                deployment_owner,
+            ),
+            channel_supervisor.take(),
+        )
+        .map_err(io::Error::other)?,
+    );
+    channel_manager
+        .resume()
+        .await
+        .map_err(|error| io::Error::other(format!("channel startup unavailable: {error:?}")))?;
+    state.application = state
+        .application
+        .clone()
+        .with_channel_management(channel_manager.clone());
+    let ready = Arc::new(AtomicBool::new(
+        configured_bundle.is_none() || configured_graph_ready,
+    ));
     start_schedule_ticker(state.clone());
     let app = router_with_readiness(state, ready.clone());
     let shutdown_ready = ready.clone();
@@ -392,9 +477,7 @@ pub async fn serve() -> io::Result<()> {
         })
         .await
         .map_err(io::Error::other);
-    if let Some(supervisor) = channel_supervisor.as_mut() {
-        supervisor.shutdown().await;
-    }
+    channel_manager.shutdown().await;
     result
 }
 
@@ -739,6 +822,8 @@ fn session_plugin_row(
             .collect::<Vec<_>>(),
         "required": required,
         "on": on,
+        "requiresNetwork": crate::plugin_network::requires_network(definition),
+        "networkProvider": definition.id == crate::plugin_network::NETWORK_PLUGIN,
         "available": available,
         "error": error,
     })
@@ -786,6 +871,26 @@ fn session_plugin_rows(
             &session.plugin_mounts,
         ));
     }
+    let mounted = rows
+        .iter()
+        .filter(|row| row["on"] == true && row["available"] == true)
+        .filter_map(|row| row["id"].as_str().map(str::to_owned))
+        .collect::<Vec<_>>();
+    let network = crate::plugin_network::resolve(&root, &mounted, session.network_allowed);
+    for row in &mut rows {
+        let id = row["id"].as_str().unwrap_or_default().to_owned();
+        row["explicitOn"] = row["on"].clone();
+        row["networkAllowed"] = json!(network.allowed);
+        row["networkPermission"] = json!(session.network_allowed);
+        if id == crate::plugin_network::NETWORK_PLUGIN {
+            row["on"] = json!(network.enabled);
+            row["enabledBy"] = json!(network.enabled_by);
+        }
+        if let Some(problem) = network.errors.get(&id) {
+            row["available"] = json!(false);
+            row["error"] = json!(problem);
+        }
+    }
     rows.sort_by(|left, right| left["id"].as_str().cmp(&right["id"].as_str()));
     Ok(rows)
 }
@@ -818,49 +923,47 @@ async fn set_session_plugin(
     AxumPath((identifier, plugin)): AxumPath<(String, String)>,
     Json(body): Json<Value>,
 ) -> Result<Json<Value>, HttpResponse> {
+    let fields = body
+        .as_object()
+        .filter(|fields| fields.len() == 1 && fields.contains_key("on"))
+        .ok_or_else(|| error(StatusCode::BAD_REQUEST, "provide on only"))?;
+    let on = fields
+        .get("on")
+        .and_then(Value::as_bool)
+        .ok_or_else(|| error(StatusCode::BAD_REQUEST, "on must be a boolean"))?;
+    if !valid_plugin_id(&plugin) {
+        return Err(error(
+            StatusCode::BAD_REQUEST,
+            format!("插件 id `{plugin}` 不合法"),
+        ));
+    }
+    let catalog_guard = state.application.graph_catalog_mutation_guard().await;
+    // Known refusals must not create a Library or its publication lock. This
+    // read-only preflight is repeated after taking the lease because a writer
+    // from another host may replace/uninstall the Plugin while we wait.
+    blocking({
+        let (state, headers, identifier, plugin) = (
+            state.clone(),
+            headers.clone(),
+            identifier.clone(),
+            plugin.clone(),
+        );
+        move || {
+            session_plugin_mount_target(&state, &headers, &identifier, &plugin)?;
+            Ok(())
+        }
+    })
+    .await?;
+    let lease = state
+        .application
+        .plugin_reference_lease()
+        .await
+        .map_err(application_error)?;
     blocking(move || {
-        let fields = body
-            .as_object()
-            .filter(|fields| fields.len() == 1 && fields.contains_key("on"))
-            .ok_or_else(|| error(StatusCode::BAD_REQUEST, "provide on only"))?;
-        let on = fields
-            .get("on")
-            .and_then(Value::as_bool)
-            .ok_or_else(|| error(StatusCode::BAD_REQUEST, "on must be a boolean"))?;
-        if !valid_plugin_id(&plugin) {
-            return Err(error(
-                StatusCode::BAD_REQUEST,
-                format!("插件 id `{plugin}` 不合法"),
-            ));
-        }
-        let (sessions, owner, session) = owned_session(&state, &headers, &identifier)?;
-        if session.status == anchor_platform_session::SessionStatus::Archived {
-            return Err(error(
-                StatusCode::CONFLICT,
-                "该会话已归档，不能再改变插件挂载",
-            ));
-        }
-        let root = crate::library_root(&state.catalog_root);
-        let definition = FilePluginCatalog::new(&root)
-            .definition(&plugin)
-            .map_err(|_| {
-                error(
-                    StatusCode::BAD_REQUEST,
-                    format!("插件 `{plugin}` 尚未安装，不能挂载"),
-                )
-            })?;
-        let declaration = session_plugin_declarations(&state, &session)
-            .get(&plugin)
-            .copied();
-        if declaration.is_some_and(|declaration| declaration.required) {
-            return Err(error(
-                StatusCode::CONFLICT,
-                "该插件在图里被声明为必需（required: true）",
-            ));
-        }
-        if let Err(unusable) = crate::plugin_view::prepare_for_plugin(&root, &plugin) {
-            return Err(error(StatusCode::CONFLICT, unusable.to_string()));
-        }
+        // Retain both guards even if validation or the transaction fails.
+        let (catalog_guard, lease) = (catalog_guard, lease);
+        let (sessions, owner, definition) =
+            session_plugin_mount_target(&state, &headers, &identifier, &plugin)?;
         let updated = sessions
             .set_plugin_mount(
                 &owner,
@@ -871,8 +974,88 @@ async fn set_session_plugin(
                 "the Session view switched this Plugin",
             )
             .map_err(session_error)?;
-        let row = session_plugin_row(&root, &definition, declaration, &updated.plugin_mounts);
-        Ok(Json(json!({"plugin": row})))
+        drop(lease);
+        drop(catalog_guard);
+        let rows = session_plugin_rows(&state, &updated)?;
+        let row = rows.iter().find(|row| row["id"] == definition.id).cloned();
+        Ok(Json(json!({"plugin": row, "plugins": rows})))
+    })
+    .await
+}
+
+#[allow(clippy::result_large_err)]
+fn session_plugin_mount_target(
+    state: &ApiState,
+    headers: &HeaderMap,
+    identifier: &str,
+    plugin: &str,
+) -> Result<
+    (
+        anchor_platform_session::SessionStore,
+        String,
+        PluginDefinition,
+    ),
+    HttpResponse,
+> {
+    let (sessions, owner, session) = owned_session(state, headers, identifier)?;
+    if session.status == anchor_platform_session::SessionStatus::Archived {
+        return Err(error(
+            StatusCode::CONFLICT,
+            "该会话已归档，不能再改变插件挂载",
+        ));
+    }
+    let root = crate::library_root(&state.catalog_root);
+    let definition = FilePluginCatalog::new(&root)
+        .definition(plugin)
+        .map_err(|_| {
+            error(
+                StatusCode::BAD_REQUEST,
+                format!("插件 `{plugin}` 尚未安装，不能挂载"),
+            )
+        })?;
+    let declaration = session_plugin_declarations(state, &session)
+        .get(plugin)
+        .copied();
+    if declaration.is_some_and(|declaration| declaration.required) {
+        return Err(error(
+            StatusCode::CONFLICT,
+            "该插件在图里被声明为必需（required: true）",
+        ));
+    }
+    if let Err(unusable) = crate::plugin_view::prepare_for_plugin(&root, plugin) {
+        return Err(error(StatusCode::CONFLICT, unusable.to_string()));
+    }
+    Ok((sessions, owner, definition))
+}
+
+#[allow(clippy::result_large_err)]
+async fn set_session_network(
+    State(state): State<ApiState>,
+    headers: HeaderMap,
+    AxumPath(identifier): AxumPath<String>,
+    Json(body): Json<Value>,
+) -> Result<Json<Value>, HttpResponse> {
+    blocking(move || {
+        let fields = body
+            .as_object()
+            .filter(|fields| fields.len() == 1 && fields.contains_key("allowed"))
+            .ok_or_else(|| error(StatusCode::BAD_REQUEST, "provide allowed only"))?;
+        let allowed = fields["allowed"]
+            .as_bool()
+            .ok_or_else(|| error(StatusCode::BAD_REQUEST, "allowed must be a boolean"))?;
+        let (sessions, owner, session) = owned_session(&state, &headers, &identifier)?;
+        if session.status == anchor_platform_session::SessionStatus::Archived {
+            return Err(error(
+                StatusCode::CONFLICT,
+                "该会话已归档，不能再改变联网权限",
+            ));
+        }
+        let updated = sessions
+            .set_network_allowed(&owner, &identifier, allowed, &owner)
+            .map_err(session_error)?;
+        Ok(Json(
+            json!({"plugins": session_plugin_rows(&state, &updated)?}),
+        ))
     })
     .await
 }
@@ -979,6 +1162,7 @@ fn router_with_readiness_and_web_root(
         .route("/v1/responses", post(create_response))
         .route("/v1/webhooks/graphs/{graph}", post(graph_webhook))
         .route("/sessions", get(list_sessions).post(create_session))
+        .merge(credential_requests::router())
         .route(
             "/sessions/{session}",
             get(get_session).put(rename_session).delete(delete_session),
@@ -986,6 +1170,7 @@ fn router_with_readiness_and_web_root(
         .route("/sessions/{session}/status", post(set_session_status))
         .route("/sessions/{session}/events", get(session_events))
         .route("/sessions/{session}/plugins", get(session_plugins))
+        .route("/sessions/{session}/network", post(set_session_network))
         .route(
             "/sessions/{session}/plugins/{plugin}",
             post(set_session_plugin),
@@ -1080,7 +1265,7 @@ fn router_with_readiness_and_web_root(
         .merge(api)
         .merge(oauth_callback)
         .fallback_service(ServeDir::new(web_root).append_index_html_on_directories(true))
-        .layer(middleware::from_fn(secure_oauth_responses))
+        .layer(middleware::from_fn(secure_private_responses))
 }
 
 fn application_error(failure: ApplicationError) -> HttpResponse {

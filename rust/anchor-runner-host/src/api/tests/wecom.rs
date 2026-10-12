@@ -467,6 +467,7 @@ async fn recovery_admits_completed_wecom_delivery_once_without_rerunning_the_gra
         "work".into(),
         vec![RunResult {
             plugin_views: Default::default(),
+            plugin_digests: Default::default(),
             interruption: None,
             node_id: "work".into(),
             key,
@@ -621,6 +622,7 @@ async fn superseded_completed_wecom_run_does_not_create_a_reply_delivery() {
         "work".into(),
         vec![RunResult {
             plugin_views: Default::default(),
+            plugin_digests: Default::default(),
             interruption: None,
             node_id: "work".into(),
             key,

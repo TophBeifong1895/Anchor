@@ -54,7 +54,7 @@ export async function nativeHost(root: string, options: {
     ANCHOR_RUNNER_WORKSPACE_ROOT: join(root, 'workspaces'),
     ANCHOR_RUNNER_LIBRARY_ROOT: join(root, 'library'),
     ANCHOR_RUNNER_SCHEDULES_PATH: join(root, 'state/schedules.json'),
-    ANCHOR_RUNNER_WEB_ROOT: fileURLToPath(new URL('../../dist', import.meta.url)),
+    ANCHOR_RUNNER_WEB_ROOT: process.env.ANCHOR_TEST_WEB_ROOT || fileURLToPath(new URL('../../dist', import.meta.url)),
     ANCHOR_RUNNER_GRAPH_NAME: graphName,
     ANCHOR_RUNNER_LISTEN: `127.0.0.1:${port}`,
     ANCHOR_RUNNER_ALLOWED_COMMANDS: 'sh,git,cat,printf,true,sleep,echo',

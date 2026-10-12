@@ -73,8 +73,7 @@ async fn claimed_input_survives_restart_before_artifact_even_after_new_input_arr
             pause: std::sync::Arc::new(AtomicBool::new(false)),
         };
         let (_, _, nodes, _) =
-            crate::make_host_with_control(&record.run_id, Default::default(), control, None)
-                .unwrap();
+            crate::make_host_with_control(&record.run_id, control, None, None).unwrap();
         let NodeExecutionOutcome::Completed(completion) = nodes.execute(request()).await.unwrap()
         else {
             panic!("claimed input did not complete");
@@ -165,6 +164,7 @@ async fn yielded_invocation_projection_never_claims_successful_submission() {
         "assistant".into(),
         vec![RunResult {
             plugin_views: Default::default(),
+            plugin_digests: Default::default(),
             sequence: 1,
             key,
             node_id: "assistant".into(),
@@ -386,7 +386,7 @@ async fn pending_input_scope_reports_truncation_and_authorizes_only_the_latest_e
         pause: std::sync::Arc::new(AtomicBool::new(false)),
     };
     let (_, _, nodes, _) =
-        crate::make_host_with_control(&record.run_id, Default::default(), control, None).unwrap();
+        crate::make_host_with_control(&record.run_id, control, None, None).unwrap();
     let NodeExecutionOutcome::Completed(completion) = nodes.execute(request).await.unwrap() else {
         panic!("waiting input did not complete");
     };

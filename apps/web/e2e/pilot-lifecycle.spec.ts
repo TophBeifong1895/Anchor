@@ -4,6 +4,9 @@ import { createServer, type ServerResponse } from 'node:http';
 import { fileURLToPath } from 'node:url';
 
 test('Pilot reconciles a lost submission response and permits corrected input after explicit rejection', async ({ page }) => {
+  await page.route('**/sessions/*/credential-requests', route => route.fulfill({ json: { requests: [] } }));
+  await page.route('**/sessions/*/plugins', route => route.fulfill({ json: { plugins: [] } }));
+  await page.route('**/sessions/*/turns/*/questions', route => route.fulfill({ json: { questions: [] } }));
   const session = { id: 'retry', title: '重试对话', status: 'active', updated_at: new Date().toISOString(), approval: null };
   const final = { id: 'accepted', session: session.id, request_id: 'lost-response', status: 'completed',
     error: '', created_at: session.updated_at, prompt: '已经收到的问题' };
@@ -82,6 +85,9 @@ test('Pilot keeps messages, navigation and live connections correct across slow 
       if (req.method === 'POST') { createResponse = res; return; }
       return json(res, { sessions });
     }
+    if (parts[2] === 'credential-requests') return json(res, { requests: [] });
+    if (parts[2] === 'plugins') return json(res, { plugins: [] });
+    if (parts[4] === 'questions') return json(res, { questions: [] });
     if (parts[2] === 'messages') {
       if (id === 'new' && blockHistory) { heldHistory = res; return; }
       if (id === 'new' && failHistory) return json(res, { error: '历史读取暂时失败' }, 503);

@@ -279,17 +279,22 @@ esac"#;
 }
 
 #[test]
-fn op_network_declaration_controls_real_loopback_access() {
+fn op_network_declaration_controls_business_network_access() {
     use std::{
         io::Read,
-        net::TcpListener,
+        net::{TcpListener, UdpSocket},
         time::{Duration, Instant},
     };
     let root = tempfile::tempdir().unwrap();
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let route = UdpSocket::bind("0.0.0.0:0").unwrap();
+    route.connect("192.0.2.1:9").unwrap();
+    let business_address = route.local_addr().unwrap().ip();
+    let listener = TcpListener::bind((business_address, 0)).unwrap();
     listener.set_nonblocking(true).unwrap();
     let port = listener.local_addr().unwrap().port();
-    let shell = format!("bash -c 'printf host-network-authorized > /dev/tcp/127.0.0.1/{port}'");
+    let shell = format!(
+        "bash -c 'printf business-network-authorized > /dev/tcp/{business_address}/{port}'"
+    );
     let mut definition = json!({
         "entry":"network", "ops":{"connect":{"run":shell,"network":false}},
         "nodes":[{"id":"network","op":"connect"}], "edges":[]
@@ -322,7 +327,7 @@ fn op_network_declaration_controls_real_loopback_access() {
                     );
                     std::thread::sleep(Duration::from_millis(10));
                 }
-                Err(error) => panic!("loopback fixture failed: {error}"),
+                Err(error) => panic!("business network fixture failed: {error}"),
             }
         }
     });
@@ -334,5 +339,5 @@ fn op_network_declaration_controls_real_loopback_access() {
         &json!({}),
     ));
     assert_eq!(allowed["status"], "completed", "{allowed}");
-    assert_eq!(received.join().unwrap(), "host-network-authorized");
+    assert_eq!(received.join().unwrap(), "business-network-authorized");
 }

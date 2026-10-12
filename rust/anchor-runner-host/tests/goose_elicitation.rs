@@ -281,6 +281,127 @@ fn evidence(host: &Host, provider: &Provider, checks: Value) {
 
 #[test]
 #[ignore = "requires pinned Goose binary"]
+fn goose_platform_without_business_graph_installs_and_uninstalls_with_native_confirmation() {
+    let provider = Provider::new(
+        "goose-empty-platform-plugin-native-confirmation",
+        vec![
+            goose::command("mkdir -p candidate"),
+            Step::tool(
+                "anchor_edit",
+                json!({"path":"candidate/plugin.json","content":json!({"name":"Empty platform native candidate"}).to_string()}),
+            ),
+            Step::tool("plugin_review", json!({"directory":"candidate"})).after("sha256_after"),
+            Step::tool(
+                "plugin_install",
+                json!({"directory":"candidate","id":"native-empty"}),
+            ),
+            Step::text("Installed the reviewed candidate after native confirmation.")
+                .after("installed"),
+            Step::tool("plugin_uninstall", json!({"plugin":"native-empty"})),
+            Step::text("Uninstalled the candidate after native confirmation.").after("uninstalled"),
+        ],
+    );
+    let host = Host::new(&graph())
+        .default_runtime()
+        .with_extra_environment([
+            ("ANCHOR_RUNNER_GRAPH_NAME", ""),
+            ("ANCHOR_RUNNER_BUNDLE_ROOT", ""),
+        ]);
+    fs::remove_dir_all(host.base.root.path().join("bundle")).unwrap();
+    let server = host.serve(&provider);
+    create(&server);
+    let (status, graphs) = server.request("GET", "/graphs", None);
+    assert_eq!(status, 200, "{graphs}");
+    assert!(graphs["graphs"].as_array().unwrap().is_empty(), "{graphs}");
+    let installed_path = host.base.root.path().join("plugins/native-empty");
+    let install_turn = submit(
+        &server,
+        "install-on-empty-platform",
+        Some("Create, review and install this candidate; wait for native confirmation."),
+    );
+    let install_question = pending_question(&server, &install_turn);
+    assert!(
+        install_question["message"]
+            .as_str()
+            .unwrap()
+            .contains("native-empty"),
+        "{install_question}"
+    );
+    assert!(
+        install_question["message"]
+            .as_str()
+            .unwrap()
+            .contains("内容指纹："),
+        "{install_question}"
+    );
+    assert_eq!(
+        install_question["requested_schema"]["required"],
+        json!(["confirm"])
+    );
+    assert!(!installed_path.exists());
+    let (status, invalid) = answer(
+        &server,
+        &install_turn,
+        &install_question,
+        &json!({"action":"accept","content":{}}),
+    );
+    assert!(matches!(status, 400 | 422), "{invalid}");
+    assert!(!installed_path.exists());
+    let (status, approved) = answer(
+        &server,
+        &install_turn,
+        &install_question,
+        &json!({"action":"accept","content":{"confirm":true}}),
+    );
+    assert_eq!(status, 200, "{approved}");
+    let installed_turn = wait_turn(&server, &install_turn, "completed");
+    let installed = last_tool_result(&provider, "installed");
+    assert_eq!(installed["installed"], true, "{installed}");
+    assert_eq!(installed["id"], "native-empty", "{installed}");
+    assert!(installed_path.join("plugin.json").is_file());
+    let uninstall_turn = submit(
+        &server,
+        "uninstall-on-empty-platform",
+        Some("Uninstall the installed candidate; wait for native confirmation of data removal."),
+    );
+    let uninstall_question = pending_question(&server, &uninstall_turn);
+    assert!(
+        uninstall_question["message"]
+            .as_str()
+            .unwrap()
+            .contains("native-empty"),
+        "{uninstall_question}"
+    );
+    assert_eq!(
+        uninstall_question["requested_schema"]["required"],
+        json!(["confirm", "confirm_data_loss"])
+    );
+    assert!(installed_path.join("plugin.json").is_file());
+    let (status, approved) = answer(
+        &server,
+        &uninstall_turn,
+        &uninstall_question,
+        &json!({"action":"accept","content":{"confirm":true,"confirm_data_loss":true}}),
+    );
+    assert_eq!(status, 200, "{approved}");
+    let uninstalled_turn = wait_turn(&server, &uninstall_turn, "completed");
+    let uninstalled = last_tool_result(&provider, "uninstalled");
+    assert_eq!(uninstalled["uninstalled"], true, "{uninstalled}");
+    assert!(!installed_path.exists());
+    let (status, graphs) = server.request("GET", "/graphs", None);
+    assert_eq!(status, 200, "{graphs}");
+    assert!(graphs["graphs"].as_array().unwrap().is_empty(), "{graphs}");
+    turn_count(&server, 2);
+    no_runs(&server);
+    evidence(
+        &host,
+        &provider,
+        json!({"no_business_graph":true,"install_question":install_question,"installed_turn":installed_turn,"installed":installed,"uninstall_question":uninstall_question,"uninstalled_turn":uninstalled_turn,"uninstalled":uninstalled}),
+    );
+}
+
+#[test]
+#[ignore = "requires pinned Goose binary"]
 fn goose_ask_user_validates_answer_and_preserves_one_turn_and_sse_history() {
     let gate = Gate::new();
     let provider = Provider::new(

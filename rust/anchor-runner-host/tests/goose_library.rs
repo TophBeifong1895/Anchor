@@ -17,33 +17,37 @@ const REPLACEMENT: &str = "fixture-installed-instructions-v2";
 
 fn graph() -> Value {
     json!({
-        "objective":"Use an installed Plugin without mutating its frozen resources",
-        "entry":"worker",
+        "objective":"Use the current installed Plugin after a Library update without mutating its resources",
+        "entry":"gate",
         "agents":{"worker":{"model":"models.worker","instructions":"Read the demo Skill, verify that its mount is read-only, save the exact Skill in skill.txt, and finish with route verify."}},
-        "ops":{"verify":{"run":"sh -c 'set -eu; cat /in/worker/skill.txt > verified.txt'"}},
-        "nodes":[{"id":"worker","agent":"worker","plugins":["demo"]},{"id":"verify","op":"verify"}],
-        "edges":[{"from":"worker","to":"verify"}]
+        "ops":{
+            "gate":{"run":"sh -c 'set -eu; : > gate-entered; while [ ! -e proceed ]; do sleep 0.05; done'"},
+            "verify":{"run":"sh -c 'set -eu; cat /in/worker/skill.txt > verified.txt'"}
+        },
+        "nodes":[{"id":"gate","op":"gate"},{"id":"worker","agent":"worker","plugins":["demo"]},{"id":"verify","op":"verify"}],
+        "edges":[{"from":"gate","to":"worker"},{"from":"worker","to":"verify"}]
     })
 }
 
 #[test]
 #[ignore = "requires pinned real Goose binary and local Bubblewrap"]
-fn installed_plugin_is_frozen_before_library_replacement_and_native_execution() {
+fn a_library_update_during_a_run_reaches_native_execution_with_current_skills() {
     let provider = Provider::new(
         "goose-installed-plugin",
         vec![
             command(
-                "set -eu; cat /plugins/demo/skills/demo/SKILL.md > skill.txt; test \"$(cat skill.txt)\" = fixture-installed-instructions-v1; if printf corrupt >> /plugins/demo/skills/demo/SKILL.md 2>/dev/null; then exit 7; fi; cat skill.txt",
+                "set -eu; cat /plugins/demo/skills/current/SKILL.md > skill.txt; test \"$(cat skill.txt)\" = fixture-installed-instructions-v2; if printf corrupt >> /plugins/demo/skills/current/SKILL.md 2>/dev/null; then exit 7; fi; cat skill.txt",
             ),
-            complete("verify").after(ORIGINAL),
-            Step::text("The frozen installed Plugin was verified."),
+            complete("verify").after(REPLACEMENT),
+            Step::text("The current installed Plugin was verified."),
         ],
     );
     let host = Host::new(&json!({
         "entry":"work","agents":{},"ops":{"work":{"run":"true"}},
         "nodes":[{"id":"work","op":"work"}],"edges":[]
     }))
-    .default_runtime();
+    .default_runtime()
+    .with_allowed_commands("sh,cat,git,true,sleep");
     let root = host.base.root.path();
     let library_root = root.to_path_buf();
     let source = root.join("checkout/demo");
@@ -76,7 +80,29 @@ fn installed_plugin_is_frozen_before_library_replacement_and_native_execution() 
         .unwrap();
     assert_eq!(frozen.plugins, ["demo"]);
     assert!(!bundle_root.join("plugins").exists());
-    fs::write(source.join("skills/demo/SKILL.md"), REPLACEMENT).unwrap();
+    let (status, accepted) =
+        server.request("POST", "/trigger", Some(&json!({"graph":"installed"})));
+    assert_eq!(status, 202, "{accepted}");
+    let run = accepted["run"].as_str().unwrap();
+    goose::wait_until("the admitted Run's Op gate", || {
+        host.base.workspace_files(run, "gate-entered").len() == 1
+    });
+    let admitted = host.record(run);
+    assert_eq!(
+        admitted["plugin_bindings"]["demo"]["digest"],
+        installed.digest
+    );
+    assert!(provider.requests().is_empty());
+    let work = root.join("work").join(run);
+    let gate_marker = goose::file_inventory(&work)
+        .into_iter()
+        .find(|file| file["path"].as_str().unwrap().ends_with("/gate-entered"))
+        .expect("the Op gate owns its workspace marker");
+    let gate_workspace = work.join(gate_marker["path"].as_str().unwrap());
+    let gate_workspace = gate_workspace.parent().unwrap();
+    fs::remove_dir_all(source.join("skills/demo")).unwrap();
+    fs::create_dir_all(source.join("skills/current")).unwrap();
+    fs::write(source.join("skills/current/SKILL.md"), REPLACEMENT).unwrap();
     let replaced = library.install_directory("demo", &source, true).unwrap();
     assert_ne!(installed.digest, replaced.digest);
     let (status, current) = server.request("GET", "/plugins/demo", None);
@@ -88,39 +114,45 @@ fn installed_plugin_is_frozen_before_library_replacement_and_native_execution() 
         .load()
         .unwrap();
     assert_eq!(frozen.plugins, preserved.plugins);
-    let (status, accepted) =
-        server.request("POST", "/trigger", Some(&json!({"graph":"installed"})));
-    assert_eq!(status, 202, "{accepted}");
-    let run = accepted["run"].as_str().unwrap();
+    fs::write(gate_workspace.join("proceed"), b"continue").unwrap();
     server.wait_status(run, "completed");
     let record = host.record(run);
     assert_eq!(
         host.base.file(&record, "worker", "skill.txt"),
-        ORIGINAL.as_bytes()
+        REPLACEMENT.as_bytes()
     );
     assert_eq!(
         host.base.file(&record, "verify", "verified.txt"),
-        ORIGINAL.as_bytes()
+        REPLACEMENT.as_bytes()
     );
+    assert!(!bundle_root.join("plugins").exists());
+    assert!(!installed.directory.join("skills/demo/SKILL.md").exists());
     assert_eq!(
-        fs::read_to_string(bundle_root.join("plugins/demo/skills/demo/SKILL.md")).unwrap(),
-        ORIGINAL
-    );
-    assert_eq!(
-        fs::read_to_string(installed.directory.join("skills/demo/SKILL.md")).unwrap(),
+        fs::read_to_string(installed.directory.join("skills/current/SKILL.md")).unwrap(),
         REPLACEMENT
     );
     let history = host.native_conversation(run, "worker", 1);
-    assert!(history.to_string().contains(ORIGINAL));
+    assert!(history.to_string().contains(REPLACEMENT));
     assert!(history.to_string().contains("final_result"));
     assert!(
         provider.requests()[0]["messages"]
             .to_string()
+            .contains("/plugins/demo/skills/current/SKILL.md")
+    );
+    assert!(
+        !provider.requests()[0]["messages"]
+            .to_string()
             .contains("/plugins/demo/skills/demo/SKILL.md")
+    );
+    assert_eq!(record["plugin_bindings"], admitted["plugin_bindings"]);
+    assert_eq!(
+        record["results"]["worker"][0]["plugin_digests"]["demo"],
+        replaced.digest
     );
     host.evidence(&provider, run, json!({
         "case_source":CASE_SOURCE,"library_install":installed,"library_replacement":replaced,
-        "library_detail":current,"frozen_plugin_unchanged":true,"readonly_mount":true,
+        "library_detail":current,"admitted_authorization_unchanged":true,
+        "update_during_run_uses_current_code_and_skill_paths":true,"bundle_contains_only_references":true,"readonly_mount":true,
         "native_history_checked":true,"artifact_exact_bytes":true,
         "boundary":"local directory installer plus actual public Graph API and Goose; no GitHub network, OAuth or real model"
     }));

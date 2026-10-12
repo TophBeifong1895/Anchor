@@ -137,6 +137,8 @@ test('Pilot opens, creates and reopens sessions through the real Vite proxy, and
 });
 
 test('Pilot renders rich replies, restores drafts and selection, and handles Chinese input on mobile', async ({ page }) => {
+  await page.route('**/sessions/*/credential-requests', route => route.fulfill({ json: { requests: [] } }));
+  await page.route('**/sessions/*/turns/*/questions', route => route.fulfill({ json: { questions: [] } }));
   const sessions = [
     { id: 'research', title: '梳理 RAG 的研究进展', status: 'active', updated_at: '2026-09-26T07:00:00Z', approval: null },
     { id: 'other', title: '另一项研究', status: 'active', updated_at: '2026-09-25T07:00:00Z', approval: null },
@@ -202,6 +204,9 @@ test('Pilot renders rich replies, restores drafts and selection, and handles Chi
 
 test('Pilot streams text and tool activity, and resumes the stream from the last delivered event', async ({ page }) => {
   test.setTimeout(60000);
+  await page.route('**/sessions/*/credential-requests', route => route.fulfill({ json: { requests: [] } }));
+  await page.route('**/sessions/*/plugins', route => route.fulfill({ json: { plugins: [] } }));
+  await page.route('**/sessions/*/turns/*/questions', route => route.fulfill({ json: { questions: [] } }));
   const session = { id: 'stream', title: '流式研究', status: 'active', updated_at: '2026-09-26T07:00:00Z', approval: null };
   const messages: Array<{ role: string; text: string }> = [];
   let turns: Turn[] = [];
@@ -258,6 +263,9 @@ test('Pilot streams text and tool activity, and resumes the stream from the last
 });
 
 test('Pilot confirms a deletion before it runs and continues the paused run after the decision', async ({ page }) => {
+  await page.route('**/sessions/*/credential-requests', route => route.fulfill({ json: { requests: [] } }));
+  await page.route('**/sessions/*/plugins', route => route.fulfill({ json: { plugins: [] } }));
+  await page.route('**/sessions/*/turns/*/questions', route => route.fulfill({ json: { questions: [] } }));
   const base = { id: 'gated', title: '删除研究', status: 'active', updated_at: '2026-09-26T07:00:00Z', approval: null };
   const messages: Array<{ role: string; text: string }> = [];
   const calls: string[] = [];
@@ -312,6 +320,9 @@ test('Pilot confirms a deletion before it runs and continues the paused run afte
 
 test('a reply opens the Graph, the Run and the file it links, and returns to the same session', async ({ page }) => {
   test.setTimeout(60000);
+  await page.route('**/sessions/*/credential-requests', route => route.fulfill({ json: { requests: [] } }));
+  await page.route('**/sessions/*/plugins', route => route.fulfill({ json: { plugins: [] } }));
+  await page.route('**/sessions/*/turns/*/questions', route => route.fulfill({ json: { questions: [] } }));
   const run = '20260926T104613';
   const session = { id: 'linked', title: '对象跳转', status: 'active', updated_at: '2026-09-26T07:00:00Z',
                     approval: null, waiting_reason: '' };

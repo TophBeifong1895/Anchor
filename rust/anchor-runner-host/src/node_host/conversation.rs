@@ -298,7 +298,6 @@ mod tests {
             ),
             Arc::new(tool_host::PluginToolHost::new(Vec::<String>::new())),
             tool_host::McpToolConfig::default(),
-            BTreeMap::new(),
             FileRunStore::new(root.join("runs")),
             LocalInputs::new(root.to_owned(), None).unwrap(),
             Arc::new(crate::plugin_mounts::SessionMounts::open(root).unwrap()),
@@ -610,6 +609,7 @@ mod tests {
             "agent".into(),
             vec![RunResult {
                 plugin_views: Default::default(),
+                plugin_digests: Default::default(),
                 sequence: 1,
                 node_id: "agent".into(),
                 key: prior.clone(),

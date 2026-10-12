@@ -21,6 +21,7 @@ impl Fixture {
         fs::copy("/usr/bin/true", &goose).unwrap();
         // The sandbox relay ships beside the host binary.
         fs::copy("/usr/bin/true", root.path().join("anchor-net-relay")).unwrap();
+        fs::copy("/usr/bin/true", root.path().join("anchor-sandbox-network")).unwrap();
         let bundle = root.path().join("bundle");
         fs::create_dir(&bundle).unwrap();
         let request = PackageRequest {
@@ -263,6 +264,7 @@ fn deterministic_archive_has_exact_layout_normalized_headers_and_verified_invent
             "anchor-runtime/bin/alpha",
             "anchor-runtime/bin/anchor-net-relay",
             "anchor-runtime/bin/anchor-runner-host",
+            "anchor-runtime/bin/anchor-sandbox-network",
             "anchor-runtime/bin/goose",
             "anchor-runtime/bin/zeta",
             "anchor-runtime/bundle",
@@ -324,7 +326,7 @@ fn native_plugin_elf_keeps_execute_mode_and_environment_references_are_not_expan
         report.inventory.environment_references,
         ["ANCHOR_DISTRIBUTION_FIXTURE_KEY"]
     );
-    assert_eq!(report.inventory.executables.len(), 4);
+    assert_eq!(report.inventory.executables.len(), 5);
     let host = report
         .inventory
         .executables
@@ -637,7 +639,7 @@ fn referenced_first_party_plugins_include_exact_native_binaries_in_the_frozen_cl
         assert!(plugin.resources.contains(&format!("bin/{binary_name}")));
         assert_eq!(plugin.digest.len(), 64);
     }
-    assert_eq!(report.inventory.executables.len(), 6);
+    assert_eq!(report.inventory.executables.len(), 7);
 
     let extracted = tempfile::tempdir().unwrap();
     tar::Archive::new(GzDecoder::new(File::open(&report.output).unwrap()))

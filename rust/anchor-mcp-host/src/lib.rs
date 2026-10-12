@@ -14,6 +14,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use thiserror::Error;
 
+#[cfg(test)]
+mod process_tests;
+
 mod contents;
 mod images;
 pub use images::{ImageBudget, validate_image_bytes};
@@ -163,6 +166,7 @@ pub struct McpHost {
     server_id: String,
     inventory: BTreeMap<String, Tool>,
     service: RunningService<RoleClient, ClientInfo>,
+    child: Option<tokio::process::Child>,
 }
 
 impl fmt::Debug for McpHost {
@@ -223,18 +227,90 @@ impl McpHost {
         server_id: String,
         command: tokio::process::Command,
     ) -> Result<Self, McpHostError> {
+        Self::connect_sandboxed_stdio_controlled(
+            server_id,
+            command,
+            std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            std::time::Duration::from_secs(120),
+        )
+        .await
+    }
+
+    /// The launcher still supplies the sandbox command. Holding the child here
+    /// lets startup cancellation and shutdown await its actual exit.
+    pub async fn connect_sandboxed_stdio_controlled(
+        server_id: String,
+        mut command: tokio::process::Command,
+        cancellation: anchor_runtime::Cancellation,
+        timeout: std::time::Duration,
+    ) -> Result<Self, McpHostError> {
         if server_id.trim().is_empty() {
             return Err(McpHostError::InvalidBinding);
         }
-        let (transport, _stderr) = rmcp::transport::TokioChildProcess::builder(command)
+        let mut child = command
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::null())
+            .kill_on_drop(true)
             .spawn()
             .map_err(|error| McpHostError::Connect(error.to_string()))?;
-        let service = ClientInfo::default()
-            .serve(transport)
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| McpHostError::Connect("child stdout unavailable".into()))?;
+        let stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| McpHostError::Connect("child stdin unavailable".into()))?;
+        let initialize = async {
+            let service = ClientInfo::default()
+                .serve((stdout, stdin))
+                .await
+                .map_err(|error| McpHostError::Connect(error.to_string()))?;
+            Self::bind_service(server_id, service).await
+        };
+        let result = tokio::select! {
+            result = tokio::time::timeout(timeout, initialize) => result.unwrap_or_else(|_| Err(McpHostError::Connect("MCP startup timed out".into()))),
+            _ = async {
+                while !cancellation.load(std::sync::atomic::Ordering::Acquire) {
+                    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+                }
+            } => Err(McpHostError::Connect("MCP startup was cancelled".into())),
+        };
+        match result {
+            Ok(mut host) => {
+                host.child = Some(child);
+                Ok(host)
+            }
+            Err(error) => {
+                let _ = child.kill().await;
+                let _ = child.wait().await;
+                Err(error)
+            }
+        }
+    }
+
+    pub async fn shutdown(mut self) -> Result<(), McpHostError> {
+        // Kill and reap first: transport shutdown cannot depend on a foreign
+        // server agreeing to close its pipe or finish an outstanding call.
+        if let Some(mut child) = self.child.take() {
+            let _ = child.kill().await;
+            child
+                .wait()
+                .await
+                .map_err(|error| McpHostError::Connect(error.to_string()))?;
+        }
+        let closed = self
+            .service
+            .close_with_timeout(std::time::Duration::from_secs(5))
             .await
             .map_err(|error| McpHostError::Connect(error.to_string()))?;
-        Self::bind_service(server_id, service).await
+        if closed.is_none() {
+            return Err(McpHostError::Connect(
+                "MCP transport shutdown timed out".into(),
+            ));
+        }
+        Ok(())
     }
 
     /// Bind an already established public RMCP service. This keeps the same
@@ -259,6 +335,7 @@ impl McpHost {
             server_id,
             inventory,
             service,
+            child: None,
         })
     }
 

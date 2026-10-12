@@ -756,6 +756,11 @@ impl RunApplication {
     ) -> Result<String, ApplicationError> {
         request.validate().map_err(ApplicationError::Invalid)?;
         let graph_path = Self::graph_identity(source)?;
+        let plugin_lease = if bundle.plugins.is_empty() {
+            None
+        } else {
+            Some(self.plugin_reference_lease().await?)
+        };
         let mut active = self.active.lock().await;
         if let Some(run) =
             self.retry_conversation(&request, &graph_path, attachments, channel.as_ref())?
@@ -827,6 +832,17 @@ impl RunApplication {
         metadata.channel = channel;
         metadata.attachments = attachments.manifest();
         let lease = self.store().acquire_lease(&request.run)?;
+        if chain.is_empty() {
+            let workspaces = crate::env_path("ANCHOR_RUNNER_WORKSPACE_ROOT")
+                .map_err(ApplicationError::Invalid)?;
+            crate::conversation_resources::start_fresh(
+                self,
+                &self.data_root,
+                &graph_path,
+                &request.session,
+                &workspaces,
+            )?;
+        }
         crate::channel_inputs::freeze(&self.data_root, &metadata, attachments)
             .map_err(ApplicationError::Conflict)?;
         // Resolvers read this host-owned context; an orphan metadata file is never an accepted Run.
@@ -853,6 +869,7 @@ impl RunApplication {
             },
         );
         drop(lease);
+        drop(plugin_lease);
         drop(graph_lease);
         self.spawn(record, execution)?;
         Ok(request.run)

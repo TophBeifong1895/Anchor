@@ -6,7 +6,7 @@ import { copyFile, mkdtemp, mkdir, readFile, writeFile } from 'node:fs/promises'
 import { createServer } from 'node:http';
 import { createServer as portServer } from 'node:net';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 test.use({ launchOptions: { executablePath: process.env.ANCHOR_BROWSER_BINARY } });
@@ -34,12 +34,17 @@ test('Goose native form answers and deletion confirmations use the same Turn thr
   const binary = join(root, 'host'), goose = join(root, 'goose');
   await copyFile(process.env.ANCHOR_TEST_GOOSE_HOST_BINARY!, binary, constants.COPYFILE_FICLONE);
   await copyFile(process.env.ANCHOR_GOOSE_BINARY!, goose, constants.COPYFILE_FICLONE);
+  for (const helper of ['anchor-net-relay', 'anchor-sandbox-network']) {
+    await copyFile(join(dirname(process.env.ANCHOR_TEST_GOOSE_HOST_BINARY!), helper), join(root, helper), constants.COPYFILE_FICLONE);
+  }
   const gooseDigest = createHash('sha256').update(await readFile(goose)).digest('hex');
-  await mkdir(join(root, 'bundle'));
+  const graphRoot = join(root, 'catalog/browser-fixture');
+  await mkdir(graphRoot, { recursive: true });
   await mkdir(join(root, 'state'));
   await mkdir(join(root, 'work'));
-  await writeFile(join(root, 'bundle/graph.json'), JSON.stringify({ entry: 'seed', ops: { seed: { run: 'true' } }, nodes: [{ id: 'seed', op: 'seed' }], edges: [] }));
-  await writeFile(join(root, 'bundle/manifest.json'), JSON.stringify({ format: 1, graph: 'graph.json', plugins: [] }));
+  await mkdir(join(root, 'library'));
+  await writeFile(join(graphRoot, 'graph.json'), JSON.stringify({ entry: 'seed', ops: { seed: { run: 'true' } }, nodes: [{ id: 'seed', op: 'seed' }], edges: [] }));
+  await writeFile(join(graphRoot, 'manifest.json'), JSON.stringify({ format: 1, graph: 'graph.json', plugins: [] }));
   const calls: Record<string, unknown>[] = [], failures: string[] = [];
   const provider = createServer(async (incoming, response) => {
     if (incoming.method === 'GET' && incoming.url === '/v1/models') {
@@ -78,14 +83,15 @@ test('Goose native form answers and deletion confirmations use the same Turn thr
   try {
     backend = spawn(binary, ['serve'], { cwd: root, env: {
       PATH: '/usr/bin:/bin', LANG: 'C.UTF-8', TZ: 'UTC', HOME: join(root, 'home'),
-      ANCHOR_RUNNER_BUNDLE_ROOT: join(root, 'bundle'), ANCHOR_RUNNER_CATALOG_ROOT: root,
+      ANCHOR_RUNNER_CATALOG_ROOT: join(root, 'catalog'),
       ANCHOR_RUNNER_STATE_ROOT: join(root, 'state'), ANCHOR_RUNNER_WORKSPACE_ROOT: join(root, 'work'),
-      ANCHOR_RUNNER_GRAPH_NAME: 'browser-fixture', ANCHOR_RUNNER_LISTEN: `127.0.0.1:${port}`,
-      ANCHOR_RUNNER_WEB_ROOT: fileURLToPath(new URL('../dist', import.meta.url)),
+      ANCHOR_RUNNER_LIBRARY_ROOT: join(root, 'library'),
+      ANCHOR_RUNNER_LISTEN: `127.0.0.1:${port}`,
+      ANCHOR_RUNNER_WEB_ROOT: process.env.ANCHOR_TEST_WEB_ROOT || fileURLToPath(new URL('../dist', import.meta.url)),
       ANCHOR_RUNNER_SCHEDULES_PATH: join(root, 'schedules.json'), ANCHOR_RUNNER_ALLOWED_COMMANDS: 'true,sh,cat,git',
       ANCHOR_MODEL_API_KEY: 'fixture-only-not-a-secret', ANCHOR_MODEL_URL: `http://127.0.0.1:${address.port}/v1`,
       ANCHOR_MODEL_NAME: 'fixture-browser', ANCHOR_MODEL_WIRE_API: 'chat',
-      ANCHOR_GOOSE_BINARY: goose, ANCHOR_GOOSE_ALLOW_SHARED_NETWORK: '1',
+      ANCHOR_GOOSE_BINARY: goose, ANCHOR_GOOSE_LOCAL_NETWORK: '1',
       ANCHOR_GOOSE_BINARY_SHA256: gooseDigest,
     } });
     backend.stdout!.on('data', chunk => { logs += chunk.toString(); });
@@ -94,6 +100,7 @@ test('Goose native form answers and deletion confirmations use the same Turn thr
       if (backend?.exitCode !== null) throw new Error(logs);
       try { return (await request.get(`${base}/health`)).status(); } catch { return 0; }
     }).toBe(200);
+    expect((await request.get(`${base}/graphs/browser-fixture`)).status()).toBe(200);
     await page.goto(base);
     await page.getByRole('button', { name: 'Pilot', exact: true }).click();
     const composer = page.getByLabel('发送给 Anchor Pilot');
@@ -127,6 +134,7 @@ test('Goose native form answers and deletion confirmations use the same Turn thr
     expect((await request.get(`${base}/graphs/browser-fixture`)).status()).toBe(404);
     const sessions = (await (await request.get(`${base}/sessions`)).json()).sessions;
     expect(sessions).toHaveLength(1);
+    expect(sessions[0].graph).toBe('');
     const session = sessions[0].id;
     const turns = (await (await request.get(`${base}/sessions/${session}/turns`)).json()).turns;
     expect(turns).toHaveLength(3);
@@ -138,7 +146,8 @@ test('Goose native form answers and deletion confirmations use the same Turn thr
     expect(calls).toHaveLength(6);
     expect(failures).toEqual([]);
     const evidence = { status: 'passed', runtime: 'goose', real_model_requests: 0, production_data_used: false,
-      refresh_pending: true, no_extra_turns: true, graph_deleted: true, turns, questions: saved, provider_requests: calls };
+      refresh_pending: true, no_extra_turns: true, graph_deleted: true, platform_graph: sessions[0].graph,
+      turns, questions: saved, provider_requests: calls };
     await writeFile(join(root, 'evidence.json'), JSON.stringify(evidence, null, 2));
     await page.screenshot({ path: test.info().outputPath('goose-elicitation.png') });
     await writeFile(test.info().outputPath('evidence.json'), await readFile(join(root, 'evidence.json')));

@@ -3,21 +3,24 @@ use std::{
     io::Read,
     path::{Path, PathBuf},
     pin::Pin,
+    sync::Arc,
 };
 
 use anchor_graph_host::{FilePluginCatalog, PluginCatalog, PluginDefinition};
 use anchor_platform_session::SessionStore;
 use anchor_runtime::{
-    ToolDefinition, ToolError, ToolPort, ToolResultContent,
-    graph::{GraphSnapshot, PluginBinding},
+    ToolDefinition, ToolError, ToolPort, ToolResultContent, graph::GraphSnapshot,
 };
 use anchor_sandbox_bwrap::{BubblewrapPolicy, BubblewrapSandbox};
 use serde_json::{Value, json};
 use sha2::Digest as _;
 
+pub(crate) mod channel_management;
 mod graphs;
+mod initialization;
 mod plugins;
 mod runs;
+mod scheduling;
 mod sessions;
 
 use crate::{
@@ -41,32 +44,6 @@ fn fake_plugin_ids() -> Vec<String> {
         .collect()
 }
 
-/// Whether this binding's own declaration launches a process.
-///
-/// The same rule `tool_host::transport_name` applies: a `command` is a stdio
-/// server unless the declaration says otherwise, and no `command` is HTTP.
-fn declares_stdio(catalog: &FilePluginCatalog, binding: &PluginBinding) -> bool {
-    if crate::node_host::is_fake_fixture(binding) {
-        return false;
-    }
-    catalog
-        .mcp_servers(&binding.id, false)
-        .is_ok_and(|servers| {
-            servers.iter().any(|server| {
-                let config = &server.config;
-                let transport = if config.get("command").is_some() {
-                    config
-                        .get("type")
-                        .and_then(Value::as_str)
-                        .unwrap_or("stdio")
-                } else {
-                    config.get("type").and_then(Value::as_str).unwrap_or("http")
-                };
-                transport == "stdio"
-            })
-        })
-}
-
 /// The node sandbox a Pilot Turn's stdio Plugin servers launch in, and the
 /// session-level workspace they share.
 ///
@@ -82,22 +59,38 @@ fn declares_stdio(catalog: &FilePluginCatalog, binding: &PluginBinding) -> bool 
 /// servers get one session-level workspace instead, stable per (owner, session)
 /// under the deployment's workspace root, so a Plugin's own state survives the
 /// Turn that created it.
+pub(crate) fn session_workspace(workspace_root: &Path, owner: &str, session: &str) -> PathBuf {
+    let identity =
+        serde_json::to_vec(&(owner, session)).expect("Session workspace identity is JSON");
+    workspace_root
+        .join("pilot")
+        .join(format!("{:x}", sha2::Sha256::digest(identity)))
+}
+
 fn pilot_plugin_sandbox(
     workspace_root: &Path,
     owner: &str,
     session: &str,
 ) -> Result<(BubblewrapSandbox, PathBuf), String> {
-    let commands = std::env::var("ANCHOR_RUNNER_ALLOWED_COMMANDS").map_err(|_| {
-        "Plugin stdio servers require the deployment's ANCHOR_RUNNER_ALLOWED_COMMANDS allow-list"
-            .to_owned()
-    })?;
+    pilot_plugin_sandbox_with_environment(
+        workspace_root,
+        owner,
+        session,
+        &crate::tool_environment::ToolEnvironment::from_env()?,
+    )
+}
+
+fn pilot_plugin_sandbox_with_environment(
+    workspace_root: &Path,
+    owner: &str,
+    session: &str,
+    environment: &crate::tool_environment::ToolEnvironment,
+) -> Result<(BubblewrapSandbox, PathBuf), String> {
+    let commands = std::env::var("ANCHOR_RUNNER_ALLOWED_COMMANDS").unwrap_or_default();
     let bwrap = std::env::var_os("ANCHOR_BWRAP")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("bwrap"));
-    let identity = serde_json::to_vec(&(owner, session)).map_err(|error| error.to_string())?;
-    let workspace = workspace_root
-        .join("pilot")
-        .join(format!("{:x}", sha2::Sha256::digest(&identity)));
+    let workspace = session_workspace(workspace_root, owner, session);
     std::fs::create_dir_all(&workspace)
         .map_err(|error| format!("Pilot Plugin workspace is unavailable: {error}"))?;
     let policy = BubblewrapPolicy::new(
@@ -107,10 +100,9 @@ fn pilot_plugin_sandbox(
             .filter(|command| !command.is_empty())
             .map(str::to_owned),
     )
-    .authorize_workspace_root(workspace_root)
+    .authorize_workspace_root(&workspace)
     .authorize_readonly_destination_root("/plugins")
     .allow_network();
-    let environment = crate::tool_environment::ToolEnvironment::from_env()?;
     let sandbox = BubblewrapSandbox::new(environment.authorize(policy))
         .map_err(|error| format!("Pilot Plugin sandbox is unavailable: {error}"))?;
     Ok((sandbox, workspace))
@@ -127,51 +119,114 @@ fn pilot_plugin_sandbox(
 /// A Plugin that is not installed, whose view is not usable, or whose MCP server
 /// cannot bind is absent and named in `reasons`. Nothing here installs a Plugin,
 /// builds or repairs a view, or fetches a package.
-pub(crate) async fn frozen_plugin_tools(
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn frozen_turn_tools(
     data_root: &Path,
     library_root: &Path,
     workspace_root: &Path,
     owner: &str,
     session: &str,
     turn: &str,
-) -> Result<(Vec<std::sync::Arc<dyn ToolPort>>, Vec<String>), String> {
+    cancellation: anchor_runtime::Cancellation,
+    runtime: Option<&crate::runtime_configuration::RuntimeSnapshot>,
+) -> Result<(Vec<Arc<tool_host::CombinedPluginTools>>, Vec<String>, bool), String> {
+    if cancellation.load(std::sync::atomic::Ordering::Acquire) {
+        return Err("Pilot tool startup was cancelled".into());
+    }
     let source = crate::plugin_mounts::SessionMounts::open(data_root)?;
     let frozen = crate::node_host::freeze_session_switches(data_root, session, turn, &source)?;
     let fixture = tool_host::PluginToolHost::new(fake_plugin_ids());
-    let (bindings, mut reasons) =
+    let selection_access = crate::dependency_provision::DependencyAccess {
+        network: false,
+        cancellation: cancellation.clone(),
+    };
+    let selection_lease = if frozen.switches.is_empty() {
+        None
+    } else {
+        Some(
+            crate::application::plugins::plugin_publication_lease(
+                library_root,
+                &selection_access,
+                "Pilot mount selection",
+            )
+            .await
+            .map_err(|error| format!("Pilot Plugin mount selection is unavailable: {error:?}"))?,
+        )
+    };
+    let (mut bindings, mut reasons) =
         crate::node_host::session_plugin_mounts(library_root, &fixture, &frozen.switches)?;
+    let network = crate::plugin_network::apply(
+        library_root,
+        &mut bindings,
+        frozen.snapshot.network_allowed,
+        &mut reasons,
+    )?;
+    drop(selection_lease);
     if frozen.snapshot_unreadable {
         reasons.push(
             "no Plugin mount snapshot could be read; the Session's current switches were used"
                 .to_owned(),
         );
     }
-    let catalog = FilePluginCatalog::new(library_root);
     let environment = crate::tool_environment::ToolEnvironment::from_env()?;
+    let environment = match runtime {
+        Some(snapshot) => environment.with_runtime_snapshot(snapshot)?,
+        None => environment,
+    };
     // Only a stdio server needs the deployment sandbox: an HTTP server connects
     // from the host, and the in-process fixture needs no process at all.
     let mut stdio = None;
-    if bindings
-        .iter()
-        .any(|binding| declares_stdio(&catalog, binding))
-    {
-        match pilot_plugin_sandbox(workspace_root, owner, session) {
-            Ok(pair) => stdio = Some(pair),
-            Err(reason) => reasons.push(reason),
-        }
-    }
-    let mut ports: Vec<std::sync::Arc<dyn ToolPort>> = Vec::new();
+    let mut stdio_checked = false;
+    let access = crate::dependency_provision::DependencyAccess {
+        network,
+        cancellation: cancellation.clone(),
+    };
+    let mut ports = Vec::new();
     for binding in &bindings {
-        let single = std::slice::from_ref(binding);
-        let mut mcp = match tool_host::McpToolConfig::from_catalog(library_root, single) {
-            Ok(mcp) => mcp,
-            Err(reason) => {
-                reasons.push(reason);
+        if cancellation.load(std::sync::atomic::Ordering::Acquire) {
+            break;
+        }
+        let prepared = match crate::plugin_view::prepare_plugins_for_owner_async(
+            vec![binding.clone()],
+            Some(library_root.to_path_buf()),
+            fixture.clone(),
+            cancellation.clone(),
+            Some((
+                data_root.to_path_buf(),
+                crate::credential_store::binding_owner(owner),
+            )),
+        )
+        .await
+        {
+            Ok(prepared) => prepared,
+            Err(error) => {
+                reasons.push(error.to_string());
                 continue;
             }
         };
+        let binding = &prepared.bindings[0];
+        let single = std::slice::from_ref(binding);
+        let mut mcp = prepared.mcp;
         mcp.environment = environment.clone();
-        if let Err(reason) = mcp.authorize_oauth(Some(owner.to_owned()), true).await {
+        mcp.startup_cancellation = Some(cancellation.clone());
+        let declares_stdio = mcp.declares_stdio(binding);
+        if declares_stdio && !stdio_checked {
+            stdio_checked = true;
+            match pilot_plugin_sandbox_with_environment(
+                workspace_root,
+                owner,
+                session,
+                &environment,
+            ) {
+                Ok(pair) => stdio = Some(pair),
+                Err(reason) => reasons.push(reason),
+            }
+        }
+        let oauth = tokio::select! {
+            result = mcp.authorize_oauth(Some(crate::credential_store::binding_owner(owner)), network) => result,
+            _ = access.cancelled() => break,
+        };
+        if let Err(reason) = oauth {
             reasons.push(reason);
             continue;
         }
@@ -182,54 +237,192 @@ pub(crate) async fn frozen_plugin_tools(
             )
         };
         let assembled = if crate::node_host::is_fake_fixture(binding) {
-            fixture.assemble(&mcp, single, true).await
-        } else if declares_stdio(&catalog, binding) {
+            fixture.assemble(&mcp, single, network).await
+        } else if declares_stdio {
             let Some((sandbox, workspace)) = &stdio else {
                 // The sandbox reason is already recorded; a stdio Plugin never
                 // runs outside the deployment's sandbox.
                 continue;
             };
-            let mount = match tool_host::McpToolConfig::plugin_mounts(library_root, single) {
-                Ok(mount) => mount,
-                Err(reason) => {
-                    reasons.push(reason);
-                    continue;
-                }
-            };
-            let views = match crate::plugin_view::prepare_views_async(
-                single.to_vec(),
-                crate::deployment_library_root(),
-            )
-            .await
-            {
-                Ok(views) => views,
-                Err(error) => {
-                    reasons.push(error.to_string());
-                    continue;
-                }
-            };
             fixture
                 .assemble_with_sandbox(
                     &mcp,
                     single,
-                    true,
+                    network,
                     tool_host::SandboxLaunch {
                         sandbox,
                         workspace,
-                        readonly_inputs: &mount,
-                        plugin_views: &views,
+                        readonly_inputs: &prepared.mounts,
+                        plugin_views: &prepared.views,
                     },
                 )
                 .await
         } else {
-            fixture.assemble(&mcp, single, true).await
+            fixture.assemble(&mcp, single, network).await
         };
         match assembled {
             Ok(port) => ports.push(port),
             Err(reason) => reasons.push(unavailable(reason)),
         }
     }
-    Ok((ports, reasons))
+    if cancellation.load(std::sync::atomic::Ordering::Acquire) {
+        let mut reason = "Pilot tool startup was cancelled".to_owned();
+        for port in ports {
+            match Arc::try_unwrap(port) {
+                Ok(port) => {
+                    if let Err(cleanup) = port.shutdown().await {
+                        reason.push_str(&format!("; cleanup failed: {cleanup}"));
+                    }
+                }
+                Err(_) => reason.push_str("; MCP port still has an active reference"),
+            }
+        }
+        return Err(reason);
+    }
+    Ok((ports, reasons, network))
+}
+
+#[cfg(test)]
+async fn frozen_plugin_tools(
+    data_root: &Path,
+    library_root: &Path,
+    workspace_root: &Path,
+    owner: &str,
+    session: &str,
+    turn: &str,
+) -> Result<(Vec<Arc<dyn ToolPort>>, Vec<String>), String> {
+    frozen_turn_tools(
+        data_root,
+        library_root,
+        workspace_root,
+        owner,
+        session,
+        turn,
+        Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        None,
+    )
+    .await
+    .map(|(ports, reasons, _)| {
+        (
+            ports
+                .into_iter()
+                .map(|port| port as Arc<dyn ToolPort>)
+                .collect(),
+            reasons,
+        )
+    })
+}
+
+/// Host assembly for a single frozen Turn. It owns no model history or planning.
+pub(crate) struct PilotTurnContext {
+    pub(crate) workspace: PathBuf,
+    pub(crate) sandbox: Arc<BubblewrapSandbox>,
+    pub(crate) network: bool,
+    pub(crate) cancellation: anchor_runtime::Cancellation,
+    pub(crate) commands: Arc<dyn ToolPort>,
+    environment: crate::tool_environment::ToolEnvironment,
+}
+
+impl PilotTurnContext {
+    pub(crate) fn rust_status(&self) -> Value {
+        self.environment.pilot_rust_status(self.network)
+    }
+    pub(crate) fn python_status(&self) -> Value {
+        self.environment.pilot_python_status()
+    }
+    fn platform_status(&self, application: &RunApplication) -> Value {
+        self.environment
+            .pilot_platform_status(self.network, application.pilot_dependency_status())
+    }
+    pub(crate) fn new(
+        workspace_root: &Path,
+        owner: &str,
+        session: &str,
+        network: bool,
+        cancellation: anchor_runtime::Cancellation,
+    ) -> Result<Self, String> {
+        let (sandbox, workspace) = pilot_plugin_sandbox(workspace_root, owner, session)?;
+        let sandbox = Arc::new(sandbox);
+        // This empty Plugin port refuses unknown names; it never points back at
+        // PilotPort, so dispatch cannot recurse into the observing adapter.
+        let empty = tool_host::PluginToolHost::new(Vec::<String>::new())
+            .for_bindings(&[])
+            .map_err(|error| error.to_string())?;
+        let environment = crate::tool_environment::ToolEnvironment::from_env()?
+            .with_pilot_rust()?
+            .with_pilot_python()?;
+        let commands = crate::node_tools::NodeTools::new(
+            Arc::new(empty),
+            sandbox.clone(),
+            workspace.clone(),
+            Vec::new(),
+            cancellation.clone(),
+        )
+        .with_network(network)
+        .with_timeout_ceiling(std::time::Duration::from_secs(600))
+        .with_environment(environment.clone());
+        Ok(Self {
+            workspace,
+            sandbox,
+            network,
+            cancellation,
+            commands: Arc::new(commands),
+            environment,
+        })
+    }
+
+    pub(crate) fn freeze_network(&mut self, network: bool) {
+        self.network = network;
+        let empty = tool_host::PluginToolHost::new(Vec::<String>::new())
+            .for_bindings(&[])
+            .expect("empty Plugin tool port");
+        self.commands = Arc::new(
+            crate::node_tools::NodeTools::new(
+                Arc::new(empty),
+                self.sandbox.clone(),
+                self.workspace.clone(),
+                Vec::new(),
+                self.cancellation.clone(),
+            )
+            .with_network(network)
+            .with_timeout_ceiling(std::time::Duration::from_secs(600))
+            .with_environment(self.environment.clone()),
+        );
+    }
+
+    pub(crate) fn configure(
+        &mut self,
+        snapshot: &crate::runtime_configuration::RuntimeSnapshot,
+        library: &Path,
+        scope: &Path,
+    ) -> Result<(), String> {
+        self.environment = crate::tool_environment::ToolEnvironment::from_env()?
+            .with_runtime_snapshot(snapshot)?;
+        let empty = tool_host::PluginToolHost::new(Vec::<String>::new())
+            .for_bindings(&[])
+            .map_err(|error| error.to_string())?;
+        self.commands = Arc::new(
+            crate::node_tools::NodeTools::new(
+                Arc::new(empty),
+                self.sandbox.clone(),
+                self.workspace.clone(),
+                Vec::new(),
+                self.cancellation.clone(),
+            )
+            .with_network(self.network)
+            .with_timeout_ceiling(std::time::Duration::from_secs(600))
+            .with_environment(self.environment.clone())
+            .with_development_projects(library.to_path_buf(), scope.to_path_buf()),
+        );
+        Ok(())
+    }
+
+    pub(crate) fn dependency_access(&self) -> crate::dependency_provision::DependencyAccess {
+        crate::dependency_provision::DependencyAccess {
+            network: self.network,
+            cancellation: self.cancellation.clone(),
+        }
+    }
 }
 
 /// A tool that takes no arguments.
@@ -288,6 +481,104 @@ pub(crate) struct PilotToolSpec {
 /// so a new tool cannot be added to one list and forgotten in another.
 pub(crate) const PILOT_TOOLS: &[PilotToolSpec] = &[
     PilotToolSpec {
+        name: "channel_status",
+        description: "Read owner-bound channel configuration, missing credentials and actual Gateway readiness without secret values.",
+        parameters: || single("platform"),
+        authority: ToolAuthority::Inspect,
+        effect: ToolEffect::Read,
+    },
+    PilotToolSpec {
+        name: "channel_configure",
+        description: "Configure the installed channel Plugin's Graph, reply node and authorized incoming/outgoing users after native user confirmation. Credentials use credential_request with server channel_<platform>.",
+        parameters: || json!({"type":"object","properties":{"platform":{"type":"string"},"graph":{"type":"string"},"reply_node":{"type":"string"},"plugin":{"type":"string"},"users":{"type":"array","items":{"type":"string"}},"send_users":{"type":"array","items":{"type":"string"}}},"required":["platform","graph","reply_node","plugin","users","send_users"],"additionalProperties":false}),
+        authority: ToolAuthority::Confirm,
+        effect: ToolEffect::HostFact,
+    },
+    PilotToolSpec {
+        name: "channel_enable",
+        description: "Start or stop the configured channel Gateway through the existing Host supervisor after native user confirmation. Missing credentials remain unavailable; acceptance is not external connection proof.",
+        parameters: || json!({"type":"object","properties":{"platform":{"type":"string"},"enabled":{"type":"boolean"}},"required":["platform","enabled"],"additionalProperties":false}),
+        authority: ToolAuthority::Confirm,
+        effect: ToolEffect::HostFact,
+    },
+    PilotToolSpec {
+        name: "schedule_list",
+        description: "List saved Graph schedules and their actual enabled/next occurrence facts.",
+        parameters: object,
+        authority: ToolAuthority::Inspect,
+        effect: ToolEffect::Read,
+    },
+    PilotToolSpec {
+        name: "schedule_create",
+        description: "Create the Graph schedule the user requested. Uses the same Host Scheduler and supported once/interval/daily/weekly/monthly rules as the platform. The Graph must already exist; acceptance is not proof of a future execution.",
+        parameters: || json!({"type":"object","properties":{"graph":{"type":"string"},"rule":{"type":"object"},"input":{"type":"object"}},"required":["graph","rule"],"additionalProperties":false}),
+        authority: ToolAuthority::Mutate,
+        effect: ToolEffect::HostFact,
+    },
+    PilotToolSpec {
+        name: "schedule_delete",
+        description: "Delete a saved Graph schedule the user requested to remove; preserves prior Run facts.",
+        parameters: || single("schedule"),
+        authority: ToolAuthority::Mutate,
+        effect: ToolEffect::HostFact,
+    },
+    PilotToolSpec {
+        name: "credential_request",
+        description: "Request a dedicated secure credential form for an installed Plugin's declared MCP environment field. The user enters the value directly into Anchor; the model never sees it. Waits for configuration or cancellation, returns status only, then safely continues this Session to use the credential. Candidate authorization and OAuth use their own explicit flows; never ask for secrets via ask_user.",
+        parameters: || json!({"type":"object","properties":{"plugin":{"type":"string"},"server":{"type":"string"},"field":{"type":"string"},"purpose":{"type":"string"}},"required":["plugin","server","field"],"additionalProperties":false}),
+        authority: ToolAuthority::Mutate,
+        effect: ToolEffect::HostFact,
+    },
+    PilotToolSpec {
+        name: "oauth_status",
+        description: "Read this owner's installed Plugin OAuth authorization metadata without token values.",
+        parameters: || json!({"type":"object","properties":{"plugin":{"type":"string"},"server":{"type":"string"}},"required":["plugin","server"],"additionalProperties":false}),
+        authority: ToolAuthority::Inspect,
+        effect: ToolEffect::Read,
+    },
+    PilotToolSpec {
+        name: "oauth_authorize",
+        description: "Prepare an owner-bound browser OAuth authorization for an installed Plugin. Show the returned authorization URL to the user; the Host continues this Session after a successful callback.",
+        parameters: || json!({"type":"object","properties":{"plugin":{"type":"string"},"server":{"type":"string"}},"required":["plugin","server"],"additionalProperties":false}),
+        authority: ToolAuthority::Mutate,
+        effect: ToolEffect::HostFact,
+    },
+    PilotToolSpec {
+        name: "runtime_prepare",
+        description: "Prepare shared Python or Rust with the installed Anchor package's verified native uv/rustup tools. Requires this Turn's task network permission. Explicit deployment-managed fields are read-only. Publishes a probed runtime and safely continues this Session in a new Turn; the current Turn's tools remain frozen.",
+        parameters: || json!({"type":"object","properties":{"kind":{"type":"string","enum":["python","rust"]},"version":{"type":"string"}},"required":["kind"],"additionalProperties":false}),
+        authority: ToolAuthority::Mutate,
+        effect: ToolEffect::Execution,
+    },
+    PilotToolSpec {
+        name: "development_prepare",
+        description: "Prepare Python packages and optional development/test packages for a workspace-relative project (use '.' for workspace root). Packages use the Host's shared store; the interpreter stays read-only. Run scripts or python -m pytest using anchor_run with the same project parameter. Source edits do not require preparing again; formal Plugin dependencies remain in plugin.json.",
+        parameters: || json!({"type":"object","properties":{"project":{"type":"string"},"requirements":{"type":"array","items":{"type":"string"}},"development_requirements":{"type":"array","items":{"type":"string"}}},"required":["project","requirements"],"additionalProperties":false}),
+        authority: ToolAuthority::Mutate,
+        effect: ToolEffect::Execution,
+    },
+    PilotToolSpec {
+        name: "session_network",
+        description: "Ask for task network authorization in this Session through a native user confirmation. Enables the installed network Plugin when allowed. The current Turn remains frozen; Anchor safely continues the same Session after it ends. Approval is never a model argument.",
+        parameters: || json!({"type":"object","properties":{"allowed":{"type":"boolean"}},"required":["allowed"],"additionalProperties":false}),
+        authority: ToolAuthority::Confirm,
+        effect: ToolEffect::HostFact,
+    },
+    PilotToolSpec {
+        name: "plugin_mount",
+        description: "Enable or disable an installed Plugin in this Session after native user confirmation. Installation remains separate. This Turn's tools stay frozen; Anchor safely continues the same Session after it ends.",
+        parameters: || json!({"type":"object","properties":{"plugin":{"type":"string"},"on":{"type":"boolean"}},"required":["plugin","on"],"additionalProperties":false}),
+        authority: ToolAuthority::Confirm,
+        effect: ToolEffect::HostFact,
+    },
+    PilotToolSpec {
+        name: "platform_status",
+        description: "Inspect the deployment-authorized Python/Rust development and dependency preparation capabilities available to this Turn. Read-only; reports no host paths, package index URLs or secrets, and performs no preparation or mutation.",
+        parameters: || object(),
+        authority: ToolAuthority::Inspect,
+        effect: ToolEffect::Read,
+    },
+    PilotToolSpec {
         name: "graph_list",
         description: "List saved Graphs",
         parameters: || object(),
@@ -304,21 +595,21 @@ pub(crate) const PILOT_TOOLS: &[PilotToolSpec] = &[
     PilotToolSpec {
         name: "graph_validate",
         description: "Validate a Graph definition without saving or running it",
-        parameters: || json!({"type":"object","properties":{"definition":{"type":"object"}},"required":["definition"],"additionalProperties":false}),
+        parameters: || json!({"type":"object","properties":{"definition":graphs::definition_parameter()},"required":["definition"],"additionalProperties":false}),
         authority: ToolAuthority::Inspect,
         effect: ToolEffect::Read,
     },
     PilotToolSpec {
         name: "graph_create",
         description: "Create a saved Graph the user explicitly requested; this does not run it",
-        parameters: || json!({"type":"object","properties":{"name":{"type":"string"},"definition":{"type":"object"}},"required":["name","definition"],"additionalProperties":false}),
+        parameters: || json!({"type":"object","properties":{"name":{"type":"string"},"definition":graphs::definition_parameter()},"required":["name","definition"],"additionalProperties":false}),
         authority: ToolAuthority::Mutate,
         effect: ToolEffect::Asset,
     },
     PilotToolSpec {
         name: "graph_update",
         description: "Update a saved Graph the user explicitly requested; frozen Run resources are preserved",
-        parameters: || json!({"type":"object","properties":{"graph":{"type":"string"},"definition":{"type":"object"}},"required":["graph","definition"],"additionalProperties":false}),
+        parameters: || json!({"type":"object","properties":{"graph":{"type":"string"},"definition":graphs::definition_parameter()},"required":["graph","definition"],"additionalProperties":false}),
         authority: ToolAuthority::Mutate,
         effect: ToolEffect::Asset,
     },
@@ -338,8 +629,8 @@ pub(crate) const PILOT_TOOLS: &[PilotToolSpec] = &[
     },
     PilotToolSpec {
         name: "plugin_read",
-        description: "Read one Plugin's instructions without executing it",
-        parameters: || single("plugin"),
+        description: "Read a Plugin's instructions, dependency declaration and resource names; optional resource reads one confined UTF-8 source/build file (at most 1 MiB).",
+        parameters: || json!({"type":"object","properties":{"plugin":{"type":"string"},"resource":{"type":"string"}},"required":["plugin"],"additionalProperties":false}),
         authority: ToolAuthority::Inspect,
         effect: ToolEffect::Read,
     },
@@ -349,6 +640,20 @@ pub(crate) const PILOT_TOOLS: &[PilotToolSpec] = &[
         parameters: || json!({"type":"object","properties":{"directory":{"type":"string"},"id":{"type":"string"}},"required":["directory"],"additionalProperties":false}),
         authority: ToolAuthority::Inspect,
         effect: ToolEffect::Read,
+    },
+    PilotToolSpec {
+        name: "plugin_prepare",
+        description: "Prepare a Session-workspace Plugin candidate and its Python dependencies before installation. Returns the exact candidate digest, actual locked package set, and whether this deployment granted Pilot a Python interpreter for authoring commands. Use python/python3 with anchor_run when configured; third-party packages still go through dependencies.python. Publishes and mounts nothing. Task network permission is frozen for this Turn.",
+        parameters: || json!({"type":"object","properties":{"directory":{"type":"string"},"id":{"type":"string"}},"required":["directory"],"additionalProperties":false}),
+        authority: ToolAuthority::Mutate,
+        effect: ToolEffect::Execution,
+    },
+    PilotToolSpec {
+        name: "plugin_test",
+        description: "Actually launch a prepared Plugin candidate in the sandbox and list its MCP tools. Optionally pass server, tool and arguments to call one tool; no call means protocol discovery only. Bounded to 120s, cancellable, never installs or adds candidate tools to this Turn. Candidate declarations cannot grant host credentials or network.",
+        parameters: || json!({"type":"object","properties":{"directory":{"type":"string"},"id":{"type":"string"},"server":{"type":"string"},"tool":{"type":"string"},"arguments":{"type":"object"}},"required":["directory"],"additionalProperties":false}),
+        authority: ToolAuthority::Mutate,
+        effect: ToolEffect::Execution,
     },
     PilotToolSpec {
         name: "run_list",
@@ -445,6 +750,7 @@ pub(crate) fn effect(name: &str) -> Option<ToolEffect> {
         .map(|tool| tool.effect)
 }
 
+#[derive(Clone)]
 pub(crate) struct PilotTools {
     pub(crate) application: RunApplication,
     pub(crate) graph_name: String,
@@ -456,6 +762,7 @@ pub(crate) struct PilotTools {
     pub(crate) owner: String,
     pub(crate) session: String,
     pub(crate) turn: String,
+    pub(crate) context: Option<Arc<PilotTurnContext>>,
 }
 
 pub(crate) fn identifier(value: &str) -> bool {
@@ -537,6 +844,21 @@ fn text_resource(root: &Path, relative: &str) -> Result<String, ToolError> {
 }
 
 impl PilotTools {
+    pub(crate) fn task_workspace(&self) -> PathBuf {
+        self.context
+            .as_ref()
+            .map(|context| context.workspace.clone())
+            .unwrap_or_else(|| session_workspace(&self.workspace_root, &self.owner, &self.session))
+    }
+
+    pub(crate) fn preparation_root(&self) -> Result<PathBuf, ToolError> {
+        let session = self
+            .sessions
+            .get(&self.owner, &self.session)
+            .map_err(|_| failed())?;
+        Ok(crate::pilot_host::scope(&self.data_root, &self.owner, &session).join("candidates"))
+    }
+
     pub(crate) fn for_turn(mut self, turn: &str) -> Self {
         self.turn = turn.into();
         self
@@ -570,6 +892,31 @@ impl PilotTools {
 
     async fn execute(&self, name: &str, arguments: Value) -> Result<Value, ToolError> {
         match name {
+            "runtime_prepare" => self.runtime_prepare(&arguments).await,
+            "development_prepare" => self.development_prepare(&arguments).await,
+            "credential_request" => self.credential_request(&arguments).await,
+            "oauth_status" => self.oauth_status(&arguments),
+            "oauth_authorize" => self.oauth_authorize(&arguments).await,
+            "channel_status" => self.channel_status(&arguments).await,
+            "schedule_list" => self.schedule_list(&arguments).await,
+            "schedule_create" => self.schedule_create(&arguments).await,
+            "schedule_delete" => self.schedule_delete(&arguments).await,
+            "platform_status" => {
+                let mut value = self
+                    .context
+                    .as_ref()
+                    .map(|context| context.platform_status(&self.application))
+                    .unwrap_or_else(|| {
+                        crate::tool_environment::ToolEnvironment::default().pilot_platform_status(
+                            false,
+                            self.application.pilot_dependency_status(),
+                        )
+                    });
+                if let Some(configuration) = self.application.runtime_configuration() {
+                    value["initialization"] = configuration.status();
+                }
+                Ok(value)
+            }
             "graph_create" => self.graph_create(&arguments).await,
             "graph_update" => self.graph_update(&arguments).await,
             "graph_run" => self.graph_run(&arguments).await,
@@ -580,6 +927,7 @@ impl PilotTools {
             "plugin_list" => self.plugin_list(&arguments).await,
             "plugin_read" => self.plugin_read(&arguments).await,
             "plugin_review" => self.plugin_review(&arguments).await,
+            "plugin_prepare" | "plugin_test" => self.plugin_candidate(name, &arguments).await,
             "run_list" => self.run_list(&arguments).await,
             "run_status" => self.run_status(&arguments).await,
             "artifact_read" => self.artifact_read(&arguments).await,
@@ -593,7 +941,7 @@ impl ToolPort for PilotTools {
     fn definitions(&self) -> Vec<ToolDefinition> {
         // Confirm tools are owned by the interaction layer, which advertises them
         // with its own definitions; this layer dispatches only Inspect and Mutate.
-        PILOT_TOOLS
+        let mut definitions: Vec<_> = PILOT_TOOLS
             .iter()
             .filter(|tool| tool.authority != ToolAuthority::Confirm)
             .map(|tool| ToolDefinition {
@@ -601,11 +949,15 @@ impl ToolPort for PilotTools {
                 description: tool.description.into(),
                 parameters: (tool.parameters)(),
             })
-            .collect()
+            .collect();
+        if let Some(context) = &self.context {
+            definitions.extend(context.commands.definitions());
+        }
+        definitions
     }
 
     fn is_read_only(&self, name: &str) -> bool {
-        effect(name) == Some(ToolEffect::Read)
+        effect(name) == Some(ToolEffect::Read) || name == crate::node_tools::READ_TOOL_NAME
     }
     fn call<'a>(
         &'a self,
@@ -613,6 +965,22 @@ impl ToolPort for PilotTools {
         arguments: Value,
     ) -> Pin<Box<dyn Future<Output = Result<Vec<ToolResultContent>, ToolError>> + Send + 'a>> {
         Box::pin(async move {
+            if let Some(context) = &self.context
+                && context
+                    .commands
+                    .definitions()
+                    .iter()
+                    .any(|tool| tool.name == name)
+            {
+                self.require_active_turn()?;
+                if context
+                    .cancellation
+                    .load(std::sync::atomic::Ordering::Acquire)
+                {
+                    return Err(rejected("Pilot was cancelled"));
+                }
+                return context.commands.call(name, arguments).await;
+            }
             let result = self.execute(name, arguments).await?;
             Ok(vec![ToolResultContent::text(result.to_string())])
         })
@@ -641,6 +1009,12 @@ mod frozen_mounts_tests {
         fn set(name: &'static str, value: impl AsRef<std::ffi::OsStr>) -> Self {
             let previous = std::env::var_os(name);
             unsafe { std::env::set_var(name, value) };
+            Self(name, previous)
+        }
+
+        fn unset(name: &'static str) -> Self {
+            let previous = std::env::var_os(name);
+            unsafe { std::env::remove_var(name) };
             Self(name, previous)
         }
     }
@@ -682,6 +1056,12 @@ mod frozen_mounts_tests {
                 )
                 .unwrap();
             let path = root.path().to_path_buf();
+            std::fs::create_dir_all(path.join("plugins/network")).unwrap();
+            std::fs::write(
+                path.join("plugins/network/plugin.json"),
+                json!({"name":"联网","network":true}).to_string(),
+            )
+            .unwrap();
             let workspace_root = path.join("workspaces");
             std::fs::create_dir_all(&workspace_root).unwrap();
             Self {
@@ -712,6 +1092,7 @@ mod frozen_mounts_tests {
                 owner: "local".into(),
                 session: "sess".into(),
                 turn: String::new(),
+                context: None,
             }
             .definitions()
         }
@@ -945,6 +1326,163 @@ mod frozen_mounts_tests {
             .await
             .unwrap();
         assert_eq!(result[0].as_json(), Some(&json!("mounted")));
+    }
+
+    #[tokio::test]
+    async fn network_denial_excludes_host_http_mcp_and_is_frozen_for_the_turn() {
+        let _env = crate::PROCESS_ENV_LOCK.lock().await;
+        let fixture = Fixture::new();
+        let server = http_mcp_fixture().await;
+        let plugin = fixture.root.join("plugins/remote");
+        std::fs::create_dir_all(&plugin).unwrap();
+        std::fs::write(
+            plugin.join("plugin.json"),
+            json!({"name":"Remote",
+            "mcpServers":{"api":{"type":"http","url":server.endpoint}}})
+            .to_string(),
+        )
+        .unwrap();
+        fixture.switch("remote", true);
+        let (ports, reasons) = fixture.freeze("allowed-turn").await;
+        assert!(reasons.is_empty(), "{reasons:?}");
+        assert!(plugin_port(&ports, "remote-api_echo").is_some());
+        fixture
+            .sessions
+            .set_network_allowed("local", "sess", false, "operator")
+            .unwrap();
+        let (retry, _) = fixture.freeze("allowed-turn").await;
+        assert!(plugin_port(&retry, "remote-api_echo").is_some());
+        let (denied, reasons) = fixture.freeze("denied-turn").await;
+        assert!(plugin_port(&denied, "remote-api_echo").is_none());
+        assert!(
+            reasons.iter().any(|reason| reason.contains("禁止联网")),
+            "{reasons:?}"
+        );
+        fixture
+            .sessions
+            .set_network_allowed("local", "sess", true, "operator")
+            .unwrap();
+        let (retry, _) = fixture.freeze("denied-turn").await;
+        assert!(plugin_port(&retry, "remote-api_echo").is_none());
+        let (allowed, reasons) = fixture.freeze("next-turn").await;
+        assert!(reasons.is_empty(), "{reasons:?}");
+        assert!(plugin_port(&allowed, "remote-api_echo").is_some());
+    }
+
+    fn network_binary() -> PathBuf {
+        let executable = std::env::current_exe().unwrap();
+        let profile = executable.parent().unwrap().parent().unwrap();
+        let target = profile.parent().unwrap();
+        let mut build = std::process::Command::new("cargo");
+        build
+            .args([
+                "build",
+                "--offline",
+                "-p",
+                "anchor-network-tools",
+                "--manifest-path",
+            ])
+            .arg(
+                Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .parent()
+                    .unwrap()
+                    .join("Cargo.toml"),
+            )
+            .env("CARGO_TARGET_DIR", target);
+        if profile.file_name().is_some_and(|name| name == "release") {
+            build.arg("--release");
+        }
+        let output = build.output().unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        profile.join("anchor-network-tools")
+    }
+
+    #[tokio::test]
+    async fn a_real_stdio_client_connects_only_with_the_network_capability_and_denial_does_not_break_offline_tools()
+     {
+        let _env = crate::PROCESS_ENV_LOCK.lock().await;
+        let _commands = EnvVar::set("ANCHOR_RUNNER_ALLOWED_COMMANDS", "sh,cat,printf,true");
+        let _library = EnvVar::unset("ANCHOR_RUNNER_LIBRARY_ROOT");
+        let _bwrap = EnvVar::unset("ANCHOR_BWRAP");
+        let fixture = Fixture::new();
+        let executable = network_binary();
+        // The same network client installed as an offline Plugin: it must run,
+        // but a connection to the Host's listener must be denied by the kernel.
+        for id in ["network", "probe"] {
+            let directory = fixture.root.join("plugins").join(id);
+            std::fs::create_dir_all(directory.join("bin")).unwrap();
+            std::fs::copy(&executable, directory.join("bin/anchor-network-tools")).unwrap();
+            std::fs::write(directory.join("plugin.json"), json!({"name":id,"network":id == "network",
+                "mcpServers":{"http":{"command":"bin/anchor-network-tools","env":{"ANCHOR_NETWORK_WORKSPACE":"/workspace"}}}}).to_string()).unwrap();
+        }
+        let hits = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let seen = hits.clone();
+        let socket = std::net::UdpSocket::bind("0.0.0.0:0").unwrap();
+        socket.connect("192.0.2.1:80").unwrap();
+        let local = socket.local_addr().unwrap().ip();
+        let listener = tokio::net::TcpListener::bind((local, 0)).await.unwrap();
+        let url = format!("http://{}/probe", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            axum::serve(
+                listener,
+                axum::Router::new().route(
+                    "/probe",
+                    axum::routing::get(move || {
+                        let seen = seen.clone();
+                        async move {
+                            seen.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                            "connected"
+                        }
+                    }),
+                ),
+            )
+            .await
+            .unwrap();
+        });
+        fixture.switch("probe", true);
+        let (offline, reasons) = fixture.freeze("offline").await;
+        assert!(reasons.is_empty(), "{reasons:?}");
+        let port = plugin_port(&offline, "probe-http_request").unwrap();
+        assert!(
+            port.call("probe-http_request", json!({"url":url}))
+                .await
+                .is_err()
+        );
+        assert_eq!(hits.load(std::sync::atomic::Ordering::SeqCst), 0);
+        fixture.switch("network", true);
+        let (online, reasons) = fixture.freeze("online").await;
+        assert!(reasons.is_empty(), "{reasons:?}");
+        let port = plugin_port(&online, "network-http_request").unwrap();
+        let value = port
+            .call("network-http_request", json!({"url":url}))
+            .await
+            .unwrap();
+        assert!(
+            value.iter().any(|content| content
+                .as_json()
+                .is_some_and(|value| value["body"] == "connected")),
+            "{value:?}"
+        );
+        assert_eq!(hits.load(std::sync::atomic::Ordering::SeqCst), 1);
+        fixture
+            .sessions
+            .set_network_allowed("local", "sess", false, "operator")
+            .unwrap();
+        let (denied, reasons) = fixture.freeze("denied").await;
+        assert!(plugin_port(&denied, "network-http_request").is_none());
+        assert!(reasons.iter().any(|reason| reason.contains("禁止联网")));
+        let port = plugin_port(&denied, "probe-http_request").unwrap();
+        assert!(
+            port.call("probe-http_request", json!({"url":url}))
+                .await
+                .is_err()
+        );
+        assert_eq!(hits.load(std::sync::atomic::Ordering::SeqCst), 1);
+        server.abort();
     }
     /// The repository's stdio MCP fixture binary (the same one the node-host
     /// tests use), built once per test process.

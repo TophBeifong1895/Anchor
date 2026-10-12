@@ -9,6 +9,7 @@ description = "Bubblewrap host adapter for Anchor's Rust sandbox port"
 anchor-runtime = { path = "../anchor-runtime" }
 tokio = { workspace = true, features = ["process", "io-util", "net"] }
 libc = "0.2"
+serde_json = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["process", "io-util", "macros", "rt-multi-thread", "time", "net"] }

@@ -235,6 +235,41 @@ fn reclaim_locked(root: &Path, apply: bool) -> Result<ReclaimReport, ReclaimErro
     let store = anchor_graph_host::store_root(root);
     let plugins = root.join("plugins");
 
+    // Temporary views carry durable ownership and exact references in Library.
+    // They survive restart and are released only by trusted Session cleanup.
+    // Missing or corrupt facts do not authorize deleting any dependency bytes.
+    let development = match crate::development::development_views(root) {
+        Ok(views) => views,
+        Err(error) => {
+            let mut report = ReclaimReport::refused(
+                "development dependency references could not be verified; nothing was deleted",
+            );
+            report.kept_reasons.push(error.to_string());
+            return Ok(report);
+        }
+    };
+    let canonical_store = store.canonicalize().unwrap_or_else(|_| store.clone());
+    for view in &development {
+        if let Err(error) = store_references(view, &canonical_store).and_then(|found| {
+            if found.is_empty() {
+                Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "temporary dependency view has no package references",
+                ))
+            } else {
+                Ok(found)
+            }
+        }) {
+            let mut report = ReclaimReport::refused(
+                "development view package references could not be verified; nothing was deleted",
+            );
+            report
+                .kept_reasons
+                .push(format!("{}: {error}", display_relative(root, view)));
+            return Ok(report);
+        }
+    }
+
     // Pass one: which views are alive, and which Plugin ids we can speak about.
     // A declaration we cannot read might point anywhere, so it stops the whole
     // run before anything is deleted.
@@ -286,6 +321,17 @@ fn reclaim_locked(root: &Path, apply: bool) -> Result<ReclaimReport, ReclaimErro
     // deployment whose `plugins/` is missing (a mistyped Library root, a partly
     // restored backup) is the one mistake that cannot be undone from here.
     if known_ids.is_empty()
+        && development.is_empty()
+        && !match crate::development::has_released_development(root) {
+            Ok(released) => released,
+            Err(error) => {
+                let mut report = ReclaimReport::refused(
+                    "released development ownership could not be verified; nothing was deleted",
+                );
+                report.kept_reasons.push(error.to_string());
+                return Ok(report);
+            }
+        }
         && (!read_directory(&views)?.is_empty() || !read_directory(&store)?.is_empty())
     {
         return Ok(ReclaimReport::refused(
@@ -371,7 +417,8 @@ fn reclaim_locked(root: &Path, apply: bool) -> Result<ReclaimReport, ReclaimErro
     // kept because their Plugin id is not installed. A view that is still on disk
     // may still be the only thing pointing at a package version, and deleting that
     // package would leave the view dangling.
-    let surviving = surviving_views(root, &planned_orphans)?;
+    let mut surviving = surviving_views(root, &planned_orphans)?;
+    surviving.extend(development);
     let mut referenced: BTreeSet<PathBuf> = BTreeSet::new();
     let mut unreadable_view = None;
     let canonical_store = store.canonicalize().unwrap_or_else(|_| store.clone());
@@ -514,13 +561,30 @@ fn store_references(view: &Path, store: &Path) -> Result<BTreeSet<PathBuf>, io::
             };
             let normalized = normalize(&resolved);
             let Ok(relative) = normalized.strip_prefix(store) else {
+                if entry
+                    .path()
+                    .components()
+                    .any(|component| component.as_os_str() == "site-packages")
+                {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "dependency view points outside the shared store",
+                    ));
+                }
                 continue;
             };
             let mut components = relative.components();
             let (Some(package), Some(version)) = (components.next(), components.next()) else {
                 continue;
             };
-            references.insert(store.join(package).join(version));
+            let package_version = store.join(package).join(version);
+            if !package_version.is_dir() || !normalized.exists() {
+                return Err(io::Error::new(
+                    io::ErrorKind::NotFound,
+                    "dependency view points at missing shared package bytes",
+                ));
+            }
+            references.insert(package_version);
         }
     }
     Ok(references)

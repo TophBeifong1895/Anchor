@@ -1,7 +1,7 @@
 //! Prepared host execution shared by application use cases and legacy framing.
 use crate::application::RunApplication;
 use crate::{HostArtifacts, HostControl, HostNodes, make_host_with_control, reject_snapshot};
-use anchor_graph_host::{GraphCatalog, InProcessGraphHost, LoadedGraphBundle, PluginCatalog};
+use anchor_graph_host::{GraphCatalog, InProcessGraphHost, LoadedGraphBundle};
 use anchor_runtime::graph::{CallIdentity, PluginBinding};
 use anchor_runtime::graph::{
     FileRunStore, GraphError, GraphRunRecord, GraphRunner, GraphSnapshot, InvocationKey,
@@ -50,13 +50,17 @@ impl PreparedExecution {
         library_root: Option<std::path::PathBuf>,
     ) -> Result<Self, String> {
         reject_snapshot(&record.snapshot)?;
-        let (store, artifacts, nodes, control) =
-            make_host_with_control(&record.run_id, bindings.clone(), control, library_root)?;
+        let (store, artifacts, nodes, control) = make_host_with_control(
+            &record.run_id,
+            control,
+            library_root,
+            application
+                .as_ref()
+                .and_then(|application| application.runtime_configuration().cloned()),
+        )?;
         // Admission validates the Plugin declarations and host wiring. The
         // per-node network flag is enforced when the node is dispatched.
-        nodes
-            .io_resolver
-            .validate_plugin_configuration(&bindings.values().cloned().collect::<Vec<_>>())?;
+        Self::validate_plugin_bindings(&nodes, &bindings)?;
         let caps = nodes.capabilities();
         for node in &record.snapshot.nodes {
             if node.agent.is_some() && !caps.agent {
@@ -136,12 +140,63 @@ impl PreparedExecution {
             .bind_local_inputs(record, Some(graph))
     }
 
+    fn validate_plugin_bindings(
+        nodes: &HostNodes,
+        bindings: &BTreeMap<String, PluginBinding>,
+    ) -> Result<(), String> {
+        if bindings.is_empty() {
+            return Ok(());
+        }
+        let ids = bindings.keys().cloned().collect::<Vec<_>>();
+        let current = nodes
+            .resolve_plugins(&ids)
+            .map_err(|error| format!("Plugin manifest resolution failed: {error}"))?;
+        if current.len() != ids.len()
+            || current.iter().zip(&ids).any(|(binding, id)| {
+                binding.id != *id
+                    || binding.digest.is_empty()
+                    || binding.authorization_digest.is_empty()
+            })
+        {
+            return Err(
+                "Plugin resolver returned incomplete, reordered, unhashed, or unauthorized bindings"
+                    .into(),
+            );
+        }
+        for ((id, admitted), current) in bindings.iter().zip(&current) {
+            if admitted.same_authorization(current)
+                || admitted.can_upgrade_legacy_authorization(current)
+            {
+                continue;
+            }
+            return Err(if admitted.authorization_digest.is_empty() {
+                format!("Plugin `{id}` authorization baseline is unavailable for this legacy Run")
+            } else {
+                format!(
+                    "Plugin `{id}` Host authorization changed since this Graph Run was admitted"
+                )
+            });
+        }
+        // Preparation proves that an old baseline can be upgraded, but cannot
+        // write it: GraphRunner owns that migration while holding the Run lease.
+        // Wiring validates the original bindings again against its catalog read.
+        nodes
+            .io_resolver
+            .validate_plugin_configuration(&bindings.values().cloned().collect::<Vec<_>>())
+    }
+
     fn validate_configuration(&self, root: &GraphRunRecord) -> Result<(), String> {
         let mut pending = vec![root.clone()];
         let mut checked = std::collections::BTreeSet::new();
         while let Some(record) = pending.pop() {
             if !checked.insert(record.run_id.clone()) {
                 continue;
+            }
+            if !matches!(
+                record.status,
+                RunStatus::Completed | RunStatus::Failed | RunStatus::Aborted
+            ) {
+                Self::validate_plugin_bindings(&self.nodes, &record.plugin_bindings)?;
             }
             let metadata = crate::application::metadata::load(
                 &crate::env_path("ANCHOR_RUNNER_STATE_ROOT")?,
@@ -275,6 +330,12 @@ struct RunnerGraphCatalog {
     application: Option<RunApplication>,
 }
 
+struct PluginReferenceLease {
+    _lease: anchor_library::InstallLease,
+}
+
+impl anchor_runtime::graph::RunLease for PluginReferenceLease {}
+
 impl RunnerGraphCatalog {
     fn path(&self, name: &str) -> Result<std::path::PathBuf, GraphError> {
         if name.is_empty()
@@ -296,6 +357,30 @@ impl RunnerGraphCatalog {
 }
 
 impl GraphCatalog for RunnerGraphCatalog {
+    fn lock_plugin_references<'a>(
+        &'a self,
+        cancellation: anchor_runtime::Cancellation,
+    ) -> anchor_graph_host::PluginReferenceLeaseFuture<'a> {
+        Box::pin(async move {
+            let root = crate::library_root(&self.root);
+            let access = crate::dependency_provision::DependencyAccess {
+                network: false,
+                cancellation,
+            };
+            let lease = crate::application::plugins::plugin_publication_lease(
+                &root,
+                &access,
+                "child reference publication",
+            )
+            .await
+            .map_err(|error| {
+                GraphError::Unsupported(format!("child Plugin publication: {error:?}"))
+            })?;
+            Ok(Box::new(PluginReferenceLease { _lease: lease })
+                as Box<dyn anchor_runtime::graph::RunLease>)
+        })
+    }
+
     fn graph_ancestry(&self, run_id: &str) -> Result<Vec<String>, GraphError> {
         let mut ancestry = Vec::new();
         let mut current = run_id.to_owned();
@@ -608,17 +693,16 @@ impl GraphCatalog for RunnerGraphCatalog {
     fn verify_child_plugins(
         &self,
         graph: &str,
-        bindings: &[PluginBinding],
+        _bindings: &[PluginBinding],
     ) -> Result<(), GraphError> {
         let path = self.path(graph)?;
-        let ids = bindings
-            .iter()
-            .map(|binding| binding.id.clone())
-            .collect::<Vec<_>>();
-        let current = anchor_graph_host::FilePluginCatalog::new(path).resolve(&ids)?;
-        if current != bindings {
-            return Err(GraphError::RunConflict);
+        if !path.is_dir() {
+            return Err(GraphError::InvalidSnapshot(format!(
+                "unknown child graph `{graph}`"
+            )));
         }
+        // Plugin authority is checked by the shared Runner against the Library.
+        // Graph bundles contain references, never another Plugin copy.
         Ok(())
     }
 
@@ -694,6 +778,9 @@ impl GraphCatalog for RunnerGraphCatalog {
         })
     }
 }
+
+#[cfg(test)]
+mod legacy_plugin_tests;
 
 #[cfg(test)]
 mod graph_call_ancestry_tests {

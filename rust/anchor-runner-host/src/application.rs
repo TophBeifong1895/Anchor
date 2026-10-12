@@ -4,9 +4,14 @@ mod assistants;
 pub(crate) use abandon::AbandonAction;
 mod conversations;
 pub(crate) use assistants::AssistantAdmission;
+pub(crate) mod channel_management;
+pub(crate) mod development_dependencies;
 pub(crate) mod graphs;
 pub(crate) mod metadata;
+pub(crate) mod oauth_management;
+pub(crate) mod plugin_candidates;
 pub(crate) mod plugins;
+pub(crate) mod scheduling;
 pub(crate) mod session_calls;
 pub(crate) use conversations::{ConversationAdmission, WECOM_REPLY_KEY_PREFIX, WECOM_REPLY_KIND};
 pub(crate) use metadata::ChannelRunSource;
@@ -73,11 +78,20 @@ pub(crate) struct RunApplication {
     /// any. Absent means "this deployment cannot fetch or build dependencies", which is
     /// a valid deployment, not an error.
     dependency_provision: Option<Arc<crate::dependency_provision::DependencyProvisioner>>,
+    runtime_configuration: Option<Arc<crate::runtime_configuration::RuntimeConfiguration>>,
+    /// A Pilot Turn keeps the same interpreter and preparation grant for all
+    /// of its tools, including an explicitly unavailable provisioner. The
+    /// shared configuration remains available for preparing the next Turn.
+    frozen_runtime_snapshot: Option<crate::runtime_configuration::RuntimeSnapshot>,
+    pub(super) schedules: Option<Arc<dyn scheduling::ScheduleManagementPort>>,
+    pub(super) oauth: Option<Arc<dyn oauth_management::OAuthManagementPort>>,
+    pub(super) channels: Option<Arc<dyn channel_management::ChannelManagementPort>>,
     executor: Option<tokio::runtime::Handle>,
 }
 
 impl RunApplication {
     /// Wire the deployment's authorized dependency preparation.
+    #[cfg(test)]
     pub(crate) fn with_dependency_provisioner(
         mut self,
         provisioner: std::sync::Arc<crate::dependency_provision::DependencyProvisioner>,
@@ -92,12 +106,147 @@ impl RunApplication {
     /// which is a valid deployment, not an error.
     pub(crate) fn dependency_provisioner(
         &self,
-    ) -> Result<&std::sync::Arc<crate::dependency_provision::DependencyProvisioner>, ApplicationError>
+    ) -> Result<std::sync::Arc<crate::dependency_provision::DependencyProvisioner>, ApplicationError>
     {
-        self.dependency_provision.as_ref().ok_or_else(|| {
+        let provisioner = match self.runtime_snapshot()? {
+            Some(snapshot) => snapshot.provisioner,
+            None => self.dependency_provision.clone(),
+        };
+        provisioner.ok_or_else(|| {
             ApplicationError::Invalid(
                 "this deployment does not authorize dependency preparation".to_owned(),
             )
+        })
+    }
+
+    pub(crate) fn with_frozen_runtime_snapshot(
+        mut self,
+        snapshot: crate::runtime_configuration::RuntimeSnapshot,
+    ) -> Self {
+        self.frozen_runtime_snapshot = Some(snapshot);
+        self
+    }
+
+    pub(crate) fn runtime_snapshot(
+        &self,
+    ) -> Result<Option<crate::runtime_configuration::RuntimeSnapshot>, ApplicationError> {
+        if let Some(snapshot) = &self.frozen_runtime_snapshot {
+            return Ok(Some(snapshot.clone()));
+        }
+        self.runtime_configuration
+            .as_ref()
+            .map(|configuration| configuration.snapshot())
+            .transpose()
+            .map_err(ApplicationError::Storage)
+    }
+
+    pub(crate) fn with_runtime_configuration(
+        mut self,
+        configuration: Arc<crate::runtime_configuration::RuntimeConfiguration>,
+    ) -> Self {
+        self.runtime_configuration = Some(configuration);
+        self
+    }
+
+    pub(crate) fn runtime_configuration(
+        &self,
+    ) -> Option<&Arc<crate::runtime_configuration::RuntimeConfiguration>> {
+        self.runtime_configuration.as_ref()
+    }
+
+    pub(crate) fn with_schedule_management(
+        mut self,
+        port: Arc<dyn scheduling::ScheduleManagementPort>,
+    ) -> Self {
+        self.schedules = Some(port);
+        self
+    }
+
+    pub(crate) fn with_oauth_management(
+        mut self,
+        port: Arc<dyn oauth_management::OAuthManagementPort>,
+    ) -> Self {
+        self.oauth = Some(port);
+        self
+    }
+    pub(crate) fn with_channel_management(
+        mut self,
+        port: Arc<dyn channel_management::ChannelManagementPort>,
+    ) -> Self {
+        self.channels = Some(port);
+        self
+    }
+
+    /// Safe, read-only facts about the deployment's Python dependency
+    /// preparation grant and shared interpreter. Never returns configured
+    /// paths, URLs, or uv digest; those are deployment details, not model inputs.
+    pub(crate) fn pilot_dependency_status(&self) -> Value {
+        use std::os::unix::fs::PermissionsExt;
+        let snapshot = match self.runtime_snapshot() {
+            Ok(snapshot) => snapshot,
+            Err(reason) => {
+                return serde_json::json!({"configured":false,"configuration_error":format!("{reason:?}")});
+            }
+        };
+        let provisioner = match &snapshot {
+            Some(snapshot) => snapshot.provisioner.clone(),
+            None => self.dependency_provision.clone(),
+        };
+        let provisioner = provisioner.as_ref();
+        let interpreter = provisioner
+            .map(|provisioner| provisioner.config.python.clone())
+            .or_else(|| {
+                snapshot
+                    .as_ref()
+                    .and_then(|snapshot| snapshot.python.clone())
+            })
+            .or_else(|| {
+                self.runtime_configuration
+                    .is_none()
+                    .then(|| {
+                        std::env::var_os(crate::dependency_provision::PYTHON_INTERPRETER_ENV)
+                            .filter(|value| !value.is_empty())
+                            .map(PathBuf::from)
+                    })
+                    .flatten()
+            });
+        let interpreter_configured = interpreter.is_some();
+        let interpreter_available = interpreter.as_ref().is_some_and(|path| {
+            path.is_absolute()
+                && std::fs::metadata(path).is_ok_and(|metadata| {
+                    metadata.is_file() && metadata.permissions().mode() & 0o111 != 0
+                })
+        });
+        let (uv_available, mut sources) = if let Some(provisioner) = provisioner {
+            let uv_available = provisioner.config.verified_uv().is_ok();
+            let sources = provisioner
+                .config
+                .sources
+                .iter()
+                .map(|source| match source {
+                    crate::dependency_provision::PackageSource::Directory(path) => {
+                        serde_json::json!({"type":"directory","available":path.is_dir()})
+                    }
+                    crate::dependency_provision::PackageSource::Index(_) => {
+                        // Reachability is intentionally not probed by this read-only
+                        // status call: it is network activity and a transient probe
+                        // would not be an authorization fact.
+                        serde_json::json!({"type":"index","configured":true,"reachability_checked":false})
+                    }
+                })
+                .collect::<Vec<_>>();
+            (uv_available, sources)
+        } else {
+            (false, Vec::new())
+        };
+        sources.sort_by(|left, right| left["type"].as_str().cmp(&right["type"].as_str()));
+        serde_json::json!({
+            "configured": provisioner.is_some(),
+            "shared_interpreter_configured": interpreter_configured,
+            "shared_interpreter_available": interpreter_available,
+            "uv_available": uv_available,
+            "uv_digest_verified": uv_available,
+            "sources": sources,
         })
     }
 
@@ -109,12 +258,18 @@ impl RunApplication {
             active: Arc::new(Mutex::new(HashMap::new())),
             catalog_mutations: Arc::new(Mutex::new(())),
             dependency_provision: None,
+            runtime_configuration: None,
+            frozen_runtime_snapshot: None,
+            schedules: None,
+            oauth: None,
+            channels: None,
             executor: tokio::runtime::Handle::try_current().ok(),
         }
     }
 
     /// Serialize Graph definition mutations with reference checks and deletion.
-    /// Run admission remains protected by each Graph's own lease.
+    /// Run admission uses each Graph's own lease and the Library publication
+    /// lease for its Plugin references; it must not acquire this catalog guard.
     pub(crate) async fn graph_catalog_mutation_guard(&self) -> OwnedMutexGuard<()> {
         Arc::clone(&self.catalog_mutations).lock_owned().await
     }
@@ -516,6 +671,18 @@ impl RunApplication {
         }
         let active = self.active.lock().await;
         let targets = self.runs_for_graph(&graph_path)?;
+        // A durable hand-off may have metadata before its Run is admitted. It
+        // still owns history and cannot be erased by an empty cascade.
+        for id in metadata::ids(&self.data_root)? {
+            if let Some(retained) = self.metadata(&id)?
+                && Self::graph_identity(&retained.bundle_source)? == graph_path
+                && !targets.iter().any(|(run, _)| run == &id)
+            {
+                return Err(ApplicationError::Conflict(format!(
+                    "Graph has retained hand-off `{id}` without its Run; settle it before deletion"
+                )));
+            }
+        }
         for (run_id, record) in &targets {
             self.reject_pending_session_delivery(run_id)?;
             if active.contains_key(run_id) {
@@ -546,24 +713,26 @@ impl RunApplication {
         for (run_id, _) in &targets {
             self.retire_assistant_for_deletion(run_id)?;
         }
-        let mut conversations = std::collections::BTreeMap::new();
+        let mut conversations = BTreeSet::new();
         for (run_id, record) in &targets {
             if let Some(metadata) = self.metadata(run_id)? {
+                crate::conversation_resources::retain(&self.data_root, record, &metadata)?;
                 for node in &record.snapshot.nodes {
                     if let Some(hint) = crate::node_host::conversation_hint_for(&metadata, &node.id)
                     {
-                        conversations.entry(hint.key.clone()).or_insert(hint);
+                        conversations.insert(hint.key);
                     }
                 }
             }
         }
-        for hint in conversations.into_values() {
-            crate::goose_acp::remove_conversation(
-                &workspace_root.join(".goose-process"),
-                &hint.key,
-            )
-            .map_err(ApplicationError::Storage)?;
-            run_data::remove_legacy_conversation(&self.data_root, &hint.key)
+        conversations.extend(crate::conversation_resources::for_graph(
+            &self.data_root,
+            &graph_path,
+        )?);
+        for hint in conversations {
+            crate::goose_acp::remove_conversation(&workspace_root.join(".goose-process"), &hint)
+                .map_err(ApplicationError::Storage)?;
+            run_data::remove_legacy_conversation(&self.data_root, &hint)
                 .map_err(ApplicationError::Storage)?;
         }
         for (id, record) in &targets {
@@ -602,6 +771,15 @@ impl RunApplication {
         run_id: &str,
         workspace_root: &Path,
     ) -> Result<(), ApplicationError> {
+        // Match admission's lock order. A saved hand-off may precede its Run,
+        // so the Graph lease must cover reference inspection and cleanup.
+        let _graph_lease = match self.metadata(run_id)? {
+            Some(metadata) if metadata.conversation.is_some() => Some(
+                self.acquire_graph_lease_waiting(&metadata.bundle_source)
+                    .await?,
+            ),
+            _ => None,
+        };
         let active = self.active.lock().await;
         if active.contains_key(run_id) {
             return Err(ApplicationError::Conflict(
@@ -674,6 +852,7 @@ impl RunApplication {
         if let Some(metadata) = metadata.as_ref()
             && let Some(source) = metadata.conversation.as_ref()
         {
+            crate::conversation_resources::retain(&self.data_root, &record, metadata)?;
             crate::run_deletions::save(
                 &self.data_root,
                 &crate::run_deletions::RunDeletion::new(
@@ -685,6 +864,13 @@ impl RunApplication {
                 ),
             )
             .map_err(ApplicationError::Storage)?;
+            crate::conversation_resources::release_unreferenced(
+                self,
+                &self.data_root,
+                &Self::graph_identity(&metadata.bundle_source)?,
+                run_id,
+                workspace_root,
+            )?;
         }
         run_data::delete_run_data(&record, &self.data_root, workspace_root)
             .map_err(ApplicationError::Storage)?;
@@ -708,6 +894,11 @@ impl RunApplication {
             bundle.snapshot.objective = objective;
         }
         let graph_path = Self::graph_identity(source)?;
+        let plugin_lease = if bundle.plugins.is_empty() {
+            None
+        } else {
+            Some(self.plugin_reference_lease().await?)
+        };
         let mut active = self.active.lock().await;
         if active.values().any(|run| run.graph_path == graph_path) {
             return Err(ApplicationError::Conflict(
@@ -746,10 +937,9 @@ impl RunApplication {
         let mut record = GraphRunRecord::create_with_id(bundle.snapshot, input, run_id.clone())?;
         record.plugin_bindings = plugin_bindings;
         record.plugin_bindings_initialized = true;
-        // A Run's Plugins are resolved here, once:
-        // the Run then carries the digest it actually ran with, and restoring it
-        // never re-reads the name table. Resolving re-hashes a published tree, so
-        // it runs off the runtime thread.
+        // The admission observation and the durable reference are published
+        // under one Library lease. Node dispatch resolves the current Plugin
+        // again so an update can take effect at the next invocation.
         let control = new_control();
         let execution = PreparedExecution::prepare_with_catalog(
             &record,
@@ -787,8 +977,9 @@ impl RunApplication {
             },
         );
         drop(lease);
+        drop(plugin_lease);
         // The durable snapshot and immutable identity now serialize future
-        // admissions. The catalog lock only protects reading/writing the bundle.
+        // admissions. The Graph lease only protects reading/writing the bundle.
         drop(graph_lease);
         self.spawn(record, execution)?;
         Ok(run_id)

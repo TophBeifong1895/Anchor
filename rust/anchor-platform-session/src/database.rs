@@ -274,8 +274,12 @@ pub(crate) fn open(path: &Path) -> Result<Connection, SessionError> {
     connection.busy_timeout(Duration::from_secs(5))?;
     connection.pragma_update(None, "foreign_keys", true)?;
     migrate(&mut connection)?;
-    let journal: String =
-        connection.pragma_update_and_check(None, "journal_mode", "WAL", |row| row.get(0))?;
+    let mut journal: String =
+        connection.pragma_query_value(None, "journal_mode", |row| row.get(0))?;
+    if !journal.eq_ignore_ascii_case("wal") {
+        journal =
+            connection.pragma_update_and_check(None, "journal_mode", "WAL", |row| row.get(0))?;
+    }
     if !journal.eq_ignore_ascii_case("wal") {
         return Err(SessionError::Storage(
             "Session database requires WAL".into(),
@@ -286,6 +290,24 @@ pub(crate) fn open(path: &Path) -> Result<Connection, SessionError> {
 }
 
 fn migrate(connection: &mut Connection) -> Result<(), SessionError> {
+    // API reads open independent connections while the executor appends Turn
+    // events. A current database needs schema validation, not a writer lease.
+    // A migration takes IMMEDIATE below and rechecks its identity under that
+    // lease, preserving concurrent first-open and fail-closed schema behavior.
+    {
+        let transaction = connection.transaction()?;
+        let application: i32 =
+            transaction.pragma_query_value(None, "application_id", |row| row.get(0))?;
+        let version: i32 =
+            transaction.pragma_query_value(None, "user_version", |row| row.get(0))?;
+        if application == APPLICATION_ID
+            && version == SCHEMA_VERSION
+            && schema(&transaction)? == expected_schema(SCHEMA_VERSION)
+        {
+            transaction.commit()?;
+            return Ok(());
+        }
+    }
     let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
     let application: i32 =
         transaction.pragma_query_value(None, "application_id", |row| row.get(0))?;

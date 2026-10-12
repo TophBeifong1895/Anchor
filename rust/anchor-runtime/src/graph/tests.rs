@@ -61,6 +61,7 @@ fn executed_nodes_follow_first_durable_completion_order() {
     .unwrap();
     let make_result = |node: &str, sequence: u64| RunResult {
         plugin_views: Default::default(),
+        plugin_digests: Default::default(),
         node_id: node.into(),
         interruption: None,
         key: InvocationKey {
@@ -396,7 +397,7 @@ fn stopped_conversation_run_can_retain_unknown_recovery_attempts() {
 }
 
 #[tokio::test]
-async fn plugin_manifest_is_pinned_to_run_and_drift_fails_before_dispatch() {
+async fn plugin_authorization_drift_fails_before_dispatch() {
     let mut snapshot = graph(&["work"], &[], "work");
     snapshot.nodes[0].plugins = vec!["review".into()];
     let binding = PluginBinding {
@@ -404,6 +405,7 @@ async fn plugin_manifest_is_pinned_to_run_and_drift_fails_before_dispatch() {
         digest: "manifest-v1".into(),
         resources: vec!["instructions.md".into()],
         mcp_servers: vec!["search".into()],
+        authorization_digest: "authorization-v1".into(),
     };
     let nodes = FakeNodes {
         resolved_plugins: Mutex::new(vec![binding.clone()]),
@@ -425,20 +427,306 @@ async fn plugin_manifest_is_pinned_to_run_and_drift_fails_before_dispatch() {
     {
         let mut changed = nodes.resolved_plugins.lock().unwrap();
         changed[0].digest = "manifest-v2".into();
+        changed[0].authorization_digest = "authorization-v2".into();
     }
     let resumed = GraphRunner::new(&store, &artifacts, &nodes, &control)
         .run(first)
         .await
         .unwrap();
     assert_eq!(resumed.status, RunStatus::Failed);
-    assert!(
-        resumed
-            .error
-            .as_deref()
-            .unwrap()
-            .contains("manifest changed")
-    );
+    assert!(resumed.error.as_deref().unwrap().contains("authorization"));
     assert_eq!(nodes.calls.lock().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn plugin_code_changes_resume_and_are_observed_per_call() {
+    let mut snapshot = graph(&["work"], &[], "work");
+    snapshot.nodes[0].plugins = vec!["review".into()];
+    let binding = PluginBinding {
+        id: "review".into(),
+        digest: "code-v1".into(),
+        resources: vec!["instructions.md".into()],
+        mcp_servers: vec!["search".into()],
+        authorization_digest: "authorization-v1".into(),
+    };
+    let nodes = FakeNodes {
+        resolved_plugins: Mutex::new(vec![binding.clone()]),
+        budget_once: Mutex::new(true),
+        ..Default::default()
+    };
+    let store = MemStore::default();
+    let artifacts = MemoryArtifacts::default();
+    let control = Control::default();
+    let first = GraphRunner::new(&store, &artifacts, &nodes, &control)
+        .run(GraphRunRecord::create(snapshot, Value::Null).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(first.status, RunStatus::BudgetStopped);
+
+    let mut current = binding;
+    current.digest = "code-v2".into();
+    current.resources.push("skills/new/SKILL.md".into());
+    *nodes.resolved_plugins.lock().unwrap() = vec![current.clone()];
+    let cursor = first.cursor.as_ref().unwrap();
+    nodes.observed_views.lock().unwrap().insert(
+        cursor.key.durable_key(),
+        BTreeMap::from([("review".to_owned(), "view-v2".to_owned())]),
+    );
+    nodes.observed_digests.lock().unwrap().insert(
+        cursor.key.durable_key(),
+        BTreeMap::from([("review".to_owned(), "code-v2".to_owned())]),
+    );
+    let resumed = GraphRunner::new(&store, &artifacts, &nodes, &control)
+        .run(first)
+        .await
+        .unwrap();
+    assert_eq!(resumed.status, RunStatus::Completed);
+    assert_eq!(nodes.calls.lock().unwrap()[1].plugins, vec![current]);
+    assert_eq!(resumed.plugin_bindings["review"].digest, "code-v1");
+    assert_eq!(resumed.results["work"][0].plugin_views["review"], "view-v2");
+    assert_eq!(
+        resumed.results["work"][0].plugin_digests["review"],
+        "code-v2"
+    );
+}
+
+#[tokio::test]
+async fn parallel_dispatch_uses_current_plugin_resources_and_preserves_admitted_authority() {
+    let mut snapshot = parallel_graph();
+    for node in &mut snapshot.nodes {
+        if node.agent.is_some() {
+            node.plugins = vec!["review".into()];
+        }
+    }
+    let admitted = PluginBinding {
+        id: "review".into(),
+        digest: "code-v1".into(),
+        resources: vec!["old.md".into()],
+        mcp_servers: vec![],
+        authorization_digest: "authority-v1".into(),
+    };
+    let mut current = admitted.clone();
+    current.digest = "code-v2".into();
+    current.resources = vec!["skills/current/SKILL.md".into()];
+    let mut record = GraphRunRecord::create(snapshot, Value::Null).unwrap();
+    record
+        .plugin_bindings
+        .insert(admitted.id.clone(), admitted.clone());
+    record.plugin_bindings_initialized = true;
+    let nodes = FakeNodes {
+        resolved_plugins: Mutex::new(vec![current.clone()]),
+        op_run: true,
+        ..Default::default()
+    };
+    for node in ["left", "right", "after"] {
+        let key = InvocationKey {
+            run_id: record.run_id.clone(),
+            graph_digest: record.graph_digest.clone(),
+            node_id: node.into(),
+            invocation: 1,
+        };
+        nodes.observed_digests.lock().unwrap().insert(
+            key.durable_key(),
+            BTreeMap::from([("review".into(), current.digest.clone())]),
+        );
+    }
+    let (store, artifacts, _, control) = setup();
+    let result = GraphRunner::new(&store, &artifacts, &nodes, &control)
+        .run(record)
+        .await
+        .unwrap();
+    assert_eq!(result.status, RunStatus::Completed);
+    assert_eq!(result.plugin_bindings["review"], admitted);
+    for call in nodes.calls.lock().unwrap().iter() {
+        assert_eq!(call.plugins, vec![current.clone()]);
+    }
+    for node in ["left", "right", "after"] {
+        assert_eq!(result.results[node][0].plugin_digests["review"], "code-v2");
+    }
+}
+
+#[tokio::test]
+async fn legacy_plugin_authority_is_upgraded_only_when_the_original_code_is_still_installed() {
+    for change in [
+        "unchanged",
+        "code",
+        "resources",
+        "mcp_servers",
+        "missing_authority",
+    ] {
+        let mut snapshot = graph(&["work"], &[], "work");
+        snapshot.nodes[0].plugins = vec!["review".into()];
+        let legacy = PluginBinding {
+            id: "review".into(),
+            digest: "original".into(),
+            resources: vec!["instructions.md".into()],
+            mcp_servers: vec!["search".into()],
+            authorization_digest: String::new(),
+        };
+        let mut current = legacy.clone();
+        current.authorization_digest = "current-authority".into();
+        match change {
+            "code" => current.digest = "replaced".into(),
+            "resources" => current.resources.push("skills/new/SKILL.md".into()),
+            "mcp_servers" => current.mcp_servers.push("write".into()),
+            "missing_authority" => current.authorization_digest.clear(),
+            _ => {}
+        }
+        let mut record = GraphRunRecord::create(snapshot, Value::Null).unwrap();
+        record.plugin_bindings_initialized = true;
+        record
+            .plugin_bindings
+            .insert(legacy.id.clone(), legacy.clone());
+        let nodes = FakeNodes {
+            resolved_plugins: Mutex::new(vec![current.clone()]),
+            ..Default::default()
+        };
+        let (store, artifacts, _, control) = setup();
+        let result = GraphRunner::new(&store, &artifacts, &nodes, &control)
+            .run(record)
+            .await
+            .unwrap();
+        if change != "unchanged" {
+            assert_eq!(result.status, RunStatus::Failed);
+            assert!(nodes.calls.lock().unwrap().is_empty());
+            let expected = if change == "missing_authority" {
+                "unauthorized"
+            } else {
+                "legacy"
+            };
+            assert!(result.error.as_deref().unwrap().contains(expected));
+            assert_eq!(result.plugin_bindings["review"], legacy);
+        } else {
+            assert_eq!(result.status, RunStatus::Completed);
+            assert_eq!(result.plugin_bindings["review"], current);
+        }
+        assert_eq!(store.load(&result.run_id).unwrap(), Some(result));
+    }
+}
+
+#[tokio::test]
+async fn a_new_run_does_not_bind_plugins_without_a_current_authorization_baseline() {
+    let mut snapshot = graph(&["work"], &[], "work");
+    snapshot.nodes[0].plugins = vec!["review".into()];
+    let nodes = FakeNodes {
+        resolved_plugins: Mutex::new(vec![PluginBinding {
+            id: "review".into(),
+            digest: "current-code".into(),
+            resources: vec![],
+            mcp_servers: vec![],
+            authorization_digest: String::new(),
+        }]),
+        ..Default::default()
+    };
+    let (store, artifacts, _, control) = setup();
+    let failed = GraphRunner::new(&store, &artifacts, &nodes, &control)
+        .run(GraphRunRecord::create(snapshot, Value::Null).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(failed.status, RunStatus::Failed);
+    assert!(failed.error.as_deref().unwrap().contains("unauthorized"));
+    assert!(!failed.plugin_bindings_initialized);
+    assert!(failed.plugin_bindings.is_empty());
+    assert!(failed.cursor.is_none());
+    assert!(failed.invocations.is_empty());
+    assert!(nodes.calls.lock().unwrap().is_empty());
+    assert_eq!(store.load(&failed.run_id).unwrap(), Some(failed));
+}
+
+#[tokio::test]
+async fn a_rejected_legacy_plugin_does_not_partially_upgrade_other_plugins() {
+    let mut snapshot = graph(&["work"], &[], "work");
+    snapshot.nodes[0].plugins = vec!["alpha".into(), "beta".into()];
+    let original = ["alpha", "beta"].map(|id| PluginBinding {
+        id: id.into(),
+        digest: "original".into(),
+        resources: vec![],
+        mcp_servers: vec![],
+        authorization_digest: String::new(),
+    });
+    let mut current = original.clone();
+    for binding in &mut current {
+        binding.authorization_digest = "current-authority".into();
+    }
+    current[1].digest = "replaced".into();
+    let mut record = GraphRunRecord::create(snapshot, Value::Null).unwrap();
+    record.plugin_bindings_initialized = true;
+    record.plugin_bindings = original
+        .into_iter()
+        .map(|binding| (binding.id.clone(), binding))
+        .collect();
+    let admitted = record.plugin_bindings.clone();
+    let nodes = FakeNodes {
+        resolved_plugins: Mutex::new(current.into()),
+        ..Default::default()
+    };
+    let (store, artifacts, _, control) = setup();
+    let failed = GraphRunner::new(&store, &artifacts, &nodes, &control)
+        .run(record)
+        .await
+        .unwrap();
+    assert_eq!(failed.status, RunStatus::Failed);
+    assert_eq!(failed.plugin_bindings, admitted);
+    assert!(nodes.calls.lock().unwrap().is_empty());
+    assert_eq!(store.load(&failed.run_id).unwrap(), Some(failed));
+}
+
+#[tokio::test]
+async fn format_twelve_migration_preserves_the_absence_of_plugin_authority_and_code_observations() {
+    let root = std::env::temp_dir().join(format!(
+        "anchor-format-thirteen-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&root).unwrap();
+    let mut snapshot = graph(&["one"], &[], "one");
+    snapshot.nodes[0].plugins = vec!["review".into()];
+    let binding = PluginBinding {
+        id: "review".into(),
+        digest: "old-code".into(),
+        authorization_digest: "authority".into(),
+        resources: vec![],
+        mcp_servers: vec![],
+    };
+    let nodes = FakeNodes {
+        resolved_plugins: Mutex::new(vec![binding]),
+        ..Default::default()
+    };
+    let (memory, artifacts, _, control) = setup();
+    let record = GraphRunner::new(&memory, &artifacts, &nodes, &control)
+        .run(GraphRunRecord::create(snapshot, Value::Null).unwrap())
+        .await
+        .unwrap();
+    let mut value = serde_json::to_value(&record).unwrap();
+    value["format"] = serde_json::json!(12);
+    value["plugin_bindings"]["review"]
+        .as_object_mut()
+        .unwrap()
+        .remove("authorization_digest");
+    value["results"]["one"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("plugin_digests");
+    let store = FileRunStore::new(&root);
+    std::fs::write(
+        root.join(format!("{}.json", record.run_id)),
+        serde_json::to_vec(&value).unwrap(),
+    )
+    .unwrap();
+    let migrated = store.load(&record.run_id).unwrap().unwrap();
+    assert_eq!(migrated.format, 13);
+    assert_eq!(migrated.status, RunStatus::Completed);
+    assert_eq!(migrated.plugin_bindings["review"].digest, "old-code");
+    assert!(
+        migrated.plugin_bindings["review"]
+            .authorization_digest
+            .is_empty()
+    );
+    assert!(migrated.results["one"][0].plugin_digests.is_empty());
+    std::fs::remove_dir_all(root).unwrap();
 }
 
 /// The Run record carries the view each node call actually used.
@@ -534,6 +822,7 @@ async fn legacy_in_progress_plugin_run_without_binding_fails_closed() {
             digest: "manifest-v1".into(),
             resources: vec![],
             mcp_servers: vec![],
+            authorization_digest: "authorization-v1".into(),
         }]),
         ..Default::default()
     };
@@ -651,6 +940,7 @@ struct FakeNodes {
     /// What a node call observed: the dependency view it actually used, by Plugin
     /// id. Empty means "this host observed nothing", which is not a failure.
     observed_views: Mutex<BTreeMap<String, BTreeMap<String, String>>>,
+    observed_digests: Mutex<BTreeMap<String, BTreeMap<String, String>>>,
 }
 impl NodeExecutionPort for FakeNodes {
     fn capabilities(&self) -> NodeExecutionCapabilities {
@@ -670,6 +960,13 @@ impl NodeExecutionPort for FakeNodes {
         // Reading consumes it, exactly as the host's resolver does: one entry per
         // call, not one per call ever made.
         self.observed_views
+            .lock()
+            .unwrap()
+            .remove(&key.durable_key())
+            .unwrap_or_default()
+    }
+    fn observed_plugin_digests(&self, key: &InvocationKey) -> BTreeMap<String, String> {
+        self.observed_digests
             .lock()
             .unwrap()
             .remove(&key.durable_key())
@@ -1395,6 +1692,7 @@ fn false_ingress_closes_cascaded_sccs_deterministically() {
         "entry".into(),
         vec![RunResult {
             plugin_views: Default::default(),
+            plugin_digests: Default::default(),
             node_id: "entry".into(),
             interruption: None,
             key: entry_key,
@@ -1416,6 +1714,7 @@ fn false_ingress_closes_cascaded_sccs_deterministically() {
         "source".into(),
         vec![RunResult {
             plugin_views: Default::default(),
+            plugin_digests: Default::default(),
             node_id: "source".into(),
             interruption: None,
             key: source_key,
@@ -1544,6 +1843,7 @@ fn later_false_loop_input_retires_stale_selected_output() {
         "branch".into(),
         vec![RunResult {
             plugin_views: Default::default(),
+            plugin_digests: Default::default(),
             node_id: "branch".into(),
             interruption: None,
             key: key("branch", 1),
@@ -2318,6 +2618,7 @@ fn parallel_activation_facts_bind_pair_branch_paths_and_active_cursors() {
         "start".into(),
         vec![RunResult {
             plugin_views: Default::default(),
+            plugin_digests: Default::default(),
             node_id: "start".into(),
             interruption: None,
             key: fanout_key,
@@ -3332,6 +3633,7 @@ fn file_run_store_rejects_edge_decision_not_newer_than_its_result() {
         "spin".into(),
         vec![RunResult {
             plugin_views: Default::default(),
+            plugin_digests: Default::default(),
             node_id: "spin".into(),
             interruption: None,
             key: key.clone(),

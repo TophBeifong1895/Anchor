@@ -1,0 +1,225 @@
+use super::*;
+use crate::platform::tests::Fixture;
+use sha2::{Digest, Sha256};
+use std::os::unix::fs::symlink;
+
+fn model(root: &Path) -> PathBuf {
+    let path = root.join("model-input.env");
+    fs::write(&path, "ANCHOR_MODEL_URL=https://provider.example/v1\nANCHOR_MODEL_API_KEY='fixture-private-key'\nANCHOR_MODEL_NAME=fixture-model\nANCHOR_MODEL_WIRE_API=chat\n").unwrap();
+    path
+}
+
+fn request(fixture: &Fixture) -> PlatformInstallRequest {
+    let report = fixture.package().unwrap();
+    PlatformInstallRequest {
+        archive: report.output,
+        sha256: report.sha256,
+        install_root: fixture.root.path().join("installation"),
+        model_config: model(fixture.root.path()),
+    }
+}
+
+fn admitted_install(
+    fixture: &Fixture,
+    request: &PlatformInstallRequest,
+) -> Result<PlatformInstallReport> {
+    install(request, &fixture.digest, &fixture.digest, &fixture.digest)
+}
+
+#[test]
+fn fresh_install_separates_release_and_private_model_and_never_creates_a_business_graph() {
+    let fixture = Fixture::new();
+    let request = request(&fixture);
+    let report = admitted_install(&fixture, &request).unwrap();
+    assert_eq!(
+        report.launcher,
+        request
+            .install_root
+            .join("release/anchor-runtime/bin/anchor-platform")
+    );
+    assert!(report.model_config.is_file());
+    assert_eq!(
+        fs::metadata(&report.model_config)
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777,
+        0o600
+    );
+    assert_eq!(
+        fs::metadata(&report.release_root)
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777,
+        0o555
+    );
+    assert_eq!(
+        fs::metadata(report.release_root.join("bin/uv"))
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777,
+        0o555
+    );
+    assert_eq!(
+        fs::metadata(report.release_root.join("runtime-manifest.json"))
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777,
+        0o444
+    );
+    assert_eq!(
+        fs::read_dir(request.install_root.join("data/catalog"))
+            .unwrap()
+            .count(),
+        0
+    );
+    assert_eq!(
+        fs::read_dir(request.install_root.join("data/library"))
+            .unwrap()
+            .count(),
+        0
+    );
+    assert!(!report.release_root.join("bundle").exists());
+    assert!(!report.release_root.join("model.env").exists());
+    let command = platform_command(&report.launcher).unwrap();
+    let values = command
+        .get_envs()
+        .map(|(key, value)| (key.to_str().unwrap(), value.unwrap().to_str().unwrap()))
+        .collect::<BTreeMap<_, _>>();
+    assert_eq!(values["ANCHOR_MODEL_API_KEY"], "fixture-private-key");
+    assert_eq!(values["ANCHOR_GOOSE_LOCAL_NETWORK"], "1");
+    assert_eq!(values["ANCHOR_RUNNER_ALLOWED_COMMANDS"], "sh,git");
+    assert!(!values.contains_key("ANCHOR_RUNNER_BUNDLE_ROOT"));
+    assert!(!values.contains_key("ANCHOR_DEPENDENCIES_PYTHON"));
+    assert!(!values.contains_key("ANCHOR_GOOSE_ALLOW_SHARED_NETWORK"));
+    let alternate = platform_command_with_listen(&report.launcher, "127.0.0.1:19087").unwrap();
+    assert!(
+        alternate
+            .get_envs()
+            .any(|(key, value)| key == "ANCHOR_RUNNER_LISTEN"
+                && value == Some(std::ffi::OsStr::new("127.0.0.1:19087")))
+    );
+    assert!(platform_command_with_listen(&report.launcher, "0.0.0.0:8077").is_err());
+    assert!(platform_command_with_listen(&report.launcher, "127.0.0.1:0").is_err());
+    let json = serde_json::to_string(&report).unwrap();
+    assert!(!json.contains("fixture-private-key"));
+    let original = fs::read(&report.model_config).unwrap();
+    assert!(matches!(
+        admitted_install(&fixture, &request),
+        Err(PackageError::AlreadyExists)
+    ));
+    assert_eq!(fs::read(&report.model_config).unwrap(), original);
+    // Test cleanup must make private read-only release directories writable.
+    make_directories_writable(&request.install_root).unwrap();
+}
+
+#[test]
+fn model_input_is_literal_data_and_errors_do_not_contain_values() {
+    let values = parse_model("ANCHOR_MODEL_URL=https://provider.example/v1\nANCHOR_MODEL_API_KEY='$(touch /tmp/anchor-not-executed)`id`'\nANCHOR_MODEL_NAME=test\n").unwrap();
+    assert_eq!(
+        values["ANCHOR_MODEL_API_KEY"],
+        "$(touch /tmp/anchor-not-executed)`id`"
+    );
+    for content in [
+        "ANCHOR_MODEL_API_KEY='secret-unmatched\n",
+        "export ANCHOR_MODEL_API_KEY=secret-value\n",
+        "HOME=secret-value\n",
+        "ANCHOR_MODEL_URL=x\nANCHOR_MODEL_URL=secret-value\n",
+        "ANCHOR_MODEL_API_KEY=secret-value\n",
+    ] {
+        let error = parse_model(content).unwrap_err().to_string();
+        assert!(!error.contains("secret-"), "{error}");
+    }
+}
+
+#[test]
+fn wrong_archive_digest_invalid_model_and_symlink_inputs_leave_no_installation() {
+    for scenario in ["digest", "model", "symlink", "ancestor"] {
+        let fixture = Fixture::new();
+        let mut request = request(&fixture);
+        match scenario {
+            "digest" => request.sha256 = "0".repeat(64),
+            "model" => fs::write(&request.model_config, "HOME=private-value\n").unwrap(),
+            "symlink" => {
+                let alias = fixture.root.path().join("model-alias");
+                symlink(&request.model_config, &alias).unwrap();
+                request.model_config = alias;
+            }
+            "ancestor" => {
+                let alias = fixture.root.path().join("parent-alias");
+                symlink(fixture.root.path(), &alias).unwrap();
+                request.install_root = alias.join("installation");
+            }
+            _ => unreachable!(),
+        }
+        assert!(admitted_install(&fixture, &request).is_err(), "{scenario}");
+        assert!(!request.install_root.exists());
+        assert!(!fs::read_dir(fixture.root.path()).unwrap().any(|entry| {
+            entry
+                .unwrap()
+                .file_name()
+                .to_str()
+                .unwrap()
+                .starts_with(".anchor-install-")
+        }));
+    }
+}
+
+fn custom_archive(root: &Path, names: &[(&str, tar::EntryType)]) -> (PathBuf, String) {
+    let file = root.join("custom.tar.gz");
+    let compressed =
+        flate2::write::GzEncoder::new(File::create(&file).unwrap(), flate2::Compression::fast());
+    let mut builder = tar::Builder::new(compressed);
+    for (name, kind) in names {
+        let mut header = tar::Header::new_ustar();
+        header.set_entry_type(*kind);
+        header.set_size(0);
+        header.set_mode(if kind.is_dir() { 0o755 } else { 0o644 });
+        if kind.is_symlink() {
+            header.set_link_name("/etc/passwd").unwrap();
+        }
+        builder
+            .append_data(&mut header, name, std::io::empty())
+            .unwrap();
+    }
+    builder.into_inner().unwrap().finish().unwrap();
+    let digest = format!("{:x}", Sha256::digest(fs::read(&file).unwrap()));
+    (file, digest)
+}
+
+#[test]
+fn installer_refuses_links_duplicates_non_platform_payload_and_unlisted_paths() {
+    for names in [
+        vec![
+            ("anchor-runtime", tar::EntryType::Directory),
+            ("anchor-runtime/escape", tar::EntryType::Symlink),
+        ],
+        vec![
+            ("anchor-runtime", tar::EntryType::Directory),
+            ("anchor-runtime", tar::EntryType::Directory),
+        ],
+        vec![("other-runtime", tar::EntryType::Directory)],
+    ] {
+        let fixture = Fixture::new();
+        let (archive, sha256) = custom_archive(fixture.root.path(), &names);
+        let request = PlatformInstallRequest {
+            archive,
+            sha256,
+            install_root: fixture.root.path().join("install"),
+            model_config: model(fixture.root.path()),
+        };
+        assert!(admitted_install(&fixture, &request).is_err());
+        assert!(!request.install_root.exists());
+    }
+    let fixture = Fixture::new();
+    fixture.package().unwrap();
+    let extracted = fixture.root.path().join("unpacked");
+    fs::create_dir(&extracted).unwrap();
+    fixture.extract(&extracted);
+    let runtime = extracted.join("anchor-runtime");
+    fs::write(runtime.join("unlisted.txt"), "cannot ship\n").unwrap();
+    assert!(validate_runtime(&runtime, &fixture.digest, &fixture.digest, &fixture.digest).is_err());
+}

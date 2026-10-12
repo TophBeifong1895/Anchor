@@ -1,0 +1,665 @@
+//! A fresh private platform installation. Model input is parsed as data, never
+//! evaluated by a shell; release files and mutable platform facts are disjoint.
+use crate::{
+    GOOSE_SHA256, PackageError, PlatformPackageInventory, RUSTUP_INIT_SHA256, Result, UV_SHA256,
+    archive, filesystem::absolute, filesystem::open_path, validation,
+};
+use flate2::read::GzDecoder;
+use rustix::fs::{RenameFlags, renameat_with};
+use serde::{Deserialize, Serialize};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    fs::{self, File, OpenOptions},
+    io::{Read, Seek, SeekFrom, Write},
+    os::{
+        fd::AsRawFd,
+        unix::fs::{MetadataExt, PermissionsExt},
+    },
+    path::{Path, PathBuf},
+    process::Command,
+};
+
+const MODEL_KEYS: &[&str] = &[
+    "ANCHOR_MODEL_URL",
+    "ANCHOR_MODEL_API_KEY",
+    "ANCHOR_MODEL_NAME",
+    "ANCHOR_MODEL_WIRE_API",
+    "ANCHOR_MODEL_ALIASES",
+    "ANCHOR_MODEL_CONTEXT_WINDOW",
+    "ANCHOR_MODEL_DIRECT",
+];
+const MAX_ARCHIVE_BYTES: u64 = 8 * 1024 * 1024 * 1024;
+const MAX_FILE_BYTES: u64 = 1024 * 1024 * 1024;
+
+#[derive(Debug, Clone)]
+pub struct PlatformInstallRequest {
+    pub archive: PathBuf,
+    pub sha256: String,
+    pub install_root: PathBuf,
+    pub model_config: PathBuf,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PlatformInstallReport {
+    pub install_root: PathBuf,
+    pub release_root: PathBuf,
+    pub launcher: PathBuf,
+    pub model_config: PathBuf,
+    pub archive_sha256: String,
+}
+
+pub fn install_platform(request: &PlatformInstallRequest) -> Result<PlatformInstallReport> {
+    install(request, GOOSE_SHA256, UV_SHA256, RUSTUP_INIT_SHA256)
+}
+
+fn install(
+    request: &PlatformInstallRequest,
+    goose_sha256: &str,
+    uv_sha256: &str,
+    rustup_sha256: &str,
+) -> Result<PlatformInstallReport> {
+    if request.sha256.len() != 64 || !request.sha256.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err(invalid("archive SHA256 must be a trusted 64-digit digest"));
+    }
+    let install_root = absolute(&request.install_root)?;
+    let parent = install_root
+        .parent()
+        .ok_or_else(|| invalid("installation has no parent"))?;
+    let name = install_root
+        .file_name()
+        .ok_or_else(|| invalid("installation has no name"))?;
+    let parent_fd = open_path(parent)?;
+    let parent_identity = parent_fd.metadata()?;
+    if !parent_identity.is_dir() {
+        return Err(invalid("installation parent must be an existing directory"));
+    }
+    if fs::symlink_metadata(&install_root).is_ok() {
+        return Err(PackageError::AlreadyExists);
+    }
+    let model = read_model(&request.model_config)?;
+    let pinned_parent = PathBuf::from(format!("/proc/self/fd/{}", parent_fd.as_raw_fd()));
+    let staging = tempfile::Builder::new()
+        .prefix(".anchor-install-")
+        .tempdir_in(&pinned_parent)?;
+    fs::set_permissions(staging.path(), fs::Permissions::from_mode(0o700))?;
+    // The private copy pins the bytes checked by SHA256 even if the supplied
+    // archive is concurrently replaced or modified after the read.
+    let mut input = open_path(&request.archive)?;
+    if !input.metadata()?.is_file() || input.metadata()?.len() > MAX_ARCHIVE_BYTES {
+        return Err(invalid(
+            "archive must be an ordinary file no larger than 8 GiB",
+        ));
+    }
+    let mut snapshot = tempfile::tempfile()?;
+    let bytes = std::io::copy(
+        &mut Read::by_ref(&mut input).take(MAX_ARCHIVE_BYTES + 1),
+        &mut snapshot,
+    )?;
+    if bytes > MAX_ARCHIVE_BYTES {
+        return Err(invalid("archive exceeds 8 GiB"));
+    }
+    snapshot.seek(SeekFrom::Start(0))?;
+    if archive::sha256(&mut snapshot)? != request.sha256.to_ascii_lowercase() {
+        return Err(invalid("archive does not match the trusted SHA256"));
+    }
+    let release = staging.path().join("release");
+    fs::create_dir(&release)?;
+    unpack_platform(snapshot, &release)?;
+    let runtime = release.join("anchor-runtime");
+    validate_runtime(&runtime, goose_sha256, uv_sha256, rustup_sha256)?;
+    let config = staging.path().join("config");
+    fs::create_dir(&config)?;
+    fs::set_permissions(&config, fs::Permissions::from_mode(0o700))?;
+    write_private(&config.join("model.env"), model.as_bytes())?;
+    for path in [
+        "data",
+        "data/home",
+        "data/state",
+        "data/catalog",
+        "data/library",
+        "data/workspaces",
+    ] {
+        let directory = staging.path().join(path);
+        fs::create_dir(&directory)?;
+        fs::set_permissions(&directory, fs::Permissions::from_mode(0o700))?;
+        File::open(&directory)?.sync_all()?;
+    }
+    let mut readonly_release = ReadonlyRelease {
+        root: &release,
+        published: false,
+    };
+    make_release_readonly(&release)?;
+    File::open(&config)?.sync_all()?;
+    File::open(staging.path())?.sync_all()?;
+    let current_parent = open_path(parent)?.metadata()?;
+    if (current_parent.dev(), current_parent.ino())
+        != (parent_identity.dev(), parent_identity.ino())
+    {
+        return Err(PackageError::Drift(parent.to_path_buf()));
+    }
+    if let Err(error) = renameat_with(
+        &parent_fd,
+        staging.path().file_name().unwrap(),
+        &parent_fd,
+        name,
+        RenameFlags::NOREPLACE,
+    ) {
+        return Err(if error == rustix::io::Errno::EXIST {
+            PackageError::AlreadyExists
+        } else {
+            PackageError::Io(error.into())
+        });
+    }
+    readonly_release.published = true;
+    let _ = staging.keep();
+    parent_fd
+        .sync_all()
+        .map_err(|_| PackageError::PublicationUncertain(install_root.clone()))?;
+    let release_root = install_root.join("release/anchor-runtime");
+    Ok(PlatformInstallReport {
+        launcher: release_root.join("bin/anchor-platform"),
+        release_root,
+        model_config: install_root.join("config/model.env"),
+        install_root,
+        archive_sha256: request.sha256.to_ascii_lowercase(),
+    })
+}
+
+fn invalid(message: impl Into<String>) -> PackageError {
+    PackageError::Invalid(message.into())
+}
+
+fn read_model(path: &Path) -> Result<String> {
+    let mut input = open_path(path)?;
+    if !input.metadata()?.is_file() || input.metadata()?.len() > 64 * 1024 {
+        return Err(invalid(
+            "model configuration must be an ordinary file no larger than 64 KiB",
+        ));
+    }
+    let mut content = String::new();
+    Read::by_ref(&mut input)
+        .take(64 * 1024 + 1)
+        .read_to_string(&mut content)?;
+    if content.len() > 64 * 1024 {
+        return Err(invalid("model configuration exceeds 64 KiB"));
+    }
+    parse_model(&content)?;
+    Ok(content)
+}
+
+// A deliberately small dotenv data syntax: KEY=value, with optional matching
+// outer quotes. No interpolation, export, escapes, shell or multiline values.
+fn parse_model(content: &str) -> Result<BTreeMap<String, String>> {
+    let mut values = BTreeMap::new();
+    for (line, raw) in content.lines().enumerate() {
+        let raw = raw.trim();
+        if raw.is_empty() || raw.starts_with('#') {
+            continue;
+        }
+        let (key, raw_value) = raw.split_once('=').ok_or_else(|| {
+            invalid(format!(
+                "model configuration line {} must be KEY=value",
+                line + 1
+            ))
+        })?;
+        let key = key.trim();
+        if !MODEL_KEYS.contains(&key) {
+            return Err(invalid(format!(
+                "unsupported model configuration key on line {}",
+                line + 1
+            )));
+        }
+        let raw_value = raw_value.trim();
+        let value = if raw_value.starts_with(['\'', '"']) {
+            let quote = raw_value.as_bytes()[0] as char;
+            raw_value
+                .strip_prefix(quote)
+                .and_then(|v| v.strip_suffix(quote))
+                .ok_or_else(|| invalid(format!("unmatched value quotes for {key}")))?
+        } else {
+            raw_value
+        };
+        if value.chars().any(char::is_control) || value.len() > 32 * 1024 {
+            return Err(invalid(format!(
+                "invalid model configuration value for {key}"
+            )));
+        }
+        if values.insert(key.into(), value.into()).is_some() {
+            return Err(invalid(format!("duplicate model configuration key {key}")));
+        }
+    }
+    for key in [
+        "ANCHOR_MODEL_URL",
+        "ANCHOR_MODEL_API_KEY",
+        "ANCHOR_MODEL_NAME",
+    ] {
+        if values
+            .get(key)
+            .is_none_or(|value: &String| value.trim().is_empty())
+        {
+            return Err(invalid(format!("model configuration requires {key}")));
+        }
+    }
+    Ok(values)
+}
+
+fn write_private(path: &Path, bytes: &[u8]) -> Result<()> {
+    use std::os::unix::fs::OpenOptionsExt;
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(path)?;
+    file.write_all(bytes)?;
+    file.sync_all()?;
+    Ok(())
+}
+
+fn unpack_platform(file: File, release: &Path) -> Result<()> {
+    let mut archive = tar::Archive::new(GzDecoder::new(file));
+    let mut seen = BTreeSet::new();
+    let mut total = 0_u64;
+    for entry in archive.entries()? {
+        let mut entry = entry?;
+        let raw = entry.path()?;
+        let path = raw
+            .to_str()
+            .ok_or_else(|| invalid("archive path is not UTF-8"))?
+            .trim_end_matches('/');
+        let relative = if path == "anchor-runtime" {
+            ""
+        } else {
+            path.strip_prefix("anchor-runtime/")
+                .ok_or_else(|| invalid("archive must contain only anchor-runtime"))?
+        };
+        if !relative.is_empty() {
+            validation::archive_path(relative)?;
+        }
+        if !seen.insert(path.to_owned()) {
+            return Err(invalid("duplicate archive path"));
+        }
+        if seen.len() > 100_000 {
+            return Err(invalid("platform archive exceeds 100000 entries"));
+        }
+        let kind = entry.header().entry_type();
+        let mode = entry.header().mode()?;
+        let size = entry.size();
+        let destination = release.join(path);
+        if kind.is_dir() && mode == 0o755 && size == 0 {
+            fs::create_dir(&destination)?;
+        } else if kind.is_file() && matches!(mode, 0o644 | 0o755) && size <= MAX_FILE_BYTES {
+            total = total
+                .checked_add(size)
+                .ok_or_else(|| invalid("archive size overflow"))?;
+            if total > MAX_ARCHIVE_BYTES {
+                return Err(invalid("extracted platform exceeds 8 GiB"));
+            }
+            let mut target = OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&destination)?;
+            if std::io::copy(&mut entry, &mut target)? != size {
+                return Err(invalid("truncated archive file"));
+            }
+            target.set_permissions(fs::Permissions::from_mode(mode))?;
+            target.sync_all()?;
+        } else {
+            return Err(invalid(
+                "archive contains a link, special file, unsafe mode or oversized file",
+            ));
+        }
+    }
+    if !seen.contains("anchor-runtime") {
+        return Err(invalid("platform archive root is missing"));
+    }
+    Ok(())
+}
+
+fn validate_runtime(
+    root: &Path,
+    goose_sha256: &str,
+    uv_sha256: &str,
+    rustup_sha256: &str,
+) -> Result<()> {
+    // These paths are inside our private extraction tree, pinned below an open
+    // parent FD; unpack_platform only created ordinary files/directories.
+    let manifest_file = File::open(root.join("runtime-manifest.json"))?;
+    if !manifest_file.metadata()?.is_file() || manifest_file.metadata()?.len() > 16 * 1024 * 1024 {
+        return Err(invalid(
+            "runtime manifest must be an ordinary file no larger than 16 MiB",
+        ));
+    }
+    let manifest: PlatformPackageInventory = serde_json::from_reader(manifest_file)?;
+    if manifest.format != 2
+        || manifest.kind != "platform"
+        || manifest.goose_sha256 != goose_sha256
+        || manifest.goose_version != crate::GOOSE_VERSION
+    {
+        return Err(invalid(
+            "installation requires the pinned format-2 platform archive",
+        ));
+    }
+    for (tool, path, digest, version, source) in [
+        (
+            &manifest.bootstrap.uv,
+            "bin/uv",
+            uv_sha256,
+            crate::UV_VERSION,
+            crate::UV_SOURCE,
+        ),
+        (
+            &manifest.bootstrap.rustup_init,
+            "bin/rustup-init",
+            rustup_sha256,
+            crate::RUSTUP_INIT_VERSION,
+            crate::RUSTUP_INIT_SOURCE,
+        ),
+    ] {
+        if tool.path != path
+            || tool.sha256 != digest
+            || tool.version != version
+            || tool.source != source
+        {
+            return Err(invalid(
+                "platform bootstrap identity differs from the fixed pin",
+            ));
+        }
+    }
+    let mut declared = BTreeSet::from(["runtime-manifest.json".to_owned()]);
+    let mut required_directories = BTreeSet::from([String::new()]);
+    for resource in &manifest.files {
+        validation::archive_path(&resource.path)?;
+        for component in resource.path.split('/') {
+            validation::resource_component(component)?;
+        }
+        if !matches!(
+            resource.path.as_str(),
+            "README.md"
+                | "bin/anchor-runner-host"
+                | "bin/anchor-net-relay"
+                | "bin/anchor-sandbox-network"
+                | "bin/anchor-platform"
+                | "bin/goose"
+                | "bin/uv"
+                | "bin/rustup-init"
+        ) && !resource.path.starts_with("plugins/network/")
+            && !resource.path.starts_with("web/")
+        {
+            return Err(invalid(
+                "platform inventory contains a non-platform resource",
+            ));
+        }
+        if !declared.insert(resource.path.clone()) || !matches!(resource.mode, 0o644 | 0o755) {
+            return Err(invalid("invalid or duplicate platform inventory file"));
+        }
+        let file = File::open(root.join(&resource.path))?;
+        let metadata = file.metadata()?;
+        if !metadata.is_file()
+            || metadata.len() != resource.size
+            || metadata.permissions().mode() & 0o7777 != resource.mode
+        {
+            return Err(invalid(
+                "platform file type, mode or size differs from inventory",
+            ));
+        }
+        let mut file = file;
+        if archive::sha256(&mut file)? != resource.sha256 {
+            return Err(invalid("platform file differs from inventory SHA256"));
+        }
+        if resource.mode == 0o755 {
+            if validation::elf(&root.join(&resource.path))? != manifest.platform {
+                return Err(invalid("platform ELF identity differs from inventory"));
+            }
+            let runtime = validation::elf_runtime(&root.join(&resource.path))?;
+            if matches!(
+                resource.path.as_str(),
+                "bin/goose" | "bin/uv" | "bin/rustup-init"
+            ) && (runtime.interpreter.is_some() || !runtime.needed.is_empty())
+            {
+                return Err(invalid(
+                    "Goose and bootstrap must be static musl executables",
+                ));
+            }
+            if !manifest.executables.iter().any(|executable| {
+                executable.path == resource.path
+                    && executable.sha256 == resource.sha256
+                    && executable.elf == manifest.platform
+                    && executable.runtime == runtime
+            }) {
+                return Err(invalid(
+                    "platform executable metadata differs from inventory",
+                ));
+            }
+        } else {
+            validation::resource_extension(&resource.path)?;
+            validation::resource_content(&root.join(&resource.path), &resource.path)?;
+        }
+        let mut path = resource.path.as_str();
+        while let Some((parent, _)) = path.rsplit_once('/') {
+            required_directories.insert(parent.to_owned());
+            path = parent;
+        }
+    }
+    for (path, digest) in [
+        ("bin/goose", goose_sha256),
+        ("bin/uv", uv_sha256),
+        ("bin/rustup-init", rustup_sha256),
+    ] {
+        if !manifest
+            .files
+            .iter()
+            .any(|file| file.path == path && file.sha256 == digest && file.mode == 0o755)
+        {
+            return Err(invalid(
+                "required fixed platform executable is absent from inventory",
+            ));
+        }
+    }
+    for path in [
+        "bin/anchor-runner-host",
+        "bin/anchor-net-relay",
+        "bin/anchor-sandbox-network",
+        "bin/anchor-platform",
+        "plugins/network/bin/anchor-network-tools",
+    ] {
+        if !manifest
+            .files
+            .iter()
+            .any(|file| file.path == path && file.mode == 0o755)
+        {
+            return Err(invalid("required platform executable is absent"));
+        }
+    }
+    if !declared.contains("web/index.html") {
+        return Err(invalid("compiled platform WebUI is missing"));
+    }
+    if manifest.executables.len()
+        != manifest
+            .files
+            .iter()
+            .filter(|file| file.mode == 0o755)
+            .count()
+    {
+        return Err(invalid(
+            "platform executable inventory has unexpected entries",
+        ));
+    }
+    use anchor_graph_host::{FilePluginCatalog, PluginCatalog};
+    let bindings = FilePluginCatalog::new(root)
+        .resolve(&["network".into()])
+        .map_err(|_| invalid("platform network Plugin failed shared admission"))?;
+    let network = &bindings[0];
+    if manifest.plugins.len() != 1
+        || manifest.plugins[0].id != "network"
+        || manifest.plugins[0].digest != network.digest
+        || manifest.plugins[0].resources != network.resources
+        || manifest.plugins[0].mcp_servers != network.mcp_servers
+    {
+        return Err(invalid(
+            "platform network Plugin differs from admitted inventory",
+        ));
+    }
+    let mut actual_files = BTreeSet::new();
+    let mut actual_directories = BTreeSet::new();
+    enumerate(root, root, &mut actual_files, &mut actual_directories)?;
+    if actual_files != declared || actual_directories != required_directories {
+        return Err(invalid(
+            "platform archive contains undeclared files or directories",
+        ));
+    }
+    Ok(())
+}
+
+fn enumerate(
+    root: &Path,
+    path: &Path,
+    files: &mut BTreeSet<String>,
+    directories: &mut BTreeSet<String>,
+) -> Result<()> {
+    let metadata = fs::symlink_metadata(path)?;
+    let relative = path
+        .strip_prefix(root)
+        .unwrap()
+        .to_str()
+        .ok_or_else(|| invalid("non-UTF8 platform path"))?
+        .to_owned();
+    if metadata.is_dir() {
+        directories.insert(relative);
+        for entry in fs::read_dir(path)? {
+            enumerate(root, &entry?.path(), files, directories)?;
+        }
+    } else if metadata.is_file() {
+        files.insert(relative);
+    } else {
+        return Err(invalid("platform contains a special file or link"));
+    }
+    Ok(())
+}
+
+fn make_release_readonly(path: &Path) -> Result<()> {
+    let metadata = fs::symlink_metadata(path)?;
+    if metadata.is_dir() {
+        for entry in fs::read_dir(path)? {
+            make_release_readonly(&entry?.path())?;
+        }
+        fs::set_permissions(path, fs::Permissions::from_mode(0o555))?;
+    } else {
+        fs::set_permissions(
+            path,
+            fs::Permissions::from_mode(metadata.permissions().mode() & 0o555),
+        )?;
+    }
+    File::open(path)?.sync_all()?;
+    Ok(())
+}
+
+fn make_directories_writable(path: &Path) -> Result<()> {
+    if fs::symlink_metadata(path)?.is_dir() {
+        fs::set_permissions(path, fs::Permissions::from_mode(0o700))?;
+        for entry in fs::read_dir(path)? {
+            make_directories_writable(&entry?.path())?;
+        }
+    }
+    Ok(())
+}
+
+struct ReadonlyRelease<'a> {
+    root: &'a Path,
+    published: bool,
+}
+
+impl Drop for ReadonlyRelease<'_> {
+    fn drop(&mut self) {
+        if !self.published {
+            // TempDir cleanup must remain possible if publication or a
+            // durability operation fails after the tree becomes read-only.
+            let _ = make_directories_writable(self.root);
+        }
+    }
+}
+
+/// Build a Host command using only installation-owned roots and the private
+/// model file. It inherits no deployment, Python, Rust or credential env vars.
+pub fn platform_command(launcher: &Path) -> Result<Command> {
+    platform_command_with_listen(launcher, "127.0.0.1:8077")
+}
+
+pub fn platform_command_with_listen(launcher: &Path, listen: &str) -> Result<Command> {
+    let address = listen
+        .parse::<std::net::SocketAddr>()
+        .map_err(|_| invalid("platform listen address must be a loopback IP and port"))?;
+    if !address.ip().is_loopback() || address.port() == 0 {
+        return Err(invalid(
+            "platform listen address must be a loopback IP and nonzero port",
+        ));
+    }
+    let launcher = absolute(launcher)?;
+    let runtime = launcher
+        .parent()
+        .and_then(Path::parent)
+        .ok_or_else(|| invalid("launcher has no release root"))?;
+    if launcher
+        .file_name()
+        .is_none_or(|name| name != "anchor-platform")
+        || runtime
+            .file_name()
+            .is_none_or(|name| name != "anchor-runtime")
+    {
+        return Err(invalid(
+            "launcher must be release/anchor-runtime/bin/anchor-platform",
+        ));
+    }
+    let install_root = runtime
+        .parent()
+        .and_then(Path::parent)
+        .ok_or_else(|| invalid("launcher has no install root"))?;
+    if runtime
+        .parent()
+        .and_then(Path::file_name)
+        .is_none_or(|name| name != "release")
+    {
+        return Err(invalid(
+            "launcher must be inside the installed release directory",
+        ));
+    }
+    open_path(runtime)?;
+    let model_path = install_root.join("config/model.env");
+    let metadata = open_path(&model_path)?.metadata()?;
+    if metadata.permissions().mode() & 0o077 != 0 {
+        return Err(invalid(
+            "installed model configuration must be private (0600)",
+        ));
+    }
+    let model = parse_model(&read_model(&model_path)?)?;
+    let mut command = Command::new(runtime.join("bin/anchor-runner-host"));
+    command
+        .arg("serve")
+        .current_dir(runtime)
+        .env_clear()
+        .env(
+            "PATH",
+            "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+        )
+        .env("HOME", install_root.join("data/home"))
+        .env("GOOSE_TELEMETRY_OFF", "1")
+        .env("ANCHOR_GOOSE_BINARY", runtime.join("bin/goose"))
+        .env("ANCHOR_GOOSE_BINARY_SHA256", GOOSE_SHA256)
+        .env("ANCHOR_GOOSE_LOCAL_NETWORK", "1")
+        .env("ANCHOR_RUNNER_LISTEN", address.to_string())
+        .env("ANCHOR_RUNNER_ALLOWED_COMMANDS", "sh,git")
+        .env("ANCHOR_MODEL_DIRECT", "0")
+        .envs(model);
+    for (key, path) in [
+        ("ANCHOR_RUNNER_STATE_ROOT", "data/state"),
+        ("ANCHOR_RUNNER_CATALOG_ROOT", "data/catalog"),
+        ("ANCHOR_RUNNER_LIBRARY_ROOT", "data/library"),
+        ("ANCHOR_RUNNER_WORKSPACE_ROOT", "data/workspaces"),
+    ] {
+        command.env(key, install_root.join(path));
+    }
+    command.env("ANCHOR_RUNNER_WEB_ROOT", runtime.join("web"));
+    Ok(command)
+}
+
+#[cfg(test)]
+mod tests;

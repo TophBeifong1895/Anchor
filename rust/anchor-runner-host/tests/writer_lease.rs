@@ -15,6 +15,8 @@ fn host(root: &Path) -> Command {
         .env("ANCHOR_RUNNER_STATE_ROOT", root.join("state"))
         .env("ANCHOR_RUNNER_WORKSPACE_ROOT", root.join("work"))
         .env("ANCHOR_RUNNER_BUNDLE_ROOT", root.join("bundle"))
+        .env("ANCHOR_RUNNER_CATALOG_ROOT", root.join("catalog"))
+        .env("ANCHOR_RUNNER_LIBRARY_ROOT", root.join("catalog"))
         .env("ANCHOR_RUNNER_ALLOWED_COMMANDS", "sh,true")
         .env_remove("ANCHOR_MODEL_API_KEY")
         .env_remove("ANCHOR_MODEL_URL")

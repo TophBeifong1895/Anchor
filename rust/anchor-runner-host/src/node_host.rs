@@ -31,7 +31,8 @@ mod conversation;
 mod media;
 
 pub(crate) use contracts::{
-    NodeConversationHint, NodeHostResolver, NodeImage, ResolutionError, ToolResolution,
+    NodeConversationHint, NodeHostResolver, NodeImage, ResolutionError, ResolvedNodeTools,
+    ToolResolution,
 };
 
 pub(crate) fn conversation_hint_for(
@@ -56,7 +57,7 @@ pub(crate) struct HostNodes {
     pub(crate) goose_nodes: Option<crate::goose_acp::GooseNodePort>,
 }
 
-/// Resolves only resources already frozen into a Graph Run. Tool clients and
+/// Resolves current Library resources under the Run’s admitted authority. Tool clients and
 /// sandbox access are owned by the returned ToolPort so the Goose MCP bridge
 /// can bind them without borrowing HostNodes.
 pub(crate) struct HostIoResolver {
@@ -64,7 +65,8 @@ pub(crate) struct HostIoResolver {
     sandbox: std::sync::Arc<BubblewrapSandbox>,
     tools: std::sync::Arc<tool_host::PluginToolHost>,
     mcp: tool_host::McpToolConfig,
-    plugin_bindings: BTreeMap<String, PluginBinding>,
+    runtime_configuration:
+        Option<std::sync::Arc<crate::runtime_configuration::RuntimeConfiguration>>,
     run_store: FileRunStore,
     /// The one place Plugins exist: the deployment's Library root. There is no
     /// second resolution path (no bundle-first, no catalog-first fallback).
@@ -72,6 +74,8 @@ pub(crate) struct HostIoResolver {
     /// Which view each invocation actually resolved, keyed by the invocation's
     /// durable key. Read once when the node's result is written.
     observed_views: std::sync::Mutex<BTreeMap<String, BTreeMap<String, String>>>,
+    /// The code digest each invocation actually mounted, keyed by its durable key.
+    observed_plugin_digests: std::sync::Mutex<BTreeMap<String, BTreeMap<String, String>>>,
     local_inputs: LocalInputs,
     /// The read-only view of Session Plugin switches, injected by the host that
     /// owns the Session store. The resolver never opens that database itself.
@@ -84,8 +88,10 @@ pub(crate) struct HostIoResolver {
 const MOUNT_EVIDENCE_KEY: &str = "plugin-mounts";
 
 /// The Plugin set one node call mounts, and the Session facts behind it.
+#[derive(Debug)]
 struct MountedPlugins {
     bindings: Vec<PluginBinding>,
+    network: bool,
     /// One line per Plugin the call named that is *not* mounted, and why.
     reasons: Vec<String>,
     /// The Session whose switches applied, when the Run belongs to one.
@@ -104,10 +110,7 @@ struct MountedPlugins {
 /// The deployment's in-process fake fixture. It is a binding the host enabled by
 /// configuration, not a Plugin the Library has on disk.
 pub(crate) fn is_fake_fixture(binding: &PluginBinding) -> bool {
-    binding
-        .mcp_servers
-        .iter()
-        .any(|server| server == tool_host::FAKE_SERVER_ID)
+    tool_host::is_fake_fixture(binding)
 }
 
 /// One Turn's Session switches, frozen when the Turn starts.
@@ -133,17 +136,18 @@ pub(crate) fn freeze_session_switches(
     turn: &str,
     source: &dyn PluginMountSource,
 ) -> Result<FrozenSwitches, String> {
-    let switches = source.session_mounts(session)?;
+    let (switches, network_allowed) = source.session_policy(session)?;
     // The Turn's snapshot is written by its **first** caller, whatever that call
     // needs: a Turn whose first node has no Plugins must still pin the switches it
     // started with, or a click made mid-Turn would take effect immediately.
     let path = plugin_mounts::snapshot_path(state_root, session, turn);
     let existing = plugin_mounts::read_snapshot(&path, session, turn);
     let snapshot_unreadable = existing.is_none() && path.exists();
-    let snapshot = match existing {
+    let mut snapshot = match existing {
         Some(snapshot) => snapshot,
         None => {
-            let candidate = MountSnapshot::new(session, turn, &switches);
+            let mut candidate = MountSnapshot::new(session, turn, &switches);
+            candidate.network_allowed = network_allowed;
             plugin_mounts::write_snapshot(&path, &candidate)
                 .map_err(|error| format!("Turn Plugin mount snapshot is unavailable: {error}"))?;
             // Another attempt of this Turn may have won the race; the snapshot on
@@ -151,6 +155,11 @@ pub(crate) fn freeze_session_switches(
             plugin_mounts::read_snapshot(&path, session, turn).unwrap_or(candidate)
         }
     };
+    if snapshot_unreadable {
+        // Mounts retain the existing compatibility fallback. An unreadable
+        // permission snapshot cannot grant connectivity to this Turn.
+        snapshot.network_allowed = false;
+    }
     Ok(FrozenSwitches {
         switches: snapshot.mounts.clone(),
         snapshot,
@@ -165,6 +174,7 @@ pub(crate) fn freeze_session_switches(
 /// it (or the deployment's fake fixture must be enabled), and the view its own
 /// declaration maps to must be usable. Nothing here builds, repairs or installs
 /// anything, and `reasons` says why a switched-on Plugin is absent.
+/// The caller holds the Library publication lease while selecting mounts.
 pub(crate) fn session_plugin_mounts(
     library_root: &Path,
     fixture: &tool_host::PluginToolHost,
@@ -172,35 +182,42 @@ pub(crate) fn session_plugin_mounts(
 ) -> Result<(Vec<PluginBinding>, Vec<String>), String> {
     let catalog = anchor_graph_host::FilePluginCatalog::new(library_root);
     let mut installed = BTreeMap::new();
+    let mut definitions = BTreeMap::new();
     for id in switches.keys() {
         let fake = fixture
             .resolve_fixture_plugins(std::slice::from_ref(id))
             .is_ok();
-        installed.insert(id.clone(), fake || catalog.definition(id).is_ok());
+        let definition = if fake {
+            None
+        } else {
+            catalog.definition(id).ok()
+        };
+        installed.insert(id.clone(), fake || definition.is_some());
+        if let Some(definition) = definition {
+            definitions.insert(id.clone(), definition);
+        }
     }
     let resolved = plugin_mounts::resolve(None, switches, &[], &installed);
     let mut reasons = resolved.reasons;
     let mut bindings = Vec::new();
     for id in resolved.mounts.keys() {
+        if let Ok(mut fixture_bindings) = fixture.resolve_fixture_plugins(std::slice::from_ref(id))
+        {
+            bindings.append(&mut fixture_bindings);
+            continue;
+        }
+        let definition = definitions
+            .get(id)
+            .ok_or_else(|| format!("Plugin `{id}` is not available in this Library"))?;
         // A Plugin whose own declaration's view is not usable does not appear: a
         // mount never becomes a view build.
-        if let Err(unusable) = crate::plugin_view::prepare_for_plugin(library_root, id) {
+        if let Err(unusable) =
+            crate::plugin_view::PreparedPlugin::from_definition(library_root, definition)
+        {
             reasons.push(unusable.to_string());
             continue;
         }
-        let binding = fixture
-            .resolve_fixture_plugins(std::slice::from_ref(id))
-            .ok()
-            .and_then(|mut bindings| bindings.pop())
-            .map(Ok)
-            .unwrap_or_else(|| {
-                catalog
-                    .resolve(std::slice::from_ref(id))
-                    .map_err(|error| format!("Plugin `{id}` is not available: {error}"))?
-                    .pop()
-                    .ok_or_else(|| format!("Plugin `{id}` is not available in this Library"))
-            })?;
-        bindings.push(binding);
+        bindings.push(definition.binding());
     }
     Ok((bindings, reasons))
 }
@@ -214,7 +231,6 @@ impl HostIoResolver {
         sandbox: std::sync::Arc<BubblewrapSandbox>,
         tools: std::sync::Arc<tool_host::PluginToolHost>,
         mcp: tool_host::McpToolConfig,
-        plugin_bindings: BTreeMap<String, PluginBinding>,
         run_store: FileRunStore,
         local_inputs: LocalInputs,
         mounts: std::sync::Arc<dyn PluginMountSource>,
@@ -224,10 +240,11 @@ impl HostIoResolver {
             sandbox,
             tools,
             mcp,
-            plugin_bindings,
+            runtime_configuration: None,
             run_store,
             library_root: None,
             observed_views: std::sync::Mutex::new(BTreeMap::new()),
+            observed_plugin_digests: std::sync::Mutex::new(BTreeMap::new()),
             local_inputs,
             mounts,
         }
@@ -240,6 +257,7 @@ impl HostIoResolver {
         &self,
         key: &InvocationKey,
         views: BTreeMap<String, String>,
+        digests: BTreeMap<String, String>,
         mounted: &MountedPlugins,
     ) {
         let mut observed = views;
@@ -254,6 +272,7 @@ impl HostIoResolver {
                 "the Session's current switches"
             };
             let mut value = format!("source={source}; session={session}");
+            value.push_str(&format!("; network={}", mounted.network));
             if !mounted.by_declaration.is_empty() {
                 value.push_str(&format!(
                     "; by-declaration=[{}]",
@@ -269,11 +288,18 @@ impl HostIoResolver {
             }
             observed.insert(MOUNT_EVIDENCE_KEY.to_owned(), value);
         }
-        if observed.is_empty() {
+        if observed.is_empty() && digests.is_empty() {
             return;
         }
-        if let Ok(mut views) = self.observed_views.lock() {
+        if !observed.is_empty()
+            && let Ok(mut views) = self.observed_views.lock()
+        {
             views.insert(key.durable_key(), observed);
+        }
+        if !digests.is_empty()
+            && let Ok(mut observations) = self.observed_plugin_digests.lock()
+        {
+            observations.insert(key.durable_key(), digests);
         }
     }
 
@@ -281,6 +307,14 @@ impl HostIoResolver {
     /// lived host does not accumulate one entry per node call).
     pub(crate) fn observed_plugin_views(&self, key: &InvocationKey) -> BTreeMap<String, String> {
         self.observed_views
+            .lock()
+            .ok()
+            .and_then(|mut observed| observed.remove(&key.durable_key()))
+            .unwrap_or_default()
+    }
+
+    pub(crate) fn observed_plugin_digests(&self, key: &InvocationKey) -> BTreeMap<String, String> {
+        self.observed_plugin_digests
             .lock()
             .ok()
             .and_then(|mut observed| observed.remove(&key.durable_key()))
@@ -297,6 +331,22 @@ impl HostIoResolver {
     pub(crate) fn with_library_root(mut self, root: Option<PathBuf>) -> Self {
         self.library_root = root;
         self
+    }
+
+    pub(crate) fn with_runtime_configuration(
+        mut self,
+        configuration: Option<std::sync::Arc<crate::runtime_configuration::RuntimeConfiguration>>,
+    ) -> Self {
+        self.runtime_configuration = configuration;
+        self
+    }
+
+    fn tool_environment(&self) -> Result<crate::tool_environment::ToolEnvironment, String> {
+        let environment = self.mcp.environment.clone();
+        match &self.runtime_configuration {
+            Some(configuration) => environment.with_runtime_snapshot(&configuration.snapshot()?),
+            None => Ok(environment),
+        }
     }
 
     /// The Library root Plugins are resolved from, or a reason there is none.
@@ -420,16 +470,45 @@ impl HostIoResolver {
         Ok(mounts)
     }
 
+    /// Recheck the admitted authority before exposing a prepared current binding.
+    fn validate_invocation_plugins(
+        admitted: &GraphRunRecord,
+        request: &NodeExecutionRequest,
+        bindings: &[PluginBinding],
+    ) -> Result<(), String> {
+        for binding in bindings {
+            let declared = request
+                .plugins
+                .iter()
+                .any(|declared| declared.id == binding.id);
+            match (admitted.plugin_bindings.get(&binding.id), declared) {
+                // A Run freezes Host authority, while executable bytes and its
+                // dependency view follow the current installed Plugin.
+                (Some(frozen), _) if !frozen.same_authorization(binding) => {
+                    return Err(format!(
+                        "Plugin `{}` Host authorization changed since this Graph Run was admitted",
+                        binding.id,
+                    ));
+                }
+                // A Graph declaration with no admitted binding is corrupt.
+                (None, true) => {
+                    return Err(format!(
+                        "Plugin `{}` is not bound by the admitted Run",
+                        binding.id,
+                    ));
+                }
+                // A human's frozen Session mount authorizes an additional Plugin.
+                _ => {}
+            }
+        }
+        Ok(())
+    }
+
     fn catalog_config(
         &self,
         bindings: &[PluginBinding],
     ) -> Result<tool_host::McpToolConfig, String> {
-        if bindings.iter().all(|binding| {
-            binding
-                .mcp_servers
-                .iter()
-                .all(|server| server == tool_host::FAKE_SERVER_ID)
-        }) {
+        if bindings.iter().all(is_fake_fixture) {
             return Ok(self.mcp.clone());
         }
         let root = self.plugin_library_root()?;
@@ -442,25 +521,6 @@ impl HostIoResolver {
         crate::application::metadata::load(self.local_inputs.state_root(), run_id)
             .map(|metadata| metadata.and_then(|metadata| metadata.oauth_owner))
             .map_err(|error| format!("OAuth Run owner is unavailable: {error:?}"))
-    }
-
-    /// The Plugin directories this invocation mounts.
-    ///
-    /// The fake fixture is not a filesystem Plugin, so it is never mounted; the
-    /// others mount exactly the directory the Library resolved.
-    fn plugin_mounts(
-        &self,
-        bindings: &[PluginBinding],
-    ) -> Result<Vec<anchor_runtime::ReadOnlyInput>, String> {
-        let mountable = bindings
-            .iter()
-            .filter(|binding| !is_fake_fixture(binding))
-            .cloned()
-            .collect::<Vec<_>>();
-        if mountable.is_empty() {
-            return Ok(Vec::new());
-        }
-        tool_host::McpToolConfig::plugin_mounts(self.plugin_library_root()?, &mountable)
     }
 
     /// The Session and Turn this Run's mount switches come from.
@@ -517,6 +577,24 @@ impl HostIoResolver {
     /// else its `default`, else on". A bare id in an older Graph is required, which
     /// is what a declaration has always meant.
     fn mounted_plugins(&self, request: &NodeExecutionRequest) -> Result<MountedPlugins, String> {
+        let _guard = self
+            .library_root
+            .as_ref()
+            .map(|root| {
+                anchor_library::Library::new(root)
+                    .catalog_read_guard()
+                    .map_err(|error| format!("Plugin mount catalog is unavailable: {error}"))
+            })
+            .transpose()?;
+        self.mounted_plugins_unlocked(request)
+    }
+
+    /// The async tool path supplies its cancellable publication lease; Op.run
+    /// uses the nonblocking read-guard wrapper above.
+    fn mounted_plugins_unlocked(
+        &self,
+        request: &NodeExecutionRequest,
+    ) -> Result<MountedPlugins, String> {
         let key = &request.key;
         let admitted = self
             .run_store
@@ -549,6 +627,7 @@ impl HostIoResolver {
         if request.plugins.is_empty() && switches.is_empty() {
             return Ok(MountedPlugins {
                 bindings: Vec::new(),
+                network: request.network && session_turn.is_none(),
                 reasons: Vec::new(),
                 session: session_turn.map(|(session, _)| session),
                 snapshot: snapshot.is_some(),
@@ -615,11 +694,7 @@ impl HostIoResolver {
             if installed.contains_key(id) {
                 continue;
             }
-            let fake = self.tools.resolve_fixture_plugins(&[id.to_owned()]).is_ok()
-                || request
-                    .plugins
-                    .iter()
-                    .any(|binding| binding.id == id && is_fake_fixture(binding));
+            let fake = self.tools.resolve_fixture_plugins(&[id.to_owned()]).is_ok();
             installed.insert(id.to_owned(), fake || catalog.definition(id).is_ok());
         }
         let mut resolved = plugin_mounts::resolve(snapshot, &switches, &declared, &installed);
@@ -630,15 +705,13 @@ impl HostIoResolver {
         }
         let mut bindings = Vec::new();
         for id in resolved.mounts.keys() {
-            // The invocation's own frozen binding comes first, the Run's admitted
-            // binding next; a Plugin the Session added was never frozen, so the
-            // Library answers for it.
-            let binding = request
-                .plugins
-                .iter()
-                .find(|binding| &binding.id == id)
-                .or_else(|| admitted.plugin_bindings.get(id))
-                .cloned()
+            // Always resolve current Library code. The Run stores an authorization
+            // baseline; it does not pin executable bytes or dependency views.
+            let binding = self
+                .tools
+                .resolve_fixture_plugins(std::slice::from_ref(id))
+                .ok()
+                .and_then(|mut bindings| bindings.pop())
                 .map(Ok)
                 .unwrap_or_else(|| {
                     catalog
@@ -647,10 +720,28 @@ impl HostIoResolver {
                         .pop()
                         .ok_or_else(|| format!("Plugin `{id}` is not available in this Library"))
                 })?;
+            if let Some(admitted_binding) = admitted.plugin_bindings.get(id)
+                && !admitted_binding.same_authorization(&binding)
+            {
+                return Err(format!(
+                    "Plugin `{id}` Host authorization changed since this Graph Run was admitted"
+                ));
+            }
             bindings.push(binding);
         }
+        let network = if let Some(snapshot) = snapshot {
+            crate::plugin_network::apply(
+                self.plugin_library_root()?,
+                &mut bindings,
+                request.network && snapshot.network_allowed,
+                &mut resolved.reasons,
+            )?
+        } else {
+            request.network
+        };
         Ok(MountedPlugins {
             bindings,
+            network,
             reasons: resolved.reasons,
             session: session_turn.map(|(session, _)| session),
             snapshot: resolved.snapshot,
@@ -686,12 +777,21 @@ impl NodeHostResolver for HostIoResolver {
     }
 
     fn resolve_plugins(&self, ids: &[String]) -> Result<Vec<PluginBinding>, String> {
+        let catalog = anchor_graph_host::FilePluginCatalog::new(self.plugin_library_root()?);
         ids.iter()
             .map(|id| {
-                self.plugin_bindings
-                    .get(id)
-                    .cloned()
-                    .ok_or_else(|| format!("Plugin `{id}` is not bound by the admitted bundle"))
+                self.tools
+                    .resolve_fixture_plugins(std::slice::from_ref(id))
+                    .ok()
+                    .and_then(|mut bindings| bindings.pop())
+                    .map(Ok)
+                    .unwrap_or_else(|| {
+                        catalog
+                            .resolve(std::slice::from_ref(id))
+                            .map_err(|error| error.to_string())?
+                            .pop()
+                            .ok_or_else(|| format!("Plugin `{id}` is not installed in the Library"))
+                    })
             })
             .collect()
     }
@@ -707,196 +807,207 @@ impl NodeHostResolver for HostIoResolver {
             // The error type is named once, here: every `?` inside then converts a
             // host-side string into `ResolutionError::Host`, while the environment
             // sites keep their own cause.
-            let resolved: Result<std::sync::Arc<dyn anchor_runtime::ToolPort>, ResolutionError> =
-                async move {
-                    // The first fallible step names the error type, so every later `?`
-                    // converts a host-side reason into `ResolutionError::Host` while the
-                    // environment sites keep their own cause.
-                    let admitted = self
-                        .run_store
-                        .load(&request.key.run_id)
-                        .map_err(|error| {
-                            ResolutionError::Host(format!(
-                                "load admitted Run Plugin bindings: {error}"
-                            ))
-                        })?
-                        .ok_or_else(|| {
-                            ResolutionError::Host(format!(
-                                "Run `{}` has no durable Plugin binding record",
-                                request.key.run_id
-                            ))
-                        })?;
-                    if admitted.graph_digest != request.key.graph_digest
-                        || !admitted.plugin_bindings_initialized
-                    {
-                        return Err(ResolutionError::Host(format!(
-                            "Run `{}` has no matching initialized Plugin binding record",
+            let resolved: Result<ResolvedNodeTools, ResolutionError> = async move {
+                let environment = self.tool_environment()?;
+                // The first fallible step names the error type, so every later `?`
+                // converts a host-side reason into `ResolutionError::Host` while the
+                // environment sites keep their own cause.
+                let admitted = self
+                    .run_store
+                    .load(&request.key.run_id)
+                    .map_err(|error| {
+                        ResolutionError::Host(format!("load admitted Run Plugin bindings: {error}"))
+                    })?
+                    .ok_or_else(|| {
+                        ResolutionError::Host(format!(
+                            "Run `{}` has no durable Plugin binding record",
                             request.key.run_id
-                        )));
-                    }
-                    // The set this invocation actually mounts: the Graph's
-                    // defaults filtered by the Session's switches and frozen for
-                    // this Turn. Everything below uses this set, so there is one
-                    // filter point and not several.
-                    let mounted = self.mounted_plugins(request)?;
-                    for binding in &mounted.bindings {
-                        let declared = request
-                            .plugins
-                            .iter()
-                            .any(|declared| declared.id == binding.id);
-                        match (admitted.plugin_bindings.get(&binding.id), declared) {
-                            (Some(frozen), _) => {
-                                if frozen != binding {
-                                    return Err(ResolutionError::Host(format!(
-                                        "Plugin `{}` differs from the frozen Run binding",
-                                        binding.id
-                                    )));
-                                }
-                            }
-                            // The Graph declared it but the Run never froze it:
-                            // a corrupt admission, not a Session mount.
-                            (None, true) => {
-                                return Err(ResolutionError::Host(format!(
-                                    "Plugin `{}` is not bound by the admitted Run",
-                                    binding.id,
-                                )));
-                            }
-                            // The Session mounted it. The filter above already
-                            // proved the Library has it; the human's click in the
-                            // Session is its authorization.
-                            (None, false) => {}
-                        }
-                    }
-                    let workspace = self.workspace(request)?;
-                    let mut local_inputs = self.local_input_mounts(&request.key)?;
-                    let conversation = self.conversation(&request.key)?;
-                    if let Some(conversation) = &conversation
-                        && let Some(mount) = self.previous_mount(&request.key, conversation)?
+                        ))
+                    })?;
+                if admitted.graph_digest != request.key.graph_digest
+                    || !admitted.plugin_bindings_initialized
+                {
+                    return Err(ResolutionError::Host(format!(
+                        "Run `{}` has no matching initialized Plugin binding record",
+                        request.key.run_id
+                    )));
+                }
+                // The set this invocation actually mounts: the Graph's
+                // defaults filtered by the Session's switches and frozen for
+                // this Turn. Everything below uses this set, so there is one
+                // filter point and not several.
+                let mount_lease = match &self.library_root {
+                    Some(root)
+                        if !request.plugins.is_empty()
+                            || self.session_turn(&request.key)?.is_some() =>
                     {
-                        local_inputs.push(mount);
-                    }
-                    // Everything this invocation mounts is granted on the invocation
-                    // itself: the Run policy is the deployment floor, not a list of
-                    // per-Run trees (a parent Run cannot know its children's Plugins or
-                    // environments).
-                    let plugin_mounts = self.plugin_mounts(&mounted.bindings)?;
-                    let mut grants = local_inputs.clone();
-                    grants.extend(plugin_mounts.iter().cloned());
-                    let sandbox = std::sync::Arc::new(
-                        self.sandbox
-                            .with_readonly_grants(&grants)
-                            .map_err(|error| error.to_string())?,
-                    );
-                    let mut readonly_inputs = self
-                        .artifacts
-                        .input_mounts(
-                            &request.input_commits,
-                            &request.key.run_id,
-                            &request.key.graph_digest,
+                        let access = crate::dependency_provision::DependencyAccess {
+                            network: false,
+                            cancellation: request.cancellation.clone(),
+                        };
+                        Some(
+                            crate::application::plugins::plugin_publication_lease(
+                                root,
+                                &access,
+                                "invocation mount selection",
+                            )
+                            .await
+                            .map_err(|error| {
+                                format!("Plugin mount selection is unavailable: {error:?}")
+                            })?,
                         )
-                        .map_err(|error| error.to_string())?;
-                    readonly_inputs.extend(plugin_mounts);
-                    readonly_inputs.extend(local_inputs);
-                    let mut mcp = self.catalog_config(&mounted.bindings)?;
-                    mcp.authorize_oauth(
-                        self.oauth_owner_for_run(&request.key.run_id)?,
-                        request.network,
+                    }
+                    _ => None,
+                };
+                let mut mounted = self.mounted_plugins_unlocked(request)?;
+                drop(mount_lease);
+                Self::validate_invocation_plugins(&admitted, request, &mounted.bindings)?;
+                let prepared = crate::plugin_view::prepare_plugins_for_owner_async(
+                    mounted.bindings.clone(),
+                    self.library_root.clone(),
+                    self.tools.as_ref().clone(),
+                    request.cancellation.clone(),
+                    self.oauth_owner_for_run(&request.key.run_id)?
+                        .map(|owner| (self.local_inputs.state_root().to_path_buf(), owner)),
+                )
+                .await
+                .map_err(|error| ResolutionError::Graph(error.into_graph_error()))?;
+                Self::validate_invocation_plugins(&admitted, request, &prepared.bindings)?;
+                mounted.bindings = prepared.bindings;
+                let workspace = self.workspace(request)?;
+                let mut local_inputs = self.local_input_mounts(&request.key)?;
+                let conversation = self.conversation(&request.key)?;
+                if let Some(conversation) = &conversation
+                    && let Some(mount) = self.previous_mount(&request.key, conversation)?
+                {
+                    local_inputs.push(mount);
+                }
+                // Everything this invocation mounts is granted on the invocation
+                // itself: the Run policy is the deployment floor, not a list of
+                // per-Run trees (a parent Run cannot know its children's Plugins or
+                // environments).
+                let plugin_mounts = prepared.mounts;
+                let mut grants = local_inputs.clone();
+                grants.extend(plugin_mounts.iter().cloned());
+                let sandbox = std::sync::Arc::new(
+                    environment
+                        .grant_sandbox(&self.sandbox)?
+                        .with_readonly_grants(&grants)
+                        .map_err(|error| error.to_string())?,
+                );
+                let mut readonly_inputs = self
+                    .artifacts
+                    .input_mounts(
+                        &request.input_commits,
+                        &request.key.run_id,
+                        &request.key.graph_digest,
+                    )
+                    .map_err(|error| error.to_string())?;
+                readonly_inputs.extend(plugin_mounts);
+                readonly_inputs.extend(local_inputs);
+                let mut mcp = prepared.mcp;
+                mcp.environment = environment.clone();
+                mcp.startup_cancellation = Some(request.cancellation.clone());
+                mcp.authorize_oauth(
+                    self.oauth_owner_for_run(&request.key.run_id)?,
+                    mounted.network,
+                )
+                .await?;
+                let plugin_views = prepared.views;
+                self.remember_plugin_observation(
+                    &request.key,
+                    plugin_views
+                        .iter()
+                        .filter_map(|(id, plugin)| {
+                            plugin
+                                .declaration_digest()
+                                .map(|digest| (id.clone(), digest.to_owned()))
+                        })
+                        .collect(),
+                    mounted
+                        .bindings
+                        .iter()
+                        .map(|binding| (binding.id.clone(), binding.digest.clone()))
+                        .collect(),
+                    &mounted,
+                );
+                let plugins = self
+                    .tools
+                    .assemble_with_sandbox(
+                        &mcp,
+                        &mounted.bindings,
+                        mounted.network,
+                        crate::tool_host::SandboxLaunch {
+                            sandbox: &sandbox,
+                            workspace: &workspace,
+                            readonly_inputs: &readonly_inputs,
+                            plugin_views: &plugin_views,
+                        },
                     )
                     .await?;
-                    let deployments = crate::deployment_library_root();
-                    // A Plugin's own declaration maps to exactly one view, and the
-                    // Run uses the *current* Plugin: an upgrade takes effect at its
-                    // next node call and nothing is refused for having changed. A
-                    // declaration that needs a view which is not there is a
-                    // deployment problem, not a corrupt Run.
-                    let plugin_views = crate::plugin_view::prepare_views_async(
-                        mounted.bindings.clone(),
-                        deployments.clone(),
-                    )
-                    .await
-                    .map_err(|error| ResolutionError::Graph(error.into_graph_error()))?;
-                    self.remember_plugin_observation(
-                        &request.key,
-                        plugin_views
-                            .iter()
-                            .map(|(id, view)| (id.clone(), view.declaration_digest().to_owned()))
-                            .collect(),
-                        &mounted,
-                    );
-                    let plugins = self
-                        .tools
-                        .assemble_with_sandbox(
-                            &mcp,
-                            &mounted.bindings,
-                            request.network,
-                            crate::tool_host::SandboxLaunch {
-                                sandbox: &sandbox,
-                                workspace: &workspace,
-                                readonly_inputs: &readonly_inputs,
-                                plugin_views: &plugin_views,
-                            },
-                        )
-                        .await?;
-                    // Output beyond the stream previews is retained host-side and mounted
-                    // read-only at /spill, so a model can read what was cut off.
-                    let spill = crate::node_tools::SpillDirectory::new(
-                        self.local_inputs
-                            .state_root()
-                            .join("spill")
-                            .join(&request.key.run_id)
-                            .join(
-                                workspace
-                                    .file_name()
-                                    .map(|name| name.to_string_lossy().into_owned())
-                                    .unwrap_or_else(|| request.key.node_id.clone()),
-                            ),
-                        "/spill",
-                    );
-                    let node_tools = crate::node_tools::NodeTools::new(
-                        crate::channel_tools::wrap(
-                            plugins,
-                            &mounted.bindings,
-                            request.key.clone(),
-                            self.local_inputs.state_root().to_path_buf(),
-                            conversation.as_ref().map(|value| value.reply_node.clone()),
-                            workspace.clone(),
-                            readonly_inputs.clone(),
-                            request.cancellation.clone(),
+                // Output beyond the stream previews is retained host-side and mounted
+                // read-only at /spill, so a model can read what was cut off.
+                let spill = crate::node_tools::SpillDirectory::new(
+                    self.local_inputs
+                        .state_root()
+                        .join("spill")
+                        .join(&request.key.run_id)
+                        .join(
+                            workspace
+                                .file_name()
+                                .map(|name| name.to_string_lossy().into_owned())
+                                .unwrap_or_else(|| request.key.node_id.clone()),
                         ),
-                        sandbox,
-                        workspace,
-                        readonly_inputs,
+                    "/spill",
+                );
+                let node_tools = crate::node_tools::NodeTools::new(
+                    crate::channel_tools::wrap(
+                        plugins,
+                        &mounted.bindings,
+                        request.key.clone(),
+                        self.local_inputs.state_root().to_path_buf(),
+                        conversation.as_ref().map(|value| value.reply_node.clone()),
+                        workspace.clone(),
+                        readonly_inputs.clone(),
                         request.cancellation.clone(),
-                    )
-                    .with_spill(spill)
-                    .with_environment(self.mcp.environment.clone())
-                    .with_network(request.network)
-                    .with_timeout_ceiling(
-                        crate::node_tools::command_timeout_ceiling(request.wall_time_limit_seconds),
-                    );
-                    let tools = std::sync::Arc::new(node_tools)
-                        as std::sync::Arc<dyn anchor_runtime::ToolPort>;
-                    // Tools a node's completion and continuity depend on stay listed; the rest
-                    // (plugins, channel tools) becomes reachable on demand.
-                    let mut always_visible = vec![
-                        crate::node_tools::RUN_TOOL_NAME.to_owned(),
-                        crate::node_tools::READ_TOOL_NAME.to_owned(),
-                        crate::node_tools::EDIT_TOOL_NAME.to_owned(),
-                    ];
-                    let tools = match conversation {
-                        Some(conversation) => {
-                            always_visible
-                                .push(crate::node_host::conversation::HISTORY_TOOL.to_owned());
-                            self.conversation_tools(tools, &request.key, conversation)
-                        }
-                        None => tools,
-                    };
-                    Ok::<_, ResolutionError>(crate::tool_disclosure::maybe_wrap(
+                    ),
+                    sandbox,
+                    workspace,
+                    readonly_inputs,
+                    request.cancellation.clone(),
+                )
+                .with_spill(spill)
+                .with_environment(environment)
+                .with_network(mounted.network)
+                .with_timeout_ceiling(crate::node_tools::command_timeout_ceiling(
+                    request.wall_time_limit_seconds,
+                ));
+                let tools =
+                    std::sync::Arc::new(node_tools) as std::sync::Arc<dyn anchor_runtime::ToolPort>;
+                // Tools a node's completion and continuity depend on stay listed; the rest
+                // (plugins, channel tools) becomes reachable on demand.
+                let mut always_visible = vec![
+                    crate::node_tools::RUN_TOOL_NAME.to_owned(),
+                    crate::node_tools::READ_TOOL_NAME.to_owned(),
+                    crate::node_tools::EDIT_TOOL_NAME.to_owned(),
+                ];
+                let tools = match conversation {
+                    Some(conversation) => {
+                        always_visible
+                            .push(crate::node_host::conversation::HISTORY_TOOL.to_owned());
+                        self.conversation_tools(tools, &request.key, conversation)
+                    }
+                    None => tools,
+                };
+                Ok::<_, ResolutionError>(ResolvedNodeTools {
+                    tools: crate::tool_disclosure::maybe_wrap(
                         tools,
                         crate::tool_disclosure::always_visible(always_visible),
-                    ))
-                }
-                .await;
+                    ),
+                    plugins: mounted.bindings,
+                })
+            }
+            .await;
             resolved
         })
     }
@@ -1045,11 +1156,21 @@ impl HostNodes {
         let argv =
             op::shell_command(command, &self.allowed_commands).map_err(GraphError::Unsupported)?;
         let route_helper = op::route_helper_mount().map_err(GraphError::Unsupported)?;
-        let sandbox = self
-            .sandbox
+        let environment = self
+            .io_resolver
+            .tool_environment()
+            .map_err(GraphError::Unsupported)?;
+        let sandbox = environment
+            .grant_sandbox(&self.sandbox)
+            .map_err(GraphError::Unsupported)?
             .with_readonly_grants(&local_inputs)
             .and_then(|sandbox| sandbox.with_readonly_grants(std::slice::from_ref(&route_helper)))
             .map_err(|error| GraphError::Unsupported(error.to_string()))?;
+        let network = self
+            .io_resolver
+            .mounted_plugins(&request)
+            .map_err(GraphError::Unsupported)?
+            .network;
         let mut sandbox_request = SandboxRequest {
             writable_inputs: Vec::new(),
             workspace,
@@ -1064,7 +1185,7 @@ impl HostNodes {
                 anchor_runtime::SandboxEnvironment::new("ANCHOR_ROUTES", request.routes.join(",")),
                 anchor_runtime::SandboxEnvironment::new("ANCHOR_INPUT", input),
             ],
-            network: if request.network {
+            network: if network {
                 NetworkPolicy::Enabled
             } else {
                 NetworkPolicy::Disabled
@@ -1077,8 +1198,8 @@ impl HostNodes {
         // The deployment's operator-registered tool paths are this invocation's
         // authority: an Op.run reaches them by absolute path, and nothing else
         // grants them.
-        self.io_resolver.mcp.environment.apply(&mut sandbox_request);
         op::add_route_helper(&mut sandbox_request, route_helper);
+        environment.apply(&mut sandbox_request);
         self.start(&request.key)?;
         let result = match sandbox.run(sandbox_request).await {
             Ok(result) => result,
@@ -1185,6 +1306,9 @@ impl NodeExecutionPort for HostNodes {
     }
     fn observed_plugin_views(&self, key: &InvocationKey) -> BTreeMap<String, String> {
         self.io_resolver.observed_plugin_views(key)
+    }
+    fn observed_plugin_digests(&self, key: &InvocationKey) -> BTreeMap<String, String> {
+        self.io_resolver.observed_plugin_digests(key)
     }
     fn execute<'a>(
         &'a self,
@@ -1353,19 +1477,16 @@ mod resolver_tests {
         .unwrap();
         let mut record =
             GraphRunRecord::create_with_id(snapshot, json!({}), "session-mounts").unwrap();
-        record.plugin_bindings = declared
-            .iter()
-            .map(|(id, _, _)| {
-                (
-                    (*id).to_owned(),
-                    PluginBinding {
-                        id: (*id).to_owned(),
-                        digest: format!("digest-{id}"),
-                        resources: Vec::new(),
-                        mcp_servers: Vec::new(),
-                    },
-                )
-            })
+        record.plugin_bindings = anchor_graph_host::FilePluginCatalog::new(&library)
+            .resolve(
+                &declared
+                    .iter()
+                    .map(|(id, _, _)| (*id).to_owned())
+                    .collect::<Vec<_>>(),
+            )
+            .unwrap()
+            .into_iter()
+            .map(|binding| (binding.id.clone(), binding))
             .collect();
         record.plugin_bindings_initialized = true;
         let store = FileRunStore::new(state.join("runs"));
@@ -1389,7 +1510,6 @@ mod resolver_tests {
             sandbox(&workspace),
             std::sync::Arc::new(tool_host::PluginToolHost::new(Vec::<String>::new())),
             tool_host::McpToolConfig::default(),
-            record.plugin_bindings.clone(),
             store,
             LocalInputs::new(state, None).unwrap(),
             mounts.clone(),
@@ -1427,6 +1547,216 @@ mod resolver_tests {
             .collect()
     }
 
+    fn seed_admitted_binding(
+        resolver: &HostIoResolver,
+        request: &mut NodeExecutionRequest,
+        binding: PluginBinding,
+    ) {
+        let mut record = resolver
+            .run_store
+            .load(&request.key.run_id)
+            .unwrap()
+            .unwrap();
+        record
+            .plugin_bindings
+            .insert(binding.id.clone(), binding.clone());
+        resolver.run_store.save(&record).unwrap();
+        request.plugins = vec![binding];
+    }
+
+    #[tokio::test]
+    async fn managed_python_is_shared_by_agent_commands_and_op_without_dependency_plugin() {
+        let _environment = crate::PROCESS_ENV_LOCK.lock().await;
+        struct Clear(Vec<(&'static str, Option<std::ffi::OsString>)>);
+        impl Drop for Clear {
+            fn drop(&mut self) {
+                for (name, value) in self.0.drain(..).rev() {
+                    unsafe {
+                        match value {
+                            Some(value) => std::env::set_var(name, value),
+                            None => std::env::remove_var(name),
+                        }
+                    }
+                }
+            }
+        }
+        let names = [
+            "ANCHOR_DEPENDENCIES_PYTHON",
+            "ANCHOR_DEPENDENCIES_UV",
+            "ANCHOR_DEPENDENCIES_UV_SHA256",
+            "ANCHOR_DEPENDENCIES_SOURCES",
+            "ANCHOR_DEPENDENCIES_BUILD_ROOT",
+            "ANCHOR_PILOT_PYTHON",
+            "ANCHOR_PILOT_PYTHON_ENABLED",
+            "ANCHOR_PILOT_RUSTUP",
+            "ANCHOR_PILOT_RUSTUP_HOME",
+            "ANCHOR_PILOT_CARGO_HOME",
+        ];
+        let _cleared = Clear(
+            names
+                .iter()
+                .map(|name| (*name, std::env::var_os(name)))
+                .collect(),
+        );
+        for name in names {
+            unsafe { std::env::remove_var(name) }
+        }
+        let (_root, resolver, _mounts, mut request) = session_fixture(&[], &[], &[]);
+        let state = resolver.local_inputs.state_root();
+        let managed = state.join("managed");
+        let python = managed.join("python/runtime/bin/python3");
+        let source = [
+            "/usr/bin/python3.12",
+            "/usr/bin/python3.11",
+            "/usr/bin/python3.10",
+            "/usr/bin/python3.9",
+            "/usr/bin/python3.8",
+        ]
+        .into_iter()
+        .find(|path| std::path::Path::new(path).is_file())
+        .expect("managed runtime fixture needs supported system Python");
+        crate::goose_acp::pilot::directory(python.parent().unwrap()).unwrap();
+        std::fs::copy(source, &python).unwrap();
+        let config = managed.join("runtime-config.json");
+        std::fs::write(
+            &config,
+            json!({"format":1,"python":python,"python_enabled":true,"sources":null,"rust":null})
+                .to_string(),
+        )
+        .unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(config, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let configuration = crate::runtime_configuration::RuntimeConfiguration::from_env(
+            state,
+            resolver.plugin_library_root().unwrap(),
+            "bwrap".into(),
+        )
+        .unwrap();
+        let resolver =
+            resolver.with_runtime_configuration(Some(std::sync::Arc::new(configuration)));
+        let tools = resolver.tools(&request).await.unwrap();
+        let result=tools.tools.call("anchor_run",json!({"command":["python","-c","import sys; print(sys.executable); print('managed-agent-marker')"]})).await.unwrap();
+        let text = serde_json::to_string(&result).unwrap();
+        assert!(text.contains("managed-agent-marker"), "{text}");
+        assert!(text.contains(python.to_str().unwrap()), "{text}");
+        drop(tools);
+        let nodes = HostNodes {
+            control: crate::HostControl {
+                cancellation: request.cancellation.clone(),
+                pause: std::sync::Arc::new(AtomicBool::new(false)),
+            },
+            sandbox: resolver.sandbox.clone(),
+            allowed_commands: vec!["sh".into()],
+            artifacts: resolver.artifacts.clone(),
+            facts_root: resolver.local_inputs.state_root().join("node-facts"),
+            io_resolver: std::sync::Arc::new(resolver),
+            goose_nodes: None,
+        };
+        request.kind = NodeKind::OpRun;
+        request.operation = Some(json!(
+            "python -c 'import sys; print(sys.executable); print(\"managed-op-marker\")'"
+        ));
+        request.input = json!({"input":{}});
+        request.key.invocation = 2;
+        let result = nodes.execute(request).await.unwrap();
+        assert!(
+            matches!(result,NodeExecutionOutcome::Completed(ref completion) if completion.output["stdout"].as_str().is_some_and(|stdout|stdout.contains("managed-op-marker") && stdout.contains(python.to_str().unwrap()))),
+            "{result:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_installed_plugin_code_and_resource_update_is_used_by_the_next_call() {
+        let (_root, resolver, _mounts, mut request) =
+            session_fixture(&["review"], &[("review", true, None)], &[]);
+        let library = resolver.plugin_library_root().unwrap();
+        let catalog = anchor_graph_host::FilePluginCatalog::new(library);
+        let admitted = catalog.resolve(&["review".into()]).unwrap().remove(0);
+        seed_admitted_binding(&resolver, &mut request, admitted.clone());
+
+        let plugin = library.join("plugins/review");
+        std::fs::create_dir_all(plugin.join("skills/new")).unwrap();
+        std::fs::write(plugin.join("skills/new/SKILL.md"), "current Skill").unwrap();
+        let current = catalog.resolve(&["review".into()]).unwrap().remove(0);
+        assert_ne!(current.digest, admitted.digest);
+        assert_ne!(current.resources, admitted.resources);
+        assert_eq!(current.authorization_digest, admitted.authorization_digest);
+
+        let mounted = resolver.mounted_plugins(&request).unwrap();
+        assert_eq!(mounted.bindings, vec![current.clone()]);
+        let resolved = resolver.tools(&request).await.unwrap();
+        assert_eq!(resolved.plugins, vec![current.clone()]);
+        assert_eq!(
+            resolver.observed_plugin_digests(&request.key),
+            BTreeMap::from([("review".to_owned(), current.digest)])
+        );
+    }
+
+    #[tokio::test]
+    async fn node_tool_selection_waits_for_real_plugin_publication_and_returns_current_skills() {
+        let (root, resolver, _mounts, request) =
+            session_fixture(&["review"], &[("review", true, None)], &[]);
+        let library_root = resolver.plugin_library_root().unwrap();
+        let source = root.path().join("updated-plugin");
+        std::fs::create_dir_all(source.join("skills/current")).unwrap();
+        std::fs::write(
+            source.join("plugin.json"),
+            r#"{"name":"review","skills":"skills/"}"#,
+        )
+        .unwrap();
+        std::fs::write(source.join("skills/current/SKILL.md"), "current generation").unwrap();
+        let library = anchor_library::Library::new(library_root);
+        let lease = library.install_lease().unwrap();
+        let mut resolving = resolver.tools(&request);
+        assert!(
+            tokio::time::timeout(Duration::from_millis(40), &mut resolving)
+                .await
+                .is_err()
+        );
+        library
+            .install_directory_locked("review", &source, true, &lease)
+            .unwrap();
+        let current = anchor_graph_host::FilePluginCatalog::new(library_root)
+            .definition("review")
+            .unwrap()
+            .binding();
+        drop(lease);
+        let resolved = tokio::time::timeout(Duration::from_secs(5), resolving)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(resolved.plugins.as_slice(), std::slice::from_ref(&current));
+        assert!(
+            resolved.plugins[0]
+                .resources
+                .contains(&"skills/current/SKILL.md".to_owned())
+        );
+        assert_eq!(
+            resolver.observed_plugin_digests(&request.key),
+            BTreeMap::from([("review".to_owned(), current.digest)])
+        );
+    }
+
+    #[test]
+    fn a_plugin_authorization_change_still_fails_closed() {
+        let (_root, resolver, _mounts, mut request) =
+            session_fixture(&["review"], &[("review", true, None)], &[]);
+        let library = resolver.plugin_library_root().unwrap();
+        let admitted = anchor_graph_host::FilePluginCatalog::new(library)
+            .resolve(&["review".into()])
+            .unwrap()
+            .remove(0);
+        seed_admitted_binding(&resolver, &mut request, admitted);
+        std::fs::write(
+            library.join("plugins/review/plugin.json"),
+            r#"{"name":"review","network":true}"#,
+        )
+        .unwrap();
+
+        let error = resolver.mounted_plugins(&request).unwrap_err();
+        assert!(error.contains("Host authorization changed"), "{error}");
+    }
+
     #[test]
     fn a_session_mounted_plugin_the_graph_never_declared_is_mounted() {
         let (_root, resolver, _mounts, request) =
@@ -1438,6 +1768,32 @@ mod resolver_tests {
         assert!(!mounted.bindings[0].digest.is_empty());
         assert_eq!(mounted.session.as_deref(), Some("session-one"));
         assert!(mounted.snapshot, "the Turn's switches are pinned");
+    }
+
+    #[tokio::test]
+    async fn a_session_skill_returns_its_current_resources_with_the_frozen_tools() {
+        let (_root, resolver, _mounts, request) =
+            session_fixture(&["side"], &[], &[("side", true)]);
+        let plugin = resolver.plugin_library_root().unwrap().join("plugins/side");
+        std::fs::create_dir_all(plugin.join("skills/check")).unwrap();
+        std::fs::write(
+            plugin.join("skills/check/SKILL.md"),
+            "read the current Skill",
+        )
+        .unwrap();
+        assert!(request.plugins.is_empty());
+        let resolved = resolver.tools(&request).await.unwrap();
+        assert_eq!(resolved.plugins.len(), 1);
+        assert_eq!(resolved.plugins[0].id, "side");
+        assert!(
+            resolved.plugins[0]
+                .resources
+                .contains(&"skills/check/SKILL.md".to_owned())
+        );
+        assert_eq!(
+            resolver.observed_plugin_digests(&request.key),
+            BTreeMap::from([("side".to_owned(), resolved.plugins[0].digest.clone())])
+        );
     }
 
     #[test]
@@ -1645,7 +2001,7 @@ mod resolver_tests {
     }
 
     #[tokio::test]
-    async fn resolver_returns_owned_anchor_tools_from_frozen_plugin_bindings() {
+    async fn resolver_returns_owned_anchor_tools_under_admitted_plugin_authority() {
         let root = tempfile::tempdir().unwrap();
         let workspace_root = root.path().join("workspaces");
         let artifacts_root = root.path().join("artifacts");
@@ -1683,11 +2039,6 @@ mod resolver_tests {
             sandbox,
             std::sync::Arc::new(tools),
             tool_host::McpToolConfig::default(),
-            bindings
-                .iter()
-                .cloned()
-                .map(|binding| (binding.id.clone(), binding))
-                .collect(),
             store,
             LocalInputs::new(root.path().to_path_buf(), None).unwrap(),
             fixed(&[]),
@@ -1722,7 +2073,7 @@ mod resolver_tests {
             cancellation: std::sync::Arc::new(AtomicBool::new(false)),
         };
         let workspace = resolver.workspace(&request).unwrap();
-        let tools = resolver.tools(&request).await.unwrap();
+        let tools = resolver.tools(&request).await.unwrap().tools;
         let names = tools
             .definitions()
             .into_iter()
@@ -1736,9 +2087,18 @@ mod resolver_tests {
         );
         assert!(workspace.is_dir());
 
-        let mut drifted = request;
-        drifted.plugins[0].digest = "sha256:drift".into();
-        assert!(resolver.tools(&drifted).await.is_err());
+        let mut record = resolver
+            .run_store
+            .load(&request.key.run_id)
+            .unwrap()
+            .unwrap();
+        record
+            .plugin_bindings
+            .get_mut("fake-tools")
+            .unwrap()
+            .authorization_digest = "sha256:drift".into();
+        resolver.run_store.save(&record).unwrap();
+        assert!(resolver.tools(&request).await.is_err());
     }
 
     #[tokio::test]
@@ -1813,7 +2173,6 @@ mod resolver_tests {
             sandbox,
             std::sync::Arc::new(tool_host::PluginToolHost::new(Vec::<String>::new())),
             tool_host::McpToolConfig::default(),
-            BTreeMap::new(),
             store,
             LocalInputs::new(state.clone(), None).unwrap(),
             fixed(&[]),
@@ -1840,7 +2199,7 @@ mod resolver_tests {
             operation: None,
             cancellation: std::sync::Arc::new(AtomicBool::new(false)),
         };
-        let tools = resolver.tools(&request).await.unwrap();
+        let tools = resolver.tools(&request).await.unwrap().tools;
         let result = tools
             .call(
                 crate::node_tools::RUN_TOOL_NAME,
@@ -1914,7 +2273,6 @@ mod resolver_tests {
             sandbox,
             std::sync::Arc::new(tool_host::PluginToolHost::new(Vec::<String>::new())),
             tool_host::McpToolConfig::default(),
-            BTreeMap::new(),
             store,
             local,
             fixed(&[]),
@@ -1940,7 +2298,7 @@ mod resolver_tests {
             operation: None,
             cancellation: std::sync::Arc::new(AtomicBool::new(false)),
         };
-        let tools = resolver.tools(&request).await.unwrap();
+        let tools = resolver.tools(&request).await.unwrap().tools;
         let result = tools.call(crate::node_tools::RUN_TOOL_NAME, json!({"command":["sh","-c","cat /local-inputs/history/history.txt; ! touch /local-inputs/history/forbidden"]})).await.unwrap();
         assert_eq!(result[0].as_json().unwrap()["exit_code"], 0);
         assert_eq!(
@@ -1949,7 +2307,7 @@ mod resolver_tests {
         );
         assert!(!private.join("forbidden").exists());
         request.key.node_id = "other".into();
-        let tools = resolver.tools(&request).await.unwrap();
+        let tools = resolver.tools(&request).await.unwrap().tools;
         let result = tools
             .call(
                 crate::node_tools::RUN_TOOL_NAME,

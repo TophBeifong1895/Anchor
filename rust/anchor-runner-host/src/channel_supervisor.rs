@@ -15,6 +15,7 @@ use tokio::{
     time::{Instant, sleep},
 };
 
+pub(crate) mod management;
 pub(crate) mod status;
 
 const RESTART_DELAY: Duration = Duration::from_secs(5);
@@ -35,7 +36,7 @@ struct DiscoveredChannel {
     plugin_dir: PathBuf,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 struct LaunchSpec {
     platform: String,
     executable: PathBuf,
@@ -43,12 +44,46 @@ struct LaunchSpec {
     environment: BTreeMap<String, OsString>,
     descriptor: PathBuf,
     control_socket: PathBuf,
+    resource_guard: Option<ChannelResourceGuard>,
+}
+
+#[derive(Clone)]
+struct ChannelResourceGuard {
+    bundle_root: PathBuf,
+    library_root: PathBuf,
+    definition: ChannelDefinition,
+}
+
+impl ChannelResourceGuard {
+    fn valid(&self) -> bool {
+        self.bundle_root.join("manifest.json").is_file()
+            && self
+                .library_root
+                .join("plugins")
+                .join(&self.definition.plugin)
+                .join("plugin.json")
+                .is_file()
+            && FilePluginCatalog::new(&self.library_root)
+                .channels(&self.definition.plugin)
+                .is_ok_and(|channels| channels.contains(&self.definition))
+    }
+}
+
+pub(crate) struct ManagedChannelLaunch {
+    pub(crate) plugin: String,
+    pub(crate) platform: String,
+    pub(crate) credentials: BTreeMap<String, String>,
+    pub(crate) users: Vec<String>,
+    pub(crate) send_users: Vec<String>,
+    pub(crate) callback_key: String,
 }
 
 pub(crate) struct ChannelSupervisor {
     shutdown: std::sync::Arc<Notify>,
     task: Option<JoinHandle<()>>,
     descriptors: BTreeMap<String, PathBuf>,
+    definitions: BTreeMap<String, ChannelDefinition>,
+    callback_keys: BTreeMap<String, String>,
     cleanup_paths: Vec<(PathBuf, PathBuf)>,
 }
 
@@ -60,25 +95,98 @@ impl ChannelSupervisor {
         listen: &str,
         api_keys: &[String],
     ) -> io::Result<Option<Self>> {
+        Self::start_with_configuration(
+            bundle_root,
+            library_root,
+            state_root,
+            listen,
+            api_keys,
+            None,
+        )
+        .await
+    }
+
+    pub(crate) async fn start_managed(
+        bundle_root: &Path,
+        library_root: &Path,
+        state_root: &Path,
+        listen: &str,
+        managed: ManagedChannelLaunch,
+    ) -> io::Result<Self> {
+        Self::start_with_configuration(
+            bundle_root,
+            library_root,
+            state_root,
+            listen,
+            &[],
+            Some(managed),
+        )
+        .await?
+        .ok_or_else(|| io::Error::other("the Graph has no matching admitted channel"))
+    }
+
+    async fn start_with_configuration(
+        bundle_root: &Path,
+        library_root: &Path,
+        state_root: &Path,
+        listen: &str,
+        api_keys: &[String],
+        managed: Option<ManagedChannelLaunch>,
+    ) -> io::Result<Option<Self>> {
         let discovered = discover(bundle_root, library_root)?;
+        let discovered = if let Some(configuration) = &managed {
+            discovered
+                .into_iter()
+                .filter(|channel| {
+                    channel.definition.plugin == configuration.plugin
+                        && channel.definition.platform == configuration.platform
+                })
+                .collect::<Vec<_>>()
+        } else {
+            discovered
+        };
         if discovered.is_empty() {
             return Ok(None);
         }
         let callback_override = env::var_os("ANCHOR_CHANNEL_WEBHOOK_URL");
         let progress_override = env::var_os("ANCHOR_CHANNEL_PROGRESS_URL");
-        let callback_key = api_keys
-            .first()
-            .cloned()
-            .unwrap_or(random_token("anchor-channel-api")?);
+        let callback_key = match &managed {
+            Some(configuration) => configuration.callback_key.clone(),
+            None => api_keys
+                .first()
+                .cloned()
+                .unwrap_or(random_token("anchor-channel-api")?),
+        };
         let mut launches = Vec::with_capacity(discovered.len());
         let mut descriptors = BTreeMap::new();
+        let mut definitions = BTreeMap::new();
+        let mut callback_keys = BTreeMap::new();
         for channel in discovered {
             let definition = &channel.definition;
+            definitions.insert(definition.platform.clone(), definition.clone());
+            callback_keys.insert(definition.platform.clone(), callback_key.clone());
             let required_environment = definition
                 .required_environment
                 .iter()
                 .map(|required| {
-                    required_environment_value(required).map(|value| (required.clone(), value))
+                    let value = match managed
+                        .as_ref()
+                        .and_then(|configuration| configuration.credentials.get(required))
+                    {
+                        Some(value)
+                            if !value.trim().is_empty() && !value.chars().any(char::is_control) =>
+                        {
+                            Ok(value.clone().into())
+                        }
+                        Some(_) => Err(io::Error::other(
+                            "channel credential is blank or contains control characters",
+                        )),
+                        None if managed.is_some() => Err(io::Error::other(format!(
+                            "required channel credential {required} is not configured"
+                        ))),
+                        None => required_environment_value(required),
+                    };
+                    value.map(|value| (required.clone(), value))
                 })
                 .collect::<io::Result<Vec<_>>>()
                 .map_err(|error| {
@@ -144,6 +252,16 @@ impl ChannelSupervisor {
                     environment.insert(name.into(), value);
                 }
             }
+            if let Some(configuration) = &managed {
+                environment.insert(
+                    "ANCHOR_WECOM_USERS".into(),
+                    configuration.users.join(",").into(),
+                );
+                environment.insert(
+                    "ANCHOR_WECOM_SEND_USERS".into(),
+                    configuration.send_users.join(",").into(),
+                );
+            }
             if let Some(previous) =
                 descriptors.insert(definition.platform.clone(), descriptor.clone())
                 && previous != descriptor
@@ -160,6 +278,11 @@ impl ChannelSupervisor {
                 environment,
                 descriptor,
                 control_socket,
+                resource_guard: managed.as_ref().map(|_| ChannelResourceGuard {
+                    bundle_root: bundle_root.to_path_buf(),
+                    library_root: library_root.to_path_buf(),
+                    definition: definition.clone(),
+                }),
             });
         }
         let shutdown = std::sync::Arc::new(Notify::new());
@@ -172,6 +295,8 @@ impl ChannelSupervisor {
             shutdown,
             task: Some(task),
             descriptors,
+            definitions,
+            callback_keys,
             cleanup_paths,
         }))
     }
@@ -270,6 +395,20 @@ async fn supervise(launches: Vec<LaunchSpec>, shutdown: std::sync::Arc<Notify>) 
     loop {
         let now = Instant::now();
         for (index, launch) in launches.iter().enumerate() {
+            // A saved binding does not preserve deleted resources. Stop the
+            // existing transport and leave an unavailable observation; a new
+            // enable must pass Graph/Plugin admission again.
+            if launch
+                .resource_guard
+                .as_ref()
+                .is_some_and(|guard| !guard.valid())
+            {
+                if let Some(mut child) = children[index].take() {
+                    stop_child(&mut child).await;
+                }
+                remove_launch_control_paths(launch);
+                continue;
+            }
             if let Some(child) = children[index].as_mut() {
                 match child.try_wait() {
                     Ok(Some(status)) => {

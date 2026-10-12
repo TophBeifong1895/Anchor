@@ -5,7 +5,9 @@ import { api, bearerKey, requestApiKey, setBearerKey } from './api';
 import { PilotQuestion } from './PilotQuestion';
 import { mergeQuestions, questionsPath, type Question } from './pilotQuestions';
 
-export type Turn = { id: string; session: string; request_id?: string; status: string; error: string; created_at: string; prompt: string | null };
+export type Turn = { id: string; session: string; request_id?: string; status: string; error: string; created_at: string; prompt: string | null;
+  continuation?: { status: 'none' | 'scheduled' | 'pending' | 'admitted' | 'cancelled' | 'superseded'; request_id?: string; turn?: string };
+};
 type Tool = { id: string; name: string; input?: unknown; output?: unknown; status: string; inputSize?: number };
 type Chunk = { type: string; id?: string; delta?: string; inputTextDelta?: string; toolCallId?: string; toolName?: string; input?: unknown; output?: unknown; errorText?: string; question?: Question };
 const outcomes: Record<string, string> = { completed: '回复完成', failed: '执行失败', stopped: '已停止', interrupted: '执行中断', waiting_approval: '等待你确认操作', waiting_user: '等待你的回答' };

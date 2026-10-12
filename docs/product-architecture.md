@@ -6,7 +6,7 @@
 
 Anchor 是本地优先、可观察、可恢复的 Agent 工作系统。用户通过 Graph 表达任务拆分、检查、返工和交付，通过 Plugin 积累可复用能力，通过 Run 检查执行证据，通过 Session 持续协作。
 
-核心对象是 Graph、AgentNode、OpNode、Plugin、Run 和 Session；依赖**不再**是一等对象——依赖声明属于插件，平台只提供共享存储与每插件版本一份视图（见 [插件依赖与 Python 视图：标准](plugin-dependencies.md)），迁移尚未开始。研究、周报、企业助手与递归改进由普通 Graph/Plugin 表达，不在通用 Runtime 里创建专属业务阶段。
+核心对象是 Graph、AgentNode、OpNode、Plugin、Run 和 Session；依赖**不再**是一等对象——依赖声明属于插件，平台只提供共享存储与每插件版本一份视图（见 [插件依赖与 Python 视图：标准](plugin-dependencies.md)）。该模型已按当前实现落地；Pilot 作者命令也复用部署配置的唯一 Python 解释器，但这项执行授权与 Plugin 第三方依赖视图分开。研究、周报、企业助手与递归改进由普通 Graph/Plugin 表达，不在通用 Runtime 里创建专属业务阶段。
 
 2026-10-10 用户明确 Pilot 的管家目标：Anchor 独立部署后，用户通过 Pilot 管理平台全部 Graph、Plugin 与它们所依赖内容的完整生命周期，包括安装、检查、更新/回退和删除。第一优先级是多 AgentNode 的共享依赖与唯一事实来源，避免逐节点或逐 Plugin 人工维护环境；先验收 Python，概念不限定语言。2026-10-11 起，"依赖环境"不再是独立资产：依赖声明属于插件（`plugin.json` 顶层 `dependencies`），安装/升级插件就是批准它带来的依赖，平台只提供共享存储 + 每插件版本一份视图 + 回收（[标准](plugin-dependencies.md)）。**这项模型已整片落地**：旧的"环境名字 + 内容寻址 + 每 run 冻结绑定"机制连同其节点字段、内核枚举、宿主按名字解析、发布环境 store 与管家工具一并删除，旧图/旧插件仍声明 `environment` 时加载具名拒绝；完整的管理（更新/回退、卸载与数据处置、真实 provider 端到端）仍按标准与[开发台账](pilot-development-plan.md)推进。
 
@@ -36,7 +36,7 @@ Anchor 是本地优先、可观察、可恢复的 Agent 工作系统。用户通
 | Agent/Op 执行、结构化结果、ACP/MCP、通用 host operation 端口 | Node Runtime；具体 host 能力由宿主适配 | invocation 与工具观察 |
 | 文件、网络、进程、凭证和隔离 | Sandbox / 宿主授权 | 获准能力与冻结输入 |
 | Skill、资源、业务工具和外部系统 | Plugin / Library | 可复用能力资产 |
-| 解释器、依赖包与工具链（插件依赖） | 插件持有依赖声明；宿主按部署授权来源取包，Library 持有共享存储与视图 | 插件的依赖声明与共享存储中的（包、版本） |
+| 解释器、依赖包与工具链（插件依赖） | Host 统一解析基础环境与来源；插件持有运行依赖，Session 持临时开发引用，Library 持有共享存储与视图 | Host 管理配置或显式部署字段；依赖声明与共享存储中的（包、版本） |
 | 研究、周报、审查目标与内容验收 | 普通 Graph / Plugin | 业务证据与结论 |
 | 画布、时间线、会话与文件展示 | WebUI | 对既有事实的投影 |
 
@@ -46,19 +46,21 @@ Anchor 是本地优先、可观察、可恢复的 Agent 工作系统。用户通
 
 新设计依次确认：已授权用户结果或已观察失败；现有框架/契约能否复用；唯一事实所有者；失败、取消和恢复语义；可执行验收。小型可逆选择直接推进。改变用户结果、持久化迁移、权限、并发或恢复语义的重要决定需明确记录；文档用于后续开发，不是额外审批平台。
 
+2026-10-11 用户确认任务联网作为 Plugin 能力入口：`network` 可以主动启用，也可以由学术调研等业务 Plugin 的联网需求依赖启用。联网 Plugin 不替代宿主授权，业务客户端不必经它代理。主动挂载、派生的依赖启用和 Session 的明确网络禁止是不同事实；只有后者限制实际联网授权。已在 Pilot 与带 Session 的节点工具装配落地，具体契约与独立 Graph 的保留边界见 [任务联网能力](network-plugin.md)。
+
 ## 对象与所有权
 
 | 对象 | 内容与生命周期 |
 | --- | --- |
 | Plugin | 独立清单、Skill、资源和工具入口；多个节点可以引用同一资产 |
-| 插件依赖（待实现） | 插件声明自己的包依赖；平台共享存储按（包、版本）只存一份字节，每个插件版本一份视图；Run 钉住自己启动时的视图快照 |
+| 插件依赖 | 插件声明自己的包依赖；平台共享存储按（包、版本）只存一份字节，每个插件版本一份视图；每次节点调用解析当前 Plugin 并记录实际观察到的依赖视图 |
 | AgentNode | Graph 内角色引用、任务、Plugin 与权限；模型在节点 workspace 执行 |
 | OpNode | Graph 内确定性命令、独立调用、配对并行控制或获授权 host operation |
 | Graph | 可编辑 JSON、节点、边、接口、目标与 layout |
 | Run | 冻结定义、启动输入/资源授权、cursor、节点工作区绑定、逐 invocation Artifact、路由和工具轨迹 |
 | Session | 长期对话、可信来源、Turn、幂等、问题/回答和关联 Run；常驻助手 current/历史 binding 与 retire 事实 |
 | Turn | 一次幂等输入或继续请求，保留事件游标、取消与投递身份 |
-| Pilot | 管理和协作入口；完整 Graph/Plugin 管家能力（含插件带来的依赖安装与升级）是明确目标，系统级 Graph 与自升级交接策略尚未冻结 |
+| Pilot | 管理和协作入口；完整平台不依赖业务 Graph，可初始化基础环境、开发并交付 Plugin，以及管理 Graph、联网/挂载、凭据、渠道与计划；各业务的真实验收范围见台账，自升级交接策略仍未冻结 |
 
 共享 `agents` 只是角色配置复用，不是独立 Agent 注册库。Plugin 直接挂在 AgentNode，不通过角色继承、默认合并或复制；OpNode 不隐式取得 Plugin 能力。
 
@@ -98,11 +100,13 @@ Session 与 Run 分别拥有状态。Session 只引用真实 Run，不复制另�
 
 ## Plugin 与能力积累
 
-Plugin 包含渐进披露的 Skill、资源、工具和可选渠道说明。短目录提供名称、描述和入口；完整内容保留在唯一 Plugin 目录，按需只读读取。工具语言由作者决定，官方工具使用 Rust；第三方依赖受宿主授权，目标是用户可通过 Pilot 安装/升级插件并管理它带来的依赖（模型见 [插件依赖标准](plugin-dependencies.md)），当前仍由部署者登记外部路径。
+Plugin 包含渐进披露的 Skill、资源、工具和可选渠道说明。短目录提供名称、描述和入口；完整内容保留在唯一 Plugin 目录，按需只读读取。工具语言由作者决定，官方工具使用 Rust；第三方依赖受宿主授权。Host 为 Pilot 提供 Session 工作区、候选获取/编辑/审查、`plugin_prepare`/`plugin_test`，以及经原生确认的 `plugin_install`。`RuntimeConfiguration` 统一解析 Python、Rust、uv 与来源：完整平台通过 `runtime_prepare` 在 Host 所有目录初始化，事实写入 `state/managed/runtime-config.json`；显式部署字段继续只读，不覆盖或镜像到 `.env`。同一 Python 版本只有一份解释器；Plugin 与开发项目都引用 Library 共享包字节，见 [插件依赖标准](plugin-dependencies.md)。宿主工具目录仍通过 Library `tool.json` 注册，Plugin 声明不能扩大授权。
+
+2026-10-12 用户明确两个交付目标：安装 Anchor 并配置模型后，仅通过 Pilot 完成空业务机器上的基础环境、Plugin 和 Graph 初始化；Pilot 可通过 Anchor 准备自己选择的 Python 开发依赖，并在 Session 沙箱中用普通命令运行、测试、调试代码，最终经现有 Plugin 接口交付。对应实现已接入完整平台发行、对话内联网/挂载确认、基础能力初始化、`development_prepare` 与 `anchor_run(project=...)`、专用凭据/OAuth 输入，以及现有渠道/计划管理用例。开发方法由 Pilot 决定，Host 管理基础环境和执行边界，Session 管理临时开发现场，Library 管理正式 Plugin 与共享依赖；不新增命名环境资产、Agent loop 或计划系统。执行中的权限和解释器保持冻结，能力变化在当前 Turn 收束后自动接续。具体契约见 [专项计划](pilot-initialization-and-development-plan.md) 和[当前架构](architecture.md)；接口接入、确定性回归、真实 Provider 与实际外部业务验证是不同状态，证据只记[开发台账](pilot-development-plan.md)。
 
 Plugin 说明不是权限策略。文件路径、网络、工具、凭据和控制动作由 Host/Sandbox 强制校验。Graph/Plugin 包不能包含密钥或扩大宿主授权；模型输出不构成授权。知识库自动编译与通用 Plugin 市场暂缓；受授权的插件依赖安装已进入管家目标（见 [插件依赖标准](plugin-dependencies.md)）。
 
-Library 拥有已安装能力、来源摘要和 owner-bound 授权事实。API 与 Pilot 通过稳定用例管理，不直接修改其他模块的私有 SQL 表、锁或字典。运行中使用的资源必须可追溯，更新不能静默替换已经冻结的依赖。
+Library 拥有已安装能力、来源摘要和 owner-bound OAuth 事实，Host 拥有基础环境配置、私有凭据和输入请求。API 与 Pilot 通过稳定用例管理，不直接修改其他模块的私有 SQL 表、锁或字典。Plugin 代码和依赖视图由 Library 管理；Run 不冻结 Plugin 版本，节点调用使用当前 Library 版本，并将实际视图记入 Run 观察。开发引用保护只限临时资源，不变成 Run 历史环境绑定。Pilot 对工作区的 Rustup/Cargo 和 Python 使用权来自 Host 授权，不能由 Plugin 声明扩大。
 
 ## 渠道与多用户工作
 

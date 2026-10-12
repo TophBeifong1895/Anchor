@@ -176,7 +176,7 @@ impl<'a, S: RunStore, A: ArtifactPort, N: NodeExecutionPort, C: RunControl>
             return Ok(false);
         }
         for (branch_index, cursor) in dispatch {
-            let request = execution_request(record, &cursor, self.control.cancellation())?;
+            let request = self.current_execution_request(record, &cursor)?;
             let nodes = self.nodes;
             pending.push(Box::pin(async move {
                 let outcome = AssertUnwindSafe(async move { nodes.execute(request).await })
@@ -450,6 +450,7 @@ impl<'a, S: RunStore, A: ArtifactPort, N: NodeExecutionPort, C: RunControl>
                 node_id: cursor.node_id.clone(),
                 key: cursor.key.clone(),
                 plugin_views: self.nodes.observed_plugin_views(&cursor.key),
+                plugin_digests: self.nodes.observed_plugin_digests(&cursor.key),
                 completion,
                 interruption: None,
                 commit: commit.clone(),
