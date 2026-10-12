@@ -870,7 +870,10 @@ impl NodeHostResolver for HostIoResolver {
                     )
                     .with_spill(spill)
                     .with_environment(self.mcp.environment.clone())
-                    .with_network(request.network);
+                    .with_network(request.network)
+                    .with_timeout_ceiling(
+                        crate::node_tools::command_timeout_ceiling(request.wall_time_limit_seconds),
+                    );
                     let tools = std::sync::Arc::new(node_tools)
                         as std::sync::Arc<dyn anchor_runtime::ToolPort>;
                     // Tools a node's completion and continuity depend on stay listed; the rest
@@ -1055,6 +1058,7 @@ impl HostNodes {
             readonly_inputs,
             workspace_readonly: vec![],
             tool_dirs: vec![],
+            devices: Vec::new(),
             environment: vec![
                 anchor_runtime::SandboxEnvironment::new("ANCHOR_NODE", request.key.node_id.clone()),
                 anchor_runtime::SandboxEnvironment::new("ANCHOR_ROUTES", request.routes.join(",")),

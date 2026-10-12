@@ -29,6 +29,33 @@ const READ_MAX_BYTES: usize = 256 * 1024;
 
 /// Wall-clock limit for one `anchor_run` command.
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Deployment ceiling for one `anchor_run` command.
+///
+/// The default stays the historical thirty seconds so an existing deployment
+/// keeps the same behaviour. A deployment that runs long experiments raises it
+/// with `ANCHOR_NODE_COMMAND_TIMEOUT_SECONDS`, and the effective ceiling never
+/// exceeds the node's own wall-clock budget: a command cannot outlive its node.
+pub(crate) fn command_timeout_ceiling(wall_time_limit_seconds: Option<f64>) -> Duration {
+    let configured = std::env::var("ANCHOR_NODE_COMMAND_TIMEOUT_SECONDS")
+        .ok()
+        .and_then(|value| value.trim().parse::<u64>().ok());
+    resolve_command_ceiling(configured, wall_time_limit_seconds)
+}
+
+fn resolve_command_ceiling(
+    configured: Option<u64>,
+    wall_time_limit_seconds: Option<f64>,
+) -> Duration {
+    let configured = configured
+        .filter(|value| *value > 0)
+        .map(Duration::from_secs)
+        .unwrap_or(DEFAULT_TIMEOUT);
+    let node = wall_time_limit_seconds
+        .and_then(|seconds| Duration::try_from_secs_f64(seconds).ok())
+        .unwrap_or(DEFAULT_TIMEOUT);
+    configured.min(node).max(DEFAULT_TIMEOUT)
+}
 /// Bytes retained per stream before the remainder is spilled or dropped.
 const DEFAULT_PREVIEW_BYTES: usize = 64 * 1024;
 /// Bounded retention for output beyond the previews.
@@ -70,6 +97,8 @@ pub(crate) struct NodeTools {
     network: NetworkPolicy,
     spill: Option<SpillDirectory>,
     timeout: Duration,
+    /// Largest per-command timeout the model may request for this node.
+    timeout_ceiling: Duration,
     preview_bytes: usize,
 }
 
@@ -91,8 +120,16 @@ impl NodeTools {
             network: NetworkPolicy::Disabled,
             spill: None,
             timeout: DEFAULT_TIMEOUT,
+            timeout_ceiling: DEFAULT_TIMEOUT,
             preview_bytes: DEFAULT_PREVIEW_BYTES,
         }
+    }
+
+    /// Raise the per-command ceiling. A deployment grants it through the node's
+    /// wall-clock budget; a command can never outlive its node.
+    pub fn with_timeout_ceiling(mut self, ceiling: Duration) -> Self {
+        self.timeout_ceiling = ceiling.max(self.timeout);
+        self
     }
 
     pub fn with_environment(
@@ -159,10 +196,12 @@ impl NodeTools {
             "Run an authorized command as an argv array (no shell) in the node sandbox. \
              The working directory is /workspace and is writable; /in and /plugins are read-only inputs. \
              Authorized commands: {}. \
-             The command is killed after {}s, and each stream keeps a {} KiB preview{}. \
+             The command defaults to {}s and timeout_seconds may request up to {}s; \
+             each stream keeps a {} KiB preview{}. \
              A non-zero exit code is a normal result: read `status`, `exit_code`, `stdout`, `stderr` and `incomplete`.",
             self.authorized_commands_summary(),
             self.timeout.as_secs(),
+            self.timeout_ceiling.as_secs(),
             self.preview_bytes / 1024,
             retention,
         )
@@ -244,6 +283,8 @@ impl NodeTools {
 #[serde(deny_unknown_fields)]
 struct RunArguments {
     command: Vec<String>,
+    #[serde(default)]
+    timeout_seconds: Option<u64>,
 }
 
 #[derive(Deserialize)]
@@ -569,7 +610,8 @@ impl ToolPort for NodeTools {
             json!({
                 "type": "object",
                 "properties": {
-                    "command": {"type": "array", "items": {"type": "string"}, "minItems": 1}
+                    "command": {"type": "array", "items": {"type": "string"}, "minItems": 1},
+                    "timeout_seconds": {"type": "integer", "minimum": 1, "maximum": self.timeout_ceiling.as_secs()}
                 },
                 "required": ["command"],
                 "additionalProperties": false
@@ -639,6 +681,18 @@ impl ToolPort for NodeTools {
             if arguments.command.is_empty() {
                 return Err(self.invalid_arguments("command must contain at least one element"));
             }
+            let timeout = match arguments.timeout_seconds {
+                None => self.timeout,
+                Some(seconds) if seconds >= 1 && seconds <= self.timeout_ceiling.as_secs() => {
+                    Duration::from_secs(seconds)
+                }
+                Some(_) => {
+                    return Err(self.invalid_arguments(format!(
+                        "timeout_seconds must be between 1 and {}",
+                        self.timeout_ceiling.as_secs()
+                    )));
+                }
+            };
             let mut request = SandboxRequest {
                 writable_inputs: Vec::new(),
                 workspace: self.workspace.clone(),
@@ -647,9 +701,10 @@ impl ToolPort for NodeTools {
                 readonly_inputs: self.readonly_inputs.clone(),
                 workspace_readonly: Vec::new(),
                 tool_dirs: Vec::new(),
+                devices: Vec::new(),
                 environment: Vec::new(),
                 network: self.network,
-                timeout: self.timeout,
+                timeout,
                 max_output_bytes: self.preview_bytes,
                 spill: self.spill_policy()?,
                 cancellation: self.cancellation.clone(),

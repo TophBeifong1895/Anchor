@@ -290,6 +290,11 @@ pub(super) struct ModelRegistry {
     direct: bool,
     /// Context window advertised to Goose, overriding its model-name heuristic.
     context_limit: Option<u64>,
+    /// Output budget per model response. Without it the provider applies its own
+    /// default (DeepSeek cuts at 4096 tokens), and a long reasoning turn is
+    /// truncated before its tool call, which ends the AgentNode without a
+    /// completion.
+    max_tokens: Option<u64>,
     endpoint: Url,
     wire: &'static str,
     model: String,
@@ -376,10 +381,27 @@ impl ModelRegistry {
                 }
             }
         };
+        let max_tokens = if fixture {
+            None
+        } else {
+            match value("ANCHOR_MODEL_MAX_TOKENS") {
+                None => None,
+                Some(tokens) => {
+                    let parsed = tokens.trim().parse::<u64>().map_err(|_| {
+                        "ANCHOR_MODEL_MAX_TOKENS must be a positive integer".to_owned()
+                    })?;
+                    if parsed == 0 {
+                        return Err("ANCHOR_MODEL_MAX_TOKENS must be a positive integer".to_owned());
+                    }
+                    Some(parsed)
+                }
+            }
+        };
         Ok(Self {
             fixture,
             direct,
             context_limit,
+            max_tokens,
             endpoint,
             wire,
             model,
@@ -463,6 +485,14 @@ impl ModelRegistry {
             environment.push(SandboxEnvironment::new(
                 "GOOSE_CONTEXT_LIMIT",
                 limit.to_string(),
+            ));
+        }
+        if let Some(tokens) = self.max_tokens {
+            // Goose otherwise sends no output budget and the provider default
+            // applies, which truncates long tool-calling turns.
+            environment.push(SandboxEnvironment::new(
+                "GOOSE_MAX_TOKENS",
+                tokens.to_string(),
             ));
         }
         environment
@@ -1163,6 +1193,28 @@ mod tests {
     }
 
     #[test]
+    fn native_output_budget_is_advertised_to_goose() {
+        let mut values = native_values();
+        values.insert("ANCHOR_MODEL_MAX_TOKENS".into(), "8192".into());
+        let entries = environment(&registry(false, &values), None);
+        assert_eq!(entries["GOOSE_MAX_TOKENS"], "8192");
+        // Without it the provider applies its own default, which can truncate a
+        // long tool-calling turn before the tool call is emitted.
+        let plain = environment(&registry(false, &native_values()), None);
+        assert!(!plain.contains_key("GOOSE_MAX_TOKENS"));
+    }
+
+    #[test]
+    fn output_budget_must_be_a_positive_integer() {
+        for tokens in ["0", "abc", "-5", ""] {
+            let mut values = native_values();
+            values.insert("ANCHOR_MODEL_MAX_TOKENS".into(), tokens.into());
+            let failure = error(false, &values);
+            assert!(failure.contains("ANCHOR_MODEL_MAX_TOKENS"), "{failure}");
+        }
+    }
+
+    #[test]
     fn configuration_reads_only_its_explicit_mode_specific_variables() {
         for (fixture, expected) in [
             (true, vec!["ANCHOR_GOOSE_OPENAI_HOST", "ANCHOR_GOOSE_MODEL"]),
@@ -1176,6 +1228,7 @@ mod tests {
                     "ANCHOR_MODEL_WIRE_API",
                     "ANCHOR_MODEL_ALIASES",
                     "ANCHOR_MODEL_CONTEXT_WINDOW",
+                    "ANCHOR_MODEL_MAX_TOKENS",
                 ],
             ),
         ] {

@@ -10,7 +10,7 @@ use std::{
     ffi::OsStr,
     fs::{self, File, OpenOptions},
     io,
-    os::unix::fs::OpenOptionsExt,
+    os::unix::fs::{FileTypeExt, OpenOptionsExt},
     os::{fd::AsRawFd, unix::process::CommandExt},
     path::{Component, Path, PathBuf},
     process::Stdio,
@@ -61,6 +61,10 @@ pub struct BubblewrapPolicy {
     pub readonly_destination_roots: Vec<PathBuf>,
     /// Exact host directories that may be added to the sandbox PATH.
     pub tool_dirs: Vec<PathBuf>,
+    /// Exact host device nodes an invocation may see at the same absolute path.
+    /// Like a writable mount this is a per-path decision: no root, workspace or
+    /// request argument can authorize a device.
+    pub device_grants: Vec<PathBuf>,
     pub spill_roots: Vec<PathBuf>,
     /// Exact host paths this policy may ever mount writable. Unlike read-only
     /// inputs there is no root-based fallback: a writable mount is a decision the
@@ -83,6 +87,7 @@ impl BubblewrapPolicy {
             readonly_input_roots: Vec::new(),
             readonly_destination_roots: Vec::new(),
             tool_dirs: Vec::new(),
+            device_grants: Vec::new(),
             spill_roots: Vec::new(),
             writable_input_roots: Vec::new(),
             writable_destination_roots: Vec::new(),
@@ -105,6 +110,12 @@ impl BubblewrapPolicy {
         self.tool_dirs.push(path.into());
         self
     }
+    /// Authorize one exact host device node for invocations of this sandbox.
+    pub fn authorize_device_grant(mut self, path: impl Into<PathBuf>) -> Self {
+        self.device_grants.push(path.into());
+        self
+    }
+
     pub fn authorize_spill_root(mut self, path: impl Into<PathBuf>) -> Self {
         self.spill_roots.push(path.into());
         self
@@ -139,6 +150,7 @@ pub struct BubblewrapSandbox {
     writable_input_roots: Vec<PathBuf>,
     writable_destination_roots: Vec<PathBuf>,
     tool_dirs: Vec<PathBuf>,
+    device_grants: Vec<PathBuf>,
     spill_roots: Vec<PathBuf>,
 }
 
@@ -157,6 +169,7 @@ impl std::fmt::Debug for BubblewrapSandbox {
             .field("readonly_grants", &self.readonly_grants)
             .field("writable_grants", &self.writable_grants)
             .field("tool_dirs", &self.tool_dirs)
+            .field("device_grants", &self.device_grants)
             .field("spill_roots", &self.spill_roots)
             .finish()
     }
@@ -167,6 +180,24 @@ impl BubblewrapSandbox {
     ///
     /// The allowlist itself is host authority; exposing the names lets the tool
     /// layer tell a model which commands it may actually use.
+    /// Grant exact host device nodes to invocations of the derived sandbox.
+    ///
+    /// A device is never reachable because a request asked for it: the derived
+    /// sandbox only accepts devices an operator recorded on the tool
+    /// environment, and the request must name exactly those paths.
+    pub fn with_device_grants(&self, devices: &[PathBuf]) -> Result<Self, SandboxError> {
+        let sandbox = self.clone();
+        for device in devices {
+            let resolved = resolve_device_grant(device)?;
+            if !sandbox.device_grants.contains(&resolved) {
+                return Err(SandboxError::InvalidRequest(
+                    "device node is not explicitly authorized by host policy".to_owned(),
+                ));
+            }
+        }
+        Ok(sandbox)
+    }
+
     pub fn allowed_commands(&self) -> Vec<String> {
         let mut commands = self.allowed_commands.iter().cloned().collect::<Vec<_>>();
         commands.sort();
@@ -226,6 +257,11 @@ impl BubblewrapSandbox {
         let readonly_input_roots = canonical_roots(policy.readonly_input_roots, "read-only input")?;
         let readonly_destination_roots = policy.readonly_destination_roots;
         let tool_dirs = canonical_roots(policy.tool_dirs, "tool directory")?;
+        let device_grants = policy
+            .device_grants
+            .iter()
+            .map(|device| resolve_device_grant(device))
+            .collect::<Result<Vec<_>, _>>()?;
         let spill_roots = canonical_roots(policy.spill_roots, "spill")?;
         let writable_input_roots = canonical_roots(policy.writable_input_roots, "writable input")?;
         let binary = if policy.binary.components().count() == 1 {
@@ -253,6 +289,7 @@ impl BubblewrapSandbox {
             writable_input_roots,
             writable_destination_roots: policy.writable_destination_roots,
             tool_dirs,
+            device_grants,
             spill_roots,
         })
     }
@@ -589,6 +626,18 @@ impl BubblewrapSandbox {
         {
             self.authorize_destination(mount)?;
         }
+        let mut devices = Vec::with_capacity(request.devices.len());
+        for device in &request.devices {
+            let resolved = resolve_device_grant(device)?;
+            if !self.device_grants.contains(&resolved) {
+                return Err(SandboxError::InvalidRequest(
+                    "device node is not authorized by the host for this invocation".to_owned(),
+                ));
+            }
+            if !devices.contains(&resolved) {
+                devices.push(resolved);
+            }
+        }
         Ok(ResolvedRequest {
             workspace,
             working_directory,
@@ -596,6 +645,7 @@ impl BubblewrapSandbox {
             writable_inputs,
             workspace_readonly,
             tool_dirs,
+            devices,
             spill,
         })
     }
@@ -680,6 +730,20 @@ impl BubblewrapSandbox {
             "--dev".into(),
             "/dev".into(),
         ]);
+        // A granted device is bound at the same absolute path. A sandbox without
+        // a device grant keeps the minimal /dev devtmpfs.
+        for device in &resolved.devices {
+            args.extend([
+                "--dev-bind".into(),
+                path_string(device),
+                path_string(device),
+            ]);
+        }
+        // A granted accelerator device comes with the read-only /sys view its
+        // driver enumerates devices through.
+        if !resolved.devices.is_empty() && Path::new("/sys").exists() {
+            args.extend(["--ro-bind".into(), "/sys".into(), "/sys".into()]);
+        }
         if include_info_fd {
             args.extend(["--info-fd".into(), BWRAP_INFO_FD.to_string()]);
         }
@@ -930,6 +994,7 @@ struct ResolvedRequest {
     writable_inputs: Vec<(PathBuf, PathBuf)>,
     workspace_readonly: Vec<(PathBuf, PathBuf)>,
     tool_dirs: Vec<PathBuf>,
+    devices: Vec<PathBuf>,
     spill: Option<ResolvedSpill>,
 }
 
@@ -1020,6 +1085,30 @@ fn canonical_roots(roots: Vec<PathBuf>, label: &str) -> Result<Vec<PathBuf>, San
             })
         })
         .collect()
+}
+
+/// A device grant names one host device node. The node itself is the authority:
+/// the path must be a character or block device below `/dev`, and the resolved
+/// path is what gets bound.
+fn resolve_device_grant(device: &Path) -> Result<PathBuf, SandboxError> {
+    let lexical = absolute_lexical(device)?;
+    if lexical == Path::new("/dev") || !lexical.starts_with("/dev/") {
+        return Err(SandboxError::InvalidRequest(
+            "device grants must name a node below /dev".to_owned(),
+        ));
+    }
+    let resolved = fs::canonicalize(&lexical).map_err(|error| {
+        SandboxError::InvalidRequest(format!("device grant cannot be resolved: {error}"))
+    })?;
+    let metadata = fs::metadata(&resolved).map_err(|error| {
+        SandboxError::InvalidRequest(format!("device grant cannot be inspected: {error}"))
+    })?;
+    if !metadata.file_type().is_char_device() && !metadata.file_type().is_block_device() {
+        return Err(SandboxError::InvalidRequest(
+            "device grants must name a character or block device node".to_owned(),
+        ));
+    }
+    Ok(resolved)
 }
 
 fn ensure_within(path: &Path, roots: &[PathBuf], label: &str) -> Result<(), SandboxError> {
@@ -1457,6 +1546,7 @@ mod tests {
             writable_grants: Vec::new(),
             writable_input_roots: Vec::new(),
             writable_destination_roots: Vec::new(),
+            device_grants: Vec::new(),
             tool_dirs: Vec::new(),
             spill_roots: vec![root],
         }
@@ -1863,6 +1953,47 @@ mod tests {
                 Err(SandboxError::InvalidRequest(_))
             ));
         }
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn device_nodes_require_an_exact_host_grant_and_render_as_dev_bind() {
+        let dir = temp_dir("devices");
+        let workspace = dir.join("ws");
+        fs::create_dir(&workspace).unwrap();
+        let mut sandbox = unchecked(fake_bwrap(&dir));
+        sandbox.device_grants.push(PathBuf::from("/dev/null"));
+
+        // A request that names a device the host never granted is refused, and
+        // the refusal happens before any namespace is created.
+        let mut denied = SandboxRequest::new(&workspace, ["true"]);
+        denied.devices.push(PathBuf::from("/dev/zero"));
+        assert!(matches!(
+            sandbox.validate_authority(&denied),
+            Err(SandboxError::InvalidRequest(message)) if message.contains("not authorized")
+        ));
+
+        // The granted node is bound at the same absolute path.
+        let mut granted = SandboxRequest::new(&workspace, ["true"]);
+        granted.devices.push(PathBuf::from("/dev/null"));
+        let resolved = sandbox.validate_authority(&granted).unwrap();
+        let argv = sandbox.argv(&granted, &resolved, false).join(" ");
+        assert!(argv.contains("--dev-bind /dev/null /dev/null"), "{argv}");
+
+        // Only real device nodes below /dev can be granted at all.
+        for invalid in ["/dev", "/etc/passwd", "/tmp", "/dev/shm"] {
+            assert!(
+                sandbox
+                    .with_device_grants(&[PathBuf::from(invalid)])
+                    .is_err(),
+                "{invalid}"
+            );
+        }
+        assert!(
+            sandbox
+                .with_device_grants(&[PathBuf::from("/dev/null")])
+                .is_ok()
+        );
         let _ = fs::remove_dir_all(dir);
     }
 

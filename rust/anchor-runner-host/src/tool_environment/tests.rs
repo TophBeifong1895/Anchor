@@ -165,3 +165,45 @@ fn malformed_tool_grants_are_rejected_and_mcp_explicit_environment_is_preserved(
         assert!(ToolEnvironment::load(&library).is_err(), "{invalid}");
     }
 }
+
+#[test]
+fn tool_manifests_grant_exact_device_nodes_and_nothing_broader() {
+    let root = tempfile::tempdir().unwrap();
+    let library = fixture(root.path());
+    let manifest = library.join("tools/sample/tool.json");
+    let original = fs::read_to_string(&manifest).unwrap();
+
+    // A registered character device becomes an exact grant on the environment
+    // and on every request the tool environment applies to.
+    let mut spec: serde_json::Value = serde_json::from_str(&original).unwrap();
+    spec.as_object_mut()
+        .unwrap()
+        .insert("devices".into(), json!(["/dev/null"]));
+    fs::write(&manifest, spec.to_string()).unwrap();
+    let tools = ToolEnvironment::load(&library).unwrap();
+    let canonical = fs::canonicalize("/dev/null").unwrap();
+    assert_eq!(tools.devices, vec![canonical.clone()]);
+    let mut request = SandboxRequest::new(root.path(), ["sh"]);
+    tools.apply(&mut request);
+    assert_eq!(request.devices, vec![canonical.clone()]);
+
+    // Nothing broad or indirect may be registered, and the refusal happens
+    // while the tool is loaded rather than at invocation time.
+    for invalid in [
+        "/dev",
+        "/dev/shm",
+        "/etc/passwd",
+        "/tmp",
+        "relative",
+        "/dev/../etc/passwd",
+        "/dev/null/../..",
+        "/dev/null/",
+    ] {
+        let mut spec: serde_json::Value = serde_json::from_str(&original).unwrap();
+        spec.as_object_mut()
+            .unwrap()
+            .insert("devices".into(), json!([invalid]));
+        fs::write(&manifest, spec.to_string()).unwrap();
+        assert!(ToolEnvironment::load(&library).is_err(), "{invalid}");
+    }
+}

@@ -16,6 +16,8 @@ pub(crate) struct ToolEnvironment {
     mounts: Vec<ReadOnlyInput>,
     dirs: Vec<PathBuf>,
     imports: Vec<PathBuf>,
+    /// Operator-registered GPU/accelerator device nodes a tool may reach.
+    devices: Vec<PathBuf>,
 }
 
 #[cfg(test)]
@@ -27,6 +29,40 @@ struct ToolSpec {
     environment: Option<PathBuf>,
     #[serde(default)]
     imports: Vec<PathBuf>,
+    /// Exact host device nodes this tool may see at the same absolute path.
+    #[serde(default)]
+    devices: Vec<PathBuf>,
+}
+
+/// An operator registers a device node by absolute path. It must be a real
+/// character/block device below `/dev`; nothing broad or indirect is accepted,
+/// and no request or Graph field can add one.
+pub(crate) fn validate_device_grant(device: &Path) -> Result<PathBuf, String> {
+    use std::os::unix::fs::FileTypeExt;
+
+    if !device.is_absolute()
+        || device
+            .components()
+            .any(|c| matches!(c, std::path::Component::ParentDir))
+        || device == Path::new("/dev")
+        || !device.starts_with("/dev/")
+    {
+        return Err(format!(
+            "tool device grant must be an absolute path below /dev: {}",
+            device.display()
+        ));
+    }
+    let resolved = device
+        .canonicalize()
+        .map_err(|e| format!("tool device grant: {e}"))?;
+    let metadata = fs::metadata(&resolved).map_err(|e| format!("tool device grant: {e}"))?;
+    if !metadata.file_type().is_char_device() && !metadata.file_type().is_block_device() {
+        return Err(format!(
+            "tool device grant must name a device node: {}",
+            resolved.display()
+        ));
+    }
+    Ok(resolved)
 }
 
 impl ToolEnvironment {
@@ -142,6 +178,12 @@ impl ToolEnvironment {
                     result.mount_at_original_path(prefix)?;
                 }
             }
+            for device in spec.devices {
+                let resolved = validate_device_grant(&device)?;
+                if !result.devices.contains(&resolved) {
+                    result.devices.push(resolved);
+                }
+            }
             for import in spec.imports {
                 result.mount_at_original_path(&import)?;
                 if !result.imports.contains(&import) {
@@ -211,6 +253,9 @@ impl ToolEnvironment {
         for directory in &self.dirs {
             policy = policy.authorize_tool_dir(directory);
         }
+        for device in &self.devices {
+            policy = policy.authorize_device_grant(device);
+        }
         policy
     }
 
@@ -237,6 +282,7 @@ impl ToolEnvironment {
     pub fn apply(&self, request: &mut SandboxRequest) {
         request.readonly_inputs.extend(self.mounts.clone());
         request.tool_dirs.extend(self.dirs.clone());
+        request.devices.extend(self.devices.clone());
         if !self.imports.is_empty() && !request.environment.iter().any(|v| v.key == "PYTHONPATH") {
             request.environment.push(SandboxEnvironment::new(
                 "PYTHONPATH",

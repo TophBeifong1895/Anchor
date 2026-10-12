@@ -143,6 +143,12 @@ pub struct SandboxRequest {
     /// Absolute host paths prepended to the command's PATH. They do not imply
     /// a mount; required files must also appear in `readonly_inputs`.
     pub tool_dirs: Vec<PathBuf>,
+    /// Host device nodes this invocation may see as the *same absolute path*
+    /// inside the sandbox (an operator grants them on the tool environment, the
+    /// same way tool directories are granted). A device is never implied by a
+    /// mount root, a workspace, or a model argument: the sandbox backend
+    /// requires an exact grant for each entry.
+    pub devices: Vec<PathBuf>,
     /// Explicit child environment. Values are redacted from Debug output.
     pub environment: Vec<SandboxEnvironment>,
     pub network: NetworkPolicy,
@@ -165,6 +171,7 @@ impl fmt::Debug for SandboxRequest {
             .field("writable_inputs", &self.writable_inputs)
             .field("workspace_readonly", &self.workspace_readonly)
             .field("tool_dirs", &self.tool_dirs)
+            .field("devices", &self.devices)
             .field("environment", &self.environment)
             .field("network", &self.network)
             .field("timeout", &self.timeout)
@@ -188,6 +195,7 @@ impl SandboxRequest {
             writable_inputs: Vec::new(),
             workspace_readonly: Vec::new(),
             tool_dirs: Vec::new(),
+            devices: Vec::new(),
             environment: Vec::new(),
             network: NetworkPolicy::default(),
             timeout: Duration::from_secs(30),
@@ -272,6 +280,17 @@ impl SandboxRequest {
             if !is_safe_absolute(path) {
                 return Err(SandboxError::InvalidRequest(
                     "tool_dirs entries must be absolute paths without `..` components".to_owned(),
+                ));
+            }
+        }
+        for device in &self.devices {
+            // Shape only: whether this invocation may actually reach the device
+            // is the sandbox adapter's decision, because only it holds the host's
+            // exact operator grants.
+            if !is_safe_absolute(device) || !device.starts_with("/dev/") {
+                return Err(SandboxError::InvalidRequest(
+                    "devices entries must be absolute paths under /dev without `..` components"
+                        .to_owned(),
                 ));
             }
         }
