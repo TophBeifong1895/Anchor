@@ -377,10 +377,10 @@ export function Pilot({ session = '', onSession }: { session?: string; onSession
           <button className="pilot-copy" aria-label={`复制${message.role === 'assistant' ? '回复' : '消息'} ${index + 1}`}
             onClick={() => void copy(message, index)}>{copied === index ? <Check size={14} /> : <Copy size={14} />}{copied === index ? '已复制' : '复制'}</button>
         </article>)}
-        {turns.some(item => item.id !== turn?.id) && <PilotQuestionHistory key={selected} session={selected}
+        {turns.some(item => item.id !== turn?.id) && <PilotQuestionHistory key={`questions-${selected}`} session={selected}
           turns={turns.filter(item => item.id !== turn?.id).map(item => item.id).reverse()} />}
         {turn && <PilotTurn key={`${turn.session}-${turn.id}`} turn={turn} saved={syncedTurn === turn.id} stopping={stopping} onComplete={complete} onQuestions={questionState} />}
-        {selected && <PilotCredentials key={selected} session={selected} onConfigured={() => {
+        {selected && <PilotCredentials key={`credentials-${selected}`} session={selected} onConfigured={() => {
           void refresh(selected).catch(error => { if (selectedRef.current === selected) setProblem((error as Error).message); });
         }} />}
         {busy && !turn && <div className="pilot-thinking" role="status"><LoaderCircle size={16} />正在提交…</div>}

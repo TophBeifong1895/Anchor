@@ -762,6 +762,7 @@ details.call pre {
 .pilot-turn { margin: 12px auto 22px; max-width: 760px; }
 .pilot-tools { border: 1px solid var(--line); border-radius: 10px; padding: 12px; margin-bottom: 18px; background: #f8faf9; }
 .pilot-tools summary { cursor: pointer; color: var(--muted); font-size: 12px; }
+.pilot-question-history-list { max-height: min(320px, 45vh); overflow-y: auto; overscroll-behavior: contain; }
 .pilot-tool { padding: 10px 0; border-top: 1px solid var(--line); margin-top: 10px; }
 .pilot-tool summary { display: flex; justify-content: space-between; gap: 12px; }
 .pilot-tool pre { max-height: 240px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 11px; }
