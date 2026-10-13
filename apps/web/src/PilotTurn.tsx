@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Anchor, LoaderCircle } from 'lucide-react';
 import { Markdown } from './markdown';
-import { api, bearerKey, requestApiKey, setBearerKey } from './api';
+import { api, bearerKey, recoverBearerKey, setBearerKey } from './api';
 import { PilotQuestion } from './PilotQuestion';
 import { mergeQuestions, questionsPath, type Question } from './pilotQuestions';
 
@@ -112,7 +112,7 @@ export function PilotTurn({ turn, saved = false, stopping = false, onComplete, o
           });
           if (ended) return;
           if (response.status === 401) {
-            const entered = await requestApiKey();
+            const entered = await recoverBearerKey(key);
             if (!entered) { setConnection('需要 API key 才能读取执行记录。'); return; }
             setBearerKey(entered); continue;
           }

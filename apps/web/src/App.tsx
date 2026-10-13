@@ -23,7 +23,7 @@ import { Plugins } from './Plugins';
 import { Workspace } from './Workspace';
 import { Pilot } from './Pilot';
 import { anchorRef, anchorTarget, type AnchorRef } from './links';
-import { api, registerApiKeyPrompt, setBearerKey } from './api';
+import { api, reason, registerApiKeyPrompt, setBearerKey, verifyBearerKey } from './api';
 import { EmptyState, JsonDialog, Modal, ToolButton } from './ui';
 import { Timeline } from './Timeline';
 import { assignGraphColors } from './graphColors';
@@ -110,7 +110,10 @@ export function App() {
   const [busy, setBusy] = useState(false);
   const [apiKeyDialog, setApiKeyDialog] = useState(false);
   const [apiKeyDraft, setApiKeyDraft] = useState('');
+  const [apiKeyProblem, setApiKeyProblem] = useState('');
+  const [apiKeyChecking, setApiKeyChecking] = useState(false);
   const apiKeyResolver = useRef<((key: string) => void) | null>(null);
+  const apiKeyCheck = useRef<AbortController | null>(null);
   // Which Pilot session to go back to after opening a Graph, Run or artifact from the chat.
   const [chat, setChat] = useState('');
   const nameRef = useRef(name); nameRef.current = name;
@@ -121,14 +124,37 @@ export function App() {
   useEffect(() => registerApiKeyPrompt(() => new Promise(resolve => {
     apiKeyResolver.current = resolve;
     setApiKeyDraft('');
+    setApiKeyProblem('');
     setApiKeyDialog(true);
   })), []);
 
   const finishApiKeyPrompt = (key: string) => {
+    apiKeyCheck.current?.abort();
+    apiKeyCheck.current = null;
+    setApiKeyChecking(false);
     if (key) setBearerKey(key);
     apiKeyResolver.current?.(key);
     apiKeyResolver.current = null;
     setApiKeyDialog(false);
+  };
+
+  const submitApiKey = async () => {
+    if (apiKeyChecking) return;
+    const controller = new AbortController();
+    apiKeyCheck.current = controller;
+    setApiKeyChecking(true);
+    setApiKeyProblem('');
+    try {
+      const key = await verifyBearerKey(apiKeyDraft, controller.signal);
+      if (!controller.signal.aborted) finishApiKeyPrompt(key);
+    } catch (error) {
+      if (!controller.signal.aborted) setApiKeyProblem(reason(error));
+    } finally {
+      if (apiKeyCheck.current === controller) {
+        apiKeyCheck.current = null;
+        setApiKeyChecking(false);
+      }
+    }
   };
 
   useEffect(() => {
@@ -928,15 +954,17 @@ export function App() {
       {apiKeyDialog && <Modal title="连接 Anchor 服务" close={() => finishApiKeyPrompt('')}>
         <form className="api-key-form" onSubmit={event => {
           event.preventDefault();
-          finishApiKeyPrompt(apiKeyDraft.trim());
+          void submitApiKey();
         }}>
           <p>此 Anchor 服务需要 API key。密钥只保存在当前浏览器标签页中。</p>
           <label htmlFor="anchor-api-key">Anchor API key</label>
           <input id="anchor-api-key" type="password" autoComplete="current-password" autoFocus
-            value={apiKeyDraft} onChange={event => setApiKeyDraft(event.target.value)} />
+            aria-invalid={!!apiKeyProblem} aria-describedby={apiKeyProblem ? 'anchor-api-key-error' : undefined}
+            value={apiKeyDraft} onChange={event => { setApiKeyDraft(event.target.value); setApiKeyProblem(''); }} />
+          {apiKeyProblem && <p id="anchor-api-key-error" className="notice bad" role="alert">{apiKeyProblem}</p>}
           <div className="modal-actions">
             <button type="button" onClick={() => finishApiKeyPrompt('')}>取消</button>
-            <button className="primary" type="submit" disabled={!apiKeyDraft.trim()}>连接</button>
+            <button className="primary" type="submit" disabled={apiKeyChecking || !apiKeyDraft.trim()}>{apiKeyChecking ? '验证中…' : '连接'}</button>
           </div>
         </form>
       </Modal>}
