@@ -1,0 +1,47 @@
+{
+  "status": "passed",
+  "runtime": "real Goose native loop over ACP",
+  "real_model_requests": 0,
+  "goose_version": "1.53.0",
+  "host_binary_sha256": "e6c67c7d5b899eeb61226572a092250b22d5bf38cf8e9e10c651105ab5ad59c5",
+  "goose_binary_sha256": "71e76c412597b2ecd96ed20d0706e7666f31c018216e7cb5d65c5ca5c44824a7",
+  "test_binary_sha256": "4e12f595df589e56267a3ed60f1da736e03e3d00b16d792d13fb7b9842479c19",
+  "test_source_sha256": "e977770603b78fce0e781cf92067ec07661db4b373f55057f1d4a85fa41c39e8",
+  "fixture_source_sha256": "0bd9d61333dfbd7a7559123ec887127116c1344412200402d2baf92e2f110447",
+  "elapsed_ms": 19278,
+  "production_data_used": false,
+  "dotenv_loaded": false,
+  "evidence_path": "/tmp/anchor-development-environment-goose-evidence-final/889887/private-development-formal-delivery/evidence.json",
+  "checks": {
+    "case_source": "tests/goose_development_environment.rs",
+    "native_install_confirmation": {
+      "id": "822dc2f2-8b58-4ced-af33-f10ca8efaf11",
+      "session": "private-development",
+      "turn": "b280085e-7319-4e3a-a203-42a3a1d3edd4",
+      "message": "确认把插件「env-probe」安装进 Anchor 插件库？\n内容指纹：b7505377793e30a465ef4d8a119255e09383d0d07305ca3b0fec3619673097a9\n这是新建，不会覆盖任何现有插件。\n当前没有 Graph 绑定这个插件。\n会运行：/usr/bin/python3.12 server.py（service）\n",
+      "requested_schema": {
+        "type": "object",
+        "properties": {
+          "confirm": {
+            "type": "boolean",
+            "title": "确认安装这个插件",
+            "default": false
+          }
+        },
+        "required": [
+          "confirm"
+        ]
+      },
+      "status": "pending",
+      "answer": null
+    },
+    "private_editable_tested": true,
+    "source_change_retested": true,
+    "candidate_business_tested_independently": true,
+    "formal_survived_session_delete": true,
+    "private_selection_removed": true,
+    "interpreter_sha256": "f5b1f24989453ad4430d5f15c8feafdfc3d918022086687c96a1917169e7f49d",
+    "interpreter": "/usr/bin/python3.12",
+    "uv_sha256": "c9f7ca00a5e1c4f2a6dd96db91097bec5b76a53a483818e8ee746e9c7440547a"
+  }
+}

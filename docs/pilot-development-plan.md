@@ -365,6 +365,8 @@ SSE `message` 的 data 为标准 Vercel chunk，`id` 为已提交到 SQLite 的�
 | A222 | Pilot/AgentNode 完整 Plugin 渐进式披露 | 授权目录、说明/多个 Skill/资源、安全声明、完整工具 schema 与原生调用；大目录有界、压缩后重读 | 开发、review、固定 Goose 回归与最终隔离真实 Provider 通过；本次提交固化，未部署 | 真实模型：Library 1,000 Plugin，Pilot 挂 10、Node 挂 1,000，目标 MCP 1,001 工具；独立实际调用、产物、trace 与回执一致。10 个确定性 Goose 场景通过；Host/GraphHost all-targets 910 passed / 0 failed / 86 ignored，最终 Clippy/fmt 通过。详见[专项计划](plugin-progressive-disclosure-plan.md)及[验收证据](../research_plugin_disclosure_20261013/acceptance/README.md)。不扩写为安装、真实业务或 1,000 server 启动验收。 |
 | A223 | 固定 Goose 原生动态扩展与 Anchor 能力复用路线 | 验原生激活、轮内工具刷新、确认、错误、调用身份、取消与重载，再确定接入边界 | 2 项确定性原生 API 实验、定向 Clippy/fmt 通过；不是产品懒连接交付 | ACP add 成功但本轮 schema 不刷新；native manager 同 prompt 真调用成功，却平铺目标全部 1,004 工具并能停用 tom。确认/HTTP 调用取消/重载重连通过。后续选择现有聚合 MCP 与 rmcp 薄适配，见[路线](goose-native-capability-reuse-plan.md)。无真实 Provider、新 Host 接线、stdio/媒体或部署验收。 |
 | A224 | 持续 Plugin 摘要、压缩存活与会话内挂载更新 | 有界当前能力提示；新 Turn/load 刷新；运行中挂载合并接续；停止/新消息与迟到 OAuth 边界 | 开发、主 Agent review、固定 Goose/浏览器回归与分路径真实 Provider 通过；本次提交固化，未部署 | Pilot 同原生 Session 活动挂载、无报告重放与真实压缩通过；最终 Node 999 挂载、摘要省略目标仍被发现、一次业务调用及产物/最新回执通过。Host all-targets 893 passed / 0 failed / 90 ignored；Web 120、browser 12；最后回执文案修正后 Bridge 12/native 1、build/Clippy/fmt 通过。证据绑定不同 Host，见[专项计划](plugin-progressive-disclosure-plan.md#持续能力摘要与会话挂载更新a224)和[验收记录](../research_plugin_disclosure_20261013/capability-context/README.md)；懒连接未实施。 |
+| A225 | Pilot 私有 Python 开发环境与独立正式交付 | 空 venv/pip、标准安装/升级/卸载及 editable；保留试装、空环境重建、项目锁/取消、旧视图兼容；删除 Session 后正式工具可用 | GPT-6.1 Sol / xhigh 开发，主 Agent 架构 review、最终固定 Goose 与隔离真实 Provider 验收通过；当前开发 Host 部署见 A226 | 5 项实际 Sandbox 与状态 2 项通过；相关 crate 全量 995 passed / 4 failed / 91 ignored，4 项锁竞争失败的受影响子集独立复跑 27+1 passed。最终 Goose 1、Clippy/fmt 通过；真实 deepseek-flash 完成开发/候选业务测试/原生安装/两次正式 Run/清理后新 Session 真调用，同一最终 Host，结果与产物一致。仅解包 store 不能恢复私有包的降级边界已明确，详见[方案](development-environment-freedom-plan-revised.md)和[验收记录](../research_development_environment_20261013/README.md)。 |
+| A226 | 开发 Host 部署与清空对话历史 | 新 release 实际运行；Pilot/渠道及所属 Goose 历史清空；正式资产、共享依赖和配置保留 | 用户明确授权后已完成，Host/Web ready，13 张 Session 表全为空 | Release 与运行摘要 `50331ca9…` 一致；19 个对话 Run 已删除，非对话 RSI Run 保留；4 Graph / 5 Plugin、共享 store、配置和独立 MLCAD 身份核对一致。构建与部署检查见 [deployment.json](../research_development_environment_20261013/deployment.json)。 |
 
 当前阶段执行相关 Rust 测试、Clippy/Rustfmt、Web 单测/build、确定性小型 Graph 与必要 HTTP/浏览器验收。必须取得实际退出码、总结和完整证据；运行中或仅看到进度点不算通过。早期记录中的 pytest、Ruff 和 compileall 是历史命令，不能用于当前维护树。阶段产物不能等同于产品全部完成。
 
@@ -373,7 +375,7 @@ SSE `message` 的 data 为标准 Vercel chunk，`id` 为已提交到 SQLite 的�
 | 需求/边界 | 实际状态与证据 | 未覆盖部分 |
 | --- | --- | --- |
 | I1 空业务安装、共享 Python 和联网授权 | 真实 DeepSeek Flash：core-v5 的 Python 冷初始化；core-v8 在另一空业务安装完成 Python/Rust 冷初始化和自动接续。launcher 只接收模型输入及最小 PATH，没有预登记开发解释器、包来源或业务 Graph。 | 支持平台的系统基础仍由安装要求提供；不是任意操作系统兼容验收。core-v9 未重复冷下载。 |
-| I2 选择开发包、普通命令调试、正式交付 | core-v5 实际准备 Pygments 2.20.0、pytest 8.4.2；测试失败后修改代码并重测，裸 pytest 可运行；候选业务测试、安装/挂载、正式调用及删除开发 Session 后新 Session 调用通过。正式视图不带 pytest，与开发视图引用相同 Pygments 字节及唯一 managed Python。 | 完整 Python authoring 证据绑定 core-v5；没有写成最终 Host 的整流程复验。 |
+| I2 选择开发包、普通命令调试、正式交付 | core-v5 实际准备 Pygments 2.20.0、pytest 8.4.2；测试失败后修改代码并重测，裸 pytest 可运行；候选业务测试、安装/挂载、正式调用及删除开发 Session 后新 Session 调用通过。正式视图不带 pytest，与开发视图引用相同 Pygments 字节及唯一 managed Python。 | 完整 Python authoring 证据绑定 core-v5；没有写成最终 Host 的整流程复验。该只读项目模型是历史行为，新私有 venv 契约与证据见 A225，不把本项旧证据回填为普通 pip/editable 通过。 |
 | I1 保留 Rust 支持 | core-v8 从无预登记工具链初始化 stable GNU Linux Rust，实际 Rustc/Cargo 探针、serde_json 源码构建、自测、交付、删除开发 Session 后新 Session 调用通过。 | native crate 额外系统依赖与其他平台未验。 |
 | I1 对话内私密凭据 | core-v8 专用输入保存 owner-bound 值；core-v9 同正式 stdio MCP 的 credential_probe 实际返回匹配哈希，值未进入聊天、工具输出或原生历史。 | 这是隔离本地 MCP fixture，不等于外部业务账号通过。 |
 | I1 Graph/Run/Artifact 与计划 | core-v9 的真实 Pilot 创建并运行 bootstrap Graph，Run completed；Artifact 含随机标记和 managed Python 路径；interval 86400 计划创建/列出。重启后同原生 Session 实际只读核查三项并 completed，保存事实不变。 | 不等待或宣称未来计划已经执行。原 Turn 的额外探测图删除请求被验收客户端中止；失败证据保留。 |
@@ -381,6 +383,17 @@ SSE `message` 的 data 为标准 Vercel chunk，`id` 为已提交到 SQLite 的�
 | 共享事实、权限和恢复 | 同版本 Python 复用解释器，Library 共享包与开发引用/lease/released 回收契约保留；Turn 冻结 RuntimeSnapshot，包括尚未配置；下一 Graph 节点读取当前 Library 的实际 Goose 回归通过。 | package receipt 仍只记录一个 verified interpreter digest；旧 snapshot 用另一解释器构建再准备可能 fail-closed，不承诺跨 ABI/不同构建共享。 |
 
 证据汇总：`.local/pilot-bootstrap-acceptance/acceptance-review-20261012.json`。所有真实场景绑定各自 `binaries.json` 的独立副本与固定 Goose；最后 Graph 工具格式说明和诊断改善只取得定向代码回归，不新增真实 Provider 结论。完整平台发行、隔离验收、现有开发服务和生产部署是不同状态，本专项未更新后两者。
+
+### 开发环境自由度验收（A225）
+
+| 切片/边界 | 实际状态与证据 | 保留限制 |
+| --- | --- | --- |
+| F1 私有现场与生命周期 | 实际 uv/Python/pip/Bubblewrap 验证空环境、Python/PATH/pip/console script、安装/升级/卸载、两项目隔离、已填充 store 的内容/mtime/inode 不变、项目锁等待取消、执行后代回收、中断观察与 scope 删除保护；旧选择、创建失败及缺失选择诊断通过 | 无 pip 更新事务或自动回滚承诺；旧引用在 Session 释放前保留 |
+| F2 标准项目语义 | editable `src/`、extras/marker、递归 requirements、constraints、文件改动不隐式同步、试装保留、内联显式安装、空环境重建/discard 与宿主文件不可达均定向通过 | 第三方构建后端/native 包、规模压力与额外长路径尚未专项验收 |
+| F3 正式交付与真实模型 | 最终确定性 Goose 和真实 deepseek-flash 使用同一 Host `e6c67c7d…`；源码修改后重测，独立候选真实业务测试、原生确认安装、删除开发 Session 后新 Pilot 和新 Graph Run 实际调用，产物匹配当前 Run 的 MCP 返回 | 真实场景为离线零第三方依赖 editable + 合成正式 wheel；未验冷初始化、外部业务、线上部署或强制测试绑定门禁 |
+| 仅剩解包 store | 旧只读视图可继续工作，私有空环境/pip 可离线重建；已实际验证缺 wheel/源码时 pip 无法恢复包，不自动回退 | 恢复私有包需要可获取的 wheel/源码来源；不承诺从共享解包字节无损迁移 |
+
+命令、失败与独立复跑、冻结身份及真实结果见 [验收记录](../research_development_environment_20261013/README.md)。这是 A225 的明确范围，未扩大 A216 的冷初始化或第三方兼容结论。
 
 ## 推进记录
 
@@ -1664,6 +1677,22 @@ SSE `message` 的 data 为标准 Vercel chunk，`id` 为已提交到 SQLite 的�
   **真实 Provider**：`deepseek-flash` 透明代理原样传递响应与 usage，自然任务不点名 Plugin。Pilot 根 `real-d0c019b9c7262926` / Host **59d501f2…**：主动选用 lens，活动挂载换成 prism 后同原生 Session 一次接续，能力核查不重复报告；明确的新任务实际用 prism 出报告。隔离 32,000 上下文与 60,202 字节压力输入触发 **2** 次原生 summary 请求，消息 64→73、68 条隐藏；压缩后普通请求保留当前摘要，无报告重放，模型从压缩历史答复，**没有声称该真实路径又读工具**。aggregate 后续 Node fixture 断言失败、退出 **1**，通过的 Pilot 单独摘录保留该事实。最终 Node-only 根 `real-88a393df05d4dd6c` / Host SHA256 `38fde27e85119cbbbe5a0cc1eb326bd13bb750768bf983abc084c7a851e0d8b9`：命令退出 **0**，挂载 **999 Plugin**，摘要显示 **87/省略 912**，目标在省略部分仍被检索；读取说明、正确 Skill、资源及完整 schema，独立 MCP 日志仅 **1** 次业务调用，JSON 产物、原生完成与最新真实回执一致。固定 Goose SHA256 `71e76c412597b2ecd96ed20d0706e7666f31c018216e7cb5d65c5ca5c44824a7`。两条路径 DELETE **200**、Host exit **0**、监听关闭，无 panic/存活所属子进程，`.env` 和共享解释器字节不变。不同构建、早期失败与修正、模型选择波动如实保留于[证据说明](../research_plugin_disclosure_20261013/capability-context/README.md)。
 
   **收尾边界**：只验预置 Library 的能力披露与执行，不冒充安装、外部业务或 1,000 server 连接验收；MCP 懒连接与 Code Mode 未实施。Web 子 Agent 的首次 build 误写当前 dist，已按前次部署 manifest 恢复原文件，后续构建均隔离 outDir；未重启 Host，8077 静态入口摘要恢复原值。原 Host PID **184037** / SHA256 `984578f85d9bc460a8868f53236f8e99c04bc61d69f616993adcb67cb42d2f15`、独立 MLCAD PID **116772** / start_ticks **281192943** / executable 摘要收尾保持一致。当前任务**未提交、未部署**。
+
+- 2026-10-13：A225 **私有 Python 开发环境与独立正式交付验收**。用户认可修订方案后授权主 Agent 负责架构设计、review/验收并驱动 GPT-6.1 Sol / xhigh 开发。Session 每项目只有一份可变 venv，引用冻结共享只读解释器；固定 uv 在 Sandbox 的稳定 `/development/env` 创建环境，再用 bundled `ensurepip` 引导私有 pip。Host scope 保存选择、归属、解释器绑定和项目锁，只有 env 子树可写挂载，退出 Library 引用扫描与源码候选。普通 pip/Python/shell/console script 使用同一现场，不挂 store、不 hardlink 共享包。默认 ensure 保留试装，内联数组是显式安装；rebuild 只重建空环境且拒绝同时安装数组，discard 仅释放私有环境。候选与正式取包/确认仍沿现有契约，开发网络遵守冻结任务授权。
+
+  **架构 review 与兼容**：准备和全部项目命令共用可取消项目排他锁，持有至 Sandbox 清理结束，scope lease 保护 Session 删除，不持全局 Library 锁等待普通命令。Host 最小操作观察保存未收束、失败和中断核查提示，不新增审批或自动 pip 重放；未执行拒绝不误报新修改。补齐 pip 可执行检查、legacy 当前授权/解释器核对，以及 Host selection 丢失时 ensure/执行/discard 诊断，避免静默清空、旧路径回退或虚假释放。旧只读视图保留，首次显式 rebuild 成功才切换，失败保持旧现场与候选引用。仅解包 store 缺 wheel/源码时旧视图仍可用，空私有 venv/pip 可离线重建，私有包恢复明确不支持直接使用 store；来源需另行获得，不把此边界留作待定。
+
+  **实际 Rust 检查**：5 项开发环境定向 **passed / 0 failed / 0 ignored**，覆盖最新缺失选择断言；三个相关 crate all-targets 一次命令 **41 targets：995 passed / 4 failed / 91 ignored，exit 101**。其中三项 Graph 删除测试遇 catalog Conflict，一项 legacy scope 释放遇 dependency writer 竞争；独立复跑受影响删除子集 **27 passed**、legacy 用例 **1 passed**，均退出 **0**，没有改产品锁策略或宣称全量零失败。状态指引修正后 **2 passed**；初次 Clippy `collapsible_if` 修正为等价条件后，all-targets Clippy `-D warnings`、workspace fmt、build 和最终固定 Goose integration **1 passed** 均退出 **0**。完整命令与日志摘要见 [checks.json](../research_development_environment_20261013/checks.json)，最终 native 证据 `/tmp/anchor-development-environment-goose-evidence-final/889887/private-development-formal-delivery/evidence.json`，概要 [final-deterministic.json](../research_development_environment_20261013/final-deterministic.json)。较早 fixture 因编辑基线和既有 candidate Python 授权失败的三轮记录保留；未修改正式候选契约。ignored 不算执行，未跑无改动的 Web 检查。
+
+  **真实 Provider**：主 Agent 执行 `python3 research_development_environment_20261013/real_provider_acceptance.py --host rust/target/debug/anchor-runner-host --root .local/development-environment-acceptance-20261013/real-architecture-01`，退出 **0**。真实 `deepseek-flash` 创建零第三方依赖 PEP 660 项目、私有 pip editable 安装、console script 首次输出及源码修改后输出、Python/pip 现场检查、默认 ensure 保留均有真实工具结果。独立候选声明合成 `formalprobe==1.0`，经既有 Host 本地 wheel 来源/共享 store/view 准备，实际业务调用确认正式包可导入、editable 包与私有 venv 不可见、修改后源码已交付；原生安装表单实际确认。正式 Run `rust-18de156503a8a4b1` completed 并保存真实结果；删除开发 Session HTTP **200** 后，私有选择/workspace 消失、正式包保留，新 Pilot Session 实际挂载并调用，再由 Run `rust-18de156bf9c9abd1` completed。两个 Run 各一次实际业务 MCP，随机参数、源码值、正式依赖值与各自产物一致，不借旧 Run 结果。新 Session 随后删除 **200**；Host exit **0**、监听关闭、无已观察所属进程残留或 panic，`.env` 与共享解释器摘要不变。最终 Host SHA256 `e6c67c7d5b899eeb61226572a092250b22d5bf38cf8e9e10c651105ab5ad59c5`、Goose 1.53.0 SHA256 `71e76c412597b2ecd96ed20d0706e7666f31c018216e7cb5d65c5ca5c44824a7`，确定性和真实场景使用同一 Host；16 个开发源码/fixture 摘要独立复核一致。概要 [final-real-provider.json](../research_development_environment_20261013/final-real-provider.json)，范围见[验收记录](../research_development_environment_20261013/README.md)。
+
+  **收尾边界**：已同步当前架构、依赖标准、产品架构、初始化计划、Plugin 指南和修订方案。未承诺第三方构建后端/native 包、reflink/空间收益、大依赖压力、额外长路径或 pip 安装事务；正式安装仍无强制成功业务测试/此前依赖锁绑定。没有重跑冷初始化或外部业务，没有改现有服务、旧 Session、实验或部署。本专项 **未提交、未部署**，原方案保留供对照。
+
+- 2026-10-13：A226 **部署私有 Python 开发环境实现并清空当前 Host 对话历史**。用户确认当前开发环境边界可接受，明确授权 commit/push、重启 Host 和删除全部 Host 对话历史。先核对 [runtime-source.sha256](../research_development_environment_20261013/runtime-source.sha256) 的 16 个源码/fixture 与 A225 一致；执行 `PATH=/home/mansteinl/.cargo/bin:$PATH cargo build --manifest-path rust/Cargo.toml --release --locked --offline -p anchor-runner-host`，退出 **0**，日志 `/tmp/anchor-development-environment-deploy-release.log`。没有修改 Runtime 源码或重复全量测试；A225 的确定性与真实 Provider 证据保留原 debug 二进制身份，不冒充本次 release 的真实 Provider 运行。
+
+  **清理与重启**：使用现有 `scripts/dev.sh stop` / `start`，均退出 **0**；一次性本地辅助命令 `python3 .local/development-environment-deploy-20261013/deploy.py before`、`clear-online`、`replace`、`verify` 均退出 **0**，只用于此次授权操作，不新增产品部署接口。先停止并 retire 当前企业微信助手，原生 API 删除 **19** 个对话 Run；Pilot Session 删除 HTTP **200**。渠道 Session 删除因旧 `run_ids` 关联仍返回 **409**，如实保留结果；Host 停机后按此次全部历史删除授权清空专用 Session SQLite、Pilot/Goose 对话根及 Session 临时快照，再启动空会话库，不修改正常生命周期实现或伪造 API 删除成功。13 张会话表均为 **0** 行，SQLite `integrity_check=ok`，`/sessions` 和 `/channel-sessions` 均为空，关联渠道输入/回复与 assistant invocation 目录为空。
+
+  **部署核对**：新 Host PID **925991**；冻结 release、部署文件和 `/proc/925991/exe` 的 SHA256 同为 `50331ca988d1991b4f97052588401f68b4b55b6c78d8fde98fef2fd12b56f104`。`health=ok`、`ready=ready`、5173 HTTP **200**；唯一正式 WeCom Gateway PID **926041**，二进制摘要未变。**4** 个 Graph、**5** 个正式 Plugin 的定义，共享包存储、managed runtime、`.env`、Python、固定 Goose、网络 helper、Web 产物及独立 MLCAD 实例身份均与清理前一致。保留非对话 RSI Run `rust-18dcda2ef6ecfdac` 及其数据；不涉及另一部署的数据。概要 [deployment.json](../research_development_environment_20261013/deployment.json)，详细本地证据 `.local/development-environment-deploy-20261013/{before,online-cleanup,replacement,post-verification}.json`。本次验证为构建、部署身份、数据保留和空历史核对，没有再次运行真实 Provider 业务。
 
 ## 独立 MLCAD 提交的交接记录
 

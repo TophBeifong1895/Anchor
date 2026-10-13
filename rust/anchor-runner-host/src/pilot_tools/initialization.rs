@@ -155,6 +155,19 @@ impl PilotTools {
 
     pub(super) async fn development_prepare(&self, arguments: &Value) -> Result<Value, ToolError> {
         self.require_active_turn()?;
+        let object = arguments.as_object().ok_or_else(|| {
+            rejected("provide project, action and optional inline dependency arrays")
+        })?;
+        if object.keys().any(|key| {
+            !matches!(
+                key.as_str(),
+                "project" | "action" | "requirements" | "development_requirements"
+            )
+        }) {
+            return Err(rejected(
+                "development_prepare accepts project, action and optional inline dependency arrays only; requirements/pyproject files are installed through anchor_run(project=...) pip, and cannot be combined as a second declaration source here",
+            ));
+        }
         let project = parameter(arguments, "project")?;
         if project != "." {
             workspace_directory(&self.task_workspace(), &project)?;
@@ -163,7 +176,7 @@ impl PilotTools {
             arguments
                 .get("requirements")
                 .cloned()
-                .ok_or_else(|| rejected("requirements must be a string array"))?,
+                .unwrap_or_else(|| json!([])),
         )
         .map_err(|_| rejected("requirements must be a string array"))?;
         let development_requirements: Vec<String> = serde_json::from_value(
@@ -182,17 +195,32 @@ impl PilotTools {
             .context
             .as_ref()
             .ok_or_else(|| rejected("Pilot Turn context unavailable"))?;
+        let action = serde_json::from_value(
+            arguments
+                .get("action")
+                .cloned()
+                .unwrap_or_else(|| json!("ensure")),
+        )
+        .map_err(|_| rejected("action must be ensure, rebuild or discard"))?;
+        if action != crate::application::development_environment::PrepareAction::Discard
+            && context.python_status()["configured"] != true
+        {
+            return Err(rejected(
+                "this frozen Turn does not authorize a Pilot Python interpreter",
+            ));
+        }
         self.application
-            .prepare_development_dependencies(
+            .prepare_development_environment(
                 &self.library_root,
                 &scope,
+                &self.task_workspace(),
                 &project,
+                action,
                 &requirements,
                 &development_requirements,
                 &context.dependency_access(),
             )
             .await
-            .map(|prepared| prepared.result(context.network))
             .map_err(|error| {
                 rejected(format!(
                     "development dependency preparation failed: {error:?}"

@@ -36,7 +36,7 @@ Anchor 是本地优先、可观察、可恢复的 Agent 工作系统。用户通
 | Agent/Op 执行、结构化结果、ACP/MCP、通用 host operation 端口 | Node Runtime；具体 host 能力由宿主适配 | invocation 与工具观察 |
 | 文件、网络、进程、凭证和隔离 | Sandbox / 宿主授权 | 获准能力与冻结输入 |
 | Skill、资源、业务工具和外部系统 | Plugin / Library | 可复用能力资产 |
-| 解释器、依赖包与工具链（插件依赖） | Host 统一解析基础环境与来源；插件持有运行依赖，Session 持临时开发引用，Library 持有共享存储与视图 | Host 管理配置或显式部署字段；依赖声明与共享存储中的（包、版本） |
+| 解释器、依赖包与工具链（插件依赖） | Host 统一解析基础环境与正式来源；插件持有运行依赖，Session 持私有开发现场及临时候选/旧视图引用，Library 持共享存储与只读视图 | Host 管理配置、归属与授权；Plugin 依赖声明；Session 项目文件与实际开发现场；共享存储中的（包、版本） |
 | 研究、周报、审查目标与内容验收 | 普通 Graph / Plugin | 业务证据与结论 |
 | 画布、时间线、会话与文件展示 | WebUI | 对既有事实的投影 |
 
@@ -61,6 +61,8 @@ Anchor 是本地优先、可观察、可恢复的 Agent 工作系统。用户通
 | Session | 长期对话、可信来源、Turn、幂等、问题/回答和关联 Run；常驻助手 current/历史 binding 与 retire 事实 |
 | Turn | 一次幂等输入或继续请求，保留事件游标、取消与投递身份 |
 | Pilot | 管理和协作入口；完整平台不依赖业务 Graph，可初始化基础环境、开发并交付 Plugin，以及管理 Graph、联网/挂载、凭据、渠道与计划；各业务的真实验收范围见台账，自升级交接策略仍未冻结 |
+
+Pilot 的 Python 开发采用 Session 每项目一份私有可写 venv，引用共享只读解释器；项目文件是重建基线，实际试装现场允许偏离。Host 保存环境选择、归属与锁；项目命令串行，默认准备保留现场，显式重建或生命周期结束才释放。开发环境不进入 Graph、Run 绑定或独立资产目录，候选与正式 Plugin 按正式声明独立准备、测试和交付。该目标已于 2026-10-13 获用户认可并接入，A225 完成小型确定性及真实 Provider 闭环；具体契约见 [开发环境自由度方案](development-environment-freedom-plan-revised.md)，实施范围与保留边界以当前架构和台账为准。
 
 共享 `agents` 只是角色配置复用，不是独立 Agent 注册库。Plugin 直接挂在 AgentNode，不通过角色继承、默认合并或复制；OpNode 不隐式取得 Plugin 能力。
 
@@ -102,7 +104,7 @@ Session 与 Run 分别拥有状态。Session 只引用真实 Run，不复制另�
 
 ## Plugin 与能力积累
 
-Plugin 包含渐进披露的 Skill、资源、工具和可选渠道说明。短目录提供名称、描述和入口；完整内容保留在唯一 Plugin 目录，按需只读读取。工具语言由作者决定，官方工具使用 Rust；第三方依赖受宿主授权。Host 为 Pilot 提供 Session 工作区、候选获取/编辑/审查、`plugin_prepare`/`plugin_test`，以及经原生确认的 `plugin_install`。`RuntimeConfiguration` 统一解析 Python、Rust、uv 与来源：完整平台通过 `runtime_prepare` 在 Host 所有目录初始化，事实写入 `state/managed/runtime-config.json`；显式部署字段继续只读，不覆盖或镜像到 `.env`。同一 Python 版本只有一份解释器；Plugin 与开发项目都引用 Library 共享包字节，见 [插件依赖标准](plugin-dependencies.md)。宿主工具目录仍通过 Library `tool.json` 注册，Plugin 声明不能扩大授权。
+Plugin 包含渐进披露的 Skill、资源、工具和可选渠道说明。短目录提供名称、描述和入口；完整内容保留在唯一 Plugin 目录，按需只读读取。工具语言由作者决定，官方工具使用 Rust；第三方依赖受宿主授权。Host 为 Pilot 提供 Session 工作区、候选获取/编辑/审查、`plugin_prepare`/`plugin_test`，以及经原生确认的 `plugin_install`。`RuntimeConfiguration` 统一解析 Python、Rust、uv 与来源：完整平台通过 `runtime_prepare` 在 Host 所有目录初始化，事实写入 `state/managed/runtime-config.json`；显式部署字段继续只读，不覆盖或镜像到 `.env`。同一 Python 版本只有一份解释器；正式、候选及旧项目视图引用 Library 共享包字节，新项目持私有开发包，见 [插件依赖标准](plugin-dependencies.md)。宿主工具目录仍通过 Library `tool.json` 注册，Plugin 声明不能扩大授权。
 
 完整 Plugin 的披露由 Host 从 Library 真身及实际授权工具派生，Pilot 与 AgentNode 共用发现、选中读取、工具详情和调用契约。当前授权 Plugin 的名称和用途简述随固定发现入口进入有界系统提示，Agent 可按任务自行选用；大量挂载超出摘要预算时明确提示遗漏数量及完整检索入口，再读取所需说明、Skill/资源和完整工具 schema。ACP/MCP 的扩展指令随 Goose 正常推理和压缩后的继续请求携带，`tom` 仅提供短指引。新 Turn/load 从当前冻结挂载重新装配，不用旧历史赋予权限。运行中网页切换不改变当前执行，正常收束后合并为一次接续；空闲切换等下一次消息。停止或更新的用户请求可取消旧任务接续，配置变化不授权重做已完成操作。管理目录和执行授权分开；搜索、分页及读取都不能安装、挂载或扩大权限。完整内容继续从唯一资产重读，正式代码更新沿现有 Library 语义，私密配置和授权变化由 Host 拒绝；不新增 Agent loop、上下文或记忆系统。具体实现及兼容开关见 [当前架构](architecture.md)，范围和验收见 [专项计划](plugin-progressive-disclosure-plan.md)。
 

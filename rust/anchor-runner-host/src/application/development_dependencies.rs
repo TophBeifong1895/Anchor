@@ -1,19 +1,20 @@
 //! Session project dependencies for ordinary sandbox commands. The Host supplies
 //! the Pilot scope; the model supplies only a confined project and requirements.
 
+#[cfg(test)]
 use super::{ApplicationError, RunApplication};
-use crate::dependency_provision::{
-    DependencyAccess, ResolvedRequirements, resolve_requirements_with_access,
-};
+use crate::dependency_provision::ResolvedRequirements;
+#[cfg(test)]
+use crate::dependency_provision::{DependencyAccess, resolve_requirements_with_access};
 use anchor_library::{DevelopmentScope, Library};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
-use std::{
-    io::Write,
-    path::{Component, Path, PathBuf},
-};
+#[cfg(test)]
+use std::io::Write;
+use std::path::{Component, Path, PathBuf};
 
+#[cfg(test)]
 fn invalid(error: impl std::fmt::Display) -> ApplicationError {
     ApplicationError::Invalid(error.to_string())
 }
@@ -52,6 +53,19 @@ fn project_root(scope: &DevelopmentScope, project: &str) -> PathBuf {
         .join(digest(project.as_bytes()))
 }
 
+pub(super) fn legacy_preparation(
+    scope: &DevelopmentScope,
+    project: &str,
+) -> Result<Option<DevelopmentPreparation>, String> {
+    let fact = crate::assistant::read_json::<DevelopmentPreparation>(
+        &project_root(scope, project).join("current.json"),
+    )?;
+    if let Some(fact) = &fact {
+        checked_fact(fact, project)?;
+    }
+    Ok(fact)
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct DevelopmentPreparation {
@@ -64,6 +78,9 @@ pub(crate) struct DevelopmentPreparation {
 }
 
 impl DevelopmentPreparation {
+    pub(super) fn interpreter_path(&self) -> &Path {
+        &self.resolved.interpreter_path
+    }
     pub(crate) fn result(&self, network: bool) -> Value {
         json!({"prepared":true,"project":self.project,
             "requirements":self.requirements,"development_requirements":self.development_requirements,
@@ -83,12 +100,14 @@ fn declaration_digest(requirements: &[String], development: &[String]) -> String
     )
 }
 
+#[cfg(test)]
 struct Requirements {
     runtime: Vec<String>,
     development: Vec<String>,
     all: Vec<String>,
 }
 
+#[cfg(test)]
 fn checked_requirements(
     requirements: &[String],
     development: &[String],
@@ -142,6 +161,7 @@ fn checked_fact(fact: &DevelopmentPreparation, project: &str) -> Result<(), Stri
     Ok(())
 }
 
+#[cfg(test)]
 fn combined(requirements: &[String], development: &[String]) -> Vec<String> {
     let mut all = requirements
         .iter()
@@ -153,6 +173,7 @@ fn combined(requirements: &[String], development: &[String]) -> Vec<String> {
     all
 }
 
+#[cfg(test)]
 fn save_current(path: &Path, fact: &DevelopmentPreparation) -> Result<(), ApplicationError> {
     let parent = path.parent().expect("project preparation parent");
     crate::create_durable_directory(parent).map_err(invalid)?;
@@ -167,6 +188,7 @@ fn save_current(path: &Path, fact: &DevelopmentPreparation) -> Result<(), Applic
         .map_err(invalid)
 }
 
+#[cfg(test)]
 impl RunApplication {
     #[allow(clippy::too_many_arguments)]
     pub(crate) async fn prepare_development_dependencies(
@@ -336,7 +358,19 @@ pub(crate) fn select_development_view(
 pub(crate) fn release_development_scope(library_root: &Path, scope: &Path) -> Result<(), String> {
     Library::new(library_root)
         .release_development_scope(scope)
-        .map_err(|error| error.to_string())
+        .map_err(|error| error.to_string())?;
+    // The Library tombstone now prevents any stale caller acquiring a scope
+    // lease. The private tree is outside its reference scan and is Host-owned.
+    let development = scope.join("development");
+    match std::fs::symlink_metadata(&development) {
+        Ok(metadata) if metadata.is_dir() && !metadata.file_type().is_symlink() => {
+            crate::goose_acp::pilot::directory(&development)?;
+            std::fs::remove_dir_all(development).map_err(|e| e.to_string())
+        }
+        Ok(_) => Err("private development storage is no longer a Host-owned directory".into()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error.to_string()),
+    }
 }
 
 #[cfg(test)]

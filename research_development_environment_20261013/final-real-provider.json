@@ -1,0 +1,99 @@
+{
+  "status": "passed",
+  "real_provider": true,
+  "production_data_used": false,
+  "nonce": "4bb37afc3ebe2cff",
+  "plugin": "env-probe-4bb37afc3ebe2cff",
+  "checks": {
+    "private_pip": true,
+    "editable": true,
+    "source_change_retested": true,
+    "ensure_preserved_existing_environment": true,
+    "candidate_business_tested_independently": true,
+    "native_install_confirmed": true,
+    "before-delete": {
+      "run": "rust-18de156503a8a4b1",
+      "actual_results": [
+        {
+          "value": "before-delete-4bb37afc3ebe2cff",
+          "private_environment_absent": true,
+          "prefix": "/home/mansteinl/Anchor/.local/development-environment-acceptance-20261013/real-architecture-01/library/dependencies/views/env-probe-4bb37afc3ebe2cff/53ef0c1754060d52c78b3b364a6eae458a9c138ee665640f2c2410cd328674c0",
+          "source_value": "4bb37afc3ebe2cff-changed",
+          "formal_value": "formal-independent"
+        }
+      ],
+      "artifact": {
+        "value": "before-delete-4bb37afc3ebe2cff",
+        "private_environment_absent": true,
+        "prefix": "/home/mansteinl/Anchor/.local/development-environment-acceptance-20261013/real-architecture-01/library/dependencies/views/env-probe-4bb37afc3ebe2cff/53ef0c1754060d52c78b3b364a6eae458a9c138ee665640f2c2410cd328674c0",
+        "source_value": "4bb37afc3ebe2cff-changed",
+        "formal_value": "formal-independent"
+      },
+      "business_call_count": 1
+    },
+    "fresh_session_actual_call": [
+      {
+        "value": "fresh-session-4bb37afc3ebe2cff",
+        "private_environment_absent": true,
+        "prefix": "/home/mansteinl/Anchor/.local/development-environment-acceptance-20261013/real-architecture-01/library/dependencies/views/env-probe-4bb37afc3ebe2cff/53ef0c1754060d52c78b3b364a6eae458a9c138ee665640f2c2410cd328674c0",
+        "source_value": "4bb37afc3ebe2cff-changed",
+        "formal_value": "formal-independent"
+      }
+    ],
+    "after-delete": {
+      "run": "rust-18de156bf9c9abd1",
+      "actual_results": [
+        {
+          "value": "after-delete-4bb37afc3ebe2cff",
+          "private_environment_absent": true,
+          "prefix": "/home/mansteinl/Anchor/.local/development-environment-acceptance-20261013/real-architecture-01/library/dependencies/views/env-probe-4bb37afc3ebe2cff/53ef0c1754060d52c78b3b364a6eae458a9c138ee665640f2c2410cd328674c0",
+          "source_value": "4bb37afc3ebe2cff-changed",
+          "formal_value": "formal-independent"
+        }
+      ],
+      "artifact": {
+        "value": "after-delete-4bb37afc3ebe2cff",
+        "private_environment_absent": true,
+        "prefix": "/home/mansteinl/Anchor/.local/development-environment-acceptance-20261013/real-architecture-01/library/dependencies/views/env-probe-4bb37afc3ebe2cff/53ef0c1754060d52c78b3b364a6eae458a9c138ee665640f2c2410cd328674c0",
+        "source_value": "4bb37afc3ebe2cff-changed",
+        "formal_value": "formal-independent"
+      },
+      "business_call_count": 1
+    },
+    "private_selection_and_workspace_removed": true,
+    "formal_plugin_survived_session_delete": true,
+    "shared_interpreter_unchanged": true,
+    "configuration_unchanged": true
+  },
+  "limitations": [
+    "Offline stdlib PEP 660 fixture and a synthetic pure Python formal wheel; no third-party backend or native package claim.",
+    "Formal installation keeps its existing contract, without a mandatory successful-test gate.",
+    "No deployment or production-data acceptance."
+  ],
+  "model": "deepseek-flash",
+  "base_url": "http://127.0.0.1:35625",
+  "host_sha256": "e6c67c7d5b899eeb61226572a092250b22d5bf38cf8e9e10c651105ab5ad59c5",
+  "goose_sha256": "71e76c412597b2ecd96ed20d0706e7666f31c018216e7cb5d65c5ca5c44824a7",
+  "interpreter": "/home/mansteinl/.local/share/uv/python/cpython-3.12.13-linux-x86_64-gnu/bin/python3.12",
+  "interpreter_sha256": "45a8c2736f55defe6b15a9b65196a60e4ac32e06338c563ff2d1d8f708693788",
+  "uv_sha256": "c9f7ca00a5e1c4f2a6dd96db91097bec5b76a53a483818e8ee746e9c7440547a",
+  "fixture_sha256": {
+    "pyproject.toml": "0d84bf58162795300c2ca8e1d53f72f1c0a0dea234196aafae5b3a7cd5ac7afa",
+    "backend.py": "6c1c9302b25d350fb14550ce5420d38009da04c15a5616bf38acca4b1ab5eeff",
+    "server.py": "c3d4d1553b2260ccb6ca914a2f3fa0fc90f8ec2a9df338c4970bbe29b3ca0453"
+  },
+  "configuration_sha256": "87bb950a6ddc4f658838d4d1aabea66bc5e6fa258e8089a4b67522d8afd666fc",
+  "helper_sha256": {
+    "anchor-net-relay": "b69130b74e4f029cfeb841f5e6b5b2186f1519d14a419281fb5017e1a2e333e4",
+    "anchor-sandbox-network": "bc6323cea17502a0daa078efe48400fcc323abb7db611a86c145bcc73c44b387"
+  },
+  "formal_wheel_sha256": "d240940d387592d9c22756b6e273272bfa1a89037f5de4bdb0511a4ac5dbc77c",
+  "host_exit_code": 0,
+  "listener_closed": true,
+  "evidence_root": "/home/mansteinl/Anchor/.local/development-environment-acceptance-20261013/real-architecture-01",
+  "command": "python3 research_development_environment_20261013/real_provider_acceptance.py --host rust/target/debug/anchor-runner-host --root .local/development-environment-acceptance-20261013/real-architecture-01",
+  "exit_code": 0,
+  "acceptance_script_sha256": "079e5cfa3a2e18f00a4490f8d35ea344515cdba869e51c46c0b156aa0c90fea8",
+  "remaining_owned_processes": [],
+  "host_log_panic": false
+}

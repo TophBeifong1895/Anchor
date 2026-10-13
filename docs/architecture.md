@@ -70,7 +70,7 @@ fs2 Artifact 的文件及谱系是节点产物权威；只读 Git 输入视图�
 
 部署者可通过 `ANCHOR_NODE_COMMAND_TIMEOUT_SECONDS` 配置 AgentNode 单条 `anchor_run` 命令上限（默认 30 秒），并通过 `ANCHOR_MODEL_MAX_TOKENS` 将单次模型回复的输出预算传给 Goose；后者默认不设置，沿用 Provider 默认。节点整体墙钟控制继续生效。
 
-插件依赖声明属于 `plugin.json` 的 `dependencies.python`。宿主用获授权的 uv 求解，包按（包、版本）存于 `library/dependencies/store/`，正式、候选及开发视图都只读引用同一存储。同版本分发正文不同则拒绝覆盖；已验证归档产生相同正文时可补充来源观察并复用。比较排除既有安装器元数据，以及同时具备 entry-point 声明和 uv 生成格式的脚本解释器绑定，脚本正文仍逐字节核查。视图用自己的 Python 启动脚本，兼容 uv 的长路径 shell 包装，不改已有共享存储字节。正式安装仍走原生确认、摘要复核与 Library 发布锁。Graph bundle 只引用 Plugin ID，独立入口必须显式配置 Library 或 catalog，不能从 bundle 的邻居目录推断插件权限。旧的命名环境模型已删除，旧图/插件声明 `environment` 时具名拒绝。
+插件依赖声明属于 `plugin.json` 的 `dependencies.python`。宿主用获授权的 uv 求解，包按（包、版本）存于 `library/dependencies/store/`，正式、候选及兼容旧项目的视图都只读引用同一存储；新项目的私有开发包由标准 pip 独立安装。同版本分发正文不同则拒绝覆盖；已验证归档产生相同正文时可补充来源观察并复用。比较排除既有安装器元数据，以及同时具备 entry-point 声明和 uv 生成格式的脚本解释器绑定，脚本正文仍逐字节核查。视图用自己的 Python 启动脚本，兼容 uv 的长路径 shell 包装，不改已有共享存储字节。正式安装仍走原生确认、摘要复核与 Library 发布锁。Graph bundle 只引用 Plugin ID，独立入口必须显式配置 Library 或 catalog，不能从 bundle 的邻居目录推断插件权限。旧的命名环境模型已删除，旧图/插件声明 `environment` 时具名拒绝。
 
 Run format 13 将准入授权与执行观察分开：`plugin_bindings.authorization_digest` 保存无凭据值的 Host 权限投影；节点结果的 `plugin_digests` 和 `plugin_views` 保存本次实际准备的代码与依赖声明摘要。代码、Skill 路径和依赖变化从后续调用读取；联网、可写路径、宿主命令、凭据来源、远程端点或 OAuth 授权声明变化不能沿用旧 Run 权限。format 12 记录只迁移格式，不填造新观察或权限；旧权限为空时，Host 与 Runner 共用完整旧 ID、代码摘要、资源与 MCP 名称核验，全部通过后由持 Run lease 的 Runner 一次性保存升级。
 
@@ -123,11 +123,17 @@ Pilot 的普通 Turn 与 Responses 共用 `PilotService::admit` 和 Host-owned `
 
 `plugin_prepare`/`plugin_test` 是 Host 应用用例。准备先按 Library 文件规则复制候选，摘要与依赖锁存入该 Pilot Goose scope 下的 `candidates/`，临时视图引用 Library 共享包，不发布正式 Plugin 视图。测试真实启动 MCP、读取工具表并按可选参数调用业务工具，返回被测摘要、实际依赖和 `business_tested`，取消或失败显式结束并等待 Host 启动的 stdio 进程回收；HTTP MCP 取消连接与请求等待，不承诺终止远端进程。候选网络声明不增加 Turn 权限；候选配置拒绝宿主环境模板引用，只允许获准的四种路径模板，不继承同 ID 正式 Plugin 的私有凭据或 OAuth。正式安装保留原生确认，在可取消的 catalog guard/Library lease 内复核已有版本、冻结与确认摘要一致的 Host 私有快照，之后依赖准备和发布只使用该快照；正式包和视图独立于开发目录。
 
-`development_prepare` 按当前 owner/Session 和工作区相对项目准备运行依赖及独立的开发依赖。`anchor_run(project=...)` 选择该项目的只读视图，普通脚本、模块命令和 console script 使用准备好的包；源码可写，共享解释器和包不可写。视图身份绑定实际求解结果及解释器，不因普通源码编辑要求重新取包。开发声明不自动进入正式 `plugin.json`，正式候选仍按运行依赖独立准备和核对摘要。
+`development_prepare(project=...)` 默认 `ensure`：新项目创建空私有 venv 和 pip，已有私有环境只核对归属、基本布局及冻结解释器，保留试装现场，不证明包健康。`rebuild` 显式重建空环境并保留源码，拒绝同时安装非空依赖数组；依赖由后续独立 pip 命令安装。`discard` 只释放私有环境。ensure 的 `requirements`/`development_requirements` 内联数组是标准 pip 安装请求，不是精确同步或第二份长期声明；文件、extras、marker、约束、递归 requirements 和 editable 由 `anchor_run` 中的 pip 解析。开发依赖不自动进入正式 `plugin.json`，候选仍按正式声明独立准备、测试和安装；安装并没有强制绑定成功业务测试或此前依赖锁。
+
+私有现场位于 Host 派生的 `<state>/platform/pilot/<scope>/development/projects/<project-hash>/`，其中 `selection.json` 保存归属、解释器绑定与最小操作观察，`.lock` 协调项目操作，只有 `env/` 精确可写挂载到 `/development/env`。该树在 Library 临时视图扫描与候选源码之外。固定 uv 在沙箱稳定路径创建 venv，再由共享解释器携带的 `ensurepip` 引导私有 pip；创建成功才发布选择事实。Host 不在沙箱外运行可写环境的 Python。`anchor_run(project=...)` 的 Python 别名、裸 pip、模块、shell 与 console script 使用同一 venv/PATH；命令获得原有工作区、自己的环境和只读解释器，不挂 store 或兄弟环境。私有包不与 store hardlink，也不回填正式存储；任务 pip 按冻结网络与文件权限执行，正式取包仍遵守 Host 来源和哈希规则。
+
+同项目的准备、全部命令、重建和释放共用可取消排他锁，持有至 Sandbox 子进程结束；scope 共享 lease 防止 Session 删除，普通命令不持全局 Library 写锁。Host 在命令前保存 `operation_in_progress`，收束后保存 `last_status`，失败、超时、取消或重启遗留操作提示 `inspection_required`；它是现场核查提示，不增加审批、不阻断检查、不自动重放 pip，后续命令成功也不冒充修复全部现场。显式重建成功清除旧观察。已发布环境损坏或选择事实丢失返回诊断，默认准备及命令不静默回退或清空。
+
+旧项目的 `current.json` 和只读视图继续可用，仍核查当前 Turn 的 Python 授权及解释器绑定；默认 ensure 明确返回 `legacy_read_only`、`pip_available=false`。首次显式 rebuild 成功后切换私有环境，失败保留旧选择，旧引用直到所属 Session 释放。只有解包 store、没有 wheel/源码时，旧视图可继续使用，私有 pip 不能从解包 store 重新安装包；可离线重建空 venv/pip，包恢复需要可获取的安装来源。这是明确兼容边界，不做私有环境到旧视图的自动降级。
 
 候选准备按代码摘要与冻结的解释器身份复用已准备结果，解释器变化后可对同一份源码重新准备。原 format 1 `preparation.json` 保留并兼容读取，新的不可变准备事实按实际求解/视图身份保存，仅成功准备后原子更新 `current-preparation.json`；失败不覆盖此前结果。测试核对被选事实、视图解释器与包集合，不把另一个 Turn 的准备结果当作本次测试依据。这些文件只是 Session 候选事实，不是正式 Plugin 历史或通用恢复日志。
 
-Library 保存开发 scope 的持久归属及视图引用，准备和执行持 scope 共享 lease，Session 删除取得排他 lease 后释放引用并保存 released 事实。回收同时考虑正式视图和有效开发引用；目录消失、归属损坏或未知状态不能证明可回收。该保护只服务临时开发资源，不改变 Run 后续节点读取当前正式 Plugin 的热更新语义。
+Library 保存开发 scope 的持久归属及候选/旧视图引用，私有项目复用 scope lease，但不登记私有包为共享 store 引用。准备和执行持 scope 共享 lease，Session 删除取得排他 lease 后释放引用并保存 released 事实，再清理所属私有环境。回收同时考虑正式视图和有效开发引用；目录消失、归属损坏或未知状态不能证明可回收。该保护只服务临时开发资源，不改变 Run 后续节点读取当前正式 Plugin 的热更新语义。
 
 Rust 开发使用 Host 管理的共享工具链，或部署显式配置的 `ANCHOR_PILOT_RUSTUP`、`ANCHOR_PILOT_RUSTUP_HOME` 和 `ANCHOR_PILOT_CARGO_HOME`。Host 只读挂载共享 Rustup proxy、工具链和 registry/git 缓存；可写 `CARGO_HOME` 位于 Session 工作区，可信 Cargo 入口首次使用时在沙箱内复制缓存，通过文件锁和临时目录发布支持并发及取消后重试，不复制编译器，不挂宿主 Cargo 凭据。默认 Cargo、命名工具链、shell 与原 Cargo 绝对路径都经过同一入口；直接 Rustc 命令绑定同一冻结工具链的精确只读入口。开发沙箱的 `/proc` 只显示自己的 PID namespace；只有联网允许下直接执行冻结 Rustup 的 `toolchain install` 才授权工具链目录写入，并禁用 self-update。Pilot 命令最多 600 秒，AgentNode 保留 30 秒上限。
 
@@ -135,7 +141,7 @@ Rust 开发使用 Host 管理的共享工具链，或部署显式配置的 `ANCH
 
 GNU Linux 发行的 Rust 初始化显式选择 `x86_64-unknown-linux-gnu`，不按静态引导器的 musl 编译目标选择主机。Host 保存完整工具链名；兼容旧安装时保留其 `default-host`，以免改变旧 Turn 的别名解析。官方 inventory 中不存在的工具链才使用 `--no-update` 安装；静态 musl 引导器需要在安装和设置默认工具链时，对这一既定 GNU 目标传入官方 `--force-non-host` 参数。已有但不可执行的工具链拒绝使用；安装后必须分别实际执行 Rustc 和 Cargo 的版本探针，全部成功才切换默认工具链并发布配置。失败保留此前配置及内存快照。
 
-每个执行只使用这一入口选出的 Python：部署可通过 `ANCHOR_DEPENDENCIES_PYTHON` 和 `ANCHOR_PILOT_PYTHON_ENABLED` 控制，完整平台也可由 Pilot 初始化。Host 在有界进程探测中校验 Python 3.8+，只读挂载安装前缀和可信命令别名，直接命令及 shell 均执行同一精确解释器，不授权整个解释器 bin 目录。Pilot 不能写共享解释器或用 pip 修改共享环境；包准备、候选测试、开发命令与正式 Plugin 都复用相同解释器及 Library 共享包机制。
+每个执行只使用这一入口选出的 Python：部署可通过 `ANCHOR_DEPENDENCIES_PYTHON` 和 `ANCHOR_PILOT_PYTHON_ENABLED` 控制，完整平台也可由 Pilot 初始化。Host 在有界进程探测中校验 Python 3.8+，只读挂载安装前缀和可信命令别名，直接命令及 shell 均执行同一精确解释器，不授权整个共享解释器 bin 目录。Pilot 不能写共享解释器或用 pip 修改共享环境；候选与正式包复用 Library 共享存储，私有开发 venv 只共享解释器。私有 pip 引导还要求该冻结解释器携带可用的 `ensurepip`，缺失时明确报错，不借宿主网络或扩大授权。
 
 没有第三方包视图的正式 Python stdio MCP，通过独立的只读 capability 将标准 Python 别名或已配置解释器路径映射到同一精确入口；不依赖 Pilot 作者命令的启用开关。有依赖视图的服务器继续使用视图显式解释器。MCP 工具集合持有可信 launcher 的生命周期，只授予 Python 只读挂载，不复用可以管理 Rustup 的作者命令权限。候选凭据拒绝和正式 owner-bound 凭据注入保持独立。
 

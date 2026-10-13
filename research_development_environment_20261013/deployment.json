@@ -1,0 +1,103 @@
+{
+  "scope": "current development Host only; user-authorized deployment and conversation-history deletion",
+  "runtime_source_manifest": "runtime-source.sha256",
+  "runtime_source_manifest_check": "16 entries matched A225",
+  "release_build": {
+    "command": "PATH=/home/mansteinl/.cargo/bin:$PATH cargo build --manifest-path rust/Cargo.toml --release --locked --offline -p anchor-runner-host",
+    "exit_code": 0,
+    "log": "/tmp/anchor-development-environment-deploy-release.log",
+    "log_sha256": "ad3165d1c582ce8b1cc1f141db80c9c4d59f1b3dfef520f32699a41b92c4d02b"
+  },
+  "lifecycle_commands": [
+    {
+      "command": "./scripts/dev.sh stop",
+      "exit_code": 0
+    },
+    {
+      "command": "./scripts/dev.sh start",
+      "exit_code": 0
+    },
+    {
+      "command": "./scripts/dev.sh status",
+      "exit_code": 0
+    }
+  ],
+  "cleanup": {
+    "sessions_before": 2,
+    "turns_before": 22,
+    "conversation_runs_deleted": 19,
+    "pilot_session_delete_http": 200,
+    "channel_session_delete_http": 409,
+    "channel_session_delete_reason": "old retained run_ids association",
+    "offline_session_reset": "explicitly authorized all-history deletion after Host stop",
+    "session_table_counts_after": {
+      "sessions": 0,
+      "session_events": 0,
+      "turns": 0,
+      "turn_events": 0,
+      "turn_native": 0,
+      "turn_runs": 0,
+      "turn_goose": 0,
+      "questions": 0,
+      "channel_sessions": 0,
+      "channel_deliveries": 0,
+      "channel_inbounds": 0,
+      "channel_assistants": 0,
+      "channel_assistant_inputs": 0
+    },
+    "sqlite_integrity_check": "ok",
+    "pilot_sessions_after": 0,
+    "channel_sessions_after": 0,
+    "goose_conversation_roots_after": 0,
+    "channel_inputs_after": 0,
+    "channel_replies_after": 0,
+    "assistant_invocations_after": 0
+  },
+  "deployed_host": {
+    "pid": 925991,
+    "start_ticks": "288963926",
+    "state": "S",
+    "exe": "/home/mansteinl/Anchor/.local/rust/bin/anchor-runner-host",
+    "sha256": "50331ca988d1991b4f97052588401f68b4b55b6c78d8fde98fef2fd12b56f104"
+  },
+  "gateway": {
+    "pid": 926041,
+    "start_ticks": "288963933",
+    "state": "S",
+    "exe": "/home/mansteinl/Anchor/.local/rust/library/plugins/wecom/bin/anchor-wecom-gateway",
+    "sha256": "d88b8ff09c0e720422ef850a617ee848c3de5dcac1a327540a86314416262ec2"
+  },
+  "health": "ok",
+  "ready": "ready",
+  "web_5173_http": 200,
+  "preserved": {
+    "graphs": [
+      "deep-academic-research",
+      "rsi",
+      "wecom-persistent-assistant",
+      "weekly-work-report"
+    ],
+    "plugins": [
+      "academic-research",
+      "docmost",
+      "humanizer-zh",
+      "network",
+      "wecom"
+    ],
+    "graph_and_plugin_definitions": true,
+    "shared_store": true,
+    "managed_runtime": true,
+    "env": true,
+    "shared_python": true,
+    "fixed_goose": true,
+    "network_helpers": true,
+    "web_files": true,
+    "independent_mlcad_processes": true,
+    "ordinary_runs": [
+      "rust-18dcda2ef6ecfdac"
+    ]
+  },
+  "real_provider_business_rerun": false,
+  "evidence_root": ".local/development-environment-deploy-20261013",
+  "status": "passed"
+}

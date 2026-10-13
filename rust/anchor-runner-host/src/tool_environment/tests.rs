@@ -466,6 +466,22 @@ fn platform_status_distinguishes_python_and_rust_grants_without_exposing_paths()
     assert_eq!(status["python"]["shared_interpreter_configured"], true);
     assert_eq!(status["python"]["authoring_granted"], true);
     assert_eq!(status["python"]["version"], "3.12");
+    assert_eq!(status["python"]["pip_write"], false);
+    assert_eq!(status["python"]["pip_write_scope"], "shared_interpreter");
+    assert_eq!(status["python"]["private_project_pip"]["available"], true);
+    assert_eq!(
+        status["python"]["private_project_pip"]["requires_project_preparation"],
+        true
+    );
+    let python_status = environment.pilot_python_status();
+    assert_eq!(python_status["pip_write"], false);
+    assert_eq!(python_status["pip_write_scope"], "shared_interpreter");
+    assert!(
+        python_status["guidance"]
+            .as_str()
+            .unwrap()
+            .contains("development_prepare")
+    );
     assert_eq!(
         status["python"]["dependency_preparation"]["uv_available"],
         true
@@ -507,6 +523,22 @@ fn platform_status_distinguishes_python_and_rust_grants_without_exposing_paths()
         offline["python"]["dependency_preparation"]["network_fetch_allowed_this_turn"],
         false
     );
+    let unprepared = environment.pilot_platform_status(
+        false,
+        json!({"configured":false,"shared_interpreter_available":true,"uv_available":true}),
+    );
+    assert_eq!(
+        unprepared["python"]["private_project_pip"]["available"],
+        false
+    );
+    let unauthorized = ToolEnvironment::default().pilot_platform_status(
+        false,
+        json!({"configured":true,"shared_interpreter_available":true,"uv_available":true}),
+    );
+    assert_eq!(
+        unauthorized["python"]["private_project_pip"]["available"],
+        false
+    );
 }
 
 #[tokio::test]
@@ -543,6 +575,8 @@ async fn platform_status_reports_shared_python_without_authoring_or_preparation_
     assert_eq!(status["python"]["shared_interpreter_configured"], true);
     assert_eq!(status["python"]["shared_interpreter_available"], true);
     assert_eq!(status["python"]["authoring_granted"], false);
+    assert_eq!(status["python"]["pip_write_scope"], "shared_interpreter");
+    assert_eq!(status["python"]["private_project_pip"]["available"], false);
     assert_eq!(
         status["python"]["dependency_preparation"]["configured"],
         false

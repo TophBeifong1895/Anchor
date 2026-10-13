@@ -111,6 +111,7 @@ pub(crate) async fn prepare_candidate(
     .await
 }
 
+#[cfg(test)]
 pub(crate) async fn prepare_development(
     provisioner: &DependencyProvisioner,
     library_root: &Path,

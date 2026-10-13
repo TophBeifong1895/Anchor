@@ -582,7 +582,7 @@ impl ToolPort for NodeTools {
                 "type": "object",
                 "properties": {
                     "command": {"type": "array", "items": {"type": "string"}, "minItems": 1},
-                    "project": {"type":"string","description":"Prepared workspace-relative Python project; runs inside this directory and uses its read-only development dependency view. Use '.' for workspace root."},
+                    "project": {"type":"string","description":"Prepared workspace-relative Python project. Runs inside this directory using its private venv/pip/PATH, or its preserved read-only legacy view until explicit rebuild. Use '.' for workspace root. Same-project commands and preparation serialize; interrupted pip may partially change state, so inspect before continuing."},
                     "timeout_seconds": {"type":"integer", "minimum":1, "maximum":self.timeout_ceiling.as_secs()}
                 },
                 "required": ["command"],
@@ -669,9 +669,17 @@ impl ToolPort for NodeTools {
                     crate::pilot_tools::workspace_directory(&self.workspace, project)?;
                 }
                 Some(
-                    crate::application::development_dependencies::select_development_view(
-                        library, scope, project,
+                    crate::application::development_environment::select_environment(
+                        library,
+                        scope,
+                        project,
+                        self.environment.pilot_python_interpreter(),
+                        &crate::dependency_provision::DependencyAccess {
+                            network: self.network == NetworkPolicy::Enabled,
+                            cancellation: self.cancellation.clone(),
+                        },
                     )
+                    .await
                     .map_err(|error| self.refusal(error))?,
                 )
             } else {
@@ -712,59 +720,59 @@ impl ToolPort for NodeTools {
             let mut sandbox = Arc::new(sandbox);
             if let Some(development) = &development {
                 sandbox = development
-                    .view
-                    .authorize(sandbox)
+                    .apply(sandbox, &mut request, python_alias.is_some())
                     .map_err(|reason| self.refusal(reason))?;
-                development.view.apply(&mut request);
-                let bin = development.view.view().join("bin");
-                let previous = request
-                    .environment
-                    .iter()
-                    .find(|value| value.key == "PATH")
-                    .map(|value| value.value().to_owned())
-                    .unwrap_or_else(|| "/usr/bin:/bin".into());
-                request.environment.retain(|value| value.key != "PATH");
-                request
-                    .environment
-                    .push(anchor_runtime::SandboxEnvironment::new(
-                        "PATH",
-                        format!("{}:{previous}", bin.display()),
-                    ));
-                request
-                    .environment
-                    .push(anchor_runtime::SandboxEnvironment::new(
-                        "PYTHONNOUSERSITE",
-                        "1",
-                    ));
-                if python_alias.is_some() {
-                    request.command[0] = bin.join("python").to_string_lossy().into_owned();
-                } else if let Some(command) = request
-                    .command
-                    .first()
-                    .filter(|command| !command.contains('/') && !command.is_empty())
-                {
-                    use std::os::unix::fs::PermissionsExt;
-                    let executable = bin.join(command);
-                    if std::fs::metadata(&executable).is_ok_and(|metadata| {
-                        metadata.is_file() && metadata.permissions().mode() & 0o111 != 0
-                    }) {
-                        request.command[0] = executable.to_string_lossy().into_owned();
-                    }
-                }
+            }
+            let private_environment = development.as_ref().is_some_and(|env| env.is_private());
+            if let Some(development) = &development {
+                development.begin_operation().map_err(ToolError::Failed)?;
             }
             let result = match sandbox.run(request).await {
                 Ok(result) => result,
                 // Raised by the adapter before any process launch, so the model
                 // can safely correct its command.
-                Err(SandboxError::InvalidRequest(reason)) => return Err(self.refusal(reason)),
-                Err(error) => return Err(ToolError::Failed(error.to_string())),
+                Err(SandboxError::InvalidRequest(reason)) => {
+                    if let Some(development) = &development {
+                        development
+                            .finish_operation("not_executed", None)
+                            .map_err(ToolError::Failed)?;
+                    }
+                    return Err(self.refusal(reason));
+                }
+                Err(error) => {
+                    if let Some(development) = &development {
+                        development
+                            .finish_operation("failed", None)
+                            .map_err(ToolError::Failed)?;
+                    }
+                    return Err(ToolError::Failed(error.to_string()));
+                }
+            };
+            let environment_observation = if let Some(development) = &development {
+                development
+                    .finish_operation(
+                        match result.status {
+                            SandboxStatus::Completed => "completed",
+                            SandboxStatus::Cancelled => "cancelled",
+                            SandboxStatus::TimedOut => "timed_out",
+                            SandboxStatus::NotExecuted => "not_executed",
+                        },
+                        result.exit_code,
+                    )
+                    .map_err(ToolError::Failed)?
+            } else {
+                Value::Null
             };
             drop(development);
             let status = match result.status {
                 SandboxStatus::Completed => "completed",
                 SandboxStatus::TimedOut => "timed_out",
                 SandboxStatus::Cancelled => {
-                    return Err(ToolError::Failed("anchor_run was cancelled".into()));
+                    return Err(ToolError::Failed(if private_environment {
+                        "anchor_run was cancelled; the private environment may be partially changed. Inspect pip list/check and project state before continuing; do not replay from an old receipt.".into()
+                    } else {
+                        "anchor_run was cancelled".into()
+                    }));
                 }
                 SandboxStatus::NotExecuted => {
                     return Err(ToolError::Failed("anchor_run was not executed".into()));
@@ -786,6 +794,15 @@ impl ToolPort for NodeTools {
                 output["full_output"] = json!(retained);
             }
             output["timeout_seconds"] = json!(timeout.as_secs());
+            if private_environment {
+                output["environment_observation"] = environment_observation;
+            }
+            if private_environment && (status == "timed_out" || result.exit_code != Some(0)) {
+                output["environment_changes_possible"] = json!(true);
+                output["environment_guidance"] = json!(
+                    "Private environment may be partially changed; inspect pip list/check and project state before continuing. An old receipt does not establish current health."
+                );
+            }
             if let Some(hint) = self.hint(status, result.incomplete, !retained.is_empty(), timeout)
             {
                 output["hint"] = json!(hint);

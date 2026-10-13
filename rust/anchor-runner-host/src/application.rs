@@ -6,6 +6,7 @@ mod conversations;
 pub(crate) use assistants::AssistantAdmission;
 pub(crate) mod channel_management;
 pub(crate) mod development_dependencies;
+pub(crate) mod development_environment;
 pub(crate) mod graphs;
 pub(crate) mod metadata;
 pub(crate) mod oauth_management;

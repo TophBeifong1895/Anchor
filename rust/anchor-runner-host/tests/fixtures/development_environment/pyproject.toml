@@ -1,0 +1,12 @@
+[build-system]
+requires = []
+build-backend = "backend"
+backend-path = ["."]
+[project]
+name = "editableprobe"
+version = "1.0"
+dependencies = ["probepkg==1.0; python_version >= '3.8'"]
+[project.optional-dependencies]
+dev = ["trialpkg==1.0"]
+[project.scripts]
+editable-probe = "editableprobe:main"

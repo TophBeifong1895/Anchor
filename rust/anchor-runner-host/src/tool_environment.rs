@@ -525,7 +525,8 @@ impl ToolEnvironment {
                 "configured": true,
                 "version": python.version,
                 "pip_write": false,
-                "guidance": "Use plugin.json dependencies.python with plugin_prepare/plugin_test; do not install packages into this shared interpreter."
+                "pip_write_scope": "shared_interpreter",
+                "guidance": "The shared interpreter is read-only. With Python authoring and dependency preparation granted, call development_prepare for the project, then use native pip through anchor_run(project=...) for trial packages. Declare delivery dependencies in plugin.json dependencies.python and use plugin_prepare/plugin_test."
             }),
         }
     }
@@ -542,6 +543,12 @@ impl ToolEnvironment {
             }
         }
         aliases
+    }
+
+    pub(crate) fn pilot_python_interpreter(&self) -> Option<&Path> {
+        self.python
+            .as_ref()
+            .map(|python| python.interpreter.as_path())
     }
 
     pub(crate) fn pilot_rust_command_aliases(&self) -> Vec<String> {
@@ -721,7 +728,12 @@ impl ToolEnvironment {
                 "version": python_version,
                 "dependency_preparation": python_preparation,
                 "pip_write": false,
-                "guidance": "Declare third-party packages in plugin.json dependencies.python and use plugin_prepare; never install into the shared interpreter.",
+                "pip_write_scope": "shared_interpreter",
+                "private_project_pip": {
+                    "available": authoring_granted && preparation_configured && dependency_python_available && dependency["uv_available"].as_bool().unwrap_or(false),
+                    "requires_project_preparation": true,
+                },
+                "guidance": "The shared interpreter is read-only. When private_project_pip.available is true, call development_prepare for the project, then use native pip through anchor_run(project=...) for trial packages. Declare delivery dependencies in plugin.json dependencies.python and use plugin_prepare/plugin_test; capability availability does not prove a project environment is prepared.",
             },
             "rust": {
                 "configured": rust_configured,

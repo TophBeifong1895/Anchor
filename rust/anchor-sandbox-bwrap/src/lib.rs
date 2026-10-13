@@ -460,13 +460,40 @@ impl BubblewrapSandbox {
                         .canonicalize()
                         .is_ok_and(|path| self.tool_dirs.contains(&path))
             });
+        // A Host-granted writable environment can provide executable entries
+        // at a stable sandbox path. Require the exact writable pair AND the
+        // separately registered source bin; a request cannot grant itself code.
+        let writable_environment_command = request.writable_inputs.iter().any(|input| {
+            let Ok(relative) = Path::new(command).strip_prefix(&input.destination) else {
+                return false;
+            };
+            if relative.parent() != Some(Path::new("bin")) {
+                return false;
+            }
+            let Ok(source) = fs::canonicalize(&input.source) else {
+                return false;
+            };
+            self.writable_grants
+                .contains(&(source.clone(), input.destination.clone()))
+                && request.tool_dirs.contains(&source.join("bin"))
+                && self.tool_dirs.contains(&source.join("bin"))
+                && fs::metadata(source.join(relative)).is_ok_and(|metadata| {
+                    use std::os::unix::fs::PermissionsExt;
+                    metadata.is_file() && metadata.permissions().mode() & 0o111 != 0
+                })
+        });
         let system_command = Path::new(command).is_absolute()
             && SYSTEM_DIRS
                 .iter()
                 .any(|root| Path::new(command).starts_with(root))
             && fs::canonicalize(command)
                 .is_ok_and(|path| SYSTEM_DIRS.iter().any(|root| path.starts_with(root)));
-        if command != basename && !mounted_command && !registered_command && !system_command {
+        if command != basename
+            && !mounted_command
+            && !registered_command
+            && !system_command
+            && !writable_environment_command
+        {
             return Err(SandboxError::InvalidRequest(
                 "command must select an allowlisted basename/system executable or a mounted Plugin/tool path".into(),
             ));
@@ -504,6 +531,7 @@ impl BubblewrapSandbox {
         if !self.allowed_commands.contains(basename)
             && !mounted_plugin_executable
             && !registered_command
+            && !writable_environment_command
         {
             return Err(SandboxError::InvalidRequest(format!(
                 "command `{basename}` is not authorized by the host sandbox policy"
@@ -2075,6 +2103,52 @@ mod tests {
                 .with_device_grants(&[PathBuf::from("/dev/null")])
                 .is_ok()
         );
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn writable_environment_executable_requires_exact_pair_and_separate_bin_grant() {
+        let dir = temp_dir("environment-command");
+        let workspace = dir.join("workspace");
+        let environment = dir.join("environment");
+        fs::create_dir_all(&workspace).unwrap();
+        fs::create_dir_all(environment.join("bin")).unwrap();
+        fs::write(environment.join("bin/script"), "#!/bin/sh\nexit 0\n").unwrap();
+        fs::set_permissions(
+            environment.join("bin/script"),
+            fs::Permissions::from_mode(0o755),
+        )
+        .unwrap();
+        let base = unchecked(fake_bwrap(&dir));
+        let grant = WritableInput::new(&environment, "/development/env");
+        let mut request = SandboxRequest::new(&workspace, ["/development/env/bin/script"]);
+        request.writable_inputs.push(grant.clone());
+        request.tool_dirs.push(environment.join("bin"));
+        assert!(base.validate_authority(&request).is_err());
+        let writable = base
+            .with_writable_grants(std::slice::from_ref(&grant))
+            .unwrap();
+        assert!(writable.validate_authority(&request).is_err());
+        let executable = base
+            .with_executable_dirs(&[environment.join("bin")])
+            .unwrap();
+        assert!(executable.validate_authority(&request).is_err());
+        let both = writable
+            .with_executable_dirs(&[environment.join("bin")])
+            .unwrap();
+        let resolved = both.validate_authority(&request).unwrap();
+        let argv = both.argv(&request, &resolved, false).join(" ");
+        assert!(argv.contains("--bind"));
+        assert!(argv.contains("/development/env"));
+        let mut missing_request_bin = request.clone();
+        missing_request_bin.tool_dirs.clear();
+        assert!(both.validate_authority(&missing_request_bin).is_err());
+        let mut other_pair = request.clone();
+        other_pair.writable_inputs[0].destination = "/development/other".into();
+        assert!(both.validate_authority(&other_pair).is_err());
+        let mut escape = request.clone();
+        escape.command[0] = "/development/env/bin/../script".into();
+        assert!(both.validate_authority(&escape).is_err());
         let _ = fs::remove_dir_all(dir);
     }
 

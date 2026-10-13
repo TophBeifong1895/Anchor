@@ -1,0 +1,106 @@
+{
+  "source_sha256_manifest": "/tmp/anchor-development-environment-final-source.sha256",
+  "host_binary": "/home/mansteinl/Anchor/rust/target/debug/anchor-runner-host",
+  "host_binary_sha256": "e6c67c7d5b899eeb61226572a092250b22d5bf38cf8e9e10c651105ab5ad59c5",
+  "commands": [
+    {
+      "command": "PATH=/home/mansteinl/.cargo/bin:$PATH ANCHOR_REQUIRE_ENV_BUILDER=1 cargo test --manifest-path rust/Cargo.toml -p anchor-runner-host --bin anchor-runner-host --locked --offline application::development_environment -- --nocapture",
+      "exit_code": 0,
+      "passed": 5,
+      "failed": 0,
+      "ignored": 0,
+      "log": "/tmp/anchor-development-environment-targeted-final-02.log",
+      "log_sha256": "84e62441594cd3ea064331eaffd8da87f0fea4b25525d4a30c7e3972bafe4c22"
+    },
+    {
+      "command": "PATH=/home/mansteinl/.cargo/bin:$PATH ANCHOR_REQUIRE_ENV_BUILDER=1 cargo test --manifest-path rust/Cargo.toml -p anchor-runner-host -p anchor-sandbox-bwrap -p anchor-library --all-targets --locked --offline --no-fail-fast",
+      "exit_code": 101,
+      "targets": 41,
+      "passed": 995,
+      "failed": 4,
+      "ignored": 91,
+      "host_bin": {
+        "passed": 770,
+        "failed": 4,
+        "ignored": 2
+      },
+      "log": "/tmp/anchor-development-environment-full.log",
+      "failure_reason": "Three Graph deletion tests hit Plugin catalog lock Conflict; one legacy development_dependencies test hit scope release dependency writer contention. All affected cases passed isolated retries below.",
+      "log_sha256": "4280cbb937df4e83ba958267f1d5379ee605d0c0d838959a879d6cc38ffa8f6e"
+    },
+    {
+      "command": "PATH=/home/mansteinl/.cargo/bin:$PATH ANCHOR_REQUIRE_ENV_BUILDER=1 cargo test --manifest-path rust/Cargo.toml -p anchor-runner-host --bin anchor-runner-host --locked --offline application::graphs::tests::deletion -- --nocapture",
+      "exit_code": 0,
+      "passed": 27,
+      "failed": 0,
+      "ignored": 0,
+      "log": "/tmp/anchor-development-environment-deletion-retry.log",
+      "log_sha256": "cde1fb9d94e8f2e2f4f7c7850eb8238d46d241f8cb348ce0dd9f15651036a67d"
+    },
+    {
+      "command": "PATH=/home/mansteinl/.cargo/bin:$PATH ANCHOR_REQUIRE_ENV_BUILDER=1 cargo test --manifest-path rust/Cargo.toml -p anchor-runner-host --bin anchor-runner-host --locked --offline application::development_dependencies::tests::project_versions_share_bytes_with_candidates_and_formal_views_and_offline_retry_works -- --nocapture",
+      "exit_code": 0,
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0,
+      "log": "/tmp/anchor-development-environment-legacy-retry.log",
+      "log_sha256": "b1f052608d7ceb2e73205ca96a8cc014bda23d33f8847684bad6e9982e28d595"
+    },
+    {
+      "command": "PATH=/home/mansteinl/.cargo/bin:$PATH ANCHOR_REQUIRE_ENV_BUILDER=1 cargo test --manifest-path rust/Cargo.toml -p anchor-runner-host --bin anchor-runner-host --locked --offline tool_environment::tests::platform_status -- --nocapture",
+      "exit_code": 0,
+      "passed": 2,
+      "failed": 0,
+      "ignored": 0,
+      "log": "/tmp/anchor-development-environment-status-final.log",
+      "log_sha256": "db235deea5fe64150b754219b8298882e197ce6ee5f4e081d34b4c19a5af8e02"
+    },
+    {
+      "command": "PATH=/home/mansteinl/.cargo/bin:$PATH cargo clippy --manifest-path rust/Cargo.toml -p anchor-runner-host -p anchor-sandbox-bwrap -p anchor-library --all-targets --locked --offline -- -D warnings",
+      "exit_code": 101,
+      "log": "/tmp/anchor-development-environment-clippy-final.log",
+      "failure_reason": "New legacy ensure branch collapsible_if lint; collapsed without semantic change before rerun.",
+      "log_sha256": "9f88e879e8c577ab387eb0918c88b2b2e9109bb5a302f437e18183dad75c9fe5"
+    },
+    {
+      "command": "PATH=/home/mansteinl/.cargo/bin:$PATH cargo clippy --manifest-path rust/Cargo.toml -p anchor-runner-host -p anchor-sandbox-bwrap -p anchor-library --all-targets --locked --offline -- -D warnings",
+      "exit_code": 0,
+      "log": "/tmp/anchor-development-environment-clippy-final-02.log",
+      "log_sha256": "8999aa94dc0833e3d501a7c25df92394827e4fbd1f509594b07e2db8d38c202f"
+    },
+    {
+      "command": "PATH=/home/mansteinl/.cargo/bin:$PATH cargo fmt --manifest-path rust/Cargo.toml --all -- --check",
+      "exit_code": 0
+    },
+    {
+      "command": "git diff --check -- rust",
+      "exit_code": 0
+    },
+    {
+      "command": "PATH=/home/mansteinl/.cargo/bin:$PATH cargo build --manifest-path rust/Cargo.toml -p anchor-runner-host --bin anchor-runner-host --locked --offline",
+      "exit_code": 0,
+      "log": "/tmp/anchor-development-environment-build-final.log",
+      "host_sha256": "2663d2004f8ee3366a8db2cedd8e78ce4d8638b301f100a8f88ebd8406cd9ae5",
+      "note": "Cargo test below regenerated normal Host artifact from unchanged source; use its final identity.",
+      "log_sha256": "ce995c51b7f95e4a5f83bc116d084e25c1933880e35211934151eeb88c6140d3"
+    },
+    {
+      "command": "PATH=/home/mansteinl/.cargo/bin:$PATH ANCHOR_REQUIRE_ENV_BUILDER=1 ANCHOR_GOOSE_BINARY=/home/mansteinl/Anchor/.local/rust/bin/goose ANCHOR_TEST_EVIDENCE_ROOT=/tmp/anchor-development-environment-goose-evidence-final cargo test --manifest-path rust/Cargo.toml -p anchor-runner-host --test goose_development_environment --locked --offline -- --ignored --nocapture",
+      "exit_code": 0,
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0,
+      "filtered_out": 5,
+      "log": "/tmp/anchor-development-environment-goose-final.log",
+      "evidence": "/tmp/anchor-development-environment-goose-evidence-final/889887/private-development-formal-delivery/evidence.json",
+      "host_sha256": "e6c67c7d5b899eeb61226572a092250b22d5bf38cf8e9e10c651105ab5ad59c5",
+      "log_sha256": "93bb163c68350b4f58d6386e971bb6863fb0aaef6fcdbb39597055ac1d06cc49"
+    },
+    {
+      "command": "sha256sum --check /tmp/anchor-development-environment-final-source.sha256",
+      "exit_code": 0,
+      "files_verified": 16
+    }
+  ],
+  "scope": "Rust implementation and deterministic local transport verification. Real Provider acceptance owned by parent and not claimed here."
+}
