@@ -10,6 +10,8 @@ test('native Rust Library preserves Plugin selection, lazy resources and Op arti
   const root = await mkdtemp(join(tmpdir(), 'anchor-plugin-browser-'));
   const host = await nativeHost(root);
   await fixturePlugin(host.environment.ANCHOR_RUNNER_LIBRARY_ROOT!);
+  const pluginPath = join(host.environment.ANCHOR_RUNNER_LIBRARY_ROOT!, 'plugins/browser-plugin/plugin.json');
+  const installedPlugin = await readFile(pluginPath, 'utf8');
   const base = host.base;
   let backend: ChildProcess | undefined;
   try {
@@ -24,23 +26,24 @@ test('native Rust Library preserves Plugin selection, lazy resources and Op arti
     await page.goto(base);
     await page.getByLabel('当前工作流').selectOption('plugin-proof');
     await page.locator('[data-id="research"]').click();
-    const checkbox = page.getByRole('checkbox', { name: '浏览器证据' });
+    const checkbox = page.getByRole('checkbox', { name: /浏览器证据/ });
     await checkbox.check();
-    await page.getByRole('button', { name: '查看说明', exact: true }).click();
-    await expect(page.locator('.plugin-instructions')).toContainText('/plugins/browser-plugin/resources/input.txt');
+    await page.getByRole('button', { name: '查看 浏览器证据 的详情', exact: true }).click();
+    const details = page.getByRole('dialog', { name: '浏览器证据 · 插件详情', exact: true });
+    await expect(details).toContainText('/plugins/browser-plugin/resources/input.txt');
     const skill = await request.get(`${base}/plugins/browser-plugin/files/skills/evidence/SKILL.md`);
     expect(skill.ok()).toBeTruthy();
     expect(skill.headers()['x-content-type-options']).toBe('nosniff');
     const resource = await request.get(`${base}/plugins/browser-plugin/files/resources/input.txt`);
     expect(await resource.text()).toBe('Native Plugin evidence');
+    await details.getByRole('button', { name: '关闭', exact: true }).click();
     await page.getByRole('button', { name: '保存', exact: true }).click();
     await expect(async () => {
       const graph = await (await request.get(`${base}/graphs/plugin-proof`)).json();
       expect(graph.definition.nodes[0].plugins).toEqual(['browser-plugin']);
     }).toPass();
     await expect(page.getByLabel('挂载 1 个 Plugin')).toBeVisible();
-    const frozen = await readFile(join(root, 'catalog/plugin-proof/plugins/browser-plugin/plugin.json'), 'utf8');
-    expect(frozen).toBe(await readFile(join(root, 'library/plugins/browser-plugin/plugin.json'), 'utf8'));
+    expect(await readFile(pluginPath, 'utf8')).toBe(installedPlugin);
     await page.screenshot({ path: test.info().outputPath('plugin-editor.png'), fullPage: true });
     await page.setViewportSize({ width: 390, height: 844 });
     await expect(checkbox).toBeVisible();
@@ -67,7 +70,8 @@ test('native Rust Library preserves Plugin selection, lazy resources and Op arti
     const artifact = await (await request.get(`${base}/runs/${runs[0].run}/files/build/result.txt`)).json();
     expect(artifact.text).toBe('native-plugin-management');
     await writeFile(test.info().outputPath('plugin-evidence.json'), JSON.stringify({ status: 'passed',
-      real_model_calls: 0, native_library: true, frozen_plugin: true, run: runs[0].run, artifact }, null, 2));
+      real_model_calls: 0, native_library: true, saved_plugin_references: true, shared_library_unchanged: true,
+      run: runs[0].run, artifact }, null, 2));
   } finally {
     await stop(backend);
     await writeFile(join(root, 'host.log'), host.logs);

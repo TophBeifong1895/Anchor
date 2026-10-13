@@ -65,3 +65,15 @@ Rust 由部署者同时设置 `ANCHOR_PILOT_RUSTUP`、`ANCHOR_PILOT_RUSTUP_HOME`
 Bot 长连接凭证与应用 API 凭证分开配置；普通助手 Graph 按成员允许名单接收私聊，Host 保存每位用户的 Session/Turn 与取消事实。Gateway 保存 ACK、unknown 和 suppression 投递账本，不自动重发未知平台请求。当前 Gateway 的官方媒体 URL 下载、AES 解密和富媒体回传尚未完成公网验收；Host 的本地规范化附件契约不能替代这些能力。
 
 安装、配置和验收边界见 [企业微信助手接入](wecom-assistant.md)、[原生应用工具](../rust/anchor-wecom-tools/README.md) 与 [Gateway](../rust/anchor-wecom-gateway/README.md)。真实服务和真实 Provider 的状态以当前开发台账的证据为准。
+
+## 界面与交互
+
+Pilot、Graph 和 Run 共用插件卡片、搜索与详情：列表显示名称、用途和状态；标识、内容摘要、Skill、MCP 与使用说明放在详情中。手机以抽屉打开会话插件，详情支持键盘关闭并恢复焦点。
+
+| 入口 | 操作及事实来源 |
+| --- | --- |
+| Pilot 会话 | 开关提交挂载请求，以 Host 返回状态为准；仅操作后显示保存与接续反馈，不常驻解释内部 Turn 机制 |
+| Graph 节点 | 复选框编辑插件引用，保存 Graph 后用于后续运行；查看详情不提交草稿 |
+| Run 节点 | 只读展示本次运行保存的绑定信息，不读取当前 Library 补写历史，也不提供挂载或授权操作 |
+
+联网插件的主动开关与依赖启用分别展示；联网许可缺失时显示未知并禁用许可修改。挂载请求可能在当前回复结束后继续原任务，网络许可修改只影响后续 Turn。OAuth 操作仅在当前库详情提供，读取失败显示未知，可重试；撤销失败保留最后确认的状态，授权窗口打不开时提供手动链接。

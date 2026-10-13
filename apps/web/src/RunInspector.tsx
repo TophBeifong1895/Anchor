@@ -29,7 +29,7 @@ export function RunInspector({ run, node, detail, targetPath = '', onOpenRun }:
         <button aria-pressed={tab === 'files'} className={tab === 'files' ? 'chosen' : ''}
           onClick={() => setTab('files')}><FolderOpen size={14} />文件</button>
         <button aria-pressed={tab === 'plugins'} className={tab === 'plugins' ? 'chosen' : ''}
-          onClick={() => setTab('plugins')}>Plugin</button>
+          onClick={() => setTab('plugins')}>插件</button>
       </div>}
     </div>
     {!!detail?.calls?.filter(call => !node || call.node === node).length && <section className="call-records" aria-label="工作流调用记录">
@@ -55,7 +55,7 @@ export function RunInspector({ run, node, detail, targetPath = '', onOpenRun }:
     </section>}
     {!node ? <EmptyState icon={MessageSquare} title="探索一次执行">
       在画布中选择节点，查看它的思考、执行过程和生成的文件。
-    </EmptyState> : tab === 'plugins' ? <Plugins recorded={detail?.plugins?.[node] ?? []} />
+    </EmptyState> : tab === 'plugins' ? <Plugins key={`${run}/${node}`} recorded={detail?.plugins?.[node] ?? []} />
     : tab === 'files' ? <><p className="inspector-note">显示 {node} 当前工作区的文件；历史轮次的对话不会改变这里的最新文件。</p><Files run={run} node={node} targetPath={targetPath} /></> : <>
       <div className="node-summary">
         <span className={`pill ${isNodeActive(detail?.state, node) ? 'running' : result?.submitted ? 'finished' : result ? 'failed' : 'pending'}`}>

@@ -498,9 +498,6 @@ export function App() {
         <div className="connection" title={problem || '服务已连接'}><span className={`status-dot ${problem ? 'bad' : ''}`} />
           {problem ? '连接中断' : '服务在线'}
         </div>
-        {view !== 'pilot' && chat && <button onClick={() => setView('pilot')} title={`回到会话 ${chat}`}>
-          <MessageSquare size={14} />返回会话
-        </button>}
         {(view === 'graph' || view === 'runDetail') && <div className="panel-toggles">
           <ToolButton icon={PanelLeftClose} label="切换侧边栏" aria-pressed={libraryOpen} onClick={() => setLibraryOpen(!libraryOpen)} />
           <ToolButton icon={PanelRightClose} label="切换详情面板" aria-pressed={inspectorOpen} onClick={() => setInspectorOpen(!inspectorOpen)} />
@@ -746,6 +743,9 @@ export function App() {
 
           <aside className="inspector">
             <div className="section-heading"><h3><SlidersHorizontal size={15} />{pick ? '选中项属性' : '工作流设置'}</h3></div>
+            {selectedNode && !selectedNode.op && !selectedNode.graph && <Plugins
+              key={`${name}/${selectedNode.id}`} selected={selectedPlugins} disabled={!editable}
+              onChange={setPlugins} />}
             <fieldset disabled={!editable}>
               {selectedNode && doc && <>
                 <div className="inspector-kind">
@@ -774,8 +774,6 @@ export function App() {
                   以 <code>{selectedNode.id}/…</code> 命名，各自在自己的目录里，父图只看得到它的
                   <code>exit</code> 节点。
                 </p> : <>
-                <Plugins selected={selectedPlugins} disabled={!editable}
-                  onChange={setPlugins} />
                 <label>使用角色
                   <select value={selectedNode.agent}
                           onChange={event => patchNode({ agent: event.target.value })}>

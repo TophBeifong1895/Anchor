@@ -91,7 +91,7 @@ test('web mounting keeps the active Goose Turn frozen, continues once with lates
     await expect(input).toBeEnabled();
     expect((await clickMount(true)).effect.status).toBe('next_turn');
     expect((await clickMount(false)).effect.status).toBe('next_turn');
-    await expect(page.getByText('已保存 · 下次发送消息时生效')).toBeVisible();
+    await expect(page.getByText('已保存，下次发消息时使用新设置')).toBeVisible();
     expect(provider.calls).toHaveLength(0);
     expect(await turns()).toHaveLength(0);
 
@@ -104,14 +104,14 @@ test('web mounting keeps the active Goose Turn frozen, continues once with lates
       expect(switched.effect).toEqual({ status: 'after_current_turn', source_turn: source.id });
       expect(switched.continuation).toEqual({ status: 'scheduled', request_id: `continuation:${source.id}` });
     }
-    await expect(page.getByText('已保存 · 当前回合正常结束后自动继续')).toBeVisible();
+    await expect(page.getByText('已保存。Pilot 会先完成当前回复，再使用新设置继续处理你的请求。')).toBeVisible();
     expect((await events()).filter((event: { kind: string }) => event.kind === 'pilot.continuation.requested')).toHaveLength(1);
     const snapshot = JSON.parse(await readFile(join(root, 'state/plugin-mounts', session, `${source.id}.json`), 'utf8'));
     expect(snapshot.mounts['browser-plugin']).toBe(false);
     releaseSource();
     await expect(page.locator('.pilot-message.assistant').last()).toContainText('Continued the original task with Native Plugin evidence.');
     await expect(input).toBeEnabled();
-    await expect(page.getByText('已应用到接续回合')).toBeVisible();
+    await expect(page.getByText('Pilot 已开始使用新设置继续处理你的请求。')).toBeVisible();
     const completed = await turns();
     expect(completed).toHaveLength(2);
     expect(completed[0].status).toBe('completed');
@@ -131,7 +131,7 @@ test('web mounting keeps the active Goose Turn frozen, continues once with lates
     await expect.poll(async () => (await turns())[0].status).toBe('stopped');
     releaseStop();
     await expect(input).toBeEnabled();
-    await expect(page.getByText('已保存 · 自动继续已取消，等待下次消息')).toBeVisible();
+    await expect(page.getByText('已保存。本次未继续，下次发消息时使用新设置。')).toBeVisible();
     await page.reload();
     await expect(input).toBeEnabled();
     expect(await turns()).toHaveLength(3);

@@ -29,6 +29,12 @@ async function openPilot(page: Page) {
   ] } }));
   await page.route('**/sessions/*/turns', route => route.fulfill({ json: { turns: [] } }));
   await page.route('**/sessions/*/credential-requests', route => route.fulfill({ json: { requests: [] } }));
+  await page.route(/^https?:\/\/[^/]+\/plugins\/[^/?]+$/, route => {
+    const id = decodeURIComponent(new URL(route.request().url()).pathname.split('/').at(-1)!);
+    const plugin = initialPlugins.find(item => item.id === id);
+    return route.fulfill({ json: { ...plugin, instructions: '插件的完整使用说明。',
+      mcpServers: Object.fromEntries((plugin?.mcpServerNames ?? []).map(name => [name, { transport: 'stdio' }])) } });
+  });
   await page.goto('/');
   await expect(page.getByLabel('发送给 Anchor Pilot')).toBeEnabled();
 }
@@ -87,6 +93,7 @@ test('the capability rail leaves room to read, searches resources and syncs new 
   await openPilot(page);
   const rail = page.getByRole('complementary', { name: '会话插件挂载' });
   await expect(rail.locator('.session-plugin-card')).toHaveCount(3);
+  await expect(rail.locator('.pilot-plugins-intro')).toHaveCount(0);
   await expect(rail.locator('.pilot-plugins-summary')).toContainText('1 已挂载');
   const chatBox = await page.getByLabel('Pilot 对话', { exact: true }).boundingBox();
   const railBox = await rail.boundingBox();
@@ -95,8 +102,10 @@ test('the capability rail leaves room to read, searches resources and syncs new 
   expect(messagesBox!.height).toBeGreaterThan(page.viewportSize()!.height * .55);
   await page.screenshot({ path: test.info().outputPath('plugins-desktop.png') });
 
-  await rail.getByLabel('查看 Academic Research 的能力详情').click();
-  await expect(rail.locator('.session-plugin-resources').first()).toContainText('evidence-synthesis');
+  await rail.getByRole('button', { name: '查看 Academic Research 的详情', exact: true }).click();
+  const details = page.getByRole('dialog', { name: 'Academic Research · 插件详情', exact: true });
+  await expect(details).toContainText('evidence-synthesis');
+  await details.getByRole('button', { name: '关闭', exact: true }).click();
   const filters = rail.getByRole('group', { name: '插件筛选' });
   await filters.getByRole('button', { name: /^未挂载/ }).click();
   await expect(rail.locator('.session-plugin-card')).toHaveCount(2);
@@ -109,7 +118,7 @@ test('the capability rail leaves room to read, searches resources and syncs new 
   await rail.getByRole('button', { name: '查看全部插件' }).click();
   await rail.getByRole('switch', { name: '挂载 Docmost', exact: true }).click();
   await expect(rail.getByRole('switch', { name: '取消挂载 Docmost', exact: true })).toHaveAttribute('aria-checked', 'true');
-  await expect(rail.getByRole('status')).toContainText('下次发送消息时生效');
+  await expect(rail.getByRole('status')).toContainText('已保存，下次发消息时使用新设置');
   await expect(rail.locator('.pilot-plugins-summary')).toContainText('2 已挂载');
 
   // A mid-session installation needs no reload. A long list scrolls separately from the transcript
@@ -152,7 +161,6 @@ test('mobile keeps the conversation visible and provides a keyboard accessible p
   await drawer.getByRole('switch', { name: '挂载 Docmost', exact: true }).click();
   await expect(drawer.getByRole('alert')).toHaveText('插件依赖尚未准备完成，请稍后重试。');
   await expect(drawer.getByRole('switch', { name: '挂载 Docmost', exact: true })).toHaveAttribute('aria-checked', 'false');
-  await expect(drawer.getByRole('note')).toContainText('当前回合保持原有能力');
   await page.screenshot({ path: test.info().outputPath('plugins-mobile-drawer.png') });
   const drawerBox = await drawer.boundingBox();
   expect(drawerBox!.x).toBeGreaterThanOrEqual(0);

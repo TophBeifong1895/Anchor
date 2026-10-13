@@ -74,6 +74,7 @@ describe('the session plugin panel', () => {
     expect(container.textContent).toContain('已禁止联网');
     expect(container.textContent).toContain('该插件需要联网：当前任务已禁止联网');
     expect(container.textContent).toContain('允许联网');
+    expect(container.textContent).toContain('已保存，下次发消息时使用新设置');
   });
 
   it('renders a required Plugin as a switch that cannot move, and lets no switch past the guard', async () => {
@@ -84,11 +85,11 @@ describe('the session plugin panel', () => {
     await draw();
     const [toggle] = switches();
     expect(container.textContent).toContain('核心能力');
-    expect(container.textContent).toContain('core');
+    expect(container.querySelector('.plugin-card-name')?.textContent).toBe('核心能力');
     expect(container.textContent).toContain('必需');
     expect(container.textContent).toContain('工作流需要此插件，保持挂载。');
-    expect(container.textContent).toContain('1 Skills');
-    expect(container.textContent).toContain('MCP search、fetch');
+    expect(container.querySelector('button[aria-label="查看 核心能力 的详情"]')).not.toBeNull();
+    expect(container.querySelector('.plugin-card-description')?.textContent).toBe('图里预置的能力');
     // The disabled attribute is what makes it unclickable in a browser; jsdom would not deliver a
     // click to it anyway, so the guard that decides is asserted directly instead of through a click.
     expect(toggle.disabled).toBe(true);
@@ -98,6 +99,19 @@ describe('the session plugin panel', () => {
     expect(maySwitch(plugin({ id: 'core' }), true)).toBe(false);
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(posts()).toEqual([]);
+  });
+
+  it('does not infer network permission from effective access when the policy field is missing', async () => {
+    fetchMock.mockResolvedValueOnce(response(200, { plugins: [plugin({ id: 'network', name: '联网',
+      networkProvider: true, networkAllowed: true, on: true, explicitOn: true })] }));
+    await draw();
+    const policy = [...container.querySelectorAll<HTMLButtonElement>('.plugin-network-policy button')][0];
+    expect(policy.textContent).toBe('联网许可未知');
+    expect(policy.disabled).toBe(true);
+    expect(container.textContent).not.toContain('已禁止联网');
+    await act(async () => { policy.click(); });
+    expect(posts()).toHaveLength(0);
+    expect(switches()[0].getAttribute('aria-checked')).toBe('true');
   });
 
   it('sends one switch at a time while the first is still waiting on the Host', async () => {
@@ -130,7 +144,7 @@ describe('the session plugin panel', () => {
     expect(posts()[0][1]).toMatchObject({ method: 'POST', body: JSON.stringify({ on: true }) });
     expect(container.textContent).toContain('该插件在图里被声明为必需（required: true）');
     expect(switches()[0].getAttribute('aria-checked')).toBe('false');
-    expect(switches()[0].textContent).toBe('未挂载');
+    expect(container.querySelector('.plugin-card-status')?.textContent).toBe('未挂载');
     expect(container.textContent).not.toContain('已切换');
   });
 
@@ -141,9 +155,10 @@ describe('the session plugin panel', () => {
     const [toggle] = switches();
     await act(async () => { toggle.click(); });
     expect(switches()[0].getAttribute('aria-checked')).toBe('true');
-    expect(switches()[0].textContent).toBe('已挂载');
-    expect(container.textContent).toContain('已保存 · 下次发送消息时生效');
-    expect(container.textContent).toContain('当前回合保持原有能力');
+    expect(container.querySelector('.plugin-card-status')?.textContent).toBe('已挂载');
+    expect(container.textContent).toContain('已保存，下次发消息时使用新设置');
+    expect(container.querySelector('.pilot-plugins-intro')).toBeNull();
+    expect(container.textContent).not.toContain('当前回合保持原有能力');
     expect(container.textContent).not.toContain('已生效');
   });
 
@@ -156,13 +171,21 @@ describe('the session plugin panel', () => {
     await act(async () => { root.render(<SessionPlugins session="s-1" onContinuation={onContinuation} />); });
     await act(async () => { switches()[0].click(); });
     expect(onContinuation).toHaveBeenCalledExactlyOnceWith('s-1', 'source');
-    expect(container.textContent).toContain('当前回合正常结束后自动继续');
+    expect(container.textContent).toContain('Pilot 会先完成当前回复，再使用新设置继续处理你的请求。');
     await act(async () => { root.render(<SessionPlugins session="s-1" onContinuation={onContinuation}
       continuation={{ session: 's-1', source: 'source', state: { status: 'admitted', turn: 'next' } }} />); });
-    expect(container.textContent).toContain('已应用到接续回合');
+    expect(container.textContent).toContain('Pilot 已开始使用新设置继续处理你的请求。');
     await act(async () => { root.render(<SessionPlugins session="s-1" onContinuation={onContinuation}
       continuation={{ session: 's-1', source: 'source', state: { status: 'cancelled' } }} />); });
-    expect(container.textContent).toContain('自动继续已取消，等待下次消息');
+    expect(container.textContent).toContain('已保存。本次未继续，下次发消息时使用新设置。');
+    for (const state of [
+      { status: 'pending' as const, notice: '已保存。本次未继续，下次发消息时使用新设置。' },
+      { status: 'superseded' as const, notice: '已保存，Pilot 会在新的请求中使用新设置。' },
+    ]) {
+      await act(async () => { root.render(<SessionPlugins session="s-1" onContinuation={onContinuation}
+        continuation={{ session: 's-1', source: 'source', state: { status: state.status } }} />); });
+      expect(container.textContent).toContain(state.notice);
+    }
     expect(onContinuation).toHaveBeenCalledTimes(1);
   });
 
@@ -198,6 +221,54 @@ describe('the session plugin panel', () => {
     expect(container.textContent).toContain('贝塔');
     expect(container.textContent).toContain('不可用：技能目录视图不可用');
     expect(switches()).toHaveLength(2);
+  });
+
+  it('keeps unavailable mounted plugins removable and prevents attaching broken definitions', async () => {
+    fetchMock.mockResolvedValueOnce(response(200, { plugins: [
+      plugin({ id: 'mounted', on: true, available: false, error: '定义无法读取' }),
+      plugin({ id: 'broken', available: false, error: '入口缺失' }),
+    ] }));
+    await draw();
+    expect(switches()[0].disabled).toBe(false);
+    expect(switches()[1].disabled).toBe(true);
+    expect(container.querySelectorAll('.plugin-card-details')).toHaveLength(2);
+    expect(maySwitch(plugin({ id: 'bad', on: true, available: false }), false)).toBe(true);
+    expect(maySwitch(plugin({ id: 'bad', available: false }), false)).toBe(false);
+  });
+
+  it('clears old facts on a session prop change and ignores its late POST even without a remount', async () => {
+    let finishOld: (value: Response) => void = () => undefined;
+    let finishNew: (value: Response) => void = () => undefined;
+    fetchMock.mockResolvedValueOnce(response(200, { plugins: [plugin({ id: 'old' })] }));
+    fetchMock.mockImplementationOnce(() => new Promise<Response>(resolve => { finishOld = resolve; }));
+    await draw();
+    await act(async () => { switches()[0].click(); });
+    fetchMock.mockImplementationOnce(() => new Promise<Response>(resolve => { finishNew = resolve; }));
+    await act(async () => { root.render(<SessionPlugins session="s-2" />); });
+    expect(switches()).toHaveLength(0);
+    expect(container.textContent).not.toContain('old');
+    await act(async () => { finishOld(response(200, { plugin: plugin({ id: 'old', on: true }) })); });
+    expect(switches()).toHaveLength(0);
+    await act(async () => { finishNew(response(200, { plugins: [plugin({ id: 'new' })] })); });
+    expect(container.querySelector('.plugin-card-name')?.textContent).toBe('new');
+    expect(switches()[0].getAttribute('aria-checked')).toBe('false');
+  });
+
+  it('preserves known rows after a failed poll and refuses an older GET overwriting a successful change', async () => {
+    let finishPoll: (value: Response) => void = () => undefined;
+    fetchMock.mockResolvedValueOnce(response(200, { plugins: [plugin({ id: 'demo' })] }));
+    fetchMock.mockImplementationOnce(() => new Promise<Response>(resolve => { finishPoll = resolve; }));
+    await draw();
+    await act(async () => { await vi.advanceTimersByTimeAsync(POLL_MS); });
+    fetchMock.mockResolvedValueOnce(response(200, { plugin: plugin({ id: 'demo', on: true }) }));
+    await act(async () => { switches()[0].click(); });
+    await act(async () => { finishPoll(response(200, { plugins: [plugin({ id: 'demo' })] })); });
+    expect(switches()[0].getAttribute('aria-checked')).toBe('true');
+    fetchMock.mockResolvedValueOnce(response(503, { error: '插件库暂时不可读' }));
+    await act(async () => { await vi.advanceTimersByTimeAsync(POLL_MS); });
+    expect(switches()).toHaveLength(1);
+    expect(switches()[0].getAttribute('aria-checked')).toBe('true');
+    expect(container.textContent).toContain('插件库暂时不可读');
   });
 
   it('stops polling once the panel is closed', async () => {

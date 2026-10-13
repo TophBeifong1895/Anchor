@@ -1,178 +1,81 @@
 import { useEffect, useState } from 'react';
-import { BookOpen, RefreshCw, Search, X } from 'lucide-react';
+import { RefreshCw } from 'lucide-react';
 import { api, reason } from './api';
 import type { Plugin } from './model';
-import { Markdown } from './markdown';
+import { PluginCard, PluginDetails, PluginToolbar } from './PluginPanel';
+import { LibraryPluginDetails } from './LibraryPluginDetails';
 
-let catalogCache: Plugin[] | null = null;
-let catalogRequest: Promise<Plugin[]> | null = null;
-type PluginFilter = 'all' | 'attached' | 'available';
+type PluginFilter = 'all' | 'selected' | 'available';
 
-const loadCatalog = (): Promise<Plugin[]> => {
-  if (catalogCache) return Promise.resolve(catalogCache);
-  catalogRequest ??= api<{ plugins: Plugin[] }>('/plugins')
-    .then(data => { catalogCache = data.plugins; return data.plugins; })
-    .finally(() => { catalogRequest = null; });
-  return catalogRequest;
-};
-
-/** A node owns references; definitions are read from the shared file-backed library. */
+/** Graph owns draft references; Run owns captured metadata; the Library owns current definitions. */
 export function Plugins({ selected, onChange, disabled = false, recorded }:
   { selected?: string[]; onChange?: (ids: string[]) => void; disabled?: boolean; recorded?: Plugin[] }) {
-  const [catalog, setCatalog] = useState<Plugin[]>(() => catalogCache ?? []);
+  const [catalog, setCatalog] = useState<Plugin[]>([]);
+  const [catalogKnown, setCatalogKnown] = useState(false);
   const [error, setError] = useState('');
   const [opened, setOpened] = useState<Plugin | null>(null);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(recorded === undefined);
   const [revision, setRevision] = useState(0);
   const [query, setQuery] = useState('');
   const [filter, setFilter] = useState<PluginFilter>('all');
-  const [authorizing, setAuthorizing] = useState('');
-  const [oauthStatuses, setOauthStatuses] = useState<Record<string, boolean>>({});
   useEffect(() => {
     if (recorded !== undefined) return;
-    if (catalogCache) return;
     let active = true;
-    setLoading(true);
-    setError('');
-    loadCatalog().then(data => {
-      if (active) setCatalog(data);
-    }).catch(e => { if (active) setError(reason(e)); })
+    setLoading(true); setError('');
+    api<{ plugins: Plugin[] }>('/plugins').then(data => {
+      if (!Array.isArray(data.plugins)) throw new Error('插件列表响应无效，请重试。');
+      if (active) { setCatalog(data.plugins); setCatalogKnown(true); }
+    }).catch(problem => { if (active) setError(reason(problem)); })
       .finally(() => { if (active) setLoading(false); });
     return () => { active = false; };
   }, [recorded, revision]);
-  useEffect(() => {
-    if (recorded !== undefined || catalog.length === 0) return;
-    let active = true;
-    const refreshStatuses = async () => {
-      const statuses = await Promise.all(catalog.flatMap(plugin =>
-        Object.entries(plugin.mcpServers ?? {})
-          .filter(([, server]) => server.auth === 'oauth')
-          .map(async ([name]) => {
-            const key = `${plugin.id}/${name}`;
-            try {
-              const status = await api<{ authorized: boolean; expired?: boolean }>(
-                `/plugins/${encodeURIComponent(plugin.id)}/oauth/${encodeURIComponent(name)}`);
-              return [key, status.authorized && !status.expired] as const;
-            } catch {
-              return [key, false] as const;
-            }
-          })));
-      if (active) setOauthStatuses(Object.fromEntries(statuses));
-    };
-    const onFocus = () => { void refreshStatuses(); };
-    void refreshStatuses();
-    window.addEventListener('focus', onFocus);
-    return () => {
-      active = false;
-      window.removeEventListener('focus', onFocus);
-    };
-  }, [catalog, recorded]);
-  const items: Plugin[] = recorded ?? [...catalog, ...(selected ?? []).filter(id => !catalog.some(p => p.id === id))
-    .map(id => ({ id, name: id, description: '', available: false, error: 'Plugin 未在库中找到' }))];
+  useEffect(() => { setOpened(null); setQuery(''); setFilter('all'); }, [recorded !== undefined]);
+  type CatalogItem = Plugin & { unconfirmed?: boolean };
+  const items: CatalogItem[] = recorded ?? [...catalog, ...(selected ?? []).filter(id => !catalog.some(plugin => plugin.id === id))
+    .map(id => ({ id, name: id, description: '', available: catalogKnown ? false : undefined,
+      error: catalogKnown ? '插件未在库中找到' : undefined, unconfirmed: !catalogKnown }))];
   const selectedIds = new Set(selected ?? []);
-  const attached = items.filter(plugin => selectedIds.has(plugin.id));
   const needle = query.trim().toLocaleLowerCase();
-  const visible = items
-    .filter(plugin => filter === 'attached' ? selectedIds.has(plugin.id)
-      : filter === 'available' ? plugin.available !== false : true)
-    .filter(plugin => !needle || [plugin.name, plugin.id, plugin.description]
-      .some(value => value.toLocaleLowerCase().includes(needle)))
-    .sort((left, right) => Number(selectedIds.has(right.id)) - Number(selectedIds.has(left.id))
+  const visible = items.filter(plugin => recorded !== undefined || filter === 'all'
+    || (filter === 'selected' ? selectedIds.has(plugin.id) : plugin.available !== false))
+    .filter(plugin => !needle || [plugin.name, plugin.id, plugin.description, ...(plugin.skills ?? []), ...Object.keys(plugin.mcpServers ?? {})]
+      .some(value => value?.toLocaleLowerCase().includes(needle)))
+    .sort((left, right) => (recorded === undefined ? Number(selectedIds.has(right.id)) - Number(selectedIds.has(left.id)) : 0)
       || left.name.localeCompare(right.name, 'zh-CN'));
-  const read = async (id: string) => {
-    setError('');
-    try { setOpened(await api<Plugin>(`/plugins/${encodeURIComponent(id)}`)); }
-    catch (e) { setError(reason(e)); }
-  };
-  return <section className="plugins-panel" aria-label="Plugin 能力">
-    <div className="plugins-header"><div>
-      <div className="plugins-kicker">Agent 能力</div>
-      <h3><BookOpen size={15} />Plugin</h3>
+  const status = (plugin: CatalogItem) => recorded !== undefined ? '运行时绑定记录'
+    : plugin.unconfirmed ? '已选择 · 状态未确认'
+    : plugin.available === false ? selectedIds.has(plugin.id) ? '已选择 · 不可用' : '不可用'
+      : selectedIds.has(plugin.id) ? '已选择' : '未选择';
+  return <section className="plugin-panel plugins-panel" aria-label={recorded !== undefined ? '运行插件记录' : '节点插件配置'}>
+    <div className="plugin-panel-header"><div><p className="plugin-panel-context">{recorded !== undefined ? '本次运行' : '节点能力'}</p><h3>插件</h3></div>
+      {recorded === undefined && <button className="plugin-panel-refresh" type="button" disabled={loading}
+        onClick={() => setRevision(value => value + 1)}><RefreshCw size={14} />刷新</button>}
     </div>
-      {recorded === undefined && <button className="icon-text-button" type="button" disabled={loading} onClick={() => {
-        catalogCache = null;
-        setRevision(v => v + 1);
-      }}><RefreshCw size={13} />刷新</button>}
-    </div>
-    {recorded !== undefined && <p className="inspector-note">本次运行解析的 Plugin 记录；不代表实际调用或任务成功。</p>}
-    {onChange && attached.length > 0 && <div className="plugin-attached">
-      <div className="plugin-subheading">已挂载</div>
-      <div className="plugin-chips">{attached.map(plugin => <span className="plugin-chip" key={plugin.id}>
-        <span title={plugin.id}>{plugin.name}</span>
-        <button type="button" aria-label={`移除 ${plugin.name}`} disabled={disabled}
-          onClick={() => onChange((selected ?? []).filter(id => id !== plugin.id))}><X size={12} /></button>
-      </span>)}</div>
-    </div>}
-    {!loading && items.length > 0 && <div className="plugin-browser">
-      <label className="plugin-search"><Search size={14} /><input aria-label="搜索 Plugin" value={query}
-        placeholder="搜索能力名称、标识或说明…" onChange={event => setQuery(event.target.value)} /></label>
-      <div className="plugin-filters" role="group" aria-label="Plugin 筛选">
-        {([['all', '全部'], ['attached', '已挂载'], ['available', '可用']] as [PluginFilter, string][]).map(([value, label]) =>
-          <button key={value} type="button" className={filter === value ? 'chosen' : ''}
-            aria-pressed={filter === value} onClick={() => setFilter(value)}>{label}</button>)}
-      </div>
-    </div>}
-    {loading && <p role="status">正在读取 Plugin 库…</p>}
-    {error && <p role="alert" className="plugin-error">{error}</p>}
-    {!loading && !items.length && <p className="inspector-note">{recorded !== undefined
-      ? '此运行没有 Plugin 绑定记录。' : '还没有 Plugin。在共享库中添加定义后刷新，即可为节点挂载。'}</p>}
-    {!loading && items.length > 0 && !visible.length && <p className="inspector-note">没有匹配的 Plugin。</p>}
-    <div className="plugin-list">{visible.map(plugin => {
-      const isAttached = selectedIds.has(plugin.id);
-      return <article className={`plugin-row${isAttached ? ' attached' : ''}${plugin.available === false ? ' unavailable' : ''}`} key={plugin.id}>
-        {onChange ? <label className="plugin-row-label"><input type="checkbox" checked={isAttached}
-          disabled={disabled || plugin.available === false && !selected?.includes(plugin.id)}
+    <p className="plugin-panel-note">{recorded !== undefined ? '本次运行保存的绑定记录，不代表实际调用或任务成功。' : '更改保存后用于后续运行。'}</p>
+    {!!items.length && <PluginToolbar query={query} onQuery={setQuery} filter={filter}
+      onFilter={value => setFilter(value as PluginFilter)} filters={recorded !== undefined ? [] : [
+        { value: 'all', label: '全部' }, { value: 'selected', label: '已选择' }, { value: 'available', label: '可用' },
+      ]} />}
+    {loading && <p className="plugin-message" role="status">正在读取插件库…</p>}
+    {error && <p role="alert" className="plugin-message is-error">插件库读取失败：{error}</p>}
+    {!loading && !error && !items.length && <div className="plugin-empty"><strong>{recorded !== undefined ? '没有插件绑定记录' : '还没有安装插件'}</strong>
+      <p>{recorded !== undefined ? '此运行没有保存插件绑定信息。' : '告诉 Pilot 你需要什么能力。安装完成后刷新，即可为节点选择插件。'}</p></div>}
+    {!!items.length && !visible.length && <div className="plugin-empty"><strong>没有匹配的插件</strong><p>试试其他名称，或清空搜索。</p>
+      <button type="button" onClick={() => { setQuery(''); setFilter('all'); }}>查看全部插件</button></div>}
+    <div className="plugin-card-list">{visible.map(plugin => {
+      const isSelected = selectedIds.has(plugin.id);
+      return <PluginCard key={plugin.id} plugin={plugin} status={status(plugin)}
+        active={recorded === undefined && isSelected} unavailable={recorded === undefined && plugin.available === false}
+        onDetails={() => setOpened(plugin)} control={recorded === undefined && onChange ? <input className="plugin-selection" type="checkbox"
+          aria-label={`${isSelected ? '取消选择' : '选择'} ${plugin.name || plugin.id}`} checked={isSelected}
+          disabled={disabled || plugin.available === false && !isSelected}
           onChange={event => onChange(event.target.checked ? [...(selected ?? []), plugin.id]
-            : (selected ?? []).filter(id => id !== plugin.id))} /><span className="plugin-row-copy">
-              <strong>{plugin.name}</strong><small>{plugin.id}</small>
-              {plugin.description && <span>{plugin.description}</span>}
-            </span></label> : <div className="plugin-row-label"><strong>{plugin.name}</strong><small>{plugin.id}</small></div>}
-        <div className="plugin-row-actions">
-          {!!plugin.skills?.length && <span className="plugin-tool-count">{plugin.skills.length} Skills</span>}
-          {recorded === undefined && Object.entries(plugin.mcpServers ?? {}).filter(([, server]) => server.auth === 'oauth')
-            .map(([name]) => <span className="plugin-oauth-actions" key={name}>
-              <button type="button" disabled={!!authorizing}
-              onClick={async () => {
-                setAuthorizing(`${plugin.id}/${name}`); setError('');
-                const popup = window.open('about:blank', '_blank');
-                try {
-                  const result = await api<{ authorization_url: string }>(
-                    `/plugins/${encodeURIComponent(plugin.id)}/authorize/${encodeURIComponent(name)}`, 'POST');
-                  if (popup) {
-                    popup.opener = null;
-                    popup.location.assign(result.authorization_url);
-                  }
-                  else window.location.assign(result.authorization_url);
-                } catch (e) {
-                  popup?.close();
-                  setError(reason(e));
-                } finally { setAuthorizing(''); }
-              }}>{authorizing === `${plugin.id}/${name}` ? '等待授权…'
-                : `${oauthStatuses[`${plugin.id}/${name}`] ? '重新授权' : '授权'} ${name}`}</button>
-              {oauthStatuses[`${plugin.id}/${name}`] && <button type="button" disabled={!!authorizing}
-                onClick={async () => {
-                  const key = `${plugin.id}/${name}`;
-                  setAuthorizing(key); setError('');
-                  try {
-                    await api(`/plugins/${encodeURIComponent(plugin.id)}/oauth/${encodeURIComponent(name)}`, 'DELETE');
-                    setOauthStatuses(current => ({ ...current, [key]: false }));
-                  } catch (e) { setError(reason(e)); }
-                  finally { setAuthorizing(''); }
-                }}>撤销 {name}</button>}
-            </span>)}
-          {recorded === undefined && plugin.available !== false
-            && <button type="button" onClick={() => void read(plugin.id)}>查看说明</button>}
-        </div>
-        {plugin.error && <p className="plugin-error">不可用：{plugin.error}</p>}
-        {!!plugin.unsupported?.length && <p className="plugin-error">暂不支持：{plugin.unsupported.join('、')}</p>}
-        {recorded !== undefined && plugin.digest && <small className="plugin-digest">内容摘要：{plugin.digest.slice(0, 12)}</small>}
-      </article>;
+            : (selected ?? []).filter(id => id !== plugin.id))} /> : undefined}>
+        {plugin.error && <p className="plugin-message is-error">不可用：{plugin.error}</p>}
+        {!!plugin.unsupported?.length && <p className="plugin-message is-error">暂不支持：{plugin.unsupported.join('、')}</p>}
+      </PluginCard>;
     })}</div>
-    {opened && <div className="plugin-instructions">
-      <div className="section-heading"><h3>{opened.name}</h3><button type="button" onClick={() => setOpened(null)}>关闭说明</button></div>
-      <p className="inspector-note">来自当前共享库，文件维护，只读查看。</p>
-      <Markdown text={opened.instructions ?? ''} prefix={`plugin-${opened.id}`}
-        fileBase={`/plugins/${encodeURIComponent(opened.id)}/files/`} />
-    </div>}
+    {opened && (recorded !== undefined ? <PluginDetails plugin={opened} status={status(opened)} recorded close={() => setOpened(null)} />
+      : <LibraryPluginDetails key={opened.id} plugin={opened} status={status(opened)} close={() => setOpened(null)} />)}
   </section>;
 }

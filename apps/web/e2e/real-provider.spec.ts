@@ -95,7 +95,7 @@ test('a killed server is restarted and the same Session continues in the browser
     // The reply's own reference opens the object page and comes back to this Session.
     await answer.getByRole('link', { name: 'real-acceptance' }).click();
     await expect(page.locator('select[aria-label="当前工作流"]')).toHaveValue('real-acceptance');
-    await page.getByRole('button', { name: '返回会话' }).click();
+    await page.getByRole('button', { name: 'Pilot', exact: true }).click();
     await expect(page.locator('.pilot-chat-heading strong')).toHaveAttribute('title', sessionId!);
     await expect(input).toBeEnabled();
     expect(errors).toEqual([]);

@@ -10,7 +10,7 @@ import { loopbackProvider, toolResultField } from './fixtures/loopback-provider'
 
 test.use({ launchOptions: { executablePath: process.env.ANCHOR_BROWSER_BINARY } });
 
-test('real Rust Host and Goose retain active trace, canonical completion and frozen Plugin history after refresh', async ({ page, request }) => {
+test('real Rust Host and Goose retain active trace, canonical completion and recorded Plugin metadata after refresh', async ({ page, request }) => {
   test.skip(!process.env.ANCHOR_GOOSE_BINARY, 'pinned Goose binary required');
   test.setTimeout(90000);
   const root = await mkdtemp(join(tmpdir(), 'anchor-goose-trace-browser-'));
@@ -33,7 +33,9 @@ test('real Rust Host and Goose retain active trace, canonical completion and fro
     if (position === 3) return { text: 'Native node result was submitted.' };
     throw new Error('unexpected local Provider request');
   });
-  const host = await nativeHost(root, { graphName: 'native-trace', definition: graph, environment: await gooseEnvironment(provider.url) });
+  const host = await nativeHost(root, { graphName: 'deployment-pilot', definition: {
+    entry: 'idle', ops: { idle: { run: 'true' } }, nodes: [{ id: 'idle', op: 'idle' }], edges: [],
+  }, environment: await gooseEnvironment(provider.url) });
   await fixturePlugin(host.environment.ANCHOR_RUNNER_LIBRARY_ROOT!);
   const base = host.base;
   let backend: ChildProcess | undefined;
@@ -41,6 +43,8 @@ test('real Rust Host and Goose retain active trace, canonical completion and fro
     backend = host.start();
     await expect(async () => expect((await request.get(`${base}/health`)).ok(), host.logs).toBeTruthy()).toPass({ timeout: 20000 });
     expect(provider.calls).toHaveLength(0);
+    const created = await request.post(`${base}/graphs`, { data: { name: 'native-trace', definition: graph } });
+    expect(created.ok(), await created.text()).toBeTruthy();
     graph.nodes[0].plugins = ['browser-plugin'];
     const mounted = await request.put(`${base}/graphs/native-trace`, { data: { definition: graph } });
     expect(mounted.ok(), await mounted.text()).toBeTruthy();
@@ -67,6 +71,7 @@ test('real Rust Host and Goose retain active trace, canonical completion and fro
     expect(binding.id).toBe('browser-plugin');
     const detail = await (await request.get(`${base}/runs/${run}`)).json();
     expect(detail.plugins.worker[0]).toMatchObject({ id: binding.id, digest: binding.digest });
+    const recordedName = detail.plugins.worker[0].name || binding.id;
     for (const [node, file] of [['worker', 'evidence.txt'], ['verify', 'verified.txt']]) {
       const artifact = await readFile(join(root, 'state/artifacts', saved.results[node][0].commit.id, 'files', file), 'utf8');
       expect(artifact).toBe('once');
@@ -80,9 +85,12 @@ test('real Rust Host and Goose retain active trace, canonical completion and fro
     await page.locator('.execution-node').filter({ has: page.locator('strong', { hasText: /^worker$/ }) }).click();
     await expect(page.locator('.inspector .said').first()).toContainText('Native browser draft');
     await expect(page.locator('.inspector .node-summary')).toContainText('Canonical native reply');
-    await page.getByRole('button', { name: 'Plugin', exact: true }).click();
-    await expect(page.locator('.plugins-panel')).toContainText('browser-plugin');
-    await expect(page.locator('.plugins-panel')).toContainText(binding.digest.slice(0, 12));
+    await page.getByRole('button', { name: '插件', exact: true }).click();
+    await page.getByRole('button', { name: `查看 ${recordedName} 的详情`, exact: true }).click();
+    const pluginDetails = page.getByRole('dialog', { name: `${recordedName} · 插件详情`, exact: true });
+    await expect(pluginDetails).toContainText('browser-plugin');
+    await expect(pluginDetails).toContainText(binding.digest.slice(0, 12));
+    await pluginDetails.getByRole('button', { name: '关闭', exact: true }).click();
     expect((await (await request.get(`${base}/runs/${run}`)).json()).plugins.worker[0].digest).toBe(binding.digest);
     await page.setViewportSize({ width: 390, height: 844 });
     expect(await page.locator('.inspector').evaluate(element => element.scrollWidth - element.clientWidth)).toBeLessThanOrEqual(1);
@@ -91,7 +99,7 @@ test('real Rust Host and Goose retain active trace, canonical completion and fro
     await writeFile(join(root, 'evidence.json'), JSON.stringify({ status: 'passed', provider: 'deterministic loopback',
       real_model_calls: 0, actual_host: true, actual_goose: true, provider_requests: provider.calls.length,
       host_sha256: createHash('sha256').update(await readFile(nativeHostBinary())).digest('hex'),
-      goose_sha256: gooseSha256, run, during, frozen_plugin: binding }));
+      goose_sha256: gooseSha256, run, during, recorded_plugin: binding }));
     console.log(`Native trace browser evidence: ${root}`);
   } finally {
     release(); await stop(backend); await provider.close();

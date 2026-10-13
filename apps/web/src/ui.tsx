@@ -10,9 +10,21 @@ export function Modal({ title, close, children, className = '' }:
   { title: string; close: () => void; children: ReactNode; className?: string }) {
   const ref = useRef<HTMLDialogElement>(null);
   const titleId = useId();
-  useEffect(() => { ref.current?.showModal(); }, []);
+  useEffect(() => {
+    const dialog = ref.current;
+    const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    dialog?.showModal();
+    return () => {
+      // close() releases native inertness before a nested dialog returns focus to its parent.
+      dialog?.close();
+      queueMicrotask(() => { if (previous?.isConnected) previous.focus(); });
+    };
+  }, []);
   return <dialog ref={ref} className={`modal ${className}`} aria-labelledby={titleId}
-    onCancel={event => { event.preventDefault(); close(); }} onClick={event => { if (event.target === event.currentTarget) close(); }}>
+    onCancel={event => {
+      event.preventDefault(); event.stopPropagation();
+      if (event.target === event.currentTarget) close();
+    }} onClick={event => { if (event.target === event.currentTarget) close(); }}>
     <div className="modal-content">
       <header><h2 id={titleId}>{title}</h2><ToolButton icon={X} label="关闭" onClick={close} /></header>
       {children}

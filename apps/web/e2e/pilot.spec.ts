@@ -211,6 +211,9 @@ test('Pilot streams text and tool activity, and resumes the stream from the last
   const messages: Array<{ role: string; text: string }> = [];
   let turns: Turn[] = [];
   let reconnects = 0;
+  await page.route('**/sessions/stream/turns/turn-1', route => route.fulfill({
+    json: { turn: turns[0], continuation: { status: 'none' } },
+  }));
   await page.route('**/graphs', route => route.fulfill({ json: { graphs: [] } }));
   await page.route('**/runs', route => route.fulfill({ json: { runs: [] } }));
   await page.route('**/timeline*', route => route.fulfill({ json: { runs: [], scheduled: [], schedules: [] } }));
@@ -271,6 +274,9 @@ test('Pilot confirms a deletion before it runs and continues the paused run afte
   const calls: string[] = [];
   let resumed = false;
   let turns: Turn[] = [];
+  await page.route('**/sessions/gated/turns/turn-1', route => route.fulfill({
+    json: { turn: turns[0], continuation: { status: 'none' } },
+  }));
   const pending = {
     tool_call_id: 'call-1', key: 'call-1', action: 'graph_delete', target: 'demo',
     proposal: { graph: 'demo' },
@@ -302,7 +308,11 @@ test('Pilot confirms a deletion before it runs and continues the paused run afte
     return route.fulfill({ status: 202, json: { turn: inProgress('turn-1', 'gated', body.message ?? null) } });
   });
   // The decision is recorded on its own; running the tool is a separate resume the UI must trigger.
-  await page.route('**/sessions/*/confirm', route => route.fulfill({ json: { confirmed: true } }));
+  await page.route('**/sessions/gated/confirm', route => {
+    expect(route.request().method()).toBe('POST');
+    expect(route.request().postDataJSON()).toEqual({ action: pending.action, approval_key: pending.key });
+    return route.fulfill({ json: { confirmed: true } });
+  });
   await page.goto('/');
   await page.getByRole('button', { name: 'Pilot', exact: true }).click();
   await page.locator('.pilot-session').filter({ hasText: base.title }).click();
@@ -369,26 +379,26 @@ test('a reply opens the Graph, the Run and the file it links, and returns to the
 
   // The Run link opens the run detail the workbench already has, without a second object view.
   await page.getByRole('link', { name: run }).click();
-  await expect(page.getByRole('button', { name: '返回会话' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Pilot', exact: true })).toBeVisible();
   await expect(page.locator('select[aria-label="当前工作流"]')).toHaveValue('demo');
   await expect(page.getByTestId('execution-canvas')).toBeVisible();
 
-  // The way back is the session it was opened from, not a new one and not the session list.
-  await page.getByRole('button', { name: '返回会话' }).click();
+  // Switching to Pilot returns to the session it was opened from.
+  await page.getByRole('button', { name: 'Pilot', exact: true }).click();
   await expect(page.locator('.pilot-chat-heading strong')).toHaveAttribute('title', session.id);
 
   // The file link opens that Run at that node and expands the linked artifact.
   await page.getByRole('link', { name: 'result.txt' }).click();
   await expect(page.locator('aside.inspector h3')).toContainText('write');
   await expect(page.locator('.file-preview')).toContainText('artifact-opened');
-  await page.getByRole('button', { name: '返回会话' }).click();
+  await page.getByRole('button', { name: 'Pilot', exact: true }).click();
   await expect(page.locator('.pilot-chat-heading strong')).toHaveAttribute('title', session.id);
 
   // The Graph link opens the graph page, and every page keeps the way back.
   await page.getByRole('link', { name: 'demo' }).click();
   await expect(page.getByRole('button', { name: '图编排', exact: true })).toHaveAttribute('aria-pressed', 'true');
   await expect(page.locator('select[aria-label="当前工作流"]')).toHaveValue('demo');
-  await page.getByRole('button', { name: '返回会话' }).click();
+  await page.getByRole('button', { name: 'Pilot', exact: true }).click();
   await expect(page.locator('.pilot-chat-heading strong')).toHaveAttribute('title', session.id);
   await expect(page.locator('article.pilot-message.assistant').last()).toContainText(run);
   expect(errors).toEqual([]);
