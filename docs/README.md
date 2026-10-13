@@ -1,29 +1,32 @@
 # 文档目录
 
-| 文档 | 用途 |
+按当前任务选择入口，沿链接读取需要的契约；不用通读整张目录。实现行为、产品方向、验收状态分别维护，历史材料只用于查证。
+
+## 从这里开始
+
+| 要做什么 | 入口 |
 | --- | --- |
-| [使用指南](usage.md) | 本地启动、配置、Graph、Run、Session 与工具 |
-| [开发指南](development.md) | 代码归属、工作节奏与验证命令 |
-| [当前架构](architecture.md) | Rust 实现、事实所有者和当前边界 |
-| [产品与系统架构](product-architecture.md) | 产品目标、执行不变量和未冻结需求 |
-| [开发台账](pilot-development-plan.md) | 实际交付、验收证据和待验收项 |
-| [Pilot 自主获取与开发 Plugin 计划](pilot-plugin-authoring-development-plan.md) | Python/Rust 候选获取、开发、自测、安装与清理的实施顺序及上下文接续 |
-| [Pilot 初始化与 Python 开发依赖计划](pilot-initialization-and-development-plan.md) | 模型配置后的空机器初始化、普通命令使用开发依赖，以及共享与交付边界 |
-| [Plugin](plugins.md) | 清单、Skill、资源、MCP 和权限 |
-| [Pilot 任务联网](network-plugin.md) | 联网 Plugin 的主动/依赖启用、授权、工具和部署候选 |
-| [插件依赖与 Python 视图：标准](plugin-dependencies.md) | 依赖属于插件、共享存储 + 视图、run 快照、reload、回收（**现行标准**） |
-| [小型 Graph 回归](runtime-contract-tests.md) | 确定性运行时检查与证据 |
-| [生产候选回归](rust-production-candidate.md) | release Host/Web/Goose 包的隔离执行 |
-| [生产部署](rust-production-deployment.md) | source-free 包、环境与 systemd |
-| [切换准备](rust-production-cutover.md) | 旧数据盘点、独立根与备份索引 |
-| [Goose 接入决定](goose-runtime-migration.md) | ACP/MCP 的边界与取舍 |
-| [Graph 作者契约](rust-graph-authoring-contract.md) | 用户 JSON 与执行 IR |
-| [Graph 组合](graph-composition-design.md) | 内联子图、独立调用与 fanout/join |
-| [Web API 契约](rust-frontend-api-contract.md) | 资源 API 与前端投影 |
-| [企业微信](wecom-assistant.md) | 原生网关、用户授权与 Session |
-| [RSI](rsi.md) | 证据、公开生态审查和改进提案 |
-| [本机工作周报](weekly-work-report.md) | 采集、评审和发布门禁 |
+| 安装、启动或使用 Anchor | [使用指南](usage.md) |
+| 修改代码、运行检查、维护文档 | [开发指南](development.md) 与 [开发约定](../AGENTS.md) |
+| 确定职责、事实所有者与执行边界 | [当前架构](architecture.md)；产品目标另见 [产品架构](product-architecture.md) |
+| 判断什么验过、还有什么没关闭 | [当前验收与待办](pilot-development-plan.md) |
 
-当前依赖以 [Cargo workspace](../rust/Cargo.toml)、[Cargo.lock](../rust/Cargo.lock) 和 [前端配置](../apps/web/package.json) 为准。进度与测试数量只以台账中的具体执行记录为证据。
+## 按任务查契约
 
-[历史归档](archive/README.md) 保留早期设计、旧执行器和迁移调研，供追溯使用；其中的旧命令、源码链接和待办不适用于当前代码。删除旧实现不会转换或清理用户的旧工作记录。
+| 任务 | 当前文档 |
+| --- | --- |
+| Pilot 初始化、Python/Rust 开发、候选自测与交付 | [Pilot 开发](pilot-development.md) |
+| Plugin 清单、安装、权限与按需披露 | [Plugin](plugins.md) |
+| 共享包、只读视图、私有开发环境与回收 | [依赖标准](plugin-dependencies.md) |
+| 联网默认、主动/依赖启用与禁止 | [任务联网](network-plugin.md) |
+| Graph 编译、模块与组合 | [作者契约](rust-graph-authoring-contract.md)、[组合契约](graph-composition-design.md)、[Kernel 模块](rust-graph-module-design.md) |
+| HTTP API 与 Web 投影 | [API 契约](rust-frontend-api-contract.md) |
+| Runtime 或发行验证 | [确定性回归](runtime-contract-tests.md)、[候选回归](rust-production-candidate.md) |
+| 部署、旧数据盘点与切换 | [部署](rust-production-deployment.md)、[切换](rust-production-cutover.md) |
+| 渠道与业务 Graph | [企业微信](wecom-assistant.md)、[RSI](rsi.md)、[周报](weekly-work-report.md) |
+| 理解 Goose 接入取舍 | [接入决定](goose-runtime-migration.md) |
+| 后续 MCP 按需连接 | [未实施路线](goose-native-capability-reuse-plan.md) |
+
+依赖版本以 [Cargo workspace](../rust/Cargo.toml)、[Cargo.lock](../rust/Cargo.lock) 和 [前端配置](../apps/web/package.json) 为准。当前文档直接更新，完成计划退出活跃入口；结论链接到相应提交或验收产物，记录方法见开发指南。
+
+[历史归档](archive/README.md) 保存已完成计划、旧执行器与验收过程。旧命令、部署状态和“下一步”仅代表当时背景；归档不改变用户数据，也不要求新任务读取历史全文。

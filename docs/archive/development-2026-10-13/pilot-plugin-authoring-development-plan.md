@@ -1,8 +1,10 @@
 # Pilot 自主获取与开发 Plugin：专项开发计划
 
+> 历史快照（截至 2026-10-13）：保留当时的方案、执行记录与验收边界，不再追加，也不作为当前实现、授权或待办。当前行为见 [当前架构](../../architecture.md)，仍未关闭的事项见 [当前验收与待办](../../pilot-development-plan.md)。正文中的“当前”、PID、部署状态和读取顺序均以记录当时为背景。
+
 编制日期：2026-10-11。用户后续已明确授权按 S1–S4 实施。下面保留编制时的基础、目标和接入约束；实际交付与证据以开发台账为准，计划中的要求不自动成为完成状态。
 
-本文保存已讨论的目标、边界、代码接入点、实施顺序和接续开发上下文。[开发台账](pilot-development-plan.md) 仍是实际交付与验收状态的唯一台账；[当前架构](architecture.md) 描述实现，[产品与系统架构](product-architecture.md#架构指导新能力放在哪里) 描述目标。本文不另建进度台账，也不把计划写成已完成能力。
+本文保存已讨论的目标、边界、代码接入点、实施顺序和接续开发上下文。[开发台账](pilot-development-plan.md) 仍是实际交付与验收状态的唯一台账；[当前架构](../../architecture.md) 描述实现，[产品与系统架构](../../product-architecture.md#架构指导新能力放在哪里) 描述目标。本文不另建进度台账，也不把计划写成已完成能力。
 
 ## 1. 用户目标与已确认的取舍
 
@@ -153,21 +155,21 @@ Session 删除不删除正式安装 Plugin、共享包存储或共享工具链�
 
 | 工作包 | 主要路径与符号 | 注意点 |
 | --- | --- | --- |
-| Pilot 装配 | [pilot_tools.rs](../rust/anchor-runner-host/src/pilot_tools.rs)：`pilot_plugin_sandbox`、`frozen_plugin_tools`、`PilotTools`、`workspace_directory` | Session 任务根与部署根分开；冻结网络的结果需要供新工具复用 |
-| 两个入口 | [api/turns.rs](../rust/anchor-runner-host/src/api/turns.rs)、[api/responses.rs](../rust/anchor-runner-host/src/api/responses.rs) | 都会创建 Pilot 工具/执行上下文，不遗漏 Responses |
-| ACP 与原生交互 | [goose_acp/pilot.rs](../rust/anchor-runner-host/src/goose_acp/pilot.rs)、[pilot_interaction.rs](../rust/anchor-runner-host/src/goose_acp/pilot_interaction.rs) | 工具定义/分发、取消、原生安装确认；Graph 删除仍用部署根 |
-| Prompt 与原生目录 | [pilot_host.rs](../rust/anchor-runner-host/src/pilot_host.rs)：`scope`、`INSTRUCTIONS` | Goose 内部 scope 绑定与任务工作区独立 |
-| 本地资源读取 | [pilot_tools/plugins.rs](../rust/anchor-runner-host/src/pilot_tools/plugins.rs)、[resource_read.rs](../rust/anchor-runner-host/src/resource_read.rs) | 复用 confined resource read，不开放任意文件读取 |
-| 文件/命令工具 | [node_tools.rs](../rust/anchor-runner-host/src/node_tools.rs)：`NodeTools`、`DEFAULT_TIMEOUT` | ToolPort 复用；构建时限、输出和取消 |
-| 工具环境与沙箱 | [tool_environment.rs](../rust/anchor-runner-host/src/tool_environment.rs)、[anchor-sandbox-bwrap](../rust/anchor-sandbox-bwrap/src/lib.rs) | 现有授权入口、只读环境和执行目录；不能只改命令白名单 |
-| Python 准备 | [plugin_dependencies.rs](../rust/anchor-runner-host/src/plugin_dependencies.rs)：`land`、[dependency_provision](../rust/anchor-runner-host/src/dependency_provision/mod.rs)、[plugin_view.rs](../rust/anchor-runner-host/src/plugin_view.rs) | 提取准备与发布，候选空间与正式视图区分，取包和 build 的权限不能混淆 |
-| 安装用例 | [application/plugins.rs](../rust/anchor-runner-host/src/application/plugins.rs)：`plugin_install_precondition`、`install_plugin_if_unchanged` | 保留确认前后复核、正式 Library 锁及实际依赖结果 |
-| 候选审查和回收 | [anchor-library](../rust/anchor-library/src/lib.rs)、[review.rs](../rust/anchor-library/src/review.rs)、[reclaim.rs](../rust/anchor-library/src/reclaim.rs) | 复用目录审查/staging；正式视图回收只认识正式 Plugin 引用 |
-| MCP 测试 | [tool_host.rs](../rust/anchor-runner-host/src/tool_host.rs)：`McpToolConfig`、`SandboxLaunch`、`PluginToolHost`；[anchor-mcp-host](../rust/anchor-mcp-host/src/lib.rs)：`connect_sandboxed_stdio` | 复用真实启动、tools/list 与 tools/call，不复制 MCP 客户端 |
-| Session 删除 | [api/sessions.rs](../rust/anchor-runner-host/src/api/sessions.rs)、[SessionStore](../rust/anchor-platform-session/src/store.rs) | 从仅存储删除提升为 Host 生命周期协调，保留现有前置条件 |
-| Run/Graph 清理 | [run_data.rs](../rust/anchor-runner-host/src/run_data.rs)、[application.rs](../rust/anchor-runner-host/src/application.rs)、[run_deletions.rs](../rust/anchor-runner-host/src/run_deletions.rs) | 先保留共享 scope 归属，再移除其发现所依赖的元数据 |
-| 原生会话归属 | [goose_acp/conversation.rs](../rust/anchor-runner-host/src/goose_acp/conversation.rs)、[node_host.rs](../rust/anchor-runner-host/src/node_host.rs)：`conversation_hint_for` | scope lease、Graph/Session/Run 引用与前驱历史保护 |
-| 开发指导 | [plugin-authoring/SKILL.md](../plugins/anchor-steward/skills/plugin-authoring/SKILL.md)、[Plugin 文档](plugins.md) | 清除与现有依赖准备能力冲突的指导，确保默认 Pilot 可获得 |
+| Pilot 装配 | [pilot_tools.rs](../../../rust/anchor-runner-host/src/pilot_tools.rs)：`pilot_plugin_sandbox`、`frozen_plugin_tools`、`PilotTools`、`workspace_directory` | Session 任务根与部署根分开；冻结网络的结果需要供新工具复用 |
+| 两个入口 | [api/turns.rs](../../../rust/anchor-runner-host/src/api/turns.rs)、[api/responses.rs](../../../rust/anchor-runner-host/src/api/responses.rs) | 都会创建 Pilot 工具/执行上下文，不遗漏 Responses |
+| ACP 与原生交互 | [goose_acp/pilot.rs](../../../rust/anchor-runner-host/src/goose_acp/pilot.rs)、[pilot_interaction.rs](../../../rust/anchor-runner-host/src/goose_acp/pilot_interaction.rs) | 工具定义/分发、取消、原生安装确认；Graph 删除仍用部署根 |
+| Prompt 与原生目录 | [pilot_host.rs](../../../rust/anchor-runner-host/src/pilot_host.rs)：`scope`、`INSTRUCTIONS` | Goose 内部 scope 绑定与任务工作区独立 |
+| 本地资源读取 | [pilot_tools/plugins.rs](../../../rust/anchor-runner-host/src/pilot_tools/plugins.rs)、[resource_read.rs](../../../rust/anchor-runner-host/src/resource_read.rs) | 复用 confined resource read，不开放任意文件读取 |
+| 文件/命令工具 | [node_tools.rs](../../../rust/anchor-runner-host/src/node_tools.rs)：`NodeTools`、`DEFAULT_TIMEOUT` | ToolPort 复用；构建时限、输出和取消 |
+| 工具环境与沙箱 | [tool_environment.rs](../../../rust/anchor-runner-host/src/tool_environment.rs)、[anchor-sandbox-bwrap](../../../rust/anchor-sandbox-bwrap/src/lib.rs) | 现有授权入口、只读环境和执行目录；不能只改命令白名单 |
+| Python 准备 | [plugin_dependencies.rs](../../../rust/anchor-runner-host/src/plugin_dependencies.rs)：`land`、[dependency_provision](../../../rust/anchor-runner-host/src/dependency_provision/mod.rs)、[plugin_view.rs](../../../rust/anchor-runner-host/src/plugin_view.rs) | 提取准备与发布，候选空间与正式视图区分，取包和 build 的权限不能混淆 |
+| 安装用例 | [application/plugins.rs](../../../rust/anchor-runner-host/src/application/plugins.rs)：`plugin_install_precondition`、`install_plugin_if_unchanged` | 保留确认前后复核、正式 Library 锁及实际依赖结果 |
+| 候选审查和回收 | [anchor-library](../../../rust/anchor-library/src/lib.rs)、[review.rs](../../../rust/anchor-library/src/review.rs)、[reclaim.rs](../../../rust/anchor-library/src/reclaim.rs) | 复用目录审查/staging；正式视图回收只认识正式 Plugin 引用 |
+| MCP 测试 | [tool_host.rs](../../../rust/anchor-runner-host/src/tool_host.rs)：`McpToolConfig`、`SandboxLaunch`、`PluginToolHost`；[anchor-mcp-host](../../../rust/anchor-mcp-host/src/lib.rs)：`connect_sandboxed_stdio` | 复用真实启动、tools/list 与 tools/call，不复制 MCP 客户端 |
+| Session 删除 | [api/sessions.rs](../../../rust/anchor-runner-host/src/api/sessions.rs)、[SessionStore](../../../rust/anchor-platform-session/src/store.rs) | 从仅存储删除提升为 Host 生命周期协调，保留现有前置条件 |
+| Run/Graph 清理 | [run_data.rs](../../../rust/anchor-runner-host/src/run_data.rs)、[application.rs](../../../rust/anchor-runner-host/src/application.rs)、[run_deletions.rs](../../../rust/anchor-runner-host/src/run_deletions.rs) | 先保留共享 scope 归属，再移除其发现所依赖的元数据 |
+| 原生会话归属 | [goose_acp/conversation.rs](../../../rust/anchor-runner-host/src/goose_acp/conversation.rs)、[node_host.rs](../../../rust/anchor-runner-host/src/node_host.rs)：`conversation_hint_for` | scope lease、Graph/Session/Run 引用与前驱历史保护 |
+| 开发指导 | [plugin-authoring/SKILL.md](../../../plugins/anchor-steward/skills/plugin-authoring/SKILL.md)、[Plugin 文档](../../plugins.md) | 清除与现有依赖准备能力冲突的指导，确保默认 Pilot 可获得 |
 
 ## 6. 验收与证据要求
 
@@ -190,10 +192,10 @@ Session 删除不删除正式安装 Plugin、共享包存储或共享工具链�
 
 可复用的现有检查入口：
 
-- [goose_pilot.rs](../rust/anchor-runner-host/tests/goose_pilot.rs)、[goose_pilot_compaction.rs](../rust/anchor-runner-host/tests/goose_pilot_compaction.rs) 与 [goose_fixture.rs](../rust/anchor-runner-host/tests/support/goose_fixture.rs)：实际 Pilot/ACP、跨 Turn 与压缩路径。
-- [native_plugins.rs](../rust/anchor-runner-host/tests/native_plugins.rs)、[session_plugins.rs](../rust/anchor-runner-host/src/api/tests/session_plugins.rs)：Plugin 启动、确认、挂载与冻结权限。
-- [goose_conversation.rs](../rust/anchor-runner-host/tests/goose_conversation.rs)、[goose_persistent_assistant.rs](../rust/anchor-runner-host/tests/goose_persistent_assistant.rs)、[conversations.rs](../rust/anchor-runner-host/src/api/tests/conversations.rs) 和 `run_data` 测试：共享历史、删除和接续保护。
-- [session-plugins.spec.ts](../apps/web/e2e/session-plugins.spec.ts)：安装/挂载结果在用户界面的可见性；仅界面受影响时扩展 Web 检查。
+- [goose_pilot.rs](../../../rust/anchor-runner-host/tests/goose_pilot.rs)、[goose_pilot_compaction.rs](../../../rust/anchor-runner-host/tests/goose_pilot_compaction.rs) 与 [goose_fixture.rs](../../../rust/anchor-runner-host/tests/support/goose_fixture.rs)：实际 Pilot/ACP、跨 Turn 与压缩路径。
+- [native_plugins.rs](../../../rust/anchor-runner-host/tests/native_plugins.rs)、[session_plugins.rs](../../../rust/anchor-runner-host/src/api/tests/session_plugins.rs)：Plugin 启动、确认、挂载与冻结权限。
+- [goose_conversation.rs](../../../rust/anchor-runner-host/tests/goose_conversation.rs)、[goose_persistent_assistant.rs](../../../rust/anchor-runner-host/tests/goose_persistent_assistant.rs)、[conversations.rs](../../../rust/anchor-runner-host/src/api/tests/conversations.rs) 和 `run_data` 测试：共享历史、删除和接续保护。
+- [session-plugins.spec.ts](../../../apps/web/e2e/session-plugins.spec.ts)：安装/挂载结果在用户界面的可见性；仅界面受影响时扩展 Web 检查。
 
 执行顺序遵守仓库约定：先运行直接相关的 crate/test 子集；切片完成或跨模块语义改变后再执行一次必要全量回归，并完成相关 `cargo test`、`cargo clippy`、`cargo fmt`。Web 有改动才按需执行测试、E2E 和 build，不为文档或未改代码重复构建。
 
@@ -219,9 +221,9 @@ Session 删除不删除正式安装 Plugin、共享包存储或共享工具链�
 
 ### 接续时按此顺序读取
 
-1. 根目录 [AGENTS.md](../AGENTS.md) 和本文件，恢复用户确认的目标与四片顺序。
+1. 根目录 [AGENTS.md](../../../AGENTS.md) 和本文件，恢复用户确认的目标与四片顺序。
 2. [开发台账](pilot-development-plan.md) 的最新相关记录，判断有哪些实际交付；没有完成记录不能因为本计划存在就视作完成。
-3. [产品与系统架构的归属规则](product-architecture.md#架构指导新能力放在哪里)、[当前架构](architecture.md) 的 Pilot/Goose/Plugin 相关章节、[任务联网契约](network-plugin.md)。
+3. [产品与系统架构的归属规则](../../product-architecture.md#架构指导新能力放在哪里)、[当前架构](../../architecture.md) 的 Pilot/Goose/Plugin 相关章节、[任务联网契约](../../network-plugin.md)。
 4. `git status --short`、本次涉及路径的 diff 和第 5 节的代码，核对计划编写后已经发生的变化；只读取相关路径，不重跑此前已获得的全部证据。
 
 ### 必须保留的上下文

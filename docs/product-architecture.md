@@ -1,14 +1,14 @@
 # 产品与系统架构
 
-本文记录产品方向、职责边界和执行不变量。它不作为实现清单；现状见 [当前架构](architecture.md)，完成状态与证据见 [开发台账](pilot-development-plan.md)。
+本文记录产品方向、职责边界和执行不变量。它不作为实现清单；现状见 [当前架构](architecture.md)，验收范围与证据入口见 [验收摘要](pilot-development-plan.md)。
 
 ## 产品方向
 
 Anchor 是本地优先、可观察、可恢复的 Agent 工作系统。用户通过 Graph 表达任务拆分、检查、返工和交付，通过 Plugin 积累可复用能力，通过 Run 检查执行证据，通过 Session 持续协作。
 
-核心对象是 Graph、AgentNode、OpNode、Plugin、Run 和 Session；依赖**不再**是一等对象——依赖声明属于插件，平台只提供共享存储与每插件版本一份视图（见 [插件依赖与 Python 视图：标准](plugin-dependencies.md)）。该模型已按当前实现落地；Pilot 作者命令也复用部署配置的唯一 Python 解释器，但这项执行授权与 Plugin 第三方依赖视图分开。研究、周报、企业助手与递归改进由普通 Graph/Plugin 表达，不在通用 Runtime 里创建专属业务阶段。
+核心对象是 Graph、AgentNode、OpNode、Plugin、Run 和 Session。依赖声明属于插件，平台提供共享存储与每插件版本一份视图，见 [依赖标准](plugin-dependencies.md)。研究、周报、企业助手与递归改进由普通 Graph/Plugin 表达，业务阶段归业务所有者。
 
-2026-10-10 用户明确 Pilot 的管家目标：Anchor 独立部署后，用户通过 Pilot 管理平台全部 Graph、Plugin 与它们所依赖内容的完整生命周期，包括安装、检查、更新/回退和删除。第一优先级是多 AgentNode 的共享依赖与唯一事实来源，避免逐节点或逐 Plugin 人工维护环境；先验收 Python，概念不限定语言。2026-10-11 起，"依赖环境"不再是独立资产：依赖声明属于插件（`plugin.json` 顶层 `dependencies`），安装/升级插件就是批准它带来的依赖，平台只提供共享存储 + 每插件版本一份视图 + 回收（[标准](plugin-dependencies.md)）。**这项模型已整片落地**：旧的"环境名字 + 内容寻址 + 每 run 冻结绑定"机制连同其节点字段、内核枚举、宿主按名字解析、发布环境 store 与管家工具一并删除，旧图/旧插件仍声明 `environment` 时加载具名拒绝；完整的管理（更新/回退、卸载与数据处置、真实 provider 端到端）仍按标准与[开发台账](pilot-development-plan.md)推进。
+Pilot 的管家目标是：Anchor 独立部署、配置模型后，用户通过 Pilot 初始化基础环境，管理 Graph、Plugin 和依赖内容的完整生命周期，包括安装、检查、更新/回退和删除，并通过普通沙箱命令开发、自测和交付。优先验收 Python，概念不限语言；共享资源保持唯一事实来源，开发方法由 Pilot 决定。
 
 后端、共享 Runtime 和官方工具使用 Rust；WebUI 保持 React/TypeScript。AgentNode 与 Pilot 统一使用固定 Goose，通过 ACP 交互、MCP 暴露授权工具。Goose 拥有 Agent loop、Provider、原生历史与 compaction；Anchor 拥有产品事实与宿主权限，不建设第二套通用 Agent 框架。预算控制暂不作为交付门槛，优先完成任务。
 
@@ -40,15 +40,13 @@ Anchor 是本地优先、可观察、可恢复的 Agent 工作系统。用户通
 | 研究、周报、审查目标与内容验收 | 普通 Graph / Plugin | 业务证据与结论 |
 | 画布、时间线、会话与文件展示 | WebUI | 对既有事实的投影 |
 
-两类可复用资产（Graph、Plugin）共用同一个模型：只存一份真身、只认一个编号、只开一个审批口、其余都是引用。**依赖不是第三个资产**：依赖声明属于插件，平台只提供共享存储与每插件版本一份视图，见 [插件依赖与 Python 视图：标准](plugin-dependencies.md)；旧的三资产模型已被推翻并删除，推翻它的三条根因写在标准的「背景与动机」里。
+Graph、Plugin 各有一份权威资产，其余位置只保存引用。依赖声明跟随插件，私有开发现场跟随 Session，不新增命名环境资产；取舍原因见 [依赖标准的背景](plugin-dependencies.md#背景与动机)。
 
 采用 Ports and Adapters 隔离外部入口；遵循 Clean Architecture 依赖方向；用限界上下文明确 Graph/Run、Session/Turn、Library/Plugin、Node Runtime/Sandbox 的事实和不变量。只采用有用的边界，不引入完整 DDD 仪式、微服务、事件溯源、CQRS 或通用依赖注入框架。
 
 新设计依次确认：已授权用户结果或已观察失败；现有框架/契约能否复用；唯一事实所有者；失败、取消和恢复语义；可执行验收。小型可逆选择直接推进。改变用户结果、持久化迁移、权限、并发或恢复语义的重要决定需明确记录；文档用于后续开发，不是额外审批平台。
 
-2026-10-11 用户确认任务联网作为 Plugin 能力入口：`network` 可以主动启用，也可以由学术调研等业务 Plugin 的联网需求依赖启用。联网 Plugin 不替代宿主授权，业务客户端不必经它代理。主动挂载、派生的依赖启用和 Session 的明确网络禁止是不同事实；只有后者限制实际联网授权。已在 Pilot 与带 Session 的节点工具装配落地，具体契约与独立 Graph 的保留边界见 [任务联网能力](network-plugin.md)。
-
-2026-10-13 用户进一步确认 Pilot 默认启用任务联网，以支持管家初始化、安装依赖和开发职责；用户可以明确关闭。默认只在新建 Pilot 会话时保存，不修改已有会话和用户选择，也不扩大业务 AgentNode 或渠道会话的默认权限。仍使用已安装的 `network` Plugin 与 Host/Sandbox 授权，不因默认开启而自动安装缺失 Plugin；实施和验收状态以台账为准。
+任务联网通过 `network` Plugin 主动或依赖启用，Host/Sandbox 执行授权。Pilot 默认启用任务联网以完成初始化与开发，用户可以明确关闭；默认不扩大业务节点或渠道权限。行为契约见 [任务联网](network-plugin.md)。
 
 ## 对象与所有权
 
@@ -64,7 +62,7 @@ Anchor 是本地优先、可观察、可恢复的 Agent 工作系统。用户通
 | Turn | 一次幂等输入或继续请求，保留事件游标、取消与投递身份 |
 | Pilot | 管理和协作入口；完整平台不依赖业务 Graph，可初始化基础环境、开发并交付 Plugin，以及管理 Graph、联网/挂载、凭据、渠道与计划；各业务的真实验收范围见台账，自升级交接策略仍未冻结 |
 
-Pilot 的 Python 开发采用 Session 每项目一份私有可写 venv，引用共享只读解释器；项目文件是重建基线，实际试装现场允许偏离。Host 保存环境选择、归属与锁；项目命令串行，默认准备保留现场，显式重建或生命周期结束才释放。开发环境不进入 Graph、Run 绑定或独立资产目录，候选与正式 Plugin 按正式声明独立准备、测试和交付。该目标已于 2026-10-13 获用户认可并接入，A225 完成小型确定性及真实 Provider 闭环；具体契约见 [开发环境自由度方案](development-environment-freedom-plan-revised.md)，实施范围与保留边界以当前架构和台账为准。
+Pilot 开发环境是 Session 每项目一份私有可写现场，引用共享只读解释器。项目文件作为重建基线，试装允许偏离；默认准备保留现场，显式重建或生命周期结束才释放。候选和正式 Plugin 按正式声明独立准备、测试和交付。具体行为见 [Pilot 开发](pilot-development.md)。
 
 共享 `agents` 只是角色配置复用，不是独立 Agent 注册库。Plugin 直接挂在 AgentNode，不通过角色继承、默认合并或复制；OpNode 不隐式取得 Plugin 能力。
 
@@ -106,11 +104,9 @@ Session 与 Run 分别拥有状态。Session 只引用真实 Run，不复制另�
 
 ## Plugin 与能力积累
 
-Plugin 包含渐进披露的 Skill、资源、工具和可选渠道说明。短目录提供名称、描述和入口；完整内容保留在唯一 Plugin 目录，按需只读读取。工具语言由作者决定，官方工具使用 Rust；第三方依赖受宿主授权。Host 为 Pilot 提供 Session 工作区、候选获取/编辑/审查、`plugin_prepare`/`plugin_test`，以及经原生确认的 `plugin_install`。`RuntimeConfiguration` 统一解析 Python、Rust、uv 与来源：完整平台通过 `runtime_prepare` 在 Host 所有目录初始化，事实写入 `state/managed/runtime-config.json`；显式部署字段继续只读，不覆盖或镜像到 `.env`。同一 Python 版本只有一份解释器；正式、候选及旧项目视图引用 Library 共享包字节，新项目持私有开发包，见 [插件依赖标准](plugin-dependencies.md)。宿主工具目录仍通过 Library `tool.json` 注册，Plugin 声明不能扩大授权。
+Plugin 包含 Skill、资源、工具和可选渠道说明，工具语言由作者决定。Host 为 Pilot 提供通用开发、候选准备/测试和正式安装接口，统一管理基础环境与授权；Session 保存临时开发现场，Library 保存正式能力及共享依赖。显式部署配置保持外部归属，Plugin 声明不能扩大宿主权限。
 
-完整 Plugin 的披露由 Host 从 Library 真身及实际授权工具派生，Pilot 与 AgentNode 共用发现、选中读取、工具详情和调用契约。当前授权 Plugin 的名称和用途简述随固定发现入口进入有界系统提示，Agent 可按任务自行选用；大量挂载超出摘要预算时明确提示遗漏数量及完整检索入口，再读取所需说明、Skill/资源和完整工具 schema。ACP/MCP 的扩展指令随 Goose 正常推理和压缩后的继续请求携带，`tom` 仅提供短指引。新 Turn/load 从当前冻结挂载重新装配，不用旧历史赋予权限。运行中网页切换不改变当前执行，正常收束后合并为一次接续；空闲切换等下一次消息。停止或更新的用户请求可取消旧任务接续，配置变化不授权重做已完成操作。管理目录和执行授权分开；搜索、分页及读取都不能安装、挂载或扩大权限。完整内容继续从唯一资产重读，正式代码更新沿现有 Library 语义，私密配置和授权变化由 Host 拒绝；不新增 Agent loop、上下文或记忆系统。具体实现及兼容开关见 [当前架构](architecture.md)，范围和验收见 [专项计划](plugin-progressive-disclosure-plan.md)。
-
-2026-10-12 用户明确两个交付目标：安装 Anchor 并配置模型后，仅通过 Pilot 完成空业务机器上的基础环境、Plugin 和 Graph 初始化；Pilot 可通过 Anchor 准备自己选择的 Python 开发依赖，并在 Session 沙箱中用普通命令运行、测试、调试代码，最终经现有 Plugin 接口交付。对应实现已接入完整平台发行、对话内联网/挂载确认、基础能力初始化、`development_prepare` 与 `anchor_run(project=...)`、专用凭据/OAuth 输入，以及现有渠道/计划管理用例。开发方法由 Pilot 决定，Host 管理基础环境和执行边界，Session 管理临时开发现场，Library 管理正式 Plugin 与共享依赖；不新增命名环境资产、Agent loop 或计划系统。执行中的权限和解释器保持冻结，能力变化在当前 Turn 收束后自动接续。具体契约见 [专项计划](pilot-initialization-and-development-plan.md) 和[当前架构](architecture.md)；接口接入、确定性回归、真实 Provider 与实际外部业务验证是不同状态，证据只记[开发台账](pilot-development-plan.md)。
+Pilot 与 AgentNode 共用从 Library 真身及授权事实派生的发现、读取和调用契约。有界能力摘要随 Goose 系统提示保留，完整说明、Skill、资源和 schema 按需读取；摘要、搜索和管理查询不赋予执行权限。当前 Turn 保持冻结授权，能力变化的生效与接续由 Host 决定，停止或新用户请求优先；变化不授权重做已完成任务。具体行为见 [Plugin](plugins.md#发现与读取) 和 [Session 契约](architecture.md#session渠道与入口)。
 
 Plugin 说明不是权限策略。文件路径、网络、工具、凭据和控制动作由 Host/Sandbox 强制校验。Graph/Plugin 包不能包含密钥或扩大宿主授权；模型输出不构成授权。知识库自动编译与通用 Plugin 市场暂缓；受授权的插件依赖安装已进入管家目标（见 [插件依赖标准](plugin-dependencies.md)）。
 
@@ -162,4 +158,4 @@ Health 与 readiness 分开。Responses 仅提供冻结的子集，Webhook、计
 
 不自造模型循环、通用记忆/计划平台、第二套 Runner、通用审批平台、未知效果人工处置平台、跨存储原子事务、外部 exactly-once 保证或云工作流集群。不把隐藏提示词当控制 API，不为未观察到的问题预建平台。
 
-后续范围和验收只维护在 [开发台账](pilot-development-plan.md)。早期方向与迁移证据见 [历史归档](archive/README.md)，旧依赖和内部格式不约束当前核心。
+当前验收结论与未关闭事项见 [验收摘要](pilot-development-plan.md)，未冻结的产品需求保留在本文。早期方向与迁移证据见 [历史归档](archive/README.md)，旧依赖和内部格式不约束当前核心。

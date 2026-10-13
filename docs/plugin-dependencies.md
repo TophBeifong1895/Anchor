@@ -1,12 +1,8 @@
 # 插件依赖与 Python 视图：标准
 
-本文是**标准**：它规定依赖属于谁、插件与它的字节存在哪、视图怎么生成、生命周期按什么判据走。实现进度与证据另记在架构文档和开发台账。
+本文规定插件依赖的所有者、共享字节、视图和生命周期。正式、候选及兼容旧项目使用共享只读视图；Session 私有开发环境单独管理，均遵守下述不变量。只有“开放问题”中的选择尚未决定。
 
-[当前架构](architecture.md) 记录实现事实；[开发台账](pilot-development-plan.md) 记录各垂直切片的验收证据。本文规定插件依赖不变量，不能因实现状态而改变。被本文取代的旧模型（"环境名字 + 内容寻址 + 每 run 冻结绑定"，ADR-001）已随实现整片删除，其设计草稿也一并删除：本文「背景与动机」保留了**为什么推翻它**的三条根因。
-
-本文所有内容都是**已定的决定**，不是待批准材料；只有最后一节"开放问题"列出的内容未定。当前实现对应关系与仍需核对的验收边界见"当前实现映射"和[开发台账](pilot-development-plan.md)。
-
-2026-10-13 用户认可 [开发环境自由度方案](development-environment-freedom-plan-revised.md) 并授权实施：正式、候选及兼容旧项目的依赖视图继续遵守共享只读模型；Session 的私有可写开发环境按下文限定单独管理。此处记录已认可的架构规则，实现与验收状态仍以当前架构和台账为准。
+当前行为与操作分别见 [架构](architecture.md)、[Plugin](plugins.md) 和 [Pilot 开发](pilot-development.md)，实际验收范围见 [验收摘要](pilot-development-plan.md)。旧命名环境模型的取舍原因保留在下节，实施过程见 [历史归档](archive/README.md)。
 
 ## 背景与动机
 
@@ -99,8 +95,9 @@
 
 ### 卸载
 
-- **触发点**：人卸载插件。
-- **动作**：删插件目录与它的视图；顺手跑一次回收扫描。没有历史版本可留，所以"删插件"等于把代码**与数据**一起删掉——**这一点尚未定**，见"开放问题"。
+- **触发点**：经原生卸载表单确认；用户同时明确勾选卸载和删除插件唯一数据（不可恢复），模型参数不能代替确认。
+- **前置条件**：仍有挂载 Session 或未结束的引用 Run 时拒绝。已保存 Graph 的引用在表单中展示，卸载后其下一次准入会因缺少 Plugin 失败。
+- **动作**：删除唯一插件目录（含代码与数据）及其视图，再按引用判据回收共享包。确认绑定的摘要和引用条件变化时拒绝旧确认。
 - **失败行为**：删不掉要如实报错，不静默当作已卸载。
 
 ### 回收
@@ -141,21 +138,11 @@
 
 ## 当前实现映射
 
-插件依赖标准的实现与验收按 [开发台账](pilot-development-plan.md) 的共享依赖和 Pilot 初始化专项记录追踪。当前代码已删除具名环境、每 Run 冻结环境和旧发布目录模型。Host 的 `RuntimeConfiguration` 统一解析基础环境：完整平台通过 Pilot 在 `state/managed/runtime-config.json` 准备共享 Python、固定 uv 和公共 PyPI；显式部署的 `ANCHOR_DEPENDENCIES_PYTHON`、`ANCHOR_PILOT_PYTHON_ENABLED` 与包来源等字段保留外部管理归属，不能由 Pilot 覆盖或双写。单独设置解释器路径仍不等于授权包准备。
-
-Library 持有唯一已安装 Plugin 与共享依赖存储；Graph bundle 只保存 Plugin ID 引用。每次调用的绑定、MCP 配置、挂载和依赖视图由短 Library lease 内的一份定义生成，释放后才启动 OAuth/MCP；不把它当作历史内容快照。Run format 13 保留准入 `authorization_digest`，节点结果分别记录实际 `plugin_digests` 和 `plugin_views`。权限投影包含联网、可写路径、宿主命令、凭据来源及远程/OAuth 声明，不含真实凭据值；代码、Skill 与依赖变化不要求冻结旧版本。旧 format 12 不填造权限或执行观察；仅完整旧身份仍一致时允许持 Run lease 的 Runner 升级，歧义拒绝。兼容与运行证据见后续对应台账，不把旧二进制的真实 Provider 验收算作本轮验证。
+Library 持有已安装 Plugin、`library/dependencies/store/<package>/<version>` 和正式/临时视图；Host 持有基础配置、归属与授权，Session 持有项目现场和临时引用。配置、prepare/run 和旧项目兼容见 [Pilot 开发](pilot-development.md)，Run 权限摘要与实际代码/视图观察见 [当前架构](architecture.md#数据布局)，安装与数据保留见 [Plugin](plugins.md#安装与更新)。
 
 候选和正式依赖准备使用 Host 授权的来源、固定 uv 和共享解释器，经原生确认安装。正式、候选与兼容旧项目的只读视图引用 `library/dependencies/store/<package>/<version>` 的同一份安装字节。namespace 包、多个 distribution 共用目录与 console script 仍由各自视图隔离；同版本不同分发正文拒绝覆盖，已验证归档产生相同正文时可复用并记录来源。
 
-新项目由 `development_prepare(project=...)` 默认创建空私有 venv；固定 uv 和共享解释器的 bundled `ensurepip` 在沙箱内引导，环境挂载路径始终是 `/development/env`。已有环境默认保留，内联数组仅作显式 pip 安装；`rebuild` 只准备空环境，拒绝同时请求依赖安装，`discard` 只释放私有环境。`anchor_run(project=...)` 共用该环境的 Python、pip、PATH 与 console script，项目文件由标准工具读取，开发依赖不隐式进入正式声明。私有现场位于 Host scope 的 `development/projects/`，不进入 Library 视图扫描或源码候选，命令不挂共享 store，不与其包字节 hardlink。
-
-环境选择、归属、解释器绑定和最小操作观察由 Host 保存；项目锁覆盖准备及全部项目命令，scope lease 保护 Session 删除。失败或中断可能留下部分修改，核查提示跨重启保留，不自动重放、不把收据当健康检查。旧项目默认保留只读视图，首次显式重建成功才切换；损坏私有选择不回退旧视图。仅解包 store 不足以供私有 pip 恢复包，旧视图可继续使用；离线空环境/pip 重建与从 wheel/源码恢复包是不同能力。
-
 比较复用包时排除 uv 安装元数据；解释器绑定差异只允许在两边均有 entry-point 声明且符合 uv 生成格式的脚本中排除，正文逐字节比较，普通脚本与正文差异继续拒绝。已有共享存储不重写；视图 launcher 使用自己的 Python 运行分发脚本，包括 uv 为长解释器路径生成的 shell/Python 包装，因此普通 `pytest` 等命令不会绕过项目视图。
-
-`Library::development_scope` 保存 Host 派生的 Session scope 归属与候选/旧视图引用，私有项目复用同一 lease，私有包不登记为共享引用。准备和执行持共享 lease；删除 Session 持排他 lease，释放临时视图并保存 released 事实后清理所属私有环境、工作区及 Goose 历史，正式 Plugin 保留。回收核查持久归属、正式及开发引用；未知状态保留。这是临时开发生命周期，不增加环境名字、每 Run 依赖快照或历史 Plugin 副本。
-
-Plugin 更新保留 `mutable` 声明的运行数据，并按代码条目替换；部分替换失败的处理以 Library 实际报告为准。Python 配置、网络和工具在 Pilot 执行启动时固定至当前 Turn，后续 Turn 与 Graph 节点重新读取 Host 当前配置；正式 Plugin 代码/依赖热更新仍沿用下一节点生效语义。上述实现及真实 Provider、测试和部署范围分别见开发台账，不能互相替代。
 
 替换解释器后，同源码候选可在新 Turn 重新准备，成功后才切换候选当前结果，原始事实保留。共享包收据目前记录一个已验证解释器摘要；新的二进制验证后，旧解释器再次准备可能被拒绝，不能默默改用新解释器。不同 Python 构建若产生同包版本的不同安装字节，仍按唯一存储规则拒绝，不承诺跨 ABI 的多种构建共存。
 

@@ -1,6 +1,6 @@
 # 私有 Python 开发环境验收
 
-本目录保存主 Agent 的独立验收入口。Runtime 开发由 GPT-6.1 Sol / xhigh Agent 完成，主 Agent 负责架构边界、源码 review 和真实 Provider 验收。方案见 [修订稿](../docs/development-environment-freedom-plan-revised.md)，实际验收状态见 [开发台账](../docs/pilot-development-plan.md)。
+本目录保存主 Agent 的独立验收入口。Runtime 开发由 GPT-6.1 Sol / xhigh Agent 完成，主 Agent 负责架构边界、源码 review 和真实 Provider 验收。方案见 [归档修订稿](../docs/archive/development-2026-10-13/development-environment-freedom-plan-revised.md)，当时验收状态见 [历史台账](../docs/archive/development-2026-10-13/pilot-development-plan.md#开发环境自由度验收a225)。
 
 ## 真实 Provider 场景
 

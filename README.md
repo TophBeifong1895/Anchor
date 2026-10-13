@@ -212,7 +212,7 @@ docs/             使用、架构、验收台账、部署和历史归档
 | source-free 包和 systemd | [生产部署](docs/rust-production-deployment.md) |
 | Web API、状态、错误和事件游标 | [Web API 契约](docs/rust-frontend-api-contract.md) |
 | 企业微信助手和渠道边界 | [企业微信指南](docs/wecom-assistant.md) |
-| 实际完成状态、证据和未验收项 | [开发台账](docs/pilot-development-plan.md) |
+| 当前验收结论、证据入口和未关闭事项 | [当前验收与待办](docs/pilot-development-plan.md) |
 | 早期设计和迁移记录 | [历史归档](docs/archive/README.md) |
 
 完整索引见[文档目录](docs/README.md)。
@@ -240,7 +240,7 @@ cargo +stable run --manifest-path rust/Cargo.toml -p anchor-devtools --locked --
   regression goose-fixture --evidence-root /tmp/anchor-goose-regression
 ```
 
-该回归不调用真实模型、不发送公网消息，也不证明外部业务内容质量；缺少 Goose、浏览器或外部凭据时，跳过/未配置必须按未验收处理。验证命令和证据边界以[回归指南](docs/runtime-contract-tests.md)与[开发台账](docs/pilot-development-plan.md)为准。
+该回归不调用真实模型、不发送公网消息，也不证明外部业务内容质量；缺少 Goose、浏览器或外部凭据时，跳过/未配置必须按未验收处理。执行方法见[回归指南](docs/runtime-contract-tests.md)，当前结论与未关闭范围见[验收摘要](docs/pilot-development-plan.md)。
 
 ## 许可证
 

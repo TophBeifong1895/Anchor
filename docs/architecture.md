@@ -1,6 +1,6 @@
 # 当前架构
 
-Anchor 的维护实现是 Rust Host + 共享 Runtime Kernel + Goose ACP，WebUI 为 React/TypeScript。官方工具、发行 builder 和开发检查位于同一个 Cargo workspace。产品目标见 [产品与系统架构](product-architecture.md)，具体证据和未验收范围见 [开发台账](pilot-development-plan.md)。
+Anchor 的维护实现是 Rust Host + 共享 Runtime Kernel + Goose ACP，WebUI 为 React/TypeScript。官方工具、发行 builder 和开发检查位于同一个 Cargo workspace。产品目标见 [产品与系统架构](product-architecture.md)，当前验收结论和未关闭范围见 [验收摘要](pilot-development-plan.md)。
 
 ## 执行链与所有权
 
@@ -70,11 +70,11 @@ fs2 Artifact 的文件及谱系是节点产物权威；只读 Git 输入视图�
 
 部署者可通过 `ANCHOR_NODE_COMMAND_TIMEOUT_SECONDS` 配置 AgentNode 单条 `anchor_run` 命令上限（默认 30 秒），并通过 `ANCHOR_MODEL_MAX_TOKENS` 将单次模型回复的输出预算传给 Goose；后者默认不设置，沿用 Provider 默认。节点整体墙钟控制继续生效。
 
-插件依赖声明属于 `plugin.json` 的 `dependencies.python`。宿主用获授权的 uv 求解，包按（包、版本）存于 `library/dependencies/store/`，正式、候选及兼容旧项目的视图都只读引用同一存储；新项目的私有开发包由标准 pip 独立安装。同版本分发正文不同则拒绝覆盖；已验证归档产生相同正文时可补充来源观察并复用。比较排除既有安装器元数据，以及同时具备 entry-point 声明和 uv 生成格式的脚本解释器绑定，脚本正文仍逐字节核查。视图用自己的 Python 启动脚本，兼容 uv 的长路径 shell 包装，不改已有共享存储字节。正式安装仍走原生确认、摘要复核与 Library 发布锁。Graph bundle 只引用 Plugin ID，独立入口必须显式配置 Library 或 catalog，不能从 bundle 的邻居目录推断插件权限。旧的命名环境模型已删除，旧图/插件声明 `environment` 时具名拒绝。
+插件运行依赖声明属于 `plugin.json` 的 `dependencies.python`，正式、候选及兼容旧项目的只读视图引用 Library 的共享包；新项目使用私有开发 venv。Host 使用获授权的来源与固定 uv 准备正式依赖，安装经原生确认和 Library 发布锁。包字节比较、视图 launcher 与跨解释器边界见 [依赖标准](plugin-dependencies.md#当前实现映射)；Graph bundle 只引用 Plugin ID，旧 `environment` 声明具名拒绝。
 
 Run format 13 将准入授权与执行观察分开：`plugin_bindings.authorization_digest` 保存无凭据值的 Host 权限投影；节点结果的 `plugin_digests` 和 `plugin_views` 保存本次实际准备的代码与依赖声明摘要。代码、Skill 路径和依赖变化从后续调用读取；联网、可写路径、宿主命令、凭据来源、远程端点或 OAuth 授权声明变化不能沿用旧 Run 权限。format 12 记录只迁移格式，不填造新观察或权限；旧权限为空时，Host 与 Runner 共用完整旧 ID、代码摘要、资源与 MCP 名称核验，全部通过后由持 Run lease 的 Runner 一次性保存升级。
 
-AgentNode 和 Pilot 的正式工具准备在同一短 Library lease 内读取一份 `PluginDefinition`，由它生成绑定、MCP 配置、挂载、依赖视图及只读披露目录；释放后才做 OAuth/MCP 网络启动。目录再与实际工具装配的 Plugin/server/remote-tool 归属关联，不解析工具名前缀猜所属资产。提示词只提供固定的发现入口，不平铺全部 Plugin/Skill 路径，不另存提示词事实。此锁保证准备期间的读取一致性，不是历史代码快照；释放之后的更新仍可替换当前代码或回收旧视图，不能据此承诺旧进程可复现。Plugin 的 `mutable` 授权独立于 Python 依赖：无 Python 包的插件也可使用声明的数据目录；`plugin.json`、`.mcp.json` 与外置 MCP 声明文件必须属于不可变代码。升级逐项替换代码、保留数据；多条目更新中途失败如实报告。验证范围见 [开发台账](pilot-development-plan.md) 及[依赖标准](plugin-dependencies.md)。
+AgentNode 和 Pilot 的正式工具准备在同一短 Library lease 内读取一份 `PluginDefinition`，由它生成绑定、MCP 配置、挂载、依赖视图及只读披露目录；释放后才做 OAuth/MCP 网络启动。目录再与实际工具装配的 Plugin/server/remote-tool 归属关联，不解析工具名前缀猜所属资产。提示词只提供固定的发现入口，不平铺全部 Plugin/Skill 路径，不另存提示词事实。此锁保证准备期间的读取一致性，不是历史代码快照；释放之后的更新仍可替换当前代码或回收旧视图，不能据此承诺旧进程可复现。Plugin 的 `mutable` 授权独立于 Python 依赖：无 Python 包的插件也可使用声明的数据目录；`plugin.json`、`.mcp.json` 与外置 MCP 声明文件必须属于不可变代码。升级逐项替换代码、保留数据；多条目更新中途失败如实报告。依赖规则见 [依赖标准](plugin-dependencies.md)，验证范围见 [验收摘要](pilot-development-plan.md)。
 
 AgentNode 的 Goose 接入区分工具解析已经返回的结果与外层等待被取消/超时：解析错误保留原错误类型并沿既有 Run 错误路径结算，不再次轮询已经完成的 future；只有外层中断才通知仍未结束的解析过程，并等待它回收所拥有的 MCP 子进程。
 
@@ -89,15 +89,7 @@ Goose 固定为 v1.53.0；Anchor 用上游同一份源码的 lean ACP-only 入�
 
 固定版 Goose 的 `enabledExtensions` 在新建时追加到默认扩展，加载时保留已存扩展，不能单独用作授权集合。共享 ACP 接入在新建/加载后、首次模型提示前，通过官方 `session/extensions/list`、`remove`、`add` 接口校准为 Anchor MCP 与部署显式允许的原生扩展；默认只保留提供边界指令的 `tom`，不启用 `developer` 的独立文件和 shell 工具。撤销旧扩展保留原生 Session 与历史，不直接修改其数据库；校准失败拒绝本次执行。
 
-Pilot 与 AgentNode 共用 `PluginDisclosureCatalog` 和 `ToolDisclosure`。`anchor_plugins` 搜索本次准备并获授权的 Plugin；`anchor_plugin_read` 按 section 读取概览、Plugin 使用说明、Skill/资源目录、单个 Skill/资源或安全的 server 声明。`anchor_tools` 搜索完整授权工具目录，`anchor_tool_detail` 返回所选工具的完整 description、参数 schema 和归属，再由 `anchor_tools_call` 调用。发现入口始终可见，普通提示也说明用法；`tom` 只承载短边界提醒，不保存完整目录，也不是发现能力的前提。Pilot 的 `plugin_list`/`plugin_read` 查询已安装 Library，执行发现查询本 Turn 的冻结挂载；管理查询不赋予调用权限。
-
-同一份冻结目录还派生不超过 16 KiB 的能力摘要，通过聚合 MCP 的 `ServerInfo.instructions` 进入 Goose 原生扩展系统提示：逐项提供 ID、名称、用途简述、准备状态、实际工具数量和读取入口，不附完整 Skill、资源、schema 或凭据。名称和描述分别取首个非空行、最多 160 字符，并以 JSON 编码；预算之外返回 `total`/`shown`/`omitted` 与完整检索入口。元数据不是执行指令，未显示不代表不可用；`available` 说明定义可发现/读取，实际调用仍取决于当前授权工具。正常推理和压缩后的继续请求都由 Goose 携带当前摘要，框架内部专用摘要请求使用自己的提示，不在此承诺内。新 Turn 或原生 Session load 后重新装配、校准扩展，当前摘要替换旧摘要，原生历史仍保留；直接 schema 和渐进 schema 模式均适用，关闭 `tom` 不影响摘要。
-
-目录默认 20 项、最多 100 项，同时限制为 16 KiB JSON 页，并返回 `next_offset`；检索为完整 Plugin/工具元数据和 Skill 头部的大小写无关多词 AND 子串，支持中文、精确 ID 和分页兜底。显示摘要限 160 字符，检索不使用裁短后的摘要。选中详情限 256 KiB JSON，工具 schema 超限明确报错，不伪装成完整结果。UTF-8 文本文件最多 1 MiB，按字节 offset 分页（默认 16 KiB、最大 32 KiB），返回 SHA256；续页传 digest 检测正文热更新，以 `next_offset=null`/`end_of_file=true` 结束。压缩后按相同入口重读，继续使用 Goose 原生 compaction，不增加 Anchor 记忆或上下文系统。
-
-读取配置文件的分类来自已验证、规范化的清单路径；隐藏文件、`plugin.json`、MCP 配置与 `channel.json` 不由披露工具返回。执行读取在 Library 非阻塞共享 guard 内核查当前授权摘要及公开文件分类，只读准备时与当前公开路径的交集，然后安全打开文件；正式发布持同一排他 lease。发布忙时明确拒绝本次读取以供重试，授权变化要求新的 invocation，普通正文更新仍可读。Pilot 管理入口同样在 guard 内读取定义及 Skill 元数据。披露目录是可重建投影，不新增持久资产、Plugin 历史副本或授权源。
-
-`anchor_tools_call` 在 Bridge 保存观察前解析真实目标和参数，保留外层 ACP 原生调用身份，继续交给原授权端口。Pilot 保留 native peer/elicitation，Node 保留真实工具观察、媒体、错误、回执与取消收束；递归元工具及间接 `final_result` 被拒绝。工具 schema 的披露沿用 `ANCHOR_NODE_TOOL_DISCLOSURE`：`1` 强制、`0` 保留直接 schema 模式，未显式设置时隐藏工具超过 3 个自动启用；Pilot 固定管理工具继续直接可见。目录与单项读取入口不依赖此开关。MCP 仍按现有准备流程连接，未增加懒连接或 Code Mode，专项范围与验证见 [实施计划](plugin-progressive-disclosure-plan.md)。
+Pilot 与 AgentNode 共用从当前授权和 Library 派生的 Plugin/工具目录，通过有界摘要和固定发现入口按需读取。完整分页、读取、调用和兼容开关见 [Plugin 披露契约](plugins.md#发现与读取)。目录是可重建投影，Goose 原生系统提示和 compaction 承载上下文；MCP 仍按准备流程连接，按需连接尚未实施。
 
 AgentNode 通过授权完成工具提交 `summary` 和可选 `route`；普通回答不能完成节点。Host 校验路由、核查回执与必要产物后提交 Run 事实。完成回执来自最近一次授权非完成工具的返回结果，发现与只读工具也会刷新回执；回执不匹配的诊断明确要求复制实际返回值，可通过只读核查取得新回执，不应为此重复业务操作。业务工具效果发生但返回结果缺失时，保存观察事实；继续原生会话后，Agent 先核查 workspace、Artifact 和可用业务状态，再决定下一步。工具不会自动重放，外部副作用不承诺 exactly-once。
 
@@ -117,37 +109,13 @@ Pilot 的 Graph validate/create/update 工具共用作者格式说明与最小�
 
 Pilot 的任务联网由 `network` Plugin 提供启用入口。Host 在网页与 Responses API 新建 Pilot 会话时默认保存主动挂载 `network`；已有会话不补默认，关闭设置在续聊和重启后保留，渠道和业务 Graph 会话不增加此默认。插件的 `network:true` 或远程 MCP 声明产生联网需求，Host 从当前挂载集合推导依赖启用；Session 的 `network_allowed` 是用户授权上限，依赖不能覆盖明确禁止，带 Session 的 AgentNode 仍受节点网络权限上限约束。授权与挂载共同冻结到 Turn 快照，stdio 沙箱、HTTP MCP 与 OAuth 使用同一结果；离线工具保留无网运行。Provider 的控制通道连接独立。具体状态、旧快照兼容、独立 Graph 边界和候选包契约见 [任务联网能力](network-plugin.md)。
 
-Pilot 的普通 Turn 与 Responses 共用 `PilotService::admit` 和 Host-owned `PilotTurnContext`，装配现有 `NodeTools` 的 `anchor_read`、`anchor_edit`、`anchor_run`。任务目录为 `<workspace_root>/pilot/<hash(owner,session)>`，候选读取、编辑、准备、测试、审查和安装都使用该 Session 根；`PilotTools.workspace_root` 仍是 Graph/Run 清理所需的部署根。跨 Turn 复用工作现场，每 Turn 冻结网络和取消权限，不把 Goose 内部目录暴露为项目工作区。
-
-工作区文件工具通过目录 FD 和 no-follow 相对操作解析路径，编辑使用排他临时文件及原子 rename；允许解析到工作区内的符号链接，拒绝越界和并发替换导致的路径逃逸。`anchor_read` 页预算为 256 KiB（按 UTF-8 文本字节和计数换行）；首个待返回行超预算时明确拒绝并提示用 `anchor_run` 检查有界字节，后续行超预算则分页。完整文件摘要与编辑仍读取整个文件，内存占用随文件大小增长。
-
-`plugin_prepare`/`plugin_test` 是 Host 应用用例。准备先按 Library 文件规则复制候选，摘要与依赖锁存入该 Pilot Goose scope 下的 `candidates/`，临时视图引用 Library 共享包，不发布正式 Plugin 视图。测试真实启动 MCP、读取工具表并按可选参数调用业务工具，返回被测摘要、实际依赖和 `business_tested`，取消或失败显式结束并等待 Host 启动的 stdio 进程回收；HTTP MCP 取消连接与请求等待，不承诺终止远端进程。候选网络声明不增加 Turn 权限；候选配置拒绝宿主环境模板引用，只允许获准的四种路径模板，不继承同 ID 正式 Plugin 的私有凭据或 OAuth。正式安装保留原生确认，在可取消的 catalog guard/Library lease 内复核已有版本、冻结与确认摘要一致的 Host 私有快照，之后依赖准备和发布只使用该快照；正式包和视图独立于开发目录。
-
-`development_prepare(project=...)` 默认 `ensure`：新项目创建空私有 venv 和 pip，已有私有环境只核对归属、基本布局及冻结解释器，保留试装现场，不证明包健康。`rebuild` 显式重建空环境并保留源码，拒绝同时安装非空依赖数组；依赖由后续独立 pip 命令安装。`discard` 只释放私有环境。ensure 的 `requirements`/`development_requirements` 内联数组是标准 pip 安装请求，不是精确同步或第二份长期声明；文件、extras、marker、约束、递归 requirements 和 editable 由 `anchor_run` 中的 pip 解析。开发依赖不自动进入正式 `plugin.json`，候选仍按正式声明独立准备、测试和安装；安装并没有强制绑定成功业务测试或此前依赖锁。
-
-私有现场位于 Host 派生的 `<state>/platform/pilot/<scope>/development/projects/<project-hash>/`，其中 `selection.json` 保存归属、解释器绑定与最小操作观察，`.lock` 协调项目操作，只有 `env/` 精确可写挂载到 `/development/env`。该树在 Library 临时视图扫描与候选源码之外。固定 uv 在沙箱稳定路径创建 venv，再由共享解释器携带的 `ensurepip` 引导私有 pip；创建成功才发布选择事实。Host 不在沙箱外运行可写环境的 Python。`anchor_run(project=...)` 的 Python 别名、裸 pip、模块、shell 与 console script 使用同一 venv/PATH；命令获得原有工作区、自己的环境和只读解释器，不挂 store 或兄弟环境。私有包不与 store hardlink，也不回填正式存储；任务 pip 按冻结网络与文件权限执行，正式取包仍遵守 Host 来源和哈希规则。
-
-同项目的准备、全部命令、重建和释放共用可取消排他锁，持有至 Sandbox 子进程结束；scope 共享 lease 防止 Session 删除，普通命令不持全局 Library 写锁。Host 在命令前保存 `operation_in_progress`，收束后保存 `last_status`，失败、超时、取消或重启遗留操作提示 `inspection_required`；它是现场核查提示，不增加审批、不阻断检查、不自动重放 pip，后续命令成功也不冒充修复全部现场。显式重建成功清除旧观察。已发布环境损坏或选择事实丢失返回诊断，默认准备及命令不静默回退或清空。
-
-旧项目的 `current.json` 和只读视图继续可用，仍核查当前 Turn 的 Python 授权及解释器绑定；默认 ensure 明确返回 `legacy_read_only`、`pip_available=false`。首次显式 rebuild 成功后切换私有环境，失败保留旧选择，旧引用直到所属 Session 释放。只有解包 store、没有 wheel/源码时，旧视图可继续使用，私有 pip 不能从解包 store 重新安装包；可离线重建空 venv/pip，包恢复需要可获取的安装来源。这是明确兼容边界，不做私有环境到旧视图的自动降级。
-
-候选准备按代码摘要与冻结的解释器身份复用已准备结果，解释器变化后可对同一份源码重新准备。原 format 1 `preparation.json` 保留并兼容读取，新的不可变准备事实按实际求解/视图身份保存，仅成功准备后原子更新 `current-preparation.json`；失败不覆盖此前结果。测试核对被选事实、视图解释器与包集合，不把另一个 Turn 的准备结果当作本次测试依据。这些文件只是 Session 候选事实，不是正式 Plugin 历史或通用恢复日志。
-
-Library 保存开发 scope 的持久归属及候选/旧视图引用，私有项目复用 scope lease，但不登记私有包为共享 store 引用。准备和执行持 scope 共享 lease，Session 删除取得排他 lease 后释放引用并保存 released 事实，再清理所属私有环境。回收同时考虑正式视图和有效开发引用；目录消失、归属损坏或未知状态不能证明可回收。该保护只服务临时开发资源，不改变 Run 后续节点读取当前正式 Plugin 的热更新语义。
-
-Rust 开发使用 Host 管理的共享工具链，或部署显式配置的 `ANCHOR_PILOT_RUSTUP`、`ANCHOR_PILOT_RUSTUP_HOME` 和 `ANCHOR_PILOT_CARGO_HOME`。Host 只读挂载共享 Rustup proxy、工具链和 registry/git 缓存；可写 `CARGO_HOME` 位于 Session 工作区，可信 Cargo 入口首次使用时在沙箱内复制缓存，通过文件锁和临时目录发布支持并发及取消后重试，不复制编译器，不挂宿主 Cargo 凭据。默认 Cargo、命名工具链、shell 与原 Cargo 绝对路径都经过同一入口；直接 Rustc 命令绑定同一冻结工具链的精确只读入口。开发沙箱的 `/proc` 只显示自己的 PID namespace；只有联网允许下直接执行冻结 Rustup 的 `toolchain install` 才授权工具链目录写入，并禁用 self-update。Pilot 命令最多 600 秒，AgentNode 保留 30 秒上限。
-
-`RuntimeConfiguration` 是基础环境的唯一解析入口。Host 管理事实位于 `state/managed/runtime-config.json`（format 1）；非空或显式设置的部署字段保持原有外部归属，Pilot 不覆盖它们，也不双写 `.env`。`runtime_prepare` 在冻结的任务联网授权下使用发行包校验过的 uv/rustup-init，安装到 `state/managed/python` 或 `state/managed/rust`，探测成功后才原子发布配置与内存快照；同版本准备复用原解释器，已有 Rust 工具链通过官方 `rustup run` 探测后跳过安装。完整平台默认 Python 来源为公共 PyPI；自定义来源仍使用部署授权契约。
-
-GNU Linux 发行的 Rust 初始化显式选择 `x86_64-unknown-linux-gnu`，不按静态引导器的 musl 编译目标选择主机。Host 保存完整工具链名；兼容旧安装时保留其 `default-host`，以免改变旧 Turn 的别名解析。官方 inventory 中不存在的工具链才使用 `--no-update` 安装；静态 musl 引导器需要在安装和设置默认工具链时，对这一既定 GNU 目标传入官方 `--force-non-host` 参数。已有但不可执行的工具链拒绝使用；安装后必须分别实际执行 Rustc 和 Cargo 的版本探针，全部成功才切换默认工具链并发布配置。失败保留此前配置及内存快照。
-
-每个执行只使用这一入口选出的 Python：部署可通过 `ANCHOR_DEPENDENCIES_PYTHON` 和 `ANCHOR_PILOT_PYTHON_ENABLED` 控制，完整平台也可由 Pilot 初始化。Host 在有界进程探测中校验 Python 3.8+，只读挂载安装前缀和可信命令别名，直接命令及 shell 均执行同一精确解释器，不授权整个共享解释器 bin 目录。Pilot 不能写共享解释器或用 pip 修改共享环境；候选与正式包复用 Library 共享存储，私有开发 venv 只共享解释器。私有 pip 引导还要求该冻结解释器携带可用的 `ensurepip`，缺失时明确报错，不借宿主网络或扩大授权。
-
-没有第三方包视图的正式 Python stdio MCP，通过独立的只读 capability 将标准 Python 别名或已配置解释器路径映射到同一精确入口；不依赖 Pilot 作者命令的启用开关。有依赖视图的服务器继续使用视图显式解释器。MCP 工具集合持有可信 launcher 的生命周期，只授予 Python 只读挂载，不复用可以管理 Rustup 的作者命令权限。候选凭据拒绝和正式 owner-bound 凭据注入保持独立。
+Pilot 的普通 Turn 与 Responses 共用接纳、Session 工作区及现有文件/命令工具。Host 的 `RuntimeConfiguration` 统一解析基础环境，Session 持有私有开发现场，Library 持有候选引用和正式 Plugin；显式部署字段仍由部署者管理。准备、命令、测试、正式交付及清理的具体行为见 [Pilot 开发契约](pilot-development.md)。
 
 Pilot 接纳保存网络和工具授权快照，执行启动时读取一次 `RuntimeSnapshot` 并冻结基础解释器和依赖准备器，包括“尚未配置”的状态；当前执行不会因其他请求更新配置而获得新能力。运行时探测和 MCP 启动不持全局接纳 gate。对话内联网授权、挂载、环境准备或凭据配置保存事实后请求幂等 continuation，当前 Turn 收束后通过同一 `PilotService::admit` 接纳下一 Turn，Web 跟随新 Turn。停止、删除、归属变化或未收束执行不能自动接续；重新接纳核查已保存请求，不重放准备或业务工具。Graph 后续节点从 Host 当前配置及当前 Library 装配，保持既有热替换语义。
 
 网页挂载在 Pilot gate → catalog guard → Library lease 顺序内复核 Session、保存挂载并登记接续。API 保留 `plugin`/`plugins`，增加 `effect`（`next_turn`/`after_current_turn`/`unchanged`，活动源附 `source_turn`）及既有 continuation 投影。仅当前登记执行且仍为最新 Running Pilot Turn 的真实变化请求 `continuation:<source>`；多次切换合并为一次，当前 Turn 保持旧冻结快照，空闲切换不调用模型。仅正常结算后自动接纳；失败、中断、停止、归档或新用户 Turn 取代来源都不唤醒旧任务。自动接续沿原生历史只处理最新用户请求中未完成且已授权的部分，能力变化不构成新的业务任务，也不要求重做已完成结果。Web 跟随宿主来源与后继，重开时处理列表/详情之间已接纳的交接，等待接续仍可停止或发送新消息。
+
+网页网络许可按钮只保存 `network_allowed`，影响后续 Turn；该 API 不返回挂载 `effect`，也不登记自动接续。对话内工具发起的联网授权仍按其既有 continuation 路径处理。
 
 停止与结算/接纳共用 Pilot gate：执行已返回成功但尚未结算时，取消仍结算为 Stopped；来源已经 Completed 时保留该历史，通过幂等 `pilot.continuation.cancelled` 事件取消该来源的后续推进，即使尚无 requested 事件也适用。取消在重启后仍有效；OAuth 回调在交换 token 前和持 gate 发布授权前都核查该事实，迟到回调不能交换/保存 token 或恢复任务。该事件是 Session 控制事实，不是新审批流程或 Agent 恢复日志。
 
@@ -208,6 +176,6 @@ source-free builder 校验固定 Goose、目标 ELF、Graph 闭包、资源摘�
 
 常规 [小型 Graph 回归](runtime-contract-tests.md) 执行实际 Host、Runner、Goose、授权 MCP 与 Sandbox，只替换模型传输。检查最终结果、逐节点历史、workspace、Artifact、恢复与幂等；[候选回归](rust-production-candidate.md) 使用 release Host/Web/Goose 的隔离发行包。
 
-常驻循环的真实 provider 隔离两轮已于 2026-10-08 跑通，覆盖同 Run、稳定 workspace、旧 fs2 不变、回到等待与显式停止；证据与进一步验证方式见 [企微助手验收边界](wecom-assistant.md#docmost-和验收)。这不是实际 WeCom transport 验收，更多确定性边界仍由主轨验证；该常驻切片尚未部署，实际企微仍待用户私聊验收。
+常驻循环、实际 WeCom transport 和外部业务分别验收，具体范围与证据见 [企微助手验收边界](wecom-assistant.md#docmost-和验收) 与 [验收摘要](pilot-development-plan.md)。
 
-候选代码和本地证据不等于生产已切换。真实 Docmost、WeCom、公共学术服务、目标发行版 systemd/动态库、旧数据/配置迁移与回滚单独验收；具体状态以台账为准。早期实现和设计快照见 [历史归档](archive/README.md)。
+候选代码和本地证据不等于生产已切换。外部业务、目标发行版、旧数据/配置迁移与回滚的未关闭范围统一见 [验收摘要](pilot-development-plan.md#保留的验收边界)。早期实现和设计快照见 [历史归档](archive/README.md)。

@@ -1,6 +1,16 @@
 # 历史归档
 
-这里保留旧方案与实验依据，**不定义当前实现，也不构成待办**。现行入口见 [文档目录](../README.md)，产品方向见 [产品架构](../product-architecture.md)，验收以 [开发台账](../pilot-development-plan.md) 为准。
+这里保留旧方案与实验依据，**不定义当前实现，也不构成待办**。现行入口见 [文档目录](../README.md)，产品方向见 [产品架构](../product-architecture.md)，未关闭事项见 [当前验收与待办](../pilot-development-plan.md)。按问题查具体记录，不把归档列为开工必读。
+
+## 2026-10-13 开发计划与验收历史
+
+以下正文保留，归档时只增加历史提示并调整相对链接。既有 A 编号、失败经过、测试和部署身份不改写；当时的“当前”不代表最新实现。
+
+- [原开发台账](development-2026-10-13/pilot-development-plan.md)：2026-09-26 至 2026-10-13 的阶段、验收矩阵、推进记录及独立 MLCAD 交接。
+- [Plugin authoring 计划](development-2026-10-13/pilot-plugin-authoring-development-plan.md) 与 [初始化计划](development-2026-10-13/pilot-initialization-and-development-plan.md)：S1–S4/I1–I2 的实施背景，未关闭范围已转入当前待办。
+- [开发环境原方案](development-2026-10-13/development-environment-freedom-plan.md) 与 [修订方案](development-2026-10-13/development-environment-freedom-plan-revised.md)：原稿由修订稿替代，当前工具行为见 [Pilot 开发](../pilot-development.md)。
+- [渐进披露实施计划](development-2026-10-13/plugin-progressive-disclosure-plan.md)：A222/A224 的计划及分阶段验收；懒连接仍按 [活跃路线](../goose-native-capability-reuse-plan.md) 单独判断。
+- [Goose 迁移计划](development-2026-10-13/goose-runtime-migration.md) 与 [Graph 组合设计](development-2026-10-13/graph-composition-design.md)：迁移阶段、早期原型和执行器背景；有效决定与当前契约分别留在现行文档。
 
 ## Rust 与 Goose 收敛前的历史
 

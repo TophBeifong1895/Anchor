@@ -1,6 +1,6 @@
 # Plugin 渐进式披露：2026-10-13 验收证据
 
-对应 [专项计划](../../docs/plugin-progressive-disclosure-plan.md) 和开发台账 A222。实现与 review 完成，以下记录实际运行结果；代码与验收证据随本次提交固化，未部署。
+对应 [归档专项计划](../../docs/archive/development-2026-10-13/plugin-progressive-disclosure-plan.md) 和 [历史台账](../../docs/archive/development-2026-10-13/pilot-development-plan.md) A222。以下是当时的实际运行结果和部署边界，不代表当前部署身份。
 
 ## 保留文件与运行身份
 

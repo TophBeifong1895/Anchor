@@ -1,8 +1,10 @@
 # 开发环境自由度：专项计划
 
+> 历史快照（截至 2026-10-13）：保留当时的方案、执行记录与验收边界，不再追加，也不作为当前实现、授权或待办。当前行为见 [当前架构](../../architecture.md)，仍未关闭的事项见 [当前验收与待办](../../pilot-development-plan.md)。正文中的“当前”、PID、部署状态和读取顺序均以记录当时为背景。
+
 编制日期：2026-10-13。状态：**待 review，未实现，未授权实施**。
 
-本文是讨论产出的实施方向与验收要求。它**不是**进度台账；实际交付、失败和证据只记 [开发台账](pilot-development-plan.md)，当前实现以 [architecture.md](architecture.md) 为准，目标与不变量以 [product-architecture.md](product-architecture.md) 为准。现行依赖标准见 [plugin-dependencies.md](plugin-dependencies.md)，本计划**不修改**该标准的不变量，只在其第 3 条（每插件版本一份视图）的**边界之外**新增一层。
+本文是讨论产出的实施方向与验收要求。它**不是**进度台账；实际交付、失败和证据只记 [开发台账](pilot-development-plan.md)，当前实现以 [architecture.md](../../architecture.md) 为准，目标与不变量以 [product-architecture.md](../../product-architecture.md) 为准。现行依赖标准见 [plugin-dependencies.md](../../plugin-dependencies.md)，本计划**不修改**该标准的不变量，只在其第 3 条（每插件版本一份视图）的**边界之外**新增一层。
 
 ## 1. 问题陈述
 
@@ -242,10 +244,10 @@ D2 之后，开发视图不再受保护，那么：
 
 实施后须更新（**实施前不得预改**）：
 
-- [architecture.md](architecture.md)：开发视图的装配、路径与可变性语义
-- [plugin-dependencies.md](plugin-dependencies.md)：确认第 3 条不变量（每插件版本一份视图）**未变**，并说明开发环境不在其适用范围内
+- [architecture.md](../../architecture.md)：开发视图的装配、路径与可变性语义
+- [plugin-dependencies.md](../../plugin-dependencies.md)：确认第 3 条不变量（每插件版本一份视图）**未变**，并说明开发环境不在其适用范围内
 - [pilot-initialization-and-development-plan.md](pilot-initialization-and-development-plan.md)：I2 的契约新增 pip 与 `requirements.txt`
-- [plugins.md](plugins.md)：`development_prepare` 的语义变化
+- [plugins.md](../../plugins.md)：`development_prepare` 的语义变化
 - [pilot-development-plan.md](pilot-development-plan.md)：追加推进记录
 
 ## 11. 接续与工作区保护

@@ -4,7 +4,7 @@
 
 目标由 [Rust 平台交付决定](rust-platform-target.md) 固定。当前生产默认仍为 Python；已有 Rust Runtime 和低成本回归是起点，不等于平台替代已完成。
 
-2026-10-06 后续用户决定将 Agent 层目标收敛为 Goose-only，停止框架比较并移除预算控制门槛。当前先执行 [Goose 迁移 G0–G2](../../goose-runtime-migration.md#最短实施顺序)，随后复用本计划的平台能力完成 G3；旧 F2b2 io-harness 提问组件保留已有证据，不再为旧框架扩展新产品路径。
+2026-10-06 后续用户决定将 Agent 层目标收敛为 Goose-only，停止框架比较并移除预算控制门槛。当前先执行 [Goose 迁移 G0–G2](../development-2026-10-13/goose-runtime-migration.md#最短实施顺序)，随后复用本计划的平台能力完成 G3；旧 F2b2 io-harness 提问组件保留已有证据，不再为旧框架扩展新产品路径。
 
 ## 开发顺序
 

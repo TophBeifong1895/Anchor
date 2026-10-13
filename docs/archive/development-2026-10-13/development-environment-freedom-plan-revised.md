@@ -1,8 +1,10 @@
 # 开发环境自由度：修订方案
 
-编制日期：2026-10-13。状态：**已实施并完成本专项小型闭环验收（A225），已按用户授权部署当前开发 Host 并清空对话历史（A226）**。主 Agent 负责架构设计、review 与验收，GPT-6.1 Sol / xhigh Agent 负责开发。具体证据与未覆盖边界见 [验收记录](../research_development_environment_20261013/README.md) 和开发台账。
+> 历史快照（截至 2026-10-13）：保留当时的方案、执行记录与验收边界，不再追加，也不作为当前实现、授权或待办。当前行为见 [当前架构](../../architecture.md)，仍未关闭的事项见 [当前验收与待办](../../pilot-development-plan.md)。正文中的“当前”、PID、部署状态和读取顺序均以记录当时为背景。
 
-本文是 [原计划](development-environment-freedom-plan.md) 的修订方案，保留原稿供对照。当前实现以 [architecture.md](architecture.md) 为准，目标与能力归属以 [product-architecture.md](product-architecture.md) 为准，现行规则以 [plugin-dependencies.md](plugin-dependencies.md) 为准。实现和实际验收仍只记 [开发台账](pilot-development-plan.md)。
+编制日期：2026-10-13。状态：**已实施并完成本专项小型闭环验收（A225），已按用户授权部署当前开发 Host 并清空对话历史（A226）**。主 Agent 负责架构设计、review 与验收，GPT-6.1 Sol / xhigh Agent 负责开发。具体证据与未覆盖边界见 [验收记录](../../../research_development_environment_20261013/README.md) 和开发台账。
+
+本文是 [原计划](development-environment-freedom-plan.md) 的修订方案，保留原稿供对照。当前实现以 [architecture.md](../../architecture.md) 为准，目标与能力归属以 [product-architecture.md](../../product-architecture.md) 为准，现行规则以 [plugin-dependencies.md](../../plugin-dependencies.md) 为准。实现和实际验收仍只记 [开发台账](pilot-development-plan.md)。
 
 ## 1. 方案结论与已认可的选择
 
@@ -28,19 +30,19 @@
 
 | 现状 | 代码依据与含义 |
 | --- | --- |
-| 共享 store 按包名和版本定位 | [plugin_dependencies.rs](../rust/anchor-runner-host/src/plugin_dependencies.rs) 的 `publish_store`；同键不同正文拒绝。它不是内容寻址目录 |
-| 项目开发视图目前只读、版本化 | [development_dependencies.rs](../rust/anchor-runner-host/src/application/development_dependencies.rs) 保存准备事实和原子切换的 `current.json`；执行复核所选视图、解释器及包集合 |
-| 执行中的项目视图会挂载共享包 | [plugin_view.rs](../rust/anchor-runner-host/src/plugin_view.rs) 的 `PreparedView::for_candidate` 和 [node_tools.rs](../rust/anchor-runner-host/src/node_tools.rs) 动态添加挂载；仅搜索 `tool_environment.rs` 不能证明 store 不可达 |
+| 共享 store 按包名和版本定位 | [plugin_dependencies.rs](../../../rust/anchor-runner-host/src/plugin_dependencies.rs) 的 `publish_store`；同键不同正文拒绝。它不是内容寻址目录 |
+| 项目开发视图目前只读、版本化 | [development_dependencies.rs](../../../rust/anchor-runner-host/src/application/development_dependencies.rs) 保存准备事实和原子切换的 `current.json`；执行复核所选视图、解释器及包集合 |
+| 执行中的项目视图会挂载共享包 | [plugin_view.rs](../../../rust/anchor-runner-host/src/plugin_view.rs) 的 `PreparedView::for_candidate` 和 [node_tools.rs](../../../rust/anchor-runner-host/src/node_tools.rs) 动态添加挂载；仅搜索 `tool_environment.rs` 不能证明 store 不可达 |
 | 无 symlink 不等于无 store 依赖 | `plugin_dependencies.rs` 的 `install_console_scripts` 生成普通 launcher 文件，正文直接引用 store 中的脚本 |
 | 项目环境尚无普通私有 pip 入口 | 现有 `uv venv` 未 seed pip；项目准备还拒绝零包请求。不能仅凭缺少 `pip` 命令别名判断全部 Python 能力 |
 | `src/` 布局本身可使用 | Python 可通过显式导入路径执行源码；缺口是标准 editable 安装与项目包管理流程，而非目录布局被禁止 |
-| scope lease 主要保护 Session 删除 | [development.rs](../rust/anchor-library/src/development.rs) 使用共享 lease；准备另持项目写锁，执行不持项目写锁 |
+| scope lease 主要保护 Session 删除 | [development.rs](../../../rust/anchor-library/src/development.rs) 使用共享 lease；准备另持项目写锁，执行不持项目写锁 |
 | 现有不可变环境确实承担保护 | 准备失败不切换 current；旧命令可继续懒加载旧视图。可变方案需要明确替代这些并发与失败行为 |
 | 候选与项目共用开发引用机制 | 两者都经 `record_view` 登记；现有回收扫描不能直接混入未登记的私有 `env` |
-| Session 删除已经释放开发引用 | [pilot_host.rs](../rust/anchor-runner-host/src/pilot_host.rs) 调用 `release_development_scope`；释放后下一次成功回收可删除仅开发使用的包 |
-| 回收也在 Host 启动时尝试 | [api.rs](../rust/anchor-runner-host/src/api.rs) 启动时执行 best-effort 扫描；“只有装卸和显式调用”不准确 |
-| 安装没有强制成功测试门禁 | [pilot_interaction.rs](../rust/anchor-runner-host/src/goose_acp/pilot_interaction.rs) 在安装后才可选比较准备包集合；无准备事实仍可安装，不匹配也不阻止安装 |
-| 正式安装会独立求解声明 | [application/plugins.rs](../rust/anchor-runner-host/src/application/plugins.rs) 的 `plugin_dependency_plan`；相同源码的宽版本声明可能在测试与安装时解析出不同版本 |
+| Session 删除已经释放开发引用 | [pilot_host.rs](../../../rust/anchor-runner-host/src/pilot_host.rs) 调用 `release_development_scope`；释放后下一次成功回收可删除仅开发使用的包 |
+| 回收也在 Host 启动时尝试 | [api.rs](../../../rust/anchor-runner-host/src/api.rs) 启动时执行 best-effort 扫描；“只有装卸和显式调用”不准确 |
+| 安装没有强制成功测试门禁 | [pilot_interaction.rs](../../../rust/anchor-runner-host/src/goose_acp/pilot_interaction.rs) 在安装后才可选比较准备包集合；无准备事实仍可安装，不匹配也不阻止安装 |
+| 正式安装会独立求解声明 | [application/plugins.rs](../../../rust/anchor-runner-host/src/application/plugins.rs) 的 `plugin_dependency_plan`；相同源码的宽版本声明可能在测试与安装时解析出不同版本 |
 
 这些事实说明应当拆开开发与正式运行的职责，也说明原稿“不可变性在开发路径不产生保护”“源码摘要已经保证测过即发布”的表述需要撤回。
 
@@ -285,6 +287,6 @@ Session 删除后，仅开发引用的共享包在引用释放后等待下一次
 | 大依赖集合与额外长路径 | 未进行专项压力验收，不从小型 fixture 推断全部规模可用 |
 | 强制“安装成功测试过的组合” | 未纳入本专项；安装仍独立求解，成功业务测试与此前依赖锁不构成强制门禁 |
 
-F1/F2/F3 在上述小型场景和明确兼容结论内完成，实际命令、全量中的 4 项锁竞争失败及独立复跑、最终二进制和真实 Provider 证据分别保存。标准适用范围、当前架构、[Pilot 初始化计划](pilot-initialization-and-development-plan.md) 与 [Plugin 指南](plugins.md) 已同步；完成记录只写 A225，不将文档编辑或测试重试单独记账。
+F1/F2/F3 在上述小型场景和明确兼容结论内完成，实际命令、全量中的 4 项锁竞争失败及独立复跑、最终二进制和真实 Provider 证据分别保存。标准适用范围、当前架构、[Pilot 初始化计划](pilot-initialization-and-development-plan.md) 与 [Plugin 指南](../../plugins.md) 已同步；完成记录只写 A225，不将文档编辑或测试重试单独记账。
 
 本次已获开发授权。实施时逐路径核对工作区改动，不 reset/checkout/clean，不删除已有实验或快照，不把无关改动纳入提交；开发授权不包含部署或清理旧数据。

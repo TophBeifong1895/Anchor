@@ -1,12 +1,14 @@
 # Plugin 渐进式披露实施与验收计划
 
+> 历史快照（截至 2026-10-13）：保留当时的方案、执行记录与验收边界，不再追加，也不作为当前实现、授权或待办。当前行为见 [当前架构](../../architecture.md)，仍未关闭的事项见 [当前验收与待办](../../pilot-development-plan.md)。正文中的“当前”、PID、部署状态和读取顺序均以记录当时为背景。
+
 创建：2026-10-13。起始 HEAD：`dba4d725bc40afff50b30ccc1018b48b027ad2f0`。
 
 ## 用户目标与范围
 
 用户已授权规划并由主 Agent 驱动子 Agent 开发、review 和验收：Anchor 的完整 Plugin（使用说明、多个 Skill、工具、资源、依赖与权限状态）能被 Goose 按任务发现和使用；大量挂载时不把全量目录、指令和参数 schema 塞入初始上下文。Pilot 与 AgentNode 使用一致披露契约，继续走现有 ACP/MCP 和原生调用链。
 
-研究依据：[大规模 Plugin 研究报告](../research_plugin_disclosure_20261013/research_report.md)。本计划是实现交接入口；完成状态只在实际验证后填写，不以写好接口或单测替代真实 Provider。
+研究依据：[大规模 Plugin 研究报告](../../../research_plugin_disclosure_20261013/research_report.md)。本计划是实现交接入口；完成状态只在实际验证后填写，不以写好接口或单测替代真实 Provider。
 
 首轮完整范围：授权 Plugin 搜索/分页/精确定位、Plugin 级概览与使用说明、逐 Skill/资源只读读取、完整工具 schema 获取、工具归属、预算、Pilot/Node 接线及回归。MCP 懒连接和 Goose Code Mode 编译属于独立后续优化，当前继续使用正式 MCP 启动方式。
 
@@ -66,7 +68,7 @@
 
 ## 当前交接状态
 
-2026-10-13：本切片的开发、子 Agent 只读审查与主 Agent 验收完成，台账项 **A222**。实现者使用 GPT-6.1-sol / max，主 Agent 负责架构边界、最终检查及真实 Provider 验收；代码和验收证据随本次提交固化，未部署。可复用脚本、实际命令、二进制身份和验证范围见 [验收证据](../research_plugin_disclosure_20261013/acceptance/README.md)。
+2026-10-13：本切片的开发、子 Agent 只读审查与主 Agent 验收完成，台账项 **A222**。实现者使用 GPT-6.1-sol / max，主 Agent 负责架构边界、最终检查及真实 Provider 验收；代码和验收证据随本次提交固化，未部署。可复用脚本、实际命令、二进制身份和验证范围见 [验收证据](../../../research_plugin_disclosure_20261013/acceptance/README.md)。
 
 ### 已实现契约
 
@@ -87,7 +89,7 @@
 | 最终真实 Provider | `deepseek-flash`；Pilot 与 AgentNode 均 completed | Library 1,000 Plugin；Pilot 挂 10 个，Node 挂 1,000 个；目标 MCP 1,001 工具。两者真实读取说明、正确 Skill、随机 token 资源及完整 schema，各有独立 MCP 调用日志，产物、trace、回执及 final_result 一致，没有加载无关 Skill 正文 |
 | 规模测量 | 10/100/1,000 工具的初始披露定义均为 3,223 B；1,000 完整 schema 为 493,671 B | 合成 ToolDefinition 序列化测量，不是 tokenizer 计数，也不是完整 Pilot prompt 或 1,000 MCP server 启动测量 |
 
-最终真实 Provider Host SHA256：`acb782f176db656dc50c0490fe62163cdee1a02423b398132a010bbbd8eb34fd`；固定 Goose SHA256：`71e76c412597b2ecd96ed20d0706e7666f31c018216e7cb5d65c5ca5c44824a7`。Session 删除 HTTP 200、Host 退出 0、监听关闭，没有 panic 或存活所属子进程；部署 `.env` 与共享解释器字节未变。最终概要见 [final-real-provider.json](../research_plugin_disclosure_20261013/acceptance/final-real-provider.json)，回归明细见 [checks.json](../research_plugin_disclosure_20261013/acceptance/checks.json)。
+最终真实 Provider Host SHA256：`acb782f176db656dc50c0490fe62163cdee1a02423b398132a010bbbd8eb34fd`；固定 Goose SHA256：`71e76c412597b2ecd96ed20d0706e7666f31c018216e7cb5d65c5ca5c44824a7`。Session 删除 HTTP 200、Host 退出 0、监听关闭，没有 panic 或存活所属子进程；部署 `.env` 与共享解释器字节未变。最终概要见 [final-real-provider.json](../../../research_plugin_disclosure_20261013/acceptance/final-real-provider.json)，回归明细见 [checks.json](../../../research_plugin_disclosure_20261013/acceptance/checks.json)。
 
 ### 收敛边界
 
@@ -97,11 +99,11 @@
 
 当前开发部署仍为原 Host PID 184037，SHA256 `984578f85d9bc460a8868f53236f8e99c04bc61d69f616993adcb67cb42d2f15`，显式配置 `ANCHOR_NODE_TOOL_DISCLOSURE=0`；隔离验收显式使用 `=1`。本次未更改 8077/5173、独立 8078、模型配置或共享依赖。
 
-2026-10-13 后续 A223：Goose 原生动态扩展的两项确定性接口实验完成，明确 ACP add 的轮内刷新缺口、原生 manager 的全量 schema 与管理边界。后续按需激活的实施方向见 [能力复用路线](goose-native-capability-reuse-plan.md)；此实验不关闭 MCP 懒连接，不改变 A222 的真实验收身份。
+2026-10-13 后续 A223：Goose 原生动态扩展的两项确定性接口实验完成，明确 ACP add 的轮内刷新缺口、原生 manager 的全量 schema 与管理边界。后续按需激活的实施方向见 [能力复用路线](../../goose-native-capability-reuse-plan.md)；此实验不关闭 MCP 懒连接，不改变 A222 的真实验收身份。
 
 ## 持续能力摘要与会话挂载更新（A224）
 
-2026-10-13 用户授权主 Agent 驱动子 Agent 实现、review 和验收，现已完成本切片。当前实现与实际范围见下文及[独立验收证据](../research_plugin_disclosure_20261013/capability-context/README.md)；A222/A223 的验收不回填本切片。代码与证据随本次提交固化，未部署。
+2026-10-13 用户授权主 Agent 驱动子 Agent 实现、review 和验收，现已完成本切片。当前实现与实际范围见下文及[独立验收证据](../../../research_plugin_disclosure_20261013/capability-context/README.md)；A222/A223 的验收不回填本切片。代码与证据随本次提交固化，未部署。
 
 ### 边界与实施
 
@@ -131,6 +133,6 @@
 | 最终真实 AgentNode | 999 个挂载 Plugin，摘要显示 87/省略 912，目标在省略部分仍被查到；读取说明/Skill/资源/schema 后仅一次业务调用，JSON 产物与原生完成一致 | 最终 Host `38fde27e…`；13 个真实模型请求，最新实际回执通过，无无关 Skill 正文请求；与 Pilot 验收使用不同 Host 构建 |
 | 收尾 | Host all-targets 30 targets：893 passed / 0 failed / 90 ignored；最后的 Bridge 12 项与 native guessed-receipt 1 项、build、Clippy/fmt 通过 | 全量运行早于最后的回执提示/错误文案修正，没有宣称最后又跑一遍全量；其他原生用例仅同步文案断言，未复跑 |
 
-回执验收发现原提示把所有非完成工具误称为业务工具，且真实错误没有解释回执不匹配；已修正文案并保留校验逻辑。早期真实模型出现多读无关 Skill、能力接续重复已完成报告，以及 fixture 的输入长度、终态采样和产物格式问题，均在[证据说明](../research_plugin_disclosure_20261013/capability-context/README.md)保留，未改写失败为通过。
+回执验收发现原提示把所有非完成工具误称为业务工具，且真实错误没有解释回执不匹配；已修正文案并保留校验逻辑。早期真实模型出现多读无关 Skill、能力接续重复已完成报告，以及 fixture 的输入长度、终态采样和产物格式问题，均在[证据说明](../../../research_plugin_disclosure_20261013/capability-context/README.md)保留，未改写失败为通过。
 
 本片复用 Goose 原生扩展系统提示、Session load 与 compaction；Library 和 Host 仍拥有资产及授权，没有第二套目录存储、记忆、Agent loop 或恢复引擎。MCP 仍按已有准备流程连接；懒连接、Code Mode、Plugin 安装、外部业务和 1,000 个 MCP server 启动不属于本片验收。
