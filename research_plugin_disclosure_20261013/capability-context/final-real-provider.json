@@ -1,0 +1,33 @@
+{
+  "date": "2026-10-13",
+  "status": "passed",
+  "one_aggregate_script_passed": false,
+  "model": "deepseek-flash",
+  "goose_binary_sha256": "71e76c412597b2ecd96ed20d0706e7666f31c018216e7cb5d65c5ca5c44824a7",
+  "deployment_updated": false,
+  "pilot": {
+    "evidence": "pilot-real-provider.json",
+    "slice_passed": true,
+    "host_binary_sha256": "59d501f2bd020405d3a5c8fd5143a874e0dd07f002d94f0012aeb6b0cd787226",
+    "native_compaction_tested": true,
+    "same_native_session": true,
+    "aggregate_exit_code": 1,
+    "post_compaction_fresh_tool_read_tested": false
+  },
+  "node": {
+    "evidence": "node-real-provider.json",
+    "slice_passed": true,
+    "host_binary_sha256": "38fde27e85119cbbbe5a0cc1eb326bd13bb750768bf983abc084c7a851e0d8b9",
+    "script_exit_code": 0,
+    "mounted_plugins": 999,
+    "target_omitted_from_summary": true,
+    "business_calls": 1,
+    "latest_receipt_checked": true
+  },
+  "limits": [
+    "Pilot and Node evidence bind different Host builds; the final production difference is receipt guidance/error wording, not receipt validation.",
+    "Real compaction verifies current capability system context and no report replay; the model answered from compacted history. Deterministic compaction fixtures separately verify tool rereading.",
+    "Fixtures preseed the Library and start one target MCP per invocation; installation, external business APIs and 1000-server connections are not tested.",
+    "Metadata presence enables autonomous selection; universal model compliance and avoidance of every irrelevant read are not guaranteed."
+  ]
+}

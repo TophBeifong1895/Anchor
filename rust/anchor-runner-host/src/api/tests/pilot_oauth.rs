@@ -125,6 +125,75 @@ async fn pilot_oauth_uses_host_callback_and_cancelled_session_never_becomes_http
         .unwrap();
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     assert_eq!(exchanges.load(Ordering::Acquire), 0);
+    let completed = create("pilot-oauth-completed-stop");
+    let result = begin(completed.clone()).await;
+    sessions
+        .finish_turn(
+            "local",
+            &completed.session.id,
+            &completed.turn,
+            TurnStatus::Completed,
+            None,
+        )
+        .unwrap();
+    assert!(
+        sessions
+            .events("local", &completed.session.id, 0)
+            .unwrap()
+            .iter()
+            .all(|event| event.kind != "pilot.continuation.requested")
+    );
+    for stopping in [true, false] {
+        let (status, stopped) = call(
+            router(state.clone()),
+            "POST",
+            &format!("/sessions/{}/stop", completed.session.id),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::ACCEPTED, "{stopped}");
+        assert_eq!(stopped["stopping"], stopping);
+    }
+    let mut restarted = state.clone();
+    restarted.pilots = crate::pilot_host::PilotService::default();
+    let response = router(restarted)
+        .oneshot(
+            Request::builder()
+                .uri(callback_url(&result))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        exchanges.load(Ordering::Acquire),
+        0,
+        "a callback after stop must not exchange a token"
+    );
+    assert_eq!(
+        sessions
+            .list_turns("local", &completed.session.id)
+            .unwrap()
+            .len(),
+        1
+    );
+    assert_eq!(
+        sessions
+            .get_turn("local", &completed.session.id, &completed.turn)
+            .unwrap()
+            .status,
+        TurnStatus::Completed
+    );
+    assert_eq!(
+        sessions
+            .events("local", &completed.session.id, 0)
+            .unwrap()
+            .iter()
+            .filter(|event| event.kind == "pilot.continuation.cancelled")
+            .count(),
+        1
+    );
     let deleted = create("pilot-oauth-deleted");
     let result = begin(deleted.clone()).await;
     sessions

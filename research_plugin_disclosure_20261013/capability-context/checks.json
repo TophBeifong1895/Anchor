@@ -1,0 +1,256 @@
+{
+  "date": "2026-10-13",
+  "all_targets": {
+    "command": "PATH=/home/mansteinl/.cargo/bin:$PATH cargo test --manifest-path rust/Cargo.toml -p anchor-runner-host --all-targets --locked --offline -- --test-threads=4",
+    "log": "/tmp/anchor-plugin-capability-context-tests-final.log",
+    "exit_code": 0,
+    "targets": [
+      {
+        "target": "Running unittests src/bin/anchor-net-relay.rs",
+        "passed": 3,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "target": "Running unittests src/main.rs",
+        "passed": 769,
+        "failed": 0,
+        "ignored": 2
+      },
+      {
+        "target": "Running tests/goose_acp.rs",
+        "passed": 7,
+        "failed": 0,
+        "ignored": 15
+      },
+      {
+        "target": "Running tests/goose_channel.rs",
+        "passed": 5,
+        "failed": 0,
+        "ignored": 4
+      },
+      {
+        "target": "Running tests/goose_compaction.rs",
+        "passed": 5,
+        "failed": 0,
+        "ignored": 4
+      },
+      {
+        "target": "Running tests/goose_conversation.rs",
+        "passed": 5,
+        "failed": 0,
+        "ignored": 13
+      },
+      {
+        "target": "Running tests/goose_distribution.rs",
+        "passed": 5,
+        "failed": 0,
+        "ignored": 1
+      },
+      {
+        "target": "Running tests/goose_elicitation.rs",
+        "passed": 5,
+        "failed": 0,
+        "ignored": 10
+      },
+      {
+        "target": "Running tests/goose_library.rs",
+        "passed": 5,
+        "failed": 0,
+        "ignored": 1
+      },
+      {
+        "target": "Running tests/goose_media.rs",
+        "passed": 5,
+        "failed": 0,
+        "ignored": 6
+      },
+      {
+        "target": "Running tests/goose_native_activation_spike.rs",
+        "passed": 5,
+        "failed": 0,
+        "ignored": 2
+      },
+      {
+        "target": "Running tests/goose_persistent_assistant.rs",
+        "passed": 5,
+        "failed": 0,
+        "ignored": 10
+      },
+      {
+        "target": "Running tests/goose_pilot.rs",
+        "passed": 5,
+        "failed": 0,
+        "ignored": 2
+      },
+      {
+        "target": "Running tests/goose_pilot_authoring.rs",
+        "passed": 5,
+        "failed": 0,
+        "ignored": 4
+      },
+      {
+        "target": "Running tests/goose_pilot_compaction.rs",
+        "passed": 5,
+        "failed": 0,
+        "ignored": 3
+      },
+      {
+        "target": "Running tests/goose_plugin_disclosure.rs",
+        "passed": 5,
+        "failed": 0,
+        "ignored": 1
+      },
+      {
+        "target": "Running tests/goose_plugin_mcp.rs",
+        "passed": 5,
+        "failed": 0,
+        "ignored": 2
+      },
+      {
+        "target": "Running tests/goose_plugin_summary.rs",
+        "passed": 5,
+        "failed": 0,
+        "ignored": 2
+      },
+      {
+        "target": "Running tests/goose_session_calls.rs",
+        "passed": 5,
+        "failed": 0,
+        "ignored": 4
+      },
+      {
+        "target": "Running tests/goose_trace.rs",
+        "passed": 5,
+        "failed": 0,
+        "ignored": 2
+      },
+      {
+        "target": "Running tests/local_inputs.rs",
+        "passed": 4,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "target": "Running tests/local_network.rs",
+        "passed": 1,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "target": "Running tests/multinode.rs",
+        "passed": 3,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "target": "Running tests/native_plugins.rs",
+        "passed": 5,
+        "failed": 0,
+        "ignored": 2
+      },
+      {
+        "target": "Running tests/parallel.rs",
+        "passed": 3,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "target": "Running tests/routing.rs",
+        "passed": 5,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "target": "Running tests/standalone_graph_call.rs",
+        "passed": 2,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "target": "Running tests/standalone_library.rs",
+        "passed": 1,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "target": "Running tests/standard_host.rs",
+        "passed": 3,
+        "failed": 0,
+        "ignored": 0
+      },
+      {
+        "target": "Running tests/writer_lease.rs",
+        "passed": 2,
+        "failed": 0,
+        "ignored": 0
+      }
+    ],
+    "passed": 893,
+    "failed": 0,
+    "ignored": 90,
+    "phase": "Before final receipt-guidance-only correction; not rerun afterward."
+  },
+  "clippy": {
+    "command": "PATH=/home/mansteinl/.cargo/bin:$PATH cargo clippy --manifest-path rust/Cargo.toml -p anchor-runner-host --all-targets --locked --offline -- -D warnings",
+    "log": "/tmp/anchor-plugin-capability-context-clippy-final.log",
+    "exit_code": 0,
+    "prior_log": "/tmp/anchor-plugin-capability-context-clippy.log",
+    "phase": "After final receipt-guidance correction."
+  },
+  "fmt": {
+    "command": "PATH=/home/mansteinl/.cargo/bin:$PATH cargo fmt --manifest-path rust/Cargo.toml --all -- --check",
+    "log": "/tmp/anchor-plugin-capability-context-fmt-receipt-final.log",
+    "exit_code": 0,
+    "prior_log": "/tmp/anchor-plugin-capability-context-fmt-final.log",
+    "phase": "After final receipt-guidance correction."
+  },
+  "web": {
+    "unit_command": "npm --prefix apps/web test",
+    "unit_log": "/tmp/anchor-plugin-mount-web-tests-final.log",
+    "unit_passed": 120,
+    "build_command": "npm --prefix apps/web run build -- --outDir /home/mansteinl/Anchor/.local/plugin-capability-context-20261013/browser-web",
+    "build_log": "/tmp/anchor-plugin-mount-web-build-final.log",
+    "browser_command": "ANCHOR_WEB_TEST_PORT=5185 ANCHOR_BROWSER_BINARY=/home/mansteinl/.cache/ms-playwright/chromium_headless_shell-1217/chrome-headless-shell-linux64/chrome-headless-shell ANCHOR_GOOSE_BINARY=/home/mansteinl/Anchor/.local/rust/bin/goose ANCHOR_TEST_GOOSE_HOST_BINARY=/home/mansteinl/Anchor/.local/plugin-capability-context-20261013/browser-host/anchor-runner-host ANCHOR_TEST_WEB_ROOT=/home/mansteinl/Anchor/.local/plugin-capability-context-20261013/browser-web npm --prefix apps/web run test:e2e -- session-plugins-native.spec.ts session-plugin-continuation.spec.ts session-plugins.spec.ts pilot-initialization.spec.ts pilot-lifecycle.spec.ts --workers=2",
+    "browser_log": "/tmp/anchor-plugin-mount-browser-final.log",
+    "browser_passed": 12,
+    "native_evidence": "/tmp/anchor-plugin-mount-browser-lObztU/evidence.json",
+    "binary_identity": ".local/plugin-capability-context-20261013/browser-host/identity.json"
+  },
+  "verification_finished": true,
+  "deployment_updated": false,
+  "receipt_bridge": {
+    "command": "PATH=/home/mansteinl/.cargo/bin:$PATH cargo test --manifest-path rust/Cargo.toml -p anchor-runner-host --bin anchor-runner-host goose_acp::bridge::tests --locked --offline -- --test-threads=4",
+    "log": "/tmp/anchor-plugin-context-receipt-bridge.log",
+    "exit_code": 0,
+    "passed": 12
+  },
+  "receipt_native": {
+    "command": "PATH=/home/mansteinl/.cargo/bin:$PATH ANCHOR_GOOSE_BINARY=/home/mansteinl/Anchor/.local/rust/bin/goose cargo test --manifest-path rust/Cargo.toml -p anchor-runner-host --test goose_acp --locked --offline native_goose_rejects_guessed_receipt_then_accepts_observed_result -- --ignored --nocapture --test-threads=1",
+    "log": "/tmp/anchor-plugin-context-receipt-native.log",
+    "exit_code": 0,
+    "passed": 1,
+    "evidence": "/tmp/anchor-goose-acp-spike/evidence/integration/728630/goose-native-guessed-receipt/evidence.json",
+    "host_binary_sha256": "daee84c842b4fc9178dd6fdb6e8987808865c9f4eddccf0367eb8fa640d312f8",
+    "other_native_error_expectations_rerun": false
+  },
+  "final_build": {
+    "command": "PATH=/home/mansteinl/.cargo/bin:$PATH cargo build --manifest-path rust/Cargo.toml -p anchor-runner-host --bin anchor-runner-host --locked --offline",
+    "log": "/tmp/anchor-plugin-capability-context-build-final.log",
+    "exit_code": 0,
+    "host_binary_sha256": "38fde27e85119cbbbe5a0cc1eb326bd13bb750768bf983abc084c7a851e0d8b9"
+  },
+  "diff_check": {
+    "command": "git diff --check",
+    "exit_code": 0
+  },
+  "real_provider": {
+    "summary": "final-real-provider.json",
+    "pilot_command": "python3 research_plugin_disclosure_20261013/capability-context/real_provider.py",
+    "pilot_aggregate_exit_code": 1,
+    "pilot_slice_passed": true,
+    "node_command": "python3 research_plugin_disclosure_20261013/capability-context/real_provider.py --node-only",
+    "node_exit_code": 0,
+    "node_log": "/tmp/anchor-plugin-capability-context-real-node-final.log"
+  }
+}

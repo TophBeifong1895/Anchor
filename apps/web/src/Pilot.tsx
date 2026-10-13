@@ -4,7 +4,7 @@ import { api, ApiError } from './api';
 import { Markdown } from './markdown';
 import { PilotTurn, type Turn } from './PilotTurn';
 import { SessionActions } from './SessionActions';
-import { SessionPlugins } from './SessionPlugins';
+import { SessionPlugins, type PluginContinuation } from './SessionPlugins';
 import { PilotCredentials } from './PilotCredentials';
 import type { Question } from './pilotQuestions';
 
@@ -43,7 +43,7 @@ export function Pilot({ session = '', onSession }: { session?: string; onSession
   const [waitingQuestion, setWaitingQuestion] = useState(false);
   const [stopping, setStopping] = useState(false);
   const [syncedTurn, setSyncedTurn] = useState('');
-  const [continuation, setContinuation] = useState<{ session: string; turn: string } | null>(null);
+  const [continuation, setContinuation] = useState<PluginContinuation | null>(null);
   const [draft, setDraft] = useState(() => cached('draft:new'));
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -96,9 +96,32 @@ export function Pilot({ session = '', onSession }: { session?: string; onSession
         api<{ turns: Turn[] }>(`/sessions/${encodeURIComponent(id)}/turns`, 'GET', undefined, controller.signal),
       ]);
       if (!mounted.current || controller.signal.aborted || selectedRef.current !== id) return;
-      const latest = execution.turns[0];
+      let latest = execution.turns[0];
+      let savedHistory = history.messages;
+      // A completed source can still have a scheduled continuation when the
+      // page reopens. Turn list rows do not carry that projection.
+      if (latest?.status === 'completed') {
+        const detail = await api<{ turn: Turn; continuation: Turn['continuation'] }>(
+          `/sessions/${encodeURIComponent(id)}/turns/${encodeURIComponent(latest.id)}`, 'GET', undefined, controller.signal);
+        if (!mounted.current || controller.signal.aborted || selectedRef.current !== id) return;
+        latest = { ...detail.turn, continuation: detail.continuation };
+        if (detail.continuation?.status === 'admitted' && detail.continuation.turn) {
+          // Admission may cross the list/detail reads on a reopened page. Read
+          // the saved successor and current history before showing an idle form.
+          const [successor, currentExecution, currentHistory] = await Promise.all([
+            api<{ turn: Turn; continuation: Turn['continuation'] }>(
+              `/sessions/${encodeURIComponent(id)}/turns/${encodeURIComponent(detail.continuation.turn)}`, 'GET', undefined, controller.signal),
+            api<{ turns: Turn[] }>(`/sessions/${encodeURIComponent(id)}/turns`, 'GET', undefined, controller.signal),
+            api<{ messages: Message[] }>(`/sessions/${encodeURIComponent(id)}/messages`, 'GET', undefined, controller.signal),
+          ]);
+          if (!mounted.current || controller.signal.aborted || selectedRef.current !== id) return;
+          latest = currentExecution.turns[0] ?? successor.turn;
+          if (latest.id === successor.turn.id) latest = { ...successor.turn, continuation: successor.continuation };
+          savedHistory = currentHistory.messages;
+        }
+      }
       // The running Turn owns its live form; its saved questions join the transcript after it ends.
-      const savedMessages = history.messages.filter(message => latest?.status !== 'running'
+      const savedMessages = savedHistory.filter(message => latest?.status !== 'running'
         || (message.question?.turn !== latest.id && message.question_answer?.turn !== latest.id));
       const pending = pendingSubmission(id);
       if (pending && execution.turns.some(item => item.request_id === pending.request_id)) {
@@ -115,6 +138,14 @@ export function Pilot({ session = '', onSession }: { session?: string; onSession
         ? [...savedMessages, { role: 'user', text: prompt }] : savedMessages);
       if (version === listVersion.current) setSessions(result.sessions);
       setCurrentTurn(latest ?? null);
+      setContinuation(previous => {
+        if (latest?.continuation?.status === 'scheduled') return { session: id, source: latest.id, state: latest.continuation };
+        if (!previous || previous.session !== id) return previous;
+        if (latest?.id === previous.source) return latest.continuation
+          ? { ...previous, state: latest.continuation } : previous;
+        return { ...previous, state: { status: latest?.request_id === `continuation:${previous.source}` ? 'admitted' : 'superseded',
+          ...(latest?.request_id === `continuation:${previous.source}` ? { turn: latest.id } : {}) } };
+      });
       if (latest?.status !== 'running') { setWaitingQuestion(false); setStopping(false); }
       setSyncedTurn(latest && latest.status !== 'running' ? latest.id : '');
       setBusy(submissions.current.has(id) || latest?.status === 'running');
@@ -123,34 +154,60 @@ export function Pilot({ session = '', onSession }: { session?: string; onSession
     }
   }, [setCurrentTurn]);
   const complete = useCallback((final: Turn) => {
-    if (!mounted.current || selectedRef.current !== final.session) return;
+    if (!mounted.current || selectedRef.current !== final.session || turnRef.current?.id !== final.id) return;
     setCurrentTurn(final); setBusy(false); setWaitingQuestion(false); setStopping(false);
-    if (final.continuation?.status === 'scheduled') setContinuation({ session: final.session, turn: final.id });
+    if (final.continuation) setContinuation(previous => final.continuation?.status === 'scheduled'
+      ? { session: final.session, source: final.id, state: final.continuation }
+      : previous?.source === final.id ? { ...previous, state: final.continuation! } : previous);
     void refresh(final.session).catch(error => {
       if (mounted.current && selectedRef.current === final.session) setProblem((error as Error).message);
     });
   }, [refresh, setCurrentTurn]);
   useEffect(() => {
-    if (!continuation || continuation.session !== selected) return;
+    if (!continuation || continuation.session !== selected || continuation.state.status !== 'scheduled') return;
     const controller = new AbortController();
     let closed = false;
     let timer: ReturnType<typeof setTimeout>;
     const followContinuation = async () => {
       try {
-        const result = await api<{ turn: Turn; continuation: Turn['continuation'] }>(`/sessions/${encodeURIComponent(continuation.session)}/turns/${encodeURIComponent(continuation.turn)}`, 'GET', undefined, controller.signal);
+        const result = await api<{ turn: Turn; continuation: Turn['continuation'] }>(`/sessions/${encodeURIComponent(continuation.session)}/turns/${encodeURIComponent(continuation.source)}`, 'GET', undefined, controller.signal);
         if (closed) return;
-        if (result.continuation?.status === 'admitted') {
-          await refresh(continuation.session);
-          if (!closed) setContinuation(null);
+        const latest = turnRef.current;
+        if (latest && latest.id !== continuation.source && latest.request_id !== `continuation:${continuation.source}`) {
+          setContinuation(previous => previous?.source === continuation.source
+            ? { ...previous, state: { status: 'superseded' } } : previous);
           return;
         }
-        if (result.continuation?.status !== 'scheduled') { setContinuation(null); return; }
+        if (submissions.current.has(continuation.session)) {
+          timer = setTimeout(() => void followContinuation(), 1000);
+          return;
+        }
+        if (result.continuation?.status === 'admitted') {
+          await refresh(continuation.session);
+          if (!closed) setContinuation(previous => previous?.source === continuation.source
+            ? { ...previous, state: result.continuation! } : previous);
+          return;
+        }
+        if (result.continuation?.status !== 'scheduled') {
+          setContinuation(previous => previous?.source === continuation.source
+            ? { ...previous, state: result.continuation ?? { status: 'none' } } : previous);
+          return;
+        }
       } catch { if (closed) return; }
       if (!closed) timer = setTimeout(() => void followContinuation(), 1000);
     };
     void followContinuation();
     return () => { closed = true; controller.abort(); clearTimeout(timer); };
   }, [continuation, selected, refresh]);
+  const scheduleContinuation = useCallback((id: string, source: string) => {
+    if (!mounted.current || selectedRef.current !== id) return;
+    const latest = turnRef.current;
+    const state: PluginContinuation['state'] = latest && latest.id !== source
+      ? { status: latest.request_id === `continuation:${source}` ? 'admitted' : 'superseded',
+        ...(latest.request_id === `continuation:${source}` ? { turn: latest.id } : {}) }
+      : { status: 'scheduled', request_id: `continuation:${source}` };
+    setContinuation({ session: id, source, state });
+  }, []);
   const submit = async (id: string, message: string | null) => {
     const key = `submission:${id}`;
     const pending = pendingSubmission(id);
@@ -169,6 +226,9 @@ export function Pilot({ session = '', onSession }: { session?: string; onSession
       historyRequest.current?.abort();
       setLoading(false); setCurrentTurn(result.turn); setWaitingQuestion(false); setStopping(false); setSyncedTurn('');
       setBusy(result.turn.status === 'running');
+      setContinuation(previous => previous?.session === id && previous.source !== result.turn.id
+        ? { ...previous, state: { status: result.turn.request_id === `continuation:${previous.source}` ? 'admitted' : 'superseded' } }
+        : previous);
     }
   };
   useEffect(() => {
@@ -288,7 +348,21 @@ export function Pilot({ session = '', onSession }: { session?: string; onSession
     const id = selected;
     const version = navigation.current;
     setStopping(true);
-    try { await api(`/sessions/${encodeURIComponent(id)}/stop`, 'POST'); }
+    try {
+      await api(`/sessions/${encodeURIComponent(id)}/stop`, 'POST');
+      if (!mounted.current || version !== navigation.current) return;
+      if (continuation?.session === id && continuation.state.status === 'scheduled') {
+        const result = await api<{ continuation: Turn['continuation'] }>(
+          `/sessions/${encodeURIComponent(id)}/turns/${encodeURIComponent(continuation.source)}`);
+        if (!mounted.current || version !== navigation.current) return;
+        setContinuation(previous => previous?.source === continuation.source
+          ? { ...previous, state: result.continuation ?? { status: 'none' } } : previous);
+      }
+      if (turnRef.current?.status !== 'running') {
+        await refresh(id);
+        if (mounted.current && version === navigation.current) setStopping(false);
+      }
+    }
     catch (error) {
       if (mounted.current && version === navigation.current) { setProblem((error as Error).message); setStopping(false); }
     }
@@ -328,6 +402,7 @@ export function Pilot({ session = '', onSession }: { session?: string; onSession
     if (selectedRef.current === id) { activate(''); setLoading(false); }
   };
   const current = sessions.find(item => item.id === selected);
+  const awaitingContinuation = continuation?.session === selected && continuation.state.status === 'scheduled';
   const pendingApproval = current?.approval?.status === 'requested';
   // An interrupted session accepts a new message: the next turn carries what the dead run recorded.
   const canSend = !selected || (current &&
@@ -383,7 +458,7 @@ export function Pilot({ session = '', onSession }: { session?: string; onSession
           void refresh(selected).catch(error => { if (selectedRef.current === selected) setProblem((error as Error).message); });
         }} />}
         {busy && !turn && <div className="pilot-thinking" role="status"><LoaderCircle size={16} />正在提交…</div>}
-        {continuation && <p className="pilot-muted" role="status">正在应用配置，Pilot 将继续当前任务…</p>}
+        {awaitingContinuation && turn?.status !== 'running' && <p className="pilot-muted" role="status">正在应用配置，Pilot 将继续当前任务…</p>}
         </div>
       </div>
       {!atBottom && <button className="pilot-latest" onClick={() => {
@@ -407,15 +482,15 @@ export function Pilot({ session = '', onSession }: { session?: string; onSession
             }
           }} disabled={busy || loading || !canSend} />
         <div className="pilot-composer-footer"><small>Enter 发送 · Shift + Enter 换行</small>
-          {busy ? <button className="pilot-stop" type="button" disabled={stopping} onClick={() => void stop()}><Square size={14} fill="currentColor" />{stopping ? '正在停止…' : '停止'}</button> :
-            <button className="primary" type="submit" disabled={!draft.trim() || loading || !canSend}><Send size={16} />发送</button>}
+          {(busy || awaitingContinuation) && <button className="pilot-stop" type="button" disabled={stopping} onClick={() => void stop()}><Square size={14} fill="currentColor" />{stopping ? '正在停止…' : '停止'}</button>}
+          {!busy && <button className="primary" type="submit" disabled={!draft.trim() || stopping || loading || !canSend}><Send size={16} />发送</button>}
         </div>
       </form>
       <small className="pilot-disclaimer">删除工作流会再次确认；研究结论请结合来源核验。</small>
     </section>
     {/* Plugin mounting belongs to the session, not to one Turn. Keeping the capability rail outside
-        the transcript gives the conversation a stable reading surface while the next-Turn rule stays
+        the transcript gives the conversation a stable reading surface while the capability policy stays
         visible beside the controls. */}
-    <SessionPlugins key={selected} session={selected} />
+    <SessionPlugins key={selected} session={selected} onContinuation={scheduleContinuation} continuation={continuation} />
   </main>;
 }

@@ -101,6 +101,7 @@ test('Pilot follows a delayed admitted continuation and shows the next Turn with
       ? { status: 'admitted', request_id: 'continuation:prepare', turn: next.id }
       : final.continuation } });
   });
+  await page.route('**/sessions/*/turns/continued', route => route.fulfill({ json: { turn: current, continuation: { status: 'none' } } }));
   await page.route(/\/sessions\/[^/]+\/turns\/[^/]+\/events/, route => {
     const isNext = route.request().url().includes('/continued/');
     current = isNext ? { ...next, status: 'completed' } : final;

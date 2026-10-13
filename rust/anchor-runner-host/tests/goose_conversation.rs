@@ -469,7 +469,7 @@ fn native_goose_channel_unknown_effect_new_turn_checks_state_and_rejects_old_rec
         command(&format!(
             "set -eu; test ! -e checkpoint.txt; test ! -e effect-ready; test -f /previous/effect-ready; test \"$(cat /previous/checkpoint.txt)\" = checkpoint; if printf corrupt > /previous/checkpoint.txt; then exit 93; fi; curl --silent --show-error --fail --max-time 5 --noproxy '*' '{}/effects' > evidence.txt; cat evidence.txt",
             provider.url
-        )).after("after observing business results"),
+        )).after("final_result.observed_receipt must match"),
         complete("verify").after("effect_count"),
         Step::text("checked external state without repeating the interrupted POST"),
     ]);
@@ -492,7 +492,7 @@ fn native_goose_channel_unknown_effect_new_turn_checks_state_and_rejects_old_rec
     assert!(continued.contains("checkpoint"));
     let rejected_completion = tool_feedback(&requests[3]).last().unwrap().to_string();
     assert!(
-        rejected_completion.contains("after observing business results"),
+        rejected_completion.contains("final_result.observed_receipt must match"),
         "{rejected_completion}"
     );
     let old_record_path = host

@@ -18,6 +18,7 @@ mod pilot_host;
 mod pilot_resources;
 mod pilot_tools;
 mod plugin_dependencies;
+mod plugin_disclosure;
 mod plugin_mounts;
 mod plugin_network;
 mod plugin_view;

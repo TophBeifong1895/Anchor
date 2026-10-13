@@ -313,7 +313,7 @@ fn graph() -> Value {
 
 fn install_plugin(host: &Host, media: &MediaFixture) -> Value {
     let bundle = host.base.root.path().join("bundle");
-    let plugin = bundle.join("plugins").join(PLUGIN);
+    let plugin = host.base.root.path().join("checkout").join(PLUGIN);
     fs::create_dir_all(plugin.join("skills/media")).unwrap();
     fs::write(
         plugin.join("plugin.json"),
@@ -330,7 +330,10 @@ fn install_plugin(host: &Host, media: &MediaFixture) -> Value {
         "---\nname: media-fixture\ndescription: Inspect fixture image results.\n---\nUse media-loopback_fixture_media in mixed mode once. On recovery, inspect rather than issue again.\n",
     )
     .unwrap();
-    let binding = FilePluginCatalog::new(&bundle)
+    anchor_library::Library::new(host.base.root.path())
+        .install_directory(PLUGIN, &plugin, false)
+        .unwrap();
+    let binding = FilePluginCatalog::new(host.base.root.path())
         .resolve(&[PLUGIN.into()])
         .unwrap()
         .remove(0);
@@ -345,7 +348,7 @@ fn install_plugin(host: &Host, media: &MediaFixture) -> Value {
     );
     fs::write(
         bundle.join("manifest.json"),
-        json!({"format":1,"graph":"graph.json","plugins":[summary]}).to_string(),
+        json!({"format":1,"graph":"graph.json","plugins":[{"id":PLUGIN}]}).to_string(),
     )
     .unwrap();
     summary
@@ -363,7 +366,8 @@ fn native_pair(history: &Value, name: &str, mode: &str) -> (Value, Value) {
         .find(|block| {
             block["type"] == "toolRequest"
                 && block["toolCall"]["value"]["name"] == name
-                && block["toolCall"]["value"]["arguments"]["mode"] == mode
+                && (block["toolCall"]["value"]["arguments"]["mode"] == mode
+                    || block["toolCall"]["value"]["arguments"]["arguments"]["mode"] == mode)
         })
         .unwrap_or_else(|| panic!("missing native tool request for {name}: {history}"));
     let response = blocks
@@ -531,7 +535,11 @@ fn native_goose_mixed_media_preserves_blocks_vision_wire_receipt_and_artifacts()
         "goose-media-mixed-vision",
         vec![
             command("printf media-workspace-checked > evidence.txt; cat evidence.txt"),
-            Step::tool(EXPOSED_TOOL, json!({"mode":"mixed"})).after("media-workspace-checked"),
+            Step::tool(
+                "anchor_tools_call",
+                json!({"name":EXPOSED_TOOL,"arguments":{"mode":"mixed"}}),
+            )
+            .after("media-workspace-checked"),
             Step::tool(
                 "final_result",
                 json!({
@@ -540,12 +548,14 @@ fn native_goose_mixed_media_preserves_blocks_vision_wire_receipt_and_artifacts()
                 }),
             )
             .after(LAST_TEXT),
-            complete("verify").after("after observing business results"),
+            complete("verify").after("final_result.observed_receipt must match"),
             Step::text("observed native images and completed the checked branch"),
         ],
         VISION_MODEL,
     );
-    let host = Host::new(&graph()).default_runtime();
+    let host = Host::new(&graph())
+        .default_runtime()
+        .with_extra_environment([("ANCHOR_NODE_TOOL_DISCLOSURE", "1")]);
     let binding = install_plugin(&host, &media);
     let response = host.run(&provider);
     assert_eq!(response["status"], "completed", "{response}");
@@ -575,18 +585,23 @@ fn native_goose_mixed_media_preserves_blocks_vision_wire_receipt_and_artifacts()
                 message["role"] == "user" && !image_urls(&message["content"]).is_empty()
             })
     );
-    let tool_name = tool_definition(&requests[1], EXPOSED_TOOL).unwrap()["function"]["name"]
+    let tool_name = tool_definition(&requests[1], "anchor_tools_call").unwrap()["function"]["name"]
         .as_str()
         .unwrap();
     let history = host.native_conversation("fixture", "worker", 1);
     let (native_request, native_response) = native_pair(&history, tool_name, "mixed");
     assert_eq!(
         native_request["toolCall"]["value"]["arguments"],
-        json!({"mode":"mixed"})
+        json!({"name":EXPOSED_TOOL,"arguments":{"mode":"mixed"}})
     );
     let receipt = assert_mixed(&native_response, &media.pictures);
     assert!(serde_json::to_vec(&native_response).unwrap().len() > 1024 * 1024);
     let (fact, native, _) = host.native_record("fixture", "worker", 1);
+    assert_eq!(native["tool_calls"][1]["tool"], EXPOSED_TOOL);
+    assert_eq!(
+        native["tool_calls"][1]["arguments"],
+        json!({"mode":"mixed"})
+    );
     assert_saved_metadata(&fact, &media.pictures);
     assert_saved_metadata(&native["tool_calls"], &media.pictures);
     assert_eq!(native["tool_calls"][2]["result"]["ok"], false);
@@ -736,7 +751,7 @@ fn native_goose_media_restart_checks_same_session_without_reissuing_effect() {
             complete("verify").after(LAST_TEXT).gated(&gate),
             complete("verify"),
             Step::tool(EXPOSED_TOOL, json!({"mode":"inspect"}))
-                .after("after observing business results"),
+                .after("final_result.observed_receipt must match"),
             complete("verify").after(LAST_TEXT),
             Step::text("inspected the issued images without issuing a second effect"),
         ],

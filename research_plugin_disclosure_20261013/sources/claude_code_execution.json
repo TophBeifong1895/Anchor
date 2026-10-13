@@ -1,0 +1,10 @@
+{
+  "url": "https://www.anthropic.com/engineering/code-execution-with-mcp",
+  "accessed_at": "2026-10-12T23:50:05.336173+00:00",
+  "status": 200,
+  "effective_url": "https://www.anthropic.com/engineering/code-execution-with-mcp",
+  "content_type": "text/html; charset=utf-8",
+  "sha256": "0d07e752a4266466a80bff67bf3f80077585e982d9076bee569ee043832a31fa",
+  "bytes": 174919,
+  "text_file": "/home/mansteinl/Anchor/research_plugin_disclosure_20261013/sources/claude_code_execution.txt"
+}

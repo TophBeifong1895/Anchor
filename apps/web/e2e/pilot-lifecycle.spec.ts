@@ -29,6 +29,7 @@ test('Pilot reconciles a lost submission response and permits corrected input af
     submitted.push(route.request().postDataJSON());
     return route.fulfill({ status: 422, json: { error: '输入需要修改' } });
   });
+  await page.route('**/sessions/*/turns/accepted', route => route.fulfill({ json: { turn: final, continuation: { status: 'none' } } }));
   await page.route(/\/sessions\/[^/]+\/turns\/[^/]+\/events/, route => route.fulfill({
     contentType: 'text/event-stream', body: `event: turn\ndata: ${JSON.stringify(final)}\n\n`,
   }));
@@ -120,6 +121,7 @@ test('Pilot keeps messages, navigation and live connections correct across slow 
       if (id === 'other') { heldSubmission = res; return; }
       return json(res, { turn }, 202);
     }
+    if (parts[2] === 'turns' && parts.length === 4) return json(res, { turn: turns.get(id), continuation: { status: 'none' } });
     if (parts[2] === 'turns') return json(res, { turns: turns.has(id) ? [turns.get(id)] : [] });
     return json(res, { error: 'not found' }, 404);
   });

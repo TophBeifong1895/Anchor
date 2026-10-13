@@ -459,6 +459,7 @@ pub(crate) struct PreparedPlugins {
     pub(crate) mcp: crate::tool_host::McpToolConfig,
     pub(crate) mounts: Vec<ReadOnlyInput>,
     pub(crate) views: BTreeMap<String, PreparedPlugin>,
+    pub(crate) disclosure: crate::plugin_disclosure::PluginDisclosureCatalog,
 }
 
 /// Prepare current Library code under the selected authorization baseline.
@@ -515,6 +516,7 @@ pub(crate) async fn prepare_plugins_for_owner_async(
         let mut current = Vec::with_capacity(bindings.len());
         let mut mounts = Vec::new();
         let mut views = BTreeMap::new();
+        let mut disclosure = crate::plugin_disclosure::PluginDisclosureCatalog::default();
         for binding in &bindings {
             if cancellation.load(std::sync::atomic::Ordering::Acquire) {
                 return Err(Unusable::unconfigured("Plugin preparation was cancelled"));
@@ -546,6 +548,7 @@ pub(crate) async fn prepare_plugins_for_owner_async(
                 format!("/plugins/{}", definition.id),
             ));
             current.push(current_binding);
+            disclosure.insert(definition.clone());
             definitions.insert(binding.id.clone(), definition);
         }
         let mcp = crate::tool_host::McpToolConfig::from_definitions_for_owner(
@@ -562,6 +565,7 @@ pub(crate) async fn prepare_plugins_for_owner_async(
             mcp,
             mounts,
             views,
+            disclosure,
         })
     })
     .await

@@ -914,6 +914,7 @@ impl NodeHostResolver for HostIoResolver {
                 )
                 .await?;
                 let plugin_views = prepared.views;
+                let mut disclosure = prepared.disclosure;
                 self.remember_plugin_observation(
                     &request.key,
                     plugin_views
@@ -945,6 +946,7 @@ impl NodeHostResolver for HostIoResolver {
                         },
                     )
                     .await?;
+                disclosure.attach_tools(plugins.tool_owners());
                 // Output beyond the stream previews is retained host-side and mounted
                 // read-only at /spill, so a model can read what was cut off.
                 let spill = crate::node_tools::SpillDirectory::new(
@@ -999,12 +1001,15 @@ impl NodeHostResolver for HostIoResolver {
                     }
                     None => tools,
                 };
+                let (tools, plugin_instructions) = crate::tool_disclosure::maybe_wrap(
+                    tools,
+                    crate::tool_disclosure::always_visible(always_visible),
+                    disclosure,
+                );
                 Ok::<_, ResolutionError>(ResolvedNodeTools {
-                    tools: crate::tool_disclosure::maybe_wrap(
-                        tools,
-                        crate::tool_disclosure::always_visible(always_visible),
-                    ),
+                    tools,
                     plugins: mounted.bindings,
+                    plugin_instructions,
                 })
             }
             .await;

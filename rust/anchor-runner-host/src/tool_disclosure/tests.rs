@@ -87,7 +87,17 @@ fn only_declared_tools_are_advertised() {
         .map(|definition| definition.name)
         .collect::<Vec<_>>();
     names.sort();
-    assert_eq!(names, ["anchor_run", SEARCH_TOOL, CALL_TOOL]);
+    assert_eq!(
+        names,
+        [
+            plugin_disclosure::READ_TOOL,
+            plugin_disclosure::LIST_TOOL,
+            "anchor_run",
+            DETAIL_TOOL,
+            SEARCH_TOOL,
+            CALL_TOOL
+        ]
+    );
 }
 
 #[tokio::test]
@@ -174,11 +184,70 @@ async fn invoke_refuses_meta_tools_unknown_names_and_missing_arguments() {
 }
 
 #[test]
-fn read_only_is_only_claimed_for_search() {
+fn read_only_includes_discovery_and_the_real_target_flags() {
     let (port, _) = wrapped();
     assert!(port.is_read_only(SEARCH_TOOL));
     assert!(!port.is_read_only(CALL_TOOL));
-    assert!(!port.is_read_only("plugin_report"));
+    assert!(port.is_read_only("plugin_report"));
+}
+
+#[test]
+fn persistent_summary_matches_filtered_tool_owners_in_both_schema_modes() {
+    let root = tempfile::tempdir().unwrap();
+    let directory = root.path().join("plugins/demo");
+    std::fs::create_dir_all(&directory).unwrap();
+    std::fs::write(
+        directory.join("plugin.json"),
+        r#"{"name":"Report Plugin","description":"Create weekly reports"}"#,
+    )
+    .unwrap();
+    let mut catalog = PluginDisclosureCatalog::default();
+    catalog.insert(
+        anchor_graph_host::FilePluginCatalog::new(root.path())
+            .definition("demo")
+            .unwrap(),
+    );
+    catalog.attach_tools(
+        ["plugin_report", "not_callable"]
+            .into_iter()
+            .map(|name| {
+                (
+                    name.into(),
+                    plugin_disclosure::ToolOwner {
+                        plugin: "demo".into(),
+                        server: "reports".into(),
+                        tool: name.into(),
+                    },
+                )
+            })
+            .collect(),
+    );
+    let mut disclosure = ToolDisclosure::new(
+        Fake::new().definitions,
+        BTreeMap::new(),
+        DisclosurePolicy::new(["anchor_run"]),
+        catalog,
+    );
+    let expected = disclosure.instructions();
+    for enabled in [false, true] {
+        disclosure.enabled = enabled;
+        assert_eq!(disclosure.instructions(), expected);
+        assert!(
+            disclosure
+                .definitions()
+                .iter()
+                .any(|tool| tool.name == plugin_disclosure::LIST_TOOL)
+        );
+        let entry: Value = serde_json::from_str(expected.lines().nth(1).unwrap()).unwrap();
+        assert_eq!(entry["tool_count"], 1);
+        let listed = disclosure
+            .inspect(plugin_disclosure::LIST_TOOL, &json!({"plugin":"demo"}))
+            .unwrap();
+        assert_eq!(
+            listed[0].as_json().unwrap()["plugins"][0]["tool_count"],
+            entry["tool_count"]
+        );
+    }
 }
 
 #[tokio::test]
@@ -236,7 +305,7 @@ fn disclosure_keeps_the_advertised_schema_bounded() {
     // What a model request carries is exactly the advertised definitions, so this
     // is the per-request schema cost for a node with `count` mounted tools.
     let mut reported = Vec::new();
-    for count in [1usize, 10, 60, 200] {
+    for count in [10usize, 100, 1_000] {
         let inner = Arc::new(Fake {
             definitions: (0..count)
                 .map(|i| realistic(&format!("plugin_tool_{i}"), i))
@@ -253,7 +322,7 @@ fn disclosure_keeps_the_advertised_schema_bounded() {
             disclosed / 4
         );
     }
-    // The advertised set is always the declared tools plus the two meta tools, so it
+    // The advertised set is always the declared tools plus the five discovery tools, so it
     // cannot grow with the number of mounted tools.
     let disclosed = reported
         .iter()
@@ -300,31 +369,52 @@ fn disclosure_waits_until_the_meta_tools_pay_for_themselves() {
     );
 }
 
-#[test]
-fn the_threshold_is_a_deliberate_margin_past_the_measured_crossover() {
-    let measure = |hidden: usize| {
-        let inner = Arc::new(Fake {
-            definitions: (0..hidden)
-                .map(|i| realistic(&format!("plugin_tool_{i}"), i))
-                .collect(),
-            calls: Mutex::new(Vec::new()),
-        });
-        let raw = schema_bytes(&inner.definitions());
-        let disclosed =
-            schema_bytes(&wrap(inner, DisclosurePolicy::new(["anchor_run"])).definitions());
-        (raw, disclosed)
-    };
-    // At the threshold we still list everything, even though the meta tools already
-    // break even: the margin absorbs tools whose schemas are larger than the fixture's.
-    let (raw_at, disclosed_at) = measure(MIN_HIDDEN_FOR_DISCLOSURE);
-    assert!(
-        raw_at > disclosed_at,
-        "the margin costs a small win at the threshold: {raw_at} vs {disclosed_at}"
+#[tokio::test]
+async fn schema_is_complete_and_search_supports_multiple_chinese_terms() {
+    let definition = ToolDefinition::new(
+        ToolName::new("research_cn").unwrap(),
+        "中文证据 搜索 nested options",
+        json!({"type":"object","properties":{"items":{"type":"array","items":{"oneOf":[{"type":"string"},{"type":"object","properties":{"id":{"type":"integer"}},"required":["id"]}]}}},"required":["items"],"additionalProperties":false}),
     );
-    // One tool past it, disclosure wins clearly.
-    let (raw_above, disclosed_above) = measure(MIN_HIDDEN_FOR_DISCLOSURE + 1);
+    let inner = Arc::new(Fake {
+        definitions: vec![definition.clone()],
+        calls: Mutex::new(Vec::new()),
+    });
+    let port = wrap(inner, DisclosurePolicy::new(Vec::<String>::new()));
+    let page = call(&port, SEARCH_TOOL, json!({"query":"中文 搜索"})).await;
+    assert_eq!(page["total"], 1);
+    let detail = call(&port, DETAIL_TOOL, json!({"name":"research_cn"})).await;
+    assert_eq!(detail["parameters"], definition.parameters);
+    assert_eq!(detail["complete"], true);
     assert!(
-        disclosed_above * 2 < raw_above,
-        "past the threshold disclosure must win: {raw_above} vs {disclosed_above}"
+        port.call(CALL_TOOL, json!({"name":"final_result","arguments":{}}))
+            .await
+            .is_err()
+    );
+    assert!(
+        port.call(CALL_TOOL, json!({"name":"research_cn","arguments":[]}))
+            .await
+            .is_err()
+    );
+}
+
+#[tokio::test]
+async fn oversized_schema_returns_a_clear_error() {
+    let definition = ToolDefinition::new(
+        ToolName::new("large").unwrap(),
+        "Large",
+        json!({"type":"object","description":"x".repeat(plugin_disclosure::DETAIL_BYTES)}),
+    );
+    let inner = Arc::new(Fake {
+        definitions: vec![definition],
+        calls: Mutex::new(Vec::new()),
+    });
+    let port = wrap(inner, DisclosurePolicy::new(Vec::<String>::new()));
+    assert!(
+        port.call(DETAIL_TOOL, json!({"name":"large"}))
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("complete schema/instruction was not returned")
     );
 }

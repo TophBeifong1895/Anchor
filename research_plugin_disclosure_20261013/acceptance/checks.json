@@ -1,0 +1,223 @@
+{
+  "all_targets_command": "PATH=/home/mansteinl/.cargo/bin:$PATH cargo test --manifest-path rust/Cargo.toml -p anchor-runner-host -p anchor-graph-host --all-targets --locked --offline -- --test-threads=4",
+  "all_targets_exit": 0,
+  "targets": [
+    {
+      "crate": "anchor-graph-host",
+      "target": "Running unittests src/lib.rs (rust/target/debug/deps/anchor_graph_host-5958374e4b0664d9)",
+      "passed": 41,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "crate": "anchor-graph-host",
+      "target": "Running tests/in_process.rs (rust/target/debug/deps/in_process-9600c111f9d442fc)",
+      "passed": 0,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "crate": "anchor-runner-host",
+      "target": "Running unittests src/bin/anchor-net-relay.rs (rust/target/debug/deps/anchor_net_relay-23c88779f645f426)",
+      "passed": 3,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "crate": "anchor-runner-host",
+      "target": "Running unittests src/main.rs (rust/target/debug/deps/anchor_runner_host-c28c94de64721398)",
+      "passed": 755,
+      "failed": 0,
+      "ignored": 2
+    },
+    {
+      "crate": "anchor-runner-host",
+      "target": "Running tests/goose_acp.rs (rust/target/debug/deps/goose_acp-167e20c79c8c8eb4)",
+      "passed": 7,
+      "failed": 0,
+      "ignored": 15
+    },
+    {
+      "crate": "anchor-runner-host",
+      "target": "Running tests/goose_channel.rs (rust/target/debug/deps/goose_channel-836bc26141a1be6a)",
+      "passed": 5,
+      "failed": 0,
+      "ignored": 4
+    },
+    {
+      "crate": "anchor-runner-host",
+      "target": "Running tests/goose_compaction.rs (rust/target/debug/deps/goose_compaction-7b6781c508449f3a)",
+      "passed": 5,
+      "failed": 0,
+      "ignored": 4
+    },
+    {
+      "crate": "anchor-runner-host",
+      "target": "Running tests/goose_conversation.rs (rust/target/debug/deps/goose_conversation-ac392ab4ee491744)",
+      "passed": 5,
+      "failed": 0,
+      "ignored": 13
+    },
+    {
+      "crate": "anchor-runner-host",
+      "target": "Running tests/goose_distribution.rs (rust/target/debug/deps/goose_distribution-150c068a9b0e170a)",
+      "passed": 5,
+      "failed": 0,
+      "ignored": 1
+    },
+    {
+      "crate": "anchor-runner-host",
+      "target": "Running tests/goose_elicitation.rs (rust/target/debug/deps/goose_elicitation-f3438f44032c6340)",
+      "passed": 5,
+      "failed": 0,
+      "ignored": 10
+    },
+    {
+      "crate": "anchor-runner-host",
+      "target": "Running tests/goose_library.rs (rust/target/debug/deps/goose_library-6933062b0744c6c9)",
+      "passed": 5,
+      "failed": 0,
+      "ignored": 1
+    },
+    {
+      "crate": "anchor-runner-host",
+      "target": "Running tests/goose_media.rs (rust/target/debug/deps/goose_media-0dbbaca1b0f7828f)",
+      "passed": 5,
+      "failed": 0,
+      "ignored": 6
+    },
+    {
+      "crate": "anchor-runner-host",
+      "target": "Running tests/goose_persistent_assistant.rs (rust/target/debug/deps/goose_persistent_assistant-99f14098c4c34f65)",
+      "passed": 5,
+      "failed": 0,
+      "ignored": 10
+    },
+    {
+      "crate": "anchor-runner-host",
+      "target": "Running tests/goose_pilot.rs (rust/target/debug/deps/goose_pilot-973ca10d50f65925)",
+      "passed": 5,
+      "failed": 0,
+      "ignored": 2
+    },
+    {
+      "crate": "anchor-runner-host",
+      "target": "Running tests/goose_pilot_authoring.rs (rust/target/debug/deps/goose_pilot_authoring-0e3e387456f2c107)",
+      "passed": 5,
+      "failed": 0,
+      "ignored": 4
+    },
+    {
+      "crate": "anchor-runner-host",
+      "target": "Running tests/goose_pilot_compaction.rs (rust/target/debug/deps/goose_pilot_compaction-1c6e6754ab3edf78)",
+      "passed": 5,
+      "failed": 0,
+      "ignored": 3
+    },
+    {
+      "crate": "anchor-runner-host",
+      "target": "Running tests/goose_plugin_disclosure.rs (rust/target/debug/deps/goose_plugin_disclosure-e569c69ed83430ee)",
+      "passed": 5,
+      "failed": 0,
+      "ignored": 1
+    },
+    {
+      "crate": "anchor-runner-host",
+      "target": "Running tests/goose_plugin_mcp.rs (rust/target/debug/deps/goose_plugin_mcp-38d7aedc16e328b2)",
+      "passed": 5,
+      "failed": 0,
+      "ignored": 2
+    },
+    {
+      "crate": "anchor-runner-host",
+      "target": "Running tests/goose_session_calls.rs (rust/target/debug/deps/goose_session_calls-603dcaa385d1a480)",
+      "passed": 5,
+      "failed": 0,
+      "ignored": 4
+    },
+    {
+      "crate": "anchor-runner-host",
+      "target": "Running tests/goose_trace.rs (rust/target/debug/deps/goose_trace-222496bd960b2349)",
+      "passed": 5,
+      "failed": 0,
+      "ignored": 2
+    },
+    {
+      "crate": "anchor-runner-host",
+      "target": "Running tests/local_inputs.rs (rust/target/debug/deps/local_inputs-c4a7a1611afcd15e)",
+      "passed": 4,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "crate": "anchor-runner-host",
+      "target": "Running tests/local_network.rs (rust/target/debug/deps/local_network-a93b0d5a4ac873fc)",
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "crate": "anchor-runner-host",
+      "target": "Running tests/multinode.rs (rust/target/debug/deps/multinode-c58ac6e0fe662771)",
+      "passed": 3,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "crate": "anchor-runner-host",
+      "target": "Running tests/native_plugins.rs (rust/target/debug/deps/native_plugins-673bd692967fb47a)",
+      "passed": 5,
+      "failed": 0,
+      "ignored": 2
+    },
+    {
+      "crate": "anchor-runner-host",
+      "target": "Running tests/parallel.rs (rust/target/debug/deps/parallel-c4814dd72243abfa)",
+      "passed": 3,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "crate": "anchor-runner-host",
+      "target": "Running tests/routing.rs (rust/target/debug/deps/routing-916dacd6d3eb7432)",
+      "passed": 5,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "crate": "anchor-runner-host",
+      "target": "Running tests/standalone_graph_call.rs (rust/target/debug/deps/standalone_graph_call-6069dbb4b3ca0057)",
+      "passed": 2,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "crate": "anchor-runner-host",
+      "target": "Running tests/standalone_library.rs (rust/target/debug/deps/standalone_library-2887487f6c25ab67)",
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "crate": "anchor-runner-host",
+      "target": "Running tests/standard_host.rs (rust/target/debug/deps/standard_host-f75b13b49ffb516f)",
+      "passed": 3,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "crate": "anchor-runner-host",
+      "target": "Running tests/writer_lease.rs (rust/target/debug/deps/writer_lease-b62073b7293352ba)",
+      "passed": 2,
+      "failed": 0,
+      "ignored": 0
+    }
+  ],
+  "clippy_command": "PATH=/home/mansteinl/.cargo/bin:$PATH cargo clippy --manifest-path rust/Cargo.toml -p anchor-runner-host -p anchor-graph-host --all-targets --locked --offline -- -D warnings",
+  "clippy_exit": 0,
+  "fmt_command": "PATH=/home/mansteinl/.cargo/bin:$PATH cargo fmt --manifest-path rust/Cargo.toml --all -- --check",
+  "fmt_exit": 0,
+  "metadata_recheck_command": "PATH=/home/mansteinl/.cargo/bin:$PATH cargo test --manifest-path rust/Cargo.toml -p anchor-runner-host --bin anchor-runner-host --locked --offline disclosure -- --nocapture",
+  "metadata_recheck_passed": 20,
+  "scope_note": "All-targets passed before the semantically equivalent manual_strip Clippy cleanup. After cleanup, 20 disclosure tests, Clippy, fmt, the Host build and the final real-provider acceptance passed. Default ignored tests are not signed as executed."
+}

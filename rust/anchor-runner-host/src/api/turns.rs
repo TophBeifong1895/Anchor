@@ -259,13 +259,14 @@ pub(super) async fn stop_pilot(
     AxumPath(identifier): AxumPath<String>,
 ) -> Result<(StatusCode, Json<Value>), HttpResponse> {
     let lookup = state.clone();
-    let (_, owner, session) =
+    let (sessions, owner, session) =
         blocking(move || owned_session(&lookup, &headers, &identifier)).await?;
     pilot_session(&session)?;
     let stopping = state
         .pilots
-        .stop(&scope(&state.data_root, &owner, &session))
-        .await;
+        .stop_session(sessions, state.data_root.clone(), owner, session.clone())
+        .await
+        .map_err(session_error)?;
     Ok((
         StatusCode::ACCEPTED,
         Json(json!({"session":session,"stopping":stopping})),

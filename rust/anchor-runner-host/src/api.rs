@@ -937,6 +937,7 @@ async fn set_session_plugin(
             format!("插件 id `{plugin}` 不合法"),
         ));
     }
+    let pilot_guard = state.pilots.plugin_mount_guard().await;
     let catalog_guard = state.application.graph_catalog_mutation_guard().await;
     // Known refusals must not create a Library or its publication lock. This
     // read-only preflight is repeated after taking the lease because a writer
@@ -961,9 +962,11 @@ async fn set_session_plugin(
         .map_err(application_error)?;
     blocking(move || {
         // Retain both guards even if validation or the transaction fails.
-        let (catalog_guard, lease) = (catalog_guard, lease);
+        let (pilot_guard, catalog_guard, lease) = (pilot_guard, catalog_guard, lease);
         let (sessions, owner, definition) =
             session_plugin_mount_target(&state, &headers, &identifier, &plugin)?;
+        let before = sessions.get(&owner, &identifier).map_err(session_error)?;
+        let changed = before.plugin_mounts.get(&plugin) != Some(&on);
         let updated = sessions
             .set_plugin_mount(
                 &owner,
@@ -974,11 +977,17 @@ async fn set_session_plugin(
                 "the Session view switched this Plugin",
             )
             .map_err(session_error)?;
+        let (effect, continuation) = pilot_guard
+            .effect(&sessions, &owner, &updated, &state.data_root, changed)
+            .map_err(session_error)?;
         drop(lease);
         drop(catalog_guard);
+        drop(pilot_guard);
         let rows = session_plugin_rows(&state, &updated)?;
         let row = rows.iter().find(|row| row["id"] == definition.id).cloned();
-        Ok(Json(json!({"plugin": row, "plugins": rows})))
+        Ok(Json(
+            json!({"plugin": row, "plugins": rows, "effect":effect, "continuation":continuation}),
+        ))
     })
     .await
 }

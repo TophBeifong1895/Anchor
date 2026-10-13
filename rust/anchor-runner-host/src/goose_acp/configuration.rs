@@ -176,7 +176,7 @@ pub(super) fn boundary_text(facts: &BoundaryFacts) -> String {
     if facts.disclosure {
         // Reference the constants so the prompt cannot drift from the port.
         text.push_str(&format!(
-            "- 能力：可用工具按需披露——先用 `{}` 检索，再用 `{}` 调用；\
+            "- 能力：用 anchor_plugins/anchor_plugin_read 发现并读取本次授权 Plugin；可用工具按需披露——先用 `{}` 检索，anchor_tool_detail 读取完整 schema，再用 `{}` 调用；\
              可用集合由宿主授权决定，列表之外的工具无法调用。\n",
             crate::tool_disclosure::SEARCH_TOOL,
             crate::tool_disclosure::CALL_TOOL,

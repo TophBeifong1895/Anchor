@@ -1,0 +1,63 @@
+{
+  "version": "v1.53.0",
+  "source_archive_sha256": "85cc5e76a12e364032df4bec0ed0738a910c3e12ec12731b4405d1fdb18d96ae",
+  "snapshots": "local research cache; not part of this commit",
+  "files": [
+    {
+      "local_path": "research_plugin_disclosure_20261013/native-activation/sources/crates__goose__src__acp__server.rs",
+      "upstream_path": "crates/goose/src/acp/server.rs",
+      "url": "https://github.com/aaif-goose/goose/blob/v1.53.0/crates/goose/src/acp/server.rs",
+      "bytes": 138430,
+      "sha256": "56cb79303f6e47c69f4b107df08ff96fc402b854d33b000351ca878cd4afb673"
+    },
+    {
+      "local_path": "research_plugin_disclosure_20261013/native-activation/sources/crates__goose__src__acp__server__extensions.rs",
+      "upstream_path": "crates/goose/src/acp/server/extensions.rs",
+      "url": "https://github.com/aaif-goose/goose/blob/v1.53.0/crates/goose/src/acp/server/extensions.rs",
+      "bytes": 30129,
+      "sha256": "ef9de60234024a2ae650fe25437c1d2143a67cf74f2d22e7fb34faba0f34e761"
+    },
+    {
+      "local_path": "research_plugin_disclosure_20261013/native-activation/sources/crates__goose__src__acp__server__load_session.rs",
+      "upstream_path": "crates/goose/src/acp/server/load_session.rs",
+      "url": "https://github.com/aaif-goose/goose/blob/v1.53.0/crates/goose/src/acp/server/load_session.rs",
+      "bytes": 27884,
+      "sha256": "fd028d8204cf29c56e459e432d7ff5addb48baecebcc8be44e80e772e638ed07"
+    },
+    {
+      "local_path": "research_plugin_disclosure_20261013/native-activation/sources/crates__goose__src__acp__server__new_session.rs",
+      "upstream_path": "crates/goose/src/acp/server/new_session.rs",
+      "url": "https://github.com/aaif-goose/goose/blob/v1.53.0/crates/goose/src/acp/server/new_session.rs",
+      "bytes": 13811,
+      "sha256": "930af2090f1c8a3a3fd418d6afcb7dca511311cce7f79f3d9e3f4788929ed768"
+    },
+    {
+      "local_path": "research_plugin_disclosure_20261013/native-activation/sources/crates__goose__src__agents__agent.rs",
+      "upstream_path": "crates/goose/src/agents/agent.rs",
+      "url": "https://github.com/aaif-goose/goose/blob/v1.53.0/crates/goose/src/agents/agent.rs",
+      "bytes": 259696,
+      "sha256": "c0e6128bb6bf400ea066e908f2656159c2c1895a0061a1e44f030078922ec193"
+    },
+    {
+      "local_path": "research_plugin_disclosure_20261013/native-activation/sources/crates__goose__src__agents__extension.rs",
+      "upstream_path": "crates/goose/src/agents/extension.rs",
+      "url": "https://github.com/aaif-goose/goose/blob/v1.53.0/crates/goose/src/agents/extension.rs",
+      "bytes": 40114,
+      "sha256": "7ecd10ee0633059b5eb72f12fbed1bef71ec2f0600abf2cdd067a260632cb157"
+    },
+    {
+      "local_path": "research_plugin_disclosure_20261013/native-activation/sources/crates__goose__src__agents__extension_manager__mod.rs",
+      "upstream_path": "crates/goose/src/agents/extension_manager/mod.rs",
+      "url": "https://github.com/aaif-goose/goose/blob/v1.53.0/crates/goose/src/agents/extension_manager/mod.rs",
+      "bytes": 98480,
+      "sha256": "cca72e241d8786ba44256a8d2e4671f3f353e6b57e04427b8892a3c346bf1943"
+    },
+    {
+      "local_path": "research_plugin_disclosure_20261013/native-activation/sources/crates__goose__src__agents__reply_parts.rs",
+      "upstream_path": "crates/goose/src/agents/reply_parts.rs",
+      "url": "https://github.com/aaif-goose/goose/blob/v1.53.0/crates/goose/src/agents/reply_parts.rs",
+      "bytes": 78228,
+      "sha256": "0fb4ef498ad379792825ccb5342f10e03ba1be6aa5b0b6f611adab2a67b922a4"
+    }
+  ]
+}

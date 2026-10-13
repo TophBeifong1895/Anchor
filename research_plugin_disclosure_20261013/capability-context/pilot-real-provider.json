@@ -1,0 +1,96 @@
+{
+  "root": "/home/mansteinl/Anchor/.local/plugin-capability-context-20261013/real-d0c019b9c7262926",
+  "real_provider": true,
+  "provider_response_replaced": false,
+  "host_binary_sha256": "59d501f2bd020405d3a5c8fd5143a874e0dd07f002d94f0012aeb6b0cd787226",
+  "goose_binary_sha256": "71e76c412597b2ecd96ed20d0706e7666f31c018216e7cb5d65c5ca5c44824a7",
+  "model": "deepseek-flash",
+  "pilot_status": "completed",
+  "same_native_session": true,
+  "active_mount_followed_once": true,
+  "capability_inspection_effects": 0,
+  "pilot_actual_calls": [
+    {
+      "plugin": "zz-lens",
+      "tool": "produce_report",
+      "arguments": {
+        "payload": {
+          "marker": "report-d0c019b9c7262926",
+          "token": "61b99568a41759ab355c64ba343347d6"
+        },
+        "entries": [
+          {
+            "amount": 17
+          },
+          {
+            "amount": 25
+          }
+        ],
+        "format": "json"
+      },
+      "result": {
+        "marker": "report-d0c019b9c7262926",
+        "token": "61b99568a41759ab355c64ba343347d6",
+        "total": 42,
+        "format": "json"
+      }
+    },
+    {
+      "plugin": "zz-prism",
+      "tool": "produce_report",
+      "arguments": {
+        "entries": [
+          {
+            "amount": 17
+          },
+          {
+            "amount": 25
+          }
+        ],
+        "format": "json",
+        "payload": {
+          "marker": "next-report-d0c019b9c7262926",
+          "token": "08e3b44f25532d262922deb1e9faf8f3"
+        }
+      },
+      "result": {
+        "marker": "next-report-d0c019b9c7262926",
+        "token": "08e3b44f25532d262922deb1e9faf8f3",
+        "total": 42,
+        "format": "json"
+      }
+    }
+  ],
+  "obsolete_summary_absent_from_current_system": true,
+  "pilot_artifacts_checked": true,
+  "isolated_context_window": 32000,
+  "pressure_message_bytes": 60202,
+  "real_provider_compaction_tested": true,
+  "native_history_compacted": true,
+  "summary_requests": 2,
+  "compaction_stages": [
+    "pilot-after-compaction"
+  ],
+  "compressed_business_effects_replayed": false,
+  "session_delete_http": 200,
+  "host_exit": 0,
+  "listener_closed": true,
+  "host_log_contains_panic": false,
+  "remaining_child_pids": [],
+  "pilot_slice_passed": true,
+  "aggregate_script_exit_code": 1,
+  "aggregate_failed_stage": "node-large-catalog",
+  "aggregate_error": "AssertionError: ",
+  "native_messages_before": 64,
+  "native_messages_after": 73,
+  "native_hidden_after": 68,
+  "actual_model_requests_by_stage": {
+    "pilot-initial": 11,
+    "pilot-active-mount": 6,
+    "pilot-updated": 5,
+    "pilot-compaction-pressure": 1,
+    "pilot-after-compaction": 3,
+    "node-large-catalog": 13
+  },
+  "excludes_failed_node_slice": true
+}

@@ -19,7 +19,81 @@ mod tests;
 #[derive(Clone, Default)]
 pub(crate) struct PilotService {
     gate: Arc<tokio::sync::Mutex<()>>,
-    active: Arc<Mutex<HashMap<PathBuf, Arc<AtomicBool>>>>,
+    active: Arc<Mutex<HashMap<PathBuf, ActivePilot>>>,
+}
+
+struct ActivePilot {
+    turn: String,
+    cancellation: Arc<AtomicBool>,
+}
+
+/// A web policy change shares admission/settlement's boundary. Acquire this
+/// before catalog -> Library guards; Session deletion also takes Pilot first.
+pub(crate) struct PluginMountGuard {
+    _gate: tokio::sync::OwnedMutexGuard<()>,
+    active: Arc<Mutex<HashMap<PathBuf, ActivePilot>>>,
+}
+
+impl PluginMountGuard {
+    pub(crate) fn effect(
+        &self,
+        sessions: &SessionStore,
+        owner: &str,
+        session: &Session,
+        data_root: &std::path::Path,
+        changed: bool,
+    ) -> Result<(serde_json::Value, serde_json::Value), SessionError> {
+        let source = self
+            .active
+            .lock()
+            .map_err(|_| SessionError::Storage("Pilot control failed".into()))?
+            .get(&scope(data_root, owner, session))
+            .filter(|active| !active.cancellation.load(Ordering::Acquire))
+            .map(|active| active.turn.clone());
+        if !changed {
+            return Ok((
+                serde_json::json!({"status":"unchanged"}),
+                serde_json::json!({"status":"none"}),
+            ));
+        }
+        let turns = sessions.list_turns(owner, &session.id)?;
+        let source = source.filter(|source| {
+            session.graph.is_empty()
+                && session.channel.is_empty()
+                && session.status != SessionStatus::Archived
+                && turns
+                    .first()
+                    .is_some_and(|turn| turn.id == *source && turn.status == TurnStatus::Running)
+        });
+        let Some(source) = source else {
+            return Ok((
+                serde_json::json!({"status":"next_turn"}),
+                serde_json::json!({"status":"none"}),
+            ));
+        };
+        if continuation_request(sessions, owner, &session.id, &source)?.is_none() {
+            sessions.append_event(
+                owner,
+                &session.id,
+                "pilot.continuation.requested",
+                std::collections::BTreeMap::from([
+                    ("turn".into(), serde_json::json!(source)),
+                    (
+                        "request_id".into(),
+                        serde_json::json!(format!("continuation:{source}")),
+                    ),
+                    (
+                        "reason".into(),
+                        serde_json::json!("Session Plugin mounts changed from the web"),
+                    ),
+                ]),
+            )?;
+        }
+        Ok((
+            serde_json::json!({"status":"after_current_turn","source_turn":source}),
+            continuation_status(sessions, owner, &session.id, &source)?,
+        ))
+    }
 }
 
 pub(crate) fn scope(data_root: &std::path::Path, owner: &str, session: &Session) -> PathBuf {
@@ -41,6 +115,16 @@ pub(crate) struct PilotAdmission {
     pub(crate) tools: PilotTools,
 }
 
+impl PilotAdmission {
+    fn for_continuation(mut self, request_id: String) -> Self {
+        self.request_id = request_id;
+        self.prompt = Some(CONTINUATION_PROMPT.into());
+        self
+    }
+}
+
+const CONTINUATION_PROMPT: &str = "Host 已应用能力或授权配置变化。能力变化不是新的业务请求。以原生会话中最近一次用户要求为准，仅继续尚未完成且已获授权的部分；已完成的结果和副作用不得因挂载、凭据或环境变化而重做，结果未知时先核查现场。若最近用户只讨论或确认能力，只说明配置与能力状态，不执行业务操作或改写已有产物。若无需继续，简短告知配置已生效。使用本轮重新冻结的能力，必要时核查 platform_status。";
+
 pub(crate) enum AdmissionError {
     Session(SessionError),
     Provider,
@@ -53,6 +137,12 @@ impl From<SessionError> for AdmissionError {
 }
 
 impl PilotService {
+    pub(crate) async fn plugin_mount_guard(&self) -> PluginMountGuard {
+        PluginMountGuard {
+            _gate: self.gate.clone().lock_owned().await,
+            active: self.active.clone(),
+        }
+    }
     pub(crate) async fn ready_to_continue(
         &self,
         mut admission: PilotAdmission,
@@ -74,6 +164,13 @@ impl PilotService {
             .sessions
             .get_turn(&admission.owner, &current.id, source)?;
         if turn.status == TurnStatus::Stopped
+            || continuation_cancelled(&admission.sessions, &admission.owner, &current.id, source)?
+            || self
+                .active
+                .lock()
+                .map_err(|_| SessionError::Storage("Pilot control failed".into()))?
+                .get(&admission.root)
+                .is_some_and(|active| active.cancellation.load(Ordering::Acquire))
             || admission
                 .sessions
                 .list_turns(&admission.owner, &current.id)?
@@ -100,8 +197,7 @@ impl PilotService {
         if turn.status != TurnStatus::Completed {
             return Ok(());
         }
-        admission.request_id = request_id;
-        admission.prompt=Some("Host 已完成此前发起的外部服务授权。继续原任务：先核查 platform_status 和授权状态，使用此轮重新冻结的工具；不要重放结果未知的外部操作。".into());
+        admission = admission.for_continuation(request_id);
         let sessions = admission.sessions.clone();
         let owner = admission.owner.clone();
         let session = admission.session.id.clone();
@@ -126,7 +222,7 @@ impl PilotService {
             .lock()
             .map_err(|_| SessionError::Storage("Pilot control failed".into()))?
             .get(root)
-            .is_some_and(|cancellation| cancellation.load(Ordering::Acquire))
+            .is_some_and(|active| active.cancellation.load(Ordering::Acquire))
         {
             return Err(SessionError::Conflict(
                 "Pilot is stopping; credential input is no longer active".into(),
@@ -294,7 +390,13 @@ impl PilotService {
             let cancellation = Arc::new(AtomicBool::new(false));
             match self.active.lock() {
                 Ok(mut active) => {
-                    active.insert(admission.root.clone(), cancellation.clone());
+                    active.insert(
+                        admission.root.clone(),
+                        ActivePilot {
+                            turn: turn.id.clone(),
+                            cancellation: cancellation.clone(),
+                        },
+                    );
                 }
                 Err(_) => {
                     admission.sessions.finish_turn(
@@ -350,25 +452,11 @@ impl PilotService {
                 }
                 _ => (TurnStatus::Interrupted, Some("Pilot execution interrupted; continue with a new message to inspect the saved facts".to_owned())),
             };
-                let _gate = service.gate.lock().await;
-                let saved = tokio::task::spawn_blocking(move || {
-                    admission.sessions.finish_turn(
-                        &admission.owner,
-                        &admission.session.id,
-                        &turn_id,
-                        status,
-                        failure.as_deref(),
-                    )
-                })
-                .await;
-                if !matches!(saved, Ok(Ok(_))) {
+                let saved = service.settle(admission, turn_id, status, failure).await;
+                if saved.is_err() {
                     eprintln!("Pilot terminal state could not be persisted");
                 }
-                if let Ok(mut active) = service.active.lock() {
-                    active.remove(&root);
-                }
-                drop(_gate);
-                if status == TurnStatus::Completed && matches!(saved, Ok(Ok(_))) {
+                if saved.is_ok_and(|turn| turn.status == TurnStatus::Completed) {
                     let pending = continuation_request(
                         &continuation.sessions,
                         &continuation.owner,
@@ -376,7 +464,16 @@ impl PilotService {
                         &source_turn,
                     );
                     if let Ok(Some(request_id)) = pending {
-                        let next=PilotAdmission {sessions:continuation.sessions.clone(),owner:continuation.owner.clone(),session:continuation.session.clone(),request_id,prompt:Some("Host 已在上一轮结束后应用用户授权或已准备的共享运行时。继续用户原任务：先核查 platform_status 与现场，使用此轮重新冻结的能力；不要重放结果未知的外部操作。".into()),root,tools:continuation.tools};
+                        let next = PilotAdmission {
+                            sessions: continuation.sessions.clone(),
+                            owner: continuation.owner.clone(),
+                            session: continuation.session.clone(),
+                            request_id: String::new(),
+                            prompt: None,
+                            root,
+                            tools: continuation.tools,
+                        }
+                        .for_continuation(request_id);
                         if let Err(error) = service.admit(next).await {
                             let reason = match error {
                                 AdmissionError::Session(error) => error.to_string(),
@@ -402,12 +499,100 @@ impl PilotService {
         })
     }
 
-    pub(crate) async fn stop(&self, root: &std::path::Path) -> bool {
+    async fn settle(
+        &self,
+        admission: PilotAdmission,
+        turn: String,
+        mut status: TurnStatus,
+        mut failure: Option<String>,
+    ) -> Result<Turn, SessionError> {
         let _gate = self.gate.lock().await;
-        if let Ok(active) = self.active.lock()
-            && let Some(cancellation) = active.get(root)
+        let root = admission.root.clone();
+        // Stop may win the gate after execution has returned success. Its
+        // cancellation still owns the terminal fact and forbids continuation.
+        if self
+            .active
+            .lock()
+            .map_err(|_| SessionError::Storage("Pilot control failed".into()))?
+            .get(&root)
+            .is_some_and(|active| {
+                active.turn == turn && active.cancellation.load(Ordering::Acquire)
+            })
         {
-            cancellation.store(true, Ordering::Release);
+            status = TurnStatus::Stopped;
+            failure = None;
+        }
+        let finished = turn.clone();
+        let saved = tokio::task::spawn_blocking(move || {
+            admission.sessions.finish_turn(
+                &admission.owner,
+                &admission.session.id,
+                &finished,
+                status,
+                failure.as_deref(),
+            )
+        })
+        .await
+        .map_err(|_| SessionError::Storage("Pilot settlement failed".into()));
+        if let Ok(mut active) = self.active.lock()
+            && active.get(&root).is_some_and(|active| active.turn == turn)
+        {
+            active.remove(&root);
+        }
+        saved?
+    }
+
+    pub(crate) async fn stop_session(
+        &self,
+        sessions: SessionStore,
+        data_root: PathBuf,
+        owner: String,
+        session: Session,
+    ) -> Result<bool, SessionError> {
+        let _gate = self.gate.lock().await;
+        let current = sessions.get(&owner, &session.id)?;
+        if current.created_at != session.created_at {
+            return Err(SessionError::Conflict(
+                "Pilot Session identity changed before stop".into(),
+            ));
+        }
+        let root = scope(&data_root, &owner, &current);
+        let stopping = self.cancel_active(&root);
+        let latest = sessions.list_turns(&owner, &current.id)?.into_iter().next();
+        let mut cancelled = false;
+        if let Some(source) = latest
+            && !continuation_cancelled(&sessions, &owner, &current.id, &source.id)?
+        {
+            // Bind stop to the latest source even if an OAuth callback has not
+            // requested continuation yet. Keep the source's settled history.
+            sessions.append_event(
+                &owner,
+                &current.id,
+                "pilot.continuation.cancelled",
+                std::collections::BTreeMap::from([
+                    ("turn".into(), serde_json::json!(source.id)),
+                    (
+                        "request_id".into(),
+                        serde_json::json!(format!("continuation:{}", source.id)),
+                    ),
+                ]),
+            )?;
+            cancelled = true;
+        }
+        Ok(stopping || cancelled)
+    }
+
+    #[cfg(test)]
+    async fn stop(&self, root: &std::path::Path) -> bool {
+        let _gate = self.gate.lock().await;
+        self.cancel_active(root)
+    }
+
+    fn cancel_active(&self, root: &std::path::Path) -> bool {
+        if let Ok(active) = self.active.lock()
+            && let Some(active) = active.get(root)
+        {
+            active.cancellation.store(true, Ordering::Release);
             return true;
         }
         false
@@ -464,8 +649,14 @@ fn continuation_request(
     session: &str,
     turn: &str,
 ) -> Result<Option<String>, SessionError> {
-    let request = sessions
-        .events(owner, session, 0)?
+    let events = sessions.events(owner, session, 0)?;
+    if events
+        .iter()
+        .any(|event| is_continuation_cancel(event, turn))
+    {
+        return Ok(None);
+    }
+    let request = events
         .into_iter()
         .rev()
         .find(|event| {
@@ -492,6 +683,23 @@ fn continuation_request(
     Ok(Some(request))
 }
 
+fn is_continuation_cancel(event: &anchor_platform_session::SessionEvent, turn: &str) -> bool {
+    event.kind == "pilot.continuation.cancelled"
+        && event.data.get("turn").and_then(serde_json::Value::as_str) == Some(turn)
+}
+
+pub(crate) fn continuation_cancelled(
+    sessions: &SessionStore,
+    owner: &str,
+    session: &str,
+    turn: &str,
+) -> Result<bool, SessionError> {
+    Ok(sessions
+        .events(owner, session, 0)?
+        .iter()
+        .any(|event| is_continuation_cancel(event, turn)))
+}
+
 pub(crate) fn continuation_status(
     sessions: &SessionStore,
     owner: &str,
@@ -503,7 +711,14 @@ pub(crate) fn continuation_status(
     if let Some(next) = turns.iter().find(|next| next.request_id == request_id) {
         return Ok(serde_json::json!({"status":"admitted","turn":next.id}));
     }
-    let requested = sessions.events(owner, session, 0)?.iter().any(|event| {
+    let events = sessions.events(owner, session, 0)?;
+    if events
+        .iter()
+        .any(|event| is_continuation_cancel(event, turn))
+    {
+        return Ok(serde_json::json!({"status":"cancelled","request_id":request_id}));
+    }
+    let requested = events.iter().any(|event| {
         event.kind == "pilot.continuation.requested"
             && event.data.get("turn").and_then(serde_json::Value::as_str) == Some(turn)
     });
@@ -511,15 +726,17 @@ pub(crate) fn continuation_status(
         return Ok(serde_json::json!({"status":"none"}));
     }
     let current = sessions.get_turn(owner, session, turn)?;
-    let failed = sessions.events(owner, session, 0)?.iter().any(|event| {
+    let failed = events.iter().any(|event| {
         event.kind == "pilot.continuation.failed"
             && event.data.get("turn").and_then(serde_json::Value::as_str) == Some(turn)
     });
-    let status = if current.status == TurnStatus::Stopped {
+    let status = if current.status == TurnStatus::Stopped
+        || sessions.get(owner, session)?.status == SessionStatus::Archived
+    {
         "cancelled"
     } else if turns.first().is_none_or(|latest| latest.id != turn) {
         "superseded"
-    } else if current.status == TurnStatus::Interrupted || failed {
+    } else if matches!(current.status, TurnStatus::Interrupted | TurnStatus::Failed) || failed {
         "pending"
     } else {
         "scheduled"
@@ -554,7 +771,7 @@ async fn execute_turn(
             .clone()
             .with_frozen_runtime_snapshot(snapshot.clone());
     }
-    let (plugin_tools, network) = match crate::pilot_tools::frozen_turn_tools(
+    let (plugin_tools, network, disclosure) = match crate::pilot_tools::frozen_turn_tools(
         &tools.data_root,
         &tools.library_root,
         &tools.workspace_root,
@@ -566,14 +783,14 @@ async fn execute_turn(
     )
     .await
     {
-        Ok((ports, reasons, network)) => {
-            for reason in reasons {
+        Ok(prepared) => {
+            for reason in prepared.reasons {
                 eprintln!(
                     "anchor-runner-host: Pilot Turn {} Plugin: {reason}",
                     request.turn
                 );
             }
-            (ports, network)
+            (prepared.ports, prepared.network, prepared.disclosure)
         }
         Err(reason) => {
             if request.cancellation.load(Ordering::Acquire) {
@@ -587,7 +804,11 @@ async fn execute_turn(
                 "anchor-runner-host: Pilot Turn {} has no Plugin tools: {reason}",
                 request.turn
             );
-            (Vec::new(), false)
+            (
+                Vec::new(),
+                false,
+                crate::plugin_disclosure::PluginDisclosureCatalog::default(),
+            )
         }
     };
     let outcome = if request.cancellation.load(Ordering::Acquire) {
@@ -603,7 +824,9 @@ async fn execute_turn(
             .cloned()
             .map(|port| port as Arc<dyn anchor_runtime::ToolPort>)
             .collect();
-        goose.run(request, Arc::new(tools), execution_plugins).await
+        goose
+            .run(request, Arc::new(tools), execution_plugins, disclosure)
+            .await
     };
     // Goose has closed its bridge and released the dispatch references. Reap
     // every admitted Plugin before finish can release this Session for another

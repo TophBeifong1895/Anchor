@@ -389,6 +389,7 @@ impl McpToolConfig {
         let sandbox = launch.as_ref().map(|launch| launch.sandbox);
         self.validate_bindings(bindings, network)?;
         let mut hosts = BTreeMap::new();
+        let mut owners = BTreeMap::new();
         for binding in bindings {
             for server_id in &binding.mcp_servers {
                 let key = server_key(&binding.id, server_id);
@@ -447,6 +448,7 @@ impl McpToolConfig {
                     Err(reason) => {
                         let cleanup = LiveMcpTools {
                             hosts,
+                            owners,
                             _environment: self.environment.clone(),
                         }
                         .shutdown()
@@ -457,11 +459,26 @@ impl McpToolConfig {
                         }));
                     }
                 };
+                let declaration = self
+                    .servers
+                    .get(&key)
+                    .expect("connected server declaration");
+                for tool in host.tools() {
+                    owners.insert(
+                        exposed_tool_name(&key, &tool.name),
+                        crate::plugin_disclosure::ToolOwner {
+                            plugin: declaration.plugin_id.clone(),
+                            server: declaration.name.clone(),
+                            tool: tool.name,
+                        },
+                    );
+                }
                 hosts.insert(key, Arc::new(host));
             }
         }
         let live = LiveMcpTools {
             hosts,
+            owners,
             _environment: self.environment.clone(),
         };
         if self
@@ -987,6 +1004,7 @@ fn visible_plugin_value(value: &str, plugin_directory: &Path, plugin_id: &str) -
 
 pub struct LiveMcpTools {
     hosts: BTreeMap<String, Arc<McpHost>>,
+    owners: BTreeMap<String, crate::plugin_disclosure::ToolOwner>,
     // Host-owned launcher files must live as long as the formal MCP server.
     _environment: crate::tool_environment::ToolEnvironment,
 }
@@ -1051,7 +1069,9 @@ impl LiveMcpTools {
         for (server_id, host) in &self.hosts {
             for tool in host.tools() {
                 let exposed = exposed_tool_name(server_id, &tool.name);
-                if exposed == FAKE_ECHO_TOOL
+                if crate::tool_disclosure::is_meta(&exposed)
+                    || exposed == "final_result"
+                    || exposed == FAKE_ECHO_TOOL
                     || exposed == crate::node_tools::RUN_TOOL_NAME
                     || exposed == crate::channel_tools::SEND_TOOL
                     || exposed == crate::channel_tools::IMAGE_TOOL
@@ -1093,6 +1113,20 @@ pub struct CombinedPluginTools {
 }
 
 impl CombinedPluginTools {
+    pub(crate) fn tool_owners(&self) -> BTreeMap<String, crate::plugin_disclosure::ToolOwner> {
+        let mut owners = self.live.owners.clone();
+        if self.fake.enabled {
+            owners.insert(
+                FAKE_ECHO_TOOL.into(),
+                crate::plugin_disclosure::ToolOwner {
+                    plugin: "fake-tools".into(),
+                    server: FAKE_SERVER_ID.into(),
+                    tool: FAKE_ECHO_TOOL.into(),
+                },
+            );
+        }
+        owners
+    }
     pub fn new(fake: BoundPluginTools, live: LiveMcpTools) -> Self {
         Self { fake, live }
     }

@@ -601,6 +601,8 @@ async fn a_successful_switch_writes_the_session_mount_and_its_audit_event() {
     assert_eq!(mounted["plugin"]["required"], false);
     assert_eq!(mounted["plugin"]["available"], true);
     assert_eq!(mounted["plugin"]["error"], Value::Null);
+    assert_eq!(mounted["effect"]["status"], "next_turn");
+    assert_eq!(mounted["continuation"]["status"], "none");
 
     let store = session_store(&state);
     assert_eq!(
@@ -615,6 +617,26 @@ async fn a_successful_switch_writes_the_session_mount_and_its_audit_event() {
                 && event.data["on"] == true
         }),
         "{events:?}"
+    );
+    let (status, unchanged) = call(
+        app.clone(),
+        "POST",
+        "/sessions/sess/plugins/demo",
+        Some(r#"{"on":true}"#),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{unchanged}");
+    assert_eq!(unchanged["effect"]["status"], "unchanged");
+    assert_eq!(unchanged["continuation"]["status"], "none");
+    assert!(store.list_turns("local", "sess").unwrap().is_empty());
+    assert_eq!(
+        store
+            .events("local", "sess", 0)
+            .unwrap()
+            .iter()
+            .filter(|event| event.kind == "session.plugin_mount.changed")
+            .count(),
+        1
     );
 
     let (status, listed) = call(app.clone(), "GET", "/sessions/sess/plugins", None).await;
@@ -699,6 +721,111 @@ async fn a_successful_switch_writes_the_session_mount_and_its_audit_event() {
     .await;
     assert_eq!(status, StatusCode::CONFLICT, "{refused}");
     assert!(refused["error"].is_string(), "{refused}");
+}
+
+#[tokio::test]
+async fn a_plugin_switch_on_a_terminal_turn_saves_policy_without_reviving_the_task() {
+    use anchor_platform_session::TurnStatus;
+    let _env_guard = PROCESS_ENV.lock().await;
+    for terminal in [
+        TurnStatus::Completed,
+        TurnStatus::Failed,
+        TurnStatus::Interrupted,
+        TurnStatus::Stopped,
+    ] {
+        let (root, state) = fixture();
+        let _library = EnvVar::set("ANCHOR_RUNNER_LIBRARY_ROOT", root.path());
+        write_plugin(&state, "demo", json!({"name":"Demo"}));
+        let app = router(state.clone());
+        create_session(app.clone(), "sess").await;
+        let store = session_store(&state);
+        let (source, _) = store
+            .create_turn("local", "sess", "source", Some("previous task"))
+            .unwrap();
+        store
+            .finish_turn("local", "sess", &source.id, terminal, None)
+            .unwrap();
+        let (status, mounted) = call(
+            app,
+            "POST",
+            "/sessions/sess/plugins/demo",
+            Some(r#"{"on":true}"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{mounted}");
+        assert_eq!(mounted["effect"]["status"], "next_turn");
+        assert_eq!(mounted["continuation"]["status"], "none");
+        assert_eq!(store.list_turns("local", "sess").unwrap().len(), 1);
+        assert_eq!(
+            store
+                .get("local", "sess")
+                .unwrap()
+                .plugin_mounts
+                .get("demo"),
+            Some(&true)
+        );
+        assert!(
+            store
+                .events("local", "sess", 0)
+                .unwrap()
+                .iter()
+                .all(|event| event.kind != "pilot.continuation.requested")
+        );
+    }
+}
+
+#[tokio::test]
+async fn stopping_a_scheduled_completed_turn_preserves_history_and_cancels_once() {
+    use anchor_platform_session::TurnStatus;
+    let (_root, state) = fixture();
+    let app = router(state.clone());
+    create_session(app.clone(), "sess").await;
+    let store = session_store(&state);
+    let (source, _) = store
+        .create_turn("local", "sess", "source", Some("previous task"))
+        .unwrap();
+    store
+        .finish_turn("local", "sess", &source.id, TurnStatus::Completed, None)
+        .unwrap();
+    store
+        .append_event(
+            "local",
+            "sess",
+            "pilot.continuation.requested",
+            BTreeMap::from([
+                ("turn".into(), json!(source.id)),
+                (
+                    "request_id".into(),
+                    json!(format!("continuation:{}", source.id)),
+                ),
+            ]),
+        )
+        .unwrap();
+    for stopping in [true, false] {
+        let (status, stopped) = call(app.clone(), "POST", "/sessions/sess/stop", None).await;
+        assert_eq!(status, StatusCode::ACCEPTED, "{stopped}");
+        assert_eq!(stopped["stopping"], stopping);
+    }
+    let (status, detail) = call(
+        app,
+        "GET",
+        &format!("/sessions/sess/turns/{}", source.id),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{detail}");
+    assert_eq!(detail["turn"]["status"], "completed");
+    assert_eq!(detail["continuation"]["status"], "cancelled");
+    assert_eq!(store.list_turns("local", "sess").unwrap().len(), 1);
+    assert_eq!(
+        store
+            .events("local", "sess", 0)
+            .unwrap()
+            .iter()
+            .filter(|event| event.kind == "pilot.continuation.cancelled")
+            .count(),
+        1
+    );
 }
 
 #[tokio::test]

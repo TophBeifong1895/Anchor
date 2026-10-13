@@ -165,6 +165,7 @@ impl GoosePilot {
         // The Plugin tools this Turn froze when it was admitted. Empty is the
         // normal case for a Session that mounted nothing.
         plugin_tools: Vec<Arc<dyn ToolPort>>,
+        mut catalog: crate::plugin_disclosure::PluginDisclosureCatalog,
     ) -> Result<TurnStatus, String> {
         directory(&request.root)?;
         fs::set_permissions(&request.root, fs::Permissions::from_mode(0o700))
@@ -181,12 +182,36 @@ impl GoosePilot {
         save(&request.root, &fact)?;
         let fact = Arc::new(Mutex::new(fact));
         let request = Arc::new(request);
+        let mut builtins = tools.definitions();
+        builtins.extend(pilot_interaction::definitions());
+        let visible = builtins
+            .iter()
+            .map(|tool| tool.name.clone())
+            .collect::<Vec<_>>();
+        catalog.owners.retain(|name, _| !visible.contains(name));
+        let definitions = plugin_definitions(builtins, &plugin_tools);
+        let read_only = definitions
+            .iter()
+            .map(|definition| {
+                let name = &definition.name;
+                let readonly = tools.is_read_only(name)
+                    || plugin_port(&plugin_tools, name).is_some_and(|port| port.is_read_only(name));
+                (name.clone(), readonly)
+            })
+            .collect();
+        let disclosure = crate::tool_disclosure::ToolDisclosure::new(
+            definitions,
+            read_only,
+            crate::tool_disclosure::DisclosurePolicy::new(visible),
+            catalog,
+        );
         let guarded = Arc::new(PilotPort {
             tools,
             plugin_tools,
             request: request.clone(),
             fact: fact.clone(),
             sequence: AtomicU64::new(0),
+            disclosure,
         });
         let mut random = [0u8; 32];
         File::open("/dev/urandom")
@@ -427,6 +452,7 @@ pub(super) struct PilotPort {
     request: Arc<PilotTurn>,
     fact: Arc<Mutex<PilotFact>>,
     sequence: AtomicU64,
+    disclosure: crate::tool_disclosure::ToolDisclosure,
 }
 
 /// The Pilot's tool list: the built-in tools, then the Plugin tools this Turn
@@ -462,12 +488,10 @@ pub(crate) fn plugin_port<'ports>(
 
 impl ToolPort for PilotPort {
     fn definitions(&self) -> Vec<ToolDefinition> {
-        let mut definitions = plugin_definitions(self.tools.definitions(), &self.plugin_tools);
-        definitions.extend(pilot_interaction::definitions());
-        definitions
+        self.disclosure.definitions()
     }
     fn is_read_only(&self, name: &str) -> bool {
-        self.tools.is_read_only(name)
+        self.disclosure.is_read_only(name)
     }
     fn call<'a>(
         &'a self,
@@ -479,6 +503,10 @@ impl ToolPort for PilotPort {
 }
 
 impl PilotPort {
+    pub(super) fn instructions(&self) -> String {
+        self.disclosure.instructions()
+    }
+
     pub(super) async fn call_mcp(
         &self,
         name: &str,
@@ -489,13 +517,8 @@ impl PilotPort {
         if self.request.cancellation.load(Ordering::Acquire) {
             return Err(failed("Pilot was cancelled".into()));
         }
-        if !self
-            .definitions()
-            .iter()
-            .any(|definition| definition.name == name)
-        {
-            return Err(ToolError::Unknown(name.into()));
-        }
+        let (name, arguments) = self.disclosure.resolve(name, arguments)?;
+        let name = name.as_str();
         let id = format!(
             "{}-{}",
             self.request.turn,
@@ -518,7 +541,9 @@ impl PilotPort {
         .map_err(failed)?;
         // One authority table decides, so a new confirmed tool cannot be added to
         // the definition list and forgotten here.
-        let result = if crate::pilot_tools::authority(name)
+        let result = if crate::tool_disclosure::is_meta(name) {
+            self.disclosure.inspect(name, &arguments)
+        } else if crate::pilot_tools::authority(name)
             == Some(crate::pilot_tools::ToolAuthority::Confirm)
         {
             match peer {

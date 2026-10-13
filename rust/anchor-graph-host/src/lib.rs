@@ -224,6 +224,9 @@ pub struct PluginDefinition {
     pub mutable: MutablePaths,
     /// The code resources covered by `digest`, from this same catalog read.
     pub resources: Vec<String>,
+    /// Configuration files may contain literal secrets; hosts expose their
+    /// safe declaration facts instead of returning these files to models.
+    pub configuration_resources: Vec<String>,
     pub digest: String,
     /// Secret-free digest of the declarations that authorize Host capabilities.
     pub authorization_digest: String,
@@ -390,6 +393,19 @@ impl FilePluginCatalog {
         let authorization_digest =
             plugin_authorization_digest(&mcp_servers, network, mutable.paths());
 
+        let mut configuration_resources = vec![
+            "plugin.json".into(),
+            ".mcp.json".into(),
+            "channel.json".into(),
+        ];
+        if let Some(Value::String(relative)) = manifest.get("mcpServers") {
+            // Match the canonical resource inventory, including ./ and repeated
+            // separators accepted by the already validated manifest path.
+            configuration_resources.push(relative_of(
+                &dir,
+                &inside_file(&dir, relative).map_err(invalid)?,
+            ));
+        }
         Ok(PluginDefinition {
             id: id.into(),
             directory: dir,
@@ -403,6 +419,7 @@ impl FilePluginCatalog {
             network,
             mutable,
             resources,
+            configuration_resources,
             digest,
             authorization_digest,
         })

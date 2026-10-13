@@ -1,8 +1,8 @@
 /** Which Plugins this Pilot session can already use, and mounting them.
  *
  * The Host owns the facts: a session lists only installed Plugins, and a switch is written by POST,
- * never by guessing locally. Mounting takes effect from the next Turn, so this panel says that in
- * one place instead of promising something the current Turn cannot deliver.
+ * never by guessing locally. The current Turn keeps its frozen capabilities; the Host reports
+ * whether a change waits for the next message or schedules continuation after normal completion.
  *
  * It polls while it is open because Pilot installs a Plugin itself in the middle of a session: the
  * new one has to appear without a page reload, and the repository has no push channel to use.
@@ -12,6 +12,7 @@ import { useEffect, useRef, useState } from 'react';
 import { ChevronDown, CircleAlert, LoaderCircle, LockKeyhole, PanelRightClose, Plug, Search, Sparkles } from 'lucide-react';
 import { api, reason } from './api';
 import { Modal } from './ui';
+import type { Turn } from './PilotTurn';
 import './SessionPlugins.css';
 
 /** One installed Plugin as the Host reports it for a session. */
@@ -21,6 +22,28 @@ export type SessionPlugin = {
   explicitOn?: boolean; requiresNetwork?: boolean; networkProvider?: boolean;
   networkAllowed?: boolean; networkPermission?: boolean; enabledBy?: string[];
 };
+
+export type PluginMountEffect = {
+  status: 'next_turn' | 'after_current_turn' | 'unchanged'; source_turn?: string;
+};
+export type PluginContinuation = {
+  session: string; source: string; state: NonNullable<Turn['continuation']>;
+};
+type MountChange = { effect: PluginMountEffect; continuation?: Turn['continuation'] };
+
+function mountNotice(change: MountChange, continuation?: PluginContinuation | null): string {
+  if (change.effect.status === 'unchanged') return '设置未改变';
+  if (change.effect.status !== 'after_current_turn') return '已保存 · 下次发送消息时生效';
+  const state = continuation && continuation.source === change.effect.source_turn ? continuation.state : change.continuation;
+  switch (state?.status) {
+    case 'admitted': return '已应用到接续回合';
+    case 'cancelled': return '已保存 · 自动继续已取消，等待下次消息';
+    case 'pending': return '已保存 · 本轮未能自动继续，等待下次消息';
+    case 'superseded': return '已保存 · 原任务的自动继续已被新回合替代';
+    case 'scheduled': return '已保存 · 当前回合正常结束后自动继续';
+    default: return '已保存 · 下次发送消息时生效';
+  }
+}
 
 /** Long enough that a session is not one request per blink, short enough that a fresh install shows up. */
 export const POLL_MS = 4000;
@@ -43,7 +66,10 @@ export function mountProblem(error: unknown): string {
   return reason(error);
 }
 
-export function SessionPlugins({ session }: { session: string }) {
+export function SessionPlugins({ session, onContinuation, continuation }: {
+  session: string; onContinuation?: (session: string, source: string) => void;
+  continuation?: PluginContinuation | null;
+}) {
   // The transcript keeps its full width on narrow screens; the same controls open in the shared
   // native dialog, which isolates focus and handles Escape.
   const [compact, setCompact] = useState(() => typeof window !== 'undefined'
@@ -53,7 +79,7 @@ export function SessionPlugins({ session }: { session: string }) {
   const [loaded, setLoaded] = useState(false);
   const [listError, setListError] = useState('');
   const [rowError, setRowError] = useState<Record<string, string>>({});
-  const [switched, setSwitched] = useState('');
+  const [changes, setChanges] = useState<Record<string, MountChange>>({});
   const [pending, setPending] = useState('');
   const [query, setQuery] = useState('');
   const [filter, setFilter] = useState<PluginFilter>('all');
@@ -61,6 +87,14 @@ export function SessionPlugins({ session }: { session: string }) {
   const wasOpen = useRef(open);
   // A second click before the Host answers must not become a second switch of the same row.
   const inFlight = useRef(false);
+  const mounted = useRef(true);
+  const sessionRef = useRef(session);
+  sessionRef.current = session;
+  const listRevision = useRef(0);
+  useEffect(() => {
+    mounted.current = true;
+    return () => { mounted.current = false; };
+  }, []);
   useEffect(() => {
     // Removing a dialog does not reliably restore focus like dialog.close() does. Return focus
     // after React has removed the shared Modal and the compact trigger is no longer inert.
@@ -80,9 +114,10 @@ export function SessionPlugins({ session }: { session: string }) {
     if (!open) return;
     let active = true;
     const load = async () => {
+      const revision = listRevision.current;
       try {
         const data = await api<{ plugins: SessionPlugin[] }>(`/sessions/${encodeURIComponent(session)}/plugins`);
-        if (!active) return;
+        if (!active || revision !== listRevision.current) return;
         setPlugins(data.plugins ?? []);
         setListError('');
       } catch (error) {
@@ -98,33 +133,46 @@ export function SessionPlugins({ session }: { session: string }) {
     if (!maySwitch(plugin, inFlight.current)) return;
     inFlight.current = true;
     setPending(plugin.id);
-    setSwitched('');
     setRowError(current => { const next = { ...current }; delete next[plugin.id]; return next; });
     try {
-      const result = await api<{ plugin: SessionPlugin; plugins?: SessionPlugin[] }>(
+      const result = await api<{ plugin: SessionPlugin; plugins?: SessionPlugin[]; effect?: PluginMountEffect;
+        continuation?: Turn['continuation'] }>(
         `/sessions/${encodeURIComponent(session)}/plugins/${encodeURIComponent(plugin.id)}`, 'POST', { on: !(plugin.explicitOn ?? plugin.on) });
+      if (!mounted.current || sessionRef.current !== session) return;
+      listRevision.current += 1;
       setPlugins(current => result.plugins ?? withPlugin(current, result.plugin));
-      setSwitched(plugin.id);
+      const effect = result.effect ?? { status: 'next_turn' };
+      setChanges(current => ({ ...current, [plugin.id]: { effect, continuation: result.continuation } }));
+      if (effect.status === 'after_current_turn' && effect.source_turn && result.continuation?.status === 'scheduled') {
+        onContinuation?.(session, effect.source_turn);
+      }
     } catch (error) {
       // No optimistic flip: the row keeps the state the Host last confirmed, and the reason is the
       // Host's own sentence rather than a paraphrase written here.
-      setRowError(current => ({ ...current, [plugin.id]: mountProblem(error) }));
-    } finally { inFlight.current = false; setPending(''); }
+      if (mounted.current && sessionRef.current === session) setRowError(current => ({ ...current, [plugin.id]: mountProblem(error) }));
+    } finally {
+      inFlight.current = false;
+      if (mounted.current && sessionRef.current === session) setPending('');
+    }
   };
   const changeNetwork = async (plugin: SessionPlugin) => {
     if (inFlight.current) return;
     inFlight.current = true;
     setPending(plugin.id);
-    setSwitched('');
     setRowError(current => { const next = { ...current }; delete next[plugin.id]; return next; });
     try {
       const result = await api<{ plugins: SessionPlugin[] }>(
         `/sessions/${encodeURIComponent(session)}/network`, 'POST', { allowed: !plugin.networkPermission });
+      if (!mounted.current || sessionRef.current !== session) return;
+      listRevision.current += 1;
       setPlugins(result.plugins);
-      setSwitched(plugin.id);
+      setChanges(current => ({ ...current, [plugin.id]: { effect: { status: 'next_turn' } } }));
     } catch (error) {
-      setRowError(current => ({ ...current, [plugin.id]: mountProblem(error) }));
-    } finally { inFlight.current = false; setPending(''); }
+      if (mounted.current && sessionRef.current === session) setRowError(current => ({ ...current, [plugin.id]: mountProblem(error) }));
+    } finally {
+      inFlight.current = false;
+      if (mounted.current && sessionRef.current === session) setPending('');
+    }
   };
   const count = plugins.filter(plugin => plugin.on).length;
   const needle = query.trim().toLocaleLowerCase();
@@ -139,8 +187,8 @@ export function SessionPlugins({ session }: { session: string }) {
     </div>
     <div className="pilot-plugins-body">
       <div className="pilot-plugins-intro">
-        <div className="pilot-plugins-note" role="note"><Sparkles size={13} /> <span>从下一个回合起生效</span></div>
-        <p>当前回合已经在用的能力不会中途改变。</p>
+        <div className="pilot-plugins-note" role="note"><Sparkles size={13} /> <span>当前回合保持原有能力</span></div>
+        <p>运行中修改后，正常结束会自动继续原任务；空闲时等待下一次消息。</p>
       </div>
       {!!plugins.length && <div className="pilot-plugins-toolbar">
         <label className="session-plugin-search"><Search size={14} /><input type="search" aria-label="搜索插件" placeholder="搜索名称或能力…"
@@ -200,7 +248,7 @@ export function SessionPlugins({ session }: { session: string }) {
           {plugin.required && <p className="session-plugin-required"><LockKeyhole size={12} /><span>必需 · 工作流需要此插件，保持挂载。</span></p>}
           {unavailable && <p className="plugin-error"><CircleAlert size={12} /><span>不可用：{plugin.error || 'Host 未给出原因'}</span></p>}
           {rowError[plugin.id] && <p className="plugin-error" role="alert"><CircleAlert size={12} /><span>{rowError[plugin.id]}</span></p>}
-          {switched === plugin.id && !rowError[plugin.id] && <p className="plugin-note" role="status">已切换 · 将在下一个回合生效</p>}
+          {changes[plugin.id] && !rowError[plugin.id] && <p className="plugin-note" role="status">{mountNotice(changes[plugin.id], continuation?.session === session ? continuation : null)}</p>}
         </article>;
       })}</div>
     </div>

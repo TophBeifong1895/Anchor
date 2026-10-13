@@ -137,21 +137,34 @@ fn no_runs(server: &HttpHost) {
 }
 
 fn graph_detail(server: &HttpHost) -> Value {
-    let (status, saved) = server.request("GET", "/graphs/fixture", None);
+    graph_detail_for(server, "fixture")
+}
+
+fn graph_detail_for(server: &HttpHost, graph: &str) -> Value {
+    let (status, saved) = server.request("GET", &format!("/graphs/{graph}"), None);
     assert_eq!(status, 200, "{saved}");
     saved
 }
 
 fn precondition(server: &HttpHost) -> String {
-    let (status, saved) = server.request("GET", "/graphs/fixture/delete-precondition", None);
+    precondition_for(server, "fixture")
+}
+
+fn precondition_for(server: &HttpHost, graph: &str) -> String {
+    let (status, saved) =
+        server.request("GET", &format!("/graphs/{graph}/delete-precondition"), None);
     assert_eq!(status, 200, "{saved}");
     saved["precondition"].as_str().unwrap().to_owned()
 }
 
 fn assert_delete_question(question: &Value, expected: &str) {
+    assert_delete_question_for(question, "fixture", expected)
+}
+
+fn assert_delete_question_for(question: &Value, graph: &str, expected: &str) {
     let message = question["message"].as_str().unwrap();
     assert!(
-        message.contains("fixture") && message.contains(expected),
+        message.contains(graph) && message.contains(expected),
         "{question}"
     );
     assert_eq!(question["requested_schema"]["required"], json!(["confirm"]));
@@ -408,8 +421,8 @@ fn goose_ask_user_validates_answer_and_preserves_one_turn_and_sse_history() {
         "goose-ask-user",
         vec![
             Step::tool(
-                "ask_user",
-                json!({"message":QUESTION,"requested_schema":schema()}),
+                "anchor_tools_call",
+                json!({"name":"ask_user","arguments":{"message":QUESTION,"requested_schema":schema()}}),
             ),
             Step::text("The user's native answer was received in this same Turn.")
                 .after("anchor-answer")
@@ -522,27 +535,44 @@ fn goose_ask_user_validates_answer_and_preserves_one_turn_and_sse_history() {
 }
 
 fn graph_delete_decision(scenario: &str, body: Value, deleted: bool) {
+    const TARGET: &str = "delete-target";
     let provider = Provider::new(
         scenario,
         vec![
-            Step::tool("graph_delete", json!({"graph":"fixture"})),
+            Step::tool(
+                "anchor_tools_call",
+                json!({"name":"graph_delete","arguments":{"graph":TARGET}}),
+            ),
             Step::text("The native deletion decision has been respected.").after("deleted"),
         ],
     );
     let host = Host::new(&graph()).default_runtime();
     let server = host.serve(&provider);
     create(&server);
-    let before = graph_detail(&server);
-    let expected = precondition(&server);
+    let (status, created) = server.request(
+        "POST",
+        "/graphs",
+        Some(&json!({"name":TARGET,"definition":graph()})),
+    );
+    assert_eq!(status, 201, "{created}");
+    let before = graph_detail_for(&server, TARGET);
+    let expected = precondition_for(&server, TARGET);
     let submitted = submit(
         &server,
         "delete",
-        Some("Delete fixture, but wait for my native confirmation."),
+        Some("Delete delete-target, but wait for my native confirmation."),
     );
     let pending = pending_question(&server, &submitted);
-    assert_delete_question(&pending, &expected);
-    assert_eq!(graph_detail(&server), before);
-    assert!(host.base.root.path().join("bundle/graph.json").is_file());
+    assert_delete_question_for(&pending, TARGET, &expected);
+    assert_eq!(graph_detail_for(&server, TARGET), before);
+    assert!(
+        host.base
+            .root
+            .path()
+            .join(TARGET)
+            .join("graph.json")
+            .is_file()
+    );
     let (status, invalid) = answer(
         &server,
         &submitted,
@@ -556,17 +586,24 @@ fn graph_delete_decision(scenario: &str, body: Value, deleted: bool) {
     assert_eq!(status, 200, "{saved}");
     let completed = wait_turn(&server, &submitted, "completed");
     let result = last_tool_result(&provider, "deleted");
-    assert_eq!(result["graph"], "fixture", "{result}");
+    assert_eq!(result["graph"], TARGET, "{result}");
     assert_eq!(result["deleted"], deleted, "{result}");
     if deleted {
-        let (status, missing) = server.request("GET", "/graphs/fixture", None);
+        let (status, missing) = server.request("GET", &format!("/graphs/{TARGET}"), None);
         assert_eq!(status, 404, "{missing}");
-        assert!(!host.base.root.path().join("bundle").exists());
+        assert!(!host.base.root.path().join(TARGET).exists());
         assert_eq!(result["precondition"], expected);
     } else {
-        assert_eq!(graph_detail(&server), before);
-        assert_eq!(precondition(&server), expected);
-        assert!(host.base.root.path().join("bundle/graph.json").is_file());
+        assert_eq!(graph_detail_for(&server, TARGET), before);
+        assert_eq!(precondition_for(&server, TARGET), expected);
+        assert!(
+            host.base
+                .root
+                .path()
+                .join(TARGET)
+                .join("graph.json")
+                .is_file()
+        );
     }
     let answered = questions(&server, &completed);
     assert_eq!(answered[0]["status"], "answered");

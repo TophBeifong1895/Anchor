@@ -1,0 +1,62 @@
+[
+  {
+    "name": "skills_client",
+    "url": "https://github.com/aaif-goose/goose/blob/v1.53.0/crates/goose/src/skills/client.rs",
+    "sha256": "68957ed2ab27fedbe34d1e38de55769d8391baea6b3a20b839eb2e974735f4a1",
+    "local_equal_official": true
+  },
+  {
+    "name": "skills_mod",
+    "url": "https://github.com/aaif-goose/goose/blob/v1.53.0/crates/goose/src/skills/mod.rs",
+    "sha256": "6a59c9e9ebbf4553cdd8195347757be9e5e13a587b07f035775cb69c3f886a1b",
+    "local_equal_official": true
+  },
+  {
+    "name": "extensions_manager",
+    "url": "https://github.com/aaif-goose/goose/blob/v1.53.0/crates/goose/src/agents/extension_manager/mod.rs",
+    "sha256": "cca72e241d8786ba44256a8d2e4671f3f353e6b57e04427b8892a3c346bf1943",
+    "local_equal_official": true
+  },
+  {
+    "name": "ext_manager",
+    "url": "https://github.com/aaif-goose/goose/blob/v1.53.0/crates/goose/src/agents/platform_extensions/ext_manager.rs",
+    "sha256": "7e00640740de8f66fd787c1083e1f9f3f5009c3d9a8f523b35ecff4270569e58",
+    "local_equal_official": true
+  },
+  {
+    "name": "reply_parts",
+    "url": "https://github.com/aaif-goose/goose/blob/v1.53.0/crates/goose/src/agents/reply_parts.rs",
+    "sha256": "0fb4ef498ad379792825ccb5342f10e03ba1be6aa5b0b6f611adab2a67b922a4",
+    "local_equal_official": true
+  },
+  {
+    "name": "docs_skills",
+    "url": "https://github.com/aaif-goose/goose/blob/v1.53.0/documentation/docs/guides/context-engineering/using-skills.md",
+    "sha256": "f521f1fedeb5720c3664b064620ea51faa8fa77407f430bef89050eb405b66c3",
+    "local_equal_official": true
+  },
+  {
+    "name": "docs_code_mode",
+    "url": "https://github.com/aaif-goose/goose/blob/v1.53.0/documentation/docs/guides/managing-tools/code-mode.md",
+    "sha256": "1beddd6e64d7af7d9561bf354f7f1f6d8bed2f7fd58490c31c566b01f6b6c2ec",
+    "local_equal_official": true
+  },
+  {
+    "name": "docs_extension_manager",
+    "url": "https://github.com/aaif-goose/goose/blob/v1.53.0/documentation/docs/mcp/extension-manager-mcp.md",
+    "sha256": "b29a00d75cbf52812fb6644a85f7e5696011dac16bf51aa5e05dd096f9ce61aa",
+    "local_equal_official": true
+  },
+  {
+    "name": "sources",
+    "url": "https://github.com/aaif-goose/goose/blob/v1.53.0/crates/goose/src/acp/server/sources.rs",
+    "sha256": "cdd0dd3a72b48f75349f084d1220c6bb1d955ec3b35d147ef6cca3534f6965d1",
+    "local_equal_official": true
+  },
+  {
+    "name": "plugins_discovery",
+    "url": "https://github.com/aaif-goose/goose/blob/v1.53.0/crates/goose/src/plugins/discovery.rs",
+    "sha256": "5317f9244ccb1ad9e6d3f671910e33e1fc50177313ea5d621ba49d3498490b28",
+    "local_equal_official": true
+  }
+]

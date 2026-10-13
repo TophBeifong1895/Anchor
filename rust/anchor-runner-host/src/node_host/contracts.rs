@@ -57,6 +57,8 @@ impl ResolutionError {
 pub(crate) struct ResolvedNodeTools {
     pub(crate) tools: Arc<dyn ToolPort>,
     pub(crate) plugins: Vec<PluginBinding>,
+    /// Derived from the same frozen disclosure catalog as the tools.
+    pub(crate) plugin_instructions: String,
 }
 
 pub(crate) type ToolResolution<'resolver> =

@@ -109,7 +109,7 @@ test('the capability rail leaves room to read, searches resources and syncs new 
   await rail.getByRole('button', { name: '查看全部插件' }).click();
   await rail.getByRole('switch', { name: '挂载 Docmost', exact: true }).click();
   await expect(rail.getByRole('switch', { name: '取消挂载 Docmost', exact: true })).toHaveAttribute('aria-checked', 'true');
-  await expect(rail.getByRole('status')).toContainText('将在下一个回合生效');
+  await expect(rail.getByRole('status')).toContainText('下次发送消息时生效');
   await expect(rail.locator('.pilot-plugins-summary')).toContainText('2 已挂载');
 
   // A mid-session installation needs no reload. A long list scrolls separately from the transcript
@@ -152,7 +152,7 @@ test('mobile keeps the conversation visible and provides a keyboard accessible p
   await drawer.getByRole('switch', { name: '挂载 Docmost', exact: true }).click();
   await expect(drawer.getByRole('alert')).toHaveText('插件依赖尚未准备完成，请稍后重试。');
   await expect(drawer.getByRole('switch', { name: '挂载 Docmost', exact: true })).toHaveAttribute('aria-checked', 'false');
-  await expect(drawer.getByRole('note')).toContainText('从下一个回合起生效');
+  await expect(drawer.getByRole('note')).toContainText('当前回合保持原有能力');
   await page.screenshot({ path: test.info().outputPath('plugins-mobile-drawer.png') });
   const drawerBox = await drawer.boundingBox();
   expect(drawerBox!.x).toBeGreaterThanOrEqual(0);

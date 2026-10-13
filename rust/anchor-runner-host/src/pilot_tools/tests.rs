@@ -7,6 +7,47 @@ use super::*;
 
 use anchor_platform_session::CreateSession;
 
+#[tokio::test]
+async fn plugin_management_metadata_and_reads_share_the_library_publication_guard() {
+    let (root, tools) = fixture();
+    let plugin = root.path().join("plugins/demo");
+    std::fs::create_dir_all(plugin.join("skills/check")).unwrap();
+    std::fs::write(plugin.join("plugin.json"), r#"{"name":"Demo"}"#).unwrap();
+    std::fs::write(
+        plugin.join("skills/check/SKILL.md"),
+        "# Public Skill\nPurpose",
+    )
+    .unwrap();
+    let lease = anchor_library::Library::new(root.path())
+        .try_install_lease()
+        .unwrap();
+    for (name, args) in [
+        ("plugin_list", json!({})),
+        ("plugin_read", json!({"plugin":"demo","section":"skills"})),
+    ] {
+        assert!(
+            tools
+                .execute(name, args)
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("Library is changing")
+        );
+    }
+    drop(lease);
+    assert_eq!(
+        tools.execute("plugin_list", json!({})).await.unwrap()["total"],
+        1
+    );
+    assert_eq!(
+        tools
+            .execute("plugin_read", json!({"plugin":"demo","section":"skills"}))
+            .await
+            .unwrap()["skills"][0]["name"],
+        "Public Skill"
+    );
+}
+
 fn fixture() -> (tempfile::TempDir, PilotTools) {
     let root = tempfile::tempdir().unwrap();
     std::fs::create_dir(root.path().join("fixture")).unwrap();
@@ -239,8 +280,8 @@ async fn read_tools_do_not_create_runs_or_modify_definitions() {
         true
     );
     assert_eq!(
-        tools.execute("plugin_list", json!({})).await.unwrap(),
-        json!({"plugins":[]})
+        tools.execute("plugin_list", json!({})).await.unwrap()["plugins"],
+        json!([])
     );
     assert_eq!(
         tools.execute("run_list", json!({})).await.unwrap(),

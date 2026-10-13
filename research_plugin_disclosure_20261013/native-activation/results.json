@@ -1,0 +1,217 @@
+{
+  "scope": "Native fixed-Goose API and Extension Manager experiments only; not Anchor integration or lazy connection feature acceptance",
+  "real_provider": false,
+  "deployment_updated": false,
+  "goose_binary_sha256": "71e76c412597b2ecd96ed20d0706e7666f31c018216e7cb5d65c5ca5c44824a7",
+  "command": "PATH=/home/mansteinl/.cargo/bin:$PATH ANCHOR_GOOSE_BINARY=/home/mansteinl/Anchor/.local/rust/bin/goose cargo test --manifest-path rust/Cargo.toml -p anchor-runner-host --test goose_native_activation_spike --locked --offline fixed_goose_ -- --ignored --nocapture",
+  "exit_code": 0,
+  "passed": 2,
+  "filtered_out": 5,
+  "clippy_command": "PATH=/home/mansteinl/.cargo/bin:$PATH cargo clippy --manifest-path rust/Cargo.toml -p anchor-runner-host --test goose_native_activation_spike --locked --offline -- -D warnings",
+  "clippy_exit_code": 0,
+  "probe_source_sha256": "9c0b7d6b500d267000ba06302383e3dad69c8763a81b444c584122f00b3da1b3",
+  "test_binary_sha256": "77463f02fedb6e5e81fcd1935441f8c347b8fa071c740652d7c9579169a6959c",
+  "results": {
+    "goose-native-activation-spike": {
+      "scope": "fixed Goose native ACP API spike, deterministic local Provider and HTTP MCP; no Anchor runtime integration",
+      "goose_binary_sha256": "71e76c412597b2ecd96ed20d0706e7666f31c018216e7cb5d65c5ca5c44824a7",
+      "real_provider": false,
+      "deployment_updated": false,
+      "initial_selected_service_unconnected": true,
+      "add_during_active_tool_succeeded": {
+        "jsonrpc": "2.0",
+        "id": 5,
+        "result": {}
+      },
+      "same_prompt_new_schema_visible": false,
+      "next_prompt_new_schema_visible": true,
+      "native_confirmation_round_trip": true,
+      "business_error_preserved": true,
+      "prompt_cancelled": {
+        "jsonrpc": "2.0",
+        "id": 7,
+        "result": {
+          "stopReason": "cancelled",
+          "usage": {
+            "totalTokens": 18,
+            "inputTokens": 11,
+            "outputTokens": 7
+          }
+        }
+      },
+      "server_observed_tool_cancellation": true,
+      "reload_retains_selected_extension": true,
+      "reload_reconnects_selected": true,
+      "explicit_removal_hides_schema_next_prompt": true,
+      "global_config_unchanged": true,
+      "native_session": "20261013_1",
+      "actual_mcp_calls": [
+        {
+          "request": {
+            "name": "native_echo",
+            "arguments": {
+              "value": "next-prompt-marker"
+            }
+          },
+          "context_meta": {
+            "agent-session-id": "20261013_1",
+            "agent-working-dir": "/tmp/anchor-goose-acp-spike/evidence/integration/593339/goose-native-activation-spike/native/home",
+            "agent-tool-call-request-id": "call-3",
+            "progressToken": 1
+          }
+        },
+        {
+          "request": {
+            "name": "native_confirm",
+            "arguments": {}
+          },
+          "context_meta": {
+            "agent-session-id": "20261013_1",
+            "agent-working-dir": "/tmp/anchor-goose-acp-spike/evidence/integration/593339/goose-native-activation-spike/native/home",
+            "agent-tool-call-request-id": "call-4",
+            "progressToken": 2
+          }
+        },
+        {
+          "request": {
+            "name": "native_error",
+            "arguments": {}
+          },
+          "context_meta": {
+            "agent-session-id": "20261013_1",
+            "agent-working-dir": "/tmp/anchor-goose-acp-spike/evidence/integration/593339/goose-native-activation-spike/native/home",
+            "agent-tool-call-request-id": "call-5",
+            "progressToken": 3
+          }
+        },
+        {
+          "request": {
+            "name": "native_wait",
+            "arguments": {}
+          },
+          "context_meta": {
+            "agent-session-id": "20261013_1",
+            "agent-working-dir": "/tmp/anchor-goose-acp-spike/evidence/integration/593339/goose-native-activation-spike/native/home",
+            "agent-tool-call-request-id": "call-7",
+            "progressToken": 4
+          }
+        },
+        {
+          "request": {
+            "name": "native_echo",
+            "arguments": {
+              "value": "reload-marker"
+            }
+          },
+          "context_meta": {
+            "agent-session-id": "20261013_1",
+            "agent-working-dir": "/tmp/anchor-goose-acp-spike/evidence/integration/593339/goose-native-activation-spike/native/home",
+            "agent-tool-call-request-id": "call-8",
+            "progressToken": 1
+          }
+        }
+      ],
+      "raw_evidence_path": "/tmp/anchor-goose-acp-spike/evidence/integration/593339/goose-native-activation-spike/evidence.json"
+    },
+    "goose-native-manager-spike": {
+      "scope": "fixed Goose native Extension Manager probe, deterministic Provider, scoped fixture config; no Anchor runtime integration",
+      "goose_binary_sha256": "71e76c412597b2ecd96ed20d0706e7666f31c018216e7cb5d65c5ca5c44824a7",
+      "real_provider": false,
+      "deployment_updated": false,
+      "initial_selected_service_unconnected": true,
+      "manager_refreshes_schema_same_prompt": true,
+      "selected_server_tool_count": 1004,
+      "selected_tools_sent_to_next_model_request": 1004,
+      "model_tools_json_bytes_after_activation": 223104,
+      "activated_extensions": {
+        "jsonrpc": "2.0",
+        "id": 5,
+        "result": {
+          "extensions": [
+            {
+              "extension": {
+                "type": "platform",
+                "name": "extensionmanager"
+              },
+              "extensionKey": "extensionmanager"
+            },
+            {
+              "extension": {
+                "type": "mcp",
+                "server": {
+                  "type": "http",
+                  "name": "picked",
+                  "url": "http://127.0.0.1:43697/mcp",
+                  "headers": []
+                },
+                "timeout": 20
+              },
+              "extensionKey": "picked"
+            },
+            {
+              "extension": {
+                "type": "builtin",
+                "name": "tom"
+              },
+              "extensionKey": "tom"
+            }
+          ]
+        }
+      },
+      "manager_can_disable_other_native_extension": true,
+      "extensions_after_disabling_tom": {
+        "jsonrpc": "2.0",
+        "id": 7,
+        "result": {
+          "extensions": [
+            {
+              "extension": {
+                "type": "platform",
+                "name": "extensionmanager"
+              },
+              "extensionKey": "extensionmanager"
+            },
+            {
+              "extension": {
+                "type": "mcp",
+                "server": {
+                  "type": "http",
+                  "name": "picked",
+                  "url": "http://127.0.0.1:43697/mcp",
+                  "headers": []
+                },
+                "timeout": 20
+              },
+              "extensionKey": "picked"
+            }
+          ]
+        }
+      },
+      "global_config_unchanged": true,
+      "actual_mcp_calls": [
+        {
+          "request": {
+            "name": "native_echo",
+            "arguments": {
+              "value": "same-prompt-marker"
+            }
+          },
+          "context_meta": {
+            "agent-session-id": "20261013_1",
+            "agent-working-dir": "/tmp/anchor-goose-acp-spike/evidence/integration/593339/goose-native-manager-spike/native/home",
+            "agent-tool-call-request-id": "call-2",
+            "progressToken": 1
+          }
+        }
+      ],
+      "raw_evidence_path": "/tmp/anchor-goose-acp-spike/evidence/integration/593339/goose-native-manager-spike/evidence.json"
+    }
+  },
+  "goose_source_tag": "v1.53.0",
+  "goose_source_archive_sha256": "85cc5e76a12e364032df4bec0ed0738a910c3e12ec12731b4405d1fdb18d96ae",
+  "fmt_command": "PATH=/home/mansteinl/.cargo/bin:$PATH cargo fmt --manifest-path rust/Cargo.toml --all -- --check",
+  "fmt_exit_code": 0,
+  "deployed_host_pid": 184037,
+  "deployed_host_sha256": "984578f85d9bc460a8868f53236f8e99c04bc61d69f616993adcb67cb42d2f15",
+  "live_experiment_processes_after_exit": []
+}

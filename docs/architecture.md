@@ -74,7 +74,7 @@ fs2 Artifact 的文件及谱系是节点产物权威；只读 Git 输入视图�
 
 Run format 13 将准入授权与执行观察分开：`plugin_bindings.authorization_digest` 保存无凭据值的 Host 权限投影；节点结果的 `plugin_digests` 和 `plugin_views` 保存本次实际准备的代码与依赖声明摘要。代码、Skill 路径和依赖变化从后续调用读取；联网、可写路径、宿主命令、凭据来源、远程端点或 OAuth 授权声明变化不能沿用旧 Run 权限。format 12 记录只迁移格式，不填造新观察或权限；旧权限为空时，Host 与 Runner 共用完整旧 ID、代码摘要、资源与 MCP 名称核验，全部通过后由持 Run lease 的 Runner 一次性保存升级。
 
-AgentNode 和 Pilot 的正式工具准备在同一短 Library lease 内读取一份 `PluginDefinition`，由它生成绑定、MCP 配置、挂载与依赖视图；释放后才做 OAuth/MCP 网络启动。节点提示词直接接收准备结果中的 Plugin/Skill 列表，包括 Session 挂载，避免再次查询或另存提示词事实。此锁保证准备期间的读取一致性，不是历史代码快照；释放之后的更新仍可替换当前代码或回收旧视图，不能据此承诺旧进程可复现。Plugin 的 `mutable` 授权独立于 Python 依赖：无 Python 包的插件也可使用声明的数据目录；`plugin.json`、`.mcp.json` 与外置 MCP 声明文件必须属于不可变代码。升级逐项替换代码、保留数据；多条目更新中途失败如实报告。验证范围见 [开发台账](pilot-development-plan.md) 及[依赖标准](plugin-dependencies.md)。
+AgentNode 和 Pilot 的正式工具准备在同一短 Library lease 内读取一份 `PluginDefinition`，由它生成绑定、MCP 配置、挂载、依赖视图及只读披露目录；释放后才做 OAuth/MCP 网络启动。目录再与实际工具装配的 Plugin/server/remote-tool 归属关联，不解析工具名前缀猜所属资产。提示词只提供固定的发现入口，不平铺全部 Plugin/Skill 路径，不另存提示词事实。此锁保证准备期间的读取一致性，不是历史代码快照；释放之后的更新仍可替换当前代码或回收旧视图，不能据此承诺旧进程可复现。Plugin 的 `mutable` 授权独立于 Python 依赖：无 Python 包的插件也可使用声明的数据目录；`plugin.json`、`.mcp.json` 与外置 MCP 声明文件必须属于不可变代码。升级逐项替换代码、保留数据；多条目更新中途失败如实报告。验证范围见 [开发台账](pilot-development-plan.md) 及[依赖标准](plugin-dependencies.md)。
 
 AgentNode 的 Goose 接入区分工具解析已经返回的结果与外层等待被取消/超时：解析错误保留原错误类型并沿既有 Run 错误路径结算，不再次轮询已经完成的 future；只有外层中断才通知仍未结束的解析过程，并等待它回收所拥有的 MCP 子进程。
 
@@ -89,7 +89,17 @@ Goose 固定为 v1.53.0；Anchor 用上游同一份源码的 lean ACP-only 入�
 
 固定版 Goose 的 `enabledExtensions` 在新建时追加到默认扩展，加载时保留已存扩展，不能单独用作授权集合。共享 ACP 接入在新建/加载后、首次模型提示前，通过官方 `session/extensions/list`、`remove`、`add` 接口校准为 Anchor MCP 与部署显式允许的原生扩展；默认只保留提供边界指令的 `tom`，不启用 `developer` 的独立文件和 shell 工具。撤销旧扩展保留原生 Session 与历史，不直接修改其数据库；校准失败拒绝本次执行。
 
-AgentNode 通过授权完成工具提交 `summary` 和可选 `route`；普通回答不能完成节点。Host 校验路由、核查回执与必要产物后提交 Run 事实。业务工具效果发生但返回结果缺失时，保存观察事实；继续原生会话后，Agent 先核查 workspace、Artifact 和可用业务状态，再决定下一步。工具不会自动重放，外部副作用不承诺 exactly-once。
+Pilot 与 AgentNode 共用 `PluginDisclosureCatalog` 和 `ToolDisclosure`。`anchor_plugins` 搜索本次准备并获授权的 Plugin；`anchor_plugin_read` 按 section 读取概览、Plugin 使用说明、Skill/资源目录、单个 Skill/资源或安全的 server 声明。`anchor_tools` 搜索完整授权工具目录，`anchor_tool_detail` 返回所选工具的完整 description、参数 schema 和归属，再由 `anchor_tools_call` 调用。发现入口始终可见，普通提示也说明用法；`tom` 只承载短边界提醒，不保存完整目录，也不是发现能力的前提。Pilot 的 `plugin_list`/`plugin_read` 查询已安装 Library，执行发现查询本 Turn 的冻结挂载；管理查询不赋予调用权限。
+
+同一份冻结目录还派生不超过 16 KiB 的能力摘要，通过聚合 MCP 的 `ServerInfo.instructions` 进入 Goose 原生扩展系统提示：逐项提供 ID、名称、用途简述、准备状态、实际工具数量和读取入口，不附完整 Skill、资源、schema 或凭据。名称和描述分别取首个非空行、最多 160 字符，并以 JSON 编码；预算之外返回 `total`/`shown`/`omitted` 与完整检索入口。元数据不是执行指令，未显示不代表不可用；`available` 说明定义可发现/读取，实际调用仍取决于当前授权工具。正常推理和压缩后的继续请求都由 Goose 携带当前摘要，框架内部专用摘要请求使用自己的提示，不在此承诺内。新 Turn 或原生 Session load 后重新装配、校准扩展，当前摘要替换旧摘要，原生历史仍保留；直接 schema 和渐进 schema 模式均适用，关闭 `tom` 不影响摘要。
+
+目录默认 20 项、最多 100 项，同时限制为 16 KiB JSON 页，并返回 `next_offset`；检索为完整 Plugin/工具元数据和 Skill 头部的大小写无关多词 AND 子串，支持中文、精确 ID 和分页兜底。显示摘要限 160 字符，检索不使用裁短后的摘要。选中详情限 256 KiB JSON，工具 schema 超限明确报错，不伪装成完整结果。UTF-8 文本文件最多 1 MiB，按字节 offset 分页（默认 16 KiB、最大 32 KiB），返回 SHA256；续页传 digest 检测正文热更新，以 `next_offset=null`/`end_of_file=true` 结束。压缩后按相同入口重读，继续使用 Goose 原生 compaction，不增加 Anchor 记忆或上下文系统。
+
+读取配置文件的分类来自已验证、规范化的清单路径；隐藏文件、`plugin.json`、MCP 配置与 `channel.json` 不由披露工具返回。执行读取在 Library 非阻塞共享 guard 内核查当前授权摘要及公开文件分类，只读准备时与当前公开路径的交集，然后安全打开文件；正式发布持同一排他 lease。发布忙时明确拒绝本次读取以供重试，授权变化要求新的 invocation，普通正文更新仍可读。Pilot 管理入口同样在 guard 内读取定义及 Skill 元数据。披露目录是可重建投影，不新增持久资产、Plugin 历史副本或授权源。
+
+`anchor_tools_call` 在 Bridge 保存观察前解析真实目标和参数，保留外层 ACP 原生调用身份，继续交给原授权端口。Pilot 保留 native peer/elicitation，Node 保留真实工具观察、媒体、错误、回执与取消收束；递归元工具及间接 `final_result` 被拒绝。工具 schema 的披露沿用 `ANCHOR_NODE_TOOL_DISCLOSURE`：`1` 强制、`0` 保留直接 schema 模式，未显式设置时隐藏工具超过 3 个自动启用；Pilot 固定管理工具继续直接可见。目录与单项读取入口不依赖此开关。MCP 仍按现有准备流程连接，未增加懒连接或 Code Mode，专项范围与验证见 [实施计划](plugin-progressive-disclosure-plan.md)。
+
+AgentNode 通过授权完成工具提交 `summary` 和可选 `route`；普通回答不能完成节点。Host 校验路由、核查回执与必要产物后提交 Run 事实。完成回执来自最近一次授权非完成工具的返回结果，发现与只读工具也会刷新回执；回执不匹配的诊断明确要求复制实际返回值，可通过只读核查取得新回执，不应为此重复业务操作。业务工具效果发生但返回结果缺失时，保存观察事实；继续原生会话后，Agent 先核查 workspace、Artifact 和可用业务状态，再决定下一步。工具不会自动重放，外部副作用不承诺 exactly-once。
 
 Run 的暂停/停止请求与节点已收束是不同事实。恢复保留 Graph cursor、invocation、原生 Session 和中断记录；重启不会自动执行未结算业务或确认。旧执行器记录保留旧身份，可识别和拒绝冒充 Goose 游标；清理源码不迁移旧数据。
 
@@ -130,6 +140,10 @@ GNU Linux 发行的 Rust 初始化显式选择 `x86_64-unknown-linux-gnu`，不�
 没有第三方包视图的正式 Python stdio MCP，通过独立的只读 capability 将标准 Python 别名或已配置解释器路径映射到同一精确入口；不依赖 Pilot 作者命令的启用开关。有依赖视图的服务器继续使用视图显式解释器。MCP 工具集合持有可信 launcher 的生命周期，只授予 Python 只读挂载，不复用可以管理 Rustup 的作者命令权限。候选凭据拒绝和正式 owner-bound 凭据注入保持独立。
 
 Pilot 接纳保存网络和工具授权快照，执行启动时读取一次 `RuntimeSnapshot` 并冻结基础解释器和依赖准备器，包括“尚未配置”的状态；当前执行不会因其他请求更新配置而获得新能力。运行时探测和 MCP 启动不持全局接纳 gate。对话内联网授权、挂载、环境准备或凭据配置保存事实后请求幂等 continuation，当前 Turn 收束后通过同一 `PilotService::admit` 接纳下一 Turn，Web 跟随新 Turn。停止、删除、归属变化或未收束执行不能自动接续；重新接纳核查已保存请求，不重放准备或业务工具。Graph 后续节点从 Host 当前配置及当前 Library 装配，保持既有热替换语义。
+
+网页挂载在 Pilot gate → catalog guard → Library lease 顺序内复核 Session、保存挂载并登记接续。API 保留 `plugin`/`plugins`，增加 `effect`（`next_turn`/`after_current_turn`/`unchanged`，活动源附 `source_turn`）及既有 continuation 投影。仅当前登记执行且仍为最新 Running Pilot Turn 的真实变化请求 `continuation:<source>`；多次切换合并为一次，当前 Turn 保持旧冻结快照，空闲切换不调用模型。仅正常结算后自动接纳；失败、中断、停止、归档或新用户 Turn 取代来源都不唤醒旧任务。自动接续沿原生历史只处理最新用户请求中未完成且已授权的部分，能力变化不构成新的业务任务，也不要求重做已完成结果。Web 跟随宿主来源与后继，重开时处理列表/详情之间已接纳的交接，等待接续仍可停止或发送新消息。
+
+停止与结算/接纳共用 Pilot gate：执行已返回成功但尚未结算时，取消仍结算为 Stopped；来源已经 Completed 时保留该历史，通过幂等 `pilot.continuation.cancelled` 事件取消该来源的后续推进，即使尚无 requested 事件也适用。取消在重启后仍有效；OAuth 回调在交换 token 前和持 gate 发布授权前都核查该事实，迟到回调不能交换/保存 token 或恢复任务。该事件是 Session 控制事实，不是新审批流程或 Agent 恢复日志。
 
 允许联网的沙箱通过独立网络 namespace 与 `anchor-sandbox-network`/slirp4netns 出网，禁用 host-loopback；失败不会退回共享宿主网络。relay 和网络进程在取消、父进程退出及启动失败时收束。Host 的无 Key 管理 API 仅允许 loopback 监听，非 loopback 必须配置 API key；模型控制通道与任务授权分开。
 

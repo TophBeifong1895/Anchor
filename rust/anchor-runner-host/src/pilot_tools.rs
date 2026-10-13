@@ -6,7 +6,7 @@ use std::{
     sync::Arc,
 };
 
-use anchor_graph_host::{FilePluginCatalog, PluginCatalog, PluginDefinition};
+use anchor_graph_host::{FilePluginCatalog, PluginCatalog};
 use anchor_platform_session::SessionStore;
 use anchor_runtime::{
     ToolDefinition, ToolError, ToolPort, ToolResultContent, graph::GraphSnapshot,
@@ -129,7 +129,7 @@ pub(crate) async fn frozen_turn_tools(
     turn: &str,
     cancellation: anchor_runtime::Cancellation,
     runtime: Option<&crate::runtime_configuration::RuntimeSnapshot>,
-) -> Result<(Vec<Arc<tool_host::CombinedPluginTools>>, Vec<String>, bool), String> {
+) -> Result<PreparedPilotPlugins, String> {
     if cancellation.load(std::sync::atomic::Ordering::Acquire) {
         return Err("Pilot tool startup was cancelled".into());
     }
@@ -182,6 +182,7 @@ pub(crate) async fn frozen_turn_tools(
         cancellation: cancellation.clone(),
     };
     let mut ports = Vec::new();
+    let mut disclosure = crate::plugin_disclosure::PluginDisclosureCatalog::default();
     for binding in &bindings {
         if cancellation.load(std::sync::atomic::Ordering::Acquire) {
             break;
@@ -205,6 +206,7 @@ pub(crate) async fn frozen_turn_tools(
             }
         };
         let binding = &prepared.bindings[0];
+        disclosure.extend(prepared.disclosure);
         let single = std::slice::from_ref(binding);
         let mut mcp = prepared.mcp;
         mcp.environment = environment.clone();
@@ -261,7 +263,10 @@ pub(crate) async fn frozen_turn_tools(
             fixture.assemble(&mcp, single, network).await
         };
         match assembled {
-            Ok(port) => ports.push(port),
+            Ok(port) => {
+                disclosure.attach_tools(port.tool_owners());
+                ports.push(port);
+            }
             Err(reason) => reasons.push(unavailable(reason)),
         }
     }
@@ -279,7 +284,19 @@ pub(crate) async fn frozen_turn_tools(
         }
         return Err(reason);
     }
-    Ok((ports, reasons, network))
+    Ok(PreparedPilotPlugins {
+        ports,
+        reasons,
+        network,
+        disclosure,
+    })
+}
+
+pub(crate) struct PreparedPilotPlugins {
+    pub(crate) ports: Vec<Arc<tool_host::CombinedPluginTools>>,
+    pub(crate) reasons: Vec<String>,
+    pub(crate) network: bool,
+    pub(crate) disclosure: crate::plugin_disclosure::PluginDisclosureCatalog,
 }
 
 #[cfg(test)]
@@ -302,13 +319,14 @@ async fn frozen_plugin_tools(
         None,
     )
     .await
-    .map(|(ports, reasons, _)| {
+    .map(|prepared| {
         (
-            ports
+            prepared
+                .ports
                 .into_iter()
                 .map(|port| port as Arc<dyn ToolPort>)
                 .collect(),
-            reasons,
+            prepared.reasons,
         )
     })
 }
@@ -622,15 +640,19 @@ pub(crate) const PILOT_TOOLS: &[PilotToolSpec] = &[
     },
     PilotToolSpec {
         name: "plugin_list",
-        description: "List installed Plugins and their availability",
-        parameters: || object(),
+        description: "Search installed Library Plugins with bounded paging or exact plugin ID. Management only: does not mount or grant execution. Use plugin_read for selected overview, instructions, Skills or resources; anchor_plugins lists this Turn execution capabilities.",
+        parameters: crate::plugin_disclosure::list_parameters,
         authority: ToolAuthority::Inspect,
         effect: ToolEffect::Read,
     },
     PilotToolSpec {
         name: "plugin_read",
-        description: "Read a Plugin's instructions, dependency declaration and resource names; optional resource reads one confined UTF-8 source/build file (at most 1 MiB).",
-        parameters: || json!({"type":"object","properties":{"plugin":{"type":"string"},"resource":{"type":"string"}},"required":["plugin"],"additionalProperties":false}),
+        description: "Read one installed Library Plugin section; default overview. Select instructions, skills, skill/path, resources, resource/path or servers. Only selected text is returned, with UTF-8 byte offset/limit, sha256 and next_offset; stop at next_offset=null. Reads do not grant execution. Configuration manifests are private. Legacy resource parameter selects one resource.",
+        parameters: || {
+            let mut schema = crate::plugin_disclosure::read_parameters();
+            schema["properties"]["resource"] = json!({"type":"string"});
+            schema
+        },
         authority: ToolAuthority::Inspect,
         effect: ToolEffect::Read,
     },
@@ -820,11 +842,6 @@ pub(crate) fn workspace_directory(workspace: &Path, relative: &str) -> Result<Pa
         return Err(rejected("the candidate directory escapes the workspace"));
     }
     Ok(candidate)
-}
-
-fn public_plugin(definition: &PluginDefinition) -> Value {
-    json!({"id":definition.id,"name":definition.name,"description":definition.description,
-        "skills":definition.skills,"available":true,"digest":definition.digest})
 }
 
 fn text_resource(root: &Path, relative: &str) -> Result<String, ToolError> {

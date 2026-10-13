@@ -488,7 +488,7 @@ impl GooseNodePort {
         else {
             return Ok(NodeExecutionOutcome::Cancelled);
         };
-        // Tools and the Skill paths in the prompt come from one Host preparation.
+        // Tools, Plugin identities and persistent summary come from one Host preparation.
         // This includes Session mounts and Library updates since dispatch.
         request.plugins = resolved.plugins;
         let mut random = [0u8; 32];
@@ -496,12 +496,15 @@ impl GooseNodePort {
         let token = format!("{:x}", Sha256::digest(random));
         let bridge = bridge::Bridge::start(
             resolved.tools,
-            request.routes.clone(),
+            bridge::NodeBridgeContext {
+                routes: request.routes.clone(),
+                plugin_instructions: resolved.plugin_instructions,
+                observation_path: (!self.fixture).then(|| fact_path.clone()),
+            },
             tool_request.cancellation.clone(),
             self.models.model_upstream(),
             self.fixture,
             token,
-            (!self.fixture).then(|| fact_path.clone()),
         )
         .await
         .map_err(GraphError::Unsupported)?;
@@ -698,19 +701,9 @@ impl GooseNodePort {
             request.instructions, request.task, request.input, request.routes
         );
         if !self.fixture {
-            prompt.push_str(" After any business tool, copy its most recent anchor_receipt into final_result.observed_receipt. A final_result in the same batch as business tools cannot know that receipt and is rejected. Read mounted Plugin instructions through the authorized tools as needed.");
-            for plugin in &request.plugins {
-                let instructions = plugin
-                    .resources
-                    .iter()
-                    .filter(|resource| {
-                        resource.ends_with("SKILL.md") || resource.as_str() == "instructions.md"
-                    })
-                    .map(|resource| format!("/plugins/{}/{}", plugin.id, resource))
-                    .collect::<Vec<_>>();
-                prompt.push_str(&format!("\nAvailable Plugin {}: read-only instructions {}. After context compaction, reread these as needed; save work in the node workspace, not in the Plugin library.", plugin.id, instructions.join(", ")));
-            }
+            prompt.push_str(" After any authorized non-completion tool, including discovery and read-only tools, copy the anchor_receipt from its most recent returned result into final_result.observed_receipt. Call final_result only after observing that result. A final_result in the same batch as another authorized non-completion tool cannot know that tool's receipt and is rejected. Inspect existing results or use authorized read-only tools when needed; do not repeat business operations merely to obtain a receipt. Read mounted Plugin instructions through the authorized tools as needed.");
         }
+        prompt.push_str(" Discover this invocation's authorized Plugins with anchor_plugins (query, exact plugin ID or offset paging); anchor_plugin_read reads only a selected overview/instructions/Skill/resource, with bounded pages and file digests. Use anchor_tools and anchor_tool_detail for the complete authorized inventory/schema, then anchor_tools_call for business tools. After compaction, reread selected instructions/schema as needed. Save work in the node workspace.");
         if evidence["resume"] == true && restored.is_some() {
             prompt.push_str(" The original invocation was interrupted. A missing tool response does NOT mean the external operation did not occur. First inspect the existing workspace, artifacts and available external state using authorized tools; do not blindly repeat pending operations. Continue this same task from verified facts.");
             let unresolved = history

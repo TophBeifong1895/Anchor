@@ -18,6 +18,26 @@ const PLUGIN: &str = "compaction";
 const SKILL: &str = "/plugins/compaction/skills/inspect/SKILL.md";
 const CONTINUATION: &str = "Your context was compacted.";
 
+fn assert_persistent_plugin_system_prompt(request: &Value) -> String {
+    let system = request["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|message| message["role"] == "system")
+        .filter_map(|message| message["content"].as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(system.contains("Current Anchor Plugin capabilities for this invocation."));
+    assert!(system.contains("\"id\":\"compaction\""));
+    assert!(system.contains("\"description\":\"Inspect durable facts.\""));
+    assert!(system.contains("\"read_with\":\"anchor_plugin_read\""));
+    assert!(
+        !system.contains("Plugin marker:"),
+        "full Skill body leaked into system prompt"
+    );
+    system
+}
+
 fn random_value(label: &str) -> String {
     let mut bytes = [0; 32];
     fs::File::open("/dev/urandom")
@@ -79,7 +99,7 @@ impl Facts {
 
 fn install_plugin(host: &Host, facts: &Facts) -> Value {
     let bundle = host.base.root.path().join("bundle");
-    let plugin = bundle.join("plugins").join(PLUGIN);
+    let plugin = host.base.root.path().join("checkout").join(PLUGIN);
     fs::create_dir_all(plugin.join("skills/inspect")).unwrap();
     fs::write(
         plugin.join("plugin.json"),
@@ -87,7 +107,10 @@ fn install_plugin(host: &Host, facts: &Facts) -> Value {
     )
     .unwrap();
     fs::write(plugin.join("skills/inspect/SKILL.md"), &facts.skill).unwrap();
-    let binding = FilePluginCatalog::new(&bundle)
+    anchor_library::Library::new(host.base.root.path())
+        .install_directory(PLUGIN, &plugin, false)
+        .unwrap();
+    let binding = FilePluginCatalog::new(host.base.root.path())
         .resolve(&[PLUGIN.into()])
         .unwrap()
         .remove(0);
@@ -102,7 +125,7 @@ fn install_plugin(host: &Host, facts: &Facts) -> Value {
     assert_eq!(summary["mcp_servers"], json!([]));
     fs::write(
         bundle.join("manifest.json"),
-        json!({"format":1,"graph":"graph.json","plugins":[summary]}).to_string(),
+        json!({"format":1,"graph":"graph.json","plugins":[{"id":PLUGIN}]}).to_string(),
     )
     .unwrap();
     summary
@@ -209,7 +232,7 @@ fn assert_artifacts(host: &Host, run: &str, facts: &Facts) -> Value {
             host.base
                 .root
                 .path()
-                .join("bundle/plugins/compaction/skills/inspect/SKILL.md")
+                .join("plugins/compaction/skills/inspect/SKILL.md")
         )
         .unwrap(),
         facts.skill.as_bytes()
@@ -309,7 +332,9 @@ fn native_goose_entry_compaction_rereads_readonly_plugin_and_workspace_before_gr
                 .gated(&gate),
         ],
     );
-    let host = Host::new(&graph()).default_runtime();
+    let host = Host::new(&graph())
+        .default_runtime()
+        .with_extra_environment([("ANCHOR_NODE_TOOL_DISCLOSURE", "0")]);
     let binding = install_plugin(&host, &facts);
     let server = host.serve(&provider);
     let (run, before) = stop_after_seed(&host, &server, &provider, &facts, &gate);
@@ -324,7 +349,14 @@ fn native_goose_entry_compaction_rereads_readonly_plugin_and_workspace_before_gr
             }),
         )
         .expect_request_contains(&facts.summary),
-        facts.reread().after("after observing business results"),
+        Step::tool("anchor_plugins", json!({"plugin":"compaction"}))
+            .after("final_result.observed_receipt must match"),
+        Step::tool(
+            "anchor_plugin_read",
+            json!({"plugin":"compaction","section":"skill","path":"skills/inspect/SKILL.md"}),
+        )
+        .after("compaction"),
+        facts.reread().after("Plugin marker"),
         complete("verify").after("plugin-workspace-reread"),
         Step::text("Verified current Plugin and workspace after native entry compaction."),
     ]);
@@ -334,7 +366,7 @@ fn native_goose_entry_compaction_rereads_readonly_plugin_and_workspace_before_gr
     provider.assert_consumed();
     assert_artifacts(&host, &run, &facts);
     let requests = provider.requests();
-    assert_eq!(requests.len(), 7);
+    assert_eq!(requests.len(), 9);
     assert_eq!(
         requests
             .iter()
@@ -342,25 +374,44 @@ fn native_goose_entry_compaction_rereads_readonly_plugin_and_workspace_before_gr
             .count(),
         1
     );
-    assert!(requests[0]["messages"].to_string().contains(SKILL));
+    assert!(
+        requests[0]["messages"]
+            .to_string()
+            .contains("anchor_plugins")
+    );
     assert!(is_summary_request(&requests[2]));
+    for request in requests
+        .iter()
+        .filter(|request| !is_summary_request(request))
+    {
+        assert_persistent_plugin_system_prompt(request);
+    }
     assert!(
         tool_feedback(&requests[3]).is_empty(),
         "old tool results must be hidden after compaction"
     );
-    let fresh_receipt = receipt(tool_feedback(&requests[5]).last().unwrap()).unwrap();
+    assert!(
+        tool_feedback(&requests[6])
+            .last()
+            .unwrap()
+            .to_string()
+            .contains("Plugin marker")
+    );
+    let fresh_receipt = receipt(tool_feedback(&requests[7]).last().unwrap()).unwrap();
     let (fact, native, _) = host.native_record(&run, "worker", 1);
     assert_identity(&host, &run, &before);
     assert!(fact["completion"].is_object(), "{fact}");
     assert_eq!(native["resume"], true);
     let calls = native["tool_calls"].as_array().unwrap();
-    assert_eq!(calls.len(), 3, "{native}");
+    assert_eq!(calls.len(), 5, "{native}");
     assert_eq!(calls[0]["tool"], "final_result");
     assert_eq!(calls[0]["result"]["ok"], false);
-    assert_eq!(calls[1]["tool"], "anchor_run");
-    assert_eq!(calls[2]["tool"], "final_result");
-    assert_eq!(calls[2]["arguments"]["observed_receipt"], fresh_receipt);
-    assert_eq!(calls[2]["result"]["ok"], true);
+    assert_eq!(calls[1]["tool"], "anchor_plugins");
+    assert_eq!(calls[2]["tool"], "anchor_plugin_read");
+    assert_eq!(calls[3]["tool"], "anchor_run");
+    assert_eq!(calls[4]["tool"], "final_result");
+    assert_eq!(calls[4]["arguments"]["observed_receipt"], fresh_receipt);
+    assert_eq!(calls[4]["result"]["ok"], true);
     let history = host.native_conversation(&run, "worker", 1);
     let compaction = assert_compaction(&history, &facts);
     assert_eq!(receipt(&compaction["old_result"]).unwrap(), old_receipt);
@@ -372,7 +423,9 @@ fn native_goose_entry_compaction_rereads_readonly_plugin_and_workspace_before_gr
         "random_workspace":facts.workspace,"compaction_history":compaction,
         "old_receipt":old_receipt,"fresh_receipt":fresh_receipt,
         "summary_cannot_complete":true,"artifact_hashes_checked":true,
-        "effects":1,"real_model_requests":0
+        "effects":1,"real_model_requests":0,"disclosure_skill_reread_after_compaction":true,
+        "persistent_plugin_summary_in_system_before_and_after_entry_compaction":true,
+        "tool_disclosure":"0"
     }));
 }
 
@@ -439,7 +492,7 @@ fn native_goose_compacted_effect_survives_host_kill_and_is_inspected_without_rep
         stale_completion(&old_receipt).expect_request_contains("do not blindly repeat"),
         command(&format!(
             "set -eu; test \"$(cat effects.txt)\" = once; test \"$(cat post-effects.txt)\" = '{effect}'; cat {SKILL} > plugin-after.txt; if printf corrupt >> {SKILL} 2>/dev/null; then exit 95; fi; cat workspace.txt > evidence.txt; cat plugin-after.txt evidence.txt effects.txt post-effects.txt; printf '\\nplugin-workspace-reread\\n'"
-        )).after("after observing business results"),
+        )).after("final_result.observed_receipt must match"),
         complete("verify").after("plugin-workspace-reread"),
         Step::text("Inspected compacted workspace and completed without repeating either effect."),
     ]);
@@ -575,7 +628,9 @@ fn native_goose_cancelled_summarizer_stays_incomplete_then_resumes_from_plugin_a
     provider.append(vec![
         Step::summary(&facts.summary).expect_request_contains(&facts.workspace),
         stale_completion(&old_receipt).expect_request_contains(&facts.summary),
-        facts.reread().after("after observing business results"),
+        facts
+            .reread()
+            .after("final_result.observed_receipt must match"),
         complete("verify").after("plugin-workspace-reread"),
         Step::text("Inspected facts after cancelling the native summarizer and completed once."),
     ]);
@@ -642,7 +697,9 @@ fn native_goose_context_length_error_compacts_same_prompt_and_rereads_plugin_wit
             ),
         ],
     );
-    let host = Host::new(&graph()).default_runtime();
+    let host = Host::new(&graph())
+        .default_runtime()
+        .with_extra_environment([("ANCHOR_NODE_TOOL_DISCLOSURE", "1")]);
     let binding = install_plugin(&host, &facts);
     let response = host.run(&provider);
     checkpoint(
@@ -669,6 +726,12 @@ fn native_goose_context_length_error_compacts_same_prompt_and_rereads_plugin_wit
         1
     );
     assert!(is_summary_request(&requests[2]));
+    for request in requests
+        .iter()
+        .filter(|request| !is_summary_request(request))
+    {
+        assert_persistent_plugin_system_prompt(request);
+    }
     assert!(tool_feedback(&requests[3]).is_empty());
     assert!(
         !requests[3]["messages"]
@@ -712,7 +775,9 @@ fn native_goose_context_length_error_compacts_same_prompt_and_rereads_plugin_wit
             "plugin_binding":binding,"plugin_readonly_before_and_after":true,
             "random_workspace":facts.workspace,"compaction_history":compaction,
             "old_receipt":old_receipt,"fresh_receipt":fresh_receipt,"effect_count":1,
-            "artifact_hashes_checked":true,"real_model_requests":0
+            "artifact_hashes_checked":true,"real_model_requests":0,
+            "persistent_plugin_summary_in_system_before_and_after_mid_turn_compaction":true,
+            "tool_disclosure":"1"
         }),
     );
 }

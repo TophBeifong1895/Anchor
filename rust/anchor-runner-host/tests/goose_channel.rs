@@ -412,7 +412,7 @@ fn native_goose_unknown_channel_result_resumes_same_session_and_inspects_without
     assert_eq!(provider.requests().len(), 1);
     provider.append(vec![
         complete("verify"),
-        command(&format!("curl --silent --show-error --fail --max-time 5 --noproxy '*' '{}/effects' > evidence.txt; cat evidence.txt", provider.url)).after("after observing business results"),
+        command(&format!("curl --silent --show-error --fail --max-time 5 --noproxy '*' '{}/effects' > evidence.txt; cat evidence.txt", provider.url)).after("final_result.observed_receipt must match"),
         complete("verify").after("effect_count"),
         Step::text("inspected unconfirmed delivery and did not resend"),
     ]);

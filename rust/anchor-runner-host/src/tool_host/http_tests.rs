@@ -176,6 +176,7 @@ async fn authenticated_http_tools_are_exposed_as_server_prefixed_names() {
         .await
         .unwrap();
         let tools = LiveMcpTools {
+            owners: BTreeMap::new(),
             hosts: BTreeMap::from([("fixture-plugin-fixture".into(), Arc::new(host))]),
             _environment: Default::default(),
         };

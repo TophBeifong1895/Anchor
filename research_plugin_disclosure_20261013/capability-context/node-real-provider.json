@@ -1,0 +1,84 @@
+{
+  "passed": true,
+  "root": "/home/mansteinl/Anchor/.local/plugin-capability-context-20261013/real-88a393df05d4dd6c",
+  "real_provider": true,
+  "provider_response_replaced": false,
+  "real_provider_compaction_tested": false,
+  "fixture_plugin_preseeded": true,
+  "plugin_installation_tested": false,
+  "deployment_updated": false,
+  "business_api_calls": 0,
+  "plugin_count": 1000,
+  "plugin_tool_count": 1001,
+  "pilot_mounted_plugin_count": 0,
+  "scope": "node-only",
+  "node_mounted_plugin_count": 999,
+  "user_names_plugin": false,
+  "host_binary_sha256": "38fde27e85119cbbbe5a0cc1eb326bd13bb750768bf983abc084c7a851e0d8b9",
+  "goose_binary_sha256": "71e76c412597b2ecd96ed20d0706e7666f31c018216e7cb5d65c5ca5c44824a7",
+  "original_env_sha256": "87bb950a6ddc4f658838d4d1aabea66bc5e6fa258e8089a4b67522d8afd666fc",
+  "shared_interpreter": "/home/mansteinl/.local/share/uv/python/cpython-3.12.13-linux-x86_64-gnu/bin/python3.12",
+  "shared_interpreter_sha256": "45a8c2736f55defe6b15a9b65196a60e4ac32e06338c563ff2d1d8f708693788",
+  "isolated_context_window": 32000,
+  "base_url": "http://127.0.0.1:56977",
+  "model": "deepseek-flash",
+  "host_pid": 729928,
+  "node_status": "completed",
+  "node_actual_calls": [
+    {
+      "plugin": "zz-lens",
+      "tool": "produce_report",
+      "arguments": {
+        "payload": {
+          "marker": "report-88a393df05d4dd6c",
+          "token": "4ae96b9ee52bfe97df4238c49728c9cb"
+        },
+        "entries": [
+          {
+            "amount": 17
+          },
+          {
+            "amount": 25
+          }
+        ],
+        "format": "json"
+      },
+      "result": {
+        "marker": "report-88a393df05d4dd6c",
+        "token": "4ae96b9ee52bfe97df4238c49728c9cb",
+        "total": 42,
+        "format": "json"
+      }
+    }
+  ],
+  "node_artifact_checked": true,
+  "large_catalog_system_bytes": 16985,
+  "large_catalog_summary": {
+    "total": 999,
+    "shown": 87,
+    "omitted": 912,
+    "byte_budget": 16384,
+    "search_with": "anchor_plugins",
+    "search_arguments": {
+      "query": "task keywords, or use exact plugin ID / offset paging"
+    },
+    "note": "The complete frozen catalog is searchable even when omitted > 0. Read only selected details; do not infer absence from this summary."
+  },
+  "initial_system_bytes": 0,
+  "original_env_unchanged": true,
+  "shared_interpreter_unchanged": true,
+  "real_model_requests": 13,
+  "proxy_errors": [],
+  "session_delete_http": 200,
+  "host_exit": 0,
+  "listener_closed": true,
+  "host_log_contains_panic": false,
+  "remaining_child_pids": [],
+  "artifact_sha256": "7c63031d5e179c82aca81d64b96960f8d800abd9d5cac9d8385a1dae9a01f5e2",
+  "native_completion_checked": true,
+  "latest_observed_receipt_checked": true,
+  "unrelated_skill_body_requested": false,
+  "actual_target_calls": 1,
+  "script_command": "python3 research_plugin_disclosure_20261013/capability-context/real_provider.py --node-only",
+  "script_exit_code": 0
+}

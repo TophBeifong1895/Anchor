@@ -834,7 +834,7 @@ fn native_goose_session_call_yield_foreground_restart_continue_same_run_without_
     provider.append(vec![
         complete("verify").expect_request_contains(&foreground_marker),
         command(&format!("set -eu; test \"$(cat effects.txt)\" = once; test \"$(cat evidence.txt)\" = '{call_marker}'; test \"$(cat /in/call/request.txt)\" = '{call_marker}'; printf inspected-once; cat evidence.txt"))
-            .after("after observing business results"),
+            .after("final_result.observed_receipt must match"),
         complete("verify").after("inspected-once"),
         Step::text("background resumed after inspecting existing effect"),
     ]);

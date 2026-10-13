@@ -57,6 +57,11 @@ impl BusinessFixture {
     fn new() -> Self {
         let calls = Calls::default();
         let state = calls.clone();
+        // Task egress deliberately cannot reach Host loopback. Like the network
+        // boundary fixture, expose only this business mock on a routable address.
+        let route = std::net::UdpSocket::bind("0.0.0.0:0").unwrap();
+        route.connect("192.0.2.1:9").unwrap();
+        let business_address = route.local_addr().unwrap().ip();
         let (address_tx, address_rx) = mpsc::channel();
         let (stop, stopped) = oneshot::channel();
         let thread = thread::spawn(move || {
@@ -65,7 +70,9 @@ impl BusinessFixture {
                 .build()
                 .unwrap()
                 .block_on(async {
-                    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+                    let listener = tokio::net::TcpListener::bind((business_address, 0))
+                        .await
+                        .unwrap();
                     address_tx.send(listener.local_addr().unwrap()).unwrap();
                     let app = Router::new()
                         .route("/cgi-bin/gettoken", get(token))
@@ -106,7 +113,7 @@ fn package(host: &Host, name: &str) -> PathBuf {
         binary.is_file(),
         "Build native tools with cargo build -p anchor-wecom-tools --bins"
     );
-    let destination = host.root.path().join("bundle/plugins").join(name);
+    let destination = host.root.path().join("checkout").join(name);
     fs::create_dir_all(destination.parent().unwrap()).unwrap();
     let result = Command::new(&binary)
         .arg("package-plugin")
@@ -128,15 +135,18 @@ fn package(host: &Host, name: &str) -> PathBuf {
 }
 
 fn bind(host: &Host, plugin: &str) {
-    let binding = FilePluginCatalog::new(host.root.path().join("bundle"))
+    let binding = FilePluginCatalog::new(host.root.path())
         .resolve(&[plugin.to_owned()])
         .unwrap()
         .remove(0);
-    fs::write(host.root.path().join("bundle/manifest.json"), json!({
-        "format":1,"graph":"graph.json","plugins":[{
-            "id":binding.id,"digest":binding.digest,"resources":binding.resources,"mcp_servers":binding.mcp_servers
-        }]
-    }).to_string()).unwrap();
+    fs::write(
+        host.root.path().join("bundle/manifest.json"),
+        json!({
+            "format":1,"graph":"graph.json","plugins":[{"id":binding.id}]
+        })
+        .to_string(),
+    )
+    .unwrap();
 }
 
 fn graph() -> Value {
@@ -163,8 +173,11 @@ fn install_plugin(host: &goose::Host, business: &BusinessFixture) -> PathBuf {
         .unwrap()
         .remove("optional_env_vars");
     fs::write(path, manifest.to_string()).unwrap();
+    anchor_library::Library::new(host.base.root.path())
+        .install_directory("wecom", &plugin, false)
+        .unwrap();
     bind(&host.base, "wecom");
-    plugin
+    host.base.root.path().join("plugins/wecom")
 }
 
 #[test]
@@ -221,7 +234,7 @@ fn native_goose_reads_plugin_skill_and_calls_rust_stdio_mcp() {
     assert!(
         provider.requests()[0]["messages"]
             .to_string()
-            .contains("/plugins/wecom/skills/wecom/SKILL.md")
+            .contains("anchor_plugins")
     );
     host.evidence(
         &provider,
@@ -247,6 +260,23 @@ fn native_goose_reaches_a_hidden_plugin_tool_through_disclosure() {
                 json!({"userid":"member-fixture"}),
             ),
             goose::Step::tool("anchor_tools", json!({"query":"get_user"})).after("not advertised"),
+            goose::Step::tool("anchor_plugins", json!({"plugin":"wecom"}))
+                .after("wecom-wecom_wecom_get_user"),
+            goose::Step::tool(
+                "anchor_plugin_read",
+                json!({"plugin":"wecom","section":"skills"}),
+            )
+            .after("wecom"),
+            goose::Step::tool(
+                "anchor_plugin_read",
+                json!({"plugin":"wecom","section":"skill","path":"skills/wecom/SKILL.md"}),
+            )
+            .after("skills/wecom/SKILL.md"),
+            goose::Step::tool(
+                "anchor_tool_detail",
+                json!({"name":"wecom-wecom_wecom_get_user"}),
+            )
+            .after("sha256"),
             goose::Step::tool(
                 "anchor_tools_call",
                 json!({
@@ -282,8 +312,11 @@ fn native_goose_reaches_a_hidden_plugin_tool_through_disclosure() {
         advertised,
         [
             "anchor__anchor_edit",
+            "anchor__anchor_plugin_read",
+            "anchor__anchor_plugins",
             "anchor__anchor_read",
             "anchor__anchor_run",
+            "anchor__anchor_tool_detail",
             "anchor__anchor_tools",
             "anchor__anchor_tools_call",
             "anchor__final_result"

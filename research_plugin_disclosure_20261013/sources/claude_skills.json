@@ -1,0 +1,10 @@
+{
+  "url": "https://code.claude.com/docs/en/skills.md",
+  "accessed_at": "2026-10-12T23:50:05.335620+00:00",
+  "status": 200,
+  "effective_url": "https://code.claude.com/docs/en/skills.md",
+  "content_type": "text/markdown; charset=utf-8",
+  "sha256": "35fd2c11f870fbe1497a53796de31b2a6b760645e724bda58894525356d4602a",
+  "bytes": 107130,
+  "text_file": "/home/mansteinl/Anchor/research_plugin_disclosure_20261013/sources/claude_skills.txt"
+}

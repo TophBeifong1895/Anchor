@@ -134,7 +134,7 @@ describe('the session plugin panel', () => {
     expect(container.textContent).not.toContain('已切换');
   });
 
-  it('applies a successful switch from the returned Plugin and only promises the next Turn', async () => {
+  it('saves an idle switch from the Host without requesting continuation', async () => {
     fetchMock.mockResolvedValueOnce(response(200, { plugins: [plugin({ id: 'demo', name: '示例插件' })] }));
     fetchMock.mockResolvedValueOnce(response(200, { plugin: plugin({ id: 'demo', name: '示例插件', on: true }) }));
     await draw();
@@ -142,9 +142,48 @@ describe('the session plugin panel', () => {
     await act(async () => { toggle.click(); });
     expect(switches()[0].getAttribute('aria-checked')).toBe('true');
     expect(switches()[0].textContent).toBe('已挂载');
-    expect(container.textContent).toContain('已切换 · 将在下一个回合生效');
-    expect(container.textContent).toContain('从下一个回合起生效');
+    expect(container.textContent).toContain('已保存 · 下次发送消息时生效');
+    expect(container.textContent).toContain('当前回合保持原有能力');
     expect(container.textContent).not.toContain('已生效');
+  });
+
+  it('follows the Host scheduled source and displays admission and cancellation truthfully', async () => {
+    const onContinuation = vi.fn();
+    fetchMock.mockResolvedValueOnce(response(200, { plugins: [plugin({ id: 'demo' })] }));
+    fetchMock.mockResolvedValueOnce(response(200, { plugin: plugin({ id: 'demo', on: true }),
+      effect: { status: 'after_current_turn', source_turn: 'source' },
+      continuation: { status: 'scheduled', request_id: 'continuation:source' } }));
+    await act(async () => { root.render(<SessionPlugins session="s-1" onContinuation={onContinuation} />); });
+    await act(async () => { switches()[0].click(); });
+    expect(onContinuation).toHaveBeenCalledExactlyOnceWith('s-1', 'source');
+    expect(container.textContent).toContain('当前回合正常结束后自动继续');
+    await act(async () => { root.render(<SessionPlugins session="s-1" onContinuation={onContinuation}
+      continuation={{ session: 's-1', source: 'source', state: { status: 'admitted', turn: 'next' } }} />); });
+    expect(container.textContent).toContain('已应用到接续回合');
+    await act(async () => { root.render(<SessionPlugins session="s-1" onContinuation={onContinuation}
+      continuation={{ session: 's-1', source: 'source', state: { status: 'cancelled' } }} />); });
+    expect(container.textContent).toContain('自动继续已取消，等待下次消息');
+    expect(onContinuation).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not schedule an unchanged switch or a late response from a departed Session', async () => {
+    const onContinuation = vi.fn();
+    let release: (value: Response) => void = () => undefined;
+    fetchMock.mockResolvedValueOnce(response(200, { plugins: [plugin({ id: 'demo' })] }));
+    fetchMock.mockImplementationOnce(() => new Promise<Response>(resolve => { release = resolve; }));
+    await act(async () => { root.render(<SessionPlugins key="s-1" session="s-1" onContinuation={onContinuation} />); });
+    await act(async () => { switches()[0].click(); });
+    fetchMock.mockResolvedValueOnce(response(200, { plugins: [plugin({ id: 'demo' })] }));
+    await act(async () => { root.render(<SessionPlugins key="s-2" session="s-2" onContinuation={onContinuation} />); });
+    await act(async () => { release(response(200, { plugin: plugin({ id: 'demo', on: true }),
+      effect: { status: 'after_current_turn', source_turn: 'old-source' }, continuation: { status: 'scheduled' } })); });
+    expect(onContinuation).not.toHaveBeenCalled();
+    expect(switches()[0].getAttribute('aria-checked')).toBe('false');
+    fetchMock.mockResolvedValueOnce(response(200, { plugin: plugin({ id: 'demo', on: true }),
+      effect: { status: 'unchanged' }, continuation: { status: 'none' } }));
+    await act(async () => { switches()[0].click(); });
+    expect(onContinuation).not.toHaveBeenCalled();
+    expect(container.textContent).toContain('设置未改变');
   });
 
   it('shows a Plugin Pilot just installed after one poll, and an unavailable one with its reason', async () => {

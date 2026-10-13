@@ -1,0 +1,10 @@
+{
+  "url": "https://platform.claude.com/docs/en/agents-and-tools/tool-use/tool-search-tool",
+  "accessed_at": "2026-10-12T23:50:05.336445+00:00",
+  "status": 200,
+  "effective_url": "https://claude.com/app-unavailable-in-region",
+  "content_type": "text/html; charset=utf-8",
+  "sha256": "cd8a751ab9a7dad454ccdbcb12b6e08b5799800fee27f5a4998e1d36c3c7ad23",
+  "bytes": 303411,
+  "text_file": "/home/mansteinl/Anchor/research_plugin_disclosure_20261013/sources/claude_search_api.txt"
+}

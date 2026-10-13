@@ -33,12 +33,19 @@ use tokio_util::sync::CancellationToken;
 /// Everything one bridge invocation needs that is not the tool port itself.
 struct BridgeSetup {
     routes: Vec<String>,
+    plugin_instructions: String,
     cancellation: Cancellation,
     upstream: Option<super::configuration::ModelUpstream>,
     fixture: bool,
     token: String,
     observation_path: Option<PathBuf>,
     pilot: Option<Arc<super::pilot::PilotPort>>,
+}
+
+pub(super) struct NodeBridgeContext {
+    pub(super) routes: Vec<String>,
+    pub(super) plugin_instructions: String,
+    pub(super) observation_path: Option<PathBuf>,
 }
 
 /// The model proxy carries whole prompts, including embedded images, so its body
@@ -61,6 +68,7 @@ pub(super) struct Bridge {
 
 pub(super) struct BridgeState {
     tools: Arc<dyn ToolPort>,
+    plugin_instructions: String,
     pilot: Option<Arc<super::pilot::PilotPort>>,
     node_completion: bool,
     routes: Vec<String>,
@@ -116,6 +124,7 @@ impl Drop for HandlerRelease {
 impl ServerHandler for McpBridge {
     fn get_info(&self) -> ServerInfo {
         ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
+            .with_instructions(self.state.plugin_instructions.clone())
     }
 
     async fn list_tools(
@@ -141,7 +150,7 @@ impl ServerHandler for McpBridge {
         if self.state.node_completion {
             tools.push(Tool::new(
             "final_result",
-            "Complete this Anchor node after inspecting all business tool results. Call alone with a nonempty summary and a legal route.",
+            "Complete this Anchor node after inspecting all authorized tool results. Call alone with a nonempty summary and a legal route.",
             Arc::new(serde_json::from_value(self.state.completion_schema()).unwrap()),
         ));
         }
@@ -167,6 +176,11 @@ impl ServerHandler for McpBridge {
         }
         let _guard = self.state.call_lock.lock().await;
         let arguments = Value::Object(request.arguments.unwrap_or_default());
+        let resolved = crate::tool_disclosure::resolve_call(&request.name, arguments.clone());
+        let (tool_name, tool_arguments) = match &resolved {
+            Ok((name, arguments)) => (name.as_str(), arguments),
+            Err(_) => (request.name.as_ref(), &arguments),
+        };
         let epoch = self.state.provider_calls.load(Ordering::SeqCst);
         let mut media = None;
         let result = if self.state.cancellation.load(Ordering::Relaxed) {
@@ -174,6 +188,8 @@ impl ServerHandler for McpBridge {
         } else if self.state.completion.lock().await.is_some() {
             *self.state.after_completion.lock().await = true;
             Err("tools after node completion are refused".to_owned())
+        } else if let Err(error) = &resolved {
+            Err(error.to_string())
         } else if self.state.node_completion && request.name == "final_result" {
             let mixed_batch = if self.state.fixture {
                 let response_tools = self.state.response_tools.lock().await;
@@ -195,7 +211,11 @@ impl ServerHandler for McpBridge {
                     call["provider_request"] == epoch && call["tool"] != "final_result"
                 });
             if same_round || mixed_batch {
-                Err("final_result must be called alone after observing business results".to_owned())
+                Err(if self.state.fixture {
+                    "final_result must be called alone after observing business results".to_owned()
+                } else {
+                    "final_result.observed_receipt must match the anchor_receipt returned by the most recent authorized non-completion tool, including discovery and read-only tools. Copy it from the returned result; do not guess it or repeat business operations merely to obtain a receipt. If a current receipt is unavailable, use an authorized read-only tool to inspect existing state.".to_owned()
+                })
             } else {
                 let mut completion = arguments.clone();
                 if !self.state.fixture {
@@ -217,7 +237,8 @@ impl ServerHandler for McpBridge {
                 .state
                 .load_fact()?
                 .and_then(|fact| native_tool_identity(&fact, request.meta.as_ref(), &context.meta));
-            let mut observation = json!({"tool":request.name,"arguments":arguments,"result":null});
+            let mut observation =
+                json!({"tool":tool_name,"arguments":tool_arguments,"result":null});
             if let Some(identity) = &identity {
                 observation["native_tool_call"] = json!({
                     "session": identity.session,
@@ -229,13 +250,17 @@ impl ServerHandler for McpBridge {
                 match &self.state.pilot {
                     Some(pilot) => {
                         pilot
-                            .call_mcp(&request.name, arguments.clone(), Some(context.peer.clone()))
+                            .call_mcp(
+                                tool_name,
+                                tool_arguments.clone(),
+                                Some(context.peer.clone()),
+                            )
                             .await
                     }
                     None => {
                         self.state
                             .tools
-                            .call(&request.name, arguments.clone())
+                            .call(tool_name, tool_arguments.clone())
                             .await
                     }
                 }
@@ -286,7 +311,7 @@ impl ServerHandler for McpBridge {
         };
         self.state
             .record_call(json!({
-                "provider_request":epoch,"tool":request.name,"arguments":arguments,"result":evidence
+                "provider_request":epoch,"tool":tool_name,"arguments":tool_arguments,"result":evidence
             }))
             .await?;
         Ok(match result {
@@ -390,7 +415,7 @@ impl BridgeState {
         let mut schema = completion_schema(&self.routes);
         if !self.fixture {
             schema["properties"]["observed_receipt"] = json!({
-                "type":"string", "description":"Copy the anchor_receipt from the most recent business tool result. Required after business tools; do not guess it."
+                "type":"string", "description":"Copy the anchor_receipt from the most recent authorized non-completion tool result, including discovery and read-only tools. Required after any such tool; do not guess it or repeat business operations merely to obtain a receipt."
             });
         }
         schema
@@ -587,22 +612,22 @@ fn response_tool_names(bytes: &[u8]) -> Result<Vec<String>, String> {
 impl Bridge {
     pub(super) async fn start(
         tools: Arc<dyn ToolPort>,
-        routes: Vec<String>,
+        context: NodeBridgeContext,
         cancellation: Cancellation,
         upstream: Option<super::configuration::ModelUpstream>,
         fixture: bool,
         token: String,
-        observation_path: Option<PathBuf>,
     ) -> Result<Self, String> {
         Self::start_inner(
             tools,
             BridgeSetup {
-                routes,
+                routes: context.routes,
+                plugin_instructions: context.plugin_instructions,
                 cancellation,
                 upstream,
                 fixture,
                 token,
-                observation_path,
+                observation_path: context.observation_path,
                 pilot: None,
             },
         )
@@ -620,6 +645,7 @@ impl Bridge {
             tools.clone(),
             BridgeSetup {
                 routes: Vec::new(),
+                plugin_instructions: tools.instructions(),
                 cancellation,
                 upstream,
                 fixture,
@@ -634,6 +660,7 @@ impl Bridge {
     async fn start_inner(tools: Arc<dyn ToolPort>, setup: BridgeSetup) -> Result<Self, String> {
         let BridgeSetup {
             routes,
+            plugin_instructions,
             cancellation,
             upstream,
             fixture,
@@ -647,6 +674,7 @@ impl Bridge {
         let address = listener.local_addr().map_err(|error| error.to_string())?;
         let state = Arc::new(BridgeState {
             tools,
+            plugin_instructions,
             node_completion: pilot.is_none(),
             pilot,
             routes,
@@ -923,7 +951,11 @@ mod tests {
 
     impl ToolPort for SlowTools {
         fn definitions(&self) -> Vec<anchor_runtime::ToolDefinition> {
-            Vec::new()
+            vec![anchor_runtime::ToolDefinition::new(
+                anchor_runtime::ToolName::new("wait").unwrap(),
+                "Wait for controlled cancellation",
+                json!({"type":"object"}),
+            )]
         }
 
         fn call<'a>(
@@ -976,9 +1008,18 @@ mod tests {
             entered: Notify::new(),
             finished: AtomicBool::new(false),
         });
-        let bridge = Bridge::start(
+        let (disclosed, plugin_instructions) = crate::tool_disclosure::maybe_wrap(
             tools.clone(),
-            Vec::new(),
+            ["wait"],
+            crate::plugin_disclosure::PluginDisclosureCatalog::default(),
+        );
+        let bridge = Bridge::start(
+            disclosed,
+            NodeBridgeContext {
+                routes: Vec::new(),
+                plugin_instructions,
+                observation_path: None,
+            },
             cancellation,
             Some(super::super::configuration::ModelUpstream {
                 url: reqwest::Url::parse("http://127.0.0.1:9/v1/chat/completions").unwrap(),
@@ -986,7 +1027,6 @@ mod tests {
             }),
             fixture,
             "test-only-token".into(),
-            None,
         )
         .await
         .unwrap();
@@ -1045,6 +1085,26 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn mcp_initialize_carries_persistent_discovery_instructions_even_without_plugins() {
+        let (bridge, _) = slow_bridge(false).await;
+        let config = StreamableHttpClientTransportConfig::with_uri(format!("{}/mcp", bridge.url))
+            .auth_header(bridge.token.clone());
+        let client = ().serve(StreamableHttpClientTransport::from_config(config)).await.unwrap();
+        let peer = client.peer_info().unwrap();
+        let instructions = peer.instructions.as_deref().unwrap();
+        assert_eq!(instructions, bridge.state.plugin_instructions);
+        assert!(
+            instructions.starts_with("Current Anchor Plugin capabilities for this invocation.")
+        );
+        assert!(instructions.contains("anchor_plugins"));
+        let footer: Value = serde_json::from_str(instructions.lines().last().unwrap()).unwrap();
+        assert_eq!(footer["total"], 0);
+        assert_eq!(footer["omitted"], 0);
+        client.cancel().await.unwrap();
+        bridge.close().await.unwrap();
+    }
+
+    #[tokio::test]
     async fn native_tool_failure_retains_mcp_error_and_observed_receipt() {
         let (bridge, tools) = slow_bridge(false).await;
         let config = StreamableHttpClientTransportConfig::with_uri(format!("{}/mcp", bridge.url))
@@ -1056,8 +1116,15 @@ mod tests {
         );
         let entered = tools.entered.notified();
         let called = client.clone();
-        let call =
-            tokio::spawn(async move { called.call_tool(CallToolRequestParams::new("wait")).await });
+        let call = tokio::spawn(async move {
+            called
+                .call_tool(
+                    CallToolRequestParams::new("anchor_tools_call").with_arguments(
+                        serde_json::from_value(json!({"name":"wait","arguments":{}})).unwrap(),
+                    ),
+                )
+                .await
+        });
         tokio::time::timeout(std::time::Duration::from_secs(3), entered)
             .await
             .unwrap();
@@ -1080,6 +1147,69 @@ mod tests {
         );
         assert_eq!(feedback["anchor_receipt"].as_str().unwrap().len(), 64);
         assert_eq!(bridge.state.calls.lock().await[0]["result"]["ok"], false);
+        assert_eq!(bridge.state.calls.lock().await[0]["tool"], "wait");
+        tools.cancellation.store(false, Ordering::SeqCst);
+        let discovery = client
+            .call_tool(
+                CallToolRequestParams::new("anchor_plugins")
+                    .with_arguments(serde_json::from_value(json!({})).unwrap()),
+            )
+            .await
+            .unwrap();
+        let discovery = serde_json::to_value(discovery).unwrap();
+        assert_ne!(discovery["isError"], true);
+        let discovered: Value =
+            serde_json::from_str(discovery["content"][0]["text"].as_str().unwrap()).unwrap();
+        assert_eq!(discovered["anchor_receipt"].as_str().unwrap().len(), 64);
+        assert_ne!(discovered["anchor_receipt"], feedback["anchor_receipt"]);
+        for rejected_receipt in [json!("invalid-receipt"), feedback["anchor_receipt"].clone()] {
+            let rejected = client
+                .call_tool(
+                    CallToolRequestParams::new("final_result").with_arguments(
+                        serde_json::from_value(json!({
+                            "summary":"This receipt must not complete the node.",
+                            "observed_receipt":rejected_receipt
+                        }))
+                        .unwrap(),
+                    ),
+                )
+                .await
+                .unwrap();
+            let rejected = serde_json::to_value(rejected).unwrap();
+            assert_eq!(rejected["isError"], true);
+            let diagnostic = rejected["content"][0]["text"].as_str().unwrap();
+            assert!(diagnostic.contains("final_result.observed_receipt must match"));
+            assert!(diagnostic.contains("including discovery and read-only tools"));
+            assert!(!diagnostic.contains("must be called alone"));
+            assert!(bridge.state.completion.lock().await.is_none());
+            assert_eq!(
+                bridge.state.receipt.lock().await.as_deref(),
+                discovered["anchor_receipt"].as_str()
+            );
+        }
+        let accepted = client
+            .call_tool(CallToolRequestParams::new("final_result").with_arguments(
+                serde_json::from_value(json!({
+                    "summary":"Observed the failed business result and latest discovery result.",
+                    "observed_receipt":discovered["anchor_receipt"]
+                }))
+                .unwrap(),
+            ))
+            .await
+            .unwrap();
+        assert_ne!(accepted.is_error, Some(true));
+        assert!(bridge.state.completion.lock().await.is_some());
+        assert_eq!(
+            bridge
+                .state
+                .calls
+                .lock()
+                .await
+                .iter()
+                .filter(|call| call["tool"] == "wait")
+                .count(),
+            1
+        );
         let client = Arc::try_unwrap(client).ok().unwrap();
         client.cancel().await.unwrap();
         bridge.close().await.unwrap();
@@ -1130,8 +1260,15 @@ mod tests {
         let client = Arc::new(().serve(transport).await.unwrap());
         let entered = tools.entered.notified();
         let called = client.clone();
-        let call =
-            tokio::spawn(async move { called.call_tool(CallToolRequestParams::new("wait")).await });
+        let call = tokio::spawn(async move {
+            called
+                .call_tool(
+                    CallToolRequestParams::new("anchor_tools_call").with_arguments(
+                        serde_json::from_value(json!({"name":"wait","arguments":{}})).unwrap(),
+                    ),
+                )
+                .await
+        });
         tokio::time::timeout(std::time::Duration::from_secs(3), entered)
             .await
             .unwrap();

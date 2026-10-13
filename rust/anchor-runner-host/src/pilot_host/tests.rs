@@ -125,12 +125,13 @@ async fn credential_submission_and_stop_share_one_control_boundary() {
     let session = fixture.create("credential-boundary");
     let root = scope(&fixture.data, "owner", &session);
     let cancellation = Arc::new(AtomicBool::new(false));
-    fixture
-        .service
-        .active
-        .lock()
-        .unwrap()
-        .insert(root.clone(), cancellation.clone());
+    fixture.service.active.lock().unwrap().insert(
+        root.clone(),
+        ActivePilot {
+            turn: "credential-turn".into(),
+            cancellation: cancellation.clone(),
+        },
+    );
     let guard = fixture
         .service
         .credential_submission_guard(&root)
@@ -150,6 +151,508 @@ async fn credential_submission_and_stop_share_one_control_boundary() {
             .credential_submission_guard(&root)
             .await
             .is_err()
+    );
+}
+
+#[tokio::test]
+async fn plugin_mount_changes_bind_one_request_to_the_registered_running_turn() {
+    let fixture = Fixture::new();
+    let session = fixture.create("mount-continuation");
+    fixture
+        .sessions
+        .set_plugin_mount(
+            "owner",
+            &session.id,
+            "demo",
+            false,
+            "operator",
+            "initial policy",
+        )
+        .unwrap();
+    let (source, _) = fixture
+        .sessions
+        .create_turn("owner", &session.id, "source", Some("original task"))
+        .unwrap();
+    fixture.register(&session, &source);
+    let mounts = crate::plugin_mounts::SessionMounts::open(&fixture.data).unwrap();
+    crate::node_host::freeze_session_switches(&fixture.data, &session.id, &source.id, &mounts)
+        .unwrap();
+
+    let guard = fixture.service.plugin_mount_guard().await;
+    for on in [true, false, true] {
+        let updated = fixture
+            .sessions
+            .set_plugin_mount("owner", &session.id, "demo", on, "operator", "web switch")
+            .unwrap();
+        let (effect, continuation) = guard
+            .effect(&fixture.sessions, "owner", &updated, &fixture.data, true)
+            .unwrap();
+        assert_eq!(
+            effect,
+            json!({"status":"after_current_turn","source_turn":source.id})
+        );
+        assert_eq!(continuation["status"], "scheduled");
+        assert_eq!(
+            continuation["request_id"],
+            format!("continuation:{}", source.id)
+        );
+    }
+    assert_eq!(
+        fixture
+            .sessions
+            .events("owner", &session.id, 0)
+            .unwrap()
+            .iter()
+            .filter(|event| event.kind == "pilot.continuation.requested")
+            .count(),
+        1
+    );
+    let unchanged = guard
+        .effect(&fixture.sessions, "owner", &session, &fixture.data, false)
+        .unwrap();
+    assert_eq!(unchanged.0["status"], "unchanged");
+    assert_eq!(unchanged.1["status"], "none");
+    let frozen = crate::plugin_mounts::read_snapshot(
+        &crate::plugin_mounts::snapshot_path(&fixture.data, &session.id, &source.id),
+        &session.id,
+        &source.id,
+    )
+    .unwrap();
+    assert_eq!(frozen.mounts.get("demo"), Some(&false));
+
+    let service = fixture.service.clone();
+    let admission = fixture.admission(&session, "source");
+    let source_id = source.id.clone();
+    let settled = tokio::spawn(async move {
+        service
+            .settle(admission, source_id, TurnStatus::Completed, None)
+            .await
+    });
+    tokio::task::yield_now().await;
+    assert!(
+        !settled.is_finished(),
+        "terminal settlement slipped between switch and request"
+    );
+    assert_eq!(
+        fixture
+            .sessions
+            .get_turn("owner", &session.id, &source.id)
+            .unwrap()
+            .status,
+        TurnStatus::Running
+    );
+    drop(guard);
+    assert_eq!(
+        settled.await.unwrap().unwrap().status,
+        TurnStatus::Completed
+    );
+    let (next, _) = fixture
+        .sessions
+        .create_turn(
+            "owner",
+            &session.id,
+            &format!("continuation:{}", source.id),
+            Some("continue original task"),
+        )
+        .unwrap();
+    let fresh =
+        crate::node_host::freeze_session_switches(&fixture.data, &session.id, &next.id, &mounts)
+            .unwrap();
+    assert_eq!(fresh.switches.get("demo"), Some(&true));
+}
+
+#[tokio::test]
+async fn idle_terminal_cancelled_and_mismatched_sources_only_save_mount_policy() {
+    for terminal in [
+        None,
+        Some(TurnStatus::Completed),
+        Some(TurnStatus::Failed),
+        Some(TurnStatus::Interrupted),
+        Some(TurnStatus::Stopped),
+    ] {
+        let fixture = Fixture::new();
+        let session = fixture.create("mount-idle");
+        if let Some(status) = terminal {
+            let (source, _) = fixture
+                .sessions
+                .create_turn("owner", &session.id, "source", Some("prior task"))
+                .unwrap();
+            fixture.register(&session, &source);
+            fixture
+                .sessions
+                .finish_turn("owner", &session.id, &source.id, status, None)
+                .unwrap();
+        }
+        let guard = fixture.service.plugin_mount_guard().await;
+        let updated = fixture
+            .sessions
+            .set_plugin_mount("owner", &session.id, "demo", true, "operator", "web switch")
+            .unwrap();
+        let (effect, continuation) = guard
+            .effect(&fixture.sessions, "owner", &updated, &fixture.data, true)
+            .unwrap();
+        assert_eq!(effect["status"], "next_turn");
+        assert_eq!(continuation["status"], "none");
+        assert!(
+            continuation_request(&fixture.sessions, "owner", &session.id, "source")
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            fixture
+                .sessions
+                .events("owner", &session.id, 0)
+                .unwrap()
+                .iter()
+                .all(|event| event.kind != "pilot.continuation.requested")
+        );
+    }
+
+    for cancelled in [false, true] {
+        let fixture = Fixture::new();
+        let session = fixture.create("mount-invalid-source");
+        let (source, _) = fixture
+            .sessions
+            .create_turn("owner", &session.id, "source", Some("original task"))
+            .unwrap();
+        let cancellation = fixture.register(&session, &source);
+        if cancelled {
+            cancellation.store(true, Ordering::Release);
+        } else {
+            fixture
+                .service
+                .active
+                .lock()
+                .unwrap()
+                .get_mut(&scope(&fixture.data, "owner", &session))
+                .unwrap()
+                .turn = "unrelated-turn".into();
+        }
+        let guard = fixture.service.plugin_mount_guard().await;
+        assert_eq!(
+            guard
+                .effect(&fixture.sessions, "owner", &session, &fixture.data, true)
+                .unwrap()
+                .0["status"],
+            "next_turn"
+        );
+        assert!(
+            continuation_request(&fixture.sessions, "owner", &session.id, &source.id)
+                .unwrap()
+                .is_none()
+        );
+    }
+}
+
+#[tokio::test]
+async fn stop_wins_over_success_computed_before_terminal_settlement() {
+    let fixture = Fixture::new();
+    let session = fixture.create("stop-before-settlement");
+    let (source, _) = fixture
+        .sessions
+        .create_turn("owner", &session.id, "source", Some("original task"))
+        .unwrap();
+    fixture.register(&session, &source);
+    let guard = fixture.service.plugin_mount_guard().await;
+    guard
+        .effect(&fixture.sessions, "owner", &session, &fixture.data, true)
+        .unwrap();
+    drop(guard);
+    let computed_result = TurnStatus::Completed;
+    assert!(
+        fixture
+            .service
+            .stop(&scope(&fixture.data, "owner", &session))
+            .await
+    );
+    let saved = fixture
+        .service
+        .settle(
+            fixture.admission(&session, "source"),
+            source.id.clone(),
+            computed_result,
+            None,
+        )
+        .await
+        .unwrap();
+    assert_eq!(saved.status, TurnStatus::Stopped);
+    assert_eq!(
+        continuation_status(&fixture.sessions, "owner", &session.id, &source.id).unwrap()["status"],
+        "cancelled"
+    );
+    assert!(matches!(
+        fixture
+            .service
+            .admit(fixture.admission(&session, &format!("continuation:{}", source.id),))
+            .await,
+        Err(AdmissionError::Session(SessionError::Conflict(_)))
+    ));
+}
+
+#[tokio::test]
+async fn failed_interrupted_and_archived_sources_cannot_auto_continue() {
+    for terminal in [
+        TurnStatus::Failed,
+        TurnStatus::Interrupted,
+        TurnStatus::Completed,
+    ] {
+        let fixture = Fixture::new();
+        let session = fixture.create("ineligible-continuation");
+        let (source, _) = fixture
+            .sessions
+            .create_turn("owner", &session.id, "source", Some("original task"))
+            .unwrap();
+        fixture.register(&session, &source);
+        let guard = fixture.service.plugin_mount_guard().await;
+        guard
+            .effect(&fixture.sessions, "owner", &session, &fixture.data, true)
+            .unwrap();
+        drop(guard);
+        fixture
+            .service
+            .settle(
+                fixture.admission(&session, "source"),
+                source.id.clone(),
+                terminal,
+                None,
+            )
+            .await
+            .unwrap();
+        if terminal == TurnStatus::Completed {
+            fixture
+                .sessions
+                .set_status("owner", &session.id, SessionStatus::Archived, "")
+                .unwrap();
+        }
+        assert_eq!(
+            continuation_status(&fixture.sessions, "owner", &session.id, &source.id).unwrap()["status"],
+            if terminal == TurnStatus::Completed {
+                "cancelled"
+            } else {
+                "pending"
+            }
+        );
+        assert!(matches!(
+            fixture
+                .service
+                .admit(fixture.admission(&session, &format!("continuation:{}", source.id),))
+                .await,
+            Err(AdmissionError::Session(SessionError::Conflict(_)))
+        ));
+        assert_eq!(
+            fixture
+                .sessions
+                .list_turns("owner", &session.id)
+                .unwrap()
+                .len(),
+            1
+        );
+    }
+}
+
+#[tokio::test]
+async fn stop_after_completed_settlement_cancels_pending_admission_idempotently() {
+    let fixture = Fixture::new();
+    let session = fixture.create("stop-completed-continuation");
+    let (source, _) = fixture
+        .sessions
+        .create_turn("owner", &session.id, "source", Some("original task"))
+        .unwrap();
+    fixture.register(&session, &source);
+    let guard = fixture.service.plugin_mount_guard().await;
+    guard
+        .effect(&fixture.sessions, "owner", &session, &fixture.data, true)
+        .unwrap();
+    drop(guard);
+    let saved = fixture
+        .service
+        .settle(
+            fixture.admission(&session, "source"),
+            source.id.clone(),
+            TurnStatus::Completed,
+            None,
+        )
+        .await
+        .unwrap();
+    assert_eq!(saved.status, TurnStatus::Completed);
+
+    // Production has finished settlement and has not acquired admission's
+    // gate yet. The stop request must close that exact boundary durably.
+    let stop = || {
+        fixture.service.stop_session(
+            fixture.sessions.clone(),
+            fixture.data.clone(),
+            "owner".into(),
+            session.clone(),
+        )
+    };
+    assert!(stop().await.unwrap());
+    assert!(!stop().await.unwrap());
+    let request = format!("continuation:{}", source.id);
+    assert!(matches!(
+        fixture
+            .service
+            .admit(fixture.admission(&session, &request))
+            .await,
+        Err(AdmissionError::Session(SessionError::Conflict(_)))
+    ));
+    assert_eq!(
+        fixture
+            .sessions
+            .list_turns("owner", &session.id)
+            .unwrap()
+            .len(),
+        1
+    );
+    assert_eq!(
+        fixture
+            .sessions
+            .get_turn("owner", &session.id, &source.id)
+            .unwrap()
+            .status,
+        TurnStatus::Completed,
+        "stop must preserve the settled source history"
+    );
+    assert_eq!(
+        continuation_status(&fixture.sessions, "owner", &session.id, &source.id).unwrap()["status"],
+        "cancelled"
+    );
+    assert_eq!(
+        fixture
+            .sessions
+            .events("owner", &session.id, 0)
+            .unwrap()
+            .iter()
+            .filter(|event| event.kind == "pilot.continuation.cancelled")
+            .count(),
+        1
+    );
+    assert!(matches!(
+        fixture
+            .service
+            .ready_to_continue(
+                fixture.admission(&session, &request),
+                &source.id,
+                "late authorization",
+            )
+            .await,
+        Err(AdmissionError::Session(SessionError::Conflict(_)))
+    ));
+    let restarted = PilotService::default();
+    assert!(matches!(
+        restarted.admit(fixture.admission(&session, &request)).await,
+        Err(AdmissionError::Session(SessionError::Conflict(_)))
+    ));
+}
+
+#[tokio::test]
+async fn stop_completed_source_without_request_prevents_late_authorization_after_restart() {
+    let fixture = Fixture::new();
+    let session = fixture.create("stop-before-late-oauth");
+    let (source, _) = fixture
+        .sessions
+        .create_turn("owner", &session.id, "source", Some("original task"))
+        .unwrap();
+    fixture
+        .sessions
+        .finish_turn(
+            "owner",
+            &session.id,
+            &source.id,
+            TurnStatus::Completed,
+            None,
+        )
+        .unwrap();
+    assert!(
+        continuation_request(&fixture.sessions, "owner", &session.id, &source.id)
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        fixture
+            .service
+            .stop_session(
+                fixture.sessions.clone(),
+                fixture.data.clone(),
+                "owner".into(),
+                session.clone(),
+            )
+            .await
+            .unwrap()
+    );
+    assert!(
+        !fixture
+            .service
+            .stop_session(
+                fixture.sessions.clone(),
+                fixture.data.clone(),
+                "owner".into(),
+                session.clone(),
+            )
+            .await
+            .unwrap()
+    );
+    let restarted = PilotService::default();
+    assert!(matches!(
+        restarted
+            .ready_to_continue(
+                fixture.admission(&session, "late-callback"),
+                &source.id,
+                "late authorization",
+            )
+            .await,
+        Err(AdmissionError::Session(SessionError::Conflict(_)))
+    ));
+    assert_eq!(
+        fixture
+            .sessions
+            .list_turns("owner", &session.id)
+            .unwrap()
+            .len(),
+        1
+    );
+    assert_eq!(
+        fixture
+            .sessions
+            .get_turn("owner", &session.id, &source.id)
+            .unwrap()
+            .status,
+        TurnStatus::Completed
+    );
+    assert_eq!(
+        continuation_status(&fixture.sessions, "owner", &session.id, &source.id).unwrap()["status"],
+        "cancelled"
+    );
+    assert!(
+        fixture
+            .sessions
+            .events("owner", &session.id, 0)
+            .unwrap()
+            .iter()
+            .all(|event| event.kind != "pilot.continuation.requested")
+    );
+}
+
+#[tokio::test]
+async fn automatic_continuation_preserves_scope_and_replaces_a_superseded_business_prompt() {
+    let fixture = Fixture::new();
+    let session = fixture.create("configuration-not-business");
+    let admission = fixture.admission(&session, "old-user-request");
+    let original_scope = admission.root.clone();
+    let original_prompt = admission.prompt.clone();
+    let continuation = admission.for_continuation("continuation:source".into());
+    assert_eq!(continuation.request_id, "continuation:source");
+    assert_eq!(continuation.root, original_scope);
+    assert_eq!(continuation.session.created_at, session.created_at);
+    assert_eq!(continuation.tools.owner, "owner");
+    assert_eq!(continuation.tools.session, session.id);
+    assert_ne!(continuation.prompt, original_prompt);
+    assert!(
+        fixture
+            .sessions
+            .list_turns("owner", &session.id)
+            .unwrap()
+            .is_empty()
     );
 }
 
@@ -255,6 +758,18 @@ impl Fixture {
                 },
             )
             .unwrap()
+    }
+
+    fn register(&self, session: &Session, turn: &Turn) -> Arc<AtomicBool> {
+        let cancellation = Arc::new(AtomicBool::new(false));
+        self.service.active.lock().unwrap().insert(
+            scope(&self.data, "owner", session),
+            ActivePilot {
+                turn: turn.id.clone(),
+                cancellation: cancellation.clone(),
+            },
+        );
+        cancellation
     }
 
     fn mount_slow_plugin(&self, session: &Session, endpoint: &str) {
@@ -363,8 +878,8 @@ impl Fixture {
 impl Drop for Fixture {
     fn drop(&mut self) {
         if let Ok(active) = self.service.active.lock() {
-            for cancellation in active.values() {
-                cancellation.store(true, Ordering::Release);
+            for active in active.values() {
+                active.cancellation.store(true, Ordering::Release);
             }
         }
     }

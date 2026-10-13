@@ -143,6 +143,13 @@ pub(super) fn validate_link(
     if session.created_at.to_rfc3339() != link.created_at
         || session.status == SessionStatus::Archived
         || turn.status == TurnStatus::Stopped
+        || crate::pilot_host::continuation_cancelled(
+            &sessions,
+            &link.owner,
+            &link.session,
+            &link.turn,
+        )
+        .map_err(|_| "OAuth source continuation unavailable")?
     {
         return Err("OAuth source Session was stopped, deleted, or recreated".into());
     }

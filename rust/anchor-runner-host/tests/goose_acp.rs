@@ -124,13 +124,14 @@ fn native_goose_direct_model_transport_requires_observed_tool_receipt() {
 #[test]
 #[ignore = "requires pinned Goose binary"]
 fn native_goose_disclosed_tools_round_trip_keeps_the_completion_contract() {
-    // With on-demand disclosure the model sees Anchor's own tools plus the two
+    // With on-demand disclosure the model sees Anchor's own tools plus the five
     // disclosure tools, and a call made through them still reaches the bridge, so
     // the receipt-bound completion contract is unchanged.
     let provider = Provider::new(
         "goose-native-disclosure",
         vec![
             Step::tool("anchor_tools", json!({"query": "run"})),
+            Step::tool("anchor_tool_detail", json!({"name":"anchor_run"})).after("anchor_run"),
             Step::tool(
                 "anchor_tools_call",
                 json!({
@@ -171,19 +172,37 @@ fn native_goose_disclosed_tools_round_trip_keeps_the_completion_contract() {
         surface,
         [
             "anchor__anchor_edit",
+            "anchor__anchor_plugin_read",
+            "anchor__anchor_plugins",
             "anchor__anchor_read",
             "anchor__anchor_run",
+            "anchor__anchor_tool_detail",
             "anchor__anchor_tools",
             "anchor__anchor_tools_call",
             "anchor__final_result"
         ],
-        "disclosure keeps Anchor's own tools and the two disclosure tools, nothing else"
+        "disclosure keeps Anchor's own tools and bounded discovery/schema tools"
     );
     let saved = host.record(&run);
     assert_artifact(&host, &saved, "verify", "verified.txt", b"disclosed");
     let history = host.native_conversation(&run, "worker", 1);
     assert_native_tool_response(&history, "anchor__anchor_tools", "anchor_run");
     assert_native_tool_response(&history, "anchor__anchor_tools_call", "exit_code");
+    let (_, evidence, _) = host.native_record(&run, "worker", 1);
+    assert!(
+        evidence["tool_calls"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|call| call["tool"] == "anchor_run" && call["arguments"]["command"].is_array())
+    );
+    assert!(
+        !evidence["tool_calls"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|call| call["tool"] == "anchor_tools_call")
+    );
     host.evidence(
         &provider,
         &run,
@@ -313,7 +332,7 @@ fn native_goose_unknown_external_effect_reopens_same_session_and_checks_before_c
         complete("verify"),
         Step::tool("anchor_run", json!({"command":["sh","-c",format!(
             "curl --silent --show-error --fail --max-time 5 --noproxy '*' '{}/effects' > evidence.txt; cat evidence.txt", provider.url
-        )]})).after("after observing business results"),
+        )]})).after("final_result.observed_receipt must match"),
         complete("verify").after("effect_count"),
         Step::text("checked external state and completed without repeating POST"),
     ]);
@@ -407,7 +426,7 @@ fn native_goose_rejects_guessed_receipt_then_accepts_observed_result() {
                 "final_result",
                 json!({"summary":"must reject","route":"verify","observed_receipt":"guessed-before-tool-result"}),
             ),
-            complete("verify").after("after observing business results"),
+            complete("verify").after("final_result.observed_receipt must match"),
             Step::text("finished after correcting receipt"),
         ],
     );

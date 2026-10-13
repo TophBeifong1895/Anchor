@@ -1,0 +1,10 @@
+{
+  "url": "https://www.anthropic.com/engineering/advanced-tool-use",
+  "accessed_at": "2026-10-12T23:50:05.335807+00:00",
+  "status": 200,
+  "effective_url": "https://www.anthropic.com/engineering/advanced-tool-use",
+  "content_type": "text/html; charset=utf-8",
+  "sha256": "c0adc1c547bdc468ace544b7256caabdbf8dd6c280e510490f3e8e9ed89bac59",
+  "bytes": 238524,
+  "text_file": "/home/mansteinl/Anchor/research_plugin_disclosure_20261013/sources/claude_advanced_tools.txt"
+}

@@ -1,0 +1,10 @@
+{
+  "url": "https://code.claude.com/docs/en/mcp.md",
+  "accessed_at": "2026-10-12T23:50:05.335294+00:00",
+  "status": 200,
+  "effective_url": "https://code.claude.com/docs/en/mcp.md",
+  "content_type": "text/markdown; charset=utf-8",
+  "sha256": "3b8b9783292cd6516679e2a0ab32e6de707526a0297196bc94b959d40b9b5c6f",
+  "bytes": 119468,
+  "text_file": "/home/mansteinl/Anchor/research_plugin_disclosure_20261013/sources/claude_mcp.txt"
+}

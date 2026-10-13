@@ -1,0 +1,131 @@
+{
+  "passed": true,
+  "root": "/home/mansteinl/Anchor/.local/plugin-disclosure-acceptance-20261013/real-da18c817d0174c14",
+  "real_provider": true,
+  "fixture_plugin_preseeded": true,
+  "plugin_installation_tested": false,
+  "deployment_updated": false,
+  "business_api_calls": 0,
+  "plugin_count": 1000,
+  "plugin_tool_count": 1001,
+  "pilot_mounted_plugin_count": 10,
+  "node_mounted_plugin_count": 1000,
+  "expected": {
+    "marker": "validation-da18c817d0174c14",
+    "token": "98a071d3d871c3cb6b510e61497d9ebb",
+    "total": 42,
+    "format": "json"
+  },
+  "host_binary_sha256": "acb782f176db656dc50c0490fe62163cdee1a02423b398132a010bbbd8eb34fd",
+  "goose_binary_sha256": "71e76c412597b2ecd96ed20d0706e7666f31c018216e7cb5d65c5ca5c44824a7",
+  "shared_interpreter": "/home/mansteinl/.local/share/uv/python/cpython-3.12.13-linux-x86_64-gnu/bin/python3.12",
+  "base_url": "http://127.0.0.1:58581",
+  "model": "deepseek-flash",
+  "host_pid": 571378,
+  "pilot_actual_calls": [
+    {
+      "tool": "produce_report",
+      "arguments": {
+        "payload": {
+          "marker": "validation-da18c817d0174c14",
+          "token": "98a071d3d871c3cb6b510e61497d9ebb"
+        },
+        "entries": [
+          {
+            "amount": 17
+          },
+          {
+            "amount": 25
+          }
+        ],
+        "format": "json"
+      },
+      "result": {
+        "marker": "validation-da18c817d0174c14",
+        "token": "98a071d3d871c3cb6b510e61497d9ebb",
+        "total": 42,
+        "format": "json"
+      }
+    }
+  ],
+  "node_actual_calls": [
+    {
+      "tool": "produce_report",
+      "arguments": {
+        "payload": {
+          "marker": "validation-da18c817d0174c14",
+          "token": "98a071d3d871c3cb6b510e61497d9ebb"
+        },
+        "entries": [
+          {
+            "amount": 17
+          },
+          {
+            "amount": 25
+          }
+        ],
+        "format": "json"
+      },
+      "result": {
+        "marker": "validation-da18c817d0174c14",
+        "token": "98a071d3d871c3cb6b510e61497d9ebb",
+        "total": 42,
+        "format": "json"
+      }
+    }
+  ],
+  "pilot_status": "completed",
+  "node_status": "completed",
+  "node_tool_count": 14,
+  "node_actual_target": [
+    {
+      "provider_request": 6,
+      "tool": "zz-validation-service_produce_report",
+      "arguments": {
+        "payload": {
+          "marker": "validation-da18c817d0174c14",
+          "token": "98a071d3d871c3cb6b510e61497d9ebb"
+        },
+        "entries": [
+          {
+            "amount": 17
+          },
+          {
+            "amount": 25
+          }
+        ],
+        "format": "json"
+      },
+      "result": {
+        "ok": true,
+        "output": {
+          "ok": true,
+          "output": [
+            {
+              "type": "json",
+              "value": {
+                "marker": "validation-da18c817d0174c14",
+                "token": "98a071d3d871c3cb6b510e61497d9ebb",
+                "total": 42,
+                "format": "json"
+              }
+            },
+            {
+              "type": "text",
+              "text": "{\"marker\": \"validation-da18c817d0174c14\", \"token\": \"98a071d3d871c3cb6b510e61497d9ebb\", \"total\": 42, \"format\": \"json\"}"
+            }
+          ],
+          "anchor_receipt": "f81416da18bf6d6d2316ce2107ff5ffb99657dcad7678804ae5f45c045062e4a"
+        }
+      }
+    }
+  ],
+  "artifact_checked": true,
+  "original_env_unchanged": true,
+  "shared_interpreter_unchanged": true,
+  "session_delete_http": 200,
+  "host_exit": 0,
+  "listener_closed": true,
+  "host_log_contains_panic": false,
+  "remaining_child_pids": []
+}

@@ -62,65 +62,62 @@ impl PilotTools {
             .await
             .map_err(|error| rejected(format!("Plugin candidate test failed: {error:?}")))
     }
-    pub(super) async fn plugin_list(&self, _arguments: &Value) -> Result<Value, ToolError> {
+    pub(super) async fn plugin_list(&self, arguments: &Value) -> Result<Value, ToolError> {
+        let _guard = anchor_library::Library::new(&self.library_root)
+            .catalog_read_guard()
+            .map_err(|_| rejected("Plugin Library is changing; retry this read"))?;
         let catalog = FilePluginCatalog::new(&self.library_root);
-        let mut plugins = Vec::new();
-        match std::fs::read_dir(self.library_root.join("plugins")) {
-            Ok(entries) => {
-                for entry in entries {
-                    let entry = entry.map_err(|_| failed())?;
-                    let id = entry.file_name().to_string_lossy().into_owned();
-                    if id.starts_with('.') {
-                        continue;
+        let mut disclosure = crate::plugin_disclosure::PluginDisclosureCatalog::default();
+        if _guard.is_some() {
+            match std::fs::read_dir(self.library_root.join("plugins")) {
+                Ok(entries) => {
+                    for entry in entries {
+                        let entry = entry.map_err(|_| failed())?;
+                        let id = entry.file_name().to_string_lossy().into_owned();
+                        if id.starts_with('.') {
+                            continue;
+                        }
+                        match catalog.definition(&id) {
+                            Ok(definition) => disclosure.insert(definition),
+                            Err(_) => disclosure.unavailable(&id),
+                        }
                     }
-                    plugins.push(match catalog.definition(&id) {
-                        Ok(definition) => public_plugin(&definition),
-                        Err(_) => json!({"id":id,"available":false}),
-                    });
                 }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(_) => return Err(failed()),
             }
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(_) => return Err(failed()),
         }
-        plugins.sort_by(|left, right| left["id"].as_str().cmp(&right["id"].as_str()));
-        Ok(json!({"plugins":plugins}))
+        let mut result = disclosure.list(arguments)?;
+        result["scope"] = json!("installed_library");
+        result["note"] = json!(
+            "Installed Library management only; listing does not mount or authorize execution. Read a selected installed Plugin using plugin_read. Execution capabilities are listed separately by anchor_plugins."
+        );
+        Ok(result)
     }
 
     pub(super) async fn plugin_read(&self, arguments: &Value) -> Result<Value, ToolError> {
+        let _guard = anchor_library::Library::new(&self.library_root)
+            .catalog_read_guard()
+            .map_err(|_| rejected("Plugin Library is changing; retry this read"))?;
+        if _guard.is_none() {
+            return Err(rejected("Plugin Library unavailable"));
+        }
         let plugin = parameter(arguments, "plugin")?;
         let definition = FilePluginCatalog::new(&self.library_root)
             .definition(&plugin)
             .map_err(|_| failed())?;
-        let mut result = public_plugin(&definition);
-        let mut instructions = Vec::new();
-        if definition.directory.join("instructions.md").is_file() {
-            instructions.push(text_resource(&definition.directory, "instructions.md")?);
-        } else {
-            for skill in &definition.skills {
-                instructions.push(text_resource(&definition.directory, skill)?);
-            }
-        }
-        result["dependencies"] =
-            serde_json::to_value(&definition.dependencies).map_err(|_| failed())?;
-        let review = anchor_library::Library::new(&self.library_root)
-            .review_directory(&plugin, &definition.directory)
-            .map_err(|_| failed())?;
-        result["resources"] = json!(review.resources);
-        result["servers"] = json!(review.servers);
+        let mut disclosure = crate::plugin_disclosure::PluginDisclosureCatalog::default();
+        disclosure.insert(definition);
+        let mut selection = arguments.clone();
         if let Some(resource) = arguments.get("resource").and_then(Value::as_str) {
-            if !review.resources.iter().any(|entry| entry == resource) {
-                return Err(rejected("resource is not part of this Plugin"));
+            if arguments.get("section").is_some() || arguments.get("path").is_some() {
+                return Err(rejected("use either resource or section/path"));
             }
-            if resource != "plugin.json" && resource != ".mcp.json" {
-                result["resource"] =
-                    json!({"path":resource,"text":text_resource(&definition.directory, resource)?});
-            } else {
-                return Err(rejected(
-                    "manifest resource reads are not exposed; use dependency and resource facts",
-                ));
-            }
+            selection["section"] = json!("resource");
+            selection["path"] = json!(resource);
         }
-        result["instructions"] = Value::String(instructions.join("\n\n"));
+        let mut result = disclosure.read(&selection)?;
+        result["scope"] = json!("installed_library");
         Ok(result)
     }
 
