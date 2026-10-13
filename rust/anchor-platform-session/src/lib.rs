@@ -24,6 +24,8 @@ pub struct CreateSession {
     pub graph: String,
     pub reply_node: String,
     pub channel: BTreeMap<String, String>,
+    /// Initial mount policy supplied by the Host, saved with Session creation.
+    pub plugin_mounts: BTreeMap<String, bool>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -219,9 +221,9 @@ pub struct Session {
     pub operations: BTreeMap<String, Value>,
     /// Whether this Session mounts one installed Plugin, by id.
     ///
-    /// The authorization is the human's click in the Session view plus the audit
-    /// event it writes -- not the Graph's declaration. The Graph's declaration is
-    /// only the *default* (`required` cannot be switched off at all). Stored in
+    /// The Host supplies initial policy at creation; later user choices write
+    /// their own audit events. Graph declarations only supply defaults
+    /// (`required` cannot be switched off at all). Stored in
     /// `sessions.data`: an older row has no key and reads as "no override".
     #[serde(default)]
     pub plugin_mounts: BTreeMap<String, bool>,

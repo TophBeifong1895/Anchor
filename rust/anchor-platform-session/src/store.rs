@@ -34,6 +34,9 @@ impl SessionStore {
         } else {
             validate_title(&request.title)?
         };
+        for plugin in request.plugin_mounts.keys() {
+            validate_identity(plugin, "plugin")?;
+        }
         let mut connection = self.lock()?;
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let exists: bool = transaction.query_row(
@@ -60,7 +63,7 @@ impl SessionStore {
             questions: Vec::new(),
             operation: None,
             operations: BTreeMap::new(),
-            plugin_mounts: BTreeMap::new(),
+            plugin_mounts: request.plugin_mounts,
             network_allowed: true,
             created_at: now,
             updated_at: now,

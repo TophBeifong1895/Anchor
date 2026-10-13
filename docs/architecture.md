@@ -115,7 +115,7 @@ Pilot Session 保存业务关联、Turn、问题/回答和 UI 事件；Goose 保
 
 Pilot 的 Graph validate/create/update 工具共用作者格式说明与最小合法示例，空 catalog 不依赖已有 Graph 猜测格式。校验直接复用 Kernel 的 `GraphSnapshot::from_authoring`；输入格式错误返回具体位置和原因，Host 能力及私有 Plugin catalog 的错误保持安全泛化。说明和示例不定义另一套编译规则，也不授予执行权限。
 
-Pilot 的任务联网由 `network` Plugin 提供启用入口。插件的 `network:true` 或远程 MCP 声明产生联网需求，Host 从当前挂载集合推导依赖启用；Session 的 `network_allowed` 是用户授权上限，依赖不能覆盖明确禁止。授权与挂载共同冻结到 Turn 快照，stdio 沙箱、HTTP MCP 与 OAuth 使用同一结果；离线工具保留无网运行。Provider 的控制通道连接独立。具体状态、旧快照兼容、独立 Graph 边界和候选包契约见 [任务联网能力](network-plugin.md)。
+Pilot 的任务联网由 `network` Plugin 提供启用入口。Host 在网页与 Responses API 新建 Pilot 会话时默认保存主动挂载 `network`；已有会话不补默认，关闭设置在续聊和重启后保留，渠道和业务 Graph 会话不增加此默认。插件的 `network:true` 或远程 MCP 声明产生联网需求，Host 从当前挂载集合推导依赖启用；Session 的 `network_allowed` 是用户授权上限，依赖不能覆盖明确禁止，带 Session 的 AgentNode 仍受节点网络权限上限约束。授权与挂载共同冻结到 Turn 快照，stdio 沙箱、HTTP MCP 与 OAuth 使用同一结果；离线工具保留无网运行。Provider 的控制通道连接独立。具体状态、旧快照兼容、独立 Graph 边界和候选包契约见 [任务联网能力](network-plugin.md)。
 
 Pilot 的普通 Turn 与 Responses 共用 `PilotService::admit` 和 Host-owned `PilotTurnContext`，装配现有 `NodeTools` 的 `anchor_read`、`anchor_edit`、`anchor_run`。任务目录为 `<workspace_root>/pilot/<hash(owner,session)>`，候选读取、编辑、准备、测试、审查和安装都使用该 Session 根；`PilotTools.workspace_root` 仍是 Graph/Run 清理所需的部署根。跨 Turn 复用工作现场，每 Turn 冻结网络和取消权限，不把 Goose 内部目录暴露为项目工作区。
 

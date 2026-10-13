@@ -2,8 +2,8 @@
 //!
 //! A Plugin gets mounted for one of **two** reasons, and they are different facts:
 //!
-//! * a **human's click** in the Session view, recorded by an audit event
-//!   (`session.plugin_mount.changed`, written by the Session store); or
+//! * a **Host-provided initial policy** saved at Session creation, or a human's
+//!   later click in the Session view recorded by `session.plugin_mount.changed`;
 //! * the **Graph's declaration** — `required: true`, or an optional one whose
 //!   `default`/absence of a switch turns it on. Nothing was clicked and no event
 //!   exists for these; they are the deployment's own default, which is why

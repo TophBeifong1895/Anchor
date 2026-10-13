@@ -266,6 +266,10 @@ pub(super) async fn create_response(
                     CreateSession {
                         id: Some(id),
                         title: "Responses".into(),
+                        plugin_mounts: std::collections::BTreeMap::from([(
+                            crate::plugin_network::NETWORK_PLUGIN.to_owned(),
+                            true,
+                        )]),
                         ..Default::default()
                     },
                 )

@@ -21,6 +21,7 @@ mod oauth;
 mod persistent_assistants;
 mod pilot_credentials;
 mod pilot_graph;
+mod pilot_network_defaults;
 mod pilot_oauth;
 mod platform_contract;
 mod plugin_library;

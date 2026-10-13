@@ -175,8 +175,11 @@ pub(super) async fn create_session(
                     "provide optional id and title only",
                 )
             })?;
-        let request: CreateSession = serde_json::from_value(Value::Object(fields.clone()))
+        let mut request: CreateSession = serde_json::from_value(Value::Object(fields.clone()))
             .map_err(|_| error(StatusCode::BAD_REQUEST, "invalid Session creation request"))?;
+        request
+            .plugin_mounts
+            .insert(crate::plugin_network::NETWORK_PLUGIN.to_owned(), true);
         if let Some(identifier) = &request.id
             && has_retained_session_run(&state, identifier)?
         {

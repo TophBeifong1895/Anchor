@@ -91,6 +91,8 @@ fn public_types_and_default_dto_match_legacy_initial_shape() {
         assert_eq!(dto[field], json!({}));
     }
     assert_eq!(dto["status"], "active");
+    assert!(session.plugin_mounts.is_empty());
+    assert!(session.network_allowed);
     assert_eq!(serde_json::from_value::<Session>(dto).unwrap(), session);
     for (status, serialized) in [
         (SessionStatus::Active, "active"),
@@ -105,6 +107,62 @@ fn public_types_and_default_dto_match_legacy_initial_shape() {
         );
     }
     assert!(serde_json::from_value::<SessionStatus>(json!("running")).is_err());
+}
+
+#[test]
+fn initial_plugin_mounts_are_saved_with_creation_and_remain_host_supplied_policy() {
+    let (_directory, path, store) = fixture();
+    let mounts = BTreeMap::from([("demo".into(), true), ("offline".into(), false)]);
+    let created = store
+        .create(
+            "local",
+            CreateSession {
+                plugin_mounts: mounts.clone(),
+                ..request("initial-policy")
+            },
+        )
+        .unwrap();
+    assert_eq!(created.plugin_mounts, mounts);
+    assert_eq!(store.events("local", &created.id, 0).unwrap().len(), 1);
+    assert_eq!(
+        store.events("local", &created.id, 0).unwrap()[0].kind,
+        "session.created"
+    );
+    drop(store);
+    let reopened = SessionStore::open(&path).unwrap();
+    assert_eq!(reopened.get("local", &created.id).unwrap(), created);
+    for (id, graph, channel) in [
+        ("plain", "", BTreeMap::new()),
+        ("business", "business", BTreeMap::new()),
+        (
+            "channel",
+            "",
+            BTreeMap::from([("source".into(), "wecom".into())]),
+        ),
+    ] {
+        let session = reopened
+            .create(
+                "local",
+                CreateSession {
+                    graph: graph.into(),
+                    channel,
+                    ..request(id)
+                },
+            )
+            .unwrap();
+        assert!(session.plugin_mounts.is_empty());
+    }
+    assert_invalid(reopened.create(
+        "local",
+        CreateSession {
+            plugin_mounts: BTreeMap::from([("../escape".into(), true)]),
+            ..request("invalid-initial-policy")
+        },
+    ));
+    assert_eq!(
+        reopened.get("local", "invalid-initial-policy"),
+        Err(SessionError::Missing)
+    );
 }
 
 #[test]
@@ -208,6 +266,7 @@ fn create_get_list_rename_status_and_events_form_one_lifecycle() {
                 graph: "assistant".into(),
                 reply_node: "reply".into(),
                 channel: BTreeMap::from([("userid".into(), "trusted-user".into())]),
+                ..Default::default()
             },
         )
         .unwrap();

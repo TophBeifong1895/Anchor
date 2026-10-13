@@ -268,7 +268,10 @@ async fn concurrent_session_mount_and_uninstall_publish_one_consistent_result() 
                     .is_some_and(|error| error.contains("尚未安装")),
                 "{response}"
             );
-            assert!(session.plugin_mounts.is_empty());
+            assert_eq!(
+                session.plugin_mounts,
+                BTreeMap::from([("network".into(), true)])
+            );
             assert_eq!(changed, 0);
             assert!(!root.path().join("plugins/demo").exists());
         }
@@ -386,6 +389,17 @@ async fn networking_is_enabled_by_dependencies_without_writing_a_provider_switch
     );
     let app = router(state.clone());
     create_session(app.clone(), "sess").await;
+    // Isolate dependency-derived enablement from the new Pilot's active default.
+    session_store(&state)
+        .set_plugin_mount(
+            "local",
+            "sess",
+            "network",
+            false,
+            "operator",
+            "test dependency enablement",
+        )
+        .unwrap();
     let (status, result) = call(
         app.clone(),
         "POST",
@@ -407,12 +421,13 @@ async fn networking_is_enabled_by_dependencies_without_writing_a_provider_switch
     assert_eq!(provider(&result)["explicitOn"], false);
     assert_eq!(provider(&result)["enabledBy"], json!(["research"]));
     assert_eq!(provider(&result)["networkAllowed"], true);
-    assert!(
-        !session_store(&state)
+    assert_eq!(
+        session_store(&state)
             .get("local", "sess")
             .unwrap()
             .plugin_mounts
-            .contains_key("network")
+            .get("network"),
+        Some(&false)
     );
     let (_, result) = call(
         app.clone(),
@@ -563,12 +578,12 @@ async fn switching_an_uninstalled_plugin_is_refused_and_changes_no_bytes() {
 
     assert_eq!(library_bytes(&state), before);
     assert!(!root.path().join("plugins/ghost").exists());
-    assert!(
+    assert_eq!(
         session_store(&state)
             .get("local", "sess")
             .unwrap()
-            .plugin_mounts
-            .is_empty()
+            .plugin_mounts,
+        BTreeMap::from([("network".into(), true)])
     );
 }
 
@@ -607,7 +622,7 @@ async fn a_successful_switch_writes_the_session_mount_and_its_audit_event() {
     let store = session_store(&state);
     assert_eq!(
         store.get("local", "sess").unwrap().plugin_mounts,
-        BTreeMap::from([("demo".to_owned(), true)])
+        BTreeMap::from([("network".to_owned(), true), ("demo".to_owned(), true)])
     );
     let events = store.events("local", "sess", 0).unwrap();
     assert!(
@@ -682,7 +697,7 @@ async fn a_successful_switch_writes_the_session_mount_and_its_audit_event() {
     // Neither refusal moved the switch or appended an event.
     assert_eq!(
         store.get("local", "sess").unwrap().plugin_mounts,
-        BTreeMap::from([("demo".to_owned(), true)])
+        BTreeMap::from([("network".to_owned(), true), ("demo".to_owned(), true)])
     );
     assert_eq!(
         store.events("local", "sess", 0).unwrap().len(),
@@ -700,7 +715,7 @@ async fn a_successful_switch_writes_the_session_mount_and_its_audit_event() {
     assert_eq!(off["plugin"]["on"], false);
     assert_eq!(
         store.get("local", "sess").unwrap().plugin_mounts,
-        BTreeMap::from([("demo".to_owned(), false)])
+        BTreeMap::from([("network".to_owned(), true), ("demo".to_owned(), false)])
     );
 
     // An archived Session is a closed border.

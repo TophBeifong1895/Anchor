@@ -62,6 +62,8 @@ async fn channel_admission_is_authenticated_idempotent_and_owner_scoped() {
     .await;
     assert_eq!(status, StatusCode::ACCEPTED, "{first}");
     assert_eq!(first["session"]["graph"], "fixture");
+    assert_eq!(first["session"]["plugin_mounts"], json!({}));
+    assert_eq!(first["session"]["network_allowed"], true);
     assert_eq!(first["relation"]["run_id"], Value::Null);
     let session = first["session"]["id"].as_str().unwrap().to_owned();
     let turn = first["turn"]["id"].as_str().unwrap().to_owned();
@@ -76,6 +78,7 @@ async fn channel_admission_is_authenticated_idempotent_and_owner_scoped() {
     .await;
     assert_eq!(status, StatusCode::ACCEPTED, "{duplicate}");
     assert_eq!(duplicate["session"]["id"], session);
+    assert_eq!(duplicate["session"]["plugin_mounts"], json!({}));
     assert_eq!(duplicate["turn"]["id"], turn);
 
     let (status, other) = authorized_call(

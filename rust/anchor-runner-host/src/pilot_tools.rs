@@ -113,8 +113,8 @@ fn pilot_plugin_sandbox_with_environment(
 /// The Turn's Session switches are frozen here, once, against the new Turn id: a
 /// click made *during* this Turn cannot change what this Turn may use, and the
 /// next Turn sees it. `required`/`default` do not apply — the Pilot's own Turn
-/// has no Graph snapshot of its own, so a Plugin reaches it only because a human
-/// mounted it in the Session.
+/// has no Graph snapshot of its own, so a Plugin reaches it through the Session's
+/// initial Host policy or a later human mount.
 ///
 /// A Plugin that is not installed, whose view is not usable, or whose MCP server
 /// cannot bind is absent and named in `reasons`. Nothing here installs a Plugin,
