@@ -1,4 +1,7 @@
 import { expect, test } from '@playwright/test';
+import { blockUnmockedApi } from './fixtures/api-fallback';
+
+test.beforeEach(async ({ page }) => { await blockUnmockedApi(page); });
 
 for (const hasQuestions of [false, true]) {
   test(`Pilot ${hasQuestions ? 'keeps saved questions and answers in the conversation' : 'has no empty question history'} across conversation redraws`, async ({ page }) => {
@@ -37,6 +40,7 @@ for (const hasQuestions of [false, true]) {
     await page.route('**/sessions/*/plugins', route => route.fulfill({ json: { plugins: [] } }));
     await page.route('**/sessions/*/credential-requests', route => route.fulfill({ json: { requests: [] } }));
     await page.route('**/sessions/*/turns', route => route.fulfill({ json: { turns } }));
+    await page.route('**/sessions/*/turns/turn-0', route => route.fulfill({ json: { turn: turns[0], continuation: { status: 'none' } } }));
     await page.route('**/sessions/*/turns/*/questions', route => {
       const turn = new URL(route.request().url()).pathname.split('/').at(-2)!;
       questionRequests.add(turn);
@@ -94,6 +98,7 @@ test('Pilot keeps one live question form on reload and puts the saved answer in 
   await page.route('**/sessions/*/plugins', route => route.fulfill({ json: { plugins: [] } }));
   await page.route('**/sessions/*/credential-requests', route => route.fulfill({ json: { requests: [] } }));
   await page.route('**/sessions/*/turns', route => route.fulfill({ json: { turns: [{ ...turn, status: answered ? finalStatus : 'running' }] } }));
+  await page.route('**/sessions/*/turns/turn-live', route => route.fulfill({ json: { turn: { ...turn, status: answered ? finalStatus : 'running' }, continuation: { status: 'none' } } }));
   await page.route('**/sessions/*/messages', route => route.fulfill({ json: { messages: [
     { role: 'user', text: turn.prompt },
     { role: 'assistant', text: pending.message, question: answered ? saved : pending },

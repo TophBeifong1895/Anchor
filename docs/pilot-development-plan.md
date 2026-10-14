@@ -2,7 +2,7 @@
 
 本页只维护当前结论、未关闭事项和证据入口，直接更新对应条目。当前行为见 [架构](architecture.md)，产品方向见 [产品架构](product-architecture.md)，操作见 [Pilot 开发指南](pilot-development.md)。
 
-以下结论按既有分片验收归纳，证据基线截至 2026-10-13、提交 `c7a4635`，不代表该提交的全产品联合验收。旧 A 编号、命令、失败经过和二进制身份完整保存在 [历史台账](archive/development-2026-10-13/pilot-development-plan.md#验收矩阵与证据台账)，无需在开工时通读。
+早期结论的证据基线截至 2026-10-13、提交 `c7a4635`；后续切片以各行证据为准，不代表全产品联合验收。旧 A 编号、命令、失败经过和二进制身份完整保存在 [历史台账](archive/development-2026-10-13/pilot-development-plan.md#验收矩阵与证据台账)，无需在开工时通读。
 
 ## 当前验收结论
 
@@ -15,6 +15,7 @@
 | Plugin 发现、读取与工具调用 | Pilot/Node 完整披露、授权调用和有界目录通过；持续摘要、挂载接续及压缩分别有真实/确定性证据 | [A222](../research_plugin_disclosure_20261013/acceptance/README.md)、[A224](../research_plugin_disclosure_20261013/capability-context/README.md) |
 | Pilot 默认联网 | 网页与 Responses 新会话默认挂载、用户禁止和旧会话边界通过；隔离 Host 实际安装 requests 并在断网后 import | 历史台账 A204/A206/A228；A228 原始产物在原机器 `.local/pilot-network-default-20261013/` |
 | Web 问答与 API key | 问答按对话顺序回看，错误 key/无效字符拒绝及正确 key 加载通过真实浏览器验收 | 历史台账 A221/A227 |
+| Pilot 文件与图片 | 上传、拖拽/粘贴、回复图片与下载、幂等/恢复引用、刷新/重启及删除清理通过；真实 `deepseek-flash` 完成 CSV 汇总、读图并发布文字与原图，MCP 工具图片由实际 Goose 确定性 fixture 验证；8077 已更新，既有会话与资源核对一致 | [浏览器验收](../apps/web/e2e/pilot-attachments-native.spec.ts)、[UI 回归](../apps/web/e2e/pilot-attachments.spec.ts)、[Goose fixture](../rust/anchor-runner-host/tests/goose_pilot_attachments.rs)；本机证据 `.local/pilot-attachments-20261014/acceptance.json` |
 | Pilot 初始界面 | 以任务、工作流和工具扩展呈现入口，示例只填草稿、首次发送和失败重试保持幂等，插件默认收起；140 项 Web 单测与 19 项相关浏览器用例通过，8077 桌面/手机只读实测及上线前后会话、挂载与资源事实一致 | [初始页回归](../apps/web/e2e/pilot-start.spec.ts)、[会话回归](../apps/web/e2e/pilot.spec.ts)；本机证据 `.local/pilot-start-ui-20261014/deployment-check.json`，本轮未新增真实模型验收 |
 | 插件界面 | Pilot/Graph/Run 共用卡片、搜索和详情，草稿/即时挂载/历史记录分别展示；140 项 Web 单测及 21 项相关浏览器用例通过，当前 8077 已更新并经只读实测确认既有会话与设置未变 | [跨面板回归](../apps/web/e2e/plugin-experience.spec.ts)、[原生挂载回归](../apps/web/e2e/session-plugins-native.spec.ts)；本机部署证据 `.local/plugin-ui-20261014/deployment-check.json`，外部 OAuth 未新增真实验收 |
 | 渠道与常驻助手 | 企微私聊收发有历史部署证据；常驻同 Run、稳定 workspace、打断/恢复有确定性与隔离真实模型证据 | 历史台账 A143–A157；[渠道验收边界](wecom-assistant.md#docmost-和验收) |
@@ -32,9 +33,10 @@
 - **Python 兼容**：A225 真实场景为零第三方依赖 editable 与合成正式 wheel；第三方构建后端/native 包、规模压力、额外长路径及跨 ABI/不同解释器构建未专项验收。仅解包 store 不能供私有 pip 恢复包，是已确定的兼容边界，见 [开发指南](pilot-development.md#旧项目兼容)。
 - **披露规模与压缩**：1,000 Plugin/工具目录不代表 1,000 MCP server 启动；A224 Pilot 与最终 Node 绑定不同 Host。真实 Pilot 压缩后未重新调用工具，重读由确定性场景验证。懒连接与 Code Mode 未实施。
 - **运行时组合**：更完整的 `call.session` 业务组合、多次/超大上下文、摘要 Provider 错误及提问/媒体组合未全部验收；Pilot 未直接暴露手动 `/compact`。固定 Goose ACP 未提供完成工具参数的逐 token 增量，不以普通文本冒充结构化完成，也不为此新增模型代理。
+- **Pilot 附件**：真实模型覆盖 CSV 与 PNG 标签识别/文件交付；任意文档解析、其他视觉模型和 ACP 直接 assistant image 输出未专项验收。MCP 工具图片的确定性 fixture 不代表外部图片服务业务已验收。
 - **外部业务**：真实外部 OAuth、最终常驻路径的企微收发/媒体/vision、Docmost 和公共学术服务仍需按具体场景验收；已有私聊或本地 mock 结果不扩大为全部通过。
 - **发行与生产切换**：目标发行版 systemd/动态库、旧数据迁移与回滚、标准业务 Graph 完整兼容仍未统一验收。开发部署 A226/A228 不等于生产切换，操作边界见 [切换指南](rust-production-cutover.md)。
-- **未决定的范围**：Plugin 多条目升级事务/自动回滚、跨设备准备区和旧目录处置见 [依赖标准的开放问题](plugin-dependencies.md#开放问题)；长期 Copilot、研究应用、可见计划、附件/分支/导出等需求见 [产品架构](product-architecture.md)。它们不自动变成当前开发任务。
+- **未决定的范围**：Plugin 多条目升级事务/自动回滚、跨设备准备区和旧目录处置见 [依赖标准的开放问题](plugin-dependencies.md#开放问题)；长期 Copilot、研究应用、可见计划、跨会话附件整理/分支/导出等需求见 [产品架构](product-architecture.md)。它们不自动变成当前开发任务。
 
 ## 查证方式
 

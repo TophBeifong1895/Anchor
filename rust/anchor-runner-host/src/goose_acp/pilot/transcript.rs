@@ -13,17 +13,46 @@ pub(super) fn messages(
         .map_err(|_| "Pilot history unavailable")?;
     let mut messages = Vec::new();
     for turn in turns.into_iter().rev() {
-        if let Some(prompt) = turn.prompt {
-            messages.push(json!({"role":"user","text":prompt}));
-        }
+        let start = messages.len();
         let events = sessions
             .turn_events(owner, session, &turn.id, 0)
             .map_err(|_| "Pilot history unavailable")?;
+        let inherited = events.iter().any(|event| {
+            event.data["type"] == "input-attachments"
+                && event.data["manifest"]["source_turn"].is_string()
+        });
+        let inputs = if inherited {
+            Vec::new()
+        } else {
+            crate::pilot_attachments::input_references(sessions, owner, session, &turn.id)?
+        };
+        let mut has_attachments = !inputs.is_empty();
+        if !turn.request_id.starts_with("continuation:")
+            && (turn.prompt.is_some() || has_attachments)
+        {
+            let mut user = json!({"role":"user","text":turn.prompt.unwrap_or_default()});
+            if has_attachments {
+                user["attachments"] = json!(inputs);
+            }
+            messages.push(user);
+        }
         let mut text = String::new();
         let mut positions = BTreeMap::<String, usize>::new();
         let mut answered = BTreeSet::new();
+        let mut attachments = BTreeSet::new();
         for event in events {
             let kind = event.data["type"].as_str().unwrap_or_default();
+            if kind == "attachment" {
+                if let Ok(attachment) = serde_json::from_value::<crate::pilot_attachments::Attachment>(
+                    event.data["attachment"].clone(),
+                ) && attachments.insert(attachment.id.clone())
+                {
+                    flush_text(&mut messages, &mut text);
+                    has_attachments = true;
+                    messages.push(json!({"role":"assistant","text":"","attachments":[attachment]}));
+                }
+                continue;
+            }
             if kind == "text-delta" {
                 if let Some(delta) = event.data["delta"].as_str() {
                     text.push_str(delta);
@@ -63,6 +92,11 @@ pub(super) fn messages(
             }
         }
         flush_text(&mut messages, &mut text);
+        if has_attachments {
+            for message in &mut messages[start..] {
+                message["turn"] = json!(turn.id);
+            }
+        }
     }
     Ok(messages)
 }

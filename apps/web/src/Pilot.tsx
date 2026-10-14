@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
-import { Anchor, ArrowDown, Check, Copy, LoaderCircle, MessageSquare, Plus, Search, Send, Square } from 'lucide-react';
+import { Anchor, ArrowDown, Check, Copy, LoaderCircle, MessageSquare, Paperclip, Plus, Search, Send, Square } from 'lucide-react';
 import { api, ApiError } from './api';
 import { Markdown } from './markdown';
 import { PilotTurn, type Turn } from './PilotTurn';
@@ -7,12 +7,15 @@ import { SessionActions } from './SessionActions';
 import { SessionPlugins, type PluginContinuation } from './SessionPlugins';
 import { PilotCredentials } from './PilotCredentials';
 import type { Question } from './pilotQuestions';
+import { PilotAttachments } from './PilotAttachments';
+import { addDraftAttachments, attachmentProblem, encodeAttachment, type Attachment, type DraftAttachment } from './pilotAttachments';
+import { clearAttachmentDraft, readAttachmentDraft, saveAttachmentDraft } from './pilotAttachmentDrafts';
 
 type Session = {
   id: string; title?: string; status: string; waiting_reason: string; updated_at: string;
   approval: { action: string; key: string; status: string; target?: string; proposal?: unknown } | null;
 };
-type Message = { role: 'user' | 'assistant'; text: string; question?: Question; question_answer?: Question };
+type Message = { role: 'user' | 'assistant'; text: string; turn?: string; attachments?: Attachment[]; localAttachments?: DraftAttachment[]; question?: Question; question_answer?: Question };
 const labels: Record<string, string> = { active: '可以继续对话', interrupted: '回复已中断', waiting_user: '等待你的答复', archived: '已归档' };
 const starters = [
   { label: '工作流', text: '帮我把每周整理资料和生成周报做成工作流。' },
@@ -28,11 +31,17 @@ function cached(key: string, value?: string) {
     return localStorage.getItem(`pilot:${key}`) ?? '';
   } catch { return ''; }
 }
-type Submission = { request_id: string; message?: string; resume?: boolean };
+type Submission = { request_id: string; message?: string; resume?: boolean; attachment_ids?: string[] };
+const draftScope = (id: string) => id ? `session:${id}` : 'new';
+const sameFiles = (ids: string[] = [], files: DraftAttachment[]) => ids.length === files.length && files.every((file, index) => file.id === ids[index]);
 function pendingSubmission(id: string): Submission | null {
   try {
     const value = JSON.parse(cached(`submission:${id}`) || 'null');
-    if (value && typeof value.request_id === 'string' && (typeof value.message === 'string' || value.resume === true)) return value;
+    if (value && typeof value.request_id === 'string' && (typeof value.message === 'string' || value.resume === true)
+      && (value.attachment_ids === undefined || (Array.isArray(value.attachment_ids) && value.attachment_ids.every((id: unknown) => typeof id === 'string')))) {
+      return { request_id: value.request_id, ...(value.resume === true ? { resume: true } : { message: value.message }),
+        ...(value.attachment_ids ? { attachment_ids: value.attachment_ids } : {}) };
+    }
   } catch { /* Invalid browser cache must not prevent loading the server's history. */ }
   return null;
 }
@@ -49,6 +58,14 @@ export function Pilot({ session = '', onSession }: { session?: string; onSession
   const [syncedTurn, setSyncedTurn] = useState('');
   const [continuation, setContinuation] = useState<PluginContinuation | null>(null);
   const [draft, setDraft] = useState(() => cached('draft:new'));
+  const [files, setFiles] = useState<DraftAttachment[]>([]);
+  const filesRef = useRef<DraftAttachment[]>([]);
+  const [filesReady, setFilesReady] = useState(false);
+  const [fileLoadVersion, setFileLoadVersion] = useState(0);
+  const [attachmentError, setAttachmentError] = useState('');
+  const [dragging, setDragging] = useState(false);
+  const fileInput = useRef<HTMLInputElement>(null);
+  const draftRevision = useRef(0);
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(true);
   const [problem, setProblem] = useState('');
@@ -74,12 +91,35 @@ export function Pilot({ session = '', onSession }: { session?: string; onSession
       ? { ...item, status: pending ? 'waiting_user' : 'active' } : item));
   }, []);
 
+  const setCurrentFiles = (value: DraftAttachment[]) => { filesRef.current = value; setFiles(value); };
+  const storeFiles = async (id: string, value: DraftAttachment[]) => {
+    const revision = ++draftRevision.current;
+    setCurrentFiles(value); setAttachmentError('');
+    try { await saveAttachmentDraft(draftScope(id), value); }
+    catch (error) {
+      if (mounted.current && selectedRef.current === id && revision === draftRevision.current) setAttachmentError((error as Error).message);
+    }
+  };
+  useEffect(() => {
+    const id = selected;
+    const revision = ++draftRevision.current;
+    setFilesReady(false); setCurrentFiles([]); setAttachmentError('');
+    void readAttachmentDraft(draftScope(id)).then(value => {
+      if (mounted.current && selectedRef.current === id && revision === draftRevision.current) setCurrentFiles(value);
+    }).catch(error => {
+      if (mounted.current && selectedRef.current === id && revision === draftRevision.current) setAttachmentError((error as Error).message);
+    }).finally(() => {
+      if (mounted.current && selectedRef.current === id && revision === draftRevision.current) setFilesReady(true);
+    });
+  }, [selected, fileLoadVersion]);
   const editDraft = (value: string) => {
     cached(`draft:${selectedRef.current || 'new'}`, value);
     setDraft(value);
   };
   const activate = (id: string) => {
     navigation.current += 1;
+    draftRevision.current += 1; setCurrentFiles([]); setFilesReady(false); setAttachmentError(''); setDragging(false);
+    setFileLoadVersion(value => value + 1);
     historyRequest.current?.abort();
     selectedRef.current = id;
     setSelected(id); cached('selected', id); onSessionRef.current?.(id);
@@ -124,22 +164,38 @@ export function Pilot({ session = '', onSession }: { session?: string; onSession
           savedHistory = currentHistory.messages;
         }
       }
-      // The running Turn owns its live form; its saved questions join the transcript after it ends.
+      // The running Turn owns live output and question forms; history joins after it ends.
       const savedMessages = savedHistory.filter(message => latest?.status !== 'running'
-        || (message.question?.turn !== latest.id && message.question_answer?.turn !== latest.id));
+        || (message.question?.turn !== latest.id && message.question_answer?.turn !== latest.id
+          && !(message.role === 'assistant' && message.turn === latest.id)));
       const pending = pendingSubmission(id);
       if (pending && execution.turns.some(item => item.request_id === pending.request_id)) {
+        if (pending.attachment_ids?.length) {
+          await clearAttachmentDraft(draftScope(id), pending.attachment_ids);
+          if (!mounted.current || controller.signal.aborted || selectedRef.current !== id) return;
+          if (sameFiles(pending.attachment_ids, filesRef.current)) setCurrentFiles([]);
+        }
         cached(`submission:${id}`, '');
-        if (pending.message && cached(`draft:${id}`) === pending.message) {
+        if (pending.message !== undefined && cached(`draft:${id}`) === pending.message) {
           cached(`draft:${id}`, ''); setDraft('');
         }
       }
       // The turn is accepted before its prompt is saved. Keep that accepted message visible
       // when reopening a session during this window, without duplicating an already saved prompt.
       const last = savedMessages.at(-1);
-      const prompt = latest?.status === 'running' ? latest.prompt : pendingSubmission(id)?.message;
-      setMessages(prompt && !(last?.role === 'user' && last.text === prompt)
-        ? [...savedMessages, { role: 'user', text: prompt }] : savedMessages);
+      const running = latest?.status === 'running';
+      const prompt = running ? latest.prompt ?? '' : pendingSubmission(id)?.message;
+      const attachments = running ? latest.attachments : undefined;
+      const hasSameAttachments = (message: Message) => !!attachments?.length && attachments.every(attachment =>
+        message.attachments?.some(saved => saved.id === attachment.id && saved.url === attachment.url));
+      // Resumed Turns can reference the original input. Those references belong to the saved
+      // upload message, while a newly admitted attachment-only Turn has its own original URLs.
+      const alreadySaved = running && savedMessages.some(message => message.role === 'user'
+        && (message.turn === latest.id || (!latest.prompt && hasSameAttachments(message))));
+      const sameLastInput = last?.role === 'user' && last.text === prompt
+        && (attachments?.length ? hasSameAttachments(last) : !last.attachments?.length);
+      setMessages(prompt !== undefined && (prompt || attachments?.length) && !alreadySaved && !sameLastInput
+        ? [...savedMessages, { role: 'user', text: prompt, ...(running ? { turn: latest.id, attachments } : {}) }] : savedMessages);
       if (version === listVersion.current) setSessions(result.sessions);
       setCurrentTurn(latest ?? null);
       setContinuation(previous => {
@@ -212,20 +268,34 @@ export function Pilot({ session = '', onSession }: { session?: string; onSession
       : { status: 'scheduled', request_id: `continuation:${source}` };
     setContinuation({ session: id, source, state });
   }, []);
-  const submit = async (id: string, message: string | null) => {
+  const submit = async (id: string, message: string | null, attachments: DraftAttachment[] = []) => {
     const key = `submission:${id}`;
     const pending = pendingSubmission(id);
-    if (pending && (pending.message ?? null) !== message) throw new Error('上次提交的结果尚未确认，请先使用原内容重试。');
-    const body = pending ?? { request_id: crypto.randomUUID(), ...(message === null ? { resume: true } : { message }) };
-    cached(key, JSON.stringify(body));
+    if (pending && ((pending.message ?? null) !== message || !sameFiles(pending.attachment_ids, attachments))) throw new Error('上次提交的结果尚未确认，请先使用原文字和附件重试。');
+    if (message === null && attachments.length) throw new Error('继续回复时不能附加文件。');
+    const submission = pending ?? { request_id: crypto.randomUUID(), ...(message === null ? { resume: true } : { message }),
+      ...(attachments.length ? { attachment_ids: attachments.map(file => file.id) } : {}) };
+    if (attachments.length) await saveAttachmentDraft(draftScope(id), attachments);
+    const encoded = attachments.length ? await Promise.all(attachments.map(encodeAttachment)) : [];
+    cached(key, JSON.stringify(submission));
+    const body = { request_id: submission.request_id, ...(message === null ? { resume: true } : message ? { message } : {}),
+      ...(encoded.length ? { attachments: encoded } : {}) };
     let result: { turn: Turn };
     try { result = await api<{ turn: Turn }>(`/sessions/${encodeURIComponent(id)}/turns`, 'POST', body); }
     catch (error) {
       // Explicit rejection means no turn was accepted. Only ambiguous delivery keeps its retry ID.
-      if (error instanceof ApiError && [400, 401, 403, 404, 409, 422].includes(error.status)) cached(key, '');
+      if (error instanceof ApiError && [400, 401, 403, 404, 409, 413, 422].includes(error.status)) cached(key, '');
       throw error;
     }
+    if (attachments.length) {
+      await clearAttachmentDraft(draftScope(id), attachments.map(file => file.id));
+      if (mounted.current && selectedRef.current === id && sameFiles(attachments.map(file => file.id), filesRef.current)) setCurrentFiles([]);
+    }
     cached(key, '');
+    if (message !== null && cached(`draft:${id}`).trim() === message) {
+      cached(`draft:${id}`, '');
+      if (mounted.current && selectedRef.current === id) setDraft('');
+    }
     if (mounted.current && selectedRef.current === id) {
       historyRequest.current?.abort();
       setLoading(false); setCurrentTurn(result.turn); setWaitingQuestion(false); setStopping(false); setSyncedTurn('');
@@ -306,43 +376,62 @@ export function Pilot({ session = '', onSession }: { session?: string; onSession
     } catch (error) { if (mounted.current && version === navigation.current) setProblem((error as Error).message); }
     finally { if (mounted.current && version === navigation.current) setLoading(false); }
   };
+  const addFiles = (incoming: File[]) => {
+    if (busy || loading || stopping || !canSend || !filesReady) return;
+    const next = addDraftAttachments(filesRef.current, incoming);
+    const error = attachmentProblem(next);
+    if (error) { setAttachmentError(error); return; }
+    void storeFiles(selectedRef.current, next);
+  };
   const send = async (event: FormEvent) => {
     event.preventDefault();
-    if (!draft.trim() || busy || loading || !canSend) return;
-    historyRequest.current?.abort();
+    if ((!draft.trim() && !files.length) || busy || loading || stopping || !canSend || !filesReady) return;
     const prompt = draft.trim();
+    const attachments = [...filesRef.current];
     let id = selected;
+    const sourceId = id;
+    const pending = pendingSubmission(id);
+    if (pending && ((pending.message ?? null) !== prompt || !sameFiles(pending.attachment_ids, attachments))) {
+      setProblem('上次提交的结果尚未确认，请先使用原文字和附件重试。'); return;
+    }
+    const error = attachmentProblem(attachments);
+    if (error) { setAttachmentError(error); return; }
+    historyRequest.current?.abort();
     const version = navigation.current;
-    setBusy(true); setProblem(''); follow.current = true;
+    setBusy(true); setProblem(''); setAttachmentError(''); follow.current = true;
     setCurrentTurn(null); setWaitingQuestion(false); setSyncedTurn('');
-    editDraft('');
-    setMessages(previous => pendingSubmission(id)?.message === prompt && previous.at(-1)?.role === 'user'
-      && previous.at(-1)?.text === prompt ? previous : [...previous, { role: 'user', text: prompt }]);
+    const optimistic: Message = { role: 'user', text: prompt, localAttachments: attachments };
+    setMessages(previous => pending?.message === prompt && previous.at(-1)?.role === 'user'
+      && previous.at(-1)?.text === prompt ? previous : [...previous, optimistic]);
     submissions.current.add(id);
     try {
+      if (attachments.length) await saveAttachmentDraft(draftScope(id), attachments);
       if (!id) {
         const { session } = await api<{ session: Session }>('/sessions', 'POST');
         submissions.current.delete('');
         id = session.id; submissions.current.add(id);
+        cached(`draft:${id}`, prompt);
         if (mounted.current) setSessions(previous => [session, ...previous]);
         if (mounted.current && version === navigation.current) {
           activate(id);
-          setMessages([{ role: 'user', text: prompt }]);
+          setMessages([optimistic]);
         }
-        cached('draft:new', '');
+        if (attachments.length) await saveAttachmentDraft(draftScope(id), attachments, draftScope(sourceId));
+        if (cached('draft:new').trim() === prompt) cached('draft:new', '');
       }
       if (mounted.current) setSessions(previous => previous.map(item => item.id === id && !item.title
-        ? { ...item, title: prompt.slice(0, 60) } : item));
-      await submit(id, prompt);
+        ? { ...item, title: (prompt || attachments[0]?.name || '新对话').slice(0, 60) } : item));
+      await submit(id, prompt, attachments);
+      if (sourceId !== id) {
+        if (cached(`draft:${sourceId || 'new'}`).trim() === prompt) cached(`draft:${sourceId || 'new'}`, '');
+        await clearAttachmentDraft(draftScope(sourceId), attachments.map(file => file.id)).catch(() => undefined);
+      }
     } catch (error) {
-      // Keep unsent text available if transport failed before the backend saved it.
       cached(`draft:${id || 'new'}`, prompt);
       if (mounted.current && selectedRef.current === id) {
-        setProblem((error as Error).message); setDraft(prompt); setBusy(false);
+        setProblem((error as Error).message); setDraft(prompt); setCurrentFiles(attachments); setFilesReady(true); setBusy(false);
       }
-    } finally {
-      submissions.current.delete(id);
-    }
+    } finally { submissions.current.delete(id); }
   };
   const resume = async () => {
     if (!selected || busy) return;
@@ -410,6 +499,7 @@ export function Pilot({ session = '', onSession }: { session?: string; onSession
     await api(`/sessions/${encodeURIComponent(id)}`, 'DELETE');
     listVersion.current += 1;
     cached(`draft:${id}`, ''); cached(`submission:${id}`, '');
+    await clearAttachmentDraft(draftScope(id)).catch(() => undefined);
     if (!mounted.current) return;
     setSessions(items => items.filter(item => item.id !== id));
     if (selectedRef.current === id) { activate(''); setLoading(false); }
@@ -453,9 +543,10 @@ export function Pilot({ session = '', onSession }: { session?: string; onSession
         {messages.map((message, index) => <article key={`${selected}-${index}`} className={`pilot-message ${message.role}`}>
           <div className="pilot-message-author">{message.role === 'assistant' && <Anchor size={16} />}<span>{message.role === 'user' ? '你' : 'Anchor Pilot'}</span></div>
           {message.role === 'assistant' ? <Markdown text={message.text} prefix={`pilot-${selected}-${index}`} /> : <p className="pilot-user-text">{message.text}</p>}
+          <PilotAttachments attachments={message.attachments} drafts={message.localAttachments} session={selected} turn={message.turn} />
           {message.question?.status === 'interrupted' && <p className="pilot-muted">这条提问已中断。</p>}
-          <button className="pilot-copy" aria-label={`复制${message.role === 'assistant' ? '回复' : '消息'} ${index + 1}`}
-            onClick={() => void copy(message, index)}>{copied === index ? <Check size={14} /> : <Copy size={14} />}{copied === index ? '已复制' : '复制'}</button>
+          {message.text && <button className="pilot-copy" aria-label={`复制${message.role === 'assistant' ? '回复' : '消息'} ${index + 1}`}
+            onClick={() => void copy(message, index)}>{copied === index ? <Check size={14} /> : <Copy size={14} />}{copied === index ? '已复制' : '复制'}</button>}
         </article>)}
         {turn && <PilotTurn key={`${turn.session}-${turn.id}`} turn={turn} saved={syncedTurn === turn.id} stopping={stopping} onComplete={complete} onQuestions={questionState} />}
         {selected && <PilotCredentials key={`credentials-${selected}`} session={selected} onConfigured={() => {
@@ -478,16 +569,30 @@ export function Pilot({ session = '', onSession }: { session?: string; onSession
       {problem && <p className="pilot-error" role="alert">{problem}
         {selected && <button onClick={() => void select(selected)}>重新加载对话</button>}
       </p>}
-      <form className="pilot-composer" onSubmit={send}>
+      <form className={`pilot-composer${dragging ? ' is-dragging' : ''}`} onSubmit={send}
+        onDragOver={event => { if (event.dataTransfer.types.includes('Files')) { event.preventDefault(); if (!busy && !loading && canSend && filesReady) setDragging(true); } }}
+        onDragLeave={event => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDragging(false); }}
+        onDrop={event => { if (event.dataTransfer.types.includes('Files')) { event.preventDefault(); setDragging(false); addFiles(Array.from(event.dataTransfer.files)); } }}>
+        <PilotAttachments drafts={files} disabled={busy || loading || stopping || !canSend || !filesReady} onRemove={id => void storeFiles(selectedRef.current, filesRef.current.filter(file => file.id !== id))} />
+        {attachmentError && <p className="pilot-composer-error" role="alert">{attachmentError}</p>}
+        <input ref={fileInput} className="pilot-file-input" type="file" multiple aria-label="选择附件" onChange={event => {
+          addFiles(Array.from(event.currentTarget.files ?? [])); event.currentTarget.value = '';
+        }} disabled={busy || loading || stopping || !canSend || !filesReady} />
         <textarea ref={input} rows={2} aria-label="发送给 Anchor Pilot" placeholder={pendingApproval ? '请先确认或拒绝上方操作' : waitingQuestion || current?.status === 'waiting_user' ? '请先回答、拒绝或取消上方问题' : '告诉 Pilot 你想完成什么…'} value={draft}
-          maxLength={100000} onChange={event => editDraft(event.target.value)} onKeyDown={event => {
+          onPaste={event => {
+            const images = Array.from(event.clipboardData.items).filter(item => item.kind === 'file' && item.type.startsWith('image/')).map(item => item.getAsFile()).filter((file): file is File => file !== null);
+            if (images.length) {
+              if (!event.clipboardData.getData('text/plain')) event.preventDefault();
+              addFiles(images);
+            }
+          }} maxLength={100000} onChange={event => editDraft(event.target.value)} onKeyDown={event => {
             if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing && event.keyCode !== 229) {
               event.preventDefault(); event.currentTarget.form?.requestSubmit();
             }
-          }} disabled={busy || loading || !canSend} />
-        <div className="pilot-composer-footer"><small>Enter 发送 · Shift + Enter 换行</small>
+          }} disabled={busy || loading || stopping || !canSend || !filesReady} />
+        <div className="pilot-composer-footer"><div className="pilot-composer-actions"><button className="pilot-attach" type="button" aria-label="添加附件" disabled={busy || loading || stopping || !canSend || !filesReady} onClick={() => fileInput.current?.click()}><Paperclip size={16} />附件</button><small>Enter 发送 · Shift + Enter 换行</small></div>
           {(busy || awaitingContinuation) && <button className="pilot-stop" type="button" disabled={stopping} onClick={() => void stop()}><Square size={14} fill="currentColor" />{stopping ? '正在停止…' : '停止'}</button>}
-          {!busy && <button className="primary" type="submit" disabled={!draft.trim() || stopping || loading || !canSend}><Send size={16} />发送</button>}
+          {!busy && <button className="primary" type="submit" disabled={(!draft.trim() && !files.length) || stopping || loading || !canSend || !filesReady}><Send size={16} />发送</button>}
         </div>
       </form>
       {showStart && <div className="pilot-starters" aria-label="任务示例">

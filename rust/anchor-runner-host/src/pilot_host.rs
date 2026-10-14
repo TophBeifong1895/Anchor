@@ -111,12 +111,15 @@ pub(crate) struct PilotAdmission {
     pub(crate) session: Session,
     pub(crate) request_id: String,
     pub(crate) prompt: Option<String>,
+    pub(crate) attachments: crate::attachments::PreparedAttachments,
+    pub(crate) input_source: Option<String>,
     pub(crate) root: PathBuf,
     pub(crate) tools: PilotTools,
 }
 
 impl PilotAdmission {
     fn for_continuation(mut self, request_id: String) -> Self {
+        self.input_source = request_id.strip_prefix("continuation:").map(str::to_owned);
         self.request_id = request_id;
         self.prompt = Some(CONTINUATION_PROMPT.into());
         self
@@ -333,12 +336,88 @@ impl PilotService {
                     })?,
                 )
             };
+            // Resume and capability continuation inherit only the exact trusted
+            // source Turn. A fresh user message receives only its own uploads.
+            if admission.input_source.is_none()
+                && admission.prompt.is_none()
+                && admission.attachments.0.is_empty()
+            {
+                let turns = admission
+                    .sessions
+                    .list_turns(&admission.owner, &admission.session.id)?;
+                if let Some(retained) = turns
+                    .iter()
+                    .find(|turn| turn.request_id == admission.request_id)
+                {
+                    admission.input_source = admission
+                        .sessions
+                        .turn_events(&admission.owner, &admission.session.id, &retained.id, 0)?
+                        .into_iter()
+                        .find(|event| event.data["type"] == "input-attachments")
+                        .and_then(|event| {
+                            event.data["manifest"]["source_turn"]
+                                .as_str()
+                                .map(str::to_owned)
+                        });
+                } else {
+                    admission.input_source = turns.first().map(|turn| turn.id.clone());
+                }
+            }
+            let mut trusted_source = None;
+            if let Some(source) = admission.input_source.as_deref() {
+                let source_turn =
+                    admission
+                        .sessions
+                        .get_turn(&admission.owner, &admission.session.id, source)?;
+                let (prepared, reference) = crate::pilot_attachments::source_inputs(
+                    &admission.tools.data_root,
+                    &admission.sessions,
+                    &admission.owner,
+                    &admission.session,
+                    &source_turn,
+                )
+                .map_err(SessionError::Storage)?;
+                admission.attachments = prepared;
+                trusted_source = reference;
+            }
+            if !existing {
+                crate::pilot_resources::register(
+                    &admission.tools.data_root,
+                    &admission.tools.workspace_root,
+                    &admission.owner,
+                    &admission.session,
+                )
+                .map_err(SessionError::Storage)?;
+            }
+            let identity =
+                crate::pilot_attachments::identity(&admission.attachments, trusted_source.as_ref());
+            let data = admission.tools.data_root.clone();
+            let snapshot = admission.session.clone();
+            let source = trusted_source;
+            let prepared = std::mem::take(&mut admission.attachments);
             let sessions = admission.sessions.clone();
             let owner = admission.owner.clone();
             let session = admission.session.id.clone();
             let request_id = admission.request_id.clone();
             let (turn, created) = tokio::task::spawn_blocking(move || {
-                sessions.create_turn(&owner, &session, &request_id, prompt.as_deref())
+                sessions.create_turn_with_attachments(
+                    &owner,
+                    &session,
+                    &request_id,
+                    prompt.as_deref(),
+                    &identity,
+                    |turn| {
+                        crate::pilot_attachments::freeze_inputs(
+                            &data,
+                            &owner,
+                            &snapshot,
+                            turn,
+                            source.as_ref(),
+                            &prepared,
+                        )
+                        .map_err(SessionError::Storage)
+                    },
+                )
             })
             .await
             .map_err(|_| SessionError::Storage("Pilot admission failed".into()))??;
@@ -347,21 +426,6 @@ impl PilotService {
             }
             let goose = goose
                 .ok_or_else(|| SessionError::Storage("Pilot admission identity changed".into()))?;
-            if let Err(reason) = crate::pilot_resources::register(
-                &admission.tools.data_root,
-                &admission.tools.workspace_root,
-                &admission.owner,
-                &admission.session,
-            ) {
-                admission.sessions.finish_turn(
-                    &admission.owner,
-                    &admission.session.id,
-                    &turn.id,
-                    TurnStatus::Interrupted,
-                    Some(&reason),
-                )?;
-                return Err(SessionError::Storage(reason).into());
-            }
             // Persist the mount policy before acknowledging this Turn. The MCP
             // connections below reuse this snapshot, even if a human changes the
             // Session switches while startup is waiting for a remote server.
@@ -416,8 +480,21 @@ impl PilotService {
                 owner: admission.owner.clone(),
                 session: admission.session.id.clone(),
                 turn: turn_id.clone(),
+                data_root: admission.tools.data_root.clone(),
                 prompt: admission.prompt.take().unwrap_or_else(|| {
-                    "继续这个会话。先核查中断前的事实和现场，不要重放结果未知的操作。".into()
+                    if crate::pilot_attachments::input_references(
+                        &admission.sessions,
+                        &admission.owner,
+                        &admission.session.id,
+                        &turn_id,
+                    )
+                    .is_ok_and(|refs| !refs.is_empty())
+                        && admission.input_source.is_none()
+                    {
+                        String::new()
+                    } else {
+                        "继续这个会话。先核查中断前的事实和现场，不要重放结果未知的操作。".into()
+                    }
                 }),
                 instructions: INSTRUCTIONS.into(),
                 cancellation,
@@ -430,6 +507,8 @@ impl PilotService {
                 session: admission.session.clone(),
                 request_id: String::new(),
                 prompt: None,
+                attachments: Default::default(),
+                input_source: None,
                 root: admission.root.clone(),
                 tools: admission.tools.clone(),
             };
@@ -470,6 +549,8 @@ impl PilotService {
                             session: continuation.session.clone(),
                             request_id: String::new(),
                             prompt: None,
+                            attachments: Default::default(),
+                            input_source: None,
                             root,
                             tools: continuation.tools,
                         }
@@ -752,6 +833,21 @@ async fn execute_turn(
     if request.cancellation.load(Ordering::Acquire) {
         return Ok(TurnStatus::Stopped);
     }
+    let session = tools
+        .sessions
+        .get(&request.owner, &request.session)
+        .map_err(|e| e.to_string())?;
+    let turn = tools
+        .sessions
+        .get_turn(&request.owner, &request.session, &request.turn)
+        .map_err(|e| e.to_string())?;
+    let readonly = crate::pilot_attachments::readonly_inputs(
+        &tools.data_root,
+        &tools.sessions,
+        &request.owner,
+        &session,
+        &turn,
+    )?;
     let mut context = crate::pilot_tools::PilotTurnContext::new(
         &tools.workspace_root,
         &request.owner,
@@ -780,6 +876,7 @@ async fn execute_turn(
         &request.turn,
         request.cancellation.clone(),
         runtime.as_ref(),
+        &readonly,
     )
     .await
     {
@@ -814,6 +911,7 @@ async fn execute_turn(
     let outcome = if request.cancellation.load(Ordering::Acquire) {
         Ok(TurnStatus::Stopped)
     } else {
+        context.set_readonly_inputs(readonly)?;
         context.freeze_network(network);
         if let Some(snapshot) = runtime.as_ref() {
             context.configure(snapshot, &tools.library_root, &request.root)?;

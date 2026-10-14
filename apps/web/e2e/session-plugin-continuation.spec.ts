@@ -1,11 +1,13 @@
 import { expect, test, type Page } from '@playwright/test';
 import type { Turn } from '../src/PilotTurn';
+import { blockUnmockedApi } from './fixtures/api-fallback';
 
 const stamp = '2026-10-13T08:00:00Z';
 const source: Turn = { id: 'source', session: 'pending', request_id: 'original', status: 'completed',
   error: '', created_at: stamp, prompt: '继续原任务' };
 
 async function openPending(page: Page) {
+  await blockUnmockedApi(page);
   await page.addInitScript(() => {
     localStorage.setItem('anchor:view', 'pilot');
     localStorage.setItem('pilot:selected', 'pending');

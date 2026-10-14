@@ -86,6 +86,16 @@ pub(super) async fn list_pilot_turns(
         let turns = sessions
             .list_turns(&owner, &identifier)
             .map_err(session_error)?;
+        let turns = turns
+            .iter()
+            .map(|turn| crate::pilot_attachments::project_turn(&sessions, &owner, turn))
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|_| {
+                error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "Pilot attachment references unavailable",
+                )
+            })?;
         Ok(Json(json!({"turns":turns})))
     })
     .await
@@ -105,6 +115,13 @@ pub(super) async fn get_pilot_turn(
         let continuation =
             crate::pilot_host::continuation_status(&sessions, &owner, &identifier, &turn.id)
                 .map_err(session_error)?;
+        let turn =
+            crate::pilot_attachments::project_turn(&sessions, &owner, &turn).map_err(|_| {
+                error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "Pilot attachment references unavailable",
+                )
+            })?;
         Ok(Json(json!({"turn":turn,"continuation":continuation})))
     })
     .await
@@ -152,6 +169,8 @@ pub(super) struct CreateTurnBody {
     message: Option<String>,
     #[serde(default)]
     resume: bool,
+    #[serde(default)]
+    attachments: Vec<crate::attachments::UploadedAttachment>,
 }
 
 pub(super) async fn create_pilot_turn(
@@ -167,15 +186,19 @@ pub(super) async fn create_pilot_turn(
     let body: CreateTurnBody = serde_json::from_value(body).map_err(|_| {
         error(
             StatusCode::BAD_REQUEST,
-            "provide request_id and either message or resume:true",
+            "provide request_id with message and/or attachments, or resume:true",
         )
     })?;
-    if body.message.is_some() == body.resume {
+    if (body.resume && (body.message.is_some() || !body.attachments.is_empty()))
+        || (!body.resume && body.message.is_none() && body.attachments.is_empty())
+    {
         return Err(error(
             StatusCode::BAD_REQUEST,
-            "provide exactly one of message or resume:true",
+            "provide message and/or attachments, or resume:true without attachments",
         ));
     }
+    let attachments = crate::attachments::prepare(&body.attachments)
+        .map_err(|reason| error(StatusCode::BAD_REQUEST, reason))?;
     if body.request_id.trim().is_empty()
         || body.request_id.len() > 128
         || body
@@ -202,6 +225,8 @@ pub(super) async fn create_pilot_turn(
         turn: String::new(),
         context: None,
     };
+    let projection_sessions = sessions.clone();
+    let projection_owner = owner.clone();
     let turn = state
         .pilots
         .admit(PilotAdmission {
@@ -210,6 +235,8 @@ pub(super) async fn create_pilot_turn(
             session,
             request_id: body.request_id,
             prompt: body.message,
+            attachments,
+            input_source: None,
             root,
             tools,
         })
@@ -221,6 +248,14 @@ pub(super) async fn create_pilot_turn(
                 "Pilot provider is not configured or unavailable",
             ),
         })?;
+    let turn =
+        crate::pilot_attachments::project_turn(&projection_sessions, &projection_owner, &turn)
+            .map_err(|_| {
+                error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "Pilot attachment references unavailable",
+                )
+            })?;
     Ok((StatusCode::ACCEPTED, Json(json!({"turn":turn}))))
 }
 
@@ -243,9 +278,12 @@ pub(super) async fn pilot_messages(
             .into_iter()
             .filter(|message| {
                 matches!(message["role"].as_str(), Some("user" | "assistant"))
-                    && message["text"]
-                        .as_str()
-                        .is_some_and(|text| !text.is_empty())
+                    && message["text"].as_str().is_some_and(|text| {
+                        !text.is_empty()
+                            || message["attachments"]
+                                .as_array()
+                                .is_some_and(|items| !items.is_empty())
+                    })
             })
             .collect::<Vec<_>>();
         Ok(Json(json!({"messages":messages})))
@@ -376,4 +414,65 @@ pub(super) async fn pilot_turn_events(
         }
     });
     Ok(Sse::new(stream).keep_alive(KeepAlive::new().interval(Duration::from_secs(10))))
+}
+
+#[derive(serde::Deserialize, Default)]
+pub(super) struct AttachmentQuery {
+    download: Option<u8>,
+}
+
+pub(super) async fn pilot_attachment(
+    State(state): State<ApiState>,
+    headers: HeaderMap,
+    AxumPath((identifier, turn, id)): AxumPath<(String, String, String)>,
+    Query(query): Query<AttachmentQuery>,
+) -> Result<HttpResponse, HttpResponse> {
+    blocking(move || {
+        let (sessions, owner, session) = owned_session(&state, &headers, &identifier)?;
+        pilot_session(&session)?;
+        let turn = sessions
+            .get_turn(&owner, &identifier, &turn)
+            .map_err(session_error)?;
+        let (attachment, bytes) = crate::pilot_attachments::read(
+            &state.data_root,
+            &sessions,
+            &owner,
+            &session,
+            &turn,
+            &id,
+        )
+        .map_err(|_| error(StatusCode::NOT_FOUND, "Pilot attachment is unavailable"))?;
+        let inline = query.download != Some(1)
+            && matches!(
+                attachment.media_type.as_deref(),
+                Some("image/png" | "image/jpeg" | "image/webp")
+            );
+        let filename = crate::pilot_attachments::url_component(&attachment.name);
+        let disposition = format!(
+            "{}; filename=\"attachment\"; filename*=UTF-8''{filename}",
+            if inline { "inline" } else { "attachment" }
+        );
+        let content_type = if inline {
+            attachment
+                .media_type
+                .as_deref()
+                .unwrap_or("application/octet-stream")
+        } else {
+            "application/octet-stream"
+        };
+        axum::http::Response::builder()
+            .status(StatusCode::OK)
+            .header(axum::http::header::CACHE_CONTROL, "no-store")
+            .header("x-content-type-options", "nosniff")
+            .header(axum::http::header::CONTENT_TYPE, content_type)
+            .header(axum::http::header::CONTENT_DISPOSITION, disposition)
+            .body(axum::body::Body::from(bytes))
+            .map_err(|_| {
+                error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "Pilot attachment response unavailable",
+                )
+            })
+    })
+    .await
 }

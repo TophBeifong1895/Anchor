@@ -1126,6 +1126,15 @@ fn router_with_readiness_and_web_root(
         .layer(RequestBodyLimitLayer::new(
             crate::channel_inputs::MAX_BODY_BYTES,
         ));
+    let pilot_turns = Router::new()
+        .route(
+            "/sessions/{session}/turns",
+            get(list_pilot_turns).post(create_pilot_turn),
+        )
+        .layer(DefaultBodyLimit::max(crate::attachments::MAX_BODY_BYTES))
+        .layer(RequestBodyLimitLayer::new(
+            crate::attachments::MAX_BODY_BYTES,
+        ));
     let api = Router::new()
         .route("/health", get(|| async { Json(json!({"status":"ok"})) }))
         .route(
@@ -1188,12 +1197,12 @@ fn router_with_readiness_and_web_root(
             "/sessions/{session}/messages",
             get(pilot_messages).post(session_execution_unavailable),
         )
-        .route(
-            "/sessions/{session}/turns",
-            get(list_pilot_turns).post(create_pilot_turn),
-        )
         .route("/sessions/{session}/stop", post(stop_pilot))
         .route("/sessions/{session}/turns/{turn}", get(get_pilot_turn))
+        .route(
+            "/sessions/{session}/turns/{turn}/attachments/{attachment}",
+            get(pilot_attachment),
+        )
         .route(
             "/sessions/{session}/turns/{turn}/questions",
             get(list_pilot_questions),
@@ -1263,6 +1272,7 @@ fn router_with_readiness_and_web_root(
         .route("/runs/{run}/files/{node}/{*path}", get(read_file))
         .route("/timeline", get(timeline))
         .layer(RequestBodyLimitLayer::new(2 * 1024 * 1024))
+        .merge(pilot_turns)
         .merge(conversations)
         .merge(wecom_events)
         .with_state(state.clone())

@@ -390,7 +390,7 @@ impl NodeTools {
 
     fn read_description(&self) -> String {
         format!(
-            "Read a text file inside /workspace by line. `path` is relative to /workspace; absolute paths and `..` are refused. \
+            "Read a text file by line. `path` is relative to /workspace, or an absolute path inside an explicitly authorized read-only input mount. Other absolute paths and `..` are refused. \
              Returns at most {READ_DEFAULT_LINES} lines (ceiling {READ_MAX_LINES}) or {READ_MAX_BYTES} bytes with 1-based line numbers, plus the file's `sha256`. \
              Page with `offset`/`next_offset`, and pass `sha256` as `base_sha256` to anchor_edit."
         )
@@ -407,10 +407,44 @@ impl NodeTools {
     fn read_file(&self, arguments: Value) -> Result<Vec<ToolResultContent>, ToolError> {
         let arguments: ReadArguments =
             serde_json::from_value(arguments).map_err(|error| self.invalid_arguments(error))?;
-        let candidate = self.relative_candidate(&arguments.path)?;
-        let bytes = self.workspace_files()?.read(&candidate).map_err(|error| {
-            ToolError::Failed(format!("anchor_read failed: `{}`: {error}", arguments.path))
-        })?;
+        let bytes = if Path::new(&arguments.path).is_absolute() {
+            let mount = self
+                .readonly_inputs
+                .iter()
+                .find(|mount| Path::new(&arguments.path).starts_with(&mount.destination))
+                .ok_or_else(|| {
+                    self.invalid_arguments(
+                        "absolute read paths must belong to an authorized read-only input",
+                    )
+                })?;
+            let relative = Path::new(&arguments.path)
+                .strip_prefix(&mount.destination)
+                .map_err(|_| self.invalid_arguments("invalid input path"))?;
+            let relative = relative
+                .to_str()
+                .ok_or_else(|| self.invalid_arguments("invalid input path"))?;
+            let mut file =
+                crate::resource_read::open_resource(&mount.source, relative).map_err(|error| {
+                    ToolError::Failed(format!("anchor_read input unavailable: {error}"))
+                })?;
+            let mut bytes = Vec::new();
+            std::io::Read::read_to_end(
+                &mut std::io::Read::take(&mut file, crate::attachments::MAX_FILE_BYTES as u64 + 1),
+                &mut bytes,
+            )
+            .map_err(|error| ToolError::Failed(error.to_string()))?;
+            if bytes.len() > crate::attachments::MAX_FILE_BYTES {
+                return Err(ToolError::Failed(
+                    "input file exceeds its read limit".into(),
+                ));
+            }
+            bytes
+        } else {
+            let candidate = self.relative_candidate(&arguments.path)?;
+            self.workspace_files()?.read(&candidate).map_err(|error| {
+                ToolError::Failed(format!("anchor_read failed: `{}`: {error}", arguments.path))
+            })?
+        };
         let sha256 = format!("{:x}", Sha256::digest(&bytes));
         if bytes.iter().take(8192).any(|byte| *byte == 0) {
             return Ok(vec![ToolResultContent::json(json!({

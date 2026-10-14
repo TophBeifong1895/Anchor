@@ -112,7 +112,7 @@ fn read_reply_images_at(path: &Path) -> Result<Vec<Value>, String> {
             Ok(ImageFormat::Jpeg) => "image/jpeg",
             _ => return Err("saved channel reply image is not PNG or JPEG".into()),
         };
-        crate::channel_inputs::validate_image(&data, mime).map_err(|error| error.to_string())?;
+        crate::attachments::validate_image(&data, mime).map_err(|error| error.to_string())?;
         let mut hasher = Md5::new();
         Md5Digest::update(&mut hasher, &data);
         if format!("{:x}", Md5Digest::finalize(hasher)) != digest {
@@ -354,7 +354,7 @@ impl ChannelTools {
                 ));
             }
         };
-        crate::channel_inputs::validate_image(&bytes, mime).map_err(ToolError::Failed)?;
+        crate::attachments::validate_image(&bytes, mime).map_err(ToolError::Failed)?;
         let encoded = STANDARD.encode(&bytes);
         let mut digest = Md5::new();
         Md5Digest::update(&mut digest, &bytes);

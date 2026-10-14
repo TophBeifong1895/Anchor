@@ -345,6 +345,8 @@ pub(super) async fn create_response(
                 session: session.clone(),
                 request_id: format!("responses-{}", crate::application::metadata::now_nanos()),
                 prompt: Some(prompt),
+                attachments: Default::default(),
+                input_source: None,
                 root: crate::pilot_host::scope(&state.data_root, &owner, &session),
                 tools,
             })

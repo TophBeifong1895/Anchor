@@ -732,10 +732,7 @@ impl GooseNodePort {
         }
         let mut blocks = vec![json!({"type":"text","text":prompt})];
         for image in prompt_images {
-            use base64::Engine;
-            anchor_mcp_host::validate_image_bytes(&image.data, &image.media_type)
-                .map_err(|error| error.to_string())?;
-            blocks.push(json!({"type":"image","data":base64::engine::general_purpose::STANDARD.encode(&image.data),"mimeType":image.media_type}));
+            blocks.push(media::image_prompt(&image.data, &image.media_type)?);
         }
         // Usage/compaction notifications are observed as they arrive because the
         // transport only retains a bounded tail of raw notifications.

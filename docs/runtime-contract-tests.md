@@ -49,6 +49,7 @@ user/mount/network namespace。入口在测试前校验 Goose 可执行权限和
 | --- | --- |
 | `goose_acp` | 实际 Agent loop、结构化完成与回执、工具权限、取消、未知效果核查后继续及保留的 spike 反例 |
 | `goose_pilot` | 原有授权工具、同原生 Session 续聊/重启、幂等、SSE 重放、变更后的现场核查与取消 |
+| `goose_pilot_attachments` | 纯附件输入、原生图片 wire、只读文件、不可变发布、工具图片、重启/幂等与恢复引用 |
 | `goose_elicitation` | 原生问答、条件删除确认/拒绝、目标变化、停止和重启不重放确认 |
 | `goose_media` | MCP PNG/JPEG/WebP、混合内容顺序、大图、模型 wire 图片、媒体拒绝、Artifact 与重启核查 |
 | `goose_conversation` | 跨 Run 与循环原生历史、用户/节点隔离、只读前驱、冻结图片、身份拒绝与整图清理 |

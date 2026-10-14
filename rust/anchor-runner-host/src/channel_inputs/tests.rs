@@ -1,4 +1,8 @@
 use super::*;
+use crate::attachments::{MAX_FILE_BYTES, MAX_IMAGE_BYTES};
+use base64::{Engine, engine::general_purpose::STANDARD};
+use image::ImageFormat;
+const MIB: usize = 1024 * 1024;
 use crate::application::ConversationSource;
 use image::{
     DynamicImage, ImageBuffer, Rgb,

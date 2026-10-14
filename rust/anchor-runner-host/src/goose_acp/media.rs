@@ -7,10 +7,12 @@ use sha2::{Digest, Sha256};
 pub(super) struct ToolOutput {
     pub(super) observation: Value,
     pub(super) media: Option<Vec<ContentBlock>>,
+    pub(super) images: Vec<(Vec<u8>, String)>,
 }
 
 pub(super) fn encode(contents: Vec<ToolResultContent>) -> Result<ToolOutput, String> {
     let mut images = ImageBudget::default();
+    let mut decoded_images = Vec::new();
     let mut has_images = false;
     let mut observation = Vec::with_capacity(contents.len());
     let mut blocks = Vec::with_capacity(contents.len());
@@ -20,6 +22,7 @@ pub(super) fn encode(contents: Vec<ToolResultContent>) -> Result<ToolOutput, Str
                 .validate(data, mime_type)
                 .map_err(|error| error.to_string())?;
             has_images = true;
+            decoded_images.push((bytes.clone(), mime_type.to_owned()));
             observation.push(json!({
                 "type":"image","mime_type":mime_type,"bytes":bytes.len(),
                 "data_sha256":format!("{:x}", Sha256::digest(&bytes))
@@ -39,6 +42,7 @@ pub(super) fn encode(contents: Vec<ToolResultContent>) -> Result<ToolOutput, Str
     Ok(ToolOutput {
         observation: Value::Array(observation),
         media: has_images.then_some(blocks),
+        images: decoded_images,
     })
 }
 
@@ -71,3 +75,11 @@ fn image_parts(content: &ToolResultContent) -> Result<Option<(&str, &str)>, Stri
 
 #[cfg(test)]
 mod tests;
+
+pub(super) fn image_prompt(bytes: &[u8], media_type: &str) -> Result<Value, String> {
+    use base64::Engine;
+    anchor_mcp_host::validate_image_bytes(bytes, media_type)?;
+    Ok(
+        json!({"type":"image","data":base64::engine::general_purpose::STANDARD.encode(bytes),"mimeType":media_type}),
+    )
+}

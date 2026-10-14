@@ -34,13 +34,13 @@ export function recoverBearerKey(rejectedKey: string): Promise<string> {
   return requestApiKey();
 }
 
-export async function api<T>(path: string, method = 'GET', body?: unknown, signal?: AbortSignal): Promise<T> {
+async function apiResponse(path: string, method = 'GET', body?: unknown, signal?: AbortSignal, accept = 'application/json'): Promise<Response> {
   const send = (key: string) => {
     const timeout = AbortSignal.timeout(30000);
     return fetch(path, {
       method,
       signal: signal ? AbortSignal.any([signal, timeout]) : timeout,
-      headers: { Accept: 'application/json', ...(body === undefined ? {} : { 'Content-Type': 'application/json' }),
+      headers: { Accept: accept, ...(body === undefined ? {} : { 'Content-Type': 'application/json' }),
         ...(key ? { Authorization: `Bearer ${key}` } : {}) },
       body: body === undefined ? undefined : JSON.stringify(body),
     });
@@ -54,11 +54,23 @@ export async function api<T>(path: string, method = 'GET', body?: unknown, signa
       response = await send(bearerKey());
     }
   }
+  if (!response.ok) {
+    const data = await response.json().catch(() => null);
+    throw new ApiError(data?.error ?? `${method} ${path} → ${response.status}`, response.status);
+  }
+  return response;
+}
+
+export async function apiBlob(path: string, signal?: AbortSignal): Promise<Blob> {
+  return (await apiResponse(path, 'GET', undefined, signal, 'application/octet-stream')).blob();
+}
+
+export async function api<T>(path: string, method = 'GET', body?: unknown, signal?: AbortSignal): Promise<T> {
+  const response = await apiResponse(path, method, body, signal);
   // A successful DELETE answers 204 with no body. Only an OK response may be
   // empty; anything else without a JSON body is a transport problem.
   const empty = response.status === 204 || response.status === 205;
   const data = empty ? null : await response.json().catch(() => null);
-  if (!response.ok) throw new ApiError(data?.error ?? `${method} ${path} → ${response.status}`, response.status);
   if (data === null) {
     if (empty) return undefined as T;
     throw new Error(`${method} ${path} 未返回有效 JSON，请检查 API 服务连接。`);

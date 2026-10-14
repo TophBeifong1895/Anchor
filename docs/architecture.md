@@ -101,6 +101,8 @@ Host 对外 trace 投影 ACP 消息、工具观察和媒体，支持增量读取
 
 Pilot Session 保存业务关联、Turn、问题/回答和 UI 事件；Goose 保存模型历史。Turn 提交按 `request_id` 幂等，SSE 按事件游标回放。原生 MCP elicitation 经过 ACP；必要删除确认绑定确切 Graph 与资源前置条件，重启中断未完成的问题，不重放旧确认。
 
+Pilot 与渠道附件复用 Host 的字节校验、限额、hash 和不可变保存原语，各自保留入口身份与归属。Pilot 原件位于已登记的 Session 资源 scope，Turn 只保存输入身份和文件引用；输入只读挂载 `/in/pilot`，图片通过原生 ACP image 内容交给 Goose。接续/恢复继承确切来源引用；新用户请求不自动获得历史附件。`publish_file` 固定工作区文件的交付版本，原生工具图片复用同一发布路径；输出事件驱动实时界面与历史，鉴权下载核查 Session/Turn/原件身份，删除沿既有 Session 清理。API 与限额见 [API 契约](rust-frontend-api-contract.md#sessionlibrary-与渠道)。
+
 `GET /sessions/{id}/messages` 按既有 Turn 和 UI 事件顺序投影用户输入、回复、提问与回答；正文保留 `role`/`text`，提问与回答分别附加 `question`/`question_answer` 的归属及保存状态。回答显示字段标题和实际填写的值，拒绝与取消保持明确的用户决定，中断提问没有虚构回答。Web 将这些记录直接显示在对应的对话位置；运行中的问题仍由当前 Turn 显示一个交互表单，完成后从消息投影读取，不另设历史提问区、不重复保存消息或重放回答。
 
 完整平台 Pilot 使用内置管理指令，不需要业务 Graph，空 catalog 可以启动和就绪。独立 Graph 宿主及显式配置的旧助手 Graph 仍保留相应准入检查；只有配置了助手 Graph 时，才检查其指令 Plugin 的自修改保护。安装和卸载的原生确认、摘要与引用前置条件不因没有业务 Graph 而改变。

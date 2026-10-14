@@ -1,6 +1,6 @@
 /** @vitest-environment jsdom */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { api, bearerKey, registerApiKeyPrompt, setBearerKey, verifyBearerKey } from './api';
+import { api, apiBlob, bearerKey, registerApiKeyPrompt, setBearerKey, verifyBearerKey } from './api';
 
 describe('Anchor API key recovery', () => {
   let fetchMock: ReturnType<typeof vi.fn>;
@@ -22,6 +22,19 @@ describe('Anchor API key recovery', () => {
     expect(new Headers(fetchMock.mock.calls[0][1].headers).has('Authorization')).toBe(false);
     expect(new Headers(fetchMock.mock.calls[1][1].headers).get('Authorization')).toBe('Bearer valid-key');
     expect(bearerKey()).toBe('valid-key');
+  });
+
+  it('recovers blob downloads through the same key dialog and keeps the key out of URLs', async () => {
+    setBearerKey('expired-key');
+    const path = '/sessions/s/turns/t/attachments/a?download=1';
+    fetchMock.mockResolvedValueOnce(Response.json({ error: 'unauthorized' }, { status: 401 }))
+      .mockResolvedValueOnce(new Response('immutable file', { headers: { 'Content-Type': 'text/csv' } }));
+    unregister = registerApiKeyPrompt(async () => 'new-key');
+    const blob = await apiBlob(path);
+    expect(await blob.text()).toBe('immutable file');
+    expect(blob.type).toBe('text/csv');
+    expect(fetchMock.mock.calls.map(call => call[0])).toEqual([path, path]);
+    expect(new Headers(fetchMock.mock.calls[1][1].headers).get('Authorization')).toBe('Bearer new-key');
   });
 
   it('drops a rejected cached key even when the user cancels the prompt', async () => {

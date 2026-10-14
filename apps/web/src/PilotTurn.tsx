@@ -4,12 +4,15 @@ import { Markdown } from './markdown';
 import { api, bearerKey, recoverBearerKey, setBearerKey } from './api';
 import { PilotQuestion } from './PilotQuestion';
 import { mergeQuestions, questionsPath, type Question } from './pilotQuestions';
+import { PilotAttachments } from './PilotAttachments';
+import type { Attachment } from './pilotAttachments';
 
 export type Turn = { id: string; session: string; request_id?: string; status: string; error: string; created_at: string; prompt: string | null;
+  attachments?: Attachment[];
   continuation?: { status: 'none' | 'scheduled' | 'pending' | 'admitted' | 'cancelled' | 'superseded'; request_id?: string; turn?: string };
 };
 type Tool = { id: string; name: string; input?: unknown; output?: unknown; status: string; inputSize?: number };
-type Chunk = { type: string; id?: string; delta?: string; inputTextDelta?: string; toolCallId?: string; toolName?: string; input?: unknown; output?: unknown; errorText?: string; question?: Question };
+type Chunk = { type: string; id?: string; delta?: string; inputTextDelta?: string; toolCallId?: string; toolName?: string; input?: unknown; output?: unknown; errorText?: string; question?: Question; attachment?: Attachment };
 const outcomes: Record<string, string> = { completed: '回复完成', failed: '执行失败', stopped: '已停止', interrupted: '执行中断', waiting_approval: '等待你确认操作', waiting_user: '等待你的回答' };
 
 /** Read-only SSE projection. Leaving a page cancels the subscription, never the server's task. */
@@ -18,6 +21,7 @@ export function PilotTurn({ turn, saved = false, stopping = false, onComplete, o
   onQuestions: (session: string, turn: string, pending: boolean) => void;
 }) {
   const [text, setText] = useState('');
+  const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [tools, setTools] = useState<Tool[]>([]);
   const [problem, setProblem] = useState('');
   const [status, setStatus] = useState(turn.status);
@@ -57,10 +61,11 @@ export function PilotTurn({ turn, saved = false, stopping = false, onComplete, o
     let last = 0;
     let ended = false;
     let resultText = '';
-    setText(''); setTools([]); setProblem('');
+    setText(''); setAttachments([]); setTools([]); setProblem('');
     setStatus(turn.status); setConnection('连接执行记录…'); setPhase('等待模型响应');
     const consume = (chunk: Chunk) => {
       lastEvent.current = Date.now();
+      if (chunk.type === 'attachment' && chunk.attachment) setAttachments(previous => previous.some(item => item.id === chunk.attachment!.id) ? previous : [...previous, chunk.attachment!]);
       if (['question', 'question-answered', 'question-interrupted'].includes(chunk.type) && chunk.question) updateQuestions([chunk.question]);
       if (chunk.type === 'start-step') setPhase('等待模型响应');
       if (chunk.type === 'reasoning-start' || chunk.type === 'reasoning-delta') setPhase('模型正在思考');
@@ -175,9 +180,10 @@ export function PilotTurn({ turn, saved = false, stopping = false, onComplete, o
         <pre>{JSON.stringify({ input: tool.input, output: tool.output }, null, 2)}</pre>
       </details>)}
     </details>}
-    {!saved && text && <article className="pilot-message assistant">
+    {!saved && (text || attachments.length > 0) && <article className="pilot-message assistant">
       <div className="pilot-message-author"><Anchor size={16} />Anchor Pilot{['failed', 'stopped', 'interrupted'].includes(status) && <small> · 未完成的回复</small>}</div>
       <Markdown text={text} prefix={`turn-${turn.id}`} />
+      <PilotAttachments attachments={attachments} session={turn.session} turn={turn.id} />
     </article>}
     {(!saved || status === 'running') && questions.map(question => <PilotQuestion key={question.id} question={question} enabled={status === 'running' && !stopping} stopping={stopping}
       onAnswered={answered => updateQuestions([answered])} />)}

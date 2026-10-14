@@ -19,6 +19,7 @@ mod graph_listeners;
 mod graph_validation;
 mod oauth;
 mod persistent_assistants;
+mod pilot_attachments;
 mod pilot_credentials;
 mod pilot_graph;
 mod pilot_network_defaults;

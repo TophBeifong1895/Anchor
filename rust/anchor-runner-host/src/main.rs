@@ -2,6 +2,7 @@ mod api;
 mod application;
 mod artifacts;
 mod assistant;
+mod attachments;
 mod channel_inputs;
 mod channel_supervisor;
 mod channel_tools;
@@ -10,6 +11,7 @@ mod execution;
 mod goose_acp;
 mod goose_tool_context;
 mod local_inputs;
+mod pilot_attachments;
 
 mod conversation_resources;
 mod credential_store;

@@ -36,6 +36,7 @@ const MAX_FACT_BYTES: u64 = 8 * 1024 * 1024;
 
 pub(crate) struct PilotTurn {
     pub(crate) root: PathBuf,
+    pub(crate) data_root: PathBuf,
     pub(crate) sessions: SessionStore,
     pub(crate) owner: String,
     pub(crate) session: String,
@@ -378,6 +379,32 @@ impl GoosePilot {
                 }
                 let update = &frame["params"]["update"];
                 if update["sessionUpdate"] == "agent_message_chunk"
+                    && update["content"]["type"] == "image"
+                    && let (Some(data), Some(mime)) = (
+                        update["content"]["data"].as_str(),
+                        update["content"]["mimeType"].as_str(),
+                    )
+                {
+                    let uploads = [crate::attachments::UploadedAttachment {
+                        name: format!(
+                            "assistant-{}.{}",
+                            &format!("{:x}", Sha256::digest(data))[..16],
+                            image_extension(mime)?
+                        ),
+                        data_base64: data.into(),
+                        media_type: Some(mime.into()),
+                    }];
+                    let prepared = crate::attachments::prepare(&uploads)?;
+                    crate::pilot_attachments::publish(
+                        &request.data_root,
+                        &request.sessions,
+                        &request.owner,
+                        &request.session,
+                        &request.turn,
+                        prepared,
+                    )?;
+                }
+                if update["sessionUpdate"] == "agent_message_chunk"
                     && let Some(text) = update["content"]["text"].as_str()
                 {
                     emit(
@@ -394,10 +421,42 @@ impl GoosePilot {
             json!(observation),
             request.prompt
         );
+        let session = request
+            .sessions
+            .get(&request.owner, &request.session)
+            .map_err(|e| e.to_string())?;
+        let turn = request
+            .sessions
+            .get_turn(&request.owner, &request.session, &request.turn)
+            .map_err(|e| e.to_string())?;
+        let inputs = crate::pilot_attachments::prepared_inputs(
+            &request.data_root,
+            &request.sessions,
+            &request.owner,
+            &session,
+            &turn,
+        )?;
+        let refs = crate::pilot_attachments::input_references(
+            &request.sessions,
+            &request.owner,
+            &request.session,
+            &request.turn,
+        )?;
+        let prompt=format!("{prompt}\nCurrent Turn read-only attachments in /in/pilot (only these files are authorized for this Turn): {}. Read document bytes with anchor_read or anchor_run; use publish_file to deliver workspace files. Prior Session files are not automatically mounted.",json!(refs.iter().map(|item|json!({"name":item.name,"size":item.size,"sha256":item.sha256,"media_type":item.media_type})).collect::<Vec<_>>()));
+        let mut blocks = vec![json!({"type":"text","text":prompt})];
+        for (item, bytes) in inputs.0 {
+            if let Some(mime) = item
+                .media_type
+                .as_deref()
+                .filter(|mime| mime.starts_with("image/"))
+            {
+                blocks.push(super::media::image_prompt(&bytes, mime)?);
+            }
+        }
         let (response, _) = connection
             .request_observed(
                 "session/prompt",
-                json!({"sessionId":opened.id,"prompt":[{"type":"text","text":prompt}]}),
+                json!({"sessionId":opened.id,"prompt":blocks}),
                 &request.cancellation,
                 None,
                 &callback,
@@ -433,6 +492,15 @@ fn validate_binding(
         return Err("Goose Pilot binary changed without a retained Session identity".into());
     }
     Ok(())
+}
+
+fn image_extension(mime: &str) -> Result<&'static str, String> {
+    match mime {
+        "image/png" => Ok("png"),
+        "image/jpeg" => Ok("jpg"),
+        "image/webp" => Ok("webp"),
+        _ => Err("unsupported Pilot image MIME".into()),
+    }
 }
 
 fn emit(request: &PilotTurn, event: Value) -> Result<(), String> {
@@ -568,10 +636,37 @@ impl PilotPort {
         } else {
             self.tools.call(name, arguments).await
         };
+        let mut display = Value::Null;
+        let result = result.and_then(|output| {
+            let encoded = super::media::encode(output.clone()).map_err(failed)?;
+            display = encoded.observation;
+            for (index, (bytes, mime)) in encoded.images.into_iter().enumerate() {
+                let prepared = crate::attachments::from_bytes(
+                    format!(
+                        "tool-{}-{index}.{}",
+                        id,
+                        image_extension(&mime).map_err(failed)?
+                    ),
+                    bytes,
+                    Some(&mime),
+                )
+                .map_err(failed)?;
+                crate::pilot_attachments::publish(
+                    &self.request.data_root,
+                    &self.request.sessions,
+                    &self.request.owner,
+                    &self.request.session,
+                    &self.request.turn,
+                    prepared,
+                )
+                .map_err(failed)?;
+            }
+            Ok(output)
+        });
         let event = match &result {
-            Ok(output) => {
-                observation["result"] = json!({"ok":true,"output":output});
-                json!({"type":"tool-output-available","toolCallId":id,"output":output})
+            Ok(_) => {
+                observation["result"] = json!({"ok":true,"output":display});
+                json!({"type":"tool-output-available","toolCallId":id,"output":display})
             }
             Err(error) => {
                 observation["result"] = json!({"ok":false,"error":error.to_string()});

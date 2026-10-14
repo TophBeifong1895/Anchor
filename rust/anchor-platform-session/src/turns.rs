@@ -21,6 +21,24 @@ impl SessionStore {
         request_id: &str,
         prompt: Option<&str>,
     ) -> Result<(Turn, bool), SessionError> {
+        self.create_turn_with_attachments(owner, session, request_id, prompt, &json!([]), |_| {
+            Ok(json!([]))
+        })
+    }
+
+    /// Admit one immutable input identity together with its browser attachment
+    /// references. The Host freezes original bytes in `prepare`; this store owns
+    /// only the manifest and Turn references, never filesystem paths.
+    /// A prepare failure rolls back the Turn and all its initial events.
+    pub fn create_turn_with_attachments(
+        &self,
+        owner: &str,
+        session: &str,
+        request_id: &str,
+        prompt: Option<&str>,
+        manifest: &Value,
+        prepare: impl FnOnce(&Turn) -> Result<Value, SessionError>,
+    ) -> Result<(Turn, bool), SessionError> {
         store::validate_lookup(owner, session)?;
         validate_input(request_id, prompt)?;
         let mut connection = self.lock()?;
@@ -42,6 +60,20 @@ impl SessionStore {
                     "request_id was already used for different input".into(),
                 ));
             }
+            let retained: Option<String> = transaction.query_row(
+                "SELECT data FROM turn_events WHERE turn_id = ?1 AND json_extract(data, '$.type') = 'input-attachments' ORDER BY seq ASC LIMIT 1",
+                [&existing.id], |row| row.get(0),
+            ).optional()?;
+            let retained = retained
+                .map(|raw| serde_json::from_str::<Value>(&raw))
+                .transpose()?
+                .map(|event| event["manifest"].clone())
+                .unwrap_or_else(|| json!([]));
+            if &retained != manifest {
+                return Err(SessionError::Conflict(
+                    "request_id was already used for different attachments".into(),
+                ));
+            }
             transaction.commit()?;
             return Ok((existing, false));
         }
@@ -56,6 +88,14 @@ impl SessionStore {
             ));
         }
         let turn = insert_running_turn(&transaction, owner, &mut snapshot, request_id, prompt)?;
+        let attachments = prepare(&turn)?;
+        if manifest != &json!([]) || attachments != json!([]) {
+            append_ui_event(
+                &transaction,
+                &turn.id,
+                json!({"type":"input-attachments","manifest":manifest,"attachments":attachments}),
+            )?;
+        }
         transaction.commit()?;
         Ok((turn, true))
     }

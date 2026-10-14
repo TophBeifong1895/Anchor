@@ -102,6 +102,7 @@ fn pilot_plugin_sandbox_with_environment(
     )
     .authorize_workspace_root(&workspace)
     .authorize_readonly_destination_root("/plugins")
+    .authorize_readonly_destination_root("/in/pilot")
     .allow_network();
     let sandbox = BubblewrapSandbox::new(environment.authorize(policy))
         .map_err(|error| format!("Pilot Plugin sandbox is unavailable: {error}"))?;
@@ -129,6 +130,7 @@ pub(crate) async fn frozen_turn_tools(
     turn: &str,
     cancellation: anchor_runtime::Cancellation,
     runtime: Option<&crate::runtime_configuration::RuntimeSnapshot>,
+    input_mounts: &[anchor_runtime::ReadOnlyInput],
 ) -> Result<PreparedPilotPlugins, String> {
     if cancellation.load(std::sync::atomic::Ordering::Acquire) {
         return Err("Pilot tool startup was cancelled".into());
@@ -246,15 +248,20 @@ pub(crate) async fn frozen_turn_tools(
                 // runs outside the deployment's sandbox.
                 continue;
             };
+            let mut readonly = prepared.mounts.clone();
+            readonly.extend_from_slice(input_mounts);
+            let sandbox = sandbox
+                .with_readonly_grants(input_mounts)
+                .map_err(|error| error.to_string())?;
             fixture
                 .assemble_with_sandbox(
                     &mcp,
                     single,
                     network,
                     tool_host::SandboxLaunch {
-                        sandbox,
+                        sandbox: &sandbox,
                         workspace,
-                        readonly_inputs: &prepared.mounts,
+                        readonly_inputs: &readonly,
                         plugin_views: &prepared.views,
                     },
                 )
@@ -317,6 +324,7 @@ async fn frozen_plugin_tools(
         turn,
         Arc::new(std::sync::atomic::AtomicBool::new(false)),
         None,
+        &[],
     )
     .await
     .map(|prepared| {
@@ -339,6 +347,7 @@ pub(crate) struct PilotTurnContext {
     pub(crate) cancellation: anchor_runtime::Cancellation,
     pub(crate) commands: Arc<dyn ToolPort>,
     environment: crate::tool_environment::ToolEnvironment,
+    readonly_inputs: Vec<anchor_runtime::ReadOnlyInput>,
 }
 
 impl PilotTurnContext {
@@ -386,7 +395,21 @@ impl PilotTurnContext {
             cancellation,
             commands: Arc::new(commands),
             environment,
+            readonly_inputs: Vec::new(),
         })
+    }
+
+    pub(crate) fn set_readonly_inputs(
+        &mut self,
+        inputs: Vec<anchor_runtime::ReadOnlyInput>,
+    ) -> Result<(), String> {
+        self.sandbox = Arc::new(
+            self.sandbox
+                .with_readonly_grants(&inputs)
+                .map_err(|error| error.to_string())?,
+        );
+        self.readonly_inputs = inputs;
+        Ok(())
     }
 
     pub(crate) fn freeze_network(&mut self, network: bool) {
@@ -399,7 +422,7 @@ impl PilotTurnContext {
                 Arc::new(empty),
                 self.sandbox.clone(),
                 self.workspace.clone(),
-                Vec::new(),
+                self.readonly_inputs.clone(),
                 self.cancellation.clone(),
             )
             .with_network(network)
@@ -424,7 +447,7 @@ impl PilotTurnContext {
                 Arc::new(empty),
                 self.sandbox.clone(),
                 self.workspace.clone(),
-                Vec::new(),
+                self.readonly_inputs.clone(),
                 self.cancellation.clone(),
             )
             .with_network(self.network)
@@ -498,6 +521,13 @@ pub(crate) struct PilotToolSpec {
 /// read-only flag and which layer dispatches a call all derive from this table,
 /// so a new tool cannot be added to one list and forgotten in another.
 pub(crate) const PILOT_TOOLS: &[PilotToolSpec] = &[
+    PilotToolSpec {
+        name: "publish_file",
+        description: "Publish an immutable delivery snapshot of an existing regular file in the Pilot workspace. path is workspace-relative; optional name changes the download filename. Returns an owner-authenticated attachment reference and displays it in this Turn. Use this for generated images and ordinary files; never invent download links.",
+        parameters: || json!({"type":"object","properties":{"path":{"type":"string"},"name":{"type":"string"}},"required":["path"],"additionalProperties":false}),
+        authority: ToolAuthority::Mutate,
+        effect: ToolEffect::HostFact,
+    },
     PilotToolSpec {
         name: "channel_status",
         description: "Read owner-bound channel configuration, missing credentials and actual Gateway readiness without secret values.",
@@ -909,6 +939,36 @@ impl PilotTools {
 
     async fn execute(&self, name: &str, arguments: Value) -> Result<Value, ToolError> {
         match name {
+            "publish_file" => {
+                self.require_active_turn()?;
+                if self.context.as_ref().is_some_and(|context| {
+                    context
+                        .cancellation
+                        .load(std::sync::atomic::Ordering::Acquire)
+                }) {
+                    return Err(rejected("Pilot was cancelled"));
+                }
+                #[derive(serde::Deserialize)]
+                #[serde(deny_unknown_fields)]
+                struct Publish {
+                    path: String,
+                    name: Option<String>,
+                }
+                let args: Publish = serde_json::from_value(arguments)
+                    .map_err(|_| rejected("publish_file requires path and optional name"))?;
+                let attachment = crate::pilot_attachments::publish_workspace_file(
+                    &self.data_root,
+                    &self.sessions,
+                    &self.owner,
+                    &self.session,
+                    &self.turn,
+                    &self.task_workspace(),
+                    &args.path,
+                    args.name.as_deref(),
+                )
+                .map_err(rejected)?;
+                Ok(json!(attachment))
+            }
             "runtime_prepare" => self.runtime_prepare(&arguments).await,
             "development_prepare" => self.development_prepare(&arguments).await,
             "credential_request" => self.credential_request(&arguments).await,

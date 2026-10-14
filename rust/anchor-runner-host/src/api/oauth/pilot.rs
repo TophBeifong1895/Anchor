@@ -228,6 +228,8 @@ pub(super) async fn publish_and_continue(
         session: session.clone(),
         request_id: String::new(),
         prompt: None,
+        attachments: Default::default(),
+        input_source: None,
         root: crate::pilot_host::scope(&state.data_root, &link.owner, &session),
         tools,
     };

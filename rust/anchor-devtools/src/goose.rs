@@ -5,6 +5,7 @@ const GOOSE_SHA256: &str = "71e76c412597b2ecd96ed20d0706e7666f31c018216e7cb5d65c
 const SUITES: &[&str] = &[
     "goose_acp",
     "goose_pilot",
+    "goose_pilot_attachments",
     "goose_elicitation",
     "goose_media",
     "goose_conversation",

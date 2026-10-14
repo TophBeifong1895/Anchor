@@ -809,6 +809,8 @@ impl Fixture {
             session: session.clone(),
             request_id: request.into(),
             prompt: Some("inspect".into()),
+            attachments: Default::default(),
+            input_source: None,
             root: scope(&self.data, "owner", session),
             tools,
         }
@@ -1341,6 +1343,8 @@ async fn stale_admission_and_delete_cannot_reach_a_recreated_session() {
             session: old.clone(),
             request_id: "stale".into(),
             prompt: Some("develop".into()),
+            attachments: Default::default(),
+            input_source: None,
             root: scope(&data, "owner", &old),
             tools,
         })

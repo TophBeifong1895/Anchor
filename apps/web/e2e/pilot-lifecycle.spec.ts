@@ -2,8 +2,10 @@ import { expect, test } from '@playwright/test';
 import { spawn } from 'node:child_process';
 import { createServer, type ServerResponse } from 'node:http';
 import { fileURLToPath } from 'node:url';
+import { blockUnmockedApi } from './fixtures/api-fallback';
 
 test('Pilot reconciles a lost submission response and permits corrected input after explicit rejection', async ({ page }) => {
+  await blockUnmockedApi(page);
   await page.route('**/sessions/*/credential-requests', route => route.fulfill({ json: { requests: [] } }));
   await page.route('**/sessions/*/plugins', route => route.fulfill({ json: { plugins: [] } }));
   await page.route('**/sessions/*/turns/*/questions', route => route.fulfill({ json: { questions: [] } }));

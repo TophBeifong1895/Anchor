@@ -50,6 +50,7 @@ async fn freeze(
         turn,
         anchor_runtime::Cancellation::default(),
         None,
+        &[],
     )
     .await
     .unwrap()

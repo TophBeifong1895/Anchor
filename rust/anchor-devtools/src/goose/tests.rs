@@ -21,6 +21,7 @@ fn evidence() -> (Value, Value) {
 fn commands_select_standard_ignored_goose_suites() {
     assert!(SUITES.contains(&"goose_compaction"));
     assert!(SUITES.contains(&"goose_pilot_compaction"));
+    assert!(SUITES.contains(&"goose_pilot_attachments"));
     assert!(SUITES.contains(&"goose_trace"));
     assert!(SUITES.contains(&"goose_session_calls"));
     assert!(SUITES.contains(&"goose_library"));
