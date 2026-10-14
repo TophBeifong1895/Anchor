@@ -89,6 +89,7 @@ test('web mounting keeps the active Goose Turn frozen, continues once with lates
     await page.goto(base);
     const input = page.getByLabel('发送给 Anchor Pilot');
     await expect(input).toBeEnabled();
+    await page.getByRole('button', { name: '展开插件面板', exact: true }).click();
     expect((await clickMount(true)).effect.status).toBe('next_turn');
     expect((await clickMount(false)).effect.status).toBe('next_turn');
     await expect(page.getByText('已保存，下次发消息时使用新设置')).toBeVisible();

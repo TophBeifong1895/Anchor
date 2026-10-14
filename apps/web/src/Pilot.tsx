@@ -14,7 +14,11 @@ type Session = {
 };
 type Message = { role: 'user' | 'assistant'; text: string; question?: Question; question_answer?: Question };
 const labels: Record<string, string> = { active: '可以继续对话', interrupted: '回复已中断', waiting_user: '等待你的答复', archived: '已归档' };
-const starters = ['查看现有的研究工作流', '帮我梳理一个研究问题', '查看最近运行的结果'];
+const starters = [
+  { label: '工作流', text: '帮我把每周整理资料和生成周报做成工作流。' },
+  { label: '安装插件', text: '我有一个插件仓库，帮我安装并检查能否使用。' },
+  { label: '开发工具', text: '帮我开发一个把 CSV 转成图表的插件，并测试它。' },
+];
 const title = (session: Session) => session.title || '新对话';
 const date = (value: string) => new Date(value).toLocaleDateString('zh-CN', { month: 'short', day: 'numeric' });
 // Browser storage holds navigation and unsent drafts only; saved messages come from the server.
@@ -253,14 +257,23 @@ export function Pilot({ session = '', onSession }: { session?: string; onSession
     })();
     return () => { live = false; mounted.current = false; controller.abort(); historyRequest.current?.abort(); };
   }, []);
+  const current = sessions.find(item => item.id === selected);
+  const awaitingContinuation = continuation?.session === selected && continuation.state.status === 'scheduled';
+  const pendingApproval = current?.approval?.status === 'requested';
+  // An interrupted session accepts a new message: the next turn carries what the dead run recorded.
+  const canSend = !selected || (current &&
+    ['active', 'interrupted'].includes(current.status) && !pendingApproval && !waitingQuestion);
+  // Empty history is not an idle session when a Turn or a saved control request still needs attention.
+  const showStart = !messages.length && !turn && !loading && !busy && !stopping && !waitingQuestion
+    && !pendingApproval && !awaitingContinuation && (!selected || current?.status === 'active');
   useEffect(() => {
     if (!input.current) return;
     input.current.style.height = 'auto';
     input.current.style.height = `${Math.min(input.current.scrollHeight, 200)}px`;
   }, [draft, selected]);
   useEffect(() => {
-    if (follow.current && scroller.current) scroller.current.scrollTop = scroller.current.scrollHeight;
-  }, [messages, busy, loading, turn, waitingQuestion]);
+    if (!showStart && follow.current && scroller.current) scroller.current.scrollTop = scroller.current.scrollHeight;
+  }, [messages, busy, loading, turn, waitingQuestion, showStart]);
   useEffect(() => {
     const element = scroller.current;
     if (!element) return;
@@ -273,7 +286,7 @@ export function Pilot({ session = '', onSession }: { session?: string; onSession
     return () => observer.disconnect();
   }, []);
   useEffect(() => {
-    if (!busy && !loading) input.current?.focus();
+    if (!busy && !loading) input.current?.focus({ preventScroll: true });
   }, [busy, loading, selected]);
 
   const select = async (id: string) => {
@@ -401,12 +414,6 @@ export function Pilot({ session = '', onSession }: { session?: string; onSession
     setSessions(items => items.filter(item => item.id !== id));
     if (selectedRef.current === id) { activate(''); setLoading(false); }
   };
-  const current = sessions.find(item => item.id === selected);
-  const awaitingContinuation = continuation?.session === selected && continuation.state.status === 'scheduled';
-  const pendingApproval = current?.approval?.status === 'requested';
-  // An interrupted session accepts a new message: the next turn carries what the dead run recorded.
-  const canSend = !selected || (current &&
-    ['active', 'interrupted'].includes(current.status) && !pendingApproval && !waitingQuestion);
   const heading = current?.title || messages.find(item => item.role === 'user')?.text.slice(0, 60) || '新对话';
   const filtered = sessions.filter(item => `${title(item)} ${item.id}`.toLowerCase().includes(query.toLowerCase()));
   return <main className="pilot-page">
@@ -427,9 +434,14 @@ export function Pilot({ session = '', onSession }: { session?: string; onSession
     </aside>
     <section className="pilot-chat" aria-label="Pilot 对话">
       <header className="pilot-chat-heading">
-        <div><strong title={selected || undefined}>{heading}</strong><span>{stopping ? '正在停止执行' : waitingQuestion ? '等待你的答复' : busy ? '正在处理你的请求' : loading ? '正在加载对话' : current ? labels[current.status] : '和 Anchor 一起开展研究'}</span></div>
+        <div><strong title={selected || undefined}>{heading}</strong><span>{stopping ? '正在停止执行' : waitingQuestion ? '等待你的答复' : busy ? '正在处理你的请求' : loading ? '正在加载对话' : current ? labels[current.status] : 'Anchor 的任务与管理入口'}</span></div>
         {current?.status === 'interrupted' && <button onClick={() => void resume()} disabled={busy || loading}>继续上次回复</button>}
       </header>
+      <div className={`pilot-chat-body${showStart ? ' is-start' : ''}`}>
+      {showStart && <div className="pilot-intro">
+        <h2>你想完成什么？</h2>
+        <p>把任务交给 Pilot，搭建工作流，或扩展你需要的工具。</p>
+      </div>}
       <div className="pilot-messages" ref={scroller} role="log" aria-label="对话消息" aria-live="polite" onScroll={() => {
         const el = scroller.current;
         if (!el) return;
@@ -437,14 +449,6 @@ export function Pilot({ session = '', onSession }: { session?: string; onSession
         follow.current = near; setAtBottom(near);
       }}>
         <div className="pilot-message-list">
-        {!messages.length && !loading && <div className="pilot-welcome">
-          <span className="pilot-emblem"><Anchor size={30} /></span>
-          <p className="pilot-eyebrow">ANCHOR PILOT</p><h2>{selected ? '我们从哪里开始？' : '从一个问题，开始探索'}</h2>
-          <p>梳理研究问题、组织工作流，或一起看看已有的成果。</p>
-          <div className="pilot-starters">{starters.map(text => <button key={text} disabled={busy}
-            onClick={() => { editDraft(text); input.current?.focus(); }}>{text}<span aria-hidden="true">↗</span></button>)}</div>
-          {!selected && <button className="pilot-text-button" disabled={busy} onClick={() => void create()}>新建对话</button>}
-        </div>}
         {loading && <div className="pilot-thinking" role="status"><LoaderCircle size={16} />正在加载对话…</div>}
         {messages.map((message, index) => <article key={`${selected}-${index}`} className={`pilot-message ${message.role}`}>
           <div className="pilot-message-author">{message.role === 'assistant' && <Anchor size={16} />}<span>{message.role === 'user' ? '你' : 'Anchor Pilot'}</span></div>
@@ -475,7 +479,7 @@ export function Pilot({ session = '', onSession }: { session?: string; onSession
         {selected && <button onClick={() => void select(selected)}>重新加载对话</button>}
       </p>}
       <form className="pilot-composer" onSubmit={send}>
-        <textarea ref={input} rows={2} aria-label="发送给 Anchor Pilot" placeholder={pendingApproval ? '请先确认或拒绝上方操作' : waitingQuestion || current?.status === 'waiting_user' ? '请先回答、拒绝或取消上方问题' : '描述你的问题，或告诉 Pilot 你想完成什么…'} value={draft}
+        <textarea ref={input} rows={2} aria-label="发送给 Anchor Pilot" placeholder={pendingApproval ? '请先确认或拒绝上方操作' : waitingQuestion || current?.status === 'waiting_user' ? '请先回答、拒绝或取消上方问题' : '告诉 Pilot 你想完成什么…'} value={draft}
           maxLength={100000} onChange={event => editDraft(event.target.value)} onKeyDown={event => {
             if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing && event.keyCode !== 229) {
               event.preventDefault(); event.currentTarget.form?.requestSubmit();
@@ -486,11 +490,17 @@ export function Pilot({ session = '', onSession }: { session?: string; onSession
           {!busy && <button className="primary" type="submit" disabled={!draft.trim() || stopping || loading || !canSend}><Send size={16} />发送</button>}
         </div>
       </form>
-      <small className="pilot-disclaimer">删除工作流会再次确认；研究结论请结合来源核验。</small>
+      {showStart && <div className="pilot-starters" aria-label="任务示例">
+        {starters.map(({ label, text }) => <button key={label} type="button"
+          onClick={() => { editDraft(text); input.current?.focus({ preventScroll: true }); }}>
+          <span className="pilot-starter-label">{label}</span><span className="pilot-starter-text">{text}</span><span className="pilot-starter-arrow" aria-hidden="true">↗</span>
+        </button>)}
+      </div>}
+      </div>
     </section>
     {/* Plugin mounting belongs to the session, not to one Turn. Keeping the capability rail outside
         the transcript gives the conversation a stable reading surface while the capability policy stays
         visible beside the controls. */}
-    <SessionPlugins key={selected} session={selected} onContinuation={scheduleContinuation} continuation={continuation} />
+    <SessionPlugins key={selected} session={selected} defaultOpen={false} onContinuation={scheduleContinuation} continuation={continuation} />
   </main>;
 }

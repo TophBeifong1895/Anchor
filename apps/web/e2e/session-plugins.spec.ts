@@ -64,6 +64,7 @@ test('networking shows dependency activation and updates authorization for the w
     return route.fulfill({ json: { plugins: rows() } });
   });
   await openPilot(page);
+  await page.getByRole('button', { name: '展开插件面板', exact: true }).click();
   const rail = page.getByRole('complementary', { name: '会话插件挂载' });
   await rail.getByRole('switch', { name: '挂载 学术调研', exact: true }).click();
   await expect(rail.getByText('由学术调研依赖启用 · 网络访问已允许')).toBeVisible();
@@ -91,6 +92,7 @@ test('the capability rail leaves room to read, searches resources and syncs new 
     return route.fulfill({ json: { plugin: installed.find(plugin => plugin.id === id) } });
   });
   await openPilot(page);
+  await page.getByRole('button', { name: '展开插件面板', exact: true }).click();
   const rail = page.getByRole('complementary', { name: '会话插件挂载' });
   await expect(rail.locator('.session-plugin-card')).toHaveCount(3);
   await expect(rail.locator('.pilot-plugins-intro')).toHaveCount(0);

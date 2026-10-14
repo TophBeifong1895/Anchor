@@ -46,8 +46,8 @@ test('Pilot opens, creates and reopens sessions through the real Vite proxy, and
     }).toPass({ timeout: 15000 });
     await page.goto(base);
     await page.getByRole('button', { name: 'Pilot', exact: true }).click();
-    await expect(page.getByRole('heading', { name: '从一个问题，开始探索' })).toBeVisible();
-    await page.getByRole('button', { name: '新建对话', exact: true }).click();
+    await expect(page.getByRole('heading', { name: '你想完成什么？' })).toBeVisible();
+    await page.getByRole('button', { name: '新对话', exact: true }).click();
     await expect(page.getByLabel('发送给 Anchor Pilot')).toBeEnabled();
     const { sessions } = await (await request.get(`${base}/sessions`)).json();
     expect(sessions).toHaveLength(1);
@@ -103,7 +103,7 @@ test('Pilot opens, creates and reopens sessions through the real Vite proxy, and
     await page.getByRole('menuitem', { name: '删除', exact: true }).click();
     await deletion.getByRole('button', { name: '删除对话', exact: true }).click();
     await expect(page.locator('.pilot-session')).toHaveCount(0);
-    await expect(page.getByRole('heading', { name: '从一个问题，开始探索' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: '你想完成什么？' })).toBeVisible();
     await expect(page.getByLabel('发送给 Anchor Pilot')).toHaveValue('');
     expect(await page.evaluate(id => localStorage.getItem(`pilot:draft:${id}`), id)).toBe('');
     await page.reload();

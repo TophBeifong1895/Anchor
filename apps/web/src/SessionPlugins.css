@@ -18,7 +18,8 @@
 .pilot-plugins.is-closed { position: absolute; top: 14px; right: 20px; border: 0; border-radius: 8px; }
 .pilot-plugins.is-closed .pilot-plugins-heading { padding: 0; border: 0; }
 .pilot-plugins.is-closed .pilot-plugins-title { display: none; }
-.pilot-plugins.is-closed .pilot-plugins-heading button { min-height: 38px; padding: 8px 11px; border: 1px solid var(--plugin-line); color: var(--plugin-ink); background: var(--plugin-card); }
+.pilot-plugins.is-closed .pilot-plugins-heading button { min-height: 38px; padding: 8px 11px; border: 1px solid var(--plugin-line); color: var(--plugin-muted); background: var(--plugin-card); }
+.pilot-plugins.is-closed .pilot-plugins-heading button:hover, .session-plugins-trigger:hover { color: var(--plugin-accent); background: var(--plugin-surface); }
 .pilot-page:has(> .pilot-plugins.is-closed) .pilot-chat-heading { padding-right: 128px; }
 .plugin-trigger-count, .session-plugins-trigger > span { padding: 1px 5px; border-radius: 4px; color: var(--plugin-accent); background: var(--accent-soft); font-size: 12px; font-variant-numeric: tabular-nums; }
 .modal.session-plugins-drawer { position: fixed; inset: 0 0 0 auto; margin: 0; width: min(380px, 100vw); max-width: 100vw; height: 100dvh; max-height: 100dvh; padding: 0; border: 0; border-left: 1px solid var(--plugin-line); border-radius: 0; background: var(--plugin-surface); box-shadow: -12px 0 40px #19392d24; }
@@ -33,7 +34,7 @@
   .pilot-page, .pilot-page:has(> .pilot-plugins.is-closed) { grid-template-columns: 260px minmax(0, 1fr); }
   .pilot-plugins, .pilot-plugins.is-closed { position: absolute; top: 15px; right: 16px; border: 0; background: transparent; }
   .pilot-page .pilot-chat-heading { padding-right: 120px; }
-  .session-plugins-trigger { display: inline-flex; align-items: center; gap: 6px; min-height: 36px; padding: 7px 11px; border: 1px solid var(--plugin-line); border-radius: 8px; color: var(--plugin-ink); background: var(--plugin-card); font-size: 13px; }
+  .session-plugins-trigger { display: inline-flex; align-items: center; gap: 6px; min-height: 36px; padding: 7px 11px; border: 1px solid var(--plugin-line); border-radius: 8px; color: var(--plugin-muted); background: var(--plugin-card); font-size: 13px; }
 }
 @media (max-width: 700px) {
   .pilot-page, .pilot-page:has(> .pilot-plugins.is-closed) { grid-template-columns: 1fr; }

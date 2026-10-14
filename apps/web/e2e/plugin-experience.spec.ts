@@ -97,6 +97,7 @@ test('one plugin experience preserves Graph drafts, immediate Session writes and
   await page.screenshot({ path: test.info().outputPath('graph-plugins.png') });
 
   await page.getByRole('button', { name: 'Pilot', exact: true }).click();
+  await page.getByRole('button', { name: '展开插件面板', exact: true }).click();
   const rail = page.getByRole('complementary', { name: '会话插件挂载' });
   const sessionCard = rail.locator('.plugin-card');
   await expect(sessionCard).toContainText(plugin.description);

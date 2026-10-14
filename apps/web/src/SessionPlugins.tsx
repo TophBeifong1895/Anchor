@@ -68,15 +68,16 @@ export function mountProblem(error: unknown): string {
   return reason(error);
 }
 
-export function SessionPlugins({ session, onContinuation, continuation }: {
+export function SessionPlugins({ session, defaultOpen, onContinuation, continuation }: {
   session: string; onContinuation?: (session: string, source: string) => void;
+  defaultOpen?: boolean;
   continuation?: PluginContinuation | null;
 }) {
   // The transcript keeps its full width on narrow screens; the same controls open in the shared
   // native dialog, which isolates focus and handles Escape.
   const [compact, setCompact] = useState(() => typeof window !== 'undefined'
     && typeof window.matchMedia === 'function' && window.matchMedia(COMPACT_QUERY).matches);
-  const [open, setOpen] = useState(() => !compact);
+  const [open, setOpen] = useState(() => defaultOpen ?? !compact);
   const [plugins, setPlugins] = useState<SessionPlugin[]>([]);
   const [loaded, setLoaded] = useState(false);
   const [listError, setListError] = useState('');
@@ -109,10 +110,14 @@ export function SessionPlugins({ session, onContinuation, continuation }: {
   useEffect(() => {
     if (typeof window.matchMedia !== 'function') return;
     const media = window.matchMedia(COMPACT_QUERY);
-    const resize = () => { setCompact(media.matches); setOpen(!media.matches); };
+    const resize = () => {
+      setCompact(media.matches);
+      // Pilot starts with a quiet, collapsed entry. Resizing must preserve a panel the user opened.
+      if (defaultOpen === undefined) setOpen(!media.matches);
+    };
     media.addEventListener('change', resize);
     return () => media.removeEventListener('change', resize);
-  }, []);
+  }, [defaultOpen]);
   useEffect(() => {
     listRevision.current += 1;
     inFlight.current = false;

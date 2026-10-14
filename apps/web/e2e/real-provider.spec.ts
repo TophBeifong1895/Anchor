@@ -50,7 +50,7 @@ test('a killed server is restarted and the same Session continues in the browser
 
     await page.goto(base);
     await page.getByRole('button', { name: 'Pilot', exact: true }).click();
-    await page.getByRole('button', { name: '新建对话', exact: true }).click();
+    await page.getByRole('button', { name: '新对话', exact: true }).click();
     const input = page.getByLabel('发送给 Anchor Pilot');
     await expect(input).toBeEnabled();
     // The reply is long on purpose: it leaves a window in which the process can be killed mid-output.

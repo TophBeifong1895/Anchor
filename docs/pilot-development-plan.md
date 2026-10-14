@@ -15,6 +15,7 @@
 | Plugin 发现、读取与工具调用 | Pilot/Node 完整披露、授权调用和有界目录通过；持续摘要、挂载接续及压缩分别有真实/确定性证据 | [A222](../research_plugin_disclosure_20261013/acceptance/README.md)、[A224](../research_plugin_disclosure_20261013/capability-context/README.md) |
 | Pilot 默认联网 | 网页与 Responses 新会话默认挂载、用户禁止和旧会话边界通过；隔离 Host 实际安装 requests 并在断网后 import | 历史台账 A204/A206/A228；A228 原始产物在原机器 `.local/pilot-network-default-20261013/` |
 | Web 问答与 API key | 问答按对话顺序回看，错误 key/无效字符拒绝及正确 key 加载通过真实浏览器验收 | 历史台账 A221/A227 |
+| Pilot 初始界面 | 以任务、工作流和工具扩展呈现入口，示例只填草稿、首次发送和失败重试保持幂等，插件默认收起；140 项 Web 单测与 19 项相关浏览器用例通过，8077 桌面/手机只读实测及上线前后会话、挂载与资源事实一致 | [初始页回归](../apps/web/e2e/pilot-start.spec.ts)、[会话回归](../apps/web/e2e/pilot.spec.ts)；本机证据 `.local/pilot-start-ui-20261014/deployment-check.json`，本轮未新增真实模型验收 |
 | 插件界面 | Pilot/Graph/Run 共用卡片、搜索和详情，草稿/即时挂载/历史记录分别展示；140 项 Web 单测及 21 项相关浏览器用例通过，当前 8077 已更新并经只读实测确认既有会话与设置未变 | [跨面板回归](../apps/web/e2e/plugin-experience.spec.ts)、[原生挂载回归](../apps/web/e2e/session-plugins-native.spec.ts)；本机部署证据 `.local/plugin-ui-20261014/deployment-check.json`，外部 OAuth 未新增真实验收 |
 | 渠道与常驻助手 | 企微私聊收发有历史部署证据；常驻同 Run、稳定 workspace、打断/恢复有确定性与隔离真实模型证据 | 历史台账 A143–A157；[渠道验收边界](wecom-assistant.md#docmost-和验收) |
 
