@@ -1,5 +1,5 @@
 /** Application navigation and cross-page references. Page owners retain drafts and subscribe to Host projections. */
-import { Anchor, Activity, GitBranch, MessageSquare, PanelLeftClose, PanelRightClose, Plug, Radio, Settings2 } from 'lucide-react';
+import { Anchor, Activity, GitBranch, MessageSquare, PanelLeftClose, PanelRightClose, Plug, Settings2 } from 'lucide-react';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent } from 'react';
 import type { OurRun, OurRunDetail } from './model';
 import { GraphRelations } from './GraphRelations';
@@ -11,7 +11,8 @@ import { graphRunAction } from './GraphRunButton';
 import { ApiKeyDialog } from './ApiKeyDialog';
 import { PluginManagement } from './PluginManagement';
 import { SettingsPage } from './SettingsPage';
-import { ChannelsPage } from './ChannelsPage';
+import { ChannelSessions } from './ChannelSessions';
+import { MessageTrigger } from './MessageTrigger';
 import { CreateGraphDialog, RunInputDialog } from './WorkbenchDialogs';
 import { anchorRef, anchorTarget, type AnchorRef } from './links';
 import { api } from './api';
@@ -32,7 +33,7 @@ export function App() {
   const [view, setView] = useState<WorkbenchView>(() => {
     try {
       const saved = localStorage.getItem('anchor:view');
-      return saved === 'pilot' || saved === 'runs' || saved === 'plugins' || saved === 'settings' || saved === 'channels' ? saved : 'graph';
+      return saved === 'pilot' || saved === 'runs' || saved === 'plugins' || saved === 'settings' ? saved : 'graph';
     } catch { return 'graph'; }
   });
   useEffect(() => {
@@ -51,6 +52,8 @@ export function App() {
   const [dialog, setDialog] = useState<'create' | 'run' | null>(null);
   const [assistance, setAssistance] = useState('');
   const [relations, setRelations] = useState(false);
+  const [sessions, setSessions] = useState(false);
+  const [triggerConfig, setTriggerConfig] = useState(false);
   const [graphReturn, setGraphReturn] = useState<{ graph: string; node?: string } | null>(null);
   // The return session after opening a Graph, Run or artifact from Pilot.
   const [chat, setChat] = useState('');
@@ -133,7 +136,7 @@ export function App() {
   const trigger = async () => {
     if (!name) return;
     const action = graphRunAction(graphs.find(item => item.graph === name));
-    if (action.kind === 'channels') { setView('channels'); return; }
+    if (action.kind === 'sessions') { setSessions(true); return; }
     if (action.kind === 'view') { setRun(action.run); setNode(''); setTargetPath(''); setView('runDetail'); return; }
     if (!dirty) setDialog('run');
   };
@@ -209,7 +212,6 @@ export function App() {
           <button aria-pressed={view === 'runs' || view === 'runDetail'} className={view === 'runs' || view === 'runDetail' ? 'chosen' : ''} onClick={() => setView('runs')}><Activity size={15} />运行看板</button>
           <button aria-pressed={view === 'pilot'} className={view === 'pilot' ? 'chosen' : ''} onClick={() => setView('pilot')}><MessageSquare size={15} />Pilot</button>
           <button aria-pressed={view === 'plugins'} className={view === 'plugins' ? 'chosen' : ''} onClick={() => setView('plugins')}><Plug size={15} />插件库</button>
-          <button aria-pressed={view === 'channels'} className={view === 'channels' ? 'chosen' : ''} onClick={() => setView('channels')}><Radio size={15} />渠道</button>
           <button aria-pressed={view === 'settings'} className={view === 'settings' ? 'chosen' : ''} onClick={() => setView('settings')}><Settings2 size={15} />设置</button>
         </nav>
         <div className="connection" title={problem || '服务已连接'}><span className={`status-dot ${problem ? 'bad' : ''}`} />
@@ -224,14 +226,13 @@ export function App() {
       {view === 'runs' && notice && <p className={`notice ${notice.kind}`} role="status">{notice.text}</p>}
 
       {view === 'plugins' ? <PluginManagement /> : view === 'settings' ? <SettingsPage />
-        : view === 'channels' ? <ChannelsPage onOpenRun={(id, graph) => void navigateRun(id, graph)} />
         : view === 'pilot' ? <Pilot session={chat} onSession={setChat} initialDraft={assistance} onDraftConsumed={() => setAssistance('')} /> : view === 'runs' ? (
         <Workspace running>
           {timelineProblem ? <main className="main"><p className="timeline-error" role="alert">
             运行时间线无法加载：{timelineProblem} <button onClick={() => void refresh()}>重新连接</button>
           </p></main> : <Timeline data={timeline} graphs={graphs.map(item => item.graph)} graphColors={graphColors}
             page={timelinePage} onPage={setTimelinePage} onOpenRun={(id, graph) => void navigateRun(id, graph)}
-            onRefresh={() => void refresh()} onSelect={openRun} />}
+            onRefresh={() => void refresh()} onSelect={openRun} onSessions={() => setSessions(true)} />}
         </Workspace>
       ) : view === 'runDetail' ? <RunDetailPage name={name} graphs={graphs} dirty={dirty} busy={busy}
         notice={notice} run={run} node={node} targetPath={targetPath} detail={detail} selectGraph={selectGraph}
@@ -239,9 +240,12 @@ export function App() {
         deleteRun={deleteRun} onNode={id => { setNode(id); setInspectorOpen(true); }} />
         : <GraphEditorPage name={name} editor={editor} graphs={graphs} runs={runs} graphColors={graphColors}
           busy={busy} notice={notice} setNotice={setNotice} selectGraph={selectGraph} create={create}
+          onTriggerConfig={() => setTriggerConfig(true)}
           onPilot={() => askPilot('graph')} deleteGraph={deleteGraph} save={save} check={check} trigger={trigger} openRun={openRun} navigateGraph={navigateGraph}
           onInspect={() => setInspectorOpen(true)} onRelations={() => setRelations(true)} graphReturn={graphReturn}
           onReturn={() => { if (graphReturn) navigateGraph(graphReturn.graph, graphReturn.node); setGraphReturn(null); }} />}
+      {sessions && <ChannelSessions onOpenRun={(id, graph) => void navigateRun(id, graph)} close={() => setSessions(false)} />}
+      {triggerConfig && name && <MessageTrigger graph={name} close={() => setTriggerConfig(false)} />}
       {relations && <GraphRelations graph={name} close={() => setRelations(false)} onOpen={navigateGraph} />}
       {dialog === 'create' && <CreateGraphDialog close={() => setDialog(null)} create={async wanted => {
         await api('/graphs', 'POST', { name: wanted });

@@ -1895,7 +1895,7 @@ async fn stopped_assistant_refusal_explains_recovery_and_never_replays_it() {
     assert_host_refusal(
         json!({"code":"assistant_stopped","error":"assistant is stopped"}),
         GatewayError::AssistantStopped,
-        "助手已停止。请打开 Anchor 的渠道页面，恢复该助手后再发消息。",
+        "助手已停止。请在 Anchor 运行看板的「消息会话」中恢复该助手后再发消息。",
     )
     .await;
 }

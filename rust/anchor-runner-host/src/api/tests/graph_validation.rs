@@ -137,7 +137,7 @@ async fn original_graphs_validate_without_provider_and_without_filesystem_change
 }
 
 #[tokio::test]
-async fn four_original_business_graphs_are_admitted_without_provider_or_side_effects() {
+async fn business_graph_examples_are_admitted_without_provider_or_side_effects() {
     let _env_guard = PROCESS_ENV.lock().await;
     let _environment = Environment::cleared(&[
         "ANCHOR_RUNNER_LIBRARY_ROOT",
@@ -201,10 +201,14 @@ async fn four_original_business_graphs_are_admitted_without_provider_or_side_eff
                 "write",
                 "review",
                 "gate",
-                "publish",
-                "docmost"
+                "publish"
             ]),
             "collect",
+        ),
+        (
+            include_str!("../../../../../examples/graphs/weekly-work-report-docmost.json"),
+            json!(["validate", "report", "docmost"]),
+            "validate",
         ),
         (
             include_str!("../../../../../examples/graphs/wecom-assistant.json"),

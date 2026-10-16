@@ -2,15 +2,21 @@ import { useEffect, useRef, useState } from 'react';
 import { api, reason } from './api';
 import type { Plugin } from './model';
 import { PluginDetails, type PluginInformation } from './PluginPanel';
-import { PluginCredentials } from './PluginCredentials';
+import { PluginConfiguration } from './PluginConfiguration';
 import { PluginInstall, PluginUninstall } from './PluginLifecycle';
 
 type Authorization = { state: 'loading' | 'authorized' | 'unauthorized' | 'unknown'; error?: string };
 
-/** Current-library adapter. Historical run details never mount this component. */
-export function LibraryPluginDetails({ plugin, status, problem, close, management = false, onChanged }: {
+type Props = {
   plugin: PluginInformation; status: string; problem?: string | null; close: () => void; management?: boolean; onChanged?: () => void;
-}) {
+};
+
+/** Current-library adapter. Historical run details never mount this component. */
+export function LibraryPluginDetails(props: Props) {
+  return <CurrentLibraryPluginDetails key={props.plugin.id} {...props} />;
+}
+
+function CurrentLibraryPluginDetails({ plugin, status, problem, close, management = false, onChanged }: Props) {
   const [updating, setUpdating] = useState(false);
   const [definition, setDefinition] = useState<PluginInformation | null>(null);
   const [loading, setLoading] = useState(true);
@@ -32,12 +38,13 @@ export function LibraryPluginDetails({ plugin, status, problem, close, managemen
   }, []);
   useEffect(() => {
     let active = true;
+    const controller = new AbortController();
     setLoading(true); setError('');
-    api<Plugin>(`/plugins/${encodeURIComponent(plugin.id)}`).then(data => {
+    api<Plugin>(`/plugins/${encodeURIComponent(plugin.id)}`, 'GET', undefined, controller.signal).then(data => {
       if (active) setDefinition(data);
     }).catch(problem => { if (active) setError(reason(problem)); })
       .finally(() => { if (active) setLoading(false); });
-    return () => { active = false; };
+    return () => { active = false; controller.abort(); };
   }, [plugin.id, revision]);
   useEffect(() => {
     let active = true;
@@ -86,11 +93,11 @@ export function LibraryPluginDetails({ plugin, status, problem, close, managemen
   const oauth = Object.entries(information.mcpServers ?? {}).filter(([, server]) => server.auth === 'oauth');
   return <><PluginDetails plugin={information} status={status} loading={loading} error={error}
     retry={() => setRevision(value => value + 1)} close={close}>
-    {management && <PluginCredentials pluginId={plugin.id} />}
+    <PluginConfiguration pluginId={plugin.id} onChanged={onChanged} />
     {management && <section className="plugin-details-section"><div className="plugin-management-heading"><h3>插件版本</h3>
       <button type="button" onClick={() => setUpdating(true)}>更新插件</button></div></section>}
     {!!oauth.length && <section className="plugin-details-section plugin-authorization"><h3>服务授权 <span>OAuth</span></h3>
-      <p>授权保存在共享库中，供后续任务使用。</p>
+      <p>授权保存在当前账户下，供后续任务使用。</p>
       {oauth.map(([name]) => {
         const authorization = statuses[name] ?? { state: 'loading' };
         return <div className="plugin-authorization-service" key={name}><div><strong>{name}</strong>

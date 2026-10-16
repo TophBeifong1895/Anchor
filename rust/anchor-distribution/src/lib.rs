@@ -562,11 +562,14 @@ fn install_plugin_binary(
             ))
         })?;
     let expected_command = format!("bin/{binary_name}");
-    if server.config["command"] != expected_command
-        || server.config["args"] != serde_json::json!([])
-    {
+    let expected_args = if plugin_id == "docmost" {
+        serde_json::json!(["--endpoint", "${DOCMOST_BASE_URL}/api/files/upload"])
+    } else {
+        serde_json::json!([])
+    };
+    if server.config["command"] != expected_command || server.config["args"] != expected_args {
         return Err(PackageError::Invalid(format!(
-            "{plugin_id} {server_name} MCP must launch {expected_command} without arguments"
+            "{plugin_id} {server_name} MCP must launch {expected_command} with the declared first-party arguments"
         )));
     }
 

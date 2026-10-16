@@ -241,6 +241,17 @@ implementation targets Linux and uses `/proc/self/fd` to anchor publication.
 Known source/repository, credential and mutable-state paths are denied. JSON,
 YAML and TOML are parsed to reject known literal credential fields and URL
 userinfo; environment references such as `${API_KEY}` are retained unexpanded.
+Only a Plugin's root `plugins/<id>/plugin.json` treats `configuration.fields`
+keys as field identifiers and `configuration.environment` values as references
+to those declared fields, using the public Host configuration types. Declaration
+metadata is still scanned; secret defaults (including empty or null defaults),
+embedded values and literal credentials elsewhere remain forbidden. Non-secret
+defaults under known credential field or mapped environment names retain the
+credential checks, even when the field is not typed as secret. Full
+Plugin/MCP binding validation remains owned by shared catalog admission.
+Native Docmost admission requires its declared `--endpoint` argument with
+`${DOCMOST_BASE_URL}/api/files/upload`; arbitrary endpoint or argument overrides
+are rejected, and WeCom's native MCP entrypoint still requires no arguments.
 Text assignments and PEM private-key markers are also checked. This is a
 conservative admission filter, not generic secret discovery: arbitrary prose,
 binary contents, images, generated JS and custom credential field names require

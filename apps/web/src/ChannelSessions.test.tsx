@@ -2,46 +2,40 @@
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { ChannelsPage } from './ChannelsPage';
+import { ChannelSessions } from './ChannelSessions';
 import type { RunProjection } from './model';
 
-vi.mock('./PluginCredentials', () => ({ PluginCredentials: ({ pluginId, target }: { pluginId: string; target: string }) => <div data-testid="credentials">{pluginId}/{target}</div> }));
 const binding = { graph: 'assistant-graph', reply_node: 'assistant', plugin: 'gateway', users: ['alice'], send_users: ['alice'] };
 const response = (status: number, data: unknown) => ({ ok: status >= 200 && status < 300, status, json: async () => data }) as Response;
 
-describe('channel and resident assistant management', () => {
+describe('message session management', () => {
   let container: HTMLDivElement;
   let root: Root;
   let fetchMock: ReturnType<typeof vi.fn>;
-  let status: Record<string, unknown>;
   let instance: { assistant: { run_id: string; wait_node: string; work_node: string; reply_node: string } | null; needs_recovery: boolean;
     plugin_update?: { state: 'current' | 'pending' | 'restart_required' | 'unavailable'; message?: string } };
   let execution: { run: string; active: boolean; control_requested: string | null; projection?: RunProjection; state: { status: string; cursor: { node: string } } };
   let sessions: { id: string; title: string; graph: string; platform: string }[];
   let deliveries: { key: string; status: string }[];
   let runIds: string[];
+  let opened: [string, string][];
+  let closed: number;
   const requests = () => fetchMock.mock.calls.map(([path, init]) => ({ path, method: init?.method ?? 'GET', body: init?.body ? JSON.parse(init.body) : undefined }));
-  const button = (name: string, parent: Element = container) => [...parent.querySelectorAll<HTMLButtonElement>('button')].find(item => item.textContent === name)!;
-  const click = async (name: string, parent?: Element) => { await act(async () => button(name, parent).click()); };
-  const render = async () => { await act(async () => root.render(<ChannelsPage />)); };
+  const button = (name: string) => [...container.querySelectorAll<HTMLButtonElement>('button')].find(item => item.textContent === name)!;
+  const click = async (name: string) => { await act(async () => button(name).click()); };
+  const render = async () => { await act(async () => root.render(<ChannelSessions onOpenRun={(run, graph) => opened.push([run, graph])} close={() => { closed += 1; }} />)); };
   beforeEach(() => {
     (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
     Object.defineProperty(HTMLDialogElement.prototype, 'showModal', { configurable: true, value() { this.open = true; } });
     Object.defineProperty(HTMLDialogElement.prototype, 'close', { configurable: true, value() { this.open = false; } });
     container = document.createElement('div'); document.body.appendChild(container); root = createRoot(container);
-    sessionStorage.clear();
-    status = { platform: 'wecom', configured: true, configuration_owner: 'host', mutable: true, owner_matches: true, enabled: true, binding, listener: 'connecting' };
     sessions = [{ id: 'channel-session', title: 'Alice 的对话', graph: binding.graph, platform: 'wecom' }];
     instance = { assistant: { run_id: 'current-run', wait_node: 'wait_input', work_node: 'assistant', reply_node: 'reply' }, needs_recovery: false };
     execution = { run: 'current-run', active: true, control_requested: null, state: { status: 'running', cursor: { node: 'wait_input' } } };
-    deliveries = []; runIds = ['current-run'];
+    deliveries = []; runIds = ['current-run']; opened = []; closed = 0;
     fetchMock = vi.fn(async (path: string, init: RequestInit = {}) => {
       const method = init.method ?? 'GET';
-      if (path === '/channels/wecom/configuration') return response(200, status);
-      if (path === '/channels/wecom/enabled') { const body = JSON.parse(String(init.body)); status = { ...status, enabled: body.enabled, listener: body.enabled ? 'connecting' : 'stopped' }; return response(200, status); }
       if (path === '/channel-sessions') return response(200, { sessions });
-      if (path === '/graphs') return response(200, { graphs: [{ graph: binding.graph }] });
-      if (path === '/plugins') return response(200, { plugins: [{ id: binding.plugin }] });
       if (path === '/channel-sessions/channel-session/assistant') return response(200, instance);
       if (path === '/channel-sessions/channel-session/deliveries/unresolved') return response(200, { deliveries });
       if (path === '/channel-sessions/channel-session' && method === 'GET') return response(200, { session: { run_ids: runIds } });
@@ -61,15 +55,11 @@ describe('channel and resident assistant management', () => {
   });
   afterEach(async () => { await act(async () => root.unmount()); container.remove(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
-  it('shows actual connection state and reuses plugin credentials for the channel target', async () => {
+  it('opens a Run from the board and closes the dialog behind it', async () => {
     await render();
-    expect(container.textContent).toContain('正在连接');
-    expect(container.textContent).not.toContain('常驻监听');
-    expect(container.textContent).toContain('配置已保存');
-    expect(container.querySelector('[data-testid="credentials"]')?.textContent).toBe('gateway/channel_wecom');
-    expect(container.querySelector('fieldset')?.disabled).toBe(true);
-    expect(container.textContent).toContain('等待消息');
-    expect(button('退役实例').disabled).toBe(true);
+    await click('current-run');
+    expect(opened).toEqual([['current-run', binding.graph]]);
+    expect(closed).toBe(1);
   });
 
   it.each([
@@ -87,40 +77,19 @@ describe('channel and resident assistant management', () => {
     expect(requests().every(item => item.method === 'GET')).toBe(true);
   });
 
-  it('marks a previously authenticated connection as unconfirmed when configuration refresh fails, then recovers', async () => {
-    status.listener = 'authenticated';
-    await render();
-    expect(container.textContent).toContain('常驻监听');
-    expect(container.querySelector('.channels-signal')?.classList.contains('connected')).toBe(true);
-    const initial = fetchMock.getMockImplementation() as (path: string, init?: RequestInit) => Promise<Response>;
-    fetchMock.mockImplementation((path: string, init?: RequestInit) => path === '/channels/wecom/configuration'
-      ? Promise.resolve(response(503, { error: 'configuration temporarily unavailable' })) : initial(path, init));
-    await click('刷新状态');
-    expect(container.textContent).toContain('连接状态无法确认');
-    expect(container.textContent).toContain('上次读取：已启用消息入口');
-    expect(container.textContent).not.toContain('常驻监听');
-    expect(container.querySelector('.channels-signal')?.classList.contains('connected')).toBe(false);
-    expect(container.querySelector('form')).not.toBeNull();
-    fetchMock.mockImplementation(initial);
-    await click('刷新状态');
-    expect(container.textContent).toContain('常驻监听');
-    expect(container.textContent).not.toContain('连接状态无法确认');
-    expect(container.querySelector('.channels-signal')?.classList.contains('connected')).toBe(true);
-  });
-
   it('shows a failed conversation read instead of an empty list until a successful retry', async () => {
     sessions = [];
     const initial = fetchMock.getMockImplementation() as (path: string, init?: RequestInit) => Promise<Response>;
     fetchMock.mockImplementation((path: string, init?: RequestInit) => path === '/channel-sessions'
       ? Promise.resolve(response(503, { error: 'conversations temporarily unavailable' })) : initial(path, init));
     await render();
-    expect(container.textContent).toContain('渠道对话读取失败');
-    expect(container.textContent).not.toContain('还没有渠道对话');
+    expect(container.textContent).toContain('消息会话读取失败');
+    expect(container.textContent).not.toContain('还没有消息会话');
     expect(container.querySelector('.channels-count')?.textContent).toBe('未知');
     fetchMock.mockImplementation(initial);
     await click('刷新状态');
-    expect(container.textContent).toContain('还没有渠道对话');
-    expect(container.textContent).not.toContain('渠道对话读取失败');
+    expect(container.textContent).toContain('还没有消息会话');
+    expect(container.textContent).not.toContain('消息会话读取失败');
     expect(container.querySelector('.channels-count')?.textContent).toBe('0');
   });
 
@@ -176,14 +145,6 @@ describe('channel and resident assistant management', () => {
     expect(requests().some(item => item.method !== 'GET')).toBe(false);
   });
 
-  it('sends the saved binding when toggling the entry without stopping its assistant', async () => {
-    await render(); await click('停用消息入口');
-    expect(requests().find(item => item.path === '/channels/wecom/enabled')?.body).toEqual({ enabled: false, expected_binding: binding });
-    expect(requests().some(item => item.path === '/runs/current-run/stop')).toBe(false);
-    expect(container.textContent).toContain('监听已停止');
-    expect(container.textContent).toContain('等待消息');
-  });
-
   it('keeps the confirmed retirement target fixed if the current instance changes', async () => {
     execution.active = false; execution.state.status = 'stopped';
     await render(); await click('退役实例');
@@ -195,14 +156,14 @@ describe('channel and resident assistant management', () => {
     expect(requests().some(item => item.path.endsWith('/assistant/retire'))).toBe(false);
   });
 
-  it('cleans the confirmed history scope through Run deletion before channel Session deletion', async () => {
+  it('cleans the confirmed history scope through Run deletion before Session deletion', async () => {
     instance = { assistant: null, needs_recovery: false }; runIds = ['old-run', 'new-run'];
     await render(); await click('清理历史');
     expect(container.querySelector('dialog')?.textContent).toContain('old-run');
     expect(container.querySelector('dialog')?.textContent).toContain('new-run');
     await click('永久清理');
     expect(requests().filter(item => item.method === 'DELETE').map(item => item.path)).toEqual(['/runs/new-run', '/runs/old-run', '/channel-sessions/channel-session']);
-    expect(container.textContent).toContain('还没有渠道对话');
+    expect(container.textContent).toContain('还没有消息会话');
   });
 
   it('rejects cleanup if a trusted message bound a new instance after confirmation opened', async () => {
@@ -221,18 +182,5 @@ describe('channel and resident assistant management', () => {
     await click('永久清理');
     expect(container.querySelector('dialog')?.textContent).toContain('重新确认清理范围');
     expect(requests().filter(item => item.method === 'DELETE')).toHaveLength(0);
-  });
-
-  it('keeps deployment management read only and hides bindings belonging to another owner', async () => {
-    status = { ...status, configuration_owner: 'deployment', mutable: false };
-    await render();
-    expect(container.textContent).toContain('此渠道由部署配置管理');
-    expect(container.querySelector('fieldset')?.disabled).toBe(true);
-    expect(container.querySelector('[data-testid="credentials"]')).toBeNull();
-    expect(button('启用消息入口')).toBeUndefined();
-    status = { platform: 'wecom', configuration_owner: 'host', configured: true, owner_matches: false, mutable: false };
-    await click('刷新状态');
-    expect(container.textContent).toContain('属于另一位管理者');
-    expect(container.querySelector('form')).toBeNull();
   });
 });

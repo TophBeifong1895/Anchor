@@ -12,7 +12,7 @@
 
 ## WebUI 配置
 
-安装带有 WeCom 通道声明的插件及助手 Graph 后，打开「渠道」，选择工作流、回复节点和插件，填写接收与主动发送的成员名单。机器人凭据在此页直接保存，也可在同一插件详情中轮换或清除；两处使用同一份凭据。确认配置后启用监听，页面显示 Supervisor 的实际状态，已启用不等于已经连接。
+安装带有 WeCom 通道声明的插件及助手 Graph 后，在图编排中打开该工作流的「消息触发」，填写回复节点和插件，以及接收与主动发送的成员名单。每个 Host 只有一个企业微信入口，绑定当前工作流会替换原绑定。机器人凭据可在此保存，也可在同一插件详情中轮换或清除；两处使用同一份凭据。确认配置后启用监听，对话框显示 Supervisor 的实际状态，已启用不等于已经连接。各对话的实例在运行看板的「消息会话」中停止、恢复、退役或清理。
 
 下方会话列表提供当前实例的停止、恢复、退役和清理。停止先等待执行者退出；退役后，下一条可信消息才创建新实例。清理会复核当前实例、未结算投递和待删除 Run，期间出现新消息会阻止清理。部署环境明确提供的字段仍由部署者管理，页面不覆盖。
 
@@ -27,7 +27,7 @@ ANCHOR_WECOM_USERS=已核实的成员userid
 ANCHOR_WECOM_SEND_USERS=
 ANCHOR_WECOM_GRAPH=wecom-assistant
 ANCHOR_WECOM_REPLY_NODE=assistant
-ANCHOR_API_KEYS=["至少32字节的随机密钥"]
+ANCHOR_API_KEYS=["至少32字节、随机生成的密钥"]
 ANCHOR_API_KEY=与服务白名单匹配的密钥
 ```
 
@@ -53,7 +53,7 @@ Host 的 ChannelSupervisor 按渠道选择的 Graph 查找 Plugin 声明的原�
 
 同一 Session 串行，新消息打断旧轮，Host 等 Goose 与工具执行者真正退出，保存未提交文件 checkpoint 与 `Yielded` 事实，再由普通 Runner 提交 `Interruption` 控制 Artifact，沿 `assistant → reply → wait_input` 接续。旧回复标为 `suppressed`，不发送、不假装旧 Agent/Turn 成功，也不把整个助手 stop 后静默复活。已发生的外部操作不回滚，未知结果须先核查现场，不能自动重放。新实例仅在首个 Agent invocation 从可信获准的 previous 文件快照初始化一次，之后直接维护本节点 `/workspace`；跨图或跨会话历史不自动迁移。
 
-入站已保存但 dispatch 拒绝或等待失败时，Host 在 Session 事务中只将仍 Running、尚无 Run 关联且未被新消息取代的 Turn 结算为 Failed。已经领取的 Turn 由其执行和投递事实继续结算。已停止助手返回 `409` 与具名 `assistant_stopped`，网关显示“助手已停止。请打开 Anchor 的渠道页面，恢复该助手后再发消息。”；拒绝不会留下永久 Running 的孤立 Turn，也不自动重放旧输入。
+入站已保存但 dispatch 拒绝或等待失败时，Host 在 Session 事务中只将仍 Running、尚无 Run 关联且未被新消息取代的 Turn 结算为 Failed。已经领取的 Turn 由其执行和投递事实继续结算。已停止助手返回 `409` 与具名 `assistant_stopped`，网关显示“助手已停止。请在 Anchor 运行看板的「消息会话」中恢复该助手后再发消息。”；拒绝不会留下永久 Running 的孤立 Turn，也不自动重放旧输入。
 
 沿用既有一次性 `wecom-assistant` 时，每条输入仍对应独立 Run：新消息取消旧 Run，待旧执行退出后接续原生 Goose 会话；上轮工作文件通过授权的只读 `/previous` 提供。被取消、且模型尚未看到的用户消息仍作为 `input.interrupted_messages` 带入新 Run（最多 8 条、每条截断到 500 字符；纯附件消息只提示文件数量），这一旧路径不挂载被打断轮的附件，不能与常驻助手的 Turn 快照授权混淆。
 
@@ -79,6 +79,8 @@ Goose 负责 Agent loop、Provider、原生历史和 compaction；Anchor 保存 
 ### 插件/图更新的操作顺序
 
 在工作流页面修改助手节点的插件选择或联网设置并保存，各会话从下一条消息起应用，保留同一 Run、Goose 历史和工作文件；无需再次点击运行。当前 Turn 及其恢复继续使用已冻结的权限，移除插件不会中断已开始的调用。Graph bundle 只引用 Plugin id，保存不改写 Library。
+
+消息会话的插件状态比较当前 Graph 与助手已冻结的配置，不表示模型、MCP 服务或凭据连接测试通过。状态查询使用与 Graph 写入同一标识的共享读租约，多个会话或标签页的查询互不排斥；Graph 保存、准入与授权写入仍持独占租约，写入期间读取可以暂时不可用，不能因此重建助手或重放工具调用。`unavailable` 的具体原因可在消息会话行的「详情 → 插件配置」核查；会话 UUID 是会话标识，不是失败的插件 ID。
 
 修改指令、节点或连线等结构时，仍有 current 助手的保存请求返回 409：先停止并等待执行及投递收束，再退役现有实例，然后保存新版；下一条可信消息创建新实例。普通 Graph 仍保留准入快照。插件准备失败明确报错，不悄悄恢复已移除的权限。
 

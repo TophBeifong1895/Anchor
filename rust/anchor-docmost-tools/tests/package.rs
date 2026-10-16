@@ -66,7 +66,6 @@ fn native_package_has_only_manifest_original_skill_and_current_executable() {
         serde_json::from_str(include_str!("../../../plugins/docmost/plugin.json"))
             .expect("original manifest");
     expected["mcpServers"]["attachments"]["command"] = "bin/anchor-docmost-tools".into();
-    expected["mcpServers"]["attachments"]["args"] = serde_json::json!([]);
     expected["mcpServers"]["attachments"]["cwd"] = ".".into();
     assert_eq!(manifest, expected);
     assert_eq!(

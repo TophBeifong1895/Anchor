@@ -16,6 +16,32 @@ impl FileRunStore {
     pub fn new(root: impl Into<PathBuf>) -> Self {
         Self { root: root.into() }
     }
+    pub fn acquire_read_lease(&self, run_id: &str) -> Result<Box<dyn RunLease>, GraphError> {
+        self.acquire_file_lease(run_id, fs::File::try_lock_shared)
+    }
+    fn acquire_file_lease(
+        &self,
+        run_id: &str,
+        try_lock: fn(&fs::File) -> Result<(), fs::TryLockError>,
+    ) -> Result<Box<dyn RunLease>, GraphError> {
+        validate_component(run_id)?;
+        fs::create_dir_all(&self.root)?;
+        let path = self.root.join(format!(".{run_id}.lock"));
+        // Keep the lock inode stable. The OS releases this advisory lock if
+        // the process exits, including an unclean crash; never unlink it.
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(&path)?;
+        try_lock(&file).map_err(|error| match error {
+            std::fs::TryLockError::WouldBlock => GraphError::RunBusy(run_id.to_owned()),
+            std::fs::TryLockError::Error(error) => GraphError::Io(error),
+        })?;
+        file.sync_all()?;
+        Ok(Box::new(FileRunLease { _file: file }))
+    }
     fn path(&self, id: &str) -> Result<PathBuf, GraphError> {
         validate_component(id)?;
         Ok(self.root.join(format!("{id}.json")))
@@ -68,23 +94,7 @@ impl RunStore for FileRunStore {
         Ok(())
     }
     fn acquire_lease(&self, run_id: &str) -> Result<Box<dyn RunLease>, GraphError> {
-        validate_component(run_id)?;
-        fs::create_dir_all(&self.root)?;
-        let path = self.root.join(format!(".{run_id}.lock"));
-        // Keep the lock inode stable. The OS releases this advisory lock if
-        // the process exits, including an unclean crash; never unlink it.
-        let file = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .truncate(false)
-            .open(&path)?;
-        file.try_lock().map_err(|error| match error {
-            std::fs::TryLockError::WouldBlock => GraphError::RunBusy(run_id.to_owned()),
-            std::fs::TryLockError::Error(error) => GraphError::Io(error),
-        })?;
-        file.sync_all()?;
-        Ok(Box::new(FileRunLease { _file: file }))
+        self.acquire_file_lease(run_id, fs::File::try_lock)
     }
 }
 struct FileRunLease {

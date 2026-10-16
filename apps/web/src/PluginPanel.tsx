@@ -148,7 +148,7 @@ export function PluginDetails({ plugin, status, recorded = false, loading = fals
   const servers = Object.keys(plugin.mcpServers ?? {});
   const serverNames = servers.length ? servers : plugin.mcpServerNames ?? [];
   return <Modal title={`${plugin.name || plugin.id} · 插件详情`} className="plugin-details" close={close}>
-    <p className="plugin-details-source">{recorded ? '历史记录 · 仅展示本次运行保存的插件信息，不代表实际调用或任务成功。' : '当前插件库 · 只读查看插件定义。'}</p>
+    <p className="plugin-details-source">{recorded ? '历史记录 · 仅展示本次运行保存的插件信息，不代表实际调用或任务成功。' : '当前插件库 · 展示当前插件定义。'}</p>
     <div className="plugin-details-overview"><span className="plugin-card-status">{status}</span>
       <p>{plugin.description || '此插件尚未提供用途说明。'}</p>
       <dl className="plugin-details-metadata"><div><dt>标识</dt><dd><code>{plugin.id}</code></dd></div>

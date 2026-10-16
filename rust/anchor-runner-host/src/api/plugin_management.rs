@@ -1,5 +1,6 @@
 //! Operator adapters for current Library configuration; no Pilot Turn is created.
 use super::*;
+mod configuration;
 mod lifecycle;
 #[cfg(test)]
 mod tests;
@@ -13,6 +14,7 @@ pub(super) fn router() -> Router<ApiState> {
         )
         .layer(RequestBodyLimitLayer::new(2 * 1024 * 1024))
         .merge(lifecycle::router())
+        .merge(configuration::router())
         .layer(middleware::from_fn(private_responses))
 }
 
@@ -20,6 +22,7 @@ pub(super) fn is_private_path(path: &str) -> bool {
     let parts = path.trim_start_matches('/').split('/').collect::<Vec<_>>();
     parts.first() == Some(&"plugins")
         && (parts.get(2) == Some(&"credentials")
+            || parts.get(2) == Some(&"configuration")
             || parts.get(1) == Some(&"install-preflight")
             || parts.get(2) == Some(&"uninstall-preflight")
             || parts.get(1) == Some(&"preflights"))

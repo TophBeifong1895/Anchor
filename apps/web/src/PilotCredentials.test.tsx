@@ -2,7 +2,7 @@
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
-import { PilotCredentialForm, type CredentialRequest } from './PilotCredentials';
+import { PilotCredentialForm, PilotCredentials, type CredentialRequest } from './PilotCredentials';
 
 const request: CredentialRequest = { id: 'c-1', session: 'pilot-private-s-1', turn: 't-1', plugin: 'service', server: 'main', field: 'SERVICE_TOKEN', status: 'pending' };
 const response = (status: number, body: unknown) => ({ ok: status >= 200 && status < 300, status, json: async () => body }) as Response;
@@ -52,7 +52,9 @@ describe('Pilot credential input', () => {
     fetchMock.mockImplementation(() => new Promise(() => undefined));
     await draw(); await submit('token');
     const signal = fetchMock.mock.calls[0][1].signal as AbortSignal;
+    const input = container.querySelector<HTMLInputElement>('input')!;
     await act(async () => root.render(<p>另一个对话</p>));
+    expect(input.value).toBe('');
     expect(signal.aborted).toBe(true); expect(configured).not.toHaveBeenCalled();
   });
   it('cancels the configuration without transmitting the typed secret', async () => {
@@ -64,16 +66,43 @@ describe('Pilot credential input', () => {
     expect(container.querySelector<HTMLInputElement>('input')!.value).toBe('');
     expect(configured).toHaveBeenCalledOnce();
   });
+
+  it('resets a replacement request immediately and ignores the cancelled submission response', async () => {
+    let complete: (value: Response) => void = () => undefined;
+    fetchMock.mockImplementationOnce(() => new Promise<Response>(resolve => { complete = resolve; }));
+    await draw(); await submit('old-request-secret');
+    const signal = fetchMock.mock.calls[0][1].signal as AbortSignal;
+    const oldInput = container.querySelector<HTMLInputElement>('input')!;
+    await draw({ ...request, id: 'c-2', field: 'NEXT_TOKEN' });
+    expect(signal.aborted).toBe(true); expect(oldInput.value).toBe('');
+    expect(container.querySelector<HTMLInputElement>('input')!.disabled).toBe(false);
+    expect(container.textContent).toContain('NEXT_TOKEN');
+    await act(async () => complete(response(200, { request: { ...request, status: 'configured' } })));
+    expect(configured).not.toHaveBeenCalled(); expect(container.textContent).toContain('NEXT_TOKEN');
+  });
+
+  it('removes a previous Session request while the next Session is loading', async () => {
+    fetchMock.mockResolvedValueOnce(response(200, { requests: [request] }));
+    await act(async () => root.render(<PilotCredentials session={request.session} onConfigured={configured} />));
+    const oldInput = container.querySelector<HTMLInputElement>('input')!;
+    oldInput.value = 'departing-session-secret';
+    fetchMock.mockImplementationOnce(() => new Promise<Response>(() => undefined));
+    await act(async () => root.render(<PilotCredentials session="pilot-private-next" onConfigured={configured} />));
+    expect(oldInput.value).toBe(''); expect(container.querySelector('input')).toBeNull();
+    expect(container.textContent).not.toContain('SERVICE_TOKEN');
+  });
+
   it('keeps completed request history distinct from current credentials', async () => {
     await draw({ ...request, status: 'configured' });
     expect(container.textContent).toContain('本次配置请求已完成');
     expect(fetchMock).not.toHaveBeenCalled();
+    fetchMock.mockResolvedValueOnce(response(200, { plugin: 'service', authorization_digest: 'digest', revision: 0, fields: [], targets: [] }));
     fetchMock.mockResolvedValueOnce(response(200, { plugin: 'service', targets: [{ target: 'main', kind: 'mcp',
       authorization_digest: 'digest', fields: [{ field: 'SERVICE_TOKEN', state: 'missing', editable: true }] }] }));
     await act(async () => { [...container.querySelectorAll('button')].find(button => button.textContent === '查看当前凭据')!.click(); });
     expect(container.textContent).toContain('本次配置请求已完成');
     expect(container.textContent).toContain('未配置');
     expect(container.textContent).toContain('设置 SERVICE_TOKEN');
-    expect(fetchMock.mock.calls[0][0]).toBe('/plugins/service/credentials');
+    expect(fetchMock.mock.calls.map(call => call[0])).toEqual(['/plugins/service/configuration', '/plugins/service/credentials']);
   });
 });

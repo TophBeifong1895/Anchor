@@ -70,6 +70,8 @@ Webhook 与 Responses 共用接纳和身份校验。Responses 只实现冻结子
 | `GET /channel-sessions/{session}`、`.../assistant`、`POST .../assistant/retire`、`DELETE /channel-sessions/{session}` | 校验渠道 owner，复用 current binding、静止与未结算投递限制；退役不会立刻创建新实例 |
 | `POST /schedules`、`PUT/DELETE /schedules/{schedule}` | 新建、编辑、暂停/启用与删除共享计划；更新保留 ID/创建时间，输入修改保留下次时点，改规则或重新启用只安排未来执行 |
 
+渠道助手的 `plugin_update` 是 Graph 插件配置与已冻结 Turn 策略的比较，不是连接健康检查。读取使用同一 Graph 锁文件的共享租约，并发读取互不排斥；保存、准入和授权写入仍要求独占，冲突保持 fail-closed。真正的读取失败或写锁占用仍返回 `state: unavailable` 及原因，不改动会话、Run 或 Plugin 权限。
+
 `execution` 投影下一轮的默认选择：`default_reference/source/configured/fields/api_key_present/error`；其中 `fields` 是选定模型的公开字段，顶层旧 `fields/configured` 仅保留兼容含义。Pilot 和未指定模型的节点使用 `models.default.flash`，Graph 可显式选择 `models.default.pro`、`models.backup.flash/pro`；不自动降级。default 尚未保存时兼容旧默认配置和预填，已保存但不完整时明确失败；四个设置引用以外的原显式模型别名保留原解释。旧 invocation 即使用过同名别名，恢复时仍核对其原始绑定。
 
 新 Pilot Turn 和新节点 invocation 读取最新设置，包含同一 Run 的后续节点或常驻助手下一轮；进行中的执行保持独立快照，无需重启 Host。加载已有 Goose Session 后通过原生模型配置接口选定本轮模型，保留历史。恢复同一个节点 invocation 仍核对原模型/服务绑定，不能改用新服务；槽的公共历史和分服务凭据复用同一私有存储与锁，历史凭据投影增加 `slot`，可经现有凭据接口轮换或清除。两槽即使地址相同也使用独立凭据；换地址/协议的 `keep` 不携带原密钥。初始化状态可跨页面刷新读取，Host 重启后的未完成初始化显示中断，重试复用准备器检查现场。
@@ -78,7 +80,9 @@ Webhook 与 Responses 共用接纳和身份校验。Responses 只实现冻结子
 
 Runtime 状态的 `python_prepare_available` 表示当前配置满足 Python 准备条件：未被部署禁用、无准备字段冲突，且有完整外置解释器与准备器或有效的发行包 bootstrap。它与 `python_configured`（已有解释器）、`python_bootstrap_available`（发行包工具）分别判断，不保证后续下载成功。Web 按该字段开放按钮；旧 Host 缺字段时保守回退到 bootstrap 状态。GET 通过有界本地探测返回 `python_version`（完整实测版本）与 `python_version_error`；失败时版本为 null，不使用路径或默认安装版本推测。刷新会重新检测；prepare/cancel 响应不执行探测，Web 保留最近观察直至下一次 GET。部署管理的 Python 展示实测版本，不允许网页改版本，准备请求传 `version: null` 以复用原解释器。
 
-插件预检依次投影 `preparing/ready/running/succeeded/failed`，确认携带具体替换与数据删除选项，重复确认观察同一操作。文件导入最多 2,048 项、解码后 32 MiB，请求上限 48 MiB；拒绝绝对路径、路径穿越、重复项及链接/特殊文件。预检和操作句柄驻留当前 Host，重启后客户端核对实际 Library 状态再决定是否重新预检，不把句柄丢失当作安装失败。独立保存凭据会完成同 owner 且仍有效的待处理请求；若保存成功但通知同步失败，响应保留成功事实并附带提示，不让用户误认为密钥未保存。
+插件预检依次投影 `preparing/ready/running/succeeded/failed`，确认携带具体替换与数据删除选项，重复确认观察同一操作。文件导入最多 2,048 项、解码后 32 MiB，请求上限 48 MiB；拒绝绝对路径、路径穿越、重复项及链接/特殊文件。预检和操作句柄驻留当前 Host，重启后客户端核对实际 Library 状态再决定是否重新预检，不把句柄丢失当作安装失败。独立保存凭据只完成同 owner、同连接身份且仍有效的待处理请求；若保存成功但通知同步失败，响应保留成功事实并附带提示，不让用户误认为密钥未保存。MCP 旧表单提交仍由后端比较创建时配置版本，配置变化后需重新申请，不能依赖通知成功来阻止旧请求覆盖。
+
+插件默认连接配置为 owner-bound Host 事实：`GET/PUT /plugins/{plugin}/configuration`，显式协议测试为 `POST /plugins/{plugin}/configuration/test`。读取返回 `authorization_digest`、`revision`、逻辑字段和 MCP targets；只有非秘密字段可带 `value`。PUT 发送 `{authorization_digest, revision, fields: {field_id: {action: "set", value: "..."} | {action: "clear"}}}`，一次提交原子更新共享消费者。冲突返回 409；清除不回退旧环境/default，更换 URL 不携带未重新提交的旧秘密。测试请求带摘要与 revision，结果提供各 target 的 `verified/failed/unsupported`、工具数及 `current`；不执行业务工具，不把 stdio 初始化解释为上游认证。所有配置响应和错误使用私有 no-store 策略。旧 credentials API 与 Pilot 请求继续复用配置用例，显式映射的逻辑字段不再重复展示。
 
 新建工作流与运行输入使用正式表单；运行输入草稿保存在当前浏览器。Graph/Run 的 Pilot 协助入口只带入对象引用到未发送草稿，不自动执行任务。插件、渠道、设置页面按各自需要读取状态，不恢复全工作台后台轮询。
 

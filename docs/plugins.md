@@ -12,6 +12,24 @@ library/plugins/<id>/
 
 Graph 的 AgentNode 保存 Plugin 目录 ID。Library 校验清单与 Skill 路径，Host 在节点调用时按当前安装内容只读挂载到 `/plugins/<id>`，实际依赖视图记入 Run 观察；升级从下一次节点调用起生效，已提交步骤不重放。Plugin 文件由安装流程或操作员维护，Graph 无权添加任意宿主路径。
 
+## 连接配置与凭据
+
+Plugin 声明配置需求，Host 保存每个 owner 的一份默认连接配置。Web 的插件详情提供普通字段、凭据设置/轮换/清除与显式连接测试；Pilot 的专用凭据表单映射到同一事实。配置属于 Host，不修改 Library 清单，也不随 Plugin/Graph 包分发。
+
+清单可增加 `configuration.fields`：稳定字段 ID 对应 `type`（`string`、`url`、`secret`）、`label`、`required`（默认 true）和可选非秘密 `default`。`configuration.environment` 按 MCP target 显式把环境名映射到字段 ID。同一个字段可被多个 server 消费，所有值与 revision 原子保存、一次解析；不能因环境名相同就隐式共享。秘密字段禁止默认值和 `${...}` 模板，只允许经 stdio 环境、Bearer 或环境 Header 注入。带配置声明的 Plugin 必须将所有非 Host 路径模板变量显式映射为非秘密字段，不能把可变端点留在旧凭据入口以绕过连接身份校验。
+
+Docmost 的 `base_url` 和 `api_key` 同时供远程页面 MCP 与本地附件 MCP 使用。网页填写一次 Key，后续轮换无需修改 `.env` 或重启 Host。环境名 `DOCMOST_API_KEY` 只是 Host 向两个实现注入凭据的适配名称。
+
+MCP 默认只读取 owner 的托管配置；进程中存在同名环境变量不会锁定网页，也不会成为缺失值的回退。清除字段保存明确的空值，不能回退到旧环境或清单默认值。更换 URL 时，未在同次更新明确设置的托管秘密会清除，避免把旧 Key 发到新服务。普通字段可回显，秘密只返回保存状态；存储目录 0700、文件 0600，秘密不进入公开 DTO、聊天、原生历史、日志投影或浏览器持久存储。
+
+运维托管通过 `ANCHOR_PLUGIN_EXTERNAL_CONFIGURATION` 显式声明，例如 `{"docmost":{"api_key":"DOCMOST_API_KEY"}}`；旧无配置声明的 MCP 使用 `{"plugin-id":{"server.ENV_NAME":"ENV_NAME"}}`。声明的来源必须匹配插件消费的环境名，此时字段只读且仍不回显秘密。缺失的外部值直接失败，不退回托管值。切换来源属于部署授权变化，不会自动把部署秘密复制给所有用户。渠道的部署归属沿用渠道契约。
+
+保存携带当前 `authorization_digest` 和 `revision`，冲突要求重新读取；声明/权限变化使旧配置失配。新 Turn/节点 invocation 读取最新配置，进行中的连接保留快照。恢复同一个 invocation 校验已保存的 owner、目标与配置来源绑定；在同一凭据引用内可轮换 Key，端点/来源改变不能静默接续。绑定事实不保存秘密或秘密哈希，随 Run 删除清理。旧记录没有此绑定时不据此补写历史结论。
+
+Pilot 的 MCP 凭据请求在创建时绑定配置 revision 与无秘密连接身份，提交前在同一写入锁内重新校验；配置变化、清除或旧请求同步失败后，旧表单不能覆盖新值。配置变更后可在同一 Turn 申请新请求；升级前没有版本绑定的待填写 MCP 请求需重新申请，不自动授权提交。渠道凭据保留独立生命周期。
+
+连接测试复用执行时的准备、权限、沙箱及 MCP transport，只进行初始化与工具发现，不调用业务工具。返回结果绑定配置 revision；测试期间配置改变则标记结果过期。stdio 发现成功只证明本地工具可启动，不证明上游 Key 有效。测试成功、远程认证和真实业务验收分别记录。
+
 ## 工具与模型边界
 
 Rust Host 使用 RMCP 读取 MCP server 的真实工具清单和 schema，并通过 Goose ACP/MCP 接入 AgentNode。工具归属来自 Plugin/server 的实际装配，说明、Skill 和 schema 经固定发现入口按需读取。Goose 负责模型循环、Provider、工具交互、原生会话和 compaction；Anchor 负责 Graph、Run、Artifact、Sandbox、Plugin 和宿主权限事实。
@@ -36,7 +54,7 @@ Pilot 与 AgentNode 共用 `PluginDisclosureCatalog` 和 `ToolDisclosure`。`anc
 
 ## 安装与更新
 
-插件库页面支持从 GitHub tree URL 或本地插件目录预检、安装与更新；确认使用同一个应用安装前置条件和 Library 发布锁，Pilot 的 `plugin_install` 保留原生确认入口（见 [开发与交付](pilot-development.md#候选准备测试与交付)）。本地导入只接受普通文件列表，最多 2048 个文件、解码后合计 32 MiB；联网获取源码或依赖需要明确授权。卸载展示会话/未结束 Run 的阻止原因及 Graph 影响，并确认删除插件自身数据。操作员 CLI（`anchor-library --root <Library> install --directory <候选目录> --id <id>`）**拒绝**安装声明了运行期依赖的插件——它没有求解依赖、落地视图的宿主能力，装了也起不来；`--review` 仍可完整查看该候选。Plugin 自己声明运行期依赖时，宿主在安装时按部署授权的来源求解并落地到共享存储，再为该插件版本生成视图；求解或取包失败就不装，并把工具原文报给人。声明写在清单顶层：`"dependencies": {"python": ["idna==3.6"]}`（清单顶层字段是**封闭白名单**：`name`/`description`/`version`/`author`/`homepage`/`repository`/`license`/`keywords`/`interface`/`skills`/`mcpServers`/`dependencies`/`network`/`mutable`/`hooks`/`commands`/`agents`/`apps`，其他键一律拒绝；这是有意的，宁可让作者发现问题，也不要静默忽略一个拼错的字段），要用视图的解释器就把 server 的 `command` 写成 `${ANCHOR_PLUGIN_VIEW}/bin/python`。插件自己的可变数据用顶层 `"mutable": ["data/", "cache.db"]` 声明（相对插件目录、不含 `..`、不能覆盖 `plugin.json`、`.mcp.json` 或外置 MCP 声明文件；末尾 `/` 表示子树）：这些路径是插件进程**唯一**可写的地方，平台从不读、不复制、不覆盖它们，代码摘要与插件包清单也不包含它们——同一份代码无论数据长到多大，摘要都不变。插件只有一份（`plugins/<id>/`），Graph 包只写 `{"id": …}` 引用：升级插件不需要改包，正在运行的 Run 从**下一次节点调用**起用新代码，已完成步骤不回滚、不重放，它实际用过的视图记进 Run 记录作为观察。OAuth 从 Plugin 面板显式授权，owner-bound token 保存在操作员 Library，凭证不进入 Graph 包。授权、刷新与 MCP 连接有确定性本地测试；真实 provider 和回调部署需独立验收，不能声明所有社区 server 兼容。
+插件库页面支持从 GitHub tree URL 或本地插件目录预检、安装与更新；确认使用同一个应用安装前置条件和 Library 发布锁，Pilot 的 `plugin_install` 保留原生确认入口（见 [开发与交付](pilot-development.md#候选准备测试与交付)）。本地导入只接受普通文件列表，最多 2048 个文件、解码后合计 32 MiB；联网获取源码或依赖需要明确授权。卸载展示会话/未结束 Run 的阻止原因及 Graph 影响，并确认删除插件自身数据。操作员 CLI（`anchor-library --root <Library> install --directory <候选目录> --id <id>`）**拒绝**安装声明了运行期依赖的插件——它没有求解依赖、落地视图的宿主能力，装了也起不来；`--review` 仍可完整查看该候选。Plugin 自己声明运行期依赖时，宿主在安装时按部署授权的来源求解并落地到共享存储，再为该插件版本生成视图；求解或取包失败就不装，并把工具原文报给人。声明写在清单顶层：`"dependencies": {"python": ["idna==3.6"]}`（清单顶层字段是**封闭白名单**：`name`/`description`/`version`/`author`/`homepage`/`repository`/`license`/`keywords`/`interface`/`skills`/`mcpServers`/`configuration`/`dependencies`/`network`/`mutable`/`hooks`/`commands`/`agents`/`apps`，其他键一律拒绝；这是有意的，宁可让作者发现问题，也不要静默忽略一个拼错的字段），要用视图的解释器就把 server 的 `command` 写成 `${ANCHOR_PLUGIN_VIEW}/bin/python`。插件自己的可变数据用顶层 `"mutable": ["data/", "cache.db"]` 声明（相对插件目录、不含 `..`、不能覆盖 `plugin.json`、`.mcp.json` 或外置 MCP 声明文件；末尾 `/` 表示子树）：这些路径是插件进程**唯一**可写的地方，平台从不读、不复制、不覆盖它们，代码摘要与插件包清单也不包含它们——同一份代码无论数据长到多大，摘要都不变。插件只有一份（`plugins/<id>/`），Graph 包只写 `{"id": …}` 引用：升级插件不需要改包，正在运行的 Run 从**下一次节点调用**起用新代码，已完成步骤不回滚、不重放，它实际用过的视图记进 Run 记录作为观察。OAuth 从 Plugin 面板显式授权，owner-bound token 保存在操作员 Library，凭证不进入 Graph 包。授权、刷新与 MCP 连接有确定性本地测试；真实 provider 和回调部署需独立验收，不能声明所有社区 server 兼容。
 
 ## Pilot 任务联网
 
@@ -44,7 +62,7 @@ Pilot 与 AgentNode 共用 `PluginDisclosureCatalog` 和 `ToolDisclosure`。`anc
 
 ## 官方工具和外部工具环境
 
-官方学术 CLI、Docmost 附件 MCP、WeCom 应用 MCP 和机器人 Gateway 都是 Rust 二进制。Docmost Plugin 的远端 HTTP MCP 使用 `DOCMOST_API_KEY`；本地 `anchor-docmost-tools` 只上传授权的 `/in/publish/assets` 普通文件，不绕过发布门禁。
+官方学术 CLI、Docmost 附件 MCP、WeCom 应用 MCP 和机器人 Gateway 都是 Rust 二进制。Docmost Plugin 的远端 HTTP MCP 使用 Host 注入的共享 `api_key`；本地 `anchor-docmost-tools` 只上传授权的 `/in/publish/assets` 普通文件，不绕过发布门禁。
 
 操作员仍可登记第三方工具的显式 entrypoint、environment 和 imports。Host 保留解释器符号链接、版本化解释器、显式环境路径及 PYTHONPATH 等外部格式兼容；使用其他语言的第三方工具由部署者提供其运行环境。这不增加官方构建、运行或回归的解释器依赖。环境必须由操作员稳定维护，Graph 与 Plugin 不自行安装依赖或扩大挂载。
 
@@ -79,4 +97,4 @@ Pilot、Graph 和 Run 共用插件卡片、搜索与详情：列表显示名称�
 
 联网插件的主动开关与依赖启用分别展示；联网许可缺失时显示未知并禁用许可修改。挂载请求可能在当前回复结束后继续原任务，网络许可修改只影响后续 Turn。OAuth 操作仅在当前库详情提供，读取失败显示未知，可重试；撤销失败保留最后确认的状态，授权窗口打不开时提供手动链接。
 
-插件凭据详情只展示缺失、已保存、部署管理或授权声明失配，已保存不等于外部服务验证成功。详情页与 Pilot 使用同一 owner-bound 存储；独立保存只完成同一目标、仍有效的待填写请求，旧请求不会覆盖新值，已处理请求的历史保留。渠道页面复用相同凭据组件，旧 Run 详情不提供当前配置修改。
+插件配置详情展示非秘密字段及缺失、已保存、部署管理或授权声明失配，已保存不等于外部服务验证成功。详情页与 Pilot 使用同一 owner-bound 存储；独立保存只完成同一目标、仍有效的待填写请求，旧请求不会覆盖新值，已处理请求的历史保留。工作流的消息触发对话框复用相同凭据组件，旧 Run 详情不提供当前配置修改。

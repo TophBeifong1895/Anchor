@@ -37,7 +37,7 @@ Artifact、节点历史、工作区、Run / Session / Turn 事实
 
 Goose 拥有 Agent loop、Provider、原生会话与 compaction；Anchor 拥有 Graph/Run、宿主授权、Artifact 和平台 Session/Turn。工具记录、API 与 UI 都围绕相同身份，UI 缓存不能成为第二份运行事实。
 
-Web 管理与 Pilot 管理调用相同 Host 用例。插件密钥归 owner-bound 凭据存储，安装/卸载沿 Library 预检与发布；模型配置归 `ModelConfiguration`，运行环境归 `RuntimeConfiguration`，渠道由原 `ChannelManagementPort`/supervisor 托管，计划仍归 Scheduler。设置页只管理模型与环境，插件/渠道/计划留在各自入口，不保存第二份配置。
+Web 管理与 Pilot 管理调用相同 Host 用例。插件密钥归 owner-bound 凭据存储，安装/卸载沿 Library 预检与发布；模型配置归 `ModelConfiguration`，运行环境归 `RuntimeConfiguration`，渠道由原 `ChannelManagementPort`/supervisor 托管，计划仍归 Scheduler。设置页只管理模型与环境；图编排的「消息触发」配置渠道绑定与启停，运行看板的「消息会话」管理对话实例，凭据复用插件库的同一组件与存储。Web 不保存第二份配置，也不保留顶层渠道页。
 
 HTTP、Session、Pilot 的插件基础目录读取归 `InstalledPluginCatalog`，清单有效性、依赖就绪与上下文授权、连接验证分别表达；目录列表保持轻量，不生成执行绑定。Graph 的发现、bundle 读取与校验复用 Graph 应用用例，适配器保留身份、格式和私有诊断脱敏。Web 的插件设置、鉴权下载和行菜单复用完整交互，草稿、持久策略和历史绑定保持不同归属。具体边界见 [共同事实与实现收敛](shared-facts-convergence.md)。
 
@@ -166,7 +166,7 @@ Pilot 清理保存 format 1 的不可变归属绑定 `state/platform/pilot-resou
 
 - 首条可信消息惰性创建该 Session 的 current assistant Run，后续输入复用它；Session 保存 Turn、幂等、历史 binding 和 retire 事实，RunStore/Runner 拥有冻结 Graph、cursor 与执行状态，Host 工作区适配层保存 Run 的稳定节点 workspace 绑定。
 - `wait_input` 从持久输入事实领取 Turn，按等待 invocation 幂等绑定，重试不取下一条；将本轮文本、可信身份与附件引用提交给 Agent。后续消息不覆写 `Run.input`，等待期间不调用模型。
-- WeCom dispatch 拒绝或等待失败时，Session 事务只将仍 Running、尚无 Run 关联且未被新输入取代的入站 Turn 结算为 Failed；已领取 Turn 的执行与投递沿原有事实收束。助手已停止返回具名 `409 assistant_stopped`，网关提示在渠道页恢复后再发消息，不把拒绝留下为永久 Running 或自动重放。
+- WeCom dispatch 拒绝或等待失败时，Session 事务只将仍 Running、尚无 Run 关联且未被新输入取代的入站 Turn 结算为 Failed；已领取 Turn 的执行与投递沿原有事实收束。助手已停止返回具名 `409 assistant_stopped`，网关提示在运行看板的消息会话中恢复后再发消息，不把拒绝留下为永久 Running 或自动重放。
 - 新输入打断旧轮而非停止整个 Run。Host 取消并等待 Goose 与工具执行者真正退出，保存未提交现场 checkpoint 和持久 `Yielded` 事实；Runner 冻结 `Interruption` 控制 Artifact 后沿普通 route 到 `reply`，旧回复记 `suppressed`，再回到等待节点。它不把旧 Agent/Turn 标成成功，不自动重放未知业务效果。
 - `reply` 读取本 Turn 绑定的确切 Agent commit；出站图片按 Turn 登记，不取长期 Run 的“最新回复”，不串到下一轮。Turn 结算不等待 Run `Completed`，平台发送 claim、ACK 与 unknown 仍复用既有账本。
 

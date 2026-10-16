@@ -3336,6 +3336,144 @@ fn expanded_graph_snapshot_fixture_preserves_node_policy() {
 }
 
 #[test]
+fn file_run_store_read_leases_coexist_and_each_blocks_writers() {
+    let root = std::env::temp_dir().join(format!(
+        "anchor-run-store-read-leases-{}-{}",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    let store = FileRunStore::new(&root);
+    let other_store = FileRunStore::new(&root);
+    let run_id = "shared-run";
+
+    for release_first in [true, false] {
+        let first = store.acquire_read_lease(run_id).unwrap();
+        let second = other_store.acquire_read_lease(run_id).unwrap();
+        assert!(matches!(
+            store.acquire_lease(run_id),
+            Err(GraphError::RunBusy(id)) if id == run_id
+        ));
+
+        let remaining = if release_first {
+            drop(first);
+            second
+        } else {
+            drop(second);
+            first
+        };
+        assert!(matches!(
+            other_store.acquire_lease(run_id),
+            Err(GraphError::RunBusy(id)) if id == run_id
+        ));
+        drop(remaining);
+
+        let writer = store.acquire_lease(run_id).unwrap();
+        assert!(matches!(
+            other_store.acquire_read_lease(run_id),
+            Err(GraphError::RunBusy(id)) if id == run_id
+        ));
+        assert!(matches!(
+            other_store.acquire_lease(run_id),
+            Err(GraphError::RunBusy(id)) if id == run_id
+        ));
+        drop(writer);
+    }
+
+    drop(other_store.acquire_read_lease(run_id).unwrap());
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn file_run_store_read_and_write_leases_preserve_lock_identity() {
+    let root = std::env::temp_dir().join(format!(
+        "anchor-run-store-lock-identity-{}-{}",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    let store = FileRunStore::new(&root);
+    let run_id = "shared-run";
+    let reader = store.acquire_read_lease(run_id).unwrap();
+    let lock_path = root.join(format!(".{run_id}.lock"));
+    let lock_file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&lock_path)
+        .unwrap();
+    drop(reader);
+    assert!(lock_path.is_file());
+
+    lock_file.try_lock().unwrap();
+    assert!(matches!(
+        store.acquire_read_lease(run_id),
+        Err(GraphError::RunBusy(id)) if id == run_id
+    ));
+    assert!(matches!(
+        store.acquire_lease(run_id),
+        Err(GraphError::RunBusy(id)) if id == run_id
+    ));
+    lock_file.unlock().unwrap();
+
+    drop(store.acquire_lease(run_id).unwrap());
+    assert!(lock_path.is_file());
+    lock_file.try_lock_shared().unwrap();
+    assert!(matches!(
+        store.acquire_lease(run_id),
+        Err(GraphError::RunBusy(id)) if id == run_id
+    ));
+    drop(store.acquire_read_lease(run_id).unwrap());
+    assert!(matches!(
+        store.acquire_lease(run_id),
+        Err(GraphError::RunBusy(id)) if id == run_id
+    ));
+    lock_file.unlock().unwrap();
+
+    drop(store.acquire_lease(run_id).unwrap());
+    drop(lock_file);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn file_run_store_read_and_write_leases_reject_invalid_run_ids() {
+    let root = std::env::temp_dir().join(format!(
+        "anchor-run-store-invalid-lease-{}-{}",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    let store = FileRunStore::new(&root);
+
+    for run_id in [
+        "",
+        ".",
+        "..",
+        "../escape",
+        "nested/run",
+        r"nested\run",
+        "/absolute",
+        "run\0id",
+        "run id",
+    ] {
+        assert!(matches!(
+            store.acquire_read_lease(run_id),
+            Err(GraphError::InvalidRunId(id)) if id == run_id
+        ));
+        assert!(matches!(
+            store.acquire_lease(run_id),
+            Err(GraphError::InvalidRunId(id)) if id == run_id
+        ));
+        assert!(!root.exists());
+    }
+}
+
+#[test]
 fn file_run_store_roundtrips_rejects_corruption_and_releases_lease_after_process_crash() {
     let root = std::env::temp_dir().join(format!(
         "anchor-run-store-crash-{}-{}",

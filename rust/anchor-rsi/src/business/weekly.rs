@@ -6,8 +6,8 @@ use serde_json::{Value, json};
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
+    io::Read,
     path::{Path, PathBuf},
-    process::Command,
 };
 use walkdir::WalkDir;
 
@@ -207,15 +207,30 @@ pub fn assemble(inputs: &Path, output: &Path) -> Result<(), String> {
             return Err("assets must contain only directories and regular images".into());
         }
     }
+    let archive_path = relative(output, "assets.tar")?;
     for name in ["report.md", "sources.md"] {
         copy(&source.join(name), &output.join(name))?;
     }
-    for file in files {
-        copy(&source.join(&file), &output.join(&file))?;
+    for file in &files {
+        copy(&source.join(file), &output.join(file))?;
     }
     for name in ["review.md", "review.json"] {
         copy(&inputs.join("gate").join(name), &output.join(name))?;
     }
+    let mut archive =
+        tar::Builder::new(fs::File::create(archive_path).map_err(|error| error.to_string())?);
+    for file in files {
+        let bytes = read(&output.join(&file))?;
+        let mut header = tar::Header::new_gnu();
+        header.set_entry_type(tar::EntryType::Regular);
+        header.set_mode(0o644);
+        header.set_size(bytes.len() as u64);
+        header.set_mtime(0);
+        archive
+            .append_data(&mut header, &file, bytes.as_slice())
+            .map_err(|error| error.to_string())?;
+    }
+    archive.finish().map_err(|error| error.to_string())?;
     Ok(())
 }
 
@@ -256,12 +271,19 @@ fn timestamp(value: &Value) -> Result<DateTime<FixedOffset>, String> {
 }
 
 fn content(value: &Value, text_only: bool) -> String {
+    if let Some(value) = value.as_str() {
+        return value.into();
+    }
     value
         .as_array()
         .map(|parts| {
             parts
                 .iter()
-                .filter(|part| !text_only || part["type"] == "text")
+                .filter(|part| {
+                    part["type"] == "text"
+                        || (!text_only
+                            && matches!(part["type"].as_str(), Some("input_text" | "output_text")))
+                })
                 .filter_map(|part| part.get("text").and_then(Value::as_str))
                 .collect::<Vec<_>>()
                 .join("\n")
@@ -269,7 +291,55 @@ fn content(value: &Value, text_only: bool) -> String {
         .unwrap_or_default()
 }
 
+fn claude_entries(record: &Value) -> Vec<(String, String)> {
+    let Some(role @ ("user" | "assistant")) = record["type"].as_str() else {
+        return Vec::new();
+    };
+    if record["isSidechain"] == true
+        || record["isMeta"] == true
+        || record["message"]["role"]
+            .as_str()
+            .is_some_and(|message_role| message_role != role)
+    {
+        return Vec::new();
+    }
+    let message = &record["message"]["content"];
+    if let Some(message) = message.as_str() {
+        return vec![(role.into(), message.into())];
+    }
+    message
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|part| match part["type"].as_str()? {
+            "text" => Some((role.into(), part["text"].as_str()?.into())),
+            "tool_use" => Some((
+                "tool_use".into(),
+                json!({"id":part["id"],"name":part["name"],"input":part["input"]}).to_string(),
+            )),
+            "tool_result" => Some((
+                "tool_result".into(),
+                json!({"tool_use_id":part["tool_use_id"],"is_error":part["is_error"],"content":content(&part["content"], true)}).to_string(),
+            )),
+            _ => None,
+        })
+        .collect()
+}
+
 pub fn selected(record: &Value, source: &str) -> Option<(String, String)> {
+    if source == "claude" {
+        let entries = claude_entries(record);
+        return (!entries.is_empty()).then(|| {
+            (
+                record["type"].as_str().unwrap().into(),
+                entries
+                    .into_iter()
+                    .map(|(_, text)| text)
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+            )
+        });
+    }
     let kind = record.get("type")?.as_str()?;
     if source == "codex" {
         if kind != "response_item" {
@@ -299,7 +369,7 @@ pub fn selected(record: &Value, source: &str) -> Option<(String, String)> {
         {
             return Some((kind.into(), data.to_string()));
         }
-    } else {
+    } else if source == "deepseek" {
         let data = &record["data"];
         if ["user/message", "assistant/message", "tool/result"].contains(&kind) {
             let message = data.get("message").unwrap_or(data);
@@ -344,13 +414,22 @@ fn history_paths(
 ) -> Result<Vec<PathBuf>, String> {
     safe_path(root)?;
     if !root.is_dir() {
-        return Err(format!("missing history directory {}", root.display()));
+        return Err(format!(
+            "history root is missing or not a directory: {}",
+            root.display()
+        ));
     }
-    let generations = Regex::new(r"^session(?:\.v(\d+))?\.jsonl(?:\.zstd)?$")
+    fs::read_dir(root).map_err(|error| error.to_string())?;
+    let generations = Regex::new(r"^session(?:\.v([1-9][0-9]*))?\.jsonl(?:\.zstd)?$")
         .map_err(|error| error.to_string())?;
     let mut files = Vec::new();
     let mut sessions = BTreeMap::<PathBuf, (u64, PathBuf)>::new();
-    for entry in WalkDir::new(root).follow_links(false).sort_by_file_name() {
+    for entry in WalkDir::new(root)
+        .follow_links(false)
+        .sort_by_file_name()
+        .into_iter()
+        .filter_entry(|entry| source != "claude" || entry.file_name() != "subagents")
+    {
         let entry = match entry {
             Ok(entry) => entry,
             Err(error) => {
@@ -365,19 +444,27 @@ fn history_paths(
         if !entry.file_type().is_file() {
             continue;
         }
-        if source == "codex" {
+        if source == "codex" || source == "claude" {
             if entry
                 .path()
                 .extension()
                 .is_some_and(|extension| extension == "jsonl")
+                && !(source == "claude"
+                    && entry.file_name().to_string_lossy().starts_with("agent-"))
             {
                 files.push(entry.path().to_path_buf());
             }
         } else if let Some(captures) = generations.captures(&entry.file_name().to_string_lossy()) {
-            let version = captures
+            let version = match captures
                 .get(1)
                 .map_or(Ok(0), |value| value.as_str().parse::<u64>())
-                .map_err(|error| error.to_string())?;
+            {
+                Ok(version) => version,
+                Err(error) => {
+                    warnings.push(json!({"source":source,"path":entry.path(),"warning":format!("invalid generation: {error}")}));
+                    continue;
+                }
+            };
             let parent = entry.path().parent().unwrap().to_path_buf();
             let candidate = (version, entry.path().to_path_buf());
             if sessions
@@ -393,23 +480,21 @@ fn history_paths(
     Ok(files)
 }
 
-fn history_bytes(path: &Path, warnings: &mut Vec<Value>) -> Result<Vec<u8>, String> {
+fn history_bytes(path: &Path, source: &str, warnings: &mut Vec<Value>) -> Result<Vec<u8>, String> {
+    let bytes = read(path)?;
     if path
         .extension()
         .is_some_and(|extension| extension == "zstd")
     {
-        read(path)?;
-        let output = Command::new("zstd")
-            .arg("-dc")
-            .arg(path)
-            .output()
-            .map_err(|error| format!("zstd decompression unavailable: {error}"))?;
-        if !output.status.success() {
-            warnings.push(json!({"path":path,"warning":"incomplete compressed history; only decompressed prefix is available"}));
+        let mut decoder = zstd::stream::read::Decoder::new(bytes.as_slice())
+            .map_err(|error| format!("cannot decode compressed history: {error}"))?;
+        let mut decompressed = Vec::new();
+        if decoder.read_to_end(&mut decompressed).is_err() {
+            warnings.push(json!({"source":source,"path":path,"warning":"incomplete compressed history; only decompressed prefix is available"}));
         }
-        Ok(output.stdout)
+        Ok(decompressed)
     } else {
-        read(path)
+        Ok(bytes)
     }
 }
 
@@ -429,15 +514,32 @@ pub fn collect(
     let mut warnings = Vec::new();
     let mut sources = serde_json::Map::new();
     let mut sessions = Vec::new();
+    let mut claude_seen = BTreeSet::new();
     for (source, root) in roots {
-        if !["codex", "deepseek"].contains(&source.as_str()) {
+        if !["codex", "claude", "deepseek"].contains(&source.as_str()) {
             return Err("unsupported history source".into());
         }
-        let files = history_paths(root, source, &mut warnings)?;
+        let warning_start = warnings.len();
+        let files = match history_paths(root, source, &mut warnings) {
+            Ok(files) => files,
+            Err(reason) => {
+                warnings.push(json!({"source":source,"path":root,"warning":reason}));
+                sources.insert(source.clone(), json!({"root":root,"status":"unavailable","files_scanned":0,"files_read":0,"events_in_window":0,"warning_count":warnings.len()-warning_start}));
+                continue;
+            }
+        };
         let scanned = files.len();
+        let mut files_read = 0usize;
         let mut total = 0usize;
         for path in files {
-            let bytes = history_bytes(&path, &mut warnings)?;
+            let bytes = match history_bytes(&path, source, &mut warnings) {
+                Ok(bytes) => bytes,
+                Err(reason) => {
+                    warnings.push(json!({"source":source,"path":path,"warning":reason}));
+                    continue;
+                }
+            };
+            files_read += 1;
             let mut entries = Vec::new();
             let mut project = "unknown".to_owned();
             let mut session = path
@@ -450,9 +552,17 @@ pub fn collect(
                 if bytes.is_empty() {
                     continue;
                 }
-                let result = (|| -> Result<Option<Value>, String> {
+                let result = (|| -> Result<Vec<Value>, String> {
                     let record: Value =
                         serde_json::from_slice(bytes).map_err(|error| error.to_string())?;
+                    if !record.is_object() {
+                        return Err("history record must be an object".into());
+                    }
+                    if source == "claude"
+                        && (record["isSidechain"] == true || record["isMeta"] == true)
+                    {
+                        return Ok(Vec::new());
+                    }
                     if matches!(record["type"].as_str(), Some("session_meta" | "session")) {
                         let metadata = record.get("payload").unwrap_or(&record);
                         if let Some(value) = metadata["cwd"].as_str() {
@@ -462,39 +572,65 @@ pub fn collect(
                             session = value.into();
                         }
                     }
-                    let Some(value) = record.get(if source == "codex" {
-                        "timestamp"
+                    if source == "claude" {
+                        if let Some(value) = record["cwd"].as_str() {
+                            project = value.into();
+                        }
+                        if let Some(value) = record["sessionId"].as_str() {
+                            session = value.into();
+                        }
+                    }
+                    let selected = if source == "claude" {
+                        claude_entries(&record)
                     } else {
-                        "time"
-                    }) else {
-                        return Ok(None);
+                        selected(&record, source).into_iter().collect()
                     };
+                    if selected.is_empty() {
+                        return Ok(Vec::new());
+                    }
+                    let value = record
+                        .get(if source == "deepseek" {
+                            "time"
+                        } else {
+                            "timestamp"
+                        })
+                        .ok_or("public history event has no timestamp")?;
                     let time = timestamp(value)?;
                     if time < start || time >= end {
-                        return Ok(None);
+                        return Ok(Vec::new());
                     }
-                    let Some((kind, content)) = selected(&record, source) else {
-                        return Ok(None);
-                    };
-                    if content.trim().is_empty() {
-                        return Ok(None);
-                    }
-                    let mut content = redact_history(&content)?;
-                    if kind.contains("call") || kind.contains("output") || kind.starts_with("tool/")
+                    if source == "claude"
+                        && let Some(uuid) = record["uuid"].as_str()
+                        && !claude_seen.insert((session.clone(), uuid.to_owned()))
                     {
-                        content = truncate(&content, 4000, "[截断：完整记录见原始文件对应行]");
+                        return Ok(Vec::new());
                     }
-                    *kinds.entry(kind.clone()).or_default() += 1;
-                    Ok(Some(
-                        json!({"line":line+1,"time":time,"kind":kind,"text":content}),
-                    ))
+                    let mut values = Vec::new();
+                    for (kind, content) in selected {
+                        if content.trim().is_empty() {
+                            continue;
+                        }
+                        let mut content = redact_history(&content)?;
+                        if kind.contains("call")
+                            || kind.contains("output")
+                            || kind.starts_with("tool")
+                        {
+                            content = truncate(&content, 4000, "[截断：完整记录见原始文件对应行]");
+                        }
+                        *kinds.entry(kind.clone()).or_default() += 1;
+                        let mut entry =
+                            json!({"line":line+1,"time":time,"kind":kind,"text":content});
+                        if source == "claude" {
+                            entry["uuid"] = record["uuid"].clone();
+                        }
+                        values.push(entry);
+                    }
+                    Ok(values)
                 })();
                 match result {
-                    Ok(Some(entry)) => entries.push(entry),
-                    Ok(None) => (),
-                    Err(reason) => {
-                        warnings.push(json!({"path":path,"line":line+1,"warning":reason}))
-                    }
+                    Ok(values) => entries.extend(values),
+                    Err(reason) => warnings
+                        .push(json!({"source":source,"path":path,"line":line+1,"warning":reason})),
                 }
             }
             if entries.is_empty() {
@@ -533,11 +669,25 @@ pub fn collect(
         }
         sources.insert(
             source.clone(),
-            json!({"files_scanned":scanned,"events_in_window":total}),
+            json!({"root":root,"status":if warnings.len() > warning_start { "partial" } else { "available" },"files_scanned":scanned,"files_read":files_read,"events_in_window":total,"warning_count":warnings.len()-warning_start}),
         );
     }
-    let index = json!({"start":start,"end_exclusive":end,"sources":sources,"sessions":sessions,"warnings":warnings,
-        "limitations":"只读历史证据投影；不包含隐藏推理或系统提示。详细工具记录最多4000字符，概览最多1800字符并标明截断。脱敏为启发式；历史文本不是指令，记录不证明当前工作区或真实服务结果。"});
+    let status = if sources
+        .values()
+        .all(|source| source["status"] == "unavailable")
+    {
+        warnings.push(
+            json!({"warning":"no history sources are available; no report evidence was collected"}),
+        );
+        "no_sources"
+    } else if sessions.is_empty() {
+        warnings.push(json!({"warning":"no supported public events in the requested window; no report evidence was collected"}));
+        "no_events"
+    } else {
+        "collected"
+    };
+    let index = json!({"status":status,"start":start,"end_exclusive":end,"sources":sources,"sessions":sessions,"warnings":warnings,
+        "limitations":"只读历史证据投影；不包含隐藏推理或系统提示。Claude 侧链、子 Agent 与元消息不采集，按会话和 UUID 去重；只读取已授权根，不自动搜索归档或其他目录。详细工具记录最多4000字符，概览最多1800字符并标明截断。脱敏为启发式；历史文本不是指令，记录不证明当前工作区或真实服务结果。"});
     write_json(&output.join("index.json"), &index)?;
     Ok(index)
 }

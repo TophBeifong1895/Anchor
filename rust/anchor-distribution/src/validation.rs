@@ -1,4 +1,5 @@
 use crate::{PackageError, Result};
+use anchor_graph_host::PluginConfiguration;
 use object::{BinaryFormat, Object, ObjectKind, ObjectSegment, SegmentFlags};
 use object::{
     elf,
@@ -241,21 +242,25 @@ fn secret_reference(value: &str) -> bool {
         .is_some_and(env_name)
 }
 
+fn check_json_field(key: &str, value: &Value, context: &str) -> Result<()> {
+    if sensitive(key)
+        && !value.is_null()
+        && !value
+            .as_str()
+            .is_some_and(|value| value.is_empty() || secret_reference(value))
+    {
+        return Err(invalid(format!(
+            "literal credential field in {context}; use environment references"
+        )));
+    }
+    check_json(value, context)
+}
+
 fn check_json(value: &Value, context: &str) -> Result<()> {
     match value {
         Value::Object(object) => {
             for (key, value) in object {
-                if sensitive(key)
-                    && !value.is_null()
-                    && !value
-                        .as_str()
-                        .is_some_and(|value| value.is_empty() || secret_reference(value))
-                {
-                    return Err(invalid(format!(
-                        "literal credential field in {context}; use environment references"
-                    )));
-                }
-                check_json(value, context)?;
+                check_json_field(key, value, context)?;
             }
         }
         Value::Array(array) => {
@@ -276,6 +281,45 @@ fn check_json(value: &Value, context: &str) -> Result<()> {
         _ => {}
     }
     Ok(())
+}
+
+fn check_plugin_manifest(mut value: Value, context: &str) -> Result<()> {
+    if let Some(configuration) = value
+        .as_object_mut()
+        .and_then(|manifest| manifest.remove("configuration"))
+    {
+        let declaration: PluginConfiguration = serde_json::from_value(configuration.clone())
+            .map_err(|_| {
+                invalid(format!(
+                    "invalid Plugin configuration declaration in {context}"
+                ))
+            })?;
+        for (name, field) in &declaration.fields {
+            let metadata = &configuration["fields"][name];
+            if let Some(default) = metadata.get("default") {
+                if field.is_secret() {
+                    return Err(invalid(format!(
+                        "secret configuration field default in {context}"
+                    )));
+                }
+                check_json_field(name, default, context)?;
+            }
+            check_json(metadata, context)?;
+        }
+        for bindings in declaration.environment.values() {
+            for (environment, field) in bindings {
+                if !declaration.fields.contains_key(field) {
+                    return Err(invalid(format!(
+                        "invalid Plugin configuration environment reference in {context}"
+                    )));
+                }
+                if let Some(default) = configuration["fields"][field].get("default") {
+                    check_json_field(environment, default, context)?;
+                }
+            }
+        }
+    }
+    check_json(&value, context)
 }
 
 pub(crate) fn resource_content(path: &Path, relative: &str) -> Result<()> {
@@ -314,7 +358,13 @@ pub(crate) fn resource_content(path: &Path, relative: &str) -> Result<()> {
         return Err(invalid(format!("private key in {relative}")));
     }
     if extension == "json" {
-        check_json(&serde_json::from_str(&text)?, relative)?;
+        let value = serde_json::from_str(&text)?;
+        let components = relative.split('/').collect::<Vec<_>>();
+        if matches!(components.as_slice(), ["plugins", _, "plugin.json"]) {
+            check_plugin_manifest(value, relative)?;
+        } else {
+            check_json(&value, relative)?;
+        }
     } else if matches!(extension.as_str(), "yaml" | "yml") {
         let value: Value =
             serde_yaml_ng::from_str(&text).map_err(|_| invalid("malformed YAML resource"))?;

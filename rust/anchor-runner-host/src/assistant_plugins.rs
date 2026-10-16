@@ -22,10 +22,21 @@ fn hash(value: &[u8]) -> String {
 /// Shared with Graph publication/admission: reading desired policy and freezing
 /// its grants is serialized with saving the Graph, never with model execution.
 pub(crate) fn graph_lease(root: &Path, source: &Path) -> Result<Box<dyn RunLease>, GraphError> {
+    FileRunStore::new(root.join("admission-locks")).acquire_lease(&graph_lease_key(source)?)
+}
+
+pub(crate) fn graph_read_lease(
+    root: &Path,
+    source: &Path,
+) -> Result<Box<dyn RunLease>, GraphError> {
+    FileRunStore::new(root.join("admission-locks")).acquire_read_lease(&graph_lease_key(source)?)
+}
+
+fn graph_lease_key(source: &Path) -> Result<String, GraphError> {
     let identity = crate::application::RunApplication::graph_identity(source).map_err(|error| {
         GraphError::Unsupported(format!("Graph identity unavailable: {error:?}"))
     })?;
-    FileRunStore::new(root.join("admission-locks")).acquire_lease(&format!(
+    Ok(format!(
         "graph-{}",
         hash(identity.as_os_str().as_encoded_bytes())
     ))

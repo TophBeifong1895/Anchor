@@ -26,6 +26,7 @@ use std::{
 };
 
 mod assistant;
+mod configuration;
 mod contracts;
 mod conversation;
 mod execution;

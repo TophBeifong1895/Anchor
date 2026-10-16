@@ -1,5 +1,5 @@
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
-import { Activity, ArrowUpRight, CalendarDays, ChevronLeft, ChevronRight, Clock3, Plus } from 'lucide-react';
+import { Activity, ArrowUpRight, CalendarDays, ChevronLeft, ChevronRight, Clock3, Plus, Radio } from 'lucide-react';
 import type { OurRun, OurRunDetail, Schedule, TimelineData, TimelineItem } from './model';
 import { api } from './api';
 import { Modal } from './ui';
@@ -11,7 +11,7 @@ const day = (value: Date) => `${value.getFullYear()}-${String(value.getMonth() +
 const addDays = (date: Date, amount: number) => { const result = new Date(date); result.setDate(result.getDate() + amount); return result; };
 const clockText = (value: string | number) => new Date(value).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
 const dateText = (value: string | number) => new Date(value).toLocaleString('zh-CN', { month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit' });
-const sourceText = (value: string) => ({ manual: '手动', schedule: '定时', webhook: 'Webhook', graph_call: '工作流调用', channel: '通道' }[value] ?? value);
+const sourceText = (value: string) => ({ manual: '手动', schedule: '定时', webhook: 'Webhook', graph_call: '工作流调用', channel: '消息' }[value] ?? value);
 const duration = (ms: number) => {
   const seconds = Math.max(0, Math.floor(ms / 1000));
   if (seconds < 60) return `${seconds} 秒`;
@@ -76,9 +76,9 @@ const placeEntries = (items: Entry[], date: Date): PlacedEntry[] => {
   });
 };
 
-export function Timeline({ data, graphs, graphColors: sharedGraphColors, page, onPage, onSelect, onOpenRun, onRefresh, problem = '' }: {
+export function Timeline({ data, graphs, graphColors: sharedGraphColors, page, onPage, onSelect, onOpenRun, onRefresh, onSessions, problem = '' }: {
   data: TimelineData | null; graphs: string[]; graphColors?: Record<string, string>; page: number; onPage: (page: number) => void;
-  onSelect: (run: OurRun) => void; onOpenRun?: (run: string, graph: string) => void; onRefresh: () => void; problem?: string;
+  onSelect: (run: OurRun) => void; onOpenRun?: (run: string, graph: string) => void; onRefresh: () => void; onSessions?: () => void; problem?: string;
 }) {
   const [graphFilter, setGraphFilter] = useState('');
   const [filter, setFilter] = useState<Filter>('all');
@@ -185,7 +185,7 @@ export function Timeline({ data, graphs, graphColors: sharedGraphColors, page, o
   return <main className="timeline-board">
     <header className="timeline-header">
       <div className="timeline-title"><h2>运行看板</h2><p>运行进度与定时计划</p></div>
-      <div className="timeline-actions"><button disabled={!scheduling} title={!scheduling ? '定时计划尚未由此运行时托管' : undefined} onClick={() => { setScheduleOpen(true); }}><CalendarDays size={16} />管理计划 <span className="count">{data?.schedules.length ?? 0}</span></button>
+      <div className="timeline-actions">{onSessions && <button onClick={onSessions}><Radio size={16} />消息会话</button>}<button disabled={!scheduling} title={!scheduling ? '定时计划尚未由此运行时托管' : undefined} onClick={() => { setScheduleOpen(true); }}><CalendarDays size={16} />管理计划 <span className="count">{data?.schedules.length ?? 0}</span></button>
         <button className="primary" disabled={!graphs.length || !scheduling} title={!scheduling ? '定时计划尚未由此运行时托管' : undefined} onClick={() => { setScheduleOpen(true); }}><Plus size={16} />添加计划</button></div>
     </header>
     <section className="timeline-summary" aria-label="运行概览">
@@ -209,7 +209,7 @@ export function Timeline({ data, graphs, graphColors: sharedGraphColors, page, o
           <select aria-label="筛选状态" value={filter} onChange={event => setFilter(event.target.value as Filter)}>
             <option value="all">全部状态</option><option value="running">执行中</option><option value="finished">已完成</option><option value="attention">仅异常 / 错过</option><option value="planned">仅未来计划</option><option value="stopped">已停止</option>
           </select>
-          <select aria-label="筛选触发方式" value={sourceFilter} onChange={event => setSourceFilter(event.target.value)}><option value="">全部触发方式</option><option value="manual">手动</option><option value="schedule">定时</option><option value="webhook">Webhook</option><option value="graph_call">工作流调用</option><option value="channel">通道</option></select>
+          <select aria-label="筛选触发方式" value={sourceFilter} onChange={event => setSourceFilter(event.target.value)}><option value="">全部触发方式</option><option value="manual">手动</option><option value="schedule">定时</option><option value="webhook">Webhook</option><option value="graph_call">工作流调用</option><option value="channel">消息</option></select>
           <select aria-label="筛选调用链" value={chainFilter} onChange={event => setChainFilter(event.target.value)}><option value="">全部调用链</option>
             {[...new Set((data?.runs ?? []).filter(run => run.trigger?.source === 'graph_call').map(run => run.trigger?.root_run ?? run.trigger?.run).filter((run): run is string => Boolean(run)))].map(run => <option key={run} value={run}>{run}</option>)}
           </select>

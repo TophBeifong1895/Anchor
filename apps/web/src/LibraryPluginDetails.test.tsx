@@ -12,13 +12,21 @@ const response = (status: number, data: unknown) => ({ ok: status >= 200 && stat
 describe('plugin details ownership and request safety', () => {
   let container: HTMLDivElement;
   let root: Root;
-  let fetchMock: ReturnType<typeof vi.fn>;
+  let fetchMock: ReturnType<typeof vi.fn<(path: string, options: RequestInit) => Promise<Response>>>;
   beforeEach(() => {
     (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
     Object.defineProperty(HTMLDialogElement.prototype, 'showModal', { configurable: true, value() { this.open = true; } });
     Object.defineProperty(HTMLDialogElement.prototype, 'close', { configurable: true, value() { this.open = false; } });
     container = document.createElement('div'); document.body.appendChild(container); root = createRoot(container);
-    fetchMock = vi.fn(); vi.stubGlobal('fetch', fetchMock);
+    fetchMock = vi.fn(); vi.stubGlobal('fetch', (path: string, options: RequestInit) => {
+      const pluginId = /^\/plugins\/([^/]+)\/configuration$/.exec(path)?.[1];
+      if (pluginId) return Promise.resolve(response(200, { plugin: pluginId, authorization_digest: 'digest', revision: 0, fields: [], targets: [] }));
+      const credentialPlugin = /^\/plugins\/([^/]+)\/credentials$/.exec(path)?.[1];
+      if (credentialPlugin) return Promise.resolve(response(200, { plugin: credentialPlugin, targets: [
+        { target: 'api', kind: 'mcp', authorization_digest: 'digest', fields: [{ field: 'API_KEY', state: 'missing', editable: true }] },
+      ] }));
+      return fetchMock(path, options);
+    });
   });
   afterEach(async () => { await act(async () => root.unmount()); container.remove(); vi.useRealTimers(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
   const click = async (name: string) => { const button = [...container.querySelectorAll('button')].find(item => item.textContent === name)!; await act(async () => button.click()); };

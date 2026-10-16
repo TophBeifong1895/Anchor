@@ -29,12 +29,12 @@ describe('Graph run entry', () => {
     await act(async () => button.click()); expect(onClick).toHaveBeenCalledOnce();
   });
 
-  it('sends listener-bound Graphs to channel management even when instances are active', async () => {
+  it('sends listener-bound Graphs to their message sessions even when instances are active', async () => {
     const graph: GraphSummary = { graph: 'g', running: 'run-1', active_runs: ['run-1'], listener: { platform: 'wecom', status: 'authenticated' } };
-    expect(graphRunAction(graph)).toEqual({ kind: 'channels' });
+    expect(graphRunAction(graph)).toEqual({ kind: 'sessions' });
     const button = await render(graph);
-    expect(button.textContent).toBe('查看渠道');
-    expect(button.title).toContain('消息会接纳对应实例');
+    expect(button.textContent).toBe('查看会话');
+    expect(button.title).toContain('消息会唤醒此工作流');
   });
 
   it('only offers a new Run for an inactive Graph and requires a saved draft', async () => {

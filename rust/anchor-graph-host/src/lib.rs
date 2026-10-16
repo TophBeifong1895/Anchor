@@ -13,6 +13,7 @@ mod graph_catalog;
 mod mcp;
 mod plugin_authorization;
 mod plugin_catalog;
+mod plugin_configuration;
 mod resources;
 
 pub use bundle::{
@@ -28,6 +29,10 @@ pub use graph_catalog::{ChildRunControl, GraphCatalog, PluginReferenceLeaseFutur
 pub use mcp::{McpServerDefinition, host_environment_references};
 pub use plugin_catalog::{
     ChannelDefinition, FilePluginCatalog, PluginCatalog, PluginDefinition, PluginMetadata,
+};
+pub use plugin_configuration::{
+    PluginConfiguration, PluginConfigurationField, PluginConfigurationFieldType,
+    mcp_environment_fields,
 };
 
 use anchor_runtime::graph::GraphError;

@@ -7,6 +7,7 @@
 | 范围 | 权威实现与调用入口 | 保留的边界 |
 | --- | --- | --- |
 | 插件目录与基础健康 | [InstalledPluginCatalog](../rust/anchor-runner-host/src/application/plugins/catalog.rs) 统一目录发现、轻量元数据和依赖视图观察；HTTP、Session、Pilot 列表消费同一结果，坏清单保留为不可用项 | 基础定义有效性不证明代码正文可读、执行绑定、权限或连接成功；Session 可叠加上下文拒绝。完整定义按详情、挂载启用或执行需要读取，管理列表不生成 digest |
+| 插件连接配置与凭据 | Host 的 [配置用例](../rust/anchor-runner-host/src/plugin_configuration.rs) 原子保存逻辑字段、来源与 revision，Web/Pilot/执行准备复用；[共享组件](../apps/web/src/PluginConfiguration.tsx) 管理字段、轮换与测试 | 多个 MCP 仅通过声明共享字段；清除不回退环境，配置/连接/业务验证分开，owner 与恢复绑定保持隔离 |
 | 插件设置完整交互 | [PluginSettings](../apps/web/src/PluginPanel.tsx) 统一开关、已选优先排序、筛选、搜索、加载、重试和反馈；Graph、Pilot、Library、Run 提供数据与写入适配 | Graph 保存草稿引用，Session 写持久挂载策略，Run 显示冻结绑定记录；历史记录不因当前目录变化而重写 |
 | 插件挂载与撤销 | [Session 挂载入口](../rust/anchor-runner-host/src/api.rs) 对启用执行定义与依赖校验；撤销只验证 Session 归属、生命周期及 required 约束，不要求被撤销插件仍健康 | 缺失或清单损坏的已开启引用仍可见并可撤销；权限和发布锁不因关闭操作放宽 |
 | Graph 发现、读取与校验 | [Graph 应用用例](../rust/anchor-runner-host/src/application/graphs.rs) 统一 bundle 有效性、读取及作者/私有诊断分类；HTTP、Pilot 只投影格式与脱敏 | 配置 Graph 别名仍由部署拥有；损坏目录不作为可运行 Graph 暴露，作者输入错误与私有 Library 错误保留诊断边界 |

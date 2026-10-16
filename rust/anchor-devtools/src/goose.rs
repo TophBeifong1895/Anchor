@@ -14,6 +14,7 @@ const SUITES: &[&str] = &[
     "goose_conversation",
     "goose_persistent_assistant",
     "goose_plugin_turns",
+    "goose_plugin_configuration",
     "goose_channel",
     "goose_compaction",
     "goose_pilot_compaction",

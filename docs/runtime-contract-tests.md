@@ -58,6 +58,7 @@ user/mount/network namespace。入口在测试前校验 Goose 可执行权限和
 | `goose_conversation` | 跨 Run 与循环原生历史、用户/节点隔离、只读前驱、冻结图片、身份拒绝与整图清理 |
 | `goose_persistent_assistant` | 常驻助手同 Run 多轮：稳定 workspace 与不可变 fs2 历史分离、逐 Turn 输入/打断与零模型等待、多用户隔离、恢复/退役/删除不越权 |
 | `goose_plugin_turns` | Graph 保存后下一 Turn 增删插件、当前工具调用冻结、多用户独立生效及重启交接保留本轮授权 |
+| `goose_plugin_configuration` | 双 MCP 共用托管配置、轮换后新 invocation 生效且当前调用冻结、清除不回退环境及秘密不进入模型请求 |
 | `goose_channel` | 私有 Unix gateway、原生发送身份、相同正文不同调用、越权拒绝与丢 ACK 后不重发 |
 | `goose_compaction` | Goose 原生压缩、Plugin/现场重读、取消、重启和同 prompt 超窗恢复 |
 | `goose_pilot_compaction` | Pilot 压缩、续聊/重启、显示历史/SSE、摘要取消和变更后核查 |

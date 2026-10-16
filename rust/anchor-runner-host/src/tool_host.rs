@@ -54,6 +54,11 @@ pub struct McpToolConfig {
     pub(crate) environment: crate::tool_environment::ToolEnvironment,
     oauth_library_root: Option<PathBuf>,
     pub(crate) startup_cancellation: Option<anchor_runtime::Cancellation>,
+    pub(crate) startup_timeout: Option<std::time::Duration>,
+    /// Non-secret observation of the configuration captured for this invocation.
+    pub(crate) configuration_revisions: BTreeMap<String, u64>,
+    /// Stable owner/target/source identities; excludes rotating secret values.
+    pub(crate) configuration_bindings: BTreeMap<String, String>,
 }
 
 /// Everything one node invocation provides to a sandboxed MCP launch.
@@ -111,6 +116,9 @@ struct ResolvedMcpServer {
     plugin_id: String,
     name: String,
     plugin_directory: PathBuf,
+    // The validated declaration identifies path templates before credentials
+    // are injected; resolved credential bytes must never become templates.
+    declaration: Value,
     config: Value,
 }
 
@@ -174,6 +182,8 @@ impl McpToolConfig {
         let catalog = FilePluginCatalog::new(root);
         let mut servers: BTreeMap<String, ResolvedMcpServer> = BTreeMap::new();
         let mut disabled = BTreeSet::new();
+        let mut configuration_revisions = BTreeMap::new();
+        let mut configuration_bindings = BTreeMap::new();
         for binding in bindings {
             if is_fake_fixture(binding) {
                 continue;
@@ -191,18 +201,19 @@ impl McpToolConfig {
                 ));
             }
             let definitions = if let Some((state, owner)) = credentials {
+                // Resolve all of one Plugin's consumers under the same lease so
+                // a rotation cannot split its remote and local MCP identities.
+                let snapshot =
+                    crate::credential_store::environment_snapshot(state, owner, declaration)?;
+                configuration_revisions.insert(binding.id.clone(), snapshot.revision);
+                configuration_bindings.insert(binding.id.clone(), snapshot.binding_digest);
                 let mut resolved = Vec::new();
                 for server in &declaration.mcp_servers {
-                    let values = crate::credential_store::environment_values(
-                        state,
-                        owner,
-                        declaration,
-                        &server.name,
-                    )?;
+                    let values = snapshot.environments.get(&server.name);
                     let mut single = declaration.clone();
                     single.mcp_servers = vec![server.clone()];
                     let environment =
-                        |key: &str| values.get(key).cloned().or_else(|| std::env::var(key).ok());
+                        |key: &str| values.and_then(|values| values.get(key)).cloned();
                     resolved.extend(
                         catalog
                             .resolve_mcp_servers_with(&single, &environment)
@@ -256,6 +267,15 @@ impl McpToolConfig {
                         plugin_id: binding.id.clone(),
                         name: server_name.clone(),
                         plugin_directory: declaration.directory.clone(),
+                        declaration: declaration
+                            .mcp_servers
+                            .iter()
+                            .find(|server| &server.name == server_name)
+                            .ok_or_else(|| {
+                                format!("Plugin `{}` MCP declaration is unavailable", binding.id)
+                            })?
+                            .config
+                            .clone(),
                         config: definition.config,
                     },
                 );
@@ -271,6 +291,9 @@ impl McpToolConfig {
                 std::env::var_os("ANCHOR_RUNNER_CATALOG_ROOT").map(PathBuf::from),
             )),
             startup_cancellation: None,
+            startup_timeout: None,
+            configuration_revisions,
+            configuration_bindings,
         })
     }
 
@@ -378,6 +401,64 @@ impl McpToolConfig {
         launch: SandboxLaunch<'_>,
     ) -> Result<LiveMcpTools, String> {
         self.bind_inner(bindings, network, Some(launch)).await
+    }
+
+    /// Probe through exactly the same transport and sandbox adapter as a node.
+    /// A protocol success proves initialization/tool discovery, not a business
+    /// operation or (for local servers) the validity of their upstream secrets.
+    pub(crate) async fn test_connections(
+        &self,
+        bindings: &[PluginBinding],
+        launch: SandboxLaunch<'_>,
+    ) -> Vec<Value> {
+        let mut results = Vec::new();
+        for binding in bindings {
+            for target in &binding.mcp_servers {
+                let key = server_key(&binding.id, target);
+                if self.servers.get(&key).is_some_and(|server| {
+                    transport_name(&server.config).is_ok_and(|value| value == "sse")
+                }) {
+                    results.push(json!({"target":target,"status":"unsupported",
+                        "message":"当前运行时不支持旧版 SSE MCP，请使用 Streamable HTTP。"}));
+                    continue;
+                }
+                let mut single = binding.clone();
+                single.mcp_servers = vec![target.clone()];
+                let connection = self
+                    .bind_with_node_inputs(
+                        &[single],
+                        true,
+                        SandboxLaunch {
+                            sandbox: launch.sandbox,
+                            workspace: launch.workspace,
+                            readonly_inputs: launch.readonly_inputs,
+                            plugin_views: launch.plugin_views,
+                        },
+                    )
+                    .await;
+                let result = match connection {
+                    Ok(live) if live.hosts.is_empty() => {
+                        let _ = live.shutdown().await;
+                        json!({"target":target,"status":"unsupported",
+                            "message":"该 MCP 目标当前被配置为禁用，未建立连接。"})
+                    }
+                    Ok(live) => {
+                        let count: usize = live.hosts.values().map(|host| host.tools().len()).sum();
+                        if live.shutdown().await.is_ok() {
+                            json!({"target":target,"status":"verified","tool_count":count,
+                                "message":"已完成 MCP 初始化与工具发现；未调用业务工具。"})
+                        } else {
+                            json!({"target":target,"status":"failed",
+                                "message":"工具发现已完成，但连接清理失败，请检查服务状态。"})
+                        }
+                    }
+                    Err(_) => json!({"target":target,"status":"failed",
+                        "message":"连接或工具发现失败，请检查服务地址、凭据与服务状态。"}),
+                };
+                results.push(result);
+            }
+        }
+        results
     }
 
     async fn bind_inner(
@@ -546,6 +627,9 @@ impl McpToolConfig {
         sandbox: Option<SandboxLaunch<'_>>,
         grant: Option<ServerGrant<'_>>,
     ) -> Result<McpHost, String> {
+        let timeout = self
+            .startup_timeout
+            .unwrap_or(std::time::Duration::from_secs(120));
         let transport = transport_name(&definition.config)?;
         match transport {
             "http" => {
@@ -560,8 +644,8 @@ impl McpToolConfig {
                 });
                 let result = if let Some(cancellation) = &self.startup_cancellation {
                     tokio::select! {
-                        result = tokio::time::timeout(std::time::Duration::from_secs(120), connect) => result
-                            .map_err(|_| format!("MCP server `{key}` startup timed out after 120s"))?,
+                        result = tokio::time::timeout(timeout, connect) => result
+                            .map_err(|_| format!("MCP server `{key}` startup timed out"))?,
                         _ = async {
                             while !cancellation.load(std::sync::atomic::Ordering::Acquire) {
                                 tokio::time::sleep(std::time::Duration::from_millis(20)).await;
@@ -569,9 +653,9 @@ impl McpToolConfig {
                         } => return Err(format!("MCP server `{key}` startup was cancelled")),
                     }
                 } else {
-                    tokio::time::timeout(std::time::Duration::from_secs(120), connect)
+                    tokio::time::timeout(timeout, connect)
                         .await
-                        .map_err(|_| format!("MCP server `{key}` startup timed out after 120s"))?
+                        .map_err(|_| format!("MCP server `{key}` startup timed out"))?
                 };
                 result.map_err(|error| format!("MCP server `{key}` failed to bind: {error}"))
             }
@@ -589,11 +673,16 @@ impl McpToolConfig {
                 })?;
                 let config = named_view(
                     &definition.config,
+                    &definition.declaration,
                     grant.and_then(|grant| grant.view()),
                     &definition.plugin_id,
                 )?;
-                let (mut program, args, environment, working_directory) =
-                    stdio_config(&config, &definition.plugin_directory, &definition.plugin_id)?;
+                let (mut program, args, environment, working_directory) = stdio_config(
+                    &config,
+                    &definition.declaration,
+                    &definition.plugin_directory,
+                    &definition.plugin_id,
+                )?;
                 if grant.and_then(|grant| grant.view()).is_none()
                     && let Some(command) = definition.config.get("command").and_then(Value::as_str)
                     && Path::new(command).is_absolute()
@@ -658,7 +747,7 @@ impl McpToolConfig {
                     self.startup_cancellation
                         .clone()
                         .unwrap_or_else(|| Arc::new(std::sync::atomic::AtomicBool::new(false))),
-                    std::time::Duration::from_secs(120),
+                    timeout,
                 )
                 .await
                 .map_err(|error| format!("MCP server `{key}` failed to bind: {error}"))
@@ -787,46 +876,88 @@ fn read_oauth_response(response: reqwest::blocking::Response) -> Result<Vec<u8>,
 /// substitute it: the path written here is exactly the path granted to this
 /// launch, which is why the command the sandbox authorizes and the environment it
 /// mounts can never be two different things.
-fn named_view(config: &Value, view: Option<&Path>, plugin: &str) -> Result<Value, String> {
-    if !mentions_view_token(config) {
-        return Ok(config.clone());
-    }
-    let Some(view) = view else {
+fn named_view(
+    config: &Value,
+    declaration: &Value,
+    view: Option<&Path>,
+    plugin: &str,
+) -> Result<Value, String> {
+    let token = format!("${{{}}}", anchor_graph_host::VIEW_TOKEN);
+    let mut named = config.clone();
+    let mut needs_view = false;
+    map_declared_paths(&mut named, declaration, |template, value| {
+        if !template.contains(&token) {
+            return value.to_owned();
+        }
+        needs_view = true;
+        view.map(|view| value.replace(&token, &view.to_string_lossy()))
+            .unwrap_or_else(|| value.to_owned())
+    });
+    if needs_view && view.is_none() {
         return Err(format!(
             "Plugin `{plugin}` names ${{{}}} but this host has no usable dependency view for it; install the Plugin on a deployment that authorizes dependency installation, or repair its view",
             anchor_graph_host::VIEW_TOKEN
         ));
-    };
-    let mut named = config.clone();
-    replace_view_token(&mut named, &view.to_string_lossy());
+    }
     Ok(named)
 }
 
-fn mentions_view_token(value: &Value) -> bool {
-    match value {
-        Value::String(text) => text.contains(&format!("${{{}}}", anchor_graph_host::VIEW_TOKEN)),
-        Value::Array(items) => items.iter().any(mentions_view_token),
-        Value::Object(items) => items.values().any(mentions_view_token),
-        _ => false,
-    }
+fn injected_environment(config: &Value, name: &str) -> bool {
+    ["env_vars", "optional_env_vars"].iter().any(|field| {
+        config
+            .get(field)
+            .and_then(Value::as_array)
+            .is_some_and(|names| names.iter().any(|value| value.as_str() == Some(name)))
+    })
 }
 
-fn replace_view_token(value: &mut Value, view: &str) {
-    match value {
-        Value::String(text) => {
-            *text = text.replace(&format!("${{{}}}", anchor_graph_host::VIEW_TOKEN), view);
+fn plugin_path_template(value: &str) -> bool {
+    [
+        "PLUGIN_ROOT",
+        "CODEX_PLUGIN_ROOT",
+        "CLAUDE_PLUGIN_ROOT",
+        anchor_graph_host::VIEW_TOKEN,
+    ]
+    .iter()
+    .any(|name| value.contains(&format!("${{{name}}}")) || value.contains(&format!("${{{name}:-")))
+}
+
+/// Only declaration-owned process paths can name mounts. Headers and explicit
+/// environment injection slots are opaque transport data, never path templates.
+fn map_declared_paths(
+    config: &mut Value,
+    declaration: &Value,
+    mut map: impl FnMut(&str, &str) -> String,
+) {
+    for key in ["command", "cwd"] {
+        if let Some(template) = declaration.get(key).and_then(Value::as_str)
+            && let Some(Value::String(value)) = config.get_mut(key)
+        {
+            *value = map(template, value);
         }
-        Value::Array(items) => {
-            for item in items {
-                replace_view_token(item, view);
+    }
+    if let Some(templates) = declaration.get("args").and_then(Value::as_array)
+        && let Some(values) = config.get_mut("args").and_then(Value::as_array_mut)
+    {
+        for (template, value) in templates.iter().zip(values) {
+            if let Some(template) = template.as_str()
+                && let Value::String(value) = value
+            {
+                *value = map(template, value);
             }
         }
-        Value::Object(items) => {
-            for item in items.values_mut() {
-                replace_view_token(item, view);
+    }
+    if let Some(templates) = declaration.get("env").and_then(Value::as_object)
+        && let Some(values) = config.get_mut("env").and_then(Value::as_object_mut)
+    {
+        for (key, template) in templates {
+            if !injected_environment(declaration, key)
+                && let Some(template) = template.as_str()
+                && let Some(Value::String(value)) = values.get_mut(key)
+            {
+                *value = map(template, value);
             }
         }
-        _ => {}
     }
 }
 
@@ -874,6 +1005,7 @@ fn http_config(config: &Value) -> Result<HttpConfig, String> {
 
 fn stdio_config(
     config: &Value,
+    declaration: &Value,
     plugin_directory: &Path,
     plugin_id: &str,
 ) -> Result<(String, Vec<String>, Vec<SandboxEnvironment>, String), String> {
@@ -913,7 +1045,8 @@ fn stdio_config(
         .map(|items| {
             items
                 .iter()
-                .map(|item| {
+                .enumerate()
+                .map(|(index, item)| {
                     item.as_str()
                         .map(|value| {
                             visible_plugin_path(value, plugin_directory, plugin_id)
@@ -929,7 +1062,17 @@ fn stdio_config(
                                     })
                                 })
                                 .unwrap_or_else(|| {
-                                    visible_plugin_value(value, plugin_directory, plugin_id)
+                                    if declaration
+                                        .get("args")
+                                        .and_then(Value::as_array)
+                                        .and_then(|values| values.get(index))
+                                        .and_then(Value::as_str)
+                                        .is_some_and(plugin_path_template)
+                                    {
+                                        visible_plugin_value(value, plugin_directory, plugin_id)
+                                    } else {
+                                        value.to_owned()
+                                    }
                                 })
                         })
                         .ok_or_else(|| "MCP stdio args must be strings".to_owned())
@@ -948,9 +1091,19 @@ fn stdio_config(
                     value
                         .as_str()
                         .map(|value| {
+                            let path = !injected_environment(declaration, key)
+                                && declaration
+                                    .get("env")
+                                    .and_then(|values| values.get(key))
+                                    .and_then(Value::as_str)
+                                    .is_some_and(plugin_path_template);
                             SandboxEnvironment::new(
                                 key,
-                                visible_plugin_value(value, plugin_directory, plugin_id),
+                                if path {
+                                    visible_plugin_value(value, plugin_directory, plugin_id)
+                                } else {
+                                    value.to_owned()
+                                },
                             )
                         })
                         .ok_or_else(|| format!("MCP stdio environment `{key}` must be a string"))
@@ -1324,6 +1477,9 @@ mod oauth_tests;
 
 #[cfg(test)]
 mod preparation_tests;
+
+#[cfg(test)]
+mod path_template_tests;
 
 #[cfg(test)]
 mod python_runtime_tests;

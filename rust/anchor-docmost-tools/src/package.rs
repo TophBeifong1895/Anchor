@@ -77,7 +77,6 @@ fn package_checked(
         serde_json::from_str(MANIFEST).map_err(|_| PackageError::Write)?;
     let attachments = &mut manifest["mcpServers"]["attachments"];
     attachments["command"] = "bin/anchor-docmost-tools".into();
-    attachments["args"] = serde_json::json!([]);
     attachments["cwd"] = ".".into();
     let bytes = serde_json::to_vec_pretty(&manifest).map_err(|_| PackageError::Write)?;
     write_file(&staging_fd, "plugin.json", &bytes)?;
