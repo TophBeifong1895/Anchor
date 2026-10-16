@@ -118,6 +118,82 @@
 
 内核依赖、Record 格式、Waiter 与 Phase 变体均未增加。原预检目录保留为回归，原始失败 JSON 保持历史身份。**已知未决项**：崩溃后宿主重复提交的去重/重复计费本轮不处理；从历史求和的读取开销未做规模验收；固定 Goose、真实 Provider 与 Host 新调度路径不在 K0.1 验收范围。
 
+## H1 补充：旧授权单一门
+
+`ddadb17` 把空授权摘要从"每个使用点各自判断"改成"类型本身不可为空"：`PluginBinding.authorization_digest` 由 `String` 改为新类型 `AuthorizationDigest`（`rust/anchor-runtime/src/graph/ports.rs`），`TryFrom`/反序列化拒绝空值，错误信息为 `old authorization format; offline migration required`。方向已由架构师认可；该提交本身因下列测试问题被拒，由本节的修正提交补齐。生产代码里 `authorization_digest.is_empty()` 的判断点由 14 处降到 0 处。
+
+### 14 处判断点的来源分类
+
+按 `6ee2b0e`（上一版 H1 提交）逐一分类。`bindings` 来源指被检查的那一侧从哪来。"处置"列是这一刀的实际处理。
+
+| # | 位置（6ee2b0e） | 检查对象与 bindings 来源 | 处置 | 理由 |
+|---|---|---|---|---|
+| 1 | `anchor-runner-host/src/execution.rs:156` | 调用方传入的 bindings：已解码持久化 Run 的 `plugin_bindings`（应用路径）或 catalog 当前定义（CLI 路径） | 删除 | 已解码的持久化 Run 不可能带空值；catalog 定义由本刀改为 `AuthorizationDigest`，同样不可为空 |
+| 2 | `execution.rs:170` | `resolve_plugins` 返回的当前定义 | 删除 | 当前定义的授权摘要由 `FilePluginCatalog` 计算，新类型保证非空 |
+| 3 | `execution.rs:182` | admitted 侧：已解码持久化 Run | 删除 | 空值已不可能；该处原本用于在老授权与"授权已变"之间选择错误信息，现在只剩后者 |
+| 4 | `tool_host.rs:144` | `from_catalog` 入参：已解码持久化 Run 或 catalog 当前定义 | 删除 | 同一类型保证；反序列化已是唯一拒绝点 |
+| 5 | `tool_host.rs:193` | 同上，逐 binding 再查一次 | 删除 | 与 #4 同一规则的第二处判断，纯冗余 |
+| 6 | `anchor-runtime/src/graph/runner.rs:854` | `record.plugin_bindings`：已解码持久化 Run | 删除 | 已解码记录不可能带空值 |
+| 7 | `runner.rs:878` | `resolve_plugins` 返回的当前定义 | 删除 | 当前定义的授权摘要由 catalog 计算，非空 |
+| 8 | `runner.rs:914` | admitted 侧：已解码持久化 Run | 删除 | 同 #3，错误信息分支合并为一条 |
+| 9 | `anchor-runtime/src/graph/state.rs:352` | 解码入口：持久化字节 | 删除（由新类型接管） | 这一处才是真正的门。删除判断，改由 `PluginBinding::deserialize` 内的 `AuthorizationDigest::try_from` 拒绝，语义等价且无法被绕过 |
+| 10 | `state.rs:473` | `GraphRunRecord::validate`：内存记录 | 删除 | 内存记录只由解码或构造产生，两条路都不可为空 |
+| 11 | `ports.rs:186` | `same_authorization` 的 `self`：已解码持久化 Run | 删除 | 空值不可构造；保留比较即可 |
+| 12 | `anchor-runner-host/src/assistant_plugins.rs:143` | 助手 bundle 的 publication 回执 | 删除 | 回执经反序列化读出，空值已被拒绝；`id != binding.id` 的结构检查保留 |
+| 13 | `assistant_plugins.rs:214` | 助手 bundle 的 Turn policy | 删除 | 同上 |
+| 14 | `ports.rs:177` | 归因：`skip_serializing_if = "String::is_empty"` 使空值在序列化时消失 | 删除并改为结构化 | 这正是"空值"这种旧状态得以写出的原因。新类型 `Serialize` 恒输出字段，"缺失"不再被写入，只能在读到旧文件时出现 |
+
+计数：**旧 14 处（生产代码）→ 新 0 处**，拒绝只在反序列化一层产生。测试代码里还有 3 处 `is_empty()`/`clear()`（`legacy_plugin_tests.rs:104`、`legacy_plugin_tests.rs:119`、`preparation_tests.rs:299`），其中 2 处是构造旧格式的夹具，随本节改动一并调整；`legacy_plugin_tests.rs:104` 的断言保留（它验证的是 catalog 真的算出了摘要）。
+
+`assistant_plugins::active_bindings` 随同收窄为 `active_plugin_ids`：旧版本在缺策略时会用 `PluginBinding { authorization_digest: String::new(), .. }` 现场合成一个绑定，这正是空授权在内存里唯一的来源；改为只返回 id 集合后，这条合成路径在类型上消失。唯一调用点 `application/plugins.rs:763` 只做 `contains_key`，改为 `contains` 后语义不变。
+
+### 改写与恢复的测试
+
+| 测试 | 原覆盖 | 本刀前（ddadb17） | 本刀处理 |
+|---|---|---|---|
+| `anchor-runtime/src/graph/tests.rs: legacy_plugin_authority_requires_offline_migration_before_execution` | runner 行为：带空授权的记录不派发节点、store 无记录、拒绝信息具名 | 退化为纯解码测试（只断言反序列化报错） | **恢复 runner 行为覆盖**：解码仍逐个断言"缺失/null/空"三种旧形状；另用 `FileRunStore` 写入旧字节后 `GraphRunner::run`，断言返回具名拒绝、`nodes.calls` 为空、文件字节不变 |
+| 同上文件 `a_new_run_does_not_bind_plugins_without_a_current_authorization_baseline` | runner 行为：resolver 给出不可用基线时新 Run 失败、不绑定、cursor 与 invocations 为空、节点未被调用 | 退化为纯新类型测试 | **恢复 runner 行为覆盖**；原夹具用的空授权在新类型下不可构造，改用 `digest` 为空（resolver 返回未哈希绑定）触发同一条失败路径，原断言与错误文本 `unauthorized` 全部保留。新类型的 `try_from`/序列化断言保留在测试尾部 |
+| `anchor-runner-host/src/execution/legacy_plugin_tests.rs: legacy_mcp_preparation_and_load_require_offline_migration_without_rewrite` | prepare 与 `store.load` 都具名拒绝旧授权，且文件字节不变 | 夹具同时把 `format` 改成 12 并把授权摘写成空串 | **拆成两个用例**：`(无 format 改写, 期望 old authorization format)` 与 `(format=12, 期望 old Graph Run format)`，两者都断言 prepare 拒绝、load 拒绝、字节不变；并新增 `assert_no_execution_state` 检查拒绝后没有产生任何带 run_id 的执行状态 |
+| 同文件 `changed_or_ambiguous_legacy_mcp_bindings_fail_before_durable_state_changes` | 四种变更（code/resources/servers/plugin_id）下，prepare 拒绝且持久化字节不变 | 保留了"传入当前 bindings"的分支，但那条分支在新代码里报的是"授权已变" | 保留两个真实路径并各自断言正确的拒绝：应用路径只能先 `store.load`（断言 `old authorization format`）；CLI 路径传入当前 bindings 时断言 prepare 抵达持久化解码并同样拒绝旧授权。原意图（拒绝 + 字节不变 + 无执行状态）保留 |
+| 同文件 `a_waiting_parents_preparation_validates_its_legacy_child_without_upgrading_either` | 等待中子 Run 的旧身份被拒绝，父子字节均不变 | 断言仅"含 offline migration required" | 断言收紧为同时含 `old authorization format`，明确拒绝来自子 Run 的授权解码（父记录本身不含 binding） |
+| `anchor-runner-host/src/tool_host/preparation_tests.rs: preliminary_wiring_refuses_legacy_identity_and_validates_skill_authority` | 旧身份装配被拒；**代码改动后同一 binding 失去授权** | 末段退化为重复一次反序列化断言，丢失"装配期拒绝已变更定义"的覆盖 | **恢复装配期覆盖**：保留反序列化拒绝断言；另在 `plugin.json` 新增一个 MCP server（真正改变授权摘要的输入）后断言 `from_catalog` 拒绝旧 binding。原测试改的是 `instructions.md`，而那并不进入授权摘要，旧断言此前是由空授权短路才通过的 |
+| `anchor-runner-host/src/tool_host.rs: fake_fixture_binding_does_not_require_a_filesystem_catalog` | 旧授权装配被拒 | 改为断言反序列化报错 | 保留（装配侧已不可构造空授权，类型保证替代；装配期拒绝的覆盖由上一行恢复） |
+| `anchor-runtime/src/graph/tests.rs: old_run_formats_are_named_refusals_on_decode_and_file_load` | 各旧格式逐个具名拒绝 | 断言放宽为"三种旧格式之一" | 保留（夹具与期望不是一一对应的放宽仍存在，属 H1 原有风格；本刀未再放宽。待办见下） |
+| `anchor-runtime/src/graph/tests.rs: newer_run_formats_are_refused_instead_of_guessed` | 新格式被拒 | 由"decode 通过 + validate 拒绝"改为"decode 拒绝" | 保留（`RunRecordFormat` 新类型使不合法格式无法构造，validate 分支随之不可达） |
+
+未新增测试函数，只强化既有断言；`anchor-runtime` 的 `AuthorizationDigest` 两个 `compile_fail` doctest 由 ddadb17 引入，本刀验证其确实失败编译（`cargo test -p anchor-runtime --doc`：2 通过）。注意 `--all-targets` 不运行 doctest，因此它们不计入全量测试数字。
+
+### 第 1、2 项的定性
+
+- **第 1 项（两个确定性失败的 Host 夹具测试）**：定性为**夹具过时**，不是生产路径丢失拒绝。ddadb17 使空授权摘要不可构造，而两个夹具仍假定"内存里可以持有一条空授权 binding"：`legacy_record` 在内存中清空授权摘要，`legacy_file` 把 `format` 改成 12。在新类型下 prepare 能得到的历史数据只有解码后的记录，所以拒绝要么发生在 `store.load`（旧格式），要么在"传入当前 bindings"的路径上以授权比对失败的形式出现。裁定：保留原意图改写夹具（旧数据被拒绝 + 持久化字节不变 + 未执行节点），并把 runner/装配层的拒绝覆盖补回来，见上表。生产代码只保留解码层这一道门，没有丢拒绝；丢掉的只是"逐 Plugin 指名的错误文本"，登记为 S16。
+- **第 2 项（两个满载下失败的测试）**：在 `445d278` 的 6 次全量运行中未复现，但同一故障类别（`Goose conversation is already active`、进程内 env 竞态）在基线上复现了 3 次。定性为**既有 flaky，不在本切片修**，证据见"待处理与观察"一节。
+
+### 语义变更
+
+本刀不改变对外行为：旧数据的拒绝结论、"读取不改写"、拒绝的粒度（整条记录）都保持一致，只是拒绝点从 14 处收敛到解码一层。唯一可观察的差异是错误信息的保真度，登记为 S16。
+
+`ports.rs` 的 `skip_serializing_if` 删除后，新写出的记录字节不变：该属性只对空值生效，而新类型不可能为空，非空摘要原本也照常写出。
+
+## 待处理与观察：全量运行中的既有 flaky
+
+为定性 `ddadb17` 之后全量运行里两个"满载才失败"的测试，在临时 worktree `/tmp/h1-base`（`445d278`，`git worktree add`，用后已 `git worktree remove`）用同一条全量命令跑了 6 次：
+
+| 运行 | 结果 | 失败项 |
+|---|---|---|
+| 1 | 1277 通过 / 1 失败 / 112 忽略，45 targets | `runtime_management::tests::runtime_python_version_is_a_refreshable_observation_without_publishing_configuration` |
+| 2 | 1278 / 0 / 112 | — |
+| 3 | 1276 / 2 / 112 | `goose_acp::conversation::tests::latest_native_fact_may_be_an_authorized_background_continuation_not_chain_head`、`run_data::tests::conversation_cleanup_keeps_other_scopes_and_obeys_native_lock`（均为 `Goose conversation is already active` / `native conversation ... is already active`） |
+| 4 | 1278 / 0 / 112 | — |
+| 5 | 1277 / 1 / 112 | `goose_acp::conversation::tests::latest_native_fact_may_be_an_authorized_background_continuation_not_chain_head`（`Goose conversation is already active`） |
+| 6 | 1278 / 0 / 112 | — |
+
+结论：
+
+1. **两个报告项在 `445d278` 上 6 次运行均未复现**（`api::tests::session_plugins::only_the_configured_pilot_graph_may_declare_a_plugin_required`、`goose_acp::conversation::tests::reviewed_provider_patches_load_old_history_only_for_a_new_invocation` 都是通过）。所以"由 `ddadb17` 引入"没有被证实，但也没有被排除。
+2. **故障类别在 `445d278` 上确实存在且可复现**：6 次里有 2 次（第 3、5 次）出现 `Goose conversation is already active`，落在同一个 `goose_acp/conversation` 测试文件的两个兄弟测试上；另有 1 次（第 1 次）是进程内环境变量竞态导致的运行时探测失败。三者都不是本刀触碰的代码路径。
+3. 因此判定为**既有 flaky，不在本切片修**，登记在此：这一类测试在同一二进制内共享进程级 conversation lease / Library 读锁 / `PROCESS_ENV_LOCK`，满载时相互竞争；`runtime_python_version` 是同一进程内 `std::env` 竞态。代表性证据：第 3 次的失败信息与报告项的一字不差。
+4. 未做的验证：没有为这些测试做串行化改造或隔离，也没有扩大采样规模。若要归零，需要单独一刀（例如给共享 lease 的测试加进程级串行门），属于 H2 之前的独立工作。
+
 ## 语义变更记录
 
 | 编号 | 场景 | 旧行为 | 新行为 | 理由 |
@@ -137,6 +213,7 @@
 | S13 | 等待中的迟到节点结果 | Code/Human 可以继续写入并推进 Graph | 非生命周期提交统一 TaskWaiting 并计费；越预算仍结算失败，不应用节点内容 | D5 + D1，等待门禁由内核强制执行 |
 | S14 | Graph 节点中断提交 | 无中断字段，无法保存宿主中断事实 | 仅 Code 可携带中断字段，记录规范中断结果并沿普通路由继续；非 Code 含显式 null 也拒绝 | D4，中断来自宿主观察，不能由 Agent 自述产生 |
 | S15 | 旧 Run 格式、旧授权与旧 cursor | 加载时升级或派发前补写计数/授权 | H1 读取/接纳时拒绝并提示离线迁移，不改写数据；持久化记录仅接受对象 | C6 用户明确不兼容旧格式，拒绝隐式发明历史事实 |
+| S16 | 空授权摘要的拒绝信息 | `Plugin \`{id}\` uses an old authorization format; offline migration required`，逐 Plugin 指明 id | `old authorization format; offline migration required`，由解码层给出整条记录的拒绝，不含 Plugin id（serde 另附行列位置） | 判断点由 14 处收敛到 `AuthorizationDigest` 反序列化一层，解码层已不持有"是哪个 Plugin"的语境；调用方只依赖 `offline migration required` 这一子串，无分支受影响 |
 
 S1、S2 在差分测试中被显式映射（S2：旧 `Stopped` 且存在停止原因 ⇔ 新 `Escalated`）。S1 未进入差分测试，因为路由脚本只产生合法路由。
 
@@ -146,7 +223,7 @@ S1、S2 在差分测试中被显式映射（S2：旧 `Stopped` 且存在停止�
 
 ## H1：旧格式清理（实现完成）
 
-H1 已验收，下一步 H2。用户独立重跑确认 45 targets、1278 通过、0 失败、112 忽略，Clippy 与 fmt 通过；H2 首个提交须收拢旧授权拒绝并补判断点度量。用户已决定 H1 仅做兼容删除；FileStore 随 H2 调度器接入，C2 零直接写入在 H3 结束验收。原[存储边界预检](../experiments/constitution-host-preflight/h1/review.md)保留为历史证据，不再是当前停止条件。
+H1 已验收，下一步 H2。`445d278` 之后用户独立重跑确认 45 targets、1278 通过、0 失败、112 忽略，Clippy 与 fmt 通过。`ddadb17` 的旧授权单一门方向已获认可，但其测试问题被验收拒绝，由 `H1 补充：旧授权单一门` 一节的修正提交补齐（夹具过时、覆盖恢复见该节）。用户已决定 H1 仅做兼容删除；FileStore 随 H2 调度器接入，C2 零直接写入在 H3 结束验收。原[存储边界预检](../experiments/constitution-host-preflight/h1/review.md)保留为历史证据，不再是当前停止条件。
 
 已删除格式自动迁移、managed-environment 遗留字段、旧授权升级、Deleted 调用标记及旧 cursor 计数补写。旧 Run 格式、遗留 environments、缺失授权摘要、Deleted 标记和旧 cursor 均具名拒绝，说明需离线迁移；读取不重写原始字节。当前持久化记录必须为对象，非对象序列也具名拒绝；解码保留 serde 已知字段重复键及未知字段拒绝，不经 Value 覆盖字段。未修改内核、GraphValidator 或三组差分测试；仍由旧 RunStore 单独负责 Run，无内核双写或新提交契约。
 
@@ -170,6 +247,8 @@ H1 已验收，下一步 H2。用户独立重跑确认 45 targets、1278 通过�
 Host 的 `legacy_mcp_preparation_is_read_only_and_runner_upgrade_requires_the_run_lease` 替换为 `legacy_mcp_preparation_and_load_require_offline_migration_without_rewrite`；`preliminary_wiring_accepts_only_unchanged_legacy_identity_and_validates_skill_authority` 替换为 `preliminary_wiring_refuses_legacy_identity_and_validates_skill_authority`。fake fixture 仅接受严格相等的现代 binding，不再借升级规则放行。
 
 保留原业务断言：Run Plugin 历史顺序、停止 Run 的 Graph 修改/放弃、未完成 Run 阻止 Graph 删除、Plugin 更新影响这四处 fixture 补齐当前授权摘要；可变 MCP declaration 拒绝测试改用现代授权，以继续实际到达并验证原权限检查。没有删除这些业务/安全测试。新增旧格式 decode/FileRunStore 字节不变、旧 cursor/旧授权执行前拒绝、重复字段和非对象序列拒绝回归。
+
+`ddadb17` 之后这两个替换测试的 runner/装配层覆盖曾退化为纯解码断言，已在 `H1 补充：旧授权单一门` 一节恢复；那一节另有逐测试的覆盖去向表。
 
 ### H2/H3 直接写入棘轮起点
 
@@ -252,3 +331,4 @@ RunStatus 直接赋值 11 站点已包括在 mutation 中；旧 Runtime Runner �
 - Host 侧 H2–H6：H1 兼容删除已完成；后续接入调度器、执行者、内核 FileStore、生命周期及常驻助手中断契约。C2 在 H3 验收，16 save / 36 mutation 为上述棘轮起点。
 - 旧 Runner 的删除。
 - 测量探针与原因码投影接入。
+- 共享 conversation lease / Library 读锁 / `PROCESS_ENV_LOCK` 的既有多测试 flaky（见"待处理与观察"）。

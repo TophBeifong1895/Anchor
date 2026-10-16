@@ -1,6 +1,6 @@
 # 宪法内核接入 Host：临时开发计划
 
-编制日期：2026-10-16。状态：**H1 已验收，下一步 H2**。H1 审查对象 `445d278`；K0.1 独立验收见[结论](../experiments/constitution-host-preflight/k01/review.md)。
+编制日期：2026-10-16。状态：**H1 已验收（含旧授权单一门补充，待复核），下一步 H2**。H1 审查对象 `445d278`；`ddadb17` 的旧授权单一门被验收拒绝，修正提交见[工作记录](constitution-refactor-log.md)的“H1 补充：旧授权单一门”一节；K0.1 独立验收见[结论](../experiments/constitution-host-preflight/k01/review.md)。
 
 预检阻塞的修订范围已由[审查决定 D1–D5](constitution-preflight-decision.md)明确授权；实现与验收入口见[工作记录](constitution-refactor-log.md#k01内核修订与中断事实)。K0.1 与 H1 已验收；Host 当前仍使用旧 Runner，下一步 H2。
 

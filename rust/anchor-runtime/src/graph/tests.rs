@@ -494,12 +494,32 @@ async fn parallel_dispatch_uses_current_plugin_resources_and_preserves_admitted_
     }
 }
 
-#[test]
-fn legacy_plugin_authority_requires_offline_migration_before_execution() {
-    let record = GraphRunRecord::create(graph(&["work"], &[], "work"), Value::Null).unwrap();
-    let mut value = serde_json::to_value(record).unwrap();
-    for authorization in [Value::Null, serde_json::json!("")] {
-        value["plugin_bindings"] = serde_json::json!({"review": {"id":"review","digest":"code","authorization_digest":authorization}});
+#[tokio::test]
+async fn legacy_plugin_authority_requires_offline_migration_before_execution() {
+    let mut snapshot = graph(&["work"], &[], "work");
+    snapshot.nodes[0].plugins = vec!["review".into()];
+    let mut record = GraphRunRecord::create(snapshot, Value::Null).unwrap();
+    record.plugin_bindings_initialized = true;
+    record.plugin_bindings.insert(
+        "review".into(),
+        PluginBinding {
+            id: "review".into(),
+            digest: "code".into(),
+            resources: vec![],
+            mcp_servers: vec![],
+            authorization_digest: "authority".try_into().expect("non-empty fixture authority"),
+        },
+    );
+    record.status = RunStatus::Paused;
+    // Missing, null and empty authorization are the old shapes; each is refused
+    // when decoded, before any in-memory record exists.
+    let mut value = serde_json::to_value(&record).unwrap();
+    for authorization in [None, Some(Value::Null), Some(serde_json::json!(""))] {
+        let binding = value["plugin_bindings"]["review"].as_object_mut().unwrap();
+        match authorization {
+            Some(authorization) => binding.insert("authorization_digest".into(), authorization),
+            None => binding.remove("authorization_digest"),
+        };
         let error = serde_json::from_value::<GraphRunRecord>(value.clone())
             .unwrap_err()
             .to_string();
@@ -509,10 +529,66 @@ fn legacy_plugin_authority_requires_offline_migration_before_execution() {
             "{error}"
         );
     }
+    // The Runner reaches the old shape only through its store. It refuses the
+    // durable record without calling a node or rewriting the bytes.
+    let root = std::env::temp_dir().join(format!(
+        "anchor-legacy-plugin-authority-{}-{}",
+        std::process::id(),
+        RUN_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+    ));
+    fs::create_dir_all(&root).unwrap();
+    let path = root.join(format!("{}.json", record.run_id));
+    let bytes = serde_json::to_vec(&value).unwrap();
+    fs::write(&path, &bytes).unwrap();
+    let store = FileRunStore::new(&root);
+    let (_, artifacts, nodes, control) = setup();
+    *nodes.resolved_plugins.lock().unwrap() = vec![record.plugin_bindings["review"].clone()];
+    let error = GraphRunner::new(&store, &artifacts, &nodes, &control)
+        .run(record)
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.contains("old authorization format") && error.contains("offline migration required"),
+        "{error}"
+    );
+    assert!(nodes.calls.lock().unwrap().is_empty());
+    assert_eq!(fs::read(&path).unwrap(), bytes);
+    let _ = fs::remove_dir_all(root);
 }
 
-#[test]
-fn a_new_run_does_not_bind_plugins_without_a_current_authorization_baseline() {
+/// A resolver cannot produce an empty authorization baseline (type guarantee);
+/// any other unusable baseline still fails the new Run before it binds.
+#[tokio::test]
+async fn a_new_run_does_not_bind_plugins_without_a_current_authorization_baseline() {
+    let mut snapshot = graph(&["work"], &[], "work");
+    snapshot.nodes[0].plugins = vec!["review".into()];
+    let nodes = FakeNodes {
+        resolved_plugins: Mutex::new(vec![PluginBinding {
+            id: "review".into(),
+            digest: String::new(),
+            resources: vec![],
+            mcp_servers: vec![],
+            authorization_digest: "current-authority"
+                .try_into()
+                .expect("non-empty fixture authority"),
+        }]),
+        ..Default::default()
+    };
+    let (store, artifacts, _, control) = setup();
+    let failed = GraphRunner::new(&store, &artifacts, &nodes, &control)
+        .run(GraphRunRecord::create(snapshot, Value::Null).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(failed.status, RunStatus::Failed);
+    assert!(failed.error.as_deref().unwrap().contains("unauthorized"));
+    assert!(!failed.plugin_bindings_initialized);
+    assert!(failed.plugin_bindings.is_empty());
+    assert!(failed.cursor.is_none());
+    assert!(failed.invocations.is_empty());
+    assert!(nodes.calls.lock().unwrap().is_empty());
+    assert_eq!(store.load(&failed.run_id).unwrap(), Some(failed));
+
     assert!(AuthorizationDigest::try_from(String::new()).is_err());
     let digest = AuthorizationDigest::try_from("current-authority").unwrap();
     assert_eq!(

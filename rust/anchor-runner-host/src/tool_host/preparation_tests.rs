@@ -303,9 +303,17 @@ fn preliminary_wiring_refuses_legacy_identity_and_validates_skill_authority() {
         .to_string();
     assert!(error.contains("old authorization format"), "{error}");
     assert!(error.contains("offline migration required"), "{error}");
-    let mut forged = binding;
+    let mut forged = binding.clone();
     forged.authorization_digest = "forged".try_into().expect("non-empty fixture authority");
     assert!(McpToolConfig::from_catalog(root.path(), &[forged]).is_err());
+    // Declaring a new MCP server changes the authority digest, so a binding this
+    // Host read before the edit no longer matches the catalog and assembly stops.
+    fs::write(
+        plugin.join("plugin.json"),
+        r#"{"name":"Skill","mcpServers":{"probe":{"type":"http","url":"http://127.0.0.1:9/mcp"}}}"#,
+    )
+    .unwrap();
+    assert!(McpToolConfig::from_catalog(root.path(), &[binding]).is_err());
     fs::write(plugin.join("instructions.md"), "changed code and resources").unwrap();
     assert!(serde_json::from_value::<PluginBinding>(legacy).is_err());
 }

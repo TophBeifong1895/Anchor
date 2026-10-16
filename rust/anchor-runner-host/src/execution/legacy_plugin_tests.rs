@@ -105,6 +105,8 @@ fn plugin(root: &Path) -> (PathBuf, PluginBinding) {
     (directory, binding)
 }
 
+/// The in-memory record a caller holds before the durable copy is read. An empty
+/// authorization cannot exist in memory, so the old shape lives only in the file.
 fn legacy_record(id: &str, current: &PluginBinding) -> GraphRunRecord {
     let snapshot = GraphSnapshot::admit(json!({
         "objective":"legacy Plugin authorization recovery",
@@ -123,18 +125,34 @@ fn legacy_record(id: &str, current: &PluginBinding) -> GraphRunRecord {
     record
 }
 
+/// Persist the pre-baseline authorization shape: a current-format record whose
+/// bindings omit `authorization_digest`, as the old serializer wrote them.
 fn legacy_file(root: &Path, record: &GraphRunRecord) -> (FileRunStore, PathBuf, Vec<u8>) {
+    legacy_file_with_format(root, record, None)
+}
+
+/// `format` additionally downgrades the record schema itself.
+fn legacy_file_with_format(
+    root: &Path,
+    record: &GraphRunRecord,
+    format: Option<u32>,
+) -> (FileRunStore, PathBuf, Vec<u8>) {
     let directory = root.join("state/runs");
     fs::create_dir_all(&directory).unwrap();
     let path = directory.join(format!("{}.json", record.run_id));
     let mut value = serde_json::to_value(record).unwrap();
-    value["format"] = json!(12);
+    if let Some(format) = format {
+        value["format"] = json!(format);
+    }
     for binding in value["plugin_bindings"]
         .as_object_mut()
         .unwrap()
         .values_mut()
     {
-        binding["authorization_digest"] = json!("");
+        binding
+            .as_object_mut()
+            .unwrap()
+            .remove("authorization_digest");
     }
     let bytes = serde_json::to_vec(&value).unwrap();
     fs::write(&path, &bytes).unwrap();
@@ -165,23 +183,54 @@ async fn legacy_mcp_preparation_and_load_require_offline_migration_without_rewri
     let root = tempfile::tempdir().unwrap();
     let _environment = Environment::configure(root.path());
     let (_, current) = plugin(root.path());
-    let record = legacy_record("legacy-mcp", &current);
-    let (store, path, original_bytes) = legacy_file(root.path(), &record);
-    let error = match prepare(root.path(), &record, record.plugin_bindings.clone()) {
-        Ok(_) => panic!("legacy authorization was accepted"),
-        Err(error) => error,
-    };
-    assert!(
-        error.contains("old authorization format") && error.contains("offline migration required"),
-        "{error}"
-    );
-    let error = store.load(&record.run_id).unwrap_err().to_string();
-    assert!(
-        (error.contains("old Graph Run format") || error.contains("old authorization format"))
-            && error.contains("offline migration required"),
-        "{error}"
-    );
-    assert_eq!(fs::read(path).unwrap(), original_bytes);
+    // Old authorization alone, then together with an old record schema. The
+    // caller's in-memory view is current; only the durable decode can refuse.
+    for (id, format, refusal) in [
+        ("legacy-mcp", None, "old authorization format"),
+        ("legacy-mcp-format", Some(12), "old Graph Run format"),
+    ] {
+        let record = legacy_record(id, &current);
+        let (store, path, original_bytes) = legacy_file_with_format(root.path(), &record, format);
+        let error = match prepare(root.path(), &record, record.plugin_bindings.clone()) {
+            Ok(_) => panic!("legacy {id} was accepted"),
+            Err(error) => error,
+        };
+        assert!(
+            error.contains(refusal) && error.contains("offline migration required"),
+            "{error}"
+        );
+        let error = store.load(&record.run_id).unwrap_err().to_string();
+        assert!(
+            error.contains(refusal) && error.contains("offline migration required"),
+            "{error}"
+        );
+        assert_eq!(fs::read(path).unwrap(), original_bytes);
+        assert_no_execution_state(root.path(), &record.run_id);
+    }
+}
+
+/// A refused preparation leaves no execution handle; nothing beyond the
+/// untouched durable record may exist for the Run.
+fn assert_no_execution_state(root: &Path, run_id: &str) {
+    let mut found = Vec::new();
+    let mut pending = vec![root.join("state"), root.join("workspaces")];
+    while let Some(directory) = pending.pop() {
+        let Ok(entries) = fs::read_dir(&directory) else {
+            continue;
+        };
+        for entry in entries {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                pending.push(path.clone());
+            }
+            if path.to_string_lossy().contains(run_id)
+                && path != root.join(format!("state/runs/{run_id}.json"))
+            {
+                found.push(path);
+            }
+        }
+    }
+    assert!(found.is_empty(), "refused Run created state: {found:?}");
 }
 
 #[tokio::test]
@@ -209,32 +258,40 @@ async fn changed_or_ambiguous_legacy_mcp_bindings_fail_before_durable_state_chan
             "plugin_id" => record.plugin_bindings.get_mut("research").unwrap().id = "other".into(),
             _ => unreachable!(),
         }
+        // The durable file carries the changed binding without an authorization
+        // baseline; no in-memory copy of that binding can exist.
         let (store, path, original_bytes) = legacy_file(root.path(), &record);
         let current = FilePluginCatalog::new(root.path().join("library"))
             .resolve(&["research".into()])
             .unwrap()
             .remove(0);
-        // The application prepares from the durable legacy bindings; the CLI
-        // may supply current bindings before it loads the saved record. Both
-        // paths must validate the same historical baseline.
-        for bindings in [
-            record.plugin_bindings.clone(),
+        // The application obtains durable bindings only by loading the saved
+        // record, so its path is refused at that decode.
+        let error = store.load(&record.run_id).unwrap_err().to_string();
+        assert!(
+            error.contains("old authorization format")
+                && error.contains("offline migration required"),
+            "{change}: {error}"
+        );
+        assert_eq!(fs::read(&path).unwrap(), original_bytes);
+        // The CLI supplies current bindings before it loads the saved record.
+        // Preparation must still reach the durable decode and refuse there.
+        let expected = legacy_record(&record.run_id, &current);
+        let error = match prepare(
+            root.path(),
+            &expected,
             BTreeMap::from([("research".into(), current.clone())]),
-        ] {
-            let error = match prepare(root.path(), &record, bindings) {
-                Ok(_) => panic!("legacy {change} change was accepted"),
-                Err(error) => error,
-            };
-            assert!(error.contains("offline migration required"), "{error}");
-            assert!(
-                store
-                    .load(&record.run_id)
-                    .unwrap_err()
-                    .to_string()
-                    .contains("offline migration required")
-            );
-            assert_eq!(fs::read(&path).unwrap(), original_bytes);
-        }
+        ) {
+            Ok(_) => panic!("legacy {change} change was accepted"),
+            Err(error) => error,
+        };
+        assert!(
+            error.contains("old authorization format")
+                && error.contains("offline migration required"),
+            "{change}: {error}"
+        );
+        assert_eq!(fs::read(&path).unwrap(), original_bytes);
+        assert_no_execution_state(root.path(), &record.run_id);
     }
 }
 
@@ -296,7 +353,12 @@ async fn a_waiting_parents_preparation_validates_its_legacy_child_without_upgrad
         Ok(_) => panic!("legacy child was accepted"),
         Err(error) => error,
     };
-    assert!(error.contains("offline migration required"), "{error}");
+    // The parent holds no Plugin binding, so its file is current; the refusal
+    // must come from decoding the waiting child's legacy authorization.
+    assert!(
+        error.contains("old authorization format") && error.contains("offline migration required"),
+        "{error}"
+    );
     assert_eq!(fs::read(&child_path).unwrap(), child_bytes);
     assert_eq!(fs::read(&parent_path).unwrap(), parent_bytes);
 
@@ -305,7 +367,10 @@ async fn a_waiting_parents_preparation_validates_its_legacy_child_without_upgrad
         Ok(_) => panic!("parent preparation ignored its child's legacy identity"),
         Err(error) => error,
     };
-    assert!(error.contains("offline migration required"), "{error}");
+    assert!(
+        error.contains("old authorization format") && error.contains("offline migration required"),
+        "{error}"
+    );
     assert_eq!(fs::read(child_path).unwrap(), child_bytes);
     assert_eq!(fs::read(parent_path).unwrap(), parent_bytes);
 }
