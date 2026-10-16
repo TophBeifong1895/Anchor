@@ -9,12 +9,13 @@ use std::sync::{Arc, Mutex};
 
 use anchor_kernel::{
     Action, Authority, Evidence, Kernel, MemoryStore, Outcome, Phase, Principal, PrincipalKind,
-    Reason, Submission,
+    Reason, Submission, Waiter,
 };
 
 use super::super::*;
 use super::{
-    DispatchKind, GRAPH_VALIDATOR, GraphValidator, NodeSubmission, record_of, run_resource,
+    CallSubmission, DispatchKind, GRAPH_VALIDATOR, GraphValidator, NodeSubmission, call_identity,
+    record_of, run_resource,
 };
 
 // ---------------------------------------------------------------------------
@@ -218,6 +219,71 @@ fn random_parallel_graph(seed: u64) -> GraphSnapshot {
     snapshot
 }
 
+/// What a child Run does, decided by the call identity on both sides.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CallScript {
+    /// wait: admitted, waited on, then completes.
+    WaitThenComplete,
+    /// wait or detach: the port answers with a completed child at once.
+    CompleteAtOnce,
+    /// detach: accepted.
+    Detached,
+    Failed,
+    Uncertain,
+}
+
+fn call_script(key: &str, mode: &str, seed: u64) -> CallScript {
+    let h = hash(&[key], seed) % 100;
+    match (mode, h) {
+        ("wait", 0..50) => CallScript::WaitThenComplete,
+        ("wait", 50..75) => CallScript::CompleteAtOnce,
+        ("detach", 0..60) => CallScript::Detached,
+        ("detach", 60..80) => CallScript::CompleteAtOnce,
+        (_, 80..90) | ("wait", 75..80) => CallScript::Failed,
+        _ => CallScript::Uncertain,
+    }
+}
+
+fn child_of(key: &str) -> String {
+    format!("child-{}", &key[..12])
+}
+
+fn child_output(key: &str, seed: u64) -> Value {
+    serde_json::json!({"answer": hash(&[key, "out"], seed) % 1000, "secret": "child business result"})
+}
+
+/// Random serial Graphs with one or two nodes turned into Op.call (wait or
+/// detach), each keeping at most one exit.
+fn random_call_graph(seed: u64) -> GraphSnapshot {
+    let mut snapshot = random_graph(seed ^ 0x5A5A);
+    let mut rng = Rng(seed);
+    snapshot.ops = BTreeMap::from([
+        (
+            "callw".to_string(),
+            serde_json::json!({"call": {"graph": "child", "mode": "wait"}}),
+        ),
+        (
+            "calld".to_string(),
+            serde_json::json!({"call": {"graph": "child", "mode": "detach"}}),
+        ),
+    ]);
+    let count = 1 + rng.below(2) as usize;
+    for _ in 0..count {
+        let index = rng.below(snapshot.nodes.len() as u64) as usize;
+        let id = snapshot.nodes[index].id.clone();
+        snapshot.nodes[index].agent = None;
+        snapshot.nodes[index].op = Some(if rng.chance(55) { "callw" } else { "calld" }.into());
+        let mut kept = false;
+        snapshot.edges.retain(|e| {
+            if e.from_node != id {
+                return true;
+            }
+            !std::mem::replace(&mut kept, true)
+        });
+    }
+    snapshot
+}
+
 // ---------------------------------------------------------------------------
 // Old side: GraphRunner with scripted ports
 // ---------------------------------------------------------------------------
@@ -269,8 +335,62 @@ type Trace = Vec<(String, u64, Vec<String>)>;
 struct Scripted {
     seed: u64,
     trace: Mutex<Trace>,
+    calls: ScriptedCalls,
+}
+
+#[derive(Default)]
+struct ScriptedCalls {
+    seed: u64,
+    /// Identities whose child has been admitted and is still running.
+    waiting: Mutex<BTreeSet<String>>,
+}
+
+impl GraphCallPort for ScriptedCalls {
+    fn call<'a>(
+        &'a self,
+        identity: &'a CallIdentity,
+        spec: &'a Value,
+        _input: &'a Value,
+        _input_commits: &'a [CommitRef],
+        _cancellation: crate::Cancellation,
+    ) -> Pin<Box<dyn Future<Output = Result<GraphCallOutcome, GraphError>> + Send + 'a>> {
+        Box::pin(async move {
+            let key = identity.durable_key();
+            let mode = spec["mode"].as_str().unwrap_or_default();
+            let child = child_of(&key);
+            Ok(match call_script(&key, mode, self.seed) {
+                CallScript::WaitThenComplete
+                    if self.waiting.lock().unwrap().insert(key.clone()) =>
+                {
+                    GraphCallOutcome::Waiting {
+                        child_run_id: child,
+                    }
+                }
+                CallScript::WaitThenComplete | CallScript::CompleteAtOnce => {
+                    GraphCallOutcome::Completed {
+                        child_run_id: child,
+                        output: child_output(&key, self.seed),
+                    }
+                }
+                CallScript::Detached => GraphCallOutcome::Detached {
+                    child_run_id: child,
+                },
+                CallScript::Failed => GraphCallOutcome::Failed {
+                    child_run_id: Some(child),
+                    reason: "child refused".into(),
+                },
+                CallScript::Uncertain => GraphCallOutcome::Uncertain {
+                    child_run_id: None,
+                    reason: "admission unknown".into(),
+                },
+            })
+        })
+    }
 }
 impl NodeExecutionPort for Scripted {
+    fn graph_call_port(&self) -> Option<&dyn GraphCallPort> {
+        Some(&self.calls)
+    }
     fn capabilities(&self) -> NodeExecutionCapabilities {
         NodeExecutionCapabilities {
             agent: true,
@@ -324,12 +444,23 @@ async fn run_old(record: GraphRunRecord, seed: u64) -> (Trace, GraphRunRecord) {
     let nodes = Scripted {
         seed,
         trace: Mutex::default(),
+        calls: ScriptedCalls {
+            seed,
+            ..Default::default()
+        },
     };
     let control = NoControl(Arc::new(std::sync::atomic::AtomicBool::new(false)));
-    let done = GraphRunner::new(&store, &Artifacts, &nodes, &control)
-        .run(record)
-        .await
-        .expect("old runner");
+    let mut done = record;
+    // A waiting parent is re-entered by its host once the child settles.
+    for _ in 0..1_000 {
+        done = GraphRunner::new(&store, &Artifacts, &nodes, &control)
+            .run(done)
+            .await
+            .expect("old runner");
+        if done.status != RunStatus::WaitingCall {
+            break;
+        }
+    }
     (nodes.trace.into_inner().unwrap(), done)
 }
 
@@ -363,6 +494,19 @@ fn run_new(record: GraphRunRecord, seed: u64) -> NewRun {
     let mut late = BTreeSet::new();
     for _ in 0..10_000 {
         let resource = kernel.load(&id).unwrap().unwrap();
+        if resource.is_settled() {
+            break;
+        }
+        if let Some(Phase::Waiting {
+            waiter: Waiter::Child { .. },
+        }) = resource.phase()
+        {
+            // The child settled: host code releases the parent (kernel law).
+            let resume = Submission::new(&id, resource.version, Action::Request)
+                .content(serde_json::json!({"control": "resume"}));
+            assert!(kernel.submit(&host, 0, resume).unwrap().is_accepted());
+            continue;
+        }
         let wave = GraphValidator::frontier(&resource).unwrap();
         let open = kernel.open(&id).unwrap();
         assert_eq!(
@@ -402,16 +546,54 @@ fn run_new(record: GraphRunRecord, seed: u64) -> NewRun {
                 DispatchKind::Work => route_for(seed, &node, dispatch.invocation, &routes),
                 _ => None,
             };
-            let content = serde_json::to_value(NodeSubmission {
-                summary: format!("{node} #{}", dispatch.invocation),
-                route,
-                output: serde_json::json!({"node": node, "invocation": dispatch.invocation}),
-                model_requests: 1,
-                commit: commit.clone(),
-                plugin_views: BTreeMap::new(),
-                plugin_digests: BTreeMap::new(),
-            })
-            .unwrap();
+            let content = if dispatch.kind == DispatchKind::Call {
+                let key = call_identity(&state, &dispatch).unwrap().durable_key();
+                let mode = state.snapshot.ops[dispatch.node.op.as_ref().unwrap()]["call"]["mode"]
+                    .as_str()
+                    .unwrap()
+                    .to_owned();
+                let child = child_of(&key);
+                let bound = state.graph_calls.contains_key(&key);
+                serde_json::to_value(match (call_script(&key, &mode, seed), bound) {
+                    (CallScript::WaitThenComplete, false) => CallSubmission::Bound {
+                        child_run_id: child,
+                    },
+                    (CallScript::WaitThenComplete | CallScript::CompleteAtOnce, _) => {
+                        CallSubmission::Completed {
+                            child_run_id: child,
+                            // For a detach this carries the child's business
+                            // result; the validator must not let it through.
+                            output: child_output(&key, seed),
+                            commit: commit.clone(),
+                        }
+                    }
+                    (CallScript::Detached, _) => CallSubmission::Completed {
+                        child_run_id: child,
+                        output: Value::Null,
+                        commit: commit.clone(),
+                    },
+                    (CallScript::Failed, _) => CallSubmission::Failed {
+                        child_run_id: Some(child),
+                        reason: "child refused".into(),
+                    },
+                    (CallScript::Uncertain, _) => CallSubmission::Uncertain {
+                        child_run_id: None,
+                        reason: "admission unknown".into(),
+                    },
+                })
+                .unwrap()
+            } else {
+                serde_json::to_value(NodeSubmission {
+                    summary: format!("{node} #{}", dispatch.invocation),
+                    route,
+                    output: serde_json::json!({"node": node, "invocation": dispatch.invocation}),
+                    model_requests: 1,
+                    commit: commit.clone(),
+                    plugin_views: BTreeMap::new(),
+                    plugin_digests: BTreeMap::new(),
+                })
+                .unwrap()
+            };
             // An executor submits against the version it was dispatched at;
             // only after a stale return does it re-read.
             let mut version = resource.version;
@@ -493,6 +675,7 @@ struct Facts {
     passes: BTreeMap<String, u64>,
     module_activations: BTreeMap<String, u64>,
     sequence: u64,
+    graph_calls: BTreeMap<String, GraphCallRecord>,
 }
 
 fn facts(r: &GraphRunRecord) -> Facts {
@@ -522,6 +705,7 @@ fn facts(r: &GraphRunRecord) -> Facts {
         passes: r.passes.clone(),
         module_activations: r.module_activations.clone(),
         sequence: r.sequence,
+        graph_calls: r.graph_calls.clone(),
     }
 }
 
@@ -561,6 +745,10 @@ struct Tally {
     resubmissions: u64,
     phantom_invocations: u64,
     late_refusals: u64,
+    calls_waited: u64,
+    calls_detached: u64,
+    call_failed: u64,
+    call_unknown: u64,
 }
 
 async fn check(snapshot: GraphSnapshot, seed: u64, tally: &mut Tally) {
@@ -582,7 +770,13 @@ async fn check(snapshot: GraphSnapshot, seed: u64, tally: &mut Tally) {
         old_trace, new_trace,
         "dispatch trace differs, seed {seed}, graph {snapshot:#?}"
     );
-    if old.status == RunStatus::Failed {
+    let call_ended_it = old.graph_calls.values().any(|c| {
+        matches!(
+            c.status,
+            GraphCallStatus::Failed | GraphCallStatus::Uncertain
+        )
+    });
+    if old.status == RunStatus::Failed && !call_ended_it {
         // S6: fail fast. Old merged results = new merged results + late
         // refusals, disjointly. Ceiling reasons are both recorded.
         let new_results = result_set(&new);
@@ -626,11 +820,39 @@ async fn check(snapshot: GraphSnapshot, seed: u64, tally: &mut Tally) {
                     result: Outcome::Escalated { .. },
                 },
             ) if !old.ceased.is_empty() => tally.round_limited += 1,
+            (
+                RunStatus::Failed,
+                Phase::Settled {
+                    result: Outcome::Failed { .. },
+                },
+            ) if call_ended_it => tally.call_failed += 1,
+            // S7: an unknown admission settles as unknown, not as failed.
+            (
+                RunStatus::Failed,
+                Phase::Settled {
+                    result: Outcome::Unknown { .. },
+                },
+            ) if call_ended_it => tally.call_unknown += 1,
             other => panic!("terminal state differs, seed {seed}: {other:?}"),
         }
     }
     tally.cases += 1;
     tally.resubmissions += resubmissions;
+    for call in new.graph_calls.values() {
+        match call.status {
+            GraphCallStatus::Completed => tally.calls_waited += 1,
+            GraphCallStatus::Detached => {
+                tally.calls_detached += 1;
+                assert!(
+                    call.output
+                        .as_ref()
+                        .is_some_and(|o| o.get("secret").is_none()),
+                    "a detach leaked the child's result, seed {seed}"
+                );
+            }
+            _ => {}
+        }
+    }
     tally.parallel_activations += new.results.get("f").map(|r| r.len() as u64).unwrap_or(0);
     tally.module_activated += u64::from(!new.module_activations.is_empty());
     tally.module_limited += u64::from(new.ceased.iter().any(|c| c.starts_with("m@")));
@@ -680,5 +902,22 @@ async fn parallel_regions_match_the_runner_on_random_graphs() {
     assert!(
         tally.completed > 100 && tally.failed > 100,
         "completed and branch-ceiling failures exercised: {tally:?}"
+    );
+}
+
+#[tokio::test]
+async fn graph_calls_match_the_runner_on_random_graphs() {
+    let mut tally = Tally::default();
+    for seed in 0..5_000 {
+        check(random_call_graph(seed), seed, &mut tally).await;
+    }
+    eprintln!("differential calls: {tally:?}");
+    assert!(tally.cases > 4_500, "{tally:?}");
+    assert!(
+        tally.calls_waited > 500
+            && tally.calls_detached > 500
+            && tally.call_failed > 100
+            && tally.call_unknown > 100,
+        "{tally:?}"
     );
 }

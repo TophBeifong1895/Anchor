@@ -12,9 +12,14 @@
 //! scheduler runs the open slots in waves or as soon as they open is the
 //! scheduler's choice, not the Graph's.
 //!
+//! Op.call is not a special path either: host code binds the child Run, the
+//! Run waits on that child as a kernel waiter, and host code submits the
+//! child's settlement. A detached call's output is built here, so a child's
+//! business result can never leak through a detach.
+//!
 //! Covered: serial routing, feedback edges, skipped paths, node and module
-//! round limits, fanout/join. Not yet: Op.call, module scopes inside parallel
-//! branches.
+//! round limits, fanout/join, Op.call wait/detach. Not yet: module scopes
+//! inside parallel branches.
 
 use anchor_kernel::{
     Action, Evidence, JudgeCtx, Judgement, Outcome, Phase, PrincipalKind, Reason, Resource, Slot,
@@ -35,6 +40,8 @@ pub enum DispatchKind {
     /// Deterministic control, submitted only by host code.
     Fanout,
     Join,
+    /// An Op.call: host code binds and settles a child Run.
+    Call,
 }
 
 /// One node invocation a Run would currently accept.
@@ -86,17 +93,70 @@ pub struct NodeSubmission {
     pub plugin_digests: BTreeMap<String, String>,
 }
 
+/// What host code reports about one Op.call invocation.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "call", rename_all = "snake_case", deny_unknown_fields)]
+pub enum CallSubmission {
+    /// A wait-mode child was admitted; the Run now waits on it.
+    Bound { child_run_id: String },
+    /// The child settled (wait) or was accepted (detach).
+    Completed {
+        child_run_id: String,
+        #[serde(default)]
+        output: Value,
+        commit: CommitRef,
+    },
+    Failed {
+        child_run_id: Option<String>,
+        reason: String,
+    },
+    /// Whether the child exists is not known.
+    Uncertain {
+        child_run_id: Option<String>,
+        reason: String,
+    },
+}
+
+/// The durable identity of one Op.call invocation. A host admits the child
+/// idempotently under it; the Run binds exactly one child to it.
+pub fn call_identity(
+    record: &GraphRunRecord,
+    dispatch: &Dispatch,
+) -> Result<CallIdentity, GraphError> {
+    let spec = op_of(record, &dispatch.node)
+        .and_then(|op| op.get("call"))
+        .ok_or_else(|| {
+            GraphError::InvalidSnapshot(format!("`{}` is not an Op.call", dispatch.node.id))
+        })?;
+    let bytes = serde_json::to_vec(spec).map_err(GraphError::SnapshotDecode)?;
+    Ok(CallIdentity {
+        parent_run_id: record.run_id.clone(),
+        parent_graph_digest: record.graph_digest.clone(),
+        node_id: dispatch.node.id.clone(),
+        invocation: dispatch.invocation,
+        call_spec_digest: format!("{:x}", <sha2::Sha256 as sha2::Digest>::digest(bytes)),
+    })
+}
+
 /// The kernel resource for a new Run.
 pub fn run_resource(record: &GraphRunRecord, budget: u64) -> Result<Resource, GraphError> {
-    if record
-        .snapshot
-        .ops
-        .values()
-        .any(|op| op.get("call").is_some())
-    {
-        return Err(GraphError::Unsupported(
-            "Op.call is not admitted by the Graph validator yet".into(),
-        ));
+    // Host code cannot choose a route for a call, so a call with several exits
+    // is an authoring error found here, not a failure found mid-Run.
+    for node in &record.snapshot.nodes {
+        if op_of(record, node).is_some_and(|op| op.get("call").is_some())
+            && record
+                .snapshot
+                .edges
+                .iter()
+                .filter(|e| e.from_node == node.id)
+                .count()
+                > 1
+        {
+            return Err(GraphError::InvalidSnapshot(format!(
+                "Op.call node `{}` cannot choose between multiple outgoing edges",
+                node.id
+            )));
+        }
     }
     for region in record.snapshot.parallel_regions()?.values() {
         if region
@@ -165,6 +225,40 @@ pub(crate) fn prepare(record: &mut GraphRunRecord) -> Result<Advance, GraphError
         {
             return parallel_frontier(record);
         }
+        // Started but without a result: the same invocation continues (a call
+        // whose child was bound). It was counted when it started, so round
+        // limits and module entry were already applied to it. This is what
+        // the old Runner's cursor remembered; here it is derived from facts.
+        if let Some(node) = record
+            .snapshot
+            .nodes
+            .iter()
+            .find(|n| {
+                let started = record.invocations.get(&n.id).copied().unwrap_or(0);
+                let finished = record
+                    .results
+                    .get(&n.id)
+                    .and_then(|r| r.iter().map(|x| x.key.invocation).max())
+                    .unwrap_or(0);
+                started > finished
+            })
+            .cloned()
+        {
+            let invocation = record.invocations[&node.id];
+            let inputs = dispatch_inputs(record, &node.id);
+            let kind = if op_of(record, &node).is_some_and(|op| op.get("call").is_some()) {
+                DispatchKind::Call
+            } else {
+                DispatchKind::Work
+            };
+            return Ok(Advance::Open(vec![Dispatch {
+                node,
+                invocation,
+                kind,
+                branch: None,
+                inputs,
+            }]));
+        }
         let Some(node) = next_node(record)? else {
             return Ok(Advance::Done);
         };
@@ -231,6 +325,8 @@ pub(crate) fn prepare(record: &mut GraphRunRecord) -> Result<Advance, GraphError
                 .is_some_and(|a| a.join_node == node.id);
         let (kind, inputs) = if op.is_some_and(|op| op.get("fanout").is_some()) {
             (DispatchKind::Fanout, dispatch_inputs(record, &node.id))
+        } else if op.is_some_and(|op| op.get("call").is_some()) {
+            (DispatchKind::Call, dispatch_inputs(record, &node.id))
         } else if is_join {
             let inputs = record
                 .parallel
@@ -360,6 +456,9 @@ impl Validator for GraphValidator {
         if dispatch.kind != DispatchKind::Work && ctx.principal.kind != PrincipalKind::Code {
             return Judgement::refused(Reason::Unauthorized);
         }
+        if dispatch.kind == DispatchKind::Call {
+            return judge_call(record, &dispatch, s);
+        }
         let Ok(content) = serde_json::from_value::<NodeSubmission>(s.content.clone()) else {
             return Judgement::returned(Reason::ContentInvalid);
         };
@@ -373,13 +472,7 @@ impl Validator for GraphValidator {
             model_requests: content.model_requests,
             output: content.output,
         };
-        let routes = record
-            .snapshot
-            .edges
-            .iter()
-            .filter(|e| e.from_node == node_id)
-            .map(|e| e.to_node.clone())
-            .collect::<Vec<_>>();
+        let routes = routes_of(&record, &node_id);
         if dispatch.branch.is_some() && routes.len() != 1 {
             return Judgement::refused(Reason::RouteInvalid);
         }
@@ -392,45 +485,17 @@ impl Validator for GraphValidator {
                 Err(_) => return Judgement::returned(Reason::RouteInvalid),
             }
         };
-        record
-            .invocations
-            .insert(node_id.clone(), dispatch.invocation);
-        *record.passes.entry(node_id.clone()).or_default() += 1;
-        record.sequence += 1;
-        let result_sequence = record.sequence;
+        count_dispatch(&mut record, &dispatch);
         let commit = content.commit.clone();
-        record
-            .results
-            .entry(node_id.clone())
-            .or_default()
-            .push(RunResult {
-                node_id: node_id.clone(),
-                key: InvocationKey {
-                    run_id: record.run_id.clone(),
-                    graph_digest: record.graph_digest.clone(),
-                    node_id: node_id.clone(),
-                    invocation: dispatch.invocation,
-                },
-                plugin_views: content.plugin_views,
-                plugin_digests: content.plugin_digests,
-                completion,
-                interruption: None,
-                commit: commit.clone(),
-                sequence: result_sequence,
-            });
-        record.sequence += 1;
-        for target in &routes {
-            record.decided.insert(
-                edge_key(&node_id, target),
-                EdgeDecision {
-                    selected: dispatch.kind == DispatchKind::Fanout
-                        || Some(target) == chosen.as_ref(),
-                    sequence: record.sequence,
-                    source_invocation: dispatch.invocation,
-                    result_sequence,
-                },
-            );
-        }
+        record_result(
+            &mut record,
+            &dispatch,
+            completion,
+            commit.clone(),
+            (content.plugin_views, content.plugin_digests),
+            &routes,
+            chosen.as_ref(),
+        );
         match (dispatch.kind, dispatch.branch) {
             (DispatchKind::Fanout, _) => {
                 let Ok(regions) = record.snapshot.parallel_regions() else {
@@ -472,59 +537,271 @@ impl Validator for GraphValidator {
                     ParallelBranchStatus::Ready
                 };
             }
-            (DispatchKind::Work, None) => {}
+            (DispatchKind::Work | DispatchKind::Call, _) => {}
         }
-        // Look ahead without persisting dispatch-time effects for the next
-        // node; persist the look-ahead only when it shows the Run is over.
-        let mut ahead = record.clone();
-        let next = prepare(&mut ahead);
-        let verification = if s
-            .evidence
-            .iter()
-            .any(|e| matches!(e, Evidence::Resource { .. }))
-        {
-            Verification::Evidenced
-        } else {
-            Verification::Asserted
-        };
-        let (record, phase) = match next {
-            Ok(Advance::Open(_)) => (record, None),
-            Ok(Advance::Done) if ahead.ceased.is_empty() => (
+        conclude(record, verification_of(s))
+    }
+}
+
+fn routes_of(record: &GraphRunRecord, node_id: &str) -> Vec<String> {
+    record
+        .snapshot
+        .edges
+        .iter()
+        .filter(|e| e.from_node == node_id)
+        .map(|e| e.to_node.clone())
+        .collect()
+}
+
+fn verification_of(s: &Submission) -> Verification {
+    if s.evidence
+        .iter()
+        .any(|e| matches!(e, Evidence::Resource { .. }))
+    {
+        Verification::Evidenced
+    } else {
+        Verification::Asserted
+    }
+}
+
+/// An invocation counts as started when its first fact is accepted.
+fn count_dispatch(record: &mut GraphRunRecord, dispatch: &Dispatch) {
+    record
+        .invocations
+        .insert(dispatch.node.id.clone(), dispatch.invocation);
+    *record.passes.entry(dispatch.node.id.clone()).or_default() += 1;
+}
+
+fn record_result(
+    record: &mut GraphRunRecord,
+    dispatch: &Dispatch,
+    completion: NodeCompletion,
+    commit: CommitRef,
+    (plugin_views, plugin_digests): (BTreeMap<String, String>, BTreeMap<String, String>),
+    routes: &[String],
+    chosen: Option<&String>,
+) {
+    let node_id = dispatch.node.id.clone();
+    record.sequence += 1;
+    let result_sequence = record.sequence;
+    record
+        .results
+        .entry(node_id.clone())
+        .or_default()
+        .push(RunResult {
+            node_id: node_id.clone(),
+            key: InvocationKey {
+                run_id: record.run_id.clone(),
+                graph_digest: record.graph_digest.clone(),
+                node_id: node_id.clone(),
+                invocation: dispatch.invocation,
+            },
+            plugin_views,
+            plugin_digests,
+            completion,
+            interruption: None,
+            commit,
+            sequence: result_sequence,
+        });
+    record.sequence += 1;
+    for target in routes {
+        record.decided.insert(
+            edge_key(&node_id, target),
+            EdgeDecision {
+                selected: dispatch.kind == DispatchKind::Fanout || Some(target) == chosen,
+                sequence: record.sequence,
+                source_invocation: dispatch.invocation,
+                result_sequence,
+            },
+        );
+    }
+}
+
+/// Accept the new state, settling the Run if nothing can run again. The
+/// look-ahead is persisted only when it shows the Run is over, so the next
+/// node's dispatch-time effects are applied exactly once, when it is judged.
+fn conclude(record: GraphRunRecord, verification: Verification) -> Judgement {
+    let mut ahead = record.clone();
+    let (record, phase) = match prepare(&mut ahead) {
+        Ok(Advance::Open(_)) => (record, None),
+        Ok(Advance::Done) if ahead.ceased.is_empty() => (
+            ahead,
+            Some(Phase::Settled {
+                result: Outcome::Done,
+            }),
+        ),
+        Ok(Advance::Done) => {
+            let detail = format!(
+                "round limit reached: {}",
+                ahead.ceased.iter().cloned().collect::<Vec<_>>().join(", ")
+            );
+            (
                 ahead,
                 Some(Phase::Settled {
-                    result: Outcome::Done,
+                    result: Outcome::Escalated { detail },
                 }),
-            ),
-            Ok(Advance::Done) => {
-                let detail = format!(
-                    "round limit reached: {}",
-                    ahead.ceased.iter().cloned().collect::<Vec<_>>().join(", ")
-                );
-                (
-                    ahead,
-                    Some(Phase::Settled {
-                        result: Outcome::Escalated { detail },
-                    }),
-                )
+            )
+        }
+        Ok(Advance::Failed(detail)) => (
+            ahead,
+            Some(Phase::Settled {
+                result: Outcome::Failed {
+                    reason: Reason::Unclassified,
+                    detail,
+                },
+            }),
+        ),
+        Err(_) => return Judgement::refused(Reason::Unclassified),
+    };
+    accept(&record, verification, phase)
+}
+
+fn accept(record: &GraphRunRecord, verification: Verification, phase: Option<Phase>) -> Judgement {
+    let Ok(state) = serde_json::to_value(record) else {
+        return Judgement::refused(Reason::Unclassified);
+    };
+    let judgement = Judgement::accept(state, verification);
+    match phase {
+        Some(phase) => judgement.with_phase(phase),
+        None => judgement,
+    }
+}
+
+/// One identity binds one child. Bound puts the Run in a kernel wait; the
+/// kernel lets host code release it when the child settles.
+fn judge_call(mut record: GraphRunRecord, dispatch: &Dispatch, s: &Submission) -> Judgement {
+    let Ok(content) = serde_json::from_value::<CallSubmission>(s.content.clone()) else {
+        return Judgement::returned(Reason::ContentInvalid);
+    };
+    let Some(spec) = op_of(&record, &dispatch.node)
+        .and_then(|op| op.get("call"))
+        .cloned()
+    else {
+        return Judgement::refused(Reason::Unclassified);
+    };
+    let mode = spec["mode"].as_str().unwrap_or_default().to_owned();
+    let graph = spec["graph"].as_str().unwrap_or_default().to_owned();
+    let Ok(identity) = call_identity(&record, dispatch) else {
+        return Judgement::refused(Reason::Unclassified);
+    };
+    let key = identity.durable_key();
+    let bound = record
+        .graph_calls
+        .get(&key)
+        .and_then(|call| call.child_run_id.clone());
+    let child = match &content {
+        CallSubmission::Bound { child_run_id } | CallSubmission::Completed { child_run_id, .. } => {
+            Some(child_run_id.clone())
+        }
+        CallSubmission::Failed { child_run_id, .. }
+        | CallSubmission::Uncertain { child_run_id, .. } => child_run_id.clone(),
+    };
+    if bound.is_some() && child != bound {
+        // A different child under a stable identity would fork or replay work.
+        return Judgement::refused(Reason::ContentInvalid);
+    }
+    if !record.graph_calls.contains_key(&key) {
+        count_dispatch(&mut record, dispatch);
+    }
+    let call_record = |status, output: Option<Value>, error: Option<String>| GraphCallRecord {
+        identity: identity.clone(),
+        graph: graph.clone(),
+        child_run_id: child.clone(),
+        mode: mode.clone(),
+        status,
+        output,
+        error,
+    };
+    match content {
+        CallSubmission::Bound { child_run_id } => {
+            if mode != "wait" {
+                return Judgement::returned(Reason::ContentInvalid);
             }
-            Ok(Advance::Failed(detail)) => (
-                ahead,
+            record
+                .graph_calls
+                .insert(key, call_record(GraphCallStatus::Waiting, None, None));
+            accept(
+                &record,
+                Verification::Asserted,
+                Some(Phase::Waiting {
+                    waiter: anchor_kernel::Waiter::Child {
+                        task: format!("run/{child_run_id}"),
+                    },
+                }),
+            )
+        }
+        CallSubmission::Completed {
+            child_run_id,
+            output,
+            commit,
+        } => {
+            if commit.node_id != dispatch.node.id || commit.invocation != dispatch.invocation {
+                return Judgement::returned(Reason::EvidenceMissing);
+            }
+            // A detach returns the accepted reference only, whatever was sent.
+            let (status, output) = if mode == "detach" {
+                (
+                    GraphCallStatus::Detached,
+                    serde_json::json!({"graph": graph, "run_id": child_run_id,
+                        "mode": "detach", "status": "accepted"}),
+                )
+            } else {
+                (GraphCallStatus::Completed, output)
+            };
+            record
+                .graph_calls
+                .insert(key, call_record(status, Some(output.clone()), None));
+            let completion = NodeCompletion {
+                submission: output.to_string(),
+                route: None,
+                model_requests: 0,
+                output,
+            };
+            let routes = routes_of(&record, &dispatch.node.id);
+            let Ok(chosen) = select_route(&completion, &routes) else {
+                return Judgement::refused(Reason::RouteInvalid);
+            };
+            record_result(
+                &mut record,
+                dispatch,
+                completion,
+                commit,
+                Default::default(),
+                &routes,
+                chosen.as_ref(),
+            );
+            conclude(record, verification_of(s))
+        }
+        CallSubmission::Failed { reason, .. } => {
+            record.graph_calls.insert(
+                key,
+                call_record(GraphCallStatus::Failed, None, Some(reason.clone())),
+            );
+            accept(
+                &record,
+                Verification::Asserted,
                 Some(Phase::Settled {
                     result: Outcome::Failed {
                         reason: Reason::Unclassified,
-                        detail,
+                        detail: format!("Graph call failed: {reason}"),
                     },
                 }),
-            ),
-            Err(_) => return Judgement::refused(Reason::Unclassified),
-        };
-        let Ok(state) = serde_json::to_value(&record) else {
-            return Judgement::refused(Reason::Unclassified);
-        };
-        let judgement = Judgement::accept(state, verification);
-        match phase {
-            Some(phase) => judgement.with_phase(phase),
-            None => judgement,
+            )
+        }
+        CallSubmission::Uncertain { reason, .. } => {
+            record.graph_calls.insert(
+                key,
+                call_record(GraphCallStatus::Uncertain, None, Some(reason.clone())),
+            );
+            accept(
+                &record,
+                Verification::Asserted,
+                Some(Phase::Settled {
+                    result: Outcome::Unknown {
+                        detail: format!("Graph call outcome unknown: {reason}"),
+                    },
+                }),
+            )
         }
     }
 }
