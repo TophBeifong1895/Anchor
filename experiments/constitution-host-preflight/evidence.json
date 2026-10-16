@@ -1,0 +1,139 @@
+{
+  "feature_acceptance": "not_run",
+  "kind": "public_api_observation",
+  "observations": [
+    {
+      "blocking": true,
+      "id": "code_unknown_effect_wait",
+      "observed": {
+        "open_slots": [
+          {
+            "action": "write",
+            "id": "work#1"
+          }
+        ],
+        "phase": {
+          "phase": "executing"
+        },
+        "principal": {
+          "id": "fixture-host",
+          "kind": "code"
+        },
+        "verdict": {
+          "effect": "refused",
+          "reason": "human_only",
+          "verification": "not_applicable"
+        }
+      },
+      "plan_requirement": "2.2/2.3: host-observed unknown effects put the Run in Waiter::Human using the kernel lifecycle, with the actual Code identity (C4/C5).",
+      "source": [
+        "rust/anchor-kernel/src/kernel.rs:task_control",
+        "rust/anchor-runtime/src/graph/validator.rs:GraphValidator::judge"
+      ]
+    },
+    {
+      "blocking": true,
+      "id": "returned_submission_cost",
+      "observed": {
+        "cost_per_submission": 6,
+        "history_len": 3,
+        "reported_cost": 18,
+        "task": {
+          "budget": {
+            "limit": 10,
+            "spent": 0
+          },
+          "phase": {
+            "phase": "executing"
+          }
+        },
+        "verdicts": [
+          {
+            "effect": "returned",
+            "reason": "content_invalid",
+            "verification": "not_applicable"
+          },
+          {
+            "effect": "returned",
+            "reason": "content_invalid",
+            "verification": "not_applicable"
+          },
+          {
+            "effect": "returned",
+            "reason": "content_invalid",
+            "verification": "not_applicable"
+          }
+        ]
+      },
+      "plan_requirement": "Constitution 2.5/6.1 and integration 2.2: refused or returned work still costs resources; exceeding the finite budget settles the task.",
+      "source": [
+        "rust/anchor-kernel/src/kernel.rs:Kernel::adjudicate"
+      ]
+    },
+    {
+      "blocking": true,
+      "id": "torn_tail_hides_future_history",
+      "observed": {
+        "after_simulated_lost_state_write_and_restart": {
+          "history_len": 0,
+          "phase": {
+            "phase": "executing"
+          },
+          "version": 0
+        },
+        "before_restart": {
+          "phase": {
+            "phase": "waiting",
+            "waiter": {
+              "on": "human",
+              "reason": "stop"
+            }
+          },
+          "version": 1
+        },
+        "history_after_accepted_stop": 0,
+        "history_before_stop": 0,
+        "simulation": "Restore the pre-submit resource.json only inside an owned tempfile fixture; retain the appended history exactly as written.",
+        "stop_verdict": {
+          "effect": "accepted",
+          "reason": "ok",
+          "verification": "not_applicable"
+        }
+      },
+      "plan_requirement": "Constitution 2 and H1/2.1: accepted facts remain readable; a durable record restores a lost state write after restart without replay.",
+      "source": [
+        "rust/anchor-kernel/src/store.rs:FileStore::commit",
+        "rust/anchor-kernel/src/store.rs:FileStore::history",
+        "rust/anchor-kernel/src/store.rs:FileStore::load"
+      ]
+    },
+    {
+      "blocking": false,
+      "host_mitigation": "The scheduler can discard a cancelled executor's late result. This observation alone is not classified as a required kernel change.",
+      "id": "late_code_completion_after_stop",
+      "observed": {
+        "late_result_verdict": {
+          "effect": "accepted",
+          "reason": "ok",
+          "verification": "asserted"
+        },
+        "open_slots_after_stop": [],
+        "phase_after_late_result": {
+          "phase": "settled",
+          "result": {
+            "outcome": "done"
+          }
+        },
+        "stop_verdict": {
+          "effect": "accepted",
+          "reason": "ok",
+          "verification": "not_applicable"
+        }
+      },
+      "plan_requirement": "C4: an accepted stop cancels executors; the scheduler must account for late Op results."
+    }
+  ],
+  "real_provider": "not_used",
+  "scope": "Existing Kernel + GraphValidator; one-node Op fixture; no executor or external side effect runs.",
+  "status": "preflight_blocked"
+}

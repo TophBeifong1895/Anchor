@@ -1,0 +1,13 @@
+[package]
+name = "constitution-host-preflight"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[dependencies]
+anchor-kernel = { path = "../../rust/anchor-kernel" }
+anchor-runtime = { path = "../../rust/anchor-runtime" }
+serde_json = "1"
+tempfile = "3"
