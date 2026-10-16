@@ -130,6 +130,7 @@ pub struct GraphCallRecord {
     pub graph: String,
     pub child_run_id: Option<String>,
     pub mode: String,
+    #[serde(deserialize_with = "deserialize_graph_call_status")]
     pub status: GraphCallStatus,
     #[serde(default)]
     pub output: Option<Value>,
@@ -146,9 +147,20 @@ pub enum GraphCallStatus {
     Detached,
     Failed,
     Uncertain,
-    /// Legacy persisted marker from the earlier cascade-delete behavior. New
-    /// Graph deletion rejects callers instead of writing this status.
-    Deleted,
+}
+
+fn deserialize_graph_call_status<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<GraphCallStatus, D::Error> {
+    let status = String::deserialize(deserializer)?;
+    if status == "deleted" {
+        return Err(serde::de::Error::custom(
+            "old Graph Run format (deleted call); offline migration required",
+        ));
+    }
+    GraphCallStatus::deserialize(serde::de::value::StringDeserializer::<D::Error>::new(
+        status,
+    ))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -186,8 +198,7 @@ pub struct ParallelActivation {
     pub branches: Vec<ParallelBranchRecord>,
 }
 
-/// Current persisted Graph Run record format. Readers migrate older formats and
-/// reject newer ones instead of guessing what changed.
+/// Current persisted Graph Run record format. Older records require offline migration.
 pub const RUN_RECORD_FORMAT: u32 = 13;
 
 /// RFC 3339 UTC timestamp used for `started`/`updated` on Run records.
@@ -195,16 +206,9 @@ pub(crate) fn timestamp_now() -> String {
     chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct GraphRunRecord {
-    /// The managed-environment era's frozen bindings, accepted and dropped.
-    ///
-    /// A record written before format 12 carries `environments`; the mechanism is
-    /// gone, so the field is read and discarded rather than reinterpreted, and an
-    /// old record stays loadable.
-    #[serde(default, skip_serializing, rename = "environments")]
-    legacy_environments: BTreeMap<String, Value>,
     pub format: u32,
     /// RFC 3339 UTC when the record was created. Absent on records written
     /// before format 8: the real creation time is unknown and is deliberately
@@ -235,10 +239,6 @@ pub struct GraphRunRecord {
     pub plugin_bindings: BTreeMap<String, PluginBinding>,
     #[serde(default)]
     pub plugin_bindings_initialized: bool,
-    /// Frozen dependency-environment bindings, keyed by their canonical site
-    /// key. Every place the Graph declares an environment must have an entry here
-    /// with a matching name: the record never invents an environment after the
-    /// fact, and a restored Run never re-resolves the name.
     #[serde(default)]
     pub invocations: BTreeMap<String, u64>,
     pub passes: BTreeMap<String, u64>,
@@ -248,6 +248,118 @@ pub struct GraphRunRecord {
     pub decided: BTreeMap<String, EdgeDecision>,
     pub sequence: u64,
     pub error: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(remote = "GraphRunRecord", deny_unknown_fields)]
+struct GraphRunRecordWire {
+    pub format: u32,
+    /// RFC 3339 UTC when the record was created. Absent on records written
+    /// before format 8: the real creation time is unknown and is deliberately
+    /// not inferred from file mtime.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub started: Option<String>,
+    /// RFC 3339 UTC of the last persisted mutation; writers refresh it through
+    /// [`GraphRunRecord::touch`] immediately before saving.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub updated: Option<String>,
+    pub run_id: String,
+    pub graph_digest: String,
+    pub snapshot: GraphSnapshot,
+    pub input: Value,
+    pub status: RunStatus,
+    pub cursor: Option<RunCursor>,
+    #[serde(default)]
+    pub parallel: Option<ParallelActivation>,
+    /// Persisted unresolved tool attempts. Each attempt is tied to
+    /// the exact serial or parallel invocation whose cursor remains active.
+    #[serde(default)]
+    pub recovery: Vec<PendingRecovery>,
+    #[serde(default)]
+    pub recovery_submissions: Vec<RecoverySubmission>,
+    #[serde(default)]
+    pub graph_calls: BTreeMap<String, GraphCallRecord>,
+    #[serde(default)]
+    pub plugin_bindings: BTreeMap<String, PluginBinding>,
+    #[serde(default)]
+    pub plugin_bindings_initialized: bool,
+    #[serde(default)]
+    pub invocations: BTreeMap<String, u64>,
+    pub passes: BTreeMap<String, u64>,
+    pub module_activations: BTreeMap<String, u64>,
+    pub ceased: BTreeSet<String>,
+    pub results: BTreeMap<String, Vec<RunResult>>,
+    pub decided: BTreeMap<String, EdgeDecision>,
+    pub sequence: u64,
+    pub error: Option<String>,
+}
+
+impl<'de> Deserialize<'de> for GraphRunRecord {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct RecordVisitor;
+        impl<'de> serde::de::Visitor<'de> for RecordVisitor {
+            type Value = GraphRunRecord;
+            fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+                formatter.write_str("a Graph Run object")
+            }
+            fn visit_map<M: serde::de::MapAccess<'de>>(
+                self,
+                map: M,
+            ) -> Result<Self::Value, M::Error> {
+                struct RecordMap<M>(M);
+                impl<'de, M: serde::de::MapAccess<'de>> serde::de::MapAccess<'de> for RecordMap<M> {
+                    type Error = M::Error;
+                    fn next_key_seed<K: serde::de::DeserializeSeed<'de>>(
+                        &mut self,
+                        seed: K,
+                    ) -> Result<Option<K::Value>, Self::Error> {
+                        use serde::de::IntoDeserializer;
+                        let Some(key) = self.0.next_key::<String>()? else {
+                            return Ok(None);
+                        };
+                        if key == "environments" {
+                            return Err(serde::de::Error::custom(
+                                "old Graph Run format; offline migration required",
+                            ));
+                        }
+                        seed.deserialize(key.into_deserializer()).map(Some)
+                    }
+                    fn next_value_seed<V: serde::de::DeserializeSeed<'de>>(
+                        &mut self,
+                        seed: V,
+                    ) -> Result<V::Value, Self::Error> {
+                        self.0.next_value_seed(seed)
+                    }
+                }
+                GraphRunRecordWire::deserialize(serde::de::value::MapAccessDeserializer::new(
+                    RecordMap(map),
+                ))
+            }
+            fn visit_seq<A: serde::de::SeqAccess<'de>>(
+                self,
+                _: A,
+            ) -> Result<Self::Value, A::Error> {
+                Err(serde::de::Error::custom(
+                    "old non-object Graph Run format; offline migration required",
+                ))
+            }
+        }
+        let record = deserializer.deserialize_any(RecordVisitor)?;
+        if record.format < RUN_RECORD_FORMAT
+            || record
+                .plugin_bindings
+                .values()
+                .any(|binding| binding.authorization_digest.is_empty())
+        {
+            return Err(serde::de::Error::custom(
+                "old Graph Run format; offline migration required",
+            ));
+        }
+        record
+            .refuse_old_cursor()
+            .map_err(serde::de::Error::custom)?;
+        Ok(record)
+    }
 }
 
 impl GraphRunRecord {
@@ -281,7 +393,6 @@ impl GraphRunRecord {
         let now = timestamp_now();
         Ok(Self {
             format: RUN_RECORD_FORMAT,
-            legacy_environments: BTreeMap::new(),
             started: Some(now.clone()),
             updated: Some(now),
             run_id,
@@ -330,13 +441,40 @@ impl GraphRunRecord {
             .collect()
     }
 
+    fn refuse_old_cursor(&self) -> Result<(), GraphError> {
+        if let Some(cursor) = &self.cursor
+            && self
+                .invocations
+                .get(&cursor.node_id)
+                .copied()
+                .unwrap_or(0)
+                .checked_add(1)
+                == Some(cursor.key.invocation)
+        {
+            return Err(GraphError::CorruptRun(
+                "old cursor format; offline migration required".into(),
+            ));
+        }
+        Ok(())
+    }
+
     pub(crate) fn validate(&self) -> Result<(), GraphError> {
         validate_component(&self.run_id)?;
         if self.format != RUN_RECORD_FORMAT {
             return Err(GraphError::CorruptRun(format!(
-                "unsupported graph run format {}",
+                "old or unsupported graph run format {}; offline migration required",
                 self.format
             )));
+        }
+        self.refuse_old_cursor()?;
+        if self
+            .plugin_bindings
+            .values()
+            .any(|binding| binding.authorization_digest.is_empty())
+        {
+            return Err(GraphError::CorruptRun(
+                "old authorization format; offline migration required".into(),
+            ));
         }
         self.snapshot.validate()?;
         if self.snapshot.digest()? != self.graph_digest {
@@ -362,7 +500,6 @@ impl GraphRunRecord {
                     GraphCallStatus::Waiting
                         | GraphCallStatus::Completed
                         | GraphCallStatus::Detached
-                        | GraphCallStatus::Deleted
                 ) && call.child_run_id.as_deref().is_none_or(str::is_empty)
             {
                 return Err(GraphError::CorruptRun(
@@ -824,116 +961,5 @@ impl GraphRunRecord {
             }
         }
         Ok(())
-    }
-
-    pub(crate) fn migrate_format(&mut self) -> Result<(), GraphError> {
-        match self.format {
-            1 => {
-                self.snapshot.validate()?;
-                if self.snapshot.digest()? != self.graph_digest {
-                    return Err(GraphError::CorruptRun("snapshot digest mismatch".into()));
-                }
-                if let Some(cursor) = &self.cursor {
-                    let previous = self.invocations.get(&cursor.node_id).copied().unwrap_or(0);
-                    if cursor.key.node_id != cursor.node_id
-                        || cursor.key.run_id != self.run_id
-                        || cursor.key.graph_digest != self.graph_digest
-                        || previous.checked_add(1) != Some(cursor.key.invocation)
-                        || !self
-                            .snapshot
-                            .nodes
-                            .iter()
-                            .any(|node| node.id == cursor.node_id)
-                    {
-                        return Err(GraphError::CorruptRun(
-                            "legacy cursor identity does not match its Graph Run".into(),
-                        ));
-                    }
-                    self.invocations
-                        .insert(cursor.node_id.clone(), cursor.key.invocation);
-                    *self.passes.entry(cursor.node_id.clone()).or_default() += 1;
-                }
-                for (edge_key_value, decision) in &mut self.decided {
-                    if decision.source_invocation == 0 || decision.result_sequence != 0 {
-                        continue;
-                    }
-                    let Some((from, _)) = edge_key_value.split_once('|') else {
-                        continue;
-                    };
-                    if let Some(result) = self.results.get(from).and_then(|results| {
-                        results
-                            .iter()
-                            .find(|result| result.key.invocation == decision.source_invocation)
-                    }) {
-                        decision.result_sequence = result.sequence;
-                    }
-                }
-                self.format = 2;
-                self.migrate_format()
-            }
-            2 => {
-                self.parallel = None;
-                self.format = 3;
-                self.migrate_format()
-            }
-            3 => {
-                self.graph_calls = BTreeMap::new();
-                self.format = 4;
-                self.migrate_format()
-            }
-            4 => {
-                self.plugin_bindings = BTreeMap::new();
-                self.format = 5;
-                self.migrate_format()
-            }
-            5 => {
-                self.recovery = Vec::new();
-                self.format = 6;
-                self.migrate_format()
-            }
-            6 => {
-                self.recovery_submissions = Vec::new();
-                self.format = 7;
-                self.migrate_format()
-            }
-            7 => {
-                // Format 8 adds `started`/`updated`. Migrated records keep both
-                // absent because their real timestamps cannot be recovered.
-                self.format = 8;
-                self.migrate_format()
-            }
-            8 | 9 => {
-                // Formats 9 and 10 are the managed-environment era. The mechanism
-                // is gone, and the field is simply dropped: a migrated record has
-                // no bindings because nothing resolves environments any more.
-                self.format = 10;
-                self.migrate_format()
-            }
-            10 => {
-                // Format 11 adds the observed dependency views to each result.
-                // Nothing has to be rewritten: a record written before it simply
-                // has no observation for steps that already ran.
-                self.format = 11;
-                self.migrate_format()
-            }
-            11 => {
-                // Format 12 removes the frozen environment bindings entirely. The
-                // field is dropped, not reinterpreted: a Run uses its Plugin's
-                // views, and the environment mechanism no longer exists.
-                self.format = 12;
-                self.migrate_format()
-            }
-            12 => {
-                // Format 13 separates the admitted Plugin authorization from
-                // observed code digests. Old records have neither: never infer
-                // authority from whatever code is installed during migration.
-                self.format = 13;
-                Ok(())
-            }
-            13 => Ok(()),
-            other => Err(GraphError::CorruptRun(format!(
-                "unsupported graph run format {other}"
-            ))),
-        }
     }
 }

@@ -29,35 +29,21 @@ impl<'a, S: RunStore, A: ArtifactPort, N: NodeExecutionPort, C: RunControl>
         self.store.save(record)
     }
     pub async fn run(&self, mut record: GraphRunRecord) -> Result<GraphRunRecord, GraphError> {
-        record.migrate_format()?;
         record.validate()?;
         self.admit_capabilities(&record.snapshot)?;
         let _lease = self.store.acquire_lease(&record.run_id)?;
         // Keep the stored copy so an admission that changes nothing does not
         // rewrite the record (and does not advance its write stamp).
         let mut loaded: Option<GraphRunRecord> = None;
-        if let Some(mut saved) = self.store.load(&record.run_id)? {
-            saved.migrate_format()?;
+        if let Some(saved) = self.store.load(&record.run_id)? {
             if saved != record {
                 return Err(GraphError::RunConflict);
             }
             loaded = Some(saved);
         }
-        // Upgrade an in-flight record written by the earlier R5 counter timing:
-        // it persisted a cursor before dispatch, but counted only completed nodes.
-        // The cursor itself proves this invocation started, so promote that fact
-        // once before writing the resumed record.
-        if let Some(cursor) = &record.cursor
-            && record.invocations.get(&cursor.node_id).copied() != Some(cursor.key.invocation)
-        {
-            record
-                .invocations
-                .insert(cursor.node_id.clone(), cursor.key.invocation);
-            *record.passes.entry(cursor.node_id.clone()).or_default() += 1;
-        }
         if record.status.is_terminal() {
             // Re-entering a terminal Run is a read. Write only when this admission
-            // actually changed the record (for example the cursor upgrade above),
+            // actually changed the record,
             // so re-entry stays idempotent and the write stamp stays meaningful.
             if loaded.as_ref().is_none_or(|saved| saved != &record) {
                 self.persist(&mut record)?;
@@ -350,32 +336,9 @@ impl<'a, S: RunStore, A: ArtifactPort, N: NodeExecutionPort, C: RunControl>
                 let bound_child = record
                     .graph_calls
                     .get(&identity_key)
-                    .filter(|call| call.status != GraphCallStatus::Deleted)
                     .and_then(|call| call.child_run_id.clone())
                     .filter(|child| !child.is_empty());
-                // Older Run records may contain a `Deleted` marker written by the
-                // previous cascade-delete behavior. Preserve their resume behavior;
-                // new deletions reject callers and never create this marker.
-                if let Some(existing) = record
-                    .graph_calls
-                    .get(&identity_key)
-                    .filter(|call| call.status == GraphCallStatus::Deleted)
                 {
-                    let output = existing.output.clone().unwrap_or_else(|| {
-                        serde_json::json!({
-                            "graph": target_graph,
-                            "run_id": existing.child_run_id,
-                            "mode": existing.mode,
-                            "status": "deleted",
-                        })
-                    });
-                    NodeCompletion {
-                        submission: output.to_string(),
-                        route: None,
-                        model_requests: 0,
-                        output,
-                    }
-                } else {
                     let port = self.nodes.graph_call_port().ok_or_else(|| {
                         GraphError::Unsupported("op.call requires a GraphCallPort".into())
                     })?;
@@ -946,29 +909,19 @@ impl<'a, S: RunStore, A: ArtifactPort, N: NodeExecutionPort, C: RunControl>
             if !same_ids {
                 return Err("Plugin references changed since this Graph Run was admitted".into());
             }
-            let mut upgrades = Vec::new();
             for (id, current) in &bindings {
                 let admitted = record.plugin_bindings.get(id).expect("keys were compared");
                 if admitted.authorization_digest.is_empty() {
-                    // Old Run records have no stable authorization summary. Their
-                    // historic digest covered manifest/config bytes, so accept a
-                    // migration only when every old field is unchanged and refuse
-                    // changed/ambiguous records rather than inferring authority.
-                    if !admitted.can_upgrade_legacy_authorization(current) {
-                        return Err(format!(
-                            "Plugin `{id}` authorization baseline is unavailable for this legacy Run"
-                        ));
-                    }
-                    upgrades.push((id.clone(), current.clone()));
-                } else if !admitted.same_authorization(current) {
+                    return Err(format!(
+                        "Plugin `{id}` uses an old authorization format; offline migration required"
+                    ));
+                }
+                if !admitted.same_authorization(current) {
                     return Err(format!(
                         "Plugin `{id}` Host authorization changed since this Graph Run was admitted"
                     ));
                 }
             }
-            // A rejected Plugin must not leave a partially migrated authority
-            // baseline in the failed Run's durable facts.
-            record.plugin_bindings.extend(upgrades);
         }
         Ok(())
     }

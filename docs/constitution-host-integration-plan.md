@@ -1,6 +1,6 @@
 # 宪法内核接入 Host：临时开发计划
 
-编制日期：2026-10-16。状态：**K0.1 限定实现与九项检查完成，单独提交待审；H1–H6 尚未开始**。
+编制日期：2026-10-16。状态：**H1 旧格式清理实现完成；H2–H6 尚未开始**。H1 验证及直接写入基线见工作记录。
 
 预检阻塞的修订范围已由[审查决定 D1–D5](constitution-preflight-decision.md)明确授权；实现与验收入口见[工作记录](constitution-refactor-log.md#k01内核修订与中断事实)。K0.1 审查通过后才从 H1 继续；Host 当前仍使用旧 Runner。
 
@@ -104,12 +104,17 @@
 
 每个阶段结束必须：编译通过、全部测试通过（或在工作记录中逐项登记修改理由）、更新工作记录、单独 commit。
 
-### H1：内核存储接入与旧格式清理
+### H1：旧格式清理（实现完成）
 
-- Host 使用 `anchor_kernel::FileStore` 作为 Run 的存储（state root 下新目录）。
-- 删除 `migrate_format`、`legacy_environments`、旧授权升级（`can_upgrade_legacy_authorization` 及调用）、`Deleted` 调用标记、旧 cursor 升级；旧格式记录具名拒绝。
-- 删除所有直接 `store.save(run)` 的路径或改为提交（C2）。
+**决定（2026-10-16）：C6 已由用户明确确认。分支完全不兼容旧格式；旧格式数据在生产迁移时另行处理，不在本阶段。**
+
+- 删除 `migrate_format`、`legacy_environments`、旧授权升级（`can_upgrade_legacy_authorization` 及调用）、`Deleted` 调用标记、旧 cursor 升级。读到旧格式时具名拒绝，错误信息说明是旧格式、需离线迁移，并加对应测试。
 - 涉及的旧测试：仅为旧格式兼容存在的测试删除，**在工作记录中逐个列出删除的测试名**。
+- **建立直接写入基线清单**：在工作记录中列出 H1 结束时 Host 里每一处 `store.save(run)` / 直接改 `GraphRunRecord` 字段后保存的位置（文件:行 + 用途）。此清单是 H2/H3 的棘轮起点，数量只能减少，不得增加。
+- H1 **不要求**接入 `anchor_kernel::FileStore`，也不要求清零直接写入。FileStore 接入随 H2 的调度器一起落地；C2 零直接写入在 H3 结束时验收。
+- 中间态单一权威：迁移前 Run 仍由旧 RunStore 负责，不得双写，不得把旧状态包装成内核已裁决事实。
+
+H1 结果、删除测试清单及 16 save / 36 mutation 基线见[工作记录](constitution-refactor-log.md#h1旧格式清理实现完成)；验证范围见[H1 证据](../experiments/constitution-host-preflight/h1/verification.md)。
 
 ### H2：调度器 + 执行者，替换 `GraphRunner`
 

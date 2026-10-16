@@ -307,84 +307,6 @@ async fn graph_call_identity_must_keep_one_child_run_across_reload() {
     );
 }
 
-#[tokio::test]
-async fn deleted_graph_call_marker_resumes_as_completed_without_replay() {
-    use sha2::Digest;
-
-    let mut snapshot = graph(&["call"], &[], "call");
-    snapshot.nodes[0].agent = None;
-    snapshot.nodes[0].op = Some("child".into());
-    let spec = serde_json::json!({"graph": "child-graph", "mode": "wait", "input": {}});
-    snapshot
-        .ops
-        .insert("child".into(), serde_json::json!({"call": spec.clone()}));
-
-    let mut record = GraphRunRecord::create(snapshot, Value::Null).unwrap();
-    let key = InvocationKey {
-        run_id: record.run_id.clone(),
-        graph_digest: record.graph_digest.clone(),
-        node_id: "call".into(),
-        invocation: 1,
-    };
-    let identity = CallIdentity {
-        parent_run_id: record.run_id.clone(),
-        parent_graph_digest: record.graph_digest.clone(),
-        node_id: "call".into(),
-        invocation: 1,
-        call_spec_digest: format!(
-            "{:x}",
-            sha2::Sha256::digest(serde_json::to_vec(&spec).unwrap())
-        ),
-    };
-    record.graph_calls.insert(
-        identity.durable_key(),
-        GraphCallRecord {
-            identity,
-            graph: "child-graph".into(),
-            child_run_id: Some("child-run-deleted".into()),
-            mode: "wait".into(),
-            status: GraphCallStatus::Deleted,
-            output: None,
-            error: None,
-        },
-    );
-    record.cursor = Some(RunCursor {
-        node_id: "call".into(),
-        key: key.clone(),
-        input_commits: vec![],
-        prepared_input: serde_json::json!({"input": Value::Null, "committed_inputs": []}),
-    });
-    record.invocations.insert("call".into(), 1);
-    record.passes.insert("call".into(), 1);
-    record.status = RunStatus::Stopped;
-
-    let port = Arc::new(FakeGraphCalls::default());
-    let nodes = FakeNodes {
-        graph_call_port: Some(port.clone()),
-        ..Default::default()
-    };
-    let store = MemStore::default();
-    let artifacts = MemoryArtifacts::default();
-    let control = Control::default();
-    let finished = GraphRunner::new(&store, &artifacts, &nodes, &control)
-        .run(record)
-        .await
-        .unwrap();
-
-    assert_eq!(finished.status, RunStatus::Completed);
-    assert!(
-        port.identities.lock().unwrap().is_empty(),
-        "a deleted child must never be re-admitted"
-    );
-    let result = finished.results.get("call").unwrap().last().unwrap();
-    assert_eq!(result.completion.output["status"], "deleted");
-    assert_eq!(result.completion.output["run_id"], "child-run-deleted");
-    assert_eq!(
-        finished.graph_calls.values().next().unwrap().status,
-        GraphCallStatus::Deleted
-    );
-}
-
 #[test]
 fn stopped_conversation_run_can_retain_unknown_recovery_attempts() {
     let mut record = GraphRunRecord::create(graph(&["work"], &[], "work"), Value::Null).unwrap();
@@ -565,62 +487,34 @@ async fn parallel_dispatch_uses_current_plugin_resources_and_preserves_admitted_
 }
 
 #[tokio::test]
-async fn legacy_plugin_authority_is_upgraded_only_when_the_original_code_is_still_installed() {
-    for change in [
-        "unchanged",
-        "code",
-        "resources",
-        "mcp_servers",
-        "missing_authority",
-    ] {
-        let mut snapshot = graph(&["work"], &[], "work");
-        snapshot.nodes[0].plugins = vec!["review".into()];
-        let legacy = PluginBinding {
+async fn legacy_plugin_authority_requires_offline_migration_before_execution() {
+    let mut snapshot = graph(&["work"], &[], "work");
+    snapshot.nodes[0].plugins = vec!["review".into()];
+    let mut record = GraphRunRecord::create(snapshot, Value::Null).unwrap();
+    record.plugin_bindings_initialized = true;
+    record.plugin_bindings.insert(
+        "review".into(),
+        PluginBinding {
             id: "review".into(),
-            digest: "original".into(),
-            resources: vec!["instructions.md".into()],
-            mcp_servers: vec!["search".into()],
+            digest: "code".into(),
+            resources: vec![],
+            mcp_servers: vec![],
             authorization_digest: String::new(),
-        };
-        let mut current = legacy.clone();
-        current.authorization_digest = "current-authority".into();
-        match change {
-            "code" => current.digest = "replaced".into(),
-            "resources" => current.resources.push("skills/new/SKILL.md".into()),
-            "mcp_servers" => current.mcp_servers.push("write".into()),
-            "missing_authority" => current.authorization_digest.clear(),
-            _ => {}
-        }
-        let mut record = GraphRunRecord::create(snapshot, Value::Null).unwrap();
-        record.plugin_bindings_initialized = true;
-        record
-            .plugin_bindings
-            .insert(legacy.id.clone(), legacy.clone());
-        let nodes = FakeNodes {
-            resolved_plugins: Mutex::new(vec![current.clone()]),
-            ..Default::default()
-        };
-        let (store, artifacts, _, control) = setup();
-        let result = GraphRunner::new(&store, &artifacts, &nodes, &control)
-            .run(record)
-            .await
-            .unwrap();
-        if change != "unchanged" {
-            assert_eq!(result.status, RunStatus::Failed);
-            assert!(nodes.calls.lock().unwrap().is_empty());
-            let expected = if change == "missing_authority" {
-                "unauthorized"
-            } else {
-                "legacy"
-            };
-            assert!(result.error.as_deref().unwrap().contains(expected));
-            assert_eq!(result.plugin_bindings["review"], legacy);
-        } else {
-            assert_eq!(result.status, RunStatus::Completed);
-            assert_eq!(result.plugin_bindings["review"], current);
-        }
-        assert_eq!(store.load(&result.run_id).unwrap(), Some(result));
-    }
+        },
+    );
+    let (store, artifacts, nodes, control) = setup();
+    let id = record.run_id.clone();
+    let error = GraphRunner::new(&store, &artifacts, &nodes, &control)
+        .run(record)
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.contains("old authorization format") && error.contains("offline migration required"),
+        "{error}"
+    );
+    assert!(nodes.calls.lock().unwrap().is_empty());
+    assert!(store.load(&id).unwrap().is_none());
 }
 
 #[tokio::test]
@@ -652,108 +546,6 @@ async fn a_new_run_does_not_bind_plugins_without_a_current_authorization_baselin
     assert_eq!(store.load(&failed.run_id).unwrap(), Some(failed));
 }
 
-#[tokio::test]
-async fn a_rejected_legacy_plugin_does_not_partially_upgrade_other_plugins() {
-    let mut snapshot = graph(&["work"], &[], "work");
-    snapshot.nodes[0].plugins = vec!["alpha".into(), "beta".into()];
-    let original = ["alpha", "beta"].map(|id| PluginBinding {
-        id: id.into(),
-        digest: "original".into(),
-        resources: vec![],
-        mcp_servers: vec![],
-        authorization_digest: String::new(),
-    });
-    let mut current = original.clone();
-    for binding in &mut current {
-        binding.authorization_digest = "current-authority".into();
-    }
-    current[1].digest = "replaced".into();
-    let mut record = GraphRunRecord::create(snapshot, Value::Null).unwrap();
-    record.plugin_bindings_initialized = true;
-    record.plugin_bindings = original
-        .into_iter()
-        .map(|binding| (binding.id.clone(), binding))
-        .collect();
-    let admitted = record.plugin_bindings.clone();
-    let nodes = FakeNodes {
-        resolved_plugins: Mutex::new(current.into()),
-        ..Default::default()
-    };
-    let (store, artifacts, _, control) = setup();
-    let failed = GraphRunner::new(&store, &artifacts, &nodes, &control)
-        .run(record)
-        .await
-        .unwrap();
-    assert_eq!(failed.status, RunStatus::Failed);
-    assert_eq!(failed.plugin_bindings, admitted);
-    assert!(nodes.calls.lock().unwrap().is_empty());
-    assert_eq!(store.load(&failed.run_id).unwrap(), Some(failed));
-}
-
-#[tokio::test]
-async fn format_twelve_migration_preserves_the_absence_of_plugin_authority_and_code_observations() {
-    let root = std::env::temp_dir().join(format!(
-        "anchor-format-thirteen-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ));
-    std::fs::create_dir_all(&root).unwrap();
-    let mut snapshot = graph(&["one"], &[], "one");
-    snapshot.nodes[0].plugins = vec!["review".into()];
-    let binding = PluginBinding {
-        id: "review".into(),
-        digest: "old-code".into(),
-        authorization_digest: "authority".into(),
-        resources: vec![],
-        mcp_servers: vec![],
-    };
-    let nodes = FakeNodes {
-        resolved_plugins: Mutex::new(vec![binding]),
-        ..Default::default()
-    };
-    let (memory, artifacts, _, control) = setup();
-    let record = GraphRunner::new(&memory, &artifacts, &nodes, &control)
-        .run(GraphRunRecord::create(snapshot, Value::Null).unwrap())
-        .await
-        .unwrap();
-    let mut value = serde_json::to_value(&record).unwrap();
-    value["format"] = serde_json::json!(12);
-    value["plugin_bindings"]["review"]
-        .as_object_mut()
-        .unwrap()
-        .remove("authorization_digest");
-    value["results"]["one"][0]
-        .as_object_mut()
-        .unwrap()
-        .remove("plugin_digests");
-    let store = FileRunStore::new(&root);
-    std::fs::write(
-        root.join(format!("{}.json", record.run_id)),
-        serde_json::to_vec(&value).unwrap(),
-    )
-    .unwrap();
-    let migrated = store.load(&record.run_id).unwrap().unwrap();
-    assert_eq!(migrated.format, 13);
-    assert_eq!(migrated.status, RunStatus::Completed);
-    assert_eq!(migrated.plugin_bindings["review"].digest, "old-code");
-    assert!(
-        migrated.plugin_bindings["review"]
-            .authorization_digest
-            .is_empty()
-    );
-    assert!(migrated.results["one"][0].plugin_digests.is_empty());
-    std::fs::remove_dir_all(root).unwrap();
-}
-
-/// The Run record carries the view each node call actually used.
-///
-/// This goes through `GraphRunner`, so it asserts the *record* the operator can
-/// inspect, not a `prepare` call: the observation is written when the node's
-/// result is settled, and reading it consumes it so a long-lived host does not
-/// accumulate one entry per call.
 #[tokio::test]
 async fn a_node_call_records_the_dependency_view_it_used() {
     let snapshot = graph(&["work"], &[], "work");
@@ -788,49 +580,6 @@ async fn a_node_call_records_the_dependency_view_it_used() {
 }
 
 /// A record written before the observation existed still loads.
-#[tokio::test]
-async fn a_format_ten_record_loads_without_inventing_plugin_views() {
-    let snapshot = graph(&["work"], &[], "work");
-    let record = GraphRunRecord::create(snapshot, Value::Null).unwrap();
-    let key = InvocationKey {
-        run_id: record.run_id.clone(),
-        graph_digest: record.graph_digest.clone(),
-        node_id: "work".into(),
-        invocation: 1,
-    };
-    let nodes = FakeNodes {
-        observed_views: Mutex::new(BTreeMap::from([(
-            key.durable_key(),
-            BTreeMap::from([("review".to_owned(), "/library/views/review/abc".to_owned())]),
-        )])),
-        ..Default::default()
-    };
-    let store = MemStore::default();
-    let artifacts = MemoryArtifacts::default();
-    let control = Control::default();
-    let finished = GraphRunner::new(&store, &artifacts, &nodes, &control)
-        .run(record)
-        .await
-        .unwrap();
-    // The same record as the previous format wrote it: no `plugin_views` anywhere.
-    let mut value = serde_json::to_value(&finished).unwrap();
-    value["format"] = serde_json::json!(10);
-    for results in value["results"].as_object_mut().unwrap().values_mut() {
-        for result in results.as_array_mut().unwrap() {
-            result.as_object_mut().unwrap().remove("plugin_views");
-        }
-    }
-    let mut loaded: GraphRunRecord = serde_json::from_value(value).unwrap();
-    assert!(loaded.results["work"][0].plugin_views.is_empty());
-    loaded.migrate_format().unwrap();
-    assert_eq!(loaded.format, RUN_RECORD_FORMAT);
-    assert!(
-        loaded.results["work"][0].plugin_views.is_empty(),
-        "an old record has no observation, and migration must not invent one"
-    );
-    assert!(loaded.validate().is_ok());
-}
-
 #[tokio::test]
 async fn legacy_in_progress_plugin_run_without_binding_fails_closed() {
     let mut snapshot = graph(&["work"], &[], "work");
@@ -2138,109 +1887,6 @@ async fn graph_runner_dispatches_durable_resumable_node_with_same_invocation() {
 }
 
 #[tokio::test]
-async fn format_one_cursor_migrates_under_lease_and_persists_once() {
-    let root = std::env::temp_dir().join(format!(
-        "anchor-run-migration-{}-{}",
-        std::process::id(),
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ));
-    let store = FileRunStore::new(&root);
-    let artifacts = MemoryArtifacts::default();
-    let nodes = FakeNodes::default();
-    let control = Control::default();
-    let mut record = GraphRunRecord::create(graph(&["one"], &[], "one"), Value::Null).unwrap();
-    let id = record.run_id.clone();
-    record.cursor = Some(RunCursor {
-        node_id: "one".into(),
-        key: InvocationKey {
-            run_id: id.clone(),
-            graph_digest: record.graph_digest.clone(),
-            node_id: "one".into(),
-            invocation: 1,
-        },
-        input_commits: vec![],
-        prepared_input: Value::Null,
-    });
-    record.format = 1;
-    record.status = RunStatus::BudgetStopped;
-    fs::create_dir_all(&root).unwrap();
-    fs::write(
-        root.join(format!("{id}.json")),
-        serde_json::to_vec(&record).unwrap(),
-    )
-    .unwrap();
-
-    // Loading migrates in memory, without writing outside the Runner lease.
-    let loaded = store.load(&id).unwrap().unwrap();
-    assert_eq!(loaded.format, RUN_RECORD_FORMAT);
-    assert_eq!(loaded.invocations["one"], 1);
-    assert_eq!(loaded.passes["one"], 1);
-    let persisted: Value =
-        serde_json::from_slice(&fs::read(root.join(format!("{id}.json"))).unwrap()).unwrap();
-    assert_eq!(persisted["format"], 1);
-
-    let runner = GraphRunner::new(&store, &artifacts, &nodes, &control);
-    let result = runner.run(loaded).await.unwrap();
-    assert_eq!(result.status, RunStatus::Completed);
-    assert_eq!(result.invocations["one"], 1);
-    assert_eq!(result.passes["one"], 1);
-    let persisted = store.load(&id).unwrap().unwrap();
-    assert_eq!(persisted.format, RUN_RECORD_FORMAT);
-    assert_eq!(persisted.invocations["one"], 1);
-    assert_eq!(persisted.passes["one"], 1);
-
-    fs::remove_dir_all(root).unwrap();
-}
-
-#[tokio::test]
-async fn format_one_terminal_run_migrates_without_changing_counters() {
-    let root = std::env::temp_dir().join(format!(
-        "anchor-run-terminal-migration-{}-{}",
-        std::process::id(),
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ));
-    let store = FileRunStore::new(&root);
-    let artifacts = MemoryArtifacts::default();
-    let nodes = FakeNodes::default();
-    let control = Control::default();
-    let mut record = GraphRunRecord::create(graph(&["one"], &[], "one"), Value::Null).unwrap();
-    record.status = RunStatus::Completed;
-    record.format = 1;
-    record.passes.insert("one".into(), 3);
-    record.invocations.insert("one".into(), 3);
-    let id = record.run_id.clone();
-    fs::create_dir_all(&root).unwrap();
-    fs::write(
-        root.join(format!("{id}.json")),
-        serde_json::to_vec(&record).unwrap(),
-    )
-    .unwrap();
-
-    let loaded = store.load(&id).unwrap().unwrap();
-    assert_eq!(loaded.format, RUN_RECORD_FORMAT);
-    assert_eq!(loaded.passes["one"], 3);
-    assert_eq!(loaded.invocations["one"], 3);
-    let result = GraphRunner::new(&store, &artifacts, &nodes, &control)
-        .run(loaded)
-        .await
-        .unwrap();
-    assert_eq!(result.status, RunStatus::Completed);
-    let persisted = store.load(&id).unwrap().unwrap();
-    assert_eq!(persisted.format, RUN_RECORD_FORMAT);
-    assert_eq!(persisted.passes["one"], 3);
-    assert_eq!(persisted.invocations["one"], 3);
-    assert!(nodes.calls.lock().unwrap().is_empty());
-
-    fs::remove_dir_all(root).unwrap();
-}
-
-#[tokio::test]
 async fn known_node_failure_is_terminal_and_does_not_advance_edges() {
     let snapshot = graph(
         &["fails", "downstream"],
@@ -2713,54 +2359,6 @@ fn parallel_activation_facts_bind_pair_branch_paths_and_active_cursors() {
         invalid_cursor.validate(),
         Err(GraphError::CorruptRun(_))
     ));
-}
-
-#[test]
-fn run_format_two_migrates_to_parallel_aware_format_three() {
-    let mut record = GraphRunRecord::create(graph(&["one"], &[], "one"), Value::Null).unwrap();
-    record.format = 2;
-    let mut value = serde_json::to_value(&record).unwrap();
-    value.as_object_mut().unwrap().remove("parallel");
-    let mut loaded: GraphRunRecord = serde_json::from_value(value).unwrap();
-    loaded.migrate_format().unwrap();
-    assert_eq!(loaded.format, RUN_RECORD_FORMAT);
-    assert!(loaded.parallel.is_none());
-    loaded.validate().unwrap();
-}
-
-#[test]
-fn run_format_three_migrates_graph_calls_and_plugin_bindings_to_current_format() {
-    let mut value = serde_json::to_value(
-        GraphRunRecord::create(graph(&["one"], &[], "one"), Value::Null).unwrap(),
-    )
-    .unwrap();
-    value["format"] = serde_json::json!(3);
-    value.as_object_mut().unwrap().remove("graph_calls");
-    value.as_object_mut().unwrap().remove("plugin_bindings");
-    let mut record: GraphRunRecord = serde_json::from_value(value).unwrap();
-    record.migrate_format().unwrap();
-    assert_eq!(record.format, RUN_RECORD_FORMAT);
-    assert!(record.graph_calls.is_empty());
-    assert!(record.plugin_bindings.is_empty());
-    record.validate().unwrap();
-}
-
-#[test]
-fn run_format_six_migrates_recovery_submissions_to_current_format() {
-    let mut value = serde_json::to_value(
-        GraphRunRecord::create(graph(&["one"], &[], "one"), Value::Null).unwrap(),
-    )
-    .unwrap();
-    value["format"] = serde_json::json!(6);
-    value
-        .as_object_mut()
-        .unwrap()
-        .remove("recovery_submissions");
-    let mut record: GraphRunRecord = serde_json::from_value(value).unwrap();
-    record.migrate_format().unwrap();
-    assert_eq!(record.format, RUN_RECORD_FORMAT);
-    assert!(record.recovery_submissions.is_empty());
-    record.validate().unwrap();
 }
 
 #[tokio::test]
@@ -4432,72 +4030,14 @@ fn an_old_shape_snapshot_reproduces_its_stored_digest() {
 /// A record from the managed-environment era still loads: the field is accepted
 /// and dropped, never reinterpreted.
 #[test]
-fn a_managed_environment_record_migrates_by_dropping_the_field() {
-    let record = GraphRunRecord::create(graph(&["one"], &[], "one"), Value::Null).unwrap();
-    let mut value = serde_json::to_value(&record).unwrap();
-    value["format"] = serde_json::json!(9);
-    value["environments"] = serde_json::json!({
-        "one": {"site": {"kind": "node_task", "node": "one"}, "name": "research", "id": "a".repeat(64)}
-    });
-    let mut loaded: GraphRunRecord = serde_json::from_value(value).unwrap();
-    loaded.migrate_format().unwrap();
-    assert_eq!(loaded.format, RUN_RECORD_FORMAT);
-    assert!(loaded.validate().is_ok());
-    assert!(
-        !serde_json::to_value(&loaded)
-            .unwrap()
-            .to_string()
-            .contains("environments"),
-        "the field is gone from what we write next"
-    );
-}
-
-#[test]
-fn format_seven_migrates_to_current_without_inventing_timestamps() {
-    let mut original = GraphRunRecord::create(graph(&["one"], &[], "one"), Value::Null).unwrap();
-    original.cursor = Some(RunCursor {
-        node_id: "one".into(),
-        key: InvocationKey {
-            run_id: original.run_id.clone(),
-            graph_digest: original.graph_digest.clone(),
-            node_id: "one".into(),
-            invocation: 1,
-        },
-        input_commits: vec![],
-        prepared_input: Value::Null,
-    });
-    // A Run that retains a cursor is not `Ready`; `Stopped` is the resumable
-    // state migration must preserve. The cursor also has to agree with the
-    // invocation facts it belongs to.
-    original.status = RunStatus::Stopped;
-    original.invocations.insert("one".into(), 1);
-    original.passes.insert("one".into(), 1);
-    let cursor = original.cursor.clone();
-    let mut value = serde_json::to_value(&original).unwrap();
-    value["format"] = serde_json::json!(7);
-    value.as_object_mut().unwrap().remove("started");
-    value.as_object_mut().unwrap().remove("updated");
-    let mut record: GraphRunRecord = serde_json::from_value(value).unwrap();
-    assert!(record.started.is_none() && record.updated.is_none());
-    record.migrate_format().unwrap();
-    assert_eq!(record.format, RUN_RECORD_FORMAT);
-    // A real creation time cannot be recovered, so migration must not invent one,
-    // and the cursor semantics must survive unchanged.
-    assert!(record.started.is_none(), "{:?}", record.started);
-    assert!(record.updated.is_none(), "{:?}", record.updated);
-    assert_eq!(record.cursor, cursor);
-    record.validate().unwrap();
-}
-
-#[test]
 fn newer_run_formats_are_refused_instead_of_guessed() {
     let mut value = serde_json::to_value(
         GraphRunRecord::create(graph(&["one"], &[], "one"), Value::Null).unwrap(),
     )
     .unwrap();
     value["format"] = serde_json::json!(RUN_RECORD_FORMAT + 1);
-    let mut record: GraphRunRecord = serde_json::from_value(value).unwrap();
-    let error = record.migrate_format().unwrap_err().to_string();
+    let record: GraphRunRecord = serde_json::from_value(value).unwrap();
+    let error = record.validate().unwrap_err().to_string();
     assert!(error.contains("unsupported graph run format"), "{error}");
 }
 
@@ -4556,4 +4096,178 @@ async fn persist_stamps_updated_and_keeps_memory_in_step_with_disk() {
     assert_eq!(loaded.started, started, "started is never rewritten");
     assert_eq!(loaded.format, RUN_RECORD_FORMAT);
     let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn old_run_formats_are_named_refusals_on_decode_and_file_load() {
+    let root = std::env::temp_dir().join(format!(
+        "anchor-h1-{}-{}",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    fs::create_dir_all(&root).unwrap();
+    let record =
+        GraphRunRecord::create_with_id(graph(&["work"], &[], "work"), Value::Null, "old-format")
+            .unwrap();
+    let store = FileRunStore::new(&root);
+    let current = serde_json::to_value(&record).unwrap();
+    let mut fixtures = Vec::new();
+    for format in 1..RUN_RECORD_FORMAT {
+        let mut value = current.clone();
+        value["format"] = serde_json::json!(format);
+        fixtures.push(value);
+    }
+    let mut environment = current.clone();
+    environment["environments"] = serde_json::json!({});
+    fixtures.push(environment);
+    let mut authorization = current.clone();
+    authorization["plugin_bindings"] = serde_json::json!({"old": {"id":"old", "digest":"digest"}});
+    fixtures.push(authorization);
+    let mut deleted = current.clone();
+    deleted["graph_calls"] = serde_json::json!({"old": {"identity": {"parent_run_id":record.run_id,"parent_graph_digest":record.graph_digest,"node_id":"work","invocation":1,"call_spec_digest":"spec"},"graph":"child","child_run_id":null,"mode":"wait","status":"deleted"}});
+    fixtures.push(deleted);
+    let mut old_cursor = current;
+    old_cursor["cursor"] = serde_json::json!({"node_id":"work","key":{"run_id":record.run_id,"graph_digest":record.graph_digest,"node_id":"work","invocation":1},"input_commits":[],"prepared_input":null});
+    fixtures.push(old_cursor);
+    for value in fixtures {
+        let error = serde_json::from_value::<GraphRunRecord>(value.clone())
+            .unwrap_err()
+            .to_string();
+        assert!(
+            (error.contains("old Graph Run format") || error.contains("old cursor format"))
+                && error.contains("offline migration required"),
+            "{error}"
+        );
+        let bytes = serde_json::to_vec(&value).unwrap();
+        fs::write(root.join("old-format.json"), &bytes).unwrap();
+        let error = store.load("old-format").unwrap_err().to_string();
+        assert!(
+            (error.contains("old Graph Run format") || error.contains("old cursor format"))
+                && error.contains("offline migration required"),
+            "{error}"
+        );
+        assert_eq!(fs::read(root.join("old-format.json")).unwrap(), bytes);
+    }
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[tokio::test]
+async fn old_cursor_counter_timing_is_named_refusal_without_rewrite() {
+    let mut record = GraphRunRecord::create(graph(&["work"], &[], "work"), Value::Null).unwrap();
+    record.status = RunStatus::Stopped;
+    record.cursor = Some(RunCursor {
+        node_id: "work".into(),
+        key: InvocationKey {
+            run_id: record.run_id.clone(),
+            graph_digest: record.graph_digest.clone(),
+            node_id: "work".into(),
+            invocation: 1,
+        },
+        input_commits: vec![],
+        prepared_input: Value::Null,
+    });
+    let error = serde_json::from_value::<GraphRunRecord>(serde_json::to_value(&record).unwrap())
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.contains("old cursor format") && error.contains("offline migration required"),
+        "{error}"
+    );
+    let (store, artifacts, nodes, control) = setup();
+    let error = GraphRunner::new(&store, &artifacts, &nodes, &control)
+        .run(record.clone())
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.contains("old cursor format") && error.contains("offline migration required"),
+        "{error}"
+    );
+    assert!(store.load(&record.run_id).unwrap().is_none());
+}
+
+#[test]
+fn run_record_decode_preserves_duplicate_field_rejection() {
+    let mut record = GraphRunRecord::create(graph(&["work"], &[], "work"), Value::Null).unwrap();
+    record.plugin_bindings.insert(
+        "review".into(),
+        PluginBinding {
+            id: "review".into(),
+            digest: "code".into(),
+            resources: vec![],
+            mcp_servers: vec![],
+            authorization_digest: "authority".into(),
+        },
+    );
+    let json = serde_json::to_string(&record).unwrap();
+    for (field, duplicate) in [
+        ("\"format\":13", "\"format\":12,\"format\":13"),
+        (
+            "\"entry\":\"work\"",
+            "\"entry\":\"other\",\"entry\":\"work\"",
+        ),
+        (
+            "\"authorization_digest\":\"authority\"",
+            "\"authorization_digest\":\"\",\"authorization_digest\":\"authority\"",
+        ),
+    ] {
+        assert!(json.contains(field), "{field}");
+        let error = serde_json::from_str::<GraphRunRecord>(&json.replace(field, duplicate))
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("duplicate field"), "{error}");
+    }
+    assert_eq!(
+        serde_json::from_str::<GraphRunRecord>(&json).unwrap(),
+        record
+    );
+}
+
+#[test]
+fn non_object_run_record_decode_requires_offline_migration() {
+    let record = GraphRunRecord::create(graph(&["work"], &[], "work"), Value::Null).unwrap();
+    let object = serde_json::to_value(record).unwrap();
+    let fields = [
+        "format",
+        "started",
+        "updated",
+        "run_id",
+        "graph_digest",
+        "snapshot",
+        "input",
+        "status",
+        "cursor",
+        "parallel",
+        "recovery",
+        "recovery_submissions",
+        "graph_calls",
+        "plugin_bindings",
+        "plugin_bindings_initialized",
+        "invocations",
+        "passes",
+        "module_activations",
+        "ceased",
+        "results",
+        "decided",
+        "sequence",
+        "error",
+    ];
+    for format in [12, RUN_RECORD_FORMAT] {
+        let mut values = fields
+            .iter()
+            .map(|field| object[*field].clone())
+            .collect::<Vec<_>>();
+        values[0] = serde_json::json!(format);
+        let error = serde_json::from_value::<GraphRunRecord>(Value::Array(values))
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("old non-object Graph Run format")
+                && error.contains("offline migration required"),
+            "{error}"
+        );
+    }
 }

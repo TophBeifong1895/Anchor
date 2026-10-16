@@ -153,44 +153,27 @@ fn prepare(
 }
 
 #[tokio::test]
-async fn legacy_mcp_preparation_is_read_only_and_runner_upgrade_requires_the_run_lease() {
+async fn legacy_mcp_preparation_and_load_require_offline_migration_without_rewrite() {
     let _env_guard = crate::PROCESS_ENV_LOCK.lock().await;
     let root = tempfile::tempdir().unwrap();
     let _environment = Environment::configure(root.path());
-    let (directory, current) = plugin(root.path());
+    let (_, current) = plugin(root.path());
     let record = legacy_record("legacy-mcp", &current);
     let (store, path, original_bytes) = legacy_file(root.path(), &record);
-    // Ordinary Plugin-owned data never participates in either code identity or
-    // the authority upgrade. Only MCP declarations must stay immutable.
-    fs::write(directory.join("state/results.json"), "[1,2,3]").unwrap();
-
-    let prepared = prepare(root.path(), &record, record.plugin_bindings.clone()).unwrap();
-    assert_eq!(store.load(&record.run_id).unwrap(), Some(record.clone()));
-    assert_eq!(fs::read(&path).unwrap(), original_bytes);
-    let lease = store.acquire_lease(&record.run_id).unwrap();
-    let error = prepared.run(record.clone()).await.unwrap_err();
-    assert_eq!(
-        error,
-        GraphError::RunBusy(record.run_id.clone()).to_string()
-    );
-    assert_eq!(fs::read(&path).unwrap(), original_bytes);
-    drop(lease);
-
-    let prepared = prepare(root.path(), &record, record.plugin_bindings.clone()).unwrap();
-    let resumed = prepared.run(record).await.unwrap();
-    assert_eq!(resumed.status, RunStatus::Paused);
-    assert_eq!(resumed.plugin_bindings["research"], current);
-    assert!(resumed.cursor.is_none());
-    assert!(resumed.invocations.is_empty());
-    assert_eq!(store.load(&resumed.run_id).unwrap(), Some(resumed));
-    let saved: Value = serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
-    assert_eq!(saved["format"], 13);
+    let error = match prepare(root.path(), &record, record.plugin_bindings.clone()) {
+        Ok(_) => panic!("legacy authorization was accepted"),
+        Err(error) => error,
+    };
     assert!(
-        !saved["plugin_bindings"]["research"]["authorization_digest"]
-            .as_str()
-            .unwrap()
-            .is_empty()
+        error.contains("old authorization format") && error.contains("offline migration required"),
+        "{error}"
     );
+    let error = store.load(&record.run_id).unwrap_err().to_string();
+    assert!(
+        error.contains("old Graph Run format") && error.contains("offline migration required"),
+        "{error}"
+    );
+    assert_eq!(fs::read(path).unwrap(), original_bytes);
 }
 
 #[tokio::test]
@@ -234,8 +217,14 @@ async fn changed_or_ambiguous_legacy_mcp_bindings_fail_before_durable_state_chan
                 Ok(_) => panic!("legacy {change} change was accepted"),
                 Err(error) => error,
             };
-            assert!(error.contains("legacy Run"), "{error}");
-            assert_eq!(store.load(&record.run_id).unwrap(), Some(record.clone()));
+            assert!(error.contains("offline migration required"), "{error}");
+            assert!(
+                store
+                    .load(&record.run_id)
+                    .unwrap_err()
+                    .to_string()
+                    .contains("offline migration required")
+            );
             assert_eq!(fs::read(&path).unwrap(), original_bytes);
         }
     }
@@ -295,7 +284,11 @@ async fn a_waiting_parents_preparation_validates_its_legacy_child_without_upgrad
     parent.passes.insert("invoke".into(), 1);
     parent.status = RunStatus::WaitingCall;
     let (_, parent_path, parent_bytes) = legacy_file(root.path(), &parent);
-    prepare(root.path(), &parent, BTreeMap::new()).unwrap();
+    let error = match prepare(root.path(), &parent, BTreeMap::new()) {
+        Ok(_) => panic!("legacy child was accepted"),
+        Err(error) => error,
+    };
+    assert!(error.contains("offline migration required"), "{error}");
     assert_eq!(fs::read(&child_path).unwrap(), child_bytes);
     assert_eq!(fs::read(&parent_path).unwrap(), parent_bytes);
 
@@ -304,7 +297,7 @@ async fn a_waiting_parents_preparation_validates_its_legacy_child_without_upgrad
         Ok(_) => panic!("parent preparation ignored its child's legacy identity"),
         Err(error) => error,
     };
-    assert!(error.contains("legacy Run"), "{error}");
+    assert!(error.contains("offline migration required"), "{error}");
     assert_eq!(fs::read(child_path).unwrap(), child_bytes);
     assert_eq!(fs::read(parent_path).unwrap(), parent_bytes);
 }
@@ -316,8 +309,12 @@ async fn legacy_mcp_preparation_refuses_mutable_declaration_files() {
     let _environment = Environment::configure(root.path());
     for (path, config) in [(".mcp.json", ".mcp.json"), ("state/", "state/mcp.json")] {
         let (directory, current) = plugin(root.path());
-        let record = legacy_record("mutable-mcp", &current);
-        let (_, record_path, original_bytes) = legacy_file(root.path(), &record);
+        let mut record = legacy_record("mutable-mcp", &current);
+        record.plugin_bindings.insert(current.id.clone(), current);
+        let store = FileRunStore::new(root.path().join("state/runs"));
+        store.save(&record).unwrap();
+        let record_path = root.path().join("state/runs/mutable-mcp.json");
+        let original_bytes = fs::read(&record_path).unwrap();
         fs::write(
             directory.join("plugin.json"),
             json!({

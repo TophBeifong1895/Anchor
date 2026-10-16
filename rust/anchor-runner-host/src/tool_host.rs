@@ -42,7 +42,7 @@ fn fake_binding() -> PluginBinding {
 
 pub(crate) fn is_fake_fixture(binding: &PluginBinding) -> bool {
     let fixture = fake_binding();
-    binding == &fixture || binding.can_upgrade_legacy_authorization(&fixture)
+    binding == &fixture
 }
 
 #[derive(Debug, Clone, Default)]
@@ -140,6 +140,14 @@ impl McpToolConfig {
         root: impl Into<PathBuf>,
         bindings: &[PluginBinding],
     ) -> Result<Self, String> {
+        for binding in bindings {
+            if binding.authorization_digest.is_empty() {
+                return Err(format!(
+                    "Plugin `{}` uses an old authorization format; offline migration required",
+                    binding.id
+                ));
+            }
+        }
         let root = root.into();
         let catalog = FilePluginCatalog::new(root.clone());
         let mut definitions = BTreeMap::new();
@@ -182,9 +190,13 @@ impl McpToolConfig {
                 .get(&binding.id)
                 .ok_or_else(|| format!("Plugin `{}` MCP definition is unavailable", binding.id))?;
             let current = declaration.binding();
-            if !binding.same_authorization(&current)
-                && !binding.can_upgrade_legacy_authorization(&current)
-            {
+            if binding.authorization_digest.is_empty() {
+                return Err(format!(
+                    "Plugin `{}` uses an old authorization format; offline migration required",
+                    binding.id
+                ));
+            }
+            if !binding.same_authorization(&current) {
                 return Err(format!(
                     "Plugin `{}` Host authorization changed before MCP assembly",
                     binding.id
@@ -1472,8 +1484,11 @@ mod tests {
             mcp_servers: vec![FAKE_SERVER_ID.into()],
             authorization_digest: String::new(),
         };
-        let config = McpToolConfig::from_catalog("/does/not/exist", &[binding]).unwrap();
+        let config = McpToolConfig::from_catalog("/does/not/exist", &[fake_binding()]).unwrap();
         assert!(config.servers.is_empty());
+        let error = McpToolConfig::from_catalog("/does/not/exist", &[binding]).unwrap_err();
+        assert!(error.contains("old authorization format"), "{error}");
+        assert!(error.contains("offline migration required"), "{error}");
     }
 
     #[tokio::test]

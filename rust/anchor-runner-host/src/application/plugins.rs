@@ -1668,7 +1668,7 @@ mod impact_tests {
                 digest: "a".repeat(64),
                 resources: Vec::new(),
                 mcp_servers: vec!["probe".into()],
-                authorization_digest: String::new(),
+                authorization_digest: "fixture-authority".into(),
             },
         );
         record.plugin_bindings_initialized = true;

@@ -286,10 +286,10 @@ impl RunApplication {
         }
         for (other_id, other) in self.records()? {
             if other_id != run_id
-                && other.graph_calls.values().any(|call| {
-                    call.child_run_id.as_deref() == Some(run_id)
-                        && call.status != anchor_runtime::graph::GraphCallStatus::Deleted
-                })
+                && other
+                    .graph_calls
+                    .values()
+                    .any(|call| call.child_run_id.as_deref() == Some(run_id))
             {
                 return Err(ApplicationError::Conflict(
                     "Run is referenced by another Graph call".into(),

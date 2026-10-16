@@ -129,13 +129,14 @@
 | S5 | 并行波次中某个分支触发轮数上限 | 先准备好的兄弟分支被记为"已开始"，但从未执行（幽灵调用） | 不把任何未派发的调用记为已开始 | 宪法第二条：没有发生的事不能记为发生 |
 | S7 | 子 Run 的接纳结果未知 | Run 失败 | 结算为"未知" | 宪法第二条：未知是正当的终点，不应伪装为失败 |
 | S8 | 有多条出边的调用节点 | 运行到该节点时 Run 失败 | 创建 Run 时拒绝 | 宿主代码无法替调用节点选择路由，这是作者错误，应尽早发现 |
-| S9 | 旧版本写入的 `Deleted` 调用标记 | 恢复时按已完成处理 | 不再支持 | 分支不背兼容包袱；旧数据迁移在合并时单独处理 |
+| S9 | 旧版本写入的 `Deleted` 调用标记 | 恢复时按已完成处理 | H1 读取具名拒绝，需离线迁移 | 分支不背兼容包袱；旧数据迁移在合并时单独处理 |
 | S6 | 并行区域已注定无法汇合（某分支触发上限） | 等本波次所有分支完成、并入结果后，下一波次才失败 | 立即结算为失败；之后到达的兄弟分支结果被拒绝，但连同产物证据完整记录在 Run 历史中 | 快速失败减少无效工作，与规格"分支失败时请求停止活动同伴"一致；被拒提交同样被记录，信息不丢失 |
 | S10 | 任务历史中的成本 | 打回、拒绝、过期、待定等成本可能丢失 | 所有历史记录都计费，成本不推进版本；同一工作过期重提成本为 0 | D1，预算不能被拒绝提交绕过 |
 | S11 | 残缺或损坏的历史 | 首个解析失败后静默停止，后续接受记录可能不可恢复 | 追加前去掉未闭合尾字节；闭合坏行具名报 Corrupt；完整历史字节不变 | D2，接受的事实必须可恢复，损坏不能静默吞掉 |
 | S12 | Code 观察到未知效果 | Code stop 一律 HumanOnly | 有 Observation 可 stop 进入等待人；Code 无证据、Agent stop 与 Code resume 人的等待仍拒绝 | D3，安全方向与释放方向不对称 |
 | S13 | 等待中的迟到节点结果 | Code/Human 可以继续写入并推进 Graph | 非生命周期提交统一 TaskWaiting 并计费；越预算仍结算失败，不应用节点内容 | D5 + D1，等待门禁由内核强制执行 |
 | S14 | Graph 节点中断提交 | 无中断字段，无法保存宿主中断事实 | 仅 Code 可携带中断字段，记录规范中断结果并沿普通路由继续；非 Code 含显式 null 也拒绝 | D4，中断来自宿主观察，不能由 Agent 自述产生 |
+| S15 | 旧 Run 格式、旧授权与旧 cursor | 加载时升级或派发前补写计数/授权 | H1 读取/接纳时拒绝并提示离线迁移，不改写数据；持久化记录仅接受对象 | C6 用户明确不兼容旧格式，拒绝隐式发明历史事实 |
 
 S1、S2 在差分测试中被显式映射（S2：旧 `Stopped` 且存在停止原因 ⇔ 新 `Escalated`）。S1 未进入差分测试，因为路由脚本只产生合法路由。
 
@@ -143,15 +144,111 @@ S1、S2 在差分测试中被显式映射（S2：旧 `Stopped` 且存在停止�
 
 在 `d0f9b61` 上复现成本丢失、残缺尾行后接受记录不可恢复及 Code 无法进入等待人，按 C1 停止；原始观察与结构基线保留在[预检产物](../experiments/constitution-host-preflight/review.md)。审查随后将迟到 Code 结果从“不阻塞”改为 D5 必修；现由上述 K0.1 覆盖，旧建议不再作为实施依据。
 
-## H1：存储接入边界预检（未完成）
+## H1：旧格式清理（实现完成）
 
-K0.1 验收结论不变。H1 盘点发现：要求本阶段清零直接保存，与 H2 才替换 Runner、H3 才迁移生命周期/恢复存在依赖。旧 Runner 派发前保存 cursor 与启动计数，恢复入口保存 recovery_submissions 与剩余恢复项；现有 GraphValidator 只接受开放空位上的结果/调用事实，不能机械接管整份状态保存。公开 API + FileStore 探针确认整份 Run 快照和 started 内容均被 ContentInvalid 打回，Graph 状态与版本不变，历史记录完整。
+用户已决定 H1 仅做兼容删除；FileStore 随 H2 调度器接入，C2 零直接写入在 H3 结束验收。原[存储边界预检](../experiments/constitution-host-preflight/h1/review.md)保留为历史证据，不再是当前停止条件。
 
-按计划停止条件交回阶段切分讨论；未修改生产代码、内核或校验器，未删除测试、未产生新的 S 编号。建议 H1 先清理兼容并准备存储门面，执行者/调度器与生命周期写入分别随 H2/H3 迁移，C2 零直接写入在 H3 完成时验收；另一选择是合并 H1–H3 为可运行切片。实际执行的探针、Clippy、格式检查和保留边界见 [H1 预检证据](../experiments/constitution-host-preflight/h1/review.md)。阶段边界未经决定前，H1 不标记完成。
+已删除格式自动迁移、managed-environment 遗留字段、旧授权升级、Deleted 调用标记及旧 cursor 计数补写。旧 Run 格式、遗留 environments、缺失授权摘要、Deleted 标记和旧 cursor 均具名拒绝，说明需离线迁移；读取不重写原始字节。当前持久化记录必须为对象，非对象序列也具名拒绝；解码保留 serde 已知字段重复键及未知字段拒绝，不经 Value 覆盖字段。未修改内核、GraphValidator 或三组差分测试；仍由旧 RunStore 单独负责 Run，无内核双写或新提交契约。
+
+### 删除与替换的测试
+
+以下旧 Runtime 测试名逐一退出；除授权测试改为执行前具名拒绝外，其余只为兼容/升级存在的测试删除，由统一旧格式拒绝覆盖：
+
+- `a_format_ten_record_loads_without_inventing_plugin_views`。
+- `a_managed_environment_record_migrates_by_dropping_the_field`。
+- `a_rejected_legacy_plugin_does_not_partially_upgrade_other_plugins`。
+- `deleted_graph_call_marker_resumes_as_completed_without_replay`。
+- `format_one_cursor_migrates_under_lease_and_persists_once`。
+- `format_one_terminal_run_migrates_without_changing_counters`。
+- `format_seven_migrates_to_current_without_inventing_timestamps`。
+- `format_twelve_migration_preserves_the_absence_of_plugin_authority_and_code_observations`。
+- `legacy_plugin_authority_is_upgraded_only_when_the_original_code_is_still_installed`。
+- `run_format_six_migrates_recovery_submissions_to_current_format`。
+- `run_format_three_migrates_graph_calls_and_plugin_bindings_to_current_format`。
+- `run_format_two_migrates_to_parallel_aware_format_three`。
+
+Host 的 `legacy_mcp_preparation_is_read_only_and_runner_upgrade_requires_the_run_lease` 替换为 `legacy_mcp_preparation_and_load_require_offline_migration_without_rewrite`；`preliminary_wiring_accepts_only_unchanged_legacy_identity_and_validates_skill_authority` 替换为 `preliminary_wiring_refuses_legacy_identity_and_validates_skill_authority`。fake fixture 仅接受严格相等的现代 binding，不再借升级规则放行。
+
+保留原业务断言：Run Plugin 历史顺序、停止 Run 的 Graph 修改/放弃、未完成 Run 阻止 Graph 删除、Plugin 更新影响这四处 fixture 补齐当前授权摘要；可变 MCP declaration 拒绝测试改用现代授权，以继续实际到达并验证原权限检查。没有删除这些业务/安全测试。新增旧格式 decode/FileRunStore 字节不变、旧 cursor/旧授权执行前拒绝、重复字段和非对象序列拒绝回归。
+
+### H2/H3 直接写入棘轮起点
+
+范围仅两个 Host crate 的生产 GraphRunRecord；按静态站点计数，排除测试、metadata、Session/Goose 自身记录。构造器及局部变量整体重绑定不算字段 mutation；集合 push/retain、mem::take 与 touch 单列。save 与 mutation 不可混为一个计数。下表为 H1 提交源码行号，后续只能减少，不能增加。
+
+| Host | save | 字段赋值 | 集合修改 | touch | mutation 合计 |
+|---|---:|---:|---:|---:|---:|
+| anchor-runner-host | 15 | 22 | 4 | 7 | 33 |
+| anchor-graph-host | 1 | 3 | 0 | 0 | 3 |
+| **合计** | **16** | **25** | **4** | **7** | **36** |
+
+### GraphRunRecord store.save（16）
+
+| 文件:行号 | 写入 | 用途 |
+|---|---|---|
+| rust/anchor-runner-host/src/application/admission.rs:103 | `self.store().save(&record)?` | 新 Run admission；先持久化不可变身份元数据，再保存记录、注册并启动执行。 |
+| rust/anchor-runner-host/src/application/assistants.rs:227 | `self.store().save(&record)?` | channel assistant 新 Run：元数据、执行准备及 workspace 绑定后保存。 |
+| rust/anchor-runner-host/src/application/conversations.rs:855 | `self.store().save(&record)?` | conversation 新 Run：冻结附件/元数据及执行准备后保存，随后注册并启动。 |
+| rust/anchor-runner-host/src/application/session_calls.rs:184 | `self.store().save(&record)?` | stop_session_call：非活跃且未终态记录保存为 Stopped。 |
+| rust/anchor-runner-host/src/application/session_calls.rs:211 | `self.store().save(&record)?` | yield_session_call：非活跃且未终态记录保存为 Stopped。 |
+| rust/anchor-runner-host/src/application/session_calls.rs:392 | `self.store().save(&record)?` | execute_session_call：保存中断工具恢复上下文、清空待恢复项并进入 Running，再启动。 |
+| rust/anchor-runner-host/src/application/recovery.rs:139 | `self.store().save(&record)?` | 接受 Abort 恢复决定后保存 Aborted、错误与恢复事实。 |
+| rust/anchor-runner-host/src/application/recovery.rs:145 | `self.store().save(&record)?` | 一项恢复决定完成但仍有未决项，保存 WaitingRecovery。 |
+| rust/anchor-runner-host/src/application/recovery.rs:150 | `self.store().save(&record)?` | 最后一项恢复决定完成，保存 Running 后重新启动。 |
+| rust/anchor-runner-host/src/application/control.rs:126 | `self.store().save(&record)?` | 停止 WaitingCall 父 Run，先保存 Stopped，再停止等待中的子 Run。 |
+| rust/anchor-runner-host/src/application/control.rs:137 | `self.store().save(&current)?` | 停止子 Run 后重读父记录，若被推进回 WaitingCall，再保存 Stopped。 |
+| rust/anchor-runner-host/src/application/control.rs:146 | `self.store().save(&record)?` | 普通 inactive stop：保存 Stopped，保留 cursor 与完成事实、不派发工作。 |
+| rust/anchor-runner-host/src/application/abandon.rs:164 | `self.store().save(&record)?` | finalize_abandoned_run：非活跃且未终态 Run 保存为 Aborted 并记录放弃原因。 |
+| rust/anchor-runner-host/src/execution.rs:317 | `self.store.save(&durable).map_err(...)?` | Runner 出错释放 lease 后，重新加载仍 Ready/Running 的记录，保存 host 中断失败。 |
+| rust/anchor-runner-host/src/main.rs:663 | `execution.store.save(&record)`（`newly_admitted` 条件） | standalone CLI/协议入口，仅首次 admission 保存记录；已有匹配 snapshot/input 的记录不重存。 |
+| rust/anchor-graph-host/src/graph_call.rs:532 | `self.store.save(record)` | persist_child_admission：catalog 子身份元数据/可选 Session call 元数据保存后，持久化 child Run。 |
+
+### 字段赋值、集合修改与 touch（36）
+
+| 文件:行号 | 写入 | 用途 |
+|---|---|---|
+| rust/anchor-runner-host/src/application/admission.rs:70 | `record.plugin_bindings = plugin_bindings` | 记录 admission 观察到的当前 Plugin bindings。 |
+| rust/anchor-runner-host/src/application/admission.rs:71 | `record.plugin_bindings_initialized = true` | 标记 Plugin bindings 已初始化。 |
+| rust/anchor-runner-host/src/application/admission.rs:102 | `record.touch()` | admission 保存前刷新记录时间。 |
+| rust/anchor-runner-host/src/application/assistants.rs:184 | `record.plugin_bindings = plugin_bindings` | 新 assistant Run 记录 bundle Plugin bindings。 |
+| rust/anchor-runner-host/src/application/assistants.rs:185 | `record.plugin_bindings_initialized = true` | 标记 assistant Run bindings 已初始化。 |
+| rust/anchor-runner-host/src/application/conversations.rs:812 | `record.plugin_bindings = plugin_bindings` | 新 conversation Run 记录 bundle Plugin bindings。 |
+| rust/anchor-runner-host/src/application/conversations.rs:813 | `record.plugin_bindings_initialized = true` | 标记 conversation Run bindings 已初始化。 |
+| rust/anchor-runner-host/src/application/session_calls.rs:183 | `record.status = RunStatus::Stopped` | 停止未活跃、未终态 Session call。 |
+| rust/anchor-runner-host/src/application/session_calls.rs:210 | `record.status = RunStatus::Stopped` | yield 非活跃、未终态 Session call。 |
+| rust/anchor-runner-host/src/application/session_calls.rs:369 | `std::mem::take(&mut record.recovery)` | 清空并取走全部未决恢复项，逐项生成效果未知的恢复上下文。 |
+| rust/anchor-runner-host/src/application/session_calls.rs:385 | `record.recovery_submissions.push(RecoverySubmission { ... })` | 追加中断工具调用的 Completed 恢复提交事实。 |
+| rust/anchor-runner-host/src/application/session_calls.rs:391 | `record.status = RunStatus::Running` | Session call 恢复上下文记入后进入 Running。 |
+| rust/anchor-runner-host/src/application/recovery.rs:123 | `record.recovery_submissions.push(RecoverySubmission { ... })` | Harness 意图持久化后追加本次恢复决定。 |
+| rust/anchor-runner-host/src/application/recovery.rs:130 | `record.recovery.retain(...)` | 移除匹配 key + attempt_id 的已处理未决恢复项。 |
+| rust/anchor-runner-host/src/application/recovery.rs:136 | `record.status = RunStatus::Aborted` | Abort 决定将整个 Run 置为终态；保留其他未决项作只读事实。 |
+| rust/anchor-runner-host/src/application/recovery.rs:137 | `record.error = Some(format!(...))` | 写入 operator abort 的节点错误说明。 |
+| rust/anchor-runner-host/src/application/recovery.rs:138 | `record.touch()` | Abort 分支保存前刷新记录时间。 |
+| rust/anchor-runner-host/src/application/recovery.rs:143 | `record.status = RunStatus::WaitingRecovery` | 仍有未决恢复项，继续等待恢复。 |
+| rust/anchor-runner-host/src/application/recovery.rs:144 | `record.touch()` | 继续等待恢复分支保存前刷新记录时间。 |
+| rust/anchor-runner-host/src/application/recovery.rs:148 | `record.status = RunStatus::Running` | 未决恢复项全部处理后进入 Running。 |
+| rust/anchor-runner-host/src/application/recovery.rs:149 | `record.touch()` | 恢复执行分支保存前刷新记录时间。 |
+| rust/anchor-runner-host/src/application/control.rs:124 | `record.status = RunStatus::Stopped` | WaitingCall 父 Run 先停止，再处理等待的子 Run。 |
+| rust/anchor-runner-host/src/application/control.rs:125 | `record.touch()` | 首次停止 WaitingCall 父 Run 保存前刷新时间。 |
+| rust/anchor-runner-host/src/application/control.rs:135 | `current.status = RunStatus::Stopped` | 停止子 Run 后若父记录又为 WaitingCall，再次停止。 |
+| rust/anchor-runner-host/src/application/control.rs:136 | `current.touch()` | 重读后的父 Run 保存前刷新时间。 |
+| rust/anchor-runner-host/src/application/control.rs:144 | `record.status = RunStatus::Stopped` | 普通 inactive stop，保留执行 cursor 与完成事实。 |
+| rust/anchor-runner-host/src/application/control.rs:145 | `record.touch()` | 普通 inactive stop 保存前刷新时间。 |
+| rust/anchor-runner-host/src/application/abandon.rs:160 | `record.status = RunStatus::Aborted` | 非活跃、未终态 Run 由 operator abandon 置为 Aborted。 |
+| rust/anchor-runner-host/src/application/abandon.rs:161 | `record.error = Some(format!(...))` | 写入 abandon reason 与 requested_at，保留放弃原因。 |
+| rust/anchor-runner-host/src/execution.rs:313 | `durable.status = RunStatus::Failed` | 非 RunBusy/RunConflict 执行错误后，仅仍 Ready/Running 的持久记录置为 Failed。 |
+| rust/anchor-runner-host/src/execution.rs:314 | `durable.error = Some(format!(...))` | 写入 host execution interrupted，声明未完成效果不会自动重放。 |
+| rust/anchor-runner-host/src/main.rs:615 | `expected.plugin_bindings = plugin_bindings.clone()` | standalone 预期新记录绑定已解析 bindings；已有记录路径沿用加载记录。 |
+| rust/anchor-runner-host/src/main.rs:616 | `expected.plugin_bindings_initialized = true` | 标记 standalone 预期新记录 bindings 已初始化。 |
+| rust/anchor-graph-host/src/graph_call.rs:295 | `record.run_id = run_id.clone()` | child 构造后改用由 call identity 决定的可重试确定性 ID。 |
+| rust/anchor-graph-host/src/graph_call.rs:296 | `record.plugin_bindings = referenced.iter().cloned().map(...).collect()` | child admission 记录当前 Library 解析的 Plugin bindings。 |
+| rust/anchor-graph-host/src/graph_call.rs:301 | `record.plugin_bindings_initialized = true` | 标记 child Plugin bindings 已初始化。 |
+
+
+RunStatus 直接赋值 11 站点已包括在 mutation 中；旧 Runtime Runner 的内部写入不在 Host 目录计数内，它随 H2 替换。基线只盘点写点，不证明并发恢复语义已迁移。验证命令、结果和未覆盖边界见[H1 验证证据](../experiments/constitution-host-preflight/h1/verification.md)。
 
 ## 尚未完成
 
 - 并行分支内的模块作用域。
-- Host 侧接入：K0.1 审查通过后，实施调度器、执行者、生命周期和常驻助手中断契约；机械盘点为生产代码 23 文件、188 处 `RunStatus::` 引用（不等同独立规则数）。
+- Host 侧 H2–H6：H1 兼容删除已完成；后续接入调度器、执行者、内核 FileStore、生命周期及常驻助手中断契约。C2 在 H3 验收，16 save / 36 mutation 为上述棘轮起点。
 - 旧 Runner 的删除。
 - 测量探针与原因码投影接入。

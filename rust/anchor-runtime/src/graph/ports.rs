@@ -173,26 +173,14 @@ pub struct PluginBinding {
     #[serde(default)]
     pub mcp_servers: Vec<String>,
     /// Stable, secret-free digest of declarations that grant Host authority.
-    /// Missing on legacy Run records; those may only be upgraded after exact
-    /// equality with the current legacy binding has been established.
+    /// Missing legacy baselines require offline migration.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub authorization_digest: String,
 }
 
 impl PluginBinding {
-    /// An old binding can acquire an authorization baseline only while every
-    /// fact it originally recorded still matches the current installation.
-    pub fn can_upgrade_legacy_authorization(&self, current: &Self) -> bool {
-        self.authorization_digest.is_empty()
-            && !current.authorization_digest.is_empty()
-            && self.id == current.id
-            && self.digest == current.digest
-            && self.resources == current.resources
-            && self.mcp_servers == current.mcp_servers
-    }
-
     /// Compare the Host authorization baseline without pinning executable code
-    /// or resource contents. Legacy bindings require an explicit upgrade first.
+    /// or resource contents. Legacy bindings require offline migration.
     pub fn same_authorization(&self, current: &Self) -> bool {
         self.id == current.id
             && !self.authorization_digest.is_empty()

@@ -287,7 +287,7 @@ async fn oauth_releases_publication_lease_and_cannot_mix_a_reclaimed_view_with_n
 }
 
 #[test]
-fn preliminary_wiring_accepts_only_unchanged_legacy_identity_and_validates_skill_authority() {
+fn preliminary_wiring_refuses_legacy_identity_and_validates_skill_authority() {
     let root = tempfile::tempdir().unwrap();
     let plugin = root.path().join("plugins/skill");
     fs::create_dir_all(&plugin).unwrap();
@@ -297,11 +297,11 @@ fn preliminary_wiring_accepts_only_unchanged_legacy_identity_and_validates_skill
     assert!(binding.mcp_servers.is_empty());
     let mut legacy = binding.clone();
     legacy.authorization_digest.clear();
-    McpToolConfig::from_catalog(root.path(), std::slice::from_ref(&legacy)).unwrap();
-    assert!(
-        legacy.authorization_digest.is_empty(),
-        "wiring never persists an upgrade"
-    );
+    McpToolConfig::from_catalog(root.path(), std::slice::from_ref(&binding)).unwrap();
+    let error =
+        McpToolConfig::from_catalog(root.path(), std::slice::from_ref(&legacy)).unwrap_err();
+    assert!(error.contains("old authorization format"), "{error}");
+    assert!(error.contains("offline migration required"), "{error}");
     let mut forged = binding;
     forged.authorization_digest = "forged".into();
     assert!(McpToolConfig::from_catalog(root.path(), &[forged]).is_err());

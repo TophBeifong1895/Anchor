@@ -1854,7 +1854,7 @@ async fn graph_delete_is_rejected_while_its_own_run_is_unfinished() {
             digest: "pinned-digest".into(),
             resources: vec!["resource.txt".into()],
             mcp_servers: vec![],
-            authorization_digest: String::new(),
+            authorization_digest: "fixture-authority".into(),
         },
     );
     record.plugin_bindings_initialized = true;

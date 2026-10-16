@@ -28,14 +28,13 @@ impl RunStore for FileRunStore {
             Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
             Err(e) => return Err(e.into()),
         };
-        let mut record: GraphRunRecord =
+        let record: GraphRunRecord =
             serde_json::from_slice(&bytes).map_err(GraphError::RunDecode)?;
         if record.run_id != run_id {
             return Err(GraphError::CorruptRun(
                 "run identity or format mismatch".into(),
             ));
         }
-        record.migrate_format()?;
         record.validate()?;
         Ok(Some(record))
     }

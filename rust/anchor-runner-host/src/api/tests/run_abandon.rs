@@ -374,7 +374,7 @@ async fn graph_updates_do_not_require_abandoning_stopped_plugin_runs() {
             digest: "a".repeat(64),
             resources: vec!["skills/example/SKILL.md".into()],
             mcp_servers: Vec::new(),
-            authorization_digest: String::new(),
+            authorization_digest: "fixture-authority".into(),
         },
     );
     run_store(&state).save(&record).unwrap();

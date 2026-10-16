@@ -152,6 +152,13 @@ impl PreparedExecution {
         if bindings.is_empty() {
             return Ok(());
         }
+        for (id, admitted) in bindings {
+            if admitted.authorization_digest.is_empty() {
+                return Err(format!(
+                    "Plugin `{id}` uses an old authorization format; offline migration required"
+                ));
+            }
+        }
         let ids = bindings.keys().cloned().collect::<Vec<_>>();
         let current = nodes
             .resolve_plugins(&ids)
@@ -169,22 +176,20 @@ impl PreparedExecution {
             );
         }
         for ((id, admitted), current) in bindings.iter().zip(&current) {
-            if admitted.same_authorization(current)
-                || admitted.can_upgrade_legacy_authorization(current)
-            {
+            if admitted.same_authorization(current) {
                 continue;
             }
             return Err(if admitted.authorization_digest.is_empty() {
-                format!("Plugin `{id}` authorization baseline is unavailable for this legacy Run")
+                format!(
+                    "Plugin `{id}` uses an old authorization format; offline migration required"
+                )
             } else {
                 format!(
                     "Plugin `{id}` Host authorization changed since this Graph Run was admitted"
                 )
             });
         }
-        // Preparation proves that an old baseline can be upgraded, but cannot
-        // write it: GraphRunner owns that migration while holding the Run lease.
-        // Wiring validates the original bindings again against its catalog read.
+        // Wiring validates the admitted bindings again against its catalog read.
         nodes
             .io_resolver
             .validate_plugin_configuration(&bindings.values().cloned().collect::<Vec<_>>())
