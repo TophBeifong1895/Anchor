@@ -1,0 +1,201 @@
+Source baseline: 0b71475; final new kernel regression tests copied unchanged.
+Only workspace membership reduced to anchor-kernel in a private snapshot.
+CARGO_TARGET_DIR=/home/mansteinl/code/anchor-constitution-core/.local/constitution-k01/before-target
+Command: cargo test --offline --manifest-path /tmp/anchor-k01-before-5741g4ls/rust/Cargo.toml -p anchor-kernel --test accounting_lifecycle --test storage_regressions --no-fail-fast
+   Compiling anchor-kernel v0.1.0 (/tmp/anchor-k01-before-5741g4ls/rust/anchor-kernel)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.22s
+     Running tests/accounting_lifecycle.rs (.local/constitution-k01/before-target/debug/deps/accounting_lifecycle-0dbc2784a5d11f64)
+
+running 12 tests
+test agent_cannot_stop_even_with_observation_evidence ... FAILED
+test approval_observation_also_obeys_the_targets_history_budget ... FAILED
+test every_recorded_verdict_including_unauthorized_and_pending_costs_resources ... FAILED
+test host_observation_can_stop_but_only_a_human_can_release_the_wait ... FAILED
+test concurrent_branches_charge_stale_work_once_and_retry_at_zero_cost ... FAILED
+test observed_unknown_effect_parks_the_task_without_a_human_impersonation ... FAILED
+test returned_work_exhausts_budget_on_the_second_submission_without_cost_versions ... FAILED
+test unauthorized_record_can_exhaust_budget_without_authorizing_the_change ... FAILED
+test stopped_task_refuses_a_late_code_result_without_advancing_state ... FAILED
+test waiting_gate_refuses_even_unauthorized_or_stale_non_lifecycle_requests ... FAILED
+test waiting_work_that_exhausts_budget_settles_once_without_applying_work ... FAILED
+test waiting_rejects_non_lifecycle_work_for_every_identity_and_charges_it ... FAILED
+
+failures:
+
+---- agent_cannot_stop_even_with_observation_evidence stdout ----
+
+thread 'agent_cannot_stop_even_with_observation_evidence' (3483618) panicked at anchor-kernel/tests/accounting_lifecycle.rs:287:5:
+assertion `left == right` failed
+  left: 0
+ right: 1
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- approval_observation_also_obeys_the_targets_history_budget stdout ----
+
+thread 'approval_observation_also_obeys_the_targets_history_budget' (3483619) panicked at anchor-kernel/tests/accounting_lifecycle.rs:403:5:
+assertion `left == right` failed
+  left: Ok
+ right: BudgetExhausted
+
+---- every_recorded_verdict_including_unauthorized_and_pending_costs_resources stdout ----
+
+thread 'every_recorded_verdict_including_unauthorized_and_pending_costs_resources' (3483621) panicked at anchor-kernel/tests/accounting_lifecycle.rs:167:5:
+assertion `left == right` failed
+  left: 0
+ right: 14
+
+---- host_observation_can_stop_but_only_a_human_can_release_the_wait stdout ----
+
+thread 'host_observation_can_stop_but_only_a_human_can_release_the_wait' (3483622) panicked at anchor-kernel/tests/accounting_lifecycle.rs:201:5:
+assertion `left == right` failed
+  left: HumanOnly
+ right: EvidenceMissing
+
+---- concurrent_branches_charge_stale_work_once_and_retry_at_zero_cost stdout ----
+
+thread 'concurrent_branches_charge_stale_work_once_and_retry_at_zero_cost' (3483620) panicked at anchor-kernel/tests/accounting_lifecycle.rs:119:5:
+assertion `left == right` failed
+  left: 3
+ right: 7
+
+---- observed_unknown_effect_parks_the_task_without_a_human_impersonation stdout ----
+
+thread 'observed_unknown_effect_parks_the_task_without_a_human_impersonation' (3483623) panicked at anchor-kernel/tests/accounting_lifecycle.rs:253:5:
+assertion failed: kernel.submit(&principal(PrincipalKind::Code), 0, stop).unwrap().is_accepted()
+
+---- returned_work_exhausts_budget_on_the_second_submission_without_cost_versions stdout ----
+
+thread 'returned_work_exhausts_budget_on_the_second_submission_without_cost_versions' (3483624) panicked at anchor-kernel/tests/accounting_lifecycle.rs:78:5:
+assertion `left == right` failed
+  left: 0
+ right: 6
+
+---- unauthorized_record_can_exhaust_budget_without_authorizing_the_change stdout ----
+
+thread 'unauthorized_record_can_exhaust_budget_without_authorizing_the_change' (3483626) panicked at anchor-kernel/tests/accounting_lifecycle.rs:184:5:
+assertion failed: matches!(resource.phase(),
+    Some(Phase::Settled
+    { result: Outcome::Failed { reason: Reason::BudgetExhausted, .. } }))
+
+---- stopped_task_refuses_a_late_code_result_without_advancing_state stdout ----
+
+thread 'stopped_task_refuses_a_late_code_result_without_advancing_state' (3483625) panicked at anchor-kernel/tests/accounting_lifecycle.rs:374:5:
+assertion `left == right` failed
+  left: Ok
+ right: TaskWaiting
+
+---- waiting_gate_refuses_even_unauthorized_or_stale_non_lifecycle_requests stdout ----
+
+thread 'waiting_gate_refuses_even_unauthorized_or_stale_non_lifecycle_requests' (3483627) panicked at anchor-kernel/tests/accounting_lifecycle.rs:440:9:
+assertion `left == right` failed
+  left: Unauthorized
+ right: TaskWaiting
+
+---- waiting_work_that_exhausts_budget_settles_once_without_applying_work stdout ----
+
+thread 'waiting_work_that_exhausts_budget_settles_once_without_applying_work' (3483629) panicked at anchor-kernel/tests/accounting_lifecycle.rs:342:5:
+assertion `left == right` failed: waiting work is refused as TaskWaiting even when its cost settles the budget
+  left: BudgetExhausted
+ right: TaskWaiting
+
+---- waiting_rejects_non_lifecycle_work_for_every_identity_and_charges_it stdout ----
+
+thread 'waiting_rejects_non_lifecycle_work_for_every_identity_and_charges_it' (3483628) panicked at anchor-kernel/tests/accounting_lifecycle.rs:328:9:
+assertion `left == right` failed: Agent
+  left: 0
+ right: 8
+
+
+failures:
+    agent_cannot_stop_even_with_observation_evidence
+    approval_observation_also_obeys_the_targets_history_budget
+    concurrent_branches_charge_stale_work_once_and_retry_at_zero_cost
+    every_recorded_verdict_including_unauthorized_and_pending_costs_resources
+    host_observation_can_stop_but_only_a_human_can_release_the_wait
+    observed_unknown_effect_parks_the_task_without_a_human_impersonation
+    returned_work_exhausts_budget_on_the_second_submission_without_cost_versions
+    stopped_task_refuses_a_late_code_result_without_advancing_state
+    unauthorized_record_can_exhaust_budget_without_authorizing_the_change
+    waiting_gate_refuses_even_unauthorized_or_stale_non_lifecycle_requests
+    waiting_rejects_non_lifecycle_work_for_every_identity_and_charges_it
+    waiting_work_that_exhausts_budget_settles_once_without_applying_work
+
+test result: FAILED. 0 passed; 12 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p anchor-kernel --test accounting_lifecycle`
+     Running tests/storage_regressions.rs (.local/constitution-k01/before-target/debug/deps/storage_regressions-2d2b22884907c1f4)
+
+running 8 tests
+test memory_store_derives_spent_from_every_record_without_advancing_versions ... FAILED
+test store_cost_sum_saturates_instead_of_overflowing ... FAILED
+test valid_json_without_terminating_newline_is_not_a_record_and_is_trimmed_on_append ... FAILED
+test existing_complete_record_bytes_are_preserved_including_json_whitespace ... ok
+test malformed_complete_records_are_corrupt_in_middle_and_at_end ... FAILED
+test file_store_derives_spent_from_every_record_including_after_restart ... FAILED
+test torn_tail_is_removed_before_append_and_all_complete_records_remain_readable ... FAILED
+test accepted_stop_after_torn_tail_recovers_on_restart_when_state_write_is_lost ... FAILED
+
+failures:
+
+---- memory_store_derives_spent_from_every_record_without_advancing_versions stdout ----
+
+thread 'memory_store_derives_spent_from_every_record_without_advancing_versions' (3483635) panicked at anchor-kernel/tests/storage_regressions.rs:210:9:
+assertion `left == right` failed
+  left: 0
+ right: 2
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- store_cost_sum_saturates_instead_of_overflowing stdout ----
+
+thread 'store_cost_sum_saturates_instead_of_overflowing' (3483636) panicked at anchor-kernel/tests/storage_regressions.rs:240:5:
+assertion `left == right` failed
+  left: 0
+ right: 18446744073709551615
+
+---- valid_json_without_terminating_newline_is_not_a_record_and_is_trimmed_on_append stdout ----
+
+thread 'valid_json_without_terminating_newline_is_not_a_record_and_is_trimmed_on_append' (3483638) panicked at anchor-kernel/tests/storage_regressions.rs:151:5:
+assertion failed: store.history(RUN).unwrap().is_empty()
+
+---- malformed_complete_records_are_corrupt_in_middle_and_at_end stdout ----
+
+thread 'malformed_complete_records_are_corrupt_in_middle_and_at_end' (3483634) panicked at anchor-kernel/tests/storage_regressions.rs:136:13:
+assertion failed: matches!(store.history(RUN), Err(StoreError::Corrupt(_)))
+
+---- file_store_derives_spent_from_every_record_including_after_restart stdout ----
+
+thread 'file_store_derives_spent_from_every_record_including_after_restart' (3483633) panicked at anchor-kernel/tests/storage_regressions.rs:210:9:
+assertion `left == right` failed
+  left: 0
+ right: 2
+
+---- torn_tail_is_removed_before_append_and_all_complete_records_remain_readable stdout ----
+
+thread 'torn_tail_is_removed_before_append_and_all_complete_records_remain_readable' (3483637) panicked at anchor-kernel/tests/storage_regressions.rs:80:5:
+assertion `left == right` failed
+  left: [Record { stamp: Stamp { principal: Principal { id: "host", kind: Code }, cost: 2, seq: 1, knobs: "storage-regression" }, submission: Submission { target: "run/storage", seen: 0, action: Write, slot: None, content: Null, evidence: [] }, verdict: Verdict { effect: Returned, verification: NotApplicable, reason: ContentInvalid }, after: None }]
+ right: [Record { stamp: Stamp { principal: Principal { id: "host", kind: Code }, cost: 2, seq: 1, knobs: "storage-regression" }, submission: Submission { target: "run/storage", seen: 0, action: Write, slot: None, content: Null, evidence: [] }, verdict: Verdict { effect: Returned, verification: NotApplicable, reason: ContentInvalid }, after: None }, Record { stamp: Stamp { principal: Principal { id: "host", kind: Code }, cost: 3, seq: 2, knobs: "storage-regression" }, submission: Submission { target: "run/storage", seen: 0, action: Write, slot: None, content: Null, evidence: [] }, verdict: Verdict { effect: Returned, verification: NotApplicable, reason: ContentInvalid }, after: None }]
+
+---- accepted_stop_after_torn_tail_recovers_on_restart_when_state_write_is_lost stdout ----
+
+thread 'accepted_stop_after_torn_tail_recovers_on_restart_when_state_write_is_lost' (3483631) panicked at anchor-kernel/tests/storage_regressions.rs:107:5:
+assertion `left == right` failed
+  left: 0
+ right: 1
+
+
+failures:
+    accepted_stop_after_torn_tail_recovers_on_restart_when_state_write_is_lost
+    file_store_derives_spent_from_every_record_including_after_restart
+    malformed_complete_records_are_corrupt_in_middle_and_at_end
+    memory_store_derives_spent_from_every_record_without_advancing_versions
+    store_cost_sum_saturates_instead_of_overflowing
+    torn_tail_is_removed_before_append_and_all_complete_records_remain_readable
+    valid_json_without_terminating_newline_is_not_a_record_and_is_trimmed_on_append
+
+test result: FAILED. 1 passed; 7 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.21s
+
+error: test failed, to rerun pass `-p anchor-kernel --test storage_regressions`
+error: 2 targets failed:
+    `-p anchor-kernel --test accounting_lifecycle`
+    `-p anchor-kernel --test storage_regressions`

@@ -1,8 +1,8 @@
 # 宪法内核接入 Host：临时开发计划
 
-编制日期：2026-10-16。状态：**实施预检触发 C1 / 第 5 节停止条件，H1–H6 尚未实施，交回内核边界审查**。
+编制日期：2026-10-16。状态：**K0.1 限定实现与九项检查完成，单独提交待审；H1–H6 尚未开始**。
 
-预检已复现拒绝提交成本丢失、残缺历史尾行后的续写不可恢复，并确认宿主代码报告未知效果进入等待人的契约缺口。内核与现有 Host 均未修改；具体证据、建议修订及恢复实施条件见[工作记录](constitution-refactor-log.md#host-接入预检停止于内核边界)。本计划的实施授权仍有效，但不包含绕过 C1 修改内核。
+预检阻塞的修订范围已由[审查决定 D1–D5](constitution-preflight-decision.md)明确授权；实现与验收入口见[工作记录](constitution-refactor-log.md#k01内核修订与中断事实)。K0.1 审查通过后才从 H1 继续；Host 当前仍使用旧 Runner。
 
 - 分支：`constitution-core`；worktree：`/home/mansteinl/code/anchor-constitution-core`
 - 起点 commit：`7c196d8`
@@ -41,7 +41,7 @@
 
 这些是验收时会逐条检查的硬条件：
 
-- **C1 内核零业务。** `anchor-kernel` 不得依赖 `anchor-runtime`、Graph、Goose、HTTP、Session 或任何业务 crate。不得为本阶段在内核里新增特定于 Graph 或 Host 的分支。若确实需要修改内核，必须先停下，在工作记录中写明理由，等待审查。
+- **C1 内核零业务。** `anchor-kernel` 不得依赖 `anchor-runtime`、Graph、Goose、HTTP、Session 或任何业务 crate。不得为本阶段在内核里新增特定于 Graph 或 Host 的分支。K0.1 仅授权审查决定中的 D1、D2、D3、D5；其他内核改动仍须停止、记录理由并等待审查。
 - **C2 唯一改变入口。** Run 的状态只能经 `Kernel::submit` 改变。Host 中任何直接写 Run 记录的代码（`store.save`、直接改 `GraphRunRecord` 字段后保存）都必须删除或改为提交。
 - **C3 校验器不调用任何人。** `GraphValidator` 保持纯函数：不执行 I/O、不冻结产物、不调用端口。
 - **C4 停止/暂停/恢复/放弃只走内核生命周期。** 不得在调度器或执行路径中新增"检查是否请求停止"的轮询标志；停止就是一次 `Request{control:"stop"}` 提交，执行者的取消由 Host 在提交被接受后触发。
@@ -88,7 +88,7 @@
 | 旧结果 | 新处理 |
 | --- | --- |
 | `Completed` | 提交 `NodeSubmission` |
-| `Failed` | 提交结算：`Settle`，结果为失败（需要在 Graph 校验器中支持节点失败结算；**这是本阶段对校验器的唯一允许扩展**，须加差分测试或单测） |
+| `Failed` | 提交结算：`Settle`，结果为失败（Graph 校验器须支持节点失败结算并加差分测试或单测；另按审查决定 D4 允许 Code 中断事实扩展） |
 | `Cancelled` / `Suspended` / `Interrupted` | 不提交节点结果；Run 已由人的 `stop` 进入等待，执行者只需收束 |
 | `BudgetExhausted` | 由内核预算定律处理：执行者如实上报成本，内核超预算即结算 |
 | `WaitingRecovery`（未知外部效果） | Run 进入等待人（`Waiter::Human`，原因标明未知效果），人核查后 `resume` 或 `abandon` |

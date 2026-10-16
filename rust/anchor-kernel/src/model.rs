@@ -252,6 +252,7 @@ pub enum Phase {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Budget {
     pub limit: u64,
+    /// Derived from every historical stamp, independently of resource.version.
     pub spent: u64,
 }
 

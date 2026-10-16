@@ -80,6 +80,12 @@ pub enum Advance {
 #[serde(deny_unknown_fields)]
 pub struct NodeSubmission {
     pub summary: String,
+    /// A host-observed interruption, using the canonical control completion.
+    /// The executor must freeze `commit` with [`ArtifactKind::Interruption`]
+    /// without freezing the interrupted node workspace. A `CommitRef` carries
+    /// identity only; the validator does not inspect artifacts or perform I/O.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub interruption: Option<String>,
     #[serde(default)]
     pub route: Option<String>,
     #[serde(default)]
@@ -452,6 +458,11 @@ impl Validator for GraphValidator {
         if s.action != Action::Write {
             return Judgement::refused(Reason::SlotClosed);
         }
+        // Inspect the original object: explicit null still claims this host
+        // field, even though Option<String> would deserialize it as None.
+        if s.content.get("interruption").is_some() && ctx.principal.kind != PrincipalKind::Code {
+            return Judgement::refused(Reason::Unauthorized);
+        }
         // Control nodes are deterministic host code; no proposer can fake one.
         if dispatch.kind != DispatchKind::Work && ctx.principal.kind != PrincipalKind::Code {
             return Judgement::refused(Reason::Unauthorized);
@@ -472,6 +483,17 @@ impl Validator for GraphValidator {
             model_requests: content.model_requests,
             output: content.output,
         };
+        if let Some(reason) = &content.interruption {
+            // Preserve the existing RunResult control-evidence contract: an
+            // interrupted invocation cannot masquerade as a model success,
+            // and interruptions in parallel regions remain unsupported.
+            if dispatch.kind != DispatchKind::Work || dispatch.branch.is_some() {
+                return Judgement::refused(Reason::ContentInvalid);
+            }
+            if completion != interruption_completion(reason, completion.route.clone()) {
+                return Judgement::returned(Reason::ContentInvalid);
+            }
+        }
         let routes = routes_of(&record, &node_id);
         if dispatch.branch.is_some() && routes.len() != 1 {
             return Judgement::refused(Reason::RouteInvalid);
@@ -492,7 +514,11 @@ impl Validator for GraphValidator {
             &dispatch,
             completion,
             commit.clone(),
-            (content.plugin_views, content.plugin_digests),
+            (
+                content.plugin_views,
+                content.plugin_digests,
+                content.interruption,
+            ),
             &routes,
             chosen.as_ref(),
         );
@@ -577,7 +603,11 @@ fn record_result(
     dispatch: &Dispatch,
     completion: NodeCompletion,
     commit: CommitRef,
-    (plugin_views, plugin_digests): (BTreeMap<String, String>, BTreeMap<String, String>),
+    (plugin_views, plugin_digests, interruption): (
+        BTreeMap<String, String>,
+        BTreeMap<String, String>,
+        Option<String>,
+    ),
     routes: &[String],
     chosen: Option<&String>,
 ) {
@@ -599,7 +629,7 @@ fn record_result(
             plugin_views,
             plugin_digests,
             completion,
-            interruption: None,
+            interruption,
             commit,
             sequence: result_sequence,
         });
@@ -808,3 +838,6 @@ fn judge_call(mut record: GraphRunRecord, dispatch: &Dispatch, s: &Submission) -
 
 #[cfg(test)]
 mod differential;
+
+#[cfg(test)]
+mod interruption_tests;

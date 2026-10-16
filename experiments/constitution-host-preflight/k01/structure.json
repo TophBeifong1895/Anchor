@@ -1,0 +1,10 @@
+{
+  "source_base": "0b71475",
+  "differential_only_change": "NodeSubmission initializer: interruption: None; no changed assertions, seeds or case counts",
+  "unchanged_files": [
+    "rust/anchor-kernel/Cargo.toml",
+    "rust/anchor-kernel/tests/constitution.rs",
+    "rust/Cargo.lock"
+  ],
+  "model_only_change": "Budget.spent documentation; no Record/Phase/Waiter layout change"
+}

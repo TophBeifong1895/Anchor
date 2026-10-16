@@ -1,4 +1,4 @@
-//! Observations of the current public API, not feature acceptance tests.
+//! K0.1 regression of the public API counterexamples, without Host execution.
 
 use std::collections::BTreeMap;
 use std::error::Error;
@@ -7,7 +7,8 @@ use std::io::Write;
 use std::sync::Arc;
 
 use anchor_kernel::{
-    Action, Authority, FileStore, Kernel, MemoryStore, Principal, PrincipalKind, Submission,
+    Action, Authority, FileStore, Kernel, MemoryStore, Phase, Principal, PrincipalKind, Reason,
+    Submission, Waiter,
 };
 use anchor_runtime::graph::validator::{
     GRAPH_VALIDATOR, GraphValidator, NodeSubmission, run_resource,
@@ -75,14 +76,35 @@ fn unknown_effect_wait() -> ProbeResult<Value> {
             "reason": "unknown external effect; human observation required"
         })),
     )?;
+    assert_eq!(verdict.reason, Reason::EvidenceMissing);
+    let observed_stop = kernel.submit(
+        &code,
+        0,
+        Submission::new("run/unknown", 0, Action::Request)
+            .content(json!({
+                "control": "stop",
+                "reason": "unknown external effect; human observation required"
+            }))
+            .evidence(anchor_kernel::Evidence::Observation {
+                id: "effect/unknown".into(),
+            }),
+    )?;
+    assert!(observed_stop.is_accepted());
     let resource = kernel.load("run/unknown")?.ok_or("Run missing")?;
+    assert!(matches!(
+        resource.phase(),
+        Some(Phase::Waiting {
+            waiter: Waiter::Human { .. }
+        })
+    ));
     Ok(json!({
         "id": "code_unknown_effect_wait",
-        "blocking": true,
+        "blocking": false,
         "plan_requirement": "2.2/2.3: host-observed unknown effects put the Run in Waiter::Human using the kernel lifecycle, with the actual Code identity (C4/C5).",
         "observed": {
             "principal": code,
-            "verdict": verdict,
+            "without_observation": verdict,
+            "with_observation": observed_stop,
             "phase": resource.phase(),
             "open_slots": kernel.open("run/unknown")?
         },
@@ -110,9 +132,17 @@ fn returned_cost() -> ProbeResult<Value> {
         );
     }
     let resource = kernel.load("run/budget")?.ok_or("Run missing")?;
+    assert_eq!(verdicts[0].reason, Reason::ContentInvalid);
+    assert_eq!(verdicts[1].reason, Reason::BudgetExhausted);
+    assert_eq!(verdicts[2].reason, Reason::TaskSettled);
+    assert_eq!(
+        resource.task.as_ref().ok_or("Task missing")?.budget.spent,
+        18
+    );
+    assert!(resource.is_settled());
     Ok(json!({
         "id": "returned_submission_cost",
-        "blocking": true,
+        "blocking": false,
         "plan_requirement": "Constitution 2.5/6.1 and integration 2.2: refused or returned work still costs resources; exceeding the finite budget settles the task.",
         "observed": {
             "reported_cost": 18,
@@ -157,9 +187,12 @@ fn history_after_torn_tail() -> ProbeResult<Value> {
     fs::write(&resource_path, before_state_write)?;
     let restarted = file_kernel(fixture.path())?;
     let after_restart = restarted.load("run/torn")?.ok_or("Run missing")?;
+    assert_eq!(history_after_stop, 1);
+    assert_eq!(after_restart.version, before_restart.version);
+    assert_eq!(after_restart.phase(), before_restart.phase());
     Ok(json!({
-        "id": "torn_tail_hides_future_history",
-        "blocking": true,
+        "id": "torn_tail_recovers_future_history",
+        "blocking": false,
         "plan_requirement": "Constitution 2 and H1/2.1: accepted facts remain readable; a durable record restores a lost state write after restart without replay.",
         "observed": {
             "stop_verdict": verdict,
@@ -197,6 +230,7 @@ fn late_code_completion() -> ProbeResult<Value> {
     let open_after_stop = kernel.open("run/late")?;
     let completion = NodeSubmission {
         summary: "fixture result".into(),
+        interruption: None,
         route: None,
         output: json!({}),
         model_requests: 0,
@@ -216,6 +250,9 @@ fn late_code_completion() -> ProbeResult<Value> {
             .content(serde_json::to_value(completion)?),
     )?;
     let resource = kernel.load("run/late")?.ok_or("Run missing")?;
+    assert_eq!(verdict.reason, Reason::TaskWaiting);
+    assert!(matches!(resource.phase(), Some(Phase::Waiting { .. })));
+    assert_eq!(resource.version, 1);
     Ok(json!({
         "id": "late_code_completion_after_stop",
         "blocking": false,
@@ -226,14 +263,14 @@ fn late_code_completion() -> ProbeResult<Value> {
             "late_result_verdict": verdict,
             "phase_after_late_result": resource.phase()
         },
-        "host_mitigation": "The scheduler can discard a cancelled executor's late result. This observation alone is not classified as a required kernel change."
+        "kernel_rule": "D5: waiting tasks refuse non-lifecycle submissions for every principal; no scheduler convention is required."
     }))
 }
 
 fn main() -> ProbeResult<()> {
     let evidence = json!({
-        "status": "preflight_blocked",
-        "kind": "public_api_observation",
+        "status": "k01_regression_passed",
+        "kind": "public_api_regression",
         "feature_acceptance": "not_run",
         "real_provider": "not_used",
         "scope": "Existing Kernel + GraphValidator; one-node Op fixture; no executor or external side effect runs.",

@@ -1,0 +1,65 @@
+[
+  {
+    "command": [
+      "cargo",
+      "clippy",
+      "--manifest-path",
+      "rust/Cargo.toml",
+      "-p",
+      "anchor-kernel",
+      "-p",
+      "anchor-runtime",
+      "-p",
+      "anchor-runner-host",
+      "-p",
+      "anchor-graph-host",
+      "--all-targets",
+      "--locked",
+      "--",
+      "-D",
+      "warnings"
+    ],
+    "exit_code": 0,
+    "raw_log": ".local/constitution-k01/check-k01-0.log"
+  },
+  {
+    "command": [
+      "cargo",
+      "fmt",
+      "--manifest-path",
+      "rust/Cargo.toml",
+      "--all",
+      "--",
+      "--check"
+    ],
+    "exit_code": 0,
+    "raw_log": ".local/constitution-k01/check-k01-1.log"
+  },
+  {
+    "command": [
+      "cargo",
+      "fmt",
+      "--manifest-path",
+      "experiments/constitution-host-preflight/Cargo.toml",
+      "--check"
+    ],
+    "exit_code": 0,
+    "raw_log": ".local/constitution-k01/check-k01-2.log"
+  },
+  {
+    "command": [
+      "cargo",
+      "clippy",
+      "--offline",
+      "--locked",
+      "--manifest-path",
+      "experiments/constitution-host-preflight/Cargo.toml",
+      "--all-targets",
+      "--",
+      "-D",
+      "warnings"
+    ],
+    "exit_code": 0,
+    "raw_log": ".local/constitution-k01/check-k01-3.log"
+  }
+]

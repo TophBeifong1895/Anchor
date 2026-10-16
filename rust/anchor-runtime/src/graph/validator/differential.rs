@@ -585,6 +585,7 @@ fn run_new(record: GraphRunRecord, seed: u64) -> NewRun {
             } else {
                 serde_json::to_value(NodeSubmission {
                     summary: format!("{node} #{}", dispatch.invocation),
+                    interruption: None,
                     route,
                     output: serde_json::json!({"node": node, "invocation": dispatch.invocation}),
                     model_requests: 1,

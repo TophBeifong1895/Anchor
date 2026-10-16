@@ -129,6 +129,8 @@ impl<S: Store> Kernel<S> {
 
     /// The single entry point for change. `cost` is a host observation: what
     /// the proposer spent since its previous submission to this target.
+    /// Every recorded verdict is charged. Retrying the same work after a
+    /// stale-version verdict reports zero new cost.
     pub fn submit(
         &self,
         principal: &Principal,
@@ -179,6 +181,23 @@ impl<S: Store> Kernel<S> {
             ));
         };
         let validator_id = resource.validator.clone();
+        let waiting_work =
+            matches!(resource.phase(), Some(Phase::Waiting { .. })) && !is_lifecycle(submission);
+        // Costs belong to history, not the accepted-state version. The store
+        // derives spent from all previous records; include this record before
+        // any verdict, including authority, waiting and stale refusals.
+        if charge(&mut resource, stamp.cost) {
+            return Ok((
+                Verdict::refused(if waiting_work {
+                    Reason::TaskWaiting
+                } else {
+                    Reason::BudgetExhausted
+                }),
+                validator_id,
+                Some(resource),
+                Vec::new(),
+            ));
+        }
         let refuse = |reason| {
             Ok((
                 Verdict::refused(reason),
@@ -188,6 +207,12 @@ impl<S: Store> Kernel<S> {
             ))
         };
 
+        // No principal can bypass the waiting gate, including one without
+        // authority. Budget exhaustion above still settles the task, while
+        // its late work is refused as TaskWaiting and never applied.
+        if waiting_work {
+            return refuse(Reason::TaskWaiting);
+        }
         // Authority only descends; the submission cannot widen it.
         if !self
             .authority
@@ -195,31 +220,15 @@ impl<S: Store> Kernel<S> {
         {
             return refuse(Reason::Unauthorized);
         }
-        // Law 3: a settled task never changes; a waiting one is not the
-        // proposer's to move, only people's and host code's.
-        if let Some(task) = &mut resource.task {
+        // Law 3: settled outcomes never change. Waiting tasks accept only
+        // lifecycle requests, never late work, regardless of its principal.
+        if let Some(task) = &resource.task {
             match &task.phase {
                 Phase::Settled { .. } => return refuse(Reason::TaskSettled),
                 Phase::Waiting { .. } if principal.kind == PrincipalKind::Agent => {
                     return refuse(Reason::TaskWaiting);
                 }
                 _ => {}
-            }
-            task.budget.spent = task.budget.spent.saturating_add(stamp.cost);
-            if task.budget.spent > task.budget.limit {
-                task.phase = Phase::Settled {
-                    result: Outcome::Failed {
-                        reason: Reason::BudgetExhausted,
-                        detail: format!("spent {} of {}", task.budget.spent, task.budget.limit),
-                    },
-                };
-                resource.version += 1;
-                return Ok((
-                    Verdict::refused(Reason::BudgetExhausted),
-                    validator_id,
-                    Some(resource),
-                    Vec::new(),
-                ));
             }
         }
         if submission.seen != resource.version {
@@ -237,7 +246,13 @@ impl<S: Store> Kernel<S> {
             && let Some(control) = submission.content.get("control").and_then(Value::as_str)
         {
             return Ok(
-                match task_control(&mut resource, principal, control, &submission.content) {
+                match task_control(
+                    &mut resource,
+                    principal,
+                    control,
+                    &submission.content,
+                    &submission.evidence,
+                ) {
                     Ok(()) => {
                         resource.version += 1;
                         (
@@ -356,26 +371,41 @@ impl<S: Store> Kernel<S> {
                     Vec::new(),
                 ));
             }
-            target.version += 1;
-            if !proposal["state"].is_null() {
-                target.state = proposal["state"].clone();
-            }
-            if let (Some(task), Ok(phase)) = (
-                &mut target.task,
-                serde_json::from_value::<Phase>(proposal["phase"].clone()),
-            ) {
-                task.phase = phase;
-            }
+            // The observation written to the target's history is charged too.
+            let exhausted = charge(&mut target, stamp.cost);
+            let target_verdict = if exhausted {
+                Verdict::refused(Reason::BudgetExhausted)
+            } else {
+                target.version += 1;
+                if !proposal["state"].is_null() {
+                    target.state = proposal["state"].clone();
+                }
+                if let (Some(task), Ok(phase)) = (
+                    &mut target.task,
+                    serde_json::from_value::<Phase>(proposal["phase"].clone()),
+                ) {
+                    task.phase = phase;
+                }
+                judgement.verdict
+            };
             self.store.commit(
                 &target_id,
                 &Record {
                     stamp: stamp.clone(),
                     submission: Submission::new(&target_id, target.version - 1, Action::Write)
                         .content(json!({"approved": pending.id})),
-                    verdict: judgement.verdict,
+                    verdict: target_verdict,
                     after: Some(target),
                 },
             )?;
+            if exhausted {
+                return Ok((
+                    target_verdict,
+                    HUMAN_DECISION.into(),
+                    Some(pending),
+                    Vec::new(),
+                ));
+            }
         }
         Ok((
             judgement.verdict,
@@ -422,7 +452,35 @@ impl<S: Store> Kernel<S> {
 // Task lifecycle: the whole of it
 // ---------------------------------------------------------------------------
 
-/// - `stop`: a person parks the task; it waits on a person.
+/// Cost is a projection of history. Only crossing the budget settles a live
+/// task and advances its accepted-state version; charging alone never does.
+fn charge(resource: &mut Resource, cost: u64) -> bool {
+    let Some(task) = &mut resource.task else {
+        return false;
+    };
+    task.budget.spent = task.budget.spent.saturating_add(cost);
+    if matches!(task.phase, Phase::Settled { .. }) || task.budget.spent <= task.budget.limit {
+        return false;
+    }
+    task.phase = Phase::Settled {
+        result: Outcome::Failed {
+            reason: Reason::BudgetExhausted,
+            detail: format!("spent {} of {}", task.budget.spent, task.budget.limit),
+        },
+    };
+    resource.version += 1;
+    true
+}
+
+fn is_lifecycle(submission: &Submission) -> bool {
+    submission.action == Action::Request
+        && matches!(
+            submission.content.get("control").and_then(Value::as_str),
+            Some("stop" | "resume" | "abandon")
+        )
+}
+
+/// - `stop`: a person or an evidenced host observation parks the task for a person.
 /// - `resume`: whoever the task waits on releases it — a person for a person,
 ///   host code for a child task or an observed effect.
 /// - `abandon`: a person settles it as aborted.
@@ -434,6 +492,7 @@ fn task_control(
     principal: &Principal,
     control: &str,
     content: &Value,
+    evidence: &[Evidence],
 ) -> Result<(), Verdict> {
     let task = resource.task.as_mut().expect("task resource");
     let detail = content
@@ -443,8 +502,17 @@ fn task_control(
         .to_owned();
     match control {
         "stop" => {
-            if principal.kind != PrincipalKind::Human {
-                return Err(Verdict::refused(Reason::HumanOnly));
+            match principal.kind {
+                PrincipalKind::Human => {}
+                PrincipalKind::Code => {
+                    if !evidence
+                        .iter()
+                        .any(|e| matches!(e, Evidence::Observation { .. }))
+                    {
+                        return Err(Verdict::refused(Reason::EvidenceMissing));
+                    }
+                }
+                PrincipalKind::Agent => return Err(Verdict::refused(Reason::HumanOnly)),
             }
             task.phase = Phase::Waiting {
                 waiter: Waiter::Human { reason: detail },

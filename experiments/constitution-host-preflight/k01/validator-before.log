@@ -1,0 +1,43 @@
+   Compiling anchor-runtime v0.1.0 (/home/mansteinl/code/anchor-constitution-core/rust/anchor-runtime)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.11s
+     Running unittests src/lib.rs (target/debug/deps/anchor_runtime-c4d8e009b3cec2c8)
+
+running 5 tests
+
+thread 'graph::validator::interruption_tests::interrupted_completion_requires_a_valid_route_before_acceptance' (3403952) panicked at anchor-runtime/src/graph/validator/interruption_tests.rs:143:9:
+assertion `left == right` failed
+  left: ContentInvalid
+ right: RouteInvalid
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+thread 'graph::validator::interruption_tests::only_host_code_can_submit_an_interruption_field_including_null' (3403954) panicked at anchor-runtime/src/graph/validator/interruption_tests.rs:86:13:
+assertion `left == right` failed
+  left: Returned
+ right: Refused
+
+thread 'graph::validator::interruption_tests::host_interruption_records_control_completion_and_takes_the_ordinary_route' (3403950) panicked at anchor-runtime/src/graph/validator/interruption_tests.rs:97:5:
+assertion `left == right` failed
+  left: Returned
+ right: Accepted
+test graph::validator::interruption_tests::interrupted_completion_requires_a_valid_route_before_acceptance ... FAILED
+test graph::validator::interruption_tests::only_host_code_can_submit_an_interruption_field_including_null ... FAILED
+test graph::validator::interruption_tests::host_interruption_records_control_completion_and_takes_the_ordinary_route ... FAILED
+test graph::validator::interruption_tests::interrupted_completion_cannot_claim_a_successful_model_result ... ok
+
+thread 'graph::validator::interruption_tests::interruptions_preserve_the_existing_parallel_region_boundary' (3403953) panicked at anchor-runtime/src/graph/validator/interruption_tests.rs:181:5:
+assertion `left == right` failed
+  left: Returned
+ right: Refused
+test graph::validator::interruption_tests::interruptions_preserve_the_existing_parallel_region_boundary ... FAILED
+
+failures:
+
+failures:
+    graph::validator::interruption_tests::host_interruption_records_control_completion_and_takes_the_ordinary_route
+    graph::validator::interruption_tests::interrupted_completion_requires_a_valid_route_before_acceptance
+    graph::validator::interruption_tests::interruptions_preserve_the_existing_parallel_region_boundary
+    graph::validator::interruption_tests::only_host_code_can_submit_an_interruption_field_including_null
+
+test result: FAILED. 1 passed; 4 failed; 0 ignored; 0 measured; 122 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p anchor-runtime --lib`

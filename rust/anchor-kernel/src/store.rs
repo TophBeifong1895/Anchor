@@ -3,7 +3,7 @@
 
 use std::collections::BTreeMap;
 use std::fs::{self, File, OpenOptions};
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
@@ -25,13 +25,16 @@ pub enum StoreError {
 
 pub trait Store: Send + Sync {
     /// The current resource, including any accepted change whose state write
-    /// was interrupted after its record was appended.
+    /// was interrupted after its record was appended. A task's spent budget
+    /// is derived from every record's cost, independently of resource versions.
     fn load(&self, id: &str) -> Result<Option<Resource>, StoreError>;
     /// Create a resource. Fails if it exists: creation is never a silent
     /// overwrite.
     fn create(&self, resource: &Resource) -> Result<(), StoreError>;
     /// Append `record` to the history of `id`, then, if it was accepted, save
-    /// `record.after` as the current state. The record is durable first.
+    /// `record.after` as the current state. The record is durable first. Only
+    /// newline-complete records are history; an incomplete tail is discarded
+    /// before appending. The caller holds the kernel's writer lock.
     fn commit(&self, id: &str, record: &Record) -> Result<(), StoreError>;
     fn history(&self, id: &str) -> Result<Vec<Record>, StoreError>;
     /// Ids starting with `prefix`, in order.
@@ -52,7 +55,11 @@ impl Store for MemoryStore {
             .lock()
             .expect("store lock")
             .get(id)
-            .map(|(r, _)| r.clone()))
+            .map(|(resource, history)| {
+                let mut resource = resource.clone();
+                derive_spent(&mut resource, history);
+                resource
+            }))
     }
 
     fn create(&self, resource: &Resource) -> Result<(), StoreError> {
@@ -95,6 +102,15 @@ impl Store for MemoryStore {
             .take_while(|(k, _)| k.starts_with(prefix))
             .map(|(k, _)| k.clone())
             .collect())
+    }
+}
+
+/// Costs are facts in the history even when a submission changes no version.
+fn derive_spent(resource: &mut Resource, history: &[Record]) {
+    if let Some(task) = &mut resource.task {
+        task.budget.spent = history.iter().fold(0_u64, |spent, record| {
+            spent.saturating_add(record.stamp.cost())
+        });
     }
 }
 
@@ -154,6 +170,32 @@ fn read_resource(path: &Path) -> Result<Resource, StoreError> {
     serde_json::from_slice(&bytes).map_err(|e| StoreError::Corrupt(e.to_string()))
 }
 
+/// A crash can leave bytes that never formed a record. Locate the last
+/// newline from the end without rewriting any existing complete records.
+fn trim_incomplete_tail(file: &mut File) -> Result<(), std::io::Error> {
+    let original_len = file.metadata()?.len();
+    let mut end = original_len;
+    let mut chunk = [0_u8; 8192];
+    while end > 0 {
+        let start = end.saturating_sub(chunk.len() as u64);
+        let len = (end - start) as usize;
+        file.seek(SeekFrom::Start(start))?;
+        file.read_exact(&mut chunk[..len])?;
+        if let Some(newline) = chunk[..len].iter().rposition(|byte| *byte == b'\n') {
+            let complete_len = start + newline as u64 + 1;
+            if complete_len != original_len {
+                file.set_len(complete_len)?;
+            }
+            return Ok(());
+        }
+        end = start;
+    }
+    if original_len > 0 {
+        file.set_len(0)?;
+    }
+    Ok(())
+}
+
 impl Store for FileStore {
     fn load(&self, id: &str) -> Result<Option<Resource>, StoreError> {
         let dir = self.dir(id)?;
@@ -162,13 +204,15 @@ impl Store for FileStore {
             return Ok(None);
         }
         let mut resource = read_resource(&path)?;
+        let history = self.history(id)?;
         // Crash window: the record was appended but the state not yet saved.
         // The record carries the resulting resource, so recovery is a read.
-        if let Some(after) = self.history(id)?.into_iter().rev().find_map(|r| r.after)
+        if let Some(after) = history.iter().rev().find_map(|r| r.after.as_ref())
             && after.version > resource.version
         {
-            resource = after;
+            resource = after.clone();
         }
+        derive_spent(&mut resource, &history);
         Ok(Some(resource))
     }
 
@@ -195,8 +239,10 @@ impl Store for FileStore {
         line.push(b'\n');
         let mut history = OpenOptions::new()
             .create(true)
+            .read(true)
             .append(true)
             .open(dir.join("history.jsonl"))?;
+        trim_incomplete_tail(&mut history)?;
         history.write_all(&line)?;
         history.sync_all()?;
         if let Some(after) = &record.after {
@@ -213,16 +259,23 @@ impl Store for FileStore {
             return Ok(Vec::new());
         }
         let mut records = Vec::new();
-        for line in BufReader::new(File::open(path)?).lines() {
-            let line = line?;
-            if line.is_empty() {
-                continue;
+        let mut reader = BufReader::new(File::open(&path)?);
+        let mut line = Vec::new();
+        while reader.read_until(b'\n', &mut line)? > 0 {
+            // Even valid JSON without its final newline was never a complete
+            // record. Only this unterminated tail may be ignored.
+            if line.last() != Some(&b'\n') {
+                break;
             }
-            // A torn final line from a crash mid-append is not a record.
-            match serde_json::from_str(&line) {
-                Ok(record) => records.push(record),
-                Err(_) => break,
-            }
+            let record = serde_json::from_slice(&line).map_err(|error| {
+                StoreError::Corrupt(format!(
+                    "{}: line {}: {error}",
+                    path.display(),
+                    records.len() + 1
+                ))
+            })?;
+            records.push(record);
+            line.clear();
         }
         Ok(records)
     }

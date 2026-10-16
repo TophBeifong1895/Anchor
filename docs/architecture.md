@@ -20,7 +20,7 @@ Artifact、节点历史、工作区、Run / Session / Turn 事实
 
 | 模块 | 职责与事实 |
 | --- | --- |
-| [anchor-kernel](../rust/anchor-kernel) | 独立提交/裁决/任务生命周期内核；GraphValidator 已有差分验证，尚未接入 Host。接入预检的内核阻塞见[工作记录](constitution-refactor-log.md#host-接入预检停止于内核边界)，当前执行仍走下列 Runner |
+| [anchor-kernel](../rust/anchor-kernel) | 独立提交/裁决/任务生命周期内核；成本从全部裁决历史派生，等待中只接受生命周期控制，Code 凭观察可停止但不能释放人的等待。K0.1 与 Graph 中断事实见[工作记录](constitution-refactor-log.md#k01内核修订与中断事实)；尚未接入 Host，当前执行仍走下列 Runner |
 | [anchor-runtime](../rust/anchor-runtime) | Graph 编译、IR、Runner、RunStore 和节点执行端口；不依赖 HTTP 或具体业务 |
 | [anchor-runner-host](../rust/anchor-runner-host) | API/应用接纳、共享 Runner、Goose 接入、Artifact、渠道协调、调度和控制 |
 | [anchor-graph-host](../rust/anchor-graph-host) | bundle 读取、资源绑定、独立 Graph Call 和恢复关联 |

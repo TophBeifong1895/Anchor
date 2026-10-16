@@ -1,0 +1,36 @@
+{
+  "source_base": "0b71475",
+  "command": [
+    "cargo",
+    "test",
+    "--manifest-path",
+    "rust/Cargo.toml",
+    "-p",
+    "anchor-kernel",
+    "-p",
+    "anchor-runtime",
+    "-p",
+    "anchor-runner-host",
+    "-p",
+    "anchor-graph-host",
+    "--all-targets",
+    "--locked",
+    "--no-fail-fast"
+  ],
+  "exit_code": 0,
+  "passed": 1285,
+  "failed": 0,
+  "ignored": 112,
+  "targets": 45,
+  "raw_log": ".local/constitution-k01/all-targets-k01.log",
+  "source_sha256": {
+    "rust/anchor-kernel/src/kernel.rs": "5148d6a1e7ee644e9573a11e19176d1efd4c6bdfa610b33a2e92add4a3779b9e",
+    "rust/anchor-kernel/src/model.rs": "85a0f0c0378fba8f515df657f624afdc11e352b0683b76799232bd981120c04b",
+    "rust/anchor-kernel/src/store.rs": "92be8b5d2f2b01f2a914d5f29dbb4224c1a21e26cd49242f906628b9294b731b",
+    "rust/anchor-kernel/tests/accounting_lifecycle.rs": "f4877ef54872a6580e67e1db90ffc7c2fd0d1f045c54f7763328eb5486eff2b3",
+    "rust/anchor-kernel/tests/storage_regressions.rs": "436805a6b6179def0c2d9c3fd3096288c41304f1ccc58bf7740bb8a3ccaf1aca",
+    "rust/anchor-runtime/src/graph/validator.rs": "ec51dc6f33f1b21659fa145640621df2b998260a3d1ba42851b36fe391b0d35e",
+    "rust/anchor-runtime/src/graph/validator/differential.rs": "85fde1e80b7a6141d55773c30bea05df4cf1dde6c35cb88ccedb4fa629474f55",
+    "rust/anchor-runtime/src/graph/validator/interruption_tests.rs": "d6f0b730c8ae206a009a92fc343c0bcfd6a72f9f318c48a7e1da2b81028072e8"
+  }
+}
