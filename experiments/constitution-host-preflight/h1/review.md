@@ -29,6 +29,14 @@ git diff --check
 
 原有 K0.1 默认运行入口通过 `default-run` 保留。没有新增依赖、修改锁文件或删除测试。四 crate 全量回归、固定 Goose、真实 Provider、Web、部署均未执行；生产代码未修改，不重复 K0.1 全量验证。
 
+## 对事实所有者的补充核查
+
+执行开始与完成并非必须新增到 GraphValidator：[HostNodes::start/complete](../../../rust/anchor-runner-host/src/node_host/facts.rs) 已保存 invocation 的 durable started/completed 事实；[Goose completion_fact](../../../rust/anchor-runner-host/src/goose_acp.rs) 也能从既有执行记录返回 Completed、Resumable、Uncertain。新调度器可从开放空位导出稳定 InvocationKey，再查询执行者事实。这提供了 H2 迁移方向，进一步说明不能把旧 cursor 快照写入当作 H1 必需的新内核能力。
+
+另需收窄恢复入口的解释：[标准 Host 的 record_recovery_decision](../../../rust/anchor-runner-host/src/node_host/execution.rs) 当前直接返回 `legacy Agent recovery is disabled in the standard Goose Host`。因此 application/recovery 中后续 Run 保存是待清理的旧路径，不能据其存在声称标准 Goose 的恢复成功路径需要新增 Graph 决定提交。该代码归属盘点不改变已经复现的 H1/H2 阶段依赖，也不要求修改内核。
+
+本补充为只读源码核查，未执行 Goose 或 Host 场景。仍需在获准调整切分后实现并验证 H2 的执行者事实恢复，而不是用当前探针推断其已正确。
+
 ## 建议交回决定
 
 建议明确调整阶段验收边界：H1 先完成旧格式具名拒绝、兼容分支删除及新存储门面；H2 切换生产调度器和执行者并移除其直接写入；H3 迁移生命周期与恢复后验收 C2 零直接写入。各阶段仍单独提交、编译和测试，C1/C3–C6 不变，最终 C2 不放宽。中间态不得将旧状态写入包装成内核已裁决事实，也不得双写作为两份 Run 权威。
