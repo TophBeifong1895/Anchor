@@ -143,6 +143,12 @@ S1、S2 在差分测试中被显式映射（S2：旧 `Stopped` 且存在停止�
 
 在 `d0f9b61` 上复现成本丢失、残缺尾行后接受记录不可恢复及 Code 无法进入等待人，按 C1 停止；原始观察与结构基线保留在[预检产物](../experiments/constitution-host-preflight/review.md)。审查随后将迟到 Code 结果从“不阻塞”改为 D5 必修；现由上述 K0.1 覆盖，旧建议不再作为实施依据。
 
+## H1：存储接入边界预检（未完成）
+
+K0.1 验收结论不变。H1 盘点发现：要求本阶段清零直接保存，与 H2 才替换 Runner、H3 才迁移生命周期/恢复存在依赖。旧 Runner 派发前保存 cursor 与启动计数，恢复入口保存 recovery_submissions 与剩余恢复项；现有 GraphValidator 只接受开放空位上的结果/调用事实，不能机械接管整份状态保存。公开 API + FileStore 探针确认整份 Run 快照和 started 内容均被 ContentInvalid 打回，Graph 状态与版本不变，历史记录完整。
+
+按计划停止条件交回阶段切分讨论；未修改生产代码、内核或校验器，未删除测试、未产生新的 S 编号。建议 H1 先清理兼容并准备存储门面，执行者/调度器与生命周期写入分别随 H2/H3 迁移，C2 零直接写入在 H3 完成时验收；另一选择是合并 H1–H3 为可运行切片。实际执行的探针、Clippy、格式检查和保留边界见 [H1 预检证据](../experiments/constitution-host-preflight/h1/review.md)。阶段边界未经决定前，H1 不标记完成。
+
 ## 尚未完成
 
 - 并行分支内的模块作用域。
