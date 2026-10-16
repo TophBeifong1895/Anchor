@@ -18,6 +18,8 @@ Rust Host 使用 RMCP 读取 MCP server 的真实工具清单和 schema，并通
 
 stdio server 在现有 Bubblewrap 节点边界中运行，Plugin 挂载只读；HTTP MCP 要求节点 `network:true`，凭证与 headers 由声明在绑定时展开。模型不能提供新的 host path、服务凭证或授权。节点完成使用受限 `final_result`，其路由与工具结果由宿主校验，不把普通文本当作成功完成。
 
+远程 HTTPS MCP 由 `anchor-mcp-host` 显式启用 RMCP 的 TLS 支持，使用系统信任证书并验证服务域名；不可信证书和域名不匹配均拒绝连接。能建立 HTTPS 连接不代表凭据有效，服务返回 401 时仍需修正该插件的凭据。
+
 当前兼容根清单、Skill/资源读取、只读挂载和 MCP；来源中的 `hooks`、`commands`、`agents` 不作为额外执行入口。当前产品不依赖旧 Tool Search、CodeMode 或另一套 Agent loop。
 
 ## 发现与读取
@@ -34,7 +36,7 @@ Pilot 与 AgentNode 共用 `PluginDisclosureCatalog` 和 `ToolDisclosure`。`anc
 
 ## 安装与更新
 
-安装没有 HTTP 入口：Plugin 只能由管家走 `plugin_install` 的人工确认流程安装（见 [开发与交付](pilot-development.md#候选准备测试与交付)）；插件页只读，不提供安装表单。操作员 CLI（`anchor-library --root <Library> install --directory <候选目录> --id <id>`）**拒绝**安装声明了运行期依赖的插件——它没有求解依赖、落地视图的宿主能力，装了也起不来；`--review` 仍可完整查看该候选。Plugin 自己声明运行期依赖时，宿主在安装时按部署授权的来源求解并落地到共享存储，再为该插件版本生成视图；求解或取包失败就不装，并把工具原文报给人。声明写在清单顶层：`"dependencies": {"python": ["idna==3.6"]}`（清单顶层字段是**封闭白名单**：`name`/`description`/`version`/`author`/`homepage`/`repository`/`license`/`keywords`/`interface`/`skills`/`mcpServers`/`dependencies`/`network`/`mutable`/`hooks`/`commands`/`agents`/`apps`，其他键一律拒绝；这是有意的，宁可让作者发现问题，也不要静默忽略一个拼错的字段），要用视图的解释器就把 server 的 `command` 写成 `${ANCHOR_PLUGIN_VIEW}/bin/python`。插件自己的可变数据用顶层 `"mutable": ["data/", "cache.db"]` 声明（相对插件目录、不含 `..`、不能覆盖 `plugin.json`、`.mcp.json` 或外置 MCP 声明文件；末尾 `/` 表示子树）：这些路径是插件进程**唯一**可写的地方，平台从不读、不复制、不覆盖它们，代码摘要与插件包清单也不包含它们——同一份代码无论数据长到多大，摘要都不变。插件只有一份（`plugins/<id>/`），Graph 包只写 `{"id": …}` 引用：升级插件不需要改包，正在运行的 Run 从**下一次节点调用**起用新代码，已完成步骤不回滚、不重放，它实际用过的视图记进 Run 记录作为观察。OAuth 从 Plugin 面板显式授权，owner-bound token 保存在操作员 Library，凭证不进入 Graph 包。授权、刷新与 MCP 连接有确定性本地测试；真实 provider 和回调部署需独立验收，不能声明所有社区 server 兼容。
+插件库页面支持从 GitHub tree URL 或本地插件目录预检、安装与更新；确认使用同一个应用安装前置条件和 Library 发布锁，Pilot 的 `plugin_install` 保留原生确认入口（见 [开发与交付](pilot-development.md#候选准备测试与交付)）。本地导入只接受普通文件列表，最多 2048 个文件、解码后合计 32 MiB；联网获取源码或依赖需要明确授权。卸载展示会话/未结束 Run 的阻止原因及 Graph 影响，并确认删除插件自身数据。操作员 CLI（`anchor-library --root <Library> install --directory <候选目录> --id <id>`）**拒绝**安装声明了运行期依赖的插件——它没有求解依赖、落地视图的宿主能力，装了也起不来；`--review` 仍可完整查看该候选。Plugin 自己声明运行期依赖时，宿主在安装时按部署授权的来源求解并落地到共享存储，再为该插件版本生成视图；求解或取包失败就不装，并把工具原文报给人。声明写在清单顶层：`"dependencies": {"python": ["idna==3.6"]}`（清单顶层字段是**封闭白名单**：`name`/`description`/`version`/`author`/`homepage`/`repository`/`license`/`keywords`/`interface`/`skills`/`mcpServers`/`dependencies`/`network`/`mutable`/`hooks`/`commands`/`agents`/`apps`，其他键一律拒绝；这是有意的，宁可让作者发现问题，也不要静默忽略一个拼错的字段），要用视图的解释器就把 server 的 `command` 写成 `${ANCHOR_PLUGIN_VIEW}/bin/python`。插件自己的可变数据用顶层 `"mutable": ["data/", "cache.db"]` 声明（相对插件目录、不含 `..`、不能覆盖 `plugin.json`、`.mcp.json` 或外置 MCP 声明文件；末尾 `/` 表示子树）：这些路径是插件进程**唯一**可写的地方，平台从不读、不复制、不覆盖它们，代码摘要与插件包清单也不包含它们——同一份代码无论数据长到多大，摘要都不变。插件只有一份（`plugins/<id>/`），Graph 包只写 `{"id": …}` 引用：升级插件不需要改包，正在运行的 Run 从**下一次节点调用**起用新代码，已完成步骤不回滚、不重放，它实际用过的视图记进 Run 记录作为观察。OAuth 从 Plugin 面板显式授权，owner-bound token 保存在操作员 Library，凭证不进入 Graph 包。授权、刷新与 MCP 连接有确定性本地测试；真实 provider 和回调部署需独立验收，不能声明所有社区 server 兼容。
 
 ## Pilot 任务联网
 
@@ -64,10 +66,17 @@ Bot 长连接凭证与应用 API 凭证分开配置；普通助手 Graph 按成�
 
 Pilot、Graph 和 Run 共用插件卡片、搜索与详情：列表显示名称、用途和状态；标识、内容摘要、Skill、MCP 与使用说明放在详情中。手机以抽屉打开会话插件，详情支持键盘关闭并恢复焦点。
 
+会话选中后预读一次插件列表，仅面板展开时继续轮询；反复开关共用未完成的请求并保留已确认列表。首次等待显示加载占位，读取失败可重试，收到空列表后才显示未安装；切换会话取消旧请求。Host 列表读取实时目录信息和当前依赖视图，不读取程序文件正文计算代码摘要；详情与执行继续读取完整定义，不缓存跨请求的权限或可用性。
+
+列表先显示 50 个卡片，可继续加载；搜索和筛选覆盖完整目录，改变条件后重新从首批显示。插件数量和已挂载数量始终统计完整结果。
+
 | 入口 | 操作及事实来源 |
 | --- | --- |
+| 插件库 | 安装/更新/卸载和当前凭据管理；预检、确认与执行结果分别显示 |
 | Pilot 会话 | 开关提交挂载请求，以 Host 返回状态为准；仅操作后显示保存与接续反馈，不常驻解释内部 Turn 机制 |
-| Graph 节点 | 复选框编辑插件引用，保存 Graph 后用于后续运行；查看详情不提交草稿 |
-| Run 节点 | 只读展示本次运行保存的绑定信息，不读取当前 Library 补写历史，也不提供挂载或授权操作 |
+| Graph 节点 | 复选框编辑插件引用；常驻助手经操作员保存后下一 Turn 生效，普通 Graph 用于后续 Run；查看详情不提交草稿 |
+| Run 节点 | 只读展示保存的绑定；常驻助手显示当前或最近一轮冻结的插件，不读取当前 Library 补写历史，也不提供挂载或授权操作 |
 
 联网插件的主动开关与依赖启用分别展示；联网许可缺失时显示未知并禁用许可修改。挂载请求可能在当前回复结束后继续原任务，网络许可修改只影响后续 Turn。OAuth 操作仅在当前库详情提供，读取失败显示未知，可重试；撤销失败保留最后确认的状态，授权窗口打不开时提供手动链接。
+
+插件凭据详情只展示缺失、已保存、部署管理或授权声明失配，已保存不等于外部服务验证成功。详情页与 Pilot 使用同一 owner-bound 存储；独立保存只完成同一目标、仍有效的待填写请求，旧请求不会覆盖新值，已处理请求的历史保留。渠道页面复用相同凭据组件，旧 Run 详情不提供当前配置修改。

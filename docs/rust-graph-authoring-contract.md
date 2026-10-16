@@ -35,6 +35,12 @@ Runtime IR 保存稳定展开节点、路由/反馈/并行、输入与权限、�
 
 作者模型断言、固定展开样例与 HTTP CRUD 测试位于 Rust crate 的测试范围。测试样例不执行另一个语言解析器；具体本轮结果见 [开发台账](pilot-development-plan.md)。历史快照只用于解释先前兼容来源。
 
+## 模型选择
+
+Agent 的 `model` 可填写 `models.default.flash`、`models.default.pro`、`models.backup.flash` 或 `models.backup.pro`，分别读取设置页中的服务和模型。省略 `model` 或使用 `models.default` 时选择 default Flash。每个新节点 invocation 读取当时保存的配置，同一 Run 的后续节点与常驻助手下一轮也适用；进行中的 invocation 和同 invocation 恢复保留其模型/服务绑定。backup 仅在明确选择时使用，不自动降级。
+
+default 尚未保存时兼容旧默认配置；已保存但缺少所选模型或密钥时执行失败，不回退旧配置。上述四个设置引用以外，原 `ANCHOR_MODEL_ALIASES` 中的显式别名继续使用旧部署映射。旧 invocation 即使用过与新设置引用同名的别名，恢复时仍核对原绑定，不自动改写用户 Graph。模型请求和历史仍由 Goose 原生 Provider/Session 承担。
+
 ## Host Op 与常驻助手
 
 Op 在 `run`、`call`、`fanout`、`join`、`host` 中恰好选择一种。`host` 必须为 JSON object，`operation` 必须为非空字符串；其余参数由 Kernel 原样保留并通过 `NodeExecutionPort` 交给宿主，不解析为 Session/WeCom 类型，也不授予隐式 Plugin、网络或文件权限。`NodeExecutionCapabilities.host_operations` 默认关闭；支持普通 `Op.run` 不等于支持 host operation。当前 Host 只接入获准助手的 `session.wait_input` 和 `session.reply`，未知 operation 明确拒绝；Graph 能保存不代表手动或 standalone 入口获得 Session 授权。

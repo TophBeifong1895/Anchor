@@ -9,6 +9,7 @@
 | 安装、启动或使用 Anchor | [使用指南](usage.md) |
 | 修改代码、运行检查、维护文档 | [开发指南](development.md) 与 [开发约定](../AGENTS.md) |
 | 确定职责、事实所有者与执行边界 | [当前架构](architecture.md)；产品目标另见 [产品架构](product-architecture.md) |
+| 收敛跨入口重复规则与交互 | [共同事实与实现收敛](shared-facts-convergence.md) |
 | 判断什么验过、还有什么没关闭 | [当前验收与待办](pilot-development-plan.md) |
 
 ## 按任务查契约

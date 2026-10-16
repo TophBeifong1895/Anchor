@@ -100,7 +100,7 @@ AgentNode 必须通过原生授权完成工具提交 `summary` 和可选 `route`
 
 Session 与 Run 分别拥有状态。Session 只引用真实 Run，不复制另一份运行状态。删除前必须处理关联 Run 和原生历史范围；单条持续会话 Run 删除受共享 scope 约束，不能破坏仍在使用的历史。
 
-常驻实例的 stop/resume 与 explicit retire 分开：stop/resume 保留 current binding 和冻结快照；retire 要求 Run 已真实 Stopped/终态且非 active，Session 的 Running Turn 及 pending/sending/unknown delivery 均阻断退役。退役保留历史、禁止旧 Run resume 或重新绑定，下一条可信消息惰性创建新实例；画布更新不热改旧 Run。Graph cascade 删除先完成保护与退役，再按 owned bindings 清理输入、回复、yield、checkpoint 与执行数据，不把 opt-in 升级变成全历史 workspace 清除。
+常驻实例的 stop/resume 与 explicit retire 分开：stop/resume 保留 current binding 和冻结快照；retire 要求 Run 已真实 Stopped/终态且非 active，Session 的 Running Turn 及 pending/sending/unknown delivery 均阻断退役。退役保留历史、禁止旧 Run resume 或重新绑定，下一条可信消息惰性创建新实例；Graph 结构更新不热改旧 Run；操作员保存常驻助手的插件选择和节点联网权限后，各 Session 在下一 Turn 冻结并应用，当前 Turn 和恢复保持原权限，历史和工作文件继续复用。Graph cascade 删除先完成保护与退役，再按 owned bindings 清理输入、回复、yield、checkpoint 与执行数据，不把 opt-in 升级变成全历史 workspace 清除。
 
 ## Plugin 与能力积累
 

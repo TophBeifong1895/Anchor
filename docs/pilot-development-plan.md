@@ -8,6 +8,10 @@
 
 | 能力 | 已验范围 | 证据入口 |
 | --- | --- | --- |
+| 共同事实与交互收敛 | 核查发现的 8 项问题及原交互清单已修复：插件目录/交互、Graph 查询/校验、Run 状态/控制与冻结拓扑、条件删除、角色模型默认值、鉴权下载及 Pilot 创建/菜单共用权威实现。Host/MCP 1099 项、Web 285 项及 38 个浏览器场景通过，另有 3 个固定 Goose 集成场景；真实 Provider 单节点完成，并验证网页默认模型与修改 Graph 后的历史拓扑。已部署 8077/5173，两端口桌面/手机只读检查通过，原 57 个 Turn 等事实保留，3 个助手沿既有谱系恢复等待输入。默认忽略、现场新增 Pilot 请求和备份修正限制见证据 | [规则归属与边界](shared-facts-convergence.md)、[本轮命令、结果与证据](../.local/shared-facts-fix-20261016/README.md)、[部署核对](../.local/shared-facts-fix-20261016/deployment/README.md) |
+| 常驻助手插件热切换 | 保存后下一 Turn 生效，当前轮冻结，正常切换保留 Run、原生历史与工作文件。上线后发现旧会话的新消息误入历史权限交接链，已按 Turn.runs 收紧继承边界；旧候选复现失败，最终候选 4 项实际 Goose 场景与真实模型新增插件/续聊通过。修复已部署，3 个助手恢复等待输入，原 52 个 Turn 等事实保留；真实 Docmost 业务与企微公网投递未新增验收 | [故障修复与部署](../.local/plugin-turn-followup-20261016/README.md)、[前轮验收](../.local/plugin-turn-20261016/README.md)、[行为回归](../rust/anchor-runner-host/tests/goose_plugin_turns.rs) |
+| 远程 MCP HTTPS | 补齐 RMCP 所用 reqwest 版本的 TLS 构建能力；可信 CA 的握手/工具调用、不可信 CA 和域名拒绝，以及固定 Goose 的插件调用/失败收尾通过。新 Host 已部署，3 个助手等待输入，原 54 个 Turn 等事实保留；真实 Docmost 已到达 HTTP 401，尚未通过认证或业务验收 | [修复、验证与部署](../.local/mcp-https-20261016/README.md)、[TLS 回归](../rust/anchor-mcp-host/src/tls_tests.rs) |
+| AgentNode 完成协议 | 同批工具回执不再因返回顺序误拒；合法完成提交后保存原生历史并结束本轮，重复/冲突、取消/恢复及用户隔离有定向覆盖。17 套 93 场景、额外 3 场景及真实模型 4 轮 9 次请求通过；已部署，原失败会话由既有启动恢复机制接续至等待输入。Goose Clippy 尚有一项参数数量警告，未冒充全绿 | [修复验收与限制](../.local/completion-fix-20261015/README.md)、[部署证据](../.local/completion-fix-20261015/deployment.json)、[完成回归](../rust/anchor-runner-host/tests/goose_completion.rs) |
 | Rust Kernel、Host 与 Goose ACP | AgentNode/Pilot、原生历史、问答、恢复、取消和 compaction 有确定性及分片真实模型证据；旧执行器记录保持原身份 | 历史台账 A114–A140；[回归入口](runtime-contract-tests.md) |
 | Pilot 获取、开发与交付 Plugin | Python/Rust 开发、自测、确认安装、挂载、正式调用和删除开发 Session 后调用通过；受控 HTTP 获取另有阶段证据 | 历史台账 A207/A212；不代表公共市场兼容 |
 | 空业务安装初始化 | Python/Rust 冷初始化、私密凭据 fixture、Graph 运行和计划登记分别通过，绑定不同冻结包 | [A216 范围表](archive/development-2026-10-13/pilot-development-plan.md#pilot-初始化与开发依赖验收a216)；详细产物在原机器 `.local/pilot-bootstrap-acceptance/` |
@@ -17,15 +21,26 @@
 | Web 问答与 API key | 问答按对话顺序回看，错误 key/无效字符拒绝及正确 key 加载通过真实浏览器验收 | 历史台账 A221/A227 |
 | Pilot 文件与图片 | 上传、拖拽/粘贴、回复图片与下载、幂等/恢复引用、刷新/重启及删除清理通过；真实 `deepseek-flash` 完成 CSV 汇总、读图并发布文字与原图，MCP 工具图片由实际 Goose 确定性 fixture 验证；8077 已更新，既有会话与资源核对一致 | [浏览器验收](../apps/web/e2e/pilot-attachments-native.spec.ts)、[UI 回归](../apps/web/e2e/pilot-attachments.spec.ts)、[Goose fixture](../rust/anchor-runner-host/tests/goose_pilot_attachments.rs)；本机证据 `.local/pilot-attachments-20261014/acceptance.json` |
 | Pilot 初始界面 | 以任务、工作流和工具扩展呈现入口，示例只填草稿、首次发送和失败重试保持幂等，插件默认收起；140 项 Web 单测与 19 项相关浏览器用例通过，8077 桌面/手机只读实测及上线前后会话、挂载与资源事实一致 | [初始页回归](../apps/web/e2e/pilot-start.spec.ts)、[会话回归](../apps/web/e2e/pilot.spec.ts)；本机证据 `.local/pilot-start-ui-20261014/deployment-check.json`，本轮未新增真实模型验收 |
-| 插件界面 | Pilot/Graph/Run 共用卡片、搜索和详情，草稿/即时挂载/历史记录分别展示；140 项 Web 单测及 21 项相关浏览器用例通过，当前 8077 已更新并经只读实测确认既有会话与设置未变 | [跨面板回归](../apps/web/e2e/plugin-experience.spec.ts)、[原生挂载回归](../apps/web/e2e/session-plugins-native.spec.ts)；本机部署证据 `.local/plugin-ui-20261014/deployment-check.json`，外部 OAuth 未新增真实验收 |
-| 渠道与常驻助手 | 企微私聊收发有历史部署证据；常驻同 Run、稳定 workspace、打断/恢复有确定性与隔离真实模型证据 | 历史台账 A143–A157；[渠道验收边界](wecom-assistant.md#docmost-和验收) |
+| 插件界面 | Pilot/Graph/Run 共用插件组件、搜索和详情，草稿/即时挂载/历史记录分别展示；会话选中后预读并复用插件列表，列表只投影实时目录信息，首批 50 个条目且搜索覆盖完整目录；1000 插件含 64 MB 资源的原生 Host 验证通过。新 Host 已上线 8077，现有 2 个会话、1 个 Run 的事实与配置重启前后一致，桌面/手机只读面板打开 64/48 ms、重开 35/40 ms | [跨面板回归](../apps/web/e2e/plugin-experience.spec.ts)、[原生挂载回归](../apps/web/e2e/session-plugins-native.spec.ts)、[规模回归](../apps/web/e2e/plugin-catalog-scale.spec.ts)；本轮上线与真实服务证据 `.local/plugin-catalog-scale-20261014/deployment-check.json`、`browser-check.json`，详情仍按需读取完整定义；外部 OAuth 未新增真实验收 |
+| 核心职责与退出清理 | Graph Host、RunApplication、Node Host 和 Web 状态按职责分组；wait child 的错误退出注销与取消转发任务回收通过定向测试，Rust 全量、Web 169 项单测及 34 项浏览器回归通过，21 项 Goose 确定性场景验证执行/恢复/取消与子会话契约；本轮未新增真实模型或部署验收 | [模块边界](architecture.md)、[child 生命周期回归](../rust/anchor-graph-host/tests/child_lifecycle.rs)；本机命令、失败修复与边界 `.local/structure-consolidation-20261014/README.md` |
+| W1 Run 状态判断收敛 | Kernel 与 Host 共用终态定义，退役、前驱交接与渠道停止等待共用静止判断；原有锁顺序、状态格式和控制语义保留。Runtime/Host all-targets 1045 项通过，93 项默认忽略；另行执行的 12 个固定 Goose 场景通过，覆盖打断、恢复、退役和删除。本轮未新增真实 Provider 或部署验收 | [状态与执行者边界](architecture.md#执行链与所有权)、[前驱交接回归](../rust/anchor-runner-host/src/application/tests.rs)；本机命令、失败修复与证据 [W1 验收](../.local/w1-run-liveness-20261014/README.md) |
+| Web 工作台布局 | Graph/Run/Pilot 共用紧凑导航、面板与插件列表；基础布局 169 项单测、47 项受控浏览器回归及构建通过。Pilot 正文与输入框可两侧拖动、键盘调宽和恢复默认，偏好跨刷新/会话保留；后续 41 项受控浏览器回归覆盖宽度、消息、附件与插件，320–1440px 无横向溢出，窄屏抽屉保持聊天尺寸；本轮未部署或新增真实模型验收 | [布局边界](architecture.md)、[宽度回归](../apps/web/e2e/pilot-width.spec.ts)；本机证据 `.local/workbench-design-20261014/README.md`、`.local/pilot-width-20261014/README.md` |
+| 渠道与常驻助手 | 群内跨成员共享 Session/Run/原生历史，私聊/不同群隔离，真实 actor 与逐 Turn 附件授权保留；Session v8 迁移与 78 项网关回归通过。真实模型验证群内接续、在线保存联网及退役后历史/HTTP 工具；已部署 8077/5173，网关已认证，原会话/Turn/投递保留。真实企微群聊和媒体投递仍待验收 | [本轮验收与部署证据](../.local/wecom-network-group-20261015/README.md)、[群会话回归](../rust/anchor-platform-session/tests/channel_group.rs)、[独立渠道启动](../rust/anchor-runner-host/tests/channel_startup.rs)；[渠道边界](wecom-assistant.md#docmost-和验收) |
+| WebUI 管理基础 | 插件安装/更新/卸载与凭据、渠道会话控制、定时计划和运行表单有原生浏览器证据；Python/Rust 初始化及原单模型网页配置有隔离真实服务证据。目标开发部署的模型设置与环境初始化见下两行；隔离验证不扩大为全部管理能力的业务验收 | [管理接口契约](rust-frontend-api-contract.md#web-管理入口)、[原生浏览器回归](../apps/web/e2e/management-native.spec.ts)；前轮 [隔离验收](../.local/webui-lifecycle-20261014/README.md)、[上线核验](../.local/webui-lifecycle-20261014/deployment/README.md) |
+| 模型设置与执行选择 | 保存 `default/backup × flash/pro` 后，新 Pilot Turn 和节点 invocation 读取最新配置；默认 default Flash，当前执行冻结、同 invocation 恢复核对旧绑定，保留原生历史且不自动降级。隔离真实 `deepseek-flash`/Responses 经网页保存、立即续聊、Host 重启和 `graph_list` 完成三轮（42→43→44），同原生 Session；本次真实网页初始/更新使用同一模型，四种引用和当前执行冻结由确定性场景另验 | [设置契约](rust-frontend-api-contract.md#web-管理入口)、[模型执行回归](../rust/anchor-runner-host/tests/goose_model_settings.rs)、[真实网页证据](../.local/reasoning-roundtrip-20261015/real-browser/anchor-management-provider-P02PH3/evidence.json)、[浏览器日志](../.local/reasoning-roundtrip-20261015/test-real-browser.log) |
+| 当前 Responses 服务兼容 | 固定 Goose 保留完整 reasoning、接受空 delta，并在请求投影中将同一响应的多个 call 放在 result 前。629 项 Provider 单测及 Pilot/Graph 真实 Goose 回归通过；真实 DeepSeek 旧原生历史升级后同 Session 继续，多工具调用、HTTP 读取与 final_result 均成功，新增 4 个模型请求全部 200。新候选已部署；不宣称跨 Provider 私有 reasoning 兼容 | [原生补丁边界](../scripts/patches/README.md)、[Responses 回归](../rust/anchor-runner-host/tests/goose_responses.rs)、[新候选真实验收](../.local/wecom-network-group-20261015/real-assistant/evidence-upgrade.json)；[既有模型证据](../.local/reasoning-roundtrip-20261015/README.md) |
+| 开发部署的 Python 环境 | 部署登记固定 uv、摘要与来源，复用现有 Python 3.12.13；网页初始化实际成功，两入口刷新后状态保留。Host 按准备条件投影按钮，缺工具时说明原因；页面自动探测完整版本，刷新重测，失败不猜测版本，部署管理版本只读。8077/5173 已实测，定向测试、Web 全量与构建/clippy/fmt 通过 | [准备条件契约](rust-frontend-api-contract.md#web-管理入口)；本机 [初始化核验](../.local/model-settings-deploy-20261015/README.md)、[版本读取核验](../.local/runtime-version-20261015/README.md) |
 
 ## 正在收口
 
 | 事项 | 当前状态 | 关闭条件 |
 | --- | --- | --- |
-| 当前开发部署的依赖准备配置 | A228 的开发 Host 未配置依赖准备器；隔离 Host 安装成功不能代替这里可用 | 在目标部署核查配置，并实际通过 Pilot 准备、安装和调用依赖 |
+| Docmost 凭据与业务验收 | 已确认 `.env` 与运行 Host 的 `DOCMOST_API_KEY` 完全一致，Bearer 传递链路正常；绕过 Anchor 直接请求身份接口和 MCP 初始化仍均为 401，服务端拒绝原因未定。详见 [凭据核对](../.local/docmost-auth-check-20261016/README.md) | 核对目标 Docmost 实例的 Key 状态与服务端鉴权日志，必要时轮换部署凭据，再验证初始化、工具清单与实际业务；当前凭据由部署管理，网页只读 |
+| 常驻助手节点改名后的重建 | 对照旧候选时，显式退役后修改 wait 节点 ID 的新实例触发交接身份拒绝；与本次新 Turn 权限误继承分开，最终候选未覆盖这一改名场景 | 单独验证节点改名的实例边界与工作区来源；保持节点身份的指令调整/重建后续聊已有本轮回归 |
+| 当前开发部署的依赖业务验证 | 配置缺失与初始化失败已修复，目标网页初始化成功；本次未执行新增第三方依赖的安装与 Pilot 调用 | 按实际开发任务，在目标部署安装并调用所需依赖；初始化成功不替代业务验证 |
+| 渠道管理产品归属 | 渠道页仍将企微与常驻助手直接作为全局产品入口，单平台单实例限制未收口 | 按用户确认的产品范围设计渠道归属与多实例；模型 backup 不自动解释为降级策略 |
 | MCP 按需连接 | A223 仅完成固定 Goose 原生接口实验，产品尚未实施 | 按 [短路线](goose-native-capability-reuse-plan.md) 验发现、首次连接、调用与回收及权限/取消边界 |
+| 后续结构整理 | Plugin 安装/卸载前置条件、共享包发布/视图装配、MCP 配置/OAuth/连接，以及 Pilot 会话同步与提交协调尚需收敛 | 按事实所有者逐批整理，保持同一 Library 发布锁、会话幂等与原生恢复契约；每批完成对应回归，不设行数门禁 |
 
 ## 保留的验收边界
 
@@ -33,8 +48,11 @@
 - **Python 兼容**：A225 真实场景为零第三方依赖 editable 与合成正式 wheel；第三方构建后端/native 包、规模压力、额外长路径及跨 ABI/不同解释器构建未专项验收。仅解包 store 不能供私有 pip 恢复包，是已确定的兼容边界，见 [开发指南](pilot-development.md#旧项目兼容)。
 - **披露规模与压缩**：1,000 Plugin/工具目录不代表 1,000 MCP server 启动；A224 Pilot 与最终 Node 绑定不同 Host。真实 Pilot 压缩后未重新调用工具，重读由确定性场景验证。懒连接与 Code Mode 未实施。
 - **运行时组合**：更完整的 `call.session` 业务组合、多次/超大上下文、摘要 Provider 错误及提问/媒体组合未全部验收；Pilot 未直接暴露手动 `/compact`。固定 Goose ACP 未提供完成工具参数的逐 token 增量，不以普通文本冒充结构化完成，也不为此新增模型代理。
+- **Responses 与错误分类**：完整 reasoning 回传已验同一服务/模型的接续，跨不同 Provider、模型或账号的 opaque/encrypted reasoning 兼容未验；独立 backup 成功不证明历史可跨服务迁移。Goose 的 Provider 错误仍可能以助手正文结束，Turn `completed` 不单独证明模型请求或业务成功。
 - **Pilot 附件**：真实模型覆盖 CSV 与 PNG 标签识别/文件交付；任意文档解析、其他视觉模型和 ACP 直接 assistant image 输出未专项验收。MCP 工具图片的确定性 fixture 不代表外部图片服务业务已验收。
 - **外部业务**：真实外部 OAuth、最终常驻路径的企微收发/媒体/vision、Docmost 和公共学术服务仍需按具体场景验收；已有私聊或本地 mock 结果不扩大为全部通过。
+- **WebUI 管理**：本轮原生浏览器安装使用本机插件目录；GitHub 获取、带依赖的插件安装及任意远程 MCP 凭据业务未新增实际外部验收。插件预检操作句柄不跨 Host 重启保留，页面会依据 Library 实际状态重新预检；旧共享会话不自动迁入私有凭据作用域。
+- **共同事实收敛**：真实 Provider 新增验收仅为 default Flash、单个无插件 AgentNode；backup/Pro、真实外部插件连接与恢复并发不在该证据内。Run/Pilot 下载已验证 Bearer，Markdown 内嵌资源鉴权未专项覆盖；原始 HTTP 无 `If-Match` 删除兼容接口仍保留，Web/Pilot 交互确认使用条件删除。现有开发部署已只读复查，未执行旧接口退役、生产切换或全产品联合验收。
 - **发行与生产切换**：目标发行版 systemd/动态库、旧数据迁移与回滚、标准业务 Graph 完整兼容仍未统一验收。开发部署 A226/A228 不等于生产切换，操作边界见 [切换指南](rust-production-cutover.md)。
 - **未决定的范围**：Plugin 多条目升级事务/自动回滚、跨设备准备区和旧目录处置见 [依赖标准的开放问题](plugin-dependencies.md#开放问题)；长期 Copilot、研究应用、可见计划、跨会话附件整理/分支/导出等需求见 [产品架构](product-architecture.md)。它们不自动变成当前开发任务。
 

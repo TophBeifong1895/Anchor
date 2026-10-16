@@ -71,7 +71,12 @@ a system-package command when they are absent; it never falls back to sharing
 the Host network. Rust/Node are build-machine requirements; Python/Rust
 development installations are unnecessary on the target machine.
 
-Prepare a private model input using `deploy/platform/model.env.example`. It
+Model configuration is optional at installation. Start the service and configure
+the provider in WebUI **Settings**; the Host stores it privately under
+`data/state/managed/`. Python and Rust initialization is available on the same page.
+
+To keep the model under deployment control, optionally prepare a private input
+using `deploy/platform/model.env.example` and pass `--model-config`. It
 accepts exactly `ANCHOR_MODEL_URL`, `ANCHOR_MODEL_API_KEY`, `ANCHOR_MODEL_NAME`,
 `ANCHOR_MODEL_WIRE_API`, `ANCHOR_MODEL_ALIASES`,
 `ANCHOR_MODEL_CONTEXT_WINDOW` and `ANCHOR_MODEL_DIRECT`. Model URL, API key and
@@ -81,8 +86,7 @@ export statements, escapes and multiline values are unsupported.
 
 ```sh
 scripts/install-platform.sh --archive /reviewed/platform.tar.gz \
-  --sha256 TRUSTED_BUILD_REPORT_SHA256 --install-root /existing/parent/anchor \
-  --model-config /private/model.env
+  --sha256 TRUSTED_BUILD_REPORT_SHA256 --install-root /existing/parent/anchor
 /existing/parent/anchor/release/anchor-runtime/bin/anchor-platform start
 ```
 
@@ -98,7 +102,7 @@ It does not start a service or update an existing installation.
 ```text
 <install-root>/
   release/anchor-runtime/     read-only release, directories/ELFs 0555, resources 0444
-  config/model.env           private model data, 0600
+  config/model.env           optional deployment-managed model data, 0600
   data/home/                 private runtime HOME
   data/state/                Host facts, including managed/runtime-config.json
   data/catalog/              empty business Graph catalog
@@ -108,7 +112,9 @@ It does not start a service or update an existing installation.
 
 The native `anchor-platform start` clears inherited environment settings and
 selects installation-owned roots, fixed Goose, isolated model transport and the
-private model data. It binds `127.0.0.1:8077`; open that address to use Pilot. The
+optional private model data. Without that file it injects no model environment
+variables, allowing WebUI settings to take effect. It binds `127.0.0.1:8077`; open
+that address to configure the service and use Pilot. The
 initial command grant is `sh,git`; Python/Rust execution is granted through the
 Host's managed initialization. It does not inherit the developer machine's
 Python/Rust paths, dependency cache, Graph or secrets. The Host reads the release
