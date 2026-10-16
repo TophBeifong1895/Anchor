@@ -1,0 +1,9 @@
+   Compiling anchor-runtime v0.1.0 (/home/mansteinl/code/anchor-constitution-core/rust/anchor-runtime)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.60s
+     Running unittests src/lib.rs (rust/target/debug/deps/anchor_runtime-c4d8e009b3cec2c8)
+
+running 1 test
+S17 seed 495: Tally { cases: 1, rejected_graphs: 0, completed: 0, round_limited: 0, dispatches: 4, longest: 4, module_activated: 0, module_limited: 0, skipped_paths: 1, failed: 0, node_failed: 1, multi_failure_waves: 1, parallel_activations: 1, resubmissions: 1, phantom_invocations: 0, late_refusals: 1, calls_waited: 0, calls_detached: 0, call_failed: 0, call_unknown: 0 }
+test graph::validator::differential::same_wave_node_failures_keep_first_reason_and_record_late_failure ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 126 filtered out; finished in 0.00s

@@ -1,0 +1,67 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.06s
+     Running unittests src/lib.rs (target/debug/deps/anchor_kernel-12afbfe33fd2c9b7)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/accounting_lifecycle.rs (target/debug/deps/accounting_lifecycle-0dbc2784a5d11f64)
+
+running 12 tests
+test agent_cannot_stop_even_with_observation_evidence ... ok
+test every_recorded_verdict_including_unauthorized_and_pending_costs_resources ... ok
+test approval_observation_also_obeys_the_targets_history_budget ... ok
+test concurrent_branches_charge_stale_work_once_and_retry_at_zero_cost ... ok
+test observed_unknown_effect_parks_the_task_without_a_human_impersonation ... ok
+test host_observation_can_stop_but_only_a_human_can_release_the_wait ... ok
+test returned_work_exhausts_budget_on_the_second_submission_without_cost_versions ... ok
+test stopped_task_refuses_a_late_code_result_without_advancing_state ... ok
+test unauthorized_record_can_exhaust_budget_without_authorizing_the_change ... ok
+test waiting_gate_refuses_even_unauthorized_or_stale_non_lifecycle_requests ... ok
+test waiting_work_that_exhausts_budget_settles_once_without_applying_work ... ok
+test waiting_rejects_non_lifecycle_work_for_every_identity_and_charges_it ... ok
+
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/constitution.rs (target/debug/deps/constitution-0c203f26e4b43f25)
+
+running 17 tests
+test authority_comes_from_the_host_not_the_submission ... ok
+test a_graph_opens_slots_and_judges_them_without_instructing_anyone ... ok
+test accepted_is_not_correct ... ok
+test completion_is_a_typed_submission_not_a_claim ... ok
+test budget_settles_the_task_exactly_once ... ok
+test every_verdict_is_recorded_and_measured_including_refusals ... ok
+test only_people_change_validators ... ok
+test stale_views_are_returned_not_merged ... ok
+test the_task_lifecycle_needs_no_rule_per_verb ... ok
+test people_decide_pending_changes_bound_to_what_they_saw ... ok
+test whoever_a_task_waits_on_releases_it ... ok
+test unknown_effects_block_until_observed_and_are_never_replayed ... ok
+test waiting_is_one_rule_not_scattered_checks ... ok
+test ids_cannot_escape_the_store_root ... ok
+test a_torn_history_line_is_ignored ... ok
+test file_store_survives_restart_with_full_history ... ok
+test crash_between_record_and_state_recovers_by_reading_the_record ... ok
+
+test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.13s
+
+     Running tests/storage_regressions.rs (target/debug/deps/storage_regressions-2d2b22884907c1f4)
+
+running 8 tests
+test memory_store_derives_spent_from_every_record_without_advancing_versions ... ok
+test existing_complete_record_bytes_are_preserved_including_json_whitespace ... ok
+test valid_json_without_terminating_newline_is_not_a_record_and_is_trimmed_on_append ... ok
+test store_cost_sum_saturates_instead_of_overflowing ... ok
+test torn_tail_is_removed_before_append_and_all_complete_records_remain_readable ... ok
+test file_store_derives_spent_from_every_record_including_after_restart ... ok
+test accepted_stop_after_torn_tail_recovers_on_restart_when_state_write_is_lost ... ok
+test malformed_complete_records_are_corrupt_in_middle_and_at_end ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.17s
+
+   Doc-tests anchor_kernel
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s

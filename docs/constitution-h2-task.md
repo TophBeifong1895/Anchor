@@ -1,6 +1,6 @@
 # H2 任务书：节点失败结算 + 调度器
 
-当前结论：**H2.1 WIP，触发 §5 停止条件；H2.2 / H2.3 未开始**。并行 seed 495 的多失败错误文本不一致，见[阻塞证据与交回](../experiments/constitution-host-preflight/h2/verification.md)。
+当前结论：**H2.1 WIP：S17 同波多失败对照已补齐，seed 495 通过；seed 2122 的轮次上限与单节点失败组合触发 §5 停止条件，待审查；H2.2 / H2.3 未开始**。S17 审查决定保持有效，新的阻塞见[继续实施交回](../experiments/constitution-host-preflight/h2/h21-resume-verification.md)。
 
 编制：2026-10-17。上位计划：[constitution-host-integration-plan.md](constitution-host-integration-plan.md) 的 H2。
 
@@ -9,8 +9,8 @@
 ## 0. 开工前
 
 1. 按顺序读：`AGENTS.md`；上位计划第 0、2 节（约束 C1–C6、§2.1 调度器、§2.2 执行者）；`docs/constitution-refactor-log.md`（S1 起的语义变更、H1 结论）。
-2. **worktree 当前编译不通过**，原因是有一处未提交的半成品。`rust/anchor-runtime/src/graph/validator.rs` 已加入 `SettleSubmission` 结构，`judge` 里也已调用 `judge_settle`，但这个函数还不存在。H2.1 直接在此基础上完成，按 §1 的形状修改。不要用 `git checkout`、`reset` 或 `stash` 丢弃改动。
-3. 记录基线：`cd rust && cargo build -p anchor-sandbox-bwrap --bins`，然后 `cargo test -p anchor-kernel -p anchor-runtime -p anchor-runner-host -p anchor-graph-host`。H2.1 完成前编译不过，基线就用 `6ee2b0e` 交接时工作记录里的数字，并注明。
+2. H2.1 的实现已在 `3d5d091`（WIP）中：`judge_settle`、`settle_tests.rs`、差分失败注入均已存在且可编译。唯一失败是并行差分 seed 495 的错误文本断言。**从这里继续，不要重写已有实现**，只按 §1“同波多失败”修改对照规则并补齐计数。不要用 `git checkout`、`reset` 或 `stash` 丢弃任何改动。
+3. 记录基线：`cd rust && cargo build -p anchor-sandbox-bwrap --bins`，然后 `cargo test -p anchor-kernel -p anchor-runtime -p anchor-runner-host -p anchor-graph-host`。`3d5d091` 上的预期是：并行差分 1 项失败，其余与[交回](../experiments/constitution-host-preflight/h2/verification.md)一致（kernel 37、runtime 124 通过 1 失败、host+graph-host 1120 / 0 / 112）。若与此不符，先停下报告。
 
 不要重做的东西：内核六原语、Graph 校验器的串行/并行/调用裁决、三组差分测试、H1 的旧格式拒绝。
 
@@ -24,6 +24,14 @@
 - 不记录节点结果，不决定任何出边（`decided` 不变），下游节点不会开启。
 - Run 终结为失败，错误文本为 `"{node} failed: {reason}"`。
 - 在并行区内：该分支 `status = Failed`、`error = reason`，`record.parallel` 保留；已完成兄弟分支的结果保留；join 永不开启。之后兄弟分支迟到的提交由内核以 `TaskSettled` 拒绝（与 S6 一致）。
+
+### 同波多失败（审查决定，2026-10-17，S17）
+
+旧 Runner 在同一波内逐个处理结果，每个失败都覆盖 `record.error`（`parallel.rs:278`），最终错误取决于波内处理顺序。这是实现偶然，不保留。新语义：
+
+- **首次被内核接受的 Settle 决定唯一结算原因。** 之后同一 Run 的 Settle 提交由内核以 `TaskSettled` 拒绝，作为被拒记录留在历史中，不改写结算结果。
+- 新侧只有首个失败分支为 `Failed`；其余失败分支的事实只存在于被拒的 Settle 记录中。
+- 不得为复刻"最后一个获胜"而改校验器或内核，也不得调整哈希来避开多失败。
 
 ### 形状（已决定）
 
@@ -44,7 +52,16 @@
    - 经 `Kernel` 结算后，再提交到任何槽位都被拒（TaskSettled）。
    - 并行：一个分支失败后，兄弟分支已完成的结果保留，该分支为 Failed，join 不开启，兄弟分支迟到的提交返回 TaskSettled。
 2. 差分：给 `validator/differential.rs` 的串行组和并行组加失败注入。用 `hash(node, invocation, seed)` 决定，概率约 3%。旧侧在 `Scripted::execute` 返回 `NodeExecutionOutcome::Failed`，新侧用 Code 提交 Settle。Tally 增加 `node_failed` 字段，串行组和并行组各自要求 `node_failed > 100`。**已有阈值一律不得下调。**并行组里节点失败与轮次上限失败目前走同一个 `old.status == Failed` 分支，那里断言了 `ceased` 非空，需要按失败原因分开处理。比较的事实包括错误文本（旧 `record.error` 与新 `detail`）。
-3. 在工作记录中新增一个语义条目（编号沿用最后一个 S 之后）。如果实现中发现与旧语义有任何差异，逐条写出。
+3. **同波多失败的对照规则**（取代第 2 条中"错误文本相等"在多失败时的要求）。先从旧侧事实中取出该 Run 所有节点失败（旧侧每个 `Failed` 结果；fixture 的哈希可以直接重算，不需要从 `record.error` 反推）：
+   - 只有一个失败：旧 `record.error` 与新 `detail` **完全相等**，规则不变。
+   - 多个失败，且属于同一波：
+     1. 新 `detail` 必须等于这些失败之一的 `"{node} failed: {reason}"`。
+     2. 其余每个失败，新侧历史中必须有一条 Code 身份的 Settle 记录，槽位相同、reason 相同，裁决为 `TaskSettled`。
+     3. 分支状态：旧侧每个失败分支为 Failed。新侧只有对应 `detail` 的分支为 Failed，其余失败分支须与第 2 点的被拒记录一一对应。除此之外，分支状态、已完成兄弟结果、计数仍需逐项相等。
+   - 如果多个失败不在同一波（旧侧在后续波次才出现），这是新的差异，按 §5 停止，不要套用本规则。
+   - Tally 新增 `multi_failure_waves`，并行组要求 `> 0`，证明这条路径被实际走到。在交回中写出实际数值。
+   - 若 `multi_failure_waves` 很小（< 10），在交回中注明数值即可，**不要**为了凑数改注入概率。
+4. 工作记录中的 S17 已由审查方改为"已批准"，实现完成后补上最终 Tally 数值即可，不要改动语义描述。如果实现中发现与旧语义还有其他差异，另起新条目逐条写出。
 
 提交：`feat(validator): settle a Run on a known node failure (H2.1)`
 

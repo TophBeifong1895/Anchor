@@ -1,6 +1,6 @@
 # 宪法内核接入 Host：临时开发计划
 
-编制日期：2026-10-16。状态：**H1 已验收；H2.1 WIP 因并行多失败错误文本差异停止交回**。阻塞见[H2.1 证据](../experiments/constitution-host-preflight/h2/verification.md)，H2.2 / H2.3 未开始。H1 审查对象 `445d278`；`ddadb17` 的旧授权单一门被验收拒绝，修正提交见[工作记录](constitution-refactor-log.md)的“H1 补充：旧授权单一门”一节；K0.1 独立验收见[结论](../experiments/constitution-host-preflight/k01/review.md)。
+编制日期：2026-10-16。状态：**H1 已验收；H2.1 WIP：S17 同波多失败已补齐，轮次上限与单失败组合待审查**。当前阻塞见[H2.1 继续实施交回](../experiments/constitution-host-preflight/h2/h21-resume-verification.md)，H2.2 / H2.3 未开始。H1 审查对象 `445d278`；`ddadb17` 的旧授权单一门被验收拒绝，修正提交见[工作记录](constitution-refactor-log.md)的“H1 补充：旧授权单一门”一节；K0.1 独立验收见[结论](../experiments/constitution-host-preflight/k01/review.md)。
 
 预检阻塞的修订范围已由[审查决定 D1–D5](constitution-preflight-decision.md)明确授权；实现与验收入口见[工作记录](constitution-refactor-log.md#k01内核修订与中断事实)。K0.1 与 H1 已验收；Host 当前仍使用旧 Runner。H2.1 按[任务书](constitution-h2-task.md) §5 停止，后续工作等待审查结论。
 

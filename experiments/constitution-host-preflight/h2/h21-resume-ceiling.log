@@ -1,0 +1,22 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.05s
+     Running unittests src/lib.rs (rust/target/debug/deps/anchor_runtime-c4d8e009b3cec2c8)
+
+running 1 test
+seed 2122: old error Some("b1_0 failed: fixture failure b1_0 #2"), old ceased {}; new phase Settled { result: Failed { reason: Unclassified, detail: "parallel branch `b0_1` exceeded node round ceiling `1`" } }, new ceased {"b0_1@1"}
+node failure reports: [(Code, Some("b1_0#2"), Object {"reason": String("fixture failure b1_0 #2")}, Verdict { effect: Refused, verification: NotApplicable, reason: TaskSettled })]
+
+thread 'graph::validator::differential::single_node_failure_preserves_error_when_sibling_reaches_ceiling' (586653) panicked at anchor-runtime/src/graph/validator/differential.rs:1392:5:
+assertion `left == right` failed: single failure detail differs, seed 2122
+  left: Some("b1_0 failed: fixture failure b1_0 #2")
+ right: Some("parallel branch `b0_1` exceeded node round ceiling `1`")
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test graph::validator::differential::single_node_failure_preserves_error_when_sibling_reaches_ceiling ... FAILED
+
+failures:
+
+failures:
+    graph::validator::differential::single_node_failure_preserves_error_when_sibling_reaches_ceiling
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 126 filtered out; finished in 0.02s
+
+error: test failed, to rerun pass `-p anchor-runtime --lib`
