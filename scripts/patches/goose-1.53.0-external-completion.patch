@@ -1,0 +1,481 @@
+--- a/crates/goose/src/agents/agent.rs
++++ b/crates/goose/src/agents/agent.rs
+@@ -903,6 +903,7 @@
+         request_to_response_map: &mut HashMap<String, Message>,
+         cancel_token: Option<tokio_util::sync::CancellationToken>,
+         session: &Session,
++        batch: Option<super::external_completion::ToolCallBatch>,
+     ) -> Result<Vec<(String, ToolStream)>> {
+         let mut tool_futures: Vec<(String, ToolStream)> = Vec::new();
+ 
+@@ -910,11 +911,12 @@
+         for request in &permission_check_result.approved {
+             if let Ok(tool_call) = request.tool_call.clone() {
+                 let (req_id, tool_result) = self
+-                    .dispatch_tool_call(
++                    .dispatch_tool_call_in_batch(
+                         tool_call,
+                         request.id.clone(),
+                         cancel_token.clone(),
+                         session,
++                        batch.clone(),
+                     )
+                     .await;
+ 
+@@ -1070,6 +1072,18 @@
+         request_id: String,
+         cancellation_token: Option<CancellationToken>,
+         session: &Session,
++    ) -> (String, Result<ToolCallResult, ErrorData>) {
++        self.dispatch_tool_call_in_batch(tool_call, request_id, cancellation_token, session, None)
++            .await
++    }
++
++    pub(super) async fn dispatch_tool_call_in_batch(
++        &self,
++        tool_call: CallToolRequestParams,
++        request_id: String,
++        cancellation_token: Option<CancellationToken>,
++        session: &Session,
++        batch: Option<super::external_completion::ToolCallBatch>,
+     ) -> (String, Result<ToolCallResult, ErrorData>) {
+         if gen_ai_telemetry::capture_message_content() {
+             let input_summary = serde_json::json!({
+@@ -1163,7 +1177,8 @@
+             session.id.clone(),
+             Some(session.working_dir.clone()),
+             Some(request_id.clone()),
+-        );
++        )
++        .with_tool_call_batch(batch);
+ 
+         debug!("WAITING_TOOL_START: {}", tool_call.name);
+         let result = self
+@@ -2163,6 +2178,11 @@
+             }
+         }
+ 
++        if use_state_machine && super::external_completion::tool_name().is_some() {
++            return Err(anyhow!(
++                "External completion requires the native standard agent loop"
++            ));
++        }
+         if use_state_machine {
+             tracing::info!("dispatching reply via experimental state machine");
+             return self
+@@ -2460,6 +2480,7 @@
+         cancel_token: Option<CancellationToken>,
+         reply_span: tracing::Span,
+     ) -> Result<BoxStream<'_, Result<AgentEvent>>> {
++        let external_completion_tool = super::external_completion::tool_name();
+         let context = self
+             .prepare_reply_context(&session.id, conversation, session.working_dir.as_path())
+             .await?;
+@@ -2750,6 +2771,7 @@
+                 let mut tools_updated = false;
+                 let mut did_recovery_compact_this_iteration = false;
+                 let mut exit_chat = false;
++                let mut external_completion_succeeded = false;
+                 let mut provider_errored = false;
+                 let mut provider_produced_content = false;
+                 let mut provider_reached_output_token_limit = false;
+@@ -2874,6 +2896,9 @@
+                                     continue;
+                                 }
+ 
++                                let batch = external_completion_tool.as_ref().map(|_| {
++                                    super::external_completion::ToolCallBatch::new(tool_requests.len())
++                                });
+                                 let mut request_to_response_map = HashMap::new();
+                                 let mut request_metadata: HashMap<String, Option<ProviderMetadata>> = HashMap::new();
+                                 for request in &tool_requests {
+@@ -2909,7 +2934,7 @@
+                                         )
+                                         .await?;
+ 
+-                                    let permission_check_result = self.tool_inspection_manager
++                                    let mut permission_check_result = self.tool_inspection_manager
+                                         .process_inspection_results_with_permission_inspector(
+                                             &tool_requests,
+                                             &inspection_results,
+@@ -2924,6 +2949,27 @@
+                                             result
+                                         });
+ 
++                                    // A host completion is never dispatched in a mixed batch.
++                                    // Other tools retain the existing inspection/authorization path.
++                                    if tool_requests.len() != 1 {
++                                        let reject_completion = |request: &crate::conversation::message::ToolRequest| {
++                                            let is_completion = request.tool_call.as_ref().is_ok_and(|call| {
++                                                external_completion_tool.as_deref() == Some(call.name.as_ref())
++                                            });
++                                            if is_completion {
++                                                if let Some(response) = request_to_response_map.get_mut(&request.id) {
++                                                    response.add_tool_response_with_metadata(request.id.clone(),
++                                                        Err(ErrorData::invalid_params("External completion tool must be called alone after observing business results", None)),
++                                                        request.metadata.as_ref());
++                                                }
++                                            }
++                                            !is_completion
++                                        };
++                                        let mut reject_completion = reject_completion;
++                                        permission_check_result.approved.retain(&mut reject_completion);
++                                        permission_check_result.needs_approval.retain(&mut reject_completion);
++                                    }
++
+                                     // Track extension requests
+                                     let mut enable_extension_request_ids = vec![];
+                                     for request in &tool_requests {
+@@ -2939,6 +2985,7 @@
+                                         &mut request_to_response_map,
+                                         cancel_token.clone(),
+                                         &session,
++                                        batch.clone(),
+                                     ).await?;
+ 
+                                     {
+@@ -2949,6 +2996,7 @@
+                                             cancel_token.clone(),
+                                             &session,
+                                             &inspection_results,
++                                            batch.clone(),
+                                         );
+ 
+                                         while let Some(msg) = tool_approval_stream.try_next().await? {
+@@ -2986,6 +3034,12 @@
+                                                                 yield AgentEvent::Message(msg);
+                                                             }
+                                                             ToolStreamItem::Result(output) => {
++                                                                if let Some(request) = tool_requests.iter().find(|request| request.id == request_id) {
++                                                                    if let Ok(call) = &request.tool_call {
++                                                                        external_completion_succeeded |= super::external_completion::succeeds(
++                                                                            external_completion_tool.as_deref(), call.name.as_ref(), batch.as_ref(), &output);
++                                                                    }
++                                                                }
+                                                                 if let Ok(ref call_result) = output {
+                                                                     if let Some(ref meta) = call_result.meta {
+                                                                         if let Some(notification_data) = meta.0.get("platform_notification") {
+@@ -3542,6 +3596,13 @@
+                 }
+                 conversation.extend(messages_to_add);
+ 
++                // The native request/response pair is now committed. No further
++                // inference, steering, goal nudge or stop-hook retry may reopen a
++                // successful host completion; user cancellation remains separate.
++                if external_completion_succeeded {
++                    break;
++                }
++
+                 if exit_chat && self.has_pending_steers(&session_config.id).await {
+                     exit_chat = false;
+                 }
+--- a/crates/goose/src/agents/mod.rs
++++ b/crates/goose/src/agents/mod.rs
+@@ -4,6 +4,7 @@
+ pub mod extension;
+ pub mod extension_malware_check;
+ pub mod extension_manager;
++mod external_completion;
+ pub mod final_output_tool;
+ pub(crate) mod gen_ai_telemetry;
+ mod large_response_handler;
+--- a/crates/goose/src/agents/tool_execution.rs
++++ b/crates/goose/src/agents/tool_execution.rs
+@@ -39,6 +39,7 @@
+     pub working_dir: Option<PathBuf>,
+     pub tool_call_request_id: Option<String>,
+     notification_emitter: Option<ToolCallNotificationEmitter>,
++    pub(crate) tool_call_batch: Option<super::external_completion::ToolCallBatch>,
+ }
+ 
+ impl ToolCallContext {
+@@ -52,7 +53,16 @@
+             working_dir,
+             tool_call_request_id,
+             notification_emitter: None,
+-        }
++            tool_call_batch: None,
++        }
++    }
++
++    pub(crate) fn with_tool_call_batch(
++        mut self,
++        batch: Option<super::external_completion::ToolCallBatch>,
++    ) -> Self {
++        self.tool_call_batch = batch;
++        self
+     }
+ 
+     pub fn working_dir_str(&self) -> Option<&str> {
+@@ -154,6 +164,7 @@
+         cancellation_token: Option<CancellationToken>,
+         session: &'a Session,
+         inspection_results: &'a [crate::tool_inspection::InspectionResult],
++        batch: Option<super::external_completion::ToolCallBatch>,
+     ) -> BoxStream<'a, anyhow::Result<Message>> {
+         try_stream! {
+         for request in tool_requests.iter() {
+@@ -203,7 +214,7 @@
+                 }
+ 
+                 if confirmation.permission == Permission::AllowOnce || confirmation.permission == Permission::AlwaysAllow {
+-                    let (req_id, tool_result) = self.dispatch_tool_call(tool_call.clone(), request.id.clone(), cancellation_token.clone(), session).await;
++                    let (req_id, tool_result) = self.dispatch_tool_call_in_batch(tool_call.clone(), request.id.clone(), cancellation_token.clone(), session, batch.clone()).await;
+ 
+                     tool_futures.push((req_id, match tool_result {
+                         Ok(result) => tool_stream(
+--- a/crates/goose/src/agents/reply_parts.rs
++++ b/crates/goose/src/agents/reply_parts.rs
+@@ -540,6 +540,8 @@
+             let mut first_content_at: Option<std::time::Instant> = None;
+             let mut active_mergeable_assistant_id: Option<String> = None;
+             let mut output_message: Option<Message> = None;
++            let defer_tools = super::external_completion::tool_name().is_some();
++            let mut deferred_tools = None;
+             while let Some(result) = stream.next().await {
+                 let (message, mut usage) = result?;
+ 
+@@ -573,7 +575,15 @@
+                     }
+                 });
+ 
++                let message = if defer_tools {
++                    message.and_then(|message| super::external_completion::defer_tools(message, &mut deferred_tools))
++                } else {
++                    message
++                };
+                 yield (message, usage);
++            }
++            if let Some(message) = deferred_tools {
++                yield (Some(message), None);
+             }
+             if let Some(output_message) = output_message {
+                 let output_messages = gen_ai_telemetry::output_message_json(&output_message);
+--- a/crates/goose/src/agents/mcp_client.rs
++++ b/crates/goose/src/agents/mcp_client.rs
+@@ -799,6 +799,10 @@
+                         .map(|(key, value)| (key.clone(), value.clone())),
+                 );
+             }
++            super::external_completion::inject_batch_meta(
++                &mut params.meta.get_or_insert_default().0 .0,
++                ctx.tool_call_batch.as_ref(),
++            );
+             let client = self.client.lock().await.clone();
+             client.service().set_session_id(&ctx.session_id).await;
+             let _active_tool_call_guard = ctx
+@@ -821,7 +825,11 @@
+             };
+         }
+ 
+-        let request = ClientRequest::CallToolRequest(Request::new(params));
++        let mut request = Request::new(params);
++        let mut meta = serde_json::Map::new();
++        super::external_completion::inject_batch_meta(&mut meta, ctx.tool_call_batch.as_ref());
++        request.extensions.insert(MetaObject(meta));
++        let request = ClientRequest::CallToolRequest(request);
+ 
+         let result = self
+             .send_request_with_context(
+--- a/crates/goose/src/agents/extension_manager/mod.rs
++++ b/crates/goose/src/agents/extension_manager/mod.rs
+@@ -1336,7 +1336,8 @@
+             ctx.session_id.clone(),
+             ctx.working_dir.clone(),
+             ctx.tool_call_request_id.clone(),
+-        );
++        )
++        .with_tool_call_batch(ctx.tool_call_batch.clone());
+         let (owned_ctx, tool_call_notifications_receiver) =
+             if let Some(notification_emitter) = ctx.notification_emitter().cloned() {
+                 (
+--- /dev/null
++++ b/crates/goose/src/agents/external_completion.rs
+@@ -0,0 +1,187 @@
++//! An opt-in boundary for a host-validated external completion tool.
++//!
++//! The host still owns validation and authorization. Goose owns the tool batch,
++//! native history and the point at which it can stop without another inference.
++
++use crate::conversation::message::{Message, MessageContent};
++use crate::mcp_utils::ToolResult;
++use rmcp::model::CallToolResult;
++use serde_json::{Map, Value};
++
++pub(super) fn tool_name() -> Option<String> {
++    std::env::var("GOOSE_EXTERNAL_COMPLETION_TOOL")
++        .ok()
++        .filter(|name| !name.trim().is_empty())
++}
++
++#[derive(Clone)]
++pub(crate) struct ToolCallBatch {
++    pub id: String,
++    pub size: usize,
++}
++
++impl ToolCallBatch {
++    pub fn new(size: usize) -> Self {
++        Self {
++            id: uuid::Uuid::new_v4().to_string(),
++            size,
++        }
++    }
++}
++
++/// Reserved context comes from the executor, never from model-supplied metadata.
++pub(super) fn inject_batch_meta(meta: &mut Map<String, Value>, batch: Option<&ToolCallBatch>) {
++    meta.retain(|key, _| {
++        !key.eq_ignore_ascii_case("agent-tool-call-batch-id")
++            && !key.eq_ignore_ascii_case("agent-tool-call-batch-size")
++    });
++    if let Some(batch) = batch {
++        meta.insert(
++            "agent-tool-call-batch-id".into(),
++            Value::String(batch.id.clone()),
++        );
++        meta.insert("agent-tool-call-batch-size".into(), Value::from(batch.size));
++    }
++}
++
++pub(super) fn succeeds(
++    expected_tool: Option<&str>,
++    actual_tool: &str,
++    batch: Option<&ToolCallBatch>,
++    result: &ToolResult<CallToolResult>,
++) -> bool {
++    expected_tool == Some(actual_tool)
++        && batch.is_some_and(|batch| batch.size == 1)
++        && result
++            .as_ref()
++            .is_ok_and(|result| result.is_error != Some(true))
++}
++
++/// Keep text/thinking streaming, but collect every executable tool call from one
++/// provider inference before assigning its batch size or dispatching any tool.
++pub(super) fn defer_tools(mut message: Message, pending: &mut Option<Message>) -> Option<Message> {
++    let tools = message
++        .content
++        .iter()
++        .filter(|content| matches!(content, MessageContent::ToolRequest(_)))
++        .cloned()
++        .collect::<Vec<_>>();
++    if tools.is_empty() {
++        return Some(message);
++    }
++    match pending {
++        Some(pending) => pending.content.extend(tools),
++        None => {
++            let mut deferred = message.clone();
++            deferred.content = tools;
++            // The original chunk below emits this marker immediately, even
++            // when it has no text. Do not emit the same limit marker twice.
++            deferred.metadata.output_token_limit_reached = false;
++            *pending = Some(deferred);
++        }
++    }
++    message
++        .content
++        .retain(|content| !matches!(content, MessageContent::ToolRequest(_)));
++    (!message.content.is_empty() || message.metadata.output_token_limit_reached).then_some(message)
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    use rmcp::model::{CallToolRequestParams, ContentBlock};
++    use serde_json::json;
++
++    #[test]
++    fn deferred_stream_tools_form_one_batch_without_losing_thinking() {
++        let mut pending = None;
++        let first = Message::assistant()
++            .with_thinking("reason", "signature")
++            .with_tool_request("one", Ok(CallToolRequestParams::new("host__finish")));
++        let visible = defer_tools(first, &mut pending).unwrap();
++        assert!(matches!(&visible.content[0], MessageContent::Thinking(_)));
++        assert!(defer_tools(
++            Message::assistant()
++                .with_tool_request("two", Ok(CallToolRequestParams::new("host__work"))),
++            &mut pending
++        )
++        .is_none());
++        assert_eq!(pending.unwrap().content.len(), 2);
++    }
++
++    #[test]
++    fn trusted_batch_overwrites_spoofed_case_variants_and_can_be_removed() {
++        let mut meta = json!({"Agent-Tool-Call-Batch-Id":"forged",
++            "agent-tool-call-batch-size":1,"other":true})
++        .as_object()
++        .unwrap()
++        .clone();
++        let batch = ToolCallBatch::new(2);
++        inject_batch_meta(&mut meta, Some(&batch));
++        assert_eq!(meta["agent-tool-call-batch-id"], batch.id);
++        assert_eq!(meta["agent-tool-call-batch-size"], 2);
++        assert!(!meta.contains_key("Agent-Tool-Call-Batch-Id"));
++        inject_batch_meta(&mut meta, None);
++        assert_eq!(meta, json!({"other":true}).as_object().unwrap().clone());
++    }
++
++    #[test]
++    fn deferred_tool_only_chunks_preserve_first_and_later_output_limit_markers() {
++        for limited_index in 0..2 {
++            let mut pending = None;
++            for index in 0..2 {
++                let mut message = Message::assistant().with_tool_request(
++                    format!("call-{index}"),
++                    Ok(CallToolRequestParams::new("host__work")),
++                );
++                message.metadata.output_token_limit_reached = index == limited_index;
++                let visible = defer_tools(message, &mut pending);
++                if index == limited_index {
++                    let marker = visible.expect("tool-only limit marker must remain visible");
++                    assert!(marker.content.is_empty());
++                    assert!(marker.metadata.output_token_limit_reached);
++                } else {
++                    assert!(visible.is_none());
++                }
++            }
++            let deferred = pending.unwrap();
++            assert_eq!(deferred.content.len(), 2);
++            assert!(!deferred.metadata.output_token_limit_reached);
++        }
++    }
++
++    #[test]
++    fn only_the_sole_successful_configured_tool_finishes() {
++        let success = Ok(CallToolResult::success(vec![ContentBlock::text(
++            "accepted",
++        )]));
++        let failure = Ok(CallToolResult::error(vec![ContentBlock::text("rejected")]));
++        let single = ToolCallBatch::new(1);
++        let mixed = ToolCallBatch::new(2);
++        assert!(succeeds(
++            Some("host__finish"),
++            "host__finish",
++            Some(&single),
++            &success
++        ));
++        assert!(!succeeds(
++            Some("host__finish"),
++            "host__finish",
++            Some(&mixed),
++            &success
++        ));
++        assert!(!succeeds(
++            Some("host__finish"),
++            "host__finish",
++            Some(&single),
++            &failure
++        ));
++        assert!(!succeeds(None, "host__finish", Some(&single), &success));
++        assert!(!succeeds(
++            Some("host__finish"),
++            "host__work",
++            Some(&single),
++            &success
++        ));
++    }
++}

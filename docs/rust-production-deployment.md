@@ -57,7 +57,7 @@ Edit `/etc/anchor/anchor.env`: set the actual model URL, API key and model name;
 review the graph's exact `ANCHOR_RUNNER_ALLOWED_COMMANDS`; install Bubblewrap,
 Git and any explicitly required Plugin dependencies. Goose is the Anchor-built lean
 ACP binary from pinned upstream v1.53.0 sources (`scripts/build-goose-acp.sh`) with
-SHA256 `71e76c412597b2ecd96ed20d0706e7666f31c018216e7cb5d65c5ca5c44824a7`.
+SHA256 `dc2a4352279c16f3c665b280e4fc8fedbec3a67cce596bf460aa9fd416c27a15`.
 The template binds to loopback and permits an empty API-key list only in that
 case. Non-loopback binds require unique bearer secrets of at least 32 bytes and
 must be protected by the deployment's network/authentication boundary.

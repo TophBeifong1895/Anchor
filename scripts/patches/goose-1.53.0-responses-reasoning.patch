@@ -1,0 +1,754 @@
+--- a/crates/goose-provider-types/src/conversation/message.rs
++++ b/crates/goose-provider-types/src/conversation/message.rs
+@@ -232,6 +232,9 @@
+ pub struct ThinkingContentBlock {
+     pub thinking: String,
+     pub signature: String,
++    /// Opaque provider data needed to replay this exact reasoning block.
++    #[serde(default, skip_serializing_if = "Option::is_none")]
++    pub provider_metadata: Option<ProviderMetadata>,
+ }
+ 
+ #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+@@ -603,6 +606,7 @@
+         MessageContentBlock::Thinking(ThinkingContentBlock {
+             thinking: thinking.into(),
+             signature: signature.into(),
++            provider_metadata: None,
+         })
+     }
+ 
+--- a/crates/goose-provider-types/src/conversation.rs
++++ b/crates/goose-provider-types/src/conversation.rs
+@@ -95,6 +95,8 @@
+                     Some(MessageContentBlock::Thinking(ref mut last)),
+                     Some(MessageContentBlock::Thinking(new)),
+                 ) if message.content.len() == 1
++                    && last.provider_metadata.is_none()
++                    && new.provider_metadata.is_none()
+                     && (last.signature.is_empty() || new.signature == last.signature) =>
+                 {
+                     // Merge cases:
+--- a/crates/goose-provider-types/src/formats/openai_responses.rs
++++ b/crates/goose-provider-types/src/formats/openai_responses.rs
+@@ -1,4 +1,4 @@
+-use crate::conversation::message::{Message, MessageContentBlock};
++use crate::conversation::message::{Message, MessageContentBlock, ThinkingContentBlock};
+ use crate::conversation::token_usage::{ProviderUsage, Usage};
+ use crate::documents::{
+     convert_document, document_media_type_is_supported, unsupported_document_text, DocumentFormat,
+@@ -20,7 +20,7 @@
+ use rmcp::model::{object, CallToolRequestParams, ContentBlock, Role, Tool};
+ use serde::{Deserialize, Serialize};
+ use serde_json::{json, Value};
+-use std::collections::HashSet;
++use std::collections::{HashMap, HashSet};
+ 
+ #[derive(Debug, Serialize, Deserialize)]
+ pub struct ResponsesApiResponse {
+@@ -36,23 +36,58 @@
+     pub usage: Option<ResponseUsage>,
+ }
+ 
+-#[derive(Debug, Serialize, Deserialize, Clone)]
+-#[serde(tag = "type", rename_all = "snake_case")]
+-pub struct SummaryText {
+-    pub text: String,
++const RESPONSES_REASONING_ITEM: &str = "openai_responses_reasoning_item";
++const RESPONSES_REASONING_RESPONSE_ID: &str = "openai_responses_reasoning_response_id";
++
++fn reasoning_item_key(item: &Value, response_id: Option<&str>) -> String {
++    let item_key = item
++        .get("id")
++        .and_then(Value::as_str)
++        .map(|id| format!("id:{id}"))
++        .unwrap_or_else(|| format!("item:{item}"));
++    format!("{}:{item_key}", response_id.unwrap_or_default())
+ }
+ 
+-fn reasoning_from_summary(summary: &[SummaryText]) -> Option<MessageContentBlock> {
+-    let text: String = summary
+-        .iter()
+-        .map(|s| sanitize_unicode_tags(&s.text))
+-        .collect::<Vec<_>>()
+-        .join("\n");
+-    if text.is_empty() {
+-        None
++fn set_reasoning_response_id(content: &mut MessageContentBlock, response_id: Option<&str>) {
++    if let (MessageContentBlock::Thinking(thinking), Some(response_id)) = (content, response_id) {
++        if let Some(metadata) = &mut thinking.provider_metadata {
++            metadata.insert(
++                RESPONSES_REASONING_RESPONSE_ID.to_string(),
++                json!(response_id),
++            );
++        }
++    }
++}
++
++fn reasoning_from_item(fields: &serde_json::Map<String, Value>) -> MessageContentBlock {
++    let text_from = |field: &str, item_type: &str| {
++        fields
++            .get(field)
++            .and_then(Value::as_array)
++            .into_iter()
++            .flatten()
++            .filter(|item| item.get("type").and_then(Value::as_str) == Some(item_type))
++            .filter_map(|item| item.get("text").and_then(Value::as_str))
++            .map(sanitize_unicode_tags)
++            .collect::<Vec<_>>()
++            .join("\n")
++    };
++    let content_text = text_from("content", "reasoning_text");
++    let thinking = if content_text.is_empty() {
++        text_from("summary", "summary_text")
+     } else {
+-        Some(MessageContentBlock::thinking(text, ""))
+-    }
++        content_text
++    };
++    let mut item = fields.clone();
++    item.insert("type".to_string(), json!("reasoning"));
++    MessageContentBlock::Thinking(ThinkingContentBlock {
++        thinking,
++        signature: String::new(),
++        provider_metadata: Some(serde_json::Map::from_iter([(
++            RESPONSES_REASONING_ITEM.to_string(),
++            Value::Object(item),
++        )])),
++    })
+ }
+ 
+ #[derive(Debug, Serialize, Deserialize)]
+@@ -60,10 +95,8 @@
+ #[serde(rename_all = "snake_case")]
+ pub enum ResponseOutputItem {
+     Reasoning {
+-        #[serde(default, skip_serializing_if = "Option::is_none")]
+-        id: Option<String>,
+-        #[serde(default)]
+-        summary: Vec<SummaryText>,
++        #[serde(flatten)]
++        item: serde_json::Map<String, Value>,
+     },
+     Message {
+         // `id` and `status` are required when the OpenAI API emits these
+@@ -324,6 +357,14 @@
+         return Ok(None);
+     }
+ 
++    // Empty text deltas carry no model output. Some compatible services use
++    // them as heartbeat frames without the required numbered-event fields.
++    if event_type == "response.output_text.delta"
++        && raw_event.get("delta").and_then(Value::as_str) == Some("")
++    {
++        return Ok(None);
++    }
++
+     let event = serde_json::from_value(raw_event).map_err(|e| {
+         ProviderError::stream_decode_error(format!(
+             "Failed to parse Responses stream event: {}: {:?}",
+@@ -355,10 +396,8 @@
+ #[serde(rename_all = "snake_case")]
+ pub enum ResponseOutputItemInfo {
+     Reasoning {
+-        #[serde(skip_serializing_if = "Option::is_none")]
+-        id: Option<String>,
+-        #[serde(default)]
+-        summary: Vec<SummaryText>,
++        #[serde(flatten)]
++        item: serde_json::Map<String, Value>,
+     },
+     Message {
+         #[serde(skip_serializing_if = "Option::is_none")]
+@@ -405,7 +444,32 @@
+ }
+ 
+ fn add_message_items(input_items: &mut Vec<Value>, messages: &[Message], supports_vision: bool) {
++    // Native tool execution may copy a turn's thinking onto several tool-call
++    // messages. Replay each original Responses reasoning item only once.
++    let mut reasoning_items = HashSet::new();
++    let mut call_responses = HashMap::new();
++    let mut user_epoch = 0;
+     for message in messages.iter().filter(|m| m.is_agent_visible()) {
++        if message.role == Role::User
++            && message
++                .content
++                .iter()
++                .any(|content| !matches!(content, MessageContentBlock::ToolResponse(_)))
++        {
++            user_epoch += 1;
++        }
++        let response = message
++            .content
++            .iter()
++            .filter_map(|content| content.as_thinking())
++            .find_map(|thinking| {
++                thinking
++                    .provider_metadata
++                    .as_ref()?
++                    .get(RESPONSES_REASONING_RESPONSE_ID)?
++                    .as_str()
++            })
++            .map(|id| format!("{user_epoch}:{id}"));
+         let role = match message.role {
+             Role::User => "user",
+             Role::Assistant => "assistant",
+@@ -415,6 +479,35 @@
+ 
+         for content in &message.content {
+             match content {
++                MessageContentBlock::Thinking(thinking) if message.role == Role::Assistant => {
++                    let Some(item) = thinking
++                        .provider_metadata
++                        .as_ref()
++                        .and_then(|metadata| metadata.get(RESPONSES_REASONING_ITEM))
++                        .filter(|item| {
++                            item.get("type").and_then(Value::as_str) == Some("reasoning")
++                        })
++                    else {
++                        continue;
++                    };
++                    let owner = thinking
++                        .provider_metadata
++                        .as_ref()
++                        .and_then(|metadata| metadata.get(RESPONSES_REASONING_RESPONSE_ID))
++                        .and_then(Value::as_str)
++                        .or(message.id.as_deref());
++                    if reasoning_items.insert(reasoning_item_key(item, owner)) {
++                        if !text_items.is_empty() {
++                            input_items.push(json!({
++                                "type": "message",
++                                "role": role,
++                                "content": text_items
++                            }));
++                            text_items = Vec::new();
++                        }
++                        input_items.push(item.clone());
++                    }
++                }
+                 MessageContentBlock::Text(text) if !text.text.is_empty() => {
+                     if message.role == Role::Assistant {
+                         // Responses output_text items require annotations even when empty.
+@@ -442,6 +535,9 @@
+ 
+                     match &request.tool_call {
+                         Ok(tool_call) => {
++                            if let Some(response) = &response {
++                                call_responses.insert(input_items.len(), response.clone());
++                            }
+                             let sanitized_name = sanitize_function_name(&tool_call.name);
+                             let arguments_str = tool_call
+                                 .arguments
+@@ -604,6 +700,49 @@
+             }));
+         }
+     }
++    group_response_tool_outputs(input_items, &call_responses);
++}
++
++/// Goose persists split call/result pairs. Responses expects all calls from one
++/// original assistant response before its results, with that response's opaque
++/// reasoning replayed once. Only delay outputs whose response has another call;
++/// genuine user input and distinct response ids keep independent groups.
++fn group_response_tool_outputs(items: &mut Vec<Value>, call_responses: &HashMap<usize, String>) {
++    let mut last_calls = HashMap::new();
++    for (index, response) in call_responses {
++        last_calls
++            .entry(response.as_str())
++            .and_modify(|last: &mut usize| *last = (*last).max(*index))
++            .or_insert(*index);
++    }
++    let mut calls = HashMap::new();
++    let mut pending: HashMap<&str, Vec<Value>> = HashMap::new();
++    for (index, item) in std::mem::take(items).into_iter().enumerate() {
++        if let Some(response) = call_responses.get(&index) {
++            if let Some(call) = item.get("call_id").and_then(Value::as_str) {
++                calls.insert(call.to_owned(), response.as_str());
++            }
++        }
++        if item.get("type").and_then(Value::as_str) == Some("function_call_output") {
++            if let Some(response) = item
++                .get("call_id")
++                .and_then(Value::as_str)
++                .and_then(|id| calls.get(id))
++            {
++                if last_calls[response] > index {
++                    pending.entry(response).or_default().push(item);
++                    continue;
++                }
++            }
++        }
++        items.push(item);
++        if let Some(response) = call_responses.get(&index) {
++            if last_calls[response.as_str()] == index {
++                items.extend(pending.remove(response.as_str()).unwrap_or_default());
++            }
++        }
++    }
++    debug_assert!(pending.is_empty());
+ }
+ 
+ fn is_gpt_5_6_model(model_name: &str) -> bool {
+@@ -714,6 +853,9 @@
+         "input": input_items,
+         "store": store,
+     });
++    if !store {
++        payload["include"] = json!(["reasoning.encrypted_content"]);
++    }
+ 
+     if reasoning_effort.is_some() || reasoning_mode.is_some() {
+         let mut reasoning = serde_json::Map::new();
+@@ -822,8 +964,10 @@
+ 
+     for item in &response.output {
+         match item {
+-            ResponseOutputItem::Reasoning { summary, .. } => {
+-                content.extend(reasoning_from_summary(summary));
++            ResponseOutputItem::Reasoning { item } => {
++                let mut reasoning = reasoning_from_item(item);
++                set_reasoning_response_id(&mut reasoning, Some(&response.id));
++                content.push(reasoning);
+             }
+             ResponseOutputItem::Message {
+                 content: msg_content,
+@@ -907,8 +1051,8 @@
+ 
+     for item in output_items {
+         match item {
+-            ResponseOutputItemInfo::Reasoning { summary, .. } => {
+-                content.extend(reasoning_from_summary(&summary));
++            ResponseOutputItemInfo::Reasoning { item } => {
++                content.push(reasoning_from_item(&item));
+             }
+             ResponseOutputItemInfo::Message { content: parts, .. } => {
+                 for part in parts {
+@@ -1018,6 +1162,7 @@
+         let mut output_items: Vec<ResponseOutputItemInfo> = Vec::new();
+         let mut is_text_response = false;
+         let mut output_token_limit_reached = false;
++        let mut emitted_reasoning_items = HashSet::new();
+ 
+         'outer: while let Some(response) = stream.next().await {
+             let response_str = response?;
+@@ -1085,6 +1230,27 @@
+                 }
+ 
+                 ResponsesStreamEvent::OutputItemDone { item, .. } => {
++                    // Preserve reasoning before subsequent text/tool items. The
++                    // completed response repeats these items and is deduplicated
++                    // below, while also serving as a fallback for completion-only APIs.
++                    if let ResponseOutputItemInfo::Reasoning { item: fields } = &item {
++                        let mut reasoning = reasoning_from_item(fields);
++                        set_reasoning_response_id(&mut reasoning, response_id.as_deref());
++                        if let MessageContentBlock::Thinking(thinking) = &reasoning {
++                            let raw = &thinking.provider_metadata.as_ref().unwrap()[RESPONSES_REASONING_ITEM];
++                            if emitted_reasoning_items.insert(reasoning_item_key(raw, response_id.as_deref())) {
++                                let mut message = Message::new(
++                                    Role::Assistant,
++                                    chrono::Utc::now().timestamp(),
++                                    vec![reasoning],
++                                );
++                                if let Some(id) = &response_id {
++                                    message = message.with_id(id.clone());
++                                }
++                                yield (Some(message), None);
++                            }
++                        }
++                    }
+                     output_items.push(item);
+                 }
+ 
+@@ -1102,6 +1268,7 @@
+                     pu.finish_reasons = Some(vec![response.status.clone()]);
+                     pu.response_id = Some(response.id.clone());
+                     final_usage = Some(pu);
++                    response_id = Some(response.id.clone());
+ 
+                     // For complete output, use the response output items
+                     if !response.output.is_empty() {
+@@ -1201,7 +1368,21 @@
+         }
+ 
+         // Process final output items and yield usage data
+-        let content = process_streaming_output_items(output_items, is_text_response)?;
++        let content = process_streaming_output_items(output_items, is_text_response)?
++            .into_iter()
++            .map(|mut content| {
++                set_reasoning_response_id(&mut content, response_id.as_deref());
++                content
++            })
++            .filter(|content| match content {
++                MessageContentBlock::Thinking(thinking) => thinking
++                    .provider_metadata
++                    .as_ref()
++                    .and_then(|metadata| metadata.get(RESPONSES_REASONING_ITEM))
++                    .is_none_or(|item| !emitted_reasoning_items.contains(&reasoning_item_key(item, response_id.as_deref()))),
++                _ => true,
++            })
++            .collect::<Vec<_>>();
+ 
+         if !content.is_empty() {
+             let mut message = Message::new(Role::Assistant, chrono::Utc::now().timestamp(), content);
+@@ -3122,3 +3303,361 @@
+             .contains("invalid arguments"));
+     }
+ }
++
++#[cfg(test)]
++mod reasoning_roundtrip_tests {
++    use super::*;
++    use crate::conversation::Conversation;
++    use futures::StreamExt;
++
++    fn reasoning(id: &str, text: &str) -> Value {
++        json!({
++            "type": "reasoning", "id": id, "status": "completed",
++            "content": [{"type": "reasoning_text", "text": text}],
++            "summary": [], "encrypted_content": "opaque-provider-state",
++            "provider_extension": {"must_survive": true}
++        })
++    }
++
++    fn response(output: Vec<Value>) -> Value {
++        json!({
++            "id": "resp_roundtrip", "object": "response", "created_at": 1,
++            "status": "completed", "model": "deepseek-flash", "output": output
++        })
++    }
++
++    fn tool(id: &str) -> Value {
++        json!({
++            "type": "function_call", "id": format!("fc_{id}"),
++            "call_id": id, "name": "read", "arguments": "{}", "status": "completed"
++        })
++    }
++
++    fn reload(message: &Message) -> Message {
++        serde_json::from_value(serde_json::to_value(message).unwrap()).unwrap()
++    }
++
++    fn request(messages: &[Message]) -> Value {
++        create_responses_request(&ModelConfig::new("deepseek-flash"), "", messages, &[]).unwrap()
++    }
++
++    #[test]
++    fn empty_text_heartbeat_is_ignored_but_malformed_model_output_is_rejected() {
++        assert!(parse_responses_stream_event(r#"{"type":"response.output_text.delta","item_id":"SSE-Keep-Alive","output_index":0,"content_index":0,"delta":"","SSE-Keep-Alive":true}"#)
++            .unwrap().is_none());
++        assert!(parse_responses_stream_event(
++            r#"{"type":"response.output_text.delta","delta":"actual output"}"#
++        )
++        .is_err());
++    }
++
++    #[test]
++    fn full_reasoning_item_survives_native_message_reload_and_input_replay() {
++        let original = reasoning("rs_native", "think\u{E0041} exactly");
++        let parsed: ResponsesApiResponse =
++            serde_json::from_value(response(vec![original.clone(), tool("call_1")])).unwrap();
++        let message = reload(&responses_api_to_message(&parsed).unwrap());
++        let thinking = message.content[0].as_thinking().unwrap();
++        assert_eq!(thinking.thinking, "think exactly");
++        assert!(thinking.signature.is_empty());
++        let input = request(&[message]);
++        assert_eq!(input["input"][0], original);
++        assert_eq!(input["input"][1]["type"], "function_call");
++        assert_eq!(input["input"][1]["call_id"], "call_1");
++    }
++
++    #[test]
++    fn encrypted_only_reasoning_and_stateless_include_are_preserved() {
++        let original = json!({"type":"reasoning", "id":"rs_opaque", "summary":[], "encrypted_content":"opaque"});
++        let parsed: ResponsesApiResponse =
++            serde_json::from_value(response(vec![original.clone()])).unwrap();
++        let message = reload(&responses_api_to_message(&parsed).unwrap());
++        assert!(message.content[0]
++            .as_thinking()
++            .unwrap()
++            .thinking
++            .is_empty());
++        let input = request(&[message]);
++        assert_eq!(input["input"], json!([original]));
++        assert_eq!(input["include"], json!(["reasoning.encrypted_content"]));
++        let mut stored_model = ModelConfig::new("deepseek-flash");
++        stored_model.request_params = Some(std::collections::HashMap::from_iter([(
++            "store".to_string(),
++            json!(true),
++        )]));
++        let stored = create_responses_request(&stored_model, "", &[], &[]).unwrap();
++        assert!(stored.get("include").is_none());
++    }
++
++    #[test]
++    fn legacy_thinking_deserializes_without_provider_metadata() {
++        let block: MessageContentBlock = serde_json::from_value(json!({
++            "type":"thinking", "thinking":"legacy", "signature":"signed"
++        }))
++        .unwrap();
++        assert!(block.as_thinking().unwrap().provider_metadata.is_none());
++        assert!(serde_json::to_value(block)
++            .unwrap()
++            .get("provider_metadata")
++            .is_none());
++    }
++
++    #[test]
++    fn identical_idless_reasoning_from_distinct_responses_is_not_deduplicated() {
++        let original = json!({"type":"reasoning", "summary":[], "encrypted_content":"same-opaque"});
++        let first: ResponsesApiResponse =
++            serde_json::from_value(response(vec![original.clone()])).unwrap();
++        let mut second = response(vec![original.clone()]);
++        second["id"] = json!("resp_next");
++        let second: ResponsesApiResponse = serde_json::from_value(second).unwrap();
++        let messages = [
++            reload(&responses_api_to_message(&first).unwrap()),
++            reload(&responses_api_to_message(&second).unwrap()),
++        ];
++        assert_eq!(request(&messages)["input"], json!([original, original]));
++    }
++
++    #[test]
++    fn parallel_tool_message_copies_replay_reasoning_once_before_grouped_calls() {
++        let original = reasoning("rs_parallel", "choose both tools");
++        let parsed: ResponsesApiResponse = serde_json::from_value(response(vec![
++            original.clone(),
++            tool("call_a"),
++            tool("call_b"),
++        ]))
++        .unwrap();
++        let message = responses_api_to_message(&parsed).unwrap();
++        let thinking = message.content[0].clone();
++        let mut conversation = Conversation::default();
++        // The native loop copies the provider turn's thinking into each split
++        // assistant/tool-result pair before persisting the conversation.
++        for (index, content) in message.content[1..].iter().enumerate() {
++            conversation.push(
++                Message::assistant()
++                    .with_id(format!("asst_{index}"))
++                    .with_content(thinking.clone())
++                    .with_content(content.clone()),
++            );
++            conversation.push(
++                Message::user()
++                    .with_id(format!("tool_{index}"))
++                    .with_tool_response(
++                        format!("call_{}", if index == 0 { "a" } else { "b" }),
++                        Ok(rmcp::model::CallToolResult::success(vec![
++                            ContentBlock::text("ok"),
++                        ])),
++                    ),
++            );
++        }
++        let reloaded: Conversation =
++            serde_json::from_value(serde_json::to_value(&conversation).unwrap()).unwrap();
++        let input = request(reloaded.messages());
++        let items = input["input"].as_array().unwrap();
++        assert_eq!(items[0], original);
++        assert_eq!(
++            items
++                .iter()
++                .map(|item| item["type"].as_str().unwrap())
++                .collect::<Vec<_>>(),
++            vec![
++                "reasoning",
++                "function_call",
++                "function_call",
++                "function_call_output",
++                "function_call_output"
++            ]
++        );
++        assert_eq!(items[1]["call_id"], "call_a");
++        assert_eq!(items[2]["call_id"], "call_b");
++    }
++
++    #[test]
++    fn captured_deepseek_multicall_shape_keeps_reasoning_text_and_both_calls_before_outputs() {
++        // Shape captured from a real Responses stream: one reasoning item,
++        // narration, anchor_read and anchor_conversation_history in one response
++        // despite parallel_tool_calls=false. Text and opaque state are fixtures.
++        let original = reasoning("rs_captured", "inspect both sources");
++        let call_ids = [
++            "call_00_2MN2jDSQFzzyH1G6PJVJ1588",
++            "call_01_8GGtUWxdhLNhNlYNmw4T6834",
++        ];
++        let mut read = tool(call_ids[0]);
++        read["name"] = json!("anchor__anchor_read");
++        read["arguments"] = json!(r#"{"path":"/in/channel/probe.txt"}"#);
++        let mut history = tool(call_ids[1]);
++        history["name"] = json!("anchor__anchor_conversation_history");
++        let parsed: ResponsesApiResponse = serde_json::from_value(response(vec![
++            original.clone(),
++            json!({"type":"message","role":"assistant","content":[{"type":"output_text","text":"Inspect both sources","annotations":[]}]}),
++            read,
++            history,
++        ])).unwrap();
++        let message = responses_api_to_message(&parsed).unwrap();
++        let thinking = message.content[0].clone();
++        let mut native = Conversation::default();
++        native.push(
++            Message::assistant()
++                .with_content(thinking.clone())
++                .with_content(message.content[1].clone()),
++        );
++        for (index, content) in message.content[2..].iter().enumerate() {
++            native.push(
++                Message::assistant()
++                    .with_content(thinking.clone())
++                    .with_content(content.clone()),
++            );
++            native.push(Message::user().with_tool_response(
++                call_ids[index],
++                Ok(rmcp::model::CallToolResult::success(vec![
++                    ContentBlock::text(format!("observed-{index}")),
++                ])),
++            ));
++        }
++        let saved = serde_json::to_value(&native).unwrap();
++        let restored: Conversation = serde_json::from_value(saved.clone()).unwrap();
++        let input = request(restored.messages());
++        let items = input["input"].as_array().unwrap();
++        assert_eq!(
++            items
++                .iter()
++                .map(|item| item["type"].as_str().unwrap())
++                .collect::<Vec<_>>(),
++            vec![
++                "reasoning",
++                "message",
++                "function_call",
++                "function_call",
++                "function_call_output",
++                "function_call_output"
++            ]
++        );
++        assert_eq!(items[0], original);
++        assert_eq!(items[1]["content"][0]["text"], "Inspect both sources");
++        assert_eq!(items[2]["call_id"], call_ids[0]);
++        assert_eq!(items[3]["call_id"], call_ids[1]);
++        assert_eq!(items[4]["call_id"], call_ids[0]);
++        assert_eq!(items[5]["call_id"], call_ids[1]);
++        assert_eq!(items[4]["output"], "observed-0");
++        assert_eq!(items[5]["output"], "observed-1");
++        assert_eq!(serde_json::to_value(&restored).unwrap(), saved);
++    }
++
++    #[test]
++    fn tool_output_grouping_does_not_cross_another_response_or_a_user_message() {
++        for user_boundary in [false, true] {
++            let first: ResponsesApiResponse =
++                serde_json::from_value(response(vec![reasoning("rs_a", "first"), tool("call_a")]))
++                    .unwrap();
++            let mut next = response(vec![reasoning("rs_b", "second"), tool("call_b")]);
++            if !user_boundary {
++                next["id"] = json!("resp_next");
++            }
++            let next: ResponsesApiResponse = serde_json::from_value(next).unwrap();
++            let mut native = Conversation::default();
++            native.push(responses_api_to_message(&first).unwrap());
++            native.push(Message::user().with_tool_response(
++                "call_a",
++                Ok(rmcp::model::CallToolResult::success(vec![
++                    ContentBlock::text("first output"),
++                ])),
++            ));
++            if user_boundary {
++                native.push(Message::user().with_text("a real user message"));
++            }
++            native.push(responses_api_to_message(&next).unwrap());
++            native.push(Message::user().with_tool_response(
++                "call_b",
++                Ok(rmcp::model::CallToolResult::success(vec![
++                    ContentBlock::text("second output"),
++                ])),
++            ));
++            let input = request(native.messages());
++            let items = input["input"].as_array().unwrap();
++            let first_output = items
++                .iter()
++                .position(|item| {
++                    item["type"] == "function_call_output" && item["call_id"] == "call_a"
++                })
++                .unwrap();
++            let next_call = items
++                .iter()
++                .position(|item| item["type"] == "function_call" && item["call_id"] == "call_b")
++                .unwrap();
++            assert!(first_output < next_call);
++        }
++    }
++
++    #[tokio::test]
++    async fn stream_done_and_completed_keep_distinct_reasoning_items_once_and_in_order() {
++        let first = reasoning("rs_first", "same text");
++        let second = reasoning("rs_second", "same text");
++        let final_response = response(vec![first.clone(), second.clone(), tool("call_1")]);
++        let events = vec![
++            json!({"type":"response.created", "sequence_number":1, "response": response(vec![])}),
++            json!({"type":"response.output_item.done", "sequence_number":2, "output_index":0, "item":first}),
++            json!({"type":"response.output_item.done", "sequence_number":3, "output_index":1, "item":second}),
++            json!({"type":"response.output_item.done", "sequence_number":4, "output_index":2, "item":tool("call_1")}),
++            json!({"type":"response.completed", "sequence_number":5, "response":final_response}),
++        ];
++        let lines =
++            tokio_stream::iter(events.into_iter().map(|event| Ok(format!("data: {event}"))));
++        let stream = responses_api_to_streaming_message(lines);
++        futures::pin_mut!(stream);
++        let mut conversation = Conversation::default();
++        while let Some(result) = stream.next().await {
++            if let Some(message) = result.unwrap().0 {
++                conversation.push(reload(&message));
++            }
++        }
++        let input = request(conversation.messages());
++        assert_eq!(input["input"][0], first);
++        assert_eq!(input["input"][1], second);
++        assert_eq!(input["input"][2]["type"], "function_call");
++        assert_eq!(input["input"].as_array().unwrap().len(), 3);
++    }
++
++    #[tokio::test]
++    async fn completion_only_stream_preserves_reasoning_before_tool_call() {
++        let original = reasoning("rs_completion", "call the tool");
++        let completed = json!({"type":"response.completed", "sequence_number":1,
++            "response":response(vec![original.clone(), tool("call_1")])});
++        let stream = responses_api_to_streaming_message(tokio_stream::iter([Ok(format!(
++            "data: {completed}"
++        ))]));
++        futures::pin_mut!(stream);
++        let message = stream.next().await.unwrap().unwrap().0.unwrap();
++        let input = request(&[reload(&message)]);
++        assert_eq!(input["input"][0], original);
++        assert_eq!(input["input"][1]["type"], "function_call");
++        assert!(stream.next().await.is_none());
++    }
++
++    #[tokio::test]
++    async fn streamed_text_remains_after_its_completed_reasoning_item() {
++        let original = reasoning("rs_before_text", "consider the answer");
++        let message = json!({"type":"message", "role":"assistant", "content":[
++            {"type":"output_text", "text":"answer", "annotations":[]}
++        ]});
++        let events = vec![
++            json!({"type":"response.created", "sequence_number":1, "response":response(vec![])}),
++            json!({"type":"response.output_item.done", "sequence_number":2, "output_index":0, "item":original}),
++            json!({"type":"response.output_text.delta", "sequence_number":3, "item_id":"msg_answer",
++                "output_index":1, "content_index":0, "delta":"answer"}),
++            json!({"type":"response.completed", "sequence_number":4, "response":response(vec![original.clone(), message])}),
++        ];
++        let stream = responses_api_to_streaming_message(tokio_stream::iter(
++            events.into_iter().map(|event| Ok(format!("data: {event}"))),
++        ));
++        futures::pin_mut!(stream);
++        let mut conversation = Conversation::default();
++        while let Some(result) = stream.next().await {
++            if let Some(message) = result.unwrap().0 {
++                conversation.push(reload(&message));
++            }
++        }
++        let input = request(conversation.messages());
++        assert_eq!(input["input"][0], original);
++        assert_eq!(input["input"][1]["content"][0]["text"], "answer");
++        assert_eq!(input["input"].as_array().unwrap().len(), 2);
++    }
++}

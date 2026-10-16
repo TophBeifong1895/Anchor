@@ -22,7 +22,7 @@ cargo +stable run --manifest-path rust/Cargo.toml -p anchor-devtools --locked --
 
 需要固定依赖支持的 stable Rust、Linux、Git、Bubblewrap 和可用的
 user/mount/network namespace。入口在测试前校验 Goose 可执行权限和 SHA256
-`71e76c412597b2ecd96ed20d0706e7666f31c018216e7cb5d65c5ca5c44824a7`，
+`dc2a4352279c16f3c665b280e4fc8fedbec3a67cce596bf460aa9fd416c27a15`，
 不下载 binary、不加载 `.env`。缺 binary、digest 不符、构建失败、必要测试
 未执行或证据缺失均不能算通过。
 

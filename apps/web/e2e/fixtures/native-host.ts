@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 import type { OurGraph } from '../../src/model';
 
 export const repo = fileURLToPath(new URL('../../../../', import.meta.url));
-export const gooseSha256 = '71e76c412597b2ecd96ed20d0706e7666f31c018216e7cb5d65c5ca5c44824a7';
+export const gooseSha256 = 'dc2a4352279c16f3c665b280e4fc8fedbec3a67cce596bf460aa9fd416c27a15';
 
 export function nativeHostBinary() {
   const configured = process.env.ANCHOR_TEST_GOOSE_HOST_BINARY || process.env.ANCHOR_TEST_NATIVE_PILOT_BINARY

@@ -27,6 +27,10 @@
 #   musl cc      : https://musl.cc/x86_64-linux-musl-cross.tgz
 #                  sha256 c5d410d9f82a4f24c549fe5d24f988f85b2679b452413a9f7e5f7b956f2fe7ea
 #   features     : --no-default-features --features rustls-tls,online-model-meta
+#   patch        : patches/goose-1.53.0-responses-reasoning.patch
+#                  Retains Responses reasoning in Goose native history and requests.
+#   patch        : patches/goose-1.53.0-external-completion.patch
+#                  Ends an opted-in host completion after native tool history is saved.
 #
 # Reproducibility
 # ---------------
@@ -53,6 +57,9 @@
 
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+REASONING_PATCH="$SCRIPT_DIR/patches/goose-1.53.0-responses-reasoning.patch"
+COMPLETION_PATCH="$SCRIPT_DIR/patches/goose-1.53.0-external-completion.patch"
 GOOSE_VERSION="1.53.0"
 SOURCE_URL="https://codeload.github.com/aaif-goose/goose/tar.gz/refs/tags/v${GOOSE_VERSION}"
 SOURCE_SHA256="85cc5e76a12e364032df4bec0ed0738a910c3e12ec12731b4405d1fdb18d96ae"
@@ -62,7 +69,7 @@ TARGET="x86_64-unknown-linux-musl"
 FEATURES="rustls-tls,online-model-meta"
 # The digest the rest of the repository pins. It is reproducible only at the default
 # build root, because rustc embeds source paths; see the check before publication.
-PINNED_SHA256="71e76c412597b2ecd96ed20d0706e7666f31c018216e7cb5d65c5ca5c44824a7"
+PINNED_SHA256="dc2a4352279c16f3c665b280e4fc8fedbec3a67cce596bf460aa9fd416c27a15"
 
 ROOT="${ANCHOR_GOOSE_BUILD_ROOT:-/var/tmp/anchor-goose-build}"
 JOBS="${CARGO_BUILD_JOBS:-12}"
@@ -128,11 +135,24 @@ export AR_x86_64_unknown_linux_musl="$(dirname "$ANCHOR_GOOSE_MUSL_CC")/x86_64-l
 export CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER="$ANCHOR_GOOSE_MUSL_CC"
 export CARGO_BUILD_JOBS="$JOBS"
 
-# --- unpack at a stable path ---------------------------------------------------------
-rm -rf "$ROOT/src/goose-${GOOSE_VERSION}"
-tar xzf "$SOURCE_ARCHIVE" -C "$ROOT/src"
+# --- prepare verified source without discarding the Cargo cache ----------------------
+# Stage fresh pinned inputs, then synchronize source at the stable build path.
+# Existing target artifacts remain available; source from older patches is removed.
+command -v rsync >/dev/null || die "rsync is required to preserve the build cache"
+STAGING="$(mktemp -d "$ROOT/src/.goose-${GOOSE_VERSION}.XXXXXX")"
+trap 'rm -rf "$STAGING"' EXIT
+tar xzf "$SOURCE_ARCHIVE" -C "$STAGING"
+STAGED_SRC="$STAGING/goose-${GOOSE_VERSION}"
 SRC="$ROOT/src/goose-${GOOSE_VERSION}"
-[ -f "$SRC/Cargo.toml" ] || die "unexpected source layout under $SRC"
+[ -f "$STAGED_SRC/Cargo.toml" ] || die "unexpected source layout under $STAGED_SRC"
+[ -f "$REASONING_PATCH" ] || die "missing reviewed Responses reasoning patch"
+[ -f "$COMPLETION_PATCH" ] || die "missing reviewed external completion patch"
+patch --batch --fuzz=0 -d "$STAGED_SRC" -p1 < "$REASONING_PATCH"
+patch --batch --fuzz=0 -d "$STAGED_SRC" -p1 < "$COMPLETION_PATCH"
+mkdir -p "$SRC"
+rsync -rlc --delete --exclude=/target/ "$STAGED_SRC/" "$SRC/"
+PATCH_SHA256="$(sha256_of "$REASONING_PATCH")"
+COMPLETION_PATCH_SHA256="$(sha256_of "$COMPLETION_PATCH")"
 cd "$SRC"
 
 command -v rustup >/dev/null || die "rustup is required (the source pins its toolchain)"
@@ -190,6 +210,12 @@ cat >"$DEST.build-record.json" <<JSON
   "goose_version": "$GOOSE_VERSION",
   "source_url": "$SOURCE_URL",
   "source_sha256": "$SOURCE_SHA256",
+  "patch": "goose-1.53.0-responses-reasoning.patch",
+  "patch_sha256": "$PATCH_SHA256",
+  "patches": [
+    {"path": "goose-1.53.0-responses-reasoning.patch", "sha256": "$PATCH_SHA256"},
+    {"path": "goose-1.53.0-external-completion.patch", "sha256": "$COMPLETION_PATCH_SHA256"}
+  ],
   "recipe": "cargo build -p goose --bin goose-acp --profile lean --locked --target $TARGET --no-default-features --features $FEATURES",
   "toolchain": "$(rustc -V)",
   "musl_cc": "$($ANCHOR_GOOSE_MUSL_CC --version | head -1)",

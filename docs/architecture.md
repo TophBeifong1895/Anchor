@@ -85,7 +85,7 @@ Library 审查、候选准备与导入共用代码暂存规则：选中 root 或
 
 ## Goose 与恢复
 
-Goose 固定为 v1.53.0；Anchor 用上游同一份源码的 lean ACP-only 入口构建静态 x86_64 musl 二进制（recipe 见 [构建脚本](../scripts/build-goose-acp.sh)），SHA256 为 `71e76c412597b2ecd96ed20d0706e7666f31c018216e7cb5d65c5ca5c44824a7`。它与官方完整 CLI 共用 `goose::acp::server::run`，省去完整 CLI 和未使用的发行入口；Goose 库的原生平台扩展仍须由 Host 明确管理。AgentNode 与 Pilot 共用 ACP/MCP 接入。Host 绑定二进制、模型/endpoint、原生 Session 和 invocation，恢复时不静默更换模型或新建替代历史；更换二进制即改变恢复身份，未收束的 invocation fail-closed，不会被静默接管。
+Goose 固定为 v1.53.0；Anchor 用上游同一份源码的 lean ACP-only 入口构建静态 x86_64 musl 二进制（recipe 见 [构建脚本](../scripts/build-goose-acp.sh)），SHA256 为 `dc2a4352279c16f3c665b280e4fc8fedbec3a67cce596bf460aa9fd416c27a15`。它与官方完整 CLI 共用 `goose::acp::server::run`，省去完整 CLI 和未使用的发行入口；Goose 库的原生平台扩展仍须由 Host 明确管理。AgentNode 与 Pilot 共用 ACP/MCP 接入。Host 绑定二进制、模型/endpoint、原生 Session 和 invocation，恢复时不静默更换模型或新建替代历史；更换二进制即改变恢复身份，未收束的 invocation fail-closed，不会被静默接管。
 
 固定版 Goose 的 `enabledExtensions` 在新建时追加到默认扩展，加载时保留已存扩展，不能单独用作授权集合。共享 ACP 接入在新建/加载后、首次模型提示前，通过官方 `session/extensions/list`、`remove`、`add` 接口校准为 Anchor MCP 与部署显式允许的原生扩展；默认只保留提供边界指令的 `tom`，不启用 `developer` 的独立文件和 shell 工具。撤销旧扩展保留原生 Session 与历史，不直接修改其数据库；校准失败拒绝本次执行。
 
