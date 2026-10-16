@@ -334,7 +334,7 @@ fn resolve_binding_at_root(
         library_root: library_root.to_path_buf(),
         config: config.clone(),
         digest: definition.digest.clone(),
-        authorization_digest: definition.binding().authorization_digest,
+        authorization_digest: definition.binding().authorization_digest.into(),
     })
 }
 

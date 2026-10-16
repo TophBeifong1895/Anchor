@@ -115,9 +115,9 @@ fn legacy_record(id: &str, current: &PluginBinding) -> GraphRunRecord {
     }))
     .unwrap();
     let mut record = GraphRunRecord::create_with_id(snapshot, Value::Null, id).unwrap();
-    let mut legacy = current.clone();
-    legacy.authorization_digest.clear();
-    record.plugin_bindings.insert(legacy.id.clone(), legacy);
+    record
+        .plugin_bindings
+        .insert(current.id.clone(), current.clone());
     record.plugin_bindings_initialized = true;
     record.status = RunStatus::Paused;
     record
@@ -129,6 +129,13 @@ fn legacy_file(root: &Path, record: &GraphRunRecord) -> (FileRunStore, PathBuf, 
     let path = directory.join(format!("{}.json", record.run_id));
     let mut value = serde_json::to_value(record).unwrap();
     value["format"] = json!(12);
+    for binding in value["plugin_bindings"]
+        .as_object_mut()
+        .unwrap()
+        .values_mut()
+    {
+        binding["authorization_digest"] = json!("");
+    }
     let bytes = serde_json::to_vec(&value).unwrap();
     fs::write(&path, &bytes).unwrap();
     (FileRunStore::new(directory), path, bytes)
@@ -170,7 +177,8 @@ async fn legacy_mcp_preparation_and_load_require_offline_migration_without_rewri
     );
     let error = store.load(&record.run_id).unwrap_err().to_string();
     assert!(
-        error.contains("old Graph Run format") && error.contains("offline migration required"),
+        (error.contains("old Graph Run format") || error.contains("old authorization format"))
+            && error.contains("offline migration required"),
         "{error}"
     );
     assert_eq!(fs::read(path).unwrap(), original_bytes);

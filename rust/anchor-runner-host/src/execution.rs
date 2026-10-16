@@ -152,23 +152,15 @@ impl PreparedExecution {
         if bindings.is_empty() {
             return Ok(());
         }
-        for (id, admitted) in bindings {
-            if admitted.authorization_digest.is_empty() {
-                return Err(format!(
-                    "Plugin `{id}` uses an old authorization format; offline migration required"
-                ));
-            }
-        }
         let ids = bindings.keys().cloned().collect::<Vec<_>>();
         let current = nodes
             .resolve_plugins(&ids)
             .map_err(|error| format!("Plugin manifest resolution failed: {error}"))?;
         if current.len() != ids.len()
-            || current.iter().zip(&ids).any(|(binding, id)| {
-                binding.id != *id
-                    || binding.digest.is_empty()
-                    || binding.authorization_digest.is_empty()
-            })
+            || current
+                .iter()
+                .zip(&ids)
+                .any(|(binding, id)| binding.id != *id || binding.digest.is_empty())
         {
             return Err(
                 "Plugin resolver returned incomplete, reordered, unhashed, or unauthorized bindings"
@@ -179,15 +171,9 @@ impl PreparedExecution {
             if admitted.same_authorization(current) {
                 continue;
             }
-            return Err(if admitted.authorization_digest.is_empty() {
-                format!(
-                    "Plugin `{id}` uses an old authorization format; offline migration required"
-                )
-            } else {
-                format!(
-                    "Plugin `{id}` Host authorization changed since this Graph Run was admitted"
-                )
-            });
+            return Err(format!(
+                "Plugin `{id}` Host authorization changed since this Graph Run was admitted"
+            ));
         }
         // Wiring validates the admitted bindings again against its catalog read.
         nodes

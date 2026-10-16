@@ -139,7 +139,7 @@ fn binding(server: &str) -> PluginBinding {
         digest: "fixture-digest".into(),
         resources: vec![],
         mcp_servers: vec![server.into()],
-        authorization_digest: String::new(),
+        authorization_digest: "fixture-authority".try_into().unwrap(),
     }
 }
 

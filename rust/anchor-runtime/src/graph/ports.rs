@@ -163,7 +163,67 @@ pub struct NodeExecutionRequest {
     pub cancellation: crate::Cancellation,
 }
 
+/// Non-empty Host authority identity. Construction and decoding share one invariant.
+///
+/// ```compile_fail
+/// use anchor_runtime::graph::AuthorizationDigest;
+/// let invalid = AuthorizationDigest(String::new());
+/// ```
+/// ```compile_fail
+/// use anchor_runtime::graph::AuthorizationDigest;
+/// let mut digest = AuthorizationDigest::try_from("authority").unwrap();
+/// digest.clear();
+/// ```
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(try_from = "String", into = "String")]
+pub struct AuthorizationDigest(String);
+
+impl TryFrom<String> for AuthorizationDigest {
+    type Error = &'static str;
+
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        if value.is_empty() {
+            Err("old authorization format; offline migration required")
+        } else {
+            Ok(Self(value))
+        }
+    }
+}
+
+impl TryFrom<&str> for AuthorizationDigest {
+    type Error = &'static str;
+
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        value.to_owned().try_into()
+    }
+}
+
+impl From<AuthorizationDigest> for String {
+    fn from(value: AuthorizationDigest) -> Self {
+        value.0
+    }
+}
+
+impl AsRef<str> for AuthorizationDigest {
+    fn as_ref(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::ops::Deref for AuthorizationDigest {
+    type Target = str;
+    fn deref(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Display for AuthorizationDigest {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.0)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct PluginBinding {
     pub id: String,
@@ -174,8 +234,40 @@ pub struct PluginBinding {
     pub mcp_servers: Vec<String>,
     /// Stable, secret-free digest of declarations that grant Host authority.
     /// Missing legacy baselines require offline migration.
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub authorization_digest: String,
+    pub authorization_digest: AuthorizationDigest,
+}
+
+impl<'de> Deserialize<'de> for PluginBinding {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Wire {
+            id: String,
+            digest: String,
+            #[serde(default)]
+            resources: Vec<String>,
+            #[serde(default)]
+            mcp_servers: Vec<String>,
+            #[serde(default, deserialize_with = "decode_authority_text")]
+            authorization_digest: String,
+        }
+        fn decode_authority_text<'de, D: serde::Deserializer<'de>>(
+            deserializer: D,
+        ) -> Result<String, D::Error> {
+            Ok(Option::<String>::deserialize(deserializer)?.unwrap_or_default())
+        }
+        let wire = Wire::deserialize(deserializer)?;
+        Ok(Self {
+            id: wire.id,
+            digest: wire.digest,
+            resources: wire.resources,
+            mcp_servers: wire.mcp_servers,
+            authorization_digest: wire
+                .authorization_digest
+                .try_into()
+                .map_err(serde::de::Error::custom)?,
+        })
+    }
 }
 
 impl PluginBinding {
@@ -183,7 +275,6 @@ impl PluginBinding {
     /// or resource contents. Legacy bindings require offline migration.
     pub fn same_authorization(&self, current: &Self) -> bool {
         self.id == current.id
-            && !self.authorization_digest.is_empty()
             && self.authorization_digest == current.authorization_digest
             && self.mcp_servers == current.mcp_servers
     }

@@ -137,10 +137,7 @@ pub(crate) fn publication(
         if saved.format != 1
             || saved.source != source
             || saved.graph_digest != digest
-            || saved
-                .bindings
-                .iter()
-                .any(|(id, binding)| id != &binding.id || binding.authorization_digest.is_empty())
+            || saved.bindings.iter().any(|(id, binding)| id != &binding.id)
         {
             return Err("Graph Plugin authorization receipt is corrupt".into());
         }
@@ -208,10 +205,7 @@ pub(crate) fn load(
             || saved.mounts.turn != turn
             || saved.node.is_empty()
             || saved.graph_digest.is_empty()
-            || saved
-                .bindings
-                .iter()
-                .any(|(id, binding)| id != &binding.id || binding.authorization_digest.is_empty()))
+            || saved.bindings.iter().any(|(id, binding)| id != &binding.id))
     {
         return Err("Turn Plugin policy is corrupt".into());
     }
@@ -243,16 +237,16 @@ pub(crate) fn invocation_authority(root: &Path, record: &GraphRunRecord) -> Resu
 }
 
 /// Only the cursor's still executable Turn holds references, never old history.
-pub(crate) fn active_bindings(
+pub(crate) fn active_plugin_ids(
     root: &Path,
     record: &GraphRunRecord,
     metadata: &RunMetadata,
-) -> Result<BTreeMap<String, PluginBinding>, String> {
+) -> Result<std::collections::BTreeSet<String>, String> {
     let Some(source) = &metadata.assistant else {
-        return Ok(BTreeMap::new());
+        return Ok(std::collections::BTreeSet::new());
     };
     let Some(cursor) = &record.cursor else {
-        return Ok(BTreeMap::new());
+        return Ok(std::collections::BTreeSet::new());
     };
     let mut binding = crate::assistant::binding(root, &cursor.key)?;
     if binding.is_none() && cursor.node_id != source.wait_node {
@@ -272,37 +266,35 @@ pub(crate) fn active_bindings(
         if cursor.node_id != source.wait_node {
             return Err("assistant active invocation has no Turn binding".into());
         }
-        return Ok(BTreeMap::new());
+        return Ok(std::collections::BTreeSet::new());
     };
     if let Some(policy) = load(root, &record.run_id, &source.session, &binding.turn)? {
         if policy.node != source.work_node {
             return Err("assistant Turn Plugin node identity changed".into());
         }
-        return Ok(policy.bindings);
+        return Ok(policy.bindings.into_keys().collect());
     }
     if initialized(root, &record.run_id)? {
         return Err("assistant Turn Plugin policy is missing".into());
     }
     // Only pre-upgrade active Turns lack a policy. Retain conservative baseline
     // references until that Turn finishes; idle assistants hold no such grants.
-    let mut bindings = record.plugin_bindings.clone();
+    let mut ids = record
+        .plugin_bindings
+        .keys()
+        .cloned()
+        .collect::<std::collections::BTreeSet<_>>();
     let path = crate::plugin_mounts::snapshot_path(root, &source.session, &binding.turn);
     if let Some(snapshot) =
         crate::plugin_mounts::read_snapshot_strict(&path, &source.session, &binding.turn)?
     {
         for (id, enabled) in snapshot.mounts {
             if enabled {
-                bindings.entry(id.clone()).or_insert(PluginBinding {
-                    id,
-                    digest: String::new(),
-                    resources: vec![],
-                    mcp_servers: vec![],
-                    authorization_digest: String::new(),
-                });
+                ids.insert(id);
             }
         }
     }
-    Ok(bindings)
+    Ok(ids)
 }
 
 /// Delete only parsed facts whose exact owner and hashed filename agree. Open

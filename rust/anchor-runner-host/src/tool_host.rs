@@ -36,7 +36,9 @@ fn fake_binding() -> PluginBinding {
         digest: "anchor.fake.echo.v1".into(),
         resources: Vec::new(),
         mcp_servers: vec![FAKE_SERVER_ID.into()],
-        authorization_digest: "anchor.fake.echo.authorization.v1".into(),
+        authorization_digest: "anchor.fake.echo.authorization.v1"
+            .try_into()
+            .expect("non-empty fixture authority"),
     }
 }
 
@@ -140,14 +142,6 @@ impl McpToolConfig {
         root: impl Into<PathBuf>,
         bindings: &[PluginBinding],
     ) -> Result<Self, String> {
-        for binding in bindings {
-            if binding.authorization_digest.is_empty() {
-                return Err(format!(
-                    "Plugin `{}` uses an old authorization format; offline migration required",
-                    binding.id
-                ));
-            }
-        }
         let root = root.into();
         let catalog = FilePluginCatalog::new(root.clone());
         let mut definitions = BTreeMap::new();
@@ -190,12 +184,6 @@ impl McpToolConfig {
                 .get(&binding.id)
                 .ok_or_else(|| format!("Plugin `{}` MCP definition is unavailable", binding.id))?;
             let current = declaration.binding();
-            if binding.authorization_digest.is_empty() {
-                return Err(format!(
-                    "Plugin `{}` uses an old authorization format; offline migration required",
-                    binding.id
-                ));
-            }
             if !binding.same_authorization(&current) {
                 return Err(format!(
                     "Plugin `{}` Host authorization changed before MCP assembly",
@@ -1439,7 +1427,7 @@ mod tests {
             digest: "digest".into(),
             resources: Vec::new(),
             mcp_servers: vec!["docmost".into()],
-            authorization_digest: String::new(),
+            authorization_digest: "fixture-authority".try_into().unwrap(),
         };
         assert!(
             fake_host
@@ -1477,16 +1465,13 @@ mod tests {
 
     #[test]
     fn fake_fixture_binding_does_not_require_a_filesystem_catalog() {
-        let binding = PluginBinding {
-            id: "fake-tools".into(),
-            digest: "anchor.fake.echo.v1".into(),
-            resources: Vec::new(),
-            mcp_servers: vec![FAKE_SERVER_ID.into()],
-            authorization_digest: String::new(),
-        };
         let config = McpToolConfig::from_catalog("/does/not/exist", &[fake_binding()]).unwrap();
         assert!(config.servers.is_empty());
-        let error = McpToolConfig::from_catalog("/does/not/exist", &[binding]).unwrap_err();
+        let mut legacy = serde_json::to_value(fake_binding()).unwrap();
+        legacy["authorization_digest"] = json!("");
+        let error = serde_json::from_value::<PluginBinding>(legacy)
+            .unwrap_err()
+            .to_string();
         assert!(error.contains("old authorization format"), "{error}");
         assert!(error.contains("offline migration required"), "{error}");
     }
@@ -1519,7 +1504,6 @@ mod tests {
                 root.path(),
                 &[PluginBinding {
                     mcp_servers: vec!["not-declared".into()],
-                    authorization_digest: String::new(),
                     ..binding
                 }]
             )

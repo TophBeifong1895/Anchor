@@ -127,7 +127,7 @@ impl RunApplication {
                 let definition = FilePluginCatalog::new(staged)
                     .definition(&id)
                     .map_err(ApplicationError::from)?;
-                let authorization_digest = definition.authorization_digest.clone();
+                let authorization_digest = definition.authorization_digest.to_string();
                 let network = crate::plugin_network::requires_network(&definition);
                 let mutable = definition.mutable.paths().to_vec();
                 let existing_digest = FilePluginCatalog::new(&review_root)
@@ -760,9 +760,9 @@ impl RunApplication {
                 .filter(|metadata| metadata.assistant.is_some())
             {
                 Some(metadata) => {
-                    crate::assistant_plugins::active_bindings(&self.data_root, &record, metadata)
+                    crate::assistant_plugins::active_plugin_ids(&self.data_root, &record, metadata)
                         .map_err(ApplicationError::Conflict)?
-                        .contains_key(id)
+                        .contains(id)
                 }
                 None => {
                     record.plugin_bindings.contains_key(id)
@@ -1668,7 +1668,9 @@ mod impact_tests {
                 digest: "a".repeat(64),
                 resources: Vec::new(),
                 mcp_servers: vec!["probe".into()],
-                authorization_digest: "fixture-authority".into(),
+                authorization_digest: "fixture-authority"
+                    .try_into()
+                    .expect("non-empty fixture authority"),
             },
         );
         record.plugin_bindings_initialized = true;

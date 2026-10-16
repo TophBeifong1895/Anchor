@@ -55,7 +55,7 @@ pub struct PluginDefinition {
     pub configuration_resources: Vec<String>,
     pub digest: String,
     /// Secret-free digest of the declarations that authorize Host capabilities.
-    pub authorization_digest: String,
+    pub authorization_digest: anchor_runtime::graph::AuthorizationDigest,
 }
 
 /// Validated live catalog information, without a code-content identity. This can describe a
@@ -176,7 +176,9 @@ impl FilePluginCatalog {
             resources,
             configuration_resources,
             digest,
-            authorization_digest,
+            authorization_digest: authorization_digest
+                .try_into()
+                .expect("SHA256 authority digest is non-empty"),
         })
     }
 

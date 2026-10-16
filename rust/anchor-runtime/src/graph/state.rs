@@ -201,6 +201,34 @@ pub struct ParallelActivation {
 /// Current persisted Graph Run record format. Older records require offline migration.
 pub const RUN_RECORD_FORMAT: u32 = 13;
 
+/// The only supported persisted Run schema. No invalid in-memory format can be constructed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(try_from = "u32", into = "u32")]
+pub struct RunRecordFormat;
+
+impl TryFrom<u32> for RunRecordFormat {
+    type Error = String;
+    fn try_from(value: u32) -> Result<Self, Self::Error> {
+        if value == RUN_RECORD_FORMAT {
+            Ok(Self)
+        } else {
+            Err(format!(
+                "old Graph Run format or unsupported graph run format {value}; offline migration required"
+            ))
+        }
+    }
+}
+impl From<RunRecordFormat> for u32 {
+    fn from(_: RunRecordFormat) -> Self {
+        RUN_RECORD_FORMAT
+    }
+}
+impl PartialEq<u32> for RunRecordFormat {
+    fn eq(&self, other: &u32) -> bool {
+        u32::from(*self) == *other
+    }
+}
+
 /// RFC 3339 UTC timestamp used for `started`/`updated` on Run records.
 pub(crate) fn timestamp_now() -> String {
     chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
@@ -209,7 +237,7 @@ pub(crate) fn timestamp_now() -> String {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct GraphRunRecord {
-    pub format: u32,
+    pub format: RunRecordFormat,
     /// RFC 3339 UTC when the record was created. Absent on records written
     /// before format 8: the real creation time is unknown and is deliberately
     /// not inferred from file mtime.
@@ -253,7 +281,7 @@ pub struct GraphRunRecord {
 #[derive(Deserialize)]
 #[serde(remote = "GraphRunRecord", deny_unknown_fields)]
 struct GraphRunRecordWire {
-    pub format: u32,
+    pub format: RunRecordFormat,
     /// RFC 3339 UTC when the record was created. Absent on records written
     /// before format 8: the real creation time is unknown and is deliberately
     /// not inferred from file mtime.
@@ -345,16 +373,6 @@ impl<'de> Deserialize<'de> for GraphRunRecord {
             }
         }
         let record = deserializer.deserialize_any(RecordVisitor)?;
-        if record.format < RUN_RECORD_FORMAT
-            || record
-                .plugin_bindings
-                .values()
-                .any(|binding| binding.authorization_digest.is_empty())
-        {
-            return Err(serde::de::Error::custom(
-                "old Graph Run format; offline migration required",
-            ));
-        }
         record
             .refuse_old_cursor()
             .map_err(serde::de::Error::custom)?;
@@ -392,7 +410,7 @@ impl GraphRunRecord {
         let input = merge_values(&snapshot.input, &input, &Value::Null);
         let now = timestamp_now();
         Ok(Self {
-            format: RUN_RECORD_FORMAT,
+            format: RunRecordFormat,
             started: Some(now.clone()),
             updated: Some(now),
             run_id,
@@ -460,22 +478,7 @@ impl GraphRunRecord {
 
     pub(crate) fn validate(&self) -> Result<(), GraphError> {
         validate_component(&self.run_id)?;
-        if self.format != RUN_RECORD_FORMAT {
-            return Err(GraphError::CorruptRun(format!(
-                "old or unsupported graph run format {}; offline migration required",
-                self.format
-            )));
-        }
         self.refuse_old_cursor()?;
-        if self
-            .plugin_bindings
-            .values()
-            .any(|binding| binding.authorization_digest.is_empty())
-        {
-            return Err(GraphError::CorruptRun(
-                "old authorization format; offline migration required".into(),
-            ));
-        }
         self.snapshot.validate()?;
         if self.snapshot.digest()? != self.graph_digest {
             return Err(GraphError::CorruptRun("snapshot digest mismatch".into()));

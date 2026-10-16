@@ -295,18 +295,19 @@ fn preliminary_wiring_refuses_legacy_identity_and_validates_skill_authority() {
     let catalog = FilePluginCatalog::new(root.path());
     let binding = catalog.resolve(&["skill".into()]).unwrap().remove(0);
     assert!(binding.mcp_servers.is_empty());
-    let mut legacy = binding.clone();
-    legacy.authorization_digest.clear();
+    let mut legacy = serde_json::to_value(&binding).unwrap();
+    legacy["authorization_digest"] = serde_json::json!("");
     McpToolConfig::from_catalog(root.path(), std::slice::from_ref(&binding)).unwrap();
-    let error =
-        McpToolConfig::from_catalog(root.path(), std::slice::from_ref(&legacy)).unwrap_err();
+    let error = serde_json::from_value::<PluginBinding>(legacy.clone())
+        .unwrap_err()
+        .to_string();
     assert!(error.contains("old authorization format"), "{error}");
     assert!(error.contains("offline migration required"), "{error}");
     let mut forged = binding;
-    forged.authorization_digest = "forged".into();
+    forged.authorization_digest = "forged".try_into().expect("non-empty fixture authority");
     assert!(McpToolConfig::from_catalog(root.path(), &[forged]).is_err());
     fs::write(plugin.join("instructions.md"), "changed code and resources").unwrap();
-    assert!(McpToolConfig::from_catalog(root.path(), &[legacy]).is_err());
+    assert!(serde_json::from_value::<PluginBinding>(legacy).is_err());
 }
 
 #[tokio::test]
@@ -317,7 +318,7 @@ async fn preparation_requires_real_skill_authority_and_deployment_enabled_exact_
     fs::write(plugin.join("plugin.json"), r#"{"name":"Skill"}"#).unwrap();
     let catalog = FilePluginCatalog::new(root.path());
     let mut skill = catalog.resolve(&["skill".into()]).unwrap().remove(0);
-    skill.authorization_digest = "forged".into();
+    skill.authorization_digest = "forged".try_into().expect("non-empty fixture authority");
     let enabled = PluginToolHost::new(["fake-tools".into()]);
     let cancellation = || Arc::new(AtomicBool::new(false));
     assert!(

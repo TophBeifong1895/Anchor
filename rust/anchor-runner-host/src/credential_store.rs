@@ -331,7 +331,7 @@ pub(crate) fn target_authorization(
             .ok_or("credential target MCP server is not declared")?;
         Ok((
             declared_fields(&declaration.config),
-            definition.binding().authorization_digest,
+            definition.binding().authorization_digest.into(),
         ))
     }
 }

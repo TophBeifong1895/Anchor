@@ -40,7 +40,9 @@ async fn invocation_authority_is_explicit_and_keeps_the_run_admission_immutable(
             digest: "old-code".into(),
             resources: vec![],
             mcp_servers: vec![],
-            authorization_digest: "old-grants".into(),
+            authorization_digest: "old-grants"
+                .try_into()
+                .expect("non-empty fixture authority"),
         };
         record.plugin_bindings.insert(binding.id.clone(), binding);
         record.plugin_bindings_initialized = true;

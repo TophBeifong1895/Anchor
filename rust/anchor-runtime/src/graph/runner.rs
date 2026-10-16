@@ -850,9 +850,10 @@ impl<'a, S: RunStore, A: ArtifactPort, N: NodeExecutionPort, C: RunControl>
         {
             if !record.plugin_bindings_initialized
                 || !record.plugin_bindings.keys().eq(ids.iter())
-                || record.plugin_bindings.iter().any(|(id, binding)| {
-                    id != &binding.id || binding.authorization_digest.is_empty()
-                })
+                || record
+                    .plugin_bindings
+                    .iter()
+                    .any(|(id, binding)| id != &binding.id)
             {
                 return Err("invocation-authorized Run has no valid admitted Plugin record".into());
             }
@@ -872,11 +873,10 @@ impl<'a, S: RunStore, A: ArtifactPort, N: NodeExecutionPort, C: RunControl>
             .resolve_plugins(&ids)
             .map_err(|error| format!("Plugin manifest resolution failed: {error}"))?;
         let valid = resolved.len() == ids.len()
-            && resolved.iter().zip(&ids).all(|(binding, id)| {
-                binding.id == *id
-                    && !binding.digest.is_empty()
-                    && !binding.authorization_digest.is_empty()
-            });
+            && resolved
+                .iter()
+                .zip(&ids)
+                .all(|(binding, id)| binding.id == *id && !binding.digest.is_empty());
         if !valid {
             return Err(
                 "Plugin resolver returned incomplete, reordered, unhashed, or unauthorized bindings"
@@ -911,11 +911,6 @@ impl<'a, S: RunStore, A: ArtifactPort, N: NodeExecutionPort, C: RunControl>
             }
             for (id, current) in &bindings {
                 let admitted = record.plugin_bindings.get(id).expect("keys were compared");
-                if admitted.authorization_digest.is_empty() {
-                    return Err(format!(
-                        "Plugin `{id}` uses an old authorization format; offline migration required"
-                    ));
-                }
                 if !admitted.same_authorization(current) {
                     return Err(format!(
                         "Plugin `{id}` Host authorization changed since this Graph Run was admitted"

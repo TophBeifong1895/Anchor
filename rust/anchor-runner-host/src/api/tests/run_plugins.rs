@@ -31,7 +31,9 @@ async fn run_plugins_retain_frozen_identity_order_and_node_scope_after_library_d
                 digest,
                 resources: vec!["resources/input.txt".into()],
                 mcp_servers: Vec::new(),
-                authorization_digest: "fixture-authority".into(),
+                authorization_digest: "fixture-authority"
+                    .try_into()
+                    .expect("non-empty fixture authority"),
             },
         );
     }

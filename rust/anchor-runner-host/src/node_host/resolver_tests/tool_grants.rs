@@ -97,7 +97,9 @@ async fn resolver_returns_owned_anchor_tools_under_admitted_plugin_authority() {
         .plugin_bindings
         .get_mut("fake-tools")
         .unwrap()
-        .authorization_digest = "sha256:drift".into();
+        .authorization_digest = "sha256:drift"
+        .try_into()
+        .expect("non-empty fixture authority");
     resolver.run_store.save(&record).unwrap();
     assert!(resolver.tools(&request).await.is_err());
 }

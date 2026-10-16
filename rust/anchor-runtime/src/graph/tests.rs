@@ -346,7 +346,9 @@ async fn plugin_authorization_drift_fails_before_dispatch() {
         digest: "manifest-v1".into(),
         resources: vec!["instructions.md".into()],
         mcp_servers: vec!["search".into()],
-        authorization_digest: "authorization-v1".into(),
+        authorization_digest: "authorization-v1"
+            .try_into()
+            .expect("non-empty fixture authority"),
     };
     let nodes = FakeNodes {
         resolved_plugins: Mutex::new(vec![binding.clone()]),
@@ -368,7 +370,9 @@ async fn plugin_authorization_drift_fails_before_dispatch() {
     {
         let mut changed = nodes.resolved_plugins.lock().unwrap();
         changed[0].digest = "manifest-v2".into();
-        changed[0].authorization_digest = "authorization-v2".into();
+        changed[0].authorization_digest = "authorization-v2"
+            .try_into()
+            .expect("non-empty fixture authority");
     }
     let resumed = GraphRunner::new(&store, &artifacts, &nodes, &control)
         .run(first)
@@ -388,7 +392,9 @@ async fn plugin_code_changes_resume_and_are_observed_per_call() {
         digest: "code-v1".into(),
         resources: vec!["instructions.md".into()],
         mcp_servers: vec!["search".into()],
-        authorization_digest: "authorization-v1".into(),
+        authorization_digest: "authorization-v1"
+            .try_into()
+            .expect("non-empty fixture authority"),
     };
     let nodes = FakeNodes {
         resolved_plugins: Mutex::new(vec![binding.clone()]),
@@ -444,7 +450,9 @@ async fn parallel_dispatch_uses_current_plugin_resources_and_preserves_admitted_
         digest: "code-v1".into(),
         resources: vec!["old.md".into()],
         mcp_servers: vec![],
-        authorization_digest: "authority-v1".into(),
+        authorization_digest: "authority-v1"
+            .try_into()
+            .expect("non-empty fixture authority"),
     };
     let mut current = admitted.clone();
     current.digest = "code-v2".into();
@@ -486,64 +494,37 @@ async fn parallel_dispatch_uses_current_plugin_resources_and_preserves_admitted_
     }
 }
 
-#[tokio::test]
-async fn legacy_plugin_authority_requires_offline_migration_before_execution() {
-    let mut snapshot = graph(&["work"], &[], "work");
-    snapshot.nodes[0].plugins = vec!["review".into()];
-    let mut record = GraphRunRecord::create(snapshot, Value::Null).unwrap();
-    record.plugin_bindings_initialized = true;
-    record.plugin_bindings.insert(
-        "review".into(),
-        PluginBinding {
-            id: "review".into(),
-            digest: "code".into(),
-            resources: vec![],
-            mcp_servers: vec![],
-            authorization_digest: String::new(),
-        },
-    );
-    let (store, artifacts, nodes, control) = setup();
-    let id = record.run_id.clone();
-    let error = GraphRunner::new(&store, &artifacts, &nodes, &control)
-        .run(record)
-        .await
-        .unwrap_err()
-        .to_string();
-    assert!(
-        error.contains("old authorization format") && error.contains("offline migration required"),
-        "{error}"
-    );
-    assert!(nodes.calls.lock().unwrap().is_empty());
-    assert!(store.load(&id).unwrap().is_none());
+#[test]
+fn legacy_plugin_authority_requires_offline_migration_before_execution() {
+    let record = GraphRunRecord::create(graph(&["work"], &[], "work"), Value::Null).unwrap();
+    let mut value = serde_json::to_value(record).unwrap();
+    for authorization in [Value::Null, serde_json::json!("")] {
+        value["plugin_bindings"] = serde_json::json!({"review": {"id":"review","digest":"code","authorization_digest":authorization}});
+        let error = serde_json::from_value::<GraphRunRecord>(value.clone())
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("old authorization format")
+                && error.contains("offline migration required"),
+            "{error}"
+        );
+    }
 }
 
-#[tokio::test]
-async fn a_new_run_does_not_bind_plugins_without_a_current_authorization_baseline() {
-    let mut snapshot = graph(&["work"], &[], "work");
-    snapshot.nodes[0].plugins = vec!["review".into()];
-    let nodes = FakeNodes {
-        resolved_plugins: Mutex::new(vec![PluginBinding {
-            id: "review".into(),
-            digest: "current-code".into(),
-            resources: vec![],
-            mcp_servers: vec![],
-            authorization_digest: String::new(),
-        }]),
-        ..Default::default()
-    };
-    let (store, artifacts, _, control) = setup();
-    let failed = GraphRunner::new(&store, &artifacts, &nodes, &control)
-        .run(GraphRunRecord::create(snapshot, Value::Null).unwrap())
-        .await
-        .unwrap();
-    assert_eq!(failed.status, RunStatus::Failed);
-    assert!(failed.error.as_deref().unwrap().contains("unauthorized"));
-    assert!(!failed.plugin_bindings_initialized);
-    assert!(failed.plugin_bindings.is_empty());
-    assert!(failed.cursor.is_none());
-    assert!(failed.invocations.is_empty());
-    assert!(nodes.calls.lock().unwrap().is_empty());
-    assert_eq!(store.load(&failed.run_id).unwrap(), Some(failed));
+#[test]
+fn a_new_run_does_not_bind_plugins_without_a_current_authorization_baseline() {
+    assert!(AuthorizationDigest::try_from(String::new()).is_err());
+    let digest = AuthorizationDigest::try_from("current-authority").unwrap();
+    assert_eq!(
+        serde_json::to_value(&digest).unwrap(),
+        serde_json::json!("current-authority")
+    );
+    assert_eq!(
+        serde_json::from_value::<AuthorizationDigest>(serde_json::json!("current-authority"))
+            .unwrap(),
+        digest
+    );
+    assert!(serde_json::from_value::<AuthorizationDigest>(serde_json::json!("")).is_err());
 }
 
 #[tokio::test]
@@ -590,7 +571,9 @@ async fn legacy_in_progress_plugin_run_without_binding_fails_closed() {
             digest: "manifest-v1".into(),
             resources: vec![],
             mcp_servers: vec![],
-            authorization_digest: "authorization-v1".into(),
+            authorization_digest: "authorization-v1"
+                .try_into()
+                .expect("non-empty fixture authority"),
         }]),
         ..Default::default()
     };
@@ -4027,8 +4010,7 @@ fn an_old_shape_snapshot_reproduces_its_stored_digest() {
     );
 }
 
-/// A record from the managed-environment era still loads: the field is accepted
-/// and dropped, never reinterpreted.
+/// Unsupported schemas are rejected before an in-memory record exists.
 #[test]
 fn newer_run_formats_are_refused_instead_of_guessed() {
     let mut value = serde_json::to_value(
@@ -4036,8 +4018,9 @@ fn newer_run_formats_are_refused_instead_of_guessed() {
     )
     .unwrap();
     value["format"] = serde_json::json!(RUN_RECORD_FORMAT + 1);
-    let record: GraphRunRecord = serde_json::from_value(value).unwrap();
-    let error = record.validate().unwrap_err().to_string();
+    let error = serde_json::from_value::<GraphRunRecord>(value)
+        .unwrap_err()
+        .to_string();
     assert!(error.contains("unsupported graph run format"), "{error}");
 }
 
@@ -4137,7 +4120,9 @@ fn old_run_formats_are_named_refusals_on_decode_and_file_load() {
             .unwrap_err()
             .to_string();
         assert!(
-            (error.contains("old Graph Run format") || error.contains("old cursor format"))
+            (error.contains("old Graph Run format")
+                || error.contains("old cursor format")
+                || error.contains("old authorization format"))
                 && error.contains("offline migration required"),
             "{error}"
         );
@@ -4145,7 +4130,9 @@ fn old_run_formats_are_named_refusals_on_decode_and_file_load() {
         fs::write(root.join("old-format.json"), &bytes).unwrap();
         let error = store.load("old-format").unwrap_err().to_string();
         assert!(
-            (error.contains("old Graph Run format") || error.contains("old cursor format"))
+            (error.contains("old Graph Run format")
+                || error.contains("old cursor format")
+                || error.contains("old authorization format"))
                 && error.contains("offline migration required"),
             "{error}"
         );
@@ -4199,12 +4186,12 @@ fn run_record_decode_preserves_duplicate_field_rejection() {
             digest: "code".into(),
             resources: vec![],
             mcp_servers: vec![],
-            authorization_digest: "authority".into(),
+            authorization_digest: "authority".try_into().expect("non-empty fixture authority"),
         },
     );
     let json = serde_json::to_string(&record).unwrap();
     for (field, duplicate) in [
-        ("\"format\":13", "\"format\":12,\"format\":13"),
+        ("\"format\":13", "\"format\":13,\"format\":13"),
         (
             "\"entry\":\"work\"",
             "\"entry\":\"other\",\"entry\":\"work\"",
