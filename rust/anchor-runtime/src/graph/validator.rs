@@ -99,6 +99,13 @@ pub struct NodeSubmission {
     pub plugin_digests: BTreeMap<String, String>,
 }
 
+/// What host code reports when a node fails: the Run cannot continue.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SettleSubmission {
+    pub reason: String,
+}
+
 /// What host code reports about one Op.call invocation.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "call", rename_all = "snake_case", deny_unknown_fields)]
@@ -455,6 +462,9 @@ impl Validator for GraphValidator {
         else {
             return Judgement::refused(Reason::SlotClosed);
         };
+        if s.action == Action::Settle {
+            return judge_settle(record, &dispatch, s, ctx);
+        }
         if s.action != Action::Write {
             return Judgement::refused(Reason::SlotClosed);
         }
@@ -567,6 +577,36 @@ impl Validator for GraphValidator {
         }
         conclude(record, verification_of(s))
     }
+}
+
+fn judge_settle(
+    mut record: GraphRunRecord,
+    dispatch: &Dispatch,
+    s: &Submission,
+    ctx: &JudgeCtx,
+) -> Judgement {
+    if ctx.principal.kind != PrincipalKind::Code {
+        return Judgement::refused(Reason::Unauthorized);
+    }
+    if dispatch.kind != DispatchKind::Work {
+        return Judgement::refused(Reason::SlotClosed);
+    }
+    let Ok(content) = serde_json::from_value::<SettleSubmission>(s.content.clone()) else {
+        return Judgement::returned(Reason::ContentInvalid);
+    };
+    count_dispatch(&mut record, dispatch);
+    if let Some(index) = dispatch.branch {
+        let branch = &mut record.parallel.as_mut().expect("parallel").branches[index];
+        branch.status = ParallelBranchStatus::Failed;
+        branch.error = Some(content.reason.clone());
+    }
+    let phase = Phase::Settled {
+        result: Outcome::Failed {
+            reason: Reason::Unclassified,
+            detail: format!("{} failed: {}", dispatch.node.id, content.reason),
+        },
+    };
+    accept(&record, verification_of(s), Some(phase))
 }
 
 fn routes_of(record: &GraphRunRecord, node_id: &str) -> Vec<String> {
@@ -841,3 +881,6 @@ mod differential;
 
 #[cfg(test)]
 mod interruption_tests;
+
+#[cfg(test)]
+mod settle_tests;

@@ -1,0 +1,35 @@
+   Compiling anchor-runtime v0.1.0 (/home/mansteinl/code/anchor-constitution-core/rust/anchor-runtime)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.73s
+     Running unittests src/lib.rs (rust/target/debug/deps/anchor_runtime-c4d8e009b3cec2c8)
+
+running 13 tests
+test graph::validator::interruption_tests::only_host_code_can_submit_an_interruption_field_including_null ... ok
+test graph::validator::interruption_tests::interrupted_completion_requires_a_valid_route_before_acceptance ... ok
+test graph::validator::interruption_tests::interrupted_completion_cannot_claim_a_successful_model_result ... ok
+test graph::validator::interruption_tests::host_interruption_records_control_completion_and_takes_the_ordinary_route ... ok
+test graph::validator::interruption_tests::ordinary_submissions_omit_interruption_and_remain_agent_writable ... ok
+test graph::validator::interruption_tests::interruptions_preserve_the_existing_parallel_region_boundary ... ok
+test graph::validator::settle_tests::serial_failure_counts_start_without_results_or_edge_decisions ... ok
+test graph::validator::settle_tests::failure_refuses_non_code_closed_slots_and_unknown_fields ... ok
+test graph::validator::settle_tests::parallel_failure_keeps_sibling_and_kernel_refuses_every_late_slot ... ok
+test graph::validator::settle_tests::fanout_join_and_call_cannot_be_settled_as_work ... ok
+
+thread 'graph::validator::differential::parallel_regions_match_the_runner_on_random_graphs' (512858) panicked at anchor-runtime/src/graph/validator/differential.rs:805:9:
+assertion `left == right` failed: failure detail differs, seed 495
+  left: Some("b2_0 failed: fixture failure b2_0 #1")
+ right: Some("b1_0 failed: fixture failure b1_0 #1")
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test graph::validator::differential::parallel_regions_match_the_runner_on_random_graphs ... FAILED
+differential calls: Tally { cases: 5000, rejected_graphs: 0, completed: 2902, round_limited: 1218, dispatches: 9733, longest: 13, module_activated: 721, module_limited: 156, skipped_paths: 4576, failed: 0, node_failed: 0, parallel_activations: 0, resubmissions: 0, phantom_invocations: 0, late_refusals: 0, calls_waited: 1704, calls_detached: 1485, call_failed: 497, call_unknown: 383 }
+test graph::validator::differential::graph_calls_match_the_runner_on_random_graphs ... ok
+differential: Tally { cases: 10000, rejected_graphs: 0, completed: 6968, round_limited: 2260, dispatches: 26981, longest: 21, module_activated: 1310, module_limited: 293, skipped_paths: 9046, failed: 0, node_failed: 772, parallel_activations: 0, resubmissions: 0, phantom_invocations: 0, late_refusals: 0, calls_waited: 0, calls_detached: 0, call_failed: 0, call_unknown: 0 }
+test graph::validator::differential::kernel_with_graph_validator_matches_the_runner_on_random_graphs ... ok
+
+failures:
+
+failures:
+    graph::validator::differential::parallel_regions_match_the_runner_on_random_graphs
+
+test result: FAILED. 12 passed; 1 failed; 0 ignored; 0 measured; 112 filtered out; finished in 20.36s
+
+error: test failed, to rerun pass `-p anchor-runtime --lib`

@@ -1,0 +1,24 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.05s
+     Running unittests src/lib.rs (target/debug/deps/anchor_runtime-c4d8e009b3cec2c8)
+
+running 3 tests
+
+thread 'graph::validator::differential::parallel_regions_match_the_runner_on_random_graphs' (537672) panicked at anchor-runtime/src/graph/validator/differential.rs:812:9:
+assertion `left == right` failed: failure detail differs, seed 495
+  left: Some("b2_0 failed: fixture failure b2_0 #1")
+ right: Some("b1_0 failed: fixture failure b1_0 #1")
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test graph::validator::differential::parallel_regions_match_the_runner_on_random_graphs ... FAILED
+differential calls: Tally { cases: 5000, rejected_graphs: 0, completed: 2902, round_limited: 1218, dispatches: 9733, longest: 13, module_activated: 721, module_limited: 156, skipped_paths: 4576, failed: 0, node_failed: 0, parallel_activations: 0, resubmissions: 0, phantom_invocations: 0, late_refusals: 0, calls_waited: 1704, calls_detached: 1485, call_failed: 497, call_unknown: 383 }
+test graph::validator::differential::graph_calls_match_the_runner_on_random_graphs ... ok
+differential: Tally { cases: 10000, rejected_graphs: 0, completed: 6968, round_limited: 2260, dispatches: 26981, longest: 21, module_activated: 1310, module_limited: 293, skipped_paths: 9046, failed: 0, node_failed: 772, parallel_activations: 0, resubmissions: 0, phantom_invocations: 0, late_refusals: 0, calls_waited: 0, calls_detached: 0, call_failed: 0, call_unknown: 0 }
+test graph::validator::differential::kernel_with_graph_validator_matches_the_runner_on_random_graphs ... ok
+
+failures:
+
+failures:
+    graph::validator::differential::parallel_regions_match_the_runner_on_random_graphs
+
+test result: FAILED. 2 passed; 1 failed; 0 ignored; 0 measured; 122 filtered out; finished in 20.36s
+
+error: test failed, to rerun pass `-p anchor-runtime --lib`

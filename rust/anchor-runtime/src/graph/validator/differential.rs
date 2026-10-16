@@ -14,8 +14,8 @@ use anchor_kernel::{
 
 use super::super::*;
 use super::{
-    CallSubmission, DispatchKind, GRAPH_VALIDATOR, GraphValidator, NodeSubmission, call_identity,
-    record_of, run_resource,
+    CallSubmission, DispatchKind, GRAPH_VALIDATOR, GraphValidator, NodeSubmission,
+    SettleSubmission, call_identity, record_of, run_resource,
 };
 
 // ---------------------------------------------------------------------------
@@ -60,7 +60,12 @@ fn route_for(seed: u64, node: &str, invocation: u64, routes: &[String]) -> Optio
     }
 }
 
-fn random_graph(seed: u64) -> GraphSnapshot {
+fn failure_for(seed: u64, node: &str, invocation: u64) -> Option<String> {
+    (hash(&[node, &invocation.to_string(), "failure"], seed) % 100 < 3)
+        .then(|| format!("fixture failure {node} #{invocation}"))
+}
+
+pub(super) fn random_graph(seed: u64) -> GraphSnapshot {
     let mut rng = Rng(seed);
     let n = 2 + rng.below(8) as usize;
     let module = n >= 4 && rng.chance(40);
@@ -134,7 +139,7 @@ fn random_graph(seed: u64) -> GraphSnapshot {
 /// prefix → fanout → 2–3 linear branches → join → suffix, with random back
 /// edges from the suffix that re-enter the whole region, skip edges around
 /// it, and round limits everywhere (so branches can hit their ceiling).
-fn random_parallel_graph(seed: u64) -> GraphSnapshot {
+pub(super) fn random_parallel_graph(seed: u64) -> GraphSnapshot {
     let mut snapshot = random_graph(seed ^ 0xA5A5);
     let mut rng = Rng(seed);
     let prefix = 1 + rng.below(2) as usize;
@@ -334,6 +339,7 @@ type Trace = Vec<(String, u64, Vec<String>)>;
 
 struct Scripted {
     seed: u64,
+    inject_failures: bool,
     trace: Mutex<Trace>,
     calls: ScriptedCalls,
 }
@@ -416,6 +422,11 @@ impl NodeExecutionPort for Scripted {
                 key.invocation,
                 request.input_commits.iter().map(|c| c.id.clone()).collect(),
             ));
+            if self.inject_failures
+                && let Some(reason) = failure_for(self.seed, &key.node_id, key.invocation)
+            {
+                return Ok(NodeExecutionOutcome::Failed { reason });
+            }
             Ok(NodeExecutionOutcome::Completed(NodeCompletion {
                 submission: format!("{} #{}", key.node_id, key.invocation),
                 route: route_for(self.seed, &key.node_id, key.invocation, &request.routes),
@@ -443,6 +454,7 @@ async fn run_old(record: GraphRunRecord, seed: u64) -> (Trace, GraphRunRecord) {
     let store = MemStore::default();
     let nodes = Scripted {
         seed,
+        inject_failures: !record.snapshot.ops.contains_key("callw"),
         trace: Mutex::default(),
         calls: ScriptedCalls {
             seed,
@@ -519,7 +531,7 @@ fn run_new(record: GraphRunRecord, seed: u64) -> NewRun {
         let state = record_of(&resource).unwrap();
         for dispatch in wave {
             let node = dispatch.node.id.clone();
-            let principal = if dispatch.kind == DispatchKind::Work {
+            let mut principal = if dispatch.kind == DispatchKind::Work {
                 trace.push((
                     node.clone(),
                     dispatch.invocation,
@@ -595,6 +607,19 @@ fn run_new(record: GraphRunRecord, seed: u64) -> NewRun {
                 })
                 .unwrap()
             };
+            let failure = (dispatch.kind == DispatchKind::Work
+                && !state.snapshot.ops.contains_key("callw"))
+            .then(|| failure_for(seed, &node, dispatch.invocation))
+            .flatten();
+            let (action, content) = if let Some(reason) = failure {
+                principal = &host;
+                (
+                    Action::Settle,
+                    serde_json::to_value(SettleSubmission { reason }).unwrap(),
+                )
+            } else {
+                (Action::Write, content)
+            };
             // An executor submits against the version it was dispatched at;
             // only after a stale return does it re-read.
             let mut version = resource.version;
@@ -603,7 +628,7 @@ fn run_new(record: GraphRunRecord, seed: u64) -> NewRun {
                     .submit(
                         principal,
                         1,
-                        Submission::new(&id, version, Action::Write)
+                        Submission::new(&id, version, action)
                             .slot(dispatch.slot())
                             .content(content.clone())
                             .evidence(Evidence::Resource {
@@ -742,6 +767,7 @@ struct Tally {
     module_limited: u64,
     skipped_paths: u64,
     failed: u64,
+    node_failed: u64,
     parallel_activations: u64,
     resubmissions: u64,
     phantom_invocations: u64,
@@ -777,7 +803,24 @@ async fn check(snapshot: GraphSnapshot, seed: u64, tally: &mut Tally) {
             GraphCallStatus::Failed | GraphCallStatus::Uncertain
         )
     });
-    if old.status == RunStatus::Failed && !call_ended_it {
+    let node_failed = old
+        .error
+        .as_ref()
+        .is_some_and(|e| e.contains(" failed: fixture failure"));
+    if node_failed {
+        tally.node_failed += 1;
+        assert_eq!(
+            old.error.as_deref(),
+            match &phase {
+                Phase::Settled {
+                    result: Outcome::Failed { detail, .. },
+                } => Some(detail.as_str()),
+                _ => None,
+            },
+            "failure detail differs, seed {seed}"
+        );
+    }
+    if old.status == RunStatus::Failed && !call_ended_it && old.parallel.is_some() {
         // S6: fail fast. Old merged results = new merged results + late
         // refusals, disjointly. Ceiling reasons are both recorded.
         let new_results = result_set(&new);
@@ -788,10 +831,12 @@ async fn check(snapshot: GraphSnapshot, seed: u64, tally: &mut Tally) {
             union,
             "Failed results differ, seed {seed}"
         );
-        assert!(
-            !old.ceased.is_empty() && !new.ceased.is_empty(),
-            "seed {seed}"
-        );
+        if !node_failed {
+            assert!(
+                !old.ceased.is_empty() && !new.ceased.is_empty(),
+                "seed {seed}"
+            );
+        }
         assert!(
             matches!(
                 phase,
@@ -801,7 +846,9 @@ async fn check(snapshot: GraphSnapshot, seed: u64, tally: &mut Tally) {
             ),
             "seed {seed}: {phase:?}"
         );
-        tally.failed += 1;
+        if !node_failed {
+            tally.failed += 1;
+        }
         tally.late_refusals += late.len() as u64;
         let mut old_facts = facts(&old);
         tally.phantom_invocations += remove_phantoms(&mut old_facts);
@@ -821,6 +868,12 @@ async fn check(snapshot: GraphSnapshot, seed: u64, tally: &mut Tally) {
                     result: Outcome::Escalated { .. },
                 },
             ) if !old.ceased.is_empty() => tally.round_limited += 1,
+            (
+                RunStatus::Failed,
+                Phase::Settled {
+                    result: Outcome::Failed { .. },
+                },
+            ) if node_failed => {}
             (
                 RunStatus::Failed,
                 Phase::Settled {
@@ -874,6 +927,7 @@ async fn kernel_with_graph_validator_matches_the_runner_on_random_graphs() {
         check(random_graph(seed), seed, &mut tally).await;
     }
     eprintln!("differential: {tally:?}");
+    assert!(tally.node_failed > 100, "{tally:?}");
     assert!(tally.cases > 9_000, "{tally:?}");
     assert!(
         tally.module_activated > 500 && tally.module_limited > 50 && tally.skipped_paths > 1000,
@@ -892,6 +946,7 @@ async fn parallel_regions_match_the_runner_on_random_graphs() {
         check(random_parallel_graph(seed), seed, &mut tally).await;
     }
     eprintln!("differential parallel: {tally:?}");
+    assert!(tally.node_failed > 100, "{tally:?}");
     assert!(tally.cases > 4_500, "{tally:?}");
     assert!(
         tally.parallel_activations > 5_000
