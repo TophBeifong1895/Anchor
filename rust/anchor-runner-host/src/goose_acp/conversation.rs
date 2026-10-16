@@ -30,6 +30,14 @@ pub(super) struct ConversationScope {
     _lease: File,
 }
 
+impl Drop for ConversationScope {
+    fn drop(&mut self) {
+        // A concurrent fork may inherit this descriptor before exec closes it.
+        // Release the owner's lock explicitly instead of waiting for every copy.
+        let _ = rustix::fs::flock(&self._lease, rustix::fs::FlockOperation::Unlock);
+    }
+}
+
 fn scope_name(hint: &str) -> Result<String, String> {
     if hint.len() != 64
         || !hint

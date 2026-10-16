@@ -279,7 +279,21 @@ mod tests {
 
     fn configure_python(management: &RuntimeManagement, python: &Path, script: &str) {
         fs::create_dir_all(python.parent().unwrap()).unwrap();
-        fs::write(python, script).unwrap();
+        // Write via subprocess to avoid fd inheritance. Concurrent test thread spawns
+        // can inherit the write fd, blocking exec of this script with ETXTBSY.
+        let mut child = std::process::Command::new("sh")
+            .arg("-c")
+            .arg(format!("cat > {:?}", python))
+            .stdin(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        child
+            .stdin
+            .as_mut()
+            .unwrap()
+            .write_all(script.as_bytes())
+            .unwrap();
+        child.wait().unwrap();
         fs::set_permissions(python, fs::Permissions::from_mode(0o755)).unwrap();
         management.configuration.publish_snapshot_for_test(
             crate::runtime_configuration::RuntimeSnapshot {
@@ -304,7 +318,19 @@ mod tests {
         assert!(first["runtime"]["python_version_error"].is_null());
         assert_eq!(first["runtime"]["python_configured"], true);
         assert_eq!(first["runtime"]["python_enabled"], true);
-        fs::write(&python, "#!/bin/sh\nprintf '3.13.2\\n'\n").unwrap();
+        let mut child = std::process::Command::new("sh")
+            .arg("-c")
+            .arg(format!("cat > {:?}", &python))
+            .stdin(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        child
+            .stdin
+            .as_mut()
+            .unwrap()
+            .write_all(b"#!/bin/sh\nprintf '3.13.2\\n'\n")
+            .unwrap();
+        child.wait().unwrap();
         assert_eq!(
             management.observed_status().unwrap()["runtime"]["python_version"],
             "3.13.2"
@@ -346,7 +372,19 @@ mod tests {
         assert!(!failed.to_string().contains("fixture probe failure"));
         assert_eq!(failed["runtime"]["python_configured"], true);
         assert_eq!(failed["runtime"]["python_enabled"], true);
-        fs::write(&python, "#!/bin/sh\nprintf '3.12.13\\n'\n").unwrap();
+        let mut child = std::process::Command::new("sh")
+            .arg("-c")
+            .arg(format!("cat > {:?}", &python))
+            .stdin(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        child
+            .stdin
+            .as_mut()
+            .unwrap()
+            .write_all(b"#!/bin/sh\nprintf '3.12.13\\n'\n")
+            .unwrap();
+        child.wait().unwrap();
         let recovered = management.observed_status().unwrap();
         assert_eq!(recovered["runtime"]["python_version"], "3.12.13");
         assert!(recovered["runtime"]["python_version_error"].is_null());

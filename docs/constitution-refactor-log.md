@@ -248,6 +248,25 @@ Host 的 `legacy_mcp_preparation_is_read_only_and_runner_upgrade_requires_the_ru
 
 保留原业务断言：Run Plugin 历史顺序、停止 Run 的 Graph 修改/放弃、未完成 Run 阻止 Graph 删除、Plugin 更新影响这四处 fixture 补齐当前授权摘要；可变 MCP declaration 拒绝测试改用现代授权，以继续实际到达并验证原权限检查。没有删除这些业务/安全测试。新增旧格式 decode/FileRunStore 字节不变、旧 cursor/旧授权执行前拒绝、重复字段和非对象序列拒绝回归。
 
+### H1 之后修复：并发 fork 导致的锁释放延迟
+
+**根因**  
+Linux flock 特性：fork 后父子进程同时持有锁文件 fd 副本，直到所有副本关闭，锁才真正释放。`goose_acp/conversation.rs:63` (flock) 和 `run_data.rs:119` (try_lock) 两处只依赖 drop 隐式关闭 fd，未显式 unlock。当 Host 高频 spawn 子进程（runtime provision、插件探测、artifact 处理）时，子进程在 exec 完成前会继承父进程的锁 fd，导致父进程 drop 后锁仍未释放。下一个请求立刻 try_lock 拿不到，误报 "conversation is already active" 返回 409。
+
+对比实验验证：只 drop 不 unlock 时，单 spawner 20000 次中假阳性 2255 次，8 spawner 10353 次；显式 unlock 后 drop，单/8 spawner 各 20000 次假阳性均为 0。
+
+**修复**  
+- `rust/anchor-runner-host/src/goose_acp/conversation.rs:33-39`：为 `ConversationScope` 添加 Drop impl，在 drop 时显式 `flock(..., Unlock)`，参照 `graph/store.rs:97` 的 `FileRunLease::drop`。
+- `rust/anchor-runner-host/src/run_data.rs:177-180`：`remove_legacy_conversation` 函数在最终 return 前显式 `lock.unlock()`。
+
+**测试修复**  
+`runtime_management.rs` 测试中 `configure_python` 辅助函数原直接 `fs::write` 写入 python 桩脚本，该 fd 会被并发测试线程 fork 出的子进程继承，导致 exec 这个脚本时触发 ETXTBSY (Text file busy)。修改为通过子进程完成写入（`sh -c 'cat > path'`），写 fd 仅存在于子进程内，不会被测试进程的其他线程 fork 继承。同时修复测试内 307、349 行同样会被 exec 的脚本覆写操作。
+
+独立实验证实：直接 write + exec，3000 次有 56 次 ETXTBSY（单 spawner），8 spawner 时 634 次；改用子进程写入后 0 次。
+
+**影响范围**  
+生产缺陷，影响真实并发场景（多用户 Goose 会话、多 Run cleanup）。修复同时消除测试 flaky。
+
 `ddadb17` 之后这两个替换测试的 runner/装配层覆盖曾退化为纯解码断言，已在 `H1 补充：旧授权单一门` 一节恢复；那一节另有逐测试的覆盖去向表。
 
 ### H2/H3 直接写入棘轮起点

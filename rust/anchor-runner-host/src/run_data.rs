@@ -173,7 +173,11 @@ pub(crate) fn remove_legacy_conversation(data_root: &Path, hint: &str) -> Result
     }
     std::fs::File::open(&root)
         .and_then(|file| file.sync_all())
-        .map_err(|error| error.to_string())
+        .map_err(|error| error.to_string())?;
+    // Release the lock explicitly before dropping. A concurrent fork may inherit
+    // this descriptor before exec closes it.
+    let _ = lock.unlock();
+    Ok(())
 }
 
 /// Every invocation a Run may have persisted a fact, artifact, or io-harness
