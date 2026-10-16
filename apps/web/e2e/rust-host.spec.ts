@@ -32,8 +32,8 @@ test('Rust-hosted React workbench runs a protected Graph and inspects its commit
     await page.getByLabel('Anchor API key').fill(key);
     await page.getByRole('button', { name: '连接', exact: true }).click();
     await expect(page.locator('[data-id="build"]')).toBeVisible();
-    page.on('dialog', dialog => dialog.accept('{}'));
     await page.getByRole('button', { name: '运行工作流', exact: true }).click();
+    await page.getByRole('button', { name: '开始运行', exact: true }).click();
     await expect(page.locator('.execution-node.state-completed')).toHaveCount(1, { timeout: 20000 });
     await page.locator('[data-id="build"]').click();
     await page.getByRole('button', { name: '文件' }).click();

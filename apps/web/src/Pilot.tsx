@@ -9,7 +9,10 @@ import { PilotCredentials } from './PilotCredentials';
 import type { Question } from './pilotQuestions';
 import { PilotAttachments } from './PilotAttachments';
 import { addDraftAttachments, attachmentProblem, encodeAttachment, type Attachment, type DraftAttachment } from './pilotAttachments';
-import { clearAttachmentDraft, readAttachmentDraft, saveAttachmentDraft } from './pilotAttachmentDrafts';
+import { clearAttachmentDraft, saveAttachmentDraft } from './pilotAttachmentDrafts';
+import { usePilotDrafts } from './usePilotDrafts';
+import { PilotConversationLayout } from './PilotConversationLayout';
+import './Pilot.css';
 
 type Session = {
   id: string; title?: string; status: string; waiting_reason: string; updated_at: string;
@@ -46,7 +49,7 @@ function pendingSubmission(id: string): Submission | null {
   return null;
 }
 
-export function Pilot({ session = '', onSession }: { session?: string; onSession?: (id: string) => void }) {
+export function Pilot({ session = '', onSession, initialDraft = '', onDraftConsumed }: { session?: string; onSession?: (id: string) => void; initialDraft?: string; onDraftConsumed?: () => void }) {
   const [sessions, setSessions] = useState<Session[]>([]);
   const [selected, setSelected] = useState('');
   const selectedRef = useRef('');
@@ -57,15 +60,8 @@ export function Pilot({ session = '', onSession }: { session?: string; onSession
   const [stopping, setStopping] = useState(false);
   const [syncedTurn, setSyncedTurn] = useState('');
   const [continuation, setContinuation] = useState<PluginContinuation | null>(null);
-  const [draft, setDraft] = useState(() => cached('draft:new'));
-  const [files, setFiles] = useState<DraftAttachment[]>([]);
-  const filesRef = useRef<DraftAttachment[]>([]);
-  const [filesReady, setFilesReady] = useState(false);
-  const [fileLoadVersion, setFileLoadVersion] = useState(0);
-  const [attachmentError, setAttachmentError] = useState('');
   const [dragging, setDragging] = useState(false);
   const fileInput = useRef<HTMLInputElement>(null);
-  const draftRevision = useRef(0);
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(true);
   const [problem, setProblem] = useState('');
@@ -83,6 +79,8 @@ export function Pilot({ session = '', onSession }: { session?: string; onSession
   const navigation = useRef(0);
   const mounted = useRef(true);
   const listVersion = useRef(0);
+  const { draft, setDraft, files, filesRef, filesReady, setFilesReady, attachmentError, setAttachmentError,
+    setCurrentFiles, storeFiles, editDraft, activate: activateDraft, clearSent } = usePilotDrafts(selected, selectedRef, mounted);
   const setCurrentTurn = useCallback((value: Turn | null) => { turnRef.current = value; setTurn(value); }, []);
   const questionState = useCallback((id: string, turnId: string, pending: boolean) => {
     if (!mounted.current || selectedRef.current !== id || turnRef.current?.id !== turnId || turnRef.current.status !== 'running') return;
@@ -91,39 +89,12 @@ export function Pilot({ session = '', onSession }: { session?: string; onSession
       ? { ...item, status: pending ? 'waiting_user' : 'active' } : item));
   }, []);
 
-  const setCurrentFiles = (value: DraftAttachment[]) => { filesRef.current = value; setFiles(value); };
-  const storeFiles = async (id: string, value: DraftAttachment[]) => {
-    const revision = ++draftRevision.current;
-    setCurrentFiles(value); setAttachmentError('');
-    try { await saveAttachmentDraft(draftScope(id), value); }
-    catch (error) {
-      if (mounted.current && selectedRef.current === id && revision === draftRevision.current) setAttachmentError((error as Error).message);
-    }
-  };
-  useEffect(() => {
-    const id = selected;
-    const revision = ++draftRevision.current;
-    setFilesReady(false); setCurrentFiles([]); setAttachmentError('');
-    void readAttachmentDraft(draftScope(id)).then(value => {
-      if (mounted.current && selectedRef.current === id && revision === draftRevision.current) setCurrentFiles(value);
-    }).catch(error => {
-      if (mounted.current && selectedRef.current === id && revision === draftRevision.current) setAttachmentError((error as Error).message);
-    }).finally(() => {
-      if (mounted.current && selectedRef.current === id && revision === draftRevision.current) setFilesReady(true);
-    });
-  }, [selected, fileLoadVersion]);
-  const editDraft = (value: string) => {
-    cached(`draft:${selectedRef.current || 'new'}`, value);
-    setDraft(value);
-  };
   const activate = (id: string) => {
     navigation.current += 1;
-    draftRevision.current += 1; setCurrentFiles([]); setFilesReady(false); setAttachmentError(''); setDragging(false);
-    setFileLoadVersion(value => value + 1);
+    activateDraft(id); setDragging(false);
     historyRequest.current?.abort();
     selectedRef.current = id;
     setSelected(id); cached('selected', id); onSessionRef.current?.(id);
-    setDraft(cached(`draft:${id || 'new'}`));
     setMessages([]); setCurrentTurn(null); setWaitingQuestion(false); setStopping(false); setSyncedTurn(''); setContinuation(null); setCopied(null); setProblem('');
     setBusy(submissions.current.has(id));
     follow.current = true; setAtBottom(true);
@@ -171,9 +142,8 @@ export function Pilot({ session = '', onSession }: { session?: string; onSession
       const pending = pendingSubmission(id);
       if (pending && execution.turns.some(item => item.request_id === pending.request_id)) {
         if (pending.attachment_ids?.length) {
-          await clearAttachmentDraft(draftScope(id), pending.attachment_ids);
+          await clearSent(id, pending.attachment_ids);
           if (!mounted.current || controller.signal.aborted || selectedRef.current !== id) return;
-          if (sameFiles(pending.attachment_ids, filesRef.current)) setCurrentFiles([]);
         }
         cached(`submission:${id}`, '');
         if (pending.message !== undefined && cached(`draft:${id}`) === pending.message) {
@@ -288,8 +258,7 @@ export function Pilot({ session = '', onSession }: { session?: string; onSession
       throw error;
     }
     if (attachments.length) {
-      await clearAttachmentDraft(draftScope(id), attachments.map(file => file.id));
-      if (mounted.current && selectedRef.current === id && sameFiles(attachments.map(file => file.id), filesRef.current)) setCurrentFiles([]);
+      await clearSent(id, attachments.map(file => file.id));
     }
     cached(key, '');
     if (message !== null && cached(`draft:${id}`).trim() === message) {
@@ -308,6 +277,12 @@ export function Pilot({ session = '', onSession }: { session?: string; onSession
   useEffect(() => {
     let live = true;
     mounted.current = true;
+    if (initialDraft) {
+      const previous = cached('draft:new');
+      editDraft(previous.includes(initialDraft) ? previous : previous ? `${previous}\n\n${initialDraft}` : initialDraft);
+      onDraftConsumed?.();
+      requestAnimationFrame(() => input.current?.focus());
+    }
     const initialNavigation = navigation.current;
     let expectedNavigation = initialNavigation;
     const controller = new AbortController();
@@ -316,7 +291,7 @@ export function Pilot({ session = '', onSession }: { session?: string; onSession
         const result = await api<{ sessions: Session[] }>('/sessions', 'GET', undefined, controller.signal);
         if (!live || navigation.current !== initialNavigation) return;
         setSessions(result.sessions);
-        const saved = session || cached('selected');
+        const saved = initialDraft ? '' : session || cached('selected');
         if (result.sessions.some(item => item.id === saved)) {
           activate(saved);
           expectedNavigation = navigation.current;
@@ -527,7 +502,7 @@ export function Pilot({ session = '', onSession }: { session?: string; onSession
         <div><strong title={selected || undefined}>{heading}</strong><span>{stopping ? '正在停止执行' : waitingQuestion ? '等待你的答复' : busy ? '正在处理你的请求' : loading ? '正在加载对话' : current ? labels[current.status] : 'Anchor 的任务与管理入口'}</span></div>
         {current?.status === 'interrupted' && <button onClick={() => void resume()} disabled={busy || loading}>继续上次回复</button>}
       </header>
-      <div className={`pilot-chat-body${showStart ? ' is-start' : ''}`}>
+      <PilotConversationLayout start={showStart}>
       {showStart && <div className="pilot-intro">
         <h2>你想完成什么？</h2>
         <p>把任务交给 Pilot，搭建工作流，或扩展你需要的工具。</p>
@@ -601,7 +576,7 @@ export function Pilot({ session = '', onSession }: { session?: string; onSession
           <span className="pilot-starter-label">{label}</span><span className="pilot-starter-text">{text}</span><span className="pilot-starter-arrow" aria-hidden="true">↗</span>
         </button>)}
       </div>}
-      </div>
+      </PilotConversationLayout>
     </section>
     {/* Plugin mounting belongs to the session, not to one Turn. Keeping the capability rail outside
         the transcript gives the conversation a stable reading surface while the capability policy stays

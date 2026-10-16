@@ -26,8 +26,8 @@ test('native Rust Library preserves Plugin selection, lazy resources and Op arti
     await page.goto(base);
     await page.getByLabel('当前工作流').selectOption('plugin-proof');
     await page.locator('[data-id="research"]').click();
-    const checkbox = page.getByRole('checkbox', { name: /浏览器证据/ });
-    await checkbox.check();
+    const selection = page.getByRole('switch', { name: /浏览器证据/ });
+    await selection.click();
     await page.getByRole('button', { name: '查看 浏览器证据 的详情', exact: true }).click();
     const details = page.getByRole('dialog', { name: '浏览器证据 · 插件详情', exact: true });
     await expect(details).toContainText('/plugins/browser-plugin/resources/input.txt');
@@ -46,7 +46,7 @@ test('native Rust Library preserves Plugin selection, lazy resources and Op arti
     expect(await readFile(pluginPath, 'utf8')).toBe(installedPlugin);
     await page.screenshot({ path: test.info().outputPath('plugin-editor.png'), fullPage: true });
     await page.setViewportSize({ width: 390, height: 844 });
-    await expect(checkbox).toBeVisible();
+    await expect(selection).toBeVisible();
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBeTruthy();
     await page.setViewportSize({ width: 1440, height: 1000 });
 
@@ -57,12 +57,12 @@ test('native Rust Library preserves Plugin selection, lazy resources and Op arti
     expect(op.ok(), await op.text()).toBeTruthy();
     await page.reload();
     await page.getByLabel('当前工作流').selectOption('op-proof');
-    page.on('dialog', dialog => dialog.accept('{}'));
     await page.getByRole('button', { name: '运行工作流', exact: true }).click();
+    await page.getByRole('button', { name: '开始运行', exact: true }).click();
     await expect(page.locator('.execution-node.state-completed')).toHaveCount(1, { timeout: 20000 });
     await page.locator('[data-id="build"]').click();
     await page.getByRole('button', { name: '文件', exact: true }).click();
-    await page.getByRole('button', { name: /result\.txt/ }).click();
+    await page.getByRole('button', { name: /^result\.txt/ }).click();
     await expect(page.locator('.file-preview')).toHaveText('native-plugin-management');
     const runs = (await (await request.get(`${base}/runs`)).json()).runs;
     expect(runs).toHaveLength(1);

@@ -6,6 +6,74 @@ import { join } from 'node:path';
 import { fixturePlugin, gooseEnvironment, nativeHost, stop } from './fixtures/native-host';
 import { loopbackProvider, toolResultField } from './fixtures/loopback-provider';
 
+test('native Library health stays visible and broken dependencies or definitions can be unmounted in the browser', async ({ page, request }) => {
+  test.setTimeout(60000);
+  const root = await mkdtemp(join(tmpdir(), 'anchor-broken-plugin-browser-'));
+  const key = 'shared-plugin-browser-key-fixture-32';
+  const headers = { Authorization: `Bearer ${key}` };
+  const session = 'broken-plugin-session';
+  const host = await nativeHost(root, { environment: { ANCHOR_API_KEYS: JSON.stringify([key]) } });
+  const directory = await fixturePlugin(host.environment.ANCHOR_RUNNER_LIBRARY_ROOT!);
+  const manifestPath = join(directory, 'plugin.json');
+  const original = await readFile(manifestPath, 'utf8');
+  let backend: ChildProcess | undefined;
+  try {
+    backend = host.start();
+    await expect.poll(async () => {
+      try { return (await request.get(`${host.base}/health`, { headers })).status(); } catch { return 0; }
+    }, { timeout: 20000 }).toBe(200);
+    expect((await request.post(`${host.base}/sessions`, { headers, data: { id: session } })).status()).toBe(201);
+    await page.addInitScript(({ key, session }) => {
+      sessionStorage.setItem('anchor-api-key', key);
+      localStorage.setItem('anchor:view', 'pilot');
+      localStorage.setItem('pilot:selected', session);
+    }, { key, session });
+    await page.goto(host.base);
+    await page.getByRole('button', { name: '展开插件面板', exact: true }).click();
+    const card = page.locator('.plugin-card').filter({ has: page.locator('.plugin-card-name', { hasText: '浏览器证据' }) });
+    const switchPlugin = async (name: string, on: boolean) => {
+      const saving = page.waitForResponse(response => response.url() === `${host.base}/sessions/${session}/plugins/browser-plugin`
+        && response.request().method() === 'POST');
+      await page.getByRole('switch', { name: `${on ? '挂载' : '取消挂载'} ${name}`, exact: true }).click();
+      expect((await saving).status()).toBe(200);
+    };
+    await switchPlugin('浏览器证据', true);
+    await writeFile(manifestPath, JSON.stringify({ ...JSON.parse(original), dependencies: { python: ['idna==3.7'] } }));
+    await expect(card).toContainText('Plugin dependency view is missing or unusable', { timeout: 10000 });
+    const row = (body: { plugins: { id: string; [key: string]: unknown }[] }) => body.plugins.find(plugin => plugin.id === 'browser-plugin')!;
+    const catalog = row(await (await request.get(`${host.base}/plugins`, { headers })).json());
+    const mounted = row(await (await request.get(`${host.base}/sessions/${session}/plugins`, { headers })).json());
+    expect(catalog.definitionValid).toBe(true);
+    expect(catalog.dependenciesReady).toBe(false);
+    expect(catalog.available).toBe(false);
+    expect(mounted.definitionValid).toBe(catalog.definitionValid);
+    expect(mounted.dependenciesReady).toBe(catalog.dependenciesReady);
+    expect(mounted.on).toBe(true);
+    await switchPlugin('浏览器证据', false);
+    await expect(page.getByRole('switch', { name: '挂载 浏览器证据', exact: true })).toBeDisabled();
+
+    await writeFile(manifestPath, original);
+    await expect(page.getByRole('switch', { name: '挂载 浏览器证据', exact: true })).toBeEnabled({ timeout: 10000 });
+    await switchPlugin('浏览器证据', true);
+    await writeFile(manifestPath, '{invalid manifest');
+    const broken = page.locator('.plugin-card').filter({ has: page.locator('.plugin-card-name', { hasText: /^browser-plugin$/ }) });
+    await expect(broken).toContainText('Plugin is unavailable or malformed', { timeout: 10000 });
+    await expect(broken.getByRole('switch')).toHaveAttribute('aria-checked', 'true');
+    await switchPlugin('browser-plugin', false);
+    const revoked = row(await (await request.get(`${host.base}/sessions/${session}/plugins`, { headers })).json());
+    expect(revoked.on).toBe(false);
+    expect(revoked.definitionValid).toBe(false);
+    expect(revoked.dependenciesReady).toBeNull();
+    await page.screenshot({ path: test.info().outputPath('broken-plugin-revoked.png'), fullPage: true });
+    await writeFile(test.info().outputPath('broken-plugin-evidence.json'), JSON.stringify({ actual_host: true,
+      real_model_calls: 0, catalog, mounted, revoked, dependency_failure_revoked: true, invalid_manifest_revoked: true }, null, 2));
+  } finally {
+    await stop(backend);
+    await writeFile(join(root, 'host.log'), host.logs);
+    console.log(`Broken Plugin browser fixture: ${root}`);
+  }
+});
+
 test('web mounting keeps the active Goose Turn frozen, continues once with latest mounts and respects stop', async ({ page, request }) => {
   test.skip(!process.env.ANCHOR_GOOSE_BINARY, 'pinned Goose binary required');
   test.setTimeout(90000);

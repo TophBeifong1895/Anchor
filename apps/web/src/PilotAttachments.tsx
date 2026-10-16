@@ -1,7 +1,8 @@
-import { useEffect, useRef, useState } from 'react';
-import { Download, FileText, LoaderCircle, RefreshCw, X } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { FileText, LoaderCircle, RefreshCw, X } from 'lucide-react';
 import { apiBlob, human, reason } from './api';
 import { attachmentPath, imageTypes, type Attachment, type DraftAttachment } from './pilotAttachments';
+import { DownloadButton } from './DownloadButton';
 import './PilotAttachments.css';
 
 type Source = { attachment: Attachment; session: string; turn: string } | { draft: DraftAttachment };
@@ -16,16 +17,7 @@ function AttachmentCard({ source, onRemove, disabled = false }: { source: Source
   const downloadPath = remote ? attachmentPath(remote.attachment, remote.session, remote.turn, true) : undefined;
   const [preview, setPreview] = useState('');
   const [previewProblem, setPreviewProblem] = useState('');
-  const [downloadProblem, setDownloadProblem] = useState('');
-  const [downloading, setDownloading] = useState(false);
   const [revision, setRevision] = useState(0);
-  const downloadRequest = useRef<AbortController | null>(null);
-  const downloadUrls = useRef(new Set<string>());
-  useEffect(() => () => {
-    downloadRequest.current?.abort();
-    for (const url of downloadUrls.current) URL.revokeObjectURL(url);
-    downloadUrls.current.clear();
-  }, []);
   useEffect(() => {
     if (!image) return;
     const controller = new AbortController();
@@ -42,23 +34,6 @@ function AttachmentCard({ source, onRemove, disabled = false }: { source: Source
     })();
     return () => { controller.abort(); if (url) URL.revokeObjectURL(url); };
   }, [local?.blob, previewPath, mediaType, image, revision]);
-  const download = async () => {
-    if (downloading) return;
-    const controller = new AbortController();
-    downloadRequest.current = controller;
-    setDownloading(true); setDownloadProblem('');
-    try {
-      if (remote && !downloadPath) throw new Error('文件链接不可用，请重新加载对话。');
-      const blob = local?.blob ?? await apiBlob(downloadPath!, controller.signal);
-      if (controller.signal.aborted) return;
-      const url = URL.createObjectURL(blob);
-      downloadUrls.current.add(url);
-      const link = document.createElement('a');
-      link.href = url; link.download = name; document.body.append(link); link.click(); link.remove();
-      window.setTimeout(() => { URL.revokeObjectURL(url); downloadUrls.current.delete(url); }, 1000);
-    } catch (error) { if (!controller.signal.aborted) setDownloadProblem(reason(error)); }
-    finally { if (!controller.signal.aborted) setDownloading(false); }
-  };
   return <div className={`pilot-attachment${image ? ' is-image' : ''}`}>
     {image && <div className="pilot-attachment-preview">
       {preview && !previewProblem && <img src={preview} alt={name} onError={() => setPreviewProblem('图片加载失败，请重试或下载查看。')} />}
@@ -66,10 +41,10 @@ function AttachmentCard({ source, onRemove, disabled = false }: { source: Source
         : !preview && <span className="pilot-attachment-loading" role="status"><LoaderCircle size={16} />加载图片…</span>}
     </div>}
     <div className="pilot-attachment-details"><FileText size={15} aria-hidden="true" /><span><strong title={name}>{name}</strong><small>{human(size)}</small></span>
-      <button type="button" className="pilot-attachment-action" aria-label={`下载 ${name}`} title="下载" disabled={downloading || (!!remote && !downloadPath)} onClick={() => void download()}>{downloading ? <LoaderCircle size={15} /> : <Download size={15} />}</button>
+      <DownloadButton className="pilot-attachment-action" errorClassName="pilot-attachment-error" name={name}
+        path={downloadPath ?? undefined} blob={local?.blob} disabled={!!remote && !downloadPath} />
       {onRemove && <button type="button" className="pilot-attachment-action" aria-label={`移除 ${name}`} title="移除" disabled={disabled} onClick={onRemove}><X size={15} /></button>}
     </div>
-    {downloadProblem && <p className="pilot-attachment-error" role="alert">{downloadProblem}</p>}
     {remote && !downloadPath && <p className="pilot-attachment-error">文件链接不可用，请重新加载对话。</p>}
   </div>;
 }

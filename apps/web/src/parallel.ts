@@ -1,4 +1,5 @@
 import type { OurGraph, OurRunState } from './model';
+import { createAgent } from './agentAuthoring';
 
 export function activeNodes(state: OurRunState | null | undefined) {
   const active = { ...state?.active };
@@ -10,10 +11,6 @@ export function activeNodes(state: OurRunState | null | undefined) {
   }
   if (state?.cursor && !active[state.cursor.node]) active[state.cursor.node] = state.cursor;
   return Object.values(active);
-}
-
-export function isNodeActive(state: OurRunState | null | undefined, node: string) {
-  return state?.status === 'running' && activeNodes(state).some(item => item.node === node);
 }
 
 /** New keys encode identity explicitly; old serial Run keys remain readable. */
@@ -45,7 +42,7 @@ export function pairedNodes(graph: OurGraph, node: string): string[] {
 }
 
 /** Insert a complete region before the existing entry, preserving its downstream topology. */
-export function addParallelRegion(graph: OurGraph): { graph: OurGraph; fanout: string } {
+export function addParallelRegion(graph: OurGraph, defaultModel: string): { graph: OurGraph; fanout: string } {
   const used = new Set([...graph.nodes.map(node => node.id), ...Object.keys(graph.ops ?? {}), ...Object.keys(graph.agents ?? {})]);
   const unique = (base: string) => {
     let id = base, suffix = 2;
@@ -58,7 +55,7 @@ export function addParallelRegion(graph: OurGraph): { graph: OurGraph; fanout: s
   const role = Object.keys(graph.agents ?? {})[0] ?? unique('parallel-agent');
   const downstream = graph.nodes.some(node => node.id === graph.entry) ? graph.entry : unique('synthesize');
   return { fanout, graph: { ...graph, entry: fanout,
-    agents: graph.agents?.[role] ? graph.agents : { ...graph.agents, [role]: { model: 'models.academic', network: false, instructions: '' } },
+    agents: graph.agents?.[role] ? graph.agents : { ...graph.agents, [role]: createAgent(defaultModel) },
     ops: { ...graph.ops, [fanout]: { fanout: { join } }, [join]: { join: {} } },
     nodes: [...graph.nodes, { id: fanout, op: fanout }, { id: left, agent: role }, { id: right, agent: role }, { id: join, op: join },
       ...(!graph.nodes.some(node => node.id === downstream) ? [{ id: downstream, agent: role }] : [])],

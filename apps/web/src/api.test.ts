@@ -37,6 +37,18 @@ describe('Anchor API key recovery', () => {
     expect(new Headers(fetchMock.mock.calls[1][1].headers).get('Authorization')).toBe('Bearer new-key');
   });
 
+  it('preserves version preconditions across authentication retry and keeps Authorization managed', async () => {
+    setBearerKey('expired-key');
+    fetchMock.mockResolvedValueOnce(Response.json({ error: 'unauthorized' }, { status: 401 }))
+      .mockResolvedValueOnce(new Response(null, { status: 204 }));
+    unregister = registerApiKeyPrompt(async () => 'new-key');
+    await api('/graphs/g', 'DELETE', undefined, undefined, { 'If-Match': '"version-1"', authorization: 'untrusted' });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    for (const call of fetchMock.mock.calls) expect(new Headers(call[1].headers).get('If-Match')).toBe('"version-1"');
+    expect(new Headers(fetchMock.mock.calls[0][1].headers).get('Authorization')).toBe('Bearer expired-key');
+    expect(new Headers(fetchMock.mock.calls[1][1].headers).get('Authorization')).toBe('Bearer new-key');
+  });
+
   it('drops a rejected cached key even when the user cancels the prompt', async () => {
     setBearerKey('rejected-key');
     fetchMock.mockResolvedValue(Response.json({ error: 'unauthorized' }, { status: 401 }));

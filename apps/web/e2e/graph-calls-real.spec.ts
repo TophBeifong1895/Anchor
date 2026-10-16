@@ -77,9 +77,9 @@ test('real backend: author wait and detach calls, follow results and concurrent 
     evidence.waitDefinition = saved.definition;
     await page.locator('.inspector').evaluate(el => { el.scrollTop = 0; });
     await page.screenshot({ path: test.info().outputPath('real-call-editor.png'), fullPage: true });
-    page.on('dialog', dialog => dialog.accept('{}'));
     const startWait = page.waitForResponse(response => response.url().endsWith('/trigger') && response.request().method() === 'POST');
     await page.getByRole('button', { name: '运行工作流', exact: true }).click();
+    await page.getByRole('button', { name: '开始运行', exact: true }).click();
     const waitRun = (await (await startWait).json()).run as string;
     await expect(async () => {
       const detail = await json(request, `${base}/runs/${waitRun}`);
@@ -116,6 +116,7 @@ test('real backend: author wait and detach calls, follow results and concurrent 
     for (let index = 0; index < 2; index++) {
       const response = page.waitForResponse(response => response.url().endsWith('/trigger') && response.request().method() === 'POST');
       await page.getByRole('button', { name: '运行工作流', exact: true }).click();
+      await page.getByRole('button', { name: '开始运行', exact: true }).click();
       const run = (await (await response).json()).run as string;
       await expect(async () => {
         const detail = await json(request, `${base}/runs/${run}`);

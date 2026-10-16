@@ -1,0 +1,10 @@
+.action-menu-trigger { display: grid; place-items: center; flex: none; width: 30px; height: 30px; padding: 0; border: 0; border-radius: 5px; color: var(--muted); background: transparent; cursor: pointer; }
+.action-menu-trigger:hover, .action-menu-trigger[aria-expanded="true"] { background: var(--accent-soft); color: var(--ink); }
+.action-menu-trigger:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.action-menu { position: fixed; inset: auto; margin: 0; width: 192px; max-width: calc(100vw - 16px); max-height: calc(100dvh - 16px); overflow-y: auto; padding: 5px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); color: var(--ink); box-shadow: var(--popover-shadow); }
+.action-menu button { display: flex; align-items: center; justify-content: flex-start; gap: 9px; width: 100%; padding: 10px; font: inherit; text-align: left; color: var(--ink); border: 0; border-radius: 5px; background: transparent; cursor: pointer; }
+.action-menu button:hover, .action-menu button:focus-visible { background: var(--accent-soft); outline: none; }
+.action-menu button.danger { color: var(--red); }
+.action-menu button:disabled, .action-menu button[aria-disabled="true"] { color: var(--muted); cursor: default; }
+.action-menu p, .action-menu small { display: block; margin: 3px 10px 7px; font-size: 11px; line-height: 1.6; color: var(--muted); }
+@media (hover: none), (pointer: coarse) { .action-menu-trigger { width: 44px; height: 44px; } }

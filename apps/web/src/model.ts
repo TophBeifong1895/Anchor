@@ -8,8 +8,8 @@
 
 import type { Edge, Node, XYPosition } from '@xyflow/react';
 import type { Definition } from './graph';
-import { label } from './execution';
-import { isNodeActive, pairedNodes, parallelControl } from './parallel';
+import { pairedNodes, parallelControl } from './parallel';
+import { runNodePresentation } from './runPresentation';
 
 /** An agent: a model loop. `reads`/`writes` are the files it expects and the files it promises,
  *  which the loader checks against what the graph can actually hand it. */
@@ -47,7 +47,8 @@ export type RunTrigger = { source: string; schedule?: string; scheduled_at?: str
    *  nothing newer still reads it. */
   session?: string; reply_node?: string; previous_run?: string | null };
 export type CallRecord = { node: string; invocation: number; graph: string; run: string;
-  mode: 'wait' | 'detach'; status: string; active?: boolean; summary?: string; input?: Record<string, unknown>; result?: unknown };
+  mode: 'wait' | 'detach'; status: string; active?: boolean; projection?: RunProjection | null;
+  summary?: string; input?: Record<string, unknown>; result?: unknown };
 export type GraphRelationsData = { graphs: { graph: string; schedules: number }[];
   calls: { graph: string; node: string; op: string; target: string; mode: 'wait' | 'detach' }[] };
 export const callModeLabel = (mode: 'wait' | 'detach') => mode === 'wait' ? '等待完成' : '启动后继续';
@@ -56,6 +57,8 @@ export type GraphSummary = {
   graph: string; running: string | null; active_runs?: string[]; active_nodes?: string[];
   listener?: { platform: string; status: 'connecting' | 'authenticating' | 'authenticated' | 'reconnecting' | 'stopped' | 'unavailable' };
 };
+
+export type GraphPluginActivation = { mode: 'next_turn' | 'new_run'; graph_digest: string };
 
 export const listenerLabel = (status: NonNullable<GraphSummary['listener']>['status']) => ({
   connecting: '正在连接', authenticating: '正在认证', authenticated: '常驻监听',
@@ -98,6 +101,9 @@ export type Plugin = {
   unsupported?: string[];
   mcpServers?: Record<string, { transport: string; auth?: string }>;
   available?: boolean; error?: string; instructions?: string;
+  requiresNetwork?: boolean;
+  definitionValid?: boolean; dependenciesReady?: boolean | null;
+  contextAuthorized?: boolean | null; connectionVerified?: boolean | null;
 };
 
 /** Which of the three a node is as written. A module is the third: it disappears when the graph is
@@ -163,6 +169,7 @@ export type OurRun = {
   executed: string[];
   objective: string;
   trigger?: RunTrigger;
+  projection?: RunProjection;
   /** The intervals a Run that outlives one Turn actually worked, oldest first. The host only
    *  reports these for a resident assistant instance, whose `started` says nothing about when it
    *  was executing; an absent list means the Run is one continuous execution. `running` marks a
@@ -209,6 +216,10 @@ export type OurRunDetail = {
   control_requested?: 'pause' | 'stop' | null;
   /** Whether this host currently owns a live execution task for the durable Run. */
   active?: boolean;
+  projection?: RunProjection;
+  /** Display-only topology from the frozen, compiled Run snapshot. Expanded
+   * inline modules are included; live authoring drafts never feed this view. */
+  definition?: OurGraph;
   calls?: CallRecord[];
   plugins?: Record<string, Plugin[]>;
   graph: string;
@@ -216,6 +227,16 @@ export type OurRunDetail = {
   state: OurRunState;
   traces: Record<string, TraceMessage[]>;
   nodes: string[];
+};
+
+export type RunProjection = {
+  phase: string;
+  active: boolean;
+  control_requested: 'pause' | 'stop' | null;
+  terminal: boolean;
+  quiescent: boolean;
+  needs_attention: boolean;
+  actions: { pause: boolean; stop: boolean; resume: boolean };
 };
 
 export type FlowNode = Node<{
@@ -247,22 +268,14 @@ export function asDefinition(graph: OurGraph, name: string): Definition {
 }
 
 /** One node's state as of the most recent run, or as it was left by an earlier one. */
-function nodeState(nodeId: string, graph: OurGraph, state: OurRunState | null): FlowNode {
+function nodeState(nodeId: string, graph: OurGraph, state: OurRunState | null, projection?: RunProjection): FlowNode {
   const definition = asDefinition(graph, nodeId);
   const node = definition.nodes.find(item => item.id === nodeId)!;
   const result = state?.nodes[nodeId];
   const passes = state?.passes[nodeId] ?? 0;
-  const running = isNodeActive(state, nodeId);
+  const presentation = runNodePresentation(state, nodeId, projection);
   const skipped = state?.skipped?.includes(nodeId) ?? false;
 
-  const status = running ? 'running'
-    : result?.exit_status === 'interrupted' ? 'interrupted'
-    : result?.submitted ? 'completed'
-    : result ? 'failed'
-    : skipped ? 'skipped'
-    : 'pending';
-
-  const statusLabel = running ? label('running') : result ? label(result.exit_status || status) : undefined;
   const detail = result
     ? (result.submission || '').split('\n').find(line => line.trim()) ?? ''
     : skipped ? '没有被选中' : '尚未执行';
@@ -277,7 +290,7 @@ function nodeState(nodeId: string, graph: OurGraph, state: OurRunState | null): 
       // to everything the canvas draws — a node with a workspace and a state — so the difference is
       // said in words rather than drawn as a different shape.
       kind: nodeKindLabel(graph, nodeId),
-      state: status,
+      state: presentation.status,
       detail,
       nodeKind: kindOf(graph.nodes.find(item => item.id === nodeId)!),
       plugins: graph.nodes.find(item => item.id === nodeId)?.plugins,
@@ -285,7 +298,7 @@ function nodeState(nodeId: string, graph: OurGraph, state: OurRunState | null): 
       call: graph.ops?.[graph.nodes.find(item => item.id === nodeId)?.op ?? '']?.call,
       // The canvas renders `attempt + 1` as "第 N 次执行", so zero means the first pass.
       attempt: passes ? passes - 1 : undefined,
-      statusLabel,
+      statusLabel: state ? presentation.label : undefined,
     },
   };
 }
@@ -303,13 +316,13 @@ function nodeKindLabel(graph: OurGraph, nodeId: string): string {
 }
 
 export function toFlowNodes(graph: OurGraph, name: string,
-                            state: OurRunState | null): FlowNode[] {
+                            state: OurRunState | null, projection?: RunProjection): FlowNode[] {
   const spec = asDefinition(graph, name);
-  return spec.nodes.map(node => nodeState(node.id, graph, state));
+  return spec.nodes.map(node => nodeState(node.id, graph, state, projection));
 }
 
 /** An edge carries what the run decided about it, which is the whole point of drawing one. */
-export function toFlowEdges(graph: OurGraph, state: OurRunState | null): Edge[] {
+export function toFlowEdges(graph: OurGraph, state: OurRunState | null, projection?: RunProjection): Edge[] {
   // `decided` stores the latest settlement for an edge. When a routed node has several exits,
   // the runner deliberately settles the exits it did not choose to false; that must not erase a
   // true traversal from an earlier feedback cycle. The execution sequence is the durable history
@@ -336,7 +349,7 @@ export function toFlowEdges(graph: OurGraph, state: OurRunState | null): Edge[] 
       target: edge.to,
       type: 'routed',
       style,
-      animated: Boolean(selected) && isNodeActive(state, edge.to),
+      animated: Boolean(selected) && runNodePresentation(state, edge.to, projection).live,
     } as Edge;
   });
 }

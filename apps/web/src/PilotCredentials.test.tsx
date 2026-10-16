@@ -4,7 +4,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 import { PilotCredentialForm, type CredentialRequest } from './PilotCredentials';
 
-const request: CredentialRequest = { id: 'c-1', session: 's-1', turn: 't-1', plugin: 'service', server: 'main', field: 'SERVICE_TOKEN', status: 'pending' };
+const request: CredentialRequest = { id: 'c-1', session: 'pilot-private-s-1', turn: 't-1', plugin: 'service', server: 'main', field: 'SERVICE_TOKEN', status: 'pending' };
 const response = (status: number, body: unknown) => ({ ok: status >= 200 && status < 300, status, json: async () => body }) as Response;
 describe('Pilot credential input', () => {
   let root: Root;
@@ -30,7 +30,7 @@ describe('Pilot credential input', () => {
     const input = container.querySelector<HTMLInputElement>('input')!;
     expect(input.type).toBe('password'); expect(input.autocomplete).toBe('off');
     await submit(secret);
-    expect(fetchMock.mock.calls[0][0]).toBe('/sessions/s-1/credential-requests/c-1/value');
+    expect(fetchMock.mock.calls[0][0]).toBe('/sessions/pilot-private-s-1/credential-requests/c-1/value');
     expect(fetchMock.mock.calls[0][1].body).toBe(JSON.stringify({ value: secret }));
     expect(input.value).toBe(''); expect(configured).toHaveBeenCalledOnce();
     expect(container.innerHTML).not.toContain(secret); expect(localStorage.length).toBe(0); expect(sessionStorage.length).toBe(0);
@@ -59,9 +59,21 @@ describe('Pilot credential input', () => {
     fetchMock.mockResolvedValue(response(200, { request: { ...request, status: 'cancelled' } }));
     await draw(); container.querySelector<HTMLInputElement>('input')!.value = 'do-not-send';
     await act(async () => { [...container.querySelectorAll<HTMLButtonElement>('button')].find(button => button.textContent === '取消')!.click(); });
-    expect(fetchMock.mock.calls[0][0]).toBe('/sessions/s-1/credential-requests/c-1/cancel');
+    expect(fetchMock.mock.calls[0][0]).toBe('/sessions/pilot-private-s-1/credential-requests/c-1/cancel');
     expect(fetchMock.mock.calls[0][1].body).toBeUndefined();
     expect(container.querySelector<HTMLInputElement>('input')!.value).toBe('');
     expect(configured).toHaveBeenCalledOnce();
+  });
+  it('keeps completed request history distinct from current credentials', async () => {
+    await draw({ ...request, status: 'configured' });
+    expect(container.textContent).toContain('本次配置请求已完成');
+    expect(fetchMock).not.toHaveBeenCalled();
+    fetchMock.mockResolvedValueOnce(response(200, { plugin: 'service', targets: [{ target: 'main', kind: 'mcp',
+      authorization_digest: 'digest', fields: [{ field: 'SERVICE_TOKEN', state: 'missing', editable: true }] }] }));
+    await act(async () => { [...container.querySelectorAll('button')].find(button => button.textContent === '查看当前凭据')!.click(); });
+    expect(container.textContent).toContain('本次配置请求已完成');
+    expect(container.textContent).toContain('未配置');
+    expect(container.textContent).toContain('设置 SERVICE_TOKEN');
+    expect(fetchMock.mock.calls[0][0]).toBe('/plugins/service/credentials');
   });
 });

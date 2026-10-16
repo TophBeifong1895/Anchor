@@ -30,7 +30,6 @@ test('real Rust Host and Goose retain active trace, canonical completion and rec
       expect(typeof observed).toBe('string'); await gate;
       return { tool: { name: 'final_result', arguments: { summary: 'Canonical native reply', route: 'verify', observed_receipt: observed } } };
     }
-    if (position === 3) return { text: 'Native node result was submitted.' };
     throw new Error('unexpected local Provider request');
   });
   const host = await nativeHost(root, { graphName: 'deployment-pilot', definition: {
@@ -95,7 +94,7 @@ test('real Rust Host and Goose retain active trace, canonical completion and rec
     await page.setViewportSize({ width: 390, height: 844 });
     expect(await page.locator('.inspector').evaluate(element => element.scrollWidth - element.clientWidth)).toBeLessThanOrEqual(1);
     await page.screenshot({ path: join(root, 'settled-mobile.png'), fullPage: true });
-    expect(pageErrors).toEqual([]); expect(provider.failures).toEqual([]); expect(provider.calls).toHaveLength(3);
+    expect(pageErrors).toEqual([]); expect(provider.failures).toEqual([]); expect(provider.calls).toHaveLength(2);
     await writeFile(join(root, 'evidence.json'), JSON.stringify({ status: 'passed', provider: 'deterministic loopback',
       real_model_calls: 0, actual_host: true, actual_goose: true, provider_requests: provider.calls.length,
       host_sha256: createHash('sha256').update(await readFile(nativeHostBinary())).digest('hex'),

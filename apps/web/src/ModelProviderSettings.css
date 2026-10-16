@@ -1,0 +1,31 @@
+.model-provider-form + .model-provider-form { border-top: 1px solid var(--line); margin-top: 20px; padding-top: 20px; }
+.model-provider legend { display: flex; align-items: center; gap: 9px; padding: 0; font-size: 13px; font-weight: 600; }
+.model-provider legend code { color: var(--accent); background: var(--accent-soft); border-radius: var(--radius); padding: 3px 7px; font: 11px var(--font-code); }
+.model-provider-heading { display: flex; align-items: center; gap: 10px; margin: 9px 0 14px; }
+.model-provider-dirty { color: var(--muted); font-size: 11px; padding-left: 10px; border-left: 1px solid var(--line); }
+.model-provider-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 13px 18px; }
+.model-provider-key { grid-column: 1 / -1; }
+.model-provider-model input { font-family: var(--font-code) !important; font-size: 12px !important; }
+.model-provider-actions { gap: 9px; margin-top: 15px; }
+.settings-page .model-provider-actions .settings-text-button { margin-top: 0; padding: 4px 6px; min-height: var(--control-height); }
+.model-provider-actions .model-provider-clear { margin-left: auto; }
+.model-provider-footnote { margin-top: 17px; }
+.model-provider-problem { margin-bottom: 15px; }
+.model-provider-problem .settings-notice { margin-bottom: 9px; }
+.settings-retained { margin-top: 17px; padding-top: 13px; border-top: 1px solid var(--line); }
+.settings-provider-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 10px 0; border-bottom: 1px solid var(--line); }
+.settings-provider-row:last-child { border-bottom: 0; padding-bottom: 0; }
+.settings-provider-row > div { min-width: 0; }
+.settings-provider-row code { display: block; overflow-wrap: anywhere; font: 11px var(--font-code); }
+.settings-provider-row span { display: block; color: var(--muted); margin-top: 4px; font-size: 11px; }
+.settings-provider-row button { min-height: 26px; font-size: 11px; }
+.settings-provider-key { display: flex; align-items: center; gap: 6px; }
+.settings-page .settings-provider-key input[type="password"] { width: 180px; min-height: 27px; margin: 0; padding: 4px 7px; font-size: 11px; }
+@media (max-width: 680px) {
+  .model-provider-grid { grid-template-columns: minmax(0, 1fr); gap: 12px; }
+  .model-provider-actions { gap: 7px; }
+  .model-provider-actions .model-provider-clear { margin-left: 0; }
+  .settings-provider-row { align-items: start; flex-direction: column; gap: 10px; }
+  .settings-provider-key { width: 100%; flex-wrap: wrap; }
+  .settings-page .settings-provider-key input[type="password"] { flex: 1; min-width: 100px; }
+}

@@ -5,8 +5,8 @@ import { Transcript } from './Transcript';
 import { Plugins } from './Plugins';
 import { EmptyState } from './ui';
 import { callModeLabel, type OurRunDetail } from './model';
-import { label } from './execution';
-import { isNodeActive, tracePassKeys } from './parallel';
+import { tracePassKeys } from './parallel';
+import { runNodePresentation, runPhase, runPhaseLabel } from './runPresentation';
 
 /** Inspection state is local to the selected run/node, independent of graph editing. */
 export function RunInspector({ run, node, detail, targetPath = '', onOpenRun }:
@@ -18,6 +18,9 @@ export function RunInspector({ run, node, detail, targetPath = '', onOpenRun }:
   const shown = passes.includes(pass) ? pass : latest;
   const messages = detail?.traces?.[shown] ?? [];
   const result = detail?.state.nodes[node];
+  const phase = detail ? runPhase(detail) : 'unavailable';
+  const presentation = runNodePresentation(detail?.state, node, detail?.projection);
+  const { atCursor, status: nodeStatus, summaryLabel: nodeLabel } = presentation;
   useEffect(() => { setPass(''); }, [node, detail?.run]);
 
   return <aside className="inspector">
@@ -34,17 +37,11 @@ export function RunInspector({ run, node, detail, targetPath = '', onOpenRun }:
     </div>
     {!!detail?.calls?.filter(call => !node || call.node === node).length && <section className="call-records" aria-label="工作流调用记录">
       <h3>独立运行</h3>
-      {node && <p>本节点：{isNodeActive(detail.state, node) ? '执行中' : result?.submitted ? '已完成' : result ? '失败' : '尚未完成'}</p>}
+      {node && <p>本节点：{presentation.label}</p>}
       {detail.calls.filter(call => !node || call.node === node).map(call => <article className="call-record" key={`${call.node}/${call.invocation}`}>
         <header><strong>{call.graph}</strong><span>第 {call.invocation} 轮 · {call.node}</span></header>
-        <p>{callModeLabel(call.mode)} · {call.active === true
-          ? call.mode === 'detach' ? '目标正在后台执行' : '正在等待目标完成'
-          : call.mode === 'detach'
-            ? ['ready', 'created', 'queued', 'pending'].includes(call.status) ? '目标已接纳，等待启动'
-              : call.status === 'running' ? '目标已启动，等待接续' : '目标已结束'
-            : call.status === 'running' ? '目标等待接续'
-              : ['queued', 'created', 'pending'].includes(call.status) ? '等待目标启动' : '目标已结束'}</p>
-        <p>目标运行：<span className={`pill ${call.active ? 'running' : call.status}`}>{call.active ? '执行中' : label(call.status)}</span></p>
+        <p>{callModeLabel(call.mode)}</p>
+        <p>目标运行：<span className={`pill ${runPhase(call)}`}>{runPhaseLabel(runPhase(call))}</span></p>
         <button className="full-button" onClick={() => onOpenRun?.(call.run, call.graph)}>查看目标运行 ↗</button>
         <small className="call-run-id">{call.run}</small>
         {call.summary && <p>{call.summary}</p>}
@@ -58,9 +55,7 @@ export function RunInspector({ run, node, detail, targetPath = '', onOpenRun }:
     </EmptyState> : tab === 'plugins' ? <Plugins key={`${run}/${node}`} recorded={detail?.plugins?.[node] ?? []} />
     : tab === 'files' ? <><p className="inspector-note">显示 {node} 当前工作区的文件；历史轮次的对话不会改变这里的最新文件。</p><Files run={run} node={node} targetPath={targetPath} /></> : <>
       <div className="node-summary">
-        <span className={`pill ${isNodeActive(detail?.state, node) ? 'running' : result?.submitted ? 'finished' : result ? 'failed' : 'pending'}`}>
-          {isNodeActive(detail?.state, node) ? '执行中' : result ? (result.submitted ? '已提交' : '失败') : '未执行'}
-        </span>
+        <span className={`pill ${nodeStatus}`}>{nodeLabel}</span>
         <span>已执行 {detail?.state.passes[node] ?? 0} 轮</span>
         {result?.submission && <span className="node-summary-text" title={result.submission}>{result.submission.split('\n').find(line => line.trim())}</span>}
         {result?.route && <span>下一步：{result.route}</span>}
@@ -70,8 +65,8 @@ export function RunInspector({ run, node, detail, targetPath = '', onOpenRun }:
           aria-pressed={item === shown} onClick={() => setPass(item)}>第 {index + 1} 轮</button>)}
       </div>}
       {!messages.length && <EmptyState icon={MessageSquare}
-        title={result ? '该节点没有对话记录' : detail?.state.status === 'running' ? '等待执行记录' : '节点尚未执行'}>
-        {result ? '它可能是确定性操作节点，或只留下了文件结果。' : detail?.state.status === 'running' ? '节点开始执行后，对话会自动出现在这里。' : '选择已执行的节点查看过程。'}
+        title={result ? '该节点没有对话记录' : atCursor ? `${nodeLabel}，暂无对话记录` : phase === 'unavailable' ? '运行状态不可用' : '节点尚未执行'}>
+        {result ? '它可能是确定性操作节点，或只留下了文件结果。' : phase === 'unavailable' ? '请重读 Host 的运行状态。' : atCursor ? '这里会保留节点产生的对话与工具记录。' : '选择已执行的节点查看过程。'}
       </EmptyState>}
       <Transcript messages={messages} />
     </>}

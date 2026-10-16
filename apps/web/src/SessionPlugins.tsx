@@ -4,23 +4,22 @@
  * never by guessing locally. The current Turn keeps its frozen capabilities; the Host reports
  * whether a change waits for the next message or schedules continuation after normal completion.
  *
- * It polls while it is open because Pilot installs a Plugin itself in the middle of a session: the
- * new one has to appear without a page reload, and the repository has no push channel to use.
+ * It reads once when a session is selected, then polls only while open because Pilot can install a
+ * Plugin mid-session. Opening the panel shares any pending read instead of starting it over.
  */
 
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { PanelRightClose, Plug } from 'lucide-react';
 import { api, reason } from './api';
 import { Modal } from './ui';
 import type { Turn } from './PilotTurn';
-import { PluginCard, PluginToolbar } from './PluginPanel';
+import { PluginSettings, pluginSettingStatus, type PluginInformation } from './PluginPanel';
 import { LibraryPluginDetails } from './LibraryPluginDetails';
 import './SessionPlugins.css';
 
 /** One installed Plugin as the Host reports it for a session. */
-export type SessionPlugin = {
-  id: string; name: string; description?: string; skills?: string[]; mcpServerNames?: string[];
-  required?: boolean; on?: boolean; available?: boolean; error?: string | null;
+export type SessionPlugin = PluginInformation & {
+  required?: boolean; on?: boolean;
   explicitOn?: boolean; requiresNetwork?: boolean; networkProvider?: boolean;
   networkAllowed?: boolean; networkPermission?: boolean; enabledBy?: string[];
 };
@@ -50,7 +49,6 @@ function mountNotice(change: MountChange, continuation?: PluginContinuation | nu
 /** Long enough that a session is not one request per blink, short enough that a fresh install shows up. */
 export const POLL_MS = 4000;
 const COMPACT_QUERY = '(max-width: 1100px)';
-type PluginFilter = 'all' | 'attached' | 'detached';
 
 /** Replace a row with what the Host returned. A row the Host no longer reports keeps its old place
  * rather than vanishing under the pointer that just clicked it. */
@@ -84,8 +82,6 @@ export function SessionPlugins({ session, defaultOpen, onContinuation, continuat
   const [rowError, setRowError] = useState<Record<string, string>>({});
   const [changes, setChanges] = useState<Record<string, MountChange>>({});
   const [pending, setPending] = useState('');
-  const [query, setQuery] = useState('');
-  const [filter, setFilter] = useState<PluginFilter>('all');
   const [opened, setOpened] = useState<SessionPlugin | null>(null);
   const [listRefresh, setListRefresh] = useState(0);
   const trigger = useRef<HTMLButtonElement>(null);
@@ -97,6 +93,7 @@ export function SessionPlugins({ session, defaultOpen, onContinuation, continuat
   const sessionVersion = useRef(0);
   if (sessionRef.current !== session) { sessionRef.current = session; sessionVersion.current += 1; }
   const listRevision = useRef(0);
+  const listRequest = useRef<AbortController | null>(null);
   useEffect(() => {
     mounted.current = true;
     return () => { mounted.current = false; };
@@ -122,36 +119,46 @@ export function SessionPlugins({ session, defaultOpen, onContinuation, continuat
     listRevision.current += 1;
     inFlight.current = false;
     setPlugins([]); setLoaded(false); setListError(''); setRowError({}); setChanges({}); setPending('');
-    setQuery(''); setFilter('all'); setOpened(null);
+    setOpened(null);
   }, [session]);
   useEffect(() => {
     if (!open) setOpened(null);
   }, [open]);
+  const loadPlugins = useCallback(async () => {
+    if (!session || listRequest.current) return;
+    const controller = new AbortController();
+    listRequest.current = controller;
+    const version = sessionVersion.current;
+    const revision = listRevision.current;
+    const current = () => mounted.current && !controller.signal.aborted
+      && version === sessionVersion.current && revision === listRevision.current;
+    try {
+      const data = await api<{ plugins: SessionPlugin[] }>(`/sessions/${encodeURIComponent(session)}/plugins`,
+        'GET', undefined, controller.signal);
+      if (!Array.isArray(data.plugins)) throw new Error('插件列表响应无效，请重试。');
+      if (!current()) return;
+      setPlugins(data.plugins); setListError(''); setLoaded(true);
+    } catch (error) {
+      // Keep the rows already read: a failed poll is not evidence that nothing is installed.
+      if (current()) { setListError(mountProblem(error)); setLoaded(true); }
+    } finally {
+      if (listRequest.current === controller) listRequest.current = null;
+    }
+  }, [session]);
   useEffect(() => {
-    if (!session) { setPlugins([]); setLoaded(false); setListError(''); return; }
-    // Keep the last confirmed count when collapsed, while stopping all background polling.
-    if (!open) return;
-    let active = true;
-    let polling = false;
-    const load = async () => {
-      if (polling) return;
-      polling = true;
-      const revision = listRevision.current;
-      try {
-        const data = await api<{ plugins: SessionPlugin[] }>(`/sessions/${encodeURIComponent(session)}/plugins`);
-        if (!Array.isArray(data.plugins)) throw new Error('插件列表响应无效，请重试。');
-        if (!active || revision !== listRevision.current) return;
-        setPlugins(data.plugins);
-        setListError('');
-      } catch (error) {
-        // Keep the rows already read: a failed poll is not evidence that nothing is installed.
-        if (active && revision === listRevision.current) setListError(mountProblem(error));
-      } finally { polling = false; if (active) setLoaded(true); }
-    };
-    void load();
-    const timer = window.setInterval(() => { void load(); }, POLL_MS);
-    return () => { active = false; window.clearInterval(timer); };
-  }, [open, session, listRefresh]);
+    if (!session) return;
+    // One early read prepares the collapsed entry; only an open panel keeps polling.
+    setListError('');
+    if (listRefresh) setLoaded(false);
+    void loadPlugins();
+    return () => { listRequest.current?.abort(); listRequest.current = null; };
+  }, [session, listRefresh, loadPlugins]);
+  useEffect(() => {
+    if (!open || !session) return;
+    void loadPlugins();
+    const timer = window.setInterval(() => { void loadPlugins(); }, POLL_MS);
+    return () => window.clearInterval(timer);
+  }, [open, session, listRefresh, loadPlugins]);
   const toggle = async (plugin: SessionPlugin) => {
     if (!maySwitch(plugin, inFlight.current)) return;
     inFlight.current = true;
@@ -199,47 +206,35 @@ export function SessionPlugins({ session, defaultOpen, onContinuation, continuat
     }
   };
   const count = plugins.filter(plugin => plugin.on).length;
-  const needle = query.trim().toLocaleLowerCase();
-  const visible = plugins.filter(plugin => (filter === 'all' || (plugin.on === true) === (filter === 'attached'))
-    && (!needle || [plugin.name, plugin.id, plugin.description, ...(plugin.skills ?? []), ...(plugin.mcpServerNames ?? [])]
-      .some(value => value?.toLocaleLowerCase().includes(needle))));
   const knowsCount = !!session && (plugins.length > 0 || (loaded && !listError));
+  const loading = !!session && !loaded && !plugins.length && !listError;
   const pluginStatus = (plugin: SessionPlugin) => {
     const direct = plugin.explicitOn ?? plugin.on;
     if (plugin.networkProvider) {
       const enabled = direct ? '主动启用' : plugin.on ? '依赖启用' : '未启用';
       return plugin.available === false ? `${enabled} · 不可用` : enabled;
     }
-    return plugin.available === false ? plugin.on ? '已挂载 · 不可用' : '不可用' : plugin.on ? '已挂载' : '未挂载';
+    return pluginSettingStatus(plugin, { selected: plugin.on === true }, { selectedLabel: '已挂载', unselectedLabel: '未挂载' });
   };
   const body = <>
-    <div className="pilot-plugins-summary"><span>{knowsCount ? <>已安装 <strong>{plugins.length}</strong> 个插件</>
+    <div className="pilot-plugins-summary"><span>{knowsCount ? <>共 <strong>{plugins.length}</strong> 个插件</>
       : !session ? '为当前对话配置插件' : listError ? '暂时无法读取插件列表' : '正在读取已安装的插件…'}</span>
       {knowsCount && <span className="plugin-mounted-count">{count} 已挂载</span>}
     </div>
-    <div className="pilot-plugins-body">
-      {!!plugins.length && <PluginToolbar query={query} onQuery={setQuery} filter={filter}
-        onFilter={value => setFilter(value as PluginFilter)} filters={[
-          { value: 'all', label: '全部', count: plugins.length },
-          { value: 'attached', label: '已挂载', count },
-          { value: 'detached', label: '未挂载', count: plugins.length - count },
-        ]} />}
-      {!session && <div className="plugin-empty"><strong>为对话选择能力</strong><p>先开始或选择一个对话，再为 Pilot 挂载需要的插件。</p></div>}
-      {session && !loaded && !plugins.length && !listError && <p className="plugin-message" role="status">正在读取本会话的插件…</p>}
-      {listError && <div className="plugin-message is-error" role="alert"><span>插件列表读取失败：{listError}</span><button type="button" onClick={() => setListRefresh(value => value + 1)}>重试</button></div>}
-      {session && loaded && !plugins.length && !listError && <div className="plugin-empty"><strong>还没有安装插件</strong><p>告诉 Pilot 你需要什么能力。安装完成后，插件会自动出现在这里。</p></div>}
-      {!!plugins.length && !visible.length && <div className="plugin-empty"><strong>{needle ? '没有找到匹配的插件' : filter === 'attached' ? '还没有挂载插件' : '所有插件均已挂载'}</strong><p>{needle ? '试试其他名称，或清空搜索。' : '选择「全部」查看已安装的插件。'}</p>
-        <button type="button" onClick={() => { setQuery(''); setFilter('all'); }}>查看全部插件</button></div>}
-      <div className="plugin-card-list session-plugin-list">{visible.map(plugin => {
-        const direct = plugin.explicitOn ?? plugin.on;
-        const dependents = (plugin.enabledBy ?? []).map(id => plugins.find(item => item.id === id)?.name || id);
-        const unavailable = plugin.available === false;
-        return <PluginCard key={plugin.id} className="session-plugin-card" plugin={plugin} status={pluginStatus(plugin)}
-          active={plugin.on === true} unavailable={unavailable} onDetails={() => setOpened(plugin)}
-          control={<button type="button" role="switch" aria-checked={direct === true} aria-label={`${direct ? '取消挂载' : '挂载'} ${plugin.name || plugin.id}`}
-            className={`session-plugin-switch${direct ? ' on' : ''}`} disabled={!maySwitch(plugin, pending === plugin.id)}
-            title={plugin.required ? '工作流需要此插件，保持挂载' : plugin.networkProvider ? '主动启用开关；依赖启用由已挂载插件决定' : undefined}
-            aria-busy={pending === plugin.id} onClick={() => void toggle(plugin)}><span className="plugin-switch-track" aria-hidden="true" /></button>}>
+    <div className="pilot-plugins-body" aria-busy={loading}>
+      <PluginSettings key={session} items={plugins} loading={loading} error={listError}
+        retry={() => setListRefresh(value => value + 1)}
+        selectedLabel="已挂载" unselectedLabel="未挂载" enableLabel="挂载" disableLabel="取消挂载"
+        setting={plugin => ({ selected: (plugin.explicitOn ?? plugin.on) === true, active: plugin.on === true,
+          required: plugin.required, pending: pending === plugin.id, status: pluginStatus(plugin),
+          problem: rowError[plugin.id], notice: changes[plugin.id] ? mountNotice(changes[plugin.id], continuation?.session === session ? continuation : null) : undefined })}
+        onToggle={plugin => void toggle(plugin)} onDetails={setOpened}
+        empty={<div className="plugin-empty"><strong>{session ? '还没有安装插件' : '为对话选择能力'}</strong>
+          <p>{session ? '告诉 Pilot 你需要什么能力。安装完成后，插件会自动出现在这里。' : '先开始或选择一个对话，再为 Pilot 挂载需要的插件。'}</p></div>}>
+        {plugin => {
+          const direct = plugin.explicitOn ?? plugin.on;
+          const dependents = (plugin.enabledBy ?? []).map(id => plugins.find(item => item.id === id)?.name || id);
+          return <>
           {plugin.networkProvider && <div className="plugin-network-policy">
             <p>{dependents.length ? `${direct ? '主动启用 · ' : ''}由${dependents.join('、')}依赖启用` : direct ? '已主动启用' : '未启用'}
               {' · '}{typeof plugin.networkPermission !== 'boolean' ? '联网许可未知'
@@ -248,13 +243,9 @@ export function SessionPlugins({ session, defaultOpen, onContinuation, continuat
               onClick={() => void changeNetwork(plugin)}>
               {typeof plugin.networkPermission !== 'boolean' ? '联网许可未知' : plugin.networkPermission === false ? '允许联网' : '禁止联网'}</button>
           </div>}
-          {plugin.requiresNetwork && !plugin.networkProvider && <p className="plugin-message">需要联网{plugin.on && plugin.networkAllowed ? ' · 网络访问已允许' : ''}</p>}
-          {plugin.required && <p className="plugin-message is-required">必需 · 工作流需要此插件，保持挂载。</p>}
-          {unavailable && <p className="plugin-message is-error">不可用：{plugin.error || 'Host 未给出原因'}</p>}
-          {rowError[plugin.id] && <p className="plugin-message is-error" role="alert">{rowError[plugin.id]}</p>}
-          {changes[plugin.id] && !rowError[plugin.id] && <p className="plugin-message is-success" role="status">{mountNotice(changes[plugin.id], continuation?.session === session ? continuation : null)}</p>}
-        </PluginCard>;
-      })}</div>
+          </>;
+        }}
+      </PluginSettings>
     </div>
     <div className="pilot-plugins-footer"><p>需要其他能力？直接告诉 Pilot。</p></div>
     {opened && <LibraryPluginDetails key={`${session}/${opened.id}`} plugin={plugins.find(plugin => plugin.id === opened.id) ?? opened}

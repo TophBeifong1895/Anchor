@@ -17,7 +17,9 @@ async function fixture(page: Page, current = plugin) {
   const facts = { graphWrites: 0, mountWrites: 0, detailReads: 0 };
   const session = { id: 'experience', title: '研究资料整理', status: 'active', updated_at: '2026-10-14T01:00:00Z', approval: null };
   const run = { run: 'experience-run', graph: 'experience', status: 'completed', running: false,
-    started: '2026-10-14T01:00:00Z', updated: '2026-10-14T01:01:00Z', executed: ['worker'], objective: '整理研究证据' };
+    started: '2026-10-14T01:00:00Z', updated: '2026-10-14T01:01:00Z', executed: ['worker'], objective: '整理研究证据',
+    projection: { phase: 'completed', active: false, control_requested: null, terminal: true, quiescent: true,
+      needs_attention: false, actions: { pause: false, stop: false, resume: false } } };
   await page.addInitScript(() => {
     localStorage.setItem('anchor:view', 'graph');
     localStorage.setItem('pilot:selected', 'experience');
@@ -32,7 +34,8 @@ async function fixture(page: Page, current = plugin) {
   });
   await page.route('**/runs', route => route.fulfill({ json: { runs: [run] } }));
   await page.route('**/runs/experience-run', route => route.fulfill({ json: {
-    graph: run.graph, run: run.run, nodes: ['worker'], traces: {}, plugins: { worker: [captured] },
+    graph: run.graph, run: run.run, definition: graph, projection: run.projection,
+    nodes: ['worker'], traces: {}, plugins: { worker: [captured] },
     state: { ...run, cursor: null, reason: '', nodes: {}, passes: { worker: 1 }, skipped: [] },
   } }));
   await page.route('**/timeline*', route => route.fulfill({ json: { runs: [run], scheduled: [], schedules: [] } }));
@@ -71,6 +74,47 @@ async function typography(card: Locator) {
   });
 }
 
+for (const width of [1440, 390]) {
+  test(`a slow first plugin read stays visible and is shared across panel reopening at ${width}px`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 844 });
+    await fixture(page);
+    let finish: () => void = () => undefined;
+    const waiting = new Promise<void>(resolve => { finish = resolve; });
+    let reads = 0;
+    await page.route('**/sessions/experience/plugins', async route => {
+      reads++;
+      await waiting;
+      await route.fulfill({ json: { plugins: [{ ...plugin, on: false, explicitOn: false,
+        mcpServerNames: Object.keys(plugin.mcpServers ?? {}) }] } });
+    });
+    await page.getByRole('button', { name: 'Pilot', exact: true }).click();
+    await expect.poll(() => reads).toBeGreaterThan(0);
+    const trigger = page.getByRole('button', { name: '展开插件面板', exact: true });
+    await expect(trigger).toHaveAttribute('aria-expanded', 'false');
+    await trigger.click();
+    const panel = width > 1100 ? page.getByRole('complementary', { name: '会话插件挂载' })
+      : page.getByRole('dialog', { name: '会话插件', exact: true });
+    await expect(panel.getByRole('status')).toHaveText('正在加载插件…');
+    await expect(panel.getByRole('status')).toBeInViewport();
+    await expect(panel.locator('.session-plugin-placeholder')).toHaveCount(3);
+    await expect(panel.locator('.session-plugin-placeholder').last()).toBeInViewport();
+    await expect(panel).not.toContainText('还没有安装插件');
+    await panel.screenshot({ path: test.info().outputPath(`plugins-loading-${width}.png`) });
+    // Development StrictMode may start then cancel an initialization read. Reopening must reuse
+    // the remaining pending read rather than add another request.
+    const readsBeforeReopen = reads;
+    if (width > 1100) await panel.getByRole('button', { name: '收起插件面板', exact: true }).click();
+    else await page.keyboard.press('Escape');
+    await trigger.click();
+    await expect(panel.getByRole('status')).toBeVisible();
+    expect(reads).toBe(readsBeforeReopen);
+    finish();
+    await expect(panel.locator('.plugin-card')).toContainText(plugin.name);
+    await expect(panel.locator('.session-plugins-loading')).toHaveCount(0);
+    await expect(panel.locator('.pilot-plugins-body')).toHaveAttribute('aria-busy', 'false');
+  });
+}
+
 test('one plugin experience preserves Graph drafts, immediate Session writes and read-only historical facts', async ({ page }) => {
   const facts = await fixture(page);
   const editor = page.locator('.inspector .plugins-panel');
@@ -80,7 +124,7 @@ test('one plugin experience preserves Graph drafts, immediate Session writes and
   await expect(editor).toContainText('更改保存后用于后续运行');
   const type = await typography(editorCard);
   expect(parseFloat(type.bodySize)).toBeGreaterThanOrEqual(13);
-  await editor.getByRole('checkbox', { name: `选择 ${plugin.name}`, exact: true }).check();
+  await editor.getByRole('switch', { name: `选择 ${plugin.name}`, exact: true }).click();
   expect(facts.graphWrites).toBe(0);
   expect(facts.mountWrites).toBe(0);
   await page.getByRole('button', { name: '保存', exact: true }).click();

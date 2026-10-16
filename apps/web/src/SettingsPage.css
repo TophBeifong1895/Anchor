@@ -1,0 +1,63 @@
+.settings-page { flex: 1; min-width: 0; min-height: 0; overflow-y: auto; background: var(--paper); padding: 24px 28px 48px; }
+.settings-content { max-width: 920px; margin: 0 auto; }
+.settings-heading { display: flex; justify-content: space-between; align-items: center; gap: 16px; margin-bottom: 18px; }
+.settings-heading h1 { font-family: var(--font-ui); font-size: 21px; font-weight: 600; letter-spacing: -.025em; margin: 0 0 5px; }
+.settings-heading p, .settings-help { color: var(--muted); font-size: 12px; line-height: 1.7; margin: 0; }
+.settings-page button { display: inline-flex; justify-content: center; align-items: center; gap: 5px; min-height: var(--control-height); padding: 4px 11px; border: 1px solid var(--line-strong); border-radius: var(--radius); background: var(--surface); color: var(--ink); font: inherit; cursor: pointer; white-space: nowrap; }
+.settings-page button:hover:not(:disabled) { color: var(--accent); border-color: var(--accent); }
+.settings-page button:disabled { opacity: .5; cursor: default; }
+.settings-page :is(button, input, select, summary):focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.settings-section { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 19px 22px; margin-bottom: 18px; box-shadow: var(--shadow); }
+.settings-section-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 8px; }
+.settings-section-heading h2 { font-size: 15px; letter-spacing: -.015em; }
+.settings-state { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: 11px; }
+.settings-state > span { width: 6px; height: 6px; border-radius: 50%; background: var(--amber); }
+.settings-state.ready { color: var(--accent); }
+.settings-state.ready > span { background: var(--accent); }
+.settings-help { margin-bottom: 17px; max-width: 740px; }
+.settings-page fieldset { min-width: 0; margin: 0; border: 0; padding: 0; }
+.settings-page label { display: block; font-size: 12px; color: var(--ink); }
+.settings-page small { color: var(--muted); font-size: 10px; font-weight: 400; margin-left: 5px; }
+.settings-page input:not([type="checkbox"]), .settings-page select { box-sizing: border-box; width: 100%; min-height: 33px; margin: 6px 0 0; padding: 6px 9px; color: var(--ink); border: 1px solid var(--line-strong); border-radius: var(--radius); background: var(--surface); font: inherit; }
+.settings-page input[readonly], .settings-page input:disabled, .settings-page select:disabled { background: var(--panel); color: var(--muted); }
+.settings-page input::placeholder { color: var(--muted); opacity: .8; }
+.settings-endpoint input { font-family: var(--font-code) !important; font-size: 12px !important; }
+.settings-field-help { display: block; font-size: 11px; line-height: 1.65; color: var(--muted); margin: 5px 0 0; }
+.settings-page .settings-text-button { background: transparent; border: 0; min-height: 24px; padding: 2px 0; font-size: 11px; margin-top: 5px; }
+.settings-page .settings-text-button.danger { color: var(--red); }
+.settings-page summary { cursor: pointer; font-size: 12px; color: var(--muted); }
+.settings-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 9px; margin-top: 19px; }
+.settings-page .settings-primary { background: var(--accent); border-color: var(--accent); color: var(--surface); }
+.settings-page .settings-primary:hover:not(:disabled) { color: var(--surface); filter: brightness(.95); }
+.settings-actions .settings-field-help { margin: 0 0 0 3px; }
+.settings-notice { font-size: 12px; line-height: 1.65; padding: 9px 11px; border-radius: var(--radius); margin: 13px 0 0; overflow-wrap: anywhere; }
+.settings-notice.ok { color: var(--accent); background: var(--accent-soft); }
+.settings-notice.bad { color: var(--red); background: var(--panel); border-left: 2px solid var(--red); }
+.settings-network { display: flex !important; align-items: center; gap: 7px; margin-bottom: 7px; }
+.settings-network input { margin: 0; accent-color: var(--accent); }
+.settings-runtime-row { display: grid; grid-template-columns: minmax(0, 1fr) 150px 119px; gap: 16px; align-items: center; padding: 16px 0; border-bottom: 1px solid var(--line); }
+.settings-runtime-row > div { min-width: 0; }
+.settings-runtime-row strong { display: block; font-size: 13px; font-weight: 600; }
+.settings-runtime-row > div > span { display: block; font-size: 11px; color: var(--muted); line-height: 1.6; margin-top: 4px; overflow-wrap: anywhere; }
+.settings-runtime-row > label { color: var(--muted); font-size: 11px; }
+.settings-runtime-row input { font-family: var(--font-code) !important; }
+.settings-runtime-version { display: block; min-height: 33px; margin-top: 6px; padding: 7px 0; font: 13px var(--font-code); color: var(--ink); }
+.settings-runtime-row > button { align-self: end; min-height: 33px; }
+.settings-operation { border-left: 2px solid var(--accent); background: var(--panel); padding: 11px 13px; margin-top: 16px; font-size: 12px; }
+.settings-operation.bad { border-color: var(--red); }
+.settings-operation > div { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.settings-operation strong { font-weight: 500; }
+.settings-operation time { color: var(--muted); font-size: 10px; }
+.settings-operation progress { display: block; width: 100%; height: 4px; accent-color: var(--accent); margin: 11px 0; }
+.settings-operation p { margin: 7px 0 0; line-height: 1.7; white-space: pre-wrap; overflow-wrap: anywhere; }
+.settings-operation > button { min-height: 25px; font-size: 11px; margin-top: 9px; }
+@media (max-width: 680px) {
+  .settings-page { padding: 17px 12px 30px; }
+  .settings-section { padding: 16px; }
+  .settings-runtime-row { grid-template-columns: minmax(0, 1fr) 120px; gap: 12px; }
+  .settings-runtime-row > div { grid-column: 1 / -1; }
+  .settings-runtime-row > button { align-self: end; }
+  .settings-actions .settings-field-help { flex-basis: 100%; margin-left: 0; }
+  .settings-operation > div { align-items: start; flex-direction: column; gap: 4px; }
+}
+@media (prefers-reduced-motion: reduce) { .settings-operation progress { animation: none; } }

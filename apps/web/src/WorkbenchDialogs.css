@@ -1,0 +1,19 @@
+.workbench-dialog { width: min(640px, calc(100vw - 32px)); }
+.workbench-dialog form > label { display: grid; gap: 7px; font-weight: 500; }
+.workbench-dialog input, .workbench-dialog textarea { box-sizing: border-box; width: 100%; padding: 8px 10px; border: 1px solid var(--line-strong); border-radius: var(--radius); background: var(--surface); color: var(--ink); font: inherit; }
+.workbench-dialog .json-editor { min-height: 180px; font-family: var(--font-code); font-size: 12px; }
+.workbench-dialog .input-helpers { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 8px; }
+.workbench-dialog .input-helpers .hint { flex-basis: 100%; }
+.workbench-dialog :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.schedule-fields { border: 0; padding: 0; margin: 0; min-width: 0; display: grid; gap: 12px; }
+.schedule-form-heading, .schedule-item-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
+.schedule-form-heading { justify-content: space-between; }
+.schedule-form-heading h3 { font-size: 13px; }
+.schedule-item > .schedule-item-actions { flex-direction: row; flex: 0 1 auto; justify-content: flex-end; }
+.schedule-enabled { display: flex !important; align-items: center; gap: 8px; }
+.schedule-enabled input { width: auto !important; }
+.schedule-delete-confirm { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; font-size: 12px; }
+@media (max-width: 900px) {
+  .topbar .product-switch { min-width: 0; overflow-x: auto; flex-wrap: nowrap; }
+  .topbar .product-switch button { flex-shrink: 0; padding-inline: 9px; }
+}

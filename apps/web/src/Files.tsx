@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState, useId } from 'react';
-import { AlertTriangle, ChevronRight, Download, FileText, Folder, LoaderCircle, RefreshCw } from 'lucide-react';
+import { AlertTriangle, ChevronRight, FileText, Folder, LoaderCircle, RefreshCw } from 'lucide-react';
 import { Markdown } from './markdown';
 import { api, human, reason } from './api';
+import { DownloadButton } from './DownloadButton';
 import type { OurFile, OurFileBody, OurFileList } from './model';
 
 type Directory = { name: string; directories: Map<string, Directory>; files: OurFile[] };
@@ -54,9 +55,7 @@ function FileItem({ file, base, revision, targetPath }: { file: OurFile; base: s
         <ChevronRight size={12} className="call-caret" /><FileText size={13} />
         <span title={file.path}>{name}</span><small>{human(file.size)}</small>
       </button>
-      <a className="file-get" aria-label={`下载 ${name}`} title={`下载 ${name}`} href={`${url}?download=1`} download>
-        <Download size={13} />
-      </a>
+      <DownloadButton className="file-get" name={name} path={`${url}?download=1`} size={13} />
     </div>
     {open && <div className="file-open" id={contentId}>
       {problem ? <div className="message error" role="alert">

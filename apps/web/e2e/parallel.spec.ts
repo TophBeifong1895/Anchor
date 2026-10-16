@@ -1,12 +1,13 @@
 import { test, expect, type Page } from '@playwright/test';
 import { addParallelRegion } from '../src/parallel';
 import type { OurGraph, OurRun, OurRunDetail } from '../src/model';
+import { runProjectionFixture } from './fixtures/runProjection';
 
 // UI contract fixtures. Scheduler/provider acceptance is tested separately against the real service.
-const graph = addParallelRegion({ entry: 'finish', nodes: [{ id: 'finish', op: 'finish' }], edges: [], ops: { finish: { run: 'true' } } }).graph;
+const graph = addParallelRegion({ entry: 'finish', nodes: [{ id: 'finish', op: 'finish' }], edges: [], ops: { finish: { run: 'true' } } }, 'models.default.flash').graph;
 const started = new Date().toISOString();
-const run: OurRun = { run: 'parallel-run', graph: 'parallel', status: 'running', running: true, started, updated: started, executed: ['fanout'], objective: '并行研究' };
-const detail: OurRunDetail = { run: run.run, graph: run.graph, nodes: graph.nodes.map(node => node.id), traces: {}, state: {
+const run: OurRun = { run: 'parallel-run', graph: 'parallel', status: 'running', running: true, started, updated: started, executed: ['fanout'], objective: '并行研究', projection: runProjectionFixture('running', { active: true }) };
+const detail: OurRunDetail = { run: run.run, graph: run.graph, definition: graph, projection: run.projection, nodes: graph.nodes.map(node => node.id), traces: {}, state: {
   objective: run.objective, started, updated: started, status: 'running', cursor: null,
   active: { 'branch-a': { node: 'branch-a', pass: 1, run: 1, dir: 'a' }, 'branch-b': { node: 'branch-b', pass: 1, run: 1, dir: 'b' } },
   parallel: { fanout: 'fanout', join: 'join', invocation: 1 }, passes: { 'branch-a': 1, 'branch-b': 1 },

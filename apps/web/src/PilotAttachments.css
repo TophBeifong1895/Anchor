@@ -1,6 +1,6 @@
 .pilot-attachments { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 8px; margin: 10px 0 4px; min-width: 0; }
-.pilot-attachment { width: 244px; max-width: 100%; min-width: 0; overflow: hidden; border: 1px solid var(--line); border-radius: 10px; background: #fff; }
-.pilot-attachment-details { display: flex; align-items: center; gap: 7px; padding: 10px; color: var(--muted); }
+.pilot-attachment { width: 244px; max-width: 100%; min-width: 0; overflow: hidden; border: 1px solid var(--line); border-radius: var(--radius); background: #fff; }
+.pilot-attachment-details { display: flex; align-items: center; gap: 7px; padding: 8px; color: var(--muted); }
 .pilot-attachment-details > svg { flex: none; }
 .pilot-attachment-details > span { display: flex; flex: 1; min-width: 0; flex-direction: column; gap: 3px; }
 .pilot-attachment-details strong { color: var(--ink); font-size: 11px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -20,7 +20,7 @@
 .pilot-composer .pilot-attachment-preview { min-height: 64px; }
 .pilot-composer .pilot-attachment-preview img { height: 96px; max-height: 96px; }
 .pilot-composer-actions { display: flex; align-items: center; gap: 10px; }
-.pilot-attach { display: inline-flex; align-items: center; justify-content: center; gap: 5px; min-height: 36px; padding: 6px 8px; border: 0; border-radius: 7px; color: var(--muted); background: transparent; font-size: 11px !important; }
+.pilot-attach { display: inline-flex; align-items: center; justify-content: center; gap: 5px; min-height: var(--control-height); padding: 4px 6px; border: 0; border-radius: 7px; color: var(--muted); background: transparent; font-size: 11px; }
 .pilot-attach:hover { background: var(--accent-soft); color: var(--accent); }
 .pilot-file-input { display: none; }
 .pilot-composer-error { margin: 0; color: var(--red); font-size: 11px; line-height: 1.6; }

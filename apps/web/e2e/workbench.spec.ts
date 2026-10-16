@@ -13,8 +13,14 @@ test('manage individual workflows without disturbing the editor', async ({ page 
   await page.route('**/graphs', route => route.fulfill({ json: { graphs } }));
   await page.route('**/runs', route => route.fulfill({ json: { runs: [] } }));
   await page.route('**/timeline*', route => route.fulfill({ json: { runs: [], scheduled: [], schedules: [] } }));
+  await page.route('**/graphs/*/delete-precondition', route => {
+    const name = decodeURIComponent(new URL(route.request().url()).pathname.split('/').at(-2)!);
+    return route.fulfill({ json: { graph: name, precondition: `version-${name}` } });
+  });
   await page.route('**/graphs/*', route => {
     if (route.request().method() !== 'DELETE') return route.fulfill({ json: { definition: graph } });
+    const target = decodeURIComponent(new URL(route.request().url()).pathname.split('/').at(-1)!);
+    expect(route.request().headers()['if-match']).toBe(`"version-${target}"`);
     if (refuseDelete) return route.fulfill({ status: 409, json: { error: '工作流正在运行' } });
     const name = decodeURIComponent(new URL(route.request().url()).pathname.split('/').at(-1)!);
     deleted.push(name);
@@ -93,11 +99,46 @@ test('manage individual workflows without disturbing the editor', async ({ page 
   expect(deleted).toEqual(['research-review', 'academic-survey', 'running-research']);
 });
 
+test('Graph confirmation keeps its captured version after a concurrent edit', async ({ page }) => {
+  const definition = { entry: 'seed', ops: { seed: { run: 'true' } }, nodes: [{ id: 'seed', op: 'seed' }], edges: [] };
+  let version = 'before-edit';
+  let deleted = false;
+  const observed: string[] = [];
+  await page.route('**/graphs', route => route.fulfill({ json: { graphs: deleted ? [] : [{ graph: 'demo', running: null }] } }));
+  await page.route('**/runs', route => route.fulfill({ json: { runs: [] } }));
+  await page.route('**/graphs/demo', route => {
+    if (route.request().method() !== 'DELETE') return route.fulfill({ json: { definition } });
+    const condition = route.request().headers()['if-match'];
+    observed.push(condition);
+    if (condition !== `"${version}"`) return route.fulfill({ status: 409, json: { error: 'Graph changed or was recreated; request a new delete confirmation' } });
+    deleted = true;
+    return route.fulfill({ status: 204 });
+  });
+  await page.route('**/graphs/demo/delete-precondition', route => route.fulfill({ json: { graph: 'demo', precondition: version } }));
+  await page.goto('/');
+  const manage = page.getByRole('button', { name: '管理工作流 demo', exact: true });
+  const open = async () => {
+    await manage.click(); await page.getByRole('menuitem', { name: '删除工作流' }).click();
+    await expect(page.getByRole('button', { name: '永久删除' })).toBeEnabled();
+  };
+  await open(); version = 'after-edit';
+  await page.getByRole('button', { name: '永久删除' }).click();
+  await expect(page.getByRole('alert')).toContainText('Graph changed');
+  expect(deleted).toBe(false); expect(observed).toEqual(['"before-edit"']);
+  await page.getByRole('button', { name: '取消', exact: true }).click();
+  await open();
+  await page.getByRole('button', { name: '永久删除' }).click();
+  await expect(manage).toHaveCount(0);
+  expect(deleted).toBe(true); expect(observed).toEqual(['"before-edit"', '"after-edit"']);
+});
+
 test('edit a graph, inspect a run and read its files across screen sizes', async ({ page }) => {
   const graph = JSON.parse(readFileSync('../../examples/graphs/academic-gated.json', 'utf8'));
   const errors: string[] = [];
   page.on('pageerror', error => errors.push(error.message));
   const run = { run: 'run-demo', graph: 'academic-survey', status: 'running', running: true,
+    projection: { phase: 'running', active: true, control_requested: null, terminal: false, quiescent: false,
+      needs_attention: false, actions: { pause: true, stop: true, resume: false } },
     started: '2026-09-22T08:30:00Z', updated: '2026-09-22T08:32:00Z',
     executed: ['plan', 'gather', 'write'], objective: '调研多智能体协作：从证据收集到可靠的研究结论' };
   await page.route('**/graphs', route => route.fulfill({ json: { graphs: [
@@ -107,11 +148,15 @@ test('edit a graph, inspect a run and read its files across screen sizes', async
   await page.route('**/graphs/*', route => route.fulfill({ json: { definition: graph } }));
   const history = Array.from({ length: 5 }, (_, index) => ({ ...run, run: `run-history-${index}`,
     running: false, status: index === 0 ? 'failed' : 'finished',
+    projection: { phase: index === 0 ? 'failed' : 'completed', active: false, control_requested: null, terminal: true,
+      quiescent: true, needs_attention: index === 0, actions: { pause: false, stop: false, resume: false } },
     started: `2026-09-${21 - index}T08:30:00Z`, updated: `2026-09-${21 - index}T08:32:00Z` }));
   await page.route('**/runs', route => route.fulfill({ json: { runs: [run, ...history] } }));
   await page.route('**/timeline*', route => route.fulfill({ json: { runs: [run], scheduled: [], schedules: [] } }));
   await page.route('**/runs/run-demo', route => route.fulfill({ json: {
-    graph: run.graph, run: run.run, nodes: graph.nodes.map((node: { id: string }) => node.id),
+    graph: run.graph, run: run.run, definition: graph, nodes: graph.nodes.map((node: { id: string }) => node.id),
+    projection: { phase: 'running', active: true, control_requested: null, terminal: false, quiescent: false,
+      needs_attention: false, actions: { pause: true, stop: true, resume: false } },
     state: { ...run, cursor: { node: 'structure', pass: 1, dir: '' }, passes: { plan: 1, gather: 1, write: 1, structure: 1 },
       decided: { 'plan|gather': [true, 1], 'gather|write': [true, 2], 'write|structure': [true, 3] },
       nodes: Object.fromEntries(['plan', 'gather', 'write'].map(node => [node, {
@@ -220,7 +265,8 @@ test('edit a graph, inspect a run and read its files across screen sizes', async
   await expect(page.getByRole('dialog')).toHaveCount(0);
   await page.getByLabel('目标', { exact: true }).fill('新的研究目标');
   await expect(page.getByText('● 未保存')).toBeVisible();
-  await expect(page.getByRole('button', { name: '运行工作流', exact: true })).toBeDisabled();
+  await expect(page.getByRole('button', { name: '运行工作流', exact: true })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: '查看运行', exact: true })).toBeEnabled();
   page.once('dialog', dialog => dialog.dismiss());
   await page.getByLabel('当前工作流').selectOption('research-review');
   await expect(page.getByLabel('当前工作流')).toHaveValue('academic-survey');
@@ -253,9 +299,9 @@ test('edit a graph, inspect a run and read its files across screen sizes', async
   await detailHandle.focus();
   await page.keyboard.press('ArrowLeft');
   await expect.poll(async () => (await page.locator('.inspector').boundingBox())!.width).toBe(detailWidth + 16);
-  await page.getByRole('button', { name: /paper.md/ }).click();
+  await page.getByRole('button', { name: /^paper\.md/ }).click();
   await expect(page.getByText('这是本次运行生成的研究报告。')).toBeVisible();
-  const paper = page.locator('.file-item').filter({ has: page.getByRole('button', { name: /paper.md/ }) });
+  const paper = page.locator('.file-item').filter({ has: page.getByRole('button', { name: /^paper\.md/ }) });
   await expect(paper.getByText('这是本次运行生成的研究报告。')).toBeVisible();
   await expect(paper.locator('table')).toHaveCount(1);
   await expect(paper.getByRole('checkbox')).toBeChecked();
@@ -269,21 +315,21 @@ test('edit a graph, inspect a run and read its files across screen sizes', async
   await expect(page.getByRole('dialog').getByRole('img', { name: 'Mermaid 图表', exact: true })).toBeVisible();
   await page.screenshot({ path: 'test-results/mermaid-expanded.png' });
   await page.keyboard.press('Escape');
-  await expect(page.getByRole('button', { name: /evidence.md/ })).not.toBeVisible();
+  await expect(page.getByRole('button', { name: /^evidence\.md/ })).not.toBeVisible();
   await page.locator('.file-folder > summary').filter({ hasText: /^sources$/ }).click();
   expect(await page.locator('.file-folder > summary').first().evaluate(element =>
     getComputedStyle(element).listStyleType)).toBe('none');
-  await expect(page.getByRole('button', { name: /notes.md/ })).toBeVisible();
+  await expect(page.getByRole('button', { name: /^notes\.md/ })).toBeVisible();
   await page.locator('.file-folder > summary').filter({ hasText: /^raw$/ }).click();
-  await page.getByRole('button', { name: /evidence.md/ }).click();
+  await page.getByRole('button', { name: /^evidence\.md/ }).click();
   await expect(page.getByText('这是嵌套目录中的证据。')).toBeVisible();
   await expect(paper.getByText('这是本次运行生成的研究报告。')).toBeVisible();
-  await page.getByRole('button', { name: /evidence.md/ }).click();
+  await page.getByRole('button', { name: /^evidence\.md/ }).click();
   await expect(page.getByText('这是嵌套目录中的证据。')).not.toBeVisible();
   await page.locator('.file-folder > summary').filter({ hasText: /^sources$/ }).click();
   await page.screenshot({ path: 'test-results/files-desktop.png' });
   await page.setViewportSize({ width: 390, height: 844 });
-  await expect(page.getByRole('button', { name: '运行工作流', exact: true })).toBeInViewport();
+  await expect(page.getByRole('button', { name: '查看运行', exact: true })).toBeInViewport();
   await expect(page.locator('.execution-node').filter({ has: page.locator('strong', { hasText: /^publish$/ }) })).toBeInViewport();
   await page.screenshot({ path: 'test-results/run-mobile.png', fullPage: true });
   await page.locator('.file-open').scrollIntoViewIfNeeded();

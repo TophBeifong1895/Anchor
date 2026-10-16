@@ -1,12 +1,15 @@
 import { test, expect } from '@playwright/test';
 import { readFileSync } from 'node:fs';
+import { runProjectionFixture } from './fixtures/runProjection';
 
 test('timeline fills the workspace and renders runs and plans on the same time scale', async ({ page }) => {
   await page.clock.setFixedTime(new Date('2026-09-28T12:00:00'));
   const graph = JSON.parse(readFileSync('../../examples/graphs/academic-gated.json', 'utf8'));
   const run = { run: 'short-run', graph: 'research-review', status: 'finished', running: false,
+    projection: runProjectionFixture('finished', { terminal: true, quiescent: true }),
     started: '2026-09-28T09:00:00', updated: '2026-09-28T09:02:00', executed: [], objective: '整理本周研究进展' };
   const runs = [run, { ...run, run: 'active-run', graph: 'academic-survey', status: 'running', running: true,
+    projection: runProjectionFixture('running', { active: true }),
     started: '2026-09-28T10:00:00' }, { ...run, run: 'overlap-run', graph: 'weekly-report',
     started: '2026-09-28T11:00:00', updated: '2026-09-28T11:30:00' },
     { ...run, run: 'next-short-run', started: '2026-09-28T09:10:00', updated: '2026-09-28T09:12:00' }];
@@ -136,7 +139,7 @@ test('timeline hints fit the viewport at both edges and dismiss without blocking
   const runs = [
     { run: 'left', graph: longName, started: '2026-09-27T00:01:00', updated: '2026-09-27T00:15:00' },
     { run: 'right', graph: longName, started: '2026-09-27T23:45:00', updated: '2026-09-27T23:59:00' },
-  ].map(run => ({ ...run, status: 'finished', running: false, executed: [] }));
+  ].map(run => ({ ...run, status: 'finished', running: false, executed: [], projection: runProjectionFixture('finished', { terminal: true, quiescent: true }) }));
   await page.route('**/graphs', route => route.fulfill({ json: { graphs: [{ graph: longName, running: null }] } }));
   await page.route('**/graphs/*', route => route.fulfill({ json: { definition: graph } }));
   await page.route('**/runs', route => route.fulfill({ json: { runs } }));
@@ -209,6 +212,7 @@ test('a resident Run draws only the windows it executed, not its idle lifetime',
   const graph = JSON.parse(readFileSync('../../examples/graphs/academic-gated.json', 'utf8'));
   const resident = {
     run: 'assistant-1', graph: 'wecom-persistent-assistant', status: 'running', running: true,
+    projection: runProjectionFixture('running', { active: true }),
     started: '2026-09-28T08:00:00', updated: '2026-09-30T11:30:00', executed: ['wait_input', 'assistant'],
     objective: '常驻助手', trigger: { source: 'channel' },
     activity: [

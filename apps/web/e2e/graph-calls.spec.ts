@@ -1,22 +1,27 @@
 import { test, expect, type Page } from '@playwright/test';
 import type { OurGraph, OurRun, OurRunDetail } from '../src/model';
+import { runProjectionFixture } from './fixtures/runProjection';
 
 // Contract fixtures only: actual admission, isolation and provider behavior are verified by backend E2E.
 const source: OurGraph = { entry: 'prepare', nodes: [{ id: 'prepare', op: 'prepare' }, { id: 'notify', op: 'notify' }],
   edges: [{ from: 'prepare', to: 'notify' }], ops: { prepare: { run: 'true' }, notify: { call: { graph: 'assistant', mode: 'detach' } } } };
 const target: OurGraph = { entry: 'reply', nodes: [{ id: 'reply', op: 'reply' }], edges: [], ops: { reply: { run: 'true' } } };
 const started = new Date().toISOString();
-const parent: OurRun = { run: 'parent-run', graph: 'report', status: 'finished', running: false, started, updated: started, executed: ['prepare', 'notify'], objective: '发布周报' };
+const parent: OurRun = { run: 'parent-run', graph: 'report', status: 'finished', running: false, started, updated: started, executed: ['prepare', 'notify'], objective: '发布周报', projection: runProjectionFixture('finished', { terminal: true, quiescent: true }) };
 const child: OurRun = { ...parent, run: 'child-run', graph: 'assistant', status: 'running', running: true,
+  projection: runProjectionFixture('running', { active: true, actions: { pause: true, stop: true, resume: false } }),
   trigger: { source: 'graph_call', graph: 'report', run: 'parent-run', node: 'notify', invocation: 2, mode: 'detach', root_run: 'parent-run' } };
 const waitChild: OurRun = { ...child, run: 'wait-child', trigger: { ...child.trigger!, mode: 'wait' } };
-const other: OurRun = { ...child, run: 'other-child', running: false, trigger: { ...child.trigger!, root_run: 'other-parent', run: 'other-parent' } };
+const other: OurRun = { ...child, run: 'other-child', running: false,
+  projection: runProjectionFixture('waiting_resume', { needs_attention: true, actions: { pause: false, stop: true, resume: true } }),
+  trigger: { ...child.trigger!, root_run: 'other-parent', run: 'other-parent' } };
 const detail = (run: OurRun): OurRunDetail => ({ run: run.run, graph: run.graph, nodes: run.graph === 'report' ? ['prepare', 'notify'] : ['reply'], traces: {},
+  definition: run.graph === 'report' ? source : target, projection: run.projection,
   active: run.running,
   state: { objective: run.objective, started, status: run.status, updated: started, trigger: run.trigger, cursor: null, passes: { notify: 2 }, decided: {}, nodes: run.graph === 'report' ? { notify: { node_id: 'notify', pass_number: 2, submission: '已接纳', files: ['call.json'], submitted: true, exit_status: 'completed', route: null } } : {}, executed: run.executed, skipped: [], error: '' },
-  calls: run.graph === 'report' ? [{ node: 'notify', invocation: 1, graph: 'assistant', run: 'first-child', mode: 'detach', status: 'failed' },
-    { node: 'notify', invocation: 2, graph: 'assistant', run: 'wait-child', mode: 'wait', status: 'running', active: true, input: { report: 'weekly' } },
-    { node: 'notify', invocation: 3, graph: 'assistant', run: 'child-run', mode: 'detach', status: 'running', active: true, input: { report: 'weekly' } }] : [] });
+  calls: run.graph === 'report' ? [{ node: 'notify', invocation: 1, graph: 'assistant', run: 'first-child', mode: 'detach', status: 'failed', projection: runProjectionFixture('failed', { terminal: true, quiescent: true, needs_attention: true }) },
+    { node: 'notify', invocation: 2, graph: 'assistant', run: 'wait-child', mode: 'wait', status: 'running', active: true, projection: child.projection, input: { report: 'weekly' } },
+    { node: 'notify', invocation: 3, graph: 'assistant', run: 'child-run', mode: 'detach', status: 'running', active: true, projection: child.projection, input: { report: 'weekly' } }] : [] });
 async function fixture(page: Page) {
   const saved: OurGraph[] = [];
   let current = structuredClone(source);
@@ -97,8 +102,10 @@ test('mocked: show wait/detach child Runs, source links and active controls', as
   await expect(records).toContainText('本节点：已完成');
   await expect(records.locator('.call-record')).toHaveCount(3);
   await expect(records.locator('.call-record').first()).toContainText('失败');
-  await expect(records.locator('.call-record').nth(1)).toContainText('正在等待目标完成');
-  await expect(records.locator('.call-record').last()).toContainText('目标正在后台执行');
+  await expect(records.locator('.call-record').nth(1)).toContainText('等待完成');
+  await expect(records.locator('.call-record').nth(1).locator('.pill')).toHaveText('执行中');
+  await expect(records.locator('.call-record').last()).toContainText('启动后继续');
+  await expect(records.locator('.call-record').last().locator('.pill')).toHaveText('执行中');
   await page.screenshot({ path: 'test-results/graph-call-run.png' });
   await records.getByRole('button', { name: '查看目标运行' }).last().click();
   await expect(page.locator('.run-origin')).toContainText('report / notify · 第 2 轮');
@@ -130,5 +137,5 @@ test('mocked: show wait/detach child Runs, source links and active controls', as
   await page.getByRole('button', { name: '查看节点与产物' }).click();
   await expect(page.getByRole('button', { name: '继续' })).toBeVisible();
   await expect(page.getByRole('button', { name: '暂停' })).toHaveCount(0);
-  await expect(page.getByRole('button', { name: '停止', exact: true })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: '停止', exact: true })).toBeVisible();
 });

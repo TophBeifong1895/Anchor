@@ -5,7 +5,7 @@ import {
   type Edge, type Node, type NodeProps,
 } from '@xyflow/react';
 import { Bot, GitFork, GitMerge, Layers, Terminal, Workflow } from 'lucide-react';
-import { asDefinition, listenerLabel, toFlowEdges, toFlowNodes, type GraphCall, type GraphSummary, type NodePluginRef, type OurGraph, type OurRunState } from './model';
+import { asDefinition, listenerLabel, toFlowEdges, toFlowNodes, type GraphCall, type GraphSummary, type NodePluginRef, type OurGraph, type OurRunState, type RunProjection } from './model';
 import { layoutWorkflow, NODE_HEIGHT, NODE_WIDTH, type Layout, type Port } from './graph';
 import { RoutedEdge } from './RoutedEdge';
 
@@ -49,6 +49,7 @@ const edgeTypes = { routed: RoutedEdge };
 type Pick = { kind: 'node' | 'edge'; id: string } | null;
 type Props = {
   graph: OurGraph; name: string; mode: 'edit' | 'run'; state?: OurRunState | null; editable?: boolean;
+  projection?: RunProjection;
   activity?: GraphSummary;
   targets?: string[]; onOpenTarget?: (target: string, node: string) => void;
   onPick: (pick: Pick) => void;
@@ -60,8 +61,10 @@ export function WorkflowCanvas(props: Props) {
   return <ReactFlowProvider key={props.name}><Canvas {...props} /></ReactFlowProvider>;
 }
 
-function Canvas({ graph, name, mode, state = null, editable = false, activity, onPick, onPositions, onConnect, targets, onOpenTarget }: Props) {
+function Canvas({ graph, name, mode, state = null, projection, editable = false, activity, onPick, onPositions, onConnect, targets, onOpenTarget }: Props) {
   const editing = mode === 'edit';
+  const runState = editing ? null : state;
+  const runProjection = editing ? undefined : projection;
   // Only topology, labels and saved positions invalidate geometry. Polling cannot relayout it.
   const definitionKey = JSON.stringify(asDefinition(graph, name));
   const positionsKey = JSON.stringify(graph.layout?.positions ?? {});
@@ -83,7 +86,7 @@ function Canvas({ graph, name, mode, state = null, editable = false, activity, o
     return () => { active = false; };
   }, [definitionKey, positionsKey]);
 
-  const nodes = useMemo<WorkflowNode[]>(() => !layout ? [] : toFlowNodes(graph, name, state).map(node => {
+  const nodes = useMemo<WorkflowNode[]>(() => !layout ? [] : toFlowNodes(graph, name, runState, runProjection).map(node => {
     const status = editing && activity?.active_nodes?.includes(node.id)
       ? { state: 'running', statusLabel: '执行中' }
       : editing && node.id === graph.entry && activity?.listener && !activity.running && !activity.active_runs?.length
@@ -94,16 +97,16 @@ function Canvas({ graph, name, mode, state = null, editable = false, activity, o
       data: { ...node.data, ...status, entry: node.id === graph.entry, terminal: !graph.edges.some(edge => edge.from === node.id),
         editing, ports: layout.ports[node.id], onOpenTarget, targetMissing: !!node.data.call && !!targets && !targets.includes(node.data.call.graph) },
     };
-  }), [graph, name, state, editing, activity, layout, targets, onOpenTarget]);
+  }), [graph, name, runState, runProjection, editing, activity, layout, targets, onOpenTarget]);
   const [canvasNodes, setCanvasNodes, onNodesChange] = useNodesState(nodes);
   useEffect(() => { if (!dragging) setCanvasNodes(nodes); }, [nodes, dragging, setCanvasNodes]);
-  const edges = useMemo<Edge[]>(() => !layout ? [] : toFlowEdges(graph, state).map((edge, index) => {
+  const edges = useMemo<Edge[]>(() => !layout ? [] : toFlowEdges(graph, runState, runProjection).map((edge, index) => {
     const route = layout.routes[index];
-    const style = !editing && state ? edge.style : { stroke: route.feedback ? '#98704a' : '#568571', strokeWidth: 1.8 };
+    const style = runState ? edge.style : { stroke: route.feedback ? '#98704a' : '#568571', strokeWidth: 1.8 };
     return { ...edge, sourceHandle: `e${index}-out`, targetHandle: `e${index}-in`, style,
       markerEnd: { type: MarkerType.ArrowClosed, color: style?.stroke, width: 16, height: 16 },
       data: { ...route, index }, hidden: dragging };
-  }), [graph, state, editing, layout, dragging]);
+  }), [graph, runState, runProjection, layout, dragging]);
   const fit = useCallback(() => {
     if (!layout || !container.current) return;
     const { width, height } = container.current.getBoundingClientRect();

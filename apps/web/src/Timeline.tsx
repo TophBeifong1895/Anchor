@@ -1,19 +1,16 @@
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
-import { Activity, ArrowUpRight, CalendarDays, ChevronLeft, ChevronRight, Clock3, Plus, Trash2 } from 'lucide-react';
+import { Activity, ArrowUpRight, CalendarDays, ChevronLeft, ChevronRight, Clock3, Plus } from 'lucide-react';
 import type { OurRun, OurRunDetail, Schedule, TimelineData, TimelineItem } from './model';
 import { api } from './api';
 import { Modal } from './ui';
+import { ScheduleManager, scheduleRuleText as ruleText } from './ScheduleManager';
 import { assignGraphColors } from './graphColors';
+import { runPhase as runStatus, runPhaseLabel as statusText, runNeedsAttention } from './runPresentation';
 
 const day = (value: Date) => `${value.getFullYear()}-${String(value.getMonth() + 1).padStart(2, '0')}-${String(value.getDate()).padStart(2, '0')}`;
 const addDays = (date: Date, amount: number) => { const result = new Date(date); result.setDate(result.getDate() + amount); return result; };
 const clockText = (value: string | number) => new Date(value).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
 const dateText = (value: string | number) => new Date(value).toLocaleString('zh-CN', { month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit' });
-const statusText = (status: string) => ({
-  running: '执行中', finished: '已完成', completed: '已完成', failed: '失败', aborted: '已终止', stopped: '已停止',
-  interrupted: '已中断', waiting_resume: '等待接续', paused: '已暂停', uncertain: '待核查', planned: '已计划',
-  missed_busy: '忙碌错过', missed_downtime: '停机错过',
-}[status] ?? status);
 const sourceText = (value: string) => ({ manual: '手动', schedule: '定时', webhook: 'Webhook', graph_call: '工作流调用', channel: '通道' }[value] ?? value);
 const duration = (ms: number) => {
   const seconds = Math.max(0, Math.floor(ms / 1000));
@@ -22,15 +19,8 @@ const duration = (ms: number) => {
   return minutes < 60 ? `${minutes} 分钟` : `${Math.floor(minutes / 60)} 小时 ${minutes % 60} 分`;
 };
 const hasRunEnd = (run: OurRun) => Boolean(run.updated?.trim()) && Number.isFinite(Date.parse(run.updated));
-const runStatus = (run: OurRun) => run.running ? 'running' : run.status === 'running' ? 'waiting_resume' : run.status;
-const needsAttention = (status: string) => ['failed', 'aborted', 'interrupted', 'waiting_resume', 'uncertain'].includes(status) || status.startsWith('missed_');
-const ruleText = (rule: Record<string, unknown>) => {
-  if (rule.type === 'once') return `一次性 · ${dateText(String(rule.at))}`;
-  if (rule.type === 'interval') return `每 ${rule.seconds} 秒`;
-  if (rule.type === 'weekly') return `每周 ${(rule.weekdays as number[]).map(index => '一二三四五六日'[index]).join('、')} · ${rule.time}`;
-  if (rule.type === 'monthly') return `每月 ${rule.day} 日 · ${rule.time}`;
-  return `每天 · ${rule.time}`;
-};
+export const timelineNeedsAttention = (entry: { run?: OurRun; status: string }) => entry.run
+  ? runNeedsAttention(entry.run) : entry.status.startsWith('missed_');
 type Entry = { id: string; graph: string; start: number; end: number; status: string; source: string;
   /** The Run has not finished this interval, so its end grows with the clock rather than a record. */
   open?: boolean;
@@ -66,7 +56,7 @@ export function intervalFacts(run: OurRun, entry: Entry, now: number): { label: 
     : run.running
       ? { label: '这段时长', value: '暂无记录', end: '等待下一轮输入' }
       : { label: '这段时长', value: '暂无记录', end: '暂无记录' };
-  if (run.status === 'running') return { label: '运行状态', value: '宿主重启后等待接续' };
+  if (runStatus(run) === 'waiting_resume') return { label: '运行状态', value: '宿主重启后等待接续' };
   return entry.end > entry.start
     ? { label: '运行时长', value: duration(entry.end - entry.start), end: dateText(entry.end) }
     : { label: '运行时长', value: '暂无记录', end: '暂无记录' };
@@ -100,16 +90,6 @@ export function Timeline({ data, graphs, graphColors: sharedGraphColors, page, o
   const hintId = useId();
   const tooltip = useRef<HTMLDivElement>(null);
   const [scheduleOpen, setScheduleOpen] = useState(false);
-  const [graph, setGraph] = useState(graphs[0] ?? '');
-  const [rule, setRule] = useState('once');
-  const [at, setAt] = useState('');
-  const [time, setTime] = useState('09:00');
-  const [interval, setInterval] = useState(3600);
-  const [scheduleInput, setScheduleInput] = useState('');
-  const [weekdays, setWeekdays] = useState([0, 1, 2, 3, 4]);
-  const [monthDay, setMonthDay] = useState(1);
-  const [error, setError] = useState('');
-  const [pending, setPending] = useState(false);
   const [now, setNow] = useState(Date.now());
   const scheduling = data?.capabilities?.scheduling !== false;
   const graphColors = useMemo(() => sharedGraphColors ?? assignGraphColors([
@@ -142,7 +122,6 @@ export function Timeline({ data, graphs, graphColors: sharedGraphColors, page, o
       document.removeEventListener('keydown', escape);
     };
   }, [hint]);
-  useEffect(() => { if (!graphs.includes(graph)) setGraph(graphs[0] ?? ''); }, [graphs, graph]);
   useEffect(() => { const timer = window.setInterval(() => setNow(Date.now()), 15000); return () => clearInterval(timer); }, []);
   const today = new Date(now); today.setHours(0, 0, 0, 0);
   const todayKey = day(today);
@@ -164,7 +143,7 @@ export function Timeline({ data, graphs, graphColors: sharedGraphColors, page, o
   const matching = entries.filter(entry => {
     if (sourceFilter && entry.source !== sourceFilter) return false;
     if (chainFilter && (!entry.run || (entry.run.trigger?.root_run ?? entry.run.run) !== chainFilter)) return false;
-    if (filter === 'attention') return needsAttention(entry.status);
+    if (filter === 'attention') return timelineNeedsAttention(entry);
     if (filter === 'finished') return ['finished', 'completed'].includes(entry.status);
     return filter === 'all' || entry.status === filter;
   }).sort((a, b) => a.start - b.start);
@@ -176,7 +155,7 @@ export function Timeline({ data, graphs, graphColors: sharedGraphColors, page, o
     .sort((a, b) => +new Date(a.next_at) - +new Date(b.next_at))[0];
   const running = runs.filter(run => run.running);
   const todayRuns = runs.filter(run => day(new Date(run.started)) === todayKey);
-  const issues = entries.filter(entry => needsAttention(entry.status) && entry.start >= +first && entry.start < +addDays(last, 1));
+  const issues = entries.filter(entry => timelineNeedsAttention(entry) && entry.start >= +first && entry.start < +addDays(last, 1));
   const focusToday = () => {
     const area = surface.current;
     const target = area?.querySelector<HTMLElement>('.timeline-day.today');
@@ -200,32 +179,14 @@ export function Timeline({ data, graphs, graphColors: sharedGraphColors, page, o
   }, [data, page, todayKey]);
   const reset = () => { setFilter('all'); setGraphFilter(''); setSourceFilter(''); setChainFilter(''); };
 
-  const create = async () => {
-    setPending(true); setError('');
-    try {
-      const scheduleRule = rule === 'once' ? { type: rule, at } : rule === 'interval' ? { type: rule, seconds: interval }
-        : rule === 'daily' ? { type: rule, time } : rule === 'weekly' ? { type: rule, time, weekdays } : { type: rule, time, day: monthDay };
-      const input = scheduleInput.trim() ? JSON.parse(scheduleInput) : {};
-      if (!input || Array.isArray(input) || typeof input !== 'object') throw new Error('计划输入必须是 JSON object');
-      await api('/schedules', 'POST', { graph, rule: scheduleRule, input });
-      setAt(''); onRefresh(); setScheduleOpen(false);
-    } catch (cause) { setError((cause as Error).message); }
-    finally { setPending(false); }
-  };
-  const remove = async (id: string) => {
-    setPending(true); setError('');
-    try { await api(`/schedules/${encodeURIComponent(id)}`, 'DELETE'); onRefresh(); }
-    catch (cause) { setError((cause as Error).message); }
-    finally { setPending(false); }
-  };
   // Keep empty dates accessible without filling the initial view with weeks of empty rows.
   let emptyStart = 0;
 
   return <main className="timeline-board">
     <header className="timeline-header">
       <div className="timeline-title"><h2>运行看板</h2><p>运行进度与定时计划</p></div>
-      <div className="timeline-actions"><button disabled={!scheduling} title={!scheduling ? '定时计划尚未由此运行时托管' : undefined} onClick={() => { setError(''); setScheduleOpen(true); }}><CalendarDays size={16} />管理计划 <span className="count">{data?.schedules.length ?? 0}</span></button>
-        <button className="primary" disabled={!graphs.length || !scheduling} title={!scheduling ? '定时计划尚未由此运行时托管' : undefined} onClick={() => { setError(''); setScheduleOpen(true); }}><Plus size={16} />添加计划</button></div>
+      <div className="timeline-actions"><button disabled={!scheduling} title={!scheduling ? '定时计划尚未由此运行时托管' : undefined} onClick={() => { setScheduleOpen(true); }}><CalendarDays size={16} />管理计划 <span className="count">{data?.schedules.length ?? 0}</span></button>
+        <button className="primary" disabled={!graphs.length || !scheduling} title={!scheduling ? '定时计划尚未由此运行时托管' : undefined} onClick={() => { setScheduleOpen(true); }}><Plus size={16} />添加计划</button></div>
     </header>
     <section className="timeline-summary" aria-label="运行概览">
       <button className="summary-card summary-running" onClick={() => { reset(); setFilter('running'); onPage(0); }}><span><Activity size={15} />正在运行</span><strong>{data ? running.length : '—'}<small> 个</small></strong><small>{running[0]?.graph ?? '当前没有执行中的工作流'}</small></button>
@@ -308,23 +269,7 @@ export function Timeline({ data, graphs, graphColors: sharedGraphColors, page, o
       {hint && <><strong>{hint.entry.graph}</strong><small>{sourceText(hint.entry.source)} · {clockText(hint.entry.start)} · {statusText(hint.entry.status)}{hint.entry.run && (hint.entry.run.running || hasRunEnd(hint.entry.run)) ? ` · ${duration(hint.entry.end - hint.entry.start)}` : ''}</small></>}
     </div>
     {selected && <RunPreview key={selected.id} entry={selected} data={data} onClose={() => setSelected(null)} onOpen={onSelect} onOpenRun={onOpenRun} />}
-    {scheduleOpen && <Modal title="定时计划" close={() => { if (!pending) setScheduleOpen(false); }} className="timeline-schedule-dialog">
-      <p className="timeline-muted">按本机时间执行。停机或 Graph 忙碌时跳过，不补跑。</p>
-      <form onSubmit={event => { event.preventDefault(); void create(); }}>
-        <label>工作流<select required value={graph} onChange={event => setGraph(event.target.value)}>{graphs.map(name => <option key={name}>{name}</option>)}</select></label>
-        <label>规则<select value={rule} onChange={event => setRule(event.target.value)}><option value="once">未来执行一次</option><option value="interval">固定间隔</option><option value="daily">每天</option><option value="weekly">每周</option><option value="monthly">每月</option></select></label>
-        {rule === 'once' ? <label>执行时间<input required type="datetime-local" value={at} onChange={event => setAt(event.target.value)} /></label> : rule === 'interval' ? <label>间隔秒数<input required type="number" min="1" step="1" value={interval} onChange={event => setInterval(Number(event.target.value))} /></label> : <label>本机时间<input required type="time" value={time} onChange={event => setTime(event.target.value)} /></label>}
-        {rule === 'weekly' && <fieldset className="weekdays"><legend>星期</legend>{['一', '二', '三', '四', '五', '六', '日'].map((label, index) => <label key={index}><input type="checkbox" checked={weekdays.includes(index)} onChange={event => setWeekdays(old => event.target.checked ? [...old, index].sort() : old.filter(value => value !== index))} />{label}</label>)}</fieldset>}
-        {rule === 'monthly' && <label>每月日期<input required type="number" min="1" max="31" value={monthDay} onChange={event => setMonthDay(Number(event.target.value))} /></label>}
-        <label>运行输入（可选 JSON）<textarea rows={3} value={scheduleInput} onChange={event => setScheduleInput(event.target.value)} placeholder="{}" /></label>
-        {error && <p className="timeline-error" role="alert">{error}</p>}
-        <button className="primary" disabled={pending || !graph} type="submit"><Plus size={15} />{pending ? '正在保存…' : '保存计划'}</button>
-      </form>
-      <section className="schedule-list" aria-label="已配置的计划"><h3>已配置 · {data?.schedules.length ?? 0}</h3>
-        {!data?.schedules.length && <p className="timeline-muted">还没有计划。保存后即可在时间线上查看。</p>}
-        {data?.schedules.map(item => <div className="schedule-item" key={item.id}><div><strong>{item.graph}</strong><span>{ruleText(item.rule)}</span><small>{item.enabled ? `下次 ${dateText(item.next_at)}` : '已结束'}</small></div><button disabled={pending} aria-label={`删除 ${item.graph} 计划`} onClick={() => void remove(item.id)}><Trash2 size={15} /></button></div>)}
-      </section>
-    </Modal>}
+    {scheduleOpen && <ScheduleManager graphs={graphs} schedules={data?.schedules ?? []} refresh={onRefresh} close={() => setScheduleOpen(false)} />}
   </main>;
 }
 

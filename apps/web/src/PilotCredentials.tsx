@@ -1,12 +1,13 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { api } from './api';
+import { PluginCredentials } from './PluginCredentials';
 import './PilotQuestion.css';
 
 export type CredentialRequest = {
   id: string; session: string; turn: string; plugin: string; server: string; field: string;
   purpose?: string; status: 'pending' | 'configured' | 'cancelled' | 'interrupted';
 };
-const statusLabels = { pending: '等待配置凭据', configured: '凭据已配置', cancelled: '配置已取消', interrupted: '配置请求已中断' };
+const statusLabels = { pending: '等待配置凭据', configured: '本次配置请求已完成', cancelled: '配置已取消', interrupted: '配置请求已中断' };
 
 export function PilotCredentialForm({ request, onConfigured }: {
   request: CredentialRequest; onConfigured: () => void;
@@ -17,7 +18,9 @@ export function PilotCredentialForm({ request, onConfigured }: {
   const submission = useRef<AbortController | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [problem, setProblem] = useState('');
+  const [showCurrent, setShowCurrent] = useState(false);
   const active = request.status === 'pending';
+  const privateScope = request.session.startsWith('pilot-private-') || request.session.startsWith('responses-');
   useEffect(() => () => { submission.current?.abort(); if (input.current) input.current.value = ''; }, [request.id]);
   useEffect(() => { if (!active) { submission.current?.abort(); if (input.current) input.current.value = ''; setSubmitting(false); } }, [active]);
   const submit = async (event: FormEvent) => {
@@ -58,6 +61,7 @@ export function PilotCredentialForm({ request, onConfigured }: {
   const id = `credential-${request.id}`;
   return <section className="pilot-question" aria-label="配置插件凭据">
     <p>{request.plugin} · {request.server} · {request.field}</p>
+    {!privateScope && <p className="pilot-muted">旧版共享会话：本表单管理共享作用域的凭据。插件库按当前访问账户管理凭据，凭据不会跨作用域自动共享。</p>}
     {request.purpose && <p>{request.purpose}</p>}
     {active ? <form onSubmit={event => void submit(event)}>
       <div className="pilot-question-field">
@@ -68,6 +72,10 @@ export function PilotCredentialForm({ request, onConfigured }: {
       {problem && <p className="pilot-question-error" role="alert">{problem}</p>}
       <div className="pilot-question-actions"><button type="button" disabled={submitting} onClick={() => void cancel()}>取消</button><button type="submit" className="primary" disabled={submitting}>{submitting ? '正在配置…' : '保存凭据并继续'}</button></div>
     </form> : <p className="pilot-muted" role="status">{statusLabels[request.status]}</p>}
+    {privateScope && <button type="button" onClick={() => setShowCurrent(current => !current)} aria-expanded={showCurrent}>
+      {showCurrent ? '收起当前凭据' : '查看当前凭据'}</button>
+    }
+    {privateScope && showCurrent && <PluginCredentials pluginId={request.plugin} target={request.server} onChanged={onConfigured} />}
   </section>;
 }
 

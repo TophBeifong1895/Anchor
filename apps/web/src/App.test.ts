@@ -1,7 +1,19 @@
 import { describe, expect, it } from 'vitest';
-import { loadWorkbenchData } from './App';
+import { loadWorkbenchData } from './useWorkbenchData';
 
 describe('loadWorkbenchData', () => {
+  it('does not request the timeline when the current page has no timeline consumer', async () => {
+    const calls: string[] = [];
+    const api = async <T>(path: string): Promise<T> => {
+      calls.push(path);
+      if (path === '/graphs') return { graphs: [] } as T;
+      return { runs: [] } as T;
+    };
+
+    await expect(loadWorkbenchData(api)).resolves.toEqual({ graphs: [], runs: [] });
+    expect(calls).toEqual(['/graphs', '/runs']);
+  });
+
   it('keeps Graph and Run data when the timeline projection is unavailable', async () => {
     const calls: string[] = [];
     const api = async <T>(path: string): Promise<T> => {

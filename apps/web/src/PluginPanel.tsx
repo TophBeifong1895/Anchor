@@ -1,5 +1,5 @@
-import type { ReactNode } from 'react';
-import { Search } from 'lucide-react';
+import { useEffect, useState, type ReactNode } from 'react';
+import { LoaderCircle, Search } from 'lucide-react';
 import { Markdown } from './markdown';
 import { Modal } from './ui';
 import './PluginPanel.css';
@@ -8,7 +8,102 @@ export type PluginInformation = {
   id: string; name: string; description?: string; skills?: string[]; digest?: string;
   mcpServers?: Record<string, { transport: string; auth?: string }>;
   mcpServerNames?: string[]; instructions?: string; error?: string | null; unsupported?: string[];
+  available?: boolean; requiresNetwork?: boolean;
+  definitionValid?: boolean; dependenciesReady?: boolean | null;
+  contextAuthorized?: boolean | null; connectionVerified?: boolean | null;
 };
+
+export type PluginSetting = {
+  selected: boolean; active?: boolean; required?: boolean; disabled?: boolean; pending?: boolean;
+  status?: string; problem?: string; notice?: string;
+};
+
+export function pluginSettingStatus(plugin: PluginInformation, state: PluginSetting, {
+  recorded = false, management = false, selectedLabel = '已选择', unselectedLabel = '未选择',
+}: { recorded?: boolean; management?: boolean; selectedLabel?: string; unselectedLabel?: string } = {}): string {
+  if (state.status) return state.status;
+  if (recorded) return '运行时绑定记录';
+  if (management) return plugin.available === false ? '不可用' : '已安装';
+  const selected = state.active ?? state.selected;
+  if (plugin.available === false) return selected ? `${selectedLabel} · 不可用` : '不可用';
+  return selected ? selectedLabel : unselectedLabel;
+}
+
+/** The complete list interaction shared by draft selection and persisted mounts.
+ * Loading and writes stay with their owners; this component never invents a saved fact. */
+export function PluginSettings<T extends PluginInformation>({ items, setting, onToggle, onDetails, loading = false,
+  error = '', retry, recorded = false, management = false, selectedLabel = '已选择', unselectedLabel = '未选择',
+  enableLabel = '选择', disableLabel = '取消选择', empty, children }: {
+  items: T[]; setting: (plugin: T) => PluginSetting; onToggle?: (plugin: T) => void;
+  onDetails: (plugin: T) => void; loading?: boolean; error?: string; retry?: () => void;
+  recorded?: boolean; management?: boolean; selectedLabel?: string; unselectedLabel?: string;
+  enableLabel?: string; disableLabel?: string; empty: ReactNode; children?: (plugin: T) => ReactNode;
+}) {
+  const [query, setQuery] = useState('');
+  const [filter, setFilter] = useState('all');
+  const needle = query.trim().toLocaleLowerCase();
+  const chosen = (plugin: T) => setting(plugin).active ?? setting(plugin).selected;
+  const count = items.filter(chosen).length;
+  const visible = items.filter(plugin => filter === 'all' || (filter === 'selected' ? chosen(plugin)
+    : filter === 'unselected' ? !chosen(plugin) : plugin.available !== false))
+    .filter(plugin => !needle || [plugin.name, plugin.id, plugin.description, ...(plugin.skills ?? []),
+      ...Object.keys(plugin.mcpServers ?? {}), ...(plugin.mcpServerNames ?? [])]
+      .some(value => value?.toLocaleLowerCase().includes(needle)))
+    .sort((left, right) => (recorded || management ? 0 : Number(chosen(right)) - Number(chosen(left)))
+      || left.name.localeCompare(right.name, 'zh-CN') || left.id.localeCompare(right.id));
+  return <div className="plugin-settings" aria-busy={loading}>
+    {!!items.length && <PluginToolbar query={query} onQuery={setQuery} filter={filter} onFilter={setFilter}
+      filters={recorded ? [] : [{ value: 'all', label: '全部', count: items.length },
+        ...(management ? [] : [{ value: 'selected', label: selectedLabel, count },
+          { value: 'unselected', label: unselectedLabel, count: items.length - count }]),
+        { value: 'available', label: '可用' }]} />}
+    {loading && <div className="session-plugins-loading"><p className="plugin-message" role="status">
+      <LoaderCircle size={16} className="spin" aria-hidden="true" />正在加载插件…</p>
+      {!items.length && <div className="session-plugin-placeholders" aria-hidden="true">{[0, 1, 2].map(index =>
+        <div className="session-plugin-placeholder" key={index}><span /><span /><span /></div>)}</div>}
+    </div>}
+    {error && <div className="plugin-message is-error" role="alert"><span>插件列表读取失败：{error}</span>
+      {retry && <button type="button" onClick={retry}>重试</button>}</div>}
+    {!loading && !error && !items.length && empty}
+    {!!items.length && !visible.length && <div className="plugin-empty"><strong>没有匹配的插件</strong>
+      <p>试试其他名称，或清空搜索和筛选。</p><button type="button" onClick={() => { setQuery(''); setFilter('all'); }}>查看全部插件</button></div>}
+    <PluginCardList items={visible} scope={`${filter}/${query}`}>{plugin => {
+      const state = setting(plugin);
+      const unavailable = !recorded && plugin.available === false;
+      const status = pluginSettingStatus(plugin, state, { recorded, management, selectedLabel, unselectedLabel });
+      return <PluginCard key={plugin.id} plugin={plugin} status={status} active={!recorded && chosen(plugin)} unavailable={unavailable}
+        onDetails={() => onDetails(plugin)} control={onToggle && !recorded && !management ?
+          <button type="button" role="switch" aria-checked={state.selected}
+            aria-label={`${state.selected ? disableLabel : enableLabel} ${plugin.name || plugin.id}`}
+            className={`session-plugin-switch${state.selected ? ' on' : ''}`}
+            disabled={state.disabled || state.required || state.pending || unavailable && !state.selected}
+            title={state.required ? '工作流需要此插件，保持挂载' : undefined}
+            aria-busy={state.pending} onClick={() => onToggle(plugin)}><span className="plugin-switch-track" aria-hidden="true" /></button> : undefined}>
+        {plugin.requiresNetwork && <p className="plugin-message">需要联网</p>}
+        {state.required && <p className="plugin-message is-required">必需 · 工作流需要此插件，保持挂载。</p>}
+        {unavailable && <p className="plugin-message is-error">不可用：{plugin.error || 'Host 未给出原因'}</p>}
+        {!!plugin.unsupported?.length && <p className="plugin-message is-error">暂不支持：{plugin.unsupported.join('、')}</p>}
+        {state.problem && <p className="plugin-message is-error" role="alert">{state.problem}</p>}
+        {state.notice && !state.problem && <p className="plugin-message is-success" role="status">{state.notice}</p>}
+        {children?.(plugin)}
+      </PluginCard>;
+    }}</PluginCardList>
+  </div>;
+}
+
+/** Filtering applies to the complete catalog; only the visible card batch is mounted. */
+export function PluginCardList<T>({ items, scope, className = '', children }: {
+  items: T[]; scope: string; className?: string; children: (item: T) => ReactNode;
+}) {
+  const [limit, setLimit] = useState(50);
+  useEffect(() => { setLimit(50); }, [scope]);
+  return <>
+    <div className={`plugin-card-list ${className}`}>{items.slice(0, limit).map(children)}</div>
+    {items.length > limit && <div className="plugin-list-more"><span>已显示 {limit} / {items.length} 个插件</span>
+      <button type="button" onClick={() => setLimit(current => current + 50)}>显示更多插件</button>
+    </div>}
+  </>;
+}
 
 /** Presentation only: selection, policy and library facts belong to the caller. */
 export function PluginToolbar({ query, onQuery, filters = [], filter, onFilter }: {
@@ -39,10 +134,10 @@ export function PluginCard({ plugin, status, active = false, unavailable = false
       {control && <div className="plugin-card-control">{control}</div>}
     </div>
     <p className="plugin-card-description">{plugin.description || '此插件尚未提供用途说明。'}</p>
-    <div className="plugin-card-footer"><span className={`plugin-card-status${unavailable ? ' is-unavailable' : ''}`}>{status}</span>
+    <div className="plugin-card-footer"><div className="plugin-card-meta"><span className={`plugin-card-status${unavailable ? ' is-unavailable' : ''}`}>{status}</span>
+      {children}</div>
       <button className="plugin-card-details" type="button" aria-label={`查看 ${plugin.name || plugin.id} 的详情`} onClick={onDetails}>详情</button>
     </div>
-    {children}
   </article>;
 }
 

@@ -94,7 +94,7 @@ test('the capability rail leaves room to read, searches resources and syncs new 
   await openPilot(page);
   await page.getByRole('button', { name: '展开插件面板', exact: true }).click();
   const rail = page.getByRole('complementary', { name: '会话插件挂载' });
-  await expect(rail.locator('.session-plugin-card')).toHaveCount(3);
+  await expect(rail.locator('.plugin-card')).toHaveCount(3);
   await expect(rail.locator('.pilot-plugins-intro')).toHaveCount(0);
   await expect(rail.locator('.pilot-plugins-summary')).toContainText('1 已挂载');
   const chatBox = await page.getByLabel('Pilot 对话', { exact: true }).boundingBox();
@@ -110,13 +110,13 @@ test('the capability rail leaves room to read, searches resources and syncs new 
   await details.getByRole('button', { name: '关闭', exact: true }).click();
   const filters = rail.getByRole('group', { name: '插件筛选' });
   await filters.getByRole('button', { name: /^未挂载/ }).click();
-  await expect(rail.locator('.session-plugin-card')).toHaveCount(2);
+  await expect(rail.locator('.plugin-card')).toHaveCount(2);
   await filters.getByRole('button', { name: /^全部/ }).click();
   await rail.getByLabel('搜索插件').fill('evidence-synthesis');
-  await expect(rail.locator('.session-plugin-card')).toHaveCount(1);
-  await expect(rail.locator('.session-plugin-card')).toContainText('Academic Research');
+  await expect(rail.locator('.plugin-card')).toHaveCount(1);
+  await expect(rail.locator('.plugin-card')).toContainText('Academic Research');
   await rail.getByLabel('搜索插件').fill('no-such-plugin');
-  await expect(rail.getByText('没有找到匹配的插件')).toBeVisible();
+  await expect(rail.getByText('没有匹配的插件')).toBeVisible();
   await rail.getByRole('button', { name: '查看全部插件' }).click();
   await rail.getByRole('switch', { name: '挂载 Docmost', exact: true }).click();
   await expect(rail.getByRole('switch', { name: '取消挂载 Docmost', exact: true })).toHaveAttribute('aria-checked', 'true');
@@ -127,8 +127,8 @@ test('the capability rail leaves room to read, searches resources and syncs new 
   // and must not move the composer out of the viewport.
   installed.push(...Array.from({ length: 18 }, (_, index) => ({ id: `fixture-${index}`, name: `测试能力 ${index}`,
     description: '用于检查插件列表独立滚动的浏览器夹具。', on: false, available: true })));
-  await expect(rail.locator('.session-plugin-card')).toHaveCount(21, { timeout: 7000 });
-  await rail.locator('.session-plugin-card').last().scrollIntoViewIfNeeded();
+  await expect(rail.locator('.plugin-card')).toHaveCount(21, { timeout: 7000 });
+  await rail.locator('.plugin-card').last().scrollIntoViewIfNeeded();
   await expect(page.getByLabel('发送给 Anchor Pilot')).toBeInViewport();
   await expect(page.getByRole('log', { name: '对话消息' })).toBeInViewport();
   const scrollBox = await rail.locator('.pilot-plugins-body').evaluate(element => ({ height: element.clientHeight, scroll: element.scrollHeight }));
@@ -138,7 +138,7 @@ test('the capability rail leaves room to read, searches resources and syncs new 
   const expandedChat = await page.getByLabel('Pilot 对话', { exact: true }).boundingBox();
   expect(expandedChat!.width).toBeGreaterThan(chatBox!.width);
   await rail.getByRole('button', { name: '展开插件面板' }).click();
-  await expect(rail.locator('.session-plugin-card')).toHaveCount(21);
+  await expect(rail.locator('.plugin-card')).toHaveCount(21);
   expect(errors).toEqual([]);
 });
 

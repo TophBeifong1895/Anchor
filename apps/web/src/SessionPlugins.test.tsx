@@ -54,6 +54,67 @@ describe('the session plugin panel', () => {
     expect(POLL_MS).toBeLessThanOrEqual(5000);
   });
 
+  it('prefetches once while collapsed, shares that read across opening and closing, and retains its result', async () => {
+    let finish: (value: Response) => void = () => undefined;
+    fetchMock.mockImplementationOnce(() => new Promise<Response>(resolve => { finish = resolve; }));
+    await act(async () => { root.render(<SessionPlugins session="s-1" defaultOpen={false} />); });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(switches()).toHaveLength(0);
+    await act(async () => { await vi.advanceTimersByTimeAsync(POLL_MS * 3); });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const togglePanel = () => container.querySelector<HTMLButtonElement>('.pilot-plugins-heading button')!.click();
+    await act(async () => { togglePanel(); });
+    expect(container.querySelector('[role="status"]')?.textContent).toBe('正在加载插件…');
+    expect(container.querySelector('.pilot-plugins-body')?.getAttribute('aria-busy')).toBe('true');
+    expect(container.querySelectorAll('.session-plugin-placeholder')).toHaveLength(3);
+    expect(container.textContent).not.toContain('还没有安装插件');
+    await act(async () => { await vi.advanceTimersByTimeAsync(POLL_MS * 2); });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    await act(async () => { togglePanel(); });
+    await act(async () => { finish(response(200, { plugins: [plugin({ id: 'ready', name: '已准备的插件', on: true })] })); });
+    expect(container.querySelector('.plugin-trigger-count')?.textContent).toBe('1');
+    await act(async () => { await vi.advanceTimersByTimeAsync(POLL_MS * 2); });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    fetchMock.mockImplementationOnce(() => new Promise<Response>(() => undefined));
+    await act(async () => { togglePanel(); });
+    expect(container.textContent).toContain('已准备的插件');
+    expect(container.querySelector('.session-plugins-loading')).toBeNull();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('cancels a departed session read and stays loading until the new session answers', async () => {
+    let old: (value: Response) => void = () => undefined;
+    let next: (value: Response) => void = () => undefined;
+    fetchMock.mockImplementationOnce(() => new Promise<Response>(resolve => { old = resolve; }));
+    await draw();
+    const signal = (fetchMock.mock.calls[0][1] as RequestInit).signal!;
+    fetchMock.mockImplementationOnce(() => new Promise<Response>(resolve => { next = resolve; }));
+    await act(async () => { root.render(<SessionPlugins session="s-2" />); });
+    expect(signal.aborted).toBe(true);
+    await act(async () => { old(response(200, { plugins: [plugin({ id: 'old' })] })); });
+    expect(switches()).toHaveLength(0);
+    expect(container.querySelector('[role="status"]')?.textContent).toBe('正在加载插件…');
+    expect(container.textContent).not.toContain('还没有安装插件');
+    await act(async () => { next(response(200, { plugins: [] })); });
+    expect(container.textContent).toContain('还没有安装插件');
+    expect(container.querySelector('.session-plugins-loading')).toBeNull();
+  });
+
+  it('shows loading again during an explicit retry and only shows empty after a confirmed empty response', async () => {
+    let finish: (value: Response) => void = () => undefined;
+    fetchMock.mockResolvedValueOnce(response(503, { error: '插件库暂时不可读' }));
+    await draw();
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain('插件库暂时不可读');
+    fetchMock.mockImplementationOnce(() => new Promise<Response>(resolve => { finish = resolve; }));
+    const retry = [...container.querySelectorAll('button')].find(button => button.textContent === '重试')!;
+    await act(async () => { retry.click(); });
+    expect(container.querySelector('[role="alert"]')).toBeNull();
+    expect(container.querySelector('[role="status"]')?.textContent).toBe('正在加载插件…');
+    expect(container.textContent).not.toContain('还没有安装插件');
+    await act(async () => { finish(response(200, { plugins: [] })); });
+    expect(container.textContent).toContain('还没有安装插件');
+  });
+
   it('shows dependency activation separately from the direct switch and applies network denial to every row', async () => {
     const networking = plugin({ id: 'network', name: '联网', on: true, explicitOn: false,
       networkProvider: true, networkAllowed: true, networkPermission: true, enabledBy: ['research'] });

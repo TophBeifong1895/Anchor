@@ -50,9 +50,9 @@ test('real backend: paired authoring, simultaneous native nodes, joined artifact
     expect((await request.put(`${base}/graphs/parallel-ui`, { data: { definition: invalid } })).status()).toBe(422);
     await page.reload();
     await page.getByLabel('当前工作流').selectOption('parallel-ui');
-    page.on('dialog', dialog => dialog.accept('{}'));
     const triggered = page.waitForResponse(response => response.url().endsWith('/trigger') && response.request().method() === 'POST');
     await page.getByRole('button', { name: '运行工作流', exact: true }).click();
+    await page.getByRole('button', { name: '开始运行', exact: true }).click();
     const run = (await (await triggered).json()).run as string;
     await expect(page.locator('.execution-node.state-running')).toHaveCount(2);
     await expect(page.getByLabel('活动节点', { exact: true })).toContainText('branch-a');

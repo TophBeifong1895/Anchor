@@ -78,7 +78,7 @@ test('an empty installation presents one task composer and examples only edit a 
   await expect(examples).toHaveCount(3);
   await expect(page.getByRole('button', { name: '新建对话', exact: true })).toHaveCount(0);
   await expect(page.getByRole('button', { name: '展开插件面板', exact: true })).toHaveAttribute('aria-expanded', 'false');
-  await expect(page.locator('.session-plugin-card')).toHaveCount(0);
+  await expect(page.locator('.plugin-card')).toHaveCount(0);
   for (const [width, height] of [[1440, 1000], [768, 900], [390, 844], [320, 740], [1280, 600]]) {
     await page.setViewportSize({ width, height });
     await expect(heading).toBeInViewport();

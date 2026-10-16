@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { intervalFacts, timelineEntries } from './Timeline';
+import { intervalFacts, timelineEntries, timelineNeedsAttention } from './Timeline';
 import { assignGraphColors } from './graphColors';
 import type { OurRun } from './model';
 
@@ -80,7 +80,10 @@ describe('bar interval facts', () => {
   });
 
   it('keeps the restart message for a Run the host no longer owns', () => {
-    expect(factsFor({ running: false, status: 'running', updated: '2026-09-29T10:30:00' })).toEqual({
+    expect(factsFor({ running: false, status: 'running', updated: '2026-09-29T10:30:00', projection: {
+      phase: 'waiting_resume', active: false, control_requested: null, terminal: false,
+      quiescent: false, needs_attention: true, actions: { pause: false, stop: true, resume: true },
+    } })).toEqual({
       label: '运行状态', value: '宿主重启后等待接续',
     });
   });
@@ -96,5 +99,20 @@ describe('bar interval facts', () => {
     expect(factsFor({ running: false, status: 'stopped', activity: [] }, { resident: true, end: +new Date('2026-09-28T09:00:00') })).toEqual({
       label: '这段时长', value: '暂无记录', end: '暂无记录',
     });
+  });
+});
+
+describe('shared Run status and attention projection', () => {
+  it('includes waiting recovery in the same attention filter used by the Timeline', () => {
+    const recovering = run({ status: 'waiting_recovery', running: false, projection: {
+      phase: 'waiting_recovery', active: false, control_requested: null, terminal: false,
+      quiescent: false, needs_attention: true, actions: { pause: false, stop: true, resume: true },
+    } });
+    const [entry] = timelineEntries(recovering, Date.now());
+    expect(entry.status).toBe('waiting_recovery');
+    expect(timelineNeedsAttention(entry)).toBe(true);
+    recovering.projection!.needs_attention = false;
+    expect(timelineNeedsAttention(entry)).toBe(false);
+    expect(timelineNeedsAttention({ status: 'missed_busy' })).toBe(true);
   });
 });

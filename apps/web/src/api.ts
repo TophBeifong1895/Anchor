@@ -34,14 +34,18 @@ export function recoverBearerKey(rejectedKey: string): Promise<string> {
   return requestApiKey();
 }
 
-async function apiResponse(path: string, method = 'GET', body?: unknown, signal?: AbortSignal, accept = 'application/json'): Promise<Response> {
+async function apiResponse(path: string, method = 'GET', body?: unknown, signal?: AbortSignal, accept = 'application/json', extraHeaders?: Record<string, string>): Promise<Response> {
   const send = (key: string) => {
     const timeout = AbortSignal.timeout(30000);
+    const headers = new Headers(extraHeaders);
+    headers.set('Accept', accept);
+    if (body !== undefined) headers.set('Content-Type', 'application/json');
+    headers.delete('Authorization');
+    if (key) headers.set('Authorization', `Bearer ${key}`);
     return fetch(path, {
       method,
       signal: signal ? AbortSignal.any([signal, timeout]) : timeout,
-      headers: { Accept: accept, ...(body === undefined ? {} : { 'Content-Type': 'application/json' }),
-        ...(key ? { Authorization: `Bearer ${key}` } : {}) },
+      headers,
       body: body === undefined ? undefined : JSON.stringify(body),
     });
   };
@@ -65,8 +69,8 @@ export async function apiBlob(path: string, signal?: AbortSignal): Promise<Blob>
   return (await apiResponse(path, 'GET', undefined, signal, 'application/octet-stream')).blob();
 }
 
-export async function api<T>(path: string, method = 'GET', body?: unknown, signal?: AbortSignal): Promise<T> {
-  const response = await apiResponse(path, method, body, signal);
+export async function api<T>(path: string, method = 'GET', body?: unknown, signal?: AbortSignal, headers?: Record<string, string>): Promise<T> {
+  const response = await apiResponse(path, method, body, signal, 'application/json', headers);
   // A successful DELETE answers 204 with no body. Only an OK response may be
   // empty; anything else without a JSON body is a transport problem.
   const empty = response.status === 204 || response.status === 205;

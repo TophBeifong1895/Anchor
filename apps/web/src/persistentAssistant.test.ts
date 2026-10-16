@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import assistant from '../../../examples/graphs/wecom-persistent-assistant.json';
-import { asDefinition, toFlowNodes, type OurGraph, type OurRunState } from './model';
+import { asDefinition, toFlowNodes, type OurGraph, type OurRunState, type RunProjection } from './model';
 
 const graph: OurGraph = assistant;
 const state: OurRunState = {
@@ -14,6 +14,8 @@ const state: OurRunState = {
     },
   },
 };
+const observation: RunProjection = { phase: 'paused', active: false, control_requested: null,
+  terminal: false, quiescent: false, needs_attention: false, actions: { pause: false, stop: true, resume: true } };
 
 describe('persistent assistant Graph projections', () => {
   it('uses ordinary Op nodes for host operations and preserves the loop', () => {
@@ -27,7 +29,7 @@ describe('persistent assistant Graph projections', () => {
   });
 
   it('shows a yielded invocation as interrupted rather than successful or failed', () => {
-    const node = toFlowNodes(graph, 'persistent-assistant', state).find(node => node.id === 'assistant');
+    const node = toFlowNodes(graph, 'persistent-assistant', state, observation).find(node => node.id === 'assistant');
     expect(node?.data.state).toBe('interrupted');
     expect(node?.data.statusLabel).toBe('已中断');
   });
@@ -36,6 +38,7 @@ describe('persistent assistant Graph projections', () => {
     const completed = {
       ...state, nodes: { assistant: { ...state.nodes.assistant, submitted: true, exit_status: '', interruption: null } },
     };
+    expect(toFlowNodes(graph, 'persistent-assistant', completed, observation).find(node => node.id === 'assistant')?.data.state).toBe('completed');
     expect(toFlowNodes(graph, 'persistent-assistant', completed).find(node => node.id === 'assistant')?.data.state).toBe('completed');
   });
 });

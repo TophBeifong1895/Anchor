@@ -343,9 +343,11 @@ test('a reply opens the Graph, the Run and the file it links, and returns to the
   await page.route('**/graphs', route => route.fulfill({ json: { graphs: [{ graph: 'demo', running: null }] } }));
   await page.route('**/graphs/demo', route => route.fulfill({ json: { definition } }));
   await page.route('**/runs', route => route.fulfill({ json: { runs: [{ run, graph: 'demo', status: 'finished',
+    projection: { phase: 'finished', active: false, control_requested: null, terminal: true, quiescent: true, needs_attention: false, actions: { pause: false, stop: false, resume: false } },
     running: false, started: '2026-09-26T10:46:13Z', updated: '2026-09-26T10:47:00Z', executed: ['write'],
     objective: '写一个文件' }] } }));
   await page.route('**/timeline*', route => route.fulfill({ json: { runs: [{ run, graph: 'demo', status: 'finished',
+    projection: { phase: 'finished', active: false, control_requested: null, terminal: true, quiescent: true, needs_attention: false, actions: { pause: false, stop: false, resume: false } },
     running: false, started: '2026-09-26T10:46:13Z', updated: '2026-09-26T10:47:00Z', executed: ['write'],
     objective: '写一个文件' }], scheduled: [], schedules: [] } }));
   await page.route(`**/runs/${run}/files/write`, route => route.fulfill({ json: { files: [{ path: 'out/result.txt', size: 12, binary: false }] } }));
@@ -359,7 +361,8 @@ test('a reply opens the Graph, the Run and the file it links, and returns to the
     if (route.request().url().endsWith('/files/write')) return route.fulfill({ json: {
       files: [{ path: 'out/result.txt', size: 12, binary: false }],
     } });
-    return route.fulfill({ json: { graph: 'demo', run,
+    return route.fulfill({ json: { graph: 'demo', run, definition,
+    projection: { phase: 'finished', active: false, control_requested: null, terminal: true, quiescent: true, needs_attention: false, actions: { pause: false, stop: false, resume: false } },
     state: { status: 'finished', objective: '写一个文件', cursor: null, reason: '', nodes: {},
              passes: {}, skipped: [], executed: ['write'], started: '2026-09-26T10:46:13Z',
              updated: '2026-09-26T10:47:00Z' },

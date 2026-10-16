@@ -1,5 +1,6 @@
 import { test, expect, type Page } from '@playwright/test';
 import { readFileSync } from 'node:fs';
+import { runProjectionFixture } from './fixtures/runProjection';
 
 async function geometry(page: Page) {
   await expect(page.locator('.workflow-canvas')).toHaveAttribute('aria-busy', 'false');
@@ -13,11 +14,13 @@ async function geometry(page: Page) {
   }));
 }
 
-test('one layout survives view switches, polling, dragging, arranging, undo and reload', async ({ page }) => {
+test('editor geometry survives edits while Run geometry stays frozen across view switches and polling', async ({ page }) => {
   let graph = JSON.parse(readFileSync('../../examples/graphs/deep-academic-research.json', 'utf8'));
+  const frozenDefinition = structuredClone(graph);
+  delete frozenDefinition.layout;
   const errors: string[] = [];
   page.on('pageerror', e => errors.push(e.message));
-  const run = { run: 'research-run', graph: 'research', status: 'running', running: true,
+  const run = { run: 'research-run', graph: 'research', status: 'running', running: true, projection: runProjectionFixture('running', { active: true }),
     started: '2026-09-24T08:00:00Z', updated: '2026-09-24T08:00:00Z', objective: '研究',
     executed: ['frame', 'investigate', 'challenge', 'feedback', 'frame', 'investigate'] };
   await page.route('**/graphs', r => r.fulfill({ json: { graphs: [{ graph: 'research', running: run.run }] } }));
@@ -29,7 +32,7 @@ test('one layout survives view switches, polling, dragging, arranging, undo and 
   await page.route('**/runs', r => { polls++; return r.fulfill({ json: { runs: [run] } }); });
   await page.route('**/timeline*', r => r.fulfill({ json: { runs: [run], scheduled: [], schedules: [] } }));
   await page.route('**/runs/research-run', r => r.fulfill({ json: {
-    graph: 'research', run: run.run, nodes: graph.nodes.map((n: { id: string }) => n.id), traces: {},
+    graph: 'research', run: run.run, definition: frozenDefinition, projection: run.projection, nodes: frozenDefinition.nodes.map((n: { id: string }) => n.id), traces: {},
     state: { ...run, cursor: { node: 'investigate', pass: 2, dir: '' }, passes: { frame: 2, investigate: 2 },
       decided: { 'feedback|frame': [false, 2] }, nodes: {}, skipped: [], error: '' },
   } }));
@@ -42,7 +45,8 @@ test('one layout survives view switches, polling, dragging, arranging, undo and 
   await page.locator('.timeline-run').first().click();
   await page.getByRole('button', { name: '查看节点与产物', exact: true }).click();
   await expect(page.getByTestId('execution-canvas')).toBeVisible();
-  expect(await geometry(page)).toEqual(initial);
+  const runGeometry = await geometry(page);
+  expect(runGeometry.nodes.map(node => node.id)).toEqual(initial.nodes.map(node => node.id));
   const feedback = page.getByTestId('edge-e3-feedback-frame').locator('.react-flow__edge-path');
   await expect(feedback).toHaveCSS('stroke-dasharray', 'none');
   await expect(feedback).toHaveCSS('stroke-width', '3.5px');
@@ -53,7 +57,7 @@ test('one layout survives view switches, polling, dragging, arranging, undo and 
   const viewport = await page.locator('.react-flow__viewport').getAttribute('style');
   const before = polls;
   await expect.poll(() => polls).toBeGreaterThan(before);
-  expect(await geometry(page)).toEqual(initial);
+  expect(await geometry(page)).toEqual(runGeometry);
   expect(await page.locator('.react-flow__viewport').getAttribute('style')).toBe(viewport);
   await page.getByRole('button', { name: '图编排', exact: true }).click();
   const node = page.locator('.react-flow__node[data-id="investigate"]');
@@ -69,7 +73,7 @@ test('one layout survives view switches, polling, dragging, arranging, undo and 
   await page.getByRole('button', { name: '运行看板', exact: true }).click();
   await page.locator('.timeline-run').first().click();
   await page.getByRole('button', { name: '查看节点与产物', exact: true }).click();
-  expect(await geometry(page)).toEqual(dragged);
+  expect(await geometry(page)).toEqual(runGeometry);
   await page.getByRole('button', { name: '图编排', exact: true }).click();
   await page.getByRole('button', { name: '自动整理', exact: true }).click();
   await expect.poll(() => geometry(page)).toEqual(initial);

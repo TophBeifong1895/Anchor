@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState, type ButtonHTMLAttributes, type ReactNode } from 'react';
+import { useEffect, useId, useRef, useState, type ButtonHTMLAttributes, type ReactNode, type RefObject } from 'react';
 import { X, type LucideIcon } from 'lucide-react';
 
 export function ToolButton({ icon: Icon, label, ...rest }:
@@ -6,20 +6,22 @@ export function ToolButton({ icon: Icon, label, ...rest }:
   return <button type="button" aria-label={label} title={label} {...rest}><Icon size={16} /></button>;
 }
 
-export function Modal({ title, close, children, className = '' }:
-  { title: string; close: () => void; children: ReactNode; className?: string }) {
+export function Modal({ title, close, children, className = '', initialFocus }:
+  { title: string; close: () => void; children: ReactNode; className?: string;
+    initialFocus?: RefObject<HTMLElement | null> }) {
   const ref = useRef<HTMLDialogElement>(null);
   const titleId = useId();
   useEffect(() => {
     const dialog = ref.current;
     const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     dialog?.showModal();
+    initialFocus?.current?.focus();
     return () => {
       // close() releases native inertness before a nested dialog returns focus to its parent.
       dialog?.close();
-      queueMicrotask(() => { if (previous?.isConnected) previous.focus(); });
+      queueMicrotask(() => { if (!dialog?.open && previous?.isConnected) previous.focus(); });
     };
-  }, []);
+  }, [initialFocus]);
   return <dialog ref={ref} className={`modal ${className}`} aria-labelledby={titleId}
     onCancel={event => {
       event.preventDefault(); event.stopPropagation();

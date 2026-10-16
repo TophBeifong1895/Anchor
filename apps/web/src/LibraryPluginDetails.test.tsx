@@ -4,6 +4,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { LibraryPluginDetails } from './LibraryPluginDetails';
 import { Plugins } from './Plugins';
+import { PluginManagement } from './PluginManagement';
 
 vi.mock('./markdown', () => ({ Markdown: ({ text }: { text: string }) => <div>{text}</div> }));
 const response = (status: number, data: unknown) => ({ ok: status >= 200 && status < 300, status, json: async () => data }) as Response;
@@ -19,9 +20,35 @@ describe('plugin details ownership and request safety', () => {
     container = document.createElement('div'); document.body.appendChild(container); root = createRoot(container);
     fetchMock = vi.fn(); vi.stubGlobal('fetch', fetchMock);
   });
-  afterEach(async () => { await act(async () => root.unmount()); container.remove(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
+  afterEach(async () => { await act(async () => root.unmount()); container.remove(); vi.useRealTimers(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
   const click = async (name: string) => { const button = [...container.querySelectorAll('button')].find(item => item.textContent === name)!; await act(async () => button.click()); };
   const base = { id: 'demo', name: '示例', description: '完整用途' };
+
+  it('preserves an open credential input when background publication finishes and refreshes the catalog', async () => {
+    vi.useFakeTimers();
+    let completed = false;
+    fetchMock.mockImplementation(async (path: string) => {
+      if (path === '/plugins') return response(200, { plugins: [base] });
+      if (path === '/plugins/demo') return response(200, base);
+      if (path === '/plugins/demo/credentials') return response(200, { plugin: 'demo', targets: [
+        { target: 'api', kind: 'mcp', authorization_digest: 'digest', fields: [{ field: 'API_KEY', state: 'missing', editable: true }] },
+      ] });
+      if (path === '/plugins/preflights') return response(200, { reviews: [{ token: 'install', operation: 'install', plugin: 'demo',
+        state: completed ? 'succeeded' : 'running', digest: 'digest' }] });
+      throw new Error(`Unexpected request ${path}`);
+    });
+    await act(async () => root.render(<PluginManagement />));
+    await click('详情');
+    await click('设置 API_KEY');
+    const input = container.querySelector<HTMLInputElement>('input[type="password"]')!;
+    input.value = 'ephemeral-in-progress';
+    completed = true;
+    await act(async () => { await vi.advanceTimersByTimeAsync(1800); });
+    expect(fetchMock.mock.calls.filter(call => call[0] === '/plugins')).toHaveLength(2);
+    expect(container.querySelector('dialog')?.open).toBe(true);
+    expect(container.querySelector('input[type="password"]')).toBe(input);
+    expect(input.value).toBe('ephemeral-in-progress');
+  });
 
   it('opens captured Run metadata without a current library or authorization request', async () => {
     await act(async () => root.render(<Plugins recorded={[{ ...base, skills: ['历史技能'], digest: 'historical-digest' }]} />));

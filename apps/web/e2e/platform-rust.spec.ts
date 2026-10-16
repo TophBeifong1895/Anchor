@@ -24,8 +24,8 @@ test('native Rust Host owns manual and scheduled Runs, restart recovery, files a
     await ready();
     await page.goto(base);
     await expect(page.locator('[data-id="first"]')).toBeVisible();
-    page.on('dialog', dialog => dialog.accept('{}'));
     await page.getByRole('button', { name: '运行工作流', exact: true }).click();
+    await page.getByRole('button', { name: '开始运行', exact: true }).click();
     await expect(page.getByRole('button', { name: '暂停', exact: true })).toBeVisible();
     const pauseResponse = page.waitForResponse(response => response.url().endsWith('/pause'));
     await page.getByRole('button', { name: '暂停', exact: true }).click();

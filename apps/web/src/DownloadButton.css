@@ -1,0 +1,2 @@
+.file-row:has(> .download-error), .pilot-attachment-details:has(> .download-error) { flex-wrap: wrap; }
+.download-error { flex: 0 0 100%; order: 99; box-sizing: border-box; overflow-wrap: anywhere; }

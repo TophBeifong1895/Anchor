@@ -2,13 +2,16 @@ import { useEffect, useRef, useState } from 'react';
 import { api, reason } from './api';
 import type { Plugin } from './model';
 import { PluginDetails, type PluginInformation } from './PluginPanel';
+import { PluginCredentials } from './PluginCredentials';
+import { PluginInstall, PluginUninstall } from './PluginLifecycle';
 
 type Authorization = { state: 'loading' | 'authorized' | 'unauthorized' | 'unknown'; error?: string };
 
 /** Current-library adapter. Historical run details never mount this component. */
-export function LibraryPluginDetails({ plugin, status, problem, close }: {
-  plugin: PluginInformation; status: string; problem?: string | null; close: () => void;
+export function LibraryPluginDetails({ plugin, status, problem, close, management = false, onChanged }: {
+  plugin: PluginInformation; status: string; problem?: string | null; close: () => void; management?: boolean; onChanged?: () => void;
 }) {
+  const [updating, setUpdating] = useState(false);
   const [definition, setDefinition] = useState<PluginInformation | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -81,8 +84,11 @@ export function LibraryPluginDetails({ plugin, status, problem, close }: {
     finally { authBusy.current = false; if (alive.current) setPending(''); }
   };
   const oauth = Object.entries(information.mcpServers ?? {}).filter(([, server]) => server.auth === 'oauth');
-  return <PluginDetails plugin={information} status={status} loading={loading} error={error}
+  return <><PluginDetails plugin={information} status={status} loading={loading} error={error}
     retry={() => setRevision(value => value + 1)} close={close}>
+    {management && <PluginCredentials pluginId={plugin.id} />}
+    {management && <section className="plugin-details-section"><div className="plugin-management-heading"><h3>插件版本</h3>
+      <button type="button" onClick={() => setUpdating(true)}>更新插件</button></div></section>}
     {!!oauth.length && <section className="plugin-details-section plugin-authorization"><h3>服务授权 <span>OAuth</span></h3>
       <p>授权保存在共享库中，供后续任务使用。</p>
       {oauth.map(([name]) => {
@@ -100,5 +106,8 @@ export function LibraryPluginDetails({ plugin, status, problem, close }: {
       {authError && <p className="plugin-message is-error" role="alert">{authError}</p>}
       {authorizationLink && <a className="plugin-authorization-link" href={authorizationLink} target="_blank" rel="noopener noreferrer">打开授权页面</a>}
     </section>}
-  </PluginDetails>;
+    {management && <PluginUninstall pluginId={plugin.id} onChanged={() => { onChanged?.(); close(); }} />}
+  </PluginDetails>
+    {updating && <PluginInstall pluginId={plugin.id} close={() => setUpdating(false)} onChanged={() => { onChanged?.(); setRevision(value => value + 1); setAuthRevision(value => value + 1); }} />}
+  </>;
 }

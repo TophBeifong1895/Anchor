@@ -1,0 +1,27 @@
+.plugin-management { width: 100%; min-width: 0; box-sizing: border-box; overflow-y: auto; padding: 20px; display: grid; gap: 18px; align-content: start; }
+.plugin-management :is(button, input, select):focus-visible, .plugin-credentials :is(button, input):focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.plugin-management-heading { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; }
+.plugin-management-heading :is(h2, h3) { margin: 0; }
+.plugin-management-heading button { font-size: 12px; }
+.plugin-management .plugin-panel { margin: 0; }
+.plugin-credentials { display: grid; gap: 10px; }
+.plugin-credential-target { padding: 12px; border: 1px solid var(--plugin-line, var(--line)); border-radius: var(--radius); }
+.plugin-credential-target h4 { margin: 0 0 12px; font-size: 12px; font-weight: 600; }
+.plugin-credential-field { display: grid; gap: 9px; padding: 12px 0; border-top: 1px solid var(--plugin-line, var(--line)); }
+.plugin-credential-summary { display: flex; align-items: baseline; justify-content: space-between; flex-wrap: wrap; gap: 8px; font-size: 12px; }
+.plugin-credential-summary span { color: var(--plugin-muted, var(--muted)); }
+.plugin-credential-form { display: grid; gap: 10px; margin: 0; }
+.plugin-credential-form label { display: grid; gap: 5px; font-size: 12px; }
+.plugin-credential-form input { width: 100%; min-width: 0; box-sizing: border-box; }
+.plugin-credential-form p { margin: 0; font-size: 12px; line-height: 1.65; }
+.plugin-management-form { display: grid; gap: 12px; }
+.plugin-management-form > label { display: grid; gap: 6px; font-size: 13px; }
+.plugin-management-form > label:has(input[type="checkbox"]) { display: flex; align-items: flex-start; gap: 8px; line-height: 1.6; }
+.plugin-management-form input:not([type="checkbox"]) { width: 100%; box-sizing: border-box; min-width: 0; }
+.plugin-management-review { display: grid; gap: 12px; padding: 12px; border: 1px solid var(--plugin-line, var(--line)); border-radius: var(--radius); font-size: 13px; }
+.plugin-management-review p { margin: 0; line-height: 1.65; }
+.plugin-management-review ul { margin: 0; padding-left: 20px; line-height: 1.65; }
+.plugin-management-review code { overflow-wrap: anywhere; }
+.plugin-management-review pre { max-height: 220px; max-width: 100%; margin: 0; overflow: auto; font-size: 11px; }
+.plugin-management-note { margin: 0; color: var(--plugin-muted, var(--muted)); font-size: 13px; line-height: 1.65; }
+@media (max-width: 700px) { .plugin-management { padding: 16px; } .plugin-credential-form input { font-size: 16px; } }
