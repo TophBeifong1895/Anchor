@@ -16,10 +16,21 @@ use thiserror::Error;
 
 #[cfg(test)]
 mod process_tests;
+#[cfg(all(test, unix, not(target_vendor = "apple")))]
+mod tls_tests;
 
 mod contents;
 mod images;
 pub use images::{ImageBudget, validate_image_bytes};
+
+/// Initialize the MCP HTTP client's compiled TLS backend when the embedding
+/// application has not selected one. Hosts constructing RMCP transports
+/// directly use the same initialization as `McpHost::connect`.
+pub fn initialize_crypto_provider() {
+    // RMCP's reqwest 0.13 no-provider feature requires an installed provider
+    // even when ring is the only compiled backend. Preserve an existing one.
+    let _ = rustls::crypto::ring::default_provider().install_default();
+}
 
 /// A credential whose value is never included in Debug output or serde state.
 #[derive(Clone, Default)]
@@ -204,6 +215,7 @@ impl McpHost {
                     transport.auth_header = Some(token.expose().to_owned());
                 }
                 transport.custom_headers = custom_headers(headers)?;
+                initialize_crypto_provider();
                 ClientInfo::default()
                     .serve(StreamableHttpClientTransport::from_config(transport))
                     .await
@@ -424,7 +436,7 @@ mod tests {
     use tokio_util::sync::CancellationToken;
 
     #[derive(Clone)]
-    struct Fixture;
+    pub(super) struct Fixture;
 
     impl ServerHandler for Fixture {
         fn get_info(&self) -> ServerInfo {
