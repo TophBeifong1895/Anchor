@@ -32,6 +32,7 @@ pub use ports::*;
 mod runner;
 pub use runner::*;
 mod parallel;
+pub mod validator;
 
 #[cfg(test)]
 mod tests;

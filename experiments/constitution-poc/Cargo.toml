@@ -1,0 +1,18 @@
+[package]
+name = "constitution-poc"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "Proof of concept for docs/anchor-constitution.md: six primitives, a four-function kernel, lifecycle collapse and measurement-driven selection."
+
+# Standalone on purpose: no dependency on, and no effect on, the Anchor workspace.
+[workspace]
+
+[dependencies]
+
+[profile.release]
+debug = false
+
+# The statistical experiments are compute-heavy; optimise tests too.
+[profile.test]
+opt-level = 2

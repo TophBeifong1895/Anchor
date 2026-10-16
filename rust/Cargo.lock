@@ -129,6 +129,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "anchor-kernel"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror",
+]
+
+[[package]]
 name = "anchor-library"
 version = "0.1.0"
 dependencies = [
@@ -260,6 +270,7 @@ dependencies = [
 name = "anchor-runtime"
 version = "0.1.0"
 dependencies = [
+ "anchor-kernel",
  "chrono",
  "futures",
  "schemars 1.2.2",

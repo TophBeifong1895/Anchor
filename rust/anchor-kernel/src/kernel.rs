@@ -1,0 +1,558 @@
+//! The four duties: adjudicate, record, settle, measure.
+
+use std::collections::BTreeMap;
+use std::sync::{Arc, Mutex};
+
+use serde_json::{Value, json};
+
+use crate::model::*;
+use crate::store::{Store, StoreError};
+
+/// The constitution's own validator: only people change validators.
+pub const CONSTITUTION: &str = "validator/constitution";
+/// People complete pending verdicts.
+pub const HUMAN_DECISION: &str = "validator/human-decision";
+/// The lifecycle of an external effect.
+pub const EFFECT: &str = "validator/effect";
+
+/// Host authority, frozen per turn or Run. Nothing in a submission can create
+/// authority; the kernel only asks.
+pub trait Authority: Send + Sync {
+    fn permits(&self, principal: &Principal, action: Action, target: &str) -> bool;
+}
+
+pub trait Probe: Send + Sync {
+    fn observe(&self, point: &Point);
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum KernelError {
+    #[error(transparent)]
+    Store(#[from] StoreError),
+    #[error("validator `{0}` is not installed")]
+    MissingValidator(String),
+}
+
+#[derive(Default, Clone)]
+pub struct Validators {
+    map: BTreeMap<ResourceId, Arc<dyn Validator>>,
+}
+
+impl Validators {
+    pub fn get(&self, id: &str) -> Option<&Arc<dyn Validator>> {
+        self.map.get(id)
+    }
+}
+
+pub struct Kernel<S: Store> {
+    store: S,
+    authority: Box<dyn Authority>,
+    validators: Validators,
+    probe: Option<Box<dyn Probe>>,
+    knobs: Mutex<String>,
+    /// One writer per state root. Adjudication is short; executors run outside.
+    writer: Mutex<u64>,
+}
+
+impl<S: Store> Kernel<S> {
+    pub fn new(store: S, authority: Box<dyn Authority>) -> Result<Self, KernelError> {
+        let mut kernel = Self {
+            store,
+            authority,
+            validators: Validators::default(),
+            probe: None,
+            knobs: Mutex::new("default".into()),
+            writer: Mutex::new(0),
+        };
+        kernel.install(CONSTITUTION, Arc::new(HumanOnly))?;
+        kernel.install(HUMAN_DECISION, Arc::new(HumanDecision))?;
+        kernel.install(EFFECT, Arc::new(EffectLifecycle))?;
+        Ok(kernel)
+    }
+
+    pub fn with_probe(mut self, probe: Box<dyn Probe>) -> Self {
+        self.probe = Some(probe);
+        self
+    }
+
+    /// The knob version stamped on every submission from now on.
+    pub fn set_knobs(&self, version: impl Into<String>) {
+        *self.knobs.lock().expect("knobs") = version.into();
+    }
+
+    /// Register validator code. Its resource is judged by the constitution, so
+    /// only people can change it.
+    pub fn install(&mut self, id: &str, validator: Arc<dyn Validator>) -> Result<(), KernelError> {
+        self.validators.map.insert(id.into(), validator);
+        if self.store.load(id)?.is_none() {
+            self.store
+                .create(&Resource::new(id, CONSTITUTION, Value::Null))?;
+        }
+        Ok(())
+    }
+
+    pub fn create(&self, resource: Resource) -> Result<(), KernelError> {
+        if self.validators.get(&resource.validator).is_none() {
+            return Err(KernelError::MissingValidator(resource.validator));
+        }
+        Ok(self.store.create(&resource)?)
+    }
+
+    pub fn load(&self, id: &str) -> Result<Option<Resource>, KernelError> {
+        Ok(self.store.load(id)?)
+    }
+
+    pub fn history(&self, id: &str) -> Result<Vec<Record>, KernelError> {
+        Ok(self.store.history(id)?)
+    }
+
+    pub fn store(&self) -> &S {
+        &self.store
+    }
+
+    /// What this resource would currently consider. Empty unless executing:
+    /// a waiting or settled task offers nothing, so a scheduler never has to
+    /// check for stop, pause or completion itself.
+    pub fn open(&self, id: &str) -> Result<Vec<Slot>, KernelError> {
+        let Some(resource) = self.store.load(id)? else {
+            return Ok(Vec::new());
+        };
+        if resource.phase().is_some_and(|p| *p != Phase::Executing) {
+            return Ok(Vec::new());
+        }
+        let validator = self
+            .validators
+            .get(&resource.validator)
+            .ok_or_else(|| KernelError::MissingValidator(resource.validator.clone()))?;
+        Ok(validator.open(&resource))
+    }
+
+    /// The single entry point for change. `cost` is a host observation: what
+    /// the proposer spent since its previous submission to this target.
+    pub fn submit(
+        &self,
+        principal: &Principal,
+        cost: u64,
+        submission: Submission,
+    ) -> Result<Verdict, KernelError> {
+        let mut seq = self.writer.lock().expect("kernel writer");
+        *seq += 1;
+        let stamp = Stamp {
+            principal: principal.clone(),
+            cost,
+            seq: *seq,
+            knobs: self.knobs.lock().expect("knobs").clone(),
+        };
+        let (verdict, validator, after, effects) = self.adjudicate(&stamp, &submission)?;
+        // Record: the target's history gets every verdict, refusals included.
+        if self.store.load(&submission.target)?.is_some() {
+            self.store.commit(
+                &submission.target,
+                &Record {
+                    stamp: stamp.clone(),
+                    submission: submission.clone(),
+                    verdict,
+                    after,
+                },
+            )?;
+        }
+        for created in effects {
+            self.store.create(&created)?;
+        }
+        self.measure(&stamp, &submission, &validator, verdict);
+        Ok(verdict)
+    }
+
+    #[allow(clippy::type_complexity)]
+    fn adjudicate(
+        &self,
+        stamp: &Stamp,
+        submission: &Submission,
+    ) -> Result<(Verdict, ResourceId, Option<Resource>, Vec<Resource>), KernelError> {
+        let principal = &stamp.principal;
+        let Some(mut resource) = self.store.load(&submission.target)? else {
+            return Ok((
+                Verdict::refused(Reason::UnknownResource),
+                String::new(),
+                None,
+                Vec::new(),
+            ));
+        };
+        let validator_id = resource.validator.clone();
+        let refuse = |reason| {
+            Ok((
+                Verdict::refused(reason),
+                validator_id.clone(),
+                None,
+                Vec::new(),
+            ))
+        };
+
+        // Authority only descends; the submission cannot widen it.
+        if !self
+            .authority
+            .permits(principal, submission.action, &submission.target)
+        {
+            return refuse(Reason::Unauthorized);
+        }
+        // Law 3: a settled task never changes; a waiting one is not the
+        // proposer's to move, only people's and host code's.
+        if let Some(task) = &mut resource.task {
+            match &task.phase {
+                Phase::Settled { .. } => return refuse(Reason::TaskSettled),
+                Phase::Waiting { .. } if principal.kind == PrincipalKind::Agent => {
+                    return refuse(Reason::TaskWaiting);
+                }
+                _ => {}
+            }
+            task.budget.spent = task.budget.spent.saturating_add(stamp.cost);
+            if task.budget.spent > task.budget.limit {
+                task.phase = Phase::Settled {
+                    result: Outcome::Failed {
+                        reason: Reason::BudgetExhausted,
+                        detail: format!("spent {} of {}", task.budget.spent, task.budget.limit),
+                    },
+                };
+                resource.version += 1;
+                return Ok((
+                    Verdict::refused(Reason::BudgetExhausted),
+                    validator_id,
+                    Some(resource),
+                    Vec::new(),
+                ));
+            }
+        }
+        if submission.seen != resource.version {
+            return Ok((
+                Verdict::returned(Reason::StaleVersion),
+                validator_id,
+                None,
+                Vec::new(),
+            ));
+        }
+        // Law 3 again: the lifecycle of every task is the same three requests,
+        // whatever its validator. No Graph implements stop, resume or abandon.
+        if submission.action == Action::Request
+            && resource.task.is_some()
+            && let Some(control) = submission.content.get("control").and_then(Value::as_str)
+        {
+            return Ok(
+                match task_control(&mut resource, principal, control, &submission.content) {
+                    Ok(()) => {
+                        resource.version += 1;
+                        (
+                            Verdict {
+                                effect: Effect::Accepted,
+                                verification: Verification::NotApplicable,
+                                reason: Reason::Ok,
+                            },
+                            validator_id,
+                            Some(resource),
+                            Vec::new(),
+                        )
+                    }
+                    Err(verdict) => (verdict, validator_id, None, Vec::new()),
+                },
+            );
+        }
+        // Law 2: what was not observed is unknown, and blocks the next effect.
+        if submission.action == Action::Execute && self.has_unknown_effect(&submission.target)? {
+            return refuse(Reason::EffectUnknown);
+        }
+        let validator = self
+            .validators
+            .get(&validator_id)
+            .ok_or_else(|| KernelError::MissingValidator(validator_id.clone()))?;
+        let judgement = validator.judge(
+            &JudgeCtx {
+                resource: &resource,
+                principal,
+            },
+            submission,
+        );
+        let verdict = judgement.verdict;
+        match verdict.effect {
+            Effect::Accepted => {
+                if validator_id == HUMAN_DECISION {
+                    return self.resolve_pending(stamp, resource, judgement);
+                }
+                let mut created = Vec::new();
+                if submission.action == Action::Execute {
+                    created.push(Resource::new(
+                        format!("effect/{}/{:012}", submission.target, stamp.seq),
+                        EFFECT,
+                        json!({"endpoint": submission.target, "status": "authorized"}),
+                    ));
+                }
+                resource.version += 1;
+                if let Some(state) = judgement.state {
+                    resource.state = state;
+                }
+                if let Some(task) = &mut resource.task {
+                    if let Some(phase) = judgement.phase {
+                        task.phase = phase;
+                    } else if submission.action == Action::Settle {
+                        task.phase = Phase::Settled {
+                            result: Outcome::Done,
+                        };
+                    }
+                }
+                Ok((verdict, validator_id, Some(resource), created))
+            }
+            Effect::Pending => {
+                let pending = Resource::new(
+                    format!("pending/{}/{:012}", submission.target, stamp.seq),
+                    HUMAN_DECISION,
+                    json!({
+                        "target": submission.target,
+                        "seen": resource.version,
+                        "state": judgement.state,
+                        "phase": judgement.phase,
+                    }),
+                );
+                Ok((verdict, validator_id, None, vec![pending]))
+            }
+            Effect::Returned | Effect::Refused => Ok((verdict, validator_id, None, Vec::new())),
+        }
+    }
+
+    /// A person decided. The approval binds to the exact version the proposal
+    /// saw; a target that changed meanwhile refuses it.
+    #[allow(clippy::type_complexity)]
+    fn resolve_pending(
+        &self,
+        stamp: &Stamp,
+        mut pending: Resource,
+        judgement: Judgement,
+    ) -> Result<(Verdict, ResourceId, Option<Resource>, Vec<Resource>), KernelError> {
+        let decision = judgement.state.unwrap_or(Value::Null);
+        let approved = decision.get("decision").and_then(Value::as_str) == Some("approve");
+        let proposal = pending.state.clone();
+        pending.version += 1;
+        pending.state = json!({"proposal": proposal, "decision": decision});
+        if approved {
+            let target_id = proposal["target"].as_str().unwrap_or_default().to_owned();
+            let Some(mut target) = self.store.load(&target_id)? else {
+                return Ok((
+                    Verdict::refused(Reason::UnknownResource),
+                    HUMAN_DECISION.into(),
+                    Some(pending),
+                    Vec::new(),
+                ));
+            };
+            if target.is_settled() {
+                return Ok((
+                    Verdict::refused(Reason::TaskSettled),
+                    HUMAN_DECISION.into(),
+                    Some(pending),
+                    Vec::new(),
+                ));
+            }
+            if Some(target.version) != proposal["seen"].as_u64() {
+                return Ok((
+                    Verdict::refused(Reason::PendingTargetChanged),
+                    HUMAN_DECISION.into(),
+                    Some(pending),
+                    Vec::new(),
+                ));
+            }
+            target.version += 1;
+            if !proposal["state"].is_null() {
+                target.state = proposal["state"].clone();
+            }
+            if let (Some(task), Ok(phase)) = (
+                &mut target.task,
+                serde_json::from_value::<Phase>(proposal["phase"].clone()),
+            ) {
+                task.phase = phase;
+            }
+            self.store.commit(
+                &target_id,
+                &Record {
+                    stamp: stamp.clone(),
+                    submission: Submission::new(&target_id, target.version - 1, Action::Write)
+                        .content(json!({"approved": pending.id})),
+                    verdict: judgement.verdict,
+                    after: Some(target),
+                },
+            )?;
+        }
+        Ok((
+            judgement.verdict,
+            HUMAN_DECISION.into(),
+            Some(pending),
+            Vec::new(),
+        ))
+    }
+
+    fn has_unknown_effect(&self, endpoint: &str) -> Result<bool, KernelError> {
+        for id in self.store.list(&format!("effect/{endpoint}/"))? {
+            if let Some(effect) = self.store.load(&id)?
+                && effect.state["status"] == "unknown"
+            {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    fn measure(&self, stamp: &Stamp, submission: &Submission, validator: &str, verdict: Verdict) {
+        if let Some(probe) = &self.probe {
+            probe.observe(&Point {
+                component: submission
+                    .target
+                    .split('/')
+                    .next()
+                    .unwrap_or_default()
+                    .to_owned(),
+                validator: validator.to_owned(),
+                principal: stamp.principal.kind,
+                action: submission.action,
+                effect: verdict.effect,
+                verification: verdict.verification,
+                reason: verdict.reason,
+                cost: stamp.cost,
+                knobs: stamp.knobs.clone(),
+            });
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Task lifecycle: the whole of it
+// ---------------------------------------------------------------------------
+
+/// - `stop`: a person parks the task; it waits on a person.
+/// - `resume`: whoever the task waits on releases it — a person for a person,
+///   host code for a child task or an observed effect.
+/// - `abandon`: a person settles it as aborted.
+///
+/// Settled tasks never reach here (refused earlier), so "a finished or
+/// abandoned Run cannot be resumed" needs no rule of its own.
+fn task_control(
+    resource: &mut Resource,
+    principal: &Principal,
+    control: &str,
+    content: &Value,
+) -> Result<(), Verdict> {
+    let task = resource.task.as_mut().expect("task resource");
+    let detail = content
+        .get("reason")
+        .and_then(Value::as_str)
+        .unwrap_or(control)
+        .to_owned();
+    match control {
+        "stop" => {
+            if principal.kind != PrincipalKind::Human {
+                return Err(Verdict::refused(Reason::HumanOnly));
+            }
+            task.phase = Phase::Waiting {
+                waiter: Waiter::Human { reason: detail },
+            };
+        }
+        "resume" => {
+            let releaser = match &task.phase {
+                Phase::Waiting {
+                    waiter: Waiter::Human { .. },
+                } => PrincipalKind::Human,
+                Phase::Waiting { .. } => PrincipalKind::Code,
+                _ => return Err(Verdict::refused(Reason::NotWaiting)),
+            };
+            if principal.kind != releaser {
+                return Err(Verdict::refused(if releaser == PrincipalKind::Human {
+                    Reason::HumanOnly
+                } else {
+                    Reason::Unauthorized
+                }));
+            }
+            task.phase = Phase::Executing;
+        }
+        "abandon" => {
+            if principal.kind != PrincipalKind::Human {
+                return Err(Verdict::refused(Reason::HumanOnly));
+            }
+            task.phase = Phase::Settled {
+                result: Outcome::Aborted { detail },
+            };
+        }
+        _ => return Err(Verdict::returned(Reason::ContentInvalid)),
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Constitutional validators
+// ---------------------------------------------------------------------------
+
+struct HumanOnly;
+
+impl Validator for HumanOnly {
+    fn judge(&self, ctx: &JudgeCtx, submission: &Submission) -> Judgement {
+        if ctx.principal.kind != PrincipalKind::Human {
+            return Judgement::refused(Reason::HumanOnly);
+        }
+        Judgement::accept(submission.content.clone(), Verification::Reviewed)
+    }
+}
+
+struct HumanDecision;
+
+impl Validator for HumanDecision {
+    fn judge(&self, ctx: &JudgeCtx, submission: &Submission) -> Judgement {
+        if ctx.principal.kind != PrincipalKind::Human {
+            return Judgement::refused(Reason::HumanOnly);
+        }
+        if ctx.resource.state.get("decision").is_some() {
+            return Judgement::refused(Reason::TaskSettled);
+        }
+        match submission.content.get("decision").and_then(Value::as_str) {
+            Some("approve" | "reject") => {
+                Judgement::accept(submission.content.clone(), Verification::Reviewed)
+            }
+            _ => Judgement::returned(Reason::ContentInvalid),
+        }
+    }
+}
+
+/// authorized → started → succeeded | failed | unknown; unknown → succeeded |
+/// failed only with an observation as evidence. Never back to authorized.
+struct EffectLifecycle;
+
+impl Validator for EffectLifecycle {
+    fn judge(&self, ctx: &JudgeCtx, submission: &Submission) -> Judgement {
+        if ctx.principal.kind == PrincipalKind::Agent {
+            return Judgement::refused(Reason::Unauthorized);
+        }
+        let from = ctx.resource.state["status"].as_str().unwrap_or_default();
+        let Some(to) = submission.content.get("status").and_then(Value::as_str) else {
+            return Judgement::returned(Reason::ContentInvalid);
+        };
+        let observed = submission
+            .evidence
+            .iter()
+            .any(|e| matches!(e, Evidence::Observation { .. }));
+        let allowed = match (from, to) {
+            ("authorized", "started") => true,
+            ("started", "succeeded" | "failed" | "unknown") => true,
+            ("unknown", "succeeded" | "failed") => observed,
+            _ => false,
+        };
+        if !allowed {
+            return Judgement::returned(if from == "unknown" {
+                Reason::EvidenceMissing
+            } else {
+                Reason::ContentInvalid
+            });
+        }
+        let mut state = ctx.resource.state.clone();
+        state["status"] = json!(to);
+        Judgement::accept(
+            state,
+            if observed {
+                Verification::Evidenced
+            } else {
+                Verification::Asserted
+            },
+        )
+    }
+}
