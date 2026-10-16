@@ -69,7 +69,33 @@ fn set_host_env(root: &std::path::Path, state_root: &std::path::Path) {
     }
 }
 
-fn fixture() -> (tempfile::TempDir, ApiState) {
+pub(in crate::api) fn management_fixture(
+    root: &std::path::Path,
+) -> (
+    Arc<crate::model_configuration::ModelConfiguration>,
+    Arc<crate::runtime_management::RuntimeManagement>,
+) {
+    // Management state stays outside the execution root so static graph
+    // validation tests can continue proving that they create no execution facts.
+    let management_root = root.join("management");
+    let model = Arc::new(
+        crate::model_configuration::ModelConfiguration::from_env(&management_root).unwrap(),
+    );
+    let runtime = Arc::new(
+        crate::runtime_configuration::RuntimeConfiguration::from_env(
+            &management_root,
+            &root.join("library"),
+            PathBuf::from("bwrap"),
+        )
+        .unwrap(),
+    );
+    let operations = Arc::new(
+        crate::runtime_management::RuntimeManagement::new(runtime, &management_root).unwrap(),
+    );
+    (model, operations)
+}
+
+pub(super) fn fixture() -> (tempfile::TempDir, ApiState) {
     let root = tempdir().unwrap();
     let bundle = root.path().join("bundle");
     std::fs::create_dir_all(&bundle).unwrap();
@@ -80,7 +106,10 @@ fn fixture() -> (tempfile::TempDir, ApiState) {
     )
     .unwrap();
     let schedules = ScheduleStore::open(root.path().join("schedules.json")).unwrap();
+    let (model_configuration, runtime_management) = management_fixture(root.path());
     let state = ApiState {
+        model_configuration,
+        runtime_management,
         bundle_root: bundle.clone(),
         catalog_root: root.path().to_path_buf(),
         application: RunApplication::new(root.path().join("state"), root.path().to_path_buf())

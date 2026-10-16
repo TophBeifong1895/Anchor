@@ -135,7 +135,7 @@ fn exact_v4_migrates_to_v5_without_rewriting_session_turn_goose_or_delivery_fact
         connection
             .pragma_query_value(None, "user_version", |row| row.get::<_, i32>(0))
             .unwrap(),
-        7
+        8
     );
     assert_eq!(old_facts(&connection), before);
     let after = connection

@@ -20,11 +20,11 @@ enum Operation {
         sha256: String,
         #[arg(long)]
         install_root: PathBuf,
-        /// Private KEY=value data containing model URL, API key and model name.
+        /// Optional deployment-owned model data. Omit to configure it in WebUI.
         #[arg(long)]
-        model_config: PathBuf,
+        model_config: Option<PathBuf>,
     },
-    /// Start the Host from the installed release using its private model configuration.
+    /// Start the Host. Configure the model in WebUI when no model file was supplied.
     Start {
         /// Loopback IP and port for the local WebUI/API listener.
         #[arg(long, default_value = "127.0.0.1:8077")]

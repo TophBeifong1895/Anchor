@@ -79,8 +79,12 @@ pub(super) fn private_owner(state: &ApiState, headers: &HeaderMap) -> String {
     format!("api:{:x}", Sha256::digest(key.as_bytes()))
 }
 
+fn private_session_id(identifier: &str) -> bool {
+    identifier.starts_with("responses-") || identifier.starts_with("pilot-private-")
+}
+
 fn owner_for_id(state: &ApiState, headers: &HeaderMap, identifier: &str) -> String {
-    if identifier.starts_with("responses-") {
+    if private_session_id(identifier) {
         private_owner(state, headers)
     } else {
         "local".to_owned()
@@ -135,7 +139,7 @@ pub(super) async fn list_sessions(
         let mut visible = sessions.list("local").map_err(session_error)?;
         let owner = private_owner(&state, &headers);
         if owner != "local" {
-            visible.retain(|session| !session.id.starts_with("responses-"));
+            visible.retain(|session| !private_session_id(&session.id));
             visible.extend(sessions.list(&owner).map_err(session_error)?);
         }
         visible.retain(|session| session.graph.is_empty() && session.channel.is_empty());
@@ -177,9 +181,16 @@ pub(super) async fn create_session(
             })?;
         let mut request: CreateSession = serde_json::from_value(Value::Object(fields.clone()))
             .map_err(|_| error(StatusCode::BAD_REQUEST, "invalid Session creation request"))?;
-        request
-            .plugin_mounts
-            .insert(crate::plugin_network::NETWORK_PLUGIN.to_owned(), true);
+        if request.id.is_none() {
+            static NEXT_PRIVATE_SESSION: std::sync::atomic::AtomicU64 =
+                std::sync::atomic::AtomicU64::new(0);
+            let nanos = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos();
+            let sequence = NEXT_PRIVATE_SESSION.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            request.id = Some(format!("pilot-private-{nanos:x}-{sequence:x}"));
+        }
         if let Some(identifier) = &request.id
             && has_retained_session_run(&state, identifier)?
         {
@@ -193,8 +204,7 @@ pub(super) async fn create_session(
             .as_deref()
             .map(|identifier| owner_for_id(&state, &headers, identifier))
             .unwrap_or_else(|| "local".to_owned());
-        let session = store(&state)?
-            .create(&owner, request)
+        let session = crate::application::pilot_sessions::create(&store(&state)?, &owner, request)
             .map_err(session_error)?;
         Ok((StatusCode::CREATED, Json(json!({"session":session}))))
     })

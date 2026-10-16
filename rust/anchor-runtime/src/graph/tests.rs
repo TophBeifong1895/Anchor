@@ -7,6 +7,25 @@ use std::{
 };
 
 mod host_operations;
+mod invocation_authority;
+
+#[test]
+fn only_completed_failed_and_aborted_runs_are_terminal() {
+    for (status, terminal) in [
+        (RunStatus::Ready, false),
+        (RunStatus::Running, false),
+        (RunStatus::Paused, false),
+        (RunStatus::BudgetStopped, false),
+        (RunStatus::WaitingCall, false),
+        (RunStatus::WaitingRecovery, false),
+        (RunStatus::Completed, true),
+        (RunStatus::Aborted, true),
+        (RunStatus::Stopped, false),
+        (RunStatus::Failed, true),
+    ] {
+        assert_eq!(status.is_terminal(), terminal, "{status:?}");
+    }
+}
 
 #[derive(Default)]
 struct MemStore {

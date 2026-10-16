@@ -164,27 +164,39 @@ pub(crate) fn write_snapshot(
     })?;
     std::fs::create_dir_all(parent)?;
     let bytes = serde_json::to_vec(snapshot).map_err(std::io::Error::other)?;
-    // A unique temporary name plus a rename, so a crash mid-write cannot leave a
-    // half-written snapshot that a retry would then trust.
-    let temporary = path.with_extension(format!("{}.tmp", std::process::id()));
-    crate::write_durable(&temporary, &bytes)?;
-    if path.exists() {
-        // Another attempt won the race; theirs is the snapshot this Turn uses.
-        let _ = std::fs::remove_file(&temporary);
-        return Ok(false);
+    use std::io::Write;
+    let mut temporary = tempfile::NamedTempFile::new_in(parent)?;
+    temporary.write_all(&bytes)?;
+    temporary.as_file().sync_all()?;
+    match temporary.persist_noclobber(path) {
+        Ok(_) => {}
+        Err(error) if error.error.kind() == std::io::ErrorKind::AlreadyExists => return Ok(false),
+        Err(error) => return Err(error.error),
     }
-    std::fs::rename(&temporary, path)?;
-    if let Ok(directory) = std::fs::File::open(parent) {
-        let _ = directory.sync_all();
-    }
+    std::fs::File::open(parent)?.sync_all()?;
     Ok(true)
 }
 
-/// Read a Turn's snapshot, or `None` when there is none.
-///
-/// An unreadable or malformed snapshot is also `None`: the caller falls back to
-/// the Session's current switches and records that it had no snapshot, because a
-/// missing snapshot must not stop an old Run from running.
+/// A malformed or unreadable permission fact must never recover live grants.
+pub(crate) fn read_snapshot_strict(
+    path: &Path,
+    session: &str,
+    turn: &str,
+) -> Result<Option<MountSnapshot>, String> {
+    let Some(snapshot) = crate::assistant::read_json::<MountSnapshot>(path)
+        .map_err(|error| format!("Turn Plugin mount snapshot unavailable: {error}"))?
+    else {
+        return Ok(None);
+    };
+    if !matches!(snapshot.format, 1 | 2) || snapshot.session != session || snapshot.turn != turn {
+        return Err("Turn Plugin mount snapshot identity changed".into());
+    }
+    Ok(Some(snapshot))
+}
+
+/// Lenient reader for legacy fixture assertions. Execution uses the strict
+/// reader so corrupt permission facts never select live Session switches.
+#[cfg(test)]
 pub(crate) fn read_snapshot(path: &Path, session: &str, turn: &str) -> Option<MountSnapshot> {
     let bytes = std::fs::read(path).ok()?;
     parse_snapshot(&bytes, session, turn)

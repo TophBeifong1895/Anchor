@@ -610,19 +610,26 @@ impl Ledger {
     }
 
     pub fn is_latest(&self, event: &ChannelEvent) -> Result<bool, GatewayError> {
-        self.is_latest_identity(&event.event_id, &event.sender_id, &event.conversation_id)
+        self.is_latest_event(&event.event_id)
     }
 
-    pub fn is_latest_identity(
-        &self,
-        event_id: &str,
-        sender_id: &str,
-        conversation_id: &str,
-    ) -> Result<bool, GatewayError> {
+    pub fn is_latest_event(&self, event_id: &str) -> Result<bool, GatewayError> {
+        // The immutable event already carries its chat type. Reuse that fact
+        // instead of migrating delivery identities or replacing the real actor
+        // with a synthetic group sender. Pre-event-json rows are private.
         Ok(!self.lock()?.query_row(
-            "SELECT EXISTS(SELECT 1 FROM inbound WHERE rowid > (SELECT rowid FROM inbound WHERE event_id=?1)
-             AND sender_id=?2 AND conversation_id=?3 AND superseded=0)",
-            params![event_id, sender_id, conversation_id], |row| row.get::<_, bool>(0),
+            "SELECT EXISTS(
+                SELECT 1 FROM inbound current JOIN inbound newer
+                  ON newer.rowid > current.rowid
+                 AND newer.conversation_id = current.conversation_id
+                 AND COALESCE(json_extract(newer.event_json, '$.metadata.chat_type'), 'single')
+                     = COALESCE(json_extract(current.event_json, '$.metadata.chat_type'), 'single')
+                 AND (json_extract(current.event_json, '$.metadata.chat_type') = 'group'
+                      OR newer.sender_id = current.sender_id)
+                WHERE current.event_id = ?1 AND newer.superseded = 0
+             )",
+            [event_id],
+            |row| row.get::<_, bool>(0),
         )?)
     }
 

@@ -10,6 +10,7 @@ use std::path::{Path, PathBuf};
 
 mod deletion;
 mod references;
+mod updates;
 
 #[cfg(test)]
 mod tests;
@@ -23,6 +24,22 @@ pub(crate) enum GraphManagementError {
     Conflict(String),
     Invalid(String),
     Storage(String),
+}
+
+/// Authoring diagnostics are safe to return to the author. Library and Host
+/// failures can include private paths, so protocol adapters redact those.
+#[derive(Debug)]
+pub(crate) enum GraphValidationFailure {
+    Authoring(GraphError),
+    Unavailable(GraphError),
+}
+
+impl std::fmt::Display for GraphValidationFailure {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Authoring(failure) | Self::Unavailable(failure) => failure.fmt(formatter),
+        }
+    }
 }
 
 impl std::fmt::Display for GraphManagementError {
@@ -79,11 +96,22 @@ impl RunApplication {
         &self,
         definition: &Value,
     ) -> Result<GraphSnapshot, GraphManagementError> {
-        let (snapshot, _, _) =
-            resolve_graph_definition(definition, &self.catalog_root).map_err(invalid)?;
+        self.inspect_graph_definition(definition).map_err(invalid)
+    }
+
+    pub(crate) fn inspect_graph_definition(
+        &self,
+        definition: &Value,
+    ) -> Result<GraphSnapshot, GraphValidationFailure> {
+        let snapshot = GraphSnapshot::from_authoring(definition.clone())
+            .map_err(GraphValidationFailure::Authoring)?;
         crate::reject_snapshot(&snapshot)
             .map_err(GraphError::Unsupported)
-            .map_err(invalid)?;
+            .map_err(GraphValidationFailure::Unavailable)?;
+        let ids = snapshot_plugin_ids(&snapshot);
+        FilePluginCatalog::new(crate::library_root(&self.catalog_root))
+            .resolve(&ids)
+            .map_err(GraphValidationFailure::Unavailable)?;
         Ok(snapshot)
     }
 
@@ -167,7 +195,8 @@ impl RunApplication {
             .map(|node| (node.id.clone(), json!(node.plugins)))
             .collect::<serde_json::Map<_, _>>();
         Ok(
-            json!({"graph":name,"definition":bundle.authoring_definition,"node_plugins":node_plugins}),
+            json!({"graph":name,"definition":bundle.authoring_definition,"node_plugins":node_plugins,
+            "plugin_activation":updates::activation(&bundle.snapshot)?}),
         )
     }
 
@@ -195,31 +224,6 @@ impl RunApplication {
             })
         });
         create_graph_bundle_from_catalog(&path, &definition, &self.catalog_root)?;
-        Ok(json!({"graph":name,"definition":definition}))
-    }
-
-    pub(crate) async fn update_graph(
-        &self,
-        name: &str,
-        definition: Value,
-    ) -> Result<Value, GraphManagementError> {
-        let _catalog_guard = self.graph_catalog_mutation_guard().await;
-        let path = self.graph_path_checked(name)?;
-        let _graph_lease = self.graph_admission_lease(&path)?;
-        let (path, current) = self.load_graph(name)?;
-        for (run_id, _) in self.runs_for_graph(&path)? {
-            self.reject_pending_session_delivery(&run_id)?;
-        }
-        let next = anchor_runtime::graph::GraphSnapshot::from_authoring(definition.clone())
-            .map_err(invalid)?;
-        if (!current.plugins.is_empty() || next.nodes.iter().any(|node| !node.plugins.is_empty()))
-            && self.has_unfinished_plugin_run(&path).await?
-        {
-            return Err(GraphManagementError::Conflict(
-                "cannot replace Plugin resources while this Graph has an unfinished Run".into(),
-            ));
-        }
-        write_graph_bundle_from_catalog(&path, &definition, &self.catalog_root)?;
         Ok(json!({"graph":name,"definition":definition}))
     }
 
@@ -273,16 +277,20 @@ fn resolve_graph_definition(
     catalog_root: &Path,
 ) -> Result<(GraphSnapshot, FilePluginCatalog, Vec<PluginBinding>), GraphError> {
     let snapshot = GraphSnapshot::from_authoring(definition.clone())?;
-    let ids = snapshot
+    let ids = snapshot_plugin_ids(&snapshot);
+    let catalog = FilePluginCatalog::new(crate::library_root(catalog_root));
+    let bindings = catalog.resolve(&ids)?;
+    Ok((snapshot, catalog, bindings))
+}
+
+fn snapshot_plugin_ids(snapshot: &GraphSnapshot) -> Vec<String> {
+    snapshot
         .nodes
         .iter()
         .flat_map(|node| node.plugins.iter().map(|reference| reference.id.clone()))
         .collect::<std::collections::BTreeSet<_>>()
         .into_iter()
-        .collect::<Vec<_>>();
-    let catalog = FilePluginCatalog::new(crate::library_root(catalog_root));
-    let bindings = catalog.resolve(&ids)?;
-    Ok((snapshot, catalog, bindings))
+        .collect()
 }
 
 fn create_graph_bundle_from_catalog(
@@ -378,12 +386,9 @@ fn write_graph_bundle_from_catalog(
     let (_, _catalog, bindings) =
         resolve_graph_definition(definition, catalog_root).map_err(invalid)?;
     std::fs::create_dir_all(path).map_err(storage)?;
-    // A bundle exported by the previous model carries copies of its Plugins. This
-    // export is exactly the fix, so a stale copy is removed rather than left to
-    // make the bundle unloadable.
-    if path.join("plugins").exists() {
-        std::fs::remove_dir_all(path.join("plugins")).map_err(storage)?;
-    }
+    // Do not mutate Plugin resources here. In a supported single-root deployment
+    // path/plugins is the canonical Library, not a stale bundle copy. Other
+    // embedded Plugin copies are rejected by load_graph before an update.
     let graph_tmp = path.join(".graph.json.tmp");
     let manifest_tmp = path.join(".manifest.json.tmp");
     let references = bindings
@@ -406,6 +411,12 @@ fn write_graph_bundle_from_catalog(
             .map_err(|failure| failure.to_string())?,
         )
         .map_err(|failure| failure.to_string())?;
+        std::fs::File::open(&graph_tmp)
+            .and_then(|file| file.sync_all())
+            .map_err(|failure| failure.to_string())?;
+        std::fs::File::open(&manifest_tmp)
+            .and_then(|file| file.sync_all())
+            .map_err(|failure| failure.to_string())?;
         Ok(())
     })();
     if let Err(message) = write_result {
@@ -415,5 +426,8 @@ fn write_graph_bundle_from_catalog(
     }
     std::fs::rename(&graph_tmp, path.join("graph.json")).map_err(storage)?;
     std::fs::rename(&manifest_tmp, path.join("manifest.json")).map_err(storage)?;
+    std::fs::File::open(path)
+        .and_then(|directory| directory.sync_all())
+        .map_err(storage)?;
     Ok(())
 }

@@ -793,7 +793,6 @@ impl Fixture {
                 self.catalog.clone(),
             ),
             graph_name: "pilot".into(),
-            catalog_root: self.catalog.clone(),
             library_root: self.catalog.clone(),
             data_root: self.data.clone(),
             workspace_root: self.workspace.clone(),
@@ -1326,7 +1325,6 @@ async fn stale_admission_and_delete_cannot_reach_a_recreated_session() {
     let tools = PilotTools {
         application: crate::application::RunApplication::new(data.clone(), root.path().to_owned()),
         graph_name: "pilot".into(),
-        catalog_root: root.path().to_owned(),
         library_root: root.path().to_owned(),
         data_root: data.clone(),
         workspace_root: workspace,

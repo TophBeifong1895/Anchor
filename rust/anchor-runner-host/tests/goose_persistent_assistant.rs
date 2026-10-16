@@ -27,7 +27,7 @@ use sha2::{Digest, Sha256};
 use std::{
     fs,
     io::Cursor,
-    os::unix::fs::MetadataExt,
+    os::unix::fs::{MetadataExt, PermissionsExt},
     path::{Path, PathBuf},
     thread,
     time::Duration,
@@ -68,13 +68,48 @@ fn host() -> Host {
 }
 
 fn host_for(definition: &Value) -> Host {
-    Host::new(definition)
+    let mut definition = definition.clone();
+    for node in definition["nodes"].as_array_mut().unwrap() {
+        if node.get("agent").is_some() {
+            node["plugins"] = json!(["wecom"]);
+        }
+    }
+    let host = Host::new(&definition)
         .default_runtime()
         .with_extra_environment([
             ("ANCHOR_WECOM_GRAPH", "fixture".to_owned()),
             ("ANCHOR_WECOM_REPLY_NODE", "assistant".to_owned()),
             ("ANCHOR_WECOM_USERS", format!("{ALICE},{BOB}")),
-        ])
+        ]);
+    // Deployment routing settings do not enable a channel by themselves. Give
+    // the real supervisor an isolated channel process; these tests submit HTTP
+    // events directly and verify Run lifecycles, not external WeCom delivery.
+    let bundle = host.base.root.path().join("bundle");
+    let plugin = host.base.root.path().join("plugins/wecom");
+    fs::create_dir_all(plugin.join("bin")).unwrap();
+    fs::write(
+        plugin.join("plugin.json"),
+        json!({"name":"Persistent assistant channel fixture"}).to_string(),
+    )
+    .unwrap();
+    fs::write(
+        plugin.join("channel.json"),
+        json!({
+            "platform":"wecom", "transport":"websocket", "entrypoint":"bin/gateway",
+            "required_environment":[]
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let gateway = plugin.join("bin/gateway");
+    fs::write(&gateway, "#!/bin/sh\nexec /bin/sleep 3600\n").unwrap();
+    fs::set_permissions(&gateway, fs::Permissions::from_mode(0o700)).unwrap();
+    fs::write(
+        bundle.join("manifest.json"),
+        json!({"format":1,"graph":"graph.json","plugins":[{"id":"wecom"}]}).to_string(),
+    )
+    .unwrap();
+    host
 }
 
 /// The opt-out path: an operator who disables automatic recovery keeps the
@@ -95,6 +130,14 @@ fn event(user: &str, identity: &str, text: &str) -> Value {
         "metadata":{"chat_type":"single","request_id":identity},
         "attachments":[]
     }})
+}
+
+fn group_event(user: &str, identity: &str, group: &str, text: &str) -> Value {
+    let mut body = event(user, identity, text);
+    body["event"]["conversation_id"] = json!(group);
+    body["event"]["reply_target"] = json!(group);
+    body["event"]["metadata"]["chat_type"] = json!("group");
+    body
 }
 
 fn finish(summary: &'static str) -> Step {
@@ -322,6 +365,160 @@ fn runs(host: &Host) -> Vec<Value> {
 
 #[test]
 #[ignore = "requires pinned real Goose binary and local Bubblewrap"]
+fn group_members_share_native_history_while_private_and_other_groups_are_isolated() {
+    let provider =
+        Provider::new(
+            "goose-persistent-group-context",
+            vec![
+        command("set -eu; printf shared-group-state > shared.txt; printf group-alice-tool")
+            .expect_request_contains("group-alice-input"),
+        finish("group-alice-reply").after("group-alice-tool"),
+        command("set -eu; test \"$(cat shared.txt)\" = shared-group-state; printf group-bob-tool")
+            .expect_request_contains("group-bob-input"),
+        finish("group-bob-reply").after("group-bob-tool"),
+        command("set -eu; test ! -e shared.txt; printf isolated-other-group-tool")
+            .expect_request_contains("isolated-other-group-input"),
+        finish("isolated-other-group-reply").after("isolated-other-group-tool"),
+        command("set -eu; test ! -e shared.txt; printf isolated-private-tool")
+            .expect_request_contains("isolated-private-input"),
+        finish("isolated-private-reply").after("isolated-private-tool"),
+    ],
+        );
+    let host = host();
+    let server = host.serve(&provider);
+    let first_event = group_event(
+        ALICE,
+        "group-alice-event",
+        "shared-group",
+        "group-alice-input",
+    );
+    let first = submit(&server, &first_event, "group-alice-reply");
+    let run = first["run"].as_str().unwrap();
+    waiting(&host, run, 1);
+    let alice_native = native_round(&host, &provider, run, 1);
+    let second_event = group_event(BOB, "group-bob-event", "shared-group", "group-bob-input");
+    let second = submit(&server, &second_event, "group-bob-reply");
+    assert_eq!(second["run"], first["run"]);
+    assert_eq!(second["session"], first["session"]);
+    let saved = waiting(&host, run, 2);
+    let bob_native = native_round(&host, &provider, run, 2);
+    assert_eq!(bob_native["session_id"], alice_native["session_id"]);
+    assert_eq!(
+        bob_native["conversation_scope"],
+        alice_native["conversation_scope"]
+    );
+    let inputs = &saved["results"]["wait_input"];
+    assert_eq!(
+        inputs[0]["completion"]["output"]["channel"]["sender_id"],
+        ALICE
+    );
+    assert_eq!(
+        inputs[1]["completion"]["output"]["channel"]["sender_id"],
+        BOB
+    );
+    assert_eq!(
+        inputs[1]["completion"]["output"]["channel"]["conversation_kind"],
+        "group"
+    );
+    let shared_prompt = provider.requests()[2]["messages"].to_string();
+    for required in [
+        "group-alice-input",
+        "group-alice-tool",
+        "group-bob-input",
+        ALICE,
+        BOB,
+    ] {
+        assert!(
+            shared_prompt.contains(required),
+            "shared native history omitted {required}"
+        );
+    }
+    assert_eq!(submit(&server, &second_event, "group-bob-reply"), second);
+    idle(&provider, 4);
+    let mut spoofed = second_event.clone();
+    spoofed["event"]["sender_id"] = json!(ALICE);
+    let (status, conflict) = server.request("POST", EVENTS, Some(&spoofed));
+    assert_eq!(status, 409, "{conflict}");
+    let denied = group_event(
+        "denied-group-member",
+        "denied-event",
+        "shared-group",
+        "denied input",
+    );
+    let (status, rejected) = server.request("POST", EVENTS, Some(&denied));
+    assert_eq!(status, 403, "{rejected}");
+    idle(&provider, 4);
+
+    let other_event = group_event(
+        ALICE,
+        "other-group-event",
+        "other-group",
+        "isolated-other-group-input",
+    );
+    let other = submit(&server, &other_event, "isolated-other-group-reply");
+    let other_run = other["run"].as_str().unwrap();
+    waiting(&host, other_run, 1);
+    let other_native = native_round(&host, &provider, other_run, 1);
+    let mut private_event = event(BOB, "private-bob-event", "isolated-private-input");
+    private_event["event"]["conversation_id"] = json!("shared-group");
+    private_event["event"]["reply_target"] = json!("shared-group");
+    let private = submit(&server, &private_event, "isolated-private-reply");
+    let private_run = private["run"].as_str().unwrap();
+    waiting(&host, private_run, 1);
+    let private_native = native_round(&host, &provider, private_run, 1);
+    assert_ne!(other["session"], first["session"]);
+    assert_ne!(private["session"], first["session"]);
+    assert_ne!(private["session"], other["session"]);
+    // Native session ids are local to each Goose conversation directory.
+    assert_ne!(
+        other_native["conversation_scope"],
+        alice_native["conversation_scope"]
+    );
+    assert_ne!(
+        private_native["conversation_scope"],
+        alice_native["conversation_scope"]
+    );
+    assert_ne!(
+        private_native["conversation_scope"],
+        other_native["conversation_scope"]
+    );
+    for index in [4, 6] {
+        let prompt = provider.requests()[index]["messages"].to_string();
+        for secret in [
+            "group-alice-input",
+            "group-bob-input",
+            "group-alice-tool",
+            "shared-group-state",
+        ] {
+            assert!(
+                !prompt.contains(secret),
+                "group history leaked into isolated prompt: {secret}"
+            );
+        }
+    }
+    assert_eq!(runs(&host).len(), 3);
+    idle(&provider, 8);
+    let stopped = [
+        stop(&server, &provider, run),
+        stop(&server, &provider, other_run),
+        stop(&server, &provider, private_run),
+    ];
+    evidence(
+        &host,
+        &provider,
+        run,
+        json!({
+            "case_source":CASE_SOURCE,"responses":[first,second,other,private],
+            "same_group_same_run_and_native_session":true,"real_actor_per_turn":true,
+            "shared_workspace_checked_by_actual_tool":true,"private_and_other_group_isolated":true,
+            "isolated_native_facts":[other_native,private_native],
+            "spoofed_duplicate_actor":conflict,"denied_member":rejected,"stopped":stopped
+        }),
+    );
+}
+
+#[test]
+#[ignore = "requires pinned real Goose binary and local Bubblewrap"]
 fn two_turns_reuse_run_workspace_and_native_session_without_mutating_fs2_snapshots() {
     let provider = Provider::new(
         "goose-persistent-assistant-two-turns",
@@ -329,11 +526,9 @@ fn two_turns_reuse_run_workspace_and_native_session_without_mutating_fs2_snapsho
             command("set -eu; test ! -e state.txt; pwd > cwd.txt; printf first > state.txt; printf first > first.txt; printf turn-one-written")
                 .expect_request_contains("persistent-first-input"),
             finish("persistent-first-reply").after("turn-one-written"),
-            Step::text("first persistent turn finished"),
             command("set -eu; test \"$(cat state.txt)\" = first; test \"$(cat first.txt)\" = first; test \"$(pwd)\" = \"$(cat cwd.txt)\"; printf second > state.txt; printf second > second.txt; printf turn-two-updated")
                 .expect_request_contains("persistent-second-input"),
             finish("persistent-second-reply").after("turn-two-updated"),
-            Step::text("second persistent turn finished"),
         ],
     );
     let host = host();
@@ -356,10 +551,10 @@ fn two_turns_reuse_run_workspace_and_native_session_without_mutating_fs2_snapsho
         b"first"
     );
     let first_native = native_round(&host, &provider, run, 1);
-    idle(&provider, 3);
+    idle(&provider, 2);
     let replay = submit(&server, &first_event, "persistent-first-reply");
     assert_eq!(replay, first);
-    idle(&provider, 3);
+    idle(&provider, 2);
 
     let second_event = event(
         ALICE,
@@ -395,12 +590,12 @@ fn two_turns_reuse_run_workspace_and_native_session_without_mutating_fs2_snapsho
     goose::tool_definition(&requests[0], "anchor_run").unwrap();
     goose::tool_definition(&requests[1], "final_result").unwrap();
     assert!(
-        requests[3]["messages"]
+        requests[2]["messages"]
             .to_string()
             .contains("persistent-first-input")
     );
     assert!(
-        requests[3]["messages"]
+        requests[2]["messages"]
             .to_string()
             .contains("turn-one-written")
     );
@@ -408,7 +603,7 @@ fn two_turns_reuse_run_workspace_and_native_session_without_mutating_fs2_snapsho
         submit(&server, &second_event, "persistent-second-reply"),
         second
     );
-    idle(&provider, 6);
+    idle(&provider, 4);
     let stopped = stop(&server, &provider, run);
     evidence(
         &host,
@@ -437,7 +632,6 @@ fn new_input_interrupts_gated_execution_suppresses_late_reply_and_retains_uncomm
             command("set -eu; test \"$(cat draft.txt)\" = uncommitted-draft; test ! -e resumed.txt; printf inspected > resumed.txt; printf retained-draft-inspected")
                 .expect_request_contains("persistent-replacement-input").gated(&new_gate),
             finish("replacement-reply-after-inspection").after("retained-draft-inspected"),
-            Step::text("replacement persistent turn finished"),
         ],
     );
     let host = host();
@@ -547,7 +741,7 @@ fn new_input_interrupts_gated_execution_suppresses_late_reply_and_retains_uncomm
         submit(&server, &second_event, "replacement-reply-after-inspection"),
         replacement
     );
-    idle(&provider, 5);
+    idle(&provider, 4);
     let stopped = stop(&server, &provider, run);
     evidence(
         &host,
@@ -575,13 +769,10 @@ fn concurrent_users_keep_separate_runs_workspaces_and_native_histories() {
             command("set -eu; test ! -e owner.txt; printf bob > owner.txt; printf bob-first-workspace")
                 .expect_request_contains("bob-private-first-input").gated(&bob_gate),
             finish("alice-private-first-reply").after("alice-first-workspace"),
-            Step::text("alice persistent turn finished"),
             finish("bob-private-first-reply").after("bob-first-workspace"),
-            Step::text("bob persistent turn finished"),
             command("set -eu; test \"$(cat owner.txt)\" = alice; printf continued > continued.txt; printf alice-workspace-continued")
                 .expect_request_contains("alice-private-followup-input"),
             finish("alice-private-followup-reply").after("alice-workspace-continued"),
-            Step::text("alice persistent followup finished"),
         ],
     );
     let host = host();
@@ -613,7 +804,7 @@ fn concurrent_users_keep_separate_runs_workspaces_and_native_histories() {
         alice_gate.open();
         let alice = alice_request.join().unwrap();
         waiting(&host, alice["run"].as_str().unwrap(), 1);
-        assert_eq!(provider.requests().len(), 4);
+        assert_eq!(provider.requests().len(), 3);
         bob_gate.open();
         (alice, bob_request.join().unwrap())
     });
@@ -676,12 +867,12 @@ fn concurrent_users_keep_separate_runs_workspaces_and_native_histories() {
         alice_native["conversation_scope"]
     );
     assert!(
-        provider.requests()[6]["messages"]
+        provider.requests()[4]["messages"]
             .to_string()
             .contains("alice-private-first-input")
     );
     assert!(
-        !provider.requests()[6]["messages"]
+        !provider.requests()[4]["messages"]
             .to_string()
             .contains("bob-private")
     );
@@ -689,7 +880,7 @@ fn concurrent_users_keep_separate_runs_workspaces_and_native_histories() {
     assert_eq!(snapshot_inventory(&bob_artifact), bob_inventory);
     assert_eq!(waiting(&host, bob_run, 1)["results"], bob_saved["results"]);
     assert_eq!(submit(&server, &bob_event, "bob-private-first-reply"), bob);
-    idle(&provider, 9);
+    idle(&provider, 6);
     let alice_stopped = stop(&server, &provider, alice_run);
     let bob_stopped = stop(&server, &provider, bob_run);
     evidence(
@@ -724,11 +915,9 @@ fn idle_wait_pause_resume_dispatches_no_model_until_new_input_and_stop_exits() {
         command("set -eu; printf pause-seed > control.txt; printf pause-seed-written")
             .expect_request_contains("persistent-idle-control-first-input"),
         finish("persistent-idle-control-first-reply").after("pause-seed-written"),
-        Step::text("idle control first turn finished"),
         command("set -eu; test \"$(cat control.txt)\" = pause-seed; printf resumed > control.txt; printf resumed-input-inspected")
             .expect_request_contains("persistent-idle-control-second-input"),
         finish("persistent-idle-control-second-reply").after("resumed-input-inspected"),
-        Step::text("idle control second turn finished"),
     ]);
     let host = host();
     let server = host.serve(&provider);
@@ -741,19 +930,19 @@ fn idle_wait_pause_resume_dispatches_no_model_until_new_input_and_stop_exits() {
     let run = first["run"].as_str().unwrap();
     let before = waiting(&host, run, 1);
     let native = native_round(&host, &provider, run, 1);
-    idle(&provider, 3);
+    idle(&provider, 2);
     action(&server, run, "pause");
     let paused = server.wait_status(run, "paused");
     let paused_record = host.record(run);
     assert_eq!(paused_record["cursor"], before["cursor"]);
     assert_eq!(paused_record["results"], before["results"]);
-    idle(&provider, 3);
+    idle(&provider, 2);
     action(&server, run, "resume");
     let resumed = waiting(&host, run, 1);
     assert_eq!(resumed["cursor"], before["cursor"]);
     assert_eq!(resumed["results"], before["results"]);
     assert_eq!(host.native_fact(run, "assistant", 1), native);
-    idle(&provider, 3);
+    idle(&provider, 2);
     let second_event = event(
         ALICE,
         "persistent-idle-control-second",
@@ -775,7 +964,7 @@ fn idle_wait_pause_resume_dispatches_no_model_until_new_input_and_stop_exits() {
         fs::read(workspace(&host, run).join("control.txt")).unwrap(),
         b"resumed"
     );
-    idle(&provider, 6);
+    idle(&provider, 4);
     let stopped = stop(&server, &provider, run);
     evidence(
         &host,
@@ -799,7 +988,6 @@ fn host_restart_requires_explicit_resume_when_automatic_recovery_is_disabled() {
             command("set -eu; printf restart-seed > restart.txt; printf restart-seed-written")
                 .expect_request_contains("persistent-restart-first-input"),
             finish("persistent-restart-first-reply").after("restart-seed-written"),
-            Step::text("restart first turn finished"),
         ],
     );
     let host = host_without_auto_resume();
@@ -819,7 +1007,7 @@ fn host_restart_requires_explicit_resume_when_automatic_recovery_is_disabled() {
     let files = goose::file_inventory(&directory);
     let first_artifact = artifact(&host, &before, 1);
     let first_snapshot = snapshot_inventory(&first_artifact);
-    idle(&provider, 3);
+    idle(&provider, 2);
     server.kill();
     drop(server);
     fs::copy(
@@ -836,22 +1024,21 @@ fn host_restart_requires_explicit_resume_when_automatic_recovery_is_disabled() {
     assert_eq!(fs::metadata(&directory).unwrap().ino(), directory_identity);
     assert_eq!(goose::file_inventory(&directory), files);
     assert_eq!(host.native_conversation(run, "assistant", 1), history);
-    idle(&provider, 3);
+    idle(&provider, 2);
     assert_eq!(
         submit(&restarted, &first_event, "persistent-restart-first-reply"),
         first
     );
-    idle(&provider, 3);
+    idle(&provider, 2);
     action(&restarted, run, "resume");
     let resumed = waiting(&host, run, 1);
     assert_eq!(resumed["cursor"], before["cursor"]);
     assert_eq!(resumed["results"], before["results"]);
-    idle(&provider, 3);
+    idle(&provider, 2);
     provider.append(vec![
         command("set -eu; test \"$(cat restart.txt)\" = restart-seed; printf inspected > after-restart.txt; printf restart-workspace-inspected")
             .expect_request_contains("persistent-restart-second-input"),
         finish("persistent-restart-second-reply").after("restart-workspace-inspected"),
-        Step::text("restart second turn finished"),
     ]);
     let second_event = event(
         ALICE,
@@ -870,12 +1057,12 @@ fn host_restart_requires_explicit_resume_when_automatic_recovery_is_disabled() {
         native["conversation_scope"]
     );
     assert!(
-        provider.requests()[3]["messages"]
+        provider.requests()[2]["messages"]
             .to_string()
             .contains("persistent-restart-first-input")
     );
     assert!(
-        provider.requests()[3]["messages"]
+        provider.requests()[2]["messages"]
             .to_string()
             .contains("restart-seed-written")
     );
@@ -888,7 +1075,7 @@ fn host_restart_requires_explicit_resume_when_automatic_recovery_is_disabled() {
         fs::read(directory.join("after-restart.txt")).unwrap(),
         b"inspected"
     );
-    idle(&provider, 6);
+    idle(&provider, 4);
     let stopped = stop(&restarted, &provider, run);
     evidence(
         &host,
@@ -917,7 +1104,6 @@ fn host_restart_automatically_resumes_the_instance_with_its_workspace_and_sessio
             )
             .expect_request_contains("persistent-auto-resume-first-input"),
             finish("persistent-auto-resume-first-reply").after("auto-resume-seed-written"),
-            Step::text("auto resume first turn finished"),
         ],
     );
     let host = host();
@@ -939,7 +1125,7 @@ fn host_restart_automatically_resumes_the_instance_with_its_workspace_and_sessio
     );
     let first_artifact = artifact(&host, &before, 1);
     let first_snapshot = snapshot_inventory(&first_artifact);
-    idle(&provider, 3);
+    idle(&provider, 2);
 
     server.kill();
     drop(server);
@@ -976,10 +1162,10 @@ fn host_restart_automatically_resumes_the_instance_with_its_workspace_and_sessio
             && saved["cursor"]["key"]["invocation"] == 1
             && saved["results"].get("reply").is_none()
     });
-    idle(&provider, 3);
+    idle(&provider, 2);
 
     let sessions =
-        SessionStore::open(host.base.root.path().join("state/platform/sessions.sqlite")).unwrap();
+        SessionStore::open(host.base.state_root().join("platform/sessions.sqlite")).unwrap();
     let events = sessions.events("local", &session, 0).unwrap();
     let automatic = events
         .iter()
@@ -993,9 +1179,8 @@ fn host_restart_automatically_resumes_the_instance_with_its_workspace_and_sessio
         command("set -eu; test \"$(cat inherited.txt)\" = auto-resume-seed; printf inherited > continued.txt; printf auto-resume-workspace-inherited")
             .expect_request_contains("persistent-auto-resume-second-input"),
         finish("persistent-auto-resume-second-reply").after("auto-resume-workspace-inherited"),
-        Step::text("auto resume second turn finished"),
     ]);
-    idle(&provider, 3);
+    idle(&provider, 2);
     let second_event = event(
         ALICE,
         "persistent-auto-resume-second",
@@ -1041,11 +1226,11 @@ fn host_restart_automatically_resumes_the_instance_with_its_workspace_and_sessio
         "persistent-auto-resume-second-reply"
     );
     assert!(
-        provider.requests()[3]["messages"]
+        provider.requests()[2]["messages"]
             .to_string()
             .contains("persistent-auto-resume-first-input")
     );
-    idle(&provider, 6);
+    idle(&provider, 4);
     let stopped = stop(&restarted, &provider, &resumed);
     evidence(
         &host,
@@ -1090,7 +1275,7 @@ fn confirm_reply(
     let session = response["session"].as_str().unwrap();
     let inbound_id = inbound_identity(body);
     let sessions =
-        SessionStore::open(host.base.root.path().join("state/platform/sessions.sqlite")).unwrap();
+        SessionStore::open(host.base.state_root().join("platform/sessions.sqlite")).unwrap();
     let input = sessions
         .get_channel_inbound("local", session, &inbound_id)
         .unwrap();
@@ -1153,20 +1338,22 @@ fn confirm_reply(
 
 fn install_image_plugin(host: &Host) {
     let bundle = host.base.root.path().join("bundle");
-    let plugin = bundle.join("plugins/wecom");
+    let plugin = host.base.root.path().join("plugins/wecom");
     fs::create_dir_all(plugin.join("skills/channel")).unwrap();
     fs::write(plugin.join("plugin.json"), json!({
         "name":"WeCom reply-image fixture","description":"Resource-only authorized channel image tools; no real delivery.","skills":"./skills"
     }).to_string()).unwrap();
     fs::write(plugin.join("skills/channel/SKILL.md"), "---\nname: fixture-reply-image\ndescription: Prepare a turn-scoped reply image.\n---\nUse wecom_attach_image to prepare a validated workspace PNG. Do not send external messages.\n").unwrap();
-    let binding = FilePluginCatalog::new(&bundle)
+    let binding = FilePluginCatalog::new(host.base.root.path())
         .resolve(&["wecom".into()])
         .unwrap()
         .remove(0);
     assert!(binding.mcp_servers.is_empty());
-    fs::write(bundle.join("manifest.json"), json!({"format":1,"graph":"graph.json","plugins":[{
-        "id":binding.id,"digest":binding.digest,"resources":binding.resources,"mcp_servers":binding.mcp_servers
-    }]}).to_string()).unwrap();
+    fs::write(
+        bundle.join("manifest.json"),
+        json!({"format":1,"graph":"graph.json","plugins":[{"id":binding.id}]}).to_string(),
+    )
+    .unwrap();
 }
 
 fn reply_picture(picture: &Value) -> Value {
@@ -1201,11 +1388,9 @@ fn reply_images_are_bound_to_exact_turn_receipts_and_not_reused_by_text_only_tur
             )
             .after("red-image-created"),
             finish("persistent-red-reply").after("attached"),
-            Step::text("red reply turn finished"),
             command("set -eu; test -f outgoing.png; printf red-not-reattached")
                 .expect_request_contains("persistent-after-red-input"),
             finish("persistent-after-red-reply").after("red-not-reattached"),
-            Step::text("text-only turn after red finished"),
             command(&blue_command).expect_request_contains("persistent-blue-reply-input"),
             Step::tool(
                 "wecom_attach_image",
@@ -1213,11 +1398,9 @@ fn reply_images_are_bound_to_exact_turn_receipts_and_not_reused_by_text_only_tur
             )
             .after("blue-image-created"),
             finish("persistent-blue-reply").after("attached"),
-            Step::text("blue reply turn finished"),
             command("set -eu; test -f outgoing.png; printf blue-not-reattached")
                 .expect_request_contains("persistent-after-blue-input"),
             finish("persistent-after-blue-reply").after("blue-not-reattached"),
-            Step::text("text-only turn after blue finished"),
         ],
     );
     let mut definition = graph();
@@ -1306,7 +1489,7 @@ fn reply_images_are_bound_to_exact_turn_receipts_and_not_reused_by_text_only_tur
             *response
         );
     }
-    idle(&provider, 14);
+    idle(&provider, 10);
     let stopped = stop(&server, &provider, run);
     evidence(
         &host,
@@ -1371,12 +1554,10 @@ fn interrupted_file_is_readonly_in_pending_scope_until_replacement_reply_is_conf
                 .expect_request_contains("persistent-file-replacement-input")
                 .gated(&new_gate),
             finish("persistent-file-replacement-reply").after("pending-file-recovered"),
-            Step::text("pending file replacement finished"),
             command(&after_confirmation)
                 .expect_request_contains("persistent-after-file-confirmation-input"),
             finish("persistent-after-file-confirmation-reply")
                 .after("confirmed-pending-scope-removed"),
-            Step::text("confirmed pending file scope removed"),
         ]);
         let replacement_request = scope.spawn(|| {
             submit(
@@ -1453,7 +1634,7 @@ fn interrupted_file_is_readonly_in_pending_scope_until_replacement_reply_is_conf
         native["session_id"]
     );
     let next_confirmed = confirm_reply(&host, &server, &next_event, &next, 3, &[]);
-    idle(&provider, 8);
+    idle(&provider, 6);
     let stopped = stop(&server, &provider, run);
     evidence(
         &host,
@@ -1474,15 +1655,12 @@ fn retired_instance_rejects_resume_and_new_instance_seeds_workspace_and_native_s
         command("set -eu; printf committed-once > retirement-seed.txt; printf retirement-seed-written")
             .expect_request_contains("persistent-retirement-first-input"),
         finish("persistent-retirement-first-reply").after("retirement-seed-written"),
-        Step::text("retirement first turn finished"),
         command("set -eu; test \"$(cat retirement-seed.txt)\" = committed-once; printf updated > retirement-seed.txt; printf handoff-inspected > new-instance.txt; printf retired-workspace-seed-inspected")
             .expect_request_contains("persistent-retirement-new-instance-input"),
         finish("persistent-retirement-new-instance-reply").after("retired-workspace-seed-inspected"),
-        Step::text("new assistant instance seeded"),
         command("set -eu; test \"$(cat retirement-seed.txt)\" = updated; test \"$(cat new-instance.txt)\" = handoff-inspected; printf retained > followup.txt; printf seed-not-reapplied")
             .expect_request_contains("persistent-retirement-followup-input"),
         finish("persistent-retirement-followup-reply").after("seed-not-reapplied"),
-        Step::text("new assistant instance continued"),
     ]);
     let host = host();
     let server = host.serve(&provider);
@@ -1522,7 +1700,7 @@ fn retired_instance_rejects_resume_and_new_instance_seeds_workspace_and_native_s
     assert_eq!(status, 409, "{resume_rejection}");
     assert_eq!(host.native_fact(old_run, "assistant", 1), old_native);
     assert_eq!(snapshot_inventory(&old_artifact), old_snapshot);
-    idle(&provider, 3);
+    idle(&provider, 2);
 
     let next_event = event(
         ALICE,
@@ -1554,7 +1732,7 @@ fn retired_instance_rejects_resume_and_new_instance_seeds_workspace_and_native_s
     );
     assert_eq!(metadata["conversation"]["previous_run"], old_run);
     assert!(
-        provider.requests()[3]["messages"]
+        provider.requests()[2]["messages"]
             .to_string()
             .contains("persistent-retirement-first-input")
     );
@@ -1583,7 +1761,7 @@ fn retired_instance_rejects_resume_and_new_instance_seeds_workspace_and_native_s
     let (status, new_binding) = server.request("GET", &assistant_path, None);
     assert_eq!(status, 200, "{new_binding}");
     assert_eq!(new_binding["assistant"]["run_id"], run);
-    idle(&provider, 9);
+    idle(&provider, 6);
     let stopped = stop(&server, &provider, run);
     evidence(
         &host,
@@ -1631,15 +1809,12 @@ fn attachments_are_readonly_and_turn_scoped_while_native_history_keeps_distinct_
             command("set -eu; test \"$(cat /in/channel/notes.txt)\" = first-turn-attachment; test -f /in/channel/first.png; test ! -e /in/channel/second.png; if printf forbidden > /in/channel/notes.txt; then exit 91; fi; if printf forbidden > /in/channel/first.png; then exit 92; fi; cat /in/channel/notes.txt > saved-note.txt; printf first-image-checked")
                 .expect_request_contains("persistent-first-image-input"),
             finish("persistent-first-image-reply").after("first-image-checked"),
-            Step::text("first image turn finished"),
             command("set -eu; test ! -e /in/channel/notes.txt; test ! -e /in/channel/first.png; test ! -e /in/channel/second.png; test \"$(cat saved-note.txt)\" = first-turn-attachment; printf text-turn-no-attachments")
                 .expect_request_contains("persistent-text-only-input"),
             finish("persistent-text-only-reply").after("text-turn-no-attachments"),
-            Step::text("attachment-free turn finished"),
             command("set -eu; test \"$(cat /in/channel/notes.txt)\" = second-turn-attachment; test ! -e /in/channel/first.png; test -f /in/channel/second.png; test \"$(cat saved-note.txt)\" = first-turn-attachment; if printf forbidden > /in/channel/notes.txt; then exit 93; fi; if printf forbidden > /in/channel/second.png; then exit 94; fi; cat /in/channel/notes.txt > second-note.txt; printf second-image-checked")
                 .expect_request_contains("persistent-second-image-input"),
             finish("persistent-second-image-reply").after("second-image-checked"),
-            Step::text("second image turn finished"),
         ],
         "gpt-4o",
     );
@@ -1685,7 +1860,7 @@ fn attachments_are_readonly_and_turn_scoped_while_native_history_keeps_distinct_
             .is_empty()
     );
     assert_eq!(
-        prompt_images(&provider.requests()[3]),
+        prompt_images(&provider.requests()[2]),
         vec![first_url.clone()]
     );
     assert_eq!(
@@ -1712,7 +1887,7 @@ fn attachments_are_readonly_and_turn_scoped_while_native_history_keeps_distinct_
         native_round(&host, &provider, run, 3)["session_id"],
         first_native["session_id"]
     );
-    let images = prompt_images(&provider.requests()[6]);
+    let images = prompt_images(&provider.requests()[4]);
     assert_eq!(images, vec![first_url, second_url]);
     let committed = artifact(&host, &saved, 3);
     assert_eq!(
@@ -1728,7 +1903,7 @@ fn attachments_are_readonly_and_turn_scoped_while_native_history_keeps_distinct_
         submit(&server, &second_event, "persistent-second-image-reply"),
         second
     );
-    idle(&provider, 9);
+    idle(&provider, 6);
     let stopped = stop(&server, &provider, run);
     evidence(
         &host,
@@ -1739,6 +1914,75 @@ fn attachments_are_readonly_and_turn_scoped_while_native_history_keeps_distinct_
             "current_turn_attachments_only":true,"attachments_readonly":true,
             "same_run_and_native_session":true,"native_prompt_images":images,
             "old_fs2_snapshot_unchanged":true,"real_vision_model_requests":0,"stopped":stopped
+        }),
+    );
+}
+
+#[test]
+#[ignore = "requires pinned Goose and isolated Host fixture"]
+fn other_user_tools_do_not_replace_an_awaiting_completion_receipt() {
+    let alice_first = Gate::new();
+    let bob_first = Gate::new();
+    let alice_submit = Gate::new();
+    let provider = Provider::new(
+        "interleaved-user-receipts",
+        vec![
+            command("printf alice-observed")
+                .expect_request_contains("probe-alice-input")
+                .gated(&alice_first),
+            command("printf bob-observed")
+                .expect_request_contains("probe-bob-input")
+                .gated(&bob_first),
+            finish("probe-alice-reply")
+                .after("alice-observed")
+                .gated(&alice_submit),
+            finish("probe-bob-reply").after("bob-observed"),
+        ],
+    );
+    let host = host();
+    let server = goose::serve_gated(&host, &provider);
+    let alice_event = event(ALICE, "probe-alice-event", "probe-alice-input");
+    let bob_event = event(BOB, "probe-bob-event", "probe-bob-input");
+    let (alice, bob) = thread::scope(|scope| {
+        let alice_request = scope.spawn(|| submit(&server, &alice_event, "probe-alice-reply"));
+        entered(&provider, 1, &alice_first, &alice_request);
+        let bob_request = scope.spawn(|| submit(&server, &bob_event, "probe-bob-reply"));
+        entered(&provider, 2, &bob_first, &bob_request);
+        alice_first.open();
+        entered(&provider, 3, &alice_submit, &alice_request);
+        // Alice has observed her receipt; hold her model's completion while
+        // Bob performs his tool and commits a complete reply on the same Host.
+        bob_first.open();
+        let bob = bob_request.join().unwrap();
+        waiting(&host, bob["run"].as_str().unwrap(), 1);
+        assert!(!alice_request.is_finished());
+        assert_eq!(provider.requests().len(), 4);
+        alice_submit.open();
+        (alice_request.join().unwrap(), bob)
+    });
+    let alice_run = alice["run"].as_str().unwrap();
+    let bob_run = bob["run"].as_str().unwrap();
+    waiting(&host, alice_run, 1);
+    let alice_native = native_round(&host, &provider, alice_run, 1);
+    let bob_native = native_round(&host, &provider, bob_run, 1);
+    assert_ne!(
+        alice_native["conversation_scope"],
+        bob_native["conversation_scope"]
+    );
+    idle(&provider, 4);
+    stop(&server, &provider, alice_run);
+    stop(&server, &provider, bob_run);
+    evidence(
+        &host,
+        &provider,
+        alice_run,
+        json!({
+            "case_source":CASE_SOURCE,
+            "alice":alice, "bob":bob,
+            "same_host_concurrent_users":true,
+            "order":["alice_tool_result", "bob_tool_result", "bob_completion", "alice_completion"],
+            "both_completions_accepted":true,
+            "other_user_did_not_replace_receipt":true
         }),
     );
 }

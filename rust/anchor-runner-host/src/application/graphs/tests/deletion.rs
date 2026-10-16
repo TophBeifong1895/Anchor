@@ -74,6 +74,7 @@ async fn assert_conflict_unchanged(
 
 #[tokio::test]
 async fn unchanged_snapshot_survives_reopen_and_reuses_terminal_run_cleanup() {
+    let _env_guard = crate::PROCESS_ENV_LOCK.lock().await;
     let (root, application) = fixture();
     application.create_graph("other", None).await.unwrap();
     save_run(&application, "fixture", "target-run", RunStatus::Completed);
@@ -127,6 +128,7 @@ async fn unchanged_snapshot_survives_reopen_and_reuses_terminal_run_cleanup() {
 
 #[tokio::test]
 async fn definition_and_layout_changes_refuse_the_old_confirmation() {
+    let _env_guard = crate::PROCESS_ENV_LOCK.lock().await;
     let (root, application) = fixture();
     for replacement in [definition("changed"), {
         let mut replacement = definition("changed");
@@ -153,6 +155,7 @@ async fn definition_and_layout_changes_refuse_the_old_confirmation() {
 
 #[tokio::test]
 async fn definition_changed_then_restored_still_refuses_the_old_confirmation() {
+    let _env_guard = crate::PROCESS_ENV_LOCK.lock().await;
     let (root, application) = fixture();
     let expected = application
         .graph_delete_precondition("fixture")
@@ -177,6 +180,7 @@ async fn definition_changed_then_restored_still_refuses_the_old_confirmation() {
 
 #[tokio::test]
 async fn deletion_and_identical_recreation_refuse_the_old_confirmation() {
+    let _env_guard = crate::PROCESS_ENV_LOCK.lock().await;
     let (root, application) = fixture();
     application.create_graph("target", None).await.unwrap();
     let expected = application
@@ -362,6 +366,7 @@ async fn malformed_tokens_and_names_are_rejected_without_deleting() {
 
 #[tokio::test]
 async fn tokens_are_bound_to_target_name_path_and_configured_alias() {
+    let _env_guard = crate::PROCESS_ENV_LOCK.lock().await;
     let (root, application) = fixture();
     application
         .create_graph("other", Some(definition("fixture")))
@@ -544,13 +549,13 @@ async fn guarded_delete_rechecks_active_execution_even_with_a_terminal_record() 
     save_run(&application, "fixture", "active", RunStatus::Completed);
     application.active.lock().await.insert(
         "active".into(),
-        ActiveRun {
-            graph_path: application.graph_path_checked("fixture").unwrap(),
-            control: crate::HostControl {
+        ActiveRun::new(
+            application.graph_path_checked("fixture").unwrap(),
+            crate::HostControl {
                 cancellation: Arc::new(AtomicBool::new(false)),
                 pause: Arc::new(AtomicBool::new(false)),
             },
-        },
+        ),
     );
     assert_conflict_unchanged(
         &application,
@@ -617,6 +622,7 @@ async fn permission_changes_invalidate_the_snapshot_without_expanding_authority(
 
 #[tokio::test]
 async fn guarded_delete_rechecks_current_callers_created_after_the_snapshot() {
+    let _env_guard = crate::PROCESS_ENV_LOCK.lock().await;
     let (root, application) = fixture();
     let expected = application
         .graph_delete_precondition("fixture")
@@ -638,6 +644,7 @@ async fn guarded_delete_rechecks_current_callers_created_after_the_snapshot() {
 
 #[tokio::test]
 async fn guarded_delete_preserves_unfinished_callers_frozen_in_run_snapshots() {
+    let _env_guard = crate::PROCESS_ENV_LOCK.lock().await;
     let (root, application) = fixture();
     application
         .create_graph("caller", Some(caller_definition("fixture")))
@@ -765,6 +772,7 @@ async fn guarded_delete_holds_the_graph_lease_until_cleanup_finishes() {
 
 #[tokio::test]
 async fn catalog_gate_serializes_snapshot_and_guarded_delete_with_reference_mutations() {
+    let _env_guard = crate::PROCESS_ENV_LOCK.lock().await;
     let (root, application) = fixture();
     application.create_graph("caller", None).await.unwrap();
     let expected = application
@@ -824,6 +832,7 @@ async fn concurrent_confirmed_deletes_have_only_one_success() {
 
 #[tokio::test]
 async fn snapshots_wait_for_the_catalog_gate_and_capture_the_published_definition() {
+    let _env_guard = crate::PROCESS_ENV_LOCK.lock().await;
     let (_root, application) = fixture();
     let previous = application
         .graph_delete_precondition("fixture")
@@ -914,6 +923,7 @@ async fn a_graph_that_cannot_be_read_refuses_the_delete_and_is_named() {
 /// A completely readable catalog with a caller still refuses by name.
 #[tokio::test]
 async fn a_readable_caller_still_refuses_the_delete_by_name() {
+    let _env_guard = crate::PROCESS_ENV_LOCK.lock().await;
     let (root, application) = fixture();
     let workspace_root = root.path().join("workspaces");
     let path = application.graph_path_checked("fixture").unwrap();

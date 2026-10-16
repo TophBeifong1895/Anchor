@@ -15,6 +15,7 @@ fn request(inbound: &str, conversation: &str) -> ChannelInboundRequest {
     ChannelInboundRequest {
         inbound_id: inbound.into(),
         identity: ChannelIdentity {
+            conversation_kind: Default::default(),
             source: "wecom".into(),
             account: Some("corp-a".into()),
             conversation_id: conversation.into(),

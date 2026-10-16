@@ -212,7 +212,6 @@ pub(super) async fn publish_and_continue(
     let tools = crate::pilot_tools::PilotTools {
         application: state.application.clone(),
         graph_name: state.graph_name.clone(),
-        catalog_root: state.catalog_root.clone(),
         library_root: library_root(&state.catalog_root),
         data_root: state.data_root.clone(),
         workspace_root: state.workspace_root.clone(),

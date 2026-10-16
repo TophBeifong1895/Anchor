@@ -1,11 +1,11 @@
 use super::*;
 use crate::resource_read::open_resource;
-use anchor_graph_host::{FilePluginCatalog, PluginDefinition};
+use anchor_graph_host::{FilePluginCatalog, PluginDefinition, PluginMetadata};
 use anchor_runtime::graph::GraphError;
 use std::io::Read;
 use std::path::Path;
 
-fn plugin_record(definition: &PluginDefinition) -> Value {
+fn plugin_record(definition: &PluginMetadata) -> Value {
     let mcp_servers = definition
         .mcp_servers
         .iter()
@@ -35,7 +35,7 @@ fn plugin_record(definition: &PluginDefinition) -> Value {
         "skills": definition.skills,
         "unsupported": definition.unsupported,
         "mcpServers": mcp_servers,
-        "requiresNetwork": crate::plugin_network::requires_network(definition),
+        "requiresNetwork": crate::plugin_network::metadata_requires_network(definition),
         "channels": definition.channels.iter().map(|channel| json!({
             "plugin": channel.plugin,
             "platform": channel.platform,
@@ -45,7 +45,6 @@ fn plugin_record(definition: &PluginDefinition) -> Value {
             "description": channel.description,
             "sdk": channel.sdk,
         })).collect::<Vec<_>>(),
-        "digest": definition.digest,
         "available": true,
     })
 }
@@ -62,55 +61,61 @@ fn unavailable_record(id: String, error: impl ToString) -> Value {
     })
 }
 
+#[allow(clippy::result_large_err)]
 pub(super) async fn plugin_catalog(
     State(state): State<ApiState>,
 ) -> Result<Json<Value>, HttpResponse> {
+    blocking(move || plugin_catalog_rows(&state).map(|records| Json(json!({"plugins": records}))))
+        .await
+}
+
+#[allow(clippy::result_large_err)]
+fn plugin_catalog_rows(state: &ApiState) -> Result<Vec<Value>, HttpResponse> {
     let root = crate::library_root(&state.catalog_root);
-    let catalog = FilePluginCatalog::new(&root);
-    let entries = match std::fs::read_dir(root.join("plugins")) {
-        Ok(entries) => entries,
-        Err(failure) if failure.kind() == std::io::ErrorKind::NotFound => {
-            return Ok(Json(json!({"plugins": []})));
-        }
-        Err(_) => {
-            return Err(error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "cannot read Plugin catalog",
-            ));
-        }
-    };
-    let mut records = Vec::new();
-    for entry in entries {
-        let entry = entry.map_err(|_| {
-            error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "cannot read Plugin catalog",
-            )
-        })?;
-        let name = entry.file_name().to_string_lossy().into_owned();
-        if name.starts_with('.') {
-            continue;
-        }
-        records.push(match catalog.definition(&name) {
-            Ok(definition) => plugin_record(&definition),
-            Err(failure) => unavailable_record(name, public_catalog_error(failure)),
-        });
-    }
-    records.sort_by(|left, right| left["id"].as_str().cmp(&right["id"].as_str()));
-    Ok(Json(json!({"plugins": records})))
+    let catalog = crate::application::plugins::catalog::InstalledPluginCatalog::read(&root)
+        .map_err(application_error)?;
+    Ok(catalog
+        .entries
+        .iter()
+        .map(|entry| {
+            let mut record = entry
+                .metadata
+                .as_ref()
+                .map(plugin_record)
+                .unwrap_or_else(|| {
+                    unavailable_record(
+                        entry.id.clone(),
+                        crate::application::plugins::catalog::INVALID_DEFINITION,
+                    )
+                });
+            entry.project_health(&mut record);
+            record
+        })
+        .collect())
 }
 
 pub(super) async fn plugin_detail(
     State(state): State<ApiState>,
     AxumPath(plugin): AxumPath<String>,
 ) -> Result<Json<Value>, HttpResponse> {
-    let catalog = FilePluginCatalog::new(crate::library_root(&state.catalog_root));
-    let definition = catalog
-        .definition(&plugin)
-        .map_err(|failure| error(StatusCode::BAD_REQUEST, public_catalog_error(failure)))?;
+    let catalog = crate::application::plugins::catalog::InstalledPluginCatalog::read_selected(
+        &crate::library_root(&state.catalog_root),
+        &plugin,
+    )
+    .map_err(application_error)?;
+    let definition = catalog.definition(&plugin).map_err(|_| {
+        error(
+            StatusCode::BAD_REQUEST,
+            crate::application::plugins::catalog::INVALID_DEFINITION,
+        )
+    })?;
     let instructions = instructions(&definition)
         .map_err(|_| error(StatusCode::BAD_REQUEST, "cannot read Plugin instructions"))?;
-    let mut record = plugin_record(&definition);
+    let mut record = plugin_record(&definition.metadata());
+    if let Some(entry) = catalog.entries.iter().find(|entry| entry.id == plugin) {
+        entry.project_health(&mut record);
+    }
+    record["digest"] = Value::String(definition.digest);
     record["instructions"] = Value::String(instructions);
     Ok(Json(record))
 }

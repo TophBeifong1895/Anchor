@@ -37,7 +37,7 @@ impl HostIoResolver {
         // A handed-over instance already received its predecessor's live scene
         // inside the preparation lock. Copying the committed mount over it here
         // would replace newer uncommitted files with older committed bytes.
-        if assistant::handover_workspace_source(root, key)?.is_some() {
+        if assistant::handover_workspace_source(root, key, &self.artifacts)?.is_some() {
             return Ok(());
         }
         let fact_path = root
@@ -280,6 +280,15 @@ impl HostNodes {
                             )
                             .map_err(graph_error)?;
                         }
+                        self.io_resolver
+                            .freeze_assistant_plugins(
+                                &request.key,
+                                &input.relation.turn_id,
+                                true,
+                                request.cancellation.clone(),
+                            )
+                            .await
+                            .map_err(graph_error)?;
                         let selected = assistant::attachment_metadata(
                             root,
                             &crate::application::metadata::load(root, &request.key.run_id)
@@ -305,7 +314,7 @@ impl HostNodes {
                             for file in &mut attachments.files {
                                 file.path = format!("/in/channel-pending/{}/{}", message.relation.turn_id, file.name);
                             }
-                            json!({"message":message.request.text,"turn":message.relation.turn_id,"attachments":attachments})
+                            json!({"message":message.request.text,"channel":message.request.identity,"turn":message.relation.turn_id,"attachments":attachments})
                         }).collect::<Vec<_>>();
                         let output = json!({
                             "message":input.request.text,

@@ -252,11 +252,33 @@ impl SessionStore {
     }
 
     pub fn interrupt_running(&self) -> Result<usize, SessionError> {
+        self.interrupt_running_except_assistants(&[])
+    }
+
+    /// Interrupt detached Turns at startup while preserving the claimed input
+    /// of each current assistant Run the Host verified can be recovered.
+    /// Unclaimed, orphaned and one-shot channel Turns retain ordinary recovery.
+    pub fn interrupt_running_except_assistants(
+        &self,
+        recoverable_runs: &[String],
+    ) -> Result<usize, SessionError> {
+        let recoverable = recoverable_runs
+            .iter()
+            .collect::<std::collections::BTreeSet<_>>();
         let mut connection = self.lock()?;
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let running = {
             let mut statement = transaction.prepare(
-                "SELECT sessions.owner, turns.session_id, turns.id FROM turns
+                "SELECT sessions.owner, turns.session_id, turns.id,
+                        (SELECT assistant.run_id FROM channel_assistant_inputs input
+                         JOIN channel_assistants assistant
+                           ON assistant.session_id = input.session_id AND assistant.run_id = input.run_id
+                         JOIN channel_inbounds inbound
+                           ON inbound.session_id = input.session_id AND inbound.turn_id = input.turn_id
+                         WHERE input.session_id = turns.session_id AND input.turn_id = turns.id
+                           AND assistant.retired = 0 AND inbound.run_id = assistant.run_id
+                           AND inbound.superseded_by_turn_id IS NULL)
+                 FROM turns
                  JOIN sessions ON sessions.id = turns.session_id WHERE turns.status = 'running'
                  ORDER BY turns.session_id",
             )?;
@@ -266,9 +288,14 @@ impl SessionStore {
                         row.get::<_, String>(0)?,
                         row.get::<_, String>(1)?,
                         row.get::<_, String>(2)?,
+                        row.get::<_, Option<String>>(3)?,
                     ))
                 })?
                 .collect::<Result<Vec<_>, _>>()?
+                .into_iter()
+                .filter(|(_, _, _, run)| !run.as_ref().is_some_and(|run| recoverable.contains(run)))
+                .map(|(owner, session, turn, _)| (owner, session, turn))
+                .collect::<Vec<_>>()
         };
         for (owner, session, turn) in &running {
             let mut snapshot = store::read_session(&transaction, owner, session)?;

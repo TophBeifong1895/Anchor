@@ -119,6 +119,103 @@ fn unfinished_predecessor_session_saved_before_index_is_not_replaced() {
 }
 
 #[test]
+fn next_invocation_can_change_model_but_recovery_keeps_its_selected_model() {
+    let fixture = Fixture::new();
+    let mut first = fact("first");
+    first.session_id = Some("native-session".into());
+    let mut scope = fixture.open(&first.key, None, &[]).unwrap();
+    fixture.save(&first);
+    scope.claim(&first).unwrap();
+    drop(scope);
+    let mut second = fact("second");
+    second.model_binding = Some("new-model".into());
+    second.session_id = first.session_id.clone();
+    let open = |current: Option<&Fact>, model: &str| {
+        ConversationScope::open(
+            &fixture.process,
+            HINT,
+            &second.key,
+            &fixture.facts,
+            "binary",
+            model,
+            current,
+            std::slice::from_ref(&first.key),
+        )
+    };
+    let scope = open(None, "new-model").unwrap();
+    assert_eq!(scope.session_id(), first.session_id);
+    assert_eq!(scope.previous_observation, first.tool_observation);
+    drop(scope);
+    // A crash after the new invocation fact, before the scope index update,
+    // preserves the new selection and the existing native history.
+    fixture.save(&second);
+    let mut recovered = open(Some(&second), "new-model").unwrap();
+    recovered.claim(&second).unwrap();
+    drop(recovered);
+    assert!(open(Some(&second), "third-model").is_err());
+    let recovered = open(Some(&second), "new-model").unwrap();
+    assert_eq!(recovered.session_id(), first.session_id);
+}
+
+#[test]
+fn reviewed_provider_patches_load_old_history_only_for_a_new_invocation() {
+    for (old, new) in [
+        (revision::BEFORE_REASONING_FIX, revision::WITH_REASONING_FIX),
+        (revision::BEFORE_REASONING_FIX, revision::WITH_MULTICALL_FIX),
+        (revision::WITH_REASONING_FIX, revision::WITH_MULTICALL_FIX),
+        (
+            revision::BEFORE_REASONING_FIX,
+            revision::WITH_COMPLETION_FIX,
+        ),
+        (revision::WITH_REASONING_FIX, revision::WITH_COMPLETION_FIX),
+        (revision::WITH_MULTICALL_FIX, revision::WITH_COMPLETION_FIX),
+    ] {
+        let fixture = Fixture::new();
+        let mut first = fact("first");
+        first.binary_sha256 = old.into();
+        first.session_id = Some("retained-native-session".into());
+        let open =
+            |key: &InvocationKey, current: Option<&Fact>, previous: &[InvocationKey], binary| {
+                ConversationScope::open(
+                    &fixture.process,
+                    HINT,
+                    key,
+                    &fixture.facts,
+                    binary,
+                    "model",
+                    current,
+                    previous,
+                )
+            };
+        let mut scope = open(&first.key, None, &[], old).unwrap();
+        fixture.save(&first);
+        scope.claim(&first).unwrap();
+        drop(scope);
+        // A failed/unfinished invocation retains its exact executable identity.
+        assert!(open(&first.key, Some(&first), &[], new).is_err());
+        assert!(open(&key("second"), None, &[first.key.clone()], "unreviewed").is_err());
+        let scope = open(&key("second"), None, &[first.key.clone()], new).unwrap();
+        assert_eq!(scope.session_id(), first.session_id);
+        assert_eq!(scope.previous_observation, first.tool_observation);
+        drop(scope);
+        let mut second = fact("second");
+        second.binary_sha256 = new.into();
+        second.session_id = first.session_id.clone();
+        fixture.save(&second);
+        // Crash after the new fact but before updating the scope index is recoverable.
+        let mut scope = open(&second.key, Some(&second), &[first.key.clone()], new).unwrap();
+        scope.claim(&second).unwrap();
+        drop(scope);
+        let scope = open(&second.key, Some(&second), &[first.key.clone()], new).unwrap();
+        assert_eq!(scope.binding.binary_sha256, new);
+        drop(scope);
+        assert!(open(&key("third"), None, &[second.key.clone()], old).is_err());
+        let scope = open(&key("third"), None, &[second.key], new).unwrap();
+        assert_eq!(scope.session_id(), first.session_id);
+    }
+}
+
+#[test]
 fn index_claim_without_fact_and_missing_binding_fail_closed() {
     let fixture = Fixture::new();
     let first = fact("first");

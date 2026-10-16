@@ -23,6 +23,14 @@ struct WorkspaceOwner {
     directories: Vec<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WorkspaceHandover {
+    format: u32,
+    source: InvocationKey,
+    target: InvocationKey,
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct InterruptedWorkspace {
@@ -33,6 +41,81 @@ struct InterruptedWorkspace {
 }
 
 impl HostArtifacts {
+    /// Observe the last initialized owner without inventing a prepared workspace
+    /// from a Runner invocation counter. No paths supplied by a Graph are read.
+    pub(crate) fn initialized_workspace_owner(
+        &self,
+        key: &InvocationKey,
+    ) -> Result<Option<InvocationKey>, GraphError> {
+        validate_key(key)?;
+        let workspace = self.stable_workspace_path(key);
+        if !path_exists(&self.binding_state_path(key))? {
+            if path_exists(&workspace)? {
+                return Err(corrupt("node workspace binding is missing"));
+            }
+            return Ok(None);
+        }
+        self.require_binding(key)?;
+        match self.read_workspace_owner(key)? {
+            Some(owner) if owner.initialized => {
+                require_directory(&workspace)?;
+                Ok(Some(owner.key))
+            }
+            Some(_) => Ok(None),
+            None if path_exists(&workspace)? => {
+                Err(corrupt("node workspace has no initialization fact"))
+            }
+            None => Ok(None),
+        }
+    }
+
+    /// The Host has separately proved a same-session handover. Persist exact
+    /// compatible Graph identities before generic preparation copies its scene;
+    /// ordinary cross-Graph workspace seeding stays rejected.
+    pub(crate) fn prepare_workspace_from_handover(
+        &self,
+        key: &InvocationKey,
+        inputs: &[CommitRef],
+        source: &InvocationKey,
+        source_graph: &anchor_runtime::graph::GraphSnapshot,
+        target_graph: &anchor_runtime::graph::GraphSnapshot,
+    ) -> Result<PathBuf, GraphError> {
+        if source_graph.digest()? != source.graph_digest
+            || target_graph.digest()? != key.graph_digest
+            || source.node_id != key.node_id
+            || source.run_id == key.run_id
+            || !crate::assistant_plugins::compatible(source_graph, target_graph, &key.node_id)
+        {
+            return Err(corrupt("workspace handover Graph identity changed"));
+        }
+        let state = self.binding_state_path(key);
+        self.require_binding(key)?;
+        let _lock = PreparationLock::acquire(&state.join(".prepare.lock"))?;
+        let receipt = WorkspaceHandover {
+            format: 1,
+            source: source.clone(),
+            target: key.clone(),
+        };
+        crate::assistant::save_immutable(&state.join("handover.json"), &receipt)
+            .map_err(corrupt)?;
+        self.prepare_workspace_from(key, inputs, Some(source))
+    }
+
+    fn matching_workspace_handover(
+        &self,
+        source: &InvocationKey,
+        target: &InvocationKey,
+    ) -> Result<bool, GraphError> {
+        let path = self.binding_state_path(target).join("handover.json");
+        if !path_exists(&path)? {
+            return Ok(false);
+        }
+        let fact: WorkspaceHandover = read_private_json(&path)?;
+        if fact.format != 1 || fact.target != *target {
+            return Err(corrupt("workspace handover receipt identity changed"));
+        }
+        Ok(fact.source == *source)
+    }
     pub(crate) fn bind_node_workspace(
         &self,
         run_id: &str,
@@ -359,7 +442,8 @@ impl HostArtifacts {
             // the same Graph and node, and only an initialized owner may claim
             // one. Within one Run the invocation must still strictly increase.
             let same_run = previous.run_id == key.run_id;
-            if previous.graph_digest != key.graph_digest
+            if (previous.graph_digest != key.graph_digest
+                && (same_run || !self.matching_workspace_handover(previous, &owner.key)?))
                 || previous.node_id != key.node_id
                 || (same_run && previous.invocation >= owner.key.invocation)
                 || !owner.initialized
@@ -539,7 +623,10 @@ impl HostArtifacts {
     ) -> Result<Option<SeededScene>, GraphError> {
         validate_key(source)?;
         validate_key(target)?;
-        if source.node_id != target.node_id || source.graph_digest != target.graph_digest {
+        if source.node_id != target.node_id
+            || (source.graph_digest != target.graph_digest
+                && !self.matching_workspace_handover(source, target)?)
+        {
             return Err(corrupt(
                 "workspace seeding requires the same node and Graph",
             ));

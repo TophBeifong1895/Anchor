@@ -1,8 +1,8 @@
 use super::*;
-use crate::application::{WECOM_REPLY_KEY_PREFIX, WECOM_REPLY_KIND};
+use crate::application::{RunLiveness, WECOM_REPLY_KEY_PREFIX, WECOM_REPLY_KIND};
 use anchor_platform_session::{
-    AttachmentManifest, AttachmentManifestEntry, ChannelDeliveryRequest, ChannelDeliveryStatus,
-    ChannelIdentity, ChannelInboundRequest, TurnStatus,
+    AttachmentManifest, AttachmentManifestEntry, ChannelConversationKind, ChannelDeliveryRequest,
+    ChannelDeliveryStatus, ChannelIdentity, ChannelInboundRequest, TurnStatus,
 };
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
@@ -106,7 +106,7 @@ impl WecomEvent {
                 .metadata
                 .keys()
                 .any(|key| !matches!(key.as_str(), "chat_type" | "request_id"))
-            || self.metadata.get("chat_type") != Some(&json!("single"))
+            || self.conversation_kind().is_none()
             || self
                 .metadata
                 .get("request_id")
@@ -123,6 +123,14 @@ impl WecomEvent {
 
     fn inbound_id(&self) -> String {
         inbound_id_for(&self.source, &self.event_id)
+    }
+
+    fn conversation_kind(&self) -> Option<ChannelConversationKind> {
+        match self.metadata.get("chat_type").and_then(Value::as_str) {
+            Some("single") => Some(ChannelConversationKind::Single),
+            Some("group") => Some(ChannelConversationKind::Group),
+            _ => None,
+        }
     }
 }
 
@@ -246,14 +254,6 @@ pub(super) async fn receive_event(
     } else {
         event.text.clone()
     };
-    let lock_key = format!(
-        "{}\0{}\0{}\0{}\0{}",
-        owner,
-        config.graph,
-        config.account.as_deref().unwrap_or(""),
-        event.conversation_id,
-        event.sender_id
-    );
     // Persist the accepted message before serialising on the conversation. The
     // inbound row is the durable fact that makes an accepted message visible —
     // the progress projection, pending assistant inputs and supersede
@@ -265,6 +265,9 @@ pub(super) async fn receive_event(
     let request = ChannelInboundRequest {
         inbound_id: inbound_id.clone(),
         identity: ChannelIdentity {
+            conversation_kind: event
+                .conversation_kind()
+                .expect("validated WeCom chat type"),
             source: "wecom".into(),
             account: config.account.clone(),
             conversation_id: event.conversation_id.clone(),
@@ -277,6 +280,15 @@ pub(super) async fn receive_event(
         run_id: None,
         replace_running: true,
     };
+    let lock_key = format!(
+        "{}\0{}\0{}\0{}\0{}\0{}",
+        owner,
+        request.identity.source,
+        request.identity.account.as_deref().unwrap_or(""),
+        request.identity.conversation_kind.as_str(),
+        request.identity.conversation_id,
+        request.identity.participant_id()
+    );
     let admission = {
         let state_for_admission = state.clone();
         let owner_for_admission = owner.clone();
@@ -295,18 +307,29 @@ pub(super) async fn receive_event(
             .or_insert_with(|| std::sync::Arc::new(tokio::sync::Mutex::new(())))
             .clone()
     };
-    let admitted = {
+    let admitted = async {
         let _guard = channel_lock.lock().await;
         // Authoritative state under the lock: between admission and
         // serialisation another message may have superseded this Turn.
         let current =
             read_channel_inbound(&state, &owner, &admission.session.id, &inbound_id).await?;
         if current.relation.superseded_by_turn_id.is_some() {
-            return Ok((StatusCode::OK, Json(json!({"text":"","superseded":true}))));
+            return Ok(None);
         }
         let saved_assistant = store(&state)?
             .get_channel_assistant(&owner, &admission.session.id)
             .map_err(session_error)?;
+        if current.relation.run_id.is_none() && current.turn.status != TurnStatus::Running {
+            if let Some(binding) = saved_assistant.as_ref()
+                && !state.application.run_is_active(&binding.run_id).await
+            {
+                return Err(assistant_stopped());
+            }
+            return Err(error(
+                StatusCode::CONFLICT,
+                "WeCom input was already rejected before execution",
+            ));
+        }
         let persistent_assistant =
             assistant_plan.as_ref().is_ok_and(Option::is_some) || saved_assistant.is_some();
         if persistent_assistant {
@@ -367,10 +390,10 @@ pub(super) async fn receive_event(
             crate::channel_inputs::freeze(&state.data_root, &selected, &prepared_attachments)
                 .map_err(|message| error(StatusCode::CONFLICT, message))?;
             crate::assistant::signal(&admission.session.id).notify_waiters();
-            AdmittedRun {
+            Ok(Some(AdmittedRun {
                 run_id: run,
-                session: admission.session.id,
-            }
+                session: admission.session.id.clone(),
+            }))
         } else {
             assistant_plan.map_err(|message| error(StatusCode::BAD_REQUEST, message))?;
             let run = format!("channel-{}", admission.turn.id);
@@ -380,12 +403,8 @@ pub(super) async fn receive_event(
                 }
                 _ => None,
             };
-            let channel = json!({
-                "source":"wecom",
-                "conversation_id":event.conversation_id,
-                "sender_id":event.sender_id,
-                "reply_target":event.reply_target,
-            });
+            let mut channel = json!(current.request.identity);
+            channel["reply_target"] = json!(event.reply_target);
             // A new message interrupts the previous turn. Whatever the model has
             // not been asked yet travels with this Run, so the interrupted work
             // continues with the new information instead of disappearing.
@@ -408,7 +427,7 @@ pub(super) async fn receive_event(
                 input,
                 previous_run,
                 attachments: std::mem::take(&mut event.attachments),
-                channel_inbound: Some(inbound_id),
+                channel_inbound: Some(inbound_id.clone()),
             };
             let (status, accepted) = super::runs::conversation_run(
                 State(state.clone()),
@@ -422,14 +441,25 @@ pub(super) async fn receive_event(
                     "WeCom Graph admission returned an unexpected Run",
                 ));
             }
-            AdmittedRun {
+            Ok(Some(AdmittedRun {
                 run_id: run,
-                session: admission.session.id,
-            }
+                session: admission.session.id.clone(),
+            }))
+        }
+    }
+    .await;
+    let admitted = match admitted {
+        Ok(Some(admitted)) => admitted,
+        Ok(None) => {
+            return Ok((StatusCode::OK, Json(json!({"text":"","superseded":true}))));
+        }
+        Err(failure) => {
+            reject_unclaimed_input(&state, &owner, &admission.session.id, &inbound_id).await?;
+            return Err(failure);
         }
     };
 
-    let Some(reply) = wait_for_channel_reply(
+    let reply = wait_for_channel_reply(
         &state,
         &owner,
         &config.reply_node,
@@ -437,8 +467,15 @@ pub(super) async fn receive_event(
         &event.inbound_id(),
         &admitted.run_id,
     )
-    .await?
-    else {
+    .await;
+    let reply = match reply {
+        Ok(reply) => reply,
+        Err(failure) => {
+            reject_unclaimed_input(&state, &owner, &admitted.session, &inbound_id).await?;
+            return Err(failure);
+        }
+    };
+    let Some(reply) = reply else {
         return Ok((StatusCode::OK, Json(json!({"text":"","superseded":true}))));
     };
 
@@ -513,6 +550,41 @@ struct ChannelReply {
 struct AdmittedRun {
     run_id: String,
     session: String,
+}
+
+async fn reject_unclaimed_input(
+    state: &ApiState,
+    owner: &str,
+    session: &str,
+    inbound_id: &str,
+) -> Result<(), HttpResponse> {
+    let state = state.clone();
+    let owner = owner.to_owned();
+    let session = session.to_owned();
+    let inbound_id = inbound_id.to_owned();
+    blocking(move || {
+        store(&state)?
+            .reject_unclaimed_channel_inbound(
+                &owner,
+                &session,
+                &inbound_id,
+                "WeCom input was rejected before execution",
+            )
+            .map_err(session_error)?;
+        Ok(())
+    })
+    .await
+}
+
+fn assistant_stopped() -> HttpResponse {
+    (
+        StatusCode::CONFLICT,
+        Json(json!({
+            "code":"assistant_stopped",
+            "error":"assistant is stopped; explicit resume or a new instance is required",
+        })),
+    )
+        .into_response()
 }
 
 async fn wait_for_channel_reply(
@@ -621,10 +693,7 @@ async fn wait_for_channel_reply(
                 ) || (matches!(record.status, RunStatus::Ready | RunStatus::Running)
                     && !state.application.run_is_active(run_id).await)
                 {
-                    return Err(error(
-                        StatusCode::CONFLICT,
-                        "assistant is stopped; explicit resume or a new instance is required",
-                    ));
+                    return Err(assistant_stopped());
                 }
                 tokio::time::sleep(RUN_POLL).await;
                 continue;
@@ -696,7 +765,7 @@ async fn read_interrupted_messages(
     owner: &str,
     session: &str,
     inbound_id: &str,
-) -> Result<Vec<String>, HttpResponse> {
+) -> Result<Vec<Value>, HttpResponse> {
     let state = state.clone();
     let owner = owner.to_owned();
     let session = session.to_owned();
@@ -713,7 +782,7 @@ async fn read_interrupted_messages(
     .await
 }
 
-fn interrupted_text(message: &anchor_platform_session::ChannelPendingMessage) -> Option<String> {
+fn interrupted_text(message: &anchor_platform_session::ChannelPendingMessage) -> Option<Value> {
     let text = message.text.trim();
     let rendered = match (text.is_empty(), message.attachments) {
         (false, 0) => text.to_owned(),
@@ -721,12 +790,14 @@ fn interrupted_text(message: &anchor_platform_session::ChannelPendingMessage) ->
         (true, 0) => return None,
         (true, count) => format!("（用户发来 {count} 个文件，本轮工作区没有挂载这些文件）"),
     };
-    Some(
-        rendered
-            .chars()
-            .take(MAX_INTERRUPTED_MESSAGE_CHARS)
-            .collect(),
-    )
+    let text = rendered
+        .chars()
+        .take(MAX_INTERRUPTED_MESSAGE_CHARS)
+        .collect::<String>();
+    Some(match message.identity.conversation_kind {
+        ChannelConversationKind::Single => json!(text),
+        ChannelConversationKind::Group => json!({"message":text,"channel":message.identity}),
+    })
 }
 
 async fn read_channel_inbound(
@@ -777,21 +848,14 @@ pub(super) async fn stop_previous_run(
         }
         return Ok(false);
     };
-    if (active.contains(&run_id.to_owned())
-        || !matches!(
-            record.status,
-            RunStatus::Completed | RunStatus::Failed | RunStatus::Aborted | RunStatus::Stopped
-        ))
+    if !RunLiveness::observed(record.status, active.contains(&run_id.to_owned())).is_quiescent()
         && let Err(failure) = state.application.control(run_id, "stop").await
     {
         let current = FileRunStore::new(state.data_root.join("runs"))
             .load(run_id)
             .map_err(|failure| error(StatusCode::INTERNAL_SERVER_ERROR, failure.to_string()))?;
         if current.as_ref().is_none_or(|record| {
-            !matches!(
-                record.status,
-                RunStatus::Completed | RunStatus::Failed | RunStatus::Aborted | RunStatus::Stopped
-            )
+            !record.status.is_terminal() && record.status != RunStatus::Stopped
         }) {
             return Err(application_error(failure));
         }
@@ -810,11 +874,7 @@ pub(super) async fn stop_previous_run(
             }
             return Ok(false);
         };
-        if !active.contains(&run_id.to_owned())
-            && matches!(
-                record.status,
-                RunStatus::Completed | RunStatus::Failed | RunStatus::Aborted | RunStatus::Stopped
-            )
+        if RunLiveness::observed(record.status, active.contains(&run_id.to_owned())).is_quiescent()
         {
             return Ok(true);
         }
@@ -886,6 +946,7 @@ async fn settle_delivery_value(
     // this exact inbound and the identity fields below pin the sender and
     // conversation, which is what "the same message" means here.
     if inbound.request.identity.source != envelope.event.source
+        || Some(inbound.request.identity.conversation_kind) != envelope.event.conversation_kind()
         || inbound.request.identity.conversation_id != envelope.event.conversation_id
         || inbound.request.identity.sender_id != envelope.event.sender_id
         || inbound.request.text.as_deref().is_none()

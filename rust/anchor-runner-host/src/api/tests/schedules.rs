@@ -165,7 +165,11 @@ fn reload_accepts_legacy_schedule_array_and_skips_downtime_occurrences() {
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     std::fs::write(&path, r#"[{"id":"daily","graph":"fixture","rule":{"type":"daily","time":"09:00"},"input":{"x":1},"created_at":"2026-10-01T08:00:00","next_at":"2026-10-06T09:00:00","enabled":true},{"id":"once","graph":"fixture","rule":{"type":"once","at":"2026-10-05T09:00:00"},"input":{},"created_at":"2026-10-01T08:00:00","next_at":"2026-10-05T09:00:00","enabled":true}]"#).unwrap();
     let schedules = crate::api::schedules::ScheduleStore::open(path.clone()).unwrap();
+    let (model_configuration, runtime_management) =
+        crate::api::tests::management_fixture(root.path());
     let state = crate::api::ApiState {
+        model_configuration,
+        runtime_management,
         bundle_root: root.path().join("bundle"),
         catalog_root: root.path().to_path_buf(),
         application: crate::application::RunApplication::new(

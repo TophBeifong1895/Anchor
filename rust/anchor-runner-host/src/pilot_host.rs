@@ -326,9 +326,10 @@ impl PilotService {
                     .into());
                 }
                 Some(
-                    crate::goose_acp::pilot::GoosePilot::from_env(
+                    crate::goose_acp::pilot::GoosePilot::from_state(
                         &admission.root,
                         turns.iter().find_map(|turn| turn.goose.as_ref()),
+                        &admission.tools.data_root,
                     )
                     .map_err(|reason| {
                         eprintln!("anchor-runner-host: Pilot provider unavailable: {reason}");

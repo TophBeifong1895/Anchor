@@ -14,6 +14,7 @@
 use super::*;
 use crate::assistant::{read_json, save_immutable};
 use serde::{Deserialize, Serialize};
+use std::time::Duration;
 
 pub(crate) const REASON_OPERATOR: &str = "operator";
 pub(crate) const REASON_PLUGIN_UPDATE: &str = "plugin_update";
@@ -155,10 +156,7 @@ impl RunApplication {
             .store()
             .load(run_id)?
             .ok_or(ApplicationError::Missing)?;
-        if !matches!(
-            record.status,
-            RunStatus::Completed | RunStatus::Failed | RunStatus::Aborted
-        ) {
+        if !record.status.is_terminal() {
             record.status = RunStatus::Aborted;
             record.error = Some(format!(
                 "Run abandoned by operator (reason {reason}, requested at {requested_at})"
@@ -221,6 +219,7 @@ impl RunApplication {
                 });
             }
             RunStatus::Completed | RunStatus::Failed => {
+                // Aborted is an idempotent success above, not this rejection.
                 return Err(ApplicationError::Conflict(
                     "terminal Run cannot be abandoned".into(),
                 ));
@@ -298,6 +297,7 @@ impl RunApplication {
                     requested_at: Some(intent.requested_at),
                 })
             }
+            // Aborted settles the recorded intent above; these terminal states reject it.
             RunStatus::Completed | RunStatus::Failed => Err(ApplicationError::Conflict(
                 "Run finished before it was abandoned".into(),
             )),

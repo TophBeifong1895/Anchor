@@ -136,18 +136,10 @@ fn no_runs(server: &HttpHost) {
     assert!(saved["runs"].as_array().unwrap().is_empty(), "{saved}");
 }
 
-fn graph_detail(server: &HttpHost) -> Value {
-    graph_detail_for(server, "fixture")
-}
-
 fn graph_detail_for(server: &HttpHost, graph: &str) -> Value {
     let (status, saved) = server.request("GET", &format!("/graphs/{graph}"), None);
     assert_eq!(status, 200, "{saved}");
     saved
-}
-
-fn precondition(server: &HttpHost) -> String {
-    precondition_for(server, "fixture")
 }
 
 fn precondition_for(server: &HttpHost, graph: &str) -> String {
@@ -155,10 +147,6 @@ fn precondition_for(server: &HttpHost, graph: &str) -> String {
         server.request("GET", &format!("/graphs/{graph}/delete-precondition"), None);
     assert_eq!(status, 200, "{saved}");
     saved["precondition"].as_str().unwrap().to_owned()
-}
-
-fn assert_delete_question(question: &Value, expected: &str) {
-    assert_delete_question_for(question, "fixture", expected)
 }
 
 fn assert_delete_question_for(question: &Value, graph: &str, expected: &str) {
@@ -659,10 +647,11 @@ fn goose_graph_delete_native_cancel_does_not_delete() {
 }
 
 fn graph_delete_changed(scenario: &str, change_definition: bool) {
+    const TARGET: &str = "delete-target";
     let provider = Provider::new(
         scenario,
         vec![
-            Step::tool("graph_delete", json!({"graph":"fixture"})),
+            Step::tool("graph_delete", json!({"graph":TARGET})),
             Step::text("The Graph changed; a fresh confirmation is necessary.")
                 .after("Graph changed"),
         ],
@@ -670,21 +659,27 @@ fn graph_delete_changed(scenario: &str, change_definition: bool) {
     let host = Host::new(&graph()).default_runtime();
     let server = host.serve(&provider);
     create(&server);
-    let expected = precondition(&server);
+    let (status, created) = server.request(
+        "POST",
+        "/graphs",
+        Some(&json!({"name":TARGET,"definition":graph()})),
+    );
+    assert_eq!(status, 201, "{created}");
+    let expected = precondition_for(&server, TARGET);
     let submitted = submit(
         &server,
         "delete-stale",
-        Some("Delete fixture only after confirming the exact current contents."),
+        Some("Delete delete-target only after confirming the exact current contents."),
     );
     let pending = pending_question(&server, &submitted);
-    assert_delete_question(&pending, &expected);
-    let resource = host.base.root.path().join("bundle/manifest.json");
+    assert_delete_question_for(&pending, TARGET, &expected);
+    let resource = host.base.root.path().join(TARGET).join("manifest.json");
     if change_definition {
-        let mut definition = graph_detail(&server)["definition"].clone();
+        let mut definition = graph_detail_for(&server, TARGET)["definition"].clone();
         definition["objective"] = json!("Changed during the native confirmation wait.");
         let (status, saved) = server.request(
             "PUT",
-            "/graphs/fixture",
+            &format!("/graphs/{TARGET}"),
             Some(&json!({"definition":definition})),
         );
         assert_eq!(status, 200, "{saved}");
@@ -692,8 +687,8 @@ fn graph_delete_changed(scenario: &str, change_definition: bool) {
         let manifest = fs::read_to_string(&resource).unwrap();
         fs::write(&resource, format!("{manifest}\n")).unwrap();
     }
-    let changed = graph_detail(&server);
-    let current = precondition(&server);
+    let changed = graph_detail_for(&server, TARGET);
+    let current = precondition_for(&server, TARGET);
     assert_ne!(expected, current);
     let (status, saved) = answer(
         &server,
@@ -703,9 +698,16 @@ fn graph_delete_changed(scenario: &str, change_definition: bool) {
     );
     assert_eq!(status, 200, "{saved}");
     let completed = wait_turn(&server, &submitted, "completed");
-    assert_eq!(graph_detail(&server), changed);
-    assert_eq!(precondition(&server), current);
-    assert!(host.base.root.path().join("bundle/graph.json").is_file());
+    assert_eq!(graph_detail_for(&server, TARGET), changed);
+    assert_eq!(precondition_for(&server, TARGET), current);
+    assert!(
+        host.base
+            .root
+            .path()
+            .join(TARGET)
+            .join("graph.json")
+            .is_file()
+    );
     if !change_definition {
         assert!(fs::read_to_string(&resource).unwrap().ends_with('\n'));
     }
@@ -749,13 +751,14 @@ fn goose_graph_delete_rejects_confirmation_after_resource_changes() {
 }
 
 fn interrupted_confirmation_recovery(scenario: &str, kill_host: bool) {
+    const TARGET: &str = "delete-target";
     let provider = Provider::new(
         scenario,
         vec![
-            Step::tool("graph_delete", json!({"graph":"fixture"})),
-            Step::tool("graph_read", json!({"graph":"fixture"})),
+            Step::tool("graph_delete", json!({"graph":TARGET})),
+            Step::tool("graph_read", json!({"graph":TARGET})),
             Step::text(
-                "Checked the retained fixture Graph; the interrupted deletion was not replayed.",
+                "Checked the retained delete-target Graph; the interrupted deletion was not replayed.",
             )
             .after("seed"),
         ],
@@ -763,15 +766,21 @@ fn interrupted_confirmation_recovery(scenario: &str, kill_host: bool) {
     let host = Host::new(&graph()).default_runtime();
     let mut server = host.serve(&provider);
     create(&server);
-    let before = graph_detail(&server);
-    let expected = precondition(&server);
+    let (status, created) = server.request(
+        "POST",
+        "/graphs",
+        Some(&json!({"name":TARGET,"definition":graph()})),
+    );
+    assert_eq!(status, 201, "{created}");
+    let before = graph_detail_for(&server, TARGET);
+    let expected = precondition_for(&server, TARGET);
     let submitted = submit(
         &server,
         "interrupted-delete",
-        Some("Request deletion of fixture and wait for confirmation."),
+        Some("Request deletion of delete-target and wait for confirmation."),
     );
     let pending = pending_question(&server, &submitted);
-    assert_delete_question(&pending, &expected);
+    assert_delete_question_for(&pending, TARGET, &expected);
     if kill_host {
         server.kill();
         drop(server);
@@ -806,8 +815,8 @@ fn interrupted_confirmation_recovery(scenario: &str, kill_host: bool) {
         &json!({"action":"accept","content":{"confirm":true}}),
     );
     assert_eq!(status, 409, "late confirmation accepted: {late}");
-    assert_eq!(graph_detail(&server), before);
-    assert_eq!(precondition(&server), expected);
+    assert_eq!(graph_detail_for(&server, TARGET), before);
+    assert_eq!(precondition_for(&server, TARGET), expected);
     let delivery = history(
         &server,
         &interrupted,
@@ -832,9 +841,16 @@ fn interrupted_confirmation_recovery(scenario: &str, kill_host: bool) {
         json!([]),
         "resume replayed the deletion question"
     );
-    assert_eq!(graph_detail(&server), before);
-    assert_eq!(precondition(&server), expected);
-    assert!(host.base.root.path().join("bundle/graph.json").is_file());
+    assert_eq!(graph_detail_for(&server, TARGET), before);
+    assert_eq!(precondition_for(&server, TARGET), expected);
+    assert!(
+        host.base
+            .root
+            .path()
+            .join(TARGET)
+            .join("graph.json")
+            .is_file()
+    );
     let requests = provider.requests();
     assert_eq!(requests.len(), 3);
     let inspected = last_tool_result(&provider, "definition");

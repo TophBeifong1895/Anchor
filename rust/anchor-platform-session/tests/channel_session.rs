@@ -17,6 +17,7 @@ fn request(inbound_id: &str, identity: &str) -> ChannelInboundRequest {
     ChannelInboundRequest {
         inbound_id: inbound_id.into(),
         identity: ChannelIdentity {
+            conversation_kind: Default::default(),
             source: "wecom".into(),
             account: Some("corp-a".into()),
             conversation_id: identity.into(),
@@ -58,6 +59,95 @@ fn assert_conflict<T>(result: Result<T, SessionError>) {
 
 fn assert_invalid<T>(result: Result<T, SessionError>) {
     assert!(matches!(result, Err(SessionError::Invalid(_))));
+}
+
+#[test]
+fn rejected_unclaimed_input_is_terminal_and_cannot_be_claimed_later() {
+    let (_directory, store) = fixture();
+    let admitted = store
+        .admit_channel_inbound("owner", request("rejected", "conversation-1"))
+        .unwrap();
+    let session = &admitted.session.id;
+    assert!(matches!(
+        store.reject_unclaimed_channel_inbound("other-owner", session, "rejected", "stopped"),
+        Err(SessionError::Missing)
+    ));
+    assert!(
+        store
+            .reject_unclaimed_channel_inbound("owner", session, "rejected", "stopped")
+            .unwrap()
+    );
+    assert!(
+        !store
+            .reject_unclaimed_channel_inbound("owner", session, "rejected", "different error")
+            .unwrap()
+    );
+    let rejected = store
+        .get_channel_inbound("owner", session, "rejected")
+        .unwrap();
+    assert_eq!(rejected.turn.status, TurnStatus::Failed);
+    assert_eq!(rejected.turn.error.as_deref(), Some("stopped"));
+    assert_eq!(rejected.relation.run_id, None);
+    store
+        .bind_channel_assistant("owner", session, "assistant", "wait", "reply", "reply")
+        .unwrap();
+    assert!(
+        store
+            .claim_channel_assistant_input("owner", session, "assistant", "wait-1")
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[test]
+fn dispatch_rejection_preserves_claimed_and_superseded_inputs() {
+    let (_directory, store) = fixture();
+    let admitted = store
+        .admit_channel_inbound("owner", request("claimed", "conversation-1"))
+        .unwrap();
+    let session = &admitted.session.id;
+    store
+        .bind_channel_assistant("owner", session, "assistant", "wait", "reply", "reply")
+        .unwrap();
+    store
+        .claim_channel_assistant_input("owner", session, "assistant", "wait-1")
+        .unwrap()
+        .unwrap();
+    assert!(
+        !store
+            .reject_unclaimed_channel_inbound("owner", session, "claimed", "dispatch failed")
+            .unwrap()
+    );
+    assert_eq!(
+        store
+            .get_channel_inbound("owner", session, "claimed")
+            .unwrap()
+            .turn
+            .status,
+        TurnStatus::Running
+    );
+    let mut newer = request("newer", "conversation-1");
+    newer.replace_running = true;
+    store.admit_channel_inbound("owner", newer).unwrap();
+    let mut newest = request("newest", "conversation-1");
+    newest.replace_running = true;
+    store.admit_channel_inbound("owner", newest).unwrap();
+    let superseded = store
+        .get_channel_inbound("owner", session, "newer")
+        .unwrap();
+    assert!(superseded.relation.superseded_by_turn_id.is_some());
+    assert!(
+        !store
+            .reject_unclaimed_channel_inbound("owner", session, "newer", "dispatch failed")
+            .unwrap()
+    );
+    assert_eq!(
+        store
+            .get_channel_inbound("owner", session, "newer")
+            .unwrap()
+            .turn,
+        superseded.turn
+    );
 }
 
 #[test]

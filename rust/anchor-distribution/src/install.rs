@@ -26,6 +26,7 @@ const MODEL_KEYS: &[&str] = &[
     "ANCHOR_MODEL_WIRE_API",
     "ANCHOR_MODEL_ALIASES",
     "ANCHOR_MODEL_CONTEXT_WINDOW",
+    "ANCHOR_MODEL_MAX_TOKENS",
     "ANCHOR_MODEL_DIRECT",
 ];
 const MAX_ARCHIVE_BYTES: u64 = 8 * 1024 * 1024 * 1024;
@@ -36,7 +37,7 @@ pub struct PlatformInstallRequest {
     pub archive: PathBuf,
     pub sha256: String,
     pub install_root: PathBuf,
-    pub model_config: PathBuf,
+    pub model_config: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -44,7 +45,7 @@ pub struct PlatformInstallReport {
     pub install_root: PathBuf,
     pub release_root: PathBuf,
     pub launcher: PathBuf,
-    pub model_config: PathBuf,
+    pub model_config: Option<PathBuf>,
     pub archive_sha256: String,
 }
 
@@ -76,7 +77,11 @@ fn install(
     if fs::symlink_metadata(&install_root).is_ok() {
         return Err(PackageError::AlreadyExists);
     }
-    let model = read_model(&request.model_config)?;
+    let model = request
+        .model_config
+        .as_deref()
+        .map(read_model)
+        .transpose()?;
     let pinned_parent = PathBuf::from(format!("/proc/self/fd/{}", parent_fd.as_raw_fd()));
     let staging = tempfile::Builder::new()
         .prefix(".anchor-install-")
@@ -110,7 +115,9 @@ fn install(
     let config = staging.path().join("config");
     fs::create_dir(&config)?;
     fs::set_permissions(&config, fs::Permissions::from_mode(0o700))?;
-    write_private(&config.join("model.env"), model.as_bytes())?;
+    if let Some(model) = model {
+        write_private(&config.join("model.env"), model.as_bytes())?;
+    }
     for path in [
         "data",
         "data/home",
@@ -159,7 +166,10 @@ fn install(
     Ok(PlatformInstallReport {
         launcher: release_root.join("bin/anchor-platform"),
         release_root,
-        model_config: install_root.join("config/model.env"),
+        model_config: request
+            .model_config
+            .as_ref()
+            .map(|_| install_root.join("config/model.env")),
         install_root,
         archive_sha256: request.sha256.to_ascii_lowercase(),
     })
@@ -624,13 +634,21 @@ pub fn platform_command_with_listen(launcher: &Path, listen: &str) -> Result<Com
     }
     open_path(runtime)?;
     let model_path = install_root.join("config/model.env");
-    let metadata = open_path(&model_path)?.metadata()?;
-    if metadata.permissions().mode() & 0o077 != 0 {
-        return Err(invalid(
-            "installed model configuration must be private (0600)",
-        ));
-    }
-    let model = parse_model(&read_model(&model_path)?)?;
+    // An omitted model file leaves model settings entirely Host-managed. Do
+    // not inject empty environment values: those would become read-only fields.
+    open_path(&install_root.join("config"))?;
+    let model = match fs::symlink_metadata(&model_path) {
+        Ok(metadata) => {
+            if !metadata.is_file() || metadata.permissions().mode() & 0o077 != 0 {
+                return Err(invalid(
+                    "installed model configuration must be an ordinary private file (0600)",
+                ));
+            }
+            parse_model(&read_model(&model_path)?)?
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => BTreeMap::new(),
+        Err(error) => return Err(error.into()),
+    };
     let mut command = Command::new(runtime.join("bin/anchor-runner-host"));
     command
         .arg("serve")

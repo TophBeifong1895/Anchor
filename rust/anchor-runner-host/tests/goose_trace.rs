@@ -5,7 +5,7 @@ mod fixture;
 #[path = "support/goose_fixture.rs"]
 mod goose;
 
-use goose::{Gate, Host, HttpHost, Provider, Step, command, complete};
+use goose::{Gate, Host, HttpHost, Provider, command, complete};
 use serde_json::{Value, json};
 
 const CASE_SOURCE: &str = "tests/goose_trace.rs";
@@ -66,7 +66,6 @@ fn live_trace_precedes_completion_and_final_artifacts_remain_authoritative() {
             command("set -eu; test ! -e effect.txt; printf once > effect.txt; cat effect.txt")
                 .with_preface(DRAFT),
             complete("verify").gated(&gate),
-            Step::text("Node summary was submitted."),
         ],
     );
     let host = Host::new(&graph()).default_runtime();
@@ -127,7 +126,6 @@ fn stopped_live_trace_survives_restart_without_replaying_the_effect() {
     provider.append(vec![
         command("set -eu; test \"$(cat effect.txt)\" = once; cat effect.txt").after("once"),
         complete("verify").after("once"),
-        Step::text("Node summary was submitted after inspection."),
     ]);
     let restarted = host.serve(&provider);
     let (status, detail) = restarted.request("GET", &format!("/runs/{run}"), None);
@@ -158,6 +156,6 @@ fn stopped_live_trace_survives_restart_without_replaying_the_effect() {
         })
         .count();
     assert_eq!(writes, 1);
-    assert_eq!(provider.requests().len(), 5);
+    assert_eq!(provider.requests().len(), 4);
     host.evidence(&provider, &run, json!({"case_source":CASE_SOURCE,"live_detail":during,"stopped_detail":stopped,"restart_detail":detail,"same_native_session":true,"effect_once":true}));
 }

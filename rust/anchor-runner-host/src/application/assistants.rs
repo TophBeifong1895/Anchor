@@ -1,5 +1,7 @@
 use super::*;
+use crate::execution::PreparedExecution;
 use crate::{HostArtifacts, application::metadata::AssistantSource, assistant::AssistantPlan};
+use anchor_graph_host::LoadedGraphBundle;
 use anchor_platform_session::{SessionError, SessionStore};
 
 pub(crate) struct AssistantAdmission {
@@ -25,12 +27,7 @@ impl RunApplication {
             return Err(ApplicationError::Missing);
         }
         let record = self.store().load(run)?.ok_or(ApplicationError::Missing)?;
-        if active.contains_key(run)
-            || !matches!(
-                record.status,
-                RunStatus::Stopped | RunStatus::Completed | RunStatus::Failed | RunStatus::Aborted
-            )
-        {
+        if !RunLiveness::with_registry(&record, &active).is_quiescent() {
             return Err(ApplicationError::Conflict(
                 "stop the assistant before retiring its instance".into(),
             ));
@@ -137,7 +134,7 @@ impl RunApplication {
             return Ok(run);
         }
         for (_, record) in self.records()? {
-            if is_unfinished(record.status) {
+            if !record.status.is_terminal() {
                 let metadata = self.metadata(&record.run_id)?.ok_or_else(|| {
                     ApplicationError::Conflict("unfinished Run has no immutable identity".into())
                 })?;
@@ -239,13 +236,7 @@ impl RunApplication {
                 &plan.reply_node,
             )
             .map_err(storage)?;
-        active.insert(
-            run.clone(),
-            ActiveRun {
-                graph_path,
-                control,
-            },
-        );
+        active.insert(run.clone(), ActiveRun::new(graph_path, control));
         drop(lease);
         drop(plugin_lease);
         drop(graph_lease);

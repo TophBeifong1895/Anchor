@@ -26,6 +26,11 @@ use std::{
 };
 use tokio::sync::{Semaphore, oneshot};
 
+#[path = "goose_fixture/effects.rs"]
+mod effects;
+#[path = "goose_fixture/responses.rs"]
+mod responses;
+
 pub const MODEL: &str = "fixture-goose";
 pub const GOOSE_SHA256: &str = "dc2a4352279c16f3c665b280e4fc8fedbec3a67cce596bf460aa9fd416c27a15";
 pub const SUMMARY_REQUEST: &str =
@@ -33,12 +38,15 @@ pub const SUMMARY_REQUEST: &str =
 
 pub enum Reply {
     Tool(&'static str, Value),
+    /// Multiple tool calls in one model response, regardless of the parallel hint.
+    Batch(Vec<(&'static str, Value)>),
     /// Emit a call with this exact tool name, whether or not it was advertised.
     Named(String, Value),
     Text(&'static str),
     Summary(String),
     ContextLengthExceeded,
     Gated(Arc<Gate>, Box<Reply>),
+    Reasoning(Value, Box<Reply>),
 }
 
 pub struct Step {
@@ -48,6 +56,7 @@ pub struct Step {
     request_contains: Option<String>,
     usage: (u32, u32),
     preface: Option<String>,
+    receipt_back: usize,
 }
 
 impl Step {
@@ -59,7 +68,20 @@ impl Step {
             request_contains: None,
             usage: (11, 7),
             preface: None,
+            receipt_back: 0,
         }
+    }
+
+    pub fn batch(calls: Vec<(&'static str, Value)>) -> Self {
+        let mut step = Self::text("");
+        step.reply = Reply::Batch(calls);
+        step
+    }
+
+    /// Select a real returned receipt, counting backwards through tool feedback.
+    pub fn observing_result(mut self, back: usize) -> Self {
+        self.receipt_back = back;
+        self
     }
 
     /// Call a tool by its exact model-facing name, advertised or not.
@@ -71,6 +93,7 @@ impl Step {
             request_contains: None,
             usage: (11, 7),
             preface: None,
+            receipt_back: 0,
         }
     }
 
@@ -82,6 +105,7 @@ impl Step {
             request_contains: None,
             usage: (11, 7),
             preface: None,
+            receipt_back: 0,
         }
     }
 
@@ -93,6 +117,7 @@ impl Step {
             request_contains: None,
             usage: (11, 7),
             preface: None,
+            receipt_back: 0,
         }
     }
 
@@ -104,6 +129,7 @@ impl Step {
             request_contains: None,
             usage: (11, 7),
             preface: None,
+            receipt_back: 0,
         }
     }
 
@@ -134,6 +160,12 @@ impl Step {
 
     pub fn gated(mut self, gate: &Arc<Gate>) -> Self {
         self.reply = Reply::Gated(gate.clone(), Box::new(self.reply));
+        self
+    }
+
+    pub fn with_reasoning(mut self, item: Value) -> Self {
+        assert_eq!(item["type"], "reasoning");
+        self.reply = Reply::Reasoning(item, Box::new(self.reply));
         self
     }
 }
@@ -524,6 +556,35 @@ async fn completion(
     }
     let mut selected_tool = Value::Null;
     let finish = match reply {
+        Reply::Batch(calls) => {
+            let mut tool_calls = Vec::new();
+            let mut definitions = Vec::new();
+            for (index, (suffix, mut arguments)) in calls.into_iter().enumerate() {
+                let definition = match tool_definition(&request, suffix) {
+                    Ok(definition) => definition,
+                    Err(message) => return shared.lock().unwrap().fail(message),
+                };
+                definitions.push(definition.clone());
+                if suffix == "final_result"
+                    && arguments.get("observed_receipt").is_none()
+                    && let Some(receipt) = tool_feedback(&request)
+                        .iter()
+                        .rev()
+                        .filter_map(observed_receipt)
+                        .nth(step.receipt_back)
+                {
+                    arguments["observed_receipt"] = json!(receipt);
+                }
+                tool_calls.push(
+                    json!({"index":index,"id":format!("call-{sequence}-{index}"),
+                    "type":"function","function":{"name":definition["function"]["name"],
+                    "arguments":arguments.to_string()}}),
+                );
+            }
+            selected_tool = json!(definitions);
+            chunks.push(chunk(json!({"tool_calls":tool_calls}), Value::Null));
+            "tool_calls"
+        }
         Reply::Named(name, arguments) => {
             // Deliberately bypasses the advertised-tool lookup: the scenario wants to
             // exercise what the agent does with a name it was not offered.
@@ -555,7 +616,8 @@ async fn completion(
                 && let Some(receipt) = tool_feedback(&request)
                     .iter()
                     .rev()
-                    .find_map(observed_receipt)
+                    .filter_map(observed_receipt)
+                    .nth(step.receipt_back)
             {
                 arguments["observed_receipt"] = json!(receipt);
             }
@@ -584,6 +646,12 @@ async fn completion(
         }
         Reply::ContextLengthExceeded => unreachable!(),
         Reply::Gated(_, _) => unreachable!(),
+        Reply::Reasoning(_, _) => {
+            return shared
+                .lock()
+                .unwrap()
+                .fail("reasoning fixture requires /v1/responses".into());
+        }
     };
     chunks.push(chunk(json!({}), json!(finish)));
     let (input, output) = step.usage;
@@ -669,6 +737,7 @@ impl Provider {
                 .block_on(async {
                     let app = Router::new()
                         .route("/v1/chat/completions", post(completion))
+                        .route("/v1/responses", post(responses::completion))
                         .route("/v1/models", get(models))
                         .route("/effects", post(external_effect).get(effect_state))
                         .layer(DefaultBodyLimit::max(32 * 1024 * 1024))
@@ -703,6 +772,12 @@ impl Provider {
 
     pub fn effects(&self) -> Vec<Value> {
         self.state.lock().unwrap().effects.clone()
+    }
+
+    /// Task egress cannot reach the model transport's host loopback listener.
+    /// Only the fake business endpoint is exposed on the routed interface.
+    pub fn serve_effects(&self) -> effects::EffectService {
+        effects::EffectService::new(self.state.clone())
     }
 
     pub fn assert_consumed(&self) {

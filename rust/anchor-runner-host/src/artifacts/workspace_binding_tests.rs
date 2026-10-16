@@ -1027,3 +1027,129 @@ fn seeding_requires_one_node_graph_and_two_runs() {
         artifacts.stable_workspace_path(&target)
     );
 }
+
+#[test]
+fn plugin_revision_handover_preserves_scene_and_requires_an_exact_receipt() {
+    use anchor_runtime::graph::GraphSnapshot;
+    let (_temp, artifacts) = fixture();
+    let graph = GraphSnapshot::admit(json!({
+        "objective":"handover", "entry":"assistant",
+        "agents":{"worker":{"model":"fixture","instructions":"keep scene"}},
+        "nodes":[{"id":"assistant","agent":"worker"}], "edges":[]
+    }))
+    .unwrap();
+    let mut updated = graph.clone();
+    updated.agents.get_mut("worker").unwrap().network = true;
+    let source = InvocationKey {
+        graph_digest: graph.digest().unwrap(),
+        ..key("assistant")
+    };
+    let target = InvocationKey {
+        run_id: "run-2".into(),
+        graph_digest: updated.digest().unwrap(),
+        ..source.clone()
+    };
+    bind(&artifacts, &source);
+    bind(&artifacts, &target);
+    let original = artifacts.prepare_workspace(&source, &[]).unwrap();
+    fs::create_dir_all(original.join("research/empty")).unwrap();
+    fs::write(original.join("research/draft.md"), "unfinished research").unwrap();
+    assert!(
+        artifacts
+            .prepare_workspace_from(&target, &[], Some(&source))
+            .is_err()
+    );
+    let path = artifacts
+        .prepare_workspace_from_handover(&target, &[], &source, &graph, &updated)
+        .unwrap();
+    assert_eq!(
+        fs::read_to_string(path.join("research/draft.md")).unwrap(),
+        "unfinished research"
+    );
+    assert!(path.join("research/empty").is_dir());
+    assert_eq!(
+        artifacts.initialized_workspace_owner(&target).unwrap(),
+        Some(target.clone())
+    );
+    assert_eq!(
+        artifacts
+            .read_workspace_owner(&target)
+            .unwrap()
+            .unwrap()
+            .previous_owner,
+        Some(source.clone())
+    );
+    fs::write(path.join("research/draft.md"), "continued research").unwrap();
+    assert_eq!(
+        artifacts
+            .prepare_workspace_from_handover(&target, &[], &source, &graph, &updated)
+            .unwrap(),
+        path
+    );
+    assert_eq!(
+        fs::read_to_string(path.join("research/draft.md")).unwrap(),
+        "continued research"
+    );
+    assert_eq!(
+        fs::read_to_string(original.join("research/draft.md")).unwrap(),
+        "unfinished research"
+    );
+    let receipt = artifacts.binding_state_path(&target).join("handover.json");
+    let saved = fs::read(&receipt).unwrap();
+    fs::remove_file(&receipt).unwrap();
+    assert!(artifacts.workspace_path(&target).is_err());
+    assert!(artifacts.prepare_workspace(&target, &[]).is_err());
+    fs::write(&receipt, saved).unwrap();
+    artifacts.retain_interrupted_workspace(&target).unwrap();
+    let later = next(&target);
+    assert_eq!(artifacts.prepare_workspace(&later, &[]).unwrap(), path);
+    assert_eq!(
+        artifacts.initialized_workspace_owner(&target).unwrap(),
+        Some(later)
+    );
+}
+
+#[test]
+fn workspace_handover_rejects_structural_edits_and_unowned_scenes() {
+    use anchor_runtime::graph::GraphSnapshot;
+    let (_temp, artifacts) = fixture();
+    let graph = GraphSnapshot::admit(json!({
+        "objective":"handover", "entry":"assistant",
+        "agents":{"worker":{"model":"fixture","instructions":"original"}},
+        "nodes":[{"id":"assistant","agent":"worker"}], "edges":[]
+    }))
+    .unwrap();
+    let mut changed = graph.clone();
+    changed.agents.get_mut("worker").unwrap().instructions = "changed".into();
+    let source = InvocationKey {
+        graph_digest: graph.digest().unwrap(),
+        ..key("assistant")
+    };
+    let target = InvocationKey {
+        run_id: "run-2".into(),
+        graph_digest: changed.digest().unwrap(),
+        ..source.clone()
+    };
+    bind(&artifacts, &source);
+    bind(&artifacts, &target);
+    assert!(
+        artifacts
+            .prepare_workspace_from_handover(&target, &[], &source, &graph, &changed)
+            .is_err()
+    );
+    assert!(
+        !artifacts
+            .binding_state_path(&target)
+            .join("handover.json")
+            .exists()
+    );
+    assert_eq!(
+        artifacts.initialized_workspace_owner(&source).unwrap(),
+        None
+    );
+    let path = artifacts.prepare_workspace(&source, &[]).unwrap();
+    fs::write(path.join("keep.md"), "keep").unwrap();
+    fs::remove_file(artifacts.binding_state_path(&source).join("binding.json")).unwrap();
+    assert!(artifacts.initialized_workspace_owner(&source).is_err());
+    assert_eq!(fs::read_to_string(path.join("keep.md")).unwrap(), "keep");
+}

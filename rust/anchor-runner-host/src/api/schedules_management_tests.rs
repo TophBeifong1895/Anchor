@@ -37,7 +37,6 @@ fn fixture() -> (tempfile::TempDir, ApiState, PilotTools) {
     let tools = PilotTools {
         application: application.clone(),
         graph_name: String::new(),
-        catalog_root: root.path().join("catalog"),
         library_root: root.path().join("library"),
         data_root: root.path().join("state"),
         workspace_root: root.path().join("workspaces"),
@@ -47,7 +46,11 @@ fn fixture() -> (tempfile::TempDir, ApiState, PilotTools) {
         turn: turn.id,
         context: None,
     };
+    let (model_configuration, runtime_management) =
+        crate::api::tests::management_fixture(root.path());
     let state = ApiState {
+        model_configuration,
+        runtime_management,
         bundle_root: graph,
         catalog_root: root.path().join("catalog"),
         data_root: root.path().join("state"),
@@ -194,5 +197,99 @@ fn schedule_store_persistence_failure_rolls_back_create_and_delete() {
         adapter.delete(created["schedule"]["id"].as_str().unwrap()),
         Err(ApplicationError::Storage(_))
     ));
+    assert_eq!(adapter.list().unwrap(), before);
+    assert!(matches!(
+        adapter.update(
+            created["schedule"]["id"].as_str().unwrap(),
+            "task",
+            &json!({"type":"daily","time":"12:00"}),
+            &json!({"edited":true}),
+            false
+        ),
+        Err(ApplicationError::Storage(_))
+    ));
+    assert_eq!(adapter.list().unwrap(), before);
+}
+
+#[tokio::test]
+async fn editing_a_plan_preserves_identity_and_only_new_occurrences_use_edited_inputs() {
+    let (root, state, tools) = fixture();
+    let created = pilot(
+        &tools,
+        "schedule_create",
+        json!({"graph":"task","rule":{"type":"interval","seconds":3600},"input":{"version":1}}),
+    )
+    .await;
+    let original = &created["schedule"];
+    let id = original["id"].as_str().unwrap();
+    let (status, edited) = http(
+        &state,
+        "PUT",
+        &format!("/schedules/{id}"),
+        Some(json!({"graph":"task","rule":original["rule"],"input":{"version":2},"enabled":true})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{edited}");
+    assert_eq!(edited["schedule"]["id"], original["id"]);
+    assert_eq!(edited["schedule"]["created_at"], original["created_at"]);
+    assert_eq!(edited["schedule"]["next_at"], original["next_at"]);
+    assert_eq!(edited["schedule"]["input"], json!({"version":2}));
+    assert!(state.application.records().unwrap().is_empty());
+    let paused = pilot(&tools, "schedule_update", json!({"schedule":id,"graph":"task","rule":original["rule"],"input":{"version":3},"enabled":false})).await;
+    assert_eq!(paused["schedule"]["enabled"], false);
+    assert_eq!(paused["schedule"]["next_at"], original["next_at"]);
+    let (_, listed) = http(&state, "GET", "/schedules", None).await;
+    assert_eq!(listed["schedules"][0], paused["schedule"]);
+    drop(tools);
+    drop(state);
+    let reopened = ScheduleStore::open(root.path().join("schedules.json")).unwrap();
+    assert_eq!(
+        reopened.lock().unwrap().items[0].input,
+        json!({"version":3})
+    );
+    assert!(!reopened.lock().unwrap().items[0].enabled);
+}
+
+#[tokio::test]
+async fn reenabling_skips_missed_intervals_and_rejects_a_past_once_without_changing_the_plan() {
+    let (_root, state, _tools) = fixture();
+    let now = Local::now().naive_local();
+    let adapter = ScheduleManagementAdapter::new(state.schedules.clone());
+    let created = adapter
+        .create(
+            "task",
+            &json!({"type":"interval","seconds":3600}),
+            &json!({}),
+        )
+        .unwrap();
+    let id = created["schedule"]["id"].as_str().unwrap();
+    {
+        let mut store = state.schedules.lock().unwrap();
+        store.items[0].enabled = false;
+        store.items[0].next_at = format_local_datetime(now - Duration::days(3));
+    }
+    let enabled = adapter
+        .update(
+            id,
+            "task",
+            &json!({"type":"interval","seconds":3600}),
+            &json!({}),
+            true,
+        )
+        .unwrap();
+    assert!(parse_local_datetime(enabled["schedule"]["next_at"].as_str().unwrap()).unwrap() > now);
+    let before = adapter.list().unwrap();
+    let (status, _) = http(&state, "PUT", &format!("/schedules/{id}"), Some(json!({"graph":"task","rule":{"type":"once","at":format_local_datetime(now - Duration::days(1))},"enabled":true}))).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(adapter.list().unwrap(), before);
+    assert!(state.application.records().unwrap().is_empty());
+    let (status, _) = http(
+        &state,
+        "PUT",
+        &format!("/schedules/{id}"),
+        Some(json!({"graph":"missing","rule":{"type":"daily","time":"10:00"},"enabled":true})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
     assert_eq!(adapter.list().unwrap(), before);
 }

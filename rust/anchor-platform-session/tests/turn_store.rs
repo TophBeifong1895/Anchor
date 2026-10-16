@@ -1019,7 +1019,7 @@ fn exact_v1_migrates_transactionally_and_preserves_sessions_events_and_ownership
         connection
             .pragma_query_value(None, "user_version", |row| row.get::<_, i32>(0))
             .unwrap(),
-        7
+        8
     );
     assert_eq!(
         connection

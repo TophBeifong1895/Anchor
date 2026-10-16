@@ -6,11 +6,12 @@ use std::{
     sync::Arc,
 };
 
+#[cfg(test)]
 use anchor_graph_host::{FilePluginCatalog, PluginCatalog};
 use anchor_platform_session::SessionStore;
-use anchor_runtime::{
-    ToolDefinition, ToolError, ToolPort, ToolResultContent, graph::GraphSnapshot,
-};
+#[cfg(test)]
+use anchor_runtime::graph::GraphSnapshot;
+use anchor_runtime::{ToolDefinition, ToolError, ToolPort, ToolResultContent};
 use anchor_sandbox_bwrap::{BubblewrapPolicy, BubblewrapSandbox};
 use serde_json::{Value, json};
 use sha2::Digest as _;
@@ -564,6 +565,13 @@ pub(crate) const PILOT_TOOLS: &[PilotToolSpec] = &[
         effect: ToolEffect::HostFact,
     },
     PilotToolSpec {
+        name: "schedule_update",
+        description: "Edit, pause or re-enable an existing Graph schedule. Preserves its ID and previous Run facts. Changing timing or re-enabling schedules only future occurrences; inputs-only edits keep the next occurrence.",
+        parameters: || json!({"type":"object","properties":{"schedule":{"type":"string"},"graph":{"type":"string"},"rule":{"type":"object"},"input":{"type":"object"},"enabled":{"type":"boolean"}},"required":["schedule","graph","rule","enabled"],"additionalProperties":false}),
+        authority: ToolAuthority::Mutate,
+        effect: ToolEffect::HostFact,
+    },
+    PilotToolSpec {
         name: "schedule_delete",
         description: "Delete a saved Graph schedule the user requested to remove; preserves prior Run facts.",
         parameters: || single("schedule"),
@@ -806,7 +814,6 @@ pub(crate) fn effect(name: &str) -> Option<ToolEffect> {
 pub(crate) struct PilotTools {
     pub(crate) application: RunApplication,
     pub(crate) graph_name: String,
-    pub(crate) catalog_root: PathBuf,
     pub(crate) library_root: PathBuf,
     pub(crate) data_root: PathBuf,
     pub(crate) workspace_root: PathBuf,
@@ -977,6 +984,7 @@ impl PilotTools {
             "channel_status" => self.channel_status(&arguments).await,
             "schedule_list" => self.schedule_list(&arguments).await,
             "schedule_create" => self.schedule_create(&arguments).await,
+            "schedule_update" => self.schedule_update(&arguments).await,
             "schedule_delete" => self.schedule_delete(&arguments).await,
             "platform_status" => {
                 let mut value = self
@@ -1161,7 +1169,6 @@ mod frozen_mounts_tests {
             PilotTools {
                 application: RunApplication::new(self.state.clone(), self.root.clone()),
                 graph_name: "pilot".into(),
-                catalog_root: self.root.clone(),
                 library_root: self.root.clone(),
                 data_root: self.state.clone(),
                 workspace_root: self.root.join("workspaces"),

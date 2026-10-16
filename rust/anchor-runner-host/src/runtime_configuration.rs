@@ -442,8 +442,32 @@ impl RuntimeConfiguration {
         })
     }
 
+    fn python_preparation_fields_conflict(&self) -> bool {
+        self.external_provision.is_none()
+            && [
+                "ANCHOR_DEPENDENCIES_SOURCES",
+                "ANCHOR_DEPENDENCIES_UV",
+                "ANCHOR_DEPENDENCIES_UV_SHA256",
+                "ANCHOR_DEPENDENCIES_BUILD_ROOT",
+            ]
+            .iter()
+            .any(|field| self.external_fields.contains(field))
+    }
+
     pub(crate) fn status(&self) -> Value {
-        json!({"python_bootstrap_available":self.bootstrap_tool("uv").is_ok(), "rust_bootstrap_available":self.bootstrap_tool("rustup_init").is_ok(), "python_configuration_owner":if self.external_fields.contains("ANCHOR_DEPENDENCIES_PYTHON") {"deployment"} else {"host"}, "rust_configuration_owner":if self.external_fields.contains("ANCHOR_PILOT_RUSTUP") {"deployment"} else {"host"}, "python_default_version":"3.12", "rust_default_toolchain":"stable"})
+        let snapshot = self.snapshot().ok();
+        let python = snapshot
+            .as_ref()
+            .and_then(|snapshot| snapshot.python.as_ref());
+        let rust = snapshot
+            .as_ref()
+            .and_then(|snapshot| snapshot.rust.as_ref());
+        let python_bootstrap_available = self.bootstrap_tool("uv").is_ok();
+        let python_prepare_available = self.external_python_enabled != Some(false)
+            && !self.python_preparation_fields_conflict()
+            && ((self.external_python.is_some() && self.external_provision.is_some())
+                || python_bootstrap_available);
+        json!({"python_bootstrap_available":python_bootstrap_available, "python_prepare_available":python_prepare_available, "rust_bootstrap_available":self.bootstrap_tool("rustup_init").is_ok(), "python_configuration_owner":if self.external_fields.contains("ANCHOR_DEPENDENCIES_PYTHON") {"deployment"} else {"host"}, "rust_configuration_owner":if self.external_fields.contains("ANCHOR_PILOT_RUSTUP") {"deployment"} else {"host"}, "python_default_version":"3.12", "rust_default_toolchain":"stable", "python_configured":python.is_some_and(|path| path.is_file()), "python_enabled":snapshot.as_ref().is_some_and(|snapshot| snapshot.python_enabled), "python_explicitly_disabled":self.external_python_enabled == Some(false), "python_path":python, "rust_configured":rust.is_some_and(|installation| installation.proxy.is_file()), "rust_toolchain":rust.and_then(|installation| installation.toolchain.as_ref())})
     }
 
     async fn preparation_lease(&self, access: &DependencyAccess) -> Result<fs::File, String> {
@@ -501,11 +525,23 @@ impl RuntimeConfiguration {
         version: Option<&str>,
         access: &DependencyAccess,
     ) -> Result<Value, String> {
+        self.prepare_observed(kind, version, access, |_| {}).await
+    }
+
+    pub(crate) async fn prepare_observed(
+        &self,
+        kind: &str,
+        version: Option<&str>,
+        access: &DependencyAccess,
+        progress: impl Fn(&str) + Send + Sync,
+    ) -> Result<Value, String> {
         access.check().map_err(|error| error.to_string())?;
         if !access.network {
             return Err("runtime preparation requires task network authorization; call session_network first and continue after this Turn finishes".into());
         }
+        progress("waiting_for_lock");
         let _lease = self.preparation_lease(access).await?;
+        progress("checking_configuration");
         let mut fields = self.fields()?;
         let before = fields.clone();
         match kind {
@@ -513,16 +549,7 @@ impl RuntimeConfiguration {
                 if self.external_python_enabled == Some(false) {
                     return Err("Pilot Python is explicitly disabled by the deployment".into());
                 }
-                if self.external_provision.is_none()
-                    && [
-                        "ANCHOR_DEPENDENCIES_SOURCES",
-                        "ANCHOR_DEPENDENCIES_UV",
-                        "ANCHOR_DEPENDENCIES_UV_SHA256",
-                        "ANCHOR_DEPENDENCIES_BUILD_ROOT",
-                    ]
-                    .iter()
-                    .any(|field| self.external_fields.contains(field))
-                {
+                if self.python_preparation_fields_conflict() {
                     return Err("dependency preparation fields are externally managed and cannot be overwritten by Pilot".into());
                 }
                 let version = version.unwrap_or("3.12");
@@ -556,6 +583,7 @@ impl RuntimeConfiguration {
                         ("HOME", home.as_path()),
                         ("UV_PYTHON_INSTALL_DIR", python_root.as_path()),
                     ];
+                    progress("installing_python");
                     run_native(
                         &uv,
                         &[
@@ -571,6 +599,7 @@ impl RuntimeConfiguration {
                         access,
                     )
                     .await?;
+                    progress("probing_python");
                     let output = run_native(
                         &uv,
                         &[
@@ -645,6 +674,7 @@ impl RuntimeConfiguration {
                     ("RUSTUP_HOME", rustup.as_path()),
                 ];
                 if !cargo.join("bin/rustup").is_file() {
+                    progress("installing_rustup");
                     run_native(
                         &initializer,
                         &[
@@ -666,6 +696,7 @@ impl RuntimeConfiguration {
                 // `rustup run` does not install without `--install`. Failure
                 // can mean an installed compiler is unusable, so consult the
                 // official inventory before considering installation.
+                progress("checking_rust_toolchain");
                 let runnable = run_native(
                     &proxy,
                     &["run", &selected, "rustc", "--version"],
@@ -683,6 +714,7 @@ impl RuntimeConfiguration {
                     )
                     .await?;
                     if !installed.lines().any(|name| name == selected) {
+                        progress("installing_rust_toolchain");
                         // A static musl rustup needs explicit non-host selection
                         // even for this bundle's supported GNU Linux platform.
                         run_native(
@@ -705,6 +737,7 @@ impl RuntimeConfiguration {
                 }
                 // Installation and directory validation alone do not prove
                 // that a toolchain can execute on this host.
+                progress("probing_rust_toolchain");
                 for command in ["rustc", "cargo"] {
                     run_native(
                         &proxy,
@@ -738,6 +771,7 @@ impl RuntimeConfiguration {
             _ => return Err("kind must be python or rust".into()),
         }
         access.check().map_err(|error| error.to_string())?;
+        progress("publishing_configuration");
         let snapshot = self.snapshot_fields(fields.clone())?;
         self.publish(&fields)?;
         *self
@@ -888,6 +922,148 @@ esac
             false
         );
     }
+
+    fn configure_deployment_python(
+        root: &Path,
+        configuration: &mut RuntimeConfiguration,
+        with_provision: bool,
+    ) -> PathBuf {
+        let python = root.join("deployment-python/bin/python3");
+        fs::create_dir_all(python.parent().unwrap()).unwrap();
+        fs::write(&python, "#!/bin/sh\nprintf '3.12\\n'\n").unwrap();
+        fs::set_permissions(&python, fs::Permissions::from_mode(0o755)).unwrap();
+        configuration.external_python = Some(python.clone());
+        configuration.external_python_enabled = Some(true);
+        configuration
+            .external_fields
+            .extend(["ANCHOR_DEPENDENCIES_PYTHON", "ANCHOR_PILOT_PYTHON_ENABLED"]);
+        if with_provision {
+            configuration.external_provision = Some(DependencyProvisionConfig {
+                uv: configuration.bootstrap_tool("uv").unwrap(),
+                uv_digest: configuration.bootstrap.uv.as_ref().unwrap().sha256.clone(),
+                python: python.clone(),
+                sources: vec![PackageSource::Index("https://pypi.org/simple".into())],
+                build_root: root.join("deployment-build"),
+                bwrap: configuration.bwrap.clone(),
+            });
+            configuration.external_fields.extend([
+                "ANCHOR_DEPENDENCIES_SOURCES",
+                "ANCHOR_DEPENDENCIES_UV",
+                "ANCHOR_DEPENDENCIES_UV_SHA256",
+                "ANCHOR_DEPENDENCIES_BUILD_ROOT",
+            ]);
+        }
+        configuration.publish_snapshot_for_test(
+            configuration
+                .snapshot_fields(ManagedFields::default())
+                .unwrap(),
+        );
+        python
+    }
+
+    #[tokio::test]
+    async fn complete_external_python_preparation_does_not_require_release_bootstrap() {
+        let (root, mut configuration) = fixture();
+        let python = configure_deployment_python(root.path(), &mut configuration, true);
+        configuration.release = None;
+        configuration.bootstrap = BootstrapTools::default();
+        let status = configuration.status();
+        assert_eq!(status["python_bootstrap_available"], false);
+        assert_eq!(status["python_prepare_available"], true);
+        assert_eq!(status["python_configured"], true);
+        assert_eq!(status["python_enabled"], true);
+        assert_eq!(status["python_configuration_owner"], "deployment");
+        let access = DependencyAccess::default();
+        assert_eq!(
+            configuration
+                .prepare("python", None, &access)
+                .await
+                .unwrap()["prepared"],
+            true
+        );
+        let snapshot = configuration.snapshot().unwrap();
+        assert_eq!(snapshot.python, Some(python));
+        assert!(snapshot.provisioner.is_some());
+        let managed = configuration.fields().unwrap();
+        assert!(managed.python.is_none());
+        assert!(managed.sources.is_none());
+        configuration.external_python_enabled = Some(false);
+        assert_eq!(configuration.status()["python_prepare_available"], false);
+        let error = configuration
+            .prepare("python", None, &access)
+            .await
+            .unwrap_err();
+        assert!(error.contains("explicitly disabled"), "{error}");
+        assert_snapshot_unchanged(&configuration, &snapshot);
+    }
+
+    #[tokio::test]
+    async fn external_python_stays_ready_when_preparation_tools_are_missing() {
+        let (root, mut configuration) = fixture();
+        let python = configure_deployment_python(root.path(), &mut configuration, false);
+        assert_eq!(configuration.status()["python_prepare_available"], true);
+        let bootstrap = std::mem::take(&mut configuration.bootstrap);
+        let before = configuration.snapshot().unwrap();
+        let status = configuration.status();
+        assert_eq!(status["python_bootstrap_available"], false);
+        assert_eq!(status["python_prepare_available"], false);
+        assert_eq!(status["python_configured"], true);
+        assert_eq!(status["python_enabled"], true);
+        let access = DependencyAccess::default();
+        let error = configuration
+            .prepare("python", None, &access)
+            .await
+            .unwrap_err();
+        assert!(error.contains("no native uv bootstrap tool"), "{error}");
+        assert_snapshot_unchanged(&configuration, &before);
+        assert!(!configuration.root.join("runtime-config.json").exists());
+        configuration.bootstrap = bootstrap;
+        assert_eq!(configuration.status()["python_prepare_available"], true);
+        configuration
+            .prepare("python", None, &access)
+            .await
+            .unwrap();
+        let after = configuration.snapshot().unwrap();
+        assert_eq!(after.python, Some(python));
+        assert!(after.python_enabled);
+        assert!(after.provisioner.is_some());
+    }
+
+    #[tokio::test]
+    async fn python_prepare_availability_respects_external_field_conflicts_and_tool_identity() {
+        let (_root, mut configuration) = fixture();
+        let access = DependencyAccess::default();
+        for field in [
+            "ANCHOR_DEPENDENCIES_SOURCES",
+            "ANCHOR_DEPENDENCIES_UV",
+            "ANCHOR_DEPENDENCIES_UV_SHA256",
+            "ANCHOR_DEPENDENCIES_BUILD_ROOT",
+        ] {
+            configuration.external_fields.insert(field);
+            assert_eq!(configuration.status()["python_bootstrap_available"], true);
+            assert_eq!(configuration.status()["python_prepare_available"], false);
+            let error = configuration
+                .prepare("python", None, &access)
+                .await
+                .unwrap_err();
+            assert!(error.contains("externally managed"), "{error}");
+            configuration.external_fields.remove(field);
+        }
+        assert_eq!(configuration.status()["python_prepare_available"], true);
+        fs::write(
+            configuration.release.as_ref().unwrap().join("uv"),
+            "changed",
+        )
+        .unwrap();
+        assert_eq!(configuration.status()["python_prepare_available"], false);
+        let error = configuration
+            .prepare("python", None, &access)
+            .await
+            .unwrap_err();
+        assert!(error.contains("digest changed"), "{error}");
+        assert!(!configuration.root.join("runtime-config.json").exists());
+    }
+
     fn rust_fixture() -> (tempfile::TempDir, RuntimeConfiguration) {
         let (root, mut configuration) = fixture();
         let initializer = configuration.release.as_ref().unwrap().join("rustup-init");

@@ -124,6 +124,27 @@ async fn channel_admission_is_authenticated_idempotent_and_owner_scoped() {
     .await;
     assert_eq!(status, StatusCode::NOT_FOUND, "{forbidden}");
 
+    let (status, detail) = authorized_call(
+        app.clone(),
+        "GET",
+        &format!("/channel-sessions/{session}"),
+        &first_key,
+        json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{detail}");
+    assert_eq!(detail["session"]["id"], session);
+    assert_eq!(detail["session"]["run_ids"], json!(["channel-run-1"]));
+    let (status, _) = authorized_call(
+        app.clone(),
+        "GET",
+        &format!("/channel-sessions/{session}"),
+        &second_key,
+        json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+
     let (status, _) = authorized_call(
         app,
         "POST",

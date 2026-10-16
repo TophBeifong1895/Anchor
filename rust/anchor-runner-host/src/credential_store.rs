@@ -1,5 +1,8 @@
 //! Owner-bound credentials are Host configuration. Values never enter Pilot
 //! history, question answers, workspace files, or public request metadata.
+mod management;
+pub(crate) use management::{configure, credentials};
+
 use anchor_graph_host::{FilePluginCatalog, PluginDefinition};
 use anchor_platform_session::{Session, SessionStore, TurnStatus};
 use serde::{Deserialize, Serialize};
@@ -538,24 +541,15 @@ pub(crate) fn submit(
             "Plugin changed while credential input was pending; request a fresh form".into(),
         );
     }
-    let binding_owner = binding_owner(owner);
-    save(
-        &secret_path(
-            data,
-            &binding_owner,
-            &fact.request.plugin,
-            &fact.request.server,
-            &fact.request.field,
-        ),
-        &Secret {
-            format: 1,
-            owner: binding_owner,
-            plugin: fact.request.plugin.clone(),
-            server: fact.request.server.clone(),
-            field: fact.request.field.clone(),
-            authorization_digest: fact.authorization_digest.clone(),
-            value: value.into(),
-        },
+    let _synchronization_warning = management::mutate_locked(
+        data,
+        owner,
+        &definition,
+        &fact.request.server,
+        &fact.request.field,
+        &fact.authorization_digest,
+        Some(value),
+        sessions,
     )?;
     fact.request.status = "configured".into();
     save(&path, &fact)?;
@@ -669,7 +663,7 @@ pub(crate) fn public_result(request: &CredentialRequest) -> Value {
 mod tests {
     use super::*;
     use anchor_platform_session::CreateSession;
-    fn fixture() -> (tempfile::TempDir, SessionStore, Session, String) {
+    pub(super) fn fixture() -> (tempfile::TempDir, SessionStore, Session, String) {
         let root = tempfile::tempdir().unwrap();
         let data = root.path().join("state");
         fs::create_dir_all(data.join("platform")).unwrap();

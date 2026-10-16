@@ -299,7 +299,7 @@ async fn a_session_lists_installed_plugins_from_the_frozen_run_not_the_graph_fil
         "needsview",
         json!({"name":"Needs view","dependencies":{"python":["idna==3.7"]}}),
     );
-    // A directory the catalog cannot resolve is not installed.
+    // Broken installed assets stay visible with their base health facts.
     let broken = state.catalog_root.join("plugins/broken");
     std::fs::create_dir_all(&broken).unwrap();
     std::fs::write(broken.join("plugin.json"), "{ not json").unwrap();
@@ -318,7 +318,7 @@ async fn a_session_lists_installed_plugins_from_the_frozen_run_not_the_graph_fil
         &[("pinned", false, Some(true)), ("fileonly", true, None)],
     );
     write_plugin(&state, "fileonly", json!({"name":"File only"}));
-    // A switch that names a Plugin the Library does not have must not appear.
+    // A stale enabled switch stays visible so the owner can revoke it.
     session_store(&state)
         .set_plugin_mount("local", "sess", "ghost", true, "test", "stale")
         .unwrap();
@@ -332,7 +332,16 @@ async fn a_session_lists_installed_plugins_from_the_frozen_run_not_the_graph_fil
         .collect::<Vec<_>>();
     assert_eq!(
         ids,
-        ["extra", "fileonly", "needsview", "optional", "pinned"]
+        [
+            "broken",
+            "extra",
+            "fileonly",
+            "ghost",
+            "needsview",
+            "network",
+            "optional",
+            "pinned"
+        ]
     );
     let row = |id: &str| {
         rows.iter()
@@ -346,6 +355,9 @@ async fn a_session_lists_installed_plugins_from_the_frozen_run_not_the_graph_fil
     assert_eq!(row("pinned")["mcpServerNames"], json!([]));
     assert_eq!(row("pinned")["available"], true);
     assert_eq!(row("pinned")["error"], Value::Null);
+    assert_eq!(row("broken")["definitionValid"], false);
+    assert_eq!(row("broken")["dependenciesReady"], Value::Null);
+    assert_eq!(row("ghost")["on"], true);
     assert_eq!(row("optional")["required"], false);
     assert_eq!(
         row("optional")["on"],
@@ -585,6 +597,83 @@ async fn switching_an_uninstalled_plugin_is_refused_and_changes_no_bytes() {
             .plugin_mounts,
         BTreeMap::from([("network".into(), true)])
     );
+}
+
+#[tokio::test]
+async fn catalog_and_session_share_base_health_and_allow_revoking_broken_mounts() {
+    let (_root, state) = fixture();
+    let _env_guard = PROCESS_ENV.lock().await;
+    for (id, manifest) in [
+        ("healthy", json!({"name":"Healthy"})),
+        (
+            "needsview",
+            json!({"name":"Needs view","dependencies":{"python":["idna==3.7"]}}),
+        ),
+        ("broken", json!({"name":"Initially healthy"})),
+    ] {
+        write_plugin(&state, id, manifest);
+    }
+    let app = router(state.clone());
+    create_session(app.clone(), "sess").await;
+    let sessions = session_store(&state);
+    for id in ["needsview", "broken", "missing"] {
+        sessions
+            .set_plugin_mount("local", "sess", id, true, "test", "prior mount")
+            .unwrap();
+    }
+    std::fs::write(
+        state.catalog_root.join("plugins/broken/plugin.json"),
+        "{invalid",
+    )
+    .unwrap();
+    let (_, catalog) = call(app.clone(), "GET", "/plugins", None).await;
+    let (_, listed) = call(app.clone(), "GET", "/sessions/sess/plugins", None).await;
+    for row in catalog["plugins"].as_array().unwrap() {
+        let session_row = listed["plugins"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|item| item["id"] == row["id"])
+            .unwrap();
+        for field in [
+            "definitionValid",
+            "dependenciesReady",
+            "available",
+            "connectionVerified",
+            "contextAuthorized",
+        ] {
+            assert_eq!(
+                row[field], session_row[field],
+                "{field}: {row} / {session_row}"
+            );
+        }
+    }
+    for id in ["needsview", "broken", "missing"] {
+        let (status, response) = call(
+            app.clone(),
+            "POST",
+            &format!("/sessions/sess/plugins/{id}"),
+            Some(r#"{"on":false}"#),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{id}: {response}");
+        assert_eq!(response["plugin"]["on"], false);
+        assert_eq!(
+            sessions.get("local", "sess").unwrap().plugin_mounts.get(id),
+            Some(&false)
+        );
+        let (status, _) = call(
+            app.clone(),
+            "POST",
+            &format!("/sessions/sess/plugins/{id}"),
+            Some(r#"{"on":true}"#),
+        )
+        .await;
+        assert!(
+            status.is_client_error(),
+            "a broken mount must not be re-enabled: {id}"
+        );
+    }
 }
 
 #[tokio::test]

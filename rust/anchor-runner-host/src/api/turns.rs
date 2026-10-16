@@ -24,6 +24,7 @@ pub(super) async fn recover_pilot_turns(state: &ApiState) -> Result<(), String> 
         sessions
             .recover_channel_deliveries()
             .map_err(|_| "Channel delivery startup recovery failed".to_owned())?;
+        let mut recoverable_assistants = Vec::new();
         for (run, record) in state
             .application
             .records()
@@ -45,6 +46,23 @@ pub(super) async fn recover_pilot_turns(state: &ApiState) -> Result<(), String> 
                 .application
                 .metadata(&run)
                 .map_err(|_| "Pilot Run identity unavailable".to_owned())?;
+            if let Some(metadata) = &metadata
+                && metadata.graph_digest == record.graph_digest
+                && !record.status.is_terminal()
+                && record.status != anchor_runtime::graph::RunStatus::Stopped
+                && let Some(source) = &metadata.assistant
+                && sessions
+                    .get_channel_assistant(&source.owner, &source.session)
+                    .map_err(|_| "Assistant startup identity unavailable".to_owned())?
+                    .is_some_and(|current| {
+                        current.run_id == run
+                            && current.wait_node == source.wait_node
+                            && current.work_node == source.work_node
+                            && current.reply_node == source.reply_node
+                    })
+            {
+                recoverable_assistants.push(run.clone());
+            }
             if let Some(source) = metadata
                 .as_ref()
                 .and_then(|metadata| metadata.pilot.clone())
@@ -67,7 +85,7 @@ pub(super) async fn recover_pilot_turns(state: &ApiState) -> Result<(), String> 
             }
         }
         sessions
-            .interrupt_running()
+            .interrupt_running_except_assistants(&recoverable_assistants)
             .map_err(|_| "Pilot startup recovery failed".to_owned())?;
         Ok(())
     })
@@ -215,7 +233,6 @@ pub(super) async fn create_pilot_turn(
     let tools = PilotTools {
         application: state.application.clone(),
         graph_name: state.graph_name.clone(),
-        catalog_root: state.catalog_root.clone(),
         library_root: library_root(&state.catalog_root),
         data_root: state.data_root.clone(),
         workspace_root: state.workspace_root.clone(),

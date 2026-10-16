@@ -268,6 +268,13 @@ pub trait NodeExecutionPort: Send + Sync {
             "Plugin resolver is not configured".into(),
         ))
     }
+    /// A Host with its own durable invocation authorization may explicitly own
+    /// live Plugin validation. The default retains frozen Run authorization.
+    /// Opting in requires authenticating the Run's Host binding and validating
+    /// every executable invocation against an immutable permission snapshot.
+    fn invocation_plugin_authority(&self, _record: &GraphRunRecord) -> Result<bool, GraphError> {
+        Ok(false)
+    }
     fn completion_fact<'a>(
         &'a self,
         key: &'a InvocationKey,

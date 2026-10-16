@@ -97,7 +97,6 @@ fn fixture() -> (tempfile::TempDir, PilotTools, Arc<Port>) {
         )
         .with_channel_management(port.clone()),
         graph_name: String::new(),
-        catalog_root: root.path().join("catalog"),
         library_root: root.path().join("catalog"),
         data_root: root.path().join("state"),
         workspace_root: root.path().join("workspaces"),

@@ -278,12 +278,13 @@ impl BridgeTransport {
 
 /// Host-side model endpoint used by the bridge proxy.
 #[derive(Clone)]
-pub(super) struct ModelUpstream {
+pub(crate) struct ModelUpstream {
     pub url: Url,
     pub api_key: String,
 }
 
-pub(super) struct ModelRegistry {
+#[derive(Clone)]
+pub(crate) struct ModelRegistry {
     fixture: bool,
     /// Sandbox-dials-the-provider mode. Kept only as a rollback lever for the
     /// bridge proxy; the fixture transport always proxies.
@@ -300,11 +301,13 @@ pub(super) struct ModelRegistry {
     model: String,
     api_key: String,
     aliases: BTreeMap<String, String>,
+    credential_scope: Option<String>,
+    retained: Vec<ModelRegistry>,
 }
 
-pub(super) struct ModelBinding {
-    pub(super) model: String,
-    pub(super) identity: String,
+pub(crate) struct ModelBinding {
+    pub(crate) model: String,
+    pub(crate) identity: String,
 }
 
 impl ModelRegistry {
@@ -324,7 +327,7 @@ impl ModelRegistry {
         registry
     }
 
-    fn from_values(
+    pub(crate) fn from_values(
         fixture: bool,
         mut value: impl FnMut(&str) -> Option<String>,
     ) -> Result<Self, String> {
@@ -345,6 +348,11 @@ impl ModelRegistry {
             let mut endpoint = configured_url(&host, false)?;
             let api_key =
                 value("ANCHOR_MODEL_API_KEY").ok_or("ANCHOR_MODEL_API_KEY is required")?;
+            if !api_key.bytes().all(|byte| matches!(byte, 0x21..=0x7e)) {
+                return Err(
+                    "ANCHOR_MODEL_API_KEY 格式不正确，请检查是否混入中文、空格或换行。".into(),
+                );
+            }
             validate_text(&api_key, "ANCHOR_MODEL_API_KEY")?;
             let model = model_name(
                 value("ANCHOR_MODEL_NAME").unwrap_or_else(|| "default".into()),
@@ -407,10 +415,22 @@ impl ModelRegistry {
             model,
             api_key,
             aliases,
+            credential_scope: None,
+            retained: vec![],
         })
     }
 
-    pub(super) fn resolve(&self, reference: Option<&str>) -> Result<ModelBinding, String> {
+    pub(crate) fn with_retained(mut self, retained: Vec<ModelRegistry>) -> Self {
+        self.retained = retained;
+        self
+    }
+
+    pub(crate) fn with_credential_scope(mut self, scope: &str) -> Self {
+        self.credential_scope = Some(scope.to_owned());
+        self
+    }
+
+    pub(crate) fn resolve(&self, reference: Option<&str>) -> Result<ModelBinding, String> {
         let model = match reference {
             None | Some("models.default") => &self.model,
             Some(reference) if reference == self.model => &self.model,
@@ -419,8 +439,11 @@ impl ModelRegistry {
                 .get(reference)
                 .ok_or("model reference is not explicitly configured for Goose")?,
         };
-        let identity = serde_json::to_vec(&(self.endpoint.as_str(), self.wire, model))
-            .expect("model binding strings are serializable");
+        let identity = match &self.credential_scope {
+            Some(scope) => serde_json::to_vec(&(self.endpoint.as_str(), self.wire, model, scope)),
+            None => serde_json::to_vec(&(self.endpoint.as_str(), self.wire, model)),
+        }
+        .expect("model binding strings are serializable");
         Ok(ModelBinding {
             model: model.clone(),
             identity: format!("{:x}", Sha256::digest(identity)),
@@ -437,6 +460,13 @@ impl ModelRegistry {
     /// real provider credential never enters it. `None` means the sandbox dials
     /// the provider itself, which only happens with the explicit
     /// `ANCHOR_MODEL_DIRECT=1` rollback lever.
+    pub(crate) fn connection_test_upstream(&self) -> ModelUpstream {
+        ModelUpstream {
+            url: self.endpoint.clone(),
+            api_key: self.api_key.clone(),
+        }
+    }
+
     pub(super) fn model_upstream(&self) -> Option<ModelUpstream> {
         if self.direct {
             return None;
@@ -468,7 +498,14 @@ impl ModelRegistry {
             // The sandbox speaks only to the host bridge.
             (
                 bridge_url.to_owned(),
-                "v1/chat/completions".to_owned(),
+                if self.wire == "responses" {
+                    "v1/responses"
+                } else {
+                    // A nonstandard chat path prevents Goose's model-name
+                    // heuristic from switching a chat deployment to Responses.
+                    "anchor/v1/chat/completions"
+                }
+                .to_owned(),
                 bridge_token.to_owned(),
             )
         };
@@ -645,7 +682,10 @@ mod tests {
                 ("GOOSE_PROVIDER".into(), "openai".into()),
                 ("GOOSE_MODEL".into(), "fixture-goose".into()),
                 ("OPENAI_HOST".into(), "http://127.0.0.1:54321".into()),
-                ("OPENAI_BASE_PATH".into(), "v1/chat/completions".into()),
+                (
+                    "OPENAI_BASE_PATH".into(),
+                    "anchor/v1/chat/completions".into()
+                ),
                 ("OPENAI_API_KEY".into(), "bridge-secret".into()),
             ])
         );
@@ -794,7 +834,14 @@ mod tests {
                 // ...while the sandbox only ever speaks to the bridge.
                 let entries = environment(&models, None);
                 assert_eq!(entries["OPENAI_HOST"], "http://127.0.0.1:54321");
-                assert_eq!(entries["OPENAI_BASE_PATH"], "v1/chat/completions");
+                assert_eq!(
+                    entries["OPENAI_BASE_PATH"],
+                    if wire == "responses" {
+                        "v1/responses"
+                    } else {
+                        "anchor/v1/chat/completions"
+                    }
+                );
                 // The explicit rollback lever restores sandbox-direct dialing with
                 // the configured prefix preserved.
                 values.insert("ANCHOR_MODEL_DIRECT".into(), "1".into());
@@ -826,7 +873,7 @@ mod tests {
                 ("GOOSE_PROVIDER".into(), "openai".into()),
                 ("GOOSE_MODEL".into(), "primary-model".into()),
                 ("OPENAI_HOST".into(), "http://127.0.0.1:54321".into()),
-                ("OPENAI_BASE_PATH".into(), "v1/chat/completions".into()),
+                ("OPENAI_BASE_PATH".into(), "v1/responses".into()),
                 ("OPENAI_API_KEY".into(), "bridge-secret".into()),
             ])
         );
@@ -1090,6 +1137,26 @@ mod tests {
                 original.identity
             );
         }
+    }
+
+    #[test]
+    fn credential_scope_separates_slot_bindings_without_hashing_credentials() {
+        let mut values = native_values();
+        let legacy = registry(false, &values).resolve(None).unwrap();
+        let scoped = registry(false, &values).with_credential_scope("slot:default");
+        let original = scoped.resolve(None).unwrap();
+        let backup = registry(false, &values)
+            .with_credential_scope("slot:backup")
+            .resolve(None)
+            .unwrap();
+        assert_ne!(original.identity, legacy.identity);
+        assert_ne!(original.identity, backup.identity);
+
+        values.insert("ANCHOR_MODEL_API_KEY".into(), "rotated-secret".into());
+        let rotated = registry(false, &values).with_credential_scope("slot:default");
+        assert_eq!(rotated.resolve(None).unwrap().identity, original.identity);
+        assert_eq!(rotated.model_upstream().unwrap().api_key, "rotated-secret");
+        assert_eq!(scoped.model_upstream().unwrap().api_key, "operator-secret");
     }
 
     #[test]

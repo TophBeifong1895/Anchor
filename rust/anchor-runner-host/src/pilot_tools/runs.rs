@@ -25,13 +25,16 @@ impl PilotTools {
     }
 
     pub(super) async fn run_list(&self, _arguments: &Value) -> Result<Value, ToolError> {
-        let runs = self
-            .application
-            .records()
-            .map_err(|_| failed())?
-            .into_iter()
-            .map(|(id, record)| json!({"run":id,"status":record.status}))
-            .collect::<Vec<_>>();
+        let mut runs = Vec::new();
+        for (id, record) in self.application.records().map_err(|_| failed())? {
+            let metadata = self.application.metadata(&id).map_err(|_| failed())?;
+            let projection = self
+                .application
+                .project_run(&record, metadata.as_ref())
+                .await
+                .map_err(|_| failed())?;
+            runs.push(json!({"run":id,"status":record.status,"projection":projection}));
+        }
         Ok(json!({"runs":runs}))
     }
 
@@ -48,6 +51,12 @@ impl PilotTools {
             .find(|(id, _)| id == &run)
             .ok_or_else(failed)?
             .1;
-        Ok(json!({"run":run,"record":record}))
+        let metadata = self.application.metadata(&run).map_err(|_| failed())?;
+        let projection = self
+            .application
+            .project_run(&record, metadata.as_ref())
+            .await
+            .map_err(|_| failed())?;
+        Ok(json!({"run":run,"record":record,"projection":projection}))
     }
 }

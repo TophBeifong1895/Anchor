@@ -535,9 +535,6 @@ pub fn config_with_progress(
         // Tests that exercise the progress bubble lower this explicitly; the
         // default keeps every other test free of an extra frame.
         ack_delay: Duration::from_secs(60),
-        // Animation is off unless a test asks for it, so an idle frame never
-        // lands in another test's expectations.
-        animation_interval: Duration::from_secs(60),
     };
     // Fixtures keep the (default-on) progress display enabled so the bubble
     // semantics stay covered; `ANCHOR_WECOM_PROGRESS=0` disables it in
@@ -555,6 +552,13 @@ pub fn config_with_progress(
 pub fn callback(event_id: &str, sender: &str, text: &str) -> Value {
     json!({"cmd":"aibot_msg_callback","headers":{"req_id":format!("callback-{event_id}")},
         "body":{"msgid":event_id,"msgtype":"text","from":{"userid":sender},"text":{"content":text}}})
+}
+
+pub fn group_callback(event_id: &str, sender: &str, chatid: &str, text: &str) -> Value {
+    let mut frame = callback(event_id, sender, text);
+    frame["body"]["chattype"] = json!("group");
+    frame["body"]["chatid"] = json!(chatid);
+    frame
 }
 
 pub fn send_request(request_id: &str, userid: &str, content: &str) -> Value {

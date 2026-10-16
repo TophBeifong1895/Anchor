@@ -104,7 +104,6 @@ fn node_steps(value: &str, route: &str, previous: Option<&str>) -> Vec<Step> {
             "set -eu; test ! -e evidence.txt; {previous_check} printf '%s' '{value}' > evidence.txt; cat evidence.txt"
         )),
         complete(route).after(""),
-        Step::text("conversation node finished"),
     ]
 }
 
@@ -251,16 +250,16 @@ fn native_goose_channel_two_turns_restart_reuse_history_but_not_workspace() {
         host.base.artifact(&host.record(&second), "worker")
     );
     let requests = provider.requests();
-    assert_eq!(requests.len(), 6);
-    assert!(requests[3]["messages"].to_string().contains(&first_nonce));
+    assert_eq!(requests.len(), 4);
+    assert!(requests[2]["messages"].to_string().contains(&first_nonce));
     assert!(
-        requests[3]["messages"]
+        requests[2]["messages"]
             .to_string()
-            .contains("conversation node finished")
+            .contains("fixture complete")
     );
-    assert!(requests[3]["messages"].to_string().contains(&second_nonce));
+    assert!(requests[2]["messages"].to_string().contains(&second_nonce));
     assert!(
-        tool_feedback(&requests[4])
+        tool_feedback(&requests[3])
             .last()
             .unwrap()
             .to_string()
@@ -296,7 +295,7 @@ fn native_goose_channel_two_turns_restart_reuse_history_but_not_workspace() {
             .is_file()
     );
     assert_eq!(submit(&server, &second_request), second);
-    assert_eq!(provider.requests().len(), 6);
+    assert_eq!(provider.requests().len(), 4);
     host.evidence(
         &provider,
         &second,
@@ -339,7 +338,7 @@ fn native_goose_channel_users_and_nodes_ignore_forged_input_authority() {
     let crossing = turn("bob", &bob_nonce, Some(&alice));
     let (status, rejected) = server.request("POST", "/conversation-runs", Some(&crossing));
     assert_eq!(status, 409, "{rejected}");
-    assert_eq!(provider.requests().len(), 6);
+    assert_eq!(provider.requests().len(), 4);
     let protected = host.base.root.path().join("operator-private.txt");
     fs::write(&protected, "operator-data").unwrap();
     provider.append(vec![
@@ -349,7 +348,6 @@ fn native_goose_channel_users_and_nodes_ignore_forged_input_authority() {
             protected.display()
         )).after("not authorized"),
         complete("peer").after(""),
-        Step::text("isolated worker finished"),
     ]);
     provider.append(node_steps(&bob_peer, "verify", None));
     let mut bob_request = turn("bob", &bob_nonce, None);
@@ -379,13 +377,9 @@ fn native_goose_channel_users_and_nodes_ignore_forged_input_authority() {
     assert_ne!(alice_worker_process, bob_worker_process);
     assert_ne!(alice_peer_process, bob_peer_process);
     let requests = provider.requests();
-    assert_eq!(requests.len(), 13);
-    assert!(
-        !requests[3]["messages"]
-            .to_string()
-            .contains("conversation node finished")
-    );
-    for request in &requests[6..] {
+    assert_eq!(requests.len(), 9);
+    assert!(!requests[2]["messages"].to_string().contains(&alice_worker));
+    for request in &requests[4..] {
         for private in [&alice_nonce, &alice_worker, &alice_peer] {
             assert!(
                 !request["messages"].to_string().contains(private),
@@ -393,7 +387,7 @@ fn native_goose_channel_users_and_nodes_ignore_forged_input_authority() {
             );
         }
     }
-    let denial = tool_feedback(&requests[7]).last().unwrap().to_string();
+    let denial = tool_feedback(&requests[5]).last().unwrap().to_string();
     assert!(
         denial.contains("not_executed") && denial.contains("not authorized"),
         "{denial}"
@@ -405,11 +399,7 @@ fn native_goose_channel_users_and_nodes_ignore_forged_input_authority() {
     assert_artifact(&host, &bob, "peer", bob_peer.as_bytes());
     assert_artifact(&host, &bob, "verify", bob_peer.as_bytes());
     let peer_history = host.native_conversation(&bob, "peer", 1);
-    assert!(
-        !peer_history
-            .to_string()
-            .contains("isolated worker finished")
-    );
+    assert!(!peer_history.to_string().contains(&bob_worker));
     host.evidence(
         &provider,
         &bob,
@@ -430,12 +420,13 @@ fn native_goose_channel_unknown_effect_new_turn_checks_state_and_rejects_old_rec
     let first_nonce = nonce("unknown-first");
     let second_nonce = nonce("unknown-second");
     let provider = Provider::new("goose-conversation-unknown-effect", vec![]);
+    let business = provider.serve_effects();
     let payload = json!({"effect_key":first_nonce});
     provider.append(vec![
         command("printf checkpoint > checkpoint.txt; cat checkpoint.txt"),
         command(&format!(
-            "curl --silent --show-error --fail --max-time 5 --noproxy '*' --request POST --header 'Content-Type: application/json' --data '{}' '{}/effects'; printf ready > effect-ready; sleep 60",
-            payload, provider.url
+            "set -e; curl --silent --show-error --fail --max-time 5 --noproxy '*' --request POST --header 'Content-Type: application/json' --data '{}' '{}/effects'; printf ready > effect-ready; sleep 60",
+            payload, business.url
         )).after("checkpoint"),
     ]);
     let mut definition = graph(false);
@@ -443,7 +434,24 @@ fn native_goose_channel_unknown_effect_new_turn_checks_state_and_rejects_old_rec
     let host = Host::new(&definition)
         .default_runtime()
         .with_allowed_commands("sh,cat,curl,sleep,true");
+    let network = host.base.root.path().join("plugins/network");
+    fs::create_dir_all(&network).unwrap();
+    fs::write(
+        network.join("plugin.json"),
+        json!({"name":"Fixture task network","network":true}).to_string(),
+    )
+    .unwrap();
     let mut server = host.serve(&provider);
+    let (status, created) =
+        server.request("POST", "/sessions", Some(&json!({"id":"unknown-user"})));
+    assert_eq!(status, 201, "{created}");
+    assert_eq!(created["session"]["network_allowed"], true);
+    let (status, mounted) = server.request(
+        "POST",
+        "/sessions/unknown-user/plugins/network",
+        Some(&json!({"on":true})),
+    );
+    assert_eq!(status, 200, "{mounted}");
     let first = submit(&server, &turn("unknown-user", &first_nonce, None));
     wait_until("unknown external effect and workspace checkpoint", || {
         provider.effects().len() == 1
@@ -468,10 +476,9 @@ fn native_goose_channel_unknown_effect_new_turn_checks_state_and_rejects_old_rec
         complete("verify"),
         command(&format!(
             "set -eu; test ! -e checkpoint.txt; test ! -e effect-ready; test -f /previous/effect-ready; test \"$(cat /previous/checkpoint.txt)\" = checkpoint; if printf corrupt > /previous/checkpoint.txt; then exit 93; fi; curl --silent --show-error --fail --max-time 5 --noproxy '*' '{}/effects' > evidence.txt; cat evidence.txt",
-            provider.url
+            business.url
         )).after("final_result.observed_receipt must match"),
         complete("verify").after("effect_count"),
-        Step::text("checked external state without repeating the interrupted POST"),
     ]);
     let server = host.serve(&provider);
     let (status, stopped) = server.request("POST", &format!("/runs/{first}/stop"), None);
@@ -485,7 +492,7 @@ fn native_goose_channel_unknown_effect_new_turn_checks_state_and_rejects_old_rec
     assert_ne!(after_fact["key"], before_fact["key"]);
     assert_eq!(provider.effects(), vec![payload]);
     let requests = provider.requests();
-    assert_eq!(requests.len(), 6);
+    assert_eq!(requests.len(), 5);
     let continued = requests[2]["messages"].to_string();
     assert!(continued.contains(&first_nonce) && continued.contains(&second_nonce));
     assert!(continued.contains("do not blindly repeat"));
@@ -505,7 +512,7 @@ fn native_goose_channel_unknown_effect_new_turn_checks_state_and_rejects_old_rec
     let (status, rejected_resume) = server.request("POST", &format!("/runs/{first}/resume"), None);
     assert_eq!(status, 409, "{rejected_resume}");
     assert_eq!(fs::read(&old_record_path).unwrap(), frozen_record);
-    assert_eq!(provider.requests().len(), 6);
+    assert_eq!(provider.requests().len(), 5);
     let saved = host.record(&second);
     let bytes = host.base.file(&saved, "worker", "evidence.txt");
     let report: Value = serde_json::from_slice(&bytes).unwrap();
@@ -568,14 +575,14 @@ fn native_goose_channel_skipped_agent_keeps_nearest_selected_native_session_and_
     );
     assert_eq!(second_worker_process, third_worker_process);
     let requests = provider.requests();
-    assert_eq!(requests.len(), 15);
-    let peer_request = requests[12]["messages"].to_string();
+    assert_eq!(requests.len(), 10);
+    let peer_request = requests[8]["messages"].to_string();
     assert!(peer_request.contains(&first_nonce) && peer_request.contains(&first_peer));
     assert!(peer_request.contains(&third_nonce));
     assert!(!peer_request.contains(&second_nonce));
-    assert!(requests[9]["messages"].to_string().contains(&second_nonce));
+    assert!(requests[6]["messages"].to_string().contains(&second_nonce));
     assert!(
-        tool_feedback(&requests[13])
+        tool_feedback(&requests[9])
             .last()
             .unwrap()
             .to_string()
@@ -633,14 +640,6 @@ fn binding_failure(failure: &str) {
     let second_request = turn("binding-user", &nonce("rebind-denied"), Some(&first));
     server.kill();
     drop(server);
-    let changed_provider = (failure == "changed-model").then(|| {
-        Provider::with_model(
-            &format!("{scenario}-new-provider"),
-            vec![],
-            "fixture-goose-changed",
-        )
-    });
-    let active_provider = changed_provider.as_ref().unwrap_or(&provider);
     match failure {
         "missing-fact" => fs::remove_file(&path).unwrap(),
         "missing-scope" | "missing-model-binding" => {
@@ -655,11 +654,10 @@ fn binding_failure(failure: &str) {
                 });
             fs::write(&path, serde_json::to_vec_pretty(&damaged).unwrap()).unwrap();
         }
-        "changed-model" => {}
         _ => unreachable!(),
     }
-    let server = host.serve(active_provider);
-    let rejected = assert_no_silent_rebind(&server, &second_request, active_provider);
+    let server = host.serve(&provider);
+    let rejected = assert_no_silent_rebind(&server, &second_request, &provider);
     let after_history =
         host.session_conversation(&process, first_fact["session_id"].as_str().unwrap());
     assert_eq!(
@@ -676,21 +674,19 @@ fn binding_failure(failure: &str) {
         );
     }
     provider.assert_consumed();
-    active_provider.assert_consumed();
-    assert_eq!(provider.requests().len(), 3);
+    assert_eq!(provider.requests().len(), 2);
     fs::write(&path, &original).unwrap();
     assert_artifact(&host, &first, "worker", first_nonce.as_bytes());
     assert_artifact(&host, &first, "verify", first_nonce.as_bytes());
     host.evidence(
-        active_provider,
+        &provider,
         &first,
         json!({
             "case_source":CASE_SOURCE,"failure":failure,"rejected_request":second_request,
             "rejection":rejected,"no_model_calls_after_binding_failure":true,
             "baseline_provider_requests":provider.requests(),"baseline_fact":first_fact,
             "native_history_unchanged":after_history,
-            "model_and_endpoint_changed":failure == "changed-model",
-            "fixture_fact_restored_only_for_evidence":failure != "changed-model"
+            "fixture_fact_restored_only_for_evidence":true
         }),
     );
 }
@@ -715,8 +711,37 @@ fn missing_predecessor_model_binding_fails_closed() {
 
 #[test]
 #[ignore = "requires pinned Goose binary"]
-fn changed_model_and_endpoint_fail_closed() {
-    binding_failure("changed-model");
+fn next_conversation_invocation_changes_model_and_endpoint_without_losing_history() {
+    let first_nonce = nonce("model-before");
+    let second_nonce = nonce("model-after");
+    let first_provider = Provider::new(
+        "conversation-model-before",
+        node_steps(&first_nonce, "verify", None),
+    );
+    let mut next_steps = node_steps(&second_nonce, "verify", Some(&first_nonce));
+    next_steps[0] = command(&format!(
+        "test \"$(cat /previous/evidence.txt)\" = '{first_nonce}'; printf '%s' '{second_nonce}' > evidence.txt"
+    )).expect_request_contains(&first_nonce);
+    let second_provider =
+        Provider::with_model("conversation-model-after", next_steps, "fixture-next-model");
+    let host = Host::new(&graph(false)).default_runtime();
+    let mut server = host.serve(&first_provider);
+    let first = submit(&server, &turn("model-user", &first_nonce, None));
+    server.wait_status(&first, "completed");
+    let (first_fact, _) = assert_scope(&host, &first, "worker");
+    server.kill();
+    drop(server);
+    let server = host.serve(&second_provider);
+    let second = submit(&server, &turn("model-user", &second_nonce, Some(&first)));
+    server.wait_status(&second, "completed");
+    let (second_fact, _) = assert_scope(&host, &second, "worker");
+    assert_eq!(first_fact["session_id"], second_fact["session_id"]);
+    assert_ne!(first_fact["model_binding"], second_fact["model_binding"]);
+    assert_artifact(&host, &second, "verify", second_nonce.as_bytes());
+    first_provider.assert_consumed();
+    host.evidence(&second_provider, &second, json!({"case_source":CASE_SOURCE,
+        "same_native_session":true,"model_and_endpoint_updated":true,"history_and_previous_artifact_preserved":true,
+        "first_provider_requests":first_provider.requests()}));
 }
 
 #[test]
@@ -727,12 +752,10 @@ fn same_run_loop_reuses_native_session_for_each_invocation() {
         vec![
             command("printf first-loop > evidence.txt; cat evidence.txt"),
             complete("worker").after("first-loop"),
-            Step::text("first loop finished"),
             command(
                 "test \"$(cat evidence.txt)\" = first-loop; printf second-loop > evidence.txt; cat evidence.txt",
             ),
             complete("verify").after("second-loop"),
-            Step::text("second loop finished"),
         ],
     );
     let mut definition = graph(false);
@@ -752,9 +775,9 @@ fn same_run_loop_reuses_native_session_for_each_invocation() {
         b"second-loop"
     );
     assert!(
-        provider.requests()[3]["messages"]
+        provider.requests()[2]["messages"]
             .to_string()
-            .contains("first loop finished")
+            .contains("fixture complete")
     );
     host.evidence(&provider, &run, json!({"case_source":CASE_SOURCE,"first_fact":first,"second_fact":second,"same_run_native_continuation":true}));
 }
@@ -771,7 +794,6 @@ fn frozen_channel_image_reaches_native_prompt_without_host_path_grants() {
                 "test -f /in/channel/pixel.png; if printf invalid > /in/channel/pixel.png; then exit 91; fi; printf frozen-image > evidence.txt; cat evidence.txt",
             ),
             complete("verify").after("frozen-image"),
-            Step::text("image input fixture finished"),
         ],
         "gpt-4o",
     );

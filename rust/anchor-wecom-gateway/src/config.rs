@@ -59,9 +59,6 @@ pub struct Timing {
     /// "processing" bubble. A burst of messages therefore collapses into one
     /// bubble for the newest message instead of one per message.
     pub ack_delay: Duration,
-    /// How often the open bubble redraws its ellipsis while a step runs. Tests
-    /// raise this to keep an idle animation frame out of their expectations.
-    pub animation_interval: Duration,
 }
 
 impl Default for Timing {
@@ -73,7 +70,6 @@ impl Default for Timing {
             reconnect_base: Duration::from_secs(1),
             reconnect_max: Duration::from_secs(30),
             ack_delay: Duration::from_millis(1200),
-            animation_interval: Duration::from_secs(2),
         }
     }
 }
@@ -266,7 +262,6 @@ impl GatewayConfig {
             self.timing.reconnect_base,
             self.timing.reconnect_max,
             self.timing.ack_delay,
-            self.timing.animation_interval,
         ];
         if durations
             .iter()

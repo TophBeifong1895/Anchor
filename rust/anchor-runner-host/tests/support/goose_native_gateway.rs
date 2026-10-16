@@ -143,7 +143,6 @@ fn native_goose_sends_through_actual_rust_gateway_and_correlates_platform_acks()
             command("printf native-gateway-two-confirmed > evidence.txt; cat evidence.txt")
                 .after("accepted"),
             complete("verify").after("native-gateway-two-confirmed"),
-            Step::text("two native gateway deliveries confirmed by the local platform"),
         ],
     );
     let gateway = Transport::new();

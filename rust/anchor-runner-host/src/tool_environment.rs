@@ -21,6 +21,7 @@ const PILOT_RUST_BIN: &str = "/tools/anchor-pilot-rust/bin";
 const PILOT_CARGO_HOME: &str = "/workspace/.anchor-rust/cargo";
 const PILOT_PYTHON_BIN: &str = "/tools/anchor-pilot-python/bin";
 const PYTHON_PROBE_TIMEOUT: Duration = Duration::from_secs(5);
+const PYTHON_VERSION_PROBE_TIMEOUT: Duration = Duration::from_secs(1);
 
 #[derive(Clone, Debug, Default)]
 pub(crate) struct ToolEnvironment {
@@ -54,13 +55,50 @@ fn write_launcher(path: &Path, contents: &str) -> Result<(), String> {
 /// the subprocess wait and output collection without leaving reader threads
 /// behind when a misconfigured executable hangs or inherits an open pipe.
 fn probe_python(interpreter: &Path, timeout: Duration) -> Result<std::process::Output, String> {
+    run_python_probe(
+        interpreter,
+        timeout,
+        "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')",
+    )
+}
+
+/// A display observation only: retain the short ABI version used by execution.
+/// The HTTP caller must run this bounded synchronous probe off the async worker.
+pub(crate) fn probe_python_version(interpreter: &Path) -> Result<String, String> {
+    let output = run_python_probe(
+        interpreter,
+        PYTHON_VERSION_PROBE_TIMEOUT,
+        "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}')",
+    )?;
+    if !output.status.success() {
+        return Err("Python version probe failed".into());
+    }
+    let version = String::from_utf8(output.stdout)
+        .map_err(|_| "Python version probe returned invalid UTF-8")?
+        .trim()
+        .to_owned();
+    let parts = version.split('.').collect::<Vec<_>>();
+    if parts.len() != 3
+        || parts.iter().any(|part| {
+            part.is_empty()
+                || !part.bytes().all(|byte| byte.is_ascii_digit())
+                || part.parse::<u32>().is_err()
+        })
+    {
+        return Err(
+            "Python version probe did not report a numeric major.minor.patch version".into(),
+        );
+    }
+    Ok(version)
+}
+
+fn run_python_probe(
+    interpreter: &Path,
+    timeout: Duration,
+    script: &str,
+) -> Result<std::process::Output, String> {
     let mut child = std::process::Command::new(interpreter)
-        .args([
-            "-I",
-            "-S",
-            "-c",
-            "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')",
-        ])
+        .args(["-I", "-S", "-c", script])
         .env_clear()
         .stdin(Stdio::null())
         .stdout(Stdio::piped())

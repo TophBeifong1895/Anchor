@@ -16,7 +16,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anchor_graph_host::{
-    FilePluginCatalog, PluginDefinition, plugin_view_path, resolved_library_root, store_root,
+    FilePluginCatalog, PluginDefinition, PluginDependencies, plugin_view_path,
+    resolved_library_root, store_root,
 };
 use anchor_runtime::graph::PluginBinding;
 use anchor_runtime::{ReadOnlyInput, SandboxRequest, WritableInput};
@@ -185,16 +186,23 @@ pub(crate) fn prepare_for_plugin(
     prepare_definition_view(library_root, &definition)
 }
 
-fn prepare_definition_view(
+pub(crate) fn prepare_definition_view(
     library_root: &Path,
     definition: &PluginDefinition,
 ) -> Result<Option<PreparedView>, Unusable> {
-    let plugin = &definition.id;
-    if definition.dependencies.is_empty() {
+    prepare_dependency_view(library_root, &definition.id, &definition.dependencies)
+}
+
+pub(crate) fn prepare_dependency_view(
+    library_root: &Path,
+    plugin: &str,
+    dependencies: &PluginDependencies,
+) -> Result<Option<PreparedView>, Unusable> {
+    if dependencies.is_empty() {
         return Ok(None);
     }
     let root = resolved_library_root(library_root);
-    let view = plugin_view_path(&root, plugin, &definition.dependencies.declaration_digest());
+    let view = plugin_view_path(&root, plugin, &dependencies.declaration_digest());
     let view = view.canonicalize().map_err(|_| {
         Unusable::recorded(format!(
             "Plugin `{plugin}` declares dependencies but its view `{}` is missing; install the Plugin again to rebuild it",
@@ -227,7 +235,7 @@ fn prepare_definition_view(
     }
     Ok(Some(PreparedView {
         view,
-        declaration_digest: definition.dependencies.declaration_digest(),
+        declaration_digest: dependencies.declaration_digest(),
         grants,
     }))
 }

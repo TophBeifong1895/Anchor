@@ -5,6 +5,9 @@
 
 use super::*;
 
+#[cfg(test)]
+mod convergence_tests;
+
 pub(super) fn definition_parameter() -> Value {
     let example = json!({
         "entry":"hello",
@@ -45,7 +48,7 @@ impl PilotTools {
             .cloned()
             .ok_or_else(|| ToolError::Failed("definition must be an object".into()))?;
         self.application
-            .update_graph(&graph, definition)
+            .update_graph_from_agent(&graph, definition)
             .await
             .map_err(|failure| ToolError::Failed(format!("Graph update rejected: {failure:?}")))
     }
@@ -105,42 +108,20 @@ impl PilotTools {
     }
 
     pub(super) async fn graph_list(&self, _arguments: &Value) -> Result<Value, ToolError> {
-        let mut names = if self.graph_name.is_empty() {
-            Vec::new()
-        } else {
-            vec![self.graph_name.clone()]
-        };
-        if let Ok(entries) = std::fs::read_dir(&self.catalog_root) {
-            for entry in entries {
-                let entry = entry.map_err(|_| failed())?;
-                let name = entry.file_name().to_string_lossy().into_owned();
-                if identifier(&name)
-                    && !names.contains(&name)
-                    && entry.file_type().is_ok_and(|kind| kind.is_dir())
-                    && entry.path().join("graph.json").is_file()
-                {
-                    names.push(name);
-                }
-            }
-        }
-        names.sort();
-        let mut graphs = Vec::new();
-        for graph in names {
-            let active = self.application.active_runs(Some(&graph)).await;
-            graphs.push(json!({"graph":graph,"active_runs":active}));
-        }
+        let listing = self.application.list_graphs().await.map_err(|_| failed())?;
+        let graphs = listing["graphs"]
+            .as_array()
+            .ok_or_else(failed)?
+            .iter()
+            .map(|graph| json!({"graph":graph["graph"],"active_runs":graph["active_runs"]}))
+            .collect::<Vec<_>>();
         Ok(json!({"graphs":graphs}))
     }
 
     pub(super) async fn graph_read(&self, arguments: &Value) -> Result<Value, ToolError> {
         let graph = parameter(arguments, "graph")?;
-        if !identifier(&graph) {
-            return Err(failed());
-        }
-        let definition = text_resource(&self.application.graph_bundle_path(&graph), "graph.json")?;
-        Ok(
-            json!({"graph":graph,"definition":serde_json::from_str::<Value>(&definition).map_err(|_| failed())?}),
-        )
+        let value = self.application.read_graph(&graph).map_err(|_| failed())?;
+        Ok(json!({"graph":graph,"definition":value["definition"]}))
     }
 
     pub(super) async fn graph_validate(&self, arguments: &Value) -> Result<Value, ToolError> {
@@ -150,26 +131,15 @@ impl PilotTools {
             .ok_or_else(|| rejected("definition must be an object"))?;
         // Kernel diagnostics describe only this authoring input. Keep them
         // actionable without exposing errors from private Host/Plugin state.
-        let snapshot = match GraphSnapshot::from_authoring(definition.clone()) {
+        let snapshot = match self.application.inspect_graph_definition(definition) {
             Ok(snapshot) => snapshot,
-            Err(failure) => {
+            Err(crate::application::graphs::GraphValidationFailure::Authoring(failure)) => {
                 return Ok(json!({"valid":false,"error":failure.to_string()}));
             }
+            Err(crate::application::graphs::GraphValidationFailure::Unavailable(_)) => {
+                return Ok(json!({"valid":false,"error":"invalid Graph or unavailable Plugin"}));
+            }
         };
-        let ids = snapshot
-            .nodes
-            .iter()
-            .flat_map(|node| node.plugins.iter().map(|reference| reference.id.clone()))
-            .collect::<std::collections::BTreeSet<_>>()
-            .into_iter()
-            .collect::<Vec<_>>();
-        if crate::reject_snapshot(&snapshot).is_err()
-            || FilePluginCatalog::new(&self.library_root)
-                .resolve(&ids)
-                .is_err()
-        {
-            return Ok(json!({"valid":false,"error":"invalid Graph or unavailable Plugin"}));
-        }
         Ok(
             json!({"valid":true,"entry":snapshot.entry,"nodes":snapshot.nodes.iter().map(|node| &node.id).collect::<Vec<_>>()}),
         )

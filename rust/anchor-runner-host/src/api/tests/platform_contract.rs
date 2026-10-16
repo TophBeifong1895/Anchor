@@ -308,6 +308,7 @@ async fn legacy_metadata_without_schedule_fields_remains_readable() {
 
 #[tokio::test]
 async fn create_graph_publishes_initial_authoring_definition_and_plugins() {
+    let _env_guard = PROCESS_ENV.lock().await;
     let (_root, state) = fixture();
     let plugin = state.catalog_root.join("plugins/demo");
     std::fs::create_dir_all(plugin.join("skills/example")).unwrap();

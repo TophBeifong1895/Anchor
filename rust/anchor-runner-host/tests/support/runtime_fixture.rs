@@ -124,6 +124,12 @@ impl Host {
         self.serve_process(self.process())
     }
 
+    pub fn serve_configured_without_model(&self, configure: impl FnOnce(&mut Command)) -> HttpHost {
+        let mut process = self.process();
+        configure(&mut process);
+        self.serve_process(process)
+    }
+
     fn serve_process(&self, mut process: Command) -> HttpHost {
         let socket = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let address = socket.local_addr().unwrap();

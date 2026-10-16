@@ -138,7 +138,21 @@ pub(crate) fn execution_lease(root: &Path) -> Result<File, String> {
 }
 
 impl GoosePilot {
-    pub(crate) fn from_env(root: &Path, retained: Option<&GooseExecution>) -> Result<Self, String> {
+    pub(crate) fn from_state(
+        root: &Path,
+        retained: Option<&GooseExecution>,
+        state: &Path,
+    ) -> Result<Self, String> {
+        let models = crate::model_configuration::ModelConfiguration::from_env(state)?
+            .execution_snapshot(None, None)?;
+        Self::from_registry(root, retained, models)
+    }
+
+    fn from_registry(
+        root: &Path,
+        retained: Option<&GooseExecution>,
+        models: configuration::ModelRegistry,
+    ) -> Result<Self, String> {
         if !root.is_absolute() {
             return Err("Pilot root must be absolute".into());
         }
@@ -146,10 +160,8 @@ impl GoosePilot {
             return Err("legacy Pilot history cannot silently become a Goose Session".into());
         }
         let (binary, binary_sha256) = configuration::binary()?;
-        let models = configuration::ModelRegistry::from_env(false)?;
-        let binding = models.resolve(None)?;
         let fact = load(root)?;
-        validate_binding(fact.as_ref(), retained, &binary_sha256, &binding.identity)?;
+        validate_binding(fact.as_ref(), retained, &binary_sha256)?;
         let relay = configuration::RelaySettings::from_env(&binary)?;
         Ok(Self {
             binary,
@@ -326,11 +338,13 @@ impl GoosePilot {
             .map_err(|_| "Pilot fact lock unavailable")?
             .session_id
             .clone();
+        let binding = self.models.resolve(None)?;
         let opened = session::open(
             connection,
             bridge,
             endpoint,
             restored.as_deref(),
+            &binding,
             &request.cancellation,
             None,
             session::ClientCapabilities {
@@ -346,6 +360,7 @@ impl GoosePilot {
             // succeeded above; a failed load therefore cannot silently replace
             // the retained Session.
             fact.binary_sha256 = self.binary_sha256.clone();
+            fact.model_binding = binding.identity;
             fact.session_id = Some(opened.id.clone());
             save(&request.root, &fact)?;
             fact.tool_observation.clone()
@@ -474,10 +489,9 @@ fn validate_binding(
     fact: Option<&PilotFact>,
     retained: Option<&GooseExecution>,
     binary_sha256: &str,
-    model_binding: &str,
 ) -> Result<(), String> {
-    if fact.is_some_and(|fact| fact.version != 1 || fact.model_binding != model_binding) {
-        return Err("Goose Pilot fact or model binding changed".into());
+    if fact.is_some_and(|fact| fact.version != 1 || fact.model_binding.is_empty()) {
+        return Err("Goose Pilot fact or model binding is invalid".into());
     }
     if retained.is_some_and(|retained| {
         fact.and_then(|fact| fact.session_id.as_deref()) != Some(retained.session.as_str())
@@ -807,15 +821,15 @@ mod tests {
             scope: "a".repeat(64),
             session: "native-session".into(),
         };
-        assert!(validate_binding(Some(&fact()), Some(&retained), "binary", "model").is_ok());
-        assert!(validate_binding(Some(&fact()), Some(&retained), "new-binary", "model").is_ok());
-        assert!(validate_binding(None, Some(&retained), "binary", "model").is_err());
+        assert!(validate_binding(Some(&fact()), Some(&retained), "binary").is_ok());
+        assert!(validate_binding(Some(&fact()), Some(&retained), "new-binary").is_ok());
+        assert!(validate_binding(None, Some(&retained), "binary").is_err());
         let mut changed = fact();
         changed.session_id = Some("replacement-session".into());
-        assert!(validate_binding(Some(&changed), Some(&retained), "binary", "model").is_err());
-        assert!(
-            validate_binding(Some(&fact()), Some(&retained), "binary", "changed-model").is_err()
-        );
+        assert!(validate_binding(Some(&changed), Some(&retained), "binary").is_err());
+        changed = fact();
+        changed.model_binding.clear();
+        assert!(validate_binding(Some(&changed), Some(&retained), "binary").is_err());
     }
 
     #[test]

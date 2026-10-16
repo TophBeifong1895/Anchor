@@ -4,15 +4,25 @@
 
 use std::{collections::BTreeMap, path::Path};
 
-use anchor_graph_host::{FilePluginCatalog, PluginCatalog, PluginDefinition};
+use anchor_graph_host::{
+    FilePluginCatalog, McpServerDefinition, PluginCatalog, PluginDefinition, PluginMetadata,
+};
 use anchor_runtime::graph::PluginBinding;
 
 pub(crate) const NETWORK_PLUGIN: &str = "network";
+const MISSING_NETWORK: &str = "联网能力未安装或声明无效：需要 network Plugin（network: true）";
 
 pub(crate) fn requires_network(plugin: &PluginDefinition) -> bool {
-    plugin.network
-        || plugin
-            .mcp_servers
+    declaration_requires_network(plugin.network, &plugin.mcp_servers)
+}
+
+pub(crate) fn metadata_requires_network(plugin: &PluginMetadata) -> bool {
+    declaration_requires_network(plugin.network, &plugin.mcp_servers)
+}
+
+fn declaration_requires_network(network: bool, servers: &[McpServerDefinition]) -> bool {
+    network
+        || servers
             .iter()
             .any(|server| server.config.get("url").is_some())
 }
@@ -26,14 +36,58 @@ pub(crate) struct NetworkResolution {
 
 pub(crate) fn resolve(root: &Path, mounted: &[String], permission: bool) -> NetworkResolution {
     let catalog = FilePluginCatalog::new(root);
-    let mut enabled_by = mounted
-        .iter()
-        .filter(|id| id.as_str() != NETWORK_PLUGIN)
-        .filter(|id| {
+    resolve_with(
+        mounted,
+        permission,
+        |id| {
             catalog
                 .definition(id)
                 .is_ok_and(|plugin| requires_network(&plugin))
-        })
+        },
+        || match catalog.definition(NETWORK_PLUGIN) {
+            Ok(plugin) if plugin.network => {
+                crate::plugin_view::prepare_definition_view(root, &plugin)
+                    .map(|_| ())
+                    .map_err(|error| error.to_string())
+            }
+            _ => Err(MISSING_NETWORK.into()),
+        },
+    )
+}
+
+/// Lists report live declarations and view availability. Execution still uses full definitions;
+/// the same policy calculation never turns this display projection into an execution grant.
+pub(crate) fn resolve_metadata(
+    root: &Path,
+    definitions: &BTreeMap<String, PluginMetadata>,
+    mounted: &[String],
+    permission: bool,
+) -> NetworkResolution {
+    resolve_with(
+        mounted,
+        permission,
+        |id| definitions.get(id).is_some_and(metadata_requires_network),
+        || match definitions.get(NETWORK_PLUGIN) {
+            Some(plugin) if plugin.network => {
+                crate::plugin_view::prepare_dependency_view(root, &plugin.id, &plugin.dependencies)
+                    .map(|_| ())
+                    .map_err(|error| error.to_string())
+            }
+            _ => Err(MISSING_NETWORK.into()),
+        },
+    )
+}
+
+fn resolve_with(
+    mounted: &[String],
+    permission: bool,
+    mut requires_network: impl FnMut(&str) -> bool,
+    provider: impl FnOnce() -> Result<(), String>,
+) -> NetworkResolution {
+    let mut enabled_by = mounted
+        .iter()
+        .filter(|id| id.as_str() != NETWORK_PLUGIN)
+        .filter(|id| requires_network(id))
         .cloned()
         .collect::<Vec<_>>();
     enabled_by.sort();
@@ -44,14 +98,7 @@ pub(crate) fn resolve(root: &Path, mounted: &[String], permission: bool) -> Netw
     } else if !permission {
         Some("当前任务已禁止联网".to_owned())
     } else {
-        match catalog.definition(NETWORK_PLUGIN) {
-            Ok(plugin) if plugin.network => {
-                crate::plugin_view::prepare_for_plugin(root, NETWORK_PLUGIN)
-                    .err()
-                    .map(|error| error.to_string())
-            }
-            _ => Some("联网能力未安装或声明无效：需要 network Plugin（network: true）".to_owned()),
-        }
+        provider().err()
     };
     let allowed = enabled && problem.is_none();
     let mut errors = BTreeMap::new();

@@ -24,7 +24,7 @@ use crate::{
     ledger::{Ledger, SettlementStatus, current_time_millis},
     media::{ImageItem, MediaFetcher, media_send_digest, reply_images},
     private_state::PrivateState,
-    protocol::digest,
+    protocol::{ConversationScope, digest},
     webhook::{Webhook, WebhookReply},
 };
 
@@ -235,6 +235,7 @@ struct PendingDelivery {
 struct Feedback {
     event: ChannelEvent,
     finish: bool,
+    assistant_stopped: bool,
 }
 
 /// One accepted message waiting out its acknowledgement delay. A newer message
@@ -251,18 +252,15 @@ struct ArmedAck {
 /// The one progress bubble currently open for a conversation.
 pub(super) struct OpenBubble {
     pub(super) event_id: String,
+    pub(super) sender_id: String,
     pub(super) request_id: String,
     pub(super) stream_id: String,
     /// Status line waiting for the throttle window, if any.
     pub(super) pending: Option<String>,
-    /// The status line the bubble currently shows, without animation dots.
+    /// The last sent status line, used to suppress duplicate updates.
     pub(super) content: String,
-    /// Animation frames already drawn for that line.
-    pub(super) frames: usize,
     /// When the next status line may go out (the throttle window).
     pub(super) next_update: tokio::time::Instant,
-    /// When the next animation frame of the shown line is due.
-    pub(super) next_animation: tokio::time::Instant,
     pub(super) updates: usize,
 }
 
@@ -270,17 +268,12 @@ pub(super) struct OpenBubble {
 #[derive(Clone, Copy)]
 pub(super) struct AwaitingAck {
     pub(super) deadline: tokio::time::Instant,
-    /// Animation frames are best effort: a late or lost acknowledgement only
-    /// drops the entry. A strict entry (a status line, a notice or the reply
-    /// itself) keeps the transport's fail-closed behaviour.
-    pub(super) best_effort: bool,
 }
 
 /// One status line the Host projection observed for an admitted event.
 pub(super) struct ProgressLine {
     pub(super) event_id: String,
-    pub(super) sender_id: String,
-    pub(super) conversation_id: String,
+    pub(super) scope: ConversationScope,
     pub(super) content: String,
     /// Stable category token, absent when the Host predates it.
     pub(super) category: Option<String>,
@@ -319,7 +312,6 @@ struct MediaJob {
     event_id: String,
     callback_id: String,
     sender_id: String,
-    conversation_id: String,
     index: usize,
     item: ImageItem,
     send_digest: String,
@@ -367,7 +359,7 @@ struct Driver {
     feedback: VecDeque<Feedback>,
     feedback_pending: BTreeMap<String, AwaitingAck>,
     acks: Vec<ArmedAck>,
-    open_bubbles: BTreeMap<(String, String), OpenBubble>,
+    open_bubbles: BTreeMap<ConversationScope, OpenBubble>,
     progress: mpsc::UnboundedReceiver<ProgressLine>,
     progress_tx: mpsc::UnboundedSender<ProgressLine>,
     subscriptions: BTreeMap<String, Subscription>,
@@ -477,22 +469,12 @@ impl Driver {
             url,
             api_key,
             event.event_id.clone(),
-            event.sender_id.clone(),
-            event.conversation_id.clone(),
+            event.conversation_scope(),
             self.progress_tx.clone(),
             cancelled,
         );
         self.subscriptions
             .insert(event.event_id.clone(), Subscription { cancel, task });
-    }
-
-    /// Whether an update that must be acknowledged is still in flight. Animation
-    /// frames do not count: they are decoration, and waiting for one would stall
-    /// the line behind a frame that nobody misses.
-    pub(super) fn strict_pending(&self, request_id: &str) -> bool {
-        self.feedback_pending
-            .get(request_id)
-            .is_some_and(|entry| !entry.best_effort)
     }
 
     fn cancel_progress(&mut self, event_id: &str) {
@@ -509,12 +491,15 @@ impl Driver {
             self.cancel_progress(&line.event_id);
             return;
         }
-        let key = (line.sender_id.clone(), line.conversation_id.clone());
         let content = status::render(line.category.as_deref(), line.step, &line.content);
-        if let Some(bubble) = self.open_bubbles.get_mut(&key)
+        if let Some(bubble) = self.open_bubbles.get_mut(&line.scope)
             && bubble.event_id == line.event_id
         {
-            bubble.pending = Some(content);
+            // Only the newest observed state matters. Returning to the shown
+            // state also clears an older update still waiting for the throttle.
+            bubble.pending = (content != bubble.content
+                && bubble.updates < feedback::MAX_PROGRESS_UPDATES)
+                .then_some(content);
             return;
         }
         if let Some(ack) = self
@@ -608,7 +593,6 @@ impl Driver {
             event_id: reply.event_id.clone(),
             callback_id: reply.callback_id.clone(),
             sender_id: reply.sender_id.clone(),
-            conversation_id: reply.conversation_id.clone(),
             index,
             item,
             send_digest,
@@ -776,7 +760,11 @@ impl Driver {
                 None => self.ledger.finish_event(&event.event_id, true),
             },
             Err(error) => {
-                if error == GatewayError::Rejected {
+                let assistant_stopped = error == GatewayError::AssistantStopped;
+                if matches!(
+                    error,
+                    GatewayError::Rejected | GatewayError::AssistantStopped
+                ) {
                     // The Host will never accept this event. Retire it so no
                     // restart replays it; only close the user's progress bubble
                     // when the event is recent enough that one may exist.
@@ -794,6 +782,7 @@ impl Driver {
                     self.feedback.push_back(Feedback {
                         event,
                         finish: true,
+                        assistant_stopped,
                     });
                 }
                 Ok(())

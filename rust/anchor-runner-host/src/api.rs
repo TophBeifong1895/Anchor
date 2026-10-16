@@ -1,4 +1,5 @@
 mod assistant_recovery;
+mod channel_management;
 #[allow(clippy::result_large_err)]
 mod channel_sessions;
 mod credential_requests;
@@ -6,6 +7,7 @@ mod files;
 mod graphs;
 #[allow(clippy::result_large_err)]
 pub(crate) mod oauth;
+mod plugin_management;
 mod plugins;
 #[allow(clippy::result_large_err)]
 mod responses;
@@ -14,6 +16,7 @@ mod runs;
 mod schedules;
 #[allow(clippy::result_large_err)]
 mod sessions;
+mod settings;
 #[cfg(test)]
 mod tests;
 mod timeline;
@@ -25,7 +28,8 @@ mod wecom;
 mod wecom_progress;
 use super::*;
 use crate::application::{ApplicationError, RunApplication};
-use anchor_graph_host::{FileGraphBundleLoader, FilePluginCatalog, PluginDefinition};
+use crate::deployment::configured_pilot_graph;
+use anchor_graph_host::{FileGraphBundleLoader, FilePluginCatalog};
 use anchor_runtime::graph::{FileRunStore, RunStatus};
 use axum::{
     Json, Router,
@@ -69,6 +73,8 @@ struct ApiState {
     workspace_root: PathBuf,
     graph_name: String,
     application: RunApplication,
+    model_configuration: Arc<crate::model_configuration::ModelConfiguration>,
+    runtime_management: Arc<crate::runtime_management::RuntimeManagement>,
     loopback: bool,
     api_keys: Vec<String>,
     schedules: ScheduleStoreHandle,
@@ -184,7 +190,9 @@ async fn auth(
 
 async fn secure_private_responses(request: axum::extract::Request, next: Next) -> HttpResponse {
     let oauth_request = is_oauth_path(request.uri().path());
-    let credential_request = credential_requests::is_private_path(request.uri().path());
+    let credential_request = credential_requests::is_private_path(request.uri().path())
+        || plugin_management::is_private_path(request.uri().path())
+        || settings::is_private_path(request.uri().path());
     let response = next.run(request).await;
     if oauth_request {
         oauth::secure_oauth_response(response)
@@ -229,33 +237,6 @@ fn status(value: RunStatus) -> &'static str {
         RunStatus::Stopped => "stopped",
         RunStatus::Failed => "failed",
     }
-}
-
-/// The one Graph this deployment configures as its pilot Graph.
-///
-/// It is the Graph whose `required: true` declarations are an authorization, the
-/// Graph the in-assistant tools may not rewrite, and the Graph the HTTP graph
-/// routes refuse to touch. Every one of those decisions must read *this* answer:
-/// the explicit `ANCHOR_RUNNER_GRAPH_NAME`, else the configured bundle's own
-/// directory name. A second derivation (an env read here, a default there) is how
-/// one side starts trusting a Graph the other does not.
-///
-/// `None` means the deployment named no Graph and its bundle has no usable name:
-/// then no Graph may hand out `required`, which is the fail-closed direction.
-pub(crate) fn configured_pilot_graph() -> Option<String> {
-    env::var("ANCHOR_RUNNER_GRAPH_NAME")
-        .ok()
-        .map(|name| name.trim().to_owned())
-        .filter(|name| !name.is_empty())
-        .or_else(|| {
-            env::var_os("ANCHOR_RUNNER_BUNDLE_ROOT")
-                .map(PathBuf::from)
-                .and_then(|root| {
-                    root.file_name()
-                        .map(|name| name.to_string_lossy().into_owned())
-                })
-                .filter(|name| !name.is_empty())
-        })
 }
 
 pub async fn serve() -> io::Result<()> {
@@ -346,6 +327,17 @@ pub async fn serve() -> io::Result<()> {
         )
         .map_err(io::Error::other)?,
     );
+    let model_configuration = Arc::new(
+        crate::model_configuration::ModelConfiguration::from_env(&data_root)
+            .map_err(io::Error::other)?,
+    );
+    let runtime_management = Arc::new(
+        crate::runtime_management::RuntimeManagement::new(
+            runtime_configuration.clone(),
+            &data_root,
+        )
+        .map_err(io::Error::other)?,
+    );
     let mut application = RunApplication::new(data_root.clone(), catalog_root.clone())
         .with_runtime_configuration(runtime_configuration);
     if configured_bundle.is_some() {
@@ -360,6 +352,8 @@ pub async fn serve() -> io::Result<()> {
         bundle_root: bundle_root.clone(),
         catalog_root: catalog_root.clone(),
         application,
+        model_configuration,
+        runtime_management,
         data_root,
         workspace_root,
         graph_name,
@@ -398,9 +392,21 @@ pub async fn serve() -> io::Result<()> {
             &callback_listen,
         ),
     ));
-    let mut channel_supervisor = if configured_bundle.is_some() {
+    // A deployment-configured channel selects its own editable catalog Graph;
+    // listening must not require marking that Graph as the protected Pilot entry.
+    let channel_bundle = if !state.wecom.graph.is_empty() {
+        Some(
+            state
+                .application
+                .graph_path_checked(&state.wecom.graph)
+                .map_err(io::Error::other)?,
+        )
+    } else {
+        configured_bundle.clone()
+    };
+    let mut channel_supervisor = if let Some(channel_bundle) = channel_bundle {
         crate::channel_supervisor::ChannelSupervisor::start(
-            &bundle_root,
+            &channel_bundle,
             &crate::library_root(&state.catalog_root),
             &state.data_root,
             &callback_listen,
@@ -789,8 +795,7 @@ fn valid_plugin_id(value: &str) -> bool {
 /// Plugin's own declaration maps to is usable right now, and never builds,
 /// repairs, downloads or installs anything.
 fn session_plugin_row(
-    library_root: &Path,
-    definition: &PluginDefinition,
+    installed: &crate::application::plugins::catalog::InstalledPlugin,
     declaration: Option<PluginDeclaration>,
     mounts: &BTreeMap<String, bool>,
 ) -> Value {
@@ -800,83 +805,76 @@ fn session_plugin_row(
     // exactly as the mount filter does for the node that declaration belongs to.
     let on = required
         || mounts
-            .get(&definition.id)
+            .get(&installed.id)
             .copied()
             .unwrap_or(declaration.mounts_by_default);
-    let (available, error) =
-        match crate::plugin_view::prepare_for_plugin(library_root, &definition.id) {
-            Ok(_) => (true, Value::Null),
-            Err(unusable) => (false, Value::String(unusable.to_string())),
-        };
-    json!({
-        "id": definition.id,
-        "name": definition.name,
-        "description": definition.description,
-        "skills": definition.skills,
+    let definition = installed.metadata.as_ref();
+    let mut row = json!({
+        "id": installed.id,
+        "name": definition.map(|definition| definition.name.as_str()).unwrap_or(&installed.id),
+        "description": definition.map(|definition| definition.description.as_str()).unwrap_or_default(),
+        "skills": definition.map(|definition| definition.skills.clone()).unwrap_or_default(),
         // Named apart from the `/plugins` catalog's `mcpServers` object: this one
         // is the plain list of server names the Session row shows.
-        "mcpServerNames": definition
-            .mcp_servers
-            .iter()
+        "mcpServerNames": definition.into_iter().flat_map(|definition| &definition.mcp_servers)
             .map(|server| server.name.clone())
             .collect::<Vec<_>>(),
         "required": required,
         "on": on,
-        "requiresNetwork": crate::plugin_network::requires_network(definition),
-        "networkProvider": definition.id == crate::plugin_network::NETWORK_PLUGIN,
-        "available": available,
-        "error": error,
-    })
+        "requiresNetwork": definition.is_some_and(crate::plugin_network::metadata_requires_network),
+        "networkProvider": installed.id == crate::plugin_network::NETWORK_PLUGIN,
+    });
+    installed.project_health(&mut row);
+    row
 }
 
-/// Every installed Plugin, for one Session. A directory the catalog cannot
-/// resolve is not installed and is not listed.
+/// Library facts plus this Session's policy. Broken assets and stale enabled
+/// references remain visible so the owner can revoke them.
 #[allow(clippy::result_large_err)]
 fn session_plugin_rows(
     state: &ApiState,
     session: &anchor_platform_session::Session,
 ) -> Result<Vec<Value>, HttpResponse> {
     let root = crate::library_root(&state.catalog_root);
-    let catalog = FilePluginCatalog::new(&root);
+    let mut catalog = crate::application::plugins::catalog::InstalledPluginCatalog::read(&root)
+        .map_err(application_error)?;
     let declarations = session_plugin_declarations(state, session);
-    let entries = match std::fs::read_dir(root.join("plugins")) {
-        Ok(entries) => entries,
-        Err(failure) if failure.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
-        Err(_) => {
-            return Err(error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "cannot read Plugin catalog",
-            ));
+    for id in declarations.keys().chain(
+        session
+            .plugin_mounts
+            .iter()
+            .filter(|(_, on)| **on)
+            .map(|(id, _)| id),
+    ) {
+        if !catalog.entries.iter().any(|entry| &entry.id == id) {
+            catalog.entries.push(
+                crate::application::plugins::catalog::InstalledPlugin::unavailable(id.clone()),
+            );
         }
-    };
+    }
     let mut rows = Vec::new();
-    for entry in entries {
-        let entry = entry.map_err(|_| {
-            error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "cannot read Plugin catalog",
-            )
-        })?;
-        let name = entry.file_name().to_string_lossy().into_owned();
-        if name.starts_with('.') {
-            continue;
-        }
-        let Ok(definition) = catalog.definition(&name) else {
-            continue;
-        };
+    let mut definitions = BTreeMap::new();
+    for entry in &catalog.entries {
         rows.push(session_plugin_row(
-            &root,
-            &definition,
-            declarations.get(&name).copied(),
+            entry,
+            declarations.get(&entry.id).copied(),
             &session.plugin_mounts,
         ));
+        if let Some(definition) = &entry.metadata {
+            definitions.insert(entry.id.clone(), definition.clone());
+        }
     }
     let mounted = rows
         .iter()
         .filter(|row| row["on"] == true && row["available"] == true)
         .filter_map(|row| row["id"].as_str().map(str::to_owned))
         .collect::<Vec<_>>();
-    let network = crate::plugin_network::resolve(&root, &mounted, session.network_allowed);
+    let network = crate::plugin_network::resolve_metadata(
+        &root,
+        &definitions,
+        &mounted,
+        session.network_allowed,
+    );
     for row in &mut rows {
         let id = row["id"].as_str().unwrap_or_default().to_owned();
         row["explicitOn"] = row["on"].clone();
@@ -888,6 +886,7 @@ fn session_plugin_rows(
         }
         if let Some(problem) = network.errors.get(&id) {
             row["available"] = json!(false);
+            row["contextAuthorized"] = json!(false);
             row["error"] = json!(problem);
         }
     }
@@ -950,7 +949,7 @@ async fn set_session_plugin(
             plugin.clone(),
         );
         move || {
-            session_plugin_mount_target(&state, &headers, &identifier, &plugin)?;
+            session_plugin_mount_target(&state, &headers, &identifier, &plugin, on)?;
             Ok(())
         }
     })
@@ -963,8 +962,8 @@ async fn set_session_plugin(
     blocking(move || {
         // Retain both guards even if validation or the transaction fails.
         let (pilot_guard, catalog_guard, lease) = (pilot_guard, catalog_guard, lease);
-        let (sessions, owner, definition) =
-            session_plugin_mount_target(&state, &headers, &identifier, &plugin)?;
+        let (sessions, owner) =
+            session_plugin_mount_target(&state, &headers, &identifier, &plugin, on)?;
         let before = sessions.get(&owner, &identifier).map_err(session_error)?;
         let changed = before.plugin_mounts.get(&plugin) != Some(&on);
         let updated = sessions
@@ -984,7 +983,19 @@ async fn set_session_plugin(
         drop(catalog_guard);
         drop(pilot_guard);
         let rows = session_plugin_rows(&state, &updated)?;
-        let row = rows.iter().find(|row| row["id"] == definition.id).cloned();
+        let row = rows
+            .iter()
+            .find(|row| row["id"] == plugin)
+            .cloned()
+            .unwrap_or_else(|| {
+                session_plugin_row(
+                    &crate::application::plugins::catalog::InstalledPlugin::unavailable(
+                        plugin.clone(),
+                    ),
+                    None,
+                    &updated.plugin_mounts,
+                )
+            });
         Ok(Json(
             json!({"plugin": row, "plugins": rows, "effect":effect, "continuation":continuation}),
         ))
@@ -998,14 +1009,8 @@ fn session_plugin_mount_target(
     headers: &HeaderMap,
     identifier: &str,
     plugin: &str,
-) -> Result<
-    (
-        anchor_platform_session::SessionStore,
-        String,
-        PluginDefinition,
-    ),
-    HttpResponse,
-> {
+    on: bool,
+) -> Result<(anchor_platform_session::SessionStore, String), HttpResponse> {
     let (sessions, owner, session) = owned_session(state, headers, identifier)?;
     if session.status == anchor_platform_session::SessionStatus::Archived {
         return Err(error(
@@ -1013,15 +1018,6 @@ fn session_plugin_mount_target(
             "该会话已归档，不能再改变插件挂载",
         ));
     }
-    let root = crate::library_root(&state.catalog_root);
-    let definition = FilePluginCatalog::new(&root)
-        .definition(plugin)
-        .map_err(|_| {
-            error(
-                StatusCode::BAD_REQUEST,
-                format!("插件 `{plugin}` 尚未安装，不能挂载"),
-            )
-        })?;
     let declaration = session_plugin_declarations(state, &session)
         .get(plugin)
         .copied();
@@ -1031,10 +1027,23 @@ fn session_plugin_mount_target(
             "该插件在图里被声明为必需（required: true）",
         ));
     }
-    if let Err(unusable) = crate::plugin_view::prepare_for_plugin(&root, plugin) {
-        return Err(error(StatusCode::CONFLICT, unusable.to_string()));
+    if on {
+        let root = crate::library_root(&state.catalog_root);
+        FilePluginCatalog::new(&root)
+            .definition(plugin)
+            .map_err(|_| {
+                error(
+                    StatusCode::BAD_REQUEST,
+                    format!("插件 `{plugin}` 尚未安装，不能挂载"),
+                )
+            })?;
+        if let Err(unusable) = crate::plugin_view::prepare_for_plugin(&root, plugin) {
+            return Err(error(StatusCode::CONFLICT, unusable.to_string()));
+        }
+    } else if !session.plugin_mounts.contains_key(plugin) && declaration.is_none() {
+        return Err(error(StatusCode::BAD_REQUEST, "该会话没有此插件的挂载配置"));
     }
-    Ok((sessions, owner, definition))
+    Ok((sessions, owner))
 }
 
 #[allow(clippy::result_large_err)]
@@ -1181,6 +1190,15 @@ fn router_with_readiness_and_web_root(
         .route("/v1/webhooks/graphs/{graph}", post(graph_webhook))
         .route("/sessions", get(list_sessions).post(create_session))
         .merge(credential_requests::router())
+        .merge(settings::router())
+        .route(
+            "/channels/{platform}/configuration",
+            get(channel_management::status).put(channel_management::configure),
+        )
+        .route(
+            "/channels/{platform}/enabled",
+            post(channel_management::set_enabled),
+        )
         .route(
             "/sessions/{session}",
             get(get_session).put(rename_session).delete(delete_session),
@@ -1252,12 +1270,12 @@ fn router_with_readiness_and_web_root(
         )
         .route(
             "/channel-sessions/{session}",
-            axum::routing::delete(delete_channel_session),
+            get(get_channel_session).delete(delete_channel_session),
         )
         .route("/schedules", get(list_schedules).post(create_schedule))
         .route(
             "/schedules/{schedule}",
-            axum::routing::delete(delete_schedule),
+            axum::routing::delete(delete_schedule).put(update_schedule),
         )
         .route("/runs", get(list_runs))
         .route("/runs/{run}", get(get_run).delete(delete_run))
@@ -1272,6 +1290,7 @@ fn router_with_readiness_and_web_root(
         .route("/runs/{run}/files/{node}/{*path}", get(read_file))
         .route("/timeline", get(timeline))
         .layer(RequestBodyLimitLayer::new(2 * 1024 * 1024))
+        .merge(plugin_management::router())
         .merge(pilot_turns)
         .merge(conversations)
         .merge(wecom_events)

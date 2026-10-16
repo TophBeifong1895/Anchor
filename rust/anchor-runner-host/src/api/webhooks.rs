@@ -15,18 +15,7 @@ async fn busy_run(state: &ApiState, graph: &str) -> Result<Option<String>, HttpR
         .records()
         .map_err(application_error)?
         .into_iter()
-        .filter(|(_, record)| {
-            matches!(
-                record.status,
-                RunStatus::Ready
-                    | RunStatus::Running
-                    | RunStatus::Paused
-                    | RunStatus::BudgetStopped
-                    | RunStatus::WaitingCall
-                    | RunStatus::WaitingRecovery
-                    | RunStatus::Stopped
-            )
-        })
+        .filter(|(_, record)| !record.status.is_terminal())
         .filter_map(|(run, _)| match state.application.metadata(&run) {
             Ok(Some(metadata)) if metadata.graph == graph => Some(Ok(run)),
             Ok(_) => None,

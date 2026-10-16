@@ -321,7 +321,7 @@ async fn abandon_is_idempotent_and_rejects_terminal_unknown_or_invalid_requests(
 }
 
 #[tokio::test]
-async fn abandon_unblocks_plugin_resource_replacement_and_leaves_stopped_runs_blocking() {
+async fn graph_updates_do_not_require_abandoning_stopped_plugin_runs() {
     let (_root, state) = fixture();
     let _env = PROCESS_ENV.lock().await;
     set_host_env(_root.path(), &state.data_root);
@@ -390,40 +390,32 @@ async fn abandon_unblocks_plugin_resource_replacement_and_leaves_stopped_runs_bl
     )
     .unwrap();
 
-    // Stopped is unfinished: it still blocks Plugin replacement.
-    assert!(
-        state
-            .application
-            .has_unfinished_plugin_run(&state.bundle_root)
-            .await
-            .unwrap()
-    );
-    let (status, blocked) = call(
+    // Saving authoring data does not replace Library resources or the frozen
+    // Run. An unfinished Run does not need to be abandoned just to edit a Graph.
+    let frozen = std::fs::read(state.data_root.join("runs/abandon-plugin.json")).unwrap();
+    let (status, updated) = call(
         app.clone(),
         "PUT",
         "/graphs/fixture",
         Some(&json!({"definition":definition("plugin update one")}).to_string()),
     )
     .await;
-    assert_eq!(status, StatusCode::CONFLICT, "{blocked}");
+    assert_eq!(status, StatusCode::OK, "{updated}");
+    assert_eq!(
+        std::fs::read(state.data_root.join("runs/abandon-plugin.json")).unwrap(),
+        frozen
+    );
     let graph_before = std::fs::read(state.bundle_root.join("graph.json")).unwrap();
 
     let (status, abandoned) = call(
         app.clone(),
         "POST",
         "/runs/abandon-plugin/abandon",
-        Some(r#"{"reason":"plugin_update"}"#),
+        Some(r#"{"reason":"operator"}"#),
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{abandoned}");
     assert_eq!(abandoned["abandoned"], true);
-    assert!(
-        !state
-            .application
-            .has_unfinished_plugin_run(&state.bundle_root)
-            .await
-            .unwrap()
-    );
     // The abandoned Run keeps its frozen Plugin bindings and its history.
     assert_eq!(
         record_of(&state, "abandon-plugin").plugin_bindings,
@@ -447,8 +439,7 @@ async fn abandon_unblocks_plugin_resource_replacement_and_leaves_stopped_runs_bl
         RunStatus::Aborted
     );
 
-    // The predicate itself is unchanged: another stopped Run of the same Graph
-    // still blocks the next replacement.
+    // A later stopped Run likewise keeps its own definition and authorization.
     let bundle = FileGraphBundleLoader::new(&state.bundle_root)
         .load()
         .unwrap();
@@ -469,21 +460,19 @@ async fn abandon_unblocks_plugin_resource_replacement_and_leaves_stopped_runs_bl
         .unwrap(),
     )
     .unwrap();
-    assert!(
-        state
-            .application
-            .has_unfinished_plugin_run(&state.bundle_root)
-            .await
-            .unwrap()
-    );
-    let (status, blocked) = call(
+    let frozen = std::fs::read(state.data_root.join("runs/abandon-plugin-two.json")).unwrap();
+    let (status, updated) = call(
         app.clone(),
         "PUT",
         "/graphs/fixture",
         Some(&json!({"definition":definition("plugin update three")}).to_string()),
     )
     .await;
-    assert_eq!(status, StatusCode::CONFLICT, "{blocked}");
+    assert_eq!(status, StatusCode::OK, "{updated}");
+    assert_eq!(
+        std::fs::read(state.data_root.join("runs/abandon-plugin-two.json")).unwrap(),
+        frozen
+    );
 }
 
 /// The persistent assistant fixture: one bound Session instance whose Run is
@@ -503,6 +492,7 @@ fn assistant_fixture(state: &ApiState) -> (SessionStore, String, String) {
             ChannelInboundRequest {
                 inbound_id: "abandon-assistant-input".into(),
                 identity: ChannelIdentity {
+                    conversation_kind: Default::default(),
                     source: "wecom".into(),
                     account: Some("corp-a".into()),
                     conversation_id: "conversation-a".into(),

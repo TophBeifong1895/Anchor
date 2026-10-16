@@ -219,7 +219,7 @@ pub(crate) fn sessions(root: &Path) -> Result<SessionStore, String> {
 /// plain conversation predecessor, a user input or a path string can never
 /// authorize a copy. Only the first preparation of the instance's own work node
 /// inherits a scene.
-pub(crate) fn handover_workspace_source(
+pub(crate) fn handover_predecessor(
     root: &Path,
     key: &InvocationKey,
 ) -> Result<Option<InvocationKey>, String> {
@@ -261,6 +261,17 @@ pub(crate) fn handover_workspace_source(
     {
         return Ok(None);
     }
+    let certified = sessions
+        .channel_assistant_predecessor(&source.owner, &source.session, &key.run_id)
+        .map_err(|error| error.to_string())?;
+    if certified.as_ref().is_none_or(|binding| {
+        binding.run_id != previous
+            || binding.wait_node != source.wait_node
+            || binding.work_node != source.work_node
+            || binding.reply_node != source.reply_node
+    }) {
+        return Err("assistant handover predecessor identity changed".into());
+    }
     // The handover is real. From here on the facts must agree, so a mismatch is
     // retained corruption instead of a silently skipped copy.
     let Some(prior) = crate::application::metadata::load(root, previous)
@@ -291,14 +302,31 @@ pub(crate) fn handover_workspace_source(
     {
         return Err("assistant handover source belongs to another instance".into());
     }
-    // A different Graph revision or bundle means the handed-over scene was not
-    // produced by this node's current definition, so it is not inherited. The
-    // Run continues with an uninitialized workspace instead of copying bytes no
-    // current fact describes.
+    // Plugin-only publications preserve this node's scene and native history.
+    // Structural or instruction changes still require an explicit new instance.
+    let store = FileRunStore::new(root.join("runs"));
+    let prior_record = store
+        .load(previous)
+        .map_err(|error| error.to_string())?
+        .ok_or("assistant handover source Run is missing")?;
+    let current_record = store
+        .load(&key.run_id)
+        .map_err(|error| error.to_string())?
+        .ok_or("assistant handover target Run is missing")?;
+    if prior_record.graph_digest != prior.graph_digest
+        || current_record.graph_digest != metadata.graph_digest
+    {
+        return Err("assistant handover Run identity changed".into());
+    }
+    let compatible_revision = crate::assistant_plugins::compatible(
+        &prior_record.snapshot,
+        &current_record.snapshot,
+        &source.work_node,
+    );
     if prior_assistant.work_node != source.work_node
         || prior_conversation.reply_node != source.work_node
         || prior.bundle_source != metadata.bundle_source
-        || prior.graph_digest != metadata.graph_digest
+        || !compatible_revision
     {
         eprintln!(
             "anchor-runner-host: assistant handover from {previous} belongs to another Graph revision; its workspace scene is not inherited"
@@ -307,18 +335,112 @@ pub(crate) fn handover_workspace_source(
     }
     // The stable scene is per Run and node, so the invocation only records which
     // round of the handed-over Run last prepared it.
-    let invocation = FileRunStore::new(root.join("runs"))
-        .load(previous)
-        .map_err(|error| error.to_string())?
-        .and_then(|record| record.invocations.get(&key.node_id).copied())
+    let invocation = prior_record
+        .invocations
+        .get(&key.node_id)
+        .copied()
         .filter(|invocation| *invocation > 0)
         .unwrap_or(1);
     Ok(Some(InvocationKey {
         run_id: previous.to_owned(),
-        graph_digest: metadata.graph_digest,
+        graph_digest: prior.graph_digest,
         node_id: key.node_id.clone(),
         invocation,
     }))
+}
+
+/// Skip replacement instances that crashed before preparing their work scene.
+/// Every edge comes from immutable metadata and the Session's handover order.
+pub(crate) fn handover_workspace_source(
+    root: &Path,
+    key: &InvocationKey,
+    artifacts: &crate::HostArtifacts,
+) -> Result<Option<InvocationKey>, String> {
+    let Some(mut previous) = handover_predecessor(root, key)? else {
+        return Ok(None);
+    };
+    let metadata = crate::application::metadata::load(root, &key.run_id)
+        .map_err(|error| format!("assistant metadata unavailable: {error:?}"))?
+        .ok_or("assistant metadata is missing")?;
+    let source = metadata
+        .assistant
+        .as_ref()
+        .ok_or("assistant source binding is missing")?;
+    let current = FileRunStore::new(root.join("runs"))
+        .load(&key.run_id)
+        .map_err(|error| error.to_string())?
+        .ok_or("assistant Run is missing")?;
+    let store = FileRunStore::new(root.join("runs"));
+    let sessions = sessions(root)?;
+    let mut visited = std::collections::BTreeSet::new();
+    loop {
+        if !visited.insert(previous.run_id.clone()) {
+            return Err("assistant workspace handover cycle".into());
+        }
+        if let Some(owner) = artifacts
+            .initialized_workspace_owner(&previous)
+            .map_err(|error| error.to_string())?
+        {
+            return Ok(Some(owner));
+        }
+        let prior = crate::application::metadata::load(root, &previous.run_id)
+            .map_err(|error| format!("assistant workspace predecessor unavailable: {error:?}"))?
+            .ok_or("assistant workspace predecessor metadata is missing")?;
+        let Some(older) = prior
+            .conversation
+            .as_ref()
+            .and_then(|conversation| conversation.previous_run.as_deref())
+        else {
+            return Ok(None);
+        };
+        let certified = sessions
+            .channel_assistant_predecessor(&source.owner, &source.session, &previous.run_id)
+            .map_err(|error| error.to_string())?;
+        if certified.as_ref().is_none_or(|binding| {
+            binding.run_id != older
+                || binding.wait_node != source.wait_node
+                || binding.work_node != source.work_node
+                || binding.reply_node != source.reply_node
+        }) {
+            return Err("assistant workspace predecessor identity changed".into());
+        }
+        let older_meta = crate::application::metadata::load(root, older)
+            .map_err(|error| format!("assistant workspace ancestor unavailable: {error:?}"))?
+            .ok_or("assistant workspace ancestor metadata is missing")?;
+        let older_source = older_meta
+            .assistant
+            .as_ref()
+            .ok_or("assistant workspace ancestor is not an assistant")?;
+        let older_record = store
+            .load(older)
+            .map_err(|error| error.to_string())?
+            .ok_or("assistant workspace ancestor Run is missing")?;
+        if older_source.owner != source.owner
+            || older_source.session != source.session
+            || older_source.wait_node != source.wait_node
+            || older_source.work_node != source.work_node
+            || older_source.reply_node != source.reply_node
+            || older_meta.bundle_source != metadata.bundle_source
+            || older_meta.conversation.as_ref().is_none_or(|conversation| {
+                conversation.session != source.session
+                    || conversation.reply_node != source.work_node
+            })
+            || older_meta.graph_digest != older_record.graph_digest
+            || !crate::assistant_plugins::compatible(
+                &older_record.snapshot,
+                &current.snapshot,
+                &source.work_node,
+            )
+        {
+            return Err("assistant workspace ancestor belongs to another instance".into());
+        }
+        previous = InvocationKey {
+            run_id: older.into(),
+            graph_digest: older_record.graph_digest,
+            node_id: source.work_node.clone(),
+            invocation: 1,
+        };
+    }
 }
 
 pub(crate) fn binding(root: &Path, key: &InvocationKey) -> Result<Option<TurnBinding>, String> {
@@ -518,6 +640,7 @@ mod tests {
         ChannelInboundRequest {
             inbound_id: identity.into(),
             identity: ChannelIdentity {
+                conversation_kind: Default::default(),
                 source: "wecom".into(),
                 account: None,
                 conversation_id: format!("conversation-{identity}"),
@@ -562,8 +685,19 @@ mod tests {
         previous: Option<&str>,
         owner: &str,
     ) -> InvocationKey {
+        admit_snapshot(fixture, run, session, previous, owner, snapshot())
+    }
+
+    fn admit_snapshot(
+        fixture: &Fixture,
+        run: &str,
+        session: &str,
+        previous: Option<&str>,
+        owner: &str,
+        snapshot: GraphSnapshot,
+    ) -> InvocationKey {
         let record =
-            GraphRunRecord::create_with_id(snapshot(), json!({"session":session}), run).unwrap();
+            GraphRunRecord::create_with_id(snapshot, json!({"session":session}), run).unwrap();
         let digest = record.graph_digest.clone();
         FileRunStore::new(fixture.root.join("runs"))
             .save(&record)
@@ -602,10 +736,7 @@ mod tests {
             .id;
         let old = admit(&fixture, "assistant-old", &session, None);
         // Bound to nothing at all.
-        assert_eq!(
-            handover_workspace_source(&fixture.root, &old).unwrap(),
-            None
-        );
+        assert_eq!(handover_predecessor(&fixture.root, &old).unwrap(), None);
         sessions
             .bind_channel_assistant(
                 OWNER,
@@ -617,16 +748,10 @@ mod tests {
             )
             .unwrap();
         // Current instance, no handover predecessor.
-        assert_eq!(
-            handover_workspace_source(&fixture.root, &old).unwrap(),
-            None
-        );
+        assert_eq!(handover_predecessor(&fixture.root, &old).unwrap(), None);
         let new = admit(&fixture, "assistant-new", &session, Some("assistant-old"));
         // `previous_run` alone is a conversation lineage, not a handover.
-        assert_eq!(
-            handover_workspace_source(&fixture.root, &new).unwrap(),
-            None
-        );
+        assert_eq!(handover_predecessor(&fixture.root, &new).unwrap(), None);
         sessions
             .handover_channel_assistant(
                 OWNER,
@@ -637,12 +762,12 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            handover_workspace_source(&fixture.root, &new).unwrap(),
+            handover_predecessor(&fixture.root, &new).unwrap(),
             Some(old.clone())
         );
         // Only the instance's own work node, on its first invocation.
         assert_eq!(
-            handover_workspace_source(
+            handover_predecessor(
                 &fixture.root,
                 &InvocationKey {
                     node_id: "reply".into(),
@@ -653,7 +778,7 @@ mod tests {
             None
         );
         assert_eq!(
-            handover_workspace_source(
+            handover_predecessor(
                 &fixture.root,
                 &InvocationKey {
                     invocation: 2,
@@ -665,7 +790,7 @@ mod tests {
         );
         // A Graph identity this Run does not own authorizes nothing.
         assert_eq!(
-            handover_workspace_source(
+            handover_predecessor(
                 &fixture.root,
                 &InvocationKey {
                     graph_digest: "other-digest".into(),
@@ -698,10 +823,7 @@ mod tests {
                 "reply",
             )
             .unwrap();
-        assert_eq!(
-            handover_workspace_source(&fixture.root, &foreign).unwrap(),
-            None
-        );
+        assert_eq!(handover_predecessor(&fixture.root, &foreign).unwrap(), None);
         // The recorded invocation is the round of the handed-over Run that last
         // prepared the very same scene.
         let mut record = FileRunStore::new(fixture.root.join("runs"))
@@ -713,7 +835,7 @@ mod tests {
             .save(&record)
             .unwrap();
         assert_eq!(
-            handover_workspace_source(&fixture.root, &new)
+            handover_predecessor(&fixture.root, &new)
                 .unwrap()
                 .unwrap()
                 .invocation,
@@ -763,23 +885,107 @@ mod tests {
         foreign.assistant = None;
         crate::application::metadata::save(&fixture.root, &foreign).unwrap();
         assert!(
-            handover_workspace_source(&fixture.root, &new)
+            handover_predecessor(&fixture.root, &new)
                 .unwrap_err()
                 .contains("not an assistant instance")
         );
         // A predecessor with no immutable identity cannot be trusted either.
         std::fs::remove_file(fixture.root.join("run-metadata/assistant-old.json")).unwrap();
         assert!(
-            handover_workspace_source(&fixture.root, &new)
+            handover_predecessor(&fixture.root, &new)
                 .unwrap_err()
                 .contains("no immutable metadata")
         );
         // And the identity must be the same instance.
         admit_for(&fixture, "assistant-old", &session, None, "another-owner");
         assert!(
-            handover_workspace_source(&fixture.root, &new)
+            handover_predecessor(&fixture.root, &new)
                 .unwrap_err()
                 .contains("another instance")
         );
+    }
+
+    #[test]
+    fn workspace_handover_skips_unprepared_replacements_and_keeps_real_graph_identity() {
+        let fixture = fixture();
+        let sessions = sessions(&fixture.root).unwrap();
+        let session = sessions
+            .admit_channel_inbound(OWNER, inbound("one"))
+            .unwrap()
+            .session
+            .id;
+        let old = admit(&fixture, "assistant-old", &session, None);
+        sessions
+            .bind_channel_assistant(
+                OWNER,
+                &session,
+                &old.run_id,
+                "wait_input",
+                "assistant",
+                "reply",
+            )
+            .unwrap();
+        let artifacts = crate::HostArtifacts::new(
+            fixture.root.join("artifacts"),
+            fixture.root.join("workspaces"),
+        );
+        artifacts
+            .bind_node_workspace(&old.run_id, &old.graph_digest, &old.node_id)
+            .unwrap();
+        let scene = artifacts.prepare_workspace(&old, &[]).unwrap();
+        std::fs::write(scene.join("draft.md"), "retained work").unwrap();
+        // The Runner can have allocated a later invocation without preparing it.
+        let store = FileRunStore::new(fixture.root.join("runs"));
+        let mut record = store.load(&old.run_id).unwrap().unwrap();
+        record.invocations.insert("assistant".into(), 8);
+        store.save(&record).unwrap();
+        let middle = admit(&fixture, "assistant-middle", &session, Some(&old.run_id));
+        sessions
+            .handover_channel_assistant(OWNER, &session, &old.run_id, &middle.run_id, "middle-key")
+            .unwrap();
+        artifacts
+            .bind_node_workspace(&middle.run_id, &middle.graph_digest, &middle.node_id)
+            .unwrap();
+        let mut updated = snapshot();
+        updated.agents.get_mut("assistant").unwrap().network = true;
+        let new = admit_snapshot(
+            &fixture,
+            "assistant-new",
+            &session,
+            Some(&middle.run_id),
+            OWNER,
+            updated.clone(),
+        );
+        sessions
+            .handover_channel_assistant(OWNER, &session, &middle.run_id, &new.run_id, "new-key")
+            .unwrap();
+        assert_eq!(
+            handover_predecessor(&fixture.root, &new)
+                .unwrap()
+                .unwrap()
+                .run_id,
+            middle.run_id
+        );
+        let inherited = handover_workspace_source(&fixture.root, &new, &artifacts)
+            .unwrap()
+            .unwrap();
+        assert_eq!(inherited, old);
+        assert_ne!(inherited.graph_digest, new.graph_digest);
+        artifacts
+            .bind_node_workspace(&new.run_id, &new.graph_digest, &new.node_id)
+            .unwrap();
+        let path = artifacts
+            .prepare_workspace_from_handover(&new, &[], &inherited, &snapshot(), &updated)
+            .unwrap();
+        assert_eq!(
+            std::fs::read_to_string(path.join("draft.md")).unwrap(),
+            "retained work"
+        );
+        // A present but unreadable intermediate ownership fact is corruption,
+        // rather than permission to jump to an older scene.
+        let state = artifacts.workspace_path(&middle).unwrap();
+        std::fs::create_dir_all(&state).unwrap();
+        std::fs::write(state.join("unowned.md"), "unowned").unwrap();
+        assert!(handover_workspace_source(&fixture.root, &new, &artifacts).is_err());
     }
 }

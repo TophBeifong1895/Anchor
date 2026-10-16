@@ -38,6 +38,79 @@ fn text_and_text_only_mixed_preserve_identity_and_input_order() {
 }
 
 #[test]
+fn group_callbacks_share_a_scope_without_changing_the_actor_or_reply_target() {
+    let mut frame = callback();
+    frame["body"]["chattype"] = json!("group");
+    frame["body"]["chatid"] = json!("group-1");
+    // The platform supplies @-triggered callbacks; the gateway must not parse
+    // a bot's display name out of the text to decide whether it may respond.
+    let alice = normalize_message(&frame).unwrap().unwrap();
+    assert_eq!(alice.sender_id, "alice");
+    assert_eq!(alice.conversation_id, "group-1");
+    assert_eq!(alice.reply_target, "group-1");
+    assert_eq!(alice.metadata["chat_type"], "group");
+    assert_eq!(alice.metadata["request_id"], "callback-1");
+    frame["body"]["from"]["userid"] = json!("bob");
+    let bob = normalize_message(&frame).unwrap().unwrap();
+    assert_eq!(bob.sender_id, "bob");
+    assert_eq!(alice.conversation_scope(), bob.conversation_scope());
+
+    frame["body"]["chatid"] = json!("group-2");
+    assert_ne!(
+        bob.conversation_scope(),
+        normalize_message(&frame)
+            .unwrap()
+            .unwrap()
+            .conversation_scope()
+    );
+    frame["body"]["chatid"] = json!("group-1");
+    frame["body"]["chattype"] = json!("single");
+    let private = normalize_message(&frame).unwrap().unwrap();
+    assert_eq!(private.conversation_id, "group-1");
+    assert_ne!(bob.conversation_scope(), private.conversation_scope());
+}
+
+#[test]
+fn group_callbacks_require_a_valid_chatid_and_unknown_chat_types_are_rejected() {
+    let mut frame = callback();
+    frame["body"]["chattype"] = json!("group");
+    assert_eq!(
+        normalize_message(&frame),
+        Err(GatewayError::Invalid("group callback has no chatid"))
+    );
+    for chatid in [
+        json!(""),
+        json!(" "),
+        json!(null),
+        json!(1),
+        json!("bad\nchat"),
+        json!("x".repeat(201)),
+    ] {
+        frame["body"]["chatid"] = chatid;
+        assert!(matches!(
+            normalize_message(&frame),
+            Err(GatewayError::Invalid(_))
+        ));
+    }
+    for kind in [json!("channel"), json!(""), json!(null), json!(1)] {
+        frame["body"]["chatid"] = json!("group-1");
+        frame["body"]["chattype"] = kind;
+        assert_eq!(
+            normalize_message(&frame),
+            Err(GatewayError::Invalid("unsupported callback chat type"))
+        );
+    }
+    frame["body"]["chattype"] = json!("group");
+    for kind in ["image", "file", "voice"] {
+        frame["body"]["msgtype"] = json!(kind);
+        assert_eq!(
+            normalize_message(&frame),
+            Err(GatewayError::UnsupportedMedia)
+        );
+    }
+}
+
+#[test]
 fn inbound_media_callbacks_become_download_descriptors() {
     let url = "https://media.example.invalid/signed-ciphertext-url";
     let key = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
@@ -169,9 +242,7 @@ fn callback_identity_types_controls_and_size_are_validated() {
     frame["body"]["chattype"] = json!("group");
     assert_eq!(
         normalize_message(&frame),
-        Err(GatewayError::Invalid(
-            "only private WeCom callbacks are supported"
-        ))
+        Err(GatewayError::Invalid("group callback has no chatid"))
     );
 }
 
@@ -333,6 +404,46 @@ fn callback_claims_do_not_rebind_or_reexecute_and_suppress_stale_replies() {
     assert!(!reopened.admit(&event).unwrap());
     assert!(!reopened.admit(&changed).unwrap());
     assert_eq!(reopened.ready_replies(8).unwrap().len(), 1);
+}
+
+#[test]
+fn latest_group_event_is_shared_but_other_groups_and_private_actors_are_isolated() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("ledger.sqlite");
+    let ledger = crate::ledger::Ledger::open(&path, "profile").unwrap();
+    let event = |id: &str, actor: &str, conversation: &str, kind: &str| {
+        let mut frame = callback();
+        frame["headers"]["req_id"] = json!(format!("callback-{id}"));
+        frame["body"]["msgid"] = json!(id);
+        frame["body"]["from"]["userid"] = json!(actor);
+        frame["body"]["chatid"] = json!(conversation);
+        frame["body"]["chattype"] = json!(kind);
+        normalize_message(&frame).unwrap().unwrap()
+    };
+    let first = event("group-first", "alice", "same-id", "group");
+    let second = event("group-second", "bob", "same-id", "group");
+    ledger.admit(&first).unwrap();
+    ledger.admit(&second).unwrap();
+    assert!(!ledger.is_latest(&first).unwrap());
+    assert!(ledger.is_latest(&second).unwrap());
+    let other_group = event("other-group", "bob", "another-id", "group");
+    ledger.admit(&other_group).unwrap();
+    let private = event("private", "bob", "same-id", "single");
+    ledger.admit(&private).unwrap();
+    let other_actor = event("other-actor", "alice", "same-id", "single");
+    ledger.admit(&other_actor).unwrap();
+    for latest in [&second, &other_group, &private, &other_actor] {
+        assert!(ledger.is_latest(latest).unwrap());
+    }
+    // Host supersession remains authoritative when a later arrival was
+    // cancelled after a slower media callback reached the Host.
+    ledger.supersede(&second.event_id).unwrap();
+    assert!(ledger.is_latest(&first).unwrap());
+    drop(ledger);
+    let reopened = crate::ledger::Ledger::open(&path, "profile").unwrap();
+    assert!(reopened.is_latest(&first).unwrap());
+    assert!(!reopened.admit(&first).unwrap());
+    assert!(!reopened.admit(&second).unwrap());
 }
 
 #[test]
@@ -520,6 +631,8 @@ fn version_one_delivery_ledger_migrates_without_changing_at_most_once_facts() {
              INSERT INTO deliveries(kind,request_id,digest,wire_id,status)
               VALUES('send','confirmed-request','d1','wire-confirmed','confirmed'),
                     ('send','unknown-request','d2','wire-unknown','unknown');
+             INSERT INTO inbound(event_id,digest,callback_id,sender_id,conversation_id,state,reply)
+              VALUES('legacy-message','legacy-digest','legacy-callback','alice','same-id','ready','saved private reply');
              PRAGMA user_version=1;",
         )
         .unwrap();
@@ -546,6 +659,30 @@ fn version_one_delivery_ledger_migrates_without_changing_at_most_once_facts() {
         )
         .unwrap();
     assert_eq!(columns, 3);
+    assert!(ledger.is_latest_event("legacy-message").unwrap());
+    let mut group = callback();
+    group["body"]["chattype"] = json!("group");
+    group["body"]["chatid"] = json!("same-id");
+    let group = normalize_message(&group).unwrap().unwrap();
+    ledger.admit(&group).unwrap();
+    assert!(ledger.is_latest_event("legacy-message").unwrap());
+    assert_eq!(
+        ledger.ready_replies(8).unwrap()[0].text,
+        "saved private reply"
+    );
+    // The new scope projection must leave old confirmed and unknown sends alone.
+    drop(ledger);
+    let reopened = crate::ledger::Ledger::open(&path, "profile").unwrap();
+    assert!(
+        reopened
+            .previous("send", "confirmed-request", "d1")
+            .unwrap()
+    );
+    assert_eq!(
+        reopened.previous("send", "unknown-request", "d2"),
+        Err(GatewayError::PreviousUnconfirmed)
+    );
+    assert_eq!(reopened.facts().unwrap().len(), 2);
 }
 
 #[test]

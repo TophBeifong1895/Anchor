@@ -12,7 +12,6 @@ use tokio_tungstenite::{
     tungstenite::{Message, protocol::WebSocketConfig},
 };
 
-use super::status;
 use super::{
     ConnectionStatus, Driver, MAX_IN_FLIGHT, MAX_MEDIA_IN_FLIGHT, MediaJob, MediaPending,
     MediaStage, MediaStep, PendingDelivery, SendRequest, stopping,
@@ -112,13 +111,12 @@ impl Driver {
                 .map(|pending| pending.deadline)
                 .chain(self.feedback_pending.values().map(|entry| entry.deadline))
                 .chain(self.acks.iter().map(|ack| ack.deadline))
-                // An idle bubble is not idle work: it still owes the next
-                // animation frame, so the loop must wake for it.
-                .chain(self.open_bubbles.values().flat_map(|bubble| {
-                    let status = bubble.pending.is_some().then_some(bubble.next_update);
-                    let animation =
-                        status::animating(bubble.frames).then_some(bubble.next_animation);
-                    status.into_iter().chain(animation)
+                // Wait for an actual status change. A blocked update wakes on
+                // its ACK or ACK deadline, not an expired throttle deadline.
+                .chain(self.open_bubbles.values().filter_map(|bubble| {
+                    (bubble.pending.is_some()
+                        && !self.feedback_pending.contains_key(&bubble.request_id))
+                    .then_some(bubble.next_update)
                 }))
                 .chain(self.media_pending.values().map(|pending| pending.deadline))
                 .chain(ping.iter().map(|(_, deadline)| *deadline))
@@ -171,8 +169,8 @@ impl Driver {
                         if ping.as_ref().is_some_and(|(id, _)| id == request_id) {
                             ping = None;
                             if code != 0 { return Ok(()); }
-                        } else if let Some(entry) = self.feedback_pending.remove(request_id) {
-                            if code != 0 && !entry.best_effort {
+                        } else if self.feedback_pending.remove(request_id).is_some() {
+                            if code != 0 {
                                 self.report(GatewayError::Unconfirmed);
                             }
                         } else if let Some((_, pending)) = self.media_pending.remove_entry(request_id) {
@@ -219,15 +217,11 @@ impl Driver {
                     if self
                         .feedback_pending
                         .values()
-                        .any(|entry| entry.deadline <= now && !entry.best_effort)
+                        .any(|entry| entry.deadline <= now)
                     {
                         self.report(GatewayError::Unconfirmed);
                         return Ok(());
                     }
-                    // An animation frame nobody acknowledged is decoration: drop
-                    // it and keep the connection instead of failing closed.
-                    self.feedback_pending
-                        .retain(|_, entry| entry.deadline > now);
                     let expired_media: Vec<_> = self.media_pending.iter()
                         .filter(|(_, pending)| pending.deadline <= now)
                         .map(|(id, _)| id.clone()).collect();
@@ -318,10 +312,9 @@ impl Driver {
             .ledger
             .ready_replies(MAX_IN_FLIGHT.saturating_sub(self.pending.len()))?;
         for reply in replies {
-            // Any outstanding update on this request id, including a decorative
-            // animation frame, must be acknowledged first: acknowledgements are
+            // Outstanding status updates must be acknowledged first: ACKs are
             // keyed by request id, so sending the reply early could let a
-            // frame's acknowledgement be mistaken for the reply's own.
+            // status acknowledgement be mistaken for the reply's own.
             if self.feedback_pending.contains_key(&reply.callback_id) {
                 continue;
             }
@@ -332,11 +325,7 @@ impl Driver {
                 ));
                 continue;
             }
-            if !self.ledger.is_latest_identity(
-                &reply.event_id,
-                &reply.sender_id,
-                &reply.conversation_id,
-            )? {
+            if !self.ledger.is_latest_event(&reply.event_id)? {
                 self.ledger.suppress(&reply.event_id, None)?;
                 continue;
             }
@@ -429,11 +418,9 @@ impl Driver {
                 deferred.push(job);
                 continue;
             }
-            if !self.ledger.is_latest_identity(
-                &job.event_id,
-                &job.sender_id,
-                &job.conversation_id,
-            )? {
+            if !crate::config::allowed(&self.config.inbound_users, &job.sender_id)
+                || !self.ledger.is_latest_event(&job.event_id)?
+            {
                 continue;
             }
             // A send that already happened, or whose outcome is unknown, must

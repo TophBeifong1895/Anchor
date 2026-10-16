@@ -5,6 +5,8 @@ use anchor_platform_session::{
 };
 use anchor_runtime::graph::{FileRunStore, GraphRunRecord, GraphSnapshot, RunStore};
 
+mod plugin_updates;
+
 #[tokio::test]
 async fn claimed_input_survives_restart_before_artifact_even_after_new_input_arrives() {
     use anchor_runtime::graph::{
@@ -17,6 +19,7 @@ async fn claimed_input_survives_restart_before_artifact_even_after_new_input_arr
     let inbound = |id: &str| ChannelInboundRequest {
         inbound_id: id.into(),
         identity: ChannelIdentity {
+            conversation_kind: Default::default(),
             source: "wecom".into(),
             account: Some("corp-a".into()),
             conversation_id: "conversation-a".into(),
@@ -72,8 +75,13 @@ async fn claimed_input_survives_restart_before_artifact_even_after_new_input_arr
             cancellation: std::sync::Arc::new(AtomicBool::new(false)),
             pause: std::sync::Arc::new(AtomicBool::new(false)),
         };
-        let (_, _, nodes, _) =
-            crate::make_host_with_control(&record.run_id, control, None, None).unwrap();
+        let (_, _, nodes, _) = crate::make_host_with_control(
+            &record.run_id,
+            control,
+            Some(crate::library_root(&state.catalog_root)),
+            None,
+        )
+        .unwrap();
         let NodeExecutionOutcome::Completed(completion) = nodes.execute(request()).await.unwrap()
         else {
             panic!("claimed input did not complete");
@@ -194,6 +202,14 @@ async fn yielded_invocation_projection_never_claims_successful_submission() {
 }
 
 fn saved_assistant(state: &ApiState, owner: &str) -> (SessionStore, String, String) {
+    saved_assistant_with_kind(state, owner, Default::default())
+}
+
+fn saved_assistant_with_kind(
+    state: &ApiState,
+    owner: &str,
+    kind: anchor_platform_session::ChannelConversationKind,
+) -> (SessionStore, String, String) {
     write_graph_bundle(&state.bundle_root, &definition()).unwrap();
     std::fs::create_dir_all(state.data_root.join("platform")).unwrap();
     let sessions = SessionStore::open(state.data_root.join("platform/sessions.sqlite")).unwrap();
@@ -203,6 +219,7 @@ fn saved_assistant(state: &ApiState, owner: &str) -> (SessionStore, String, Stri
             ChannelInboundRequest {
                 inbound_id: "persistent-fixture-input".into(),
                 identity: ChannelIdentity {
+                    conversation_kind: kind,
                     source: "wecom".into(),
                     account: Some("corp-a".into()),
                     conversation_id: "conversation-a".into(),
@@ -236,7 +253,7 @@ fn saved_assistant(state: &ApiState, owner: &str) -> (SessionStore, String, Stri
         )
         .unwrap();
     let mut record = GraphRunRecord::create_with_id(
-        GraphSnapshot::admit(definition()).unwrap(),
+        GraphSnapshot::from_authoring(definition()).unwrap(),
         json!({"session":session}),
         run,
     )
@@ -267,6 +284,223 @@ fn saved_assistant(state: &ApiState, owner: &str) -> (SessionStore, String, Stri
     });
     metadata::save(&state.data_root, &saved).unwrap();
     (sessions, session, admission.turn.id)
+}
+
+#[tokio::test]
+async fn group_wait_input_preserves_current_and_interrupted_actors_and_turn_attachment_scope() {
+    use anchor_platform_session::{AttachmentManifestEntry, ChannelConversationKind};
+    use anchor_runtime::graph::{
+        InvocationKey, NodeExecutionOutcome, NodeExecutionPort, NodeExecutionRequest, NodeKind,
+    };
+    let (root, state) = fixture();
+    let _environment = PROCESS_ENV.lock().await;
+    set_host_env(root.path(), &state.data_root);
+    let (sessions, session, _) =
+        saved_assistant_with_kind(&state, "local", ChannelConversationKind::Group);
+    let record = FileRunStore::new(state.data_root.join("runs"))
+        .load("persistent-fixture-run")
+        .unwrap()
+        .unwrap();
+    let saved = metadata::load(&state.data_root, &record.run_id)
+        .unwrap()
+        .unwrap();
+    let mut admissions = Vec::new();
+    for (id, sender, name, bytes) in [
+        ("alice-input", "alice", "alice.txt", "YWxpY2U="),
+        ("bob-input", "bob", "bob.txt", "Ym9i"),
+    ] {
+        let uploaded = serde_json::from_value::<crate::channel_inputs::UploadedAttachment>(
+            json!({"name":name,"data_base64":bytes,"media_type":"text/plain"}),
+        )
+        .unwrap();
+        let prepared = crate::channel_inputs::prepare(&[uploaded]).unwrap();
+        let files = prepared
+            .manifest()
+            .into_iter()
+            .map(|file| AttachmentManifestEntry {
+                path: format!("/in/channel/{}", file.name),
+                name: file.name,
+                sha256: file.sha256,
+                size: file.size,
+                media_type: file.media_type,
+            })
+            .collect();
+        let admission = sessions
+            .admit_channel_inbound(
+                "local",
+                ChannelInboundRequest {
+                    inbound_id: id.into(),
+                    identity: ChannelIdentity {
+                        source: "wecom".into(),
+                        account: Some("corp-a".into()),
+                        conversation_kind: ChannelConversationKind::Group,
+                        conversation_id: "conversation-a".into(),
+                        sender_id: sender.into(),
+                    },
+                    graph: "fixture".into(),
+                    reply_node: "assistant".into(),
+                    text: Some(format!("from {sender}")),
+                    attachments: anchor_platform_session::AttachmentManifest { format: 1, files },
+                    run_id: None,
+                    replace_running: true,
+                },
+            )
+            .unwrap();
+        assert_eq!(admission.session.id, session);
+        let input = sessions.get_channel_inbound("local", &session, id).unwrap();
+        let selected = crate::assistant::attachment_metadata_for_input(&saved, &input);
+        crate::channel_inputs::freeze(&state.data_root, &selected, &prepared).unwrap();
+        admissions.push(admission);
+    }
+    assert_eq!(
+        sessions
+            .get_turn("local", &session, &admissions[0].turn.id)
+            .unwrap()
+            .status,
+        TurnStatus::Interrupted
+    );
+    let key = InvocationKey {
+        run_id: record.run_id.clone(),
+        graph_digest: record.graph_digest.clone(),
+        node_id: "wait_input".into(),
+        invocation: 2,
+    };
+    let request = NodeExecutionRequest {
+        key: key.clone(),
+        kind: NodeKind::OpHost,
+        model: None,
+        task: String::new(),
+        instructions: String::new(),
+        routes: vec!["assistant".into()],
+        input: json!({"session":session}),
+        input_commits: Vec::new(),
+        plugins: Vec::new(),
+        max_provider_requests: None,
+        wall_time_limit_seconds: None,
+        network: false,
+        operation: Some(json!({"operation":"session.wait_input"})),
+        cancellation: std::sync::Arc::new(AtomicBool::new(false)),
+    };
+    let control = HostControl {
+        cancellation: std::sync::Arc::new(AtomicBool::new(false)),
+        pause: std::sync::Arc::new(AtomicBool::new(false)),
+    };
+    let (_, _, nodes, _) = crate::make_host_with_control(
+        &record.run_id,
+        control,
+        Some(crate::library_root(&state.catalog_root)),
+        None,
+    )
+    .unwrap();
+    let NodeExecutionOutcome::Completed(completion) = nodes.execute(request).await.unwrap() else {
+        panic!("group wait did not complete")
+    };
+    assert_eq!(completion.output["channel"]["sender_id"], "bob");
+    assert_eq!(completion.output["channel"]["conversation_kind"], "group");
+    assert_eq!(
+        completion.output["attachments"]["files"][0]["name"],
+        "bob.txt"
+    );
+    assert_eq!(
+        completion.output["interrupted_messages"][0]["channel"]["sender_id"],
+        "alice"
+    );
+    assert_eq!(
+        completion.output["interrupted_messages"][0]["channel"]["conversation_kind"],
+        "group"
+    );
+    assert_eq!(
+        completion.output["interrupted_messages"][0]["attachments"]["files"][0]["path"],
+        format!("/in/channel-pending/{}/alice.txt", admissions[0].turn.id)
+    );
+    assert_eq!(
+        sessions
+            .get_channel_assistant("local", &session)
+            .unwrap()
+            .unwrap()
+            .run_id,
+        record.run_id
+    );
+    let selected = crate::assistant::attachment_metadata(&state.data_root, &saved, &key).unwrap();
+    assert_eq!(selected.run_id, format!("turn-{}", admissions[1].turn.id));
+    assert_eq!(selected.attachments.len(), 1);
+    assert_eq!(selected.attachments[0].name, "bob.txt");
+    let selected_key = InvocationKey {
+        run_id: selected.run_id.clone(),
+        ..key.clone()
+    };
+    let files = crate::channel_inputs::node_inputs(&state.data_root, &selected, &selected_key)
+        .unwrap()
+        .mount
+        .unwrap()
+        .source;
+    assert_eq!(std::fs::read(files.join("bob.txt")).unwrap(), b"bob");
+    assert!(!files.join("alice.txt").exists());
+    let mut wrong = selected;
+    wrong.attachments = crate::assistant::attachment_metadata_for_input(
+        &saved,
+        &sessions
+            .get_channel_inbound("local", &session, "alice-input")
+            .unwrap(),
+    )
+    .attachments;
+    assert!(crate::channel_inputs::node_inputs(&state.data_root, &wrong, &selected_key).is_err());
+}
+
+#[tokio::test]
+async fn stopped_assistant_rejects_inbound_without_leaving_a_running_turn_or_resuming() {
+    let (root, mut state) = fixture();
+    let _environment = PROCESS_ENV.lock().await;
+    set_host_env(root.path(), &state.data_root);
+    state.wecom.reply_node = "assistant".into();
+    let (sessions, session, _) = saved_assistant(&state, "local");
+    let run_path = state.data_root.join("runs/persistent-fixture-run.json");
+    let stopped_record = std::fs::read(&run_path).unwrap();
+    let binding = sessions.get_channel_assistant("local", &session).unwrap();
+    let event = json!({"event":{
+        "source":"wecom", "event_id":"stopped-assistant-input", "sender_id":"user-a",
+        "conversation_id":"conversation-a", "text":"new input", "reply_target":"conversation-a",
+        "message_type":"text", "metadata":{"chat_type":"single","request_id":"stopped-callback"},
+        "attachments":[],
+    }});
+    let inbound_id = super::super::wecom::inbound_id_for("wecom", "stopped-assistant-input");
+    let app = router_with_web_root(state.clone(), root.path().join("web"));
+    for _ in 0..2 {
+        let (status, response) = call(
+            app.clone(),
+            "POST",
+            "/channels/wecom/events",
+            Some(&event.to_string()),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CONFLICT, "{response}");
+        assert_eq!(response["code"], "assistant_stopped");
+        let inbound = sessions
+            .get_channel_inbound("local", &session, &inbound_id)
+            .unwrap();
+        assert_eq!(inbound.turn.status, TurnStatus::Failed);
+        assert_eq!(inbound.relation.run_id, None);
+        assert!(inbound.turn.runs.is_empty());
+    }
+    assert_eq!(sessions.list_turns("local", &session).unwrap().len(), 2);
+    assert_eq!(std::fs::read(run_path).unwrap(), stopped_record);
+    assert_eq!(
+        sessions.get_channel_assistant("local", &session).unwrap(),
+        binding
+    );
+    assert!(
+        !state
+            .application
+            .run_is_active("persistent-fixture-run")
+            .await
+    );
+    assert!(
+        sessions
+            .events("local", &session, 0)
+            .unwrap()
+            .iter()
+            .all(|event| event.kind != "channel.assistant_handover")
+    );
 }
 
 #[test]
@@ -326,6 +560,7 @@ async fn pending_input_scope_reports_truncation_and_authorizes_only_the_latest_e
     let inbound = |id: &str| ChannelInboundRequest {
         inbound_id: id.into(),
         identity: ChannelIdentity {
+            conversation_kind: Default::default(),
             source: "wecom".into(),
             account: Some("corp-a".into()),
             conversation_id: "conversation-a".into(),
@@ -385,8 +620,13 @@ async fn pending_input_scope_reports_truncation_and_authorizes_only_the_latest_e
         cancellation: std::sync::Arc::new(AtomicBool::new(false)),
         pause: std::sync::Arc::new(AtomicBool::new(false)),
     };
-    let (_, _, nodes, _) =
-        crate::make_host_with_control(&record.run_id, control, None, None).unwrap();
+    let (_, _, nodes, _) = crate::make_host_with_control(
+        &record.run_id,
+        control,
+        Some(crate::library_root(&state.catalog_root)),
+        None,
+    )
+    .unwrap();
     let NodeExecutionOutcome::Completed(completion) = nodes.execute(request).await.unwrap() else {
         panic!("waiting input did not complete");
     };
@@ -605,6 +845,7 @@ async fn assistant_projection_reports_derived_needs_recovery() {
             ChannelInboundRequest {
                 inbound_id: "assistant-recovery-input".into(),
                 identity: ChannelIdentity {
+                    conversation_kind: Default::default(),
                     source: "wecom".into(),
                     account: None,
                     conversation_id: "conversation-a".into(),
@@ -658,6 +899,7 @@ fn recovery_inbound(identity: &str) -> ChannelInboundRequest {
     ChannelInboundRequest {
         inbound_id: identity.into(),
         identity: ChannelIdentity {
+            conversation_kind: Default::default(),
             source: "wecom".into(),
             account: Some("corp-a".into()),
             conversation_id: "conversation-a".into(),
@@ -1065,6 +1307,7 @@ async fn timeline_marks_an_idle_resident_run_without_turn_windows() {
             ChannelInboundRequest {
                 inbound_id: "idle-fixture-input".into(),
                 identity: ChannelIdentity {
+                    conversation_kind: Default::default(),
                     source: "wecom".into(),
                     account: Some("corp-a".into()),
                     conversation_id: "conversation-b".into(),

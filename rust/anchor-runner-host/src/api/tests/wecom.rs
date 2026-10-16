@@ -24,6 +24,179 @@ fn event(text: &str) -> Value {
     })
 }
 
+fn group_event(id: &str, sender: &str, group: &str, text: &str) -> Value {
+    let mut body = event(text);
+    body["event"]["event_id"] = json!(id);
+    body["event"]["sender_id"] = json!(sender);
+    body["event"]["conversation_id"] = json!(group);
+    body["event"]["reply_target"] = json!(group);
+    body["event"]["metadata"] = json!({"chat_type":"group","request_id":format!("callback-{id}")});
+    body
+}
+
+#[tokio::test]
+async fn group_events_share_context_check_each_actor_and_pin_receipt_identity() {
+    let (root, mut state) = fixture();
+    let _env = PROCESS_ENV.lock().await;
+    set_host_env(root.path(), &state.data_root);
+    unsafe {
+        env::set_var("ANCHOR_RUNNER_ALLOWED_COMMANDS", "true,sh,cat,printf");
+    }
+    state.wecom.reply_node = "reply".into();
+    state.wecom.users = HashSet::from(["alice".into(), "bob".into()]);
+    write_graph_bundle(
+        &state.bundle_root,
+        &json!({
+            "objective":"group identity fixture","entry":"reply","agents":{},
+            "ops":{"reply":{"run":"printf 'group reply'"}},
+            "nodes":[{"id":"reply","op":"reply","plugins":[]}],"edges":[]
+        }),
+    )
+    .unwrap();
+    let app = router_with_web_root(state.clone(), root.path().join("web"));
+    let first = group_event("group-alice-1", "alice", "group-a", "Alice asks a question");
+    let (status, one) = call(
+        app.clone(),
+        "POST",
+        "/channels/wecom/events",
+        Some(&first.to_string()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{one}");
+    let session = one["session"].as_str().unwrap();
+    let second = group_event("group-bob-1", "bob", "group-a", "Bob adds details");
+    let (status, two) = call(
+        app.clone(),
+        "POST",
+        "/channels/wecom/events",
+        Some(&second.to_string()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{two}");
+    assert_eq!(two["session"], session);
+    let record = FileRunStore::new(state.data_root.join("runs"))
+        .load(two["run"].as_str().unwrap())
+        .unwrap()
+        .unwrap();
+    assert_eq!(record.input["channel"]["sender_id"], "bob");
+    assert_eq!(record.input["channel"]["conversation_kind"], "group");
+    assert_eq!(
+        record.input["interrupted_messages"][0]["message"],
+        "Alice asks a question"
+    );
+    assert_eq!(
+        record.input["interrupted_messages"][0]["channel"]["sender_id"],
+        "alice"
+    );
+    assert_eq!(
+        record.input["interrupted_messages"][0]["channel"]["conversation_kind"],
+        "group"
+    );
+    let sessions = SessionStore::open(state.data_root.join("platform/sessions.sqlite")).unwrap();
+    let snapshot = sessions.get("local", session).unwrap();
+    assert!(!snapshot.channel.contains_key("sender_id"));
+    let denied = group_event("group-denied", "mallory", "group-a", "denied");
+    let (status, _) = call(
+        app.clone(),
+        "POST",
+        "/channels/wecom/events",
+        Some(&denied.to_string()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(sessions.list_turns("local", session).unwrap().len(), 2);
+    let forged_actor = group_event("group-bob-1", "alice", "group-a", "Bob adds details");
+    let (status, _) = call(
+        app.clone(),
+        "POST",
+        "/channels/wecom/events",
+        Some(&forged_actor.to_string()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+
+    let settlement = json!({"event":second["event"],"settlement":{
+        "key":two["receipt"]["key"],"content_sha256":two["receipt"]["content_sha256"],"status":"confirmed"
+    }});
+    for (field, value) in [
+        ("sender_id", json!("alice")),
+        ("conversation_id", json!("group-b")),
+        ("chat_type", json!("single")),
+    ] {
+        let mut forged = settlement.clone();
+        if field == "chat_type" {
+            forged["event"]["metadata"][field] = value;
+        } else {
+            forged["event"][field] = value.clone();
+            if field == "conversation_id" {
+                forged["event"]["reply_target"] = value;
+            }
+        }
+        let (status, _) = call(
+            app.clone(),
+            "POST",
+            "/channels/wecom/events",
+            Some(&forged.to_string()),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "forged {field}");
+    }
+    let (status, confirmed) = call(
+        app.clone(),
+        "POST",
+        "/channels/wecom/events",
+        Some(&settlement.to_string()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{confirmed}");
+    assert_eq!(confirmed["delivery"]["status"], "confirmed");
+
+    let mut scopes = vec![group_event(
+        "other-group",
+        "bob",
+        "group-b",
+        "another group",
+    )];
+    let mut private = group_event("private-alice", "alice", "group-a", "private content");
+    private["event"]["metadata"]["chat_type"] = json!("single");
+    scopes.push(private.clone());
+    private["event"]["event_id"] = json!("private-bob");
+    private["event"]["sender_id"] = json!("bob");
+    scopes.push(private);
+    let mut ids = HashSet::from([session.to_owned()]);
+    for body in scopes {
+        let (status, response) = call(
+            app.clone(),
+            "POST",
+            "/channels/wecom/events",
+            Some(&body.to_string()),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{response}");
+        assert!(ids.insert(response["session"].as_str().unwrap().to_owned()));
+        let record = FileRunStore::new(state.data_root.join("runs"))
+            .load(response["run"].as_str().unwrap())
+            .unwrap()
+            .unwrap();
+        assert!(record.input.get("interrupted_messages").is_none());
+    }
+    let third = group_event("group-alice-2", "alice", "group-a", "Return to the group");
+    let (status, three) = call(
+        app,
+        "POST",
+        "/channels/wecom/events",
+        Some(&third.to_string()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{three}");
+    assert_eq!(three["session"], session);
+    let record = FileRunStore::new(state.data_root.join("runs"))
+        .load(three["run"].as_str().unwrap())
+        .unwrap()
+        .unwrap();
+    assert!(record.input.get("interrupted_messages").is_none());
+}
+
 #[tokio::test]
 async fn deleted_previous_channel_run_does_not_block_a_new_instance() {
     let (_root, state) = fixture();
@@ -154,7 +327,7 @@ async fn wecom_text_event_runs_host_graph_and_returns_idempotent_delivery_receip
 }
 
 #[tokio::test]
-async fn wecom_event_rejects_untrusted_users_and_non_private_or_media_messages() {
+async fn wecom_event_rejects_untrusted_users_unsupported_chat_types_and_invalid_media() {
     let (root, mut state) = fixture();
     state.wecom.users = HashSet::from(["user-1".into()]);
     let app = router_with_web_root(state, root.path().join("web"));
@@ -171,7 +344,7 @@ async fn wecom_event_rejects_untrusted_users_and_non_private_or_media_messages()
     assert_eq!(status, StatusCode::FORBIDDEN);
 
     let mut body = event("hello");
-    body["event"]["metadata"]["chat_type"] = json!("group");
+    body["event"]["metadata"]["chat_type"] = json!("broadcast");
     let (status, _) = call(
         app.clone(),
         "POST",
@@ -421,6 +594,7 @@ async fn recovery_admits_completed_wecom_delivery_once_without_rerunning_the_gra
             ChannelInboundRequest {
                 inbound_id: inbound_id.into(),
                 identity: ChannelIdentity {
+                    conversation_kind: Default::default(),
                     source: "wecom".into(),
                     account: Some("corp-a".into()),
                     conversation_id: "conversation-recovery".into(),
@@ -550,6 +724,7 @@ async fn superseded_completed_wecom_run_does_not_create_a_reply_delivery() {
     let run_id = "channel-00000000-0000-4000-8000-000000000002";
     let sessions = SessionStore::open(state.data_root.join("platform/sessions.sqlite")).unwrap();
     let identity = ChannelIdentity {
+        conversation_kind: Default::default(),
         source: "wecom".into(),
         account: Some("corp-a".into()),
         conversation_id: "conversation-superseded".into(),
@@ -915,6 +1090,7 @@ async fn persistent_assistant_progress_resolves_the_bound_round() {
             ChannelInboundRequest {
                 inbound_id: inbound_id_for("message-1"),
                 identity: ChannelIdentity {
+                    conversation_kind: Default::default(),
                     source: "wecom".into(),
                     account: None,
                     conversation_id: "conversation-1".into(),
@@ -1214,6 +1390,7 @@ async fn an_admitted_message_without_a_run_is_not_finished_lost_or_duplicated() 
     let inbound = |event_id: &str, text: &str| ChannelInboundRequest {
         inbound_id: inbound_id_for(event_id),
         identity: ChannelIdentity {
+            conversation_kind: Default::default(),
             source: "wecom".into(),
             account: None,
             conversation_id: "conversation-1".into(),
@@ -1296,6 +1473,7 @@ fn seed_running_assistant_round(
             ChannelInboundRequest {
                 inbound_id: inbound_id_for(event_id),
                 identity: ChannelIdentity {
+                    conversation_kind: Default::default(),
                     source: "wecom".into(),
                     account: None,
                     conversation_id: "conversation-1".into(),

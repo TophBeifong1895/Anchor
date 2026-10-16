@@ -56,3 +56,20 @@ fn native_launcher_rejects_start_outside_a_private_installation() {
     assert!(result.stdout.is_empty());
     assert!(String::from_utf8_lossy(&result.stderr).contains("launcher must"));
 }
+
+#[test]
+fn native_platform_cli_accepts_install_without_model_config() {
+    let root = tempfile::tempdir().unwrap();
+    let result = command()
+        .args(["install", "--archive", "/unavailable/archive", "--sha256"])
+        .arg("0".repeat(64))
+        .arg("--install-root")
+        .arg(root.path().join("installation"))
+        .output()
+        .unwrap();
+    assert!(!result.status.success());
+    let error = String::from_utf8_lossy(&result.stderr);
+    assert!(!error.contains("required arguments"), "{error}");
+    assert!(!error.contains("--model-config"), "{error}");
+    assert!(result.stdout.is_empty());
+}

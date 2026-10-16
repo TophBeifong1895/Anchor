@@ -59,6 +59,7 @@ async fn plugin_catalog_detail_and_file_projection_are_read_only() {
         "oauth"
     );
     assert!(catalog["plugins"][0].get("instructions").is_none());
+    assert!(catalog["plugins"][0].get("digest").is_none());
 
     let (status, detail) = call(app.clone(), "GET", "/plugins/demo", None).await;
     assert_eq!(status, StatusCode::OK);
@@ -67,6 +68,7 @@ async fn plugin_catalog_detail_and_file_projection_are_read_only() {
         "# Instructions\n\nUse the demo resource."
     );
     assert_eq!(detail["skills"][0], "skills/demo/SKILL.md");
+    assert_eq!(detail["digest"].as_str().unwrap().len(), 64);
 
     let (status, body) = raw(app.clone(), "GET", "/plugins/demo/files/notes.txt", None).await;
     assert_eq!(status, StatusCode::OK);

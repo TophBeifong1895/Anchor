@@ -549,7 +549,6 @@ fn native_goose_mixed_media_preserves_blocks_vision_wire_receipt_and_artifacts()
             )
             .after(LAST_TEXT),
             complete("verify").after("final_result.observed_receipt must match"),
-            Step::text("observed native images and completed the checked branch"),
         ],
         VISION_MODEL,
     );
@@ -561,7 +560,7 @@ fn native_goose_mixed_media_preserves_blocks_vision_wire_receipt_and_artifacts()
     assert_eq!(response["status"], "completed", "{response}");
     provider.assert_consumed();
     let requests = provider.requests();
-    assert_eq!(requests.len(), 5);
+    assert_eq!(requests.len(), 4);
     assert!(
         requests
             .iter()
@@ -753,7 +752,6 @@ fn native_goose_media_restart_checks_same_session_without_reissuing_effect() {
             Step::tool(EXPOSED_TOOL, json!({"mode":"inspect"}))
                 .after("final_result.observed_receipt must match"),
             complete("verify").after(LAST_TEXT),
-            Step::text("inspected the issued images without issuing a second effect"),
         ],
         VISION_MODEL,
     );
@@ -803,7 +801,7 @@ fn native_goose_media_restart_checks_same_session_without_reissuing_effect() {
     assert_eq!(snapshot["calls"][1]["arguments"]["mode"], "inspect");
     assert_eq!(snapshot["effects"].as_array().unwrap().len(), 1);
     let requests = provider.requests();
-    assert_eq!(requests.len(), 7);
+    assert_eq!(requests.len(), 6);
     assert!(
         requests[3]["messages"]
             .to_string()

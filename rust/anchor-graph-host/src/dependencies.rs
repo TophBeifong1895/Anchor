@@ -255,7 +255,7 @@ pub(crate) fn parse_mutable(
         )));
     }
     if let Some(Value::String(relative)) = manifest.get("mcpServers") {
-        let normalized = super::normalize_inside(Path::new(""), relative)
+        let normalized = crate::resources::normalize_inside(Path::new(""), relative)
             .filter(|_| !relative.contains('\0'))
             .ok_or_else(|| invalid(format!("Plugin {id}: unsafe MCP config path")))?;
         if mutable.covers(&normalized.to_string_lossy()) {

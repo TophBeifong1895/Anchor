@@ -10,8 +10,9 @@ use serde_json::json;
 use tempfile::TempDir;
 
 use super::super::{
-    APPLICATION_ID, CHANNEL_SCHEMA, GOOSE_SCHEMA, QUESTION_SCHEMA, RELATION_SCHEMA, SCHEMA_V1,
-    SCHEMA_VERSION, TURN_SCHEMA, expected_schema, migrate, migrate_channel_assistants, schema,
+    APPLICATION_ID, CHANNEL_ASSISTANT_SCHEMA, CHANNEL_SCHEMA, GOOSE_SCHEMA, QUESTION_SCHEMA,
+    RELATION_SCHEMA, SCHEMA_V1, SCHEMA_VERSION, TURN_SCHEMA, expected_schema, migrate,
+    migrate_channel_assistants, migrate_channel_conversations, schema,
 };
 use crate::{
     AttachmentManifest, ChannelDeliveryRequest, ChannelIdentity, ChannelInboundRequest,
@@ -22,6 +23,7 @@ fn inbound(id: &str, run: Option<&str>) -> ChannelInboundRequest {
     ChannelInboundRequest {
         inbound_id: id.into(),
         identity: ChannelIdentity {
+            conversation_kind: Default::default(),
             source: "wecom".into(),
             account: Some("corp".into()),
             conversation_id: "conversation".into(),
@@ -34,6 +36,220 @@ fn inbound(id: &str, run: Option<&str>) -> ChannelInboundRequest {
         run_id: run.map(str::to_owned),
         replace_running: true,
     }
+}
+
+fn downgrade_channel_sessions(connection: &Connection) {
+    connection.execute("CREATE TEMP TABLE preserved_sessions AS SELECT session_id, owner, source, account, conversation_id, participant_id FROM channel_sessions", []).unwrap();
+    connection
+        .execute("DROP TABLE channel_sessions", [])
+        .unwrap();
+    connection.execute(CHANNEL_SCHEMA[0].2, []).unwrap();
+    connection.execute(CHANNEL_SCHEMA[1].2, []).unwrap();
+    connection
+        .execute(
+            "INSERT INTO channel_sessions SELECT * FROM temp.preserved_sessions",
+            [],
+        )
+        .unwrap();
+    connection
+        .execute("DROP TABLE temp.preserved_sessions", [])
+        .unwrap();
+}
+
+fn v7_fixture() -> (TempDir, PathBuf, String, String) {
+    let (directory, path, _) = v6_fixture();
+    let store = SessionStore::open(&path).unwrap();
+    let mut first_request = inbound("retired-input", None);
+    first_request.identity.conversation_id = "assistant-conversation".into();
+    let first = store
+        .admit_channel_inbound("owner", first_request.clone())
+        .unwrap();
+    let session = first.session.id;
+    store
+        .bind_channel_assistant(
+            "owner",
+            &session,
+            "retired-assistant",
+            "wait",
+            "assistant",
+            "reply",
+        )
+        .unwrap();
+    store
+        .claim_channel_assistant_input("owner", &session, "retired-assistant", "wait/1")
+        .unwrap()
+        .unwrap();
+    store
+        .finish_turn(
+            "owner",
+            &session,
+            &first.turn.id,
+            TurnStatus::Completed,
+            None,
+        )
+        .unwrap();
+    store
+        .retire_channel_assistant("owner", &session, "retired-assistant")
+        .unwrap();
+    first_request.inbound_id = "current-input".into();
+    let current = store.admit_channel_inbound("owner", first_request).unwrap();
+    store
+        .bind_channel_assistant(
+            "owner",
+            &session,
+            "current-assistant",
+            "wait",
+            "assistant",
+            "reply",
+        )
+        .unwrap();
+    store
+        .claim_channel_assistant_input("owner", &session, "current-assistant", "wait/2")
+        .unwrap()
+        .unwrap();
+    store
+        .bind_goose(
+            "owner",
+            &session,
+            &current.turn.id,
+            GooseExecution {
+                scope: "d".repeat(64),
+                session: "group-upgrade-history".into(),
+            },
+        )
+        .unwrap();
+    let delivery = ChannelDeliveryRequest {
+        key: "unfinished-current".into(),
+        kind: "text".into(),
+        content_sha256: "e".repeat(64),
+    };
+    store
+        .admit_channel_delivery("owner", &session, &current.turn.id, delivery.clone())
+        .unwrap();
+    store
+        .begin_channel_delivery("owner", &session, &current.turn.id, delivery)
+        .unwrap();
+    drop(store);
+    let mut connection = Connection::open(&path).unwrap();
+    connection
+        .pragma_update(None, "foreign_keys", true)
+        .unwrap();
+    let transaction = connection.transaction().unwrap();
+    for table in ["channel_assistants", "channel_assistant_inputs"] {
+        transaction
+            .execute(
+                &format!("CREATE TEMP TABLE preserved_{table} AS SELECT * FROM {table}"),
+                [],
+            )
+            .unwrap();
+    }
+    transaction
+        .execute("DROP TABLE channel_assistant_inputs", [])
+        .unwrap();
+    transaction
+        .execute("DROP TABLE channel_assistants", [])
+        .unwrap();
+    downgrade_channel_sessions(&transaction);
+    for (_, _, statement) in CHANNEL_ASSISTANT_SCHEMA.iter().skip(1) {
+        transaction.execute(statement, []).unwrap();
+    }
+    for table in ["channel_assistants", "channel_assistant_inputs"] {
+        transaction
+            .execute(
+                &format!("INSERT INTO {table} SELECT * FROM temp.preserved_{table}"),
+                [],
+            )
+            .unwrap();
+        transaction
+            .execute(&format!("DROP TABLE temp.preserved_{table}"), [])
+            .unwrap();
+    }
+    transaction.pragma_update(None, "user_version", 7).unwrap();
+    transaction.commit().unwrap();
+    assert_eq!(schema(&connection).unwrap(), expected_schema(7));
+    (directory, path, session, current.turn.id)
+}
+
+fn assistant_facts(connection: &Connection) -> Vec<Vec<Vec<Value>>> {
+    ["channel_assistants", "channel_assistant_inputs"]
+        .iter()
+        .map(|table| {
+            let mut statement = connection
+                .prepare(&format!("SELECT * FROM {table} ORDER BY rowid"))
+                .unwrap();
+            let columns = statement.column_count();
+            statement
+                .query_map([], |row| {
+                    (0..columns)
+                        .map(|column| row.get(column))
+                        .collect::<rusqlite::Result<Vec<Value>>>()
+                })
+                .unwrap()
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap()
+        })
+        .collect()
+}
+
+#[test]
+fn v7_group_scope_migration_preserves_legacy_sessions_native_links_assistants_inputs_and_delivery()
+{
+    let (_directory, path, session, turn) = v7_fixture();
+    let connection = Connection::open(&path).unwrap();
+    let before = old_facts(&connection);
+    let assistants = assistant_facts(&connection);
+    let store = SessionStore::open(&path).unwrap();
+    assert_eq!(old_facts(&connection), before);
+    assert_eq!(assistant_facts(&connection), assistants);
+    assert_eq!(
+        schema(&connection).unwrap(),
+        expected_schema(SCHEMA_VERSION)
+    );
+    assert!(
+        !connection
+            .prepare("PRAGMA foreign_key_check")
+            .unwrap()
+            .exists([])
+            .unwrap()
+    );
+    assert_eq!(
+        store
+            .get_channel_assistant("owner", &session)
+            .unwrap()
+            .unwrap()
+            .run_id,
+        "current-assistant"
+    );
+    assert_eq!(
+        store
+            .get_channel_assistant_input("owner", &session, "retired-assistant", "wait/1")
+            .unwrap()
+            .unwrap()
+            .request
+            .inbound_id,
+        "retired-input"
+    );
+    assert_eq!(
+        store
+            .get_channel_assistant_input("owner", &session, "current-assistant", "wait/2")
+            .unwrap()
+            .unwrap()
+            .turn
+            .id,
+        turn
+    );
+    let single_scopes: bool = connection.query_row("SELECT NOT EXISTS(SELECT 1 FROM channel_sessions WHERE conversation_kind != 'single' OR participant_id != 'sender')",[],|row|row.get(0)).unwrap();
+    assert!(single_scopes);
+    let mut next = inbound("post-upgrade", None);
+    next.identity.conversation_id = "assistant-conversation".into();
+    assert_eq!(
+        store
+            .admit_channel_inbound("owner", next)
+            .unwrap()
+            .session
+            .id,
+        session
+    );
 }
 
 fn v6_fixture() -> (TempDir, PathBuf, String) {
@@ -150,6 +366,7 @@ fn v6_fixture() -> (TempDir, PathBuf, String) {
     transaction
         .execute("DROP TABLE temp.preserved_inbounds", [])
         .unwrap();
+    downgrade_channel_sessions(&transaction);
     transaction.pragma_update(None, "user_version", 6).unwrap();
     transaction.commit().unwrap();
     connection.execute_batch("VACUUM").unwrap();
@@ -167,8 +384,13 @@ fn old_facts(connection: &Connection) -> BTreeMap<String, Vec<Vec<Value>>> {
         .chain(CHANNEL_SCHEMA.iter())
         .filter(|(kind, _, _)| *kind == "table")
         .map(|(_, name, _)| {
+            let query = if *name == "channel_sessions" && connection.prepare("SELECT conversation_kind FROM channel_sessions").is_ok() {
+                "SELECT session_id, owner, source, account, conversation_id, participant_id AS sender_id FROM channel_sessions ORDER BY rowid".into()
+            } else {
+                format!("SELECT * FROM {name} ORDER BY rowid")
+            };
             let mut statement = connection
-                .prepare(&format!("SELECT * FROM {name} ORDER BY rowid"))
+                .prepare(&query)
                 .unwrap();
             let columns = statement.column_count();
             let rows = statement
@@ -196,7 +418,7 @@ fn v6_migration_preserves_every_old_table_index_and_legacy_run_rejection() {
     let after = schema(&connection).unwrap();
     assert_eq!(after, expected_schema(SCHEMA_VERSION));
     for definition in definitions {
-        if definition.1 != "channel_inbounds" {
+        if definition.1 != "channel_inbounds" && definition.1 != "channel_sessions" {
             assert!(after.contains(&definition));
         }
     }
@@ -284,6 +506,7 @@ fn v6_failed_rebuild_rolls_back_schema_version_data_and_indexes() {
         .unwrap();
     let transaction = connection.transaction().unwrap();
     migrate_channel_assistants(&transaction).unwrap();
+    migrate_channel_conversations(&transaction).unwrap();
     let required: i64 = transaction
         .pragma_query_value(None, "page_count", |row| row.get(0))
         .unwrap();
@@ -351,16 +574,16 @@ fn concurrent_v6_migrations_preserve_all_old_facts() {
 }
 
 #[test]
-fn altered_v6_v7_and_future_schemas_are_rejected_before_any_mutation() {
+fn altered_v6_current_and_future_schemas_are_rejected_before_any_mutation() {
     for (version, alteration) in [
         (6, "DROP INDEX channel_inbounds_session_created"),
-        (7, "DROP INDEX channel_inbounds_run"),
-        (7, "PRAGMA user_version = 8"),
-        (7, "PRAGMA application_id = 0"),
+        (8, "DROP INDEX channel_inbounds_run"),
+        (8, "PRAGMA user_version = 9"),
+        (8, "PRAGMA application_id = 0"),
     ] {
         let (_directory, path, _session) = v6_fixture();
         let mut connection = Connection::open(&path).unwrap();
-        if version == 7 {
+        if version == 8 {
             migrate(&mut connection).unwrap();
         }
         connection.execute_batch(alteration).unwrap();

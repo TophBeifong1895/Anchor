@@ -2,7 +2,8 @@ use rusqlite::Connection;
 
 use super::{
     APPLICATION_ID, CHANNEL_SCHEMA, GOOSE_SCHEMA, QUESTION_SCHEMA, RELATION_SCHEMA, SCHEMA_V1,
-    SCHEMA_VERSION, TURN_SCHEMA, migrate, migrate_channel_assistants, schema,
+    SCHEMA_VERSION, TURN_SCHEMA, migrate, migrate_channel_assistants,
+    migrate_channel_conversations, schema,
 };
 use crate::SessionError;
 
@@ -71,6 +72,7 @@ fn assert_failed_migration_rolls_back(version: i32) {
         }
     }
     migrate_channel_assistants(&transaction).unwrap();
+    migrate_channel_conversations(&transaction).unwrap();
     let required: i64 = transaction
         .pragma_query_value(None, "page_count", |row| row.get(0))
         .unwrap();

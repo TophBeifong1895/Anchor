@@ -358,7 +358,6 @@ fn native_goose_entry_compaction_rereads_readonly_plugin_and_workspace_before_gr
         .after("compaction"),
         facts.reread().after("Plugin marker"),
         complete("verify").after("plugin-workspace-reread"),
-        Step::text("Verified current Plugin and workspace after native entry compaction."),
     ]);
     resume(&server, &run);
     server.wait_status(&run, "completed");
@@ -366,7 +365,7 @@ fn native_goose_entry_compaction_rereads_readonly_plugin_and_workspace_before_gr
     provider.assert_consumed();
     assert_artifacts(&host, &run, &facts);
     let requests = provider.requests();
-    assert_eq!(requests.len(), 9);
+    assert_eq!(requests.len(), 8);
     assert_eq!(
         requests
             .iter()
@@ -494,7 +493,6 @@ fn native_goose_compacted_effect_survives_host_kill_and_is_inspected_without_rep
             "set -eu; test \"$(cat effects.txt)\" = once; test \"$(cat post-effects.txt)\" = '{effect}'; cat {SKILL} > plugin-after.txt; if printf corrupt >> {SKILL} 2>/dev/null; then exit 95; fi; cat workspace.txt > evidence.txt; cat plugin-after.txt evidence.txt effects.txt post-effects.txt; printf '\\nplugin-workspace-reread\\n'"
         )).after("final_result.observed_receipt must match"),
         complete("verify").after("plugin-workspace-reread"),
-        Step::text("Inspected compacted workspace and completed without repeating either effect."),
     ]);
     let restarted = host.serve(&provider);
     assert_eq!(
@@ -524,7 +522,7 @@ fn native_goose_compacted_effect_survives_host_kill_and_is_inspected_without_rep
     );
     assert_eq!(manifest["files"]["post-effects.txt"]["bytes"], effect.len());
     let requests = provider.requests();
-    assert_eq!(requests.len(), 9);
+    assert_eq!(requests.len(), 8);
     assert_eq!(
         requests
             .iter()
@@ -632,7 +630,6 @@ fn native_goose_cancelled_summarizer_stays_incomplete_then_resumes_from_plugin_a
             .reread()
             .after("final_result.observed_receipt must match"),
         complete("verify").after("plugin-workspace-reread"),
-        Step::text("Inspected facts after cancelling the native summarizer and completed once."),
     ]);
     resume(&restarted, &run);
     restarted.wait_status(&run, "completed");
@@ -646,7 +643,7 @@ fn native_goose_cancelled_summarizer_stays_incomplete_then_resumes_from_plugin_a
     assert_artifacts(&host, &run, &facts);
     assert_identity(&host, &run, &original);
     let requests = provider.requests();
-    assert_eq!(requests.len(), 8);
+    assert_eq!(requests.len(), 7);
     assert_eq!(
         requests
             .iter()
@@ -692,9 +689,6 @@ fn native_goose_context_length_error_compacts_same_prompt_and_rereads_plugin_wit
             Step::summary(&facts.summary).expect_request_contains(&facts.workspace),
             facts.reread().expect_request_contains(&facts.summary),
             complete("verify").after("plugin-workspace-reread"),
-            Step::text(
-                "Goose recovered from context length and verified current Plugin and workspace.",
-            ),
         ],
     );
     let host = Host::new(&graph())
@@ -717,7 +711,7 @@ fn native_goose_context_length_error_compacts_same_prompt_and_rereads_plugin_wit
     provider.assert_consumed();
     assert_artifacts(&host, "fixture", &facts);
     let requests = provider.requests();
-    assert_eq!(requests.len(), 6);
+    assert_eq!(requests.len(), 5);
     assert_eq!(
         requests
             .iter()

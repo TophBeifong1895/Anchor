@@ -1,5 +1,6 @@
 mod bridge;
-mod configuration;
+mod completion;
+pub(crate) mod configuration;
 mod conversation;
 pub(crate) use conversation::remove as remove_conversation;
 mod elicitation;
@@ -49,7 +50,7 @@ pub(crate) struct GooseNodePort {
     binary: PathBuf,
     binary_sha256: String,
     model: String,
-    models: configuration::ModelRegistry,
+    models: ExecutionModels,
     fixture: bool,
     /// How this port's Goose sandbox reaches the bridge and the model proxy.
     relay: configuration::RelaySettings,
@@ -57,6 +58,11 @@ pub(crate) struct GooseNodePort {
     process_root: PathBuf,
     resolver: Arc<HostIoResolver>,
     sandbox: Arc<BubblewrapSandbox>,
+}
+
+enum ExecutionModels {
+    Fixture(Box<configuration::ModelRegistry>),
+    Managed(crate::model_configuration::ModelConfiguration),
 }
 
 #[derive(Serialize, Deserialize)]
@@ -285,15 +291,20 @@ impl GooseNodePort {
         if !matches!(mode.as_str(), "goose-acp-spike" | "goose") {
             return Err(format!("unknown Agent runtime `{mode}`"));
         }
-        if mode == "goose"
-            && env::var_os("ANCHOR_GOOSE_BINARY").is_none()
-            && env::var_os("ANCHOR_MODEL_URL").is_none()
-            && env::var_os("ANCHOR_MODEL_API_KEY").is_none()
-            && !state.join("goose-acp").exists()
-            && !state.join("goose-acp-spike").exists()
-        {
-            return Ok(None);
-        }
+        let fixture = mode == "goose-acp-spike";
+        let models = if fixture {
+            ExecutionModels::Fixture(Box::new(configuration::ModelRegistry::from_env(true)?))
+        } else {
+            // Provider settings may be saved after the Host starts. The native
+            // runtime is available independently; each invocation resolves its
+            // own model immediately before execution.
+            if env::var_os("ANCHOR_GOOSE_BINARY").is_none() {
+                return Ok(None);
+            }
+            ExecutionModels::Managed(crate::model_configuration::ModelConfiguration::from_env(
+                state,
+            )?)
+        };
         if state.join("io-harness").exists() {
             return Err(
                 "Goose requires a separate state root; existing io-harness state is not migrated"
@@ -308,9 +319,10 @@ impl GooseNodePort {
         if !network_opt_in(relay.is_isolated(), shared_authorized) {
             return Err(NETWORK_OPT_IN_ERROR.into());
         }
-        let fixture = mode == "goose-acp-spike";
-        let models = configuration::ModelRegistry::from_env(fixture)?;
-        let model = models.resolve(None)?.model;
+        let model = match &models {
+            ExecutionModels::Fixture(models) => models.resolve(None)?.model,
+            ExecutionModels::Managed(_) => String::new(),
+        };
         let facts = state.join(if fixture {
             "goose-acp-spike"
         } else {
@@ -433,13 +445,21 @@ impl GooseNodePort {
             ));
         }
         let deadline = timeout.map(|timeout| tokio::time::Instant::now() + timeout);
-        let binding = self
-            .models
-            .resolve(request.model.as_deref())
-            .map_err(GraphError::Unsupported)?;
         let stem = Self::stem(&request.key);
         let fact_path = self.facts.join(format!("{stem}.json"));
         let retained = read_fact(&fact_path)?;
+        let retained_binding = retained
+            .as_ref()
+            .and_then(|fact| fact.model_binding.as_deref());
+        let models = match &self.models {
+            ExecutionModels::Fixture(models) => models.as_ref().clone(),
+            ExecutionModels::Managed(configuration) => configuration
+                .execution_snapshot(retained_binding, request.model.as_deref())
+                .map_err(GraphError::Unsupported)?,
+        };
+        let binding = models
+            .resolve(request.model.as_deref())
+            .map_err(GraphError::Unsupported)?;
         let resumed = retained.is_some();
         let mut conversation = match conversation_hint {
             Some(hint) => Some(conversation::ConversationScope::open(
@@ -502,7 +522,7 @@ impl GooseNodePort {
                 observation_path: (!self.fixture).then(|| fact_path.clone()),
             },
             tool_request.cancellation.clone(),
-            self.models.model_upstream(),
+            models.model_upstream(),
             self.fixture,
             token,
         )
@@ -522,7 +542,16 @@ impl GooseNodePort {
         let endpoint = transport.endpoint(&bridge.url);
         // State the node boundary every turn through Goose's persistent
         // instructions: mounts, network, budget and the host authorization rule.
-        let mut environment = self.models.environment(&binding, &endpoint, &bridge.token);
+        let mut environment = models.environment(&binding, &endpoint, &bridge.token);
+        if !self.fixture {
+            // Only AgentNode opts into Goose's native completion boundary.
+            // Sandbox environments are cleared before these explicit values;
+            // Pilot and the legacy spike transport never receive this setting.
+            environment.push(anchor_runtime::SandboxEnvironment::new(
+                "GOOSE_EXTERNAL_COMPLETION_TOOL",
+                "anchor__final_result",
+            ));
+        }
         environment.push(anchor_runtime::SandboxEnvironment::new(
             "GOOSE_MOIM_MESSAGE_TEXT",
             configuration::boundary_text(&configuration::BoundaryFacts {
@@ -581,6 +610,7 @@ impl GooseNodePort {
                 &request,
                 &bridge,
                 &endpoint,
+                &binding,
                 deadline,
                 &fact_path,
                 &mut fact,
@@ -663,6 +693,7 @@ impl GooseNodePort {
         request: &NodeExecutionRequest,
         bridge: &bridge::Bridge,
         endpoint: &str,
+        binding: &configuration::ModelBinding,
         deadline: Option<tokio::time::Instant>,
         fact_path: &Path,
         fact: &mut Fact,
@@ -677,6 +708,7 @@ impl GooseNodePort {
             bridge,
             endpoint,
             restored.as_deref(),
+            binding,
             &request.cancellation,
             deadline,
             session::ClientCapabilities {
@@ -701,7 +733,7 @@ impl GooseNodePort {
             request.instructions, request.task, request.input, request.routes
         );
         if !self.fixture {
-            prompt.push_str(" After any authorized non-completion tool, including discovery and read-only tools, copy the anchor_receipt from its most recent returned result into final_result.observed_receipt. Call final_result only after observing that result. A final_result in the same batch as another authorized non-completion tool cannot know that tool's receipt and is rejected. Inspect existing results or use authorized read-only tools when needed; do not repeat business operations merely to obtain a receipt. Read mounted Plugin instructions through the authorized tools as needed.");
+            prompt.push_str(" After any authorized non-completion tool batch, including discovery and read-only tools, copy an anchor_receipt from any returned result in the most recent batch into final_result.observed_receipt. Call final_result alone in a later batch after observing those results. A final_result in the same batch as any other tool is rejected. Inspect existing results or use authorized read-only tools when needed; do not repeat business operations merely to obtain a receipt. Read mounted Plugin instructions through the authorized tools as needed.");
         }
         prompt.push_str(" Discover this invocation's authorized Plugins with anchor_plugins (query, exact plugin ID or offset paging); anchor_plugin_read reads only a selected overview/instructions/Skill/resource, with bounded pages and file digests. Use anchor_tools and anchor_tool_detail for the complete authorized inventory/schema, then anchor_tools_call for business tools. After compaction, reread selected instructions/schema as needed. Save work in the node workspace.");
         if evidence["resume"] == true && restored.is_some() {
@@ -778,7 +810,7 @@ impl GooseNodePort {
                 response["stopReason"]
             )));
         }
-        if *bridge.state.after_completion.lock().await {
+        if self.fixture && *bridge.state.after_completion.lock().await {
             return Err(InvocationFailure::Contract(
                 "Goose attempted tools after final_result".into(),
             ));

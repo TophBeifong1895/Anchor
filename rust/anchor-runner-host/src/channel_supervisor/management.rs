@@ -405,6 +405,11 @@ impl ChannelManagementAdapter {
 
     async fn public_status(&self, owner: &str) -> Result<Value, ApplicationError> {
         if self.external {
+            if owner != self.configuration.deployment_owner {
+                return Ok(
+                    json!({"platform":"wecom","configuration_owner":"deployment","configured":true,"owner_matches":false,"mutable":false}),
+                );
+            }
             let descriptor = self.external_descriptors.get("wecom");
             let listener = match descriptor {
                 Some(descriptor) => serde_json::to_value(super::status::read(descriptor).await)
@@ -412,7 +417,7 @@ impl ChannelManagementAdapter {
                 None => json!("unavailable"),
             };
             return Ok(
-                json!({"platform":"wecom","configuration_owner":"deployment","configured":self.configuration.deployment_binding.as_ref().is_some_and(|binding|!binding.graph.is_empty()),"enabled":descriptor.is_some(),"listener":listener,"mutable":false}),
+                json!({"platform":"wecom","configuration_owner":"deployment","configured":self.configuration.deployment_binding.as_ref().is_some_and(|binding|!binding.graph.is_empty()),"binding":self.configuration.deployment_binding,"enabled":descriptor.is_some(),"listener":listener,"owner_matches":true,"mutable":false}),
             );
         }
         let Some(fact) = self.fact()? else {
@@ -426,13 +431,14 @@ impl ChannelManagementAdapter {
             );
         }
         let admitted = self.admission(&fact).is_ok();
-        let (available, credentials) = match self.definition(&fact.binding) {
+        let (available, credentials, account) = match self.definition(&fact.binding) {
             Ok((definition, channel)) => {
                 let values = self.credentials(&fact, &definition, &channel);
                 let fields = channel.required_environment.iter().map(|field| json!({"field":field,"configured":values.as_ref().is_ok_and(|values|values.get(field).is_some_and(|value|!value.trim().is_empty())),"configuration_owner":if env::var_os(field).is_some(){"deployment"}else{"host"}})).collect::<Vec<_>>();
-                (admitted && values.is_ok(), fields)
+                let account = values.as_ref().ok().and_then(account_identity);
+                (admitted && values.is_ok(), fields, account)
             }
-            Err(_) => (false, Vec::new()),
+            Err(_) => (false, Vec::new(), None),
         };
         let listener = if !fact.enabled {
             json!("stopped")
@@ -452,7 +458,8 @@ impl ChannelManagementAdapter {
         };
         Ok(
             json!({"platform":"wecom","configuration_owner":"host","configured":true,"owner_matches":true,"mutable":true,
-            "enabled":fact.enabled,"available":available,"binding":fact.binding,"credentials":credentials,"listener":listener}),
+            "enabled":fact.enabled,"available":available,"binding":fact.binding,"credentials":credentials,"listener":listener,
+            "account":account,"restart_required":fact.enabled && fact.account != account}),
         )
     }
 }

@@ -17,12 +17,14 @@ pub(super) struct ClientCapabilities {
     pub form_elicitation: bool,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) async fn open(
     connection: &mut AcpConnection,
     bridge: &Bridge,
     // Base URL the sandbox uses for the bridge (its own loopback when isolated).
     endpoint: &str,
     restored: Option<&str>,
+    binding: &configuration::ModelBinding,
     cancellation: &Cancellation,
     deadline: Option<Instant>,
     capabilities: ClientCapabilities,
@@ -127,6 +129,17 @@ pub(super) async fn open(
                 .await?;
         }
     }
+    // Loading restores the native session's saved model, independently of the
+    // process defaults. Select this invocation's frozen model through ACP before
+    // prompting; Goose persists the selection without replacing its history.
+    connection
+        .request(
+            "session/set_config_option",
+            json!({"sessionId":id,"configId":"model","value":binding.model}),
+            cancellation,
+            handshake_deadline,
+        )
+        .await?;
     Ok(OpenedSession {
         id,
         initialize,

@@ -4,6 +4,7 @@ use anchor_runtime::graph::{FileRunStore, GraphRunRecord, RunStatus, RunStore};
 use std::{collections::BTreeMap, time::Duration};
 
 mod deletion;
+mod publication;
 
 fn definition(objective: &str) -> Value {
     json!({
@@ -169,10 +170,10 @@ async fn active_nodes_require_a_live_executor_and_running_record() {
     );
     application.active.lock().await.insert(
         record.run_id.clone(),
-        crate::application::ActiveRun {
-            graph_path: RunApplication::graph_identity(&path).unwrap(),
-            control: crate::application::new_control(),
-        },
+        crate::application::ActiveRun::new(
+            RunApplication::graph_identity(&path).unwrap(),
+            crate::application::new_control(),
+        ),
     );
     assert_eq!(
         application.list_graphs().await.unwrap()["graphs"][0]["active_nodes"],
@@ -188,6 +189,7 @@ async fn active_nodes_require_a_live_executor_and_running_record() {
 
 #[tokio::test]
 async fn crud_round_trips_default_and_authoring_definition_without_http() {
+    let _env_guard = crate::PROCESS_ENV_LOCK.lock().await;
     let (root, application) = fixture();
     let created = application.create_graph("new-graph", None).await.unwrap();
     assert_eq!(created["graph"], "new-graph");
@@ -202,9 +204,13 @@ async fn crud_round_trips_default_and_authoring_definition_without_http() {
         .update_graph("new-graph", replacement.clone())
         .await
         .unwrap();
+    assert_eq!(updated["graph"], "new-graph");
+    assert_eq!(updated["definition"], replacement);
+    assert_eq!(updated["plugin_activation"]["mode"], "new_run");
+    let (_, published) = application.load_graph("new-graph").unwrap();
     assert_eq!(
-        updated,
-        json!({"graph":"new-graph","definition":replacement})
+        updated["plugin_activation"]["graph_digest"],
+        published.snapshot.digest().unwrap()
     );
     assert_eq!(
         application.read_graph("new-graph").unwrap()["definition"],
@@ -234,6 +240,7 @@ async fn crud_round_trips_default_and_authoring_definition_without_http() {
 
 #[tokio::test]
 async fn failed_creation_cleans_staging_and_preserves_conflict_precedence() {
+    let _env_guard = crate::PROCESS_ENV_LOCK.lock().await;
     let (_root, application) = fixture();
     assert!(matches!(
         application.create_graph("fixture", Some(Value::Null)).await,
@@ -250,6 +257,7 @@ async fn failed_creation_cleans_staging_and_preserves_conflict_precedence() {
 
 #[tokio::test]
 async fn filesystem_failures_are_storage_errors() {
+    let _env_guard = crate::PROCESS_ENV_LOCK.lock().await;
     let root = tempfile::tempdir().unwrap();
     let catalog = root.path().join("catalog-file");
     std::fs::write(&catalog, "not a directory").unwrap();
@@ -262,6 +270,7 @@ async fn filesystem_failures_are_storage_errors() {
 
 #[tokio::test]
 async fn invalid_update_preserves_the_published_bundle() {
+    let _env_guard = crate::PROCESS_ENV_LOCK.lock().await;
     let (_root, application) = fixture();
     let path = application.graph_path_checked("fixture").unwrap();
     let before = files(&path);
@@ -295,6 +304,7 @@ async fn validation_is_readonly_and_does_not_take_mutation_or_admission_locks() 
 
 #[tokio::test]
 async fn mutation_lease_protects_creation_update_and_aliased_delete() {
+    let _env_guard = crate::PROCESS_ENV_LOCK.lock().await;
     let (root, application) = fixture();
     let new_path = application.graph_path_checked("new-graph").unwrap();
     let held = application.graph_admission_lease(&new_path).unwrap();
@@ -330,6 +340,7 @@ async fn mutation_lease_protects_creation_update_and_aliased_delete() {
 
 #[tokio::test]
 async fn catalog_gate_serializes_reference_update_and_delete() {
+    let _env_guard = crate::PROCESS_ENV_LOCK.lock().await;
     let (root, application) = fixture();
     application.create_graph("target", None).await.unwrap();
     application.create_graph("caller", None).await.unwrap();
@@ -367,6 +378,7 @@ async fn catalog_gate_serializes_reference_update_and_delete() {
 
 #[tokio::test]
 async fn update_preserves_run_snapshot_and_delete_reuses_unfinished_run_checks() {
+    let _env_guard = crate::PROCESS_ENV_LOCK.lock().await;
     let (root, application) = fixture();
     let (path, bundle) = application.load_graph("fixture").unwrap();
     let mut record = GraphRunRecord::create_with_id(bundle.snapshot, json!({}), "frozen").unwrap();

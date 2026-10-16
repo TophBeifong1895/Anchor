@@ -260,20 +260,16 @@ pub(super) async fn create_response(
         let owner = owner.clone();
         let id = format!("responses-{}", crate::application::metadata::now_nanos());
         blocking(move || {
-            sessions
-                .create(
-                    &owner,
-                    CreateSession {
-                        id: Some(id),
-                        title: "Responses".into(),
-                        plugin_mounts: std::collections::BTreeMap::from([(
-                            crate::plugin_network::NETWORK_PLUGIN.to_owned(),
-                            true,
-                        )]),
-                        ..Default::default()
-                    },
-                )
-                .map_err(session_error)
+            crate::application::pilot_sessions::create(
+                &sessions,
+                &owner,
+                CreateSession {
+                    id: Some(id),
+                    title: "Responses".into(),
+                    ..Default::default()
+                },
+            )
+            .map_err(session_error)
         })
         .await?
     };
@@ -327,7 +323,6 @@ pub(super) async fn create_response(
         let tools = crate::pilot_tools::PilotTools {
             application: state.application.clone(),
             graph_name: state.graph_name.clone(),
-            catalog_root: state.catalog_root.clone(),
             library_root: library_root(&state.catalog_root),
             data_root: state.data_root.clone(),
             workspace_root: state.workspace_root.clone(),

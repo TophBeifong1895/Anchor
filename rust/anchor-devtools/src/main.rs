@@ -9,7 +9,7 @@ anchor-devtools preflight
 anchor-devtools cutover [OPTIONS]
 
 fixture and goose-fixture are aliases for the standard Goose small-Graph regression.
-Runs standard Host goose_acp/goose_pilot/goose_elicitation/goose_media/goose_conversation/goose_channel/goose_compaction/goose_pilot_compaction/goose_trace/goose_session_calls/goose_library/native_plugins ignored fixtures with a deterministic local Provider.
+Runs standard Host Goose execution, model settings, Pilot, conversations, tools and recovery fixtures with a deterministic local Provider.
 Fixture requires explicit ANCHOR_GOOSE_BINARY: pinned Goose 1.53.0 x86_64 musl binary, validated by SHA256.
 Candidate builds the WebUI and locked offline release binaries once, then runs the source-free goose_distribution recovery fixture.
 Candidate Goose path: --goose, ANCHOR_GOOSE_BINARY or ANCHOR_DISTRIBUTION_GOOSE; evidence-root must be a new directory.

@@ -28,13 +28,46 @@ pub struct CreateSession {
     pub plugin_mounts: BTreeMap<String, bool>,
 }
 
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ChannelConversationKind {
+    #[default]
+    Single,
+    Group,
+}
+
+impl ChannelConversationKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Single => "single",
+            Self::Group => "group",
+        }
+    }
+
+    fn is_single(&self) -> bool {
+        *self == Self::Single
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct ChannelIdentity {
     pub source: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub account: Option<String>,
+    #[serde(default, skip_serializing_if = "ChannelConversationKind::is_single")]
+    pub conversation_kind: ChannelConversationKind,
     pub conversation_id: String,
     pub sender_id: String,
+}
+
+impl ChannelIdentity {
+    /// A group has one shared conversation; its sender remains a per-message fact.
+    pub fn participant_id(&self) -> &str {
+        match self.conversation_kind {
+            ChannelConversationKind::Single => &self.sender_id,
+            ChannelConversationKind::Group => "",
+        }
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -80,6 +113,7 @@ pub struct ChannelInboundRun {
 /// One admitted channel message that still has no confirmed reply.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ChannelPendingMessage {
+    pub identity: ChannelIdentity,
     pub text: String,
     pub attachments: usize,
 }

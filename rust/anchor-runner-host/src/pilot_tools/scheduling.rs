@@ -30,6 +30,36 @@ impl PilotTools {
             .map_err(schedule_error)
     }
 
+    pub(super) async fn schedule_update(&self, arguments: &Value) -> Result<Value, ToolError> {
+        self.require_active_turn()?;
+        let id = parameter(arguments, "schedule")?;
+        let graph = parameter(arguments, "graph")?;
+        let rule = arguments
+            .get("rule")
+            .filter(|rule| rule.is_object())
+            .ok_or_else(|| rejected("rule must be an object"))?;
+        let input = arguments.get("input").cloned().unwrap_or_else(|| json!({}));
+        let enabled = arguments
+            .get("enabled")
+            .and_then(Value::as_bool)
+            .ok_or_else(|| rejected("enabled must be a boolean"))?;
+        if !input.is_object()
+            || arguments.as_object().is_none_or(|object| {
+                object.keys().any(|key| {
+                    !["schedule", "graph", "rule", "input", "enabled"].contains(&key.as_str())
+                })
+            })
+        {
+            return Err(rejected(
+                "provide schedule, graph, rule, object input and enabled only",
+            ));
+        }
+        self.application
+            .update_schedule(&id, &graph, rule, &input, enabled)
+            .await
+            .map_err(schedule_error)
+    }
+
     pub(super) async fn schedule_delete(&self, arguments: &Value) -> Result<Value, ToolError> {
         self.require_active_turn()?;
         let id = parameter(arguments, "schedule")?;

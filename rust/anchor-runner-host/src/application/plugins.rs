@@ -11,6 +11,8 @@ use std::path::{Path, PathBuf};
 #[cfg(test)]
 use std::sync::Arc;
 
+pub(crate) mod catalog;
+
 #[cfg(test)]
 mod reference_tests;
 
@@ -23,6 +25,9 @@ mod reference_tests;
 #[derive(Debug, Clone)]
 pub(crate) struct PluginInstallPrecondition {
     pub(crate) review: PluginReview,
+    pub(crate) authorization_digest: String,
+    pub(crate) network: bool,
+    pub(crate) mutable: Vec<String>,
     pub(crate) directory: PathBuf,
     pub(crate) existing_digest: Option<String>,
     /// Saved Graphs affected by replacing this Plugin. Runs resolve the current
@@ -112,18 +117,33 @@ impl RunApplication {
         access.check().map_err(plugin_dependency_error)?;
         let reviewed = directory.clone();
         let review_root = library_root.clone();
-        let (review, existing_digest) = tokio::task::spawn_blocking(move || {
-            let review = Library::new(&review_root)
-                .review_directory(&id, &reviewed)
-                .map_err(plugin_error)?;
-            let existing_digest = FilePluginCatalog::new(&review_root)
-                .definition(&id)
-                .ok()
-                .map(|definition| definition.digest);
-            Ok::<_, ApplicationError>((review, existing_digest))
-        })
-        .await
-        .map_err(|_| ApplicationError::Storage("Plugin review task failed".into()))??;
+        let (review, existing_digest, authorization_digest, network, mutable) =
+            tokio::task::spawn_blocking(move || {
+                let transaction = tempfile::tempdir()
+                    .map_err(|error| ApplicationError::Storage(error.to_string()))?;
+                let (staged, review) = Library::new(&review_root)
+                    .stage_directory(&id, &reviewed, transaction.path())
+                    .map_err(plugin_error)?;
+                let definition = FilePluginCatalog::new(staged)
+                    .definition(&id)
+                    .map_err(ApplicationError::from)?;
+                let authorization_digest = definition.authorization_digest.clone();
+                let network = crate::plugin_network::requires_network(&definition);
+                let mutable = definition.mutable.paths().to_vec();
+                let existing_digest = FilePluginCatalog::new(&review_root)
+                    .definition(&id)
+                    .ok()
+                    .map(|definition| definition.digest);
+                Ok::<_, ApplicationError>((
+                    review,
+                    existing_digest,
+                    authorization_digest,
+                    network,
+                    mutable,
+                ))
+            })
+            .await
+            .map_err(|_| ApplicationError::Storage("Plugin review task failed".into()))??;
         // What the replacement would reach is a host projection over the Graph
         // catalog and the Run records, so it is read here rather than guessed.
         let impact = self.plugin_impact(&review.id)?;
@@ -135,6 +155,9 @@ impl RunApplication {
             .await?;
         Ok(PluginInstallPrecondition {
             review,
+            authorization_digest,
+            network,
+            mutable,
             directory,
             existing_digest,
             impact,
@@ -728,15 +751,28 @@ impl RunApplication {
     fn unfinished_runs_binding(&self, id: &str) -> Result<Vec<String>, ApplicationError> {
         let mut runs = Vec::new();
         for (run, record) in self.records()? {
-            if !super::is_unfinished(record.status) {
+            if record.status.is_terminal() {
                 continue;
             }
-            let binds = record.plugin_bindings.contains_key(id)
-                || record
-                    .snapshot
-                    .nodes
-                    .iter()
-                    .any(|node| node.plugins.iter().any(|reference| reference.id == id));
+            let metadata = self.metadata(&run)?;
+            let binds = match metadata
+                .as_ref()
+                .filter(|metadata| metadata.assistant.is_some())
+            {
+                Some(metadata) => {
+                    crate::assistant_plugins::active_bindings(&self.data_root, &record, metadata)
+                        .map_err(ApplicationError::Conflict)?
+                        .contains_key(id)
+                }
+                None => {
+                    record.plugin_bindings.contains_key(id)
+                        || record
+                            .snapshot
+                            .nodes
+                            .iter()
+                            .any(|node| node.plugins.iter().any(|reference| reference.id == id))
+                }
+            };
             if binds {
                 runs.push(run);
             }

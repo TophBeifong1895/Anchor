@@ -15,7 +15,8 @@ use anchor_wecom_gateway::{
 use serde_json::{Value, json};
 use support::{
     HttpReply, MediaServer, Platform, ProgressFrame, ProgressServer, TOKEN, WebhookServer,
-    callback, config, config_with_progress, control, media_callback, raw_control, send_request,
+    callback, config, config_with_progress, control, group_callback, media_callback, raw_control,
+    send_request,
 };
 
 async fn wait_fact(gateway: &RunningGateway, request_id: &str, status: DeliveryStatus) {
@@ -504,6 +505,15 @@ async fn saved_unsent_reply_rechecks_current_inbound_permission_after_restart() 
 
 #[tokio::test]
 async fn callback_with_lost_reply_ack_is_not_replayed_or_reexecuted_after_restart() {
+    assert_lost_reply_ack_is_not_replayed(false).await;
+}
+
+#[tokio::test]
+async fn group_callback_with_lost_reply_ack_is_not_replayed_or_reexecuted_after_restart() {
+    assert_lost_reply_ack_is_not_replayed(true).await;
+}
+
+async fn assert_lost_reply_ack_is_not_replayed(group: bool) {
     let root = tempfile::tempdir().unwrap();
     let mut platform = Platform::new(Some(0)).await;
     let webhook = WebhookServer::new(|_| HttpReply::ok(json!({"reply":"saved final reply"}))).await;
@@ -514,10 +524,15 @@ async fn callback_with_lost_reply_ack_is_not_replayed_or_reexecuted_after_restar
         .wait_authenticated(Duration::from_secs(2))
         .await
         .unwrap();
-    let input = callback("lost-reply", "alice", "hello");
+    let input = if group {
+        group_callback("lost-reply", "bob", "group-1", "hello")
+    } else {
+        callback("lost-reply", "alice", "hello")
+    };
     platform.send(input.clone()).await;
     let reply = platform.next_final_response().await;
     assert_eq!(reply["body"]["stream"]["finish"], true);
+    assert_eq!(reply["headers"], input["headers"]);
     platform.close().await;
     platform.next("aibot_subscribe").await;
     gateway
@@ -651,7 +666,7 @@ async fn media_and_untrusted_callbacks_are_rejected_before_webhook() {
 }
 
 #[tokio::test]
-async fn group_callbacks_are_rejected_before_host_webhook() {
+async fn group_callbacks_check_the_real_actor_and_require_a_chatid_before_host_webhook() {
     let root = tempfile::tempdir().unwrap();
     let mut platform = Platform::new(Some(0)).await;
     let webhook =
@@ -665,20 +680,183 @@ async fn group_callbacks_are_rejected_before_host_webhook() {
         .await
         .unwrap();
 
-    let mut group = callback("group-message", "alice", "hello");
-    group["body"]["chattype"] = json!("group");
-    group["body"]["chatid"] = json!("group-1");
-    platform.send(group).await;
+    platform
+        .send(group_callback("group-message", "mallory", "alice", "hello"))
+        .await;
     assert_eq!(
         tokio::time::timeout(Duration::from_secs(1), errors.recv())
             .await
             .unwrap()
             .unwrap(),
-        GatewayError::Invalid("only private WeCom callbacks are supported")
+        GatewayError::Invalid("callback sender is not allowed")
+    );
+    let mut missing_chat = group_callback("missing-chat", "alice", "group-1", "hello");
+    missing_chat["body"]
+        .as_object_mut()
+        .unwrap()
+        .remove("chatid");
+    platform.send(missing_chat).await;
+    assert_eq!(
+        tokio::time::timeout(Duration::from_secs(1), errors.recv())
+            .await
+            .unwrap()
+            .unwrap(),
+        GatewayError::Invalid("group callback has no chatid")
     );
     platform.no_command("aibot_respond_msg").await;
     assert!(webhook.events.lock().unwrap().is_empty());
     assert!(gateway.delivery_facts().unwrap().is_empty());
+    gateway.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn different_members_of_a_group_share_progress_and_only_the_latest_reply_is_delivered() {
+    let root = tempfile::tempdir().unwrap();
+    let mut platform = Platform::new(Some(0)).await;
+    let webhook = WebhookServer::new(|event| {
+        let mut reply = HttpReply::ok(
+            json!({"text":format!("reply for {}", event["event_id"].as_str().unwrap())}),
+        );
+        reply.delay = Duration::from_millis(600);
+        reply
+    })
+    .await;
+    let progress = ProgressServer::new(|event_id| {
+        if event_id == "group-old" {
+            vec![
+                ProgressFrame::status("正在查看文件", "read_file", 1, Duration::ZERO),
+                ProgressFrame::status("正在工作区执行命令", "command", 2, Duration::from_secs(10)),
+            ]
+        } else {
+            vec![
+                ProgressFrame::status("正在查询业务系统", "plugin", 1, Duration::ZERO),
+                ProgressFrame::status("正在查询业务系统", "plugin", 1, Duration::from_millis(80)),
+                ProgressFrame::status("正在查询业务系统", "plugin", 1, Duration::from_secs(10)),
+            ]
+        }
+    })
+    .await;
+    let mut settings =
+        config_with_progress(root.path(), &platform, Some(&webhook), Some(&progress));
+    settings.timing.ack_delay = Duration::from_millis(80);
+    let gateway = Gateway::start(settings).await.unwrap();
+    gateway
+        .wait_authenticated(Duration::from_secs(2))
+        .await
+        .unwrap();
+
+    platform
+        .send(group_callback("group-old", "alice", "group-1", "first"))
+        .await;
+    let first = platform.next("aibot_respond_msg").await;
+    assert_eq!(first["headers"]["req_id"], "callback-group-old");
+    assert_eq!(first["body"]["stream"]["finish"], false);
+    assert_eq!(
+        first["body"]["stream"]["content"],
+        "第 1 步 · 🔍 正在查看文件"
+    );
+    platform.acknowledge(&first, 0).await;
+
+    platform
+        .send(group_callback("group-new", "bob", "group-1", "continue"))
+        .await;
+    let closed = platform.next("aibot_respond_msg").await;
+    assert_eq!(closed["headers"]["req_id"], "callback-group-old");
+    assert_eq!(closed["body"]["stream"]["finish"], true);
+    assert_eq!(
+        closed["body"]["stream"]["content"],
+        "已由群内的新消息接续处理。"
+    );
+    platform.acknowledge(&closed, 0).await;
+    wait_stream_closed(&progress, "group-old").await;
+
+    let newest = platform.next("aibot_respond_msg").await;
+    assert_eq!(newest["headers"]["req_id"], "callback-group-new");
+    assert_eq!(
+        newest["body"]["stream"]["content"],
+        "第 1 步 · 🔎 正在查询业务系统"
+    );
+    assert_eq!(newest["body"]["stream"]["finish"], false);
+    platform.acknowledge(&newest, 0).await;
+    // The repeated status is not another animation frame or another bubble.
+    let reply = platform.next("aibot_respond_msg").await;
+    assert_eq!(reply["headers"]["req_id"], "callback-group-new");
+    assert_eq!(reply["body"]["stream"]["finish"], true);
+    assert_eq!(reply["body"]["stream"]["content"], "reply for group-new");
+    platform.acknowledge(&reply, 0).await;
+    wait_fact(&gateway, "group-new", DeliveryStatus::Confirmed).await;
+    let accepted = webhook.events.lock().unwrap().clone();
+    assert_eq!(accepted.len(), 2);
+    assert_eq!(accepted[0]["sender_id"], "alice");
+    assert_eq!(accepted[1]["sender_id"], "bob");
+    assert_eq!(accepted[1]["conversation_id"], "group-1");
+    assert_eq!(accepted[1]["reply_target"], "group-1");
+    assert_eq!(gateway.delivery_facts().unwrap().len(), 1);
+    platform.no_command("aibot_respond_msg").await;
+    gateway.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn groups_and_a_private_chat_with_the_same_id_keep_independent_progress_and_replies() {
+    let root = tempfile::tempdir().unwrap();
+    let mut platform = Platform::new(Some(0)).await;
+    let webhook = WebhookServer::new(|event| {
+        let mut reply = HttpReply::ok(json!({"text":event["event_id"]}));
+        reply.delay = Duration::from_millis(300);
+        reply
+    })
+    .await;
+    let mut settings = config(root.path(), &platform, Some(&webhook));
+    settings.timing.ack_delay = Duration::from_millis(40);
+    // Three simultaneous streams share this fixture connection. Give the test
+    // reader time to acknowledge each one under the crate's parallel workload.
+    settings.timing.ack_timeout = Duration::from_secs(1);
+    let gateway = Gateway::start(settings).await.unwrap();
+    gateway
+        .wait_authenticated(Duration::from_secs(2))
+        .await
+        .unwrap();
+    platform
+        .send(group_callback(
+            "group-one",
+            "alice",
+            "alice",
+            "in first group",
+        ))
+        .await;
+    platform
+        .send(group_callback(
+            "group-two",
+            "alice",
+            "other-group",
+            "in other group",
+        ))
+        .await;
+    platform
+        .send(callback("private-one", "alice", "private"))
+        .await;
+    let mut opened = std::collections::BTreeSet::new();
+    let mut finished = std::collections::BTreeSet::new();
+    while finished.len() != 3 {
+        let frame = platform.next("aibot_respond_msg").await;
+        let request = frame["headers"]["req_id"].as_str().unwrap().to_owned();
+        if frame["body"]["stream"]["finish"] == false {
+            assert!(opened.insert(request), "duplicate bubble");
+        } else {
+            assert_eq!(
+                frame["body"]["stream"]["content"],
+                request.strip_prefix("callback-").unwrap()
+            );
+            assert!(finished.insert(request), "duplicate reply");
+        }
+        platform.acknowledge(&frame, 0).await;
+    }
+    assert_eq!(opened, finished);
+    assert_eq!(opened.len(), 3);
+    for event in ["group-one", "group-two", "private-one"] {
+        wait_fact(&gateway, event, DeliveryStatus::Confirmed).await;
+    }
+    platform.no_command("aibot_respond_msg").await;
     gateway.shutdown().await.unwrap();
 }
 
@@ -713,7 +891,7 @@ async fn webhook_media_error_and_oversized_replies_are_not_silently_downgraded()
         let input = callback(event_id, "alice", "hello");
         platform.send(input.clone()).await;
         let processing = platform.next("aibot_respond_msg").await;
-        assert_eq!(processing["body"]["stream"]["content"], "⏳ 正在处理…");
+        assert_eq!(processing["body"]["stream"]["content"], "⏳ 正在处理");
         assert_eq!(processing["body"]["stream"]["finish"], false);
         platform.acknowledge(&processing, 0).await;
         let error = tokio::time::timeout(Duration::from_secs(1), errors.recv())
@@ -771,7 +949,7 @@ async fn failed_webhook_is_retried_after_restart_without_reply_claim() {
     let input = callback("failed-webhook", "alice", "hello");
     platform.send(input.clone()).await;
     let processing = platform.next("aibot_respond_msg").await;
-    assert_eq!(processing["body"]["stream"]["content"], "⏳ 正在处理…");
+    assert_eq!(processing["body"]["stream"]["content"], "⏳ 正在处理");
     assert_eq!(processing["body"]["stream"]["finish"], false);
     platform.acknowledge(&processing, 0).await;
     assert_eq!(
@@ -1210,6 +1388,72 @@ async fn reply_image_is_uploaded_in_chunks_then_sent_after_the_text() {
 }
 
 #[tokio::test]
+async fn group_mixed_media_preserves_the_actor_and_replies_with_text_and_image_to_the_original_callback()
+ {
+    let root = tempfile::tempdir().unwrap();
+    let mut platform = Platform::new(Some(0)).await;
+    let png = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, TINY_PNG_BASE64)
+        .unwrap();
+    let media = MediaServer::new(
+        encrypt_platform_media(&png, &PLATFORM_MEDIA_KEY),
+        Some("attachment; filename=group.png"),
+    )
+    .await;
+    let webhook = WebhookServer::new(|_| HttpReply::ok(image_reply("群内图片结果"))).await;
+    let gateway = Gateway::start(config(root.path(), &platform, Some(&webhook)))
+        .await
+        .unwrap();
+    gateway
+        .wait_authenticated(Duration::from_secs(2))
+        .await
+        .unwrap();
+    let mut incoming = group_callback("group-image", "bob", "group-1", "看看附件");
+    incoming["body"].as_object_mut().unwrap().remove("text");
+    incoming["body"]["msgtype"] = json!("mixed");
+    incoming["body"]["mixed"] = json!({"msg_item":[
+        {"msgtype":"text","text":{"content":"看看附件"}},
+        {"msgtype":"image","image":{"url":media.url,"aeskey":platform_media_key()}}
+    ]});
+    platform.send(incoming.clone()).await;
+    let text = next_text_final(&mut platform).await;
+    assert_eq!(text["headers"], incoming["headers"]);
+    assert_eq!(text["body"]["stream"]["content"], "群内图片结果");
+    platform.acknowledge(&text, 0).await;
+    let accepted = webhook.events.lock().unwrap()[0].clone();
+    assert_eq!(accepted["sender_id"], "bob");
+    assert_eq!(accepted["conversation_id"], "group-1");
+    assert_eq!(accepted["reply_target"], "group-1");
+    assert_eq!(accepted["metadata"]["chat_type"], "group");
+    assert_eq!(accepted["message_type"], "mixed");
+    assert_eq!(accepted["text"], "看看附件");
+    let attachment = &accepted["attachments"][0];
+    assert_eq!(attachment["name"], "group.png");
+    assert_eq!(attachment["data_base64"], TINY_PNG_BASE64);
+    assert!(attachment.get("url").is_none());
+    assert!(attachment.get("aeskey").is_none());
+    assert_eq!(media.requests().len(), 1);
+
+    let init = platform.next("aibot_upload_media_init").await;
+    platform
+        .acknowledge_body(&init, 0, json!({"upload_id":"group-upload"}))
+        .await;
+    let chunk = platform.next("aibot_upload_media_chunk").await;
+    platform.acknowledge(&chunk, 0).await;
+    let finish = platform.next("aibot_upload_media_finish").await;
+    platform
+        .acknowledge_body(&finish, 0, json!({"media_id":"group-image-media"}))
+        .await;
+    let image = platform.next("aibot_respond_msg").await;
+    assert_eq!(image["headers"], incoming["headers"]);
+    assert_eq!(image["body"]["msgtype"], "image");
+    assert_eq!(image["body"]["image"]["media_id"], "group-image-media");
+    platform.acknowledge(&image, 0).await;
+    wait_fact(&gateway, "group-image:0", DeliveryStatus::Confirmed).await;
+    platform.no_command("aibot_send_msg").await;
+    gateway.shutdown().await.unwrap();
+}
+
+#[tokio::test]
 async fn unacknowledged_image_send_is_not_repeated_after_restart() {
     let root = tempfile::tempdir().unwrap();
     let mut platform = Platform::new(Some(0)).await;
@@ -1569,6 +1813,15 @@ async fn oversized_inbound_media_is_refused_before_it_is_read() {
 
 #[tokio::test]
 async fn a_newer_message_suppresses_an_image_still_being_uploaded() {
+    assert_a_newer_message_suppresses_an_image(false).await;
+}
+
+#[tokio::test]
+async fn another_group_member_suppresses_an_image_still_being_uploaded() {
+    assert_a_newer_message_suppresses_an_image(true).await;
+}
+
+async fn assert_a_newer_message_suppresses_an_image(group: bool) {
     let root = tempfile::tempdir().unwrap();
     let mut platform = Platform::new(Some(0)).await;
     let webhook = WebhookServer::new(|event| {
@@ -1587,18 +1840,24 @@ async fn a_newer_message_suppresses_an_image_still_being_uploaded() {
         .await
         .unwrap();
 
-    platform
-        .send(callback("stale-image", "alice", "画一张图"))
-        .await;
+    let older = if group {
+        group_callback("stale-image", "alice", "group-1", "画一张图")
+    } else {
+        callback("stale-image", "alice", "画一张图")
+    };
+    platform.send(older).await;
     let text = next_text_final(&mut platform).await;
     platform.acknowledge(&text, 0).await;
     // The upload starts and its acknowledgement is deliberately withheld.
     let init = platform.next("aibot_upload_media_init").await;
     assert_eq!(init["body"]["type"], "image");
 
-    platform
-        .send(callback("newer-message", "alice", "算了"))
-        .await;
+    let newer = if group {
+        group_callback("newer-message", "bob", "group-1", "算了")
+    } else {
+        callback("newer-message", "alice", "算了")
+    };
+    platform.send(newer).await;
     let newer = next_text_final(&mut platform).await;
     assert_eq!(newer["body"]["stream"]["content"], "新回复");
     platform.acknowledge(&newer, 0).await;
@@ -1623,11 +1882,30 @@ async fn a_newer_message_suppresses_an_image_still_being_uploaded() {
 /// replay an event the Host will never accept.
 #[tokio::test]
 async fn host_refusal_retires_the_event_and_never_replays_it() {
+    assert_host_refusal(
+        json!({"error":"Run id was already used for different conversation input"}),
+        GatewayError::Rejected,
+        "本次处理未能完成，请稍后补充一条消息继续；已执行的操作不会自动撤销。",
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn stopped_assistant_refusal_explains_recovery_and_never_replays_it() {
+    assert_host_refusal(
+        json!({"code":"assistant_stopped","error":"assistant is stopped"}),
+        GatewayError::AssistantStopped,
+        "助手已停止。请打开 Anchor 的渠道页面，恢复该助手后再发消息。",
+    )
+    .await;
+}
+
+async fn assert_host_refusal(body: Value, expected_error: GatewayError, notice: &str) {
     let root = tempfile::tempdir().unwrap();
     let mut platform = Platform::new(Some(0)).await;
-    let webhook = WebhookServer::new(|_| HttpReply {
+    let webhook = WebhookServer::new(move |_| HttpReply {
         status: axum::http::StatusCode::CONFLICT,
-        body: json!({"error":"Run id was already used for different conversation input"}),
+        body: body.clone(),
         delay: Duration::ZERO,
     })
     .await;
@@ -1643,17 +1921,14 @@ async fn host_refusal_retires_the_event_and_never_replays_it() {
     platform.send(callback("refused", "alice", "hello")).await;
     // A fresh event still closes the user's progress bubble.
     let failure = platform.next_final_response().await;
-    assert_eq!(
-        failure["body"]["stream"]["content"],
-        "本次处理未能完成，请稍后补充一条消息继续；已执行的操作不会自动撤销。"
-    );
+    assert_eq!(failure["body"]["stream"]["content"], notice);
     platform.acknowledge(&failure, 0).await;
     assert_eq!(
         tokio::time::timeout(Duration::from_secs(1), errors.recv())
             .await
             .unwrap()
             .unwrap(),
-        GatewayError::Rejected
+        expected_error
     );
     assert_eq!(webhook.events.lock().unwrap().len(), 1);
     gateway.shutdown().await.unwrap();
@@ -1767,7 +2042,7 @@ async fn a_message_burst_shows_exactly_one_progress_bubble() {
             .await;
     }
     let bubble = platform.next("aibot_respond_msg").await;
-    assert_eq!(bubble["body"]["stream"]["content"], "⏳ 正在处理…");
+    assert_eq!(bubble["body"]["stream"]["content"], "⏳ 正在处理");
     assert_eq!(bubble["body"]["stream"]["finish"], false);
     // Only the newest message is acknowledged.
     assert_eq!(bubble["headers"]["req_id"], "callback-m3");
@@ -1804,7 +2079,7 @@ async fn a_superseded_progress_bubble_is_closed_with_one_line() {
 
     platform.send(callback("first", "alice", "first")).await;
     let bubble = platform.next("aibot_respond_msg").await;
-    assert_eq!(bubble["body"]["stream"]["content"], "⏳ 正在处理…");
+    assert_eq!(bubble["body"]["stream"]["content"], "⏳ 正在处理");
     assert_eq!(bubble["headers"]["req_id"], "callback-first");
     platform.acknowledge(&bubble, 0).await;
 
@@ -1902,7 +2177,7 @@ async fn progress_status_lines_update_the_open_bubble_in_place() {
     // the static placeholder.
     assert_eq!(
         bubble["body"]["stream"]["content"],
-        "第 1 步 · 🔍 正在查看文件…"
+        "第 1 步 · 🔍 正在查看文件"
     );
     platform.acknowledge(&bubble, 0).await;
     progress.wait_requested(1).await;
@@ -1927,10 +2202,7 @@ async fn progress_status_lines_update_the_open_bubble_in_place() {
     }
     assert_eq!(
         contents,
-        vec![
-            "第 2 步 · 🔎 正在查询业务系统…",
-            "第 3 步 · ✍️ 正在整理回复…",
-        ]
+        vec!["第 2 步 · 🔎 正在查询业务系统", "第 3 步 · ✍️ 正在整理回复",]
     );
 
     let reply = platform.next_final_response().await;
@@ -2020,7 +2292,7 @@ async fn superseded_and_broken_progress_streams_never_affect_delivery() {
         .send(callback("progress-old", "alice", "first"))
         .await;
     let bubble = platform.next("aibot_respond_msg").await;
-    assert_eq!(bubble["body"]["stream"]["content"], "正在查看文件…");
+    assert_eq!(bubble["body"]["stream"]["content"], "正在查看文件");
     platform.acknowledge(&bubble, 0).await;
 
     // The newer message supersedes the running turn.
@@ -2035,7 +2307,7 @@ async fn superseded_and_broken_progress_streams_never_affect_delivery() {
 
     let second = platform.next("aibot_respond_msg").await;
     assert_eq!(second["headers"]["req_id"], "callback-progress-new");
-    assert_eq!(second["body"]["stream"]["content"], "正在查询业务系统…");
+    assert_eq!(second["body"]["stream"]["content"], "正在查询业务系统");
     platform.acknowledge(&second, 0).await;
 
     let reply = platform.next_final_response().await;
@@ -2102,7 +2374,7 @@ async fn progress_subscription_retries_until_the_event_is_admitted() {
     assert_eq!(bubble["headers"]["req_id"], "callback-progress-race");
     // The retry connected before the delayed bubble opened, so the bubble shows
     // observed work rather than the placeholder.
-    assert_eq!(bubble["body"]["stream"]["content"], "正在查询业务系统…");
+    assert_eq!(bubble["body"]["stream"]["content"], "正在查询业务系统");
     platform.acknowledge(&bubble, 0).await;
 
     let reply = platform.next_final_response().await;
@@ -2172,21 +2444,33 @@ async fn a_refused_settlement_is_abandoned_instead_of_retried() {
     reopened.shutdown().await.unwrap();
 }
 
-/// While a step is running the open bubble redraws its ellipsis, so the user can
-/// see that work is still happening.
+/// The client already shows loading. An unchanged status must not refresh the
+/// bubble, even when the Host repeats it or briefly queues another status.
 #[tokio::test]
-async fn an_open_bubble_animates_its_ellipsis_while_the_turn_runs() {
+async fn unchanged_progress_does_not_refresh_the_open_bubble() {
     let root = tempfile::tempdir().unwrap();
     let mut platform = Platform::new(Some(0)).await;
     let webhook = WebhookServer::new(|_| {
         let mut reply = HttpReply::ok(json!({"text":"done"}));
-        reply.delay = Duration::from_millis(2600);
+        reply.delay = Duration::from_millis(2800);
         reply
     })
     .await;
     let progress = ProgressServer::new(|_| {
         vec![
             ProgressFrame::status("正在查看文件", "read_file", 1, Duration::ZERO),
+            // Repeated status, including legacy trailing dots, is unchanged.
+            ProgressFrame::status("正在查看文件…", "read_file", 1, Duration::from_millis(600)),
+            // Both arrive inside the throttle window. The newest matches the
+            // shown line, so the older pending update must be discarded.
+            ProgressFrame::status("正在查询业务系统", "plugin", 2, Duration::from_millis(200)),
+            ProgressFrame::status("正在查看文件", "read_file", 1, Duration::from_millis(200)),
+            ProgressFrame::status(
+                "正在查看文件...",
+                "read_file",
+                1,
+                Duration::from_millis(600),
+            ),
             ProgressFrame::settled("completed"),
         ]
     })
@@ -2194,7 +2478,6 @@ async fn an_open_bubble_animates_its_ellipsis_while_the_turn_runs() {
     let mut settings =
         config_with_progress(root.path(), &platform, Some(&webhook), Some(&progress));
     settings.timing.ack_delay = Duration::from_millis(300);
-    settings.timing.animation_interval = Duration::from_millis(60);
     settings.webhook.as_mut().unwrap().timeout = Some(Duration::from_secs(8));
     let gateway = Gateway::start(settings).await.unwrap();
     gateway
@@ -2203,108 +2486,76 @@ async fn an_open_bubble_animates_its_ellipsis_while_the_turn_runs() {
         .unwrap();
 
     platform
-        .send(callback("animation-1", "alice", "hello"))
+        .send(callback("unchanged-progress", "alice", "hello"))
         .await;
     let bubble = platform.next("aibot_respond_msg").await;
-    assert_eq!(bubble["headers"]["req_id"], "callback-animation-1");
+    assert_eq!(bubble["headers"]["req_id"], "callback-unchanged-progress");
     assert_eq!(bubble["body"]["stream"]["finish"], false);
     assert_eq!(
         bubble["body"]["stream"]["content"],
-        "第 1 步 · 🔍 正在查看文件…"
+        "第 1 步 · 🔍 正在查看文件"
     );
-    let stream = bubble["body"]["stream"]["id"].clone();
     platform.acknowledge(&bubble, 0).await;
 
-    // The same line keeps coming back with a moving ellipsis.
-    let mut frames = Vec::new();
-    for _ in 0..2 {
-        let frame = platform.next("aibot_respond_msg").await;
-        assert_eq!(frame["headers"]["req_id"], "callback-animation-1");
-        assert_eq!(frame["body"]["stream"]["id"], stream);
-        assert_eq!(frame["body"]["stream"]["finish"], false);
-        frames.push(
-            frame["body"]["stream"]["content"]
-                .as_str()
-                .unwrap()
-                .to_owned(),
-        );
-        platform.acknowledge(&frame, 0).await;
-    }
+    // Observe the very next frame, without skipping intermediate updates. The
+    // wait spans the old two-second animation interval and repeated Host lines.
+    let reply = platform.next("aibot_respond_msg").await;
+    assert_eq!(reply["headers"]["req_id"], bubble["headers"]["req_id"]);
     assert_eq!(
-        frames,
-        vec!["第 1 步 · 🔍 正在查看文件.", "第 1 步 · 🔍 正在查看文件..",]
+        reply["body"]["stream"]["id"],
+        bubble["body"]["stream"]["id"]
     );
-
-    let reply = platform.next_final_response().await;
+    assert_eq!(reply["body"]["stream"]["finish"], true);
     assert_eq!(reply["body"]["stream"]["content"], "done");
     platform.acknowledge(&reply, 0).await;
-    wait_fact(&gateway, "animation-1", DeliveryStatus::Confirmed).await;
-    // The turn is over, so the bubble stops animating.
+    wait_fact(&gateway, "unchanged-progress", DeliveryStatus::Confirmed).await;
     platform.no_command("aibot_respond_msg").await;
     gateway.shutdown().await.unwrap();
 }
 
-/// A frame nobody acknowledged is decoration: it must not be read as a failed
-/// delivery, and the real reply must still land and be confirmed.
+/// Status ACKs and reply ACKs share a request id. Finishing the answer must wait
+/// for the open bubble's ACK, even when the Host has already returned its reply.
 #[tokio::test]
-async fn a_lost_animation_acknowledgement_keeps_the_connection_and_the_reply() {
+async fn the_final_reply_waits_for_the_progress_acknowledgement() {
     let root = tempfile::tempdir().unwrap();
     let mut platform = Platform::new(Some(0)).await;
     let webhook = WebhookServer::new(|_| {
         let mut reply = HttpReply::ok(json!({"text":"done"}));
-        reply.delay = Duration::from_millis(2200);
+        reply.delay = Duration::from_millis(300);
         reply
     })
     .await;
-    let progress = ProgressServer::new(|_| {
-        vec![
-            ProgressFrame::status("正在查看文件", "read_file", 1, Duration::ZERO),
-            ProgressFrame::settled("completed"),
-        ]
-    })
-    .await;
-    let mut settings =
-        config_with_progress(root.path(), &platform, Some(&webhook), Some(&progress));
-    settings.timing.ack_delay = Duration::from_millis(300);
-    settings.timing.animation_interval = Duration::from_millis(60);
-    settings.webhook.as_mut().unwrap().timeout = Some(Duration::from_secs(8));
+    let mut settings = config(root.path(), &platform, Some(&webhook));
+    settings.timing.ack_delay = Duration::from_millis(50);
+    settings.timing.ack_timeout = Duration::from_secs(2);
     let gateway = Gateway::start(settings).await.unwrap();
-    let mut errors = gateway.subscribe_errors();
     gateway
         .wait_authenticated(Duration::from_secs(2))
         .await
         .unwrap();
 
     platform
-        .send(callback("animation-lost", "alice", "hello"))
+        .send(callback("progress-ack", "alice", "hello"))
         .await;
     let bubble = platform.next("aibot_respond_msg").await;
-    assert_eq!(
-        bubble["body"]["stream"]["content"],
-        "第 1 步 · 🔍 正在查看文件…"
-    );
+    assert_eq!(bubble["body"]["stream"]["content"], "⏳ 正在处理");
+    assert_eq!(bubble["body"]["stream"]["finish"], false);
+    // The reply is ready but cannot yet use the same callback request id.
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    platform.no_command("aibot_respond_msg").await;
+    assert!(gateway.delivery_facts().unwrap().is_empty());
     platform.acknowledge(&bubble, 0).await;
-    for _ in 0..2 {
-        let frame = platform.next("aibot_respond_msg").await;
-        assert_eq!(frame["body"]["stream"]["finish"], false);
-        // Deliberately never acknowledged.
-    }
 
-    // The fixture's acknowledgement timeout is 150ms: a strict update would have
-    // failed closed by now, and a reconnect would announce itself.
-    assert!(
-        tokio::time::timeout(Duration::from_millis(500), errors.recv())
-            .await
-            .is_err(),
-        "a decorative frame must not report a failed delivery"
+    let reply = platform.next("aibot_respond_msg").await;
+    assert_eq!(reply["headers"]["req_id"], bubble["headers"]["req_id"]);
+    assert_eq!(
+        reply["body"]["stream"]["id"],
+        bubble["body"]["stream"]["id"]
     );
-    platform.no_command("aibot_subscribe").await;
-
-    let reply = platform.next_final_response().await;
+    assert_eq!(reply["body"]["stream"]["finish"], true);
     assert_eq!(reply["body"]["stream"]["content"], "done");
     platform.acknowledge(&reply, 0).await;
-    wait_fact(&gateway, "animation-lost", DeliveryStatus::Confirmed).await;
-    platform.no_command("aibot_respond_msg").await;
+    wait_fact(&gateway, "progress-ack", DeliveryStatus::Confirmed).await;
     gateway.shutdown().await.unwrap();
 }
 
@@ -2417,7 +2668,7 @@ async fn a_later_cancelled_message_does_not_stop_the_running_turns_progress_stre
     assert_eq!(bubble["headers"]["req_id"], "callback-running-first");
     assert_eq!(
         bubble["body"]["stream"]["content"],
-        "第 1 步 · 🔍 正在查看文件…"
+        "第 1 步 · 🔍 正在查看文件"
     );
     assert_eq!(bubble["body"]["stream"]["finish"], false);
     platform.acknowledge(&bubble, 0).await;
@@ -2432,7 +2683,7 @@ async fn a_later_cancelled_message_does_not_stop_the_running_turns_progress_stre
     assert_eq!(update["headers"]["req_id"], "callback-running-first");
     assert_eq!(
         update["body"]["stream"]["content"],
-        "第 2 步 · 🔎 正在查询业务系统…"
+        "第 2 步 · 🔎 正在查询业务系统"
     );
     assert_eq!(update["body"]["stream"]["finish"], false);
     platform.acknowledge(&update, 0).await;

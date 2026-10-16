@@ -54,6 +54,13 @@ pub enum RunStatus {
     Failed,
 }
 
+impl RunStatus {
+    /// A terminal Run cannot resume. Stopped and parked Runs are not terminal.
+    pub fn is_terminal(self) -> bool {
+        matches!(self, Self::Completed | Self::Failed | Self::Aborted)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct EdgeDecision {

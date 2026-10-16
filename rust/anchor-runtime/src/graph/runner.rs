@@ -55,10 +55,7 @@ impl<'a, S: RunStore, A: ArtifactPort, N: NodeExecutionPort, C: RunControl>
                 .insert(cursor.node_id.clone(), cursor.key.invocation);
             *record.passes.entry(cursor.node_id.clone()).or_default() += 1;
         }
-        if matches!(
-            record.status,
-            RunStatus::Failed | RunStatus::Completed | RunStatus::Aborted
-        ) {
+        if record.status.is_terminal() {
             // Re-entering a terminal Run is a read. Write only when this admission
             // actually changed the record (for example the cursor upgrade above),
             // so re-entry stays idempotent and the write stamp stays meaningful.
@@ -883,6 +880,21 @@ impl<'a, S: RunStore, A: ArtifactPort, N: NodeExecutionPort, C: RunControl>
             .collect::<BTreeSet<_>>()
             .into_iter()
             .collect::<Vec<_>>();
+        if self
+            .nodes
+            .invocation_plugin_authority(record)
+            .map_err(|error| error.to_string())?
+        {
+            if !record.plugin_bindings_initialized
+                || !record.plugin_bindings.keys().eq(ids.iter())
+                || record.plugin_bindings.iter().any(|(id, binding)| {
+                    id != &binding.id || binding.authorization_digest.is_empty()
+                })
+            {
+                return Err("invocation-authorized Run has no valid admitted Plugin record".into());
+            }
+            return Ok(());
+        }
         if ids.is_empty() {
             if !record.plugin_bindings.is_empty() {
                 return Err("Run contains Plugin bindings not referenced by its Graph".into());
@@ -970,6 +982,9 @@ impl<'a, S: RunStore, A: ArtifactPort, N: NodeExecutionPort, C: RunControl>
         cursor: &RunCursor,
     ) -> Result<NodeExecutionRequest, GraphError> {
         let mut request = execution_request(record, cursor, self.control.cancellation())?;
+        if self.nodes.invocation_plugin_authority(record)? {
+            return Ok(request);
+        }
         if request.plugins.is_empty() {
             return Ok(request);
         }

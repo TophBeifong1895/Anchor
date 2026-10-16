@@ -867,6 +867,9 @@ mod tests {
         let view = root.path().join("library/dependencies/views/probe/abc123");
         let precondition = PluginInstallPrecondition {
             review,
+            authorization_digest: "a".repeat(64),
+            network: false,
+            mutable: Vec::new(),
             directory: candidate,
             existing_digest: None,
             impact: PluginImpact {
@@ -1060,7 +1063,6 @@ mod uninstall_tool_tests {
         let tools = PilotTools {
             application: RunApplication::new(root.path().join("state"), root.path().to_path_buf()),
             graph_name: "fixture".into(),
-            catalog_root: root.path().to_path_buf(),
             library_root: root.path().to_path_buf(),
             data_root: root.path().join("state"),
             workspace_root: root.path().join("work"),
@@ -1187,6 +1189,7 @@ mod uninstall_tool_tests {
 
     #[tokio::test]
     async fn configured_instruction_plugins_remain_protected_for_install_and_uninstall() {
+        let _env_guard = crate::PROCESS_ENV_LOCK.lock().await;
         let (root, tools) = fixture();
         install(&tools, candidate(root.path(), "Demo", b"precious"), "demo").await;
         tools.application.update_graph(

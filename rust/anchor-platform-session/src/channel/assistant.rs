@@ -743,6 +743,7 @@ mod tests {
         ChannelInboundRequest {
             inbound_id: id.into(),
             identity: ChannelIdentity {
+                conversation_kind: Default::default(),
                 source: "wecom".into(),
                 account: None,
                 conversation_id: conversation.into(),

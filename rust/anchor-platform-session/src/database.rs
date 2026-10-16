@@ -12,7 +12,7 @@ use crate::SessionError;
 mod tests;
 
 const APPLICATION_ID: i32 = 0x414e5353;
-const SCHEMA_VERSION: i32 = 7;
+const SCHEMA_VERSION: i32 = 8;
 const SCHEMA_V1: [(&str, &str, &str); 3] = [
     (
         "table",
@@ -227,6 +227,24 @@ const CHANNEL_INBOUND_SCHEMA_V7: (&str, &str, &str) = (
         )",
 );
 
+const CHANNEL_SESSION_SCHEMA_V8: (&str, &str, &str) = (
+    "table",
+    "channel_sessions",
+    "CREATE TABLE channel_sessions (
+            session_id TEXT PRIMARY KEY NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+            owner TEXT NOT NULL,
+            source TEXT NOT NULL CHECK(length(CAST(source AS BLOB)) BETWEEN 1 AND 256),
+            account TEXT NOT NULL CHECK(length(CAST(account AS BLOB)) <= 256),
+            conversation_kind TEXT NOT NULL CHECK(conversation_kind IN ('single', 'group')),
+            conversation_id TEXT NOT NULL CHECK(length(CAST(conversation_id AS BLOB)) BETWEEN 1 AND 256),
+            participant_id TEXT NOT NULL CHECK(
+                (conversation_kind = 'single' AND length(CAST(participant_id AS BLOB)) BETWEEN 1 AND 256)
+                OR (conversation_kind = 'group' AND participant_id = '')
+            ),
+            UNIQUE(owner, source, account, conversation_kind, conversation_id, participant_id)
+        )",
+);
+
 const CHANNEL_ASSISTANT_SCHEMA: [(&str, &str, &str); 4] = [
     (
         "index",
@@ -319,7 +337,7 @@ fn migrate(connection: &mut Connection) -> Result<(), SessionError> {
         && existing == expected_schema(version);
     if !empty && !compatible {
         return Err(SessionError::Storage(
-            "incompatible database: expected exact Anchor platform Session schema version 1, 2, 3, 4, 5, 6 or 7"
+            "incompatible database: expected exact Anchor platform Session schema version 1, 2, 3, 4, 5, 6, 7 or 8"
                 .into(),
         ));
     }
@@ -336,6 +354,9 @@ fn migrate(connection: &mut Connection) -> Result<(), SessionError> {
     }
     if version < 7 {
         migrate_channel_assistants(&transaction)?;
+    }
+    if version < 8 {
+        migrate_channel_conversations(&transaction)?;
     }
     if version < SCHEMA_VERSION {
         transaction.pragma_update(None, "application_id", APPLICATION_ID)?;
@@ -370,6 +391,54 @@ fn migrate_channel_assistants(connection: &Connection) -> Result<(), SessionErro
     Ok(())
 }
 
+fn migrate_channel_conversations(connection: &Connection) -> Result<(), SessionError> {
+    // Keep foreign keys enabled: remove dependent tables only after preserving
+    // their rows, then rebuild from the parent out. Sessions and their JSON,
+    // Turns, native histories, inbounds and delivery facts remain untouched.
+    for table in [
+        "channel_sessions",
+        "channel_assistants",
+        "channel_assistant_inputs",
+    ] {
+        connection.execute(
+            &format!("CREATE TEMP TABLE {table}_migration AS SELECT * FROM {table}"),
+            [],
+        )?;
+    }
+    for table in [
+        "channel_assistant_inputs",
+        "channel_assistants",
+        "channel_sessions",
+    ] {
+        connection.execute(&format!("DROP TABLE {table}"), [])?;
+    }
+    connection.execute(CHANNEL_SESSION_SCHEMA_V8.2, [])?;
+    connection.execute(CHANNEL_SCHEMA[1].2, [])?;
+    connection.execute(
+        "INSERT INTO channel_sessions(session_id, owner, source, account, conversation_kind, conversation_id, participant_id)
+         SELECT session_id, owner, source, account, 'single', conversation_id, sender_id
+         FROM temp.channel_sessions_migration",
+        [],
+    )?;
+    for (_, _, statement) in CHANNEL_ASSISTANT_SCHEMA.iter().skip(1) {
+        connection.execute(statement, [])?;
+    }
+    for table in ["channel_assistants", "channel_assistant_inputs"] {
+        connection.execute(
+            &format!("INSERT INTO {table} SELECT * FROM temp.{table}_migration"),
+            [],
+        )?;
+    }
+    for table in [
+        "channel_sessions",
+        "channel_assistants",
+        "channel_assistant_inputs",
+    ] {
+        connection.execute(&format!("DROP TABLE temp.{table}_migration"), [])?;
+    }
+    Ok(())
+}
+
 fn expected_schema(version: i32) -> Vec<(String, String, String)> {
     let mut expected: Vec<_> = SCHEMA_V1
         .iter()
@@ -380,7 +449,9 @@ fn expected_schema(version: i32) -> Vec<(String, String, String)> {
         .chain(CHANNEL_SCHEMA.iter().filter(|_| version >= 6))
         .chain(CHANNEL_ASSISTANT_SCHEMA.iter().filter(|_| version >= 7))
         .map(|definition| {
-            if version >= 7 && definition.1 == "channel_inbounds" {
+            if version >= 8 && definition.1 == "channel_sessions" {
+                &CHANNEL_SESSION_SCHEMA_V8
+            } else if version >= 7 && definition.1 == "channel_inbounds" {
                 &CHANNEL_INBOUND_SCHEMA_V7
             } else {
                 definition

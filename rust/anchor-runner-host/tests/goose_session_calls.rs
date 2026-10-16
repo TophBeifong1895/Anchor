@@ -322,7 +322,6 @@ fn foreground_steps(marker: &str, previous: Option<&str>) -> Vec<Step> {
             "set -eu; test ! -e evidence.txt; test ! -e effects.txt; {previous_check} printf %s '{marker}' > evidence.txt; printf foreground > effects.txt; cat evidence.txt"
         )),
         complete("verify").after("exit_code"),
-        Step::text("foreground finished"),
     ]
 }
 
@@ -332,7 +331,6 @@ fn child_steps(marker: &str, previous: &str) -> Vec<Step> {
             "set -eu; test ! -e evidence.txt; test ! -e effects.txt; test \"$(cat /previous/evidence.txt)\" = '{previous}'; if printf corrupt > /previous/evidence.txt; then exit 92; fi; test \"$(cat /in/call/request.txt)\" = '{marker}'; if printf corrupt > /in/call/request.txt; then exit 93; fi; printf once >> effects.txt; cat /in/call/request.txt > evidence.txt; cat evidence.txt"
         )).expect_request_contains(previous),
         complete("verify").after("exit_code"),
-        Step::text("background finished"),
     ]
 }
 
@@ -515,7 +513,7 @@ fn call_case(mode: &str, scenario: &str) {
     let prior_record = record_bytes(&host, &prior, "runs");
     let (parent, child) = admit_child(&server, mode, &call_marker, &mapped);
     boundary.assert_resolved_once(&parent);
-    assert_eq!(provider.requests().len(), 3);
+    assert_eq!(provider.requests().len(), 2);
     assert!(metadata(&host, &child)["conversation"].is_null());
     let queued = record_bytes(&host, &child, "runs");
     server.kill();
@@ -524,7 +522,7 @@ fn call_case(mode: &str, scenario: &str) {
     let mut server = host.serve(&provider);
     server.wait_status(&child, "ready");
     assert_eq!(record_bytes(&host, &child, "runs"), queued);
-    assert_eq!(provider.requests().len(), 3);
+    assert_eq!(provider.requests().len(), 2);
     provider.append(child_steps(&call_marker, &prior_marker));
     execute(&server, &child, Some(&prior));
     let finished = server.wait_status(&child, "completed");
@@ -576,7 +574,7 @@ fn call_case(mode: &str, scenario: &str) {
 
     let server = host.serve(&provider);
     assert_eq!(record_bytes(&host, &child, "runs"), completed_record);
-    assert_eq!(provider.requests().len(), 6);
+    assert_eq!(provider.requests().len(), 4);
     let still_pending = server.wait_status(&child, "completed");
     assert_eq!(still_pending["session_call"]["status"], "pending");
     assert_eq!(still_pending["run"], child);
@@ -598,7 +596,7 @@ fn call_case(mode: &str, scenario: &str) {
     assert_eq!(record_bytes(&host, &prior, "runs"), prior_record);
     assert_eq!(boundary.acknowledgements(), acknowledgements);
     boundary.assert_resolved_once(&parent);
-    assert_eq!(provider.requests().len(), 6);
+    assert_eq!(provider.requests().len(), 4);
     assert_eq!(parent_finished["calls"].as_array().unwrap().len(), 1);
     assert_eq!(parent_finished["calls"][0]["run"], child);
     assert_eq!(host.record(&parent)["invocations"]["invoke"], 1);
@@ -687,7 +685,7 @@ fn native_goose_session_call_wrong_session_and_previous_reject_without_model_cal
         assert_eq!(status, 409, "{rejected}");
         assert_eq!(record_bytes(&host, &child, "runs"), frozen_record);
         assert_eq!(record_bytes(&host, &child, "run-metadata"), frozen_metadata);
-        assert_eq!(provider.requests().len(), 6);
+        assert_eq!(provider.requests().len(), 4);
         assert_eq!(host.native_conversation(&alice, "worker", 1), alice_history);
         assert_eq!(host.native_conversation(&bob, "worker", 1), bob_history);
         rejections.push(
@@ -703,7 +701,7 @@ fn native_goose_session_call_wrong_session_and_previous_reject_without_model_cal
         assert_eq!(status, 409, "{rejected}");
         assert_eq!(record_bytes(&host, &child, "runs"), frozen_record);
         assert_eq!(record_bytes(&host, &child, "run-metadata"), frozen_metadata);
-        assert_eq!(provider.requests().len(), 6);
+        assert_eq!(provider.requests().len(), 4);
         rejections.push(json!({"operation":operation,"response":rejected,"model_calls":0}));
     }
     provider.append(child_steps(&call_marker, &alice_marker));
@@ -717,7 +715,7 @@ fn native_goose_session_call_wrong_session_and_previous_reject_without_model_cal
     assert_eq!(record_bytes(&host, &child, "runs"), completed_record);
     assert_eq!(record_bytes(&host, &child, "run-metadata"), bound_metadata);
     assert_eq!(host.native_conversation(&child, "worker", 1), history);
-    assert_eq!(provider.requests().len(), 9);
+    assert_eq!(provider.requests().len(), 6);
     assert!(!history.to_string().contains(&bob_marker));
     assert_native_pairs(&history, "anchor__anchor_run", 2);
     assert_artifact(
@@ -805,12 +803,12 @@ fn native_goose_session_call_yield_foreground_restart_continue_same_run_without_
     assert_eq!(record_bytes(&host, &child, "run-metadata"), frozen_metadata);
     let foreground_history = host.native_conversation(&next, "worker", 1);
     assert!(foreground_history.to_string().contains(&call_marker));
-    assert_eq!(provider.requests().len(), 8);
+    assert_eq!(provider.requests().len(), 6);
     let prior_record = record_bytes(&host, &prior, "runs");
     let (status, old_run_resume) = server.request("POST", &format!("/runs/{prior}/resume"), None);
     assert_eq!(status, 409, "{old_run_resume}");
     assert_eq!(record_bytes(&host, &prior, "runs"), prior_record);
-    assert_eq!(provider.requests().len(), 8);
+    assert_eq!(provider.requests().len(), 6);
     fs::write(
         provider.root.join("yield-before-restart.json"),
         serde_json::to_vec_pretty(&json!({
@@ -825,25 +823,24 @@ fn native_goose_session_call_yield_foreground_restart_continue_same_run_without_
     drop(server);
 
     let server = host.serve(&provider);
-    assert_eq!(provider.requests().len(), 8);
+    assert_eq!(provider.requests().len(), 6);
     assert_eq!(host.record(&child), stopped);
     let (status, changed_binding) = execution(&server, &child, SESSION, Some(&next));
     assert_eq!(status, 409, "{changed_binding}");
     assert_eq!(record_bytes(&host, &child, "run-metadata"), frozen_metadata);
-    assert_eq!(provider.requests().len(), 8);
+    assert_eq!(provider.requests().len(), 6);
     provider.append(vec![
         complete("verify").expect_request_contains(&foreground_marker),
         command(&format!("set -eu; test \"$(cat effects.txt)\" = once; test \"$(cat evidence.txt)\" = '{call_marker}'; test \"$(cat /in/call/request.txt)\" = '{call_marker}'; printf inspected-once; cat evidence.txt"))
             .after("final_result.observed_receipt must match"),
         complete("verify").after("inspected-once"),
-        Step::text("background resumed after inspecting existing effect"),
     ]);
     let (status, continued) = execution(&server, &child, SESSION, Some(&prior));
     fs::write(
         provider.root.join("yield-resume-response.json"),
         serde_json::to_vec_pretty(&json!({
             "status":status,"response":continued,"child":child,"before_fact":before_fact,
-            "foreground_fact":foreground_fact,"requests_before_continue":8
+            "foreground_fact":foreground_fact,"requests_before_continue":6
         }))
         .unwrap(),
     )
@@ -907,7 +904,7 @@ fn native_goose_session_call_yield_foreground_restart_continue_same_run_without_
     let history = host.native_conversation(&child, "worker", 1);
     assert_native_pairs(&history, "anchor__anchor_run", 4);
     assert!(history.to_string().contains(&foreground_marker));
-    assert_eq!(provider.requests().len(), 12);
+    assert_eq!(provider.requests().len(), 9);
     let receipt = boundary.ack(&detail);
     settle(&server, &child);
     server.wait_status(&parent, "completed");

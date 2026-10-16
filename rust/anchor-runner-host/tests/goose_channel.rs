@@ -189,7 +189,8 @@ fn graph() -> Value {
 
 fn install_resource_plugin(host: &Host) -> Value {
     let bundle = host.base.root.path().join("bundle");
-    let plugin = bundle.join("plugins/wecom");
+    let library = host.base.root.path();
+    let plugin = library.join("plugins/wecom");
     fs::create_dir_all(plugin.join("skills/channel")).unwrap();
     fs::write(plugin.join("plugin.json"), json!({
         "name":"WeCom resource-only fixture",
@@ -198,7 +199,7 @@ fn install_resource_plugin(host: &Host) -> Value {
     }).to_string()).unwrap();
     fs::write(plugin.join("skills/channel/SKILL.md"),
         "---\nname: fixture-channel\ndescription: Use host-scoped channel sends.\n---\nUse wecom_send_message for authorized users. Never automatically resend a cancelled or unconfirmed delivery. Inspect external state first.\n").unwrap();
-    let binding = FilePluginCatalog::new(&bundle)
+    let binding = FilePluginCatalog::new(library)
         .resolve(&["wecom".into()])
         .unwrap()
         .remove(0);
@@ -207,7 +208,7 @@ fn install_resource_plugin(host: &Host) -> Value {
     assert!(!plugin.join(".mcp.json").exists());
     fs::write(
         bundle.join("manifest.json"),
-        json!({"format":1,"graph":"graph.json","plugins":[summary]}).to_string(),
+        json!({"format":1,"graph":"graph.json","plugins":[{"id":"wecom"}]}).to_string(),
     )
     .unwrap();
     summary
@@ -265,7 +266,6 @@ fn native_goose_identical_channel_messages_have_distinct_native_ids_and_gateway_
             command("printf channel-two-confirmed > evidence.txt; cat evidence.txt")
                 .after("accepted"),
             complete("verify").after("channel-two-confirmed"),
-            Step::text("two distinct native sends confirmed"),
         ],
     );
     let gateway = Gateway::new(&provider, Delivery::Ack);
@@ -346,7 +346,6 @@ fn native_goose_unauthorized_channel_recipient_is_rejected_before_gateway_connec
             command("printf channel-unauthorized-rejected > evidence.txt; cat evidence.txt")
                 .after("recipient is not allowed"),
             complete("verify").after("channel-unauthorized-rejected"),
-            Step::text("unauthorized channel sends were rejected"),
         ],
     );
     let gateway = Gateway::new(&provider, Delivery::Ack);
@@ -385,6 +384,7 @@ fn native_goose_unauthorized_channel_recipient_is_rejected_before_gateway_connec
 #[ignore = "requires pinned Goose binary"]
 fn native_goose_unknown_channel_result_resumes_same_session_and_inspects_without_resending() {
     let provider = Provider::new("goose-channel-unknown-recovery", vec![send(USER)]);
+    let business = provider.serve_effects();
     let gateway = Gateway::new(&provider, Delivery::Unknown);
     let host = gateway.bind_host(
         Host::new(&graph())
@@ -412,9 +412,8 @@ fn native_goose_unknown_channel_result_resumes_same_session_and_inspects_without
     assert_eq!(provider.requests().len(), 1);
     provider.append(vec![
         complete("verify"),
-        command(&format!("curl --silent --show-error --fail --max-time 5 --noproxy '*' '{}/effects' > evidence.txt; cat evidence.txt", provider.url)).after("final_result.observed_receipt must match"),
+        command(&format!("set -eu; curl --silent --show-error --fail --max-time 5 --noproxy '*' '{}/effects' > evidence.txt; cat evidence.txt", business.url)).after("final_result.observed_receipt must match"),
         complete("verify").after("effect_count"),
-        Step::text("inspected unconfirmed delivery and did not resend"),
     ]);
     let restarted = host.serve(&provider);
     let (status, accepted) = restarted.request("POST", &format!("/runs/{run}/resume"), None);

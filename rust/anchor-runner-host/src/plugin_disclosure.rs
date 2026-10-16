@@ -8,7 +8,7 @@ use std::{
     io::{BufRead, BufReader, Read},
 };
 
-use anchor_graph_host::PluginDefinition;
+use anchor_graph_host::{PluginDefinition, PluginMetadata};
 use anchor_runtime::{ToolDefinition, ToolError, ToolName, ToolResultContent};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -144,8 +144,29 @@ pub(crate) fn page(items: Vec<Value>, key: &str, arguments: &Value) -> Result<Va
 }
 
 fn skill_metadata(definition: &PluginDefinition, path: &str) -> Skill {
+    skill_metadata_in(&definition.directory, path)
+}
+
+/// Installed management search uses the same bounded Skill header parser as
+/// invocation disclosure, without constructing an execution definition/digest.
+pub(crate) fn metadata_search_document(metadata: &PluginMetadata) -> String {
+    let mut document = format!("{} {} {}", metadata.id, metadata.name, metadata.description);
+    for path in &metadata.skills {
+        let skill = skill_metadata_in(&metadata.directory, path);
+        document.push_str(&format!(
+            " {} {} {}",
+            skill.path, skill.name, skill.search_text
+        ));
+    }
+    for server in &metadata.mcp_servers {
+        document.push_str(&format!(" {}", server.name));
+    }
+    document
+}
+
+fn skill_metadata_in(directory: &std::path::Path, path: &str) -> Skill {
     let mut text = String::new();
-    if let Ok(file) = crate::resource_read::open_resource(&definition.directory, path) {
+    if let Ok(file) = crate::resource_read::open_resource(directory, path) {
         let mut reader = BufReader::with_capacity(1024, file.take(FILE_BYTES));
         let mut frontmatter = false;
         let mut paragraph = false;
@@ -319,9 +340,11 @@ impl PluginDisclosureCatalog {
         );
     }
 
+    #[cfg(test)]
     pub(crate) fn unavailable(&mut self, id: &str) {
-        // Installed-library listing retains invalid IDs, without exposing errors
-        // or private configuration. Execution never inserts invalid definitions.
+        // Synthetic unavailable entries exercise paging/instruction budgets.
+        // Management rows now belong to InstalledPluginCatalog; execution
+        // disclosure never inserts invalid definitions.
         self.unavailable
             .insert(id.into(), json!({"id":id,"available":false}));
     }

@@ -1,4 +1,5 @@
 use super::{Fact, read_fact};
+mod revision;
 #[cfg(test)]
 mod tests;
 use anchor_runtime::graph::{GraphError, InvocationKey};
@@ -125,8 +126,8 @@ impl ConversationScope {
                 if fact.key != *predecessor
                     || fact.version != 2
                     || fact.conversation_scope.as_deref() != Some(scope.as_str())
-                    || fact.binary_sha256 != binary
-                    || fact.model_binding.as_deref() != Some(model)
+                    || !revision::can_load_history(&fact.binary_sha256, binary)
+                    || fact.model_binding.as_deref().is_none_or(str::is_empty)
                 {
                     return Err(GraphError::CorruptRun(
                         "Goose predecessor conversation identity changed".into(),
@@ -167,8 +168,8 @@ impl ConversationScope {
         };
         if binding.version != 1
             || binding.scope != scope
-            || binding.binary_sha256 != binary
-            || binding.model_binding != model
+            || !revision::can_load_history(&binding.binary_sha256, binary)
+            || binding.model_binding.is_empty()
         {
             return Err(GraphError::CorruptRun(
                 "Goose conversation binary/model/scope binding changed".into(),
@@ -190,6 +191,23 @@ impl ConversationScope {
                 return Err(GraphError::CorruptRun(
                     "Goose conversation latest invocation is outside the trusted predecessor chain"
                         .into(),
+                ));
+            }
+            // The persisted scope must still agree with its last invocation.
+            // A new invocation may select another model, but that does not
+            // make a tampered predecessor or recovery binding acceptable.
+            let latest_fact = if latest == key {
+                current
+            } else {
+                previous.as_ref()
+            };
+            if latest_fact.and_then(|fact| fact.model_binding.as_deref())
+                != Some(binding.model_binding.as_str())
+                || latest_fact.map(|fact| fact.binary_sha256.as_str())
+                    != Some(binding.binary_sha256.as_str())
+            {
+                return Err(GraphError::CorruptRun(
+                    "Goose latest invocation identity differs from its conversation binding".into(),
                 ));
             }
         } else if previous.is_some() {
@@ -238,6 +256,12 @@ impl ConversationScope {
         }
         self.binding.latest = Some(fact.key.clone());
         self.binding.session_id = fact.session_id.clone();
+        self.binding.binary_sha256 = fact.binary_sha256.clone();
+        self.binding.model_binding = fact
+            .model_binding
+            .clone()
+            .filter(|model| !model.is_empty())
+            .ok_or("Goose invocation has no model binding")?;
         self.save()
     }
 

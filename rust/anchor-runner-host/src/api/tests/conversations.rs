@@ -877,7 +877,7 @@ async fn superseded_wait_ancestry_stops_at_a_detach_boundary() {
 }
 
 #[tokio::test]
-async fn sealed_plugin_conversation_history_does_not_permanently_block_graph_updates() {
+async fn publishing_graph_preserves_plugin_conversation_history_and_child_runs() {
     let (root, state) = fixture();
     let _env = PROCESS_ENV.lock().await;
     set_host_env(root.path(), &state.data_root);
@@ -936,12 +936,16 @@ async fn sealed_plugin_conversation_history_does_not_permanently_block_graph_upd
     });
     metadata::save(&state.data_root, &first_metadata).unwrap();
     store.save(&first).unwrap();
-    let update = json!({"definition":definition}).to_string();
+    let first_bytes = std::fs::read(state.data_root.join("runs/plugin-first.json")).unwrap();
+    let mut updated = definition;
+    updated["objective"] = json!("next Graph version");
+    updated["agents"]["worker"]["network"] = json!(true);
+    let update = json!({"definition":updated}).to_string();
     assert_eq!(
         call(app.clone(), "PUT", "/graphs/fixture", Some(&update))
             .await
             .0,
-        StatusCode::CONFLICT
+        StatusCode::OK
     );
     let mut next = anchor_runtime::graph::GraphRunRecord::create_with_id(
         first.snapshot.clone(),
@@ -989,7 +993,7 @@ async fn sealed_plugin_conversation_history_does_not_permanently_block_graph_upd
         call(app.clone(), "PUT", "/graphs/fixture", Some(&update))
             .await
             .0,
-        StatusCode::CONFLICT
+        StatusCode::OK
     );
     pending.status = RunStatus::Stopped;
     store.save(&pending).unwrap();
@@ -1005,7 +1009,7 @@ async fn sealed_plugin_conversation_history_does_not_permanently_block_graph_upd
         call(app.clone(), "PUT", "/graphs/fixture", Some(&update))
             .await
             .0,
-        StatusCode::CONFLICT
+        StatusCode::OK
     );
     let mut detached = store.load("plugin-detached-child").unwrap().unwrap();
     detached.status = RunStatus::Completed;
@@ -1014,8 +1018,22 @@ async fn sealed_plugin_conversation_history_does_not_permanently_block_graph_upd
     store.save(&next).unwrap();
     assert_eq!(
         call(app, "PUT", "/graphs/fixture", Some(&update)).await.0,
-        StatusCode::CONFLICT
+        StatusCode::OK
     );
+    assert_eq!(
+        std::fs::read(state.data_root.join("runs/plugin-first.json")).unwrap(),
+        first_bytes
+    );
+    for run in ["plugin-first", "plugin-next"] {
+        let record = store.load(run).unwrap().unwrap();
+        assert!(!record.snapshot.agents["worker"].network);
+    }
+    // Children admitted from the newly published definition use its permission;
+    // their stopped/running states do not prevent later publication either.
+    for run in ["plugin-wait-child", "plugin-detached-child"] {
+        let record = store.load(run).unwrap().unwrap();
+        assert!(record.snapshot.agents["worker"].network);
+    }
 }
 
 fn seed_legacy_scope(state: &ApiState, run: &str, node: &str) -> (PathBuf, PathBuf, PathBuf) {

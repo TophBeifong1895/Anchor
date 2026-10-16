@@ -189,7 +189,7 @@ fn native_goose_reads_plugin_skill_and_calls_rust_stdio_mcp() {
         goose::Step::tool("wecom-wecom_wecom_get_user", json!({"userid":"member-fixture"})).after("readonly-package-confirmed"),
         goose::command("printf 'member-fixture: Native fixture user\n' > report.txt; cp report.txt evidence.txt; cat report.txt").after("Native fixture user"),
         goose::complete("verify").after("member-fixture: Native fixture user"),
-        goose::Step::text("Plugin instructions and member lookup verified"),
+
     ]);
     let host = goose::Host::new(&graph())
         .native()
@@ -290,7 +290,6 @@ fn native_goose_reaches_a_hidden_plugin_tool_through_disclosure() {
             )
             .after("member-fixture"),
             goose::complete("verify").after("member-fixture: Native fixture user"),
-            goose::Step::text("hidden plugin tool reached through disclosure"),
         ],
     );
     let host = goose::Host::new(&graph())

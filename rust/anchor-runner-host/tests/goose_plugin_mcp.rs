@@ -141,7 +141,6 @@ fn graph_agent_calls_its_sandboxed_stdio_plugin_and_publishes_an_artifact() {
                 .after("ready:graph-node"),
             Step::tool("final_result", json!({"summary":"fixture complete"}))
                 .after("ready:graph-node"),
-            Step::text("The Plugin MCP call and artifact were verified."),
         ],
     );
     let host = host();

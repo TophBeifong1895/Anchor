@@ -22,6 +22,35 @@ pub struct ChannelEvent {
     pub attachments: Vec<Value>,
 }
 
+/// A shared group has one live turn even when a different member speaks next.
+/// The enum keeps a private conversation separate from a group with the same ID.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum ConversationScope {
+    Single {
+        sender_id: String,
+        conversation_id: String,
+    },
+    Group {
+        conversation_id: String,
+    },
+}
+
+impl ChannelEvent {
+    pub(crate) fn conversation_scope(&self) -> ConversationScope {
+        if self.metadata.get("chat_type").and_then(Value::as_str) == Some("group") {
+            ConversationScope::Group {
+                conversation_id: self.conversation_id.clone(),
+            }
+        } else {
+            // Stored private events predate explicit chat types.
+            ConversationScope::Single {
+                sender_id: self.sender_id.clone(),
+                conversation_id: self.conversation_id.clone(),
+            }
+        }
+    }
+}
+
 pub fn normalize_message(frame: &Value) -> Result<Option<ChannelEvent>, GatewayError> {
     if frame.get("cmd").and_then(Value::as_str) != Some("aibot_msg_callback") {
         return Ok(None);
@@ -36,17 +65,28 @@ pub fn normalize_message(frame: &Value) -> Result<Option<ChannelEvent>, GatewayE
         Some(value) => identity(Some(value), 500)?,
         None => request_id.clone(),
     };
+    let chat_type = match body.get("chattype") {
+        None => "single",
+        Some(Value::String(value)) if matches!(value.as_str(), "single" | "group") => value,
+        _ => return Err(GatewayError::Invalid("unsupported callback chat type")),
+    };
     let conversation = match body
         .get("chatid")
         .filter(|value| value.as_str() != Some(""))
     {
         Some(value) => identity(Some(value), 200)?,
-        None => sender.clone(),
+        None if chat_type == "single" => sender.clone(),
+        None => return Err(GatewayError::Invalid("group callback has no chatid")),
     };
     let message_type = body
         .get("msgtype")
         .and_then(Value::as_str)
         .ok_or(GatewayError::Invalid("missing callback message type"))?;
+    // The official long-connection contract only exposes standalone image,
+    // file and voice callbacks in private chats. Group media arrives in mixed.
+    if chat_type == "group" && matches!(message_type, "image" | "file" | "voice") {
+        return Err(GatewayError::UnsupportedMedia);
+    }
     if ["video", "audio", "media", "attachments"]
         .iter()
         .any(|key| body.contains_key(*key))
@@ -85,12 +125,6 @@ pub fn normalize_message(frame: &Value) -> Result<Option<ChannelEvent>, GatewayE
             "callback text exceeds platform limits",
         ));
     }
-    let chat_type = body.get("chattype").cloned().unwrap_or(json!("single"));
-    if chat_type.as_str() != Some("single") {
-        return Err(GatewayError::Invalid(
-            "only private WeCom callbacks are supported",
-        ));
-    }
     Ok(Some(ChannelEvent {
         source: "wecom".into(),
         event_id,
@@ -100,7 +134,7 @@ pub fn normalize_message(frame: &Value) -> Result<Option<ChannelEvent>, GatewayE
         text,
         message_type: message_type.into(),
         metadata: BTreeMap::from([
-            ("chat_type".into(), chat_type),
+            ("chat_type".into(), json!(chat_type)),
             ("request_id".into(), json!(request_id)),
         ]),
         attachments,

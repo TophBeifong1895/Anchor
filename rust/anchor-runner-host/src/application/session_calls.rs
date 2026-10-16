@@ -1,7 +1,8 @@
 //! Session authority belongs to the platform host; execution belongs to this application.
 use super::*;
-use anchor_runtime::graph::{CallIdentity, GraphCallOutcome};
+use anchor_runtime::graph::{CallIdentity, GraphCallOutcome, RecoveryDecision};
 use serde::{Deserialize, Serialize};
+use std::time::Duration;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -99,10 +100,7 @@ impl RunApplication {
                 .iter()
                 .find(|(entry, _)| entry.run_id == id)
                 .ok_or_else(|| ApplicationError::Conflict("Session successor is missing".into()))?;
-            if !matches!(
-                record.status,
-                RunStatus::Completed | RunStatus::Stopped | RunStatus::Failed | RunStatus::Aborted
-            ) {
+            if !record.status.is_terminal() && record.status != RunStatus::Stopped {
                 return Err(ApplicationError::Conflict(
                     "Session successor is not settled".into(),
                 ));
@@ -181,10 +179,7 @@ impl RunApplication {
         metadata::save(&self.data_root, &metadata)?;
         if let Some(run) = active.get(run_id) {
             run.control.cancellation.store(true, Ordering::Release);
-        } else if !matches!(
-            record.status,
-            RunStatus::Completed | RunStatus::Failed | RunStatus::Aborted
-        ) {
+        } else if !record.status.is_terminal() {
             record.status = RunStatus::Stopped;
             self.store().save(&record)?;
         }
@@ -211,10 +206,7 @@ impl RunApplication {
             .store()
             .load(run_id)?
             .ok_or(ApplicationError::Missing)?;
-        if !matches!(
-            record.status,
-            RunStatus::Completed | RunStatus::Failed | RunStatus::Aborted
-        ) {
+        if !record.status.is_terminal() {
             record.status = RunStatus::Stopped;
             self.store().save(&record)?;
         }
@@ -331,7 +323,7 @@ impl RunApplication {
         }
         let graph_path = Self::graph_identity(&metadata.bundle_source)?;
         for (id, other) in self.records()? {
-            if id == run_id || !is_unfinished(other.status) {
+            if id == run_id || other.status.is_terminal() {
                 continue;
             }
             if let Some(identity) = self.metadata(&id)?
@@ -400,10 +392,7 @@ impl RunApplication {
         self.store().save(&record)?;
         active.insert(
             run_id.into(),
-            ActiveRun {
-                graph_path: Self::graph_identity(&metadata.bundle_source)?,
-                control,
-            },
+            ActiveRun::new(Self::graph_identity(&metadata.bundle_source)?, control),
         );
         drop(lease);
         drop(_graph_lease);
@@ -461,6 +450,7 @@ impl RunApplication {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use anchor_runtime::graph::GraphSnapshot;
     use serde_json::json;
 
     fn seed(
@@ -542,10 +532,7 @@ mod tests {
         if active_parent {
             application.active.lock().await.insert(
                 "parent".into(),
-                ActiveRun {
-                    graph_path: root.path().into(),
-                    control: new_control(),
-                },
+                ActiveRun::new(root.path().into(), new_control()),
             );
         }
         application.control("parent", "stop").await.unwrap();
@@ -574,7 +561,16 @@ mod tests {
             serde_json::to_value(original).unwrap()
         );
         if active_parent {
-            assert_eq!(application.control_requested("parent").await, Some("stop"));
+            let parent = application.store().load("parent").unwrap().unwrap();
+            let metadata = application.metadata("parent").unwrap();
+            assert_eq!(
+                application
+                    .project_run(&parent, metadata.as_ref())
+                    .await
+                    .unwrap()
+                    .control_requested,
+                Some("stop")
+            );
         } else {
             assert_eq!(
                 application.store().load("parent").unwrap().unwrap().status,

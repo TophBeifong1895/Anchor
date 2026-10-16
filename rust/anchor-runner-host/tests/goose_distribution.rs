@@ -8,7 +8,7 @@ mod goose;
 use anchor_distribution::{PackageRequest, ToolBinary, build_package};
 use anchor_graph_host::{FilePluginCatalog, PluginCatalog};
 use flate2::read::GzDecoder;
-use goose::{Gate, Host, Provider, Step, command, complete, digest};
+use goose::{Gate, Host, Provider, command, complete, digest};
 use serde_json::{Value, json};
 use std::{
     fs,
@@ -128,6 +128,14 @@ fn extracted_goose_runtime_resumes_without_sources_or_replaying_workspace_effect
     let archive_path = root.join("runtime.tar.gz");
     let input_binary = root.join("package-input-host");
     fs::copy(root.join("anchor-runner-host"), &input_binary).unwrap();
+    let selected_host = std::env::var_os("ANCHOR_TEST_HOST_BINARY")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(env!("CARGO_BIN_EXE_anchor-runner-host")));
+    fs::copy(
+        selected_host.with_file_name("anchor-net-relay"),
+        root.join("anchor-net-relay"),
+    )
+    .unwrap();
     let web = std::env::var_os("ANCHOR_TEST_WEB_DIST").map(PathBuf::from);
     let (scholarly, tools) = official_inputs(&root);
     let official = scholarly.is_some();
@@ -236,7 +244,6 @@ fn extracted_goose_runtime_resumes_without_sources_or_replaying_workspace_effect
     provider.append(vec![
         command("set -eu; test \"$(cat effect.txt)\" = once; cat effect.txt").after("once"),
         complete("verify").after("once"),
-        Step::text("The extracted Runtime resumed after inspecting the workspace."),
     ]);
     let mut restarted = host.serve(&provider);
     let (status, resumed) = restarted.request("POST", &format!("/runs/{run}/resume"), None);
@@ -289,7 +296,7 @@ fn extracted_goose_runtime_resumes_without_sources_or_replaying_workspace_effect
         .count();
     assert_eq!(writes, 1);
     assert!(history.to_string().contains("final_result"));
-    assert_eq!(provider.requests().len(), 5);
+    assert_eq!(provider.requests().len(), 4);
     let requests_before_restart = provider.requests().len();
     restarted.kill();
     drop(restarted);
@@ -336,6 +343,6 @@ fn extracted_goose_runtime_resumes_without_sources_or_replaying_workspace_effect
         "session_before":session,"session_after":session_after,"session_after_completed_restart":session_after_restart,
         "workspace_write_count":writes,"completed_restart_unchanged":true,
         "requests_before_completed_restart":requests_before_restart,"requests_after_completed_restart":provider.requests().len(),
-        "boundary":"source-free extracted binaries, five deterministic local requests and stop/resume/completed restart; no real model, business service or production cutover"
+        "boundary":"source-free extracted binaries, four deterministic local requests and stop/resume/completed restart; no real model, business service or production cutover"
     }));
 }

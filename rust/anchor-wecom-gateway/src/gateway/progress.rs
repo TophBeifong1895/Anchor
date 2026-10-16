@@ -10,6 +10,7 @@ use std::time::Duration;
 use tokio::sync::{mpsc, watch};
 
 use super::ProgressLine;
+use crate::protocol::ConversationScope;
 
 /// Matches the Host's own stream limit so a stuck subscription cannot outlive
 /// the turn it describes.
@@ -30,8 +31,7 @@ pub(super) fn subscribe(
     url: String,
     api_key: Option<String>,
     event_id: String,
-    sender_id: String,
-    conversation_id: String,
+    scope: ConversationScope,
     sender: mpsc::UnboundedSender<ProgressLine>,
     mut cancel: watch::Receiver<bool>,
 ) -> tokio::task::JoinHandle<()> {
@@ -51,8 +51,7 @@ pub(super) fn subscribe(
                     url.clone(),
                     api_key.clone(),
                     event_id.clone(),
-                    sender_id.clone(),
-                    conversation_id.clone(),
+                    scope.clone(),
                     sender.clone(),
                 ) => outcome,
             };
@@ -91,8 +90,7 @@ async fn read(
     url: String,
     api_key: Option<String>,
     event_id: String,
-    sender_id: String,
-    conversation_id: String,
+    scope: ConversationScope,
     sender: mpsc::UnboundedSender<ProgressLine>,
 ) -> Outcome {
     let Ok(client) = reqwest::Client::builder()
@@ -166,8 +164,7 @@ async fn read(
             if sender
                 .send(ProgressLine {
                     event_id: event_id.clone(),
-                    sender_id: sender_id.clone(),
-                    conversation_id: conversation_id.clone(),
+                    scope: scope.clone(),
                     content: content.chars().take(MAX_CONTENT_CHARS).collect(),
                     category,
                     step,

@@ -60,7 +60,12 @@ impl PreparedExecution {
         )?;
         // Admission validates the Plugin declarations and host wiring. The
         // per-node network flag is enforced when the node is dispatched.
-        Self::validate_plugin_bindings(&nodes, &bindings)?;
+        if !nodes
+            .invocation_plugin_authority(record)
+            .map_err(|error| error.to_string())?
+        {
+            Self::validate_plugin_bindings(&nodes, &bindings)?;
+        }
         let caps = nodes.capabilities();
         for node in &record.snapshot.nodes {
             if node.agent.is_some() && !caps.agent {
@@ -192,10 +197,12 @@ impl PreparedExecution {
             if !checked.insert(record.run_id.clone()) {
                 continue;
             }
-            if !matches!(
-                record.status,
-                RunStatus::Completed | RunStatus::Failed | RunStatus::Aborted
-            ) {
+            if !record.status.is_terminal()
+                && !self
+                    .nodes
+                    .invocation_plugin_authority(&record)
+                    .map_err(|error| error.to_string())?
+            {
                 Self::validate_plugin_bindings(&self.nodes, &record.plugin_bindings)?;
             }
             let metadata = crate::application::metadata::load(
@@ -233,10 +240,7 @@ impl PreparedExecution {
                 if let Some(child) = &call.child_run_id
                     && let Some(child) =
                         self.store.load(child).map_err(|error| error.to_string())?
-                    && !matches!(
-                        child.status,
-                        RunStatus::Completed | RunStatus::Failed | RunStatus::Aborted
-                    )
+                    && !child.status.is_terminal()
                 {
                     pending.push(child);
                 }
@@ -660,12 +664,7 @@ impl GraphCatalog for RunnerGraphCatalog {
             ));
         }
         let child = FileRunStore::new(self.state.join("runs")).load(run_id)?;
-        if child.is_some_and(|child| {
-            matches!(
-                child.status,
-                RunStatus::Completed | RunStatus::Failed | RunStatus::Aborted
-            )
-        }) {
+        if child.is_some_and(|child| child.status.is_terminal()) {
             return Ok(());
         }
         crate::local_inputs::LocalInputs::from_env(self.state.clone())

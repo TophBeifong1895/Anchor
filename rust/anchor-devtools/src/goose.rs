@@ -4,12 +4,16 @@ const GOOSE_VERSION: &str = "1.53.0";
 const GOOSE_SHA256: &str = "dc2a4352279c16f3c665b280e4fc8fedbec3a67cce596bf460aa9fd416c27a15";
 const SUITES: &[&str] = &[
     "goose_acp",
+    "goose_completion",
     "goose_pilot",
+    "goose_model_settings",
+    "goose_responses",
     "goose_pilot_attachments",
     "goose_elicitation",
     "goose_media",
     "goose_conversation",
     "goose_persistent_assistant",
+    "goose_plugin_turns",
     "goose_channel",
     "goose_compaction",
     "goose_pilot_compaction",

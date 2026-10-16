@@ -1,7 +1,10 @@
 use super::*;
+use crate::execution::PreparedExecution;
+use anchor_graph_host::LoadedGraphBundle;
 use anchor_platform_session::{ChannelDeliveryRequest, SessionError, SessionStore, TurnStatus};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
+use std::collections::BTreeSet;
 
 pub(crate) const WECOM_REPLY_KIND: &str = "wecom_reply";
 pub(crate) const WECOM_REPLY_KEY_PREFIX: &str = "channel-wecom-reply:";
@@ -392,15 +395,7 @@ impl RunApplication {
             if !seen.insert(record.run_id.clone()) {
                 continue;
             }
-            if active.contains_key(&record.run_id)
-                || !matches!(
-                    record.status,
-                    RunStatus::Completed
-                        | RunStatus::Stopped
-                        | RunStatus::Failed
-                        | RunStatus::Aborted
-                )
-            {
+            if !RunLiveness::with_registry(&record, active).is_quiescent() {
                 return Err(ApplicationError::Conflict(
                     "previous conversation execution has not stopped; wait for it to become inactive".into(),
                 ));
@@ -593,10 +588,7 @@ impl RunApplication {
             // unknown and this Run stays retained.
             return Ok(true);
         };
-        if matches!(
-            successor.status,
-            RunStatus::Completed | RunStatus::Failed | RunStatus::Aborted
-        ) {
+        if successor.status.is_terminal() {
             return Ok(false);
         }
         // A Run with its own successor can never resume or recover: the
@@ -698,7 +690,7 @@ impl RunApplication {
                 ));
             }
             for (id, record) in self.records()? {
-                if id == metadata.run_id || !is_unfinished(record.status) {
+                if id == metadata.run_id || record.status.is_terminal() {
                     continue;
                 }
                 let Some(other) = self.metadata(&id)? else {
@@ -727,7 +719,7 @@ impl RunApplication {
                 ));
             }
             for (id, record) in self.records()? {
-                if id == metadata.run_id || !is_unfinished(record.status) {
+                if id == metadata.run_id || record.status.is_terminal() {
                     continue;
                 }
                 if let Some(other) = self.metadata(&id)?
@@ -786,7 +778,7 @@ impl RunApplication {
             self.ensure_predecessor_settled(record, &active)?;
         }
         for (id, record) in self.records()? {
-            if !is_unfinished(record.status) {
+            if record.status.is_terminal() {
                 continue;
             }
             let metadata = self.metadata(&id)?.ok_or_else(|| {
@@ -861,13 +853,7 @@ impl RunApplication {
             .map_err(ApplicationError::Invalid)?;
         create_durable_directory(&self.data_root.join("runs")).map_err(storage)?;
         self.store().save(&record)?;
-        active.insert(
-            request.run.clone(),
-            ActiveRun {
-                graph_path,
-                control,
-            },
-        );
+        active.insert(request.run.clone(), ActiveRun::new(graph_path, control));
         drop(lease);
         drop(plugin_lease);
         drop(graph_lease);

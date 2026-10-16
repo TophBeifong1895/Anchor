@@ -76,6 +76,8 @@ pub enum GatewayError {
     Webhook,
     #[error("the Anchor channel webhook permanently refused this event")]
     Rejected,
+    #[error("the channel assistant is stopped and requires explicit resume")]
+    AssistantStopped,
 }
 
 impl From<rusqlite::Error> for GatewayError {

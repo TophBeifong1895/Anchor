@@ -51,12 +51,20 @@ pub(super) async fn get_channel_assistant(
 ) -> Result<Json<Value>, HttpResponse> {
     let owner = private_owner(&state, &headers);
     let lookup_state = state.clone();
-    let (assistant, run_id) = blocking(move || {
+    let (assistant, run_id, plugin_update) = blocking(move || {
         let assistant = store(&lookup_state)?
             .get_channel_assistant(&owner, &session)
             .map_err(channel_error)?;
         let run_id = assistant.as_ref().map(|binding| binding.run_id.clone());
-        Ok((json!(assistant), run_id))
+        let plugin_update = run_id.as_deref().map(|run| {
+            lookup_state
+                .application
+                .assistant_plugin_update(run)
+                .unwrap_or_else(
+                    |failure| json!({"state":"unavailable","message":failure.to_string()}),
+                )
+        });
+        Ok((json!(assistant), run_id, plugin_update))
     })
     .await?;
     // Needs recovery is derived, never stored: a live instance is bound to a Run
@@ -68,7 +76,7 @@ pub(super) async fn get_channel_assistant(
         None => false,
     };
     Ok(Json(
-        json!({"assistant": assistant, "needs_recovery": needs_recovery}),
+        json!({"assistant": assistant, "needs_recovery": needs_recovery, "plugin_update":plugin_update}),
     ))
 }
 
@@ -268,6 +276,25 @@ pub(super) async fn delete_channel_session(
             .delete_channel_session(&owner, &session)
             .map_err(channel_error)?;
         Ok(Json(json!({"deleted": session})))
+    })
+    .await
+}
+
+pub(super) async fn get_channel_session(
+    State(state): State<ApiState>,
+    headers: HeaderMap,
+    AxumPath(session): AxumPath<String>,
+) -> Result<Json<Value>, HttpResponse> {
+    let owner = private_owner(&state, &headers);
+    blocking(move || {
+        let sessions = store(&state)?;
+        // Validate the channel boundary as well as owner. The generic Session
+        // endpoint has Pilot's legacy owner selection and is not this adapter.
+        sessions
+            .get_channel_assistant(&owner, &session)
+            .map_err(channel_error)?;
+        let session = sessions.get(&owner, &session).map_err(channel_error)?;
+        Ok(Json(json!({"session": session})))
     })
     .await
 }

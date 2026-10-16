@@ -70,7 +70,6 @@ fn fixture() -> (tempfile::TempDir, PilotTools) {
     let tools = PilotTools {
         application: RunApplication::new(root.path().join("state"), root.path().to_path_buf()),
         graph_name: "fixture".into(),
-        catalog_root: root.path().to_path_buf(),
         library_root: root.path().to_path_buf(),
         data_root: root.path().join("state"),
         workspace_root: root.path().join("work"),
@@ -306,11 +305,11 @@ async fn read_tools_do_not_create_runs_or_modify_definitions() {
 
 #[tokio::test]
 async fn graph_authoring_tools_share_a_usable_example_on_an_empty_catalog() {
+    let _env_guard = crate::PROCESS_ENV_LOCK.lock().await;
     let (root, mut tools) = fixture();
     let catalog = root.path().join("empty-catalog");
     std::fs::create_dir(&catalog).unwrap();
     tools.application = RunApplication::new(root.path().join("state"), catalog.clone());
-    tools.catalog_root = catalog;
     tools.graph_name.clear();
     assert_eq!(
         tools.execute("graph_list", json!({})).await.unwrap(),
@@ -377,6 +376,7 @@ async fn graph_authoring_tools_share_a_usable_example_on_an_empty_catalog() {
 
 #[tokio::test]
 async fn graph_validate_preserves_kernel_authoring_diagnostics() {
+    let _env_guard = crate::PROCESS_ENV_LOCK.lock().await;
     let (_root, tools) = fixture();
     let example = graphs::definition_parameter()["examples"][0].clone();
     let mut argv = example.clone();
@@ -412,6 +412,7 @@ async fn graph_validate_preserves_kernel_authoring_diagnostics() {
 
 #[tokio::test]
 async fn graph_validate_hides_private_plugin_paths_and_host_configuration_failures() {
+    let _env_guard = crate::PROCESS_ENV_LOCK.lock().await;
     let (root, tools) = fixture();
     let plugin = root.path().join("plugins/private");
     std::fs::create_dir_all(&plugin).unwrap();
@@ -460,6 +461,7 @@ async fn graph_validate_hides_private_plugin_paths_and_host_configuration_failur
 
 #[tokio::test]
 async fn graph_mutations_require_an_owned_running_turn_and_do_not_start_runs() {
+    let _env_guard = crate::PROCESS_ENV_LOCK.lock().await;
     let (root, tools) = fixture();
     let definition = json!({"entry":"idle","ops":{"idle":{"run":"true"}},
             "nodes":[{"id":"idle","op":"idle"}],"edges":[]});
@@ -538,6 +540,7 @@ async fn graph_mutations_require_an_owned_running_turn_and_do_not_start_runs() {
 
 #[tokio::test]
 async fn graph_paths_symlinks_and_plugin_credentials_fail_closed() {
+    let _env_guard = crate::PROCESS_ENV_LOCK.lock().await;
     let (root, tools) = fixture();
     assert!(
         tools

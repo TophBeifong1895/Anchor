@@ -19,7 +19,7 @@ fn graph() -> Value {
     json!({
         "objective":"Use the current installed Plugin after a Library update without mutating its resources",
         "entry":"gate",
-        "agents":{"worker":{"model":"models.worker","instructions":"Read the demo Skill, verify that its mount is read-only, save the exact Skill in skill.txt, and finish with route verify."}},
+        "agents":{"worker":{"model":"models.worker","instructions":"Discover the current demo Skill with anchor_plugin_read section skills, read the selected Skill, verify that its mount is read-only, save the exact Skill in skill.txt, and finish with route verify."}},
         "ops":{
             "gate":{"run":"sh -c 'set -eu; : > gate-entered; while [ ! -e proceed ]; do sleep 0.05; done'"},
             "verify":{"run":"sh -c 'set -eu; cat /in/worker/skill.txt > verified.txt'"}
@@ -35,11 +35,20 @@ fn a_library_update_during_a_run_reaches_native_execution_with_current_skills() 
     let provider = Provider::new(
         "goose-installed-plugin",
         vec![
+            Step::tool(
+                "anchor_plugin_read",
+                json!({"plugin":"demo","section":"skills"}),
+            ),
+            Step::tool(
+                "anchor_plugin_read",
+                json!({"plugin":"demo","section":"skill","path":"skills/current/SKILL.md"}),
+            )
+            .after("skills/current/SKILL.md"),
             command(
                 "set -eu; cat /plugins/demo/skills/current/SKILL.md > skill.txt; test \"$(cat skill.txt)\" = fixture-installed-instructions-v2; if printf corrupt >> /plugins/demo/skills/current/SKILL.md 2>/dev/null; then exit 7; fi; cat skill.txt",
-            ),
+            )
+            .after(REPLACEMENT),
             complete("verify").after(REPLACEMENT),
-            Step::text("The current installed Plugin was verified."),
         ],
     );
     let host = Host::new(&json!({
@@ -134,16 +143,19 @@ fn a_library_update_during_a_run_reaches_native_execution_with_current_skills() 
     let history = host.native_conversation(run, "worker", 1);
     assert!(history.to_string().contains(REPLACEMENT));
     assert!(history.to_string().contains("final_result"));
+    let requests = provider.requests();
+    assert_eq!(requests.len(), 4);
+    let directory = goose::tool_feedback(&requests[1]).pop().unwrap();
+    assert!(directory.to_string().contains("skills/current/SKILL.md"));
+    assert!(!directory.to_string().contains("skills/demo/SKILL.md"));
+    let selected_skill = goose::tool_feedback(&requests[2]).pop().unwrap();
     assert!(
-        provider.requests()[0]["messages"]
+        selected_skill
             .to_string()
-            .contains("/plugins/demo/skills/current/SKILL.md")
+            .contains("skills/current/SKILL.md")
     );
-    assert!(
-        !provider.requests()[0]["messages"]
-            .to_string()
-            .contains("/plugins/demo/skills/demo/SKILL.md")
-    );
+    assert!(selected_skill.to_string().contains(REPLACEMENT));
+    assert!(!selected_skill.to_string().contains(ORIGINAL));
     assert_eq!(record["plugin_bindings"], admitted["plugin_bindings"]);
     assert_eq!(
         record["results"]["worker"][0]["plugin_digests"]["demo"],
@@ -152,6 +164,7 @@ fn a_library_update_during_a_run_reaches_native_execution_with_current_skills() 
     host.evidence(&provider, run, json!({
         "case_source":CASE_SOURCE,"library_install":installed,"library_replacement":replaced,
         "library_detail":current,"admitted_authorization_unchanged":true,
+        "discovered_current_skill_directory":directory,"selected_current_skill":selected_skill,
         "update_during_run_uses_current_code_and_skill_paths":true,"bundle_contains_only_references":true,"readonly_mount":true,
         "native_history_checked":true,"artifact_exact_bytes":true,
         "boundary":"local directory installer plus actual public Graph API and Goose; no GitHub network, OAuth or real model"

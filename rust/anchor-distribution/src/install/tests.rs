@@ -15,7 +15,7 @@ fn request(fixture: &Fixture) -> PlatformInstallRequest {
         archive: report.output,
         sha256: report.sha256,
         install_root: fixture.root.path().join("installation"),
-        model_config: model(fixture.root.path()),
+        model_config: Some(model(fixture.root.path())),
     }
 }
 
@@ -37,9 +37,9 @@ fn fresh_install_separates_release_and_private_model_and_never_creates_a_busines
             .install_root
             .join("release/anchor-runtime/bin/anchor-platform")
     );
-    assert!(report.model_config.is_file());
+    assert!(report.model_config.as_ref().unwrap().is_file());
     assert_eq!(
-        fs::metadata(&report.model_config)
+        fs::metadata(report.model_config.as_ref().unwrap())
             .unwrap()
             .permissions()
             .mode()
@@ -106,12 +106,15 @@ fn fresh_install_separates_release_and_private_model_and_never_creates_a_busines
     assert!(platform_command_with_listen(&report.launcher, "127.0.0.1:0").is_err());
     let json = serde_json::to_string(&report).unwrap();
     assert!(!json.contains("fixture-private-key"));
-    let original = fs::read(&report.model_config).unwrap();
+    let original = fs::read(report.model_config.as_ref().unwrap()).unwrap();
     assert!(matches!(
         admitted_install(&fixture, &request),
         Err(PackageError::AlreadyExists)
     ));
-    assert_eq!(fs::read(&report.model_config).unwrap(), original);
+    assert_eq!(
+        fs::read(report.model_config.as_ref().unwrap()).unwrap(),
+        original
+    );
     // Test cleanup must make private read-only release directories writable.
     make_directories_writable(&request.install_root).unwrap();
 }
@@ -142,11 +145,15 @@ fn wrong_archive_digest_invalid_model_and_symlink_inputs_leave_no_installation()
         let mut request = request(&fixture);
         match scenario {
             "digest" => request.sha256 = "0".repeat(64),
-            "model" => fs::write(&request.model_config, "HOME=private-value\n").unwrap(),
+            "model" => fs::write(
+                request.model_config.as_ref().unwrap(),
+                "HOME=private-value\n",
+            )
+            .unwrap(),
             "symlink" => {
                 let alias = fixture.root.path().join("model-alias");
-                symlink(&request.model_config, &alias).unwrap();
-                request.model_config = alias;
+                symlink(request.model_config.as_ref().unwrap(), &alias).unwrap();
+                request.model_config = Some(alias);
             }
             "ancestor" => {
                 let alias = fixture.root.path().join("parent-alias");
@@ -209,7 +216,7 @@ fn installer_refuses_links_duplicates_non_platform_payload_and_unlisted_paths() 
             archive,
             sha256,
             install_root: fixture.root.path().join("install"),
-            model_config: model(fixture.root.path()),
+            model_config: Some(model(fixture.root.path())),
         };
         assert!(admitted_install(&fixture, &request).is_err());
         assert!(!request.install_root.exists());
@@ -222,4 +229,45 @@ fn installer_refuses_links_duplicates_non_platform_payload_and_unlisted_paths() 
     let runtime = extracted.join("anchor-runtime");
     fs::write(runtime.join("unlisted.txt"), "cannot ship\n").unwrap();
     assert!(validate_runtime(&runtime, &fixture.digest, &fixture.digest, &fixture.digest).is_err());
+}
+
+#[test]
+fn fresh_install_without_model_file_starts_with_web_managed_configuration() {
+    let fixture = Fixture::new();
+    let mut request = request(&fixture);
+    request.model_config = None;
+    let report = admitted_install(&fixture, &request).unwrap();
+    assert!(report.model_config.is_none());
+    assert!(!request.install_root.join("config/model.env").exists());
+    let command = platform_command(&report.launcher).unwrap();
+    let values = command
+        .get_envs()
+        .map(|(key, value)| (key.to_str().unwrap(), value.unwrap().to_str().unwrap()))
+        .collect::<BTreeMap<_, _>>();
+    for name in [
+        "ANCHOR_MODEL_URL",
+        "ANCHOR_MODEL_API_KEY",
+        "ANCHOR_MODEL_NAME",
+        "ANCHOR_MODEL_WIRE_API",
+        "ANCHOR_MODEL_ALIASES",
+        "ANCHOR_MODEL_CONTEXT_WINDOW",
+        "ANCHOR_MODEL_MAX_TOKENS",
+    ] {
+        assert!(
+            !values.contains_key(name),
+            "omitted model setting became deployment-owned: {name}"
+        );
+    }
+    assert_eq!(values["ANCHOR_MODEL_DIRECT"], "0");
+    assert_eq!(
+        values["ANCHOR_RUNNER_STATE_ROOT"],
+        request.install_root.join("data/state").to_str().unwrap()
+    );
+    assert!(
+        !request
+            .install_root
+            .join("data/state/managed/model-config.json")
+            .exists()
+    );
+    make_directories_writable(&request.install_root).unwrap();
 }

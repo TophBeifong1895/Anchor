@@ -66,7 +66,11 @@ fn fixture() -> (tempfile::TempDir, ApiState, Arc<Port>) {
     })));
     let application = RunApplication::new(root.path().join("state"), root.path().join("catalog"))
         .with_channel_management(port.clone());
+    let (model_configuration, runtime_management) =
+        crate::api::tests::management_fixture(root.path());
     let state = ApiState {
+        model_configuration,
+        runtime_management,
         bundle_root: root.path().join("bundle"),
         catalog_root: root.path().join("catalog"),
         data_root: root.path().join("state"),

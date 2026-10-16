@@ -6,6 +6,14 @@ use serde_json::Value;
 pub(crate) trait ScheduleManagementPort: Send + Sync {
     fn list(&self) -> Result<Value, ApplicationError>;
     fn create(&self, graph: &str, rule: &Value, input: &Value) -> Result<Value, ApplicationError>;
+    fn update(
+        &self,
+        id: &str,
+        graph: &str,
+        rule: &Value,
+        input: &Value,
+        enabled: bool,
+    ) -> Result<Value, ApplicationError>;
     fn delete(&self, id: &str) -> Result<Value, ApplicationError>;
 }
 
@@ -45,5 +53,25 @@ impl RunApplication {
 
     pub(crate) fn delete_schedule(&self, id: &str) -> Result<Value, ApplicationError> {
         self.schedule_management()?.delete(id)
+    }
+
+    pub(crate) async fn update_schedule(
+        &self,
+        id: &str,
+        graph: &str,
+        rule: &Value,
+        input: &Value,
+        enabled: bool,
+    ) -> Result<Value, ApplicationError> {
+        let port = self.schedule_management()?;
+        if graph.trim().is_empty() || !rule.is_object() || !input.is_object() {
+            return Err(ApplicationError::Invalid(
+                "graph, object rule and object input are required".into(),
+            ));
+        }
+        let _catalog_guard = self.graph_catalog_mutation_guard().await;
+        self.load_graph(graph)
+            .map_err(|_| ApplicationError::Missing)?;
+        port.update(id, graph, rule, input, enabled)
     }
 }

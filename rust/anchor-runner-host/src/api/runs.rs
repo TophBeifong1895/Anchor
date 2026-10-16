@@ -1,5 +1,7 @@
 use super::*;
 use anchor_platform_session::{ChannelInboundAdmission, TurnStatus};
+#[cfg(test)]
+mod tests;
 
 fn channel_attachment_manifest_matches(
     inbound: &ChannelInboundAdmission,
@@ -285,7 +287,6 @@ pub(super) async fn list_runs(State(state): State<ApiState>) -> Result<Json<Valu
 
 #[allow(clippy::result_large_err)]
 pub(super) async fn projected_runs(state: &ApiState) -> Result<Vec<Value>, HttpResponse> {
-    let active = state.application.active_runs(None).await;
     let mut runs = Vec::new();
     for (id, record) in state.application.records().map_err(application_error)? {
         let updated = state
@@ -335,7 +336,12 @@ pub(super) async fn projected_runs(state: &ApiState) -> Result<Vec<Value>, HttpR
             });
         }
         let executed = record.executed_nodes();
-        runs.push(json!({"session_call":metadata.as_ref().and_then(|m| m.session_call.as_ref()),"run":id,"graph":graph,"status":status(record.status),"running":active.contains(&id),"started":created,"updated":updated,"executed":executed,"objective":record.snapshot.objective,"trigger":trigger}));
+        let projection = state
+            .application
+            .project_run(&record, metadata.as_ref())
+            .await
+            .map_err(application_error)?;
+        runs.push(json!({"session_call":metadata.as_ref().and_then(|m| m.session_call.as_ref()),"run":id,"graph":graph,"status":status(record.status),"running":projection.active,"projection":projection,"started":created,"updated":updated,"executed":executed,"objective":record.snapshot.objective,"trigger":trigger}));
     }
     Ok(runs)
 }
@@ -382,7 +388,7 @@ pub(super) async fn get_run(
             );
         }
     }
-    let plugins = record
+    let mut plugins = record
         .snapshot
         .nodes
         .iter()
@@ -443,7 +449,6 @@ pub(super) async fn get_run(
         }
     }
     let active = state.application.active_runs(None).await;
-    let control_requested = state.application.control_requested(&id).await;
     let metadata = state
         .application
         .metadata(&id)
@@ -454,17 +459,48 @@ pub(super) async fn get_run(
                 "Run has no immutable Graph identity metadata",
             )
         })?;
+    if metadata.assistant.is_some()
+        && let Some(policy) =
+            crate::assistant_plugins::latest_policy(&state.data_root, &record, &metadata)
+                .map_err(|message| error(StatusCode::INTERNAL_SERVER_ERROR, message))?
+    {
+        plugins.insert(
+            policy.node,
+            json!(
+                policy
+                    .bindings
+                    .values()
+                    .map(|binding| json!({
+                        "id":binding.id,"name":binding.id,"description":"","digest":binding.digest
+                    }))
+                    .collect::<Vec<_>>()
+            ),
+        );
+    }
     let mut calls = Vec::new();
     for call in record.graph_calls.values() {
         if let Some(child_id) = &call.child_run_id {
             let child = FileRunStore::new(state.data_root.join("runs"))
                 .load(child_id)
                 .map_err(|e| error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-            let source = state
+            let child_metadata = state
                 .application
                 .metadata(child_id)
-                .map_err(application_error)?
-                .and_then(|metadata| metadata.graph_call);
+                .map_err(application_error)?;
+            let source = child_metadata
+                .as_ref()
+                .and_then(|metadata| metadata.graph_call.as_ref());
+            let projection = if let Some(child) = &child {
+                Some(
+                    state
+                        .application
+                        .project_run(child, child_metadata.as_ref())
+                        .await
+                        .map_err(application_error)?,
+                )
+            } else {
+                None
+            };
             calls.push(json!({
                 "run":child_id,
                 "child_id":child_id,
@@ -476,7 +512,8 @@ pub(super) async fn get_run(
                 "mode":call.mode,
                 "status":child.as_ref().map(|record| status(record.status)).unwrap_or("missing"),
                 "active":active.contains(child_id),
-                "root_run":source.map(|source| source.root_run),
+                "projection":projection,
+                "root_run":source.map(|source| &source.root_run),
             }));
         }
     }
@@ -485,7 +522,7 @@ pub(super) async fn get_run(
         .child_metadata(&id)
         .map_err(application_error)?
     {
-        let Some(source) = child_metadata.graph_call else {
+        let Some(source) = child_metadata.graph_call.as_ref() else {
             continue;
         };
         if calls
@@ -497,6 +534,17 @@ pub(super) async fn get_run(
         let child = FileRunStore::new(state.data_root.join("runs"))
             .load(&child_metadata.run_id)
             .map_err(|e| error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        let projection = if let Some(child) = &child {
+            Some(
+                state
+                    .application
+                    .project_run(child, Some(&child_metadata))
+                    .await
+                    .map_err(application_error)?,
+            )
+        } else {
+            None
+        };
         calls.push(json!({
             "run":child_metadata.run_id,
             "child_id":child_metadata.run_id,
@@ -508,6 +556,7 @@ pub(super) async fn get_run(
             "mode":source.mode,
             "status":child.as_ref().map(|record| status(record.status)).unwrap_or("missing"),
             "active":active.contains(&child_metadata.run_id),
+            "projection":projection,
             "root_run":source.root_run,
         }));
     }
@@ -539,8 +588,14 @@ pub(super) async fn get_run(
             .join(format!("{id}.json"))
             .try_exists()
             .map_err(|e| error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let projection = state
+        .application
+        .project_run(&record, Some(&metadata))
+        .await
+        .map_err(application_error)?;
+    let definition = crate::application::run_projection::run_definition(&record.snapshot);
     Ok(Json(
-        json!({"session_call":metadata.session_call,"channel_reply":channel_reply,"graph":metadata.graph,"run":id,"attachments":metadata.attachments,"plugins":plugins,"state":{"objective":record.snapshot.objective,"started":metadata.created,"updated":updated,"status":status(record.status),"trigger":trigger,"input":record.input,"cursor":cursor,"passes":record.passes,"decided":decided,"nodes":nodes,"executed":executed,"skipped":[],"error":record.error.unwrap_or_default(),"parallel":record.parallel,"recovery":record.recovery},"calls":calls,"traces":traces,"nodes":record.snapshot.nodes.iter().map(|node|node.id.clone()).collect::<Vec<_>>(),"active":active.contains(&id),"control_requested":control_requested}),
+        json!({"session_call":metadata.session_call,"channel_reply":channel_reply,"graph":metadata.graph,"run":id,"attachments":metadata.attachments,"plugins":plugins,"definition":definition,"state":{"objective":record.snapshot.objective,"started":metadata.created,"updated":updated,"status":status(record.status),"trigger":trigger,"input":record.input,"cursor":cursor,"passes":record.passes,"decided":decided,"nodes":nodes,"executed":executed,"skipped":[],"error":record.error.unwrap_or_default(),"parallel":record.parallel,"recovery":record.recovery},"calls":calls,"traces":traces,"nodes":record.snapshot.nodes.iter().map(|node|node.id.clone()).collect::<Vec<_>>(),"active":projection.active,"control_requested":projection.control_requested,"projection":projection}),
     ))
 }
 

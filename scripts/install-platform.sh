@@ -5,13 +5,13 @@ set -euo pipefail
 usage() {
   cat <<'HELP'
 Usage: scripts/install-platform.sh --archive PLATFORM.tar.gz --sha256 TRUSTED_SHA256
-       --install-root NEW_DIRECTORY --model-config PRIVATE_MODEL.env
+       --install-root NEW_DIRECTORY [--model-config PRIVATE_MODEL.env]
        [--installer /reviewed/anchor-platform]
 
-Create a private installation, never overwrite an existing root. Only model
-URL/API key/model name and optional model settings are required; Python/Rust
-and package sources are prepared later by Pilot. The model file is KEY=value
-data, not shell code, and is kept at <install-root>/config/model.env (0600).
+Create a private installation, never overwrite an existing root. Configure the
+model and initialize Python/Rust later in WebUI Settings. Optional --model-config
+keeps model fields deployment-managed and read-only in WebUI. The model file is
+KEY=value data, not shell code, kept at <install-root>/config/model.env (0600).
 After installation run <install-root>/release/anchor-runtime/bin/anchor-platform start.
 Open http://127.0.0.1:8077. No startup or service registration is done here.
 

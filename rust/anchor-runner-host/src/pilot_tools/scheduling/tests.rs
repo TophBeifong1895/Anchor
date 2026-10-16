@@ -17,6 +17,22 @@ impl ScheduleManagementPort for Port {
         self.created.lock().unwrap().push(item.clone());
         Ok(json!({"schedule":item}))
     }
+    fn update(
+        &self,
+        id: &str,
+        graph: &str,
+        rule: &Value,
+        input: &Value,
+        enabled: bool,
+    ) -> Result<Value, ApplicationError> {
+        let mut items = self.created.lock().unwrap();
+        let item = items
+            .iter_mut()
+            .find(|item| item["id"] == id)
+            .ok_or(ApplicationError::Missing)?;
+        *item = json!({"id":id,"graph":graph,"rule":rule,"input":input,"enabled":enabled});
+        Ok(json!({"schedule":item}))
+    }
     fn delete(&self, id: &str) -> Result<Value, ApplicationError> {
         let mut items = self.created.lock().unwrap();
         let len = items.len();
@@ -53,7 +69,6 @@ fn fixture() -> (tempfile::TempDir, PilotTools, Arc<Port>) {
         application: RunApplication::new(root.path().join("state"), root.path().join("catalog"))
             .with_schedule_management(port.clone()),
         graph_name: String::new(),
-        catalog_root: root.path().join("catalog"),
         library_root: root.path().join("library"),
         data_root: root.path().join("state"),
         workspace_root: root.path().join("workspaces"),

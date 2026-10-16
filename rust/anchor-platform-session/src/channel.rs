@@ -9,10 +9,10 @@ use serde_json::{Value, json};
 use uuid::Uuid;
 
 use crate::{
-    AttachmentManifest, ChannelAdmission, ChannelDelivery, ChannelDeliveryRequest,
-    ChannelDeliveryStatus, ChannelIdentity, ChannelInboundRelation, ChannelInboundRequest,
-    ChannelInboundRun, ChannelPendingMessage, Session, SessionError, SessionStatus, SessionStore,
-    Turn, TurnStatus, associations, store, turns,
+    AttachmentManifest, ChannelAdmission, ChannelConversationKind, ChannelDelivery,
+    ChannelDeliveryRequest, ChannelDeliveryStatus, ChannelIdentity, ChannelInboundRelation,
+    ChannelInboundRequest, ChannelInboundRun, ChannelPendingMessage, Session, SessionError,
+    SessionStatus, SessionStore, Turn, TurnStatus, associations, store, turns,
 };
 
 mod assistant;
@@ -30,7 +30,7 @@ const MAX_DELIVERY_KEY_BYTES: usize = 500;
 const MAX_DELIVERY_KIND_BYTES: usize = 128;
 const MAX_DELIVERY_ERROR_BYTES: usize = 4 * 1024;
 
-type IdentityParts = (String, String, String, String);
+type IdentityParts = (String, String, String, String, String);
 
 impl SessionStore {
     pub fn admit_channel_inbound(
@@ -233,9 +233,10 @@ impl SessionStore {
     ) -> Result<Vec<ChannelPendingMessage>, SessionError> {
         validate_channel_lookup(owner, session, exclude_inbound)?;
         let connection = self.lock()?;
+        store::read_session(&connection, owner, session)?;
+        ensure_channel_session(&connection, owner, session)?;
         let mut statement = connection.prepare(
-            "SELECT json_extract(request,'$.text'),
-                    json_array_length(json_extract(request,'$.attachments.files'))
+            "SELECT request
              FROM channel_inbounds
              WHERE session_id = ?1 AND inbound_id != ?2
                AND created_at > COALESCE((
@@ -245,12 +246,17 @@ impl SessionStore {
              ORDER BY created_at LIMIT ?3",
         )?;
         let rows = statement.query_map(params![session, exclude_inbound, limit as i64], |row| {
-            Ok(ChannelPendingMessage {
-                text: row.get::<_, Option<String>>(0)?.unwrap_or_default(),
-                attachments: row.get::<_, Option<i64>>(1)?.unwrap_or(0).max(0) as usize,
-            })
+            row.get::<_, String>(0)
         })?;
-        rows.map(|row| row.map_err(Into::into)).collect()
+        rows.map(|row| {
+            let request: ChannelInboundRequest = serde_json::from_str(&row?)?;
+            Ok(ChannelPendingMessage {
+                identity: request.identity,
+                text: request.text.unwrap_or_default(),
+                attachments: request.attachments.files.len(),
+            })
+        })
+        .collect()
     }
 
     pub fn get_channel_relation(
@@ -283,6 +289,42 @@ impl SessionStore {
         let admission = inbound_admission(&transaction, &inbound)?;
         transaction.commit()?;
         Ok(admission)
+    }
+
+    /// Reject an admitted input only while no Run has claimed it. The check
+    /// shares a transaction with assistant input claims, so dispatch failure
+    /// cannot terminate a Turn that has started executing in the meantime.
+    pub fn reject_unclaimed_channel_inbound(
+        &self,
+        owner: &str,
+        session: &str,
+        inbound_id: &str,
+        error: &str,
+    ) -> Result<bool, SessionError> {
+        validate_channel_lookup(owner, session, inbound_id)?;
+        validate_channel_value(error, "inbound rejection error", MAX_DELIVERY_ERROR_BYTES)?;
+        let mut connection = self.lock()?;
+        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let mut snapshot = store::read_session(&transaction, owner, session)?;
+        ensure_channel_session(&transaction, owner, session)?;
+        let inbound =
+            read_inbound(&transaction, session, inbound_id)?.ok_or(SessionError::Missing)?;
+        let mut turn = turns::find_turn(&transaction, session, &inbound.turn_id)?;
+        let rejected = inbound.run_id.is_none()
+            && inbound.superseded_by_turn_id.is_none()
+            && turn.status == TurnStatus::Running;
+        if rejected {
+            turns::finish(
+                &transaction,
+                owner,
+                &mut snapshot,
+                &mut turn,
+                TurnStatus::Failed,
+                Some(error),
+            )?;
+        }
+        transaction.commit()?;
+        Ok(rejected)
     }
 
     pub fn associate_channel_run(
@@ -793,8 +835,9 @@ fn identity_parts(identity: &ChannelIdentity) -> Result<IdentityParts, SessionEr
     Ok((
         identity.source.clone(),
         account,
+        identity.conversation_kind.as_str().into(),
         identity.conversation_id.clone(),
-        identity.sender_id.clone(),
+        identity.participant_id().into(),
     ))
 }
 
@@ -898,9 +941,16 @@ fn immutable_request(request: &ChannelInboundRequest) -> ChannelInboundRequest {
 fn channel_map(identity: &ChannelIdentity) -> BTreeMap<String, String> {
     let mut channel = BTreeMap::from([
         ("conversation_id".into(), identity.conversation_id.clone()),
-        ("sender_id".into(), identity.sender_id.clone()),
         ("source".into(), identity.source.clone()),
     ]);
+    match identity.conversation_kind {
+        ChannelConversationKind::Single => {
+            channel.insert("sender_id".into(), identity.sender_id.clone());
+        }
+        ChannelConversationKind::Group => {
+            channel.insert("conversation_kind".into(), "group".into());
+        }
+    }
     if let Some(account) = identity.account.as_deref() {
         channel.insert("account".into(), account.into());
     }
@@ -947,10 +997,10 @@ fn create_channel_session(
     store::append_event(connection, &session, "session.created", BTreeMap::new())?;
     connection.execute(
         "INSERT INTO channel_sessions(
-            session_id, owner, source, account, conversation_id, sender_id
-         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            session_id, owner, source, account, conversation_kind, conversation_id, participant_id
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
         params![
-            session.id, owner, identity.0, identity.1, identity.2, identity.3,
+            session.id, owner, identity.0, identity.1, identity.2, identity.3, identity.4,
         ],
     )?;
     store::append_event(
@@ -971,8 +1021,10 @@ fn find_channel_session(
         .query_row(
             "SELECT session_id FROM channel_sessions
              WHERE owner = ?1 AND source = ?2 AND account = ?3
-               AND conversation_id = ?4 AND sender_id = ?5",
-            params![owner, identity.0, identity.1, identity.2, identity.3],
+               AND conversation_kind = ?4 AND conversation_id = ?5 AND participant_id = ?6",
+            params![
+                owner, identity.0, identity.1, identity.2, identity.3, identity.4
+            ],
             |row| row.get(0),
         )
         .optional()
@@ -994,7 +1046,11 @@ fn verify_channel_session(
             "channel Session identity projection is inconsistent".into(),
         ));
     }
-    if identity.0.is_empty() || identity.2.is_empty() || identity.3.is_empty() {
+    if identity.0.is_empty()
+        || identity.3.is_empty()
+        || (request.identity.conversation_kind == ChannelConversationKind::Single
+            && identity.4.is_empty())
+    {
         return Err(SessionError::Storage(
             "channel Session identity is incomplete".into(),
         ));

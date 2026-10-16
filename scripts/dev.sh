@@ -34,8 +34,18 @@ export ANCHOR_RUNNER_CATALOG_ROOT="${ANCHOR_RUNNER_CATALOG_ROOT:-$dev_root/catal
 export ANCHOR_RUNNER_STATE_ROOT="${ANCHOR_RUNNER_STATE_ROOT:-$dev_root/state}"
 export ANCHOR_RUNNER_WORKSPACE_ROOT="${ANCHOR_RUNNER_WORKSPACE_ROOT:-$dev_root/workspaces}"
 export ANCHOR_RUNNER_LIBRARY_ROOT="${ANCHOR_RUNNER_LIBRARY_ROOT:-$dev_root/library}"
-export ANCHOR_RUNNER_GRAPH_NAME="${ANCHOR_RUNNER_GRAPH_NAME:-dev}"
-export ANCHOR_RUNNER_BUNDLE_ROOT="${ANCHOR_RUNNER_BUNDLE_ROOT:-$ANCHOR_RUNNER_CATALOG_ROOT/$ANCHOR_RUNNER_GRAPH_NAME}"
+# Platform development starts without a deployment-owned entry Graph. Ordinary
+# Graphs belong to the editable catalog. An explicitly configured bundle/name
+# retains the deployment-owned entry Graph contract.
+if [[ -n "${ANCHOR_RUNNER_BUNDLE_ROOT:-}" ]]; then
+  export ANCHOR_RUNNER_BUNDLE_ROOT
+  export ANCHOR_RUNNER_GRAPH_NAME="${ANCHOR_RUNNER_GRAPH_NAME:-$(basename -- "$ANCHOR_RUNNER_BUNDLE_ROOT")}"
+elif [[ -n "${ANCHOR_RUNNER_GRAPH_NAME:-}" ]]; then
+  export ANCHOR_RUNNER_GRAPH_NAME
+  export ANCHOR_RUNNER_BUNDLE_ROOT="$ANCHOR_RUNNER_CATALOG_ROOT/$ANCHOR_RUNNER_GRAPH_NAME"
+else
+  unset ANCHOR_RUNNER_GRAPH_NAME ANCHOR_RUNNER_BUNDLE_ROOT
+fi
 export ANCHOR_RUNNER_SCHEDULES_PATH="${ANCHOR_RUNNER_SCHEDULES_PATH:-$ANCHOR_RUNNER_STATE_ROOT/schedules.json}"
 export ANCHOR_RUNNER_WEB_ROOT="${ANCHOR_RUNNER_WEB_ROOT:-$repo/apps/web/dist}"
 export ANCHOR_RUNNER_LISTEN="${ANCHOR_RUNNER_LISTEN:-127.0.0.1:8077}"
@@ -117,7 +127,7 @@ record_pid() {
 
 ready() {
   local kind=$1 pid_file=$2 log=$3
-  for _ in {1..50}; do
+  for _ in {1..200}; do
     if [[ "$kind" == api ]]; then
       api_ready && return 0
     else
@@ -156,15 +166,6 @@ start_api() {
     fi
     mkdir -p "$ANCHOR_RUNNER_CATALOG_ROOT" "$ANCHOR_RUNNER_STATE_ROOT" \
       "$ANCHOR_RUNNER_WORKSPACE_ROOT" "$ANCHOR_RUNNER_LIBRARY_ROOT/plugins"
-    if [[ "$ANCHOR_RUNNER_GRAPH_NAME" == dev && "$ANCHOR_RUNNER_BUNDLE_ROOT" == "$ANCHOR_RUNNER_CATALOG_ROOT/dev" && ! -e "$ANCHOR_RUNNER_BUNDLE_ROOT" ]]; then
-      mkdir -p "$ANCHOR_RUNNER_BUNDLE_ROOT"
-      cat > "$ANCHOR_RUNNER_BUNDLE_ROOT/graph.json" <<'GRAPH'
-{"objective":"Local Rust development","entry":"ready","ops":{"ready":{"run":"true"}},"nodes":[{"id":"ready","op":"ready"}],"edges":[]}
-GRAPH
-      cat > "$ANCHOR_RUNNER_BUNDLE_ROOT/manifest.json" <<'MANIFEST'
-{"format":1,"graph":"graph.json","plugins":[]}
-MANIFEST
-    fi
     nohup setsid "$binary" serve >"$state/native-host.log" 2>&1 < /dev/null 9>&- &
     record_pid "$!" "$api_pid"
     ready api "$api_pid" "$state/native-host.log"

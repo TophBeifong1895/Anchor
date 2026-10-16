@@ -24,6 +24,7 @@ fn request(inbound: &str, conversation: &str) -> ChannelInboundRequest {
     ChannelInboundRequest {
         inbound_id: inbound.into(),
         identity: ChannelIdentity {
+            conversation_kind: Default::default(),
             source: "wecom".into(),
             account: Some("corp-a".into()),
             conversation_id: conversation.into(),
@@ -62,6 +63,118 @@ fn assert_conflict<T: std::fmt::Debug>(result: Result<T, SessionError>) {
         matches!(result, Err(SessionError::Conflict(_))),
         "{result:?}"
     );
+}
+
+#[test]
+fn startup_preserves_only_verified_current_claimed_assistant_turns_for_handover() {
+    let (_root, store, claimed) = fixture();
+    bind(&store, &claimed.session.id);
+    store
+        .claim_channel_assistant_input("owner", &claimed.session.id, "assistant-run", "old-wait")
+        .unwrap()
+        .unwrap();
+
+    store
+        .create(
+            "owner",
+            CreateSession {
+                id: Some("pilot".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    let pilot = store
+        .create_turn("owner", "pilot", "pilot-input", None)
+        .unwrap()
+        .0;
+    let orphan = store
+        .admit_channel_inbound("owner", request("orphan", "orphan-conversation"))
+        .unwrap();
+    store
+        .bind_channel_assistant(
+            "owner",
+            &orphan.session.id,
+            "orphan-run",
+            "wait",
+            "assistant",
+            "reply",
+        )
+        .unwrap();
+    store
+        .claim_channel_assistant_input("owner", &orphan.session.id, "orphan-run", "orphan-wait")
+        .unwrap()
+        .unwrap();
+    let unclaimed = store
+        .admit_channel_inbound("owner", request("unclaimed", "unclaimed-conversation"))
+        .unwrap();
+    store
+        .bind_channel_assistant(
+            "owner",
+            &unclaimed.session.id,
+            "unclaimed-run",
+            "wait",
+            "assistant",
+            "reply",
+        )
+        .unwrap();
+    let mut one_shot_request = request("one-shot", "one-shot-conversation");
+    one_shot_request.run_id = Some("one-shot-run".into());
+    let one_shot = store
+        .admit_channel_inbound("owner", one_shot_request)
+        .unwrap();
+
+    let recoverable = vec![
+        "assistant-run".into(),
+        "unclaimed-run".into(),
+        "one-shot-run".into(),
+    ];
+    assert_eq!(
+        store
+            .interrupt_running_except_assistants(&recoverable)
+            .unwrap(),
+        4
+    );
+    assert_eq!(
+        store
+            .get_turn("owner", &claimed.session.id, &claimed.turn.id)
+            .unwrap()
+            .status,
+        TurnStatus::Running
+    );
+    for (session, turn) in [
+        ("pilot", pilot.id.as_str()),
+        (orphan.session.id.as_str(), orphan.turn.id.as_str()),
+        (unclaimed.session.id.as_str(), unclaimed.turn.id.as_str()),
+        (one_shot.session.id.as_str(), one_shot.turn.id.as_str()),
+    ] {
+        assert_eq!(
+            store.get_turn("owner", session, turn).unwrap().status,
+            TurnStatus::Interrupted
+        );
+    }
+    assert_eq!(
+        store
+            .interrupt_running_except_assistants(&recoverable)
+            .unwrap(),
+        0
+    );
+    store
+        .handover_channel_assistant(
+            "owner",
+            &claimed.session.id,
+            "assistant-run",
+            "recovered-run",
+            "new-wait",
+        )
+        .unwrap();
+    let recovered = store
+        .claim_channel_assistant_input("owner", &claimed.session.id, "recovered-run", "new-wait")
+        .unwrap()
+        .unwrap();
+    assert_eq!(recovered.turn.id, claimed.turn.id);
+    assert_eq!(recovered.turn.status, TurnStatus::Running);
+    // The existing explicit interruption API still interrupts every Running Turn.
+    assert_eq!(store.interrupt_running().unwrap(), 1);
 }
 
 #[test]

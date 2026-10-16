@@ -2,11 +2,13 @@ mod api;
 mod application;
 mod artifacts;
 mod assistant;
+mod assistant_plugins;
 mod attachments;
 mod channel_inputs;
 mod channel_supervisor;
 mod channel_tools;
 mod dependency_provision;
+mod deployment;
 mod execution;
 mod goose_acp;
 mod goose_tool_context;
@@ -15,6 +17,7 @@ mod pilot_attachments;
 
 mod conversation_resources;
 mod credential_store;
+mod model_configuration;
 mod oauth_links;
 mod pilot_host;
 mod pilot_resources;
@@ -26,6 +29,7 @@ mod plugin_network;
 mod plugin_view;
 mod resource_read;
 mod runtime_configuration;
+mod runtime_management;
 use artifacts::HostArtifacts;
 mod node_host;
 mod node_tools;
@@ -356,6 +360,7 @@ fn make_host_with_control(
             anchor_runtime::graph::FileRunStore::new(state.join("runs")),
             local_inputs::LocalInputs::from_env(state.clone())?,
             session_mounts,
+            deployment::configured_pilot_graph(),
         )
         .with_library_root(library_root)
         .with_runtime_configuration(runtime_configuration),

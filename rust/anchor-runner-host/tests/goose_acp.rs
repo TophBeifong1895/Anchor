@@ -31,7 +31,6 @@ fn native_goose_direct_model_transport_requires_observed_tool_receipt() {
         vec![
             command("printf 'native-goose-evidence\\n' > evidence.txt; cat evidence.txt"),
             complete("verify").after("native-goose-evidence"),
-            Step::text("native task complete"),
         ],
     );
     let mut definition = graph();
@@ -60,7 +59,7 @@ fn native_goose_direct_model_transport_requires_observed_tool_receipt() {
         "verified.txt",
         b"native-goose-evidence\n",
     );
-    assert_eq!(provider.requests().len(), 3);
+    assert_eq!(provider.requests().len(), 2);
     for request in provider.requests() {
         assert_eq!(request["model"], goose::MODEL);
         assert!(tool_definition(&request, "final_result").unwrap()["function"]["parameters"]["properties"]["observed_receipt"].is_object());
@@ -76,15 +75,15 @@ fn native_goose_direct_model_transport_requires_observed_tool_receipt() {
     assert!(native["fixture_transport"].is_null());
     assert_eq!(native["budget_enforcement"], false);
     assert!(native["provider_requests"].is_null());
-    assert_eq!(native["observed_model_requests"], 3);
+    assert_eq!(native["observed_model_requests"], 2);
     // The usage tally observes the custom notifications as they arrive, so it
     // must agree with the count taken from the retained notification tail and
     // expose the structured accounting alongside it.
     let usage = &native["usage"];
-    assert_eq!(usage["messages"], 3, "{usage}");
+    assert_eq!(usage["messages"], 2, "{usage}");
     assert_eq!(
         usage["samples"].as_array().map(Vec::len),
-        Some(3),
+        Some(2),
         "{usage}"
     );
     assert!(usage["total_tokens"].as_u64().is_some(), "{usage}");
@@ -106,12 +105,13 @@ fn native_goose_direct_model_transport_requires_observed_tool_receipt() {
                 .as_str()
                 .is_some_and(|text| text.contains("native-goose-evidence"))
     }));
-    assert!(
-        trace
-            .iter()
-            .any(|message| message["text"] == "native task complete")
-    );
-    assert_eq!(provider.requests().len(), 3);
+    assert!(trace.iter().any(|message| {
+        message["role"] == "tool"
+            && message["text"]
+                .as_str()
+                .is_some_and(|text| text.contains("fixture complete"))
+    }));
+    assert_eq!(provider.requests().len(), 2);
     assert!(
         native
             .to_string()
@@ -141,7 +141,6 @@ fn native_goose_disclosed_tools_round_trip_keeps_the_completion_contract() {
             )
             .after("anchor_run"),
             complete("verify").after("anchor_receipt"),
-            Step::text("disclosure complete"),
         ],
     );
     let host = Host::new(&graph())
@@ -225,7 +224,6 @@ fn native_goose_turn_context_carries_the_host_boundary() {
         vec![
             command("printf 'boundary-check' > evidence.txt"),
             complete("verify"),
-            Step::text("boundary complete"),
         ],
     );
     let host = Host::new(&graph()).native();
@@ -290,7 +288,6 @@ fn native_goose_file_tools_read_and_edit_through_the_bridge() {
             .after("two"),
             command("grep -c ONE evidence.txt").after("sha256_after"),
             complete("verify").after("1"),
-            Step::text("file tools complete"),
         ],
     );
     let host = Host::new(&graph()).native();
@@ -323,18 +320,18 @@ fn native_goose_file_tools_read_and_edit_through_the_bridge() {
 #[ignore = "requires pinned Goose binary"]
 fn native_goose_unknown_external_effect_reopens_same_session_and_checks_before_continuing() {
     let provider = Provider::new("goose-native-unknown-effect-resume", vec![]);
+    let business = provider.serve_effects();
     let payload = json!({"effect_key":"native-effect-once"});
     provider.append(vec![
         Step::tool("anchor_run", json!({"command":["sh","-c",format!(
-            "curl --silent --show-error --fail --max-time 5 --noproxy '*' --request POST --header 'Content-Type: application/json' --data '{}' '{}/effects'; printf ready > effect-ready; sleep 60",
-            payload, provider.url
+            "set -e; curl --silent --show-error --fail --max-time 5 --noproxy '*' --request POST --header 'Content-Type: application/json' --data '{}' '{}/effects'; printf ready > effect-ready; sleep 60",
+            payload, business.url
         )]})),
         complete("verify"),
         Step::tool("anchor_run", json!({"command":["sh","-c",format!(
-            "curl --silent --show-error --fail --max-time 5 --noproxy '*' '{}/effects' > evidence.txt; cat evidence.txt", provider.url
+            "set -e; curl --silent --show-error --fail --max-time 5 --noproxy '*' '{}/effects' > evidence.txt; cat evidence.txt", business.url
         )]})).after("final_result.observed_receipt must match"),
         complete("verify").after("effect_count"),
-        Step::text("checked external state and completed without repeating POST"),
     ]);
     let mut definition = graph();
     definition["agents"]["worker"]["network"] = json!(true);
@@ -427,7 +424,6 @@ fn native_goose_rejects_guessed_receipt_then_accepts_observed_result() {
                 json!({"summary":"must reject","route":"verify","observed_receipt":"guessed-before-tool-result"}),
             ),
             complete("verify").after("final_result.observed_receipt must match"),
-            Step::text("finished after correcting receipt"),
         ],
     );
     let host = Host::new(&graph()).native();
@@ -478,8 +474,13 @@ fn assert_catalog(request: &Value) {
         names,
         [
             "anchor__anchor_edit",
+            "anchor__anchor_plugin_read",
+            "anchor__anchor_plugins",
             "anchor__anchor_read",
             "anchor__anchor_run",
+            "anchor__anchor_tool_detail",
+            "anchor__anchor_tools",
+            "anchor__anchor_tools_call",
             "anchor__final_result"
         ],
         "model tools must be exactly the Anchor tools, with nothing from Goose's own extensions"
@@ -786,33 +787,36 @@ fn denied_command_and_absolute_path(native: bool) {
     let outside = tempfile::tempdir().unwrap();
     let protected = outside.path().join("protected.txt");
     fs::write(&protected, "operator-data").unwrap();
+    let mut script = vec![
+        Step::tool(
+            "anchor_run",
+            json!({"command":["touch",protected.to_str().unwrap()]}),
+        ),
+        command(&format!(
+            "printf stolen > '{}'; printf path-denied",
+            protected.display()
+        ))
+        .after(""),
+        command("printf goose-evidence > evidence.txt; printf fixture-written").after(""),
+        complete("verify").after("fixture-written"),
+    ];
+    if !native {
+        script.push(Step::text("Sandbox fixture finished.").after(""));
+    }
     let provider = Provider::new(
         if native {
             "goose-native-sandbox-denials"
         } else {
             "goose-sandbox-denials"
         },
-        vec![
-            Step::tool(
-                "anchor_run",
-                json!({"command":["touch",protected.to_str().unwrap()]}),
-            ),
-            command(&format!(
-                "printf stolen > '{}'; printf path-denied",
-                protected.display()
-            ))
-            .after(""),
-            command("printf goose-evidence > evidence.txt; printf fixture-written").after(""),
-            complete("verify").after("fixture-written"),
-            Step::text("Sandbox fixture finished.").after(""),
-        ],
+        script,
     );
     let host = Host::new(&graph()).with_allowed_commands("sh,cat,true");
     let host = if native { host.native() } else { host };
     assert_eq!(host.run(&provider)["status"], "completed");
     assert_eq!(fs::read(&protected).unwrap(), b"operator-data");
     let requests = provider.requests();
-    assert_eq!(requests.len(), 5);
+    assert_eq!(requests.len(), if native { 4 } else { 5 });
     if !native {
         assert_native_record(&host, &provider, "fixture", true);
     }
@@ -972,6 +976,7 @@ fn real_goose_business_after_final_result_is_rejected_without_commit() {
 fn real_goose_external_effect_then_host_kill_is_spike_failclosed_not_native_safe_recovery() {
     let gate = Gate::new();
     let provider = Provider::new("goose-external-effect-kill-failclosed", vec![]);
+    let business = provider.serve_effects();
     let payload = json!({"effect_key":"fixture-external-once"});
     provider.append(vec![
         Step::tool(
@@ -979,7 +984,7 @@ fn real_goose_external_effect_then_host_kill_is_spike_failclosed_not_native_safe
             json!({"command":[
                 "curl","--silent","--show-error","--fail","--max-time","5","--noproxy","*",
                 "--request","POST","--header","Content-Type: application/json",
-                "--data",payload.to_string(),format!("{}/effects",provider.url)
+                "--data",payload.to_string(),format!("{}/effects",business.url)
             ]}),
         ),
         Step::text("Unfinished fixture response.")

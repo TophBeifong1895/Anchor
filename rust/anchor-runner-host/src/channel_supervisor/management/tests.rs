@@ -202,6 +202,8 @@ async fn managed_channel_uses_private_input_and_shared_binding_without_network_o
             .all(|field| field["configured"] == true)
     );
     assert!(!status.to_string().contains("private-fixture"));
+    assert!(status["account"].as_str().unwrap().starts_with("wecom:"));
+    assert_eq!(status["restart_required"], false);
     let enabled = fixture
         .adapter
         .set_enabled("local", "wecom", true)
@@ -458,6 +460,14 @@ async fn deployment_binding_is_read_only_and_missing_credentials_do_not_enable()
         external.status("local", "wecom").await.unwrap()["configuration_owner"],
         "deployment"
     );
+    assert_eq!(
+        external.status("local", "wecom").await.unwrap()["binding"]["graph"],
+        "task"
+    );
+    let hidden = external.status("another-owner", "wecom").await.unwrap();
+    assert_eq!(hidden["owner_matches"], false);
+    assert!(hidden.get("binding").is_none());
+    assert!(hidden.get("listener").is_none());
     assert!(matches!(
         external
             .configure("local", "wecom", Fixture::binding())

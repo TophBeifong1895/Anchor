@@ -88,6 +88,78 @@ fn python_probe_bounds_output_and_does_not_wait_for_an_inherited_pipe() {
     }
 }
 
+#[test]
+fn python_full_version_probe_preserves_the_execution_abi_probe() {
+    let root = tempfile::tempdir().unwrap();
+    let interpreter = root.path().join("python3");
+    write_launcher(
+        &interpreter,
+        "#!/bin/sh\n[ \"$1\" = -I ] && [ \"$2\" = -S ] && [ \"$3\" = -c ] || exit 1\ncase \"$4\" in\n*sys.version_info.micro*) printf '3.12.13\\n' ;;\n*) printf '3.12\\n' ;;\nesac\n",
+    )
+    .unwrap();
+    assert_eq!(probe_python_version(&interpreter).unwrap(), "3.12.13");
+    assert_eq!(
+        probe_python(&interpreter, Duration::from_secs(1))
+            .unwrap()
+            .stdout,
+        b"3.12\n"
+    );
+}
+
+#[test]
+fn python_full_version_probe_reports_failed_and_malformed_results() {
+    let root = tempfile::tempdir().unwrap();
+    let interpreter = root.path().join("python3");
+    for version in ["3.12", "3.12.x", "3.12.13\\nextra"] {
+        write_launcher(&interpreter, &format!("#!/bin/sh\nprintf '{version}\\n'\n")).unwrap();
+        let error = probe_python_version(&interpreter).unwrap_err();
+        assert!(
+            error.contains("numeric major.minor.patch version"),
+            "{error}"
+        );
+        fs::remove_file(&interpreter).unwrap();
+    }
+    write_launcher(
+        &interpreter,
+        "#!/bin/sh\nprintf 'fixture interpreter failure' >&2\nexit 1\n",
+    )
+    .unwrap();
+    let error = probe_python_version(&interpreter).unwrap_err();
+    assert_eq!(error, "Python version probe failed");
+    assert!(!error.contains("fixture interpreter failure"));
+    fs::remove_file(&interpreter).unwrap();
+    let error = probe_python_version(&interpreter).unwrap_err();
+    assert!(error.contains("cannot be probed"), "{error}");
+}
+
+#[test]
+fn python_full_version_probe_bounds_time_output_and_reaps_the_process() {
+    let root = tempfile::tempdir().unwrap();
+    let interpreter = root.path().join("python3");
+    let pid_file = root.path().join("pid");
+    write_launcher(
+        &interpreter,
+        &format!(
+            "#!/bin/sh\nprintf '%s' \"$$\" > {}\nexec /bin/sleep 60\n",
+            shell_path(&pid_file).unwrap()
+        ),
+    )
+    .unwrap();
+    let started = Instant::now();
+    let error = probe_python_version(&interpreter).unwrap_err();
+    assert!(error.contains("probe timed out"), "{error}");
+    assert!(started.elapsed() < Duration::from_secs(3));
+    let pid = fs::read_to_string(pid_file).unwrap();
+    assert!(!Path::new(&format!("/proc/{pid}")).exists());
+    fs::remove_file(&interpreter).unwrap();
+    write_launcher(&interpreter, "#!/bin/sh\nexec /usr/bin/yes\n").unwrap();
+    let error = probe_python_version(&interpreter).unwrap_err();
+    assert!(
+        error.contains("probe output exceeded 4096 bytes"),
+        "{error}"
+    );
+}
+
 #[tokio::test]
 async fn cargo_cache_writes_stay_in_the_session_and_shared_sources_are_read_only() {
     let root = tempfile::tempdir().unwrap();

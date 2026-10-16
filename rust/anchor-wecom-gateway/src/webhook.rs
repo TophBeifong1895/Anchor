@@ -55,6 +55,7 @@ impl Webhook {
             // 400/409/422 mean the Host will never accept this event; retrying
             // it after a restart only repeats the refusal.
             return Err(match response.status().as_u16() {
+                409 if is_assistant_stopped(&mut response).await => GatewayError::AssistantStopped,
                 400 | 409 | 422 => GatewayError::Rejected,
                 _ => GatewayError::Webhook,
             });
@@ -171,6 +172,26 @@ impl Webhook {
             .await
             .map_err(|_| GatewayError::Webhook)
     }
+}
+
+async fn is_assistant_stopped(response: &mut reqwest::Response) -> bool {
+    if response
+        .content_length()
+        .is_some_and(|size| size > MAX_REQUEST_BYTES as u64)
+    {
+        return false;
+    }
+    let mut bytes = Vec::new();
+    loop {
+        match response.chunk().await {
+            Ok(Some(chunk)) if bytes.len() + chunk.len() <= MAX_REQUEST_BYTES => {
+                bytes.extend_from_slice(&chunk);
+            }
+            Ok(None) => break,
+            _ => return false,
+        }
+    }
+    serde_json::from_slice::<Value>(&bytes).is_ok_and(|body| body["code"] == "assistant_stopped")
 }
 
 pub(crate) fn parse_receipt(value: &Value) -> Result<DeliveryReceipt, GatewayError> {

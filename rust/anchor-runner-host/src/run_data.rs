@@ -324,6 +324,7 @@ pub(crate) fn delete_run_data(
     workspace_root: &Path,
 ) -> Result<(), String> {
     let bindings = assistant_bindings(record, data_root)?;
+    crate::assistant_plugins::cleanup(data_root, record)?;
     let mut turns = bindings
         .iter()
         .map(assistant_turn)
