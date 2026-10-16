@@ -107,7 +107,7 @@
 
 ## K0.1：内核修订与中断事实
 
-按[审查决定 D1–D5](constitution-preflight-decision.md)完成限定范围实现，单独提交审查；**H1–H6 尚未开始**。Host、旧 Runner 和现有内核测试断言均未修改。
+按[审查决定 D1–D5](constitution-preflight-decision.md)完成限定范围实现；`88a6e41` 的[独立验收](../experiments/constitution-host-preflight/k01/review.md)九项通过，未发现阻塞问题。**当前状态：H1 已验收，下一步 H2**。K0.1 切片当时未修改 Host、旧 Runner 和现有内核测试断言。
 
 - **D1**：选择从历史求和；两种 Store 的 `load` 共用成本投影，`spent` 为所有记录 `stamp.cost` 的饱和和，不再依赖版本化快照。打回、拒绝、版本过期、待定及已结算后的拒绝都计费，计费本身不推进版本。版本过期后以 `cost=0` 重提同一工作；超预算仍立即结算失败，结算推进版本。待定批准写入目标任务时的观察记录也遵守预算。
 - **D2**：换行闭合才是完整记录；追加前截去尾部未闭合字节，保留完整记录原始字节。任何闭合坏行（包括末尾坏行、空行和无效 UTF-8）均报 `Corrupt`；末尾合法 JSON 若没有换行，也不算已提交记录。崩溃窗口仍从完整记录恢复，不重新执行。
@@ -146,7 +146,7 @@ S1、S2 在差分测试中被显式映射（S2：旧 `Stopped` 且存在停止�
 
 ## H1：旧格式清理（实现完成）
 
-用户已决定 H1 仅做兼容删除；FileStore 随 H2 调度器接入，C2 零直接写入在 H3 结束验收。原[存储边界预检](../experiments/constitution-host-preflight/h1/review.md)保留为历史证据，不再是当前停止条件。
+H1 已验收，下一步 H2。用户独立重跑确认 45 targets、1278 通过、0 失败、112 忽略，Clippy 与 fmt 通过；H2 首个提交须收拢旧授权拒绝并补判断点度量。用户已决定 H1 仅做兼容删除；FileStore 随 H2 调度器接入，C2 零直接写入在 H3 结束验收。原[存储边界预检](../experiments/constitution-host-preflight/h1/review.md)保留为历史证据，不再是当前停止条件。
 
 已删除格式自动迁移、managed-environment 遗留字段、旧授权升级、Deleted 调用标记及旧 cursor 计数补写。旧 Run 格式、遗留 environments、缺失授权摘要、Deleted 标记和旧 cursor 均具名拒绝，说明需离线迁移；读取不重写原始字节。当前持久化记录必须为对象，非对象序列也具名拒绝；解码保留 serde 已知字段重复键及未知字段拒绝，不经 Value 覆盖字段。未修改内核、GraphValidator 或三组差分测试；仍由旧 RunStore 单独负责 Run，无内核双写或新提交契约。
 

@@ -1,8 +1,8 @@
 # 宪法内核接入 Host：临时开发计划
 
-编制日期：2026-10-16。状态：**H1 旧格式清理实现完成；H2–H6 尚未开始**。H1 验证及直接写入基线见工作记录。
+编制日期：2026-10-16。状态：**H1 已验收，下一步 H2**。H1 审查对象 `445d278`；K0.1 独立验收见[结论](../experiments/constitution-host-preflight/k01/review.md)。
 
-预检阻塞的修订范围已由[审查决定 D1–D5](constitution-preflight-decision.md)明确授权；实现与验收入口见[工作记录](constitution-refactor-log.md#k01内核修订与中断事实)。K0.1 审查通过后才从 H1 继续；Host 当前仍使用旧 Runner。
+预检阻塞的修订范围已由[审查决定 D1–D5](constitution-preflight-decision.md)明确授权；实现与验收入口见[工作记录](constitution-refactor-log.md#k01内核修订与中断事实)。K0.1 与 H1 已验收；Host 当前仍使用旧 Runner，下一步 H2。
 
 - 分支：`constitution-core`；worktree：`/home/mansteinl/code/anchor-constitution-core`
 - 起点 commit：`7c196d8`
@@ -104,7 +104,7 @@
 
 每个阶段结束必须：编译通过、全部测试通过（或在工作记录中逐项登记修改理由）、更新工作记录、单独 commit。
 
-### H1：旧格式清理（实现完成）
+### H1：旧格式清理（已验收）
 
 **决定（2026-10-16）：C6 已由用户明确确认。分支完全不兼容旧格式；旧格式数据在生产迁移时另行处理，不在本阶段。**
 
