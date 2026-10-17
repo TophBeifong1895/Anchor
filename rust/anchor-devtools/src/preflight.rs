@@ -381,10 +381,12 @@ fn check_writer_lease(state: &Path) -> Result<(), String> {
     {
         return Err(lock_error());
     }
-    rustix::fs::flock(&lock, FlockOperation::NonBlockingLockExclusive).map_err(|_| {
-        "state root has another writing Host or cannot acquire its writer lock".to_owned()
-    })?;
-    rustix::fs::flock(&lock, FlockOperation::Unlock)
+    let lock =
+        anchor_file_lease::FileLease::acquire(lock, FlockOperation::NonBlockingLockExclusive)
+            .map_err(|_| {
+                "state root has another writing Host or cannot acquire its writer lock".to_owned()
+            })?;
+    lock.release()
         .map_err(|_| "state root writer lock could not be released".to_owned())
 }
 

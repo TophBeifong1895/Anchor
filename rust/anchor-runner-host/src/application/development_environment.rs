@@ -204,7 +204,7 @@ pub(crate) enum EnvironmentKind {
 /// command changing the env until all Sandbox children have exited.
 pub(crate) struct LeasedEnvironment {
     pub(crate) kind: EnvironmentKind,
-    _project: File,
+    _project: anchor_file_lease::FileLease,
     _scope: DevelopmentScope,
     root: PathBuf,
     scope: PathBuf,

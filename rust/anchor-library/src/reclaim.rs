@@ -186,7 +186,7 @@ fn lock_nonblocking(
     directory: &Path,
     name: &str,
     create: bool,
-) -> Result<std::fs::File, LockError> {
+) -> Result<anchor_file_lease::FileLease, LockError> {
     if !directory.is_dir() {
         return Err(LockError::Io(io::Error::new(
             io::ErrorKind::NotFound,
@@ -220,8 +220,11 @@ fn lock_nonblocking(
     );
     // `NonBlockingLockExclusive` is the non-waiting exclusive lock (rustix's
     // `LOCK_EX | LOCK_NB`); `O_NONBLOCK` alone is not a promise across backends.
-    match rustix::fs::flock(&file, rustix::fs::FlockOperation::NonBlockingLockExclusive) {
-        Ok(()) => Ok(file),
+    match anchor_file_lease::FileLease::acquire(
+        file,
+        rustix::fs::FlockOperation::NonBlockingLockExclusive,
+    ) {
+        Ok(lease) => Ok(lease),
         Err(rustix::io::Errno::WOULDBLOCK) => Err(LockError::Busy),
         Err(error) => Err(LockError::Io(io::Error::from(error))),
     }

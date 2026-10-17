@@ -9,6 +9,7 @@ description = "Shared Rust Graph runtime kernel for Anchor"
 test-fixtures = []
 
 [dependencies]
+anchor-file-lease = { path = "../anchor-file-lease" }
 anchor-kernel = { path = "../anchor-kernel" }
 serde.workspace = true
 serde_json.workspace = true

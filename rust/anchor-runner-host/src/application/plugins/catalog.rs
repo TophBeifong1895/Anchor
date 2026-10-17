@@ -4,10 +4,7 @@
 use super::ApplicationError;
 use anchor_graph_host::{FilePluginCatalog, PluginDefinition, PluginMetadata};
 use serde_json::{Value, json};
-use std::{
-    fs::File,
-    path::{Path, PathBuf},
-};
+use std::path::{Path, PathBuf};
 
 pub(crate) const INVALID_DEFINITION: &str = "Plugin is unavailable or malformed";
 pub(crate) const UNREADY_DEPENDENCIES: &str = "Plugin dependency view is missing or unusable";
@@ -53,7 +50,7 @@ impl InstalledPlugin {
 pub(crate) struct InstalledPluginCatalog {
     root: PathBuf,
     pub(crate) entries: Vec<InstalledPlugin>,
-    _guard: Option<File>,
+    _guard: Option<anchor_file_lease::FileLease>,
 }
 
 impl InstalledPluginCatalog {

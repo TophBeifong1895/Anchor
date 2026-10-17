@@ -9,7 +9,7 @@ use std::{
 };
 
 use rustix::fs::{
-    AtFlags, FlockOperation, Mode, OFlags, flock, fsync, mkdirat, open, openat, renameat, unlinkat,
+    AtFlags, FlockOperation, Mode, OFlags, fsync, mkdirat, open, openat, renameat, unlinkat,
 };
 use serde_json::json;
 
@@ -17,7 +17,7 @@ use crate::{GatewayConfig, GatewayError};
 
 pub(crate) struct PrivateState {
     directory: File,
-    _lease: File,
+    _lease: anchor_file_lease::FileLease,
     path: PathBuf,
     published: bool,
 }
@@ -47,8 +47,9 @@ impl PrivateState {
             return Err(GatewayError::PrivateState);
         }
         let lease = regular(&directory, "gateway.lock")?;
-        flock(&lease, FlockOperation::NonBlockingLockExclusive)
-            .map_err(|_| GatewayError::AlreadyRunning)?;
+        let lease =
+            anchor_file_lease::FileLease::acquire(lease, FlockOperation::NonBlockingLockExclusive)
+                .map_err(|_| GatewayError::AlreadyRunning)?;
         let state = Self {
             directory,
             _lease: lease,

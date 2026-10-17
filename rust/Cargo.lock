@@ -69,6 +69,7 @@ dependencies = [
 name = "anchor-devtools"
 version = "0.1.0"
 dependencies = [
+ "anchor-file-lease",
  "object",
  "rusqlite",
  "rustix",
@@ -117,6 +118,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "anchor-file-lease"
+version = "0.1.0"
+dependencies = [
+ "rustix",
+ "tempfile",
+]
+
+[[package]]
 name = "anchor-graph-host"
 version = "0.1.0"
 dependencies = [
@@ -142,6 +151,7 @@ dependencies = [
 name = "anchor-library"
 version = "0.1.0"
 dependencies = [
+ "anchor-file-lease",
  "anchor-graph-host",
  "anchor-runtime",
  "base64 0.22.1",
@@ -232,6 +242,7 @@ version = "0.1.0"
 dependencies = [
  "agent-client-protocol-schema",
  "anchor-distribution",
+ "anchor-file-lease",
  "anchor-graph-host",
  "anchor-kernel",
  "anchor-library",
@@ -271,6 +282,7 @@ dependencies = [
 name = "anchor-runtime"
 version = "0.1.0"
 dependencies = [
+ "anchor-file-lease",
  "anchor-kernel",
  "chrono",
  "futures",
@@ -323,6 +335,7 @@ name = "anchor-wecom-gateway"
 version = "0.1.0"
 dependencies = [
  "aes",
+ "anchor-file-lease",
  "axum",
  "base64 0.22.1",
  "cbc",

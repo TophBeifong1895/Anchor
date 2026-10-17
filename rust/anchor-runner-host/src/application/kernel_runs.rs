@@ -20,7 +20,7 @@ use anchor_runtime::graph::{
 };
 use std::{
     collections::HashMap,
-    fs::{File, OpenOptions},
+    fs::OpenOptions,
     path::Path,
     sync::{Arc, Mutex, atomic::Ordering},
 };
@@ -40,13 +40,9 @@ impl Authority for ProbeAuthority {
 pub(crate) struct KernelRuns {
     pub(crate) kernel: Kernel<FileStore>,
     active: Mutex<HashMap<String, anchor_runtime::Cancellation>>,
-    lease: File,
+    _lease: anchor_file_lease::FileLease,
 }
-impl Drop for KernelRuns {
-    fn drop(&mut self) {
-        let _ = rustix::fs::flock(&self.lease, rustix::fs::FlockOperation::Unlock);
-    }
-}
+
 struct ExecutionGuard<'a> {
     owner: &'a KernelRuns,
     id: String,
@@ -67,9 +63,13 @@ impl KernelRuns {
             .write(true)
             .open(root.join(".writer.lock"))
             .map_err(super::storage)?;
-        rustix::fs::flock(&lease, rustix::fs::FlockOperation::NonBlockingLockExclusive).map_err(
-            |e| ApplicationError::Conflict(format!("Kernel probe store already has a writer: {e}")),
-        )?;
+        let lease = anchor_file_lease::FileLease::acquire(
+            lease,
+            rustix::fs::FlockOperation::NonBlockingLockExclusive,
+        )
+        .map_err(|e| {
+            ApplicationError::Conflict(format!("Kernel probe store already has a writer: {e}"))
+        })?;
         let mut kernel = Kernel::new(
             FileStore::new(root).map_err(|e| ApplicationError::Storage(e.to_string()))?,
             Box::new(ProbeAuthority),
@@ -81,7 +81,7 @@ impl KernelRuns {
         Ok(Self {
             kernel,
             active: Mutex::default(),
-            lease,
+            _lease: lease,
         })
     }
     pub(crate) fn load(&self, id: &str) -> Result<Option<Resource>, ApplicationError> {

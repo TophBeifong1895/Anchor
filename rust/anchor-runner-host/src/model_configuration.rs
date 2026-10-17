@@ -182,7 +182,7 @@ impl ModelConfiguration {
         }
         Ok(managed)
     }
-    fn lease(&self) -> Result<fs::File, String> {
+    fn lease(&self) -> Result<anchor_file_lease::FileLease, String> {
         let file = fs::OpenOptions::new()
             .read(true)
             .write(true)
@@ -201,8 +201,9 @@ impl ModelConfiguration {
         {
             return Err("model configuration lock must be a regular file".into());
         }
-        rustix::fs::flock(&file, rustix::fs::FlockOperation::LockExclusive)
-            .map_err(|_| "model configuration lock is unavailable")?;
+        let file =
+            anchor_file_lease::FileLease::acquire(file, rustix::fs::FlockOperation::LockExclusive)
+                .map_err(|_| "model configuration lock is unavailable")?;
         Ok(file)
     }
     fn publish(&self, managed: &ManagedModel) -> Result<(), String> {

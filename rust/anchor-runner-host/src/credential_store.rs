@@ -182,7 +182,7 @@ fn save(path: &Path, value: &impl Serialize) -> Result<(), String> {
         .and_then(|directory| directory.sync_all())
         .map_err(|_| "private credential directory sync failed".into())
 }
-fn lease(data: &Path) -> Result<fs::File, String> {
+fn lease(data: &Path) -> Result<anchor_file_lease::FileLease, String> {
     let root = data.join("platform");
     crate::goose_acp::pilot::directory(&root)?;
     let file = fs::OpenOptions::new()
@@ -201,9 +201,10 @@ fn lease(data: &Path) -> Result<fs::File, String> {
     {
         return Err("credential lock is not a regular file".into());
     }
+    let file = anchor_file_lease::FileLease::new(file);
     let started = std::time::Instant::now();
     loop {
-        match rustix::fs::flock(&file, rustix::fs::FlockOperation::NonBlockingLockExclusive) {
+        match file.lock(rustix::fs::FlockOperation::NonBlockingLockExclusive) {
             Ok(()) => break,
             Err(error)
                 if error == rustix::io::Errno::WOULDBLOCK

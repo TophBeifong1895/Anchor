@@ -7,8 +7,8 @@ use std::{
 };
 
 use rustix::fs::{
-    AtFlags, FlockOperation, Mode, OFlags, RenameFlags, fchmod, flock, fstat, openat,
-    renameat_with, unlinkat,
+    AtFlags, FlockOperation, Mode, OFlags, RenameFlags, fchmod, fstat, openat, renameat_with,
+    unlinkat,
 };
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -172,8 +172,9 @@ pub(super) fn write(
             .map_err(|error| error.to_string())?
             .ok_or("could not create output directory")?,
     };
-    flock(&directory, FlockOperation::NonBlockingLockExclusive)
-        .map_err(|_| "preparation output is locked or cannot be checked")?;
+    let directory =
+        anchor_file_lease::FileLease::acquire(directory, FlockOperation::NonBlockingLockExclusive)
+            .map_err(|_| "preparation output is locked or cannot be checked")?;
     let current = filesystem::directory(output, false)
         .map_err(|error| error.to_string())?
         .ok_or("preparation output disappeared")?;

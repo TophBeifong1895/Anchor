@@ -78,22 +78,21 @@ impl RunStore for FileRunStore {
             .create(true)
             .truncate(false)
             .open(&path)?;
-        file.try_lock().map_err(|error| match error {
-            std::fs::TryLockError::WouldBlock => GraphError::RunBusy(run_id.to_owned()),
-            std::fs::TryLockError::Error(error) => GraphError::Io(error),
+        let file = anchor_file_lease::FileLease::acquire(
+            file,
+            anchor_file_lease::FlockOperation::NonBlockingLockExclusive,
+        )
+        .map_err(|error| match error {
+            error if std::io::Error::from(error).kind() == std::io::ErrorKind::WouldBlock => {
+                GraphError::RunBusy(run_id.to_owned())
+            }
+            error => GraphError::Io(error.into()),
         })?;
         file.sync_all()?;
         Ok(Box::new(FileRunLease { _file: file }))
     }
 }
 struct FileRunLease {
-    _file: fs::File,
+    _file: anchor_file_lease::FileLease,
 }
 impl RunLease for FileRunLease {}
-impl Drop for FileRunLease {
-    fn drop(&mut self) {
-        // A concurrent fork may inherit this descriptor before exec closes it.
-        // Release the owner's lock explicitly instead of waiting for every copy.
-        let _ = self._file.unlock();
-    }
-}

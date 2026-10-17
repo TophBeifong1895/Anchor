@@ -1151,7 +1151,7 @@ async fn verify_view(
 pub(crate) async fn write_lock(
     root: &Path,
     access: &DependencyAccess,
-) -> Result<std::fs::File, ProvisionError> {
+) -> Result<anchor_file_lease::FileLease, ProvisionError> {
     use std::os::unix::fs::OpenOptionsExt;
     crate::goose_acp::pilot::directory(root).map_err(ProvisionError::Failed)?;
     let path = root.join(".lock");
@@ -1170,9 +1170,10 @@ pub(crate) async fn write_lock(
     if !file.metadata().map_err(failure)?.is_file() {
         return Err(failure("dependency writer lease is not a regular file"));
     }
+    let file = anchor_file_lease::FileLease::new(file);
     loop {
         access.check()?;
-        match rustix::fs::flock(&file, rustix::fs::FlockOperation::NonBlockingLockExclusive) {
+        match file.lock(rustix::fs::FlockOperation::NonBlockingLockExclusive) {
             Ok(()) => break,
             Err(error) if error == rustix::io::Errno::WOULDBLOCK => tokio::select! {
                 _ = tokio::time::sleep(std::time::Duration::from_millis(20)) => {},

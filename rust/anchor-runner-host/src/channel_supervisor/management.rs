@@ -111,7 +111,7 @@ pub(crate) struct ChannelManagementAdapter {
     external: bool,
     external_descriptors: BTreeMap<String, PathBuf>,
     external_callback_keys: BTreeMap<String, String>,
-    _owner_lease: fs::File,
+    _owner_lease: anchor_file_lease::FileLease,
 }
 
 impl ChannelManagementAdapter {
@@ -147,8 +147,8 @@ impl ChannelManagementAdapter {
         {
             return Err("channel configuration lease must be a regular file".into());
         }
-        rustix::fs::flock(
-            &owner_lease,
+        let owner_lease = anchor_file_lease::FileLease::acquire(
+            owner_lease,
             rustix::fs::FlockOperation::NonBlockingLockExclusive,
         )
         .map_err(|_| "channel configuration already has a Host owner")?;

@@ -6,8 +6,7 @@ use std::{
 };
 
 use rustix::fs::{
-    AtFlags, Dir, FileType, FlockOperation, Mode, OFlags, Stat, flock, fstat, mkdirat, openat,
-    statat,
+    AtFlags, Dir, FileType, FlockOperation, Mode, OFlags, Stat, fstat, mkdirat, openat, statat,
 };
 use serde::Serialize;
 use serde_json::Value;
@@ -196,8 +195,11 @@ pub(super) fn lock_status(path: &Path) -> &'static str {
     })();
     match result {
         Ok(None) => "absent",
-        Ok(Some(file)) => match flock(&file, FlockOperation::NonBlockingLockExclusive) {
-            Ok(()) => "available",
+        Ok(Some(file)) => match anchor_file_lease::FileLease::acquire(
+            file,
+            FlockOperation::NonBlockingLockExclusive,
+        ) {
+            Ok(_lease) => "available",
             Err(rustix::io::Errno::WOULDBLOCK) => "held",
             Err(_) => "unknown",
         },
