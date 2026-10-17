@@ -600,9 +600,13 @@ pub(super) async fn get_run(
         .project_run(&record, Some(&metadata))
         .await
         .map_err(application_error)?;
+    let view = state
+        .application
+        .read_view(&record, projection.active)
+        .map_err(application_error)?;
     let definition = crate::application::run_projection::run_definition(&record.snapshot);
     Ok(Json(
-        json!({"session_call":metadata.session_call,"channel_reply":channel_reply,"graph":metadata.graph,"run":id,"attachments":metadata.attachments,"plugins":plugins,"definition":definition,"state":{"objective":record.snapshot.objective,"started":metadata.created,"updated":updated,"status":status(record.status),"trigger":trigger,"input":record.input,"cursor":cursor,"passes":record.passes,"decided":decided,"nodes":nodes,"executed":executed,"skipped":[],"error":record.error.unwrap_or_default(),"parallel":record.parallel,"recovery":record.recovery},"calls":calls,"traces":traces,"nodes":record.snapshot.nodes.iter().map(|node|node.id.clone()).collect::<Vec<_>>(),"active":projection.active,"control_requested":projection.control_requested,"projection":projection}),
+        json!({"session_call":metadata.session_call,"channel_reply":channel_reply,"graph":metadata.graph,"run":id,"attachments":metadata.attachments,"plugins":plugins,"definition":definition,"state":{"objective":record.snapshot.objective,"started":metadata.created,"updated":updated,"status":status(record.status),"trigger":trigger,"input":record.input,"cursor":cursor,"passes":view.graph.passes,"decided":decided,"nodes":nodes,"executed":executed,"skipped":[],"error":record.error.unwrap_or_default(),"parallel":record.parallel,"recovery":record.recovery},"calls":calls,"traces":traces,"nodes":record.snapshot.nodes.iter().map(|node|node.id.clone()).collect::<Vec<_>>(),"active":projection.active,"control_requested":projection.control_requested,"projection":projection}),
     ))
 }
 

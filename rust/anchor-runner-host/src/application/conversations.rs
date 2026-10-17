@@ -112,20 +112,15 @@ impl RunApplication {
         })
     }
 
-    pub(crate) fn settle_channel_run(
+    pub(super) fn settle_channel_turn(
         &self,
         run_id: &str,
-        status: RunStatus,
+        turn_status: TurnStatus,
     ) -> Result<(), ApplicationError> {
         let Some(metadata) = self.metadata(run_id)? else {
             return Ok(());
         };
         if let Some(source) = metadata.assistant.as_ref() {
-            let turn_status = match status {
-                RunStatus::Failed | RunStatus::Aborted => TurnStatus::Failed,
-                RunStatus::Stopped => TurnStatus::Stopped,
-                _ => return Ok(()),
-            };
             let sessions = SessionStore::open(self.data_root.join("platform/sessions.sqlite"))
                 .map_err(|error| ApplicationError::Storage(error.to_string()))?;
             if sessions
@@ -157,18 +152,7 @@ impl RunApplication {
         let Some(channel) = metadata.channel.as_ref() else {
             return Ok(());
         };
-        let turn_status = match status {
-            RunStatus::Completed => TurnStatus::Completed,
-            RunStatus::Failed | RunStatus::Aborted => TurnStatus::Failed,
-            RunStatus::Stopped => TurnStatus::Stopped,
-            RunStatus::Ready
-            | RunStatus::Running
-            | RunStatus::Paused
-            | RunStatus::BudgetStopped
-            | RunStatus::WaitingCall
-            | RunStatus::WaitingRecovery => return Ok(()),
-        };
-        let completed_record = if status == RunStatus::Completed {
+        let completed_record = if turn_status == TurnStatus::Completed {
             self.store().load(run_id)?
         } else {
             None
@@ -395,7 +379,7 @@ impl RunApplication {
             if !seen.insert(record.run_id.clone()) {
                 continue;
             }
-            if !RunLiveness::with_registry(&record, active).is_quiescent() {
+            if !self.observed_liveness(&record, active)?.is_quiescent() {
                 return Err(ApplicationError::Conflict(
                     "previous conversation execution has not stopped; wait for it to become inactive".into(),
                 ));
@@ -588,7 +572,7 @@ impl RunApplication {
             // unknown and this Run stays retained.
             return Ok(true);
         };
-        if successor.status.is_terminal() {
+        if self.read_view(successor, false)?.is_settled() {
             return Ok(false);
         }
         // A Run with its own successor can never resume or recover: the
@@ -690,7 +674,11 @@ impl RunApplication {
                 ));
             }
             for (id, record) in self.records()? {
-                if id == metadata.run_id || record.status.is_terminal() {
+                if id == metadata.run_id {
+                    continue;
+                }
+                let view = self.read_view(&record, active.contains_key(&id))?;
+                if view.is_settled() {
                     continue;
                 }
                 let Some(other) = self.metadata(&id)? else {
@@ -705,7 +693,7 @@ impl RunApplication {
                             .as_ref()
                             .is_some_and(|other| other.session == source.session)
                             && (active.contains_key(&id)
-                                || matches!(record.status, RunStatus::Ready | RunStatus::Running)))
+                                || view.phase == anchor_kernel::Phase::Executing))
                 {
                     return Err(ApplicationError::Conflict(
                         "conversation execution scope is busy".into(),
@@ -719,7 +707,11 @@ impl RunApplication {
                 ));
             }
             for (id, record) in self.records()? {
-                if id == metadata.run_id || record.status.is_terminal() {
+                if id == metadata.run_id
+                    || self
+                        .read_view(&record, active.contains_key(&id))?
+                        .is_settled()
+                {
                     continue;
                 }
                 if let Some(other) = self.metadata(&id)?
@@ -778,7 +770,10 @@ impl RunApplication {
             self.ensure_predecessor_settled(record, &active)?;
         }
         for (id, record) in self.records()? {
-            if record.status.is_terminal() {
+            if self
+                .read_view(&record, active.contains_key(&id))?
+                .is_settled()
+            {
                 continue;
             }
             let metadata = self.metadata(&id)?.ok_or_else(|| {

@@ -27,6 +27,12 @@ pub fn kernel_error(error: anchor_kernel::KernelError) -> GraphError {
     GraphError::Io(io::Error::other(error.to_string()))
 }
 
+/// Optional Host read observation; called only after an accepted submission.
+/// A failed observer cannot undo the accepted Kernel fact.
+pub trait SubmissionObserver: Send + Sync {
+    fn accepted(&self, resource_id: &str) -> Result<(), GraphError>;
+}
+
 /// Charge a unit of work once, including stale/late refusals. Repeated stale
 /// submissions carry zero additional cost (K0.1/D1).
 pub fn submit_with_retry<S: Store>(
@@ -34,12 +40,22 @@ pub fn submit_with_retry<S: Store>(
     principal: &Principal,
     mut cost: u64,
     mut submission: Submission,
+    observer: Option<&dyn SubmissionObserver>,
 ) -> Result<Verdict, GraphError> {
     loop {
         let verdict = kernel
             .submit(principal, cost, submission.clone())
             .map_err(kernel_error)?;
         if verdict.reason != Reason::StaleVersion {
+            if verdict.is_accepted()
+                && let Some(observer) = observer
+                && let Err(error) = observer.accepted(&submission.target)
+            {
+                eprintln!(
+                    "Host update observation unavailable for {}: {error}",
+                    submission.target
+                );
+            }
             return Ok(verdict);
         }
         cost = 0;
@@ -53,6 +69,7 @@ pub fn submit_with_retry<S: Store>(
 
 pub struct KernelScheduler<'a, S: Store, A: ArtifactPort + ?Sized, N: NodeExecutionPort + ?Sized> {
     pub kernel: &'a Kernel<S>,
+    pub observer: Option<&'a dyn SubmissionObserver>,
     pub artifacts: &'a A,
     pub nodes: &'a N,
     pub cancellation: crate::Cancellation,
@@ -177,7 +194,8 @@ impl<S: Store, A: ArtifactPort + ?Sized, N: NodeExecutionPort + ?Sized>
                     )));
                 }
             };
-            let verdict = submit_with_retry(self.kernel, &principal, cost, submission)?;
+            let verdict =
+                submit_with_retry(self.kernel, &principal, cost, submission, self.observer)?;
             if !verdict.is_accepted()
                 && !matches!(verdict.reason, Reason::TaskWaiting | Reason::TaskSettled)
             {
@@ -204,6 +222,7 @@ impl<S: Store, A: ArtifactPort + ?Sized, N: NodeExecutionPort + ?Sized>
             &Principal::new(HOST_ID, PrincipalKind::Code),
             0,
             submission,
+            self.observer,
         )?;
         if verdict.is_accepted()
             || matches!(verdict.reason, Reason::TaskSettled | Reason::TaskWaiting)

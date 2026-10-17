@@ -1,5 +1,5 @@
 use super::*;
-use anchor_kernel::{Evidence, Reason};
+use anchor_kernel::{Evidence, Outcome, Reason, Waiter};
 use anchor_runtime::graph::test_support::{
     Artifacts, Scripted, ScriptedCalls, facts, random_graph, run_old,
 };
@@ -489,6 +489,7 @@ fn probe_guards_keep_one_writer_and_charge_stale_work_once() {
                 id: commit.id,
                 version: 0,
             }),
+        None,
     )
     .unwrap();
     assert!(verdict.is_accepted());
@@ -515,4 +516,30 @@ fn probe_guards_keep_one_writer_and_charge_stale_work_once() {
         application.load_run("p-stale"),
         Err(ApplicationError::Conflict(_))
     ));
+}
+
+#[test]
+fn broken_host_observation_never_blocks_kernel_control_or_lifecycle_reads() {
+    let root = tempfile::tempdir().unwrap();
+    let application = app(root.path());
+    let runs = application.kernel_runs(true).unwrap().unwrap();
+    let record = record("r-observation-failure");
+    runs.create(&record, 50).unwrap();
+    let observations = root.path().join("kernel-run-observations");
+    std::fs::remove_file(observations.join("r-observation-failure.json")).unwrap();
+    std::fs::remove_dir(&observations).unwrap();
+    std::fs::write(&observations, b"fixture unavailable").unwrap();
+    runs.control(&record.run_id, "stop", None).unwrap();
+    let resource = runs.load(&record.run_id).unwrap().unwrap();
+    let view = runs.view(&resource).unwrap();
+    assert!(matches!(
+        view.phase,
+        Phase::Waiting {
+            waiter: Waiter::Human { .. }
+        }
+    ));
+    assert!(view.updated.is_none());
+    assert!(view.actions().resume);
+    runs.control(&record.run_id, "abandon", None).unwrap();
+    assert!(runs.load(&record.run_id).unwrap().unwrap().is_settled());
 }

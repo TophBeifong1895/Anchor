@@ -45,7 +45,7 @@ impl RunApplication {
         metadata::load(&self.data_root, run_id)
     }
 
-    /// FileRunStore's persisted modification time, not an independent audit clock.
+    /// Legacy file modification time or the native Run's Host update observation.
     pub(crate) fn run_updated(&self, run_id: &str) -> Result<String, ApplicationError> {
         if run_id.is_empty()
             || run_id == "."
@@ -56,25 +56,15 @@ impl RunApplication {
         {
             return Err(ApplicationError::Invalid("invalid Run id".into()));
         }
-        let path = if self.kernel_owner(run_id)?.is_some() {
-            // FileStore escapes periods and other punctuation in resource ids.
-            let encoded = anchor_runtime::graph::validator::run_resource_id(run_id)
-                .bytes()
-                .map(|b| {
-                    if b.is_ascii_alphanumeric() || b == b'-' || b == b'_' {
-                        (b as char).to_string()
-                    } else {
-                        format!("%{b:02X}")
-                    }
-                })
-                .collect::<String>();
-            self.data_root
-                .join("kernel-runs")
-                .join(encoded)
-                .join("resource.json")
-        } else {
-            self.data_root.join("runs").join(format!("{run_id}.json"))
-        };
+        if let Some(runs) = self.kernel_owner(run_id)? {
+            return runs
+                .view(&runs.load(run_id)?.ok_or(ApplicationError::Missing)?)?
+                .updated
+                .ok_or_else(|| {
+                    ApplicationError::Storage("Kernel Run update observation is unavailable".into())
+                });
+        }
+        let path = self.data_root.join("runs").join(format!("{run_id}.json"));
         let modified = std::fs::metadata(path)
             .and_then(|metadata| metadata.modified())
             .map_err(storage)?;
@@ -148,5 +138,36 @@ impl RunApplication {
             }
         }
         Ok(runs)
+    }
+}
+
+impl RunApplication {
+    pub(crate) fn read_view(
+        &self,
+        record: &GraphRunRecord,
+        worker: bool,
+    ) -> Result<super::run_view::RunView, ApplicationError> {
+        if let Some(runs) = self.kernel_owner(&record.run_id)? {
+            return runs.view(
+                &runs
+                    .load(&record.run_id)?
+                    .ok_or(ApplicationError::Missing)?,
+            );
+        }
+        Ok(super::legacy_run_view::view(record, worker))
+    }
+}
+
+impl RunApplication {
+    pub(super) fn observed_liveness(
+        &self,
+        record: &GraphRunRecord,
+        active: &std::collections::HashMap<String, super::ActiveRun>,
+    ) -> Result<super::RunLiveness, ApplicationError> {
+        let view = self.read_view(record, active.contains_key(&record.run_id))?;
+        if self.kernel_owner(&record.run_id)?.is_some() {
+            return Ok(super::RunLiveness::from_view(&view));
+        }
+        Ok(super::RunLiveness::with_registry(record, active))
     }
 }

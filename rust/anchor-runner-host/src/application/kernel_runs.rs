@@ -1,16 +1,11 @@
 //! Explicit serial probe. FileStore is the sole authority for these Runs;
-//! legacy RunStatus values are read-only projections for existing consumers.
-use super::{
-    ApplicationError, RunApplication,
-    run_projection::{RunActions, RunProjection},
-};
+//! legacy status values are read-only projections for existing consumers.
+use super::{ApplicationError, RunApplication, run_projection::RunProjection};
 use anchor_kernel::{
-    Action, Authority, FileStore, Kernel, Outcome, Phase, Principal, PrincipalKind, Resource,
-    Store, Submission, Waiter,
+    Action, Authority, FileStore, Kernel, Phase, Principal, PrincipalKind, Resource, Store,
+    Submission,
 };
-use anchor_runtime::graph::{
-    ArtifactPort, GraphError, GraphRunRecord, NodeExecutionPort, RunStatus,
-};
+use anchor_runtime::graph::{ArtifactPort, GraphError, GraphRunRecord, NodeExecutionPort};
 use anchor_runtime::graph::{
     scheduler::{
         EXECUTOR_ID, HOST_ID, KernelScheduler, OPERATOR_ID, kernel_error, submit_with_retry,
@@ -39,6 +34,7 @@ impl Authority for ProbeAuthority {
 
 pub(crate) struct KernelRuns {
     pub(crate) kernel: Kernel<FileStore>,
+    observations: super::run_observations::RunObservations,
     active: Mutex<HashMap<String, anchor_runtime::Cancellation>>,
     _lease: anchor_file_lease::FileLease,
 }
@@ -81,6 +77,12 @@ impl KernelRuns {
         Ok(Self {
             kernel,
             active: Mutex::default(),
+            observations: super::run_observations::RunObservations::new(
+                &root
+                    .parent()
+                    .expect("state root")
+                    .join("kernel-run-observations"),
+            ),
             _lease: lease,
         })
     }
@@ -100,6 +102,12 @@ impl KernelRuns {
         self.kernel
             .create(run_resource(record, budget)?)
             .map_err(kernel_error)?;
+        if let Err(error) = anchor_runtime::graph::scheduler::SubmissionObserver::accepted(
+            &self.observations,
+            &run_resource_id(&record.run_id),
+        ) {
+            eprintln!("Host initial update observation unavailable: {error}");
+        }
         Ok(())
     }
     pub(crate) fn active(&self, id: &str) -> bool {
@@ -125,6 +133,7 @@ impl KernelRuns {
         };
         KernelScheduler {
             kernel: &self.kernel,
+            observer: Some(&self.observations),
             artifacts,
             nodes,
             cancellation,
@@ -156,6 +165,7 @@ impl KernelRuns {
             &Principal::new(OPERATOR_ID, PrincipalKind::Human),
             0,
             submission,
+            Some(&self.observations),
         )?;
         if !verdict.is_accepted() {
             return Err(ApplicationError::Conflict(format!(
@@ -171,62 +181,26 @@ impl KernelRuns {
         Ok(())
     }
     pub(crate) fn record(resource: &Resource) -> Result<GraphRunRecord, ApplicationError> {
-        let mut record = record_of(resource)?;
-        // Compatibility projection only. This copy is never written to either store.
-        let (status, error) = match resource
-            .phase()
-            .ok_or_else(|| ApplicationError::Storage("Kernel Run has no phase".into()))?
-        {
-            Phase::Executing => (RunStatus::Running, None),
-            Phase::Waiting {
-                waiter: Waiter::Human { reason },
-            } => (RunStatus::Stopped, Some(reason.clone())),
-            Phase::Waiting { .. } => (RunStatus::WaitingCall, None),
-            Phase::Settled {
-                result: Outcome::Done,
-            } => (RunStatus::Completed, None),
-            Phase::Settled {
-                result: Outcome::Aborted { detail },
-            } => (RunStatus::Aborted, Some(detail.clone())),
-            Phase::Settled {
-                result: Outcome::Failed { detail, .. } | Outcome::Unknown { detail },
-            } => (RunStatus::Failed, Some(detail.clone())),
-            Phase::Settled {
-                result: Outcome::Escalated { detail },
-            } => (RunStatus::BudgetStopped, Some(detail.clone())),
-        };
-        record.status = status;
-        record.error = error;
-        Ok(record)
+        super::run_json::record(resource)
+    }
+    pub(crate) fn view(
+        &self,
+        resource: &Resource,
+    ) -> Result<super::run_view::RunView, ApplicationError> {
+        let record = record_of(resource)?;
+        Ok(super::run_view::RunView {
+            phase: resource
+                .phase()
+                .ok_or_else(|| ApplicationError::Storage("Kernel Run has no phase".into()))?
+                .clone(),
+            worker: self.active(&record.run_id),
+            // Read observation failures never affect lifecycle or Session eligibility.
+            updated: self.observations.load(&record.run_id).ok().flatten(),
+            graph: (&record).into(),
+        })
     }
     pub(crate) fn projection(&self, resource: &Resource) -> RunProjection {
-        let active = self.active(&record_of(resource).expect("Graph state").run_id);
-        let executing = resource.phase() == Some(&Phase::Executing);
-        let waiting = matches!(resource.phase(), Some(Phase::Waiting { .. }));
-        let record = Self::record(resource).expect("validated Kernel graph state");
-        RunProjection {
-            phase: if executing && !active {
-                "waiting_resume".into()
-            } else {
-                serde_json::to_value(record.status)
-                    .unwrap()
-                    .as_str()
-                    .unwrap()
-                    .to_owned()
-            },
-            active,
-            control_requested: None,
-            terminal: resource.is_settled(),
-            quiescent: !active,
-            needs_attention: waiting
-                || (executing && !active)
-                || record.status == RunStatus::Failed,
-            actions: RunActions {
-                pause: false,
-                stop: executing,
-                resume: (waiting || executing) && !active,
-            },
-        }
+        super::run_json::projection(&self.view(resource).expect("validated Kernel Run"))
     }
 }
 

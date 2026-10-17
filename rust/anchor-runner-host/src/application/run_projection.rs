@@ -1,7 +1,7 @@
 //! Read-only Run presentation shared by HTTP and Pilot. These observations are
 //! advisory; control still validates identity, scope and leases at write time.
-use super::{ApplicationError, RunApplication, RunLiveness, RunMetadata, control};
-use anchor_runtime::graph::{GraphRunRecord, GraphSnapshot, RunStatus};
+use super::{ApplicationError, RunApplication, RunMetadata, control};
+use anchor_runtime::graph::{GraphRunRecord, GraphSnapshot};
 use serde::Serialize;
 use serde_json::{Value, json};
 use std::sync::atomic::Ordering;
@@ -76,42 +76,12 @@ fn observed(
     requested: Option<&'static str>,
     session_coordinated: bool,
 ) -> RunProjection {
-    let terminal = record.status.is_terminal();
-    let phase = match (active, requested, record.status) {
-        (true, Some("stop"), _) => "stopping".into(),
-        (true, Some("pause"), _) => "pausing".into(),
-        (false, _, RunStatus::Running) => "waiting_resume".into(),
-        _ => serde_json::to_value(record.status)
-            .expect("RunStatus is serializable")
-            .as_str()
-            .expect("RunStatus serializes as a string")
-            .to_owned(),
-    };
-    let resume = !active
-        && !session_coordinated
-        && control::validate_resume_budget(record).is_ok()
-        && (control::validate_inactive_control(record, "resume").is_ok()
-            || (record.status == RunStatus::WaitingRecovery && !record.recovery.is_empty()));
-    RunProjection {
-        needs_attention: matches!(
-            phase.as_str(),
-            "failed" | "aborted" | "waiting_resume" | "waiting_recovery" | "budget_stopped"
-        ),
-        phase,
-        active,
-        control_requested: requested,
-        terminal,
-        quiescent: RunLiveness::observed(record.status, active).is_quiescent(),
-        actions: RunActions {
-            pause: active && !terminal && !session_coordinated && requested.is_none(),
-            stop: if active {
-                requested != Some("stop")
-            } else {
-                control::validate_inactive_control(record, "stop").is_ok()
-            },
-            resume,
-        },
-    }
+    super::legacy_run_view::projection(
+        &super::legacy_run_view::view(record, active),
+        record,
+        requested,
+        session_coordinated,
+    )
 }
 
 /// Canvas data comes exclusively from the compiled, frozen snapshot, including
@@ -156,6 +126,7 @@ pub(crate) fn run_definition(snapshot: &GraphSnapshot) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use anchor_runtime::graph::RunStatus;
 
     fn record() -> GraphRunRecord {
         GraphRunRecord::create_with_id(
@@ -211,6 +182,32 @@ mod tests {
         let projection = observed(&record, false, None, true);
         assert!(!projection.actions.resume);
         assert!(projection.actions.stop);
+    }
+
+    #[test]
+    fn legacy_projection_serialization_preserves_ready_paused_and_stopped_bytes() {
+        let mut record = record();
+        for (status, expected) in [
+            (
+                RunStatus::Ready,
+                r#"{"phase":"ready","active":false,"control_requested":null,"terminal":false,"quiescent":false,"needs_attention":false,"actions":{"pause":false,"stop":true,"resume":true}}"#,
+            ),
+            (
+                RunStatus::Paused,
+                r#"{"phase":"paused","active":false,"control_requested":null,"terminal":false,"quiescent":false,"needs_attention":false,"actions":{"pause":false,"stop":true,"resume":true}}"#,
+            ),
+            (
+                RunStatus::Stopped,
+                r#"{"phase":"stopped","active":false,"control_requested":null,"terminal":false,"quiescent":true,"needs_attention":false,"actions":{"pause":false,"stop":true,"resume":true}}"#,
+            ),
+        ] {
+            record.status = status;
+            assert_eq!(
+                serde_json::to_vec(&observed(&record, false, None, false)).unwrap(),
+                expected.as_bytes(),
+                "{status:?}"
+            );
+        }
     }
 
     #[test]
