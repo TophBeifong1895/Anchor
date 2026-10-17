@@ -359,8 +359,7 @@ impl HostIoResolver {
         }
         let key = &request.key;
         let admitted = self
-            .run_store
-            .load(&key.run_id)
+            .load_run(&key.run_id)
             .map_err(|error| format!("load admitted Run Plugin bindings: {error}"))?
             .ok_or_else(|| {
                 format!(

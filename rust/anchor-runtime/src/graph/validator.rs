@@ -151,6 +151,11 @@ pub fn call_identity(
     })
 }
 
+/// The canonical Kernel resource id for a business Run id.
+pub fn run_resource_id(run_id: &str) -> String {
+    format!("run/{run_id}")
+}
+
 /// The kernel resource for a new Run.
 pub fn run_resource(record: &GraphRunRecord, budget: u64) -> Result<Resource, GraphError> {
     // Host code cannot choose a route for a call, so a call with several exits
@@ -185,7 +190,7 @@ pub fn run_resource(record: &GraphRunRecord, budget: u64) -> Result<Resource, Gr
         }
     }
     let state = serde_json::to_value(record).map_err(GraphError::SnapshotDecode)?;
-    Ok(Resource::new(format!("run/{}", record.run_id), GRAPH_VALIDATOR, state).task(budget))
+    Ok(Resource::new(run_resource_id(&record.run_id), GRAPH_VALIDATOR, state).task(budget))
 }
 
 pub fn record_of(resource: &Resource) -> Result<GraphRunRecord, GraphError> {

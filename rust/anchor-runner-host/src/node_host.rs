@@ -75,6 +75,7 @@ pub(crate) struct HostIoResolver {
     runtime_configuration:
         Option<std::sync::Arc<crate::runtime_configuration::RuntimeConfiguration>>,
     run_store: FileRunStore,
+    pub(crate) run_application: std::sync::OnceLock<crate::application::RunApplication>,
     /// The one place Plugins exist: the deployment's Library root. There is no
     /// second resolution path (no bundle-first, no catalog-first fallback).
     library_root: Option<PathBuf>,
@@ -117,6 +118,7 @@ impl HostIoResolver {
             mcp,
             runtime_configuration: None,
             run_store,
+            run_application: std::sync::OnceLock::new(),
             library_root: None,
             observed_views: std::sync::Mutex::new(BTreeMap::new()),
             observed_plugin_digests: std::sync::Mutex::new(BTreeMap::new()),
@@ -156,3 +158,18 @@ impl HostIoResolver {
 
 #[cfg(test)]
 mod resolver_tests;
+
+impl HostIoResolver {
+    fn load_run(
+        &self,
+        id: &str,
+    ) -> Result<Option<anchor_runtime::graph::GraphRunRecord>, anchor_runtime::graph::GraphError>
+    {
+        if let Some(application) = self.run_application.get() {
+            return application.load_run(id).map_err(|e| {
+                anchor_runtime::graph::GraphError::Unsupported(format!("Run lookup: {e:?}"))
+            });
+        }
+        self.run_store.load(id)
+    }
+}

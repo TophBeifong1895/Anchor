@@ -32,7 +32,11 @@ pub use ports::*;
 mod runner;
 pub use runner::*;
 mod parallel;
+pub mod scheduler;
 pub mod validator;
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(any(test, feature = "test-fixtures"))]
+pub mod test_support;

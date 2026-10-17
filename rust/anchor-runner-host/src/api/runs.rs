@@ -260,7 +260,7 @@ pub(super) async fn trigger_as_owner(
     let (path, bundle) = load_graph_definition(&state, requested)?;
     let run_id = state
         .application
-        .admit(
+        .admit_selected(
             requested.to_owned(),
             &path,
             bundle,
@@ -272,6 +272,12 @@ pub(super) async fn trigger_as_owner(
                 oauth_owner: Some(oauth_owner),
             },
             graph_lease,
+            match body.get("execution") {
+                None => false,
+                Some(Value::String(value)) if value == "legacy" => false,
+                Some(Value::String(value)) if value == "kernel_probe" => true,
+                _ => return Err(error(StatusCode::BAD_REQUEST, "unknown execution path")),
+            },
         )
         .await
         .map_err(application_error)?;
@@ -353,9 +359,10 @@ pub(super) async fn get_run(
     if id.is_empty() || id.contains('/') || id == "." || id == ".." {
         return Err(error(StatusCode::BAD_REQUEST, "invalid run id"));
     }
-    let record = FileRunStore::new(state.data_root.join("runs"))
-        .load(&id)
-        .map_err(|e| error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    let record = state
+        .application
+        .load_run(&id)
+        .map_err(application_error)?
         .ok_or_else(|| error(StatusCode::NOT_FOUND, "no such run"))?;
     let updated = state
         .application

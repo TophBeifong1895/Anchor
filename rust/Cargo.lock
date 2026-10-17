@@ -233,6 +233,7 @@ dependencies = [
  "agent-client-protocol-schema",
  "anchor-distribution",
  "anchor-graph-host",
+ "anchor-kernel",
  "anchor-library",
  "anchor-mcp-host",
  "anchor-platform-session",

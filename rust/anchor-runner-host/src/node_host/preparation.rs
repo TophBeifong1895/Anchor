@@ -188,8 +188,7 @@ impl HostIoResolver {
             }
         }
         let admitted = self
-            .run_store
-            .load(&request.key.run_id)
+            .load_run(&request.key.run_id)
             .map_err(|error| {
                 ResolutionError::Host(format!("load admitted Run Plugin bindings: {error}"))
             })?

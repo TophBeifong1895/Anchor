@@ -20,7 +20,7 @@ Artifact、节点历史、工作区、Run / Session / Turn 事实
 
 | 模块 | 职责与事实 |
 | --- | --- |
-| [anchor-kernel](../rust/anchor-kernel) | 独立提交/裁决/任务生命周期内核；成本从全部裁决历史派生，等待中只接受生命周期控制，Code 凭观察可停止但不能释放人的等待。K0.1 与 Graph 中断事实见[工作记录](constitution-refactor-log.md#k01内核修订与中断事实)；尚未接入 Host，当前执行仍走下列 Runner |
+| [anchor-kernel](../rust/anchor-kernel) | 独立提交/裁决/任务生命周期内核；成本从全部裁决历史派生，等待中只接受生命周期控制，Code 凭观察可停止但不能释放人的等待。K0.1 与 Graph 中断事实见[工作记录](constitution-refactor-log.md#k01内核修订与中断事实)；已通过显式串行探针接入 Host；默认执行仍走下列 Runner，探针边界见本节下文 |
 | [anchor-runtime](../rust/anchor-runtime) | Graph 编译、IR、Runner、RunStore 和节点执行端口；不依赖 HTTP 或具体业务 |
 | [anchor-runner-host](../rust/anchor-runner-host) | API/应用接纳、共享 Runner、Goose 接入、Artifact、渠道协调、调度和控制 |
 | [anchor-graph-host](../rust/anchor-graph-host) | bundle 读取、资源绑定、独立 Graph Call 和恢复关联 |
@@ -35,6 +35,12 @@ Artifact、节点历史、工作区、Run / Session / Turn 事实
 | [anchor-distribution](../rust/anchor-distribution) | 受审闭包的 source-free 归档，不执行输入程序 |
 | [anchor-devtools](../rust/anchor-devtools) | 确定性回归、候选构建、部署预检与切换盘点 |
 | [apps/web](../apps/web) | Graph 画布、Run 时间线、节点对话、Session 和产物投影 |
+
+Host 另提供显式串行概念探针：`POST /trigger` 的 `execution: "kernel_probe"` 经同一准入与节点授权，调用共享 Runtime 的 `KernelScheduler<S: Store>`。它读取 Kernel 相位与 GraphValidator 开放空位，经原 NodeExecutionPort / ArtifactPort 执行并提交；旧 Runner 与新调度器共用请求构造和 Plugin 授权逻辑。探针 Run 只存于 `<state>/kernel-runs` 的 Kernel FileStore（资源 ID `run/{run_id}`），目录由单个 Host writer 持有文件锁；旧 Run 仍只由 FileRunStore 持有，同 ID 两份存储会拒绝读取和控制。
+
+探针的 stop/resume/abandon 是 Human Request；内核接受 stop/abandon 后才取消执行，在跑结果可被 TaskWaiting / TaskSettled 拒绝并留在历史。节点失败由 Code Settle，成功 Work 由 Agent Write，成本只从宿主观察经 submit 参数盖章，StaleVersion 重试不重复收费。Uncertain / WaitingRecovery 以 Code + Observation stop 等待人核查，不自动重放。重启读取相位、开放空位和端口 completion_fact，以同 invocation 恢复；没有第二份恢复游标。已有 RunStatus 仅是 Phase + GraphRunRecord 的返回副本投影，不回写；执行错误保留 Kernel 事实并显示可继续的孤立执行状态。
+
+本探针仅支持串行 Work，不支持 fanout/join、Op.call、host/常驻助手、pause、旧 Goose attempt recovery decision 或删除 Kernel Run/所属 Graph；入口具名拒绝。Cancelled/Suspended 收束后退出，Yielded/Interrupted/Aborted/BudgetExhausted 等尚未接线的端口结果具名 Unsupported。HTTP 准入预算暂用 `u64::MAX`，内核成本和预算裁决另有 fixture 覆盖。本地验收覆盖真实 Op.run/Bubblewrap/Artifact 与确定性 fixture，真实 Goose 和 Provider 未执行；详见[探针验收](../experiments/constitution-host-preflight/p/verification.md)与[测量](../experiments/constitution-host-preflight/p/measurement.md)。这条路径不代表默认 Host 或独立宿主已经迁移。
 
 Goose 拥有 Agent loop、Provider、原生会话与 compaction；Anchor 拥有 Graph/Run、宿主授权、Artifact 和平台 Session/Turn。工具记录、API 与 UI 都围绕相同身份，UI 缓存不能成为第二份运行事实。
 

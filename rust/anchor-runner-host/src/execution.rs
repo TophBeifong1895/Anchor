@@ -240,6 +240,15 @@ impl PreparedExecution {
         Ok(())
     }
 
+    pub(crate) fn kernel_ports(self, application: RunApplication) -> (HostArtifacts, HostNodes) {
+        self.nodes
+            .io_resolver
+            .run_application
+            .set(application)
+            .unwrap_or_else(|_| panic!("Run reader already bound"));
+        (self.artifacts, self.nodes)
+    }
+
     pub(crate) async fn run(self, record: GraphRunRecord) -> Result<GraphRunRecord, String> {
         self.validate_configuration(&record)?;
         let run_id = record.run_id.clone();

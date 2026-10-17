@@ -10,9 +10,9 @@ impl Authority for Allow {
 }
 fn resource(parallel: bool) -> Resource {
     let snapshot = if parallel {
-        super::differential::random_parallel_graph(0)
+        crate::graph::test_support::random_parallel_graph(0)
     } else {
-        super::differential::random_graph(0)
+        crate::graph::test_support::random_graph(0)
     };
     run_resource(
         &GraphRunRecord::create_with_id(snapshot, Value::Null, "settle").unwrap(),

@@ -116,8 +116,7 @@ impl HostIoResolver {
                 return Err("conversation predecessor belongs to another conversation".into());
             }
             let record = self
-                .run_store
-                .load(&id)
+                .load_run(&id)
                 .map_err(|error| error.to_string())?
                 .ok_or("conversation predecessor has no admitted Run")?;
             if record.graph_digest != metadata.graph_digest
@@ -415,7 +414,7 @@ mod tests {
             resolver.conversation_predecessors(&first).unwrap(),
             Vec::<InvocationKey>::new()
         );
-        let mut active = resolver.run_store.load("foreground").unwrap().unwrap();
+        let mut active = resolver.load_run("foreground").unwrap().unwrap();
         active.status = RunStatus::Running;
         resolver.run_store.save(&active).unwrap();
         assert!(
@@ -604,7 +603,7 @@ mod tests {
             )
             .await
             .unwrap();
-        let mut previous = resolver.run_store.load(&prior.run_id).unwrap().unwrap();
+        let mut previous = resolver.load_run(&prior.run_id).unwrap().unwrap();
         previous.sequence = 1;
         previous.results.insert(
             "agent".into(),

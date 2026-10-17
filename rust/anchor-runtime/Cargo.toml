@@ -5,6 +5,9 @@ edition.workspace = true
 license.workspace = true
 description = "Shared Rust Graph runtime kernel for Anchor"
 
+[features]
+test-fixtures = []
+
 [dependencies]
 anchor-kernel = { path = "../anchor-kernel" }
 serde.workspace = true

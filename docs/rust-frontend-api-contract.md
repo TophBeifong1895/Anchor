@@ -1,6 +1,6 @@
 # Rust Host 与 WebUI API 契约
 
-React/TypeScript WebUI 调用 Rust Host 的资源 API。Host 可直接托管编译 Web bundle；应用服务和唯一 GraphRunner 持有执行事实，前端负责投影与控制请求。当前证据与待验收项见 [开发台账](pilot-development-plan.md)。
+React/TypeScript WebUI 调用 Rust Host 的资源 API。Host 可直接托管编译 Web bundle；应用服务按 Run 归属调用共享 Runner 或显式 Kernel 探针，持有执行事实，前端负责投影与控制请求。当前证据与待验收项见 [开发台账](pilot-development-plan.md)。
 
 ## Graph、Run 与 Artifact
 
@@ -12,7 +12,7 @@ React/TypeScript WebUI 调用 Rust Host 的资源 API。Host 可直接托管编�
 | `POST /graph-validation` | `{definition:{...}}` 校验而不保存/执行；无效输入与语义诊断区分 |
 | `GET /graphs/{graph}/delete-precondition` | 返回 `{graph,precondition}` 与 ETag，`no-store`；交互确认在打开时捕获版本 |
 | `DELETE /graphs/{graph}` | Web/Pilot 确认使用捕获的版本；HTTP 发送 `If-Match: "{precondition}"`，资源变化或重建返回 409。省略头保留显式无条件兼容语义；活动/可继续 Run、定义或未结算调用引用仍阻止删除，只清本 Graph 数据 |
-| `POST /trigger` | `{graph,input?}` 接纳为 `{run,graph}`，busy 冲突；不接受调用方绝对路径 |
+| `POST /trigger` | `{graph,input?,execution?}` 接纳为 `{run,graph}`，busy 冲突；execution 缺省或 `legacy` 使用旧路径，`kernel_probe` 显式选择串行探针，其他值/类型返回400；不接受调用方绝对路径 |
 | `GET /runs`、`GET /runs/{run}` | 状态、路径/轮次、trace、节点、调用、Plugin 与触发来源 |
 | `POST /runs/{run}/pause|stop|resume` | 控制请求与最终状态分别展示，保留 snapshot/input/身份 |
 | `GET /runs/{run}/files/{node}`、`.../{path}` | 不可变 Artifact 文件、预览/下载；拒绝 host-path 越权 |
@@ -24,6 +24,8 @@ React/TypeScript WebUI 调用 Rust Host 的资源 API。Host 可直接托管编�
 HTTP DTO 是产品投影，不直接输出执行器私有记录。未知结束时间、exit status 或来源必须保持未知；下游失败不能改变上游已提交事实。文件复制/迁移可能改变基于 mtime 的历史时间精度。
 
 Run 列表、详情、时间线、子调用及 Pilot Run 查询共用 `projection: {phase,active,control_requested,terminal,quiescent,needs_attention,actions:{pause,stop,resume}}`。它从持久状态、执行登记及现有控制前置条件计算，不另存状态；动作是当次观察，最终控制仍执行身份、scope 和 lease 校验。Web 不另写状态授权条件；缺少投影时显示未知且不提供推测的控制。渠道的等待消息等上下文可叠加展示。
+
+`kernel_probe` Run 的列表、详情和节点执行读取同一应用查询；持久权威为 Kernel FileStore，`state.status/error` 是 Phase 的只读兼容投影，`updated` 取资源文件 mtime。stop/resume/abandon 交给 Kernel，stop 接受后立即显示等待并异步取消 worker；worker 排空前 resume 返回409。重启遗留的 Executing 显示 `waiting_resume`，可显式 resume。未知效果由 Code 携 Observation 停在等待人，核查执行后端后才能继续，否则再次等待；不自动重放。pause 返回具名 Unsupported 错误（422），旧 attempt recovery decision 与 Kernel Run/所属 Graph 删除返回具名 Unsupported 冲突（409）；非串行能力在准入/执行处拒绝，尚无 Web 创建该探针的入口。默认旧路径的控制契约保持原样，当前本地证据见[探针验收](../experiments/constitution-host-preflight/p/verification.md)。
 
 Run 详情另返回 `definition: {entry,nodes,edges,ops}`，仅来自该 Run 的冻结 snapshot，包含已展开的 inline 模块。它是只读展示拓扑，不含作者 layout、脚本、指令、输入及 host 参数，不能当作完整可重运行的作者定义；当前 Graph 的修改、损坏、移除或未保存草稿均不改变它。Run 文件与 Pilot 附件统一通过鉴权 Blob 下载并显示失败反馈。
 

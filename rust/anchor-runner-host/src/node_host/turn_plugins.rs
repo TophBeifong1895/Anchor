@@ -62,8 +62,7 @@ impl HostIoResolver {
             None => None,
         };
         let admitted = self
-            .run_store
-            .load(&key.run_id)
+            .load_run(&key.run_id)
             .map_err(|error| error.to_string())?
             .ok_or("assistant Run is missing")?;
         if admitted.graph_digest != metadata.graph_digest
@@ -300,8 +299,7 @@ impl HostIoResolver {
                 .as_ref()
                 .ok_or("assistant Plugin predecessor has no binding")?;
             let prior_record = self
-                .run_store
-                .load(&previous)
+                .load_run(&previous)
                 .map_err(|error| error.to_string())?
                 .ok_or("assistant Plugin predecessor Run is missing")?;
             if prior_source.owner != source.owner

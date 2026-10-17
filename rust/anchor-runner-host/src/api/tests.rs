@@ -17,6 +17,7 @@ mod conversations;
 mod graph_deletion;
 mod graph_listeners;
 mod graph_validation;
+mod kernel_probe;
 mod oauth;
 mod persistent_assistants;
 mod pilot_attachments;

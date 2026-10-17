@@ -5,6 +5,8 @@ GraphRunner、Goose ACP、授权 MCP、Bubblewrap 和 Artifact，只替换模型
 远程业务 endpoint。官方执行和回归入口均在 Rust workspace；历史验收证据
 保留在台账和归档中，不自动成为当前源码的验收。
 
+串行 Kernel 概念探针另有 `application/kernel_runs/tests.rs` 的七类应用层用例、1000 个共享生成器 seed，以及 `api/tests/kernel_probe.rs` 的真实 Op.run/Bubblewrap/Artifact 路径。它们使用 FileStore 与既有端口，未启动 Goose，不能替代下列固定 Goose 确定性回归；执行范围和原始结果见[探针验收](../experiments/constitution-host-preflight/p/verification.md)。
+
 ## 标准命令
 
 从仓库根目录运行，显式指定已经审查的 Anchor 自建 lean Goose ACP 二进制（[构建脚本](../scripts/build-goose-acp.sh)，上游 v1.53.0 源码）：

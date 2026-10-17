@@ -188,6 +188,15 @@ impl RunApplication {
             return Err(ApplicationError::Invalid("invalid Run id".into()));
         }
         let reason = parse_reason(reason)?;
+        if let Some(runs) = self.kernel_owner(run_id)? {
+            runs.control(run_id, "abandon", Some(&reason))?;
+            return Ok(AbandonResult {
+                action: AbandonAction::Abandoned,
+                status: RunStatus::Aborted,
+                reason: Some(reason),
+                requested_at: None,
+            });
+        }
         let record = self
             .store()
             .load(run_id)?

@@ -153,8 +153,7 @@ impl HostNodes {
         {
             let record = self
                 .io_resolver
-                .run_store
-                .load(&key.run_id)?
+                .load_run(&key.run_id)?
                 .ok_or_else(|| graph_error("assistant Run is missing"))?;
             let cursor = record
                 .cursor

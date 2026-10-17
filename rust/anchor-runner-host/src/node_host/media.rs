@@ -81,8 +81,7 @@ impl HostIoResolver {
             });
         };
         let record = self
-            .run_store
-            .load(&key.run_id)
+            .load_run(&key.run_id)
             .map_err(|error| error.to_string())?
             .ok_or("channel inputs require an admitted Run")?;
         if record.graph_digest != key.graph_digest

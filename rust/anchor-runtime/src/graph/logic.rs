@@ -716,3 +716,40 @@ pub(crate) fn validate_wall_time(value: Option<f64>, node_id: &str) -> Result<()
     }
     Ok(())
 }
+
+/// Shared dispatch authorization for the old runner and Kernel scheduler.
+pub(crate) fn authorized_execution_request<N: NodeExecutionPort + ?Sized>(
+    record: &GraphRunRecord,
+    cursor: &RunCursor,
+    nodes: &N,
+    cancellation: crate::Cancellation,
+) -> Result<NodeExecutionRequest, GraphError> {
+    let mut request = execution_request(record, cursor, cancellation)?;
+    if nodes.invocation_plugin_authority(record)? {
+        return Ok(request);
+    }
+    if request.plugins.is_empty() {
+        return Ok(request);
+    }
+    let ids = request
+        .plugins
+        .iter()
+        .map(|binding| binding.id.clone())
+        .collect::<Vec<_>>();
+    let current = nodes.resolve_plugins(&ids)?;
+    if current.len() != request.plugins.len()
+        || request
+            .plugins
+            .iter()
+            .zip(&current)
+            .any(|(admitted, current)| {
+                current.digest.is_empty() || !admitted.same_authorization(current)
+            })
+    {
+        return Err(GraphError::Unsupported(
+            "Plugin Host authorization changed before node dispatch".into(),
+        ));
+    }
+    request.plugins = current;
+    Ok(request)
+}

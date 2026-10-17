@@ -29,6 +29,9 @@ impl RunApplication {
         run_id: &str,
         operation: &str,
     ) -> Result<(), ApplicationError> {
+        if let Some(runs) = self.kernel_owner(run_id)? {
+            return self.kernel_control(runs, run_id, operation).await;
+        }
         self.control_expected(run_id, operation, None).await
     }
 

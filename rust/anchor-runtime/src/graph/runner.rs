@@ -929,35 +929,9 @@ impl<'a, S: RunStore, A: ArtifactPort, N: NodeExecutionPort, C: RunControl>
         record: &GraphRunRecord,
         cursor: &RunCursor,
     ) -> Result<NodeExecutionRequest, GraphError> {
-        let mut request = execution_request(record, cursor, self.control.cancellation())?;
-        if self.nodes.invocation_plugin_authority(record)? {
-            return Ok(request);
-        }
-        if request.plugins.is_empty() {
-            return Ok(request);
-        }
-        let ids = request
-            .plugins
-            .iter()
-            .map(|binding| binding.id.clone())
-            .collect::<Vec<_>>();
-        let current = self.nodes.resolve_plugins(&ids)?;
-        if current.len() != request.plugins.len()
-            || request
-                .plugins
-                .iter()
-                .zip(&current)
-                .any(|(admitted, current)| {
-                    current.digest.is_empty() || !admitted.same_authorization(current)
-                })
-        {
-            return Err(GraphError::Unsupported(
-                "Plugin Host authorization changed before node dispatch".into(),
-            ));
-        }
-        request.plugins = current;
-        Ok(request)
+        authorized_execution_request(record, cursor, self.nodes, self.control.cancellation())
     }
+
     fn fail(
         &self,
         mut record: GraphRunRecord,

@@ -30,6 +30,13 @@ impl RunApplication {
         record: &GraphRunRecord,
         metadata: Option<&RunMetadata>,
     ) -> Result<RunProjection, ApplicationError> {
+        if let Some(runs) = self.kernel_owner(&record.run_id)? {
+            return Ok(runs.projection(
+                &runs
+                    .load(&record.run_id)?
+                    .ok_or(ApplicationError::Missing)?,
+            ));
+        }
         let active = self.active.lock().await;
         let executor = active.get(&record.run_id);
         let requested = executor.and_then(|run| {

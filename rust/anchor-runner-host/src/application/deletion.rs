@@ -144,6 +144,13 @@ impl RunApplication {
         }
         let active = self.active.lock().await;
         let targets = self.runs_for_graph(&graph_path)?;
+        for (id, _) in &targets {
+            if self.kernel_owner(id)?.is_some() {
+                return Err(ApplicationError::Conflict(
+                    "P probe: deleting a Graph with Kernel Runs is Unsupported".into(),
+                ));
+            }
+        }
         // A durable hand-off may have metadata before its Run is admitted. It
         // still owns history and cannot be erased by an empty cascade.
         for id in metadata::ids(&self.data_root)? {
@@ -246,6 +253,11 @@ impl RunApplication {
         run_id: &str,
         workspace_root: &Path,
     ) -> Result<(), ApplicationError> {
+        if self.kernel_owner(run_id)?.is_some() {
+            return Err(ApplicationError::Conflict(
+                "P probe: Kernel Run deletion is Unsupported".into(),
+            ));
+        }
         // Match admission's lock order. A saved hand-off may precede its Run,
         // so the Graph lease must cover reference inspection and cleanup.
         let _graph_lease = match self.metadata(run_id)? {

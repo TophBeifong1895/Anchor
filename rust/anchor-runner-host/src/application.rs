@@ -7,6 +7,7 @@ mod deletion;
 mod dispatch;
 mod liveness;
 pub(crate) use liveness::RunLiveness;
+pub(crate) mod kernel_runs;
 mod queries;
 mod recovery;
 pub(crate) use abandon::AbandonAction;
@@ -124,6 +125,7 @@ pub(crate) struct RunApplication {
     pub(super) oauth: Option<Arc<dyn oauth_management::OAuthManagementPort>>,
     pub(super) channels: Option<Arc<dyn channel_management::ChannelManagementPort>>,
     executor: Option<tokio::runtime::Handle>,
+    kernel_probe: Arc<std::sync::Mutex<Option<Arc<kernel_runs::KernelRuns>>>>,
 }
 
 impl RunApplication {
@@ -301,6 +303,7 @@ impl RunApplication {
             oauth: None,
             channels: None,
             executor: tokio::runtime::Handle::try_current().ok(),
+            kernel_probe: Arc::default(),
         }
     }
 

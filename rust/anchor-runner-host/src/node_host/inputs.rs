@@ -25,13 +25,11 @@ impl HostIoResolver {
         )?;
         if let Some(source) = seed {
             let prior = self
-                .run_store
-                .load(&source.run_id)
+                .load_run(&source.run_id)
                 .map_err(|error| error.to_string())?
                 .ok_or("assistant workspace source Run is missing")?;
             let current = self
-                .run_store
-                .load(&key.run_id)
+                .load_run(&key.run_id)
                 .map_err(|error| error.to_string())?
                 .ok_or("assistant workspace target Run is missing")?;
             self.artifacts
@@ -60,8 +58,7 @@ impl HostIoResolver {
         graph: Option<&str>,
     ) -> Result<(), String> {
         let existing = self
-            .run_store
-            .load(&record.run_id)
+            .load_run(&record.run_id)
             .map_err(|error| error.to_string())?;
         if let Some(existing) = &existing
             && (existing.snapshot != record.snapshot || existing.input != record.input)
@@ -105,8 +102,7 @@ impl HostIoResolver {
         key: &InvocationKey,
     ) -> Result<Vec<anchor_runtime::ReadOnlyInput>, String> {
         let record = self
-            .run_store
-            .load(&key.run_id)
+            .load_run(&key.run_id)
             .map_err(|error| error.to_string())?
             .ok_or("local input mounts require a durable admitted Run")?;
         // Old Runs could not receive local inputs. Only their empty authority

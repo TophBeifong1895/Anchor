@@ -6,7 +6,8 @@ impl RunApplication {
     pub(crate) async fn active_runs(&self, graph: Option<&str>) -> Vec<String> {
         let graph_path =
             graph.and_then(|name| Self::graph_identity(&self.graph_bundle_path(name)).ok());
-        self.active
+        let mut ids: Vec<String> = self
+            .active
             .lock()
             .await
             .iter()
@@ -16,10 +17,27 @@ impl RunApplication {
                     .is_none_or(|path| &active.graph_path == path)
             })
             .map(|(id, _)| id.clone())
-            .collect()
+            .collect();
+        if let Ok(Some(runs)) = self.kernel_runs(false) {
+            for (id, _) in self.kernel_records().unwrap_or_default() {
+                let matches_graph = graph_path.as_ref().is_none_or(|path| {
+                    self.metadata(&id).ok().flatten().is_some_and(|m| {
+                        Self::graph_identity(&m.bundle_source).ok().as_ref() == Some(path)
+                    })
+                });
+                if runs.active(&id) && matches_graph {
+                    ids.push(id);
+                }
+            }
+        }
+        ids.sort();
+        ids
     }
 
     pub(crate) async fn run_is_active(&self, run_id: &str) -> bool {
+        if let Ok(Some(runs)) = self.kernel_owner(run_id) {
+            return runs.active(run_id);
+        }
         self.active.lock().await.contains_key(run_id)
     }
 
@@ -38,10 +56,28 @@ impl RunApplication {
         {
             return Err(ApplicationError::Invalid("invalid Run id".into()));
         }
-        let modified =
-            std::fs::metadata(self.data_root.join("runs").join(format!("{run_id}.json")))
-                .and_then(|metadata| metadata.modified())
-                .map_err(storage)?;
+        let path = if self.kernel_owner(run_id)?.is_some() {
+            // FileStore escapes periods and other punctuation in resource ids.
+            let encoded = anchor_runtime::graph::validator::run_resource_id(run_id)
+                .bytes()
+                .map(|b| {
+                    if b.is_ascii_alphanumeric() || b == b'-' || b == b'_' {
+                        (b as char).to_string()
+                    } else {
+                        format!("%{b:02X}")
+                    }
+                })
+                .collect::<String>();
+            self.data_root
+                .join("kernel-runs")
+                .join(encoded)
+                .join("resource.json")
+        } else {
+            self.data_root.join("runs").join(format!("{run_id}.json"))
+        };
+        let modified = std::fs::metadata(path)
+            .and_then(|metadata| metadata.modified())
+            .map_err(storage)?;
         Ok(chrono::DateTime::<chrono::Utc>::from(modified).to_rfc3339())
     }
 
@@ -79,10 +115,10 @@ impl RunApplication {
 
     pub(crate) fn records(&self) -> Result<Vec<(String, GraphRunRecord)>, ApplicationError> {
         let root = self.data_root.join("runs");
+        let mut records = self.kernel_records()?;
         if !root.exists() {
-            return Ok(Vec::new());
+            return Ok(records);
         }
-        let mut records = Vec::new();
         for entry in std::fs::read_dir(root).map_err(storage)? {
             let entry = entry.map_err(storage)?;
             let name = entry.file_name().to_string_lossy().into_owned();

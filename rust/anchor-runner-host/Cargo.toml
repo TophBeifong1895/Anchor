@@ -20,6 +20,7 @@ reqwest = { version = "0.12", default-features = false, features = ["blocking", 
 shlex = "1"
 axum = { version = "0.8", features = ["json"] }
 anchor-runtime = { path = "../anchor-runtime" }
+anchor-kernel = { path = "../anchor-kernel" }
 anchor-graph-host = { path = "../anchor-graph-host" }
 anchor-library = { path = "../anchor-library" }
 anchor-mcp-host = { path = "../anchor-mcp-host" }
@@ -35,6 +36,7 @@ url = "=2.5.8"
 tempfile = "3"
 
 [dev-dependencies]
+anchor-runtime = { path = "../anchor-runtime", features = ["test-fixtures"] }
 anchor-distribution = { path = "../anchor-distribution" }
 anchor-wecom-gateway = { path = "../anchor-wecom-gateway" }
 flate2 = { version = "=1.1.10", default-features = false, features = ["rust_backend"] }

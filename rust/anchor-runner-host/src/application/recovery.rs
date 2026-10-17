@@ -11,6 +11,9 @@ impl RunApplication {
         attempt_id: i64,
         decision: RecoveryDecision,
     ) -> Result<(), ApplicationError> {
+        if self.kernel_owner(run_id)?.is_some() {
+            return Err(ApplicationError::Conflict("P probe: recording Goose attempt recovery decisions is Unsupported; verify the execution backend before resume, or abandon".into()));
+        }
         if self
             .metadata(run_id)?
             .is_some_and(|metadata| metadata.session_call.is_some())

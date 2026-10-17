@@ -169,11 +169,7 @@ fn seed_admitted_binding(
     request: &mut NodeExecutionRequest,
     binding: PluginBinding,
 ) {
-    let mut record = resolver
-        .run_store
-        .load(&request.key.run_id)
-        .unwrap()
-        .unwrap();
+    let mut record = resolver.load_run(&request.key.run_id).unwrap().unwrap();
     record
         .plugin_bindings
         .insert(binding.id.clone(), binding.clone());
