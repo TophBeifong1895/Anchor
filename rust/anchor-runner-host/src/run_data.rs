@@ -116,11 +116,15 @@ pub(crate) fn remove_legacy_conversation(data_root: &Path, hint: &str) -> Result
         .truncate(false)
         .open(locks.join(format!("{scope}.lock")))
         .map_err(|error| error.to_string())?;
-    lock.try_lock().map_err(|error| match error {
-        std::fs::TryLockError::WouldBlock => {
+    let _lock = anchor_file_lease::FileLease::acquire(
+        lock,
+        rustix::fs::FlockOperation::NonBlockingLockExclusive,
+    )
+    .map_err(|error| match error {
+        rustix::io::Errno::WOULDBLOCK => {
             format!("native conversation {scope} is already active")
         }
-        std::fs::TryLockError::Error(error) => error.to_string(),
+        error => error.to_string(),
     })?;
     let mut stems = Vec::new();
     for entry in std::fs::read_dir(&root).map_err(|error| error.to_string())? {

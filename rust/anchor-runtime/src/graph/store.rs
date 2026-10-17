@@ -17,12 +17,15 @@ impl FileRunStore {
         Self { root: root.into() }
     }
     pub fn acquire_read_lease(&self, run_id: &str) -> Result<Box<dyn RunLease>, GraphError> {
-        self.acquire_file_lease(run_id, fs::File::try_lock_shared)
+        self.acquire_file_lease(
+            run_id,
+            anchor_file_lease::FlockOperation::NonBlockingLockShared,
+        )
     }
     fn acquire_file_lease(
         &self,
         run_id: &str,
-        try_lock: fn(&fs::File) -> Result<(), fs::TryLockError>,
+        operation: anchor_file_lease::FlockOperation,
     ) -> Result<Box<dyn RunLease>, GraphError> {
         validate_component(run_id)?;
         fs::create_dir_all(&self.root)?;
@@ -35,10 +38,17 @@ impl FileRunStore {
             .create(true)
             .truncate(false)
             .open(&path)?;
-        try_lock(&file).map_err(|error| match error {
-            std::fs::TryLockError::WouldBlock => GraphError::RunBusy(run_id.to_owned()),
-            std::fs::TryLockError::Error(error) => GraphError::Io(error),
-        })?;
+        let file =
+            anchor_file_lease::FileLease::acquire(file, operation).map_err(
+                |error| match error {
+                    error
+                        if std::io::Error::from(error).kind() == std::io::ErrorKind::WouldBlock =>
+                    {
+                        GraphError::RunBusy(run_id.to_owned())
+                    }
+                    error => GraphError::Io(error.into()),
+                },
+            )?;
         file.sync_all()?;
         Ok(Box::new(FileRunLease { _file: file }))
     }
@@ -94,17 +104,13 @@ impl RunStore for FileRunStore {
         Ok(())
     }
     fn acquire_lease(&self, run_id: &str) -> Result<Box<dyn RunLease>, GraphError> {
-        self.acquire_file_lease(run_id, fs::File::try_lock)
+        self.acquire_file_lease(
+            run_id,
+            anchor_file_lease::FlockOperation::NonBlockingLockExclusive,
+        )
     }
 }
 struct FileRunLease {
-    _file: fs::File,
+    _file: anchor_file_lease::FileLease,
 }
 impl RunLease for FileRunLease {}
-impl Drop for FileRunLease {
-    fn drop(&mut self) {
-        // A concurrent fork may inherit this descriptor before exec closes it.
-        // Release the owner's lock explicitly instead of waiting for every copy.
-        let _ = self._file.unlock();
-    }
-}

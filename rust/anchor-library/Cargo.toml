@@ -6,6 +6,7 @@ license.workspace = true
 description = "Rust-native operator Plugin installation"
 
 [dependencies]
+anchor-file-lease = { path = "../anchor-file-lease" }
 anchor-graph-host = { path = "../anchor-graph-host", default-features = false }
 anchor-runtime = { path = "../anchor-runtime", default-features = false }
 base64 = "=0.22.1"

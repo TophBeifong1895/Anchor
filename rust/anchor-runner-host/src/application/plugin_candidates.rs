@@ -36,7 +36,7 @@ pub(crate) struct PreparedCandidate {
     view: Option<PathBuf>,
     library_root: PathBuf,
     _dependency_scope: Option<anchor_library::DevelopmentScope>,
-    _lease: std::fs::File,
+    _lease: anchor_file_lease::FileLease,
 }
 
 fn invalid(error: impl std::fmt::Display) -> ApplicationError {
@@ -254,9 +254,11 @@ impl RunApplication {
             .truncate(false)
             .open(root.join("preparation.lock"))
             .map_err(invalid)?;
-        lease
-            .try_lock()
-            .map_err(|_| invalid("this candidate is already being prepared or tested"))?;
+        let lease = anchor_file_lease::FileLease::acquire(
+            lease,
+            rustix::fs::FlockOperation::NonBlockingLockExclusive,
+        )
+        .map_err(|_| invalid("this candidate is already being prepared or tested"))?;
         let staged = root.join("validation");
         if !staged.exists() {
             std::fs::rename(layout, &staged).map_err(invalid)?;

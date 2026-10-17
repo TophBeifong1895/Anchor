@@ -30,7 +30,7 @@ pub use source::{Checkout, GitCheckout, GithubSource};
 /// it does not hold. Dropping it releases the lock.
 #[derive(Debug)]
 pub struct InstallLease {
-    _lease: std::fs::File,
+    _lease: anchor_file_lease::FileLease,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
@@ -106,7 +106,7 @@ impl Library {
         self.install_with_checkout(request, &GitCheckout)
     }
 
-    pub fn catalog_read_guard(&self) -> Result<Option<std::fs::File>, InstallError> {
+    pub fn catalog_read_guard(&self) -> Result<Option<anchor_file_lease::FileLease>, InstallError> {
         match filesystem::directory(&self.root.join("plugins"), false) {
             Ok((_, directory)) => filesystem::lease(
                 &directory,

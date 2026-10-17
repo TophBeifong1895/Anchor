@@ -8,7 +8,7 @@ use std::{
 
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use rustix::{
-    fs::{AtFlags, FlockOperation, Mode, OFlags, flock, openat, renameat, unlinkat},
+    fs::{AtFlags, FlockOperation, Mode, OFlags, openat, renameat, unlinkat},
     rand::{GetRandomFlags, getrandom},
 };
 use serde::{Deserialize, Serialize};
@@ -753,7 +753,8 @@ impl FileOAuthTokenStore {
             .map_err(|_| OAuthError::Storage)?,
         );
         ensure_private_file(&lock)?;
-        flock(&lock, FlockOperation::LockExclusive).map_err(|_| OAuthError::Storage)?;
+        let lock = anchor_file_lease::FileLease::acquire(lock, FlockOperation::LockExclusive)
+            .map_err(|_| OAuthError::Storage)?;
         Ok(LockedStore {
             directory_path,
             directory,
@@ -761,7 +762,7 @@ impl FileOAuthTokenStore {
         })
     }
 
-    fn pending_lock(&self) -> Result<(PathBuf, File, File), OAuthError> {
+    fn pending_lock(&self) -> Result<(PathBuf, File, anchor_file_lease::FileLease), OAuthError> {
         let (root_path, root) = filesystem::directory(&self.root, true).map_err(storage_error)?;
         drop(root);
         let (oauth_path, oauth) =
@@ -781,7 +782,8 @@ impl FileOAuthTokenStore {
             .map_err(|_| OAuthError::Storage)?,
         );
         ensure_private_file(&lock)?;
-        flock(&lock, FlockOperation::LockExclusive).map_err(|_| OAuthError::Storage)?;
+        let lock = anchor_file_lease::FileLease::acquire(lock, FlockOperation::LockExclusive)
+            .map_err(|_| OAuthError::Storage)?;
         Ok((directory_path, directory, lock))
     }
 
@@ -864,7 +866,7 @@ impl FileOAuthTokenStore {
 struct LockedStore {
     directory_path: PathBuf,
     directory: File,
-    _lock: File,
+    _lock: anchor_file_lease::FileLease,
 }
 
 #[derive(Serialize, Deserialize)]

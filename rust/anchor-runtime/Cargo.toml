@@ -6,6 +6,7 @@ license.workspace = true
 description = "Shared Rust Graph runtime kernel for Anchor"
 
 [dependencies]
+anchor-file-lease = { path = "../anchor-file-lease" }
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true

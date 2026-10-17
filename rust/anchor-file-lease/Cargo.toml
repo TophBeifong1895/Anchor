@@ -1,0 +1,12 @@
+[package]
+name = "anchor-file-lease"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Explicitly released advisory file leases shared by Anchor hosts"
+
+[dependencies]
+rustix = { version = "=1.1.5", features = ["fs"] }
+
+[dev-dependencies]
+tempfile = "=3.27.0"

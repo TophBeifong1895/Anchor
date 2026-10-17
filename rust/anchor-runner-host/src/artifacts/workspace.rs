@@ -34,7 +34,7 @@ fn leave_held(path: &Path) {
 
 pub(super) enum PreparationLock {
     /// This guard owns the file lock.
-    Owned(fs::File, PathBuf),
+    Owned(anchor_file_lease::FileLease, PathBuf),
     /// This thread already owns the file lock through an outer guard.
     Nested(PathBuf),
 }
@@ -54,7 +54,9 @@ impl PreparationLock {
             .create(true)
             .truncate(false)
             .open(path)?;
-        file.lock()?;
+        let file =
+            anchor_file_lease::FileLease::acquire(file, rustix::fs::FlockOperation::LockExclusive)
+                .map_err(std::io::Error::from)?;
         enter_held(path);
         Ok(Self::Owned(file, path.to_path_buf()))
     }
@@ -63,9 +65,8 @@ impl PreparationLock {
 impl Drop for PreparationLock {
     fn drop(&mut self) {
         match self {
-            Self::Owned(file, path) => {
+            Self::Owned(_file, path) => {
                 leave_held(path);
-                let _ = file.unlock();
             }
             Self::Nested(path) => leave_held(path),
         }

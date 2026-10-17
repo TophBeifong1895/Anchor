@@ -6,6 +6,7 @@ license.workspace = true
 description = "Rust-native WeCom channel transport adapter"
 
 [dependencies]
+anchor-file-lease = { path = "../anchor-file-lease" }
 aes = "0.8"
 base64 = "0.22"
 cbc = "0.1"

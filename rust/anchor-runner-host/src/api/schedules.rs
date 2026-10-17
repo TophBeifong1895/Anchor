@@ -1,6 +1,6 @@
 use super::*;
 use chrono::{Datelike, Duration, Local, NaiveDateTime, NaiveTime, Timelike};
-use rustix::fs::{FlockOperation, flock};
+use rustix::fs::FlockOperation;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
@@ -45,7 +45,7 @@ fn default_enabled() -> bool {
 pub(super) struct ScheduleStore {
     pub(super) path: PathBuf,
     pub(super) items: Vec<ScheduleItem>,
-    _owner_lease: fs::File,
+    _owner_lease: anchor_file_lease::FileLease,
 }
 
 impl ScheduleStore {
@@ -70,8 +70,11 @@ impl ScheduleStore {
             .truncate(false)
             .open(&lease_path)
             .map_err(|error| format!("open schedules owner lease: {error}"))?;
-        flock(&owner_lease, FlockOperation::NonBlockingLockExclusive)
-            .map_err(|error| format!("schedules file already has a Host owner: {error}"))?;
+        let owner_lease = anchor_file_lease::FileLease::acquire(
+            owner_lease,
+            FlockOperation::NonBlockingLockExclusive,
+        )
+        .map_err(|error| format!("schedules file already has a Host owner: {error}"))?;
         let create_empty = !path.exists();
         let items = if !create_empty {
             let bytes = fs::read(&path).map_err(|error| format!("read schedules: {error}"))?;

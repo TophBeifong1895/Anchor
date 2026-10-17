@@ -114,7 +114,7 @@ pub(crate) fn directory(root: &Path) -> Result<(), String> {
     Ok(())
 }
 
-pub(crate) fn execution_lease(root: &Path) -> Result<File, String> {
+pub(crate) fn execution_lease(root: &Path) -> Result<anchor_file_lease::FileLease, String> {
     directory(root)?;
     let lease = OpenOptions::new()
         .create(true)
@@ -132,8 +132,11 @@ pub(crate) fn execution_lease(root: &Path) -> Result<File, String> {
     {
         return Err("Pilot execution lease is not a regular file".into());
     }
-    rustix::fs::flock(&lease, rustix::fs::FlockOperation::NonBlockingLockExclusive)
-        .map_err(|_| "Pilot Session is already executing")?;
+    let lease = anchor_file_lease::FileLease::acquire(
+        lease,
+        rustix::fs::FlockOperation::NonBlockingLockExclusive,
+    )
+    .map_err(|_| "Pilot Session is already executing")?;
     Ok(lease)
 }
 

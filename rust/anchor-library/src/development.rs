@@ -60,7 +60,7 @@ pub struct DevelopmentScope {
     ledger: PathBuf,
     released: PathBuf,
     binding: ScopeBinding,
-    _lease: File,
+    _lease: anchor_file_lease::FileLease,
 }
 
 fn invalid(error: impl std::fmt::Display) -> DevelopmentError {
@@ -91,7 +91,7 @@ fn lock(
     name: &str,
     operation: FlockOperation,
     create: bool,
-) -> Result<File, DevelopmentError> {
+) -> Result<anchor_file_lease::FileLease, DevelopmentError> {
     let file = File::from(
         rustix::fs::openat(
             directory,
@@ -112,7 +112,7 @@ fn lock(
     if !file.metadata()?.is_file() || file.metadata()?.len() != 0 {
         return Err(invalid("lease is not an empty regular file"));
     }
-    rustix::fs::flock(&file, operation).map_err(|error| {
+    let file = anchor_file_lease::FileLease::acquire(file, operation).map_err(|error| {
         if error == rustix::io::Errno::WOULDBLOCK {
             DevelopmentError::Busy
         } else {

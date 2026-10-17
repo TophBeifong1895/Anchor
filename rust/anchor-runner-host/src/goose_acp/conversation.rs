@@ -27,7 +27,7 @@ pub(super) struct ConversationScope {
     pub(super) scope: String,
     binding: Binding,
     pub(super) previous_observation: Option<serde_json::Value>,
-    _lease: File,
+    _lease: anchor_file_lease::FileLease,
 }
 
 fn scope_name(hint: &str) -> Result<String, String> {
@@ -41,7 +41,7 @@ fn scope_name(hint: &str) -> Result<String, String> {
     Ok(format!("gc1-{hint}"))
 }
 
-fn lease(process_root: &Path, scope: &str) -> Result<File, String> {
+fn lease(process_root: &Path, scope: &str) -> Result<anchor_file_lease::FileLease, String> {
     let directory = process_root.join("conversation-locks");
     super::pilot::directory(&directory)?;
     let file = OpenOptions::new()
@@ -60,8 +60,11 @@ fn lease(process_root: &Path, scope: &str) -> Result<File, String> {
     {
         return Err("Goose conversation lease is not a regular file".into());
     }
-    rustix::fs::flock(&file, rustix::fs::FlockOperation::NonBlockingLockExclusive)
-        .map_err(|_| "Goose conversation is already active")?;
+    let file = anchor_file_lease::FileLease::acquire(
+        file,
+        rustix::fs::FlockOperation::NonBlockingLockExclusive,
+    )
+    .map_err(|_| "Goose conversation is already active")?;
     Ok(file)
 }
 

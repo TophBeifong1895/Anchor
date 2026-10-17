@@ -470,7 +470,10 @@ impl RuntimeConfiguration {
         json!({"python_bootstrap_available":python_bootstrap_available, "python_prepare_available":python_prepare_available, "rust_bootstrap_available":self.bootstrap_tool("rustup_init").is_ok(), "python_configuration_owner":if self.external_fields.contains("ANCHOR_DEPENDENCIES_PYTHON") {"deployment"} else {"host"}, "rust_configuration_owner":if self.external_fields.contains("ANCHOR_PILOT_RUSTUP") {"deployment"} else {"host"}, "python_default_version":"3.12", "rust_default_toolchain":"stable", "python_configured":python.is_some_and(|path| path.is_file()), "python_enabled":snapshot.as_ref().is_some_and(|snapshot| snapshot.python_enabled), "python_explicitly_disabled":self.external_python_enabled == Some(false), "python_path":python, "rust_configured":rust.is_some_and(|installation| installation.proxy.is_file()), "rust_toolchain":rust.and_then(|installation| installation.toolchain.as_ref())})
     }
 
-    async fn preparation_lease(&self, access: &DependencyAccess) -> Result<fs::File, String> {
+    async fn preparation_lease(
+        &self,
+        access: &DependencyAccess,
+    ) -> Result<anchor_file_lease::FileLease, String> {
         let file = fs::OpenOptions::new()
             .create(true)
             .truncate(false)
@@ -489,9 +492,10 @@ impl RuntimeConfiguration {
         {
             return Err("runtime preparation lock must be a regular file".into());
         }
+        let file = anchor_file_lease::FileLease::new(file);
         loop {
             access.check().map_err(|error| error.to_string())?;
-            match rustix::fs::flock(&file, rustix::fs::FlockOperation::NonBlockingLockExclusive) {
+            match file.lock(rustix::fs::FlockOperation::NonBlockingLockExclusive) {
                 Ok(()) => return Ok(file),
                 Err(error) if error == rustix::io::Errno::WOULDBLOCK => {
                     tokio::time::sleep(Duration::from_millis(20)).await

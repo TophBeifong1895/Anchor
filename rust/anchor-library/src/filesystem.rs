@@ -7,7 +7,7 @@ use std::{
 };
 
 use rustix::fs::{
-    AtFlags, Dir, FileType, FlockOperation, Mode, OFlags, RenameFlags, flock, mkdirat, openat,
+    AtFlags, Dir, FileType, FlockOperation, Mode, OFlags, RenameFlags, mkdirat, openat,
     renameat_with, statat,
 };
 
@@ -54,7 +54,10 @@ fn path_error(error: rustix::io::Errno) -> InstallError {
     }
 }
 
-pub(crate) fn lease(plugins: &File, operation: FlockOperation) -> Result<File, InstallError> {
+pub(crate) fn lease(
+    plugins: &File,
+    operation: FlockOperation,
+) -> Result<anchor_file_lease::FileLease, InstallError> {
     let lock = File::from(
         openat(
             plugins,
@@ -67,7 +70,7 @@ pub(crate) fn lease(plugins: &File, operation: FlockOperation) -> Result<File, I
     if !lock.metadata()?.is_file() {
         return Err(InstallError::UnsafePath);
     }
-    flock(&lock, operation).map_err(|failure| {
+    let lock = anchor_file_lease::FileLease::acquire(lock, operation).map_err(|failure| {
         if failure == rustix::io::Errno::WOULDBLOCK {
             InstallError::CatalogBusy
         } else {
