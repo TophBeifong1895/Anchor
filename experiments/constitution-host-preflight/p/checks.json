@@ -1,0 +1,44 @@
+[
+  {
+    "check": "build",
+    "command": "cargo build -p anchor-sandbox-bwrap --bins",
+    "exit_code": 0,
+    "seconds": 0.71
+  },
+  {
+    "check": "fmt",
+    "command": "cargo fmt --all -- --check",
+    "exit_code": 0,
+    "seconds": 1.59
+  },
+  {
+    "check": "clippy",
+    "command": "cargo clippy -p anchor-kernel -p anchor-runtime -p anchor-runner-host -p anchor-graph-host --all-targets -- -D warnings",
+    "exit_code": 0,
+    "seconds": 7.11
+  },
+  {
+    "check": "kernel",
+    "command": "cargo test -p anchor-kernel",
+    "exit_code": 0,
+    "seconds": 0.47
+  },
+  {
+    "check": "differential",
+    "command": "cargo test -p anchor-runtime -- --nocapture differential",
+    "exit_code": 0,
+    "seconds": 81.55
+  },
+  {
+    "check": "runtime",
+    "command": "cargo test -p anchor-runtime",
+    "exit_code": 0,
+    "seconds": 79.1
+  },
+  {
+    "check": "host",
+    "command": "cargo test -p anchor-runner-host -p anchor-graph-host --no-fail-fast",
+    "exit_code": 0,
+    "seconds": 176.09
+  }
+]

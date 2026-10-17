@@ -354,10 +354,18 @@ RunStatus 直接赋值 11 站点已包括在 mutation 中；旧 Runtime Runner �
 
 Runtime 127通过，另2 doctest通过；fmt、Clippy通过，内核diff为空。Kernel与Host未改，复用本轮此前37与1120通过/112忽略结果。真实Provider和Goose未新增验收。详细Tally及原始日志见[H2.1验收](../experiments/constitution-host-preflight/h2/h21-completion.md)。后续改为新版任务书的串行探针P；原H2.2/H2.3不再推进。
 
+## P：串行 Kernel 探针本地交付完成（待审查）
+
+实现提交 `ff09f2c feat(host): kernel-path probe for serial Runs (P)`。同一Host准入显式选择 `execution=kernel_probe`，Run只由Kernel FileStore保存，调度器复用现有请求授权与NodeExecutionPort/ArtifactPort；默认旧Runner保留。Human stop/resume/abandon经Kernel裁决，接受后再取消worker；未知效果带Observation等待人核查，迟到结果进入拒绝历史，不自动重放。状态是Phase的只读投影，同ID双权威拒绝；未改Kernel与生产Graph裁决。
+
+七类应用层场景、1000个共享生成器seed对照及真实Op.run/Bubblewrap/Artifact路径通过。Kernel37、Runtime127另2 doctest、runner-host1083/0失败/112忽略、graph-host46/0失败；fmt、Clippy与sandbox构建通过。真实Goose/Provider未执行，固定二进制未配置。证据及全部最终命令见[P验收](../experiments/constitution-host-preflight/p/verification.md)。
+
+测量去重包络：旧193个语法判断点/1416源码行，新51个/472行（新增449行）；旧包络含未迁能力，不能把差值当同等能力净收益，实际删除旧生命周期实现0行。全Host粗估与口径、逐点源码位置、Unsupported和查询适配耦合见[测量与未决](../experiments/constitution-host-preflight/p/measurement.md)。fanout/join、Call、常驻助手、pause、真实Goose attempt恢复与Kernel Run删除未迁；P任务已交付，后续迁移范围按审查结论再定。
+
 ## 尚未完成
 
 - 并行分支内的模块作用域。
-- Host 侧 H2–H6：H1 兼容删除已完成；后续接入调度器、执行者、内核 FileStore、生命周期及常驻助手中断契约。C2 在 H3 验收，16 save / 36 mutation 为上述棘轮起点。
+- 全量Host迁移：H1、H2.1与P本地交付完成；H3–H6暂缓，P未覆盖的并行/Call/助手、Goose恢复与删除等范围见测量未决。全局C2仍未验收，16 save / 36 mutation为旧路径棘轮起点。
 - 旧 Runner 的删除。
-- 测量探针与原因码投影接入。
+- 生产级统一Run读模型、FileStore观察时间契约与原因码投影尚未确定；P只完成现有API的状态兼容投影。
 - 共享 conversation lease / Library 读锁 / `PROCESS_ENV_LOCK` 的既有多测试 flaky（见"待处理与观察"）。

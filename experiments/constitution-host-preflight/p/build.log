@@ -1,0 +1,3 @@
+   Compiling anchor-runtime v0.1.0 (/home/mansteinl/code/anchor-constitution-core/rust/anchor-runtime)
+   Compiling anchor-sandbox-bwrap v0.1.0 (/home/mansteinl/code/anchor-constitution-core/rust/anchor-sandbox-bwrap)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.70s

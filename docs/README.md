@@ -26,7 +26,7 @@
 | 部署、旧数据盘点与切换 | [部署](rust-production-deployment.md)、[切换](rust-production-cutover.md) |
 | 渠道与业务 Graph | [企业微信](wecom-assistant.md)、[RSI](rsi.md)、[周报](weekly-work-report.md) |
 | 理解 Goose 接入取舍 | [接入决定](goose-runtime-migration.md) |
-| 宪法内核接入 Host | [接入计划](constitution-host-integration-plan.md)、[K0.1 审查决定](constitution-preflight-decision.md)、[工作记录](constitution-refactor-log.md#k01内核修订与中断事实) |
+| 宪法内核接入 Host | [探针测量与未决](../experiments/constitution-host-preflight/p/measurement.md)、[后续接入计划](constitution-host-integration-plan.md)、[K0.1 审查决定](constitution-preflight-decision.md)、[工作记录](constitution-refactor-log.md#k01内核修订与中断事实) |
 | 后续 MCP 按需连接 | [未实施路线](goose-native-capability-reuse-plan.md) |
 
 依赖版本以 [Cargo workspace](../rust/Cargo.toml)、[Cargo.lock](../rust/Cargo.lock) 和 [前端配置](../apps/web/package.json) 为准。当前文档直接更新，完成计划退出活跃入口；结论链接到相应提交或验收产物，记录方法见开发指南。

@@ -1,6 +1,6 @@
 # H2 任务书：失败结算收尾 + 端到端概念探针
 
-当前结论：**H2.1 本地验收完成；P 串行探针推进中**。S18 不变量覆盖全部 5000 个并行 seed；旧无失败回归独立保留原门槛，parallel_activations=5048。见[H2.1 验收](../experiments/constitution-host-preflight/h2/h21-completion.md)。
+当前结论：**H2.1 与 P 串行探针均已完成本地验收和交付，等待审查**。S18 不变量覆盖全部 5000 个并行 seed；旧无失败回归保留原门槛，parallel_activations=5048。P 的七类场景、1000 seed 对照和真实 Op.run Host 路径通过；真实 Goose/Provider 未执行，默认旧路径未切换。见[H2.1 验收](../experiments/constitution-host-preflight/h2/h21-completion.md)、[P 验收](../experiments/constitution-host-preflight/p/verification.md)、[测量与未决](../experiments/constitution-host-preflight/p/measurement.md)。
 
 编制：2026-10-17（改版）。上位计划：[constitution-host-integration-plan.md](constitution-host-integration-plan.md)。
 

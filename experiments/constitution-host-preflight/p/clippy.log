@@ -1,0 +1,8 @@
+    Checking anchor-runtime v0.1.0 (/home/mansteinl/code/anchor-constitution-core/rust/anchor-runtime)
+    Checking anchor-graph-host v0.1.0 (/home/mansteinl/code/anchor-constitution-core/rust/anchor-graph-host)
+    Checking anchor-sandbox-bwrap v0.1.0 (/home/mansteinl/code/anchor-constitution-core/rust/anchor-sandbox-bwrap)
+    Checking anchor-mcp-host v0.1.0 (/home/mansteinl/code/anchor-constitution-core/rust/anchor-mcp-host)
+    Checking anchor-library v0.1.0 (/home/mansteinl/code/anchor-constitution-core/rust/anchor-library)
+    Checking anchor-distribution v0.1.0 (/home/mansteinl/code/anchor-constitution-core/rust/anchor-distribution)
+    Checking anchor-runner-host v0.1.0 (/home/mansteinl/code/anchor-constitution-core/rust/anchor-runner-host)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 7.07s
