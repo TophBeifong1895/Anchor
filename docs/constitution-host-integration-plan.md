@@ -1,8 +1,8 @@
 # 宪法内核接入 Host：临时开发计划
 
-编制日期：2026-10-16。状态：**H1 已验收；H2.1 WIP：S17 同波多失败已补齐，轮次上限与单失败组合待审查**。当前阻塞见[H2.1 继续实施交回](../experiments/constitution-host-preflight/h2/h21-resume-verification.md)，H2.2 / H2.3 未开始。H1 审查对象 `445d278`；`ddadb17` 的旧授权单一门被验收拒绝，修正提交见[工作记录](constitution-refactor-log.md)的“H1 补充：旧授权单一门”一节；K0.1 独立验收见[结论](../experiments/constitution-host-preflight/k01/review.md)。
+编制日期：2026-10-16。状态：**H1 已验收；H2 改为"H2.1 收尾 + 串行端到端探针 P"（2026-10-17 改版，目标是快速验证概念），见[H2 任务书](constitution-h2-task.md)。下文 H2 的 Host 级大规模对照与 H3–H6 暂缓，按探针测量结果再定。**H1 审查对象 `445d278`；`ddadb17` 的旧授权单一门被验收拒绝，修正提交见[工作记录](constitution-refactor-log.md)的“H1 补充：旧授权单一门”一节；K0.1 独立验收见[结论](../experiments/constitution-host-preflight/k01/review.md)。
 
-预检阻塞的修订范围已由[审查决定 D1–D5](constitution-preflight-decision.md)明确授权；实现与验收入口见[工作记录](constitution-refactor-log.md#k01内核修订与中断事实)。K0.1 与 H1 已验收；Host 当前仍使用旧 Runner。H2.1 按[任务书](constitution-h2-task.md) §5 停止，后续工作等待审查结论。
+预检阻塞的修订范围已由[审查决定 D1–D5](constitution-preflight-decision.md)明确授权；实现与验收入口见[工作记录](constitution-refactor-log.md#k01内核修订与中断事实)。K0.1 与 H1 已验收；Host 当前仍使用旧 Runner。S18 已批准，H2.1 的 5,000 个并行 seed 已通过不变量对照；原覆盖率门槛 parallel_activations >5000 未通过（实际 4775），尚未完成验收，P 未开始。见[当前交回](../experiments/constitution-host-preflight/h2/h21-invariant-verification.md)。
 
 - 分支：`constitution-core`；worktree：`/home/mansteinl/code/anchor-constitution-core`
 - 起点 commit：`7c196d8`

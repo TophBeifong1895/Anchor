@@ -215,7 +215,7 @@
 | S15 | 旧 Run 格式、旧授权与旧 cursor | 加载时升级或派发前补写计数/授权 | H1 读取/接纳时拒绝并提示离线迁移，不改写数据；持久化记录仅接受对象 | C6 用户明确不兼容旧格式，拒绝隐式发明历史事实 |
 | S16 | 空授权摘要的拒绝信息 | `Plugin \`{id}\` uses an old authorization format; offline migration required`，逐 Plugin 指明 id | `old authorization format; offline migration required`，由解码层给出整条记录的拒绝，不含 Plugin id（serde 另附行列位置） | 判断点由 14 处收敛到 `AuthorizationDigest` 反序列化一层，解码层已不持有"是哪个 Plugin"的语境；调用方只依赖 `offline migration required` 这一子串，无分支受影响 |
 | S17（已批准 2026-10-17） | 宿主确认节点失败 | 计入开始次数，无结果、无出边决定；并行同波多失败时逐个覆盖 Run error，最终错误取决于波内处理顺序（`parallel.rs:278`） | Code 以 Settle 结算，保留计数和分支失败事实；首次被接受的失败决定唯一结算原因，后续失败以 TaskSettled 被拒并留在历史中；只有首个失败分支为 Failed | 旧"最后一个获胜"是波次处理顺序的偶然，新调度器无波次屏障，无从复刻；与 S6 fail-fast 一致；结算不可逆；其他失败事实不丢失。对照规则见 H2 任务书 §1 测试第 3 条 |
-| S18（H2.1 待审查，未批准） | 并行同波包含单个节点失败，同时成功兄弟已达到其下一个节点的轮次上限（seed 2122） | 本波节点失败使 Run 终止，未进入下一波检查，错误为 b1_0 failed，ceased 为空 | 兄弟成功提交后 look-ahead 先以 b0_1@1 结算，之后唯一节点失败 Settle 被 TaskSettled 拒绝；detail 为轮次上限，ceased 非空 | 不属于 S17 同波多节点失败例外；与“单失败错误文本完全相等”冲突，按任务书 §5 停止，保留失败断言。审查前不扩大 S6/S17 的映射范围 |
+| S18（已批准 2026-10-17，合并 S6、S17） | 并行区内多个终结事实（节点失败、分支轮次上限）在同一波出现，例如 seed 2122：单个节点失败 + 成功兄弟的后继已达上限 | 波次屏障：收齐整波后处理，最终原因取决于波内顺序；本例为 b1_0 failed，ceased 为空 | 第一个被内核接受的终结事实决定唯一结算原因；之后的终结事实与结果以 TaskSettled 被拒并留在历史中；本例为 b0_1@1 上限 | 新模型无波次屏障，结算原因由提交顺序决定，是 S6 fail-fast 与 S17 的同一规则。对照改为 H2 任务书 §1 的三条不变量（原因正当、事实不丢不重、其余相等），seed 495/2122 用例的断言替换由审查方批准 |
 
 S1、S2 在差分测试中被显式映射（S2：旧 `Stopped` 且存在停止原因 ⇔ 新 `Escalated`）。S1 未进入差分测试，因为路由脚本只产生合法路由。
 
@@ -346,15 +346,17 @@ Linux flock 特性：fork 后父子进程同时持有锁文件 fd 副本，直�
 
 RunStatus 直接赋值 11 站点已包括在 mutation 中；旧 Runtime Runner 的内部写入不在 Host 目录计数内，它随 H2 替换。基线只盘点写点，不证明并发恢复语义已迁移。验证命令、结果和未覆盖边界见[H1 验证证据](../experiments/constitution-host-preflight/h1/verification.md)。
 
-## H2.1：S17 对照已补齐，轮次上限与单失败组合停止交回
+## H2.1：不变量对照完成，覆盖率门槛未通过
 
-当前仍为 WIP。已批准的 S17 语义描述保持不变；在 3d5d091 上继续，仅修改差分 fixture/对照，不重写 judge_settle，不改内核、旧 Runner 或 Host。对照从实际派发重新计算所有失败，保存旧侧首次失败现场以确认同波，检查唯一接受的 Code Settle 及每个被拒 Settle 的槽位、reason、身份、TaskSettled 一一对应。S6 迟到成功和 S17 迟到失败分开核对，恢复计数、完整分支记录及已完成 Work 结果后与旧侧逐项比较。原概率、seed 范围及阈值不变。
+S18 已批准，合并 S6、S17：并行区首次接受的终结事实决定唯一原因，之后的事实与结果以 TaskSettled 留在历史。按新版任务书替换按情形列举的对照，逐项验证原因正当、Work 结果及失败恰好出现一次、其余事实相等；仅在比较副本中还原迟到事实并扣除确证的最终上限效果。既有 S6 未执行 cursor 计数归一化保留，实际失败调用不作为无结果的幽灵计数删除。seed 495 / 2122 独立用例均通过。没有生产校验器、内核、旧 Runner、Host 改动。
 
-新增两项用例：seed 495 同波多失败验收通过（multi_failure_waves=1）；seed 2122 单失败与兄弟后继轮次上限组合保留严格文本相等断言并失败。旧侧失败为 b1_0#2，ceased 为空；新侧先以 b0_1@1 结算，唯一节点失败的 Code Settle 被 TaskSettled 拒绝。该组合不满足任务书明确保留的单失败相等要求，登记 S18 为待审查，按 §5 第 3、4 条停止。未修改 S17 语义描述或自行批准例外。
+三组所有 seed 已执行完：串行 10000（node_failed=772）；并行 5000（node_failed=775、multi_failure_waves=6、ceiling_preempted_failures=2）；调用 5000（node_failed=0）。multi_failure_waves 小于 10，未调整概率。并行各 seed 的不变量均通过，原组末覆盖率断言仍失败：parallel_activations=4775，不满足 >5000。原概率、seed 范围、计数定义和阈值均未改变，未把状态与历史重复计数来满足门槛。
 
-实际恢复基线与任务书一致：Kernel 37 通过、Runtime 124 通过 / 1 失败、Host 合计 1120 通过 / 112 忽略；本轮 Runtime 125 通过 / 2 失败，两处失败均为 seed 2122 的同一差异（原并行随机组及新增独立复现）。串行 10000、调用 5000 继续通过；并行已完成前缀 2122 个，node_failed=300、multi_failure_waves=1（小于 10，未改概率凑数），不是完整 5000 个验收结果。编译、fmt、Clippy 通过，内核 diff 为空。
+**尚未验收。** 新任务书 §3 保留所有旧阈值，§4 要求需要下调阈值或弱化断言时停下交回。因此保留组末失败，不为此修改概率、seed 范围或统计口径。待审查如何同时保留原无失败覆盖门槛与新增失败注入验收，P 探针未开始。原 H2.2 大规模对照和 H2.3 全量调查已取消；后续方向是限时串行探针与测量。
 
-H2.2 / H2.3 未开始，Host 仍由旧 Runner / RunStore 负责。当前证据、完整 Tally 和未执行项见[H2.1 继续实施交回](../experiments/constitution-host-preflight/h2/h21-resume-verification.md)；首次 WIP 的输出保留在[原始阻塞证据](../experiments/constitution-host-preflight/h2/verification.md)，不再将 seed 495 作为当前阻塞。
+本轮沙箱外回归：Kernel 37 通过，Runtime 126 通过 / 1 失败（另 2 doctest 通过），Host 合计 1120 通过 / 112 忽略；fmt、Clippy 通过，内核 diff 为空。
+
+当前验证、完整 Tally、环境限制和审查问题见[不变量验收交回](../experiments/constitution-host-preflight/h2/h21-invariant-verification.md)。先前 seed 495 / 2122 的阻塞证据保留为历史，不再是当前语义阻塞。
 
 ## 尚未完成
 

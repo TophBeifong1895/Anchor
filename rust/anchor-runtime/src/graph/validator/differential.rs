@@ -296,8 +296,6 @@ fn random_call_graph(seed: u64) -> GraphSnapshot {
 #[derive(Default)]
 struct MemStore {
     record: Mutex<Option<GraphRunRecord>>,
-    // The old runner keeps collecting the wave after this checkpoint.
-    first_failure: Mutex<Option<GraphRunRecord>>,
 }
 struct Lease;
 impl RunLease for Lease {}
@@ -312,12 +310,6 @@ impl RunStore for MemStore {
     }
     fn save(&self, r: &GraphRunRecord) -> Result<(), GraphError> {
         *self.record.lock().unwrap() = Some(r.clone());
-        if r.status == RunStatus::Failed {
-            self.first_failure
-                .lock()
-                .unwrap()
-                .get_or_insert_with(|| r.clone());
-        }
         Ok(())
     }
     fn acquire_lease(&self, _: &str) -> Result<Box<dyn RunLease>, GraphError> {
@@ -465,10 +457,7 @@ impl RunControl for NoControl {
     }
 }
 
-async fn run_old(
-    record: GraphRunRecord,
-    seed: u64,
-) -> (Trace, GraphRunRecord, Option<GraphRunRecord>) {
+async fn run_old(record: GraphRunRecord, seed: u64) -> (Trace, GraphRunRecord) {
     let store = MemStore::default();
     let nodes = Scripted {
         seed,
@@ -491,11 +480,7 @@ async fn run_old(
             break;
         }
     }
-    (
-        nodes.trace.into_inner().unwrap(),
-        done,
-        store.first_failure.into_inner().unwrap(),
-    )
+    (nodes.trace.into_inner().unwrap(), done)
 }
 
 // ---------------------------------------------------------------------------
@@ -758,217 +743,261 @@ fn facts(r: &GraphRunRecord) -> Facts {
     }
 }
 
-/// An invocation counted as started with no result is a phantom.
-fn remove_phantoms(facts: &mut Facts) -> u64 {
-    let mut phantoms = 0;
-    for (node, invocation) in facts.invocations.iter_mut() {
-        let last = facts
-            .results
-            .get(node)
-            .and_then(|r| r.iter().map(|x| x.0).max())
-            .unwrap_or(0);
-        if *invocation > last {
-            phantoms += *invocation - last;
-            *facts.passes.get_mut(node).expect("passes") -= *invocation - last;
-            *invocation = last;
-        }
-    }
-    facts.invocations.retain(|_, v| *v > 0);
-    facts.passes.retain(|_, v| *v > 0);
-    phantoms
-}
-
-/// Compare the first failure checkpoint and then account for every fact the
-/// old runner collected after settlement. S6 permits late successes; S17
-/// permits late failures, but neither permits losing or inventing a fact.
-fn check_node_failure(
+/// S18: the first terminal fact wins; every executed fact occurs exactly
+/// once, either in state or in the TaskSettled history. Compare the remaining
+/// facts after accounting for the documented late wave and ceiling effects.
+fn check_failed_run(
     seed: u64,
     old: &GraphRunRecord,
     new: &GraphRunRecord,
     failures: &BTreeMap<(String, u64), String>,
     history: &[anchor_kernel::Record],
-    checkpoint: &GraphRunRecord,
-) {
-    assert_eq!(old.status, RunStatus::Failed, "seed {seed}");
-    let phase = history
+) -> (u64, bool) {
+    let terminal_index = history
         .iter()
-        .rev()
-        .find_map(|r| r.after.as_ref())
-        .and_then(|r| r.phase())
-        .expect("accepted task phase");
+        .position(|r| r.after.as_ref().is_some_and(|a| a.is_settled()))
+        .expect("a failed Run has an accepted terminal fact");
+    let terminal = &history[terminal_index];
     let Phase::Settled {
         result:
             Outcome::Failed {
                 reason: Reason::Unclassified,
                 detail,
             },
-    } = phase
+    } = terminal.after.as_ref().unwrap().phase().unwrap()
     else {
-        panic!("not a node failure, seed {seed}: {phase:?}")
+        panic!("not a failed settlement, seed {seed}")
     };
-    let accepted = history
+    let prior = history[..terminal_index]
         .iter()
-        .filter(|r| r.submission.action == Action::Settle && r.verdict.is_accepted())
-        .collect::<Vec<_>>();
-    assert_eq!(
-        accepted.len(),
-        1,
-        "expected a node failure settlement, seed {seed}; old {:?}, new {phase:?}",
-        old.error
-    );
-    let accepted = accepted[0];
-    assert_eq!(accepted.stamp.principal().kind, PrincipalKind::Code);
-    let winner = failures
-        .iter()
-        .find(|((node, invocation), reason)| {
-            accepted.submission.slot.as_deref() == Some(format!("{node}#{invocation}").as_str())
-                && detail == &format!("{node} failed: {reason}")
+        .rev()
+        .find_map(|r| r.after.as_ref())
+        .map(|r| record_of(r).unwrap());
+    let ceiling = new.snapshot.nodes.iter().find(|node| {
+        node.max_rounds.is_some_and(|limit| {
+            detail
+                == &format!(
+                    "parallel branch `{}` exceeded node round ceiling `{limit}`",
+                    node.id
+                )
         })
-        .expect("the accepted settlement must name an actual failed invocation");
-    assert_eq!(
-        accepted.submission.content,
-        serde_json::json!({"reason":winner.1})
-    );
-    assert_eq!(
-        checkpoint.error.as_deref(),
-        Some(detail.as_str()),
-        "seed {seed}"
-    );
-    assert_eq!(
-        facts(checkpoint).results,
-        facts(new).results,
-        "accepted result facts, seed {seed}"
-    );
-    assert_eq!(
-        checkpoint.decided, new.decided,
-        "accepted edge facts, seed {seed}"
-    );
-    assert_eq!(
-        checkpoint.sequence, new.sequence,
-        "accepted sequence, seed {seed}"
-    );
-    if failures.len() == 1 {
-        assert_eq!(
-            old.error.as_deref(),
-            Some(detail.as_str()),
-            "single failure, seed {seed}"
+    });
+    if let Some(node) = ceiling {
+        let limit = node.max_rounds.unwrap();
+        assert!(
+            old.passes.get(&node.id).copied().unwrap_or(0) >= u64::from(limit),
+            "unjustified ceiling, seed {seed}"
         );
-    }
-    // A key may occur in several activations. Binding every failed key to the
-    // first failure's live cursor proves they belong to that exact wave.
-    if let Some(activation) = &checkpoint.parallel {
-        for (node, invocation) in failures.keys() {
-            let branch = activation
-                .branches
-                .iter()
-                .find(|b| b.nodes.get(b.next_index) == Some(node))
-                .expect("multiple failures in different waves: stop for review");
-            assert_eq!(checkpoint.invocations[node], *invocation, "seed {seed}");
-            if (node, invocation) != (&winner.0.0, &winner.0.1) {
-                let cursor = branch
-                    .cursor
-                    .as_ref()
-                    .expect("failure was not in the first failure wave: stop for review");
-                assert_eq!(
-                    (&cursor.node_id, cursor.key.invocation),
-                    (node, *invocation)
-                );
-                assert_eq!(branch.status, ParallelBranchStatus::Running);
-            }
-        }
+        let known_ceiling = old.ceased.contains(&format!("{}@{limit}", node.id));
+        let successor = old.parallel.as_ref().unwrap().branches.iter().any(|b| {
+            b.nodes.get(b.next_index) == Some(&node.id)
+                && b.next_index > 0
+                && b.completed
+                    .last()
+                    .is_some_and(|c| c.node_id == b.nodes[b.next_index - 1])
+        });
+        assert!(
+            known_ceiling || successor,
+            "ceiling must follow a completed branch invocation, seed {seed}"
+        );
+        assert_eq!(terminal.submission.action, Action::Write);
     } else {
-        assert_eq!(
-            failures.len(),
-            1,
-            "multiple serial failures: stop for review"
+        assert!(
+            failures
+                .iter()
+                .any(|((node, _), reason)| detail == &format!("{node} failed: {reason}")),
+            "unjustified failure reason, seed {seed}: {detail}"
         );
+        assert_eq!(terminal.submission.action, Action::Settle);
     }
-    let rejected_failures = history
-        .iter()
+    let new_results = result_set(new);
+    let old_work = old
+        .results
+        .values()
+        .flatten()
         .filter(|r| {
-            r.submission.action == Action::Settle && r.verdict.reason == Reason::TaskSettled
+            old.snapshot
+                .nodes
+                .iter()
+                .any(|n| n.id == r.node_id && n.agent.is_some())
         })
-        .collect::<Vec<_>>();
-    assert_eq!(rejected_failures.len(), failures.len() - 1, "seed {seed}");
-    for ((node, invocation), reason) in failures {
-        let slot = format!("{node}#{invocation}");
-        let reports = history
-            .iter()
-            .filter(|r| {
-                r.submission.action == Action::Settle
-                    && r.submission.slot.as_deref() == Some(slot.as_str())
-                    && r.verdict.reason != Reason::StaleVersion
-            })
-            .collect::<Vec<_>>();
-        assert_eq!(
-            reports.len(),
-            1,
-            "failure history must be one-to-one, seed {seed}"
+        .map(|r| (r.node_id.clone(), r.key.invocation))
+        .collect::<BTreeSet<_>>();
+    let mut seen_results = BTreeSet::new();
+    let mut seen_failures = BTreeSet::new();
+    for report in history
+        .iter()
+        .filter(|r| r.verdict.reason != Reason::StaleVersion)
+    {
+        let slot = report.submission.slot.as_deref().expect("dispatch slot");
+        let (node, invocation) = slot.rsplit_once('#').unwrap();
+        let key = (node.to_owned(), invocation.parse::<u64>().unwrap());
+        assert!(
+            report.verdict.is_accepted() || report.verdict.reason == Reason::TaskSettled,
+            "unexpected verdict, seed {seed}"
         );
-        let report = reports[0];
-        assert_eq!(report.stamp.principal().kind, PrincipalKind::Code);
-        assert_eq!(
-            report.submission.content,
-            serde_json::json!({"reason":reason})
-        );
-        let is_winner = (node, invocation) == (&winner.0.0, &winner.0.1);
-        assert_eq!(
-            report.verdict.reason,
-            if is_winner {
-                Reason::Ok
-            } else {
-                Reason::TaskSettled
-            }
-        );
-        assert_eq!(
-            report.verdict.effect,
-            if is_winner {
-                anchor_kernel::Effect::Accepted
-            } else {
-                anchor_kernel::Effect::Refused
-            }
-        );
-        if let Some(activation) = &old.parallel {
-            let branch = activation
-                .branches
-                .iter()
-                .find(|b| b.nodes.get(b.next_index) == Some(node))
-                .unwrap();
-            assert_eq!(branch.status, ParallelBranchStatus::Failed);
-            assert_eq!(branch.error.as_deref(), Some(reason.as_str()));
-            let new_branch = &new.parallel.as_ref().unwrap().branches[activation
-                .branches
-                .iter()
-                .position(|b| b.branch_id == branch.branch_id)
-                .unwrap()];
-            assert_eq!(
-                new_branch.status,
-                if is_winner {
-                    ParallelBranchStatus::Failed
-                } else {
-                    ParallelBranchStatus::Ready
+        match report.submission.action {
+            Action::Settle => {
+                assert!(
+                    seen_failures.insert(key.clone()),
+                    "duplicate failure, seed {seed}"
+                );
+                assert_eq!(report.stamp.principal().kind, PrincipalKind::Code);
+                let reason = failures.get(&key).expect("invented failure");
+                assert_eq!(
+                    report.submission.content,
+                    serde_json::json!({"reason":reason})
+                );
+                assert_eq!(report.verdict.is_accepted(), std::ptr::eq(report, terminal));
+                if let Some(activation) = &old.parallel {
+                    let index = activation
+                        .branches
+                        .iter()
+                        .position(|b| b.nodes.get(b.next_index).map(String::as_str) == Some(node))
+                        .unwrap();
+                    let old_branch = &activation.branches[index];
+                    let new_branch = &new.parallel.as_ref().unwrap().branches[index];
+                    assert_eq!(old_branch.status, ParallelBranchStatus::Failed);
+                    assert_eq!(old_branch.error.as_deref(), Some(reason.as_str()));
+                    assert_eq!(
+                        new_branch.status,
+                        if report.verdict.is_accepted() {
+                            ParallelBranchStatus::Failed
+                        } else {
+                            ParallelBranchStatus::Ready
+                        }
+                    );
+                    assert_eq!(
+                        new_branch.error.as_deref(),
+                        report.verdict.is_accepted().then_some(reason.as_str())
+                    );
                 }
-            );
-            assert_eq!(
-                new_branch.error.as_deref(),
-                is_winner.then_some(reason.as_str())
-            );
+            }
+            Action::Write if old_work.contains(&key) => {
+                assert!(
+                    seen_results.insert(key.clone()),
+                    "duplicate Work result, seed {seed}"
+                );
+                assert_eq!(report.stamp.principal().kind, PrincipalKind::Agent);
+                let content: NodeSubmission =
+                    serde_json::from_value(report.submission.content.clone()).unwrap();
+                assert_eq!(
+                    (&content.commit.node_id, content.commit.invocation),
+                    (&key.0, key.1)
+                );
+                assert!(report.submission.evidence.contains(&Evidence::Resource {
+                    id: content.commit.id.clone(),
+                    version: 0
+                }));
+                assert_eq!(
+                    new_results.contains(&key),
+                    report.verdict.is_accepted(),
+                    "state/history must be disjoint, seed {seed}"
+                );
+            }
+            Action::Write => {
+                assert!(
+                    old.snapshot
+                        .nodes
+                        .iter()
+                        .any(|n| n.id == node && n.agent.is_none()),
+                    "invented Work result, seed {seed}"
+                );
+                assert!(report.verdict.is_accepted());
+            }
+            other => panic!("unexpected action {other:?}, seed {seed}"),
         }
     }
-    // Reconstruct only the old wave's documented post-settlement facts from
-    // the recorded submissions. All unaffected fields must compare exactly.
+    assert_eq!(seen_results, old_work, "lost Work result, seed {seed}");
+    assert_eq!(
+        seen_failures,
+        failures.keys().cloned().collect(),
+        "lost failure, seed {seed}"
+    );
+
     let mut accounted = new.clone();
+    let mut expected = old.clone();
+    // Remove only the final look-ahead's exact ceased/edge writes. Restore
+    // overwritten decisions from the preceding accepted state, not defaults.
+    for record in [&mut accounted, &mut expected] {
+        let baseline = prior
+            .as_ref()
+            .map(|r| &r.ceased)
+            .cloned()
+            .unwrap_or_default();
+        let added = record
+            .ceased
+            .difference(&baseline)
+            .cloned()
+            .collect::<Vec<_>>();
+        assert!(
+            added.len() <= 1,
+            "more than one terminal ceiling, seed {seed}"
+        );
+        for ceased in added {
+            let (node, limit) = ceased.rsplit_once('@').unwrap();
+            let limit = limit.parse::<u32>().unwrap();
+            assert!(
+                record
+                    .snapshot
+                    .nodes
+                    .iter()
+                    .any(|n| n.id == node && n.max_rounds == Some(limit))
+            );
+            assert!(record.passes[node] >= u64::from(limit));
+            for edge in record.snapshot.edges.iter().filter(|e| e.from_node == node) {
+                let key = edge_key(node, &edge.to_node);
+                let decision = record.decided.remove(&key).unwrap();
+                assert!(!decision.selected);
+                assert_eq!(decision.sequence, record.sequence);
+                assert_eq!(decision.result_sequence, 0);
+                assert_eq!(
+                    decision.source_invocation,
+                    record.invocations.get(node).copied().unwrap_or(0)
+                );
+                if let Some(previous) = prior.as_ref().and_then(|r| r.decided.get(&key)) {
+                    record.decided.insert(key, previous.clone());
+                }
+            }
+            record.ceased.remove(&ceased);
+            record.sequence -= 1;
+            if let Some(activation) = &mut record.parallel {
+                for branch in &mut activation.branches {
+                    if branch.nodes.get(branch.next_index).map(String::as_str) == Some(node)
+                        && branch.status == ParallelBranchStatus::Failed
+                    {
+                        assert_eq!(
+                            branch.error.as_deref(),
+                            Some(
+                                format!(
+                                    "parallel branch `{node}` exceeded node round ceiling `{limit}`"
+                                )
+                                .as_str()
+                            )
+                        );
+                        branch.status = ParallelBranchStatus::Ready;
+                        branch.error = None;
+                    }
+                }
+            }
+        }
+    }
+    // Replay only rejected facts into the comparison copy, never the Kernel.
     for report in history
         .iter()
         .filter(|r| r.verdict.reason == Reason::TaskSettled)
     {
-        let slot = report.submission.slot.as_ref().unwrap();
-        let (node, invocation) = slot.rsplit_once('#').unwrap();
+        let (node, invocation) = report
+            .submission
+            .slot
+            .as_deref()
+            .unwrap()
+            .rsplit_once('#')
+            .unwrap();
         let invocation = invocation.parse::<u64>().unwrap();
         assert_eq!(
             accounted.invocations.get(node).copied().unwrap_or(0) + 1,
-            invocation,
-            "seed {seed}"
+            invocation
         );
         accounted.invocations.insert(node.into(), invocation);
         *accounted.passes.entry(node.into()).or_default() += 1;
@@ -980,101 +1009,113 @@ fn check_node_failure(
             .iter()
             .position(|b| b.nodes.get(b.next_index).map(String::as_str) == Some(node))
             .unwrap();
-        match report.submission.action {
-            Action::Settle => {
-                let branch = &mut accounted.parallel.as_mut().unwrap().branches[index];
-                branch.status = ParallelBranchStatus::Failed;
-                branch.error = Some(
-                    serde_json::from_value::<SettleSubmission>(report.submission.content.clone())
-                        .unwrap()
-                        .reason,
-                );
-            }
-            Action::Write => {
-                let content: NodeSubmission =
-                    serde_json::from_value(report.submission.content.clone()).unwrap();
-                assert_eq!(report.stamp.principal().kind, PrincipalKind::Agent);
-                assert_eq!(content.commit.node_id, node);
-                assert_eq!(content.commit.invocation, invocation);
-                assert!(report.submission.evidence.contains(&Evidence::Resource {
-                    id: content.commit.id.clone(),
-                    version: 0
-                }));
-                let dispatch = super::Dispatch {
-                    node: accounted
-                        .snapshot
-                        .nodes
-                        .iter()
-                        .find(|n| n.id == node)
-                        .unwrap()
-                        .clone(),
-                    invocation,
-                    kind: DispatchKind::Work,
-                    branch: Some(index),
-                    inputs: vec![],
-                };
-                let routes = super::routes_of(&accounted, node);
-                assert_eq!(routes.len(), 1);
-                super::record_result(
-                    &mut accounted,
-                    &dispatch,
-                    NodeCompletion {
-                        submission: content.summary,
-                        route: content.route,
-                        output: content.output,
-                        model_requests: content.model_requests,
-                    },
-                    content.commit.clone(),
-                    (
-                        content.plugin_views,
-                        content.plugin_digests,
-                        content.interruption,
-                    ),
-                    &routes,
-                    routes.first(),
-                );
-                let branch = &mut accounted.parallel.as_mut().unwrap().branches[index];
-                branch.completed.push(content.commit);
-                branch.next_index += 1;
-                branch.status = if branch.next_index == branch.nodes.len() {
-                    ParallelBranchStatus::Completed
-                } else {
-                    ParallelBranchStatus::Ready
-                };
-            }
-            action => panic!("unexpected late action {action:?}, seed {seed}"),
+        if report.submission.action == Action::Settle {
+            let branch = &mut accounted.parallel.as_mut().unwrap().branches[index];
+            branch.status = ParallelBranchStatus::Failed;
+            branch.error = Some(failures[&(node.to_owned(), invocation)].clone());
+        } else {
+            let content: NodeSubmission =
+                serde_json::from_value(report.submission.content.clone()).unwrap();
+            let dispatch = super::Dispatch {
+                node: accounted
+                    .snapshot
+                    .nodes
+                    .iter()
+                    .find(|n| n.id == node)
+                    .unwrap()
+                    .clone(),
+                invocation,
+                kind: DispatchKind::Work,
+                branch: Some(index),
+                inputs: vec![],
+            };
+            let routes = super::routes_of(&accounted, node);
+            assert_eq!(routes.len(), 1);
+            super::record_result(
+                &mut accounted,
+                &dispatch,
+                NodeCompletion {
+                    submission: content.summary,
+                    route: content.route,
+                    output: content.output,
+                    model_requests: content.model_requests,
+                },
+                content.commit.clone(),
+                (
+                    content.plugin_views,
+                    content.plugin_digests,
+                    content.interruption,
+                ),
+                &routes,
+                routes.first(),
+            );
+            let branch = &mut accounted.parallel.as_mut().unwrap().branches[index];
+            branch.completed.push(content.commit);
+            branch.next_index += 1;
+            branch.status = if branch.next_index == branch.nodes.len() {
+                ParallelBranchStatus::Completed
+            } else {
+                ParallelBranchStatus::Ready
+            };
         }
     }
+    // S6: cursors prepared in an unexecuted next wave are not invocations.
+    // A real failed invocation is counted, even though it has no result.
+    let mut phantoms = 0;
+    for (node, count) in expected.invocations.clone() {
+        let actual = expected
+            .results
+            .get(&node)
+            .and_then(|r| r.last())
+            .map(|r| r.key.invocation)
+            .unwrap_or(0)
+            .max(
+                failures
+                    .keys()
+                    .filter(|(n, _)| n == &node)
+                    .map(|(_, i)| *i)
+                    .max()
+                    .unwrap_or(0),
+            );
+        if count > actual {
+            phantoms += count - actual;
+            *expected.invocations.get_mut(&node).unwrap() = actual;
+            *expected.passes.get_mut(&node).unwrap() -= count - actual;
+            let branch = expected
+                .parallel
+                .as_mut()
+                .unwrap()
+                .branches
+                .iter_mut()
+                .find(|b| {
+                    b.cursor
+                        .as_ref()
+                        .is_some_and(|c| c.node_id == node && c.key.invocation == count)
+                })
+                .expect("phantom must have an unexecuted cursor");
+            branch.cursor = None;
+            branch.status = ParallelBranchStatus::Ready;
+        }
+    }
+    expected.invocations.retain(|_, v| *v > 0);
+    expected.passes.retain(|_, v| *v > 0);
     assert_eq!(
-        facts(old),
+        facts(&expected),
         facts(&accounted),
         "all accounted Graph facts, seed {seed}"
     );
-    // The existing differential fixture synthesizes control completions;
-    // compare their established facts and compare Work payloads in full.
     for node in old.snapshot.nodes.iter().filter(|n| n.agent.is_some()) {
         assert_eq!(
-            old.results.get(&node.id),
+            expected.results.get(&node.id),
             accounted.results.get(&node.id),
-            "full Work result facts, seed {seed}"
+            "full Work results, seed {seed}"
         );
     }
     assert_eq!(
-        old.parallel, accounted.parallel,
+        expected.parallel, accounted.parallel,
         "all accounted branch facts, seed {seed}"
     );
-    if let Some(activation) = &old.parallel {
-        assert_eq!(
-            checkpoint.parallel.as_ref().unwrap().activation_id,
-            activation.activation_id,
-            "different failure waves: stop for review"
-        );
-        // The wave cannot open its join after any failure.
-        assert_eq!(
-            old.invocations.get(&activation.join_node),
-            new.invocations.get(&activation.join_node)
-        );
-    }
+    (phantoms, ceiling.is_some() && !failures.is_empty())
 }
 
 #[derive(Default, Debug)]
@@ -1091,6 +1132,7 @@ struct Tally {
     failed: u64,
     node_failed: u64,
     multi_failure_waves: u64,
+    ceiling_preempted_failures: u64,
     parallel_activations: u64,
     resubmissions: u64,
     phantom_invocations: u64,
@@ -1108,7 +1150,7 @@ async fn check(snapshot: GraphSnapshot, seed: u64, tally: &mut Tally) {
         tally.rejected_graphs += 1;
         return;
     };
-    let (old_trace, old, first_failure) = run_old(record.clone(), seed).await;
+    let (old_trace, old) = run_old(record.clone(), seed).await;
     let NewRun {
         trace: new_trace,
         record: new,
@@ -1141,74 +1183,16 @@ async fn check(snapshot: GraphSnapshot, seed: u64, tally: &mut Tally) {
             .collect::<BTreeMap<_, _>>()
     };
     let node_failed = !failures.is_empty();
-    let late_successes = history
-        .iter()
-        .filter(|r| r.verdict.reason == Reason::TaskSettled && r.submission.action == Action::Write)
-        .map(|r| {
-            let content: NodeSubmission =
-                serde_json::from_value(r.submission.content.clone()).unwrap();
-            (content.commit.node_id, content.commit.invocation)
-        })
-        .collect::<BTreeSet<_>>();
     if node_failed {
-        if !history
-            .iter()
-            .any(|r| r.submission.action == Action::Settle && r.verdict.is_accepted())
-        {
-            eprintln!(
-                "differential stopped at seed {seed}; completed-prefix Tally (not full group): {tally:?}"
-            );
-        }
         tally.node_failed += 1;
-        check_node_failure(
-            seed,
-            &old,
-            &new,
-            &failures,
-            &history,
-            first_failure.as_ref().expect("old failure checkpoint"),
-        );
-        if failures.len() > 1 {
-            tally.multi_failure_waves += 1;
-        }
+        tally.multi_failure_waves += u64::from(failures.len() > 1);
     }
-    if old.status == RunStatus::Failed && !call_ended_it && old.parallel.is_some() {
-        // S6: fail fast. Old merged results = new merged results + late
-        // refusals, disjointly. Ceiling reasons are both recorded.
-        let new_results = result_set(&new);
-        assert!(new_results.is_disjoint(&late), "seed {seed}");
-        let union = new_results
-            .union(&late_successes)
-            .cloned()
-            .collect::<BTreeSet<_>>();
-        assert_eq!(
-            result_set(&old),
-            union,
-            "Failed results differ, seed {seed}"
-        );
-        if !node_failed {
-            assert!(
-                !old.ceased.is_empty() && !new.ceased.is_empty(),
-                "seed {seed}"
-            );
-        }
-        assert!(
-            matches!(
-                phase,
-                Phase::Settled {
-                    result: Outcome::Failed { .. }
-                }
-            ),
-            "seed {seed}: {phase:?}"
-        );
-        if !node_failed {
-            tally.failed += 1;
-        }
+    if old.status == RunStatus::Failed && !call_ended_it {
+        let (phantoms, ceiling_preempted) = check_failed_run(seed, &old, &new, &failures, &history);
+        tally.phantom_invocations += phantoms;
+        tally.ceiling_preempted_failures += u64::from(ceiling_preempted);
+        tally.failed += u64::from(!node_failed);
         tally.late_refusals += late.len() as u64;
-        if !node_failed {
-            let mut old_facts = facts(&old);
-            tally.phantom_invocations += remove_phantoms(&mut old_facts);
-        }
     } else {
         assert!(late.is_empty(), "seed {seed}");
         assert_eq!(facts(&old), facts(&new), "Graph facts differ, seed {seed}");
@@ -1305,6 +1289,7 @@ async fn parallel_regions_match_the_runner_on_random_graphs() {
     eprintln!("differential parallel: {tally:?}");
     assert!(tally.node_failed > 100, "{tally:?}");
     assert!(tally.multi_failure_waves > 0, "{tally:?}");
+    assert!(tally.ceiling_preempted_failures > 0, "{tally:?}");
     assert!(tally.cases > 4_500, "{tally:?}");
     assert!(
         tally.parallel_activations > 5_000
@@ -1347,55 +1332,11 @@ async fn same_wave_node_failures_keep_first_reason_and_record_late_failure() {
 }
 
 #[tokio::test]
-async fn single_node_failure_preserves_error_when_sibling_reaches_ceiling() {
+async fn ceiling_can_settle_before_a_late_node_failure_without_losing_facts() {
     let seed = 2122;
-    let record = GraphRunRecord::create_with_id(
-        random_parallel_graph(seed),
-        serde_json::json!({}),
-        format!("r{seed}"),
-    )
-    .unwrap();
-    let (trace, old, _) = run_old(record.clone(), seed).await;
-    let new = run_new(record, seed);
-    let failures = trace
-        .iter()
-        .filter_map(|(node, invocation, _)| {
-            failure_for(seed, node, *invocation).map(|reason| ((node.clone(), *invocation), reason))
-        })
-        .collect::<BTreeMap<_, _>>();
-    assert_eq!(
-        failures,
-        BTreeMap::from([(("b1_0".into(), 2), "fixture failure b1_0 #2".into())])
-    );
-    assert_eq!(old.status, RunStatus::Failed);
-    assert!(old.ceased.is_empty());
-    eprintln!(
-        "seed {seed}: old error {:?}, old ceased {:?}; new phase {:?}, new ceased {:?}",
-        old.error, old.ceased, new.phase, new.record.ceased
-    );
-    eprintln!(
-        "node failure reports: {:?}",
-        new.history
-            .iter()
-            .filter(|r| r.submission.action == Action::Settle)
-            .map(|r| (
-                r.stamp.principal().kind,
-                &r.submission.slot,
-                &r.submission.content,
-                r.verdict
-            ))
-            .collect::<Vec<_>>()
-    );
-    let Phase::Settled {
-        result: Outcome::Failed { detail, .. },
-    } = &new.phase
-    else {
-        panic!("{:?}", new.phase)
-    };
-    // Task §1 test 3 still requires exact text equality for a single failure.
-    assert_eq!(
-        old.error.as_deref(),
-        Some(detail.as_str()),
-        "single failure detail differs, seed {seed}"
-    );
+    let mut tally = Tally::default();
+    check(random_parallel_graph(seed), seed, &mut tally).await;
+    assert_eq!(tally.node_failed, 1);
+    assert_eq!(tally.ceiling_preempted_failures, 1);
+    eprintln!("S18 seed 2122: {tally:?}");
 }

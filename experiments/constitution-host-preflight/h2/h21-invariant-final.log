@@ -1,0 +1,28 @@
+   Compiling anchor-runtime v0.1.0 (/home/mansteinl/code/anchor-constitution-core/rust/anchor-runtime)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.38s
+     Running unittests src/lib.rs (target/debug/deps/anchor_runtime-c4d8e009b3cec2c8)
+
+running 5 tests
+S17 seed 495: Tally { cases: 1, rejected_graphs: 0, completed: 0, round_limited: 0, dispatches: 4, longest: 4, module_activated: 0, module_limited: 0, skipped_paths: 1, failed: 0, node_failed: 1, multi_failure_waves: 1, ceiling_preempted_failures: 0, parallel_activations: 1, resubmissions: 1, phantom_invocations: 0, late_refusals: 1, calls_waited: 0, calls_detached: 0, call_failed: 0, call_unknown: 0 }
+test graph::validator::differential::same_wave_node_failures_keep_first_reason_and_record_late_failure ... ok
+S18 seed 2122: Tally { cases: 1, rejected_graphs: 0, completed: 0, round_limited: 0, dispatches: 12, longest: 12, module_activated: 0, module_limited: 0, skipped_paths: 0, failed: 0, node_failed: 1, multi_failure_waves: 0, ceiling_preempted_failures: 1, parallel_activations: 2, resubmissions: 3, phantom_invocations: 0, late_refusals: 2, calls_waited: 0, calls_detached: 0, call_failed: 0, call_unknown: 0 }
+test graph::validator::differential::ceiling_can_settle_before_a_late_node_failure_without_losing_facts ... ok
+differential calls: Tally { cases: 5000, rejected_graphs: 0, completed: 2902, round_limited: 1218, dispatches: 9733, longest: 13, module_activated: 721, module_limited: 156, skipped_paths: 4576, failed: 0, node_failed: 0, multi_failure_waves: 0, ceiling_preempted_failures: 0, parallel_activations: 0, resubmissions: 0, phantom_invocations: 0, late_refusals: 0, calls_waited: 1704, calls_detached: 1485, call_failed: 497, call_unknown: 383 }
+test graph::validator::differential::graph_calls_match_the_runner_on_random_graphs ... ok
+differential: Tally { cases: 10000, rejected_graphs: 0, completed: 6968, round_limited: 2260, dispatches: 26981, longest: 21, module_activated: 1310, module_limited: 293, skipped_paths: 9046, failed: 0, node_failed: 772, multi_failure_waves: 0, ceiling_preempted_failures: 0, parallel_activations: 0, resubmissions: 0, phantom_invocations: 0, late_refusals: 0, calls_waited: 0, calls_detached: 0, call_failed: 0, call_unknown: 0 }
+test graph::validator::differential::kernel_with_graph_validator_matches_the_runner_on_random_graphs ... ok
+differential parallel: Tally { cases: 5000, rejected_graphs: 0, completed: 3087, round_limited: 808, dispatches: 33107, longest: 20, module_activated: 0, module_limited: 0, skipped_paths: 1865, failed: 330, node_failed: 775, multi_failure_waves: 6, ceiling_preempted_failures: 2, parallel_activations: 4775, resubmissions: 10224, phantom_invocations: 182, late_refusals: 357, calls_waited: 0, calls_detached: 0, call_failed: 0, call_unknown: 0 }
+
+thread 'graph::validator::differential::parallel_regions_match_the_runner_on_random_graphs' (334) panicked at anchor-runtime/src/graph/validator/differential.rs:1294:5:
+Tally { cases: 5000, rejected_graphs: 0, completed: 3087, round_limited: 808, dispatches: 33107, longest: 20, module_activated: 0, module_limited: 0, skipped_paths: 1865, failed: 330, node_failed: 775, multi_failure_waves: 6, ceiling_preempted_failures: 2, parallel_activations: 4775, resubmissions: 10224, phantom_invocations: 182, late_refusals: 357, calls_waited: 0, calls_detached: 0, call_failed: 0, call_unknown: 0 }
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test graph::validator::differential::parallel_regions_match_the_runner_on_random_graphs ... FAILED
+
+failures:
+
+failures:
+    graph::validator::differential::parallel_regions_match_the_runner_on_random_graphs
+
+test result: FAILED. 4 passed; 1 failed; 0 ignored; 0 measured; 122 filtered out; finished in 37.91s
+
+error: test failed, to rerun pass `-p anchor-runtime --lib`
