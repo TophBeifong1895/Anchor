@@ -1,6 +1,6 @@
 # H2 任务书：失败结算收尾 + 端到端概念探针
 
-当前结论：**H2.1 WIP：S18 三条不变量已跑完全部 5,000 个并行 seed；覆盖率门槛仍失败（parallel_activations=4775，原要求 >5000），未下调；P 探针未开始**。原因、完整 Tally 和待审查项见[不变量验收交回](../experiments/constitution-host-preflight/h2/h21-invariant-verification.md)。
+当前结论：**H2.1 本地验收完成；P 串行探针推进中**。S18 不变量覆盖全部 5000 个并行 seed；旧无失败回归独立保留原门槛，parallel_activations=5048。见[H2.1 验收](../experiments/constitution-host-preflight/h2/h21-completion.md)。
 
 编制：2026-10-17（改版）。上位计划：[constitution-host-integration-plan.md](constitution-host-integration-plan.md)。
 

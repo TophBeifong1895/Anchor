@@ -457,11 +457,15 @@ impl RunControl for NoControl {
     }
 }
 
-async fn run_old(record: GraphRunRecord, seed: u64) -> (Trace, GraphRunRecord) {
+async fn run_old(
+    record: GraphRunRecord,
+    seed: u64,
+    inject_failures: bool,
+) -> (Trace, GraphRunRecord) {
     let store = MemStore::default();
     let nodes = Scripted {
         seed,
-        inject_failures: !record.snapshot.ops.contains_key("callw"),
+        inject_failures: inject_failures && !record.snapshot.ops.contains_key("callw"),
         trace: Mutex::default(),
         calls: ScriptedCalls {
             seed,
@@ -498,7 +502,7 @@ impl Authority for AllowAll {
 /// mirrors the old Runner's barrier so the two can be compared step by step.
 /// Parallel submissions to one Run race on its version; a stale submission is
 /// returned and simply resubmitted against the current state.
-fn run_new(record: GraphRunRecord, seed: u64) -> NewRun {
+fn run_new(record: GraphRunRecord, seed: u64, inject_failures: bool) -> NewRun {
     let mut kernel = Kernel::new(MemoryStore::default(), Box::new(AllowAll)).unwrap();
     kernel
         .install(GRAPH_VALIDATOR, Arc::new(GraphValidator))
@@ -614,7 +618,8 @@ fn run_new(record: GraphRunRecord, seed: u64) -> NewRun {
                 })
                 .unwrap()
             };
-            let failure = (dispatch.kind == DispatchKind::Work
+            let failure = (inject_failures
+                && dispatch.kind == DispatchKind::Work
                 && !state.snapshot.ops.contains_key("callw"))
             .then(|| failure_for(seed, &node, dispatch.invocation))
             .flatten();
@@ -1144,13 +1149,22 @@ struct Tally {
 }
 
 async fn check(snapshot: GraphSnapshot, seed: u64, tally: &mut Tally) {
+    check_with_failures(snapshot, seed, tally, true).await;
+}
+
+async fn check_with_failures(
+    snapshot: GraphSnapshot,
+    seed: u64,
+    tally: &mut Tally,
+    inject_failures: bool,
+) {
     let Ok(record) =
         GraphRunRecord::create_with_id(snapshot.clone(), serde_json::json!({}), format!("r{seed}"))
     else {
         tally.rejected_graphs += 1;
         return;
     };
-    let (old_trace, old) = run_old(record.clone(), seed).await;
+    let (old_trace, old) = run_old(record.clone(), seed, inject_failures).await;
     let NewRun {
         trace: new_trace,
         record: new,
@@ -1158,7 +1172,7 @@ async fn check(snapshot: GraphSnapshot, seed: u64, tally: &mut Tally) {
         resubmissions,
         late,
         history,
-    } = run_new(record, seed);
+    } = run_new(record, seed, inject_failures);
     assert_eq!(
         old_trace, new_trace,
         "dispatch trace differs, seed {seed}, graph {snapshot:#?}"
@@ -1171,7 +1185,7 @@ async fn check(snapshot: GraphSnapshot, seed: u64, tally: &mut Tally) {
     });
     // Recompute every actual failed invocation, including failures whose
     // error text the old wave subsequently overwrote (S17).
-    let failures = if snapshot.ops.contains_key("callw") {
+    let failures = if !inject_failures || snapshot.ops.contains_key("callw") {
         BTreeMap::new()
     } else {
         old_trace
@@ -1283,19 +1297,30 @@ async fn kernel_with_graph_validator_matches_the_runner_on_random_graphs() {
 #[tokio::test]
 async fn parallel_regions_match_the_runner_on_random_graphs() {
     let mut tally = Tally::default();
+    let mut coverage = Tally::default();
     for seed in 0..5_000 {
         check(random_parallel_graph(seed), seed, &mut tally).await;
+        // Keep the original no-failure coverage population and its thresholds.
+        // Injected failures intentionally terminate some later activations.
+        check_with_failures(random_parallel_graph(seed), seed, &mut coverage, false).await;
     }
     eprintln!("differential parallel: {tally:?}");
+    eprintln!("differential parallel original coverage: {coverage:?}");
+    assert_eq!(coverage.node_failed, 0);
+    assert_eq!(coverage.cases, 5_000);
     assert!(tally.node_failed > 100, "{tally:?}");
     assert!(tally.multi_failure_waves > 0, "{tally:?}");
     assert!(tally.ceiling_preempted_failures > 0, "{tally:?}");
     assert!(tally.cases > 4_500, "{tally:?}");
     assert!(
-        tally.parallel_activations > 5_000
-            && tally.resubmissions > 1_000
-            && tally.phantom_invocations > 0
-            && tally.late_refusals > 0,
+        coverage.parallel_activations > 5_000
+            && coverage.resubmissions > 1_000
+            && coverage.phantom_invocations > 0
+            && coverage.late_refusals > 0,
+        "{coverage:?}"
+    );
+    assert!(
+        tally.resubmissions > 1_000 && tally.phantom_invocations > 0 && tally.late_refusals > 0,
         "{tally:?}"
     );
     assert!(

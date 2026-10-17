@@ -35,7 +35,7 @@
 
 | 事项 | 当前状态 | 关闭条件 |
 | --- | --- | --- |
-| 宪法内核接入 Host | H1 已验收；H2.1 的 S18 不变量已覆盖全部 5,000 个并行 seed，原覆盖率门槛未通过（4775 / >5000）；Host 仍使用旧 Runner 和 RunStore | [当前交回与完整 Tally](../experiments/constitution-host-preflight/h2/h21-invariant-verification.md)；按重写后的 [H2 任务书](constitution-h2-task.md) 处理覆盖门槛后推进串行探针 P；固定 Goose、真实 Provider、Web 与部署未新增验收 |
+| 宪法内核接入 Host | H1、H2.1 本地确定性验收完成；新版串行探针 P 推进中；现有 Host 仍使用旧 Runner | [H2.1 验收与完整 Tally](../experiments/constitution-host-preflight/h2/h21-completion.md)；后续按 [任务书](constitution-h2-task.md) 测量内核路径的 Host 生命周期；真实 Provider、固定 Goose、Web 与部署未新增验收 |
 | Docmost 凭据与业务验收 | 已确认 `.env` 与运行 Host 的 `DOCMOST_API_KEY` 完全一致，Bearer 传递链路正常；绕过 Anchor 直接请求身份接口和 MCP 初始化仍均为 401，服务端拒绝原因未定。详见 [凭据核对](../.local/docmost-auth-check-20261016/README.md) | 核对目标 Docmost 实例的 Key 状态与服务端鉴权日志，必要时轮换部署凭据，再验证初始化、工具清单与实际业务；当前凭据由部署管理，网页只读 |
 | 常驻助手节点改名后的重建 | 对照旧候选时，显式退役后修改 wait 节点 ID 的新实例触发交接身份拒绝；与本次新 Turn 权限误继承分开，最终候选未覆盖这一改名场景 | 单独验证节点改名的实例边界与工作区来源；保持节点身份的指令调整/重建后续聊已有本轮回归 |
 | 当前开发部署的依赖业务验证 | 配置缺失与初始化失败已修复，目标网页初始化成功；本次未执行新增第三方依赖的安装与 Pilot 调用 | 按实际开发任务，在目标部署安装并调用所需依赖；初始化成功不替代业务验证 |

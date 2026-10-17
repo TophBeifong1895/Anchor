@@ -346,17 +346,13 @@ Linux flock 特性：fork 后父子进程同时持有锁文件 fd 副本，直�
 
 RunStatus 直接赋值 11 站点已包括在 mutation 中；旧 Runtime Runner 的内部写入不在 Host 目录计数内，它随 H2 替换。基线只盘点写点，不证明并发恢复语义已迁移。验证命令、结果和未覆盖边界见[H1 验证证据](../experiments/constitution-host-preflight/h1/verification.md)。
 
-## H2.1：不变量对照完成，覆盖率门槛未通过
+## H2.1：本地确定性验收完成
 
-S18 已批准，合并 S6、S17：并行区首次接受的终结事实决定唯一原因，之后的事实与结果以 TaskSettled 留在历史。按新版任务书替换按情形列举的对照，逐项验证原因正当、Work 结果及失败恰好出现一次、其余事实相等；仅在比较副本中还原迟到事实并扣除确证的最终上限效果。既有 S6 未执行 cursor 计数归一化保留，实际失败调用不作为无结果的幽灵计数删除。seed 495 / 2122 独立用例均通过。没有生产校验器、内核、旧 Runner、Host 改动。
+按已批准 S18 统一失败对照：首次终结事实决定原因；每个失败与 Work 结果在状态或迟到历史中恰好出现一次；还原允许的迟到与上限效果后，其余事实相等。seed 495、2122 独立用例通过，生产校验器、内核及旧 Runner 未改。
 
-三组所有 seed 已执行完：串行 10000（node_failed=772）；并行 5000（node_failed=775、multi_failure_waves=6、ceiling_preempted_failures=2）；调用 5000（node_failed=0）。multi_failure_waves 小于 10，未调整概率。并行各 seed 的不变量均通过，原组末覆盖率断言仍失败：parallel_activations=4775，不满足 >5000。原概率、seed 范围、计数定义和阈值均未改变，未把状态与历史重复计数来满足门槛。
+串行 10000（node_failed=772）、并行失败组 5000（node_failed=775、multi_failure_waves=6、ceiling_preempted_failures=2）、调用 5000 均通过。用户“继续”后采用交回建议，原无失败回归使用同一组 5000 个 seed 单独保留原门槛：parallel_activations=5048；失败组仍为4775，不伪装成超过5000。失败哈希、注入概率、seed范围、原阈值均不变。
 
-**尚未验收。** 新任务书 §3 保留所有旧阈值，§4 要求需要下调阈值或弱化断言时停下交回。因此保留组末失败，不为此修改概率、seed 范围或统计口径。待审查如何同时保留原无失败覆盖门槛与新增失败注入验收，P 探针未开始。原 H2.2 大规模对照和 H2.3 全量调查已取消；后续方向是限时串行探针与测量。
-
-本轮沙箱外回归：Kernel 37 通过，Runtime 126 通过 / 1 失败（另 2 doctest 通过），Host 合计 1120 通过 / 112 忽略；fmt、Clippy 通过，内核 diff 为空。
-
-当前验证、完整 Tally、环境限制和审查问题见[不变量验收交回](../experiments/constitution-host-preflight/h2/h21-invariant-verification.md)。先前 seed 495 / 2122 的阻塞证据保留为历史，不再是当前语义阻塞。
+Runtime 127通过，另2 doctest通过；fmt、Clippy通过，内核diff为空。Kernel与Host未改，复用本轮此前37与1120通过/112忽略结果。真实Provider和Goose未新增验收。详细Tally及原始日志见[H2.1验收](../experiments/constitution-host-preflight/h2/h21-completion.md)。后续改为新版任务书的串行探针P；原H2.2/H2.3不再推进。
 
 ## 尚未完成
 
