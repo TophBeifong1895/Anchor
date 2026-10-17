@@ -1,0 +1,122 @@
+{
+  "r0-tests": {
+    "columns": [
+      "passed",
+      "failed",
+      "ignored"
+    ],
+    "crates": {
+      "anchor-devtools": [
+        92,
+        0,
+        0
+      ],
+      "anchor-file-lease": [
+        3,
+        0,
+        0
+      ],
+      "anchor-graph-host": [
+        46,
+        0,
+        0
+      ],
+      "anchor-library": [
+        74,
+        0,
+        0
+      ],
+      "anchor-runner-host": [
+        1083,
+        0,
+        112
+      ],
+      "anchor-runtime": [
+        129,
+        0,
+        0
+      ],
+      "anchor-wecom-gateway": [
+        78,
+        0,
+        0
+      ]
+    },
+    "test_targets_with_summary": 62,
+    "total": [
+      1505,
+      0,
+      112
+    ]
+  },
+  "tests": {
+    "columns": [
+      "passed",
+      "failed",
+      "ignored"
+    ],
+    "crates": {
+      "anchor-file-lease": [
+        3,
+        0,
+        0
+      ],
+      "anchor-graph-host": [
+        46,
+        0,
+        0
+      ],
+      "anchor-kernel": [
+        37,
+        0,
+        0
+      ],
+      "anchor-library": [
+        74,
+        0,
+        0
+      ],
+      "anchor-runner-host": [
+        1087,
+        0,
+        112
+      ],
+      "anchor-runtime": [
+        129,
+        0,
+        0
+      ]
+    },
+    "test_targets_with_summary": 58,
+    "total": [
+      1376,
+      0,
+      112
+    ]
+  },
+  "r0-master-tests": {
+    "columns": [
+      "passed",
+      "failed",
+      "ignored"
+    ],
+    "crates": {
+      "anchor-file-lease": [
+        3,
+        0,
+        0
+      ],
+      "anchor-runtime": [
+        129,
+        0,
+        0
+      ]
+    },
+    "test_targets_with_summary": 5,
+    "total": [
+      132,
+      0,
+      0
+    ]
+  }
+}

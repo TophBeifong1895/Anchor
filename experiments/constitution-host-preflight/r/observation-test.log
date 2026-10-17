@@ -1,0 +1,10 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s
+     Running unittests src/main.rs (rust/target/debug/deps/anchor_runner_host-2cefc3c824f4cf45)
+
+running 1 test
+Host update observation unavailable for run/r-observation-failure: run store I/O failed: File exists (os error 17)
+Host update observation unavailable for run/r-observation-failure: run store I/O failed: File exists (os error 17)
+test application::kernel_runs::tests::broken_host_observation_never_blocks_kernel_control_or_lifecycle_reads ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 908 filtered out; finished in 0.11s
+

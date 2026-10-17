@@ -1,0 +1,77 @@
+[
+  {
+    "command": [
+      "cargo",
+      "build",
+      "-p",
+      "anchor-sandbox-bwrap",
+      "--bins"
+    ],
+    "cwd": "rust",
+    "exit_code": 0,
+    "seconds": 2.04,
+    "log": "build.log"
+  },
+  {
+    "command": [
+      "cargo",
+      "fmt",
+      "--all",
+      "--",
+      "--check"
+    ],
+    "cwd": "rust",
+    "exit_code": 0,
+    "seconds": 1.62,
+    "log": "fmt.log"
+  },
+  {
+    "command": [
+      "cargo",
+      "clippy",
+      "-p",
+      "anchor-file-lease",
+      "-p",
+      "anchor-kernel",
+      "-p",
+      "anchor-runtime",
+      "-p",
+      "anchor-runner-host",
+      "-p",
+      "anchor-graph-host",
+      "-p",
+      "anchor-library",
+      "--all-targets",
+      "--",
+      "-D",
+      "warnings"
+    ],
+    "cwd": "rust",
+    "exit_code": 0,
+    "seconds": 14.91,
+    "log": "clippy.log"
+  },
+  {
+    "command": [
+      "cargo",
+      "test",
+      "-p",
+      "anchor-file-lease",
+      "-p",
+      "anchor-kernel",
+      "-p",
+      "anchor-runtime",
+      "-p",
+      "anchor-runner-host",
+      "-p",
+      "anchor-graph-host",
+      "-p",
+      "anchor-library",
+      "--no-fail-fast"
+    ],
+    "cwd": "rust",
+    "exit_code": 0,
+    "seconds": 326.88,
+    "log": "tests.log"
+  }
+]

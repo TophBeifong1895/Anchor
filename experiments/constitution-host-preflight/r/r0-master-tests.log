@@ -1,0 +1,165 @@
+   Compiling anchor-file-lease v0.1.0 (/home/mansteinl/Anchor/rust/anchor-file-lease)
+   Compiling anchor-runtime v0.1.0 (/home/mansteinl/Anchor/rust/anchor-runtime)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.34s
+     Running unittests src/lib.rs (rust/target/debug/deps/anchor_file_lease-603716fc1bbdfbb8)
+
+running 3 tests
+test tests::early_return_releases_even_with_an_inherited_descriptor ... ok
+test tests::shared_and_exclusive_policies_and_failed_acquisition_preserve_ownership ... ok
+test tests::unwinding_releases_a_lease_without_waiting_for_its_duplicate ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (rust/target/debug/deps/anchor_runtime-0692559afd562a8d)
+
+running 122 tests
+test graph::authoring::tests::an_environment_reference_names_the_plugin_replacement ... ok
+test graph::authoring::tests::authoring_diagnostics_reject_module_cycles_and_unproduced_reads ... ok
+test graph::authoring::tests::layout_is_ignored_but_unknown_runtime_fields_are_reported ... ok
+test graph::authoring::tests::a_plugin_reference_carries_its_own_requirement ... ok
+test graph::authoring::tests::module_fanout_join_targets_are_bound_to_each_use_scope ... ok
+test graph::authoring::tests::modules_inline_at_their_entry_and_exit_with_separate_round_budgets ... ok
+test graph::tests::a_rejected_legacy_plugin_does_not_partially_upgrade_other_plugins ... ok
+test graph::tests::an_old_shape_snapshot_reproduces_its_stored_digest ... ok
+test graph::tests::a_new_run_does_not_bind_plugins_without_a_current_authorization_baseline ... ok
+test graph::tests::created_records_carry_started_and_updated_timestamps ... ok
+test graph::tests::file_run_store_lease_process_helper ... ok
+test graph::tests::a_node_call_records_the_dependency_view_it_used ... ok
+test graph::tests::a_managed_environment_record_migrates_by_dropping_the_field ... ok
+test graph::tests::executed_nodes_follow_first_durable_completion_order ... ok
+test graph::tests::expanded_graph_snapshot_fixture_preserves_node_policy ... ok
+test graph::tests::a_format_ten_record_loads_without_inventing_plugin_views ... ok
+test graph::tests::file_run_store_read_and_write_leases_reject_invalid_run_ids ... ok
+test graph::tests::budget_stop_keeps_cursor_and_resume_uses_same_invocation ... ok
+test graph::tests::deleted_graph_call_marker_resumes_as_completed_without_replay ... ok
+test graph::tests::completion_fact_closes_run_store_crash_window_without_reexecution ... ok
+test graph::tests::false_ingress_closes_cascaded_sccs_deterministically ... ok
+test graph::tests::graph_runner_recovery_process_helper ... ok
+test graph::tests::host_assigned_run_identity_is_preserved_and_validated ... ok
+test graph::tests::host_operations::host_op_compilation_and_admission_preserve_opaque_json_parameters ... ok
+test graph::tests::host_operations::host_op_compilation_and_admission_reject_invalid_forms ... ok
+test graph::tests::format_seven_migrates_to_current_without_inventing_timestamps ... ok
+test graph::tests::host_operations::host_capabilities_fail_closed_even_when_op_run_is_enabled ... ok
+test graph::tests::graph_call_identity_must_keep_one_child_run_across_reload ... ok
+test graph::tests::host_operations::host_wait_explicit_timeout_is_preserved ... ok
+test graph::tests::graph_runner_dispatches_durable_resumable_node_with_same_invocation ... ok
+test graph::tests::host_operations::cancelled_and_interrupted_still_stop_without_advancing_graph ... ok
+test graph::tests::host_operations::interruption_artifacts_fail_closed_on_legacy_workspace_freezers ... ok
+test graph::tests::inactive_scc_waits_for_external_incoming_decision ... ok
+test graph::tests::host_operations::host_wait_suspends_without_artifact_and_resumes_same_invocation ... ok
+test graph::tests::host_operations::parallel_regions_reject_host_ops_at_compilation_and_admission ... ok
+test graph::tests::invocation_authority::invocation_authority_does_not_establish_a_missing_admission_baseline ... ok
+test graph::tests::format_twelve_migration_preserves_the_absence_of_plugin_authority_and_code_observations ... ok
+test graph::tests::invalid_durable_route_fails_run_without_settling_or_replaying ... ok
+test graph::tests::host_operations::interruption_serialization_and_validation_keep_control_evidence_explicit ... ok
+test graph::tests::invocation_authority::invocation_authority_is_explicit_and_keeps_the_run_admission_immutable ... ok
+test graph::tests::host_operations::yielded_fact_recovery_preserves_loop_invocation_identity ... ok
+test graph::tests::host_operations::durable_yielded_fact_recovers_all_pre_result_crash_windows_without_dispatch ... ok
+test graph::tests::later_false_loop_input_retires_stale_selected_output ... ok
+test graph::tests::legacy_in_progress_plugin_run_without_binding_fails_closed ... ok
+test graph::tests::only_completed_failed_and_aborted_runs_are_terminal ... ok
+test graph::tests::host_operations::host_operations_dispatch_opaque_spec_and_preserve_timeout_defaults ... ok
+test graph::tests::parallel_admission_rejects_branch_forks_merges_and_cycles ... ok
+test graph::tests::newer_run_formats_are_refused_instead_of_guessed ... ok
+test graph::tests::inactive_unstarted_cycle_closes_and_releases_selected_merge ... ok
+test graph::tests::known_node_failure_is_terminal_and_does_not_advance_edges ... ok
+test graph::tests::parallel_admission_rejects_orphan_reused_and_malformed_pairs ... ok
+test graph::tests::op_run_policy_and_command_are_passed_to_the_host_port ... ok
+test graph::tests::host_operations::suspended_parallel_branch_uses_existing_stopped_policy ... ok
+test graph::tests::host_operations::host_input_reply_loop_keeps_one_run_for_two_turns ... ok
+test graph::tests::parallel_activation_facts_bind_pair_branch_paths_and_active_cursors ... ok
+test graph::tests::host_operations::yielded_round_routes_back_to_wait_without_faking_model_success ... ok
+test graph::tests::admission_accepts_paired_parallel_topology_and_runner_executes_control_ops ... ok
+test graph::tests::parallel_branch_reuses_node_round_ceiling_before_dispatch ... ok
+test graph::tests::host_operations::invalid_yielded_routes_fail_before_artifact_for_live_and_durable_facts ... ok
+test graph::tests::loop_reentry_uses_fresh_selected_back_edge_and_ceiling ... ok
+test graph::tests::route_selection_checks_any_explicit_route_and_requires_multiple_exit_choice ... ok
+test graph::tests::legacy_plugin_authority_is_upgraded_only_when_the_original_code_is_still_installed ... ok
+test graph::authoring::tests::graph_conformance_fixtures_compile_to_their_expanded_snapshots ... ok
+test graph::tests::run_format_six_migrates_recovery_submissions_to_current_format ... ok
+test graph::tests::plugin_code_changes_resume_and_are_observed_per_call ... ok
+test graph::tests::plugin_authorization_drift_fails_before_dispatch ... ok
+test graph::tests::graph_call_wait_resumes_same_identity_and_detach_records_acceptance ... ok
+test graph::tests::host_operations::parallel_regions_reject_live_and_durable_yielded_results ... ok
+test graph::tests::run_format_three_migrates_graph_calls_and_plugin_bindings_to_current_format ... ok
+test graph::tests::run_format_two_migrates_to_parallel_aware_format_three ... ok
+test graph::tests::run_rejects_cursor_identity_mismatch_before_dispatch ... ok
+test graph::tests::skipped_propagation_does_not_invent_decisions_inside_unentered_cycle ... ok
+test graph::tests::snapshot_admission_preserves_module_rounds_and_rejects_unsafe_shapes ... ok
+test graph::tests::stopped_conversation_run_can_retain_unknown_recovery_attempts ... ok
+test graph::tests::serial_routing_skips_unselected_and_passes_fixed_commit_input ... ok
+test graph::tests::stop_before_dispatch_and_executor_cancel_preserve_safe_cursor ... ok
+test sandbox::tests::debug_redacts_environment_values_and_host_spill_paths ... ok
+test sandbox::tests::noop_reports_pre_cancel_without_running_a_command ... ok
+test graph::tests::uncertain_and_pause_fail_closed_at_invocation_boundary ... ok
+test sandbox::tests::noop_validates_and_never_executes_the_argv ... ok
+test graph::tests::skipped_multi_level_chain_propagates_to_join_without_running_nodes ... ok
+test sandbox::tests::request_accepts_declared_sandbox_policy_fields ... ok
+test sandbox::tests::request_defaults_to_network_disabled_and_positive_timeout ... ok
+test graph::tests::waiting_recovery_preserves_cursor_and_direct_graph_resume_cannot_bypass_it ... ok
+test sandbox::tests::request_rejects_empty_or_unsafe_inputs ... ok
+test graph::tests::module_reentry_counts_activations_and_resets_node_pass_ceiling ... ok
+test graph::authoring::tests::shipped_graph_examples_compile_without_runtime_or_external_services ... ok
+test sandbox::tests::request_rejects_invalid_environment_and_spill_paths ... ok
+test sandbox::tests::request_rejects_unsafe_workspace_readonly_paths_and_tool_dirs ... ok
+test tools::tests::definition_preserves_canonical_wire_shape ... ok
+test tools::tests::image_results_require_mime_and_preserve_typed_content ... ok
+test tools::tests::json_results_preserve_wire_shape_and_value_types ... ok
+test tools::tests::text_results_preserve_wire_shape_and_literal_content ... ok
+test tools::tests::tool_names_require_nonempty_strings_and_preserve_serialization ... ok
+test tools::tests::stable_tool_port_preserves_dispatch_results_and_conservative_replay ... ok
+test tools::tests::typed_results_require_their_canonical_fields ... ok
+test graph::tests::skipped_diamond_branch_propagates_false_edge_and_releases_join ... ok
+test graph::tests::parallel_dispatch_uses_current_plugin_resources_and_preserves_admitted_authority ... ok
+test graph::tests::parallel_region_counts_module_activation_once_and_enforces_reentry_ceiling ... ok
+test graph::tests::parallel_resume_keeps_completed_branch_and_reuses_budget_cursor ... ok
+test graph::tests::graph_runner_preserves_recorded_runtime_scenarios ... ok
+test graph::tests::parallel_branch_failure_is_terminal_and_never_dispatches_join ... ok
+test graph::tests::parallel_branches_complete_out_of_order_and_join_receives_all_branch_facts ... ok
+test graph::tests::file_run_store_read_and_write_leases_preserve_lock_identity ... ok
+test graph::tests::format_one_terminal_run_migrates_without_changing_counters ... ok
+test graph::tests::persist_stamps_updated_and_keeps_memory_in_step_with_disk ... ok
+test graph::tests::file_run_store_rejects_damaged_result_and_edge_facts ... ok
+test graph::tests::file_run_store_rejects_edge_decision_not_newer_than_its_result ... ok
+test graph::tests::reentering_a_terminal_run_does_not_advance_the_write_stamp ... ok
+test graph::tests::file_run_store_read_leases_coexist_and_each_blocks_writers ... ok
+test graph::tests::file_run_store_roundtrips_rejects_corruption_and_releases_lease_after_process_crash ... ok
+test graph::tests::format_one_cursor_migrates_under_lease_and_persists_once ... ok
+test graph::tests::serial_file_store_reload_resumes_same_invocation_after_interruption ... ok
+test graph::tests::file_run_store_recovers_durable_failed_node_without_replay_or_freeze ... ok
+test graph::tests::durable_run_save_feedback_error_requires_reloading_before_resume ... ok
+test graph::tests::serial_interrupted_file_store_reload_resumes_same_invocation_and_clears_error ... ok
+test graph::tests::file_run_store_recovers_not_started_invocation_after_process_crash ... ok
+test graph::tests::parallel_file_store_roundtrip_preserves_activation_and_branch_cursors ... ok
+test graph::tests::parallel_interrupted_file_store_reload_preserves_completed_branch_and_clears_error ... ok
+test graph::tests::parallel_cancelled_branch_can_reload_without_replaying_completed_sibling ... ok
+test graph::tests::file_run_store_recovers_completed_node_and_artifact_facts_after_process_crash ... ok
+test graph::tests::parallel_wave_recovers_each_branch_after_process_crash ... ok
+
+test result: ok. 122 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.32s
+
+     Running tests/weekly_work_report_graphs.rs (rust/target/debug/deps/weekly_work_report_graphs-7c197f0cfd5eeecd)
+
+running 7 tests
+test wrapper_requires_explicit_destination_before_calling_core ... ok
+test core_uses_native_publication_and_declares_assets_archive ... ok
+test wrapper_waits_for_core_and_maps_window_without_destination ... ok
+test core_keeps_revision_routes_and_truthful_empty_evidence_policy ... ok
+test wrapper_selects_declared_regular_files_and_reads_call_result_path ... ok
+test weekly_examples_compile_and_admit ... ok
+test core_ends_at_local_publish_without_plugins_or_accounts ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests anchor_file_lease
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests anchor_runtime
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

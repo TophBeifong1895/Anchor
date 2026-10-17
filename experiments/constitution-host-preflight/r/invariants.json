@@ -1,0 +1,58 @@
+{
+  "kernel": {
+    "command": [
+      "git",
+      "diff",
+      "6ee2b0e",
+      "--",
+      "rust/anchor-kernel"
+    ],
+    "diff_empty": true
+  },
+  "validator": {
+    "command": [
+      "git",
+      "diff",
+      "1d1ba54",
+      "--",
+      "rust/anchor-runtime/src/graph/validator.rs",
+      "rust/anchor-runtime/src/graph/validator"
+    ],
+    "diff_empty": true
+  },
+  "web": {
+    "command": [
+      "git",
+      "diff",
+      "1d1ba54",
+      "--",
+      "apps/web"
+    ],
+    "diff_empty": true
+  },
+  "assertion_and_ignore_diff": {
+    "command": [
+      "git",
+      "diff",
+      "1d1ba54",
+      "54e664e",
+      "--",
+      "rust"
+    ],
+    "removed_assertion_macros": 0,
+    "added_ignore_attributes": 0,
+    "note": "Existing assertion values also reviewed; no old assertion weakened. New submit observer test parameters are None."
+  },
+  "master": {
+    "revision": "6394e283855b32d5e7dd5b0c7f3826c1d3650701",
+    "tracked_status": "",
+    "status_command": [
+      "git",
+      "-C",
+      "/home/mansteinl/Anchor",
+      "status",
+      "--short",
+      "--untracked-files=no"
+    ]
+  }
+}

@@ -1,0 +1,308 @@
+{
+  "baseline": "1d1ba54",
+  "implementation": "cb2219c",
+  "before": [
+    {
+      "file": "rust/anchor-devtools/src/cutover/filesystem.rs",
+      "line": 199,
+      "release": false,
+      "source": "flock(&file, FlockOperation::NonBlockingLockExclusive)"
+    },
+    {
+      "file": "rust/anchor-devtools/src/cutover/prepare.rs",
+      "line": 175,
+      "release": false,
+      "source": "flock(&directory, FlockOperation::NonBlockingLockExclusive)"
+    },
+    {
+      "file": "rust/anchor-devtools/src/preflight.rs",
+      "line": 384,
+      "release": false,
+      "source": "flock(&lock, FlockOperation::NonBlockingLockExclusive)"
+    },
+    {
+      "file": "rust/anchor-devtools/src/preflight.rs",
+      "line": 387,
+      "release": true,
+      "source": "flock(&lock, FlockOperation::Unlock)"
+    },
+    {
+      "file": "rust/anchor-library/src/development.rs",
+      "line": 115,
+      "release": false,
+      "source": "flock(&file, operation)"
+    },
+    {
+      "file": "rust/anchor-library/src/filesystem.rs",
+      "line": 70,
+      "release": false,
+      "source": "flock(&lock, operation)"
+    },
+    {
+      "file": "rust/anchor-library/src/oauth.rs",
+      "line": 756,
+      "release": false,
+      "source": "flock(&lock, FlockOperation::LockExclusive)"
+    },
+    {
+      "file": "rust/anchor-library/src/oauth.rs",
+      "line": 784,
+      "release": false,
+      "source": "flock(&lock, FlockOperation::LockExclusive)"
+    },
+    {
+      "file": "rust/anchor-library/src/reclaim.rs",
+      "line": 223,
+      "release": false,
+      "source": "flock(&file, rustix::fs::FlockOperation::NonBlockingLockExclusive)"
+    },
+    {
+      "file": "rust/anchor-runner-host/src/api/schedules.rs",
+      "line": 73,
+      "release": false,
+      "source": "flock(&owner_lease, FlockOperation::NonBlockingLockExclusive)"
+    },
+    {
+      "file": "rust/anchor-runner-host/src/application/kernel_runs.rs",
+      "line": 47,
+      "release": true,
+      "source": "flock(&self.lease, rustix::fs::FlockOperation::Unlock)"
+    },
+    {
+      "file": "rust/anchor-runner-host/src/application/kernel_runs.rs",
+      "line": 70,
+      "release": false,
+      "source": "flock(&lease, rustix::fs::FlockOperation::NonBlockingLockExclusive)"
+    },
+    {
+      "file": "rust/anchor-runner-host/src/application/plugin_candidates.rs",
+      "line": 257,
+      "release": false,
+      "source": "lease\n            .try_lock()"
+    },
+    {
+      "file": "rust/anchor-runner-host/src/artifacts/workspace.rs",
+      "line": 57,
+      "release": false,
+      "source": "file.lock()"
+    },
+    {
+      "file": "rust/anchor-runner-host/src/artifacts/workspace.rs",
+      "line": 68,
+      "release": true,
+      "source": "file.unlock()"
+    },
+    {
+      "file": "rust/anchor-runner-host/src/channel_supervisor/management.rs",
+      "line": 150,
+      "release": false,
+      "source": "flock(\n            &owner_lease,\n            rustix::fs::FlockOperation::NonBlockingLockExclusive,\n        )"
+    },
+    {
+      "file": "rust/anchor-runner-host/src/credential_store.rs",
+      "line": 206,
+      "release": false,
+      "source": "flock(&file, rustix::fs::FlockOperation::NonBlockingLockExclusive)"
+    },
+    {
+      "file": "rust/anchor-runner-host/src/goose_acp/conversation.rs",
+      "line": 37,
+      "release": true,
+      "source": "flock(&self._lease, rustix::fs::FlockOperation::Unlock)"
+    },
+    {
+      "file": "rust/anchor-runner-host/src/goose_acp/conversation.rs",
+      "line": 71,
+      "release": false,
+      "source": "flock(&file, rustix::fs::FlockOperation::NonBlockingLockExclusive)"
+    },
+    {
+      "file": "rust/anchor-runner-host/src/goose_acp/pilot.rs",
+      "line": 135,
+      "release": false,
+      "source": "flock(&lease, rustix::fs::FlockOperation::NonBlockingLockExclusive)"
+    },
+    {
+      "file": "rust/anchor-runner-host/src/model_configuration.rs",
+      "line": 204,
+      "release": false,
+      "source": "flock(&file, rustix::fs::FlockOperation::LockExclusive)"
+    },
+    {
+      "file": "rust/anchor-runner-host/src/plugin_dependencies.rs",
+      "line": 1175,
+      "release": false,
+      "source": "flock(&file, rustix::fs::FlockOperation::NonBlockingLockExclusive)"
+    },
+    {
+      "file": "rust/anchor-runner-host/src/run_data.rs",
+      "line": 119,
+      "release": false,
+      "source": "lock.try_lock()"
+    },
+    {
+      "file": "rust/anchor-runner-host/src/run_data.rs",
+      "line": 179,
+      "release": true,
+      "source": "lock.unlock()"
+    },
+    {
+      "file": "rust/anchor-runner-host/src/runtime_configuration.rs",
+      "line": 494,
+      "release": false,
+      "source": "flock(&file, rustix::fs::FlockOperation::NonBlockingLockExclusive)"
+    },
+    {
+      "file": "rust/anchor-runtime/src/graph/store.rs",
+      "line": 81,
+      "release": false,
+      "source": "file.try_lock()"
+    },
+    {
+      "file": "rust/anchor-runtime/src/graph/store.rs",
+      "line": 97,
+      "release": true,
+      "source": "self._file.unlock()"
+    },
+    {
+      "file": "rust/anchor-wecom-gateway/src/private_state.rs",
+      "line": 50,
+      "release": false,
+      "source": "flock(&lease, FlockOperation::NonBlockingLockExclusive)"
+    }
+  ],
+  "after": [
+    {
+      "file": "rust/anchor-file-lease/src/lib.rs",
+      "line": 34,
+      "release": false,
+      "source": "flock(&self.0, operation)"
+    },
+    {
+      "file": "rust/anchor-file-lease/src/lib.rs",
+      "line": 50,
+      "release": true,
+      "source": "flock(&self.0, FlockOperation::Unlock)"
+    }
+  ],
+  "after_callers": [
+    {
+      "file": "rust/anchor-devtools/src/cutover/filesystem.rs",
+      "line": 198,
+      "source": "Ok(Some(file)) => match anchor_file_lease::FileLease::acquire("
+    },
+    {
+      "file": "rust/anchor-devtools/src/cutover/prepare.rs",
+      "line": 176,
+      "source": "anchor_file_lease::FileLease::acquire(directory, FlockOperation::NonBlockingLockExclusive)"
+    },
+    {
+      "file": "rust/anchor-devtools/src/preflight.rs",
+      "line": 385,
+      "source": "anchor_file_lease::FileLease::acquire(lock, FlockOperation::NonBlockingLockExclusive)"
+    },
+    {
+      "file": "rust/anchor-library/src/development.rs",
+      "line": 115,
+      "source": "let file = anchor_file_lease::FileLease::acquire(file, operation).map_err(|error| {"
+    },
+    {
+      "file": "rust/anchor-library/src/filesystem.rs",
+      "line": 73,
+      "source": "let lock = anchor_file_lease::FileLease::acquire(lock, operation).map_err(|failure| {"
+    },
+    {
+      "file": "rust/anchor-library/src/oauth.rs",
+      "line": 756,
+      "source": "let lock = anchor_file_lease::FileLease::acquire(lock, FlockOperation::LockExclusive)"
+    },
+    {
+      "file": "rust/anchor-library/src/oauth.rs",
+      "line": 785,
+      "source": "let lock = anchor_file_lease::FileLease::acquire(lock, FlockOperation::LockExclusive)"
+    },
+    {
+      "file": "rust/anchor-library/src/reclaim.rs",
+      "line": 223,
+      "source": "match anchor_file_lease::FileLease::acquire("
+    },
+    {
+      "file": "rust/anchor-runner-host/src/api/schedules.rs",
+      "line": 73,
+      "source": "let owner_lease = anchor_file_lease::FileLease::acquire("
+    },
+    {
+      "file": "rust/anchor-runner-host/src/application/kernel_runs.rs",
+      "line": 66,
+      "source": "let lease = anchor_file_lease::FileLease::acquire("
+    },
+    {
+      "file": "rust/anchor-runner-host/src/application/plugin_candidates.rs",
+      "line": 257,
+      "source": "let lease = anchor_file_lease::FileLease::acquire("
+    },
+    {
+      "file": "rust/anchor-runner-host/src/artifacts/workspace.rs",
+      "line": 58,
+      "source": "anchor_file_lease::FileLease::acquire(file, rustix::fs::FlockOperation::LockExclusive)"
+    },
+    {
+      "file": "rust/anchor-runner-host/src/channel_supervisor/management.rs",
+      "line": 150,
+      "source": "let owner_lease = anchor_file_lease::FileLease::acquire("
+    },
+    {
+      "file": "rust/anchor-runner-host/src/credential_store.rs",
+      "line": 204,
+      "source": "let file = anchor_file_lease::FileLease::new(file);"
+    },
+    {
+      "file": "rust/anchor-runner-host/src/goose_acp/conversation.rs",
+      "line": 63,
+      "source": "let file = anchor_file_lease::FileLease::acquire("
+    },
+    {
+      "file": "rust/anchor-runner-host/src/goose_acp/pilot.rs",
+      "line": 135,
+      "source": "let lease = anchor_file_lease::FileLease::acquire("
+    },
+    {
+      "file": "rust/anchor-runner-host/src/model_configuration.rs",
+      "line": 205,
+      "source": "anchor_file_lease::FileLease::acquire(file, rustix::fs::FlockOperation::LockExclusive)"
+    },
+    {
+      "file": "rust/anchor-runner-host/src/plugin_dependencies.rs",
+      "line": 1173,
+      "source": "let file = anchor_file_lease::FileLease::new(file);"
+    },
+    {
+      "file": "rust/anchor-runner-host/src/run_data.rs",
+      "line": 119,
+      "source": "let _lock = anchor_file_lease::FileLease::acquire("
+    },
+    {
+      "file": "rust/anchor-runner-host/src/runtime_configuration.rs",
+      "line": 495,
+      "source": "let file = anchor_file_lease::FileLease::new(file);"
+    },
+    {
+      "file": "rust/anchor-runtime/src/graph/store.rs",
+      "line": 81,
+      "source": "let file = anchor_file_lease::FileLease::acquire("
+    },
+    {
+      "file": "rust/anchor-wecom-gateway/src/private_state.rs",
+      "line": 51,
+      "source": "anchor_file_lease::FileLease::acquire(lease, FlockOperation::NonBlockingLockExclusive)"
+    }
+  ],
+  "retained_embedded_shell_locks": [
+    {
+      "file": "rust/anchor-runner-host/src/tool_environment.rs",
+      "line": 327,
+      "source": "/usr/bin/flock -x 9",
+      "reason": "Sandbox Cargo cache seeding; fd 9 is opened/locked by the subshell, not held by the Rust Host."
+    }
+  ]
+}

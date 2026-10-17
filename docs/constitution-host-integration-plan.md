@@ -1,8 +1,10 @@
 # 宪法内核接入 Host：临时开发计划
 
-编制日期：2026-10-16。状态：**H1 已验收；H2.1 与串行端到端探针 P 已完成本地交付，待审查（2026-10-17 改版，目标是快速验证概念），见[H2 任务书](constitution-h2-task.md)。下文 H2 的 Host 级大规模对照与 H3–H6 暂缓，按探针测量结果再定。**H1 审查对象 `445d278`；`ddadb17` 的旧授权单一门被验收拒绝，修正提交见[工作记录](constitution-refactor-log.md)的“H1 补充：旧授权单一门”一节；K0.1 独立验收见[结论](../experiments/constitution-host-preflight/k01/review.md)。
+编制日期：2026-10-16。状态：**H1 已验收；H2.1 与串行端到端探针 P 已验收（2026-10-17）；R0 与 R 已本地交付，读取侧测量结论为“需要重想”，见[R 测量](../experiments/constitution-host-preflight/r/measurement.md)与[验证](../experiments/constitution-host-preflight/r/verification.md)。下文 H2 的 Host 级大规模对照与 H3–H6 暂缓，先审查旧展示/动作契约。**H1 审查对象 `445d278`；`ddadb17` 的旧授权单一门被验收拒绝，修正提交见[工作记录](constitution-refactor-log.md)的“H1 补充：旧授权单一门”一节；K0.1 独立验收见[结论](../experiments/constitution-host-preflight/k01/review.md)。
 
 预检阻塞的修订范围已由[审查决定 D1–D5](constitution-preflight-decision.md)明确授权；实现与验收入口见[工作记录](constitution-refactor-log.md#k01内核修订与中断事实)。K0.1 与 H1 已验收；默认 Host 仍使用旧 Runner；显式 `execution=kernel_probe` 的 Run 已走 Kernel FileStore 与串行调度器。S18 已批准，H2.1 本地确定性验收完成；P 七类场景、1000 seed 对照、真实 Op.run Host 路径与量化测量已交付，真实 Goose/Provider 未执行。见[H2.1验收与完整Tally](../experiments/constitution-host-preflight/h2/h21-completion.md)、[P验收](../experiments/constitution-host-preflight/p/verification.md)、[测量与未决](../experiments/constitution-host-preflight/p/measurement.md)。
+
+R0 收口为唯一文件租约类型，已同步 master。R 的 RunView 直接读取 Phase、Graph 进度和宿主观察；更新时间不再依赖 Kernel 文件布局。所选四消费者的生产 RunStatus 引用清零，但包含保留适配的判断点82→90，不能作为全量迁移收益证据。真实Goose/Provider及默认路径切换未新增验收。
 
 - 分支：`constitution-core`；worktree：`/home/mansteinl/code/anchor-constitution-core`
 - 起点 commit：`7c196d8`

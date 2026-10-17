@@ -354,7 +354,7 @@ RunStatus 直接赋值 11 站点已包括在 mutation 中；旧 Runtime Runner �
 
 Runtime 127通过，另2 doctest通过；fmt、Clippy通过，内核diff为空。Kernel与Host未改，复用本轮此前37与1120通过/112忽略结果。真实Provider和Goose未新增验收。详细Tally及原始日志见[H2.1验收](../experiments/constitution-host-preflight/h2/h21-completion.md)。后续改为新版任务书的串行探针P；原H2.2/H2.3不再推进。
 
-## P：串行 Kernel 探针本地交付完成（待审查）
+## P：串行 Kernel 探针本地交付完成
 
 实现提交 `ff09f2c feat(host): kernel-path probe for serial Runs (P)`。同一Host准入显式选择 `execution=kernel_probe`，Run只由Kernel FileStore保存，调度器复用现有请求授权与NodeExecutionPort/ArtifactPort；默认旧Runner保留。Human stop/resume/abandon经Kernel裁决，接受后再取消worker；未知效果带Observation等待人核查，迟到结果进入拒绝历史，不自动重放。状态是Phase的只读投影，同ID双权威拒绝；未改Kernel与生产Graph裁决。
 
@@ -362,10 +362,26 @@ Runtime 127通过，另2 doctest通过；fmt、Clippy通过，内核diff为空�
 
 测量去重包络：旧193个语法判断点/1416源码行，新51个/472行（新增449行）；旧包络含未迁能力，不能把差值当同等能力净收益，实际删除旧生命周期实现0行。全Host粗估与口径、逐点源码位置、Unsupported和查询适配耦合见[测量与未决](../experiments/constitution-host-preflight/p/measurement.md)。fanout/join、Call、常驻助手、pause、真实Goose attempt恢复与Kernel Run删除未迁；P任务已交付，后续迁移范围按审查结论再定。
 
+## P 与 H2.1 审查结论（2026-10-17）
+
+审查方独立重跑四 crate：48 个 target，1295 通过 / 0 失败 / 112 忽略。内核相对 `6ee2b0e` 零改动；调度器和 `kernel_runs.rs` 中无停止/暂停轮询；差分阈值与 seed 范围未降，并行组 `parallel_activations > 5_000` 门槛移到无失败对照样本上，属于保留而非弱化。H2.1 与 P 验收通过。
+
+结论：写入与生命周期一侧成立（stop 40→7、resume 38→10 个判断点，旧 8 处停止/暂停轮询在新路径为 0）；跨能力的总量对比（193→51）不同口径，不作为收益证据，实际删除旧代码为 0。读取一侧未证：P 把 Phase 投影回 RunStatus，`queries.rs` 复用 FileStore 文件名编码取时间。下一步为限时 2 天的读模型探针 R，见 [R 任务书](constitution-r-task.md)；其中 R0 将 `469d81f` 的锁释放修复收口为唯一文件租约类型（`run_data.rs` 提前返回路径仍未显式解锁，生产代码另有约 15 处同类 flock）。
+
+## R0 / R：锁收口与统一读模型探针本地交付
+
+R0 `cb2219c` 提供唯一 FileLease，在Drop显式释放，覆盖提前返回与fork继承描述符；22个底层获取站点和6个显式释放站点收口为共享实现的1获取/1释放，22个调用者继续保留原锁策略。已同步master `6394e28`，保留master原有共享读锁和可见性；master相关check与132项定向测试通过。
+
+R `54e664e` 引入只读RunView（Phase、Graph passes、worker、宿主updated），按相位派生动作；Session条件继续由调用者处理。接受提交后记录Host观察文件，不读取Kernel路径或mtime；观察失败不改变控制。旧Runner适配和原生JSON兼容边界单列，旧Failed的缺省原因用Unclassified，不虚构原因码，也不回写兼容记录。
+
+结论为**需要重想**：同口径I/M/W判断点82→90。四个消费者生产RunStatus引用清零，但旧Ready/Running、Paused/Stopped、预算/recovery与P孤立driver启动等规则没有消失，不能全归属Session/授权。旧适配仍读取原record，严格的单RunView输入未闭合，不记为统一迁移完成。H3–H6继续暂缓，待审查旧显示/动作契约。测量、逐项保留规则和剩余18个原文件估算见[R测量](../experiments/constitution-host-preflight/r/measurement.md)。
+
+最终Kernel37、Runtime127+2 doctest、runner-host1087/112原有忽略、graph-host46、Library74、FileLease3通过，0失败；比四crate基线新增4项，另R0新增3项锁测试。fmt、Clippy和sandbox构建通过；Kernel相对6ee2b0e、生产GraphValidator相对P均零diff。真实Goose/Provider、Web与部署未新增验收。原始命令、输出、HTTP/动作/字节兼容测试及未覆盖边界见[R验证](../experiments/constitution-host-preflight/r/verification.md)。
+
 ## 尚未完成
 
 - 并行分支内的模块作用域。
-- 全量Host迁移：H1、H2.1与P本地交付完成；H3–H6暂缓，P未覆盖的并行/Call/助手、Goose恢复与删除等范围见测量未决。全局C2仍未验收，16 save / 36 mutation为旧路径棘轮起点。
+- 全量Host迁移：H1、H2.1与P已验收；R本地交付的测量结论为“需要重想”，H3–H6暂缓，先审查旧读契约；P未覆盖的并行/Call/助手、Goose恢复与删除仍未迁。全局C2仍未验收，16 save / 36 mutation为旧路径棘轮起点。
 - 旧 Runner 的删除。
-- 生产级统一Run读模型、FileStore观察时间契约与原因码投影尚未确定；P只完成现有API的状态兼容投影。
+- 生产级统一Run读契约仍待确定；R已将原生更新时间改为宿主观察，旧展示/静止/动作差异和未分类原因仍需兼容。缺失观察文件的旧探针Run不伪造历史时间，HTTP迁移恢复未验。
 - 共享 conversation lease / Library 读锁 / `PROCESS_ENV_LOCK` 的既有多测试 flaky（见"待处理与观察"）。

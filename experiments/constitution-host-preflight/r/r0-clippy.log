@@ -1,0 +1,13 @@
+    Checking anchor-file-lease v0.1.0 (/home/mansteinl/code/anchor-constitution-core/rust/anchor-file-lease)
+    Checking anchor-kernel v0.1.0 (/home/mansteinl/code/anchor-constitution-core/rust/anchor-kernel)
+    Checking anchor-platform-session v0.1.0 (/home/mansteinl/code/anchor-constitution-core/rust/anchor-platform-session)
+    Checking anchor-wecom-gateway v0.1.0 (/home/mansteinl/code/anchor-constitution-core/rust/anchor-wecom-gateway)
+    Checking anchor-devtools v0.1.0 (/home/mansteinl/code/anchor-constitution-core/rust/anchor-devtools)
+    Checking anchor-runtime v0.1.0 (/home/mansteinl/code/anchor-constitution-core/rust/anchor-runtime)
+    Checking anchor-graph-host v0.1.0 (/home/mansteinl/code/anchor-constitution-core/rust/anchor-graph-host)
+    Checking anchor-mcp-host v0.1.0 (/home/mansteinl/code/anchor-constitution-core/rust/anchor-mcp-host)
+    Checking anchor-sandbox-bwrap v0.1.0 (/home/mansteinl/code/anchor-constitution-core/rust/anchor-sandbox-bwrap)
+    Checking anchor-library v0.1.0 (/home/mansteinl/code/anchor-constitution-core/rust/anchor-library)
+    Checking anchor-distribution v0.1.0 (/home/mansteinl/code/anchor-constitution-core/rust/anchor-distribution)
+    Checking anchor-runner-host v0.1.0 (/home/mansteinl/code/anchor-constitution-core/rust/anchor-runner-host)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 17.73s

@@ -1,0 +1,13 @@
+run_projection {'if': 6, 'arm': 4, 'field_write': 3} -> {'if': 6, 'arm': 4, 'field_write': 3} glue 50
+liveness {'if': 0, 'arm': 0, 'field_write': 0} -> {'if': 0, 'arm': 0, 'field_write': 0} glue 24
+conversations {'if': 31, 'arm': 21, 'field_write': 7} -> {'if': 33, 'arm': 18, 'field_write': 7} glue 37
+kernel_runs_projection {'if': 1, 'arm': 7, 'field_write': 2} -> {'if': 1, 'arm': 7, 'field_write': 2} glue 84
+support {'if': 2, 'arm': 7, 'field_write': 0}
+total {'old': (82, 545, None), 'new': (90, 726, 306)}
+legacy_adapter 128 lines 17 points
+json_boundary 67 lines 10 points
+host_time_file 55 lines 4 points
+host_time_query 24 lines 2 points
+scheduler_observation_hook 31 lines 3 points
+RunStatus old 154 in 22 files
+RunStatus new 151 in 20 files
