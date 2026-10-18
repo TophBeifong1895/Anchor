@@ -49,7 +49,7 @@ function pendingSubmission(id: string): Submission | null {
   return null;
 }
 
-export function Pilot({ session = '', onSession, initialDraft = '', onDraftConsumed }: { session?: string; onSession?: (id: string) => void; initialDraft?: string; onDraftConsumed?: () => void }) {
+export function Pilot({ session = '', onSession, initialDraft = '', onDraftConsumed, onSettings }: { session?: string; onSession?: (id: string) => void; initialDraft?: string; onDraftConsumed?: () => void; onSettings: () => void }) {
   const [sessions, setSessions] = useState<Session[]>([]);
   const [selected, setSelected] = useState('');
   const selectedRef = useRef('');
@@ -65,6 +65,7 @@ export function Pilot({ session = '', onSession, initialDraft = '', onDraftConsu
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(true);
   const [problem, setProblem] = useState('');
+  const [modelRequired, setModelRequired] = useState(false);
   const [query, setQuery] = useState('');
   const [copied, setCopied] = useState<number | null>(null);
   const [atBottom, setAtBottom] = useState(true);
@@ -95,7 +96,7 @@ export function Pilot({ session = '', onSession, initialDraft = '', onDraftConsu
     historyRequest.current?.abort();
     selectedRef.current = id;
     setSelected(id); cached('selected', id); onSessionRef.current?.(id);
-    setMessages([]); setCurrentTurn(null); setWaitingQuestion(false); setStopping(false); setSyncedTurn(''); setContinuation(null); setCopied(null); setProblem('');
+    setMessages([]); setCurrentTurn(null); setWaitingQuestion(false); setStopping(false); setSyncedTurn(''); setContinuation(null); setCopied(null); setProblem(''); setModelRequired(false);
     setBusy(submissions.current.has(id));
     follow.current = true; setAtBottom(true);
   };
@@ -251,10 +252,19 @@ export function Pilot({ session = '', onSession, initialDraft = '', onDraftConsu
     const body = { request_id: submission.request_id, ...(message === null ? { resume: true } : message ? { message } : {}),
       ...(encoded.length ? { attachments: encoded } : {}) };
     let result: { turn: Turn };
+    if (mounted.current && selectedRef.current === id) setModelRequired(false);
     try { result = await api<{ turn: Turn }>(`/sessions/${encodeURIComponent(id)}/turns`, 'POST', body); }
     catch (error) {
       // Explicit rejection means no turn was accepted. Only ambiguous delivery keeps its retry ID.
       if (error instanceof ApiError && [400, 401, 403, 404, 409, 413, 422].includes(error.status)) cached(key, '');
+      if (error instanceof ApiError && error.status === 503) {
+        // Ask the Host which default can execute; a provider failure alone does not mean missing settings.
+        const status = await api<{ execution: { configured: boolean } }>('/settings/model').catch(() => null);
+        if (status?.execution?.configured === false) {
+          if (mounted.current && selectedRef.current === id) setModelRequired(true);
+          throw new Error('请先在「设置 → 模型服务」配置默认服务的地址、Flash 模型和 API key，保存后再与 Pilot 对话。');
+        }
+      }
       throw error;
     }
     if (attachments.length) {
@@ -542,7 +552,8 @@ export function Pilot({ session = '', onSession, initialDraft = '', onDraftConsu
         <div><button onClick={() => void decide(false)} disabled={busy}>拒绝</button><button onClick={() => void decide(true)} disabled={busy}>确认并继续</button></div>
       </div>}
       {problem && <p className="pilot-error" role="alert">{problem}
-        {selected && <button onClick={() => void select(selected)}>重新加载对话</button>}
+        {modelRequired ? <button onClick={onSettings}>前往模型设置</button>
+          : selected && <button onClick={() => void select(selected)}>重新加载对话</button>}
       </p>}
       <form className={`pilot-composer${dragging ? ' is-dragging' : ''}`} onSubmit={send}
         onDragOver={event => { if (event.dataTransfer.types.includes('Files')) { event.preventDefault(); if (!busy && !loading && canSend && filesReady) setDragging(true); } }}

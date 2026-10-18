@@ -226,7 +226,7 @@ export function App() {
       {view === 'runs' && notice && <p className={`notice ${notice.kind}`} role="status">{notice.text}</p>}
 
       {view === 'plugins' ? <PluginManagement /> : view === 'settings' ? <SettingsPage />
-        : view === 'pilot' ? <Pilot session={chat} onSession={setChat} initialDraft={assistance} onDraftConsumed={() => setAssistance('')} /> : view === 'runs' ? (
+        : view === 'pilot' ? <Pilot session={chat} onSession={setChat} initialDraft={assistance} onDraftConsumed={() => setAssistance('')} onSettings={() => setView('settings')} /> : view === 'runs' ? (
         <Workspace running>
           {timelineProblem ? <main className="main"><p className="timeline-error" role="alert">
             运行时间线无法加载：{timelineProblem} <button onClick={() => void refresh()}>重新连接</button>

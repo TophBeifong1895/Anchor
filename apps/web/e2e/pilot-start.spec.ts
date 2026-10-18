@@ -5,20 +5,41 @@ type SavedTurn = {
   request_id: string; error: string; created_at: string;
 };
 
-async function fixture(page: Page, options: { failFirstTurn?: boolean } = {}) {
+async function fixture(page: Page, options: { failFirstTurn?: boolean; firstTurnError?: string; modelConfigured?: boolean; modelStatusFailure?: boolean } = {}) {
   const session = { id: 'start-session', title: '', status: 'active', waiting_reason: '',
     updated_at: '2026-10-14T03:00:00Z', approval: null };
   const sessions: typeof session[] = [];
   const messages: { role: string; text: string }[] = [];
   const turns: SavedTurn[] = [];
+  const emptyFields = { endpoint: '', wire_api: 'chat', flash: '', pro: '' };
+  const model = {
+    providers: {
+      default: { fields: options.modelConfigured === false ? { ...emptyFields } : { ...emptyFields, endpoint: 'https://provider.example/v1', flash: 'fixture-flash' },
+        api_key_present: options.modelConfigured !== false, configured: false, source: 'host' },
+      backup: { fields: { ...emptyFields }, api_key_present: false, configured: false, source: 'empty' },
+    },
+    execution: { configured: options.modelConfigured !== false }, retained_providers: [],
+  };
   const facts = { sessionWrites: 0, turnWrites: [] as { message?: string; request_id: string }[],
-    pluginReads: 0, unexpected: [] as string[] };
+    pluginReads: 0, modelWrites: 0, unexpected: [] as string[] };
   await page.addInitScript(() => localStorage.setItem('anchor:view', 'pilot'));
   await page.route('**/*', async route => {
     const request = route.request();
     const path = new URL(request.url()).pathname;
     const method = request.method();
-    if (!/^\/(sessions|graphs|runs|timeline|plugins)(\/|$)/.test(path)) return route.continue();
+    if (!/^\/(sessions|graphs|runs|timeline|plugins|settings)(\/|$)/.test(path)) return route.continue();
+    if (path === '/settings/model') return route.fulfill(options.modelStatusFailure
+      ? { status: 500, json: { error: 'Cannot read model settings' } } : { json: model });
+    if (path === '/settings/model/providers/default' && method === 'PUT') {
+      const body = request.postDataJSON();
+      facts.modelWrites++;
+      model.providers.default.fields = { endpoint: body.endpoint, wire_api: body.wire_api, flash: body.flash, pro: body.pro };
+      model.providers.default.api_key_present = body.api_key.action === 'set';
+      model.execution.configured = true;
+      return route.fulfill({ json: model });
+    }
+    if (path === '/settings/runtime') return route.fulfill({ json: { runtime: { python_configuration_owner: 'host',
+      rust_configuration_owner: 'host', python_default_version: '3.12', rust_default_toolchain: 'stable' }, operation: null } });
     if (path === '/graphs') return route.fulfill({ json: { graphs: [] } });
     if (path === '/runs') return route.fulfill({ json: { runs: [] } });
     if (path === '/timeline') return route.fulfill({ json: { runs: [], scheduled: [], schedules: [] } });
@@ -41,8 +62,9 @@ async function fixture(page: Page, options: { failFirstTurn?: boolean } = {}) {
       if (method !== 'POST') return route.fulfill({ json: { turns } });
       const body = request.postDataJSON();
       facts.turnWrites.push(body);
+      if (!model.execution.configured) return route.fulfill({ status: 503, json: { error: 'Pilot provider is not configured or unavailable' } });
       if (options.failFirstTurn && facts.turnWrites.length === 1) return route.fulfill({ status: 503,
-        json: { error: '暂时无法接收任务，请保留原内容重试。' } });
+        json: { error: options.firstTurnError ?? '暂时无法接收任务，请保留原内容重试。' } });
       messages.push({ role: 'user', text: body.message });
       const turn = { id: 'turn-1', session: session.id, status: 'running', prompt: body.message,
         request_id: body.request_id, error: '', created_at: session.updated_at };
@@ -159,3 +181,56 @@ test('a failed first submission keeps the task and reuses its request identity o
   expect(facts.turnWrites[0]).toEqual(facts.turnWrites[1]);
   expect(facts.unexpected).toEqual([]);
 });
+
+test('missing default Flash settings guide users to Settings and keep the task and attachments for retry', async ({ page }) => {
+  const facts = await fixture(page, { modelConfigured: false });
+  await page.goto('/');
+  const input = page.getByLabel('发送给 Anchor Pilot');
+  const prompt = '请检查这个 CSV。';
+  await expect(input).toBeEnabled();
+  await input.fill(prompt);
+  await page.getByLabel('选择附件').setInputFiles({ name: 'input.csv', mimeType: 'text/csv', buffer: Buffer.from('value\n1\n') });
+  await expect(page.locator('.pilot-composer')).toContainText('input.csv');
+  await input.press('Enter');
+  await expect(page.locator('.pilot-chat').getByRole('alert')).toContainText('请先在「设置 → 模型服务」配置默认服务');
+  await expect(input).toHaveValue(prompt);
+  await expect(page.locator('.pilot-composer')).toContainText('input.csv');
+  await expect(page.locator('article.pilot-message.assistant')).toHaveCount(0);
+  await page.getByRole('button', { name: '前往模型设置', exact: true }).click();
+  const provider = page.getByRole('group', { name: 'default', exact: true });
+  await provider.getByLabel('服务地址').fill('https://provider.example/v1');
+  await provider.getByLabel('Flash 模型', { exact: true }).fill('fixture-flash');
+  await provider.getByLabel('模型服务 API key').fill('fixture-only-key');
+  await provider.getByRole('button', { name: '保存配置', exact: true }).click();
+  await expect(provider).toContainText('配置已保存，下一轮使用新设置');
+  await expect(provider.getByLabel('Pro 模型', { exact: true })).toHaveValue('');
+  await page.getByRole('button', { name: 'Pilot', exact: true }).click();
+  await expect(input).toHaveValue(prompt);
+  await expect(page.locator('.pilot-composer')).toContainText('input.csv');
+  await expect(input).toBeEnabled();
+  await input.press('Enter');
+  await expect(page.locator('article.pilot-message.assistant')).toContainText('已收到任务，我们开始。');
+  await expect(input).toHaveValue('');
+  await expect(page.locator('.pilot-composer')).not.toContainText('input.csv');
+  expect(facts.sessionWrites).toBe(1);
+  expect(facts.modelWrites).toBe(1);
+  expect(facts.turnWrites).toHaveLength(2);
+  expect(facts.turnWrites[1]).toEqual(facts.turnWrites[0]);
+  expect(facts.unexpected).toEqual([]);
+});
+
+for (const modelStatusFailure of [false, true]) {
+  test(`an unavailable provider keeps its actual error when settings ${modelStatusFailure ? 'cannot be read' : 'have an executable Flash model'}`, async ({ page }) => {
+    const error = 'Pilot provider is not configured or unavailable';
+    const facts = await fixture(page, { failFirstTurn: true, firstTurnError: error, modelStatusFailure });
+    await page.goto('/');
+    const input = page.getByLabel('发送给 Anchor Pilot');
+    await expect(input).toBeEnabled();
+    await input.fill('保留这条草稿');
+    await input.press('Enter');
+    await expect(page.locator('.pilot-chat').getByRole('alert')).toContainText(error);
+    await expect(page.getByRole('button', { name: '前往模型设置', exact: true })).toHaveCount(0);
+    await expect(input).toHaveValue('保留这条草稿');
+    expect(facts.unexpected).toEqual([]);
+  });
+}
