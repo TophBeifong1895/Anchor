@@ -45,7 +45,8 @@
 #
 # Usage
 # -----
-#   scripts/build-goose-acp.sh [--check-reproducible] [--output PATH]
+#   scripts/build-goose-acp.sh [--ensure] [--check-reproducible] [--output PATH]
+#   --ensure reuses a verified output, or builds a missing one; existing mismatches fail.
 #
 # Environment:
 #   ANCHOR_GOOSE_BUILD_ROOT   build/cache root (default /var/tmp/anchor-goose-build)
@@ -77,10 +78,12 @@ PINNED_SHA256="17e065a79cb0508413af714724aed51d6b76972dda9feebdda701330134fb640"
 ROOT="${ANCHOR_GOOSE_BUILD_ROOT:-/var/tmp/anchor-goose-build}"
 JOBS="${CARGO_BUILD_JOBS:-12}"
 CHECK_REPRODUCIBLE=0
+ENSURE=0
 OUTPUT=""
 
 while [ $# -gt 0 ]; do
     case "$1" in
+        --ensure) ENSURE=1 ;;
         --check-reproducible) CHECK_REPRODUCIBLE=1 ;;
         --output) OUTPUT="${2:?--output requires a path}"; shift ;;
         -h | --help)
@@ -103,6 +106,10 @@ die() {
 
 sha256_of() { sha256sum "$1" | cut -d' ' -f1; }
 
+if [ -n "$OUTPUT" ]; then
+    OUTPUT="$(realpath -m -- "$OUTPUT")"
+fi
+
 fetch_pinned() {
     local url="$1" path="$2" want="$3"
     if [ -f "$path" ] && [ "$(sha256_of "$path")" = "$want" ]; then
@@ -116,7 +123,29 @@ fetch_pinned() {
     [ "$got" = "$want" ] || die "digest mismatch for $url: got $got want $want"
 }
 
+# A verified installed output needs no compiler, target installation or download.
+# Do not silently replace a caller's existing runtime with another binary.
+if [ "$ENSURE" = 1 ]; then
+    [ -n "$OUTPUT" ] || die "--ensure requires --output PATH"
+    [ "$CHECK_REPRODUCIBLE" = 0 ] || die "--ensure cannot be combined with --check-reproducible"
+    command -v sha256sum >/dev/null || die "sha256sum is required (install coreutils)"
+    if [ -e "$OUTPUT" ] || [ -L "$OUTPUT" ]; then
+        [ -f "$OUTPUT" ] && [ -x "$OUTPUT" ] || die "existing Goose output is not an executable file: $OUTPUT"
+        [ "$(sha256_of "$OUTPUT")" = "$PINNED_SHA256" ] || die "existing Goose output does not match the pinned runtime: $OUTPUT; use a fresh output path or explicitly rebuild with --output"
+        log "pinned Goose ready: $OUTPUT"
+        exit 0
+    fi
+fi
+
+[ "$(uname -s)" = Linux ] && [ "$(uname -m)" = x86_64 ] || die "this recipe requires Linux x86_64"
+for tool in rustup cargo rustc cc curl tar gzip patch rsync readelf sha256sum install stat cmp flock realpath; do
+    command -v "$tool" >/dev/null || die "missing build prerequisite: $tool (install Rust/rustup, C build tools, curl, patch, rsync, binutils and util-linux)"
+done
+
 mkdir -p "$ROOT/cache" "$ROOT/toolchain" "$ROOT/artifacts" "$ROOT/src"
+# The stable source/cache path is shared by source checkouts. Serialize its mutation.
+exec 8>"$ROOT/build.lock"
+flock 8
 
 # --- pinned source -------------------------------------------------------------------
 SOURCE_ARCHIVE="$ROOT/cache/goose-source-v${GOOSE_VERSION}.tar.gz"
@@ -160,6 +189,12 @@ PATCH_SHA256="$(sha256_of "$REASONING_PATCH")"
 COMPLETION_PATCH_SHA256="$(sha256_of "$COMPLETION_PATCH")"
 PROVIDER_ERRORS_PATCH_SHA256="$(sha256_of "$PROVIDER_ERRORS_PATCH")"
 cd "$SRC"
+# Keep the recipe output independent of a caller's Host target directory.
+export CARGO_TARGET_DIR="$SRC/target"
+# A caller's toolchain override must not change the reviewed recipe.
+RUSTUP_TOOLCHAIN=$(sed -n 's/^channel = "\([^"]*\)"$/\1/p' rust-toolchain.toml)
+[ -n "$RUSTUP_TOOLCHAIN" ] || die "verified source is missing its Rust toolchain pin"
+export RUSTUP_TOOLCHAIN
 
 command -v rustup >/dev/null || die "rustup is required (the source pins its toolchain)"
 rustup target add "$TARGET" >&2
@@ -207,6 +242,7 @@ if [ "$DIGEST" != "$PINNED_SHA256" ]; then
 fi
 DEST="${OUTPUT:-$ROOT/artifacts/goose-acp}"
 if [ "$DEST" != "$ARTIFACT" ]; then
+    mkdir -p "$(dirname -- "$DEST")"
     install -m 0755 "$ARTIFACT" "$DEST"
 fi
 printf '%s  goose-acp\n' "$DIGEST" >"$DEST.sha256"

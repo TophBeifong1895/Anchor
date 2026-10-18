@@ -208,7 +208,7 @@ Pilot 的 `channel_configure`/`channel_enable` 经原生确认管理 owner-bound
 
 WebUI 的 Anchor API key 只保存在当前标签页。输入框先检查请求头可接受的格式，再通过只读 `GET /graphs` 验证；成功才保存并关闭，错误 key、格式错误或服务异常保留输入框并分别提示。JSON 请求与 Pilot SSE 共用缓存恢复：含非 ASCII 字符、空格或控制字符的无效缓存不会进入请求头，401 后重新输入；较早请求的迟到 401 不丢弃其他请求刚验证成功的新 key。取消验证会中止请求，迟到结果不保存。
 
-平台安装启动器从自身位置解析只读 release、固定 Goose/relay 与 `data/` 私有根，清除调用进程配置，不读取环境文件。systemd 调用同一启动器；预检 `--launcher` 复用其命令配置，并通过安装器同一 validator 检查 format-2 平台。开发脚本和 Vite 也不加载 `.env`；开发脚本默认定位 `.local/bin/goose` 和所选 Host 同目录的 relay，固定 Goose 摘要由 Host 提供默认值。旧文件保留原样；显式进程覆盖仍是开发/独立 Graph 宿主的部署接口，不是模型、Plugin 或渠道的产品配置源。
+平台安装启动器从自身位置解析只读 release、固定 Goose/relay 与 `data/` 私有根，清除调用进程配置，不读取环境文件。systemd 调用同一启动器；预检 `--launcher` 复用其命令配置，并通过安装器同一 validator 检查 format-2 平台。开发脚本和 Vite 也不加载 `.env`；源码启动先探测系统工具与 namespace，按 lock 准备前端依赖，并构建缺少的 debug Host/relay 与 Web 资产；Goose 缺失时通过既有固定配方构建到 `.local/bin/goose`（含固定工具链的 musl target 准备），已存在时校验固定摘要，不覆盖不匹配文件。`setup` 只准备，`status`/`stop` 不构建。默认不自动使用旧 release 产物，显式 Host/relay 路径需已可执行；固定 Goose 摘要仍由 Host 独立核对。旧文件保留原样；显式进程覆盖仍是开发/独立 Graph 宿主的部署接口，不是模型、Plugin 或渠道的产品配置源。
 
 模型设置由 WebUI 经 Host 管理接口写入同一个私有 `state/managed/model-config.json`，执行只读该事实来源。`ANCHOR_MODEL_URL/API_KEY/NAME/WIRE_API/ALIASES` 已退出平台配置，旧安装 `config/model.env` 不再加载；不自动迁移或覆盖已有凭据。Goose 路径、网络和运行预算仍为部署控制。固定 `default/backup × flash/pro`，两槽凭据独立。Pilot 和未指定模型的节点默认使用 `models.default.flash`；其余三种引用由 Graph 明确选择，不自动降级。每个新 Turn/invocation 直接读取最新槽设置，当前执行持有独立快照；已有原生 Session 加载后通过 `session/set_config_option` 选定本轮模型。Chat/Responses 由固定 Goose 原生 Provider 按显式协议生成和解析，Host Bridge 只转发到本轮冻结的服务。
 

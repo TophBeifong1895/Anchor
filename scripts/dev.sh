@@ -3,6 +3,19 @@ set -euo pipefail
 
 repo=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 cd "$repo"
+action=${1:-start}
+case "$action" in
+  start|setup|stop|restart|status) ;;
+  *) echo "usage: $0 [start|setup|stop|restart|status]" >&2; exit 2 ;;
+esac
+
+require_command() {
+  command -v "$1" >/dev/null || { echo "Missing prerequisite: $1. $2" >&2; exit 1; }
+}
+require_command node "Install Node.js 20.19+ or 22.12+ and npm."
+require_command flock "Install util-linux."
+require_command realpath "Install coreutils."
+
 dev_root=$(realpath -m -- "${ANCHOR_DEV_ROOT:-$repo/.local/rust}")
 state="$dev_root/dev"
 mkdir -p "$state"
@@ -119,6 +132,71 @@ ready() {
   return 1
 }
 
+check_start_prerequisites() {
+  [[ "$(uname -s)" == Linux && "$(uname -m)" == x86_64 ]] || {
+    echo "Source startup currently supports Linux x86_64." >&2; return 1;
+  }
+  require_command git "Install Git."
+  require_command curl "Install curl."
+  require_command setsid "Install util-linux."
+  require_command bwrap "Install Bubblewrap and enable user/mount/network namespaces."
+  if ! bwrap --die-with-parent --unshare-all --ro-bind / / -- /bin/true; then
+    echo "Bubblewrap cannot create the required namespaces. Check the host's user namespace policy; sandbox isolation remains required." >&2
+    return 1
+  fi
+}
+
+prepare_web() {
+  # Dependencies belong to the checkout, even when callers use different dev roots.
+  mkdir -p "$repo/.local"
+  local web_lock
+  exec {web_lock}>"$repo/.local/web-setup.lock"
+  flock "$web_lock"
+  require_command npm "Install npm alongside Node.js."
+  require_command sha256sum "Install coreutils."
+  node -e 'const [major, minor] = process.versions.node.split(".").map(Number);
+    if (!(major === 20 && minor >= 19 || major === 22 && minor >= 12 || major > 22)) {
+      console.error("Node.js 20.19+ or 22.12+ is required; found " + process.versions.node); process.exit(1);
+    }'
+  local lock_digest stamp="$repo/apps/web/node_modules/.anchor-lock.sha256"
+  lock_digest=$(sha256sum "$repo/apps/web/package.json" "$repo/apps/web/package-lock.json")
+  if [[ ! -x "$repo/apps/web/node_modules/.bin/vite" || ! -x "$repo/apps/web/node_modules/.bin/tsc" ||
+        ! -f "$stamp" || "$(cat "$stamp")" != "$lock_digest" ]]; then
+    echo "Preparing WebUI dependencies from package-lock.json (npm ci)..."
+    npm --prefix "$repo/apps/web" ci
+    printf '%s\n' "$lock_digest" > "$stamp"
+  fi
+  exec {web_lock}>&-
+}
+
+prepare_api() {
+  local target_dir
+  target_dir=$(realpath -m -- "${CARGO_TARGET_DIR:-$repo/rust/target}")
+  # Use the development output consistently; an old release binary must not mask missing tools.
+  binary=$(realpath -m -- "${ANCHOR_RUNNER_BINARY:-$target_dir/debug/anchor-runner-host}")
+  export ANCHOR_GOOSE_RELAY_BINARY="${ANCHOR_GOOSE_RELAY_BINARY:-$(dirname -- "$binary")/anchor-net-relay}"
+  local relay
+  relay=$(realpath -m -- "$ANCHOR_GOOSE_RELAY_BINARY")
+  export ANCHOR_GOOSE_RELAY_BINARY="$relay"
+  if [[ ! -x "$binary" || ! -x "$relay" ]]; then
+    if [[ "$binary" != "$target_dir/debug/anchor-runner-host" || "$relay" != "$target_dir/debug/anchor-net-relay" ]]; then
+      echo "Explicit Host/relay paths must both be executable: $binary ; $relay" >&2
+      return 1
+    fi
+    require_command cargo "Install Rust stable with rustup and the system C build tools."
+    echo "Building Rust Host and network relay..."
+    CARGO_TARGET_DIR="$target_dir" cargo build --manifest-path "$repo/rust/Cargo.toml" -p anchor-runner-host --bins --locked
+  fi
+  [[ -x "$binary" && -x "$relay" ]] || { echo "Rust build did not produce Host and relay." >&2; return 1; }
+  export ANCHOR_GOOSE_BINARY="$(realpath -m -- "${ANCHOR_GOOSE_BINARY:-$repo/.local/bin/goose}")"
+  echo "Checking pinned Goose ACP runtime (first build may take several minutes)..."
+  "$repo/scripts/build-goose-acp.sh" --ensure --output "$ANCHOR_GOOSE_BINARY"
+  if [[ ! -f "$ANCHOR_RUNNER_WEB_ROOT/index.html" && "$ANCHOR_RUNNER_WEB_ROOT" == "$repo/apps/web/dist" ]]; then
+    echo "Building WebUI assets..."
+    npm --prefix "$repo/apps/web" run build
+  fi
+}
+
 start_api() {
   if alive "$api_pid"; then
     ready api "$api_pid" "$state/native-host.log"
@@ -127,25 +205,8 @@ start_api() {
     echo "External service at $ANCHOR_WEB_API_URL (not managed by dev.sh)"
     api_ready || { echo "External service does not satisfy Rust Host health/readiness" >&2; return 1; }
   else
-    local binary target_dir
-    target_dir=$(realpath -m -- "${CARGO_TARGET_DIR:-$repo/rust/target}")
-    if [[ -n "${ANCHOR_RUNNER_BINARY:-}" ]]; then
-      binary=$(realpath -m -- "$ANCHOR_RUNNER_BINARY")
-      [[ -x "$binary" ]] || { echo "Rust Host binary is not executable: $binary" >&2; return 1; }
-    elif [[ -x "$target_dir/release/anchor-runner-host" ]]; then
-      binary="$target_dir/release/anchor-runner-host"
-    else
-      binary="$target_dir/debug/anchor-runner-host"
-      if [[ ! -x "$binary" ]]; then
-        CARGO_TARGET_DIR="$target_dir" cargo build --manifest-path "$repo/rust/Cargo.toml" -p anchor-runner-host --locked
-      fi
-    fi
-    # Fixed build outputs supply runtime tools; startup never sources a configuration file.
-    export ANCHOR_GOOSE_BINARY="${ANCHOR_GOOSE_BINARY:-$repo/.local/bin/goose}"
-    export ANCHOR_GOOSE_RELAY_BINARY="${ANCHOR_GOOSE_RELAY_BINARY:-$(dirname -- "$binary")/anchor-net-relay}"
-    if [[ ! -f "$ANCHOR_RUNNER_WEB_ROOT/index.html" && "$ANCHOR_RUNNER_WEB_ROOT" == "$repo/apps/web/dist" ]]; then
-      npm --prefix "$repo/apps/web" run build
-    fi
+    local binary
+    prepare_api
     mkdir -p "$ANCHOR_RUNNER_CATALOG_ROOT" "$ANCHOR_RUNNER_STATE_ROOT" \
       "$ANCHOR_RUNNER_WORKSPACE_ROOT" "$ANCHOR_RUNNER_LIBRARY_ROOT/plugins"
     nohup setsid "$binary" serve >"$state/native-host.log" 2>&1 < /dev/null 9>&- &
@@ -211,8 +272,16 @@ status() {
   fi
 }
 
-case "${1:-start}" in
+case "$action" in
+  setup)
+    check_start_prerequisites
+    prepare_web
+    prepare_api
+    echo "Source dependencies ready. Run ./scripts/dev.sh start, then configure the model in WebUI."
+    ;;
   start)
+    check_start_prerequisites
+    prepare_web
     start_api
     start_web
     echo "Logs: $state/"
@@ -222,6 +291,9 @@ case "${1:-start}" in
     stop_one "Anchor API" "$api_pid"
     ;;
   restart)
+    check_start_prerequisites
+    prepare_web
+    prepare_api
     stop_one "Web UI" "$web_pid"
     stop_one "Anchor API" "$api_pid"
     start_api
@@ -229,9 +301,5 @@ case "${1:-start}" in
     ;;
   status)
     status
-    ;;
-  *)
-    echo "usage: $0 [start|stop|restart|status]" >&2
-    exit 2
     ;;
 esac

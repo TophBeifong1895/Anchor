@@ -4,15 +4,24 @@
 
 ## 安装与本地启动
 
-需要 Linux x86_64、Git、Bubblewrap、Rust stable，以及 Node.js 20.19+ 或 22.12+。沙箱需要可用的 user/mount/network namespace。模型调用和 Plugin 网络权限分别配置。
+需要 Linux x86_64、Git、Bubblewrap、Rust stable（通过 rustup 安装），以及 Node.js 20.19+ 或 22.12+。构建固定 Goose 还需要 C 编译工具、curl、patch、rsync、binutils、util-linux 和 coreutils。沙箱需要可用的 user/mount/network namespace；脚本会先实际探测，失败时停止并提示，不使用共享宿主网络绕过。模型调用和 Plugin 网络权限分别配置。
+
+Debian/Ubuntu 可先安装系统工具：
 
 ```sh
-npm --prefix apps/web ci
+sudo apt-get install build-essential curl git bubblewrap patch rsync binutils util-linux
+```
+
+Rust/rustup 和符合上述版本的 Node.js/npm 需预先安装。启动脚本不会自动使用 sudo 或修改系统的 namespace 策略。
+
+```sh
 ./scripts/dev.sh start
 ./scripts/dev.sh status
 ```
 
-开发时打开 <http://127.0.0.1:5173>，Vite 将 API 请求转发到 <http://127.0.0.1:8077> 的 Rust Host；Host 也提供已构建的 WebUI。脚本使用 `.local/rust`，分别保存 catalog、state、workspace 和 Library；默认从可编辑的空 catalog 启动，不创建占位 Graph、不调用模型。预构建 Host 和 Web 资产缺失时才构建；修改代码后应主动重建。开发脚本和 Vite 均不加载 `.env`；旧文件存在也不会执行其中内容。可选的路径、端口等覆盖只取显式进程设置，见 [脚本](../scripts/dev.sh) 和下方部署参数。
+开发时打开 <http://127.0.0.1:5173>，Vite 将 API 请求转发到 <http://127.0.0.1:8077> 的 Rust Host；Host 也提供已构建的 WebUI。脚本使用 `.local/rust`，分别保存 catalog、state、workspace 和 Library；默认从可编辑的空 catalog 启动，不创建占位 Graph、不调用模型。首次 `start` 自动执行锁定的 `npm ci`、构建缺少的 debug Host/relay、准备 `.local/bin/goose` 并构建缺少的 Web 资产。Goose 配方自动安装固定工具链的 musl target 和已校验的交叉编译器；首次需要联网，后续复用产物。`setup` 执行相同准备但不启动服务；`status`/`stop` 不下载或构建。缺少系统工具或现有 Goose 摘要不匹配时明确失败，保留现有文件。
+
+默认使用 `rust/target/debug`（或 `CARGO_TARGET_DIR/debug`），不自动选取旧 release 产物；指定自定义 Host/relay 时要求路径已经可执行。修改后端应主动执行 `cargo build --manifest-path rust/Cargo.toml -p anchor-runner-host --bins --locked` 并重启，修改静态网页应主动执行 `npm --prefix apps/web run build`。开发脚本和 Vite 均不加载 `.env`；旧文件存在也不会执行其中内容。可选的路径、端口等覆盖只取显式进程设置，见 [脚本](../scripts/dev.sh) 和下方部署参数。
 
 ```sh
 ./scripts/dev.sh restart
@@ -29,7 +38,7 @@ npm --prefix apps/web ci
 17e065a79cb0508413af714724aed51d6b76972dda9feebdda701330134fb640
 ```
 
-用 [构建脚本](../scripts/build-goose-acp.sh) 从固定上游源码构建并审查该二进制，放在稳定路径，并配置 Goose 的部署路径与网络隔离。完整平台发行包已包含这些基础组件。
+源码开发由 `scripts/dev.sh start` 调用[构建脚本](../scripts/build-goose-acp.sh)准备并核验该二进制，同时定位 Host 同目录的 relay，隔离模型控制网络。完整平台发行包已包含这些基础组件。
 
 Host 可以在没有模型配置时启动。Pilot 发送消息或继续回复遇到服务不可用时，网页读取 Host 的默认模型执行状态；确认配置尚未齐备后，提示先配置默认服务的地址、Flash 模型和 API key，并提供「前往模型设置」按钮。原文字和附件保留，保存设置后返回即可重试；已配置或状态读取失败时保留原错误，不推断是配置缺失。
 
@@ -41,15 +50,15 @@ WebUI「设置 → 模型服务」固定提供 `default`、`backup` 两组，每
 
 模型服务地址、协议、模型名与 API key 只从 Host 私有管理存储读取，环境变量中的 `ANCHOR_MODEL_URL/API_KEY/NAME/WIRE_API/ALIASES` 不再作为配置或回退源。default 尚未保存时，仅兼容已有托管配置；保存之后缺少字段或密钥会明确失败，不退回旧服务。历史服务凭据用于恢复旧任务，可在网页折叠的凭据区域更新或清除。旧 `.env` 和安装中的 `config/model.env` 不会自动导入、覆盖或删除；请在 WebUI 核对并保存当前服务。新安装不接受 `--model-config`。
 
-源码开发先准备固定 Goose：
+仅准备源码依赖、不启动服务：
 
 ```sh
-scripts/build-goose-acp.sh --output "$PWD/.local/bin/goose"
-cargo build --manifest-path rust/Cargo.toml -p anchor-runner-host --locked
-./scripts/dev.sh restart
+./scripts/dev.sh setup
 ```
 
-开发脚本默认读取 `.local/bin/goose`，使用 Host 同目录的 `anchor-net-relay`；Host 内置固定 Goose 的摘要，非默认二进制需显式提供与其匹配的部署摘要。完整平台启动器直接定位随包二进制，隔离控制网络，不从调用进程继承部署或凭据设置。开发者可在命令前显式覆盖 `ANCHOR_GOOSE_BINARY`、`ANCHOR_GOOSE_RELAY_BINARY` 等路径，无需环境文件。
+手动重建 Goose 时使用 `scripts/build-goose-acp.sh --output "$PWD/.local/bin/goose"`；默认启动的 `--ensure` 模式只复用摘要相符的可执行文件或构建缺失文件，不覆盖不匹配的已有文件。构建配方固定来源、补丁、Rust 工具链与 musl 产物，首次构建不做两次 clean build；维护者复核可额外指定 `--check-reproducible`。
+
+Host 内置固定 Goose 的摘要。完整平台启动器直接定位随包二进制，不从调用进程继承部署或凭据设置。开发者可在命令前显式覆盖 `ANCHOR_GOOSE_BINARY`、`ANCHOR_GOOSE_RELAY_BINARY` 等路径，但 `dev.sh` 仍要求固定 Goose；实验性非固定 runtime 应使用独立 Host 部署入口，不经默认启动准备流程。
 
 `ANCHOR_MODEL_CONTEXT_WINDOW`（正整数，可选）会作为 `GOOSE_CONTEXT_LIMIT` 传给 Goose，覆盖它按模型名推断的上下文窗口——本机部署用别名与 OpenAI 兼容端点时该推断不可靠。
 
