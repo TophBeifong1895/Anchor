@@ -9,7 +9,7 @@
 ```sh
 npm --prefix apps/web ci
 cp .env.example .env
-# 配置 .env 中固定 Goose 的路径和当前执行模型；下方说明模型设置的边界
+# 配置 .env 中固定 Goose 的路径；模型服务和 Key 启动后在 WebUI 设置
 ./scripts/dev.sh start
 ./scripts/dev.sh status
 ```
@@ -39,17 +39,14 @@ Host 可以在没有模型配置时启动。WebUI「设置 → 模型服务」�
 
 测试等待上限为 20 秒。显示「已连接，但没有收到完整模型结果」时，说明服务已经响应，本次还没验证到模型输出；不能据此认定密钥错误或网络不通，也不能当作模型已可用。
 
-default 尚未保存时，默认模型兼容旧托管配置或以下部署环境变量；保存之后直接使用网页配置，缺少字段或密钥时不会退回旧服务。显式旧模型别名仍使用原配置。折叠的历史凭据区域用于恢复尚未完成的旧任务；部署提供的旧凭据仍由部署管理：
+模型服务地址、协议、模型名与 API key 只从 Host 私有管理存储读取，环境变量中的 `ANCHOR_MODEL_URL/API_KEY/NAME/WIRE_API/ALIASES` 不再作为配置或回退源。default 尚未保存时，仅兼容已有托管配置；保存之后缺少字段或密钥会明确失败，不退回旧服务。历史服务凭据用于恢复旧任务，可在网页折叠的凭据区域更新或清除。旧 `.env` 和安装中的 `config/model.env` 不会自动导入、覆盖或删除；请在 WebUI 核对并保存当前服务。新安装不接受 `--model-config`。
+
+以下仅配置 Goose 路径和执行控制，不包含模型服务凭据：
 
 ```sh
 ANCHOR_GOOSE_BINARY=/absolute/path/to/goose
 ANCHOR_GOOSE_BINARY_SHA256=17e065a79cb0508413af714724aed51d6b76972dda9feebdda701330134fb640
 ANCHOR_GOOSE_ALLOW_SHARED_NETWORK=1
-ANCHOR_MODEL_URL=https://provider.example/v1
-ANCHOR_MODEL_API_KEY=REPLACE_WITH_PROVIDER_KEY
-ANCHOR_MODEL_NAME=REPLACE_WITH_MODEL_NAME
-ANCHOR_MODEL_WIRE_API=responses
-ANCHOR_MODEL_ALIASES={}
 ANCHOR_MODEL_CONTEXT_WINDOW=128000
 ANCHOR_MODEL_DIRECT=0
 # Isolation is the default when the relay sits beside the Goose binary; set 0 to share.
@@ -59,7 +56,7 @@ ANCHOR_GOOSE_RELAY_BINARY=/absolute/path/to/anchor-net-relay
 
 `ANCHOR_MODEL_CONTEXT_WINDOW`（正整数，可选）会作为 `GOOSE_CONTEXT_LIMIT` 传给 Goose，覆盖它按模型名推断的上下文窗口——本机部署用别名与 OpenAI 兼容端点时该推断不可靠。
 
-`ANCHOR_MODEL_WIRE_API` 为 `chat` 或 `responses`。URL 接受 HTTPS，或仅用于本地测试的 HTTP loopback IP endpoint；拒绝 URL 用户凭据、query 和 fragment。Graph 的四个设置引用与旧别名规则见 [作者契约](rust-graph-authoring-contract.md#模型选择)。每个新 invocation 冻结绑定；恢复同一个未完成 invocation 仍使用原模型与服务。
+网页中的接口协议为 `chat` 或 `responses`。URL 接受 HTTPS，或仅用于本地测试的 HTTP loopback IP endpoint；拒绝 URL 用户凭据、query 和 fragment。Graph 的四个设置引用与旧别名规则见 [作者契约](rust-graph-authoring-contract.md#模型选择)。每个新 invocation 冻结绑定；恢复同一个未完成 invocation 仍使用原模型与服务。
 
 沙箱网络**默认隔离**：只要 `ANCHOR_GOOSE_BINARY` 同目录（或 `ANCHOR_GOOSE_RELAY_BINARY` 指定的绝对路径）存在沙箱中继 `anchor-net-relay`，Goose 就运行在自己的网络命名空间里，只能通过沙箱内中继经 UNIX socket 到达 Host bridge 与模型代理，真实 provider 凭据只留在宿主侧。发行包把中继放在 `bin/anchor-net-relay`（与 Host 同目录），部署时与 Goose 二进制放同一目录即可。设 `ANCHOR_GOOSE_LOCAL_NETWORK=0` 回到共享宿主网络（此时**必须**显式 `ANCHOR_GOOSE_ALLOW_SHARED_NETWORK=1`，该模式不是 loopback-only 隔离）；找不到中继二进制时同样回退到共享模式并需要该开关。`anchor-devtools preflight` 会校验隔离模式下的中继二进制存在。
 
@@ -67,7 +64,7 @@ ANCHOR_GOOSE_RELAY_BINARY=/absolute/path/to/anchor-net-relay
 
 模型调用默认由 Host 代理：Goose 进程只拿到 Host bridge 的 loopback 地址和一次性 token，provider 端点与真实 API key 留在宿主侧，宿主用真实响应流式回传。`ANCHOR_MODEL_DIRECT=1` 是显式回滚开关，会让沙箱像早期版本那样自己持有端点与凭据并直接拨号；仅在代理出问题时临时使用。
 
-`ANCHOR_GOOSE_ALLOW_SHARED_NETWORK=1` 是 Goose 进程的明确网络接入决定；业务工具和节点仍受 Host/Sandbox 授权。配置与凭据留在部署环境或 Host 的私有管理存储，不放进 Graph 包或版本库。
+`ANCHOR_GOOSE_ALLOW_SHARED_NETWORK=1` 是 Goose 进程的明确网络接入决定；业务工具和节点仍受 Host/Sandbox 授权。模型配置与凭据保存在 Host 的私有管理存储，不放进部署环境、Graph 包或版本库。
 
 「设置 → 开发环境」可初始化 Python 和 Rust，显示进度、停止并在失败后重试。完整发行包提供固定的初始化工具；初始化前需要勾选允许联网下载。关闭页面不会取消初始化，重新打开会读取 Host 上的操作状态。Python 当前版本自动检测，点击「刷新状态」会重新读取，不需要联网或初始化。已有解释器不代表依赖准备工具齐备；缺少工具时页面会禁用初始化并说明原因，已有解释器仍可使用。开发部署可按 [.env.example](../.env.example) 显式登记固定 uv、摘要与软件源，检查时复用原解释器；部署管理的版本只读显示，不能在网页修改。
 

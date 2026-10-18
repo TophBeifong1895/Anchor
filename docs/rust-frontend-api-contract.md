@@ -51,7 +51,7 @@ Webhook 与 Responses 共用接纳和身份校验。Responses 只实现冻结子
 
 ## Web 管理入口
 
-管理操作不要求 Pilot Session 或模型调用。HTTP 与 Pilot 复用 Host 应用用例及配置事实；旧执行配置与环境、渠道中的部署字段保持只读，新模型配置槽可独立编辑。设置、凭据与插件预检响应使用 `no-store`，密钥只通过专用表单提交，不进入聊天、日志投影或浏览器存储。
+管理操作不要求 Pilot Session 或模型调用。HTTP 与 Pilot 复用 Host 应用用例及配置事实；运行环境、渠道中的部署字段保持只读；模型服务字段与凭据统一由 Host 私有管理存储维护，环境变量不再提供模型配置或回退值，两个模型槽可独立编辑。设置、凭据与插件预检响应使用 `no-store`，密钥只通过专用表单提交，不进入聊天、日志投影或浏览器存储。
 
 `POST /sessions` 未指定 ID 时创建 `pilot-private-` 会话，与 `responses-` 会话一样按当前 API key 归属；无认证的 loopback 使用 `local`。因此新 Web 会话与插件详情共享同一 owner 的凭据。旧显式普通 ID 仍属共享 `local`，不自动迁移或跨 owner 复用密钥；旧会话表单明确显示该作用域，完成的配置请求只代表历史操作。
 
@@ -72,7 +72,7 @@ Webhook 与 Responses 共用接纳和身份校验。Responses 只实现冻结子
 
 渠道助手的 `plugin_update` 是 Graph 插件配置与已冻结 Turn 策略的比较，不是连接健康检查。读取使用同一 Graph 锁文件的共享租约，并发读取互不排斥；保存、准入和授权写入仍要求独占，冲突保持 fail-closed。真正的读取失败或写锁占用仍返回 `state: unavailable` 及原因，不改动会话、Run 或 Plugin 权限。
 
-`execution` 投影下一轮的默认选择：`default_reference/source/configured/fields/api_key_present/error`；其中 `fields` 是选定模型的公开字段，顶层旧 `fields/configured` 仅保留兼容含义。Pilot 和未指定模型的节点使用 `models.default.flash`，Graph 可显式选择 `models.default.pro`、`models.backup.flash/pro`；不自动降级。default 尚未保存时兼容旧默认配置和预填，已保存但不完整时明确失败；四个设置引用以外的原显式模型别名保留原解释。旧 invocation 即使用过同名别名，恢复时仍核对其原始绑定。
+`execution` 投影下一轮的默认选择：`default_reference/source/configured/fields/api_key_present/error`；其中 `fields` 是选定模型的公开字段，顶层旧 `fields/configured` 仅保留兼容含义。Pilot 和未指定模型的节点使用 `models.default.flash`，Graph 可显式选择 `models.default.pro`、`models.backup.flash/pro`；不自动降级。default 尚未保存时兼容旧托管默认配置和预填，已保存但不完整时明确失败；四个设置引用以外的原显式模型别名仅保留已托管的映射。模型历史凭据的 `deployment` 兼容字段固定为 `false`，可由网页轮换或清除；`deployment_fields` 仅可包含执行预算与传输控制，不含服务地址、模型名或密钥。旧 invocation 即使用过同名别名，恢复时仍核对其原始绑定。
 
 新 Pilot Turn 和新节点 invocation 读取最新设置，包含同一 Run 的后续节点或常驻助手下一轮；进行中的执行保持独立快照，无需重启 Host。加载已有 Goose Session 后通过原生模型配置接口选定本轮模型，保留历史。恢复同一个节点 invocation 仍核对原模型/服务绑定，不能改用新服务；槽的公共历史和分服务凭据复用同一私有存储与锁，历史凭据投影增加 `slot`，可经现有凭据接口轮换或清除。两槽即使地址相同也使用独立凭据；换地址/协议的 `keep` 不携带原密钥。初始化状态可跨页面刷新读取，Host 重启后的未完成初始化显示中断，重试复用准备器检查现场。
 

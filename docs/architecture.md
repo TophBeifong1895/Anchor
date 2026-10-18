@@ -41,7 +41,7 @@ Web 管理与 Pilot 管理调用相同 Host 用例。插件密钥归 owner-bound
 
 HTTP、Session、Pilot 的插件基础目录读取归 `InstalledPluginCatalog`，清单有效性、依赖就绪与上下文授权、连接验证分别表达；目录列表保持轻量，不生成执行绑定。Graph 的发现、bundle 读取与校验复用 Graph 应用用例，适配器保留身份、格式和私有诊断脱敏。Web 的插件设置、鉴权下载和行菜单复用完整交互，草稿、持久策略和历史绑定保持不同归属。具体边界见 [共同事实与实现收敛](shared-facts-convergence.md)。
 
-Host 托管的模型配置将公开字段、用于恢复的旧绑定和按槽/服务索引的密钥分别表示。执行直接读取保存的槽配置，旧部署字段仅用于未保存 default 时的兼容默认与原显式别名；Web 不改环境变量。新 Turn/invocation 通过 Goose 原生接口选择最新模型并延续历史，当前执行及同 invocation 恢复保留冻结绑定。运行环境初始化和插件安装的进度只描述管理操作，不成为 Agent loop 或通用恢复引擎。接口见 [Web 管理契约](rust-frontend-api-contract.md#web-管理入口)。
+Host 托管的模型配置将公开字段、用于恢复的旧绑定和按槽/服务索引的密钥分别表示。执行直接读取保存的槽配置，旧托管字段仅用于未保存 default 时的兼容默认与原显式别名；模型服务字段和凭据不读取环境变量，Web 与执行共用唯一私有存储。新 Turn/invocation 通过 Goose 原生接口选择最新模型并延续历史，当前执行及同 invocation 恢复保留冻结绑定。运行环境初始化和插件安装的进度只描述管理操作，不成为 Agent loop 或通用恢复引擎。接口见 [Web 管理契约](rust-frontend-api-contract.md#web-管理入口)。
 
 同一事实所有者内部按职责分模块，入口负责组合：
 
@@ -208,9 +208,9 @@ Pilot 的 `channel_configure`/`channel_enable` 经原生确认管理 owner-bound
 
 WebUI 的 Anchor API key 只保存在当前标签页。输入框先检查请求头可接受的格式，再通过只读 `GET /graphs` 验证；成功才保存并关闭，错误 key、格式错误或服务异常保留输入框并分别提示。JSON 请求与 Pilot SSE 共用缓存恢复：含非 ASCII 字符、空格或控制字符的无效缓存不会进入请求头，401 后重新输入；较早请求的迟到 401 不丢弃其他请求刚验证成功的新 key。取消验证会中止请求，迟到结果不保存。
 
-模型设置由 Host 在同一个私有 `state/managed/model-config.json` 中维护。固定 `default/backup × flash/pro`，两槽凭据独立。Pilot 和未指定模型的节点默认使用 `models.default.flash`；其余三种引用由 Graph 明确选择，不自动降级。每个新 Turn/invocation 直接读取最新槽设置，当前执行持有独立快照；已有原生 Session 加载后通过 `session/set_config_option` 选定本轮模型。Chat/Responses 由固定 Goose 原生 Provider 按显式协议生成和解析，Host Bridge 只转发到本轮冻结的服务。
+模型设置由 WebUI 经 Host 管理接口写入同一个私有 `state/managed/model-config.json`，执行只读该事实来源。`ANCHOR_MODEL_URL/API_KEY/NAME/WIRE_API/ALIASES` 已退出平台配置，旧安装 `config/model.env` 不再加载；不自动迁移或覆盖已有凭据。Goose 路径、网络和运行预算仍为部署控制。固定 `default/backup × flash/pro`，两槽凭据独立。Pilot 和未指定模型的节点默认使用 `models.default.flash`；其余三种引用由 Graph 明确选择，不自动降级。每个新 Turn/invocation 直接读取最新槽设置，当前执行持有独立快照；已有原生 Session 加载后通过 `session/set_config_option` 选定本轮模型。Chat/Responses 由固定 Goose 原生 Provider 按显式协议生成和解析，Host Bridge 只转发到本轮冻结的服务。
 
-旧 `current/history` 与环境变量保留兼容默认和显式别名，已保存槽缺字段或密钥时失败，不退回旧配置。更换服务保留槽的公共历史与独立旧服务凭据，供同 invocation 恢复核对原绑定；历史凭据仍可通过现有接口管理。命名槽绑定包含槽身份，避免与旧执行或另一账户混用。存储读取兼容 format 1/2，写入 format 3（增加 `providers.history`），复用原文件锁与原子发布；读取不迁移，回滚旧版本前需使用兼容备份。管理接口见 [API 契约](rust-frontend-api-contract.md#web-管理入口)。
+旧托管 `current/history` 保留兼容默认和显式别名，已保存槽缺字段或密钥时失败，不退回旧配置。更换服务保留槽的公共历史与独立旧服务凭据，供同 invocation 恢复核对原绑定；历史凭据仍可通过现有接口管理。命名槽绑定包含槽身份，避免与旧执行或另一账户混用。存储读取兼容 format 1/2，写入 format 3（增加 `providers.history`），复用原文件锁与原子发布；读取不迁移，回滚旧版本前需使用兼容备份。管理接口见 [API 契约](rust-frontend-api-contract.md#web-管理入口)。
 
 ## 发行与验收边界
 

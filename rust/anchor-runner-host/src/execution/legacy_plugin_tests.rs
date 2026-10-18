@@ -59,12 +59,12 @@ impl Environment {
             );
             std::env::set_var("ANCHOR_GOOSE_LOCAL_NETWORK", "0");
             std::env::set_var("ANCHOR_GOOSE_ALLOW_SHARED_NETWORK", "1");
-            std::env::set_var("ANCHOR_MODEL_URL", "http://127.0.0.1:1/v1");
-            std::env::set_var("ANCHOR_MODEL_API_KEY", "preparation-fixture-only");
-            std::env::set_var("ANCHOR_MODEL_NAME", "preparation-fixture");
-            std::env::set_var("ANCHOR_MODEL_WIRE_API", "chat");
             std::env::set_var("ANCHOR_MODEL_DIRECT", "0");
         }
+        crate::model_configuration::ModelConfiguration::from_env(&root.join("state"))
+            .unwrap()
+            .save(serde_json::from_value(json!({"endpoint":"http://127.0.0.1:1/v1","wire_api":"chat","model":"preparation-fixture","api_key":{"action":"set","value":"preparation-fixture-only"}})).unwrap())
+            .unwrap();
         Self(previous)
     }
 }

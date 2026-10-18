@@ -4,7 +4,7 @@
   "objective": "用一句话说明编译器为什么需要代价模型。",
   "agents": {
     "drafter": {
-      "model": "models.academic",
+      "model": "models.default.flash",
       "instructions": "Write one sentence about compiler cost models into `draft.md`. The reviewer's workspace is mounted read-only at `/in/review`. If a review is among what you were given, it is of the sentence you wrote: rewrite `draft.md` to address what it asks for, rather than starting again.",
       "network": false,
       "reads": [
@@ -15,7 +15,7 @@
       ]
     },
     "reviewer": {
-      "model": "models.academic",
+      "model": "models.default.flash",
       "instructions": "Count the words in the draft you were given. Choose the next node from the state of /workspace/review.md when this pass begins, before writing anything:\n\n  If review.md was absent at the start of this pass, write it asking for one concrete example, then route to `draft`. Creating review.md during this pass does not change that choice.\n  If review.md was already present at the start of this pass, read the revised draft and your previous review, then route to `done`.\n\nReturn a structured completion with the selected route.",
       "network": false,
       "reads": [
@@ -26,7 +26,7 @@
       ]
     },
     "finisher": {
-      "model": "models.academic",
+      "model": "models.default.flash",
       "instructions": "The draft is mounted read-only with what you were given, reachable through the review. Copy it into `final.md`, with a one-line heading above it. Then return a structured completion.",
       "network": false,
       "reads": [

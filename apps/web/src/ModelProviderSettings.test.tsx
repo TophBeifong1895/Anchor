@@ -7,7 +7,7 @@ import { ModelProviderSettings } from './ModelProviderSettings';
 const fields = { endpoint: 'https://provider.example/v1', wire_api: 'chat', flash: 'fast-model', pro: '' };
 const original = {
   configured: true, fields: { ...fields, model: fields.flash }, api_key_present: true,
-  deployment_fields: ['endpoint', 'wire_api', 'model', 'api_key'],
+  deployment_fields: [],
   providers: {
     default: { fields, api_key_present: true, configured: false, source: 'legacy' },
     backup: { fields: { endpoint: '', wire_api: 'responses', flash: '', pro: '' }, api_key_present: false, configured: false, source: 'empty' },
@@ -73,7 +73,7 @@ describe('Model provider settings', () => {
   const click = async (text: string, within: ParentNode = container) => { await act(async () => button(text, within).click()); };
   const writes = () => fetchMock.mock.calls.filter(([, options]) => ['PUT', 'POST', 'DELETE'].includes((options as RequestInit)?.method ?? ''));
 
-  it('saves partial default settings independently of deployment locks without testing or starting a session', async () => {
+  it('saves partial default settings through Host management without testing or starting a session', async () => {
     await draw();
     expect(input('default', 'Flash 模型').value).toBe('fast-model');
     expect(input('default', 'Pro 模型').value).toBe('');

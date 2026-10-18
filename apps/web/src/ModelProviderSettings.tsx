@@ -263,6 +263,6 @@ export function ModelProviderSettings({ refreshVersion = 0 }: { refreshVersion?:
     <p className="settings-help">Pilot 和未指定模型的节点使用 default.flash。保存后，下一轮使用新设置，当前轮保持原设置。backup 仅在工作流明确选择时使用。</p>
     {status && <p className="settings-field-help">{status.execution.configured ? `下一轮默认模型：${status.execution.fields?.model ?? 'default.flash'}` : '下一轮默认模型尚不可用，请补全 default 的服务地址、Flash 模型和密钥。'}</p>}
     {problem && <div className="model-provider-problem"><p className="settings-notice bad" role="alert">{problem}</p><button type="button" disabled={loading} onClick={() => setRetry(value => value + 1)}>重试读取模型设置</button></div>}
-    {status && <>{slots.map(slot => <ProviderSettings key={slot} slot={slot} status={status.providers[slot]} onSave={save} />)}<p className="settings-field-help model-provider-footnote">API key 只发送到 Anchor，读取设置时不返回。测试会发送一条小请求，可能产生少量费用。</p><RetainedCredentials providers={status.retained_providers.filter(provider => !provider.slot || !provider.current)} onSave={save} /></>}
+    {status && <>{slots.map(slot => <ProviderSettings key={slot} slot={slot} status={status.providers[slot]} onSave={save} />)}<p className="settings-field-help model-provider-footnote">模型服务和 API key 在此配置，由 Anchor 保存；不读取环境变量中的模型配置，读取设置时不返回密钥。测试会发送一条小请求，可能产生少量费用。</p><RetainedCredentials providers={status.retained_providers.filter(provider => !provider.slot || !provider.current)} onSave={save} /></>}
   </section>;
 }

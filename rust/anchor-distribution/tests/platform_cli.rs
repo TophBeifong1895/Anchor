@@ -16,9 +16,10 @@ fn native_platform_cli_exposes_install_and_start_without_runtime_grant_flags() {
     let result = command().args(["install", "--help"]).output().unwrap();
     assert!(result.status.success());
     let help = String::from_utf8(result.stdout).unwrap();
-    for flag in ["--archive", "--sha256", "--install-root", "--model-config"] {
+    for flag in ["--archive", "--sha256", "--install-root"] {
         assert!(help.contains(flag));
     }
+    assert!(!help.contains("--model-config"));
     assert!(!help.contains("--python"));
     assert!(!help.contains("--network"));
 }
@@ -44,7 +45,12 @@ fn native_platform_cli_does_not_evaluate_or_print_model_config() {
         .unwrap();
     assert!(!result.status.success());
     assert!(result.stdout.is_empty());
-    assert!(!String::from_utf8_lossy(&result.stderr).contains("touch"));
+    let error = String::from_utf8_lossy(&result.stderr);
+    assert!(
+        error.contains("configure model services in WebUI Settings"),
+        "{error}"
+    );
+    assert!(!error.contains("touch"));
     assert!(!sentinel.exists());
     assert!(!install_root.exists());
 }

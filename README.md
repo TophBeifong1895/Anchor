@@ -140,13 +140,9 @@ scripts/build-goose-acp.sh \
 ANCHOR_GOOSE_BINARY=/absolute/path/to/Anchor/.local/bin/goose
 ANCHOR_GOOSE_BINARY_SHA256=17e065a79cb0508413af714724aed51d6b76972dda9feebdda701330134fb640
 ANCHOR_GOOSE_ALLOW_SHARED_NETWORK=1
-ANCHOR_MODEL_URL=https://provider.example/v1
-ANCHOR_MODEL_API_KEY=replace-me
-ANCHOR_MODEL_NAME=replace-me
-ANCHOR_MODEL_WIRE_API=responses
 ```
 
-保存后执行 `./scripts/dev.sh restart`。示例 Graph 中的 `models.academic` 在没有单独配置别名时会回退到 `ANCHOR_MODEL_NAME`；需要区分不同模型时再设置 `ANCHOR_MODEL_ALIASES`。凭据只放在部署环境；不要写入 Graph、Plugin、发行包或 Git。完整配置、监听地址、API key 和各数据根见[使用指南](docs/usage.md)。
+保存 Goose 部署设置后执行 `./scripts/dev.sh restart`，再到 WebUI「设置 → 模型服务」填写服务地址、协议、API key 和 Flash/Pro 模型名。模型服务配置只由 Host 私有管理存储保存，不从 `.env` 读取；保存模型设置后下一轮生效，无需重启。示例 Graph 使用 `models.default.flash`。凭据不要写入 Graph、Plugin、发行包或 Git。监听地址、Anchor 登录密钥和各数据根见[使用指南](docs/usage.md)。
 
 ### 第一次运行开发示例
 

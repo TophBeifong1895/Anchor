@@ -731,10 +731,6 @@ impl Fixture {
         );
         environment.set("ANCHOR_GOOSE_LOCAL_NETWORK", "0");
         environment.set("ANCHOR_GOOSE_ALLOW_SHARED_NETWORK", "1");
-        environment.set("ANCHOR_MODEL_URL", "http://127.0.0.1:1/v1");
-        environment.set("ANCHOR_MODEL_API_KEY", "admission-fixture-only");
-        environment.set("ANCHOR_MODEL_NAME", "admission-fixture");
-        environment.set("ANCHOR_MODEL_WIRE_API", "chat");
         environment.set("ANCHOR_MODEL_DIRECT", "0");
         environment.set("ANCHOR_RUNNER_ALLOWED_COMMANDS", "true");
         environment.set("ANCHOR_PILOT_PYTHON_ENABLED", "0");
@@ -745,6 +741,10 @@ impl Fixture {
         environment.remove("ANCHOR_PILOT_RUSTUP");
         environment.remove("ANCHOR_PILOT_PYTHON");
         environment.remove("ANCHOR_BWRAP");
+        crate::model_configuration::ModelConfiguration::from_env(&self.data)
+            .unwrap()
+            .save(serde_json::from_value(json!({"endpoint":"http://127.0.0.1:1/v1","wire_api":"chat","model":"admission-fixture","api_key":{"action":"set","value":"admission-fixture-only"}})).unwrap())
+            .unwrap();
         environment
     }
 

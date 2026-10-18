@@ -1,7 +1,7 @@
 use super::*;
 use crate::platform::tests::Fixture;
 use sha2::{Digest, Sha256};
-use std::os::unix::fs::symlink;
+use std::{collections::BTreeMap, os::unix::fs::symlink};
 
 fn model(root: &Path) -> PathBuf {
     let path = root.join("model-input.env");
@@ -15,7 +15,7 @@ fn request(fixture: &Fixture) -> PlatformInstallRequest {
         archive: report.output,
         sha256: report.sha256,
         install_root: fixture.root.path().join("installation"),
-        model_config: Some(model(fixture.root.path())),
+        model_config: None,
     }
 }
 
@@ -27,7 +27,7 @@ fn admitted_install(
 }
 
 #[test]
-fn fresh_install_separates_release_and_private_model_and_never_creates_a_business_graph() {
+fn fresh_install_separates_release_and_host_settings_and_preserves_retired_model_files() {
     let fixture = Fixture::new();
     let request = request(&fixture);
     let report = admitted_install(&fixture, &request).unwrap();
@@ -37,15 +37,7 @@ fn fresh_install_separates_release_and_private_model_and_never_creates_a_busines
             .install_root
             .join("release/anchor-runtime/bin/anchor-platform")
     );
-    assert!(report.model_config.as_ref().unwrap().is_file());
-    assert_eq!(
-        fs::metadata(report.model_config.as_ref().unwrap())
-            .unwrap()
-            .permissions()
-            .mode()
-            & 0o777,
-        0o600
-    );
+    assert!(report.model_config.is_none());
     assert_eq!(
         fs::metadata(&report.release_root)
             .unwrap()
@@ -84,12 +76,19 @@ fn fresh_install_separates_release_and_private_model_and_never_creates_a_busines
     );
     assert!(!report.release_root.join("bundle").exists());
     assert!(!report.release_root.join("model.env").exists());
+    let legacy_model = request.install_root.join("config/model.env");
+    fs::write(
+        &legacy_model,
+        "retired file with invalid syntax and fixture-private-key",
+    )
+    .unwrap();
     let command = platform_command(&report.launcher).unwrap();
     let values = command
         .get_envs()
         .map(|(key, value)| (key.to_str().unwrap(), value.unwrap().to_str().unwrap()))
         .collect::<BTreeMap<_, _>>();
-    assert_eq!(values["ANCHOR_MODEL_API_KEY"], "fixture-private-key");
+    assert!(!values.contains_key("ANCHOR_MODEL_API_KEY"));
+    assert!(!values.contains_key("ANCHOR_MODEL_URL"));
     assert_eq!(values["ANCHOR_GOOSE_LOCAL_NETWORK"], "1");
     assert_eq!(values["ANCHOR_RUNNER_ALLOWED_COMMANDS"], "sh,git");
     assert!(!values.contains_key("ANCHOR_RUNNER_BUNDLE_ROOT"));
@@ -106,36 +105,30 @@ fn fresh_install_separates_release_and_private_model_and_never_creates_a_busines
     assert!(platform_command_with_listen(&report.launcher, "127.0.0.1:0").is_err());
     let json = serde_json::to_string(&report).unwrap();
     assert!(!json.contains("fixture-private-key"));
-    let original = fs::read(report.model_config.as_ref().unwrap()).unwrap();
+    let original = fs::read(&legacy_model).unwrap();
     assert!(matches!(
         admitted_install(&fixture, &request),
         Err(PackageError::AlreadyExists)
     ));
-    assert_eq!(
-        fs::read(report.model_config.as_ref().unwrap()).unwrap(),
-        original
-    );
+    assert_eq!(fs::read(&legacy_model).unwrap(), original);
     // Test cleanup must make private read-only release directories writable.
     make_directories_writable(&request.install_root).unwrap();
 }
 
 #[test]
-fn model_input_is_literal_data_and_errors_do_not_contain_values() {
-    let values = parse_model("ANCHOR_MODEL_URL=https://provider.example/v1\nANCHOR_MODEL_API_KEY='$(touch /tmp/anchor-not-executed)`id`'\nANCHOR_MODEL_NAME=test\n").unwrap();
-    assert_eq!(
-        values["ANCHOR_MODEL_API_KEY"],
-        "$(touch /tmp/anchor-not-executed)`id`"
+fn model_files_are_rejected_without_reading_or_echoing_credentials() {
+    let fixture = Fixture::new();
+    let mut request = request(&fixture);
+    request.model_config = Some(model(fixture.root.path()));
+    let error = admitted_install(&fixture, &request)
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.contains("configure model services in WebUI Settings"),
+        "{error}"
     );
-    for content in [
-        "ANCHOR_MODEL_API_KEY='secret-unmatched\n",
-        "export ANCHOR_MODEL_API_KEY=secret-value\n",
-        "HOME=secret-value\n",
-        "ANCHOR_MODEL_URL=x\nANCHOR_MODEL_URL=secret-value\n",
-        "ANCHOR_MODEL_API_KEY=secret-value\n",
-    ] {
-        let error = parse_model(content).unwrap_err().to_string();
-        assert!(!error.contains("secret-"), "{error}");
-    }
+    assert!(!error.contains("fixture-private-key"));
+    assert!(!request.install_root.exists());
 }
 
 #[test]
@@ -145,14 +138,10 @@ fn wrong_archive_digest_invalid_model_and_symlink_inputs_leave_no_installation()
         let mut request = request(&fixture);
         match scenario {
             "digest" => request.sha256 = "0".repeat(64),
-            "model" => fs::write(
-                request.model_config.as_ref().unwrap(),
-                "HOME=private-value\n",
-            )
-            .unwrap(),
+            "model" => request.model_config = Some(model(fixture.root.path())),
             "symlink" => {
                 let alias = fixture.root.path().join("model-alias");
-                symlink(request.model_config.as_ref().unwrap(), &alias).unwrap();
+                symlink(model(fixture.root.path()), &alias).unwrap();
                 request.model_config = Some(alias);
             }
             "ancestor" => {
@@ -216,7 +205,7 @@ fn installer_refuses_links_duplicates_non_platform_payload_and_unlisted_paths() 
             archive,
             sha256,
             install_root: fixture.root.path().join("install"),
-            model_config: Some(model(fixture.root.path())),
+            model_config: None,
         };
         assert!(admitted_install(&fixture, &request).is_err());
         assert!(!request.install_root.exists());

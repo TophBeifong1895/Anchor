@@ -251,23 +251,13 @@ fn public_check_cannot_override_the_fixed_goose_pin_from_environment_or_manifest
 }
 
 #[test]
-fn rejects_wrong_pin_model_placeholder_and_missing_shared_network_authorization() {
+fn rejects_wrong_pin_and_missing_shared_network_authorization() {
     for (name, configured, expected) in [
         ("ANCHOR_GOOSE_BINARY_SHA256", "invalid", "fixed Goose"),
-        (
-            "ANCHOR_MODEL_NAME",
-            "REPLACE_WITH_MODEL_NAME",
-            "model name placeholder",
-        ),
         (
             "ANCHOR_GOOSE_ALLOW_SHARED_NETWORK",
             "0",
             "ANCHOR_GOOSE_ALLOW_SHARED_NETWORK=1",
-        ),
-        (
-            "ANCHOR_MODEL_API_KEY",
-            " ",
-            "ANCHOR_MODEL_API_KEY is required",
         ),
     ] {
         let mut fixture = Fixture::new();
@@ -320,64 +310,28 @@ fn rejects_a_context_window_that_is_not_a_positive_integer() {
 }
 
 #[test]
-fn model_endpoint_rejects_unsafe_urls_without_echoing_credentials_or_url_content() {
+fn first_start_needs_no_model_environment_and_ignores_retired_service_fields() {
     let mut fixture = Fixture::new();
-    for endpoint in [
-        "http://provider.example/v1",
-        "ftp://127.0.0.1/v1",
-        "https://user:private-secret@example.com/v1",
-        "https://@example.com/v1",
-        "https://example.com/v1?token=private-secret",
-        "https://example.com/v1#private-secret",
-        "https://example.com:0/v1",
-        "https://example.com:65536/v1",
-        "https:///example.com/v1",
-        "https:example.com/v1",
-        "https://exam\nple.com/v1",
-        "http://[::1/v1",
-        "http://localhost\\private-secret",
-        "http://2130706433/v1",
-        "http://127.1/v1",
-        "http://127.0.0.2/v1",
-        "http://0x7f000001/v1",
+    for name in [
+        "ANCHOR_MODEL_URL",
+        "ANCHOR_MODEL_API_KEY",
+        "ANCHOR_MODEL_NAME",
+        "ANCHOR_MODEL_WIRE_API",
+        "ANCHOR_MODEL_ALIASES",
     ] {
-        fixture.set("ANCHOR_MODEL_URL", endpoint);
-        let error = check_endpoint(&fixture.env).unwrap_err();
-        assert!(error.contains("ANCHOR_MODEL_URL"));
-        assert!(!error.contains(endpoint));
-        assert!(!error.contains("private-secret"));
+        fixture.env.remove(name);
     }
-    for endpoint in [
-        "https://provider.example/v1",
-        "http://localhost:123/v1",
-        "http://[::1]:123/v1",
+    fixture.check().unwrap();
+    for name in [
+        "ANCHOR_MODEL_URL",
+        "ANCHOR_MODEL_API_KEY",
+        "ANCHOR_MODEL_NAME",
+        "ANCHOR_MODEL_WIRE_API",
+        "ANCHOR_MODEL_ALIASES",
     ] {
-        fixture.set("ANCHOR_MODEL_URL", endpoint);
-        check_endpoint(&fixture.env).unwrap();
+        fixture.set(name, "invalid-retired-environment-value");
     }
-}
-
-#[test]
-fn rejects_model_controls_invalid_wire_protocol_and_non_string_aliases() {
-    for (name, configured, expected) in [
-        (
-            "ANCHOR_MODEL_NAME",
-            "fixture\u{1f}model",
-            "control characters",
-        ),
-        ("ANCHOR_MODEL_WIRE_API", "other", "chat or responses"),
-        ("ANCHOR_MODEL_ALIASES", "[]", "JSON object of strings"),
-        (
-            "ANCHOR_MODEL_ALIASES",
-            "{\"model\":42}",
-            "JSON object of strings",
-        ),
-        ("ANCHOR_MODEL_ALIASES", "broken", "JSON object of strings"),
-    ] {
-        let mut fixture = Fixture::new();
-        fixture.set(name, configured);
-        fixture.rejects(expected);
-    }
+    fixture.check().unwrap();
 }
 
 #[test]
@@ -734,6 +688,8 @@ fn deployment_templates_use_concrete_release_paths_and_secret_placeholders() {
     ] {
         assert!(host_env.contains(expected));
     }
+    assert!(!host_env.contains("ANCHOR_MODEL_API_KEY="));
+    assert!(!host_env.contains("ANCHOR_MODEL_URL="));
     let assignments = host_env
         .lines()
         .chain(gateway_env.lines())
@@ -741,7 +697,6 @@ fn deployment_templates_use_concrete_release_paths_and_secret_placeholders() {
         .filter_map(|line| line.split_once('='))
         .collect::<BTreeMap<_, _>>();
     for name in [
-        "ANCHOR_MODEL_API_KEY",
         "ANCHOR_API_KEY",
         "WECOM_BOT_SECRET",
         "ANCHOR_CHANNEL_CONTROL_TOKEN",

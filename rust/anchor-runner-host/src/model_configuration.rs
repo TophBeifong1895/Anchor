@@ -17,14 +17,10 @@ use std::{
     path::{Path, PathBuf},
 };
 
-const ENV_FIELDS: [(&str, &str); 8] = [
-    ("endpoint", "ANCHOR_MODEL_URL"),
-    ("wire_api", "ANCHOR_MODEL_WIRE_API"),
-    ("model", "ANCHOR_MODEL_NAME"),
+// Deployment controls tune execution, never select a model service or supply credentials.
+const ENV_FIELDS: [(&str, &str); 3] = [
     ("context_window", "ANCHOR_MODEL_CONTEXT_WINDOW"),
     ("max_tokens", "ANCHOR_MODEL_MAX_TOKENS"),
-    ("aliases", "ANCHOR_MODEL_ALIASES"),
-    ("api_key", "ANCHOR_MODEL_API_KEY"),
     ("direct", "ANCHOR_MODEL_DIRECT"),
 ];
 
@@ -143,7 +139,8 @@ impl ModelConfiguration {
         }
         Self::new(state, external)
     }
-    fn new(state: &Path, external: BTreeMap<String, String>) -> Result<Self, String> {
+    fn new(state: &Path, mut external: BTreeMap<String, String>) -> Result<Self, String> {
+        external.retain(|name, _| ENV_FIELDS.iter().any(|(_, allowed)| name == allowed));
         let root = state.join("managed");
         crate::goose_acp::pilot::directory(&root)?;
         Ok(Self { root, external })
@@ -232,9 +229,6 @@ impl ModelConfiguration {
         let mut fields = fields.clone();
         for (name, value) in &self.external {
             match name.as_str() {
-                "ANCHOR_MODEL_URL" => fields.endpoint = value.clone(),
-                "ANCHOR_MODEL_WIRE_API" => fields.wire_api = value.clone(),
-                "ANCHOR_MODEL_NAME" => fields.model = value.clone(),
                 "ANCHOR_MODEL_CONTEXT_WINDOW" => {
                     fields.context_window =
                         Some(value.trim().parse().map_err(
@@ -249,23 +243,12 @@ impl ModelConfiguration {
                             .map_err(|_| "ANCHOR_MODEL_MAX_TOKENS must be a positive integer")?,
                     )
                 }
-                "ANCHOR_MODEL_ALIASES" => {
-                    fields.aliases = serde_json::from_str(value).map_err(
-                        |_| "ANCHOR_MODEL_ALIASES must be a JSON object of model aliases",
-                    )?
-                }
                 _ => {}
             }
         }
         Ok(fields)
     }
     fn key<'a>(&'a self, managed: &'a ManagedModel, fields: &ModelFields) -> Option<&'a str> {
-        let current = self.effective(&managed.current).ok()?;
-        if current.provider_id() == fields.provider_id()
-            && let Some(value) = self.external.get("ANCHOR_MODEL_API_KEY")
-        {
-            return Some(value);
-        }
         managed
             .credentials
             .get(&fields.provider_id())
@@ -277,6 +260,14 @@ impl ModelConfiguration {
         fields: &ModelFields,
         validation: bool,
     ) -> Result<ModelRegistry, String> {
+        if !validation && fields.endpoint.is_empty() {
+            return Err(
+                "no model service configured; open Settings to configure default Flash".into(),
+            );
+        }
+        if !validation && self.key(managed, fields).is_none() {
+            return Err("the selected provider has no API key configured".into());
+        }
         let mut values = fields.values();
         if let Some(key) = self
             .key(managed, fields)
@@ -338,7 +329,7 @@ impl ModelConfiguration {
                 continue;
             }
             let id = fields.provider_id();
-            providers.entry(id.clone()).or_insert_with(|| json!({"id":id,"endpoint":fields.endpoint,"wire_api":fields.wire_api,"api_key_present":self.key(managed, fields).is_some(),"current":fields.provider_id() == current.provider_id(),"deployment":fields.provider_id() == current.provider_id() && self.external.contains_key("ANCHOR_MODEL_API_KEY")}));
+            providers.entry(id.clone()).or_insert_with(|| json!({"id":id,"endpoint":fields.endpoint,"wire_api":fields.wire_api,"api_key_present":self.key(managed, fields).is_some(),"current":fields.provider_id() == current.provider_id(),"deployment":false}));
         }
         self.project_slot_credentials(managed, &mut providers);
         let mut status = json!({"configured":configured,"fields":current,"api_key_present":self.key(managed, &current).is_some(),"deployment_fields":ENV_FIELDS.iter().filter(|(_,env)| self.external.contains_key(*env)).map(|(field,_)| *field).collect::<Vec<_>>(),"retained_providers":providers.into_values().collect::<Vec<_>>(),"notice":"新调用读取最新保存的模型；正在执行的调用保持原快照。同一次调用恢复时保留原模型和服务地址，可使用同一服务更新后的密钥。"});
@@ -353,17 +344,9 @@ impl ModelConfiguration {
             serde_json::to_value(&update.fields).map_err(|_| "invalid model settings")?;
         let effective = serde_json::to_value(&draft).map_err(|_| "invalid model settings")?;
         for (field, env) in ENV_FIELDS {
-            if field != "api_key"
-                && self.external.contains_key(env)
-                && supplied.get(field) != effective.get(field)
-            {
+            if self.external.contains_key(env) && supplied.get(field) != effective.get(field) {
                 return Err(format!("{field} is managed by this deployment"));
             }
-        }
-        if self.external.contains_key("ANCHOR_MODEL_API_KEY")
-            && !matches!(update.api_key, KeyUpdate::Keep)
-        {
-            return Err("api_key is managed by this deployment".into());
         }
         self.registry(managed, &draft, true)?;
         if !before.endpoint.is_empty()
@@ -407,9 +390,6 @@ impl ModelConfiguration {
             return Ok(status);
         }
         let current = self.effective(&managed.current)?;
-        if id == current.provider_id() && self.external.contains_key("ANCHOR_MODEL_API_KEY") {
-            return Err("api_key is managed by this deployment".into());
-        }
         let fields = std::iter::once(&current)
             .chain(&managed.history)
             .find(|fields| fields.provider_id() == id)
@@ -431,9 +411,6 @@ impl ModelConfiguration {
             return Ok(status);
         }
         let current = self.effective(&managed.current)?;
-        if id == current.provider_id() && self.external.contains_key("ANCHOR_MODEL_API_KEY") {
-            return Err("api_key is managed by this deployment".into());
-        }
         if !std::iter::once(&current)
             .chain(&managed.history)
             .any(|fields| fields.provider_id() == id)

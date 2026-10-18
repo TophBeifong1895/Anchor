@@ -53,7 +53,7 @@ sudo install -d -o root -g root -m 0755 /etc/anchor
 sudo install -o root -g root -m 0600 deploy/systemd/anchor.env.example /etc/anchor/anchor.env
 ```
 
-Edit `/etc/anchor/anchor.env`: set the actual model URL, API key and model name;
+Edit `/etc/anchor/anchor.env`: configure the reviewed runtime paths and
 review the graph's exact `ANCHOR_RUNNER_ALLOWED_COMMANDS`; install Bubblewrap,
 Git and any explicitly required Plugin dependencies. Goose is the Anchor-built lean
 ACP binary from pinned upstream v1.53.0 sources (`scripts/build-goose-acp.sh`) with
@@ -61,6 +61,12 @@ SHA256 `17e065a79cb0508413af714724aed51d6b76972dda9feebdda701330134fb640`.
 The template binds to loopback and permits an empty API-key list only in that
 case. Non-loopback binds require unique bearer secrets of at least 32 bytes and
 must be protected by the deployment's network/authentication boundary.
+
+After starting the Host, configure model service URLs, protocols, API keys and
+Flash/Pro model names in WebUI Settings. Provider settings live only in the
+Host-managed private store; model environment fields are ignored. Preflight
+checks deployment readiness without requiring a configured model or contacting
+the provider. Existing environment files are not imported into model settings.
 
 Optionally install and run the Rust operator-time preflight outside the Host
 service lifecycle. `systemd-run` supplies the protected EnvironmentFile to a

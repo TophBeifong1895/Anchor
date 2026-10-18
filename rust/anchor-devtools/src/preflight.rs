@@ -23,6 +23,16 @@ pub fn run() -> Result<Value, String> {
         let Ok(name) = name.into_string() else {
             continue;
         };
+        if matches!(
+            name.as_str(),
+            "ANCHOR_MODEL_URL"
+                | "ANCHOR_MODEL_API_KEY"
+                | "ANCHOR_MODEL_NAME"
+                | "ANCHOR_MODEL_WIRE_API"
+                | "ANCHOR_MODEL_ALIASES"
+        ) {
+            continue;
+        }
         match value.into_string() {
             Ok(value) => {
                 environment.insert(name, value);
@@ -43,7 +53,6 @@ pub fn check(env: &BTreeMap<String, String>) -> Result<Value, String> {
 fn check_with_pin(env: &BTreeMap<String, String>, goose_sha256: &str) -> Result<Value, String> {
     check_env_file(env)?;
     check_api_keys(env)?;
-    check_endpoint(env)?;
     if let Some(window) = env.get("ANCHOR_MODEL_CONTEXT_WINDOW")
         && window
             .trim()
@@ -160,71 +169,6 @@ fn check_env_file(env: &BTreeMap<String, String>) -> Result<(), String> {
     if metadata.mode() & 0o077 != 0 {
         return Err("ANCHOR_ENV_FILE must have mode 0600 or stricter".into());
     }
-    Ok(())
-}
-
-fn check_endpoint(env: &BTreeMap<String, String>) -> Result<(), String> {
-    let endpoint = required(env, "ANCHOR_MODEL_URL")?;
-    let invalid =
-        || "ANCHOR_MODEL_URL must be an absolute HTTPS URL or loopback HTTP URL".to_owned();
-    let (_, authority) = endpoint.split_once("://").ok_or_else(invalid)?;
-    let authority = authority.split(['/', '?', '#']).next().unwrap_or_default();
-    if authority.is_empty()
-        || authority.starts_with('/')
-        || authority.contains('@')
-        || endpoint
-            .chars()
-            .any(|character| character.is_control() || character.is_whitespace())
-        || endpoint.contains('\\')
-    {
-        return Err(invalid());
-    }
-    let parsed = url::Url::parse(endpoint).map_err(|_| invalid())?;
-    let raw_host = if let Some(bracketed) = authority.strip_prefix('[') {
-        bracketed.split(']').next().unwrap_or_default()
-    } else {
-        authority.split(':').next().unwrap_or_default()
-    };
-    let loopback = matches!(
-        parsed.host(),
-        Some(url::Host::Domain("localhost"))
-            | Some(url::Host::Ipv4(std::net::Ipv4Addr::LOCALHOST))
-            | Some(url::Host::Ipv6(std::net::Ipv6Addr::LOCALHOST))
-    );
-    if parsed.host().is_none()
-        || !parsed.username().is_empty()
-        || parsed.password().is_some()
-        || parsed.query().is_some_and(|query| !query.is_empty())
-        || parsed
-            .fragment()
-            .is_some_and(|fragment| !fragment.is_empty())
-        || !(parsed.scheme() == "https"
-            || parsed.scheme() == "http"
-                && loopback
-                && matches!(
-                    raw_host.to_ascii_lowercase().as_str(),
-                    "127.0.0.1" | "::1" | "localhost"
-                ))
-        || parsed.port() == Some(0)
-    {
-        return Err(invalid());
-    }
-    required(env, "ANCHOR_MODEL_API_KEY")?;
-    let model = required(env, "ANCHOR_MODEL_NAME")?;
-    if model.starts_with("REPLACE_") {
-        return Err("replace the model name placeholder before starting".into());
-    }
-    if model.chars().any(|character| (character as u32) < 32) {
-        return Err("model name contains control characters".into());
-    }
-    if !matches!(
-        value(env, "ANCHOR_MODEL_WIRE_API", "responses"),
-        "chat" | "responses"
-    ) {
-        return Err("ANCHOR_MODEL_WIRE_API must be chat or responses".into());
-    }
-    serde_json::from_str::<BTreeMap<String, String>>(value(env, "ANCHOR_MODEL_ALIASES", "{}"))
-        .map_err(|_| "ANCHOR_MODEL_ALIASES must be a JSON object of strings".to_owned())?;
     Ok(())
 }
 

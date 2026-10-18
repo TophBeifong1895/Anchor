@@ -950,6 +950,21 @@ impl Host {
     }
 
     fn process(&self, provider: &Provider) -> Command {
+        // Native execution reads the same private model store as WebUI. Seed
+        // only a fresh fixture; restarts must observe settings saved by tests.
+        let path = self.base.state_root().join("managed/model-config.json");
+        if self.native && !path.exists() {
+            use std::os::unix::fs::PermissionsExt;
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            let endpoint = format!("{}/v1", provider.url);
+            let id = format!("{:x}", Sha256::digest(format!("chat\n{endpoint}")));
+            let managed = json!({"format":3,
+                "current":{"endpoint":endpoint,"wire_api":"chat","model":provider.model,
+                    "aliases":{"models.worker":provider.model}},
+                "credentials":{id:"fixture-only-not-a-secret"}});
+            fs::write(&path, managed.to_string()).unwrap();
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+        }
         let root = self.base.root.path();
         let mut process = Command::new(&self.binary);
         process
@@ -993,15 +1008,7 @@ impl Host {
             .env("ANCHOR_GOOSE_BINARY_SHA256", digest(&self.goose))
             .env("ANCHOR_GOOSE_OPENAI_HOST", &provider.url)
             .env("ANCHOR_GOOSE_MODEL", &provider.model)
-            .env("ANCHOR_MODEL_API_KEY", "fixture-only-not-a-secret")
-            .env("ANCHOR_MODEL_URL", format!("{}/v1", provider.url))
             .envs(self.extra_environment.iter().cloned())
-            .env("ANCHOR_MODEL_WIRE_API", "chat")
-            .env("ANCHOR_MODEL_NAME", &provider.model)
-            .env(
-                "ANCHOR_MODEL_ALIASES",
-                json!({"models.worker":provider.model}).to_string(),
-            )
             .current_dir(root);
         if self.runtime_default {
             process.env_remove("ANCHOR_RUNNER_AGENT_RUNTIME");
