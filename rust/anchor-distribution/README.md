@@ -75,14 +75,10 @@ Model configuration is optional at installation. Start the service and configure
 the provider in WebUI **Settings**; the Host stores it privately under
 `data/state/managed/`. Python and Rust initialization is available on the same page.
 
-To keep the model under deployment control, optionally prepare a private input
-using `deploy/platform/model.env.example` and pass `--model-config`. It
-accepts exactly `ANCHOR_MODEL_URL`, `ANCHOR_MODEL_API_KEY`, `ANCHOR_MODEL_NAME`,
-`ANCHOR_MODEL_WIRE_API`, `ANCHOR_MODEL_ALIASES`,
-`ANCHOR_MODEL_CONTEXT_WINDOW` and `ANCHOR_MODEL_DIRECT`. Model URL, API key and
-name are required. Lines use `KEY=value`, optionally enclosed in matching single
-or double quotes. Values are literal data: shell evaluation, interpolation,
-export statements, escapes and multiline values are unsupported.
+The launcher derives all resource and mutable roots from its installed location,
+clears inherited configuration, and does not read environment files. Model, Plugin,
+channel and language settings belong to the existing Host-managed WebUI flows.
+The retired `--model-config` option is rejected; old files are left untouched.
 
 ```sh
 scripts/install-platform.sh --archive /reviewed/platform.tar.gz \

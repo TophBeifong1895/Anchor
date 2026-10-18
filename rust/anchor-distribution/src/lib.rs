@@ -8,7 +8,7 @@ mod validation;
 
 pub use install::{
     PlatformInstallReport, PlatformInstallRequest, install_platform, platform_command,
-    platform_command_with_listen,
+    platform_command_with_listen, validate_platform_runtime,
 };
 pub use platform::{
     BootstrapInventory, BootstrapTool, PlatformPackageInventory, PlatformPackageReport,

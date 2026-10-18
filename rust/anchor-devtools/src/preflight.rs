@@ -46,12 +46,54 @@ pub fn run() -> Result<Value, String> {
     check(&environment)
 }
 
+/// Validate the exact command the installed launcher will use, without caller env values.
+pub fn run_installed(launcher: &Path) -> Result<Value, String> {
+    check(&installed_environment(launcher)?)
+}
+
+fn installed_environment(launcher: &Path) -> Result<BTreeMap<String, String>, String> {
+    let launcher = launcher
+        .canonicalize()
+        .map_err(|_| "platform launcher is unavailable")?;
+    let command =
+        anchor_distribution::platform_command(&launcher).map_err(|error| error.to_string())?;
+    let mut environment = BTreeMap::new();
+    for (name, value) in command.get_envs() {
+        let name = name
+            .to_str()
+            .ok_or("platform configuration must be UTF-8")?;
+        let value = value
+            .and_then(|value| value.to_str())
+            .ok_or("platform configuration must be UTF-8")?;
+        environment.insert(name.to_owned(), value.to_owned());
+    }
+    for (name, path) in [
+        (
+            "ANCHOR_DEPLOYMENT_ROOT",
+            command
+                .get_current_dir()
+                .ok_or("platform runtime root is unavailable")?,
+        ),
+        (
+            "ANCHOR_RUNNER_HOST_BINARY",
+            Path::new(command.get_program()),
+        ),
+    ] {
+        environment.insert(
+            name.to_owned(),
+            path.to_str()
+                .ok_or("platform configuration must be UTF-8")?
+                .to_owned(),
+        );
+    }
+    Ok(environment)
+}
+
 pub fn check(env: &BTreeMap<String, String>) -> Result<Value, String> {
     check_with_pin(env, GOOSE_SHA256)
 }
 
 fn check_with_pin(env: &BTreeMap<String, String>, goose_sha256: &str) -> Result<Value, String> {
-    check_env_file(env)?;
     check_api_keys(env)?;
     if let Some(window) = env.get("ANCHOR_MODEL_CONTEXT_WINDOW")
         && window
@@ -156,18 +198,6 @@ fn check_directory(path: &Path, name: &str) -> Result<(), String> {
         return Err(format!(
             "{name} is not accessible with the required permissions"
         ));
-    }
-    Ok(())
-}
-
-fn check_env_file(env: &BTreeMap<String, String>) -> Result<(), String> {
-    let path = absolute_path(required(env, "ANCHOR_ENV_FILE")?, "ANCHOR_ENV_FILE")?;
-    let metadata = metadata(&path, "ANCHOR_ENV_FILE")?;
-    if !metadata.is_file() || ![0, rustix::process::geteuid().as_raw()].contains(&metadata.uid()) {
-        return Err("ANCHOR_ENV_FILE must be a regular root- or service-owned file".into());
-    }
-    if metadata.mode() & 0o077 != 0 {
-        return Err("ANCHOR_ENV_FILE must have mode 0600 or stricter".into());
     }
     Ok(())
 }

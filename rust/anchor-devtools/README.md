@@ -65,8 +65,10 @@ capability, live-model compatibility, or production readiness.
 
 ## Native operations
 
-`anchor-devtools preflight` checks a protected deployment environment, pinned
-runtime inventory, selected binaries, private mutable roots and writer lease.
+`anchor-devtools preflight --launcher /absolute/path/to/anchor-platform` reuses
+the installed launcher command to check the pinned runtime inventory, selected
+binaries, private mutable roots and writer lease, without environment files.
+The flagless form remains available for explicit operator process settings.
 It does not contact a provider or start the service. See the
 [deployment guide](../../docs/rust-production-deployment.md).
 

@@ -3,27 +3,6 @@ set -euo pipefail
 
 repo=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 cd "$repo"
-env_file=${ANCHOR_DEV_ENV_FILE:-$repo/.env}
-if [[ "$env_file" != - ]]; then
-  if [[ -f "$env_file" ]]; then
-    declare -A exported_settings=()
-    while IFS= read -r setting; do
-      case "$setting" in
-        ANCHOR_*|WECOM_*|DOCMOST_*|CARGO_TARGET_DIR) exported_settings["$setting"]=${!setting} ;;
-      esac
-    done < <(compgen -e)
-    set -a
-    source "$env_file"
-    set +a
-    for setting in "${!exported_settings[@]}"; do
-      export "$setting=${exported_settings[$setting]}"
-    done
-  elif [[ -n "${ANCHOR_DEV_ENV_FILE:-}" ]]; then
-    echo "Missing environment file: $env_file" >&2
-    exit 1
-  fi
-fi
-
 dev_root=$(realpath -m -- "${ANCHOR_DEV_ROOT:-$repo/.local/rust}")
 state="$dev_root/dev"
 mkdir -p "$state"
@@ -161,6 +140,9 @@ start_api() {
         CARGO_TARGET_DIR="$target_dir" cargo build --manifest-path "$repo/rust/Cargo.toml" -p anchor-runner-host --locked
       fi
     fi
+    # Fixed build outputs supply runtime tools; startup never sources a configuration file.
+    export ANCHOR_GOOSE_BINARY="${ANCHOR_GOOSE_BINARY:-$repo/.local/bin/goose}"
+    export ANCHOR_GOOSE_RELAY_BINARY="${ANCHOR_GOOSE_RELAY_BINARY:-$(dirname -- "$binary")/anchor-net-relay}"
     if [[ ! -f "$ANCHOR_RUNNER_WEB_ROOT/index.html" && "$ANCHOR_RUNNER_WEB_ROOT" == "$repo/apps/web/dist" ]]; then
       npm --prefix "$repo/apps/web" run build
     fi

@@ -11,17 +11,6 @@ import argparse, json, os, pathlib, shutil, struct, subprocess, sys, tempfile, t
 ROOT = pathlib.Path(__file__).resolve().parent
 
 
-def dotenv(path):
-    values = {}
-    for line in pathlib.Path(path).read_text().splitlines():
-        line = line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, _, value = line.partition("=")
-        values[key.strip()] = value.strip().strip("'\"")
-    return values
-
-
 def host_environment(env, state, work, bundle, tasks_root, host_env=None):
     goose = env["ANCHOR_GOOSE_BINARY"]
     built = {
@@ -160,7 +149,8 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--host", required=True)
     parser.add_argument("--arm", required=True)
-    parser.add_argument("--env-file", default="/home/mansteinl/Anchor/.env")
+    parser.add_argument("--legacy-config-json", required=True, type=pathlib.Path,
+                        help="Explicit private JSON inputs for historical Host binaries only")
     parser.add_argument("--tasks", default=str(ROOT / "tasks"))
     parser.add_argument("--out", required=True)
     parser.add_argument("--repetitions", type=int, default=1)
@@ -168,7 +158,9 @@ def main():
     parser.add_argument("--timeout", type=int, default=900)
     parser.add_argument("--host-env", default="{}", help="JSON object of extra Host env")
     options = parser.parse_args()
-    env = dotenv(options.env_file)
+    env = json.loads(options.legacy_config_json.read_text())
+    if not isinstance(env, dict) or any(not isinstance(value, str) for value in env.values()):
+        parser.error("legacy configuration must be a JSON object with string values")
     tasks = sorted(
         (Task(path) for path in pathlib.Path(options.tasks).iterdir() if path.is_dir()),
         key=lambda task: task.name,

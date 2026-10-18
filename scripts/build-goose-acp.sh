@@ -200,7 +200,7 @@ BYTES="$(stat -c%s "$ARTIFACT")"
 if [ "$DIGEST" != "$PINNED_SHA256" ]; then
     die "built digest $DIGEST does not match the pinned $PINNED_SHA256.
   Anchor pins this digest in anchor-distribution, anchor-devtools (goose/preflight/candidate),
-  the Goose fixture, the Web e2e fixture, the .env templates and this script, so a different
+  the Goose fixture, the Web e2e fixture, the fixed runtime defaults and this script, so a different
   build cannot be shipped. The digest depends on the build root path because rustc embeds
   source paths: rerun with ANCHOR_GOOSE_BUILD_ROOT=/var/tmp/anchor-goose-build (the default the
   repository pin was produced with), or update every pin together."

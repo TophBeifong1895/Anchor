@@ -217,7 +217,16 @@ fn installer_refuses_links_duplicates_non_platform_payload_and_unlisted_paths() 
     fixture.extract(&extracted);
     let runtime = extracted.join("anchor-runtime");
     fs::write(runtime.join("unlisted.txt"), "cannot ship\n").unwrap();
-    assert!(validate_runtime(&runtime, &fixture.digest, &fixture.digest, &fixture.digest).is_err());
+    assert!(
+        validate_runtime(
+            &runtime,
+            &fixture.digest,
+            &fixture.digest,
+            &fixture.digest,
+            false
+        )
+        .is_err()
+    );
 }
 
 #[test]
@@ -259,4 +268,31 @@ fn fresh_install_without_model_file_starts_with_web_managed_configuration() {
             .exists()
     );
     make_directories_writable(&request.install_root).unwrap();
+}
+
+#[test]
+fn installed_runtime_validation_uses_read_only_modes_and_needs_no_config_directory() {
+    let fixture = Fixture::new();
+    let request = request(&fixture);
+    let report = admitted_install(&fixture, &request).unwrap();
+    fs::remove_dir(request.install_root.join("config")).unwrap();
+    assert!(platform_command(&report.launcher).is_ok());
+    validate_runtime(
+        &report.release_root,
+        &fixture.digest,
+        &fixture.digest,
+        &fixture.digest,
+        true,
+    )
+    .unwrap();
+    assert!(
+        validate_runtime(
+            &report.release_root,
+            &fixture.digest,
+            &fixture.digest,
+            &fixture.digest,
+            false
+        )
+        .is_err()
+    );
 }

@@ -247,18 +247,6 @@ fn run_inner(options: &CandidateOptions) -> io::Result<Value> {
     let executed = (|| -> io::Result<()> {
         let mut environment = build_environment(&root, &target)?;
         let web_root = workspace.join("apps/web");
-        for name in [
-            ".env",
-            ".env.local",
-            ".env.production",
-            ".env.production.local",
-        ] {
-            if web_root.join(name).symlink_metadata().is_ok() {
-                return Err(io::Error::other(format!(
-                    "candidate refuses Web dotenv input: {name}"
-                )));
-            }
-        }
         let web_command = ["npm", "--prefix", "apps/web", "run", "build"].map(str::to_owned);
         checked_command(
             &mut report,

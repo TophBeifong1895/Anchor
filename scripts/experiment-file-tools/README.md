@@ -8,20 +8,27 @@ those two tools exist. The task, instructions, seed, model alias, provider,
 wall-clock budget and checker are identical, and pass/fail comes from an
 independent artifact check that never reads the model's own summary.
 
-## Reproduce
+## Historical reproduction
 
 ```sh
 # treatment: any Host built from 306480f or later
-python3 run.py --host <path>/anchor-runner-host --arm treatment --out out
+python3 run.py --host <path>/anchor-runner-host --arm treatment --out out --legacy-config-json /private/historical-run.json
 # baseline: the same tree at 81a5866 (before the tools), built into its own target dir
-python3 run.py --host <baseline-target>/debug/anchor-runner-host --arm baseline --out out
+python3 run.py --host <baseline-target>/debug/anchor-runner-host --arm baseline --out out --legacy-config-json /private/historical-run.json
 ```
 
-`run.py` reads provider settings from `--env-file` (default `/home/mansteinl/Anchor/.env`),
-pins `models.worker` to `ANCHOR_MODEL_NAME`, seeds each task through its own op
-node, runs the bundle over the Host's stdio protocol, then applies the task's
-`check.sh` to the agent node's frozen workspace snapshot. Tokens/cost come from
-the node evidence written since `1ef72f3`.
+This runner is retained for the historical Host versions used by the experiment.
+It requires an explicit private JSON object through `--legacy-config-json` and
+never reads `.env` or discovers credentials automatically. The JSON keys are the
+old Host's deployment inputs; this is not a configuration path for the current
+platform, whose model and Plugin settings belong to WebUI and the Host store.
+Current model-management compatibility is not claimed for these old experiment
+arms, and the historical results below have not been rerun.
+
+The runner pins `models.worker` to the supplied `ANCHOR_MODEL_NAME`, seeds each
+task through its own op node, runs the bundle over the Host's stdio protocol,
+then applies `check.sh` to the agent node's frozen workspace snapshot.
+Tokens/cost come from the node evidence written since `1ef72f3`.
 
 `make_tasks.py` regenerates `tasks/` (five frozen tasks).
 

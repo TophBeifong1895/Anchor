@@ -25,8 +25,8 @@ fixture instead of claiming the old three-request scenario is unchanged.
 
 The command does not load `.env`, inherit application/provider credentials,
 change production configuration or data, or call Docmost, WeCom, public academic
-services or other external business systems. It refuses Web dotenv files that
-Vite would load for a production build. Build processes inherit only tool
+services or other external business systems. Web builds disable dotenv loading,
+so historical Web dotenv files are ignored. Build processes inherit only tool
 locations and use a private home. Cargo runs offline with an isolated Cargo home
 that shares registry/git caches without inheriting credentials or Cargo config.
 Dependencies must already be available locally, including installed Web

@@ -6,7 +6,7 @@
 
 `rust/` 是唯一 Cargo workspace，官方 Host、Kernel、工具、发行和开发检查共享 [Cargo.lock](../rust/Cargo.lock)。`apps/web/` 使用 React/TypeScript；依赖见 [package.json](../apps/web/package.json) 和其 lock。官方 Plugin 清单/Skill 位于 `plugins/`，Graph 示例位于 `examples/`。
 
-运行与构建需要 Linux、Git、Bubblewrap、Rust stable、Node.js 与固定 Goose。先执行 `npm --prefix apps/web ci`，再按 [使用指南](usage.md) 配置 `.env`。`scripts/dev.sh` 管理独立 Rust 开发根和本次服务 PID；修改后端需要重建并重启才能加载，不因文档变化或仅验证而重启用户服务。
+运行与构建需要 Linux、Git、Bubblewrap、Rust stable、Node.js 与固定 Goose。先执行 `npm --prefix apps/web ci`，再按 [使用指南](usage.md) 准备固定 Goose 并启动；不需要 `.env`，开发脚本与 Web 构建忽略旧环境文件。`scripts/dev.sh` 管理独立 Rust 开发根和本次服务 PID；修改后端需要重建并重启才能加载，不因文档变化或仅验证而重启用户服务。
 
 ## 工作节奏
 

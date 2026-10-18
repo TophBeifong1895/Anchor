@@ -37,13 +37,9 @@ impl Fixture {
             fs::write(&path, "fixture: never executed").unwrap();
             set_mode(&path, 0o755);
         }
-        let env_file = root.path().join("anchor.env");
-        fs::write(&env_file, "not read or sourced by preflight").unwrap();
-        set_mode(&env_file, 0o600);
         let goose_sha256 = digest(&runtime.join("bin/goose"));
         let mut env = BTreeMap::new();
         for (name, path) in [
-            ("ANCHOR_ENV_FILE", env_file),
             ("ANCHOR_DEPLOYMENT_ROOT", runtime.clone()),
             (
                 "ANCHOR_RUNNER_HOST_BINARY",
@@ -388,20 +384,30 @@ fn listener_rejects_invalid_hosts_brackets_and_ports() {
 }
 
 #[test]
-fn rejects_env_file_permissions_symlinks_and_non_regular_files() {
+fn preflight_needs_no_environment_file_and_ignores_retired_file_settings() {
     let mut fixture = Fixture::new();
-    set_mode(&fixture.path("ANCHOR_ENV_FILE"), 0o640);
-    fixture.rejects("0600 or stricter");
-    set_mode(&fixture.path("ANCHOR_ENV_FILE"), 0o600);
-    let link = fixture.root.path().join("env-link");
-    symlink(fixture.path("ANCHOR_ENV_FILE"), &link).unwrap();
-    fixture.set("ANCHOR_ENV_FILE", link.to_str().unwrap());
-    fixture.rejects("symlink path components");
-    fixture.set(
-        "ANCHOR_ENV_FILE",
-        fixture.root.path().to_str().unwrap().to_owned().as_str(),
+    assert_eq!(fixture.check().unwrap()["status"], "passed");
+    fixture.set("ANCHOR_ENV_FILE", "/missing/retired.env");
+    assert_eq!(fixture.check().unwrap()["status"], "passed");
+}
+
+#[test]
+fn installed_preflight_uses_the_launchers_roots_without_environment_files() {
+    let fixture = Fixture::new();
+    let launcher = fixture.runtime.join("bin/anchor-platform");
+    fs::write(&launcher, "fixture launcher").unwrap();
+    let env = installed_environment(&launcher).unwrap();
+    assert_eq!(
+        env["ANCHOR_DEPLOYMENT_ROOT"],
+        fixture.runtime.to_str().unwrap()
     );
-    fixture.rejects("regular root- or service-owned file");
+    assert_eq!(
+        env["ANCHOR_RUNNER_STATE_ROOT"],
+        fixture.root.path().join("data/state").to_str().unwrap()
+    );
+    assert!(!env.contains_key("ANCHOR_ENV_FILE"));
+    assert!(!env.contains_key("ANCHOR_MODEL_API_KEY"));
+    assert!(!env.contains_key("ANCHOR_RUNNER_BUNDLE_ROOT"));
 }
 
 #[test]
@@ -622,7 +628,7 @@ fn rejects_symlinked_or_untrusted_lock_directory_and_writer_lock() {
     fixture.rejects("deployment lock directory");
     set_mode(&directory, 0o750);
     let lock = directory.join(".deployment-writer.lock");
-    symlink(fixture.path("ANCHOR_ENV_FILE"), &lock).unwrap();
+    symlink(fixture.runtime.join("runtime-manifest.json"), &lock).unwrap();
     fixture.rejects("deployment writer lock");
     fs::remove_file(&lock).unwrap();
     fs::write(&lock, "existing").unwrap();
@@ -659,74 +665,21 @@ fn rejects_unsafe_command_allowlist_and_missing_bubblewrap_without_execution() {
 }
 
 #[test]
-fn systemd_service_has_rust_only_lifecycle_and_no_preflight_start_hook() {
+fn systemd_service_uses_the_installed_launcher_without_environment_files() {
     let unit = include_str!("../../../../deploy/systemd/anchor.service");
     for expected in [
-        "ExecStart=/opt/anchor/current/anchor-runtime/bin/anchor-runner-host serve",
-        "Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+        "ExecStart=/var/lib/anchor/platform/release/anchor-runtime/bin/anchor-platform start",
         "User=anchor\nGroup=anchor",
         "KillSignal=SIGTERM",
         "KillMode=control-group",
         "TimeoutStopSec=30",
-        "ReadWritePaths=/var/lib/anchor\n",
+        "ReadWritePaths=/var/lib/anchor/platform/data\n",
+        "ReadOnlyPaths=/var/lib/anchor/platform/release\n",
     ] {
-        assert!(unit.contains(expected));
+        assert!(unit.contains(expected), "{expected}");
     }
+    assert!(!unit.contains("EnvironmentFile="));
     assert!(!unit.contains("ExecStartPre="));
     assert!(!unit.to_lowercase().contains("python"));
     assert!(!unit.contains("anchor-runtime/bundle"));
-}
-
-#[test]
-fn deployment_templates_use_concrete_release_paths_and_secret_placeholders() {
-    let host_env = include_str!("../../../../deploy/systemd/anchor.env.example");
-    let gateway_env = include_str!("../../../../deploy/systemd/anchor-wecom-gateway.env.example");
-    for expected in [
-        "ANCHOR_RUNNER_BUNDLE_ROOT=/opt/anchor/releases/REPLACE_WITH_RELEASE_ID/anchor-runtime/bundle",
-        "ANCHOR_RUNNER_WEB_ROOT=/opt/anchor/releases/REPLACE_WITH_RELEASE_ID/anchor-runtime/web",
-        "ANCHOR_GOOSE_BINARY=/opt/anchor/releases/REPLACE_WITH_RELEASE_ID/anchor-runtime/bin/goose",
-    ] {
-        assert!(host_env.contains(expected));
-    }
-    assert!(!host_env.contains("ANCHOR_MODEL_API_KEY="));
-    assert!(!host_env.contains("ANCHOR_MODEL_URL="));
-    let assignments = host_env
-        .lines()
-        .chain(gateway_env.lines())
-        .filter(|line| !line.trim_start().starts_with('#'))
-        .filter_map(|line| line.split_once('='))
-        .collect::<BTreeMap<_, _>>();
-    for name in [
-        "ANCHOR_API_KEY",
-        "WECOM_BOT_SECRET",
-        "ANCHOR_CHANNEL_CONTROL_TOKEN",
-    ] {
-        assert!(assignments[name].starts_with("REPLACE_WITH_"), "{name}");
-    }
-}
-
-#[test]
-fn optional_gateway_unit_uses_rust_binary_and_private_shared_contract() {
-    let unit = include_str!("../../../../deploy/systemd/anchor-wecom-gateway.service");
-    let env = include_str!("../../../../deploy/systemd/anchor-wecom-gateway.env.example");
-    for expected in [
-        "Requires=anchor.service",
-        "After=anchor.service",
-        "PartOf=anchor.service",
-        "ExecStart=/opt/anchor/current/anchor-runtime/bin/anchor-wecom-gateway",
-        "User=anchor\nGroup=anchor",
-        "KillSignal=SIGTERM",
-        "KillMode=control-group",
-        "ReadWritePaths=/var/lib/anchor/channels/wecom",
-    ] {
-        assert!(unit.contains(expected));
-    }
-    assert!(!unit.to_lowercase().contains("python"));
-    for expected in [
-        "/channels/wecom/events",
-        "/var/lib/anchor/channels/wecom/control.json",
-        "ANCHOR_API_KEY=",
-    ] {
-        assert!(env.contains(expected));
-    }
 }

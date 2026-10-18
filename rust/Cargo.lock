@@ -69,6 +69,7 @@ dependencies = [
 name = "anchor-devtools"
 version = "0.1.0"
 dependencies = [
+ "anchor-distribution",
  "anchor-file-lease",
  "object",
  "rusqlite",

@@ -97,7 +97,7 @@ Goose 拥有 Agent loop、Provider、原生会话和上下文压缩；Anchor 拥
 
 ### 使用预构建发行包
 
-完整 `anchor-runtime/` 包包含 Host、固定 Goose、Graph bundle 和声明的 Plugin 资源；使用 WebUI 的包还需包含编译后的 `web/`。安装环境满足上表后，配置包外的数据目录、权限和模型，再直接运行 `bin/anchor-runner-host serve`，或交给 systemd 管理。部署步骤见[生产部署指南](docs/rust-production-deployment.md)。
+完整平台包包含 Host、固定 Goose、编译后的 WebUI、联网 Plugin 和语言初始化工具，不附带业务 Graph 或用户凭据。安装后运行 `bin/anchor-platform start`，再在网页配置模型与其他能力；systemd 也调用同一启动器。独立 Graph 包仍包含自己的 Graph bundle 和声明的 Plugin 资源。部署步骤见[生产部署指南](docs/rust-production-deployment.md)。
 
 只有一个 `anchor-runner-host` 可执行文件时，还需要配齐 Goose、Graph/Plugin 资源和所需 Web 资产。官方发行不依赖 Python；第三方 Plugin 若使用其他语言，其运行环境由该 Plugin 的声明决定。Goose 是静态 musl 二进制，Host 和工具仍可能依赖动态库，具体以发行 manifest 为准。
 
@@ -107,9 +107,8 @@ Goose 拥有 Agent loop、Provider、原生会话和上下文压缩；Anchor 拥
 
 ```sh
 npm --prefix apps/web ci
-cp .env.example .env
 
-# 先启动不调用模型的 dev Graph；它包含一个确定性的 true Op。
+# 从可编辑的空 Graph 目录启动；启动时不调用模型。
 ./scripts/dev.sh start
 ./scripts/dev.sh status
 ```
@@ -134,15 +133,9 @@ scripts/build-goose-acp.sh \
   --output "$PWD/.local/bin/goose"
 ```
 
-然后编辑 `.env`，至少填写：
+开发脚本默认使用 `.local/bin/goose`，并使用所选 Host 同目录的 `anchor-net-relay` 隔离模型控制网络。固定 Goose 的摘要由 Host 内置核对，无需创建或编辑 `.env`。构建 Host 后执行 `./scripts/dev.sh restart`，再到 WebUI「设置 → 模型服务」填写服务地址、协议、API key 和 Flash/Pro 模型名。模型设置保存后下一轮生效，无需重启。示例 Graph 使用 `models.default.flash`；凭据保存在 Host 私有存储。
 
-```dotenv
-ANCHOR_GOOSE_BINARY=/absolute/path/to/Anchor/.local/bin/goose
-ANCHOR_GOOSE_BINARY_SHA256=17e065a79cb0508413af714724aed51d6b76972dda9feebdda701330134fb640
-ANCHOR_GOOSE_ALLOW_SHARED_NETWORK=1
-```
-
-保存 Goose 部署设置后执行 `./scripts/dev.sh restart`，再到 WebUI「设置 → 模型服务」填写服务地址、协议、API key 和 Flash/Pro 模型名。模型服务配置只由 Host 私有管理存储保存，不从 `.env` 读取；保存模型设置后下一轮生效，无需重启。示例 Graph 使用 `models.default.flash`。凭据不要写入 Graph、Plugin、发行包或 Git。监听地址、Anchor 登录密钥和各数据根见[使用指南](docs/usage.md)。
+成品平台使用安装后的 `bin/anchor-platform start`，自动定位随包工具与独立数据目录；模型、插件、渠道和语言环境通过 WebUI 管理。开发脚本与 Web 构建均忽略遗留 `.env` 文件；开发者需要覆盖路径或端口时，可显式传入进程设置，见[使用指南](docs/usage.md)。
 
 ### 第一次运行开发示例
 

@@ -1,6 +1,6 @@
 # 使用指南
 
-当前安装使用 Rust Host、固定 Goose 与编译后的 WebUI。完整生产包与 systemd 操作见 [部署指南](rust-production-deployment.md)；本文介绍仓库开发方式和产品操作。
+当前安装使用 Rust Host、固定 Goose 与编译后的 WebUI。完整平台安装后直接运行 `release/anchor-runtime/bin/anchor-platform start`，自动定位随包资源及 `data/` 下的私有目录，再在 WebUI 配置模型、Plugin 和开发环境，全程不要求 `.env`。完整安装与 systemd 操作见 [部署指南](rust-production-deployment.md)；下文介绍仓库开发方式和产品操作。
 
 ## 安装与本地启动
 
@@ -8,13 +8,11 @@
 
 ```sh
 npm --prefix apps/web ci
-cp .env.example .env
-# 配置 .env 中固定 Goose 的路径；模型服务和 Key 启动后在 WebUI 设置
 ./scripts/dev.sh start
 ./scripts/dev.sh status
 ```
 
-开发时打开 <http://127.0.0.1:5173>，Vite 将 API 请求转发到 <http://127.0.0.1:8077> 的 Rust Host；Host 也提供已构建的 WebUI。脚本使用 `.local/rust`，分别保存 catalog、state、workspace 和 Library；默认从可编辑的空 catalog 启动，不创建占位 Graph、不调用模型。预构建 Host 和 Web 资产缺失时才构建；修改代码后应主动重建。可覆盖参数见 [脚本](../scripts/dev.sh) 和 [.env.example](../.env.example)。
+开发时打开 <http://127.0.0.1:5173>，Vite 将 API 请求转发到 <http://127.0.0.1:8077> 的 Rust Host；Host 也提供已构建的 WebUI。脚本使用 `.local/rust`，分别保存 catalog、state、workspace 和 Library；默认从可编辑的空 catalog 启动，不创建占位 Graph、不调用模型。预构建 Host 和 Web 资产缺失时才构建；修改代码后应主动重建。开发脚本和 Vite 均不加载 `.env`；旧文件存在也不会执行其中内容。可选的路径、端口等覆盖只取显式进程设置，见 [脚本](../scripts/dev.sh) 和下方部署参数。
 
 ```sh
 ./scripts/dev.sh restart
@@ -43,18 +41,15 @@ WebUI「设置 → 模型服务」固定提供 `default`、`backup` 两组，每
 
 模型服务地址、协议、模型名与 API key 只从 Host 私有管理存储读取，环境变量中的 `ANCHOR_MODEL_URL/API_KEY/NAME/WIRE_API/ALIASES` 不再作为配置或回退源。default 尚未保存时，仅兼容已有托管配置；保存之后缺少字段或密钥会明确失败，不退回旧服务。历史服务凭据用于恢复旧任务，可在网页折叠的凭据区域更新或清除。旧 `.env` 和安装中的 `config/model.env` 不会自动导入、覆盖或删除；请在 WebUI 核对并保存当前服务。新安装不接受 `--model-config`。
 
-以下仅配置 Goose 路径和执行控制，不包含模型服务凭据：
+源码开发先准备固定 Goose：
 
 ```sh
-ANCHOR_GOOSE_BINARY=/absolute/path/to/goose
-ANCHOR_GOOSE_BINARY_SHA256=17e065a79cb0508413af714724aed51d6b76972dda9feebdda701330134fb640
-ANCHOR_GOOSE_ALLOW_SHARED_NETWORK=1
-ANCHOR_MODEL_CONTEXT_WINDOW=128000
-ANCHOR_MODEL_DIRECT=0
-# Isolation is the default when the relay sits beside the Goose binary; set 0 to share.
-ANCHOR_GOOSE_LOCAL_NETWORK=1
-ANCHOR_GOOSE_RELAY_BINARY=/absolute/path/to/anchor-net-relay
+scripts/build-goose-acp.sh --output "$PWD/.local/bin/goose"
+cargo build --manifest-path rust/Cargo.toml -p anchor-runner-host --locked
+./scripts/dev.sh restart
 ```
+
+开发脚本默认读取 `.local/bin/goose`，使用 Host 同目录的 `anchor-net-relay`；Host 内置固定 Goose 的摘要，非默认二进制需显式提供与其匹配的部署摘要。完整平台启动器直接定位随包二进制，隔离控制网络，不从调用进程继承部署或凭据设置。开发者可在命令前显式覆盖 `ANCHOR_GOOSE_BINARY`、`ANCHOR_GOOSE_RELAY_BINARY` 等路径，无需环境文件。
 
 `ANCHOR_MODEL_CONTEXT_WINDOW`（正整数，可选）会作为 `GOOSE_CONTEXT_LIMIT` 传给 Goose，覆盖它按模型名推断的上下文窗口——本机部署用别名与 OpenAI 兼容端点时该推断不可靠。
 
@@ -68,7 +63,7 @@ ANCHOR_GOOSE_RELAY_BINARY=/absolute/path/to/anchor-net-relay
 
 `ANCHOR_GOOSE_ALLOW_SHARED_NETWORK=1` 是 Goose 进程的明确网络接入决定；业务工具和节点仍受 Host/Sandbox 授权。模型配置与凭据保存在 Host 的私有管理存储，不放进部署环境、Graph 包或版本库。
 
-「设置 → 开发环境」可初始化 Python 和 Rust，显示进度、停止并在失败后重试。完整发行包提供固定的初始化工具；初始化前需要勾选允许联网下载。关闭页面不会取消初始化，重新打开会读取 Host 上的操作状态。Python 当前版本自动检测，点击「刷新状态」会重新读取，不需要联网或初始化。已有解释器不代表依赖准备工具齐备；缺少工具时页面会禁用初始化并说明原因，已有解释器仍可使用。开发部署可按 [.env.example](../.env.example) 显式登记固定 uv、摘要与软件源，检查时复用原解释器；部署管理的版本只读显示，不能在网页修改。
+「设置 → 开发环境」可初始化 Python 和 Rust，显示进度、停止并在失败后重试。完整发行包提供固定的初始化工具；初始化前需要勾选允许联网下载。关闭页面不会取消初始化，重新打开会读取 Host 上的操作状态。Python 当前版本自动检测，点击「刷新状态」会重新读取，不需要联网或初始化。已有解释器不代表依赖准备工具齐备；缺少工具时页面会禁用初始化并说明原因，已有解释器仍可使用。源码开发部署也可通过显式进程设置登记固定 uv、摘要与软件源，检查时复用原解释器，见下方部署参数；部署管理的版本只读显示，不能在网页修改。完整平台安装自动提供这些固定工具。
 
 ## 配置插件与 MCP
 
@@ -91,11 +86,13 @@ ANCHOR_GOOSE_RELAY_BINARY=/absolute/path/to/anchor-net-relay
 | `ANCHOR_RUNNER_GRAPH_NAME` | 可选的部署管理入口 Graph 名，与 bundle 使用同一身份及修改保护 |
 | `ANCHOR_RUNNER_LISTEN` | 默认 `127.0.0.1:8077` |
 | `ANCHOR_RUNNER_ALLOWED_COMMANDS` | 显式命令列表，例如 `sh,git` |
-| `ANCHOR_API_KEYS` | 部署 Bearer 白名单；结构见环境模板 |
+| `ANCHOR_API_KEYS` | 可选部署 Bearer 白名单，JSON 字符串数组；非 loopback 必填，每项至少 32 字节且不可重复 |
+| `ANCHOR_DEPENDENCIES_PYTHON`、`ANCHOR_PILOT_PYTHON_ENABLED` | 开发部署已有 Python 路径及可选 Pilot 使用许可；完整平台在网页初始化 |
+| `ANCHOR_DEPENDENCIES_UV`、`ANCHOR_DEPENDENCIES_UV_SHA256`、`ANCHOR_DEPENDENCIES_SOURCES` | 开发部署显式登记固定依赖工具与软件源；三项配套，完整平台由发行 manifest 提供 |
 
 可写根应彼此隔离并在 release 外。Host 在监听前验证 bundle、探测可写根并获取 deployment-writer lease；同一 state root 只允许一个 writer。第三方工具环境与本地输入只按明确注册/授权挂载，不因模型提出路径就允许读取。
 
-正式部署使用 [deploy/systemd/anchor.env.example](../deploy/systemd/anchor.env.example)。非 loopback 监听必须配置有效唯一 Bearer secrets 并有对应网络边界；本地白名单不等于完整多租户模型。
+正式平台部署使用 [systemd 模板](../deploy/systemd/anchor.service)，由安装启动器设置以上路径与控制参数，无需环境文件。非 loopback 监听必须配置有效唯一 Bearer secrets 并有对应网络边界；本地白名单不等于完整多租户模型。
 
 ## Graph 与 WebUI
 

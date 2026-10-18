@@ -5,7 +5,7 @@ use serde_json::Value;
 
 const HELP: &str = "anchor-devtools regression fixture|goose-fixture [--workspace-root PATH] [--target-dir PATH] [--evidence-root PATH]
 anchor-devtools regression candidate [--workspace-root PATH] [--target-dir PATH] [--evidence-root PATH] [--goose PATH]
-anchor-devtools preflight
+anchor-devtools preflight [--launcher PATH]
 anchor-devtools cutover [OPTIONS]
 
 fixture and goose-fixture are aliases for the standard Goose small-Graph regression.
@@ -15,7 +15,7 @@ Candidate builds the WebUI and locked offline release binaries once, then runs t
 Candidate Goose path: --goose, ANCHOR_GOOSE_BINARY or ANCHOR_DISTRIBUTION_GOOSE; evidence-root must be a new directory.
 Requires stable Rust, Bubblewrap and the suite's normal Linux tools; candidate also requires installed Web dependencies.
 Does not call a real model or load dotenv. Live/business/production acceptance is separate.
-Preflight accepts no flags and prints a JSON report. Cutover forwards options to the inventory module; a blocked decision exits 2.
+Preflight uses the installed launcher with --launcher PATH, or explicit process settings without it, and prints a JSON report. Cutover forwards options to the inventory module; a blocked decision exits 2.
 Cutover options: --legacy-root PATH --rust-state-root PATH --rust-workspace-root PATH --rust-catalog-root PATH
   [--rust-library-root PATH] [--config PATH] [--credential-path PATH]
   [--legacy-writer-stopped] [--legacy-read-only-confirmed] [--credentials-reviewed] [--prepare --output-dir PATH]";
@@ -24,7 +24,7 @@ enum Invocation {
     Help,
     Fixture(FixtureOptions),
     Candidate(candidate::CandidateOptions),
-    Preflight,
+    Preflight(Option<PathBuf>),
     Cutover(Vec<String>),
 }
 
@@ -42,11 +42,17 @@ fn options(arguments: Vec<String>) -> Result<Invocation, String> {
     match command {
         "preflight" => {
             return if remaining.is_empty() {
-                Ok(Invocation::Preflight)
+                Ok(Invocation::Preflight(None))
+            } else if remaining.len() == 2
+                && remaining[0] == "--launcher"
+                && !remaining[1].is_empty()
+                && !remaining[1].starts_with('-')
+            {
+                Ok(Invocation::Preflight(Some(PathBuf::from(&remaining[1]))))
             } else if help(remaining) {
                 Ok(Invocation::Help)
             } else {
-                Err("preflight accepts no flags; use preflight --help".into())
+                Err("preflight accepts only --launcher PATH; use preflight --help".into())
             };
         }
         "cutover" => {
@@ -161,7 +167,13 @@ fn main() -> ExitCode {
             1,
         ),
         Invocation::Candidate(options) => print_report(candidate::run(&options), 1),
-        Invocation::Preflight => print_report(preflight::run(), 1),
+        Invocation::Preflight(launcher) => print_report(
+            match launcher {
+                Some(launcher) => preflight::run_installed(&launcher),
+                None => preflight::run(),
+            },
+            1,
+        ),
         Invocation::Cutover(arguments) => print_report(cutover::run(&arguments), 2),
     }
 }

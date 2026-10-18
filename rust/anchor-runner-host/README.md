@@ -12,18 +12,19 @@ From the repository root:
 ```sh
 cargo +stable build --manifest-path rust/Cargo.toml -p anchor-runner-host --locked
 npm --prefix apps/web ci
-cp .env.example .env
-# Configure the pinned Goose binary and model in .env.
+# Build the fixed Goose to .local/bin/goose; configure models in WebUI Settings.
 ./scripts/dev.sh start
 ```
 
-The development script uses `.local/rust`, seeds an Op-only `dev` Graph,
-and submits no model work at startup. Vite serves development UI at port 5173;
+The development script uses `.local/rust`, starts with an editable empty catalog,
+and submits no model work at startup. It never sources dotenv files. Vite serves development UI at port 5173;
 the Host API and compiled UI use port 8077. Rebuild changed backend code before
 restarting. See [usage](../../docs/usage.md) for root and model configuration.
 
-For a prepared deployment, configure separate bundle, catalog, Library, state,
-workspace and Web roots, then run `anchor-runner-host serve`. Startup validates
+For a platform installation, run `release/anchor-runtime/bin/anchor-platform start`;
+the launcher supplies fixed tools and private data roots without environment files.
+Standalone Graph hosts may still set explicit bundle, catalog, Library, state,
+workspace and Web process settings and run `anchor-runner-host serve`. Startup validates
 the configuration and acquires a state-root writer lease before listening.
 The protected JSONL standalone protocol also uses the same execution kernel.
 CLI syntax is available through `anchor-runner-host --help`.

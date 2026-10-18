@@ -102,7 +102,7 @@ fn install(
     fs::create_dir(&release)?;
     unpack_platform(snapshot, &release)?;
     let runtime = release.join("anchor-runtime");
-    validate_runtime(&runtime, goose_sha256, uv_sha256, rustup_sha256)?;
+    validate_runtime(&runtime, goose_sha256, uv_sha256, rustup_sha256, false)?;
     let config = staging.path().join("config");
     fs::create_dir(&config)?;
     fs::set_permissions(&config, fs::Permissions::from_mode(0o700))?;
@@ -224,14 +224,23 @@ fn unpack_platform(file: File, release: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Check an installed platform against the same fixed runtime contract used at installation.
+pub fn validate_platform_runtime(runtime: &Path) -> Result<()> {
+    open_path(runtime)?;
+    validate_runtime(runtime, GOOSE_SHA256, UV_SHA256, RUSTUP_INIT_SHA256, true)
+}
+
 fn validate_runtime(
     root: &Path,
     goose_sha256: &str,
     uv_sha256: &str,
     rustup_sha256: &str,
+    read_only: bool,
 ) -> Result<()> {
-    // These paths are inside our private extraction tree, pinned below an open
-    // parent FD; unpack_platform only created ordinary files/directories.
+    // Installed releases use this same validator. Reject links and special entries before reading files.
+    let mut actual_files = BTreeSet::new();
+    let mut actual_directories = BTreeSet::new();
+    enumerate(root, root, &mut actual_files, &mut actual_directories)?;
     let manifest_file = File::open(root.join("runtime-manifest.json"))?;
     if !manifest_file.metadata()?.is_file() || manifest_file.metadata()?.len() > 16 * 1024 * 1024 {
         return Err(invalid(
@@ -305,7 +314,12 @@ fn validate_runtime(
         let metadata = file.metadata()?;
         if !metadata.is_file()
             || metadata.len() != resource.size
-            || metadata.permissions().mode() & 0o7777 != resource.mode
+            || metadata.permissions().mode() & 0o7777
+                != if read_only {
+                    resource.mode & 0o555
+                } else {
+                    resource.mode
+                }
         {
             return Err(invalid(
                 "platform file type, mode or size differs from inventory",
@@ -408,9 +422,6 @@ fn validate_runtime(
             "platform network Plugin differs from admitted inventory",
         ));
     }
-    let mut actual_files = BTreeSet::new();
-    let mut actual_directories = BTreeSet::new();
-    enumerate(root, root, &mut actual_files, &mut actual_directories)?;
     if actual_files != declared || actual_directories != required_directories {
         return Err(invalid(
             "platform archive contains undeclared files or directories",
@@ -487,8 +498,8 @@ impl Drop for ReadonlyRelease<'_> {
     }
 }
 
-/// Build a Host command using only installation-owned roots and the private
-/// model file. It inherits no deployment, Python, Rust or credential env vars.
+/// Build a Host command from installation-owned roots. Model and runtime
+/// settings live in the Host store; no caller configuration is inherited.
 pub fn platform_command(launcher: &Path) -> Result<Command> {
     platform_command_with_listen(launcher, "127.0.0.1:8077")
 }
@@ -534,7 +545,6 @@ pub fn platform_command_with_listen(launcher: &Path, listen: &str) -> Result<Com
     open_path(runtime)?;
     // Old installations may retain config/model.env. Leave its bytes untouched;
     // only the Host-managed model store supplies model services and credentials.
-    open_path(&install_root.join("config"))?;
     let mut command = Command::new(runtime.join("bin/anchor-runner-host"));
     command
         .arg("serve")

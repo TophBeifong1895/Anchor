@@ -2203,7 +2203,7 @@ for line in sys.stdin:
         let library_view = deployment.view();
         assert!(library_view.join("pyvenv.cfg").is_file());
 
-        // Three separate roots, as `deploy/systemd/anchor.env.example` describes:
+        // Three separate roots, as the deployment data-root contract describes:
         // the Library holds what was installed, the catalog holds the bundle, and
         // the bundle carries its own copy of the Plugin resources.
         let catalog = deployment.root.path().join("catalog");

@@ -118,6 +118,8 @@ fn unsupported_live_mode_unknown_flags_and_missing_paths_are_errors() {
         vec!["preflight", "--unknown"],
         vec!["preflight", "--target-dir", "/target"],
         vec!["preflight", "extra"],
+        vec!["preflight", "--launcher"],
+        vec!["preflight", "--launcher", "--unknown"],
         vec!["cutover", "--unknown"],
         vec!["cutover", "--rust-state-root"],
         vec!["--help", "unexpected"],
@@ -206,7 +208,10 @@ fn preflight_without_flags_calls_validation_and_fails_closed_when_unconfigured()
         .unwrap();
     assert_eq!(output.status.code(), Some(1), "{output:?}");
     assert!(output.stdout.is_empty(), "{output:?}");
-    assert!(String::from_utf8_lossy(&output.stderr).contains("ANCHOR_ENV_FILE is required"));
+    assert!(
+        String::from_utf8_lossy(&output.stderr)
+            .contains("ANCHOR_GOOSE_ALLOW_SHARED_NETWORK is required")
+    );
 }
 
 #[test]
