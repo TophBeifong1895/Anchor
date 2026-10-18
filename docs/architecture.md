@@ -110,9 +110,9 @@ Library 审查、候选准备与导入共用代码暂存规则：选中 root 或
 
 ## Goose 与恢复
 
-Goose 固定为 v1.53.0；Anchor 在上游源码应用[已审查的本地 Responses 补丁](../scripts/patches/README.md)，再用 lean ACP-only 入口构建静态 x86_64 musl 二进制（recipe 见 [构建脚本](../scripts/build-goose-acp.sh)），SHA256 为 `dc2a4352279c16f3c665b280e4fc8fedbec3a67cce596bf460aa9fd416c27a15`。它与官方完整 CLI 共用 `goose::acp::server::run`。补丁在 Goose 原生 Thinking 的可选元数据中保存完整 reasoning item，并在后续 Responses 请求按原序单次回传，包括 opaque/encrypted 字段；同时忽略空 text delta 保活，非空畸形帧仍报错。Anchor Bridge 和产品事实不复制或重写 reasoning，旧历史已丢失的数据也不重建。
+Goose 固定为 v1.53.0；Anchor 在上游源码应用[已审查的本地兼容补丁](../scripts/patches/README.md)，再用 lean ACP-only 入口构建静态 x86_64 musl 二进制（recipe 见 [构建脚本](../scripts/build-goose-acp.sh)），SHA256 为 `17e065a79cb0508413af714724aed51d6b76972dda9feebdda701330134fb640`。它与官方完整 CLI 共用 `goose::acp::server::run`。补丁在 Goose 原生 Thinking 的可选元数据中保存完整 reasoning item，并在后续 Responses 请求按原序单次回传，包括 opaque/encrypted 字段；同时忽略空 text delta 保活，非空畸形帧仍报错。Anchor Bridge 和产品事实不复制或重写 reasoning，旧历史已丢失的数据也不重建。
 
-AgentNode 与 Pilot 共用 ACP/MCP 接入。当前执行及同 invocation 恢复严格绑定二进制、模型/endpoint 和原生 Session，不静默换模型或创建替代历史。新 invocation 可选择最新模型；跨 Goose 二进制版本的 Graph 原生历史接续，仅允许[已审查的旧固定摘要到当前摘要](../rust/anchor-runner-host/src/goose_acp/conversation/revision.rs)单向升级，核对前驱与 scope 事实后仍加载同一 Session，不授权逆向回滚或未审查二进制。Pilot 的新 Turn 通过公开 `session/load` 接续保留的 Session。跨不同 Provider、模型或账号的 opaque reasoning 兼容尚未验收；Goose 的 Provider 错误也仍可能以助手正文结束，不能仅凭 Turn `completed` 认定请求成功。
+AgentNode 与 Pilot 共用 ACP/MCP 接入。当前执行及同 invocation 恢复严格绑定二进制、模型/endpoint 和原生 Session，不静默换模型或创建替代历史。新 invocation 可选择最新模型；跨 Goose 二进制版本的 Graph 原生历史接续，仅允许[已审查的旧固定摘要到当前摘要](../rust/anchor-runner-host/src/goose_acp/conversation/revision.rs)单向升级，核对前驱与 scope 事实后仍加载同一 Session，不授权逆向回滚或未审查二进制。Pilot 的新 Turn 通过公开 `session/load` 接续保留的 Session。跨不同 Provider、模型或账号的 opaque reasoning 兼容尚未验收。固定 Goose 将请求、网络、拒答及终止的压缩错误保存为原生结构化 Error，并通过 ACP 错误结束；成功的压缩恢复继续原路径。Host 仅依据经协议校验的错误代码与原因区分模型请求失败和运行中断，Pilot 分别结算为 `failed` 与 `interrupted`，用户取消仍为 `stopped`；原始服务正文不进入 Web 错误信息。普通助手正文不参与分类，Turn `completed` 仍不替代业务成功验收。实际 Host/Goose 错误场景及真实 Provider 验收边界见[验证记录](../.local/closeout-20261018/README.md)。
 
 固定版 Goose 的 `enabledExtensions` 在新建时追加到默认扩展，加载时保留已存扩展，不能单独用作授权集合。共享 ACP 接入在新建/加载后、首次模型提示前，通过官方 `session/extensions/list`、`remove`、`add` 接口校准为 Anchor MCP 与部署显式允许的原生扩展；默认只保留提供边界指令的 `tom`，不启用 `developer` 的独立文件和 shell 工具。撤销旧扩展保留原生 Session 与历史，不直接修改其数据库；校准失败拒绝本次执行。
 
@@ -192,7 +192,7 @@ Graph 是插件选择的唯一可编辑来源。Host 在 `wait_input` 领取消�
 
 Kernel 的 `NodeExecutionPort::invocation_plugin_authority` 默认关闭，普通 Graph 继续校验 Run 准入基线；Host 仅为可信常驻助手启用，由同一 Turn 快照约束挂载、MCP、沙箱和网络。当前 Turn 重试不重读 Graph；启动交接只沿该 Turn 的持久化 `runs` 关联验证前驱并继承权限，新 Turn 直接读取当前配置，不沿 `conversation.previous_run` 跨历史轮次追溯。启动清理仅保留已验证 current 助手中已认领、未被新消息替代的 Turn，Pilot 与孤立执行继续按原规则中断。插件卸载保护仍可执行的 Turn 引用，Run/Graph 删除清理各自拥有的快照与授权事实。
 
-正常插件切换保留 Run、Goose 原生会话和稳定 workspace。重启需要新 Run 接续时，Host 核对同一会话的交接链，并仅对插件/联网差异登记精确 workspace 来源与目标；连续重启产生的未准备实例不能成为空现场来源，普通跨 Graph 复制仍被拒绝。
+正常插件切换保留 Run、Goose 原生会话和稳定 workspace。重启需要新 Run 接续时，Host 核对同一会话的交接链，并仅对插件/联网差异登记精确 workspace 来源与目标；连续重启产生的未准备实例不能成为空现场来源，普通跨 Graph 复制仍被拒绝。显式退役后可以接纳节点改名的合法新版；每个交接 binding 先核对所属实例的元数据，再判断版本兼容，不要求旧 wait/reply 名称等于新版本。结构或指令变化不继承旧实例的未提交现场，仍可按既有会话规则从已提交产物初始化；连续未准备实例的回溯也止于该版本边界，身份事实不一致仍报错。
 
 ### 渠道适配与监听
 

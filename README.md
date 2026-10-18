@@ -138,7 +138,7 @@ scripts/build-goose-acp.sh \
 
 ```dotenv
 ANCHOR_GOOSE_BINARY=/absolute/path/to/Anchor/.local/bin/goose
-ANCHOR_GOOSE_BINARY_SHA256=dc2a4352279c16f3c665b280e4fc8fedbec3a67cce596bf460aa9fd416c27a15
+ANCHOR_GOOSE_BINARY_SHA256=17e065a79cb0508413af714724aed51d6b76972dda9feebdda701330134fb640
 ANCHOR_GOOSE_ALLOW_SHARED_NETWORK=1
 ANCHOR_MODEL_URL=https://provider.example/v1
 ANCHOR_MODEL_API_KEY=replace-me

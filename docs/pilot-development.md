@@ -6,7 +6,7 @@
 
 完整平台 Pilot 使用内置管理指令，空 catalog 可以启动，不需要占位业务 Graph。普通 Turn 与 Responses 共用接纳路径；`previous_response_id` 继续原 Session，独立请求使用独立工作区。
 
-浏览器“设置”可以保存 `default/backup × flash/pro` 两组服务信息、测试连接以及初始化 Python/Rust，不要求先启动 Pilot。两组模型目前仅配置，尚不改变 Pilot/Graph 的实际选择；旧执行配置与绑定保留，模型保存、连接测试与真实任务验收分别判断。密钥不进入模型上下文。具体边界见 [使用指南](usage.md#模型与-goose)。
+浏览器“设置”可以保存 `default/backup × flash/pro` 两组服务信息、测试连接以及初始化 Python/Rust，不要求先启动 Pilot。新 Pilot Turn 与 Graph 节点调用读取已保存的默认模型或显式模型引用，当前调用保持冻结；backup 仅供显式选择，不自动降级。旧执行配置与绑定保留，模型保存、连接测试与真实任务验收分别判断。密钥不进入模型上下文。选择契约见 [Graph 作者契约](rust-graph-authoring-contract.md)，配置边界见 [使用指南](usage.md#模型与-goose)。
 
 `RuntimeConfiguration` 是 Python、Rust、uv 和来源的唯一解析入口。`runtime_prepare` 按冻结的任务联网授权初始化，探测成功后才发布 `state/managed/runtime-config.json`（format 1）和内存快照。完整平台默认使用公共 PyPI；显式部署字段归部署者管理，Pilot 不覆盖，也不双写 `.env`。配置解释器路径不等于启用依赖准备。
 

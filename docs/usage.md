@@ -28,7 +28,7 @@ cp .env.example .env
 使用 Goose v1.53.0 上游源码的 lean ACP-only 入口构建的静态 x86_64 musl 二进制（不含完整 CLI、调度器、bundled MCP 与平台扩展），SHA256 固定为：
 
 ```text
-dc2a4352279c16f3c665b280e4fc8fedbec3a67cce596bf460aa9fd416c27a15
+17e065a79cb0508413af714724aed51d6b76972dda9feebdda701330134fb640
 ```
 
 用 [构建脚本](../scripts/build-goose-acp.sh) 从固定上游源码构建并审查该二进制，放在稳定路径，并配置 Goose 的部署路径与网络隔离。完整平台发行包已包含这些基础组件。
@@ -43,7 +43,7 @@ default 尚未保存时，默认模型兼容旧托管配置或以下部署环境
 
 ```sh
 ANCHOR_GOOSE_BINARY=/absolute/path/to/goose
-ANCHOR_GOOSE_BINARY_SHA256=dc2a4352279c16f3c665b280e4fc8fedbec3a67cce596bf460aa9fd416c27a15
+ANCHOR_GOOSE_BINARY_SHA256=17e065a79cb0508413af714724aed51d6b76972dda9feebdda701330134fb640
 ANCHOR_GOOSE_ALLOW_SHARED_NETWORK=1
 ANCHOR_MODEL_URL=https://provider.example/v1
 ANCHOR_MODEL_API_KEY=REPLACE_WITH_PROVIDER_KEY

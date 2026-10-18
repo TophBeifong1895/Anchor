@@ -526,6 +526,9 @@ impl PilotService {
                 .await;
                 let (status, failure) = match result {
                 Ok(Ok(status)) => (status, None),
+                Ok(Err(error @ crate::goose_acp::pilot::PilotError::Provider(_))) => {
+                    (TurnStatus::Failed, Some(error.to_string()))
+                }
                 Ok(Err(message)) => {
                     eprintln!("Pilot executor failed: {message}");
                     (TurnStatus::Interrupted, Some("Pilot execution interrupted; continue with a new message to inspect the saved facts".to_owned()))
@@ -830,7 +833,7 @@ async fn execute_turn(
     goose: crate::goose_acp::pilot::GoosePilot,
     request: crate::goose_acp::pilot::PilotTurn,
     mut tools: PilotTools,
-) -> Result<TurnStatus, String> {
+) -> Result<TurnStatus, crate::goose_acp::pilot::PilotError> {
     if request.cancellation.load(Ordering::Acquire) {
         return Ok(TurnStatus::Stopped);
     }
@@ -895,7 +898,7 @@ async fn execute_turn(
                 return if reason == "Pilot tool startup was cancelled" {
                     Ok(TurnStatus::Stopped)
                 } else {
-                    Err(reason)
+                    Err(reason.into())
                 };
             }
             eprintln!(
@@ -944,10 +947,7 @@ async fn execute_turn(
     if cleanup.is_empty() {
         outcome
     } else {
-        Err(format!(
-            "Pilot Plugin cleanup failed: {}",
-            cleanup.join("; ")
-        ))
+        Err(format!("Pilot Plugin cleanup failed: {}", cleanup.join("; ")).into())
     }
 }
 

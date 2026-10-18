@@ -32,6 +32,36 @@ pub(crate) struct GoosePilot {
     relay: configuration::RelaySettings,
 }
 
+#[derive(Debug)]
+pub(crate) enum PilotError {
+    Interrupted(String),
+    Provider(&'static str),
+}
+
+impl std::fmt::Display for PilotError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Interrupted(message) => formatter.write_str(message),
+            Self::Provider(kind) => write!(
+                formatter,
+                "Model provider request failed ({kind}); inspect saved facts before retrying"
+            ),
+        }
+    }
+}
+
+impl From<String> for PilotError {
+    fn from(message: String) -> Self {
+        Self::Interrupted(message)
+    }
+}
+
+impl From<&str> for PilotError {
+    fn from(message: &str) -> Self {
+        Self::Interrupted(message.into())
+    }
+}
+
 const MAX_FACT_BYTES: u64 = 8 * 1024 * 1024;
 
 pub(crate) struct PilotTurn {
@@ -182,7 +212,7 @@ impl GoosePilot {
         // normal case for a Session that mounted nothing.
         plugin_tools: Vec<Arc<dyn ToolPort>>,
         mut catalog: crate::plugin_disclosure::PluginDisclosureCatalog,
-    ) -> Result<TurnStatus, String> {
+    ) -> Result<TurnStatus, PilotError> {
         directory(&request.root)?;
         fs::set_permissions(&request.root, fs::Permissions::from_mode(0o700))
             .map_err(|error| error.to_string())?;
@@ -261,7 +291,7 @@ impl GoosePilot {
         fact: &Mutex<PilotFact>,
         bridge: &Bridge,
         binding: &configuration::ModelBinding,
-    ) -> Result<TurnStatus, String> {
+    ) -> Result<TurnStatus, PilotError> {
         let directory = request.root.join("process");
         self::directory(&directory)?;
         fs::set_permissions(&directory, fs::Permissions::from_mode(0o700))
@@ -307,7 +337,11 @@ impl GoosePilot {
         let mut connection = AcpConnection::spawn(command).await?;
         let result = self
             .prompt(request, fact, bridge, &endpoint, &mut connection)
-            .await;
+            .await
+            .map_err(|error| match connection.provider_failure() {
+                Some(kind) => PilotError::Provider(kind),
+                None => PilotError::Interrupted(error),
+            });
         if result.is_err() {
             let session = fact
                 .lock()

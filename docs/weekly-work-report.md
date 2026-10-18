@@ -134,4 +134,6 @@ cargo test --manifest-path rust/Cargo.toml -p anchor-runtime --locked --test wee
 
 2026-10-16 的失败 Run `rust-18deefb96961559e` 已完成三来源采集，随后理解节点因历史措辞触发网关 HTTP 400；`Goose ended without a validated final_result` 是后续症状，不是目录缺失。该 Run 的冻结证据和原生历史仍保留旧文本，未被改写；应新建 Run 重新采集，不能仅恢复旧理解节点期待新采集工具自动清除已有上下文。旧失败 Run 也不复用新增权限。定位证据见本机 [失败摘要](../.local/weekly-gateway-wording-20261016/failure-diagnosis.json)。
 
+2026-10-18 使用本轮候选 Host、固定 Goose 与当前采集 CLI 新建隔离 Run，按发现结果显式授权三个历史子目录，实际完成核心图的 collect。understand 的原生结构化错误记录为上游 HTTP 502；核查没有模型工具调用后按现有路径接续一次，仍返回 502。冻结证据、原生记录与失败状态均保留，未发布报告或调用外部业务 Plugin，详见本机[收尾验收](../.local/closeout-20261018/README.md)。此结果不证明完整周报通过，也不能推断所有模型服务均不可用。
+
 上述证据不覆盖完整周报的理解、写作、评审流水线、空来源报告内容质量、全部真实历史格式、跨 Graph 产物实际传递、Docmost 图片更新幂等性、恢复后的远端效果核查或企业微信投递。真实模型小图只证明安全采集证据可被当前模型读取并完成节点，不等于完整周报真实 provider 端到端通过；本页不宣称完整报告或外部发布已完成。本轮修复的原始证据仍只保存在验收机器的 `.local/`，不随仓库共享。

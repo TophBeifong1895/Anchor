@@ -31,6 +31,8 @@
 #                  Retains Responses reasoning in Goose native history and requests.
 #   patch        : patches/goose-1.53.0-external-completion.patch
 #                  Ends an opted-in host completion after native tool history is saved.
+#   patch        : patches/goose-1.53.0-provider-errors.patch
+#                  Persists structured provider failures and returns ACP prompt errors.
 #
 # Reproducibility
 # ---------------
@@ -60,6 +62,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REASONING_PATCH="$SCRIPT_DIR/patches/goose-1.53.0-responses-reasoning.patch"
 COMPLETION_PATCH="$SCRIPT_DIR/patches/goose-1.53.0-external-completion.patch"
+PROVIDER_ERRORS_PATCH="$SCRIPT_DIR/patches/goose-1.53.0-provider-errors.patch"
 GOOSE_VERSION="1.53.0"
 SOURCE_URL="https://codeload.github.com/aaif-goose/goose/tar.gz/refs/tags/v${GOOSE_VERSION}"
 SOURCE_SHA256="85cc5e76a12e364032df4bec0ed0738a910c3e12ec12731b4405d1fdb18d96ae"
@@ -69,7 +72,7 @@ TARGET="x86_64-unknown-linux-musl"
 FEATURES="rustls-tls,online-model-meta"
 # The digest the rest of the repository pins. It is reproducible only at the default
 # build root, because rustc embeds source paths; see the check before publication.
-PINNED_SHA256="dc2a4352279c16f3c665b280e4fc8fedbec3a67cce596bf460aa9fd416c27a15"
+PINNED_SHA256="17e065a79cb0508413af714724aed51d6b76972dda9feebdda701330134fb640"
 
 ROOT="${ANCHOR_GOOSE_BUILD_ROOT:-/var/tmp/anchor-goose-build}"
 JOBS="${CARGO_BUILD_JOBS:-12}"
@@ -147,12 +150,15 @@ SRC="$ROOT/src/goose-${GOOSE_VERSION}"
 [ -f "$STAGED_SRC/Cargo.toml" ] || die "unexpected source layout under $STAGED_SRC"
 [ -f "$REASONING_PATCH" ] || die "missing reviewed Responses reasoning patch"
 [ -f "$COMPLETION_PATCH" ] || die "missing reviewed external completion patch"
+[ -f "$PROVIDER_ERRORS_PATCH" ] || die "missing reviewed provider errors patch"
 patch --batch --fuzz=0 -d "$STAGED_SRC" -p1 < "$REASONING_PATCH"
 patch --batch --fuzz=0 -d "$STAGED_SRC" -p1 < "$COMPLETION_PATCH"
+patch --batch --fuzz=0 -d "$STAGED_SRC" -p1 < "$PROVIDER_ERRORS_PATCH"
 mkdir -p "$SRC"
 rsync -rlc --delete --exclude=/target/ "$STAGED_SRC/" "$SRC/"
 PATCH_SHA256="$(sha256_of "$REASONING_PATCH")"
 COMPLETION_PATCH_SHA256="$(sha256_of "$COMPLETION_PATCH")"
+PROVIDER_ERRORS_PATCH_SHA256="$(sha256_of "$PROVIDER_ERRORS_PATCH")"
 cd "$SRC"
 
 command -v rustup >/dev/null || die "rustup is required (the source pins its toolchain)"
@@ -214,7 +220,8 @@ cat >"$DEST.build-record.json" <<JSON
   "patch_sha256": "$PATCH_SHA256",
   "patches": [
     {"path": "goose-1.53.0-responses-reasoning.patch", "sha256": "$PATCH_SHA256"},
-    {"path": "goose-1.53.0-external-completion.patch", "sha256": "$COMPLETION_PATCH_SHA256"}
+    {"path": "goose-1.53.0-external-completion.patch", "sha256": "$COMPLETION_PATCH_SHA256"},
+    {"path": "goose-1.53.0-provider-errors.patch", "sha256": "$PROVIDER_ERRORS_PATCH_SHA256"}
   ],
   "recipe": "cargo build -p goose --bin goose-acp --profile lean --locked --target $TARGET --no-default-features --features $FEATURES",
   "toolchain": "$(rustc -V)",

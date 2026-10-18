@@ -286,6 +286,9 @@ fn long_lines_cannot_bypass_read_pagination() {
 
 #[tokio::test]
 async fn real_http_mcp_service_lists_and_reads_frozen_evidence() {
+    // Workspace feature unification enables RMCP's provider-free TLS client.
+    // Use the same explicit crypto provider as the production MCP adapter.
+    let _ = rustls::crypto::ring::default_provider().install_default();
     use rmcp::{
         ServiceExt,
         model::{CallToolRequestParams, ClientInfo},

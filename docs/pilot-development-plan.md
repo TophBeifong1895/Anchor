@@ -8,6 +8,7 @@
 
 | 能力 | 已验范围 | 证据入口 |
 | --- | --- | --- |
+| 助手重建与 Provider 错误收尾 | 显式退役后改名 wait 节点的新实例及后续空闲重启通过实际 Host/Goose 回归；交接记录核对各自实例，兼容版本继承现场，不兼容版本仍按原规则从已提交产物初始化。Provider 请求、认证、额度与压缩失败按结构化错误结算，失败幂等、重启续聊和普通错误引用通过。新固定 Goose 下 18 个实际沙箱场景、Rust 全量 1,945 项及 workspace 严格 Clippy 通过，包含文件租约回归；本轮未部署，新二进制的全部标准小图、真实 Provider 成功与发行候选未联合验收 | [本轮结果与命令](../.local/closeout-20261018/README.md)、[助手回归](../rust/anchor-runner-host/tests/goose_plugin_turns.rs)、[错误回归](../rust/anchor-runner-host/tests/goose_provider_errors.rs) |
 | 共同事实与交互收敛 | 核查发现的 8 项问题及原交互清单已修复：插件目录/交互、Graph 查询/校验、Run 状态/控制与冻结拓扑、条件删除、角色模型默认值、鉴权下载及 Pilot 创建/菜单共用权威实现。Host/MCP 1099 项、Web 285 项及 38 个浏览器场景通过，另有 3 个固定 Goose 集成场景；真实 Provider 单节点完成，并验证网页默认模型与修改 Graph 后的历史拓扑。已部署 8077/5173，两端口桌面/手机只读检查通过，原 57 个 Turn 等事实保留，3 个助手沿既有谱系恢复等待输入。默认忽略、现场新增 Pilot 请求和备份修正限制见证据 | [规则归属与边界](shared-facts-convergence.md)、[本轮命令、结果与证据](../.local/shared-facts-fix-20261016/README.md)、[部署核对](../.local/shared-facts-fix-20261016/deployment/README.md) |
 | 常驻助手插件热切换 | 保存后下一 Turn 生效，当前轮冻结，正常切换保留 Run、原生历史与工作文件。上线后发现旧会话的新消息误入历史权限交接链，已按 Turn.runs 收紧继承边界；旧候选复现失败，最终候选 4 项实际 Goose 场景与真实模型新增插件/续聊通过。修复已部署，3 个助手恢复等待输入，原 52 个 Turn 等事实保留；真实 Docmost 业务与企微公网投递未新增验收 | [故障修复与部署](../.local/plugin-turn-followup-20261016/README.md)、[前轮验收](../.local/plugin-turn-20261016/README.md)、[行为回归](../rust/anchor-runner-host/tests/goose_plugin_turns.rs) |
 | 远程 MCP HTTPS | 补齐 RMCP 所用 reqwest 版本的 TLS 构建能力；可信 CA 的握手/工具调用、不可信 CA 和域名拒绝，以及固定 Goose 的插件调用/失败收尾通过。修复已部署；Docmost 原 401 在用户更新凭据后解除，当前只读验证见下行 | [修复、验证与部署](../.local/mcp-https-20261016/README.md)、[TLS 回归](../rust/anchor-mcp-host/src/tls_tests.rs) |
@@ -39,9 +40,8 @@
 
 | 事项 | 当前状态 | 关闭条件 |
 | --- | --- | --- |
-| 可移植周报完整业务验收 | Codex、Claude Code、DeepSeek 发现与采集、安全投影和真实模型读取小图已验；完整理解/写作/评审、本地报告和可选 Docmost/通知尚未联合验收。旧失败 Run 保留被网关拦截的文本，应新建 Run 重新采集。Host 已分别校验核心图与 Docmost 包装图，旧节点预期已同步，见[本轮回归](../.local/workspace-recovery-20261016/README.md) | 用新 Run 验收完整核心周报；外部发布按操作员授权单独验证，不以采集、Graph 校验或模型小图代替业务通过；边界与证据见[周报](weekly-work-report.md#验证边界) |
+| 可移植周报完整业务验收 | 新隔离 Run 已用当前采集工具完成三来源采集，理解节点因真实 Provider HTTP 502 停止；核查原生记录后接续一次仍为 502，完整理解/写作/评审与本地报告未完成。没有外部发布或通知 | 上游恢复后沿保留事实继续核查，验收完整核心周报；Docmost/通知按明确目标与授权独立验证。见[本轮证据](../.local/closeout-20261018/README.md)与[周报边界](weekly-work-report.md#验证边界) |
 | Docmost 进一步业务验收 | 默认连接已迁为指定 owner 的网页托管配置，双 MCP 初始化/发现、只读身份调用及真实模型单节点完成均已通过；真实新旧双 Key、目标知识库内容读取、页面写入、附件上传与企微业务尚未验收 | 后续按明确授权的业务场景验证所需读取、写入或上传，再验企微链路；当前只读身份验收不扩大为这些业务通过 |
-| 常驻助手节点改名后的重建 | 对照旧候选时，显式退役后修改 wait 节点 ID 的新实例触发交接身份拒绝；与本次新 Turn 权限误继承分开，最终候选未覆盖这一改名场景 | 单独验证节点改名的实例边界与工作区来源；保持节点身份的指令调整/重建后续聊已有本轮回归 |
 | 当前开发部署的依赖业务验证 | 配置缺失与初始化失败已修复，目标网页初始化成功；本次未执行新增第三方依赖的安装与 Pilot 调用 | 按实际开发任务，在目标部署安装并调用所需依赖；初始化成功不替代业务验证 |
 | 渠道多入口产品范围 | 消息管理入口迁移已完成受控浏览器验收，见上表；后端 API 与单平台单入口限制保留，多入口未实施 | 按用户确认的产品范围设计多实例；模型 backup 不自动解释为降级策略 |
 | MCP 按需连接 | A223 仅完成固定 Goose 原生接口实验，产品尚未实施 | 按 [短路线](goose-native-capability-reuse-plan.md) 验发现、首次连接、调用与回收及权限/取消边界 |
@@ -53,7 +53,7 @@
 - **Python 兼容**：A225 真实场景为零第三方依赖 editable 与合成正式 wheel；第三方构建后端/native 包、规模压力、额外长路径及跨 ABI/不同解释器构建未专项验收。仅解包 store 不能供私有 pip 恢复包，是已确定的兼容边界，见 [开发指南](pilot-development.md#旧项目兼容)。
 - **披露规模与压缩**：1,000 Plugin/工具目录不代表 1,000 MCP server 启动；A224 Pilot 与最终 Node 绑定不同 Host。真实 Pilot 压缩后未重新调用工具，重读由确定性场景验证。懒连接与 Code Mode 未实施。
 - **运行时组合**：更完整的 `call.session` 业务组合、多次/超大上下文、摘要 Provider 错误及提问/媒体组合未全部验收；Pilot 未直接暴露手动 `/compact`。固定 Goose ACP 未提供完成工具参数的逐 token 增量，不以普通文本冒充结构化完成，也不为此新增模型代理。
-- **Responses 与错误分类**：完整 reasoning 回传已验同一服务/模型的接续，跨不同 Provider、模型或账号的 opaque/encrypted reasoning 兼容未验；独立 backup 成功不证明历史可跨服务迁移。Goose 的 Provider 错误仍可能以助手正文结束，Turn `completed` 不单独证明模型请求或业务成功。
+- **Responses 与错误分类**：完整 reasoning 回传已验同一服务/模型的接续，跨不同 Provider、模型或账号的 opaque/encrypted reasoning 兼容未验；独立 backup 成功不证明历史可跨服务迁移。新固定 Goose 可复现构建，Provider 错误的 4 个实际 Host/Goose 场景及完成/助手 14 个场景通过；普通错误引用正文不触发分类。真实模型完整周报遇到上游 502，新二进制全部标准小图与最终发行候选未联合验收；Turn `completed` 仍不单独证明业务成功。见[本轮证据](../.local/closeout-20261018/README.md)。
 - **Pilot 附件**：真实模型覆盖 CSV 与 PNG 标签识别/文件交付；任意文档解析、其他视觉模型和 ACP 直接 assistant image 输出未专项验收。MCP 工具图片的确定性 fixture 不代表外部图片服务业务已验收。
 - **外部业务**：真实外部 OAuth、最终常驻路径的企微收发/媒体/vision、Docmost 知识库内容与写入/上传和公共学术服务仍需按具体场景验收；Docmost 的真实模型只读身份调用、已有私聊或本地 mock 结果不扩大为全部通过。
 - **WebUI 管理**：本轮原生浏览器安装使用本机插件目录；GitHub 获取、带依赖的插件安装及 Docmost 以外的远程 MCP 凭据业务未新增实际外部验收。插件预检操作句柄不跨 Host 重启保留，页面会依据 Library 实际状态重新预检；旧共享会话不自动迁入私有凭据作用域。

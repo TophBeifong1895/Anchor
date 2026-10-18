@@ -32,7 +32,7 @@ mod effects;
 mod responses;
 
 pub const MODEL: &str = "fixture-goose";
-pub const GOOSE_SHA256: &str = "dc2a4352279c16f3c665b280e4fc8fedbec3a67cce596bf460aa9fd416c27a15";
+pub const GOOSE_SHA256: &str = "17e065a79cb0508413af714724aed51d6b76972dda9feebdda701330134fb640";
 pub const SUMMARY_REQUEST: &str =
     "Please summarize the conversation history provided in the system prompt.";
 
@@ -45,6 +45,7 @@ pub enum Reply {
     Text(&'static str),
     Summary(String),
     ContextLengthExceeded,
+    HttpError(u16, &'static str),
     Gated(Arc<Gate>, Box<Reply>),
     Reasoning(Value, Box<Reply>),
 }
@@ -131,6 +132,17 @@ impl Step {
             preface: None,
             receipt_back: 0,
         }
+    }
+
+    pub fn http_error(status: u16, message: &'static str) -> Self {
+        let mut step = Self::text("");
+        step.reply = Reply::HttpError(status, message);
+        step
+    }
+
+    pub fn during_summary(mut self) -> Self {
+        self.summary = true;
+        self
     }
 
     pub fn with_usage(mut self, input: u32, output: u32) -> Self {
@@ -532,6 +544,17 @@ async fn completion(
         gate.release.acquire().await.unwrap().forget();
         reply = *next;
     }
+    if let Reply::HttpError(status, message) = reply {
+        let response = json!({"error": {
+            "message": message, "type": "invalid_request_error", "code": "fixture_error"
+        }});
+        let mut state = shared.lock().unwrap();
+        state.exchanges.push(json!({
+            "sequence": sequence, "response_status": status, "response": response
+        }));
+        state.save();
+        return (StatusCode::from_u16(status).unwrap(), Json(response)).into_response();
+    }
     if matches!(reply, Reply::ContextLengthExceeded) {
         let response = json!({"error":{
             "message":"maximum context length exceeded",
@@ -644,7 +667,7 @@ async fn completion(
             chunks.push(chunk(json!({"content":text}), Value::Null));
             "stop"
         }
-        Reply::ContextLengthExceeded => unreachable!(),
+        Reply::ContextLengthExceeded | Reply::HttpError(_, _) => unreachable!(),
         Reply::Gated(_, _) => unreachable!(),
         Reply::Reasoning(_, _) => {
             return shared

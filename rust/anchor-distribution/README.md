@@ -173,7 +173,7 @@ optional `scholarly`, `docmost_tools`, `wecom_tools`, `wecom_gateway`, and
 
 Goose is fixed to the Anchor-built lean ACP binary from pinned upstream v1.53.0
 sources (`../scripts/build-goose-acp.sh`) SHA256
-`dc2a4352279c16f3c665b280e4fc8fedbec3a67cce596bf460aa9fd416c27a15`.
+`17e065a79cb0508413af714724aed51d6b76972dda9feebdda701330134fb640`.
 The builder does not build Goose itself; supply the binary produced by that
 script. There is no environment or CLI option to bypass this check. Host and tools must
 be executable ELF files with an executable entry point and matching platform.

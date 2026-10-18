@@ -253,6 +253,7 @@ pub(crate) fn handover_predecessor(
         .map_err(|error| error.to_string())?;
     if current.as_ref().is_none_or(|current| {
         current.run_id != key.run_id
+            || current.wait_node != source.wait_node
             || current.work_node != key.node_id
             || current.reply_node != source.reply_node
     }) || !sessions
@@ -264,12 +265,10 @@ pub(crate) fn handover_predecessor(
     let certified = sessions
         .channel_assistant_predecessor(&source.owner, &source.session, &key.run_id)
         .map_err(|error| error.to_string())?;
-    if certified.as_ref().is_none_or(|binding| {
-        binding.run_id != previous
-            || binding.wait_node != source.wait_node
-            || binding.work_node != source.work_node
-            || binding.reply_node != source.reply_node
-    }) {
+    if certified
+        .as_ref()
+        .is_none_or(|binding| binding.run_id != previous)
+    {
         return Err("assistant handover predecessor identity changed".into());
     }
     // The handover is real. From here on the facts must agree, so a mismatch is
@@ -301,6 +300,17 @@ pub(crate) fn handover_predecessor(
         || prior_conversation.session != source.session
     {
         return Err("assistant handover source belongs to another instance".into());
+    }
+    // The retired binding describes its own immutable instance. An explicitly
+    // retired workflow may be replaced with different node identities; compare
+    // those revisions only after validating each instance's authoritative facts.
+    if certified.as_ref().is_none_or(|binding| {
+        binding.wait_node != prior_assistant.wait_node
+            || binding.work_node != prior_assistant.work_node
+            || binding.reply_node != prior_assistant.reply_node
+    }) || prior_conversation.reply_node != prior_assistant.work_node
+    {
+        return Err("assistant handover predecessor identity changed".into());
     }
     // Plugin-only publications preserve this node's scene and native history.
     // Structural or instruction changes still require an explicit new instance.
@@ -396,12 +406,10 @@ pub(crate) fn handover_workspace_source(
         let certified = sessions
             .channel_assistant_predecessor(&source.owner, &source.session, &previous.run_id)
             .map_err(|error| error.to_string())?;
-        if certified.as_ref().is_none_or(|binding| {
-            binding.run_id != older
-                || binding.wait_node != source.wait_node
-                || binding.work_node != source.work_node
-                || binding.reply_node != source.reply_node
-        }) {
+        if certified
+            .as_ref()
+            .is_none_or(|binding| binding.run_id != older)
+        {
             return Err("assistant workspace predecessor identity changed".into());
         }
         let older_meta = crate::application::metadata::load(root, older)
@@ -417,22 +425,30 @@ pub(crate) fn handover_workspace_source(
             .ok_or("assistant workspace ancestor Run is missing")?;
         if older_source.owner != source.owner
             || older_source.session != source.session
-            || older_source.wait_node != source.wait_node
-            || older_source.work_node != source.work_node
-            || older_source.reply_node != source.reply_node
-            || older_meta.bundle_source != metadata.bundle_source
             || older_meta.conversation.as_ref().is_none_or(|conversation| {
                 conversation.session != source.session
-                    || conversation.reply_node != source.work_node
+                    || conversation.reply_node != older_source.work_node
             })
             || older_meta.graph_digest != older_record.graph_digest
+        {
+            return Err("assistant workspace ancestor belongs to another instance".into());
+        }
+        if certified.as_ref().is_none_or(|binding| {
+            binding.wait_node != older_source.wait_node
+                || binding.work_node != older_source.work_node
+                || binding.reply_node != older_source.reply_node
+        }) {
+            return Err("assistant workspace predecessor identity changed".into());
+        }
+        if older_source.work_node != source.work_node
+            || older_meta.bundle_source != metadata.bundle_source
             || !crate::assistant_plugins::compatible(
                 &older_record.snapshot,
                 &current.snapshot,
                 &source.work_node,
             )
         {
-            return Err("assistant workspace ancestor belongs to another instance".into());
+            return Ok(None);
         }
         previous = InvocationKey {
             run_id: older.into(),
@@ -707,7 +723,10 @@ mod tests {
         metadata.assistant = Some(AssistantSource {
             owner: owner.into(),
             session: session.into(),
-            wait_node: "wait_input".into(),
+            wait_node: AssistantPlan::from_snapshot(&record.snapshot, "assistant")
+                .unwrap()
+                .unwrap()
+                .wait_node,
             work_node: "assistant".into(),
             reply_node: "reply".into(),
         });
@@ -840,6 +859,102 @@ mod tests {
                 .unwrap()
                 .invocation,
             4
+        );
+    }
+
+    #[test]
+    fn retired_instance_with_renamed_wait_starts_a_new_workspace_boundary() {
+        let fixture = fixture();
+        let sessions = sessions(&fixture.root).unwrap();
+        let first = sessions
+            .admit_channel_inbound(OWNER, inbound("one"))
+            .unwrap();
+        let session = first.session.id;
+        sessions
+            .finish_turn(
+                OWNER,
+                &session,
+                &first.turn.id,
+                anchor_platform_session::TurnStatus::Completed,
+                None,
+            )
+            .unwrap();
+        let old = admit(&fixture, "assistant-old", &session, None);
+        sessions
+            .bind_channel_assistant(
+                OWNER,
+                &session,
+                &old.run_id,
+                "wait_input",
+                "assistant",
+                "reply",
+            )
+            .unwrap();
+        sessions
+            .retire_channel_assistant(OWNER, &session, &old.run_id)
+            .unwrap();
+        let mut definition = serde_json::to_value(snapshot()).unwrap();
+        definition["entry"] = json!("current_wait");
+        definition["nodes"][0]["id"] = json!("current_wait");
+        definition["edges"][0]["from"] = json!("current_wait");
+        definition["edges"][2]["to"] = json!("current_wait");
+        let updated = GraphSnapshot::admit(definition).unwrap();
+        let middle = admit_snapshot(
+            &fixture,
+            "assistant-middle",
+            &session,
+            Some(&old.run_id),
+            OWNER,
+            updated.clone(),
+        );
+        sessions
+            .bind_channel_assistant(
+                OWNER,
+                &session,
+                &middle.run_id,
+                "current_wait",
+                "assistant",
+                "reply",
+            )
+            .unwrap();
+        assert_eq!(handover_predecessor(&fixture.root, &middle).unwrap(), None);
+
+        // A crash before the new instance prepares a workspace cannot cross the
+        // explicit workflow change to recover the older instance's scene.
+        let new = admit_snapshot(
+            &fixture,
+            "assistant-new",
+            &session,
+            Some(&middle.run_id),
+            OWNER,
+            updated,
+        );
+        sessions
+            .handover_channel_assistant(OWNER, &session, &middle.run_id, &new.run_id, "new-key")
+            .unwrap();
+        let artifacts = crate::HostArtifacts::new(
+            fixture.root.join("artifacts"),
+            fixture.root.join("workspaces"),
+        );
+        assert_eq!(
+            handover_predecessor(&fixture.root, &new).unwrap(),
+            Some(middle.clone())
+        );
+        assert_eq!(
+            handover_workspace_source(&fixture.root, &new, &artifacts).unwrap(),
+            None
+        );
+
+        // The old binding must still agree with its own immutable metadata.
+        let mut metadata = crate::application::metadata::load(&fixture.root, &old.run_id)
+            .unwrap()
+            .unwrap();
+        metadata.assistant.as_mut().unwrap().wait_node = "tampered_wait".into();
+        crate::application::metadata::save(&fixture.root, &metadata).unwrap();
+        assert!(
+            handover_workspace_source(&fixture.root, &new, &artifacts)
+                .unwrap_err()
+                .contains("identity changed")
         );
     }
 
