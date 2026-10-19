@@ -18,8 +18,8 @@
 //! business result can never leak through a detach.
 //!
 //! Covered: serial routing, feedback edges, skipped paths, node and module
-//! round limits, fanout/join, Op.call wait/detach. Not yet: module scopes
-//! inside parallel branches.
+//! round limits (including modules in parallel branches), fanout/join,
+//! Op.call wait/detach.
 
 use anchor_kernel::{
     Action, Evidence, JudgeCtx, Judgement, Outcome, Phase, PrincipalKind, Reason, Resource, Slot,
@@ -176,19 +176,7 @@ pub fn run_resource(record: &GraphRunRecord, budget: u64) -> Result<Resource, Gr
             )));
         }
     }
-    for region in record.snapshot.parallel_regions()?.values() {
-        if region
-            .branches
-            .iter()
-            .flatten()
-            .any(|node| !scope_of(node).is_empty())
-        {
-            return Err(GraphError::Unsupported(
-                "module scopes inside parallel branches are not admitted by the Graph validator yet"
-                    .into(),
-            ));
-        }
-    }
+    record.snapshot.parallel_regions()?;
     let state = serde_json::to_value(record).map_err(GraphError::SnapshotDecode)?;
     Ok(Resource::new(run_resource_id(&record.run_id), GRAPH_VALIDATOR, state).task(budget))
 }
@@ -233,6 +221,13 @@ fn op_of<'a>(record: &'a GraphRunRecord, node: &GraphNode) -> Option<&'a Value> 
 /// Advance as far as the Graph allows, applying round limits and skipped
 /// paths on the way. Mutates exactly what the Runner mutated before dispatch.
 pub(crate) fn prepare(record: &mut GraphRunRecord) -> Result<Advance, GraphError> {
+    prepare_submission(record, None)
+}
+
+fn prepare_submission(
+    record: &mut GraphRunRecord,
+    submitted_slot: Option<&str>,
+) -> Result<Advance, GraphError> {
     loop {
         propagate_inactive_edges(record)?;
         if let Some(activation) = &record.parallel
@@ -241,7 +236,7 @@ pub(crate) fn prepare(record: &mut GraphRunRecord) -> Result<Advance, GraphError
                 .iter()
                 .any(|b| b.status != ParallelBranchStatus::Completed)
         {
-            return parallel_frontier(record);
+            return parallel_frontier(record, submitted_slot);
         }
         // Started but without a result: the same invocation continues (a call
         // whose child was bound). It was counted when it started, so round
@@ -369,9 +364,13 @@ pub(crate) fn prepare(record: &mut GraphRunRecord) -> Result<Advance, GraphError
 }
 
 /// One slot per unfinished branch: the branch's next node.
-fn parallel_frontier(record: &mut GraphRunRecord) -> Result<Advance, GraphError> {
+fn parallel_frontier(
+    record: &mut GraphRunRecord,
+    submitted_slot: Option<&str>,
+) -> Result<Advance, GraphError> {
     let activation = record.parallel.clone().expect("active parallel region");
     let mut open = Vec::new();
+    let mut submitted_state = None;
     for (index, branch) in activation.branches.iter().enumerate() {
         if branch.status == ParallelBranchStatus::Completed {
             continue;
@@ -384,8 +383,73 @@ fn parallel_frontier(record: &mut GraphRunRecord) -> Result<Advance, GraphError>
             .find(|n| &n.id == node_id)
             .cloned()
             .expect("validated parallel branch node");
+        // Preview each candidate independently. Only the submitted slot's
+        // entry effects are committed: observing another open branch is not
+        // an invocation and must not consume its module activation.
+        let mut candidate = record.clone();
+        let scope = scope_of(&node.id);
+        let prefix = format!("{scope}/");
+        let prior_sequence = record
+            .results
+            .get(&node.id)
+            .and_then(|results| results.last())
+            .map(|result| result.sequence)
+            .unwrap_or(0);
+        let scope_started = activation.branches.iter().any(|branch| {
+            branch
+                .nodes
+                .iter()
+                .take(branch.next_index)
+                .any(|node| node.starts_with(&prefix))
+        });
+        let enters_scope = !scope.is_empty()
+            && !scope_started
+            && record
+                .snapshot
+                .edges
+                .iter()
+                .filter(|edge| edge.to_node == node.id && !edge.from_node.starts_with(&prefix))
+                .any(|edge| {
+                    record
+                        .decided
+                        .get(&edge_key(&edge.from_node, &edge.to_node))
+                        .is_some_and(|decision| {
+                            decision.selected && decision.sequence > prior_sequence
+                        })
+                });
+        if enters_scope && let Some(limit) = record.snapshot.module_rounds.get(&scope).copied() {
+            let next = record.module_activations.get(&scope).copied().unwrap_or(0) + 1;
+            if next > u64::from(limit) {
+                record.ceased.insert(format!("{scope}@{limit}"));
+                refuse_module_activation(record, &scope, &node.id)?;
+                return Ok(Advance::Failed(format!(
+                    "parallel branch `{}` exceeded module activation ceiling `{scope}@{limit}`",
+                    node.id
+                )));
+            }
+            candidate.module_activations.insert(scope.clone(), next);
+            let members = candidate
+                .snapshot
+                .nodes
+                .iter()
+                .filter(|member| member.id.starts_with(&prefix))
+                .map(|member| member.id.clone())
+                .collect::<Vec<_>>();
+            for member in members {
+                candidate.passes.remove(&member);
+            }
+            let nested = candidate
+                .module_activations
+                .keys()
+                .filter(|nested| nested.starts_with(&prefix))
+                .cloned()
+                .collect::<Vec<_>>();
+            for nested in nested {
+                candidate.module_activations.remove(&nested);
+            }
+        }
         if let Some(limit) = node.max_rounds
-            && record.passes.get(&node.id).copied().unwrap_or(0) >= u64::from(limit)
+            && candidate.passes.get(&node.id).copied().unwrap_or(0) >= u64::from(limit)
         {
             record.ceased.insert(format!("{}@{limit}", node.id));
             refuse_outgoing(record, &node.id);
@@ -396,13 +460,20 @@ fn parallel_frontier(record: &mut GraphRunRecord) -> Result<Advance, GraphError>
         }
         let invocation = record.invocations.get(&node.id).copied().unwrap_or(0) + 1;
         let inputs = dispatch_inputs(record, &node.id);
-        open.push(Dispatch {
+        let dispatch = Dispatch {
             node,
             invocation,
             kind: DispatchKind::Work,
             branch: Some(index),
             inputs,
-        });
+        };
+        if submitted_slot == Some(dispatch.slot().as_str()) {
+            submitted_state = Some(candidate);
+        }
+        open.push(dispatch);
+    }
+    if let Some(submitted_state) = submitted_state {
+        *record = submitted_state;
     }
     Ok(Advance::Open(open))
 }
@@ -458,7 +529,7 @@ impl Validator for GraphValidator {
         let Ok(mut record) = record_of(ctx.resource) else {
             return Judgement::refused(Reason::Unclassified);
         };
-        let Ok(Advance::Open(open)) = prepare(&mut record) else {
+        let Ok(Advance::Open(open)) = prepare_submission(&mut record, s.slot.as_deref()) else {
             return Judgement::refused(Reason::SlotClosed);
         };
         let Some(dispatch) = open
@@ -889,3 +960,6 @@ mod interruption_tests;
 
 #[cfg(test)]
 mod settle_tests;
+
+#[cfg(test)]
+mod parallel_module_tests;

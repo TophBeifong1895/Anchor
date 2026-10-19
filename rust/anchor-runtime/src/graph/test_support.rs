@@ -208,6 +208,42 @@ pub fn random_parallel_graph(seed: u64) -> GraphSnapshot {
     snapshot
 }
 
+/// Keep the original parallel population unchanged and additionally exercise
+/// shared and independent module entries. A module's ceiling is deliberately
+/// above the bounded fanout's maximum activations; ceiling failures have
+/// separate deterministic coverage with the exact S17/S18 history assertions.
+pub fn random_parallel_module_graph(seed: u64) -> GraphSnapshot {
+    let mut snapshot = random_parallel_graph(seed);
+    let renamed = snapshot
+        .nodes
+        .iter()
+        .filter(|node| node.id.starts_with('b'))
+        .map(|node| {
+            let scope = if seed.is_multiple_of(2) {
+                "m".to_owned()
+            } else {
+                format!("m{}", node.id.split('_').next().unwrap())
+            };
+            (node.id.clone(), format!("{scope}/{}", node.id))
+        })
+        .collect::<BTreeMap<_, _>>();
+    for node in &mut snapshot.nodes {
+        if let Some(id) = renamed.get(&node.id) {
+            node.id = id.clone();
+            snapshot.module_rounds.insert(scope_of(id), 100);
+        }
+    }
+    for edge in &mut snapshot.edges {
+        if let Some(id) = renamed.get(&edge.from_node) {
+            edge.from_node = id.clone();
+        }
+        if let Some(id) = renamed.get(&edge.to_node) {
+            edge.to_node = id.clone();
+        }
+    }
+    snapshot
+}
+
 /// What a child Run does, decided by the call identity on both sides.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CallScript {

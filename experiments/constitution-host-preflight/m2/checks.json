@@ -1,120 +1,368 @@
 {
   "schema_version": 1,
   "milestone": "M2",
-  "status": "stopped_at_required_validator_boundary",
-  "start_revision": "aae4bb3db2e0e2d8577353176a2a977aa853f8ae",
-  "authorization": "docs/constitution-migration-task.md sections 2, 10.4 and 10.10",
-  "stop_rule": "section 8: validator judgement rule change; exception for new Code submissions does not apply",
-  "checks": [
-    {
-      "command": "cargo test -p anchor-runtime --features test-fixtures --test m2_parallel_scope_boundary -- --nocapture",
-      "working_directory": "rust",
-      "result": {
-        "passed": 1,
-        "failed": 0,
-        "ignored": 0
+  "initial_boundary": {
+    "schema_version": 1,
+    "milestone": "M2",
+    "status": "stopped_at_required_validator_boundary",
+    "start_revision": "aae4bb3db2e0e2d8577353176a2a977aa853f8ae",
+    "authorization": "docs/constitution-migration-task.md sections 2, 10.4 and 10.10",
+    "stop_rule": "section 8: validator judgement rule change; exception for new Code submissions does not apply",
+    "checks": [
+      {
+        "command": "cargo test -p anchor-runtime --features test-fixtures --test m2_parallel_scope_boundary -- --nocapture",
+        "working_directory": "rust",
+        "result": {
+          "passed": 1,
+          "failed": 0,
+          "ignored": 0
+        },
+        "purpose": "diagnostic reproduction of existing gap; not feature acceptance",
+        "raw_output": "/tmp/anchor-m2/parallel-module-boundary.log",
+        "temporary_source": "/tmp/anchor-m2/parallel-module-boundary.rs",
+        "source_sha256": "32c00c0abe2231d40b4ceb1d3b1f6865740d5d270df86c8bd4b7418a12759238",
+        "note": "The identical temporary test was copied to rust/anchor-runtime/tests/m2_parallel_scope_boundary.rs for this command and removed after execution. Its complete source is preserved in verification.md."
       },
-      "purpose": "diagnostic reproduction of existing gap; not feature acceptance",
-      "raw_output": "/tmp/anchor-m2/parallel-module-boundary.log",
-      "temporary_source": "/tmp/anchor-m2/parallel-module-boundary.rs",
-      "source_sha256": "32c00c0abe2231d40b4ceb1d3b1f6865740d5d270df86c8bd4b7418a12759238",
-      "note": "The identical temporary test was copied to rust/anchor-runtime/tests/m2_parallel_scope_boundary.rs for this command and removed after execution. Its complete source is preserved in verification.md."
-    },
-    {
-      "command": "cargo test -p anchor-runtime --lib graph::tests::parallel_region_counts_module_activation_once_and_enforces_reentry_ceiling -- --exact --nocapture",
-      "working_directory": "rust",
-      "result": {
-        "passed": 1,
-        "failed": 0,
-        "ignored": 0
+      {
+        "command": "cargo test -p anchor-runtime --lib graph::tests::parallel_region_counts_module_activation_once_and_enforces_reentry_ceiling -- --exact --nocapture",
+        "working_directory": "rust",
+        "result": {
+          "passed": 1,
+          "failed": 0,
+          "ignored": 0
+        },
+        "raw_output": "/tmp/anchor-m2/old-module-test-exact.log"
       },
-      "raw_output": "/tmp/anchor-m2/old-module-test-exact.log"
-    },
-    {
-      "command": "cargo test -p anchor-runtime --lib parallel_region_counts_module_activation_once_and_enforces_reentry_ceiling -- --exact --nocapture",
-      "working_directory": "rust",
-      "result": {
-        "passed": 0,
-        "failed": 0,
-        "ignored": 0,
-        "filtered": 130
-      },
-      "raw_output": "/tmp/anchor-m2/old-module-test.log",
-      "note": "Initial unqualified exact filter selected zero tests; not counted as validation."
-    }
-  ],
-  "observation": {
-    "capability_implemented": false,
-    "kernel_admission_error": "unsupported graph capability: module scopes inside parallel branches are not admitted by the Graph validator yet",
-    "old": {
-      "ceased": [
-        "module@1"
-      ],
-      "module_activations": {
-        "module": 1
-      },
-      "status": "failed",
-      "trace": [
-        [
-          "module/left",
-          1,
-          [
-            "m2-module-boundary:6878ccb5c5f1b77a8da290b398dab1cd49b47f3a3e85b962890165ed2ecd2c10:start:1"
-          ]
+      {
+        "command": "cargo test -p anchor-runtime --lib parallel_region_counts_module_activation_once_and_enforces_reentry_ceiling -- --exact --nocapture",
+        "working_directory": "rust",
+        "result": {
+          "passed": 0,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 130
+        },
+        "raw_output": "/tmp/anchor-m2/old-module-test.log",
+        "note": "Initial unqualified exact filter selected zero tests; not counted as validation."
+      }
+    ],
+    "observation": {
+      "capability_implemented": false,
+      "kernel_admission_error": "unsupported graph capability: module scopes inside parallel branches are not admitted by the Graph validator yet",
+      "old": {
+        "ceased": [
+          "module@1"
         ],
-        [
-          "module/right",
-          1,
+        "module_activations": {
+          "module": 1
+        },
+        "status": "failed",
+        "trace": [
           [
-            "m2-module-boundary:6878ccb5c5f1b77a8da290b398dab1cd49b47f3a3e85b962890165ed2ecd2c10:start:1"
-          ]
-        ],
-        [
-          "after",
-          1,
+            "module/left",
+            1,
+            [
+              "m2-module-boundary:6878ccb5c5f1b77a8da290b398dab1cd49b47f3a3e85b962890165ed2ecd2c10:start:1"
+            ]
+          ],
           [
-            "m2-module-boundary:6878ccb5c5f1b77a8da290b398dab1cd49b47f3a3e85b962890165ed2ecd2c10:collect:1"
+            "module/right",
+            1,
+            [
+              "m2-module-boundary:6878ccb5c5f1b77a8da290b398dab1cd49b47f3a3e85b962890165ed2ecd2c10:start:1"
+            ]
+          ],
+          [
+            "after",
+            1,
+            [
+              "m2-module-boundary:6878ccb5c5f1b77a8da290b398dab1cd49b47f3a3e85b962890165ed2ecd2c10:collect:1"
+            ]
           ]
         ]
-      ]
+      },
+      "scenario": "same module in two parallel branches; reentry ceiling 1",
+      "stop_condition": "constitution-migration-task section 8: validator judgement rule change"
     },
-    "scenario": "same module in two parallel branches; reentry ceiling 1",
-    "stop_condition": "constitution-migration-task section 8: validator judgement rule change"
-  },
-  "constraints": {
-    "kernel_diff_vs_6ee2b0e_empty": true,
-    "production_code_changed": false,
-    "validator_rules_changed": false,
-    "existing_tests_changed": false,
-    "new_ignores": 0,
-    "new_raw_logs_committed": 0,
-    "old_runner_remains_default": true,
-    "F1_merged": false,
-    "full_workspace_rerun": false,
-    "goose_rerun": false,
-    "real_model_provider_verified": false
-  },
-  "source_snapshots": [
-    {
-      "path": "rust/anchor-runtime/src/graph/validator.rs",
-      "sha256": "e00df2b627f62873f694f740a27c3335801ca298c3f99bf14337e293d2c5b541"
+    "constraints": {
+      "kernel_diff_vs_6ee2b0e_empty": true,
+      "production_code_changed": false,
+      "validator_rules_changed": false,
+      "existing_tests_changed": false,
+      "new_ignores": 0,
+      "new_raw_logs_committed": 0,
+      "old_runner_remains_default": true,
+      "F1_merged": false,
+      "full_workspace_rerun": false,
+      "goose_rerun": false,
+      "real_model_provider_verified": false
     },
-    {
-      "path": "rust/anchor-runtime/src/graph/parallel.rs",
-      "sha256": "e6744ebfd82363fd0e1df47bbf6d6b22093ddeac6afb2bcce6fcc46a8bf3eadf"
-    },
-    {
-      "path": "rust/anchor-runtime/src/graph/tests.rs",
-      "sha256": "7c279e81824c07409a3a3b883bc57eed28f7a210a846be2e8bd012e351609655"
-    },
-    {
-      "path": "rust/anchor-runtime/src/graph/scheduler.rs",
-      "sha256": "dae1c052aba3eb4f9c1ef427fd4715dee369be8972d2d39c0fe5511cdfa01d3d"
+    "source_snapshots": [
+      {
+        "path": "rust/anchor-runtime/src/graph/validator.rs",
+        "sha256": "e00df2b627f62873f694f740a27c3335801ca298c3f99bf14337e293d2c5b541"
+      },
+      {
+        "path": "rust/anchor-runtime/src/graph/parallel.rs",
+        "sha256": "e6744ebfd82363fd0e1df47bbf6d6b22093ddeac6afb2bcce6fcc46a8bf3eadf"
+      },
+      {
+        "path": "rust/anchor-runtime/src/graph/tests.rs",
+        "sha256": "7c279e81824c07409a3a3b883bc57eed28f7a210a846be2e8bd012e351609655"
+      },
+      {
+        "path": "rust/anchor-runtime/src/graph/scheduler.rs",
+        "sha256": "dae1c052aba3eb4f9c1ef427fd4715dee369be8972d2d39c0fe5511cdfa01d3d"
+      }
+    ],
+    "raw_output_hashes": {
+      "/tmp/anchor-m2/parallel-module-boundary.log": "16f1a6b510ee6f31b77a8ade7f232bea8b6a59d5467f3fb6175669b67d8c33ff",
+      "/tmp/anchor-m2/old-module-test-exact.log": "7d66539c9300814f117bfcf7e6eeaf38150736838bd4d7b35ada5c27069803ba",
+      "/tmp/anchor-m2/old-module-test.log": "9e3f9cf458e485f070db36b9595fa60c76aed5afcc43cfb5300f402edb2b6556"
     }
-  ],
-  "raw_output_hashes": {
-    "/tmp/anchor-m2/parallel-module-boundary.log": "16f1a6b510ee6f31b77a8ade7f232bea8b6a59d5467f3fb6175669b67d8c33ff",
-    "/tmp/anchor-m2/old-module-test-exact.log": "7d66539c9300814f117bfcf7e6eeaf38150736838bd4d7b35ada5c27069803ba",
-    "/tmp/anchor-m2/old-module-test.log": "9e3f9cf458e485f070db36b9595fa60c76aed5afcc43cfb5300f402edb2b6556"
+  },
+  "status": "in_progress_parallel_module_validator_slice_verified",
+  "authorization": "User approved the four-point parallel-module extension on 2026-10-19; Kernel remains unchanged.",
+  "parallel_module_slice": {
+    "status": "implemented_and_locally_verified",
+    "new_unit_tests": 5,
+    "existing_assertions_modified": 0,
+    "kernel_changed": false,
+    "persisted_schema_changed": false,
+    "host_scheduler_parallel_enabled": false,
+    "commands": [
+      {
+        "command": "cargo test -p anchor-runtime --lib parallel_module -- --nocapture",
+        "working_directory": "rust",
+        "exit_code": 0,
+        "raw_output": "/tmp/anchor-m2/parallel-modules-directed-random.log",
+        "results": [
+          {
+            "line": "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 130 filtered out; finished in 47.83s",
+            "passed": 5,
+            "failed": 0,
+            "ignored": 0
+          }
+        ]
+      },
+      {
+        "command": "cargo test -p anchor-runtime --lib graph::validator::differential -- --nocapture",
+        "working_directory": "rust",
+        "exit_code": 0,
+        "raw_output": "/tmp/anchor-m2/validator-differential.log",
+        "results": [
+          {
+            "line": "test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 129 filtered out; finished in 82.44s",
+            "passed": 6,
+            "failed": 0,
+            "ignored": 0
+          }
+        ]
+      },
+      {
+        "command": "cargo test -p anchor-runtime -- --skip graph::validator::differential",
+        "working_directory": "rust",
+        "exit_code": 0,
+        "raw_output": "/tmp/anchor-m2/runtime-without-differential.log",
+        "results": [
+          {
+            "line": "test result: ok. 129 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 1.30s",
+            "passed": 129,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "line": "test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+            "passed": 7,
+            "failed": 0,
+            "ignored": 0
+          },
+          {
+            "line": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s",
+            "passed": 2,
+            "failed": 0,
+            "ignored": 0
+          }
+        ]
+      },
+      {
+        "command": "cargo clippy -p anchor-runtime --all-targets -- -D warnings",
+        "working_directory": "rust",
+        "exit_code": 0,
+        "raw_output": "/tmp/anchor-m2/parallel-modules-clippy.log",
+        "results": []
+      }
+    ],
+    "differential_tallies": {
+      "S17 seed 495": {
+        "cases": 1,
+        "rejected_graphs": 0,
+        "completed": 0,
+        "round_limited": 0,
+        "dispatches": 4,
+        "longest": 4,
+        "module_activated": 0,
+        "module_limited": 0,
+        "skipped_paths": 1,
+        "failed": 0,
+        "node_failed": 1,
+        "multi_failure_waves": 1,
+        "ceiling_preempted_failures": 0,
+        "parallel_activations": 1,
+        "resubmissions": 1,
+        "phantom_invocations": 0,
+        "late_refusals": 1,
+        "calls_waited": 0,
+        "calls_detached": 0,
+        "call_failed": 0,
+        "call_unknown": 0
+      },
+      "S18 seed 2122": {
+        "cases": 1,
+        "rejected_graphs": 0,
+        "completed": 0,
+        "round_limited": 0,
+        "dispatches": 12,
+        "longest": 12,
+        "module_activated": 0,
+        "module_limited": 0,
+        "skipped_paths": 0,
+        "failed": 0,
+        "node_failed": 1,
+        "multi_failure_waves": 0,
+        "ceiling_preempted_failures": 1,
+        "parallel_activations": 2,
+        "resubmissions": 3,
+        "phantom_invocations": 0,
+        "late_refusals": 2,
+        "calls_waited": 0,
+        "calls_detached": 0,
+        "call_failed": 0,
+        "call_unknown": 0
+      },
+      "differential calls": {
+        "cases": 5000,
+        "rejected_graphs": 0,
+        "completed": 2902,
+        "round_limited": 1218,
+        "dispatches": 9733,
+        "longest": 13,
+        "module_activated": 721,
+        "module_limited": 156,
+        "skipped_paths": 4576,
+        "failed": 0,
+        "node_failed": 0,
+        "multi_failure_waves": 0,
+        "ceiling_preempted_failures": 0,
+        "parallel_activations": 0,
+        "resubmissions": 0,
+        "phantom_invocations": 0,
+        "late_refusals": 0,
+        "calls_waited": 1704,
+        "calls_detached": 1485,
+        "call_failed": 497,
+        "call_unknown": 383
+      },
+      "differential": {
+        "cases": 10000,
+        "rejected_graphs": 0,
+        "completed": 6968,
+        "round_limited": 2260,
+        "dispatches": 26981,
+        "longest": 21,
+        "module_activated": 1310,
+        "module_limited": 293,
+        "skipped_paths": 9046,
+        "failed": 0,
+        "node_failed": 772,
+        "multi_failure_waves": 0,
+        "ceiling_preempted_failures": 0,
+        "parallel_activations": 0,
+        "resubmissions": 0,
+        "phantom_invocations": 0,
+        "late_refusals": 0,
+        "calls_waited": 0,
+        "calls_detached": 0,
+        "call_failed": 0,
+        "call_unknown": 0
+      },
+      "differential parallel modules": {
+        "cases": 5000,
+        "rejected_graphs": 0,
+        "completed": 3635,
+        "round_limited": 1365,
+        "dispatches": 38225,
+        "longest": 34,
+        "module_activated": 4588,
+        "module_limited": 0,
+        "skipped_paths": 1293,
+        "failed": 0,
+        "node_failed": 0,
+        "multi_failure_waves": 0,
+        "ceiling_preempted_failures": 0,
+        "parallel_activations": 5084,
+        "resubmissions": 12461,
+        "phantom_invocations": 0,
+        "late_refusals": 0,
+        "calls_waited": 0,
+        "calls_detached": 0,
+        "call_failed": 0,
+        "call_unknown": 0
+      },
+      "differential parallel": {
+        "cases": 5000,
+        "rejected_graphs": 0,
+        "completed": 3087,
+        "round_limited": 808,
+        "dispatches": 33107,
+        "longest": 20,
+        "module_activated": 0,
+        "module_limited": 0,
+        "skipped_paths": 1865,
+        "failed": 330,
+        "node_failed": 775,
+        "multi_failure_waves": 6,
+        "ceiling_preempted_failures": 2,
+        "parallel_activations": 4775,
+        "resubmissions": 10224,
+        "phantom_invocations": 182,
+        "late_refusals": 357,
+        "calls_waited": 0,
+        "calls_detached": 0,
+        "call_failed": 0,
+        "call_unknown": 0
+      },
+      "differential parallel original coverage": {
+        "cases": 5000,
+        "rejected_graphs": 0,
+        "completed": 3633,
+        "round_limited": 971,
+        "dispatches": 35958,
+        "longest": 20,
+        "module_activated": 0,
+        "module_limited": 0,
+        "skipped_paths": 1299,
+        "failed": 396,
+        "node_failed": 0,
+        "multi_failure_waves": 0,
+        "ceiling_preempted_failures": 0,
+        "parallel_activations": 5048,
+        "resubmissions": 11444,
+        "phantom_invocations": 220,
+        "late_refusals": 68,
+        "calls_waited": 0,
+        "calls_detached": 0,
+        "call_failed": 0,
+        "call_unknown": 0
+      }
+    },
+    "raw_output_hashes": {
+      "/tmp/anchor-m2/parallel-modules-directed-random.log": "35acf17be43b9baae6e4605110b9966a6cc45590f199ee94e701bb3c8d51c55b",
+      "/tmp/anchor-m2/validator-differential.log": "597a46c21142af2b53108ae462b772a48ecaef698daee38186836bc4dc661b0f",
+      "/tmp/anchor-m2/runtime-without-differential.log": "439076178da9a161299338ee58e8f371da118910a85d8fd4c9bb59883b61d5fa",
+      "/tmp/anchor-m2/parallel-modules-clippy.log": "1b010d2cb74ce37ecb08312d591aaa4a797ddadb2dae44478ce361db97675224"
+    },
+    "note": "The existing random_parallel_graph clears module_rounds and uses unscoped branch ids. An additional shared/independent module population of 5000 seeds was added; original populations, assertions and thresholds remain unchanged. Supplemental module population has no injected node failures and uses a high module ceiling; deterministic tests cover module ceiling settlement and late success/failure.",
+    "verification_correction": "The first directed run had 3 passes and 1 failure in a new test that incorrectly expected late refusal not to increase spent. The test now asserts unchanged phase/version/Graph state and spent +3, preserving D1. No existing assertion was changed."
   }
 }

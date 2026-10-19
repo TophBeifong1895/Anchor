@@ -816,6 +816,25 @@ async fn parallel_regions_match_the_runner_on_random_graphs() {
 }
 
 #[tokio::test]
+async fn parallel_modules_match_the_runner_on_five_thousand_random_graphs() {
+    let mut tally = Tally::default();
+    for seed in 0..5_000 {
+        check_with_failures(random_parallel_module_graph(seed), seed, &mut tally, false).await;
+    }
+    eprintln!("differential parallel modules: {tally:?}");
+    assert_eq!(tally.cases, 5_000);
+    assert_eq!(tally.rejected_graphs, 0);
+    assert_eq!(tally.node_failed, 0);
+    assert!(tally.module_activated > 1_000, "{tally:?}");
+    assert!(tally.parallel_activations > 5_000, "{tally:?}");
+    assert!(tally.resubmissions > 1_000, "{tally:?}");
+    assert!(
+        tally.completed > 100 && tally.round_limited > 100,
+        "{tally:?}"
+    );
+}
+
+#[tokio::test]
 async fn graph_calls_match_the_runner_on_random_graphs() {
     let mut tally = Tally::default();
     for seed in 0..5_000 {
