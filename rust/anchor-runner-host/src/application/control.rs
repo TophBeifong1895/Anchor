@@ -1,3 +1,7 @@
+use super::run_access::{
+    reject_terminal_control, validate_control_identity, validate_inactive_control,
+    validate_resume_budget,
+};
 use super::{
     ActiveRun, ApplicationError, RunApplication, RunMetadata, new_control, wait_child_ids,
 };
@@ -203,50 +207,4 @@ impl RunApplication {
         validate_control_identity(record, &metadata)?;
         Ok(metadata)
     }
-}
-
-pub(super) fn validate_control_identity(
-    record: &GraphRunRecord,
-    metadata: &RunMetadata,
-) -> Result<(), ApplicationError> {
-    if metadata.graph_digest != record.graph_digest {
-        return Err(ApplicationError::Invalid(
-            "Run Graph identity metadata does not match its frozen snapshot".into(),
-        ));
-    }
-    Ok(())
-}
-
-fn reject_terminal_control(record: &GraphRunRecord) -> Result<(), ApplicationError> {
-    if record.status.is_terminal() {
-        return Err(ApplicationError::Conflict(
-            "terminal Run cannot be controlled".into(),
-        ));
-    }
-    Ok(())
-}
-
-pub(super) fn validate_inactive_control(
-    record: &GraphRunRecord,
-    operation: &str,
-) -> Result<(), ApplicationError> {
-    if record.status == RunStatus::WaitingRecovery && operation != "stop" {
-        return Err(ApplicationError::Conflict(
-            "Run recovery context is not ready".into(),
-        ));
-    }
-    reject_terminal_control(record)?;
-    if operation == "pause" {
-        return Err(ApplicationError::Conflict("that Run is not active".into()));
-    }
-    Ok(())
-}
-
-pub(super) fn validate_resume_budget(record: &GraphRunRecord) -> Result<(), ApplicationError> {
-    if record.status == RunStatus::BudgetStopped {
-        return Err(ApplicationError::Conflict(
-            "budget-stopped Run requires an explicit budget policy".into(),
-        ));
-    }
-    Ok(())
 }

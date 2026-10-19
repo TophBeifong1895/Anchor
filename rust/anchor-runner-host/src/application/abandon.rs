@@ -218,7 +218,7 @@ impl RunApplication {
                     requested_at: recorded.map(|intent| intent.requested_at),
                 });
             }
-            RunStatus::Completed | RunStatus::Failed => {
+            _ if !super::run_access::RunView::inactive(&record).can_abandon() => {
                 // Aborted is an idempotent success above, not this rejection.
                 return Err(ApplicationError::Conflict(
                     "terminal Run cannot be abandoned".into(),

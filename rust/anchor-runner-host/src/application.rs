@@ -21,6 +21,7 @@ pub(crate) mod oauth_management;
 pub(crate) mod pilot_sessions;
 pub(crate) mod plugin_candidates;
 pub(crate) mod plugins;
+pub(crate) mod run_access;
 pub(crate) mod run_projection;
 pub(crate) mod scheduling;
 pub(crate) mod session_calls;

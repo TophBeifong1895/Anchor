@@ -27,6 +27,7 @@ mod webhooks;
 mod wecom;
 mod wecom_progress;
 use super::*;
+use crate::application::run_access::legacy_status as status;
 use crate::application::{ApplicationError, RunApplication};
 use crate::deployment::configured_pilot_graph;
 use anchor_graph_host::{FileGraphBundleLoader, FilePluginCatalog};
@@ -222,21 +223,6 @@ fn constant_time_eq(left: &str, right: &str) -> bool {
             usize::from(a.get(index).copied().unwrap_or(0) ^ b.get(index).copied().unwrap_or(0));
     }
     difference == 0
-}
-
-fn status(value: RunStatus) -> &'static str {
-    match value {
-        RunStatus::Ready => "ready",
-        RunStatus::Running => "running",
-        RunStatus::Paused => "paused",
-        RunStatus::BudgetStopped => "budget_stopped",
-        RunStatus::WaitingCall => "waiting_call",
-        RunStatus::WaitingRecovery => "waiting_recovery",
-        RunStatus::Completed => "completed",
-        RunStatus::Aborted => "aborted",
-        RunStatus::Stopped => "stopped",
-        RunStatus::Failed => "failed",
-    }
 }
 
 pub async fn serve() -> io::Result<()> {

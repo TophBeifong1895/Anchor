@@ -1,111 +1,9 @@
 //! Read-only Run presentation shared by HTTP and Pilot. These observations are
 //! advisory; control still validates identity, scope and leases at write time.
-use super::{ApplicationError, RunApplication, RunLiveness, RunMetadata, control};
-use anchor_runtime::graph::{GraphRunRecord, GraphSnapshot, RunStatus};
-use serde::Serialize;
+#[cfg(test)]
+use super::run_access::observed;
+use anchor_runtime::graph::GraphSnapshot;
 use serde_json::{Value, json};
-use std::sync::atomic::Ordering;
-
-#[derive(Debug, Serialize)]
-pub(crate) struct RunActions {
-    pub(crate) pause: bool,
-    pub(crate) stop: bool,
-    pub(crate) resume: bool,
-}
-
-#[derive(Debug, Serialize)]
-pub(crate) struct RunProjection {
-    pub(crate) phase: String,
-    pub(crate) active: bool,
-    pub(crate) control_requested: Option<&'static str>,
-    pub(crate) terminal: bool,
-    pub(crate) quiescent: bool,
-    pub(crate) needs_attention: bool,
-    pub(crate) actions: RunActions,
-}
-
-impl RunApplication {
-    pub(crate) async fn project_run(
-        &self,
-        record: &GraphRunRecord,
-        metadata: Option<&RunMetadata>,
-    ) -> Result<RunProjection, ApplicationError> {
-        let active = self.active.lock().await;
-        let executor = active.get(&record.run_id);
-        let requested = executor.and_then(|run| {
-            if run.control.cancellation.load(Ordering::Relaxed) {
-                Some("stop")
-            } else if run.control.pause.load(Ordering::Relaxed) {
-                Some("pause")
-            } else {
-                None
-            }
-        });
-        let session_coordinated = metadata.is_some_and(|value| value.session_call.is_some());
-        let mut projection = observed(record, executor.is_some(), requested, session_coordinated);
-        let identity = metadata
-            .filter(|metadata| control::validate_control_identity(record, metadata).is_ok());
-        if !projection.active && !session_coordinated && identity.is_none() {
-            projection.actions.stop = false;
-            projection.actions.resume = false;
-        }
-        // The same immutable identity and lifecycle guards used by control.
-        // Scope/lease races remain the final control use case's responsibility.
-        if projection.actions.resume {
-            projection.actions.resume = identity
-                .is_some_and(|metadata| self.ensure_current_assistant(metadata).is_ok())
-                && self.abandon_intent(&record.run_id)?.is_none()
-                && self
-                    .reject_superseded_conversation_execution(&record.run_id)
-                    .is_ok();
-        }
-        Ok(projection)
-    }
-}
-
-fn observed(
-    record: &GraphRunRecord,
-    active: bool,
-    requested: Option<&'static str>,
-    session_coordinated: bool,
-) -> RunProjection {
-    let terminal = record.status.is_terminal();
-    let phase = match (active, requested, record.status) {
-        (true, Some("stop"), _) => "stopping".into(),
-        (true, Some("pause"), _) => "pausing".into(),
-        (false, _, RunStatus::Running) => "waiting_resume".into(),
-        _ => serde_json::to_value(record.status)
-            .expect("RunStatus is serializable")
-            .as_str()
-            .expect("RunStatus serializes as a string")
-            .to_owned(),
-    };
-    let resume = !active
-        && !session_coordinated
-        && control::validate_resume_budget(record).is_ok()
-        && (control::validate_inactive_control(record, "resume").is_ok()
-            || (record.status == RunStatus::WaitingRecovery && !record.recovery.is_empty()));
-    RunProjection {
-        needs_attention: matches!(
-            phase.as_str(),
-            "failed" | "aborted" | "waiting_resume" | "waiting_recovery" | "budget_stopped"
-        ),
-        phase,
-        active,
-        control_requested: requested,
-        terminal,
-        quiescent: RunLiveness::observed(record.status, active).is_quiescent(),
-        actions: RunActions {
-            pause: active && !terminal && !session_coordinated && requested.is_none(),
-            stop: if active {
-                requested != Some("stop")
-            } else {
-                control::validate_inactive_control(record, "stop").is_ok()
-            },
-            resume,
-        },
-    }
-}
 
 /// Canvas data comes exclusively from the compiled, frozen snapshot, including
 /// expanded inline modules. Do not expose execution input, scripts or host
@@ -149,6 +47,7 @@ pub(crate) fn run_definition(snapshot: &GraphSnapshot) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use anchor_runtime::graph::{GraphRunRecord, RunStatus};
 
     fn record() -> GraphRunRecord {
         GraphRunRecord::create_with_id(
