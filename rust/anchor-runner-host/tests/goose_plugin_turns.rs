@@ -122,6 +122,15 @@ fn submit(server: &HttpHost, user: &str, id: &str, expected: &str) -> Value {
         Some(&event(user, id)),
         Duration::from_secs(30),
     );
+    if status != 200 {
+        let (_, runs) = server.request("GET", "/runs", None);
+        for row in runs["runs"].as_array().into_iter().flatten() {
+            if let Some(id) = row["run"].as_str() {
+                let (_, detail) = server.request("GET", &format!("/runs/{id}"), None);
+                eprintln!("failed fixture Run {id}: {}", detail["state"]);
+            }
+        }
+    }
     assert_eq!(status, 200, "{response}");
     assert_eq!(response["text"], expected, "{response}");
     response
@@ -286,6 +295,73 @@ fn add_call_remove_preserves_run_native_history_workspace_and_frozen_run_snapsho
         &[run],
         json!({"same_native_session_and_workspace":true,"snapshot_unchanged":true,"added":added,"removed":removed,"structural_change_rejection":rejection}),
     );
+}
+
+#[test]
+#[ignore = "requires pinned Goose binary, built http_fixture and local Bubblewrap"]
+fn operator_reapproves_changed_plugin_for_reused_and_admitted_graph_digests() {
+    for initially_mounted in [false, true] {
+        let provider = Provider::new(
+            if initially_mounted {
+                "goose-plugin-turn-reapprove-admitted"
+            } else {
+                "goose-plugin-turn-reapprove-reselected"
+            },
+            vec![
+                finish("before-approval"),
+                echo("reauthorized"),
+                finish("after-approval").after("turn:reauthorized"),
+            ],
+        );
+        let host = host(initially_mounted);
+        let server = host.serve(&provider);
+        let first = submit(&server, ALICE, "before-approval-input", "before-approval");
+        let run = first["run"].as_str().unwrap();
+        let initial = waiting(&host, run, 1);
+        let native = host.native_fact(run, "assistant", 1);
+        let policy_root = host.base.state_root().join("assistant-plugin-turns");
+        let frozen_policies = fs::read_dir(&policy_root)
+            .unwrap()
+            .map(Result::unwrap)
+            .flat_map(|directory| fs::read_dir(directory.path()).unwrap().map(Result::unwrap))
+            .map(|entry| (entry.path(), fs::read(entry.path()).unwrap()))
+            .collect::<Vec<_>>();
+        assert!(!frozen_policies.is_empty());
+        save(&server, true);
+        save(&server, false);
+        let source = host.base.root.path().join("checkout/demo");
+        let mut plugin = fixture::read_json(source.join("plugin.json"));
+        plugin["mutable"] = json!(["cache/"]);
+        fs::create_dir_all(source.join("cache")).unwrap();
+        fs::write(source.join("plugin.json"), plugin.to_string()).unwrap();
+        anchor_library::Library::new(host.base.root.path())
+            .install_directory("demo", &source, true)
+            .unwrap();
+        save(&server, true);
+        for (path, bytes) in frozen_policies {
+            assert_eq!(
+                fs::read(path).unwrap(),
+                bytes,
+                "reapproval rewrote a frozen Turn"
+            );
+        }
+        let second = submit(&server, ALICE, "after-approval-input", "after-approval");
+        let after = waiting(&host, run, 2);
+        assert_eq!(second["run"], first["run"]);
+        assert_eq!(after["snapshot"], initial["snapshot"]);
+        assert_eq!(after["plugin_bindings"], initial["plugin_bindings"]);
+        assert_eq!(
+            host.native_fact(run, "assistant", 2)["session_id"],
+            native["session_id"]
+        );
+        stop(&server, run);
+        evidence(
+            &host,
+            &provider,
+            &[run],
+            json!({"initially_mounted":initially_mounted,"operator_reapproval":true,"same_run_and_history":true}),
+        );
+    }
 }
 
 #[test]

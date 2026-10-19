@@ -102,6 +102,41 @@ async fn operator_plugin_save_preserves_run_and_delivery_and_reports_pending() {
     .await;
     assert_eq!(status, StatusCode::OK, "{current}");
     assert_eq!(current["plugin_update"]["state"], "pending");
+    // Re-selecting a previously published plugin set must approve its current
+    // Host declarations, even when the authoring Graph digest is unchanged.
+    let (_, bundle) = state.application.load_graph("fixture").unwrap();
+    let digest = bundle.snapshot.digest().unwrap();
+    let approved =
+        crate::assistant_plugins::publication(&state.data_root, &state.bundle_root, &digest)
+            .unwrap()
+            .unwrap();
+    std::fs::write(
+        plugin.join("plugin.json"),
+        r#"{"name":"Docmost","mutable":["cache/"]}"#,
+    )
+    .unwrap();
+    let denied = state
+        .application
+        .update_graph_from_agent("fixture", next.clone())
+        .await;
+    assert!(
+        denied.is_ok(),
+        "an unchanged Agent draft may save without approving permissions"
+    );
+    assert_eq!(
+        crate::assistant_plugins::publication(&state.data_root, &state.bundle_root, &digest)
+            .unwrap()
+            .unwrap(),
+        approved
+    );
+    let (status, removed) = call(
+        app.clone(),
+        "PUT",
+        "/graphs/fixture",
+        Some(&json!({"definition":definition()}).to_string()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{removed}");
     let (status, saved_again) = call(
         app,
         "PUT",
@@ -110,6 +145,22 @@ async fn operator_plugin_save_preserves_run_and_delivery_and_reports_pending() {
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{saved_again}");
+    let refreshed =
+        crate::assistant_plugins::publication(&state.data_root, &state.bundle_root, &digest)
+            .unwrap()
+            .unwrap();
+    assert!(!approved.bindings["docmost"].same_authorization(&refreshed.bindings["docmost"]));
+    assert_eq!(
+        std::fs::read(state.data_root.join("runs/persistent-fixture-run.json")).unwrap(),
+        before
+    );
+    assert_eq!(
+        sessions
+            .list_unfinished_channel_deliveries("local", &session)
+            .unwrap()
+            .len(),
+        1
+    );
 }
 
 #[tokio::test]

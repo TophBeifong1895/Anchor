@@ -1,4 +1,4 @@
-//! Host authorization receipts and immutable Plugin policy for assistant Turns.
+//! Operator Graph approvals and immutable Plugin policy for assistant Turns.
 //!
 //! Graph remains the desired configuration. These secret-free facts prove an
 //! operator authorized its grants and what a particular Turn actually received.
@@ -119,20 +119,37 @@ pub(crate) fn publish(
         graph_digest: digest.clone(),
         bindings,
     };
-    if let Some(existing) = self::publication(root, source, &digest)? {
-        if existing.bindings.len() == publication.bindings.len()
-            && existing.bindings.iter().all(|(id, frozen)| {
-                publication
-                    .bindings
-                    .get(id)
-                    .is_some_and(|current| frozen.same_authorization(current))
-            })
-        {
-            return Ok(());
-        }
-        return Err("Graph Plugin Host authorization changed since approval; retire existing assistants and publish a new Graph revision".into());
+    if let Some(existing) = self::publication(root, source, &digest)?
+        && existing.bindings.len() == publication.bindings.len()
+        && existing.bindings.iter().all(|(id, frozen)| {
+            publication
+                .bindings
+                .get(id)
+                .is_some_and(|current| frozen.same_authorization(current))
+        })
+    {
+        return Ok(());
     }
-    crate::assistant::save_immutable(&publication_path(root, source, &digest)?, &publication)
+    // An explicit operator save approves the currently installed declarations,
+    // including a previously used Graph digest. Active Turns already own their
+    // immutable policies; refreshing this approval only affects future Turns.
+    let path = publication_path(root, source, &digest)?;
+    let parent = path.parent().ok_or("Graph approval has no parent")?;
+    crate::create_durable_directory(parent).map_err(|error| error.to_string())?;
+    let mut temporary =
+        tempfile::NamedTempFile::new_in(parent).map_err(|error| error.to_string())?;
+    serde_json::to_writer(temporary.as_file_mut(), &publication)
+        .map_err(|error| error.to_string())?;
+    temporary
+        .as_file()
+        .sync_all()
+        .map_err(|error| error.to_string())?;
+    temporary
+        .persist(&path)
+        .map_err(|error| error.to_string())?;
+    std::fs::File::open(parent)
+        .and_then(|directory| directory.sync_all())
+        .map_err(|error| error.to_string())
 }
 
 pub(crate) fn publication(

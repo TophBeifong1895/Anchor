@@ -104,11 +104,10 @@ impl HostIoResolver {
                 return Err("assistant_graph_restart_required: Graph structure changed; stop and retire the assistant to apply it".into());
             }
             let digest = current.digest().map_err(|error| error.to_string())?;
-            let authority = if digest == admitted.graph_digest {
-                admitted.plugin_bindings.clone()
-            } else {
-                assistant_plugins::publication(root, &metadata.bundle_source, &digest)?
-                    .ok_or("Graph Plugin permissions have no operator authorization; save the Graph from the operator interface")?.bindings
+            let authority = match assistant_plugins::publication(root, &metadata.bundle_source, &digest)? {
+                Some(publication) => publication.bindings,
+                None if digest == admitted.graph_digest => admitted.plugin_bindings.clone(),
+                None => return Err("Graph Plugin permissions have no operator authorization; save the Graph from the operator interface".into()),
             };
             (current, authority)
         } else {
