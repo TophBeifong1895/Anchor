@@ -2,7 +2,7 @@
 
 编制：2026-10-19。决定：用户选择全量迁移（见工作记录"R2 审查结论"）。目标是**统一定律、崩溃与计费正确、删除旧 Runner**，不是让 Host 变小。起点：`d915314`（R2 停止现场）。
 
-**当前状态（2026-10-19）**：M1 已验收（`2d70ca2`，审查方重跑 workspace 121 个 target 1922 / 0 / 115、Web 290 通过）。**M1.5 已完成本地验收并交回**：先以 `c6454c3` 合并 `2b3b7a2`，再按 §10.8 仅同步 F0 `e3a5778`，未合入 F1。workspace 2023 / 0 / 122，Web 311 通过且构建通过，Goose 117 / 2 / 0，相对 §10.9 基线新增失败 0；规则清单与原样 target 结果见 [M1.5 验证](../experiments/constitution-host-preflight/m15/verification.md)。本轮按里程碑交回，M2 尚未开始。M1.5 要求如下：
+**当前状态（2026-10-19）**：M1 已验收（`2d70ca2`，审查方重跑 workspace 121 个 target 1922 / 0 / 115、Web 290 通过）。**M1.5 已验收（§10.10）**：先以 `c6454c3` 合并 `2b3b7a2`，再按 §10.8 仅同步 F0 `e3a5778`，未合入 F1。workspace 2023 / 0 / 122，Web 311 通过且构建通过，Goose 117 / 2 / 0，相对 §10.9 基线新增失败 0；规则清单与原样 target 结果见 [M1.5 验证](../experiments/constitution-host-preflight/m15/verification.md)。M2 已按 §10.10 开工；同 Graph 复现了旧 Runner 支持、GraphValidator 拒绝并行模块作用域的缺口，触发 §8 的校验器规则修改停止条件，待审查后继续；见 [M2 开工边界](../experiments/constitution-host-preflight/m2/verification.md)。M1.5 要求如下：
 
 1. 按 §10.2 合并 `master`，冲突逐文件登记；合并后 workspace 与 Web 全绿。
 2. 按 §10.3 用 master 的 Goose 锁定版本跑全部 Goose 忽略测试，原样贴出结果。**注意**：master 目前的 Goose 基线本身就是坏的（extensions/add 返回 -32603，由 master 的 G0 任务处理，见 `/home/mansteinl/Anchor/docs/goose-baseline-task.md`）。G0 修复之前，门槛改为"相对 master 基线没有新增失败"。master 侧基线**优先使用 G0 交回的失败名单**；如果 G0 还没交回，就用临时干净 worktree 在本次合并的那个 master 提交上跑，例如 `git worktree add /tmp/master-base <提交>`，用完删除。**不得**在 `/home/mansteinl/Anchor` 上跑基线，因为那里有其他 agent 正在修改。Goose 套件不要和 G0 同时跑：G0 正在跑时，先完成合并和规则表，Goose 对照放到最后。M1 时分支锁定的是旧摘要，本机没有对应二进制，所以不能执行；合并后不再适用这个理由。
@@ -13,7 +13,7 @@ S19–S24、S26 已由用户批准（2026-10-19）。M3 的前置条件见 §10.
 
 本文取代上位计划 H3–H6 的阶段划分；上位计划的约束 C1–C6、§2.1 调度器、§2.2 执行者语义仍然有效。
 
-当前进度（2026-10-19）：M1 已验收，S19–S24、S26 已批准，S25 作废。M1.5 已完成 `2b3b7a2` 与 F0 的同步、规则清点与相对 G0 无新增失败的验证，按 §0 交回；证据见 [M1.5 验证](../experiments/constitution-host-preflight/m15/verification.md)。M2–M5 尚未开始。
+当前进度（2026-10-19）：M1 已验收，S19–S24、S26 已批准，S25 作废。M1.5 已完成 `2b3b7a2` 与 F0 的同步、规则清点与相对 G0 无新增失败的验证，按 §0 交回；证据见 [M1.5 验证](../experiments/constitution-host-preflight/m15/verification.md)。M2 已开工，当前因并行模块作用域需要修改 GraphValidator 裁决规则，按 §8 停下交回；M3–M5 尚未开始。
 
 ## 0. 工作方式（先读）
 
@@ -283,3 +283,22 @@ master 的读取门面正在分片推进：F0 是 `e3a5778`，F1 的第一个切
   2. `goose_distribution::extracted_goose_runtime_resumes_without_sources_or_replaying_workspace_effects`
   3. `goose_pilot_authoring::candidate_declaration_cannot_enable_network_or_credentials_and_command_cancel_can_continue`
 - **本分支的门槛**：在合并后的分支上用标准命令跑一次，失败名单不得超出上述三项。超出的每一项必须单独复跑确认，再定性为迁移引入还是环境原因。**不再需要**在 master-base worktree 上另跑 Goose 基线；已经跑过并且配置了 relay 的结果可以保留作为对照，没有配置 relay 的结果作废。
+
+### 10.10 M1.5 审查结论与 M2 开工（2026-10-19）
+
+- **M1.5 通过。** 审查方核对了以下几项：
+  - 围栏测试与 master F0 逐字节一致，未扩大豁免，上限从 224 降到 192；
+  - 内核零 diff；
+  - 定向重跑全部通过：围栏、run_access / JSON 字节 / kernel_runs 17 项、Kernel 37 项。
+
+  全量 workspace 和 Goose 这次没有重跑，因为与 master 的 F1 构建同时进行；M2 交回时一并重跑。
+- **Goose 门槛已经起作用**：第一次带 relay 跑全量时，发现了 5 个 M1 词汇迁移遗漏，其中助手回执 2 个、Session Call 轮询 3 个，均已修复。这 5 个问题的测试此前从未在本分支上执行过。
+- G0 的原始证据现在位于 `/home/mansteinl/Anchor/.local/goose-baseline-20261019/`。
+- `goose_distribution` 是否通过，取决于构建目录里的沙箱二进制是不是硬链接，属于随环境变化的 fixture 缺陷。它在本分支通过不代表已经修复，基线名单仍保留三项。
+- **双路径并存期间，规则计数持平甚至上升是正常的。** 旧路径与内核路径并存时，每条规则暂时各有一份实现，收敛要到 M3（切换并删除）才兑现。M3 交回的目标是：
+  - 每条 Run 规则在 Host 中最多只保留"门面中的一处派生"，外加逐条列明的 Session 或授权收窄；
+  - 写入门禁全部委托给内核；
+  - 未知效果与预算的处理，收敛为门面中的恢复操作，加上执行端口提供的事实。
+
+  达不到的，逐条说明原因。
+- **可以开始 M2**，范围是 §2 加上 §10.4 的测量探针。M2 结束时是用户决定继续还是停止的检查点。

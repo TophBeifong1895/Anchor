@@ -1,0 +1,120 @@
+{
+  "schema_version": 1,
+  "milestone": "M2",
+  "status": "stopped_at_required_validator_boundary",
+  "start_revision": "aae4bb3db2e0e2d8577353176a2a977aa853f8ae",
+  "authorization": "docs/constitution-migration-task.md sections 2, 10.4 and 10.10",
+  "stop_rule": "section 8: validator judgement rule change; exception for new Code submissions does not apply",
+  "checks": [
+    {
+      "command": "cargo test -p anchor-runtime --features test-fixtures --test m2_parallel_scope_boundary -- --nocapture",
+      "working_directory": "rust",
+      "result": {
+        "passed": 1,
+        "failed": 0,
+        "ignored": 0
+      },
+      "purpose": "diagnostic reproduction of existing gap; not feature acceptance",
+      "raw_output": "/tmp/anchor-m2/parallel-module-boundary.log",
+      "temporary_source": "/tmp/anchor-m2/parallel-module-boundary.rs",
+      "source_sha256": "32c00c0abe2231d40b4ceb1d3b1f6865740d5d270df86c8bd4b7418a12759238",
+      "note": "The identical temporary test was copied to rust/anchor-runtime/tests/m2_parallel_scope_boundary.rs for this command and removed after execution. Its complete source is preserved in verification.md."
+    },
+    {
+      "command": "cargo test -p anchor-runtime --lib graph::tests::parallel_region_counts_module_activation_once_and_enforces_reentry_ceiling -- --exact --nocapture",
+      "working_directory": "rust",
+      "result": {
+        "passed": 1,
+        "failed": 0,
+        "ignored": 0
+      },
+      "raw_output": "/tmp/anchor-m2/old-module-test-exact.log"
+    },
+    {
+      "command": "cargo test -p anchor-runtime --lib parallel_region_counts_module_activation_once_and_enforces_reentry_ceiling -- --exact --nocapture",
+      "working_directory": "rust",
+      "result": {
+        "passed": 0,
+        "failed": 0,
+        "ignored": 0,
+        "filtered": 130
+      },
+      "raw_output": "/tmp/anchor-m2/old-module-test.log",
+      "note": "Initial unqualified exact filter selected zero tests; not counted as validation."
+    }
+  ],
+  "observation": {
+    "capability_implemented": false,
+    "kernel_admission_error": "unsupported graph capability: module scopes inside parallel branches are not admitted by the Graph validator yet",
+    "old": {
+      "ceased": [
+        "module@1"
+      ],
+      "module_activations": {
+        "module": 1
+      },
+      "status": "failed",
+      "trace": [
+        [
+          "module/left",
+          1,
+          [
+            "m2-module-boundary:6878ccb5c5f1b77a8da290b398dab1cd49b47f3a3e85b962890165ed2ecd2c10:start:1"
+          ]
+        ],
+        [
+          "module/right",
+          1,
+          [
+            "m2-module-boundary:6878ccb5c5f1b77a8da290b398dab1cd49b47f3a3e85b962890165ed2ecd2c10:start:1"
+          ]
+        ],
+        [
+          "after",
+          1,
+          [
+            "m2-module-boundary:6878ccb5c5f1b77a8da290b398dab1cd49b47f3a3e85b962890165ed2ecd2c10:collect:1"
+          ]
+        ]
+      ]
+    },
+    "scenario": "same module in two parallel branches; reentry ceiling 1",
+    "stop_condition": "constitution-migration-task section 8: validator judgement rule change"
+  },
+  "constraints": {
+    "kernel_diff_vs_6ee2b0e_empty": true,
+    "production_code_changed": false,
+    "validator_rules_changed": false,
+    "existing_tests_changed": false,
+    "new_ignores": 0,
+    "new_raw_logs_committed": 0,
+    "old_runner_remains_default": true,
+    "F1_merged": false,
+    "full_workspace_rerun": false,
+    "goose_rerun": false,
+    "real_model_provider_verified": false
+  },
+  "source_snapshots": [
+    {
+      "path": "rust/anchor-runtime/src/graph/validator.rs",
+      "sha256": "e00df2b627f62873f694f740a27c3335801ca298c3f99bf14337e293d2c5b541"
+    },
+    {
+      "path": "rust/anchor-runtime/src/graph/parallel.rs",
+      "sha256": "e6744ebfd82363fd0e1df47bbf6d6b22093ddeac6afb2bcce6fcc46a8bf3eadf"
+    },
+    {
+      "path": "rust/anchor-runtime/src/graph/tests.rs",
+      "sha256": "7c279e81824c07409a3a3b883bc57eed28f7a210a846be2e8bd012e351609655"
+    },
+    {
+      "path": "rust/anchor-runtime/src/graph/scheduler.rs",
+      "sha256": "dae1c052aba3eb4f9c1ef427fd4715dee369be8972d2d39c0fe5511cdfa01d3d"
+    }
+  ],
+  "raw_output_hashes": {
+    "/tmp/anchor-m2/parallel-module-boundary.log": "16f1a6b510ee6f31b77a8ade7f232bea8b6a59d5467f3fb6175669b67d8c33ff",
+    "/tmp/anchor-m2/old-module-test-exact.log": "7d66539c9300814f117bfcf7e6eeaf38150736838bd4d7b35ada5c27069803ba",
+    "/tmp/anchor-m2/old-module-test.log": "9e3f9cf458e485f070db36b9595fa60c76aed5afcc43cfb5300f402edb2b6556"
+  }
+}

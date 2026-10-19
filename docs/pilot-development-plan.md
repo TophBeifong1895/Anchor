@@ -46,7 +46,7 @@
 
 | 事项 | 当前状态 | 关闭条件 |
 | --- | --- | --- |
-| 宪法内核接入 Host | M1 已验收，S19–S24、S26 已批准；M1.5 已完成本地验收并交回：合并 `2b3b7a2` 与 F0、补交规则清单；workspace 2023/0/122，Goose 117/2/0 且无新增失败，按 [迁移任务书](constitution-migration-task.md) 交回 | [M1.5 验证与规则清单](../experiments/constitution-host-preflight/m15/verification.md)。M2 尚未开始；M2 能力补齐、M3 门面 F2 后切换并删除旧 Runner、M4 清理、生产数据离线迁移、W4 与真实 Provider 仍未关闭 |
+| 宪法内核接入 Host | M1、M1.5 已验收，S19–S24、S26 已批准；M2 按 §10.10 开工，在并行模块作用域缺口复现后触发 §8 校验器规则修改停止条件，待审查 | [M2 边界、复现与最小扩展建议](../experiments/constitution-host-preflight/m2/verification.md)；[M1.5 验证与规则清单](../experiments/constitution-host-preflight/m15/verification.md)。M2 尚无能力切片完成；M3 门面 F2 后切换并删除旧 Runner、M4 清理、生产数据离线迁移、W4 与真实 Provider 仍未关闭 |
 | Run 访问门面 | 本分支按 §10.8 仅合入 F0 `e3a5778`，原生所有权、视图和兼容桥归入 `application/run_access/`；围栏上限 224 → 192，豁免范围未改，十状态新相位字节比较通过。F1 未合入 | 等待 master F1 完成后一次性对齐接口，再接入 F2；M3 在 F2 合入后才能开始。见[当前边界](run-access-facade.md)与[M1.5 证据](../experiments/constitution-host-preflight/m15/verification.md) |
 | 真实默认模型对话复核 | 无环境文件的隔离安装通过网页保存现有 Host default 后，最小 Pilot 请求仍返回 `provider_error`（保存分类为 `other`，没有可确认的上游 HTTP 状态），未据此判断凭据有效性；原配置未改动 | 核实默认服务连通及凭据后复验；[本机记录](../.local/no-env-20261019/real-evidence.json) |
 | 可移植周报完整业务验收 | 新隔离 Run 已用当前采集工具完成三来源采集，理解节点因真实 Provider HTTP 502 停止；核查原生记录后接续一次仍为 502，完整理解/写作/评审与本地报告未完成。没有外部发布或通知 | 上游恢复后沿保留事实继续核查，验收完整核心周报；Docmost/通知按明确目标与授权独立验证。见[本轮证据](../.local/closeout-20261018/README.md)与[周报边界](weekly-work-report.md#验证边界) |
