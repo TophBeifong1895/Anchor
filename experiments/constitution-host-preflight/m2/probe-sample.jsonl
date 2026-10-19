@@ -1,0 +1,12 @@
+{"component":"run","validator":"validator/graph","principal":"human","action":"request","effect":"refused","verification":"not_applicable","reason":"unauthorized","cost":0,"knobs":"default"}
+{"component":"run","validator":"validator/graph","principal":"human","action":"request","effect":"returned","verification":"not_applicable","reason":"stale_version","cost":0,"knobs":"default"}
+{"component":"run","validator":"validator/graph","principal":"human","action":"request","effect":"accepted","verification":"not_applicable","reason":"ok","cost":0,"knobs":"default"}
+{"component":"run","validator":"validator/graph","principal":"agent","action":"write","effect":"refused","verification":"not_applicable","reason":"task_waiting","cost":1,"knobs":"default"}
+{"component":"run","validator":"validator/graph","principal":"human","action":"request","effect":"accepted","verification":"not_applicable","reason":"ok","cost":0,"knobs":"default"}
+{"component":"run","validator":"validator/graph","principal":"code","action":"write","effect":"accepted","verification":"evidenced","reason":"ok","cost":0,"knobs":"default"}
+{"component":"run","validator":"validator/graph","principal":"agent","action":"write","effect":"accepted","verification":"evidenced","reason":"ok","cost":1,"knobs":"default"}
+{"component":"run","validator":"validator/graph","principal":"agent","action":"write","effect":"returned","verification":"not_applicable","reason":"stale_version","cost":1,"knobs":"default"}
+{"component":"run","validator":"validator/graph","principal":"agent","action":"write","effect":"accepted","verification":"evidenced","reason":"ok","cost":0,"knobs":"default"}
+{"component":"run","validator":"validator/graph","principal":"code","action":"write","effect":"accepted","verification":"evidenced","reason":"ok","cost":0,"knobs":"default"}
+{"component":"run","validator":"validator/graph","principal":"agent","action":"write","effect":"accepted","verification":"evidenced","reason":"ok","cost":1,"knobs":"default"}
+{"component":"run","validator":"validator/graph","principal":"human","action":"request","effect":"refused","verification":"not_applicable","reason":"task_settled","cost":0,"knobs":"default"}

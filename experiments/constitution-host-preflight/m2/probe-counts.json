@@ -1,0 +1,175 @@
+{
+  "status": "host_probe_slice_verified_m2_incomplete",
+  "sample": "probe-sample.jsonl",
+  "sample_sha256": "e95e44adeda87c6dafa12f992da2e6d0f88dc702268b5eeed8c571cb7436a8c8",
+  "source": "Actual Host KernelRuns create/submit/control/drive using a deterministic local parallel fixture; no model Provider or Goose execution.",
+  "projection_path": "<data_root>/kernel-probe/points.jsonl",
+  "total_points": 12,
+  "total_cost": 4,
+  "by_validator": {
+    "validator/graph": 12
+  },
+  "by_principal": {
+    "agent": 5,
+    "code": 2,
+    "human": 5
+  },
+  "by_action": {
+    "request": 5,
+    "write": 7
+  },
+  "by_effect": {
+    "accepted": 7,
+    "refused": 3,
+    "returned": 2
+  },
+  "by_verification": {
+    "evidenced": 5,
+    "not_applicable": 7
+  },
+  "by_reason": {
+    "ok": 7,
+    "stale_version": 2,
+    "task_settled": 1,
+    "task_waiting": 1,
+    "unauthorized": 1
+  },
+  "by_validator_principal_action_verdict_reason": [
+    {
+      "validator": "validator/graph",
+      "principal": "agent",
+      "action": "write",
+      "effect": "accepted",
+      "verification": "evidenced",
+      "reason": "ok",
+      "count": 3
+    },
+    {
+      "validator": "validator/graph",
+      "principal": "agent",
+      "action": "write",
+      "effect": "refused",
+      "verification": "not_applicable",
+      "reason": "task_waiting",
+      "count": 1
+    },
+    {
+      "validator": "validator/graph",
+      "principal": "agent",
+      "action": "write",
+      "effect": "returned",
+      "verification": "not_applicable",
+      "reason": "stale_version",
+      "count": 1
+    },
+    {
+      "validator": "validator/graph",
+      "principal": "code",
+      "action": "write",
+      "effect": "accepted",
+      "verification": "evidenced",
+      "reason": "ok",
+      "count": 2
+    },
+    {
+      "validator": "validator/graph",
+      "principal": "human",
+      "action": "request",
+      "effect": "accepted",
+      "verification": "not_applicable",
+      "reason": "ok",
+      "count": 2
+    },
+    {
+      "validator": "validator/graph",
+      "principal": "human",
+      "action": "request",
+      "effect": "refused",
+      "verification": "not_applicable",
+      "reason": "task_settled",
+      "count": 1
+    },
+    {
+      "validator": "validator/graph",
+      "principal": "human",
+      "action": "request",
+      "effect": "refused",
+      "verification": "not_applicable",
+      "reason": "unauthorized",
+      "count": 1
+    },
+    {
+      "validator": "validator/graph",
+      "principal": "human",
+      "action": "request",
+      "effect": "returned",
+      "verification": "not_applicable",
+      "reason": "stale_version",
+      "count": 1
+    }
+  ],
+  "checks": [
+    {
+      "command": "ANCHOR_KERNEL_PROBE_SAMPLE=/tmp/anchor-m2/probe-sample.jsonl cargo test --manifest-path rust/Cargo.toml -p anchor-runner-host --bin anchor-runner-host application::run_access::kernel_runs::probe::tests -- --nocapture",
+      "result": {
+        "passed": 3,
+        "failed": 0,
+        "ignored": 0
+      },
+      "raw_output": "/tmp/anchor-m2/probe-tests.log",
+      "sha256": "dbf64e6c54c7190e1f978b78904264d2c458b0a6e6a0eb31112da1d94d42d38c"
+    },
+    {
+      "command": "cargo test --manifest-path rust/Cargo.toml -p anchor-runner-host --test run_access_fence",
+      "result": {
+        "passed": 1,
+        "failed": 0,
+        "ignored": 0
+      },
+      "raw_output": "/tmp/anchor-m2/probe-fence.log",
+      "sha256": "505808314b0b0ff213c0f5674e544d93c3420809c6195e36df22fcc1e16a5978"
+    },
+    {
+      "command": "cargo clippy --manifest-path rust/Cargo.toml -p anchor-runner-host --bin anchor-runner-host -- -D warnings",
+      "result": "passed",
+      "raw_output": "/tmp/anchor-m2/probe-clippy.log",
+      "sha256": "12f719ee75e45812a097fe94c51a499dc9bdffc90b56ab17a4baf72d96e436d7"
+    },
+    {
+      "command": "/home/mansteinl/.cargo/bin/rustfmt --edition 2024 --check rust/anchor-runner-host/src/application/run_access/kernel_probe.rs rust/anchor-runner-host/src/application/run_access/kernel_probe/tests.rs",
+      "result": "passed",
+      "raw_output": "/tmp/anchor-m2/probe-format.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "command": "git diff --check -- rust/anchor-runner-host/src/application/run_access/kernel_runs.rs",
+      "result": "passed",
+      "raw_output": "/tmp/anchor-m2/probe-diff-check.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  ],
+  "initial_failure": {
+    "command": "ANCHOR_KERNEL_PROBE_SAMPLE=/tmp/anchor-m2/probe-sample.jsonl cargo test --manifest-path rust/Cargo.toml -p anchor-runner-host --bin anchor-runner-host application::run_access::kernel_runs::probe::tests -- --nocapture",
+    "result": {
+      "passed": 2,
+      "failed": 1,
+      "ignored": 0
+    },
+    "raw_output": "/tmp/anchor-m2/probe-tests-initial-failure.log",
+    "sha256": "b8cb4cb4e78d5d799f84d5ad5239038a16caee5aadbea3e2a6dba7624379dc9a",
+    "cause": "New I/O-failure test assumed repeated stop would be refused; existing lifecycle treats stop as idempotently accepted. Test now submits Agent work while waiting; no existing test or production rule was changed."
+  },
+  "projection_contract": [
+    "Kernel.create emits no Point. Each recorded Kernel.submit verdict emits one Point, including returned and refused verdicts.",
+    "The projection is not read for authorization, lifecycle, Session eligibility, recovery or deletion.",
+    "Startup replaces the projection from retained Graph histories. Missing or partial projections are safe to remove and rebuild.",
+    "Reconstruction groups records by resource ID; cross-Run chronology is not guaranteed. Deleted owners and unknown-resource verdicts have no retained owner history and are not reconstructed.",
+    "Probe append/rebuild errors are diagnostic only. Projection I/O is synchronous under its own mutex and is not a new authority or external API."
+  ],
+  "not_executed": [
+    "full workspace",
+    "Web",
+    "Goose",
+    "real model Provider"
+  ]
+}

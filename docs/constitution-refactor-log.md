@@ -1074,3 +1074,7 @@ KernelScheduler 以开放槽位唯一标识管理并发执行，已完成的单�
 ### Host Run/Graph 删除
 
 Kernel 删除已接到 run_access 门面和获批 FileStore.remove。删除预留与 create/control/drive 注册互斥，排队 worker 重新读存储后才可执行；Run/Graph 清理保留旧 Session、引用、对话继任和 wait-child 保护。新增 10 项定向回归、Host bin/tests clippy 与围栏通过，旧业务断言无改动。删除业务内部类型围栏 3 → 1；测试围栏文件原样。证据与保留清理边界见 [Host 删除](../experiments/constitution-host-preflight/m2/host-deletion.md)。
+
+### Host Kernel 测量投影
+
+任务书 §10.4 Probe 已接到 KernelRuns.open。投影只消费 Point，按只读 JSONL 追加；启动从保留的 Graph history 重建，不参与裁决、恢复、投递或删除。投影 I/O 失败只诊断。新增 3 项定向用例通过，覆盖实际 Host 并行派发、人的控制、拒绝、重建与投影故障；样本含 12 个 Point（accepted 7 / returned 2 / refused 3），见 [分组统计与命令](../experiments/constitution-host-preflight/m2/probe-counts.json)。无跨 Run 时序保证，已删除资源的历史不在重建范围；未新增对外 API、Kernel 字段或业务断言修改。

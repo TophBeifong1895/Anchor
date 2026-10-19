@@ -22,6 +22,8 @@ use std::{
 
 mod deletion;
 mod pause;
+#[path = "kernel_probe.rs"]
+mod probe;
 
 struct KernelExecution {
     cancellation: anchor_runtime::Cancellation,
@@ -98,6 +100,11 @@ impl KernelRuns {
             Box::new(ProbeAuthority),
         )
         .map_err(kernel_error)?;
+        let probe = probe::HostProbe::new(
+            &root.parent().expect("state root").join("kernel-probe"),
+            kernel.store(),
+        );
+        kernel = kernel.with_probe(Box::new(probe));
         kernel
             .install(GRAPH_VALIDATOR, Arc::new(GraphValidator))
             .map_err(kernel_error)?;
