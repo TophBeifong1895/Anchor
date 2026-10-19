@@ -340,8 +340,8 @@ fn goose_pilot_auto_compaction_followup_restart_preserves_native_and_display_his
     assert_eq!(
         messages["messages"],
         json!([
-            {"role":"user","text":first_prompt},{"role":"assistant","text":FIRST_REPLY},
-            {"role":"user","text":followup_prompt},{"role":"assistant","text":FOLLOWUP_REPLY}
+            {"role":"user","text":first_prompt,"turn":first["id"]},{"role":"assistant","text":FIRST_REPLY,"turn":first["id"]},
+            {"role":"user","text":followup_prompt,"turn":second["id"]},{"role":"assistant","text":FOLLOWUP_REPLY,"turn":second["id"]}
         ])
     );
     assert!(!messages.to_string().contains(&summary));
@@ -394,8 +394,8 @@ fn goose_pilot_auto_compaction_followup_restart_preserves_native_and_display_his
     let final_messages = get(&server, &format!("/sessions/{SESSION}/messages"));
     let mut expected_messages = messages["messages"].as_array().unwrap().clone();
     expected_messages.extend([
-        json!({"role":"user","text":restart_prompt}),
-        json!({"role":"assistant","text":RESTART_REPLY}),
+        json!({"role":"user","text":restart_prompt,"turn":third["id"]}),
+        json!({"role":"assistant","text":RESTART_REPLY,"turn":third["id"]}),
     ]);
     assert_eq!(final_messages["messages"], json!(expected_messages));
     assert_eq!(
@@ -510,7 +510,8 @@ fn goose_pilot_cancel_native_summary_preserves_facts_and_continues_same_session(
     assert_eq!(get(&server, "/graphs/fixture"), saved_graph);
     let stopped_messages = get(&server, &format!("/sessions/{SESSION}/messages"));
     let mut expected_messages = saved_messages["messages"].as_array().unwrap().clone();
-    expected_messages.push(json!({"role":"user","text":interrupted_prompt}));
+    expected_messages
+        .push(json!({"role":"user","text":interrupted_prompt,"turn":interrupted["id"]}));
     assert_eq!(stopped_messages["messages"], json!(expected_messages));
     let stopped_stream = server.events(&format!("{}/events", turn_path(&interrupted)), 0);
     assert!(stopped_stream.contains("stopped"));
@@ -671,7 +672,7 @@ fn goose_pilot_compacted_graph_create_restart_reads_saved_effect_without_replay(
     assert_eq!(saved_messages["messages"].as_array().unwrap().len(), 3);
     assert_eq!(
         saved_messages["messages"][2],
-        json!({"role":"user","text":create_prompt})
+        json!({"role":"user","text":create_prompt,"turn":created["id"]})
     );
     no_runs(&server);
     server.kill();
@@ -736,8 +737,8 @@ fn goose_pilot_compacted_graph_create_restart_reads_saved_effect_without_replay(
     let messages = get(&server, &format!("/sessions/{SESSION}/messages"));
     let mut expected_messages = saved_messages["messages"].as_array().unwrap().clone();
     expected_messages.extend([
-        json!({"role":"user","text":continued_prompt}),
-        json!({"role":"assistant","text":CONTINUED_REPLY}),
+        json!({"role":"user","text":continued_prompt,"turn":continued["id"]}),
+        json!({"role":"assistant","text":CONTINUED_REPLY,"turn":continued["id"]}),
     ]);
     assert_eq!(messages["messages"], json!(expected_messages));
     assert_eq!(

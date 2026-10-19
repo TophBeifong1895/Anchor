@@ -174,8 +174,8 @@ async fn native_pilot_validates_inputs_and_reads_durable_turns_without_executing
     assert_eq!(
         messages["messages"],
         json!([
-            {"role":"user","text":"stored prompt"},
-            {"role":"assistant","text":"stored reply"}
+            {"role":"user","text":"stored prompt","turn":turn.id},
+            {"role":"assistant","text":"stored reply","turn":turn.id}
         ])
     );
     let (_, turns) = call(app.clone(), "GET", "/sessions/turn-api/turns", None).await;
@@ -286,11 +286,11 @@ async fn pilot_transcript_includes_saved_question_and_answer_in_event_order() {
     assert_eq!(
         response["messages"],
         json!([
-            {"role":"user","text":"先询问报告名称"},
-            {"role":"assistant","text":"我需要一点信息。"},
-            {"role":"assistant","text":"需要哪份报告？","question":question},
-            {"role":"user","text":"报告名称：季度报告","question_answer":question},
-            {"role":"assistant","text":"我会使用季度报告。"}
+            {"role":"user","text":"先询问报告名称","turn":turn.id},
+            {"role":"assistant","text":"我需要一点信息。","turn":turn.id},
+            {"role":"assistant","text":"需要哪份报告？","question":question,"turn":turn.id},
+            {"role":"user","text":"报告名称：季度报告","question_answer":question,"turn":turn.id},
+            {"role":"assistant","text":"我会使用季度报告。","turn":turn.id}
         ])
     );
 }

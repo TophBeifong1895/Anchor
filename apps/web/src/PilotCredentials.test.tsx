@@ -2,10 +2,14 @@
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
-import { PilotCredentialForm, PilotCredentials, type CredentialRequest } from './PilotCredentials';
+import { PilotCredentialForm, PilotCredentials, usePilotCredentials, type CredentialRequest } from './PilotCredentials';
 
 const request: CredentialRequest = { id: 'c-1', session: 'pilot-private-s-1', turn: 't-1', plugin: 'service', server: 'main', field: 'SERVICE_TOKEN', status: 'pending' };
 const response = (status: number, body: unknown) => ({ ok: status >= 200 && status < 300, status, json: async () => body }) as Response;
+function CredentialPanel({ session, onConfigured, polling = true }: { session: string; onConfigured: () => void; polling?: boolean }) {
+  const credentials = usePilotCredentials(session, onConfigured, polling);
+  return <PilotCredentials requests={credentials.requests} onConfigured={credentials.onConfigured} />;
+}
 describe('Pilot credential input', () => {
   let root: Root;
   let container: HTMLDivElement;
@@ -17,7 +21,7 @@ describe('Pilot credential input', () => {
     root = createRoot(container); fetchMock = vi.fn(); configured = vi.fn(); vi.stubGlobal('fetch', fetchMock);
     sessionStorage.clear(); localStorage.clear();
   });
-  afterEach(async () => { await act(async () => root.unmount()); container.remove(); vi.unstubAllGlobals(); });
+  afterEach(async () => { await act(async () => root.unmount()); container.remove(); vi.useRealTimers(); vi.unstubAllGlobals(); });
   const draw = async (value = request) => { await act(async () => root.render(<PilotCredentialForm request={value} onConfigured={configured} />)); };
   const submit = async (value: string) => {
     container.querySelector<HTMLInputElement>('input')!.value = value;
@@ -83,11 +87,11 @@ describe('Pilot credential input', () => {
 
   it('removes a previous Session request while the next Session is loading', async () => {
     fetchMock.mockResolvedValueOnce(response(200, { requests: [request] }));
-    await act(async () => root.render(<PilotCredentials session={request.session} onConfigured={configured} />));
+    await act(async () => root.render(<CredentialPanel session={request.session} onConfigured={configured} />));
     const oldInput = container.querySelector<HTMLInputElement>('input')!;
     oldInput.value = 'departing-session-secret';
     fetchMock.mockImplementationOnce(() => new Promise<Response>(() => undefined));
-    await act(async () => root.render(<PilotCredentials session="pilot-private-next" onConfigured={configured} />));
+    await act(async () => root.render(<CredentialPanel session="pilot-private-next" onConfigured={configured} />));
     expect(oldInput.value).toBe(''); expect(container.querySelector('input')).toBeNull();
     expect(container.textContent).not.toContain('SERVICE_TOKEN');
   });
@@ -104,5 +108,57 @@ describe('Pilot credential input', () => {
     expect(container.textContent).toContain('未配置');
     expect(container.textContent).toContain('设置 SERVICE_TOKEN');
     expect(fetchMock.mock.calls.map(call => call[0])).toEqual(['/plugins/service/configuration', '/plugins/service/credentials']);
+  });
+
+  it('collapses settled history without hiding a pending configuration', async () => {
+    const history: CredentialRequest[] = ['configured', 'cancelled', 'interrupted'].map((status, index) => ({
+      ...request, id: `history-${index}`, status: status as CredentialRequest['status'],
+    }));
+    await act(async () => root.render(<PilotCredentials requests={[request, ...history]} onConfigured={configured} />));
+    const details = container.querySelector('details')!;
+    expect(details.open).toBe(false);
+    expect(details.querySelector('summary')!.textContent).toBe('凭据配置记录 · 3 项');
+    expect(details.querySelectorAll('.pilot-question')).toHaveLength(3);
+    expect(container.querySelectorAll('form')).toHaveLength(1);
+    expect(details.querySelector('form')).toBeNull();
+    await act(async () => details.querySelector('summary')!.click());
+    expect(details.open).toBe(true);
+    expect(details.textContent).toContain('本次配置请求已完成');
+    expect(details.textContent).toContain('配置已取消');
+    expect(details.textContent).toContain('配置请求已中断');
+  });
+
+  it('ignores a late response from the previous Session', async () => {
+    let finish: (value: Response) => void = () => undefined;
+    fetchMock.mockImplementationOnce(() => new Promise<Response>(resolve => { finish = resolve; }));
+    await act(async () => root.render(<CredentialPanel session={request.session} onConfigured={configured} />));
+    const signal = fetchMock.mock.calls[0][1].signal as AbortSignal;
+    fetchMock.mockResolvedValueOnce(response(200, { requests: [{ ...request, session: 'pilot-private-next', field: 'NEXT_TOKEN' }] }));
+    await act(async () => root.render(<CredentialPanel session="pilot-private-next" onConfigured={configured} />));
+    expect(signal.aborted).toBe(true);
+    await act(async () => finish(response(200, { requests: [request] })));
+    expect(container.textContent).toContain('NEXT_TOKEN');
+    expect(container.textContent).not.toContain('SERVICE_TOKEN');
+  });
+
+  it('polls while running or pending, but stops for settled idle history', async () => {
+    vi.useFakeTimers();
+    fetchMock.mockResolvedValue(response(200, { requests: [{ ...request, status: 'configured' }] }));
+    const panel = (polling: boolean) => <CredentialPanel session={request.session} onConfigured={configured} polling={polling} />;
+    await act(async () => root.render(panel(false)));
+    await act(async () => vi.advanceTimersByTimeAsync(9000));
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    await act(async () => root.render(panel(true)));
+    await act(async () => vi.advanceTimersByTimeAsync(3000));
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    fetchMock.mockResolvedValue(response(200, { requests: [request] }));
+    await act(async () => root.render(panel(false)));
+    await act(async () => vi.advanceTimersByTimeAsync(3000));
+    expect(fetchMock).toHaveBeenCalledTimes(5);
+    fetchMock.mockResolvedValue(response(200, { requests: [{ ...request, status: 'configured' }] }));
+    await act(async () => vi.advanceTimersByTimeAsync(3000));
+    expect(fetchMock).toHaveBeenCalledTimes(6);
+    await act(async () => vi.advanceTimersByTimeAsync(9000));
+    expect(fetchMock).toHaveBeenCalledTimes(6);
   });
 });

@@ -172,6 +172,7 @@ export function App() {
 
   const deleteRun = () => perform('删除运行记录', async () => {
     if (!run) return;
+    const version = navigation.current;
     // A channel turn or resident-assistant instance is one link of a conversation lineage: later
     // Runs read the Run they were handed over from, so the Host only deletes a link once nothing
     // newer still reads it and refuses out-of-order deletion with a concrete reason.
@@ -181,9 +182,11 @@ export function App() {
       : `确定彻底删除运行记录 ${run} 及其所有文件吗？此操作不可恢复。`;
     if (!window.confirm(question)) return;
     await api(`/runs/${encodeURIComponent(run)}`, 'DELETE');
-    setRun(''); setNode('');
+    if (version === navigation.current) {
+      setRun(''); setNode(''); setTargetPath('');
+      setNotice({ kind: 'ok', text: conversation ? '这次会话运行及其文件已删除，更新的轮次保持可用。' : '运行记录及其文件已删除。' });
+    }
     await refresh();
-    setNotice({ kind: 'ok', text: conversation ? '这次会话运行及其文件已删除，更新的轮次保持可用。' : '运行记录及其文件已删除。' });
   });
 
   const deleteGraph = async (target: string, precondition: string) => {

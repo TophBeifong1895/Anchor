@@ -31,15 +31,18 @@ export function PilotTurn({ turn, saved = false, stopping = false, onComplete, o
   const [questionProblem, setQuestionProblem] = useState('');
   const [questionReload, setQuestionReload] = useState(0);
   const questionsRef = useRef<Question[]>([]);
+  const statusRef = useRef(turn.status);
+  const callbacks = useRef({ onComplete, onQuestions });
   const [now, setNow] = useState(Date.now);
   const lastEvent = useRef(Date.now());
+  useEffect(() => { callbacks.current = { onComplete, onQuestions }; }, [onComplete, onQuestions]);
   const updateQuestions = useCallback((incoming: Question[]) => {
     const next = mergeQuestions(questionsRef.current, incoming, turn.session, turn.id);
     questionsRef.current = next;
     setQuestions(next);
-    onQuestions(turn.session, turn.id, next.some(question => question.status === 'pending'));
-  }, [turn.session, turn.id, onQuestions]);
-  useEffect(() => { setStatus(turn.status); }, [turn.status]);
+    callbacks.current.onQuestions(turn.session, turn.id, statusRef.current === 'running' && next.some(question => question.status === 'pending'));
+  }, [turn.session, turn.id]);
+  useEffect(() => { statusRef.current = turn.status; setStatus(turn.status); }, [turn.session, turn.id, turn.status]);
   useEffect(() => {
     if (saved && turn.status !== 'running') return;
     const controller = new AbortController();
@@ -62,6 +65,9 @@ export function PilotTurn({ turn, saved = false, stopping = false, onComplete, o
     let ended = false;
     let resultText = '';
     setText(''); setAttachments([]); setTools([]); setProblem('');
+    questionsRef.current = []; setQuestions([]); setQuestionProblem('');
+    lastEvent.current = Date.now(); setNow(lastEvent.current);
+    statusRef.current = turn.status;
     setStatus(turn.status); setConnection('连接执行记录…'); setPhase('等待模型响应');
     const consume = (chunk: Chunk) => {
       lastEvent.current = Date.now();
@@ -98,10 +104,11 @@ export function PilotTurn({ turn, saved = false, stopping = false, onComplete, o
     };
     const complete = (final: Turn) => {
       ended = true; setStatus(final.status); setConnection('');
-      onQuestions(turn.session, turn.id, false);
+      statusRef.current = final.status;
+      callbacks.current.onQuestions(turn.session, turn.id, false);
       if (final.error) setProblem(final.error);
       setTools(previous => previous.map(item => ['执行中', '准备参数'].includes(item.status) ? { ...item, status: '执行已结束，请核查结果' } : item));
-      onComplete(final);
+      callbacks.current.onComplete(final);
     };
     const connect = async () => {
       while (!ended) {
@@ -163,15 +170,17 @@ export function PilotTurn({ turn, saved = false, stopping = false, onComplete, o
       const type = event.find(line => line.startsWith('event:'))?.slice(6).trim();
       if (id && Number(id) > last) { const chunk = JSON.parse(data); consume(chunk); last = Number(id); }
       else if (type === 'turn') { complete(JSON.parse(data) as Turn); return true; }
+      else if (type === 'error') consume(JSON.parse(data) as Chunk);
       return false;
     };
     void connect();
     return () => { ended = true; controller.abort(); };
-  }, [turn.id, turn.session, onComplete, onQuestions, updateQuestions]);
+  }, [turn.id, turn.session, updateQuestions]);
   const activeTool = tools.find(item => item.status === '执行中') ?? tools.find(item => item.status === '准备参数');
   const activity = activeTool ? `${activeTool.status === '准备参数' ? '正在准备工具参数' : '正在执行工具'}：${activeTool.name}` : phase;
   const elapsed = Math.max(0, Math.floor((now - Date.parse(turn.created_at)) / 1000));
   const quiet = Math.max(0, Math.floor((now - lastEvent.current) / 1000));
+  const failure = turn.error || problem;
   return <section className="pilot-turn" aria-label="本次执行过程">
     {tools.length > 0 && <details className="pilot-tools" open={status === 'running'}>
       <summary>工具活动 · {tools.length} 项</summary>
@@ -195,7 +204,7 @@ export function PilotTurn({ turn, saved = false, stopping = false, onComplete, o
         {quiet >= 15 && ` · ${quiet} 秒未收到新进展`}</span>
     </div>}
     {connection && <p className="pilot-muted" role="status">{connection}</p>}
-    {problem && <p className="pilot-error" role="alert">{problem}</p>}
+    {failure && <p className="pilot-error" role="alert">{failure}</p>}
     {status !== 'running' && <small className="pilot-turn-status">{outcomes[status] ?? status}</small>}
   </section>;
 }

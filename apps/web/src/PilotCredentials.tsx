@@ -90,36 +90,50 @@ function CurrentPilotCredentialForm({ request, onConfigured }: FormProps) {
   </section>;
 }
 
-type Props = { session: string; onConfigured: () => void };
-
-export function PilotCredentials(props: Props) {
-  return <CurrentPilotCredentials key={props.session} {...props} />;
-}
-
-function CurrentPilotCredentials({ session, onConfigured }: Props) {
-  const [requests, setRequests] = useState<CredentialRequest[]>([]);
-  const [problem, setProblem] = useState(false);
+export function usePilotCredentials(session: string, onConfigured: () => void, polling = true) {
+  const [state, setState] = useState<{ session: string; requests: CredentialRequest[]; problem: boolean }>({ session: '', requests: [], problem: false });
   const [reload, setReload] = useState(0);
   const configured = useRef(onConfigured);
   configured.current = onConfigured;
   useEffect(() => {
+    if (!session) return;
     let closed = false;
-    let timer: ReturnType<typeof setTimeout>;
+    let timer: ReturnType<typeof setTimeout> | undefined;
     const controller = new AbortController();
     const load = async () => {
+      let repeat = polling;
       try {
         const result = await api<{ requests: CredentialRequest[] }>(
           `/sessions/${encodeURIComponent(session)}/credential-requests`, 'GET', undefined, controller.signal,
         );
-        if (!closed) { setRequests(result.requests.filter(request => request.session === session)); setProblem(false); }
-      } catch { if (!closed) setProblem(true); }
-      if (!closed) timer = setTimeout(() => void load(), 3000);
+        const requests = result.requests.filter(request => request.session === session);
+        repeat ||= requests.some(request => request.status === 'pending');
+        if (!closed) setState({ session, requests, problem: false });
+      } catch {
+        repeat = true;
+        if (!closed) setState(previous => ({ session, requests: previous.session === session ? previous.requests : [], problem: true }));
+      }
+      if (!closed && repeat) timer = setTimeout(() => void load(), 3000);
     };
     void load();
     return () => { closed = true; controller.abort(); clearTimeout(timer); };
-  }, [session, reload]);
+  }, [session, reload, polling]);
+  return {
+    requests: state.session === session ? state.requests : [],
+    problem: state.session === session && state.problem,
+    retry: () => setReload(value => value + 1),
+    onConfigured: () => { setReload(value => value + 1); configured.current(); },
+  };
+}
+
+export function PilotCredentials({ requests, onConfigured }: { requests: CredentialRequest[]; onConfigured: () => void }) {
+  const pending = requests.filter(request => request.status === 'pending');
+  const history = requests.filter(request => request.status !== 'pending');
   return <>
-    {requests.map(request => <PilotCredentialForm key={request.id} request={request} onConfigured={() => { setReload(value => value + 1); configured.current(); }} />)}
-    {problem && <p className="pilot-error" role="alert">无法读取凭据配置请求。<button type="button" onClick={() => setReload(value => value + 1)}>重新加载配置状态</button></p>}
+    {pending.map(request => <PilotCredentialForm key={request.id} request={request} onConfigured={onConfigured} />)}
+    {history.length > 0 && <details className="pilot-credential-history">
+      <summary>凭据配置记录 · {history.length} 项</summary>
+      {history.map(request => <PilotCredentialForm key={request.id} request={request} onConfigured={onConfigured} />)}
+    </details>}
   </>;
 }

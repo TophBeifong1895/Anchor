@@ -11,6 +11,22 @@ const initialPlugins: SessionPlugin[] = [
   { id: 'wecom', name: '企业微信', description: '通过企业微信接收消息、发送回复与文件。',
     skills: ['wecom'], mcpServerNames: ['wecom'], on: false, available: true },
 ];
+const unexpectedRequests = new WeakMap<Page, string[]>();
+
+test.beforeEach(async ({ page }) => {
+  const unexpected: string[] = [];
+  unexpectedRequests.set(page, unexpected);
+  await page.route(/^https?:\/\/[^/]+\/(?:graph-relations|channel-sessions|channels|settings|sessions|plugins|graphs|runs|timeline|schedules|trigger)(?:[/?]|$)/, route => {
+    const request = route.request();
+    const description = `${request.method()} ${new URL(request.url()).pathname}`;
+    unexpected.push(description);
+    return route.fulfill({ status: 500, json: { error: `Unexpected fixture request: ${description}` } });
+  });
+});
+
+test.afterEach(async ({ page }) => {
+  expect(unexpectedRequests.get(page) ?? [], 'Every management API request must be mocked by this fixture').toEqual([]);
+});
 
 async function openPilot(page: Page) {
   await page.addInitScript(() => {
@@ -35,6 +51,13 @@ async function openPilot(page: Page) {
     return route.fulfill({ json: { ...plugin, instructions: '插件的完整使用说明。',
       mcpServers: Object.fromEntries((plugin?.mcpServerNames ?? []).map(name => [name, { transport: 'stdio' }])) } });
   });
+  await page.route('**/plugins/*/configuration', route => route.fulfill({ json: {
+    plugin: decodeURIComponent(new URL(route.request().url()).pathname.split('/')[2]),
+    authorization_digest: 'fixture-authorization', revision: 1, fields: [], targets: [],
+  } }));
+  await page.route('**/plugins/*/credentials', route => route.fulfill({ json: {
+    plugin: decodeURIComponent(new URL(route.request().url()).pathname.split('/')[2]), targets: [],
+  } }));
   await page.goto('/');
   await expect(page.getByLabel('发送给 Anchor Pilot')).toBeEnabled();
 }

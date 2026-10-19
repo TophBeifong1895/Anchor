@@ -24,11 +24,36 @@ describe('Host settings', () => {
     fetchMock = vi.fn((path: string) => Promise.resolve(response(path === '/settings/model' ? model : runtime)));
     vi.stubGlobal('fetch', fetchMock);
   });
-  afterEach(async () => { await act(async () => root.unmount()); container.remove(); vi.unstubAllGlobals(); });
+  afterEach(async () => { await act(async () => root.unmount()); container.remove(); vi.useRealTimers(); vi.unstubAllGlobals(); });
   const draw = async () => { await act(async () => root.render(<SettingsPage />)); };
   const button = (text: string) => [...container.querySelectorAll<HTMLButtonElement>('button')].find(item => item.textContent === text)!;
   const serveRuntime = (status: unknown) => fetchMock.mockImplementation((path: string) => Promise.resolve(response(path === '/settings/model' ? model : status)));
   const authorizeNetwork = async () => { await act(async () => container.querySelector<HTMLInputElement>('input[type="checkbox"]')!.click()); };
+  it('ignores a delayed refresh from before initialization and keeps polling the accepted operation', async () => {
+    vi.useFakeTimers();
+    let resolveRefresh!: (value: Response) => void;
+    const delayedRefresh = new Promise<Response>(resolve => { resolveRefresh = resolve; });
+    let runtimeReads = 0;
+    fetchMock.mockImplementation((path: string) => {
+      if (path === '/settings/model') return Promise.resolve(response(model));
+      if (path === '/settings/runtime/prepare') return Promise.resolve(response({ ...runtime, operation }));
+      runtimeReads += 1;
+      if (runtimeReads === 2) return delayedRefresh;
+      return Promise.resolve(response(runtimeReads === 1 ? runtime : { ...runtime, operation }));
+    });
+    await draw(); await authorizeNetwork();
+    await act(async () => button('刷新状态').click());
+    expect(runtimeReads).toBe(2);
+    await act(async () => button('初始化 Python').click());
+    expect(container.querySelector('progress')).not.toBeNull();
+    await act(async () => resolveRefresh(response(runtime)));
+    expect(container.querySelector('progress')).not.toBeNull();
+    expect(button('初始化 Python').disabled).toBe(true);
+    expect(button('刷新状态').disabled).toBe(false);
+    await act(async () => { await vi.advanceTimersByTimeAsync(1500); });
+    expect(runtimeReads).toBe(3);
+    expect(container.textContent).toContain('下载并安装 Python');
+  });
   it('initializes the Host runtime only after explicit network authorization and shows durable progress', async () => {
     await draw(); expect(button('初始化 Python').disabled).toBe(true);
     await act(async () => container.querySelector<HTMLInputElement>('input[type="checkbox"]')!.click());
@@ -41,6 +66,25 @@ describe('Host settings', () => {
     expect(container.querySelector('progress')).not.toBeNull(); expect(button('初始化 Python').disabled).toBe(true);
     await act(async () => button('停止初始化').click()); expect(container.textContent).toContain('正在停止初始化');
     expect(fetchMock.mock.calls.some(([path]) => String(path).startsWith('/sessions'))).toBe(false);
+  });
+  it('accepts a slow poll without overlapping it or discarding its progress', async () => {
+    vi.useFakeTimers();
+    let resolvePoll!: (value: Response) => void;
+    const delayedPoll = new Promise<Response>(resolve => { resolvePoll = resolve; });
+    let runtimeReads = 0;
+    fetchMock.mockImplementation((path: string) => {
+      if (path === '/settings/model') return Promise.resolve(response(model));
+      runtimeReads += 1;
+      return runtimeReads === 2 ? delayedPoll : Promise.resolve(response({ ...runtime, operation }));
+    });
+    await draw();
+    await act(async () => { await vi.advanceTimersByTimeAsync(3000); });
+    expect(runtimeReads).toBe(2);
+    await act(async () => resolvePoll(response({ ...runtime, operation: { ...operation, phase: 'probing_python' } })));
+    expect(container.textContent).toContain('验证 Python 解释器');
+    expect(container.querySelector('progress')).not.toBeNull();
+    await act(async () => { await vi.advanceTimersByTimeAsync(1500); });
+    expect(runtimeReads).toBe(3);
   });
   it('shows interrupted initialization after reopening and leaves retry available', async () => {
     fetchMock.mockImplementation((path: string) => Promise.resolve(response(path === '/settings/model' ? model : { ...runtime, operation: { ...operation, status: 'interrupted', phase: 'interrupted', message: 'Host 重启中断了初始化。' } })));

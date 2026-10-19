@@ -33,11 +33,13 @@ Session API 包括创建/重命名/删除、消息、Turn、SSE、停止、问�
 
 Pilot `POST /sessions/{session}/turns` 接受 `{request_id,message?,attachments?}`，文字与附件至少有一项；附件项为 `{name,data_base64,media_type?}`。同一 `request_id` 必须保持原文字与附件内容，`resume:true` 不能同时提交新文字或附件。输入限制为 16 个文件、单个 20 MiB、合计 50 MiB；其中图片只接受 PNG/JPEG/WebP，最多 8 张、单张 10 MiB、图片合计 20 MiB。只有该上传路由放宽至 72 MiB 请求体。
 
-Turn 的 `attachments` 列出输入；消息投影在含附件的 Turn 中附加 `turn` 与 `attachments`。继承输入保留原上传 Turn 的 URL，不重复生成用户上传消息。文件引用包含 `{id,name,size,sha256,media_type,url,download_url}`，不含宿主路径或密钥。`GET /sessions/{session}/turns/{turn}/attachments/{id}` 核验既有 Session 归属后读取原件；只有校验后的支持图片可内联显示，其他文件强制下载，`?download=1` 对图片也强制下载。预览和下载均沿用 Bearer 鉴权。
+Turn 的 `attachments` 列出输入；每条消息投影均附加所属 `turn`，有附件时另带 `attachments`，普通文字与重复输入也可准确归属。继承输入保留原上传 Turn 的 URL，不重复生成用户上传消息。文件引用包含 `{id,name,size,sha256,media_type,url,download_url}`，不含宿主路径或密钥。`GET /sessions/{session}/turns/{turn}/attachments/{id}` 核验既有 Session 归属后读取原件；只有校验后的支持图片可内联显示，其他文件强制下载，`?download=1` 对图片也强制下载。预览和下载均沿用 Bearer 鉴权。
 
 Pilot 用 `publish_file` 发布工作区文件，SSE 发出 `{type:"attachment",attachment:引用}`，历史从同一事件投影输出附件。发布保存当时的不可变版本，后续编辑工作区不改变已交付文件；原生工具返回的有效图片也进入同一输出路径。自动接续和恢复引用原获准输入，不扩大到全会话附件；删除 Session 沿既有归属清理原件。Web 支持选择、拖拽、粘贴图片及附件草稿，使用鉴权请求获得 Blob 后预览或下载。
 
 Pilot 在可开始对话、没有消息且没有待处理执行或问题的空页面显示任务入口，示例只填入并保存草稿；未选择会话时，首次发送沿现有接纳接口创建 Session/Turn。进入对话后保留同一个输入框；插件面板默认收起，选中会话后预读真实挂载状态，窗口尺寸变化保留用户的开关选择。
+
+Pilot 凭据请求按 Session 统一读取，待配置表单保持可操作；已完成、取消和中断的请求默认折叠在所属 Turn 的最后一条历史消息后，不追加为最新回复的待办。无可定位消息的旧请求保留在折叠记录中，不猜测归属。历史完成不代表当前凭据仍可用，展开后仍通过共享配置入口读取当前状态。运行或仍有待配置请求时轮询，已结算的空闲历史停止轮询；切换 Session 立即清除旧表单并取消旧读取。SSE 展示无游标的历史读取错误且保留重连游标；父级回调变化不重置订阅，终态后的问题快照不恢复待回答状态。
 
 Plugin API 提供 catalog、安装/移除与 owner-bound 授权事务。OAuth、模型与远程 MCP 的真实兼容性需要独立验收；本地工具测试不等于外部授权流程已经通过。
 
@@ -52,6 +54,8 @@ Webhook 与 Responses 共用接纳和身份校验。Responses 只实现冻结子
 ## Web 管理入口
 
 管理操作不要求 Pilot Session 或模型调用。HTTP 与 Pilot 复用 Host 应用用例及配置事实；运行环境、渠道中的部署字段保持只读；模型服务字段与凭据统一由 Host 私有管理存储维护，环境变量不再提供模型配置或回退值，两个模型槽可独立编辑。设置、凭据与插件预检响应使用 `no-store`，密钥只通过专用表单提交，不进入聊天、日志投影或浏览器存储。
+
+Web 异步操作反馈绑定发起时的上下文：删除旧 Run 的迟到响应仍刷新列表，但不能清空后来选中的 Run/节点。环境状态读取与初始化/取消共用版本保护，旧 GET 不覆盖已接纳的操作；后台轮询不重叠，慢响应仍可推进当前状态，关闭页面只取消本地观察。
 
 `POST /sessions` 未指定 ID 时创建 `pilot-private-` 会话，与 `responses-` 会话一样按当前 API key 归属；无认证的 loopback 使用 `local`。因此新 Web 会话与插件详情共享同一 owner 的凭据。旧显式普通 ID 仍属共享 `local`，不自动迁移或跨 owner 复用密钥；旧会话表单明确显示该作用域，完成的配置请求只代表历史操作。
 

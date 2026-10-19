@@ -9,8 +9,21 @@ const plugin: Plugin = {
 };
 const captured = { ...plugin, description: '本次运行登记时的插件说明。',
   skills: ['recorded-skill'], digest: 'frozen-content-20261014', instructions: undefined };
+const unexpectedRequests = new WeakMap<Page, string[]>();
+
+test.afterEach(async ({ page }) => {
+  expect(unexpectedRequests.get(page) ?? [], 'Every management API request must be mocked by this fixture').toEqual([]);
+});
 
 async function fixture(page: Page, current = plugin) {
+  const unexpected: string[] = [];
+  unexpectedRequests.set(page, unexpected);
+  await page.route(/^https?:\/\/[^/]+\/(?:graph-relations|channel-sessions|channels|settings|sessions|plugins|graphs|runs|timeline|schedules|trigger)(?:[/?]|$)/, route => {
+    const request = route.request();
+    const description = `${request.method()} ${new URL(request.url()).pathname}`;
+    unexpected.push(description);
+    return route.fulfill({ status: 500, json: { error: `Unexpected fixture request: ${description}` } });
+  });
   let graph: OurGraph = { entry: 'worker', agents: { worker: { model: 'models.default', instructions: '整理研究证据' } },
     nodes: [{ id: 'worker', agent: 'worker' }], edges: [] };
   let mounted = false;
@@ -44,6 +57,13 @@ async function fixture(page: Page, current = plugin) {
     facts.detailReads++;
     return route.fulfill({ json: current });
   });
+  await page.route('**/plugins/*/configuration', route => route.fulfill({ json: {
+    plugin: decodeURIComponent(new URL(route.request().url()).pathname.split('/')[2]),
+    authorization_digest: 'fixture-authorization', revision: 1, fields: [], targets: [],
+  } }));
+  await page.route('**/plugins/*/credentials', route => route.fulfill({ json: {
+    plugin: decodeURIComponent(new URL(route.request().url()).pathname.split('/')[2]), targets: [],
+  } }));
   await page.route('**/sessions', route => route.fulfill({ json: { sessions: [session] } }));
   await page.route('**/sessions/*/messages', route => route.fulfill({ json: { messages: [
     { role: 'user', text: '整理研究证据' },
@@ -267,11 +287,13 @@ test('a late read from closed details cannot overwrite a newly opened plugin def
   let oldRead = true;
   let release = () => {};
   const pending = new Promise<void>(resolve => { release = resolve; });
+  const lateDeliveries: Promise<void>[] = [];
   await page.route(/^https?:\/\/[^/]+\/plugins\/[^/?]+$/, async route => {
     reads++;
     if (oldRead) {
-      await pending;
-      return route.fulfill({ json: { ...plugin, instructions: '迟到的旧说明' } }).catch(() => {});
+      const delivery = pending.then(() => route.fulfill({ json: { ...plugin, instructions: '迟到的旧说明' } }).catch(() => {}));
+      lateDeliveries.push(delivery);
+      return delivery;
     }
     return route.fulfill({ json: { ...plugin, instructions: '最新的插件说明' } });
   });
@@ -279,14 +301,16 @@ test('a late read from closed details cannot overwrite a newly opened plugin def
   await button.click();
   const details = page.getByRole('dialog', { name: `${plugin.name} · 插件详情`, exact: true });
   await expect.poll(() => reads).toBeGreaterThanOrEqual(1);
-  await expect(details.getByRole('status')).toContainText('正在读取插件详情');
+  await expect(details.getByRole('status').filter({ hasText: '正在读取插件详情' })).toHaveText('正在读取插件详情…');
+  const cancelledRead = page.waitForEvent('requestfailed', request => new URL(request.url()).pathname === `/plugins/${plugin.id}`);
   await page.keyboard.press('Escape');
+  await expect(details).not.toBeVisible();
   oldRead = false;
   await button.click();
   await expect(details).toContainText('最新的插件说明');
-  const lateResponse = page.waitForResponse(response => new URL(response.url()).pathname === `/plugins/${plugin.id}`);
   release();
-  await lateResponse;
+  await Promise.all(lateDeliveries);
+  expect((await cancelledRead).failure()?.errorText).toBe('net::ERR_ABORTED');
   await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
   await expect(details).not.toContainText('迟到的旧说明');
   await expect(details).toContainText('最新的插件说明');
