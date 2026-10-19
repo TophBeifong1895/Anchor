@@ -1,6 +1,6 @@
 //! Execute and freeze one open slot. This adapter never advances Graph facts.
 use super::*;
-use crate::graph::validator::{DispatchKind, NodeSubmission, SettleSubmission};
+use crate::graph::validator::{DispatchKind, NodeSubmission, SettleSubmission, routes_of};
 use anchor_kernel::Evidence;
 
 pub(super) type StampedSubmission = (Principal, u64, Submission);
@@ -57,17 +57,38 @@ impl<S: Store, A: ArtifactPort + ?Sized, N: NodeExecutionPort + ?Sized>
                     )?;
                     self.nodes.execute(request).await?
                 }
-                CompletionFact::Yielded { .. } => {
-                    return Err(GraphError::Unsupported(
-                        "Yielded completion requires the assistant slice".into(),
-                    ));
+                CompletionFact::Yielded { reason, route } => {
+                    NodeExecutionOutcome::Yielded { reason, route }
                 }
             },
+        };
+        let (outcome, interruption) = match outcome {
+            NodeExecutionOutcome::Yielded { reason, route } => {
+                if dispatch.branch.is_some() {
+                    return Err(GraphError::CorruptRun(
+                        "interruption cannot complete a parallel branch".into(),
+                    ));
+                }
+                let completion = interruption_completion(&reason, route);
+                // Use the same routing function as the validator and legacy
+                // Runner before publishing an immutable control artifact.
+                match select_route(&completion, &routes_of(&record, &key.node_id)) {
+                    Ok(_) => (NodeExecutionOutcome::Completed(completion), Some(reason)),
+                    Err(error) => (
+                        NodeExecutionOutcome::Failed {
+                            reason: error.to_string(),
+                        },
+                        None,
+                    ),
+                }
+            }
+            outcome => (outcome, None),
         };
         match outcome {
             NodeExecutionOutcome::Completed(c) => {
                 let context = ArtifactFreezeContext {
                     kind: match dispatch.kind {
+                        _ if interruption.is_some() => ArtifactKind::Interruption,
                         DispatchKind::Fanout => ArtifactKind::Fanout,
                         DispatchKind::Join => ArtifactKind::Join,
                         _ => ArtifactKind::Node,
@@ -89,18 +110,18 @@ impl<S: Store, A: ArtifactPort + ?Sized, N: NodeExecutionPort + ?Sized>
                     output: c.output,
                     model_requests: c.model_requests,
                     commit,
-                    interruption: None,
+                    interruption: interruption.clone(),
                     plugin_views: self.nodes.observed_plugin_views(&key),
                     plugin_digests: self.nodes.observed_plugin_digests(&key),
                 };
                 Ok(Some((
                     Principal::new(
-                        if dispatch.kind == DispatchKind::Work {
+                        if dispatch.kind == DispatchKind::Work && interruption.is_none() {
                             EXECUTOR_ID
                         } else {
                             HOST_ID
                         },
-                        if dispatch.kind == DispatchKind::Work {
+                        if dispatch.kind == DispatchKind::Work && interruption.is_none() {
                             PrincipalKind::Agent
                         } else {
                             PrincipalKind::Code
@@ -129,10 +150,26 @@ impl<S: Store, A: ArtifactPort + ?Sized, N: NodeExecutionPort + ?Sized>
                 "unknown external tool effects".into(),
                 serde_json::to_value(attempts).map_err(GraphError::RunDecode)?,
             ))),
-            NodeExecutionOutcome::Cancelled | NodeExecutionOutcome::Suspended => Ok(None),
-            unsupported => Err(GraphError::Unsupported(format!(
-                "{unsupported:?} requires a later runtime slice"
+            NodeExecutionOutcome::BudgetExhausted { model_requests } => {
+                let (principal, _, submission) = self.observation_stop(
+                    &resource, &key, "budget".into(), Value::Null,
+                );
+                Ok(Some((principal, model_requests, submission)))
+            }
+            NodeExecutionOutcome::Interrupted { reason } => Ok(Some(self.observation_stop(
+                &resource, &key, reason, Value::Null,
             ))),
+            NodeExecutionOutcome::Aborted => Ok(Some((
+                // This port outcome attests an explicit operator decision;
+                // Code cannot manufacture a Run abandonment on its own.
+                Principal::new(OPERATOR_ID, PrincipalKind::Human),
+                0,
+                Submission::new(&resource.id, resource.version, Action::Request)
+                    .content(serde_json::json!({"control":"abandon","reason":format!("{} aborted by operator", key.node_id)}))
+                    .evidence(Evidence::Observation { id: format!("operator-decision/{}", key.durable_key()) }),
+            ))),
+            NodeExecutionOutcome::Cancelled | NodeExecutionOutcome::Suspended => Ok(None),
+            NodeExecutionOutcome::Yielded { .. } => unreachable!("normalized above"),
         }
     }
 

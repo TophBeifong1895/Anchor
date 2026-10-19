@@ -688,7 +688,7 @@ fn judge_settle(
     accept(&record, verification_of(s), Some(phase))
 }
 
-fn routes_of(record: &GraphRunRecord, node_id: &str) -> Vec<String> {
+pub(crate) fn routes_of(record: &GraphRunRecord, node_id: &str) -> Vec<String> {
     record
         .snapshot
         .edges

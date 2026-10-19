@@ -130,7 +130,6 @@ impl<S: Store, A: ArtifactPort + ?Sized, N: NodeExecutionPort + ?Sized>
                     if resource.phase() != Some(&Phase::Executing) {
                         return Ok((resource, Vec::new()));
                     }
-                    validate_probe(&record_of(&resource)?)?;
                     let frontier = GraphValidator::frontier(&resource)?;
                     Ok((resource, frontier))
                 });

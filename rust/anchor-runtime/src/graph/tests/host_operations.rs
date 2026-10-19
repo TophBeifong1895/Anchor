@@ -1,6 +1,8 @@
 use super::*;
 use std::collections::VecDeque;
 
+mod kernel;
+
 struct ScriptedNodes {
     capabilities: NodeExecutionCapabilities,
     outcomes: Mutex<VecDeque<NodeExecutionOutcome>>,
