@@ -1,10 +1,20 @@
 # M2 验证与当前边界
 
-M2 进行中。已批准的并行模块校验器与 Host 多槽位调度均已实现并通过本地确定性验证。FileStore 删除操作现已按用户批准实现并通过存储测试，原 §8 边界解除，继续 Host 删除与其余能力；见 [具体边界与最小授权建议](deletion-boundary.md)。Op.call、助手、结果补齐、恢复决定、删除与 Probe 尚未完成，不开始 M3。这不是完整 M2 交回。
+M2 未完成，当前按任务书 §8 交回并行 Call 裁决边界，不开始 M3。已完成并行模块、多槽位调度、获批 FileStore 删除、Host Run/Graph 删除和 Probe 投影；串行 Op.call 已接通并通过定向及 5,000 seed 对照。并行分支的 Call 仍被派发为 Work，需要单独批准校验器扩展，见 [可复现边界与建议](parallel-call-boundary.md)。助手、执行结果补齐与人工恢复决定仍待实现。这不是完整 M2 验收。
 
 ## FileStore 删除存储切片
 
-Store trait 和 MemoryStore 未改；FileStore 提供获批 remove，rename/sync/remove/sync，load 幂等清理遗留目录，资源锁文件单独留存。定向 7 项、Kernel 全量 44 项及 clippy 通过，详见 [存储操作与证据](deletion-boundary.md)。当前 Kernel diff 仅限获批存储切片与测试，不再声称整个 crate 零 diff；生命周期代码仍零 diff。Host Run/Graph 删除接线尚在进行。
+Store trait 和 MemoryStore 未改；FileStore 提供获批 remove，rename/sync/remove/sync，load 幂等清理遗留目录，资源锁文件单独留存。定向 7 项、Kernel 全量 44 项及 clippy 通过，详见 [存储操作与证据](deletion-boundary.md)。当前 Kernel diff 仅限获批存储切片与测试；生命周期代码仍零 diff。提交：`0859373`。
+
+## Host 删除、Probe 与串行 Call
+
+Host Run/Graph 删除已通过门面接通，保留原 Session、调用引用与对话继任约束，删除预留与控制/派发互斥。10 项定向测试、wait-child 补充测试及 Host clippy/围栏通过；提交 `da708cb`，见 [Host 删除证据与清理边界](host-deletion.md)。
+
+Probe 投影已提交 `5293e65`；3 项定向测试通过。真实 Host 确定性并行 fixture 产生 12 个 Point，accepted 7 / returned 2 / refused 3、总成本 4，按校验器、身份、动作和原因码统计见 [probe-counts.json](probe-counts.json)，样本见 [probe-sample.jsonl](probe-sample.jsonl)。这是实际 Kernel/Host 运行，未调用模型 Provider。投影 I/O 故障不影响控制；重建不保证跨 Run 时序，也无法重建已删除资源的历史。
+
+串行 Call 复用 InProcessGraphHost 的准入、输入暂存、产物导出和调用身份；子 Run 同样只存 Kernel，后续进度只经 submit。父 Run 先 Bound，再由宿主观察子 Run 并提交 resume 和结算事实；回调覆盖父 worker 释放时子 Run 已结算的竞态。新增 Code 提交 AdmissionFailed 的理由与权限边界见 [预准入失败登记](call-admission.md)。定向 API、Runtime、Done/Failed/Unknown 竞态及 5,000 seed 调用差分通过，实际命令与最终范围见 [call-checks.json](call-checks.json)。未知效果不按未准入处理，不自动重放。
+
+F0 围栏测试文件与 `e3a5778` 保持字节一致。既有业务断言修改 0、删除 0、新增 ignore 0；M2 尚未执行 workspace、Web、Goose 与真实模型 Provider 验收。
 
 ## Host 多槽位调度
 
@@ -14,7 +24,7 @@ Store trait 和 MemoryStore 未改；FileStore 提供获批 remove，rename/sync
 
 复制旧 Runner 的异序分支与 join、分支失败、共享模块重入用例到实际调度器；新增无屏障后继、迟到与停止恢复、端口错误/panic 收集用例。并行随机失败组直接复用原 S18 三条不变量检查器，原断言、seed、失败注入概率与阈值未改。新测试中的 fixture panic 是有意输入，捕获后仍提交兄弟事实，测试通过。
 
-实际调度器与旧 Runner 使用同一 Scripted/Artifacts fixture：串行 10,000（772 节点失败、1,310 激活模块）、并行失败 5,000（775 节点失败、10,224 过期重提）、原无失败并行 5,000、模块 5,000（4,588 激活模块、12,461 过期重提）通过。模块组仍为无节点失败注入的补充；模块上限与迟到失败由定向用例覆盖。这里只完成串行/并行对照，实际调度器调用组尚待 Op.call 切片。
+实际调度器与旧 Runner 使用同一 Scripted/Artifacts fixture：串行 10,000（772 节点失败、1,310 激活模块）、并行失败 5,000（775 节点失败、10,224 过期重提）、原无失败并行 5,000、模块 5,000（4,588 激活模块、12,461 过期重提）通过。模块组仍为无节点失败注入的补充；模块上限与迟到失败由定向用例覆盖。串行调用组另外完成 5,000 seed（waited 957、detached 1,140、failed 514、unknown 392），不含并行 Call 组合。
 
 新切片实际命令在仓库根目录执行，完整命令、target 汇总与输出哈希见 checks.json，原始日志在 /tmp/anchor-m2/：
 
@@ -27,7 +37,7 @@ Store trait 和 MemoryStore 未改；FileStore 提供获批 remove，rename/sync
 | Runtime 与 Host 各 `cargo clippy --manifest-path rust/Cargo.toml -p <crate> --all-targets -- -D warnings` | 均通过 |
 | `cargo test --manifest-path rust/Cargo.toml -p anchor-runner-host --test run_access_fence` | 1 / 0 / 0；围栏测试与 F0 字节一致，清单本切片未改 |
 
-fmt、git diff --check、工程措辞检查通过；Kernel 相对 6ee2b0e 零 diff。新增 Runtime 9 项、Host 1 项，既有业务断言修改 0、删除 0、新增 ignore 0。Runtime 分两条实际命令覆盖全部 target，不合成为一次测试输出。
+该并行调度切片的 fmt、git diff --check、工程措辞检查通过，实施当时 Kernel 相对 6ee2b0e 零 diff；后续唯一存储例外见上文。新增 Runtime 9 项、Host 1 项，既有业务断言修改 0、删除 0、新增 ignore 0。Runtime 分两条实际命令覆盖全部 target，不合成为一次测试输出。
 
 初次新 fixture 编译因 Runtime 未启用 tokio sync 失败，已补 dev feature；初次 Host 命令误用 --lib（该 crate 只有 bin），已改为 --bin。这两次临时日志被随后运行覆盖，原输出现不可获取，不计为通过证据。未新增完整 workspace、Web、Goose 或真实模型 Provider 验收；因 §8 边界交回，不宣称 M2 完成。
 

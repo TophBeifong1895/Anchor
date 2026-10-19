@@ -8,7 +8,9 @@ use anchor_kernel::{
 use futures::{FutureExt, StreamExt, stream::FuturesUnordered};
 use std::{collections::VecDeque, panic::AssertUnwindSafe};
 
+mod calls;
 mod execution;
+pub use execution::dispatch_cursor;
 #[cfg(test)]
 mod tests;
 
@@ -18,9 +20,9 @@ pub const OPERATOR_ID: &str = "kernel-probe/operator";
 
 pub fn validate_probe(record: &GraphRunRecord) -> Result<(), GraphError> {
     for op in record.snapshot.ops.values() {
-        if ["call", "host"].iter().any(|kind| op.get(kind).is_some()) {
+        if op.get("host").is_some() {
             return Err(GraphError::Unsupported(
-                "Op.call and assistant host operations require a later slice".into(),
+                "assistant host operations require a later slice".into(),
             ));
         }
     }
@@ -105,6 +107,22 @@ impl<S: Store, A: ArtifactPort + ?Sized, N: NodeExecutionPort + ?Sized>
         let mut draining = false;
         let mut failure = None;
         loop {
+            if !draining && ready.is_empty() {
+                let resource = self.load(id)?;
+                if matches!(
+                    resource.phase(),
+                    Some(Phase::Waiting {
+                        waiter: anchor_kernel::Waiter::Child { .. }
+                    })
+                ) {
+                    // A child observation is a Host operation. The validator
+                    // only receives the resulting release and terminal fact.
+                    if self.observe_child(&resource).await? {
+                        continue;
+                    }
+                    draining = true;
+                }
+            }
             // Commit completions already observed before dispatching new work.
             // An unfinished sibling never holds up a newly open successor.
             if !draining && ready.is_empty() {

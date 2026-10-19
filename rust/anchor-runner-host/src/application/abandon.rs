@@ -189,7 +189,9 @@ impl RunApplication {
         }
         let reason = parse_reason(reason)?;
         if let Some(runs) = self.kernel_owner(run_id)? {
-            return runs.abandon(run_id, reason);
+            let result = runs.abandon(run_id, reason)?;
+            self.kernel_child_finished(run_id).await?;
+            return Ok(result);
         }
         let record = self
             .store()

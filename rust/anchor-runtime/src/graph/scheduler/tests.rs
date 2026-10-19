@@ -1,5 +1,6 @@
 use super::*;
 
+mod calls;
 mod differential;
 use crate::graph::test_support::{Artifacts, commit_of, parallel_fixture_graph};
 use anchor_kernel::{Authority, Evidence, MemoryStore, Outcome, Waiter};

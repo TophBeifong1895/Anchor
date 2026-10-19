@@ -1,0 +1,373 @@
+{
+  "cwd": "/home/mansteinl/code/anchor-constitution-core",
+  "status": "serial Call slice local verification; M2 incomplete; parallel Call requires §8 review",
+  "checks": [
+    {
+      "command": "cargo test --manifest-path rust/Cargo.toml -p anchor-runner-host --bin anchor-runner-host kernel_op_call -- --nocapture",
+      "result": "4 passed; 0 failed",
+      "raw_output": "/tmp/anchor-m2/kernel-op-call-api.log",
+      "sha256": "9fbead60fad55068c4946899175bd2a18a76abf33261f8cb3e6350fe118099a6"
+    },
+    {
+      "command": "cargo test --manifest-path rust/Cargo.toml -p anchor-runtime --lib graph::scheduler::tests::calls -- --nocapture",
+      "result": "3 passed; 0 failed",
+      "raw_output": "/tmp/anchor-m2/kernel-call-runtime.log",
+      "sha256": "06afedbd7f4ae4d483a086a0b82db41402bdd665d3634c64e9cc8096b5f8fa96"
+    },
+    {
+      "command": "cargo test --manifest-path rust/Cargo.toml -p anchor-runner-host --bin anchor-runner-host kernel_call_rechecks_a_child -- --nocapture",
+      "result": "1 passed; 0 failed; deterministic Done / Failed / Unknown outcomes",
+      "raw_output": "/tmp/anchor-m2/kernel-call-race.log",
+      "sha256": "65fd1002a93c71e378b6d0865559107cb31cfc67625d359b73dde132ecaa92e1"
+    },
+    {
+      "command": "cargo test --manifest-path rust/Cargo.toml -p anchor-runtime --lib production_scheduler_matches_old_runner_on_five_thousand_call_seeds -- --nocapture",
+      "result": "1 passed; 0 failed; cases=5000, waited=957, detached=1140, failed=514, unknown=392",
+      "raw_output": "/tmp/anchor-m2/kernel-call-differential.log",
+      "sha256": "c211f2843ab6d1e0d802cb5e69c333b85216ff8d85d134a8c61a2bf604f88443"
+    },
+    {
+      "command": "CARGO_TARGET_DIR=/home/mansteinl/code/anchor-constitution-core/rust/target cargo run --manifest-path /tmp/anchor-m2/parallel-call-diagnostic/Cargo.toml --offline",
+      "result": "diagnostic success: admitted Call branch is dispatched as Work; unsupported combination unchanged",
+      "raw_output": "/tmp/anchor-m2/parallel-call-diagnostic.log",
+      "sha256": "91295398bb730a811dbeea91aa74d1b0753533fc3c7c08d43c127596fbc14525"
+    },
+    {
+      "command": "cargo test --manifest-path rust/Cargo.toml -p anchor-runner-host --bin anchor-runner-host kernel_restart_ -- --nocapture",
+      "result": "2 passed; 0 failed; reopened Kernel store restores staged child inputs and preserves unknown started effects without replay",
+      "raw_output": "/tmp/anchor-m2/kernel-call-restart.log",
+      "sha256": "db19ef949b203a5f97e58b44484a87a9bd55721eaa3c81177c2be9fb45d17035"
+    },
+    {
+      "command": "cargo test --manifest-path rust/Cargo.toml -p anchor-runner-host --bin anchor-runner-host restart_dispatches_ready_detach_child_only_with_staged_call_inputs -- --nocapture",
+      "result": "1 passed; 0 failed; original legacy startup recovery behavior unchanged",
+      "raw_output": "/tmp/anchor-m2/legacy-call-restart.log",
+      "sha256": "8374df5f21588ca27973e28437b96c5493e7a9a24406fc7657b3a02b50585851"
+    },
+    {
+      "command": "cargo test --manifest-path rust/Cargo.toml -p anchor-runtime -p anchor-graph-host -p anchor-runner-host --no-fail-fast",
+      "result": "passed; before final two restart fixtures and detached recovery selection change; targeted restart coverage recorded separately",
+      "raw_output": "/tmp/anchor-m2/approved-slices-regression.log",
+      "sha256": "32bd83e9c804ef5b6b38b39ef5148b742c85e1a0fb9710a5541f4f758c6bcd57",
+      "targets": [
+        {
+          "target": "Running unittests src/lib.rs (rust/target/debug/deps/anchor_graph_host-7e0f1f92193b3a78)",
+          "passed": 58,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "target": "Running tests/child_lifecycle.rs (rust/target/debug/deps/child_lifecycle-a6a061b67cc308a0)",
+          "passed": 4,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "target": "Running tests/in_process.rs (rust/target/debug/deps/in_process-d5e78ede71f3dd7e)",
+          "passed": 0,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "target": "Running unittests src/bin/anchor-net-relay.rs (rust/target/debug/deps/anchor_net_relay-23fa5a40612fd062)",
+          "passed": 3,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "target": "Running unittests src/main.rs (rust/target/debug/deps/anchor_runner_host-3a992d23f5a5c9b7)",
+          "passed": 962,
+          "failed": 0,
+          "ignored": 2
+        },
+        {
+          "target": "Running tests/channel_startup.rs (rust/target/debug/deps/channel_startup-0007a54f5d9ad168)",
+          "passed": 1,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "target": "Running tests/goose_acp.rs (rust/target/debug/deps/goose_acp-10b8bd26159f8551)",
+          "passed": 8,
+          "failed": 0,
+          "ignored": 15
+        },
+        {
+          "target": "Running tests/goose_channel.rs (rust/target/debug/deps/goose_channel-5764eb0d21116180)",
+          "passed": 6,
+          "failed": 0,
+          "ignored": 4
+        },
+        {
+          "target": "Running tests/goose_compaction.rs (rust/target/debug/deps/goose_compaction-b229b305fd0e4565)",
+          "passed": 6,
+          "failed": 0,
+          "ignored": 4
+        },
+        {
+          "target": "Running tests/goose_completion.rs (rust/target/debug/deps/goose_completion-5975d85e2901607e)",
+          "passed": 6,
+          "failed": 0,
+          "ignored": 9
+        },
+        {
+          "target": "Running tests/goose_conversation.rs (rust/target/debug/deps/goose_conversation-ac5da1d7a89c0072)",
+          "passed": 6,
+          "failed": 0,
+          "ignored": 13
+        },
+        {
+          "target": "Running tests/goose_development_environment.rs (rust/target/debug/deps/goose_development_environment-ae2a8efed31fa048)",
+          "passed": 6,
+          "failed": 0,
+          "ignored": 1
+        },
+        {
+          "target": "Running tests/goose_distribution.rs (rust/target/debug/deps/goose_distribution-7601fa7d5bba4fab)",
+          "passed": 6,
+          "failed": 0,
+          "ignored": 1
+        },
+        {
+          "target": "Running tests/goose_elicitation.rs (rust/target/debug/deps/goose_elicitation-2407891011f2cc0a)",
+          "passed": 6,
+          "failed": 0,
+          "ignored": 10
+        },
+        {
+          "target": "Running tests/goose_library.rs (rust/target/debug/deps/goose_library-cb2332c9cdf73e83)",
+          "passed": 6,
+          "failed": 0,
+          "ignored": 1
+        },
+        {
+          "target": "Running tests/goose_media.rs (rust/target/debug/deps/goose_media-f1d34d4bd5fe51a0)",
+          "passed": 6,
+          "failed": 0,
+          "ignored": 6
+        },
+        {
+          "target": "Running tests/goose_model_settings.rs (rust/target/debug/deps/goose_model_settings-e9cb3b89e4f5b0df)",
+          "passed": 6,
+          "failed": 0,
+          "ignored": 2
+        },
+        {
+          "target": "Running tests/goose_native_activation_spike.rs (rust/target/debug/deps/goose_native_activation_spike-9aa28061523444aa)",
+          "passed": 6,
+          "failed": 0,
+          "ignored": 2
+        },
+        {
+          "target": "Running tests/goose_persistent_assistant.rs (rust/target/debug/deps/goose_persistent_assistant-ab7798b248843ef6)",
+          "passed": 6,
+          "failed": 0,
+          "ignored": 12
+        },
+        {
+          "target": "Running tests/goose_pilot.rs (rust/target/debug/deps/goose_pilot-95763c2cf5ea0117)",
+          "passed": 6,
+          "failed": 0,
+          "ignored": 2
+        },
+        {
+          "target": "Running tests/goose_pilot_attachments.rs (rust/target/debug/deps/goose_pilot_attachments-62314e6dcee34ef0)",
+          "passed": 6,
+          "failed": 0,
+          "ignored": 2
+        },
+        {
+          "target": "Running tests/goose_pilot_authoring.rs (rust/target/debug/deps/goose_pilot_authoring-e9b11a1cb9b0312b)",
+          "passed": 6,
+          "failed": 0,
+          "ignored": 4
+        },
+        {
+          "target": "Running tests/goose_pilot_compaction.rs (rust/target/debug/deps/goose_pilot_compaction-2532f83d24db6067)",
+          "passed": 6,
+          "failed": 0,
+          "ignored": 3
+        },
+        {
+          "target": "Running tests/goose_plugin_configuration.rs (rust/target/debug/deps/goose_plugin_configuration-3efd69f9284bbf70)",
+          "passed": 6,
+          "failed": 0,
+          "ignored": 1
+        },
+        {
+          "target": "Running tests/goose_plugin_disclosure.rs (rust/target/debug/deps/goose_plugin_disclosure-5e7cdad0f08dca5f)",
+          "passed": 6,
+          "failed": 0,
+          "ignored": 1
+        },
+        {
+          "target": "Running tests/goose_plugin_mcp.rs (rust/target/debug/deps/goose_plugin_mcp-cb11fa25e387b8a1)",
+          "passed": 6,
+          "failed": 0,
+          "ignored": 2
+        },
+        {
+          "target": "Running tests/goose_plugin_summary.rs (rust/target/debug/deps/goose_plugin_summary-e4b38d4dd48e0e4e)",
+          "passed": 6,
+          "failed": 0,
+          "ignored": 2
+        },
+        {
+          "target": "Running tests/goose_plugin_turns.rs (rust/target/debug/deps/goose_plugin_turns-4dff9b42256d2fc5)",
+          "passed": 6,
+          "failed": 0,
+          "ignored": 6
+        },
+        {
+          "target": "Running tests/goose_provider_errors.rs (rust/target/debug/deps/goose_provider_errors-d8eb4a799a0742be)",
+          "passed": 6,
+          "failed": 0,
+          "ignored": 4
+        },
+        {
+          "target": "Running tests/goose_responses.rs (rust/target/debug/deps/goose_responses-ecf7802723d03f7c)",
+          "passed": 6,
+          "failed": 0,
+          "ignored": 2
+        },
+        {
+          "target": "Running tests/goose_session_calls.rs (rust/target/debug/deps/goose_session_calls-d5055908672910a6)",
+          "passed": 6,
+          "failed": 0,
+          "ignored": 4
+        },
+        {
+          "target": "Running tests/goose_trace.rs (rust/target/debug/deps/goose_trace-4e6351ec0b65585b)",
+          "passed": 6,
+          "failed": 0,
+          "ignored": 2
+        },
+        {
+          "target": "Running tests/local_inputs.rs (rust/target/debug/deps/local_inputs-b3dcce8860b0e9af)",
+          "passed": 4,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "target": "Running tests/local_network.rs (rust/target/debug/deps/local_network-0824845d8757759a)",
+          "passed": 1,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "target": "Running tests/multinode.rs (rust/target/debug/deps/multinode-432cc26aa63b9914)",
+          "passed": 3,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "target": "Running tests/native_plugins.rs (rust/target/debug/deps/native_plugins-19ba4f7e85cee030)",
+          "passed": 6,
+          "failed": 0,
+          "ignored": 2
+        },
+        {
+          "target": "Running tests/parallel.rs (rust/target/debug/deps/parallel-d0be665d75c0fd8b)",
+          "passed": 3,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "target": "Running tests/routing.rs (rust/target/debug/deps/routing-54e47e426045387b)",
+          "passed": 5,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "target": "Running tests/run_access_fence.rs (rust/target/debug/deps/run_access_fence-d3e334e8ac114b93)",
+          "passed": 1,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "target": "Running tests/standalone_graph_call.rs (rust/target/debug/deps/standalone_graph_call-652cb222778c1857)",
+          "passed": 2,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "target": "Running tests/standalone_library.rs (rust/target/debug/deps/standalone_library-9de65a9b734279ec)",
+          "passed": 1,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "target": "Running tests/standard_host.rs (rust/target/debug/deps/standard_host-a1b191cb99246b03)",
+          "passed": 3,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "target": "Running tests/writer_lease.rs (rust/target/debug/deps/writer_lease-9846566d4323f625)",
+          "passed": 2,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "target": "Running unittests src/lib.rs (rust/target/debug/deps/anchor_runtime-55bdd8fe34f307be)",
+          "passed": 148,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "target": "Running tests/weekly_work_report_graphs.rs (rust/target/debug/deps/weekly_work_report_graphs-3d22e2ac72cc580f)",
+          "passed": 7,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "target": "Doc-tests anchor_graph_host",
+          "passed": 0,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "target": "Doc-tests anchor_runtime",
+          "passed": 2,
+          "failed": 0,
+          "ignored": 0
+        }
+      ],
+      "totals": {
+        "passed": 1374,
+        "failed": 0,
+        "ignored": 119
+      }
+    },
+    {
+      "command": "cargo clippy --manifest-path rust/Cargo.toml -p anchor-runtime -p anchor-graph-host -p anchor-runner-host --all-targets -- -D warnings",
+      "result": "passed on final serial Call sources, including restart fixtures",
+      "raw_output": "/tmp/anchor-m2/kernel-call-clippy-final.log",
+      "sha256": "2f6fe6f9728c2b0aab7dcb16045d2059de15a06dc73f9d5aa38c28ac736bc684"
+    },
+    {
+      "command": "cargo fmt --manifest-path rust/Cargo.toml --all -- --check",
+      "result": "passed",
+      "raw_output": "/tmp/anchor-m2/kernel-call-fmt-final.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "command": "git diff --check",
+      "result": "passed",
+      "raw_output": "/tmp/anchor-m2/kernel-call-diff-final.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "command": "bash scripts/check-sensitive-wording.sh",
+      "result": "passed",
+      "raw_output": "/tmp/anchor-m2/kernel-call-wording-final.log",
+      "sha256": "78cf26da99b1c5272368f0baa3013d9de0bf2cdf766c0d58feb6b413525dc5d1"
+    }
+  ],
+  "limits": [
+    "No real model provider used. Three original API tests execute real shell child Runs; one tests pre-admission failure.",
+    "Parallel Call combination is an existing rule gap; see parallel-call-boundary.md.",
+    "Full workspace and Goose not run for this slice.",
+    "Three-crate regression preceded the final detached recovery change; two Kernel restart fixtures and the original legacy recovery fixture passed afterward. Final source clippy/fmt passed. Full workspace, Web, Goose and real Provider acceptance remain pending."
+  ]
+}

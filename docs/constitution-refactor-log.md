@@ -1078,3 +1078,23 @@ Kernel 删除已接到 run_access 门面和获批 FileStore.remove。删除预�
 ### Host Kernel 测量投影
 
 任务书 §10.4 Probe 已接到 KernelRuns.open。投影只消费 Point，按只读 JSONL 追加；启动从保留的 Graph history 重建，不参与裁决、恢复、投递或删除。投影 I/O 失败只诊断。新增 3 项定向用例通过，覆盖实际 Host 并行派发、人的控制、拒绝、重建与投影故障；样本含 12 个 Point（accepted 7 / returned 2 / refused 3），见 [分组统计与命令](../experiments/constitution-host-preflight/m2/probe-counts.json)。无跨 Run 时序保证，已删除资源的历史不在重建范围；未新增对外 API、Kernel 字段或业务断言修改。
+
+### 串行 Op.call 与启动恢复
+
+串行 Call 的父子 Run 均走 Kernel。共享 InProcessGraphHost 保留准入、身份核查、输入暂存与结果导出；宿主在 Bound 持久化后执行或观察子 Run，并提交 resume 及 Completed/Failed/Uncertain。父 worker 释放与子 Run 结算交错时重新核查持久等待，结算只释放一次。detached child 启动恢复按 Kernel Executing 相位选取，完成事实先于执行检查；已有 `.started` 时带 Observation 停止等待人核查，不重放效果。
+
+新增 Code 提交 AdmissionFailed，处理宿主在准入锁内证明不存在子 Run 资源和准入元数据的失败，保持 graph_calls 为空。任务书 §8 允许登记后新增 Code 提交；已 Bound 的调用不能使用该提交抹去事实，Agent 无权使用。登记与实测失败现场见 [call-admission.md](../experiments/constitution-host-preflight/m2/call-admission.md)。
+
+4 项复制的 API 用例、3 项 Runtime 调用用例、Done/Failed/Unknown 回调竞态、2 项 Kernel 重启用例和原旧路径重启用例通过。5,000 seed 调用对照通过：waited 957、detached 1,140、failed 514、unknown 392。三 crate 回归通过；随后最终恢复选择改动由定向重启用例验证，最终 clippy/fmt 通过，完整 target 及日志哈希见 [call-checks.json](../experiments/constitution-host-preflight/m2/call-checks.json)。既有业务断言修改 0、删除 0、新增 ignore 0。
+
+并行 Call 组合仍触发 §8：准入已允许，但 parallel_frontier 固定派发 Work，绕过调用端口。此裁决扩展不在并行模块授权中，已保留可执行诊断和四点建议，见 [parallel-call-boundary.md](../experiments/constitution-host-preflight/m2/parallel-call-boundary.md)。M2 未完成；助手、执行结果与人工恢复决定仍未关闭。新增 §10.11 要求当前切片提交后立即合并 master F1/F2，剩余能力在统一门面后实现，不能继续沿旧入口形状扩展。
+
+## K0.2：FileStore 删除与资源租约
+
+任务书 §10.11 已追认 `0859373` 的 FileStore 删除、anchor-file-lease/sha2 依赖和资源级阻塞排他租约。C1 从此以 `0859373` 为基线，后续 Kernel 变更仍须交回。Store trait、MemoryStore、生命周期及 Graph 裁决未变；锁路径为 `.locks/<sha256(id)>`，只隔离单资源文件访问，不定义提交权限或任务状态。
+
+FileStore 的 load/create/commit/history/remove 各自取得同一资源租约；list 只枚举规范编码的目录，不取资源租约。每个操作使用独立文件描述符；load 已持锁时调用不加锁的 history_at，避免递归获取同一租约。同步文件操作使用阻塞等待，是为了在短暂的读取/删除竞争后继续观察一致结果；非阻塞会把正常竞争变成 Io 错误，且现有 Store 没有 Busy 或异步重试契约。
+
+当前锁序为 Host `kernel_runs` 缓存互斥量 → 非阻塞 `.writer.lock`（仅打开时取得、持有至 owner 释放）；单次创建/控制/派发注册按 active → deleting → Kernel writer（提交时）→ FileStore 资源租约。删除在 active/deleting 下预留后释放这两把互斥量，再经 FileStore.remove 取资源租约；读取也可直接取资源租约。FileStore 不回调 Host，不持资源租约获取 Host 互斥量或 Kernel writer；每次 Store 操作结束便释放，后续 Probe/观察发生在 Store 操作之外，因此没有反向等待环。
+
+Host `.writer.lock` 暂不能删除。资源租约只保护一次文件操作；Kernel 的 load→裁决→commit 跨多个 Store 调用，writer mutex 仅覆盖同一 Kernel 实例，跨进程仍需排除第二个裁决者。它也不代替 active/deleting 对 worker 与控制的协调。M3 保留该锁，除非后续能证明单写入者由等价机制保证；不能因为 FileStore 已有 flock 就删去宿主写入者边界。

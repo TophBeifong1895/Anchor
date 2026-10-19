@@ -156,3 +156,97 @@ async fn production_scheduler_matches_old_runner_on_five_thousand_parallel_modul
     assert!(modules > 1_000);
     assert!(stale > 1_000);
 }
+
+#[tokio::test]
+async fn production_scheduler_matches_old_runner_on_five_thousand_call_seeds() {
+    let mut waited = 0;
+    let mut detached = 0;
+    let mut failed = 0;
+    let mut unknown = 0;
+    for seed in 0..5_000 {
+        let record = GraphRunRecord::create_with_id(
+            random_call_graph(seed),
+            serde_json::json!({}),
+            format!("scheduler-calls-{seed}"),
+        )
+        .unwrap();
+        let (mut old_trace, old) = run_old(record.clone(), seed, false).await;
+        let mut kernel = Kernel::new(MemoryStore::default(), Box::new(AuthorityFixture)).unwrap();
+        kernel
+            .install(validator::GRAPH_VALIDATOR, Arc::new(GraphValidator))
+            .unwrap();
+        let resource = validator::run_resource(&record, u64::MAX).unwrap();
+        let id = resource.id.clone();
+        kernel.create(resource).unwrap();
+        let nodes = Scripted {
+            seed,
+            inject_failures: false,
+            trace: Mutex::default(),
+            calls: ScriptedCalls {
+                seed,
+                ..Default::default()
+            },
+        };
+        let scheduler = KernelScheduler {
+            kernel: &kernel,
+            observer: None,
+            boundary: None,
+            artifacts: &Artifacts,
+            nodes: &nodes,
+            cancellation: Arc::new(AtomicBool::new(false)),
+        };
+        let resource = scheduler.run(&id).await.unwrap();
+        let new = record_of(&resource).unwrap();
+        let mut new_trace = nodes.trace.lock().unwrap().clone();
+        old_trace.sort();
+        new_trace.sort();
+        assert_eq!(old_trace, new_trace, "call dispatch multiset seed {seed}");
+        assert_eq!(facts(&old), facts(&new), "call Graph facts seed {seed}");
+        assert!(
+            matches!(
+                (old.status, resource.phase()),
+                (
+                    RunStatus::Completed,
+                    Some(Phase::Settled {
+                        result: Outcome::Done
+                    })
+                ) | (
+                    RunStatus::Stopped,
+                    Some(Phase::Settled {
+                        result: Outcome::Escalated { .. }
+                    })
+                ) | (
+                    RunStatus::Failed,
+                    Some(Phase::Settled {
+                        result: Outcome::Failed { .. } | Outcome::Unknown { .. }
+                    })
+                )
+            ),
+            "call phase seed {seed}"
+        );
+        assert_eq!(
+            resource.task.as_ref().unwrap().budget.spent,
+            old_trace.len() as u64
+        );
+        waited += usize::from(!nodes.calls.waiting.lock().unwrap().is_empty());
+        detached += usize::from(
+            new.graph_calls
+                .values()
+                .any(|c| c.status == GraphCallStatus::Detached),
+        );
+        failed += usize::from(
+            new.graph_calls
+                .values()
+                .any(|c| c.status == GraphCallStatus::Failed),
+        );
+        unknown += usize::from(
+            new.graph_calls
+                .values()
+                .any(|c| c.status == GraphCallStatus::Uncertain),
+        );
+    }
+    eprintln!(
+        "production scheduler calls: cases=5000, waited={waited}, detached={detached}, failed={failed}, unknown={unknown}"
+    );
+    assert!(waited > 500 && detached > 500 && failed > 100 && unknown > 100);
+}

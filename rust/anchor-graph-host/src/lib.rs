@@ -24,7 +24,7 @@ pub use dependencies::{
     VIEWS_DIRECTORY, mutable_paths_from_manifest, plugin_view_path, resolved_library_root,
     store_root, views_root,
 };
-pub use graph_call::InProcessGraphHost;
+pub use graph_call::{ChildExecutionPort, InProcessGraphHost, child_run_id};
 pub use graph_catalog::{ChildRunControl, GraphCatalog, PluginReferenceLeaseFuture};
 pub use mcp::{McpServerDefinition, host_environment_references};
 pub use plugin_catalog::{

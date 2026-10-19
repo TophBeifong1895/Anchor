@@ -27,6 +27,9 @@ impl RunApplication {
     }
 
     pub(crate) async fn dispatch_detached(&self, run_id: &str) -> Result<(), ApplicationError> {
+        if self.kernel_owner(run_id)?.is_some() {
+            return self.kernel_dispatch_detached(run_id).await;
+        }
         let mut active = self.active.lock().await;
         if active.contains_key(run_id) {
             return Ok(());
@@ -72,11 +75,22 @@ impl RunApplication {
     }
 
     pub(crate) async fn recover_detached(&self) -> Result<(), ApplicationError> {
-        let candidates = self
-            .records()?
-            .into_iter()
-            .filter_map(|(id, record)| (record.status == RunStatus::Ready).then_some(id))
-            .collect::<Vec<_>>();
+        let mut candidates = Vec::new();
+        for (id, record) in self.records()? {
+            let ready = if let Some(owner) = self.kernel_owner(&id)? {
+                // The compatibility record projects a newly admitted Kernel
+                // Run as Running. The scheduler checks durable completion
+                // facts before dispatch, including starts with unknown effects.
+                owner.load(&id)?.is_some_and(|resource| {
+                    resource.phase() == Some(&anchor_kernel::Phase::Executing)
+                })
+            } else {
+                record.status == RunStatus::Ready
+            };
+            if ready {
+                candidates.push(id);
+            }
+        }
         for run_id in candidates {
             if self
                 .metadata(&run_id)?
@@ -146,6 +160,9 @@ impl RunApplication {
         Box<dyn std::future::Future<Output = Result<(), ApplicationError>> + Send + 'a>,
     > {
         Box::pin(async move {
+            if self.kernel_owner(run_id)?.is_some() {
+                return self.kernel_child_finished(run_id).await;
+            }
             if status != RunStatus::Completed {
                 return Ok(());
             }

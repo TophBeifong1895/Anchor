@@ -352,12 +352,28 @@ impl RunApplication {
     ) -> Result<(), ApplicationError> {
         let runs = self.kernel_runs(true)?.expect("Kernel probe enabled");
         let (artifacts, nodes) = execution.kernel_ports(self.clone());
+        let application = self.clone();
         self.executor()?.spawn(async move {
+            let nodes = super::kernel_calls::KernelCallNodes::new(&application, &artifacts, &nodes);
             if let Err(error) = runs
                 .drive(&record.run_id, &artifacts, &nodes, control.cancellation)
                 .await
             {
                 eprintln!("Kernel probe {} suspended: {error}", record.run_id);
+            }
+            // A child can settle while its parent worker is releasing the
+            // active slot. Recheck the durable wait once after that release.
+            if let Err(error) = application.kernel_recheck_child(&record.run_id).await {
+                eprintln!(
+                    "Kernel parent {} child observation failed: {error:?}",
+                    record.run_id
+                );
+            }
+            if let Err(error) = application.kernel_child_finished(&record.run_id).await {
+                eprintln!(
+                    "Kernel child {} completion callback failed: {error:?}",
+                    record.run_id
+                );
             }
         });
         Ok(())

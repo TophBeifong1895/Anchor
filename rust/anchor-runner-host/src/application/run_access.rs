@@ -1,6 +1,7 @@
 //! Run access boundary for the constitution migration.
 //! Keep native ownership, lifecycle views and temporary compatibility bridges
 //! together until the complete master F1 interface is ready to merge.
+pub(crate) mod kernel_calls;
 pub(crate) mod kernel_runs;
 pub(super) mod legacy_run_view;
 mod run_json;

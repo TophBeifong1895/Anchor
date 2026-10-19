@@ -110,6 +110,9 @@ pub struct SettleSubmission {
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "call", rename_all = "snake_case", deny_unknown_fields)]
 pub enum CallSubmission {
+    /// Host code proved that this identity has no admitted child. This keeps
+    /// a pre-admission failure distinct from a child that settled as failed.
+    AdmissionFailed { reason: String },
     /// A wait-mode child was admitted; the Run now waits on it.
     Bound { child_run_id: String },
     /// The child settled (wait) or was accepted (detach).
@@ -835,7 +838,13 @@ fn judge_call(mut record: GraphRunRecord, dispatch: &Dispatch, s: &Submission) -
         .graph_calls
         .get(&key)
         .and_then(|call| call.child_run_id.clone());
+    if matches!(content, CallSubmission::AdmissionFailed { .. })
+        && record.graph_calls.contains_key(&key)
+    {
+        return Judgement::refused(Reason::ContentInvalid);
+    }
     let child = match &content {
+        CallSubmission::AdmissionFailed { .. } => None,
         CallSubmission::Bound { child_run_id } | CallSubmission::Completed { child_run_id, .. } => {
             Some(child_run_id.clone())
         }
@@ -859,6 +868,16 @@ fn judge_call(mut record: GraphRunRecord, dispatch: &Dispatch, s: &Submission) -
         error,
     };
     match content {
+        CallSubmission::AdmissionFailed { reason } => accept(
+            &record,
+            verification_of(s),
+            Some(Phase::Settled {
+                result: Outcome::Failed {
+                    reason: Reason::Unclassified,
+                    detail: format!("Graph call admission failed: {reason}"),
+                },
+            }),
+        ),
         CallSubmission::Bound { child_run_id } => {
             if mode != "wait" {
                 return Judgement::returned(Reason::ContentInvalid);

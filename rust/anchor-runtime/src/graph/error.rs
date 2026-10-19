@@ -5,6 +5,10 @@ use std::io;
 pub enum GraphError {
     #[error("invalid graph snapshot: {0}")]
     InvalidSnapshot(String),
+    /// A Host proved under the admission lock that neither a child resource
+    /// nor its durable admission metadata exists for this call identity.
+    #[error("Graph call was not admitted: {0}")]
+    CallAdmissionFailed(String),
     #[error("unsupported graph capability: {0}")]
     Unsupported(String),
     #[error("snapshot decode failed: {0}")]

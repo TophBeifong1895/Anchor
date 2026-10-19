@@ -328,10 +328,10 @@ impl PreparedExecution {
     }
 }
 
-struct RunnerGraphCatalog {
-    root: std::path::PathBuf,
-    state: std::path::PathBuf,
-    application: Option<RunApplication>,
+pub(crate) struct RunnerGraphCatalog {
+    pub(crate) root: std::path::PathBuf,
+    pub(crate) state: std::path::PathBuf,
+    pub(crate) application: Option<RunApplication>,
 }
 
 struct PluginReferenceLease {

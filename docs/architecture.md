@@ -36,7 +36,7 @@ Artifact、节点历史、工作区、Run / Session / Turn 事实
 | [anchor-devtools](../rust/anchor-devtools) | 确定性回归、候选构建、部署预检与切换盘点 |
 | [apps/web](../apps/web) | Graph 画布、Run 时间线、节点对话、Session 和产物投影 |
 
-GraphValidator 已支持并行分支内模块作用域：同一并行激活内共享模块首次从外部进入时计一次，后续激活重入递增，模块上限按首次终结事实结算。入口、成员 passes 与嵌套计数重置由纯校验逻辑决定；读取 frontier 不消费激活，也不增加持久化字段。该能力已通过内核用例与 5,000 个模块随机样本；Host 的 KernelScheduler 已接通多槽位并发，单个结果提交后即可补位，慢分支不形成波次屏障；Op.call 等其余 M2 能力尚未完成。
+GraphValidator 已支持并行分支内模块作用域：同一并行激活内共享模块首次从外部进入时计一次，后续激活重入递增，模块上限按首次终结事实结算。入口、成员 passes 与嵌套计数重置由纯校验逻辑决定；读取 frontier 不消费激活，也不增加持久化字段。该能力已通过内核用例与 5,000 个模块随机样本；Host 的 KernelScheduler 已接通多槽位并发，单个结果提交后即可补位，慢分支不形成波次屏障。串行 Op.call 复用共享调用准入、输入暂存与结果导出，父子 Run 都走 Kernel；宿主提交 Bound 后等待子 Run，观察结算后提交 resume 及 Completed/Failed/Uncertain。并行分支中的 Call 仍被既有 frontier 派发为 Work，尚未接通调用端口，见 [M2 组合边界](../experiments/constitution-host-preflight/m2/parallel-call-boundary.md)。
 
 Host 另提供显式 Kernel 执行路径：`POST /trigger` 的 `execution: "kernel_probe"` 经同一准入与节点授权，调用共享 Runtime 的 `KernelScheduler<S: Store>`。它读取 Kernel 相位与 GraphValidator 开放空位，经原 NodeExecutionPort / ArtifactPort 并发执行并提交；旧 Runner 与新调度器共用请求构造和 Plugin 授权逻辑。探针 Run 只存于 `<state>/kernel-runs` 的 Kernel FileStore（资源 ID `run/{run_id}`），目录由单个 Host writer 持有文件锁；旧 Run 仍只由 FileRunStore 持有，同 ID 两份存储会拒绝读取和控制。
 
@@ -44,7 +44,9 @@ Host 另提供显式 Kernel 执行路径：`POST /trigger` 的 `execution: "kern
 
 探针的 stop/resume/abandon 是 Human Request；内核接受 stop/abandon 后才取消执行，在跑结果可被 TaskWaiting / TaskSettled 拒绝并留在历史。节点失败由 Code Settle，成功 Work 由 Agent Write，成本只从宿主观察经 submit 参数盖章，StaleVersion 重试不重复收费。Uncertain / WaitingRecovery 以 Code + Observation stop 等待人核查，不自动重放。重启读取相位、开放空位和端口 completion_fact，以同 invocation 恢复；没有第二份恢复游标。原生Run的RunStatus仅在兼容边界从Phase生成返回副本，不回写；执行错误保留Kernel事实并显示可继续的孤立执行状态。Host的只读RunView包含Phase、Graph passes、worker和updated观察，动作仅由相位与worker派生，Session/身份条件由调用者叠加；本分支 M1 的旧 Run 仅在一个映射函数转为 Phase，展示/动作按新相位收敛。pause 是 Executing 且有 worker 才可用的宿主调度意图：持久保存后通过事件交给派发边界，当前节点结果与成本先提交，再以 Human stop、reason=paused 等待；不取消当前节点。重启先恢复端口已有完成事实，再消费意图；最后节点已结算时保留结算。意图消费、控制接受和清理共用宿主锁，不新增 Kernel 状态或执行标志轮询。更新时间来自独立的`<state>/kernel-run-observations/{run_id}.json`：创建及接受提交后由宿主记录，不读取Kernel文件布局或mtime，不用于控制、权限或恢复；观察故障不撤销接受事实或阻断控制，无观察时对外 updated 为 null。旧Run继续读取FileRunStore的mtime。读取侧探针的规则数量未减少，当前结论与适配成本见[R2测量](../experiments/constitution-host-preflight/r2/measurement.md)，不能视为已完成全量迁移。
 
-本探针仅支持串行 Work，不支持 fanout/join、Op.call、host/常驻助手、旧 Goose attempt recovery decision 或删除 Kernel Run/所属 Graph；入口具名拒绝。Cancelled/Suspended 收束后退出，Yielded/Interrupted/Aborted/BudgetExhausted 等尚未接线的端口结果具名 Unsupported。HTTP 准入预算暂用 `u64::MAX`，内核成本和预算裁决另有 fixture 覆盖。本地验收覆盖真实 Op.run/Bubblewrap/Artifact 与确定性 fixture，真实 Goose 和 Provider 未执行；详见[探针验收](../experiments/constitution-host-preflight/p/verification.md)与[测量](../experiments/constitution-host-preflight/p/measurement.md)。这条路径不代表默认 Host 或独立宿主已经迁移。
+Kernel Run/Graph 删除经 run_access 门面，在宿主锁内复查相位、worker 与原有 Session/引用约束，再调用 FileStore::remove；存储通过 rename 到 `.deleting-<encode(id)>`、同步父目录、递归删除、再次同步完成删除，读取幂等清理中断现场。Store trait 和 MemoryStore 不增加删除，独立资源锁文件保留。Kernel Probe 的测量点投影到 `<state>/kernel-probe/points.jsonl`，启动从保留的 Graph history 重建；投影故障只诊断，不影响裁决和控制，也不提供新的对外 API。
+
+本路径支持 Work、fanout/join、并行模块、串行 Op.call 与 Kernel Run/Graph 删除；host/常驻助手、旧 Goose attempt recovery decision 尚未接通。Cancelled/Suspended 收束后退出，Yielded/Interrupted/Aborted/BudgetExhausted 等尚未接线的端口结果具名 Unsupported。HTTP 准入预算暂用 `u64::MAX`，内核成本和预算裁决另有 fixture 覆盖。本地验收覆盖真实 Op.run/Bubblewrap/Artifact、shell 子 Run 与确定性 fixture，M2 尚未新增真实 Goose 或 Provider 验收；详见 [M2 验证](../experiments/constitution-host-preflight/m2/verification.md)。默认 Host 与独立宿主仍使用旧 Runner。
 
 Goose 拥有 Agent loop、Provider、原生会话与 compaction；Anchor 拥有 Graph/Run、宿主授权、Artifact 和平台 Session/Turn。工具记录、API 与 UI 都围绕相同身份，UI 缓存不能成为第二份运行事实。
 

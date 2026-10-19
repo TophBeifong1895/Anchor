@@ -3,7 +3,7 @@ use super::*;
 use crate::graph::validator::{DispatchKind, NodeSubmission, SettleSubmission};
 use anchor_kernel::Evidence;
 
-type StampedSubmission = (Principal, u64, Submission);
+pub(super) type StampedSubmission = (Principal, u64, Submission);
 
 impl<S: Store, A: ArtifactPort + ?Sized, N: NodeExecutionPort + ?Sized>
     KernelScheduler<'_, S, A, N>
@@ -28,9 +28,7 @@ impl<S: Store, A: ArtifactPort + ?Sized, N: NodeExecutionPort + ?Sized>
                 NodeExecutionOutcome::Completed(control_completion::join_completion(&record))
             }
             DispatchKind::Call => {
-                return Err(GraphError::Unsupported(
-                    "Op.call requires the call slice".into(),
-                ));
+                return self.execute_call(&resource, &dispatch).await.map(Some);
             }
             DispatchKind::Work => match self.nodes.completion_fact(&key).await? {
                 CompletionFact::Completed(c) => NodeExecutionOutcome::Completed(c),
@@ -138,29 +136,13 @@ impl<S: Store, A: ArtifactPort + ?Sized, N: NodeExecutionPort + ?Sized>
         }
     }
 
-    async fn cursor(
+    pub(super) async fn cursor(
         &self,
         record: &GraphRunRecord,
         dispatch: &Dispatch,
         key: InvocationKey,
     ) -> Result<RunCursor, GraphError> {
-        let mut resolved = Vec::new();
-        for commit in &dispatch.inputs {
-            resolved.push(self.artifacts.resolve(commit).await?);
-        }
-        let mut prepared_input =
-            serde_json::json!({"input":record.input,"committed_inputs":resolved});
-        if let Some(index) = dispatch.branch {
-            let activation = record.parallel.as_ref().expect("parallel dispatch");
-            prepared_input["parallel_activation"] = serde_json::json!(activation.activation_id);
-            prepared_input["branch_id"] = serde_json::json!(activation.branches[index].branch_id);
-        }
-        Ok(RunCursor {
-            node_id: dispatch.node.id.clone(),
-            key,
-            input_commits: dispatch.inputs.clone(),
-            prepared_input,
-        })
+        dispatch_cursor(self.artifacts, record, dispatch, key).await
     }
 
     fn observation_stop(
@@ -175,4 +157,30 @@ impl<S: Store, A: ArtifactPort + ?Sized, N: NodeExecutionPort + ?Sized>
                 .content(serde_json::json!({"control":"stop","reason":reason,"invocation":key,"attempts":attempts}))
                 .evidence(Evidence::Observation { id: format!("node-completion/{}", key.durable_key()) }))
     }
+}
+
+/// Resolve one validator dispatch through the same provenance/input adapter
+/// used by execution and by Host call admission validation.
+pub async fn dispatch_cursor<A: ArtifactPort + ?Sized>(
+    artifacts: &A,
+    record: &GraphRunRecord,
+    dispatch: &Dispatch,
+    key: InvocationKey,
+) -> Result<RunCursor, GraphError> {
+    let mut resolved = Vec::new();
+    for commit in &dispatch.inputs {
+        resolved.push(artifacts.resolve(commit).await?);
+    }
+    let mut prepared_input = serde_json::json!({"input":record.input,"committed_inputs":resolved});
+    if let Some(index) = dispatch.branch {
+        let activation = record.parallel.as_ref().expect("parallel dispatch");
+        prepared_input["parallel_activation"] = serde_json::json!(activation.activation_id);
+        prepared_input["branch_id"] = serde_json::json!(activation.branches[index].branch_id);
+    }
+    Ok(RunCursor {
+        node_id: dispatch.node.id.clone(),
+        key,
+        input_commits: dispatch.inputs.clone(),
+        prepared_input,
+    })
 }

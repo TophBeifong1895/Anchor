@@ -22,7 +22,19 @@ pub struct InProcessGraphHost<'a, S, A, N, C> {
     artifacts: &'a A,
     nodes: &'a N,
     plugin_catalog: Option<&'a dyn PluginCatalog>,
+    child_executor: Option<&'a dyn ChildExecutionPort>,
+    defer_wait_execution: bool,
     _control: std::marker::PhantomData<fn() -> C>,
+}
+
+/// Alternate Host execution for an already admitted wait child. Admission,
+/// input staging, immutable identity checks and result export remain shared.
+pub trait ChildExecutionPort: Send + Sync {
+    fn execute<'a>(
+        &'a self,
+        child: GraphRunRecord,
+        cancellation: Cancellation,
+    ) -> Pin<Box<dyn Future<Output = Result<GraphRunRecord, GraphError>> + Send + 'a>>;
 }
 
 struct BoundNodes<'a, N> {
@@ -119,6 +131,8 @@ impl<'a, S, A, N, C> InProcessGraphHost<'a, S, A, N, C> {
             artifacts,
             nodes,
             plugin_catalog: None,
+            child_executor: None,
+            defer_wait_execution: false,
             _control: std::marker::PhantomData,
         }
     }
@@ -146,6 +160,18 @@ impl<'a, S, A, N, C> InProcessGraphHost<'a, S, A, N, C> {
 
     pub fn with_plugin_catalog(mut self, catalog: &'a dyn PluginCatalog) -> Self {
         self.plugin_catalog = Some(catalog);
+        self
+    }
+
+    /// Defer a newly admitted child until the caller has durably bound it.
+    /// Legacy hosts omit this adapter and retain their ordinary Runner path.
+    pub fn with_child_executor(
+        mut self,
+        executor: &'a dyn ChildExecutionPort,
+        defer_wait_execution: bool,
+    ) -> Self {
+        self.child_executor = Some(executor);
+        self.defer_wait_execution = defer_wait_execution;
         self
     }
 }
@@ -350,6 +376,11 @@ impl<S: RunStore, A: ArtifactPort, N: NodeExecutionPort, C: RunControl> GraphCal
                         | RunStatus::BudgetStopped
                 );
             if resumable {
+                if self.defer_wait_execution {
+                    return Ok(GraphCallOutcome::Waiting {
+                        child_run_id: run_id,
+                    });
+                }
                 if cancellation.load(std::sync::atomic::Ordering::Acquire) {
                     return Ok(GraphCallOutcome::Waiting {
                         child_run_id: run_id,
@@ -551,9 +582,14 @@ impl<S: RunStore, A: ArtifactPort, N: NodeExecutionPort, C: RunControl>
             plugin_catalog: self.plugin_catalog,
             graph_calls: self,
         };
-        let execution = GraphRunner::new(self.store, self.artifacts, &child_nodes, &child_control)
-            .run(child)
-            .await;
+        let execution = match self.child_executor {
+            Some(executor) => executor.execute(child, child_control.cancellation()).await,
+            None => {
+                GraphRunner::new(self.store, self.artifacts, &child_nodes, &child_control)
+                    .run(child)
+                    .await
+            }
+        };
         // Registration ends on success, storage/lease errors and cooperative cancellation.
         // Preserve the Runner's error and all durable recovery/unknown-effect facts.
         self.catalog.end_child_execution(run_id).await;
@@ -658,7 +694,7 @@ impl<S: RunStore, A: ArtifactPort, N: NodeExecutionPort, C: RunControl>
     }
 }
 
-fn child_run_id(identity: &CallIdentity) -> String {
+pub fn child_run_id(identity: &CallIdentity) -> String {
     format!("call-{}", identity.durable_key())
 }
 

@@ -1,6 +1,6 @@
 # M2 删除边界与已批准的存储操作
 
-当前结论：用户已明确批准 `FileStore::remove(&self, id: &str) -> Result<(), StoreError>`；该存储切片已实现并通过测试，原 §8 边界解除，继续 Host 删除与其余 M2 能力。Store trait、MemoryStore、Kernel 生命周期与 Graph 裁决均不扩充。
+当前结论：用户已明确批准 `FileStore::remove(&self, id: &str) -> Result<(), StoreError>`；该存储切片已实现并提交 `0859373`，Host 删除接入已提交 `da708cb`，原存储 §8 边界解除。Store trait、MemoryStore、Kernel 生命周期与 Graph 裁决均不扩充。
 
 ## 授权前的现场
 
@@ -37,6 +37,6 @@ FileStore 先将资源目录 rename 到 `.deleting-<encode(id)>`，sync parent�
 
 测试新增 7 项：正常删除含历史和目录、幂等与 InvalidId、仅删除目录的恢复、正常与删除目录并存的恢复、内部目录不遮蔽合法 ID、两线程 100 轮 load/remove（交替覆盖同一实例和不同实例）。定向 7 / 0 / 0；Kernel 全量 44 / 0 / 0；Kernel clippy 通过。原始输出 `/tmp/anchor-m2/file-store-{deletion,kernel-regression,clippy}.log`；命令与 SHA256 见 checks.json。最初编译漏写租约 Errno 到 std::io::Error 的映射，已修正并保留初次失败输出，未改业务断言。
 
-内核变更仅限获批的 FileStore 存储操作、相关锁依赖和删除测试，Store trait 与 MemoryStore 原样；kernel.rs/model.rs/lib.rs 相对 6ee2b0e 仍零 diff。没有新增持久 Graph 字段。Host 删除接线与完整 M2 尚未完成，不开始 M3。
+内核变更仅限获批的 FileStore 存储操作、相关锁依赖和删除测试，Store trait 与 MemoryStore 原样；kernel.rs/model.rs/lib.rs 相对 6ee2b0e 仍零 diff。没有新增持久 Graph 字段。Host 删除接线已完成，见 [Host 删除](host-deletion.md)；完整 M2 尚未完成，不开始 M3。
 
 长 ID 的锁名使用既有 SHA256 依赖，保持固定长度；删除目录探测遇到文件系统名称长度限制时按父目录确认不存在，不影响原合法资源读取。不存在的合法 ID（含 512 字节及转义后超长）删除仍幂等。若正常目录可存在、但加 `.deleting-` 后超出文件系统 NAME_MAX，按规定的 rename 返回 Io，原目录及内容保留；不修改原 ID 编码或静默换用另一删除格式。该边界已由新增测试覆盖。
