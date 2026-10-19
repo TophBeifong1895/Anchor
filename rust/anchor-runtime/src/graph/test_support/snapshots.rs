@@ -140,12 +140,16 @@ impl FrozenOutcome {
             // Join/Call summaries are generated JSON, so compare their complete
             // structure while leaving executor-authored text byte-exact.
             for node in &r.snapshot.nodes {
-                let control = node.op.as_ref().and_then(|id| r.snapshot.ops.get(id))
+                let control = node
+                    .op
+                    .as_ref()
+                    .and_then(|id| r.snapshot.ops.get(id))
                     .is_some_and(|op| op.get("join").is_some() || op.get("call").is_some());
                 if control && let Some(results) = value["results"][&node.id].as_array_mut() {
                     for result in results {
                         if let Some(summary) = result["completion"]["submission"].as_str()
-                            && let Ok(json) = serde_json::from_str::<Value>(summary) {
+                            && let Ok(json) = serde_json::from_str::<Value>(summary)
+                        {
                             result["completion"]["submission"] = json;
                         }
                     }
