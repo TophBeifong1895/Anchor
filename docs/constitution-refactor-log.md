@@ -945,7 +945,7 @@ S21 的影响已核查：
 
 ## M1.5：master 同步与语义规则清点（2026-10-19）
 
-合并来源 `master@2b3b7a2`，使用 merge，未 rebase。M1 的独立 pause 与新相位词汇保持；master 的模型托管配置、Plugin 配置/测试、源代码启动和消息入口迁移保留。Kernel 相对 `6ee2b0e`、生产 GraphValidator 相对 M1 均无改动。规则清单与验证结果见 [M1.5 证据](../experiments/constitution-host-preflight/m15/verification.md)。
+先以 `c6454c3` 合并 `master@2b3b7a2`，再按 §10.8 仅合入 F0 `e3a5778`；使用 merge，未 rebase，未合入 F1 `06f7b8a` 及后续提交。M1 的独立 pause 与新相位词汇保持；master 的模型托管配置、Plugin 配置/测试、源代码启动和消息入口迁移保留。Kernel 相对 `6ee2b0e`、生产 GraphValidator 相对 M1 均无改动。规则清单与验证结果见 [M1.5 证据](../experiments/constitution-host-preflight/m15/verification.md)。
 
 ### 冲突解决
 
@@ -961,8 +961,13 @@ S21 的影响已核查：
 | `rust/anchor-rsi/tests/evidence.rs` | 两侧同样显式初始化 ring provider，保留单一调用；原 HTTP MCP 断言不变 |
 | `rust/anchor-runner-host/src/credential_store.rs` | 保留 master 的 crate 可见 lease，使用共享 FileLease |
 | `rust/anchor-runtime/src/graph/store.rs` | 复用 master 读/写租约 helper，保留 H1 旧格式具名拒绝与记录校验 |
+| F0 的 `docs/pilot-development-plan.md` | 保留本分支迁移行与上游门面行，按本分支实际验收状态更新，不把 master 的未合入 F1 写成当前实现 |
 
 自动合并后的编译适配：Plugin 配置的字符串边界显式读取 `AuthorizationDigest::as_ref()`，持久 JSON 保持字符串；新配置准入仍使用 `same_authorization`，移除 master 恢复引用的旧升级接口，延续 C6。Web 新入口使用同一 `runQuiescent` / `runPhaseLabel`，新增的浏览器 fixture 改为新相位并增加 abandon 动作。
+
+按 §10.8，`kernel_runs.rs` 及其目录、`run_view.rs`、`legacy_run_view.rs`、`run_json.rs`、`run_observations.rs` 原样归入 `application/run_access/`。`read_view` 从 queries 移入该边界，原生 abandon 的提交与返回事实也归入 `KernelRuns::abandon`，调用顺序、结果与权限不变。围栏测试与 F0 逐字一致，无新增运行时豁免；五个业务上限同步下降，总上限 224 → 192。完整 F1/F2 接口留待 master 完成后一次性对齐。
+
+最终本地验收：workspace 2023 通过 / 0 失败 / 122 既有忽略，Web 311 及构建、消息管理浏览器 2 项通过，fmt/clippy 与围栏通过。Goose 最终完整 117 通过 / 2 失败 / 0 忽略，失败为 §10.9 的模型端点切换与 Pilot 默认 network 挂载两项，均在 G0 已验收名单内；新增失败 0。真实模型 Provider 未验收，M2 未开始。原始输出在 `/tmp/anchor-m15/`，只提交四份摘要与机器证据。
 
 ### S 候选
 
@@ -972,7 +977,7 @@ S21 的影响已核查：
 
 ### 断言修改
 
-下列只迁移已移除的 HTTP `state.status` 词汇；原存储事实、Session/Turn 状态、产物、成本、权限拒绝和不重放检查保留。临时未配置 relay 的失败不用于放宽断言。
+Rust 共 21 处登记，另有 Web fixture 1 处。下列迁移旧 HTTP 状态、控制回执与 F0 字节期望；原存储事实、Session/Turn 状态、产物、成本、权限拒绝和不重放检查保留。临时未配置 relay 的失败不用于放宽断言。
 
 | 登记 | 位置 / 旧 → 新 |
 | --- | --- |
@@ -985,6 +990,11 @@ S21 的影响已核查：
 | M15R12–13 | `tests/support/goose_fixture.rs::wait_status`：失败拒绝与目标轮询改读 phase/waiter/outcome/reason，保留 inactive 及预算/失败拒绝；ready 是 Executing 且无 worker，paused 额外要求 reason=paused，waiting_call 要求 Waiting/Child |
 | M15R14–15 | `tests/support/runtime_fixture.rs::wait_status`：同上，仍拒绝 failed 与 budget；不加入旧 status 回退 |
 | M15R16 | `tests/goose_persistent_assistant.rs::action`：控制回执 asked → operation；HTTP 202 与 Run 身份、动作值检查保留 |
+| M15R17 | F0 `api/tests/run_access_json.rs`：十种 status 的 phase 参数改为三相位；Ready/Running=Executing，三种人的等待及 Child/Effect=Waiting，三种结算=Settled（S19/S20） |
+| M15R18 | 同上 resume 参数：WaitingCall/WaitingRecovery true→false，BudgetStopped false→true；其余保留（S23） |
+| M15R19 | 同上 stop 参数：Paused/BudgetStopped/WaitingCall/WaitingRecovery/Stopped true→false，仅 Executing 可 stop（S22） |
+| M15R20 | 同上增加 waiter/outcome/reason 逐字节期望；暂停/预算/停止各保留具体 reason，Failed/Aborted 的缺说明为空字符串（S19） |
+| M15R21 | 同上完整响应字节：移除 status 与 control_requested/terminal/quiescent/needs_attention，增加 actions.abandon 与 projection.updated；身份、时间、进度、trigger 和原始字节比较保留（S19/S22/S24/S26）。测试名 `run_status_http_json_bytes_match_the_master_contract` → `run_status_http_json_bytes_match_the_phase_contract`，没有删除覆盖 |
 | M15W01 | master 新增 `e2e/message-management.spec.ts` fixture：running → executing，移除 state.status，增加 actions.abandon；浏览器业务断言未改 |
 
 `ChannelSessions.test.tsx` 冲突解决保留 M1 既有新词汇断言，没有新增断言放宽。

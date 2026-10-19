@@ -1,6 +1,6 @@
 # M1.5 语义规则清单
 
-比较 `1d1ba54`（R 之前）与合并 `master@2b3b7a2` 后的工作树。结论是：旧/原生读取共用动作与静止定义有所收敛，但旧控制、子调用和恢复编排仍各有独立判断；M2–M3 尚未执行，不能宣称 Run 规则已全面统一。全部位点、原句与源文件摘要见 [counts.json](counts.json)。
+比较 `1d1ba54`（R 之前）与合并 `master@2b3b7a2` 并同步 F0 `e3a5778` 后的工作树（未合入 F1）。结论是：旧/原生读取共用动作与静止定义有所收敛，但旧控制、子调用和恢复编排仍各有独立判断；M2–M3 尚未执行，不能宣称 Run 规则已全面统一。全部位点、原句与源文件摘要见 [counts.json](counts.json)。
 
 ## 计数方法
 
@@ -38,8 +38,8 @@
 
 仅合并后：
 
-- `rust/anchor-runner-host/src/application/legacy_run_view.rs:36`：旧 status 到相位的唯一适配定义；Completed/Failed/Aborted 被解释为 Settled。
-- `rust/anchor-runner-host/src/application/run_view.rs:50`：原生 View 的终态谓词；消费此谓词的 abandon/actions 不再计一处终态定义。
+- `rust/anchor-runner-host/src/application/run_access/legacy_run_view.rs:36`：旧 status 到相位的唯一适配定义；Completed/Failed/Aborted 被解释为 Settled。
+- `rust/anchor-runner-host/src/application/run_access/run_view.rs:50`：原生 View 的终态谓词；消费此谓词的 abandon/actions 不再计一处终态定义。
 
 runtime（合并后，Host 数之外）：
 
@@ -65,7 +65,7 @@ Kernel（合并后，Host 数之外）：
 
 仅合并后：
 
-- `rust/anchor-runner-host/src/application/run_view.rs:37`：共享 View 的 stop 建议值；旧/原生读取共用。
+- `rust/anchor-runner-host/src/application/run_access/run_view.rs:37`：共享 View 的 stop 建议值；旧/原生读取共用。
 
 Kernel（合并后，Host 数之外）：
 
@@ -95,10 +95,10 @@ Kernel（合并后，Host 数之外）：
 
 仅合并后：
 
-- `rust/anchor-runner-host/src/application/run_view.rs:38`：共享建议：Executing/Human wait 且无 worker；child/effect 不接受人的普通 resume。
-- `rust/anchor-runner-host/src/application/kernel_runs.rs:183`：原生控制提交前禁止 worker 未退出时 resume。
-- `rust/anchor-runner-host/src/application/kernel_runs.rs:331`：原生续跑用例在准备执行端口前再检查 worker。
-- `rust/anchor-runner-host/src/application/kernel_runs.rs:351`：Executing 且无 worker 可直接重进调度；其他相位先提交 resume。
+- `rust/anchor-runner-host/src/application/run_access/run_view.rs:38`：共享建议：Executing/Human wait 且无 worker；child/effect 不接受人的普通 resume。
+- `rust/anchor-runner-host/src/application/run_access/kernel_runs.rs:196`：原生控制提交前禁止 worker 未退出时 resume。
+- `rust/anchor-runner-host/src/application/run_access/kernel_runs.rs:344`：原生续跑用例在准备执行端口前再检查 worker。
+- `rust/anchor-runner-host/src/application/run_access/kernel_runs.rs:364`：Executing 且无 worker 可直接重进调度；其他相位先提交 resume。
 
 Kernel（合并后，Host 数之外）：
 
@@ -111,12 +111,17 @@ Kernel（合并后，Host 数之外）：
 两侧相同：
 
 - `rust/anchor-runner-host/src/application/abandon.rs:159`：最终落盘只把仍未结算且 worker 已退出的旧 Run 变 Aborted。
+
+仅 baseline：
+
 - `rust/anchor-runner-host/src/application/abandon.rs:213`：放弃前置条件：Aborted 幂等，Completed/Failed 拒绝，其余可请求。
 - `rust/anchor-runner-host/src/application/abandon.rs:299`：取消后重新检查事实；已完成/失败不可反转为放弃。
 
 仅合并后：
 
-- `rust/anchor-runner-host/src/application/run_view.rs:46`：新增共享 abandon 建议；调用 is_settled，不再重复定义终态。
+- `rust/anchor-runner-host/src/application/abandon.rs:207`：放弃前置条件：Aborted 幂等，Completed/Failed 拒绝，其余可请求。
+- `rust/anchor-runner-host/src/application/abandon.rs:293`：取消后重新检查事实；已完成/失败不可反转为放弃。
+- `rust/anchor-runner-host/src/application/run_access/run_view.rs:46`：新增共享 abandon 建议；调用 is_settled，不再重复定义终态。
 
 Kernel（合并后，Host 数之外）：
 
@@ -139,12 +144,12 @@ Kernel（合并后，Host 数之外）：
 
 仅合并后：
 
-- `rust/anchor-runner-host/src/application/run_view.rs:36`：共享建议：Executing 且有 worker。
-- `rust/anchor-runner-host/src/application/kernel_runs/pause.rs:92`：原生 pause 写入同样校验 worker 和 Executing，然后保存意图。
+- `rust/anchor-runner-host/src/application/run_access/run_view.rs:36`：共享建议：Executing 且有 worker。
+- `rust/anchor-runner-host/src/application/run_access/kernel_runs/pause.rs:92`：原生 pause 写入同样校验 worker 和 Executing，然后保存意图。
 
 边缘/动作实现（合并后，Host 数之外）：
 
-- `rust/anchor-runner-host/src/application/kernel_runs/pause.rs:43`：当前结果提交后的边界把 pause 意图转为 reason=paused 的 stop；已等待/结算不改事实。
+- `rust/anchor-runner-host/src/application/run_access/kernel_runs/pause.rs:43`：当前结果提交后的边界把 pause 意图转为 reason=paused 的 stop；已等待/结算不改事实。
 
 ### 是否静止（2 → 1）
 
@@ -217,7 +222,7 @@ Kernel（合并后，Host 数之外）：
 
 仅合并后：
 
-- `rust/anchor-runner-host/src/application/legacy_run_view.rs:31`：旧 WaitingRecovery 解释为 Effect wait，不伪装成普通人等待。
+- `rust/anchor-runner-host/src/application/run_access/legacy_run_view.rs:31`：旧 WaitingRecovery 解释为 Effect wait，不伪装成普通人等待。
 
 runtime（合并后，Host 数之外）：
 
@@ -241,7 +246,7 @@ Kernel（合并后，Host 数之外）：
 
 仅合并后：
 
-- `rust/anchor-runner-host/src/application/legacy_run_view.rs:21`：新读取把旧 BudgetStopped 显示为 Human wait，reason=budget。
+- `rust/anchor-runner-host/src/application/run_access/legacy_run_view.rs:21`：新读取把旧 BudgetStopped 显示为 Human wait，reason=budget。
 
 runtime（合并后，Host 数之外）：
 
@@ -278,7 +283,7 @@ runtime（合并后，Host 数之外）：
 | `rust/anchor-runner-host/src/application/conversations.rs:386` | paused/budget 的 Turn 仍占用会话；物理 Run 静止不等于可建立后继 Turn。 |
 | `rust/anchor-runner-host/src/application/conversations.rs:653` | 旧 Turn 被替代后不能恢复执行；Session 线性化规则。 |
 | `rust/anchor-runner-host/src/application/assistants.rs:41` | current assistant 指针属于 Session；退役规则不是 Run 的 resume 定律。 |
-| `rust/anchor-runner-host/src/application/run_projection.rs:71` | 身份、scope、assistant 当前性收窄 advisory actions；写入仍在用例校验。 |
+| `rust/anchor-runner-host/src/application/run_projection.rs:73` | 身份、scope、assistant 当前性收窄 advisory actions；写入仍在用例校验。 |
 | `rust/anchor-runner-host/src/application/control.rs:62` | Session call 不通过普通 pause/resume，拥有协调生命周期。 |
 | `rust/anchor-runner-host/src/application/session_calls.rs:313` | Session call 的 continuation 门禁，不能当成普通 Run resume 的统一规则。 |
 | `rust/anchor-runner-host/src/application/session_calls.rs:369` | Session call 自己回填未知调用的核查观察；仍有独立编排写入，M3 需要核对事实所有者。 |
@@ -308,6 +313,6 @@ runtime（合并后，Host 数之外）：
 
 ## 行数辅助信号与未关闭项
 
-相对 `1d1ba54`，本次盘点工作树中 `anchor-runner-host` 为 +5711/−763，`anchor-graph-host` 为 +982/−36，`anchor-runtime` 为 +415/−26（`git diff --numstat 1d1ba54 -- <crate>`，含测试）。明显新增来自 master 合入的启动/配置/Plugin 能力和其测试，以及 R/R2/M1 的新投影、pause 与回归；旧实现尚按计划保留，因此这不是“删除旧 Runner”的完成数据。行数不作为通过门槛。
+相对 `1d1ba54`，本次盘点工作树中 `anchor-runner-host` 为 +6338/−773，`anchor-graph-host` 为 +982/−36，`anchor-runtime` 为 +415/−26（`git diff --numstat 1d1ba54 -- <crate>`，含测试）。明显新增来自 master 合入的启动/配置/Plugin 能力和其测试，以及 R/R2/M1 的新投影、pause 与回归；旧实现尚按计划保留，因此这不是“删除旧 Runner”的完成数据。行数不作为通过门槛。
 
 未关闭项是原生并行、Op.call、助手 host 操作、BudgetExhausted/其余执行结果、attempt 人工决定、内核 Run 删除能力，以及随 M3 门面切换删除旧写入路径。关注规则迁到 Web、静止仍有 Web 副本、旧/原生 resume 写入前置条件未统一，均如实保留。真实 Goose/Provider、全量测试与合并验收结果由 [verification.md](verification.md) 记录；本表不把静态阅读计为端到端通过。

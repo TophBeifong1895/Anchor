@@ -1,11 +1,13 @@
 //! One external lifecycle vocabulary for HTTP, Pilot and Web.
-use super::{ApplicationError, RunApplication, RunMetadata, control, run_view::RunView};
+use super::{
+    ApplicationError, RunApplication, RunMetadata, control, run_access::run_view::RunView,
+};
 use anchor_kernel::{Outcome, Phase, Waiter};
 use anchor_runtime::graph::{GraphRunRecord, GraphSnapshot};
 use serde::Serialize;
 use serde_json::{Value, json};
 
-pub(crate) use super::run_view::AvailableActions as RunActions;
+pub(crate) use super::run_access::run_view::AvailableActions as RunActions;
 #[derive(Debug, Serialize)]
 pub(crate) struct RunProjection {
     pub(crate) phase: &'static str,
@@ -95,7 +97,8 @@ fn observed(
     _requested: Option<&'static str>,
     session_coordinated: bool,
 ) -> RunProjection {
-    let mut projection = RunProjection::from_view(&super::legacy_run_view::view(record, active));
+    let mut projection =
+        RunProjection::from_view(&super::run_access::legacy_run_view::view(record, active));
     projection.actions.pause &= !session_coordinated;
     projection.actions.resume = projection.actions.resume && !session_coordinated;
     projection

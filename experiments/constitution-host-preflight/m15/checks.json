@@ -1,13 +1,19 @@
 {
   "schema_version": 1,
   "milestone": "M1.5",
-  "scope": "merge master@2b3b7a2; F0 synchronization remains",
+  "scope": {
+    "first_merge": "c6454c3",
+    "first_merge_master": "2b3b7a2b6e451d4dd1b499fe5c17b22665b38153",
+    "final_merge_master": "e3a5778f0e17c763c723407306a5f4ea7c1b3c8d",
+    "excluded_commit": "06f7b8a",
+    "rule_source_snapshot": "counts.json:after_snapshot + source_snapshots"
+  },
   "workspace": {
-    "raw_output": "/tmp/anchor-m15/workspace.log",
+    "raw_output": "/tmp/anchor-m15/f0-workspace.log",
     "targets": [
       {
         "target": "unittests src/lib.rs (target/debug/deps/anchor_devtools-ac9126489a93a271)",
-        "result_line": "test result: ok. 84 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.38s",
+        "result_line": "test result: ok. 84 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.50s",
         "status": "ok",
         "passed": 84,
         "failed": 0,
@@ -43,7 +49,7 @@
       },
       {
         "target": "unittests src/lib.rs (target/debug/deps/anchor_distribution-d54645247a3b3a3a)",
-        "result_line": "test result: ok. 39 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.77s",
+        "result_line": "test result: ok. 39 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.14s",
         "status": "ok",
         "passed": 39,
         "failed": 0,
@@ -88,7 +94,7 @@
       },
       {
         "target": "unittests src/lib.rs (target/debug/deps/anchor_docmost_tools-176d1d1c8dd7ad3d)",
-        "result_line": "test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.34s",
+        "result_line": "test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.57s",
         "status": "ok",
         "passed": 7,
         "failed": 0,
@@ -124,7 +130,7 @@
       },
       {
         "target": "tests/stdio.rs (target/debug/deps/stdio-7c98ab4ef2136480)",
-        "result_line": "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.14s",
+        "result_line": "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s",
         "status": "ok",
         "passed": 4,
         "failed": 0,
@@ -151,7 +157,7 @@
       },
       {
         "target": "unittests src/lib.rs (target/debug/deps/anchor_graph_host-223b823af5fc712b)",
-        "result_line": "test result: ok. 58 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.30s",
+        "result_line": "test result: ok. 58 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.32s",
         "status": "ok",
         "passed": 58,
         "failed": 0,
@@ -160,7 +166,7 @@
       },
       {
         "target": "tests/child_lifecycle.rs (target/debug/deps/child_lifecycle-51c74df130158820)",
-        "result_line": "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.18s",
+        "result_line": "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.20s",
         "status": "ok",
         "passed": 4,
         "failed": 0,
@@ -205,7 +211,7 @@
       },
       {
         "target": "tests/storage_regressions.rs (target/debug/deps/storage_regressions-02ab140727669312)",
-        "result_line": "test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.28s",
+        "result_line": "test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.27s",
         "status": "ok",
         "passed": 8,
         "failed": 0,
@@ -214,7 +220,7 @@
       },
       {
         "target": "unittests src/lib.rs (target/debug/deps/anchor_library-df96efe7ac9145c5)",
-        "result_line": "test result: ok. 21 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.18s",
+        "result_line": "test result: ok. 21 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.19s",
         "status": "ok",
         "passed": 21,
         "failed": 0,
@@ -241,7 +247,7 @@
       },
       {
         "target": "tests/development.rs (target/debug/deps/development-be60d4778efdd79e)",
-        "result_line": "test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.42s",
+        "result_line": "test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.47s",
         "status": "ok",
         "passed": 10,
         "failed": 0,
@@ -250,7 +256,7 @@
       },
       {
         "target": "tests/install.rs (target/debug/deps/install-eabed9d04af5fbc4)",
-        "result_line": "test result: ok. 21 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.34s",
+        "result_line": "test result: ok. 21 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.45s",
         "status": "ok",
         "passed": 21,
         "failed": 0,
@@ -259,7 +265,7 @@
       },
       {
         "target": "tests/reclaim.rs (target/debug/deps/reclaim-1ac5a6ab1c94ec6d)",
-        "result_line": "test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.14s",
+        "result_line": "test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.16s",
         "status": "ok",
         "passed": 11,
         "failed": 0,
@@ -268,7 +274,7 @@
       },
       {
         "target": "tests/review.rs (target/debug/deps/review-e48cd985a116c18a)",
-        "result_line": "test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.25s",
+        "result_line": "test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.29s",
         "status": "ok",
         "passed": 9,
         "failed": 0,
@@ -304,7 +310,7 @@
       },
       {
         "target": "unittests src/lib.rs (target/debug/deps/anchor_platform_session-8130049f7a2e6099)",
-        "result_line": "test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.55s",
+        "result_line": "test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.69s",
         "status": "ok",
         "passed": 12,
         "failed": 0,
@@ -313,7 +319,7 @@
       },
       {
         "target": "tests/channel_assistant.rs (target/debug/deps/channel_assistant-d0747e9e88248a3f)",
-        "result_line": "test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.47s",
+        "result_line": "test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.53s",
         "status": "ok",
         "passed": 10,
         "failed": 0,
@@ -322,7 +328,7 @@
       },
       {
         "target": "tests/channel_assistant_retirement.rs (target/debug/deps/channel_assistant_retirement-4cc9d6a5fc692ae6)",
-        "result_line": "test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.67s",
+        "result_line": "test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.77s",
         "status": "ok",
         "passed": 8,
         "failed": 0,
@@ -331,7 +337,7 @@
       },
       {
         "target": "tests/channel_group.rs (target/debug/deps/channel_group-01a0f2eb21da40a6)",
-        "result_line": "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.22s",
+        "result_line": "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.24s",
         "status": "ok",
         "passed": 3,
         "failed": 0,
@@ -340,7 +346,7 @@
       },
       {
         "target": "tests/channel_session.rs (target/debug/deps/channel_session-434ec42c03744c8f)",
-        "result_line": "test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.45s",
+        "result_line": "test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.54s",
         "status": "ok",
         "passed": 13,
         "failed": 0,
@@ -349,7 +355,7 @@
       },
       {
         "target": "tests/execution_links.rs (target/debug/deps/execution_links-2dfd1ae5d8c66af6)",
-        "result_line": "test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.48s",
+        "result_line": "test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.51s",
         "status": "ok",
         "passed": 18,
         "failed": 0,
@@ -358,7 +364,7 @@
       },
       {
         "target": "tests/goose_links.rs (target/debug/deps/goose_links-46267a836c56fbc7)",
-        "result_line": "test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.29s",
+        "result_line": "test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.31s",
         "status": "ok",
         "passed": 14,
         "failed": 0,
@@ -367,7 +373,7 @@
       },
       {
         "target": "tests/questions.rs (target/debug/deps/questions-b2e1166be05d9cd3)",
-        "result_line": "test result: ok. 22 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.22s",
+        "result_line": "test result: ok. 22 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.25s",
         "status": "ok",
         "passed": 22,
         "failed": 0,
@@ -376,7 +382,7 @@
       },
       {
         "target": "tests/schema_v3.rs (target/debug/deps/schema_v3-4848f6b49a958b89)",
-        "result_line": "test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 10.25s",
+        "result_line": "test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 10.79s",
         "status": "ok",
         "passed": 6,
         "failed": 0,
@@ -385,7 +391,7 @@
       },
       {
         "target": "tests/schema_v5.rs (target/debug/deps/schema_v5-ad356628c8fbc613)",
-        "result_line": "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.24s",
+        "result_line": "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.27s",
         "status": "ok",
         "passed": 3,
         "failed": 0,
@@ -394,7 +400,7 @@
       },
       {
         "target": "tests/session_store.rs (target/debug/deps/session_store-24973e80ab847bb5)",
-        "result_line": "test result: ok. 27 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.64s",
+        "result_line": "test result: ok. 27 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.68s",
         "status": "ok",
         "passed": 27,
         "failed": 0,
@@ -403,7 +409,7 @@
       },
       {
         "target": "tests/turn_store.rs (target/debug/deps/turn_store-e82808e9004a455f)",
-        "result_line": "test result: ok. 26 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.05s",
+        "result_line": "test result: ok. 26 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.58s",
         "status": "ok",
         "passed": 26,
         "failed": 0,
@@ -439,7 +445,7 @@
       },
       {
         "target": "tests/evidence.rs (target/debug/deps/evidence-ef282f169e6c7f6d)",
-        "result_line": "test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.14s",
+        "result_line": "test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.13s",
         "status": "ok",
         "passed": 10,
         "failed": 0,
@@ -475,16 +481,16 @@
       },
       {
         "target": "unittests src/main.rs (target/debug/deps/anchor_runner_host-41e90618e44b1a7a)",
-        "result_line": "test result: ok. 942 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 218.70s",
+        "result_line": "test result: ok. 943 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 223.24s",
         "status": "ok",
-        "passed": 942,
+        "passed": 943,
         "failed": 0,
         "ignored": 2,
         "filtered": 0
       },
       {
         "target": "tests/channel_startup.rs (target/debug/deps/channel_startup-49e40d627a488774)",
-        "result_line": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.18s",
+        "result_line": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.36s",
         "status": "ok",
         "passed": 1,
         "failed": 0,
@@ -736,7 +742,7 @@
       },
       {
         "target": "tests/local_network.rs (target/debug/deps/local_network-5b45d7355cc75485)",
-        "result_line": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.22s",
+        "result_line": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.20s",
         "status": "ok",
         "passed": 1,
         "failed": 0,
@@ -745,7 +751,7 @@
       },
       {
         "target": "tests/multinode.rs (target/debug/deps/multinode-8c4e657a7c1ca147)",
-        "result_line": "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.70s",
+        "result_line": "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.74s",
         "status": "ok",
         "passed": 3,
         "failed": 0,
@@ -772,7 +778,7 @@
       },
       {
         "target": "tests/routing.rs (target/debug/deps/routing-909a66a05e8a7d19)",
-        "result_line": "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.35s",
+        "result_line": "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.34s",
         "status": "ok",
         "passed": 5,
         "failed": 0,
@@ -780,8 +786,17 @@
         "filtered": 0
       },
       {
+        "target": "tests/run_access_fence.rs (target/debug/deps/run_access_fence-99b7b1f6ec037f55)",
+        "result_line": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.11s",
+        "status": "ok",
+        "passed": 1,
+        "failed": 0,
+        "ignored": 0,
+        "filtered": 0
+      },
+      {
         "target": "tests/standalone_graph_call.rs (target/debug/deps/standalone_graph_call-f8ee4456f5ad6fee)",
-        "result_line": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.62s",
+        "result_line": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.60s",
         "status": "ok",
         "passed": 2,
         "failed": 0,
@@ -799,7 +814,7 @@
       },
       {
         "target": "tests/standard_host.rs (target/debug/deps/standard_host-22251d20a8b6f134)",
-        "result_line": "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.53s",
+        "result_line": "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.54s",
         "status": "ok",
         "passed": 3,
         "failed": 0,
@@ -817,7 +832,7 @@
       },
       {
         "target": "unittests src/lib.rs (target/debug/deps/anchor_runtime-a0cd8ca40fb2b8d6)",
-        "result_line": "test result: ok. 130 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 113.63s",
+        "result_line": "test result: ok. 130 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 105.84s",
         "status": "ok",
         "passed": 130,
         "failed": 0,
@@ -835,7 +850,7 @@
       },
       {
         "target": "unittests src/lib.rs (target/debug/deps/anchor_sandbox_bwrap-038de1c4a1f8dca8)",
-        "result_line": "test result: ok. 19 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.59s",
+        "result_line": "test result: ok. 19 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.58s",
         "status": "ok",
         "passed": 19,
         "failed": 0,
@@ -853,7 +868,7 @@
       },
       {
         "target": "tests/network_boundary.rs (target/debug/deps/network_boundary-32101aaa5507254b)",
-        "result_line": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.25s",
+        "result_line": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.28s",
         "status": "ok",
         "passed": 2,
         "failed": 0,
@@ -898,7 +913,7 @@
       },
       {
         "target": "tests/mcp.rs (target/debug/deps/mcp-05ca9edac438c6f5)",
-        "result_line": "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s",
+        "result_line": "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
         "status": "ok",
         "passed": 3,
         "failed": 0,
@@ -925,7 +940,7 @@
       },
       {
         "target": "unittests src/lib.rs (target/debug/deps/anchor_wecom_gateway-1e26d125864e28f3)",
-        "result_line": "test result: ok. 26 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.48s",
+        "result_line": "test result: ok. 26 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.44s",
         "status": "ok",
         "passed": 26,
         "failed": 0,
@@ -943,7 +958,7 @@
       },
       {
         "target": "tests/cli.rs (target/debug/deps/cli-653f4d30c3f23955)",
-        "result_line": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.28s",
+        "result_line": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.26s",
         "status": "ok",
         "passed": 2,
         "failed": 0,
@@ -952,7 +967,7 @@
       },
       {
         "target": "tests/transport.rs (target/debug/deps/transport-b8a03cd300b11384)",
-        "result_line": "test result: ok. 50 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.12s",
+        "result_line": "test result: ok. 50 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.06s",
         "status": "ok",
         "passed": 50,
         "failed": 0,
@@ -961,7 +976,7 @@
       },
       {
         "target": "unittests src/lib.rs (target/debug/deps/anchor_wecom_tools-6ce454fb5c6066d9)",
-        "result_line": "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.07s",
+        "result_line": "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s",
         "status": "ok",
         "passed": 4,
         "failed": 0,
@@ -988,7 +1003,7 @@
       },
       {
         "target": "tests/stdio_package.rs (target/debug/deps/stdio_package-10f0eee43e6f222f)",
-        "result_line": "test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.45s",
+        "result_line": "test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.67s",
         "status": "ok",
         "passed": 6,
         "failed": 0,
@@ -1141,7 +1156,7 @@
       }
     ],
     "totals": {
-      "passed": 2021,
+      "passed": 2023,
       "failed": 0,
       "ignored": 122,
       "filtered": 0
@@ -1172,11 +1187,19 @@
     },
     "fmt": {
       "exit_code": 0,
-      "raw_output": "/tmp/anchor-m15/fmt-before-merge-commit.log"
+      "raw_output": "/tmp/anchor-m15/f0-fmt-final.log"
     },
     "clippy": {
       "exit_code": 0,
-      "raw_output": "/tmp/anchor-m15/clippy-before-merge-commit.log"
+      "raw_output": "/tmp/anchor-m15/f0-clippy-final.log"
+    },
+    "fence": {
+      "exit_code": 0,
+      "raw_output": "/tmp/anchor-m15/f0-fence-final.log"
+    },
+    "json_bytes": {
+      "exit_code": 0,
+      "raw_output": "/tmp/anchor-m15/f0-json.log"
     }
   },
   "goose": {
@@ -1184,7 +1207,7 @@
     "sha256": "17e065a79cb0508413af714724aed51d6b76972dda9feebdda701330134fb640",
     "provider": "deterministic local fixture; not a real model Provider",
     "full": {
-      "raw_output": "/tmp/anchor-m15/goose-relay.log",
+      "raw_output": "/tmp/anchor-m15/f0-goose.log",
       "targets": [
         {
           "target": "unittests src/bin/anchor-net-relay.rs (target/debug/deps/anchor_net_relay-f9dfdafbe2553ea8)",
@@ -1197,12 +1220,12 @@
         },
         {
           "target": "unittests src/main.rs (target/debug/deps/anchor_runner_host-9683335c973b02ed)",
-          "result_line": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 942 filtered out; finished in 31.06s",
+          "result_line": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 943 filtered out; finished in 31.08s",
           "status": "ok",
           "passed": 2,
           "failed": 0,
           "ignored": 0,
-          "filtered": 942
+          "filtered": 943
         },
         {
           "target": "tests/channel_startup.rs (target/debug/deps/channel_startup-099d2157b8bc88b9)",
@@ -1215,7 +1238,7 @@
         },
         {
           "target": "tests/goose_acp.rs (target/debug/deps/goose_acp-5c84a9ca968694cd)",
-          "result_line": "test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 8 filtered out; finished in 33.27s",
+          "result_line": "test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 8 filtered out; finished in 33.51s",
           "status": "ok",
           "passed": 15,
           "failed": 0,
@@ -1224,7 +1247,7 @@
         },
         {
           "target": "tests/goose_channel.rs (target/debug/deps/goose_channel-e3130d996b18dd5e)",
-          "result_line": "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 10.30s",
+          "result_line": "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 9.88s",
           "status": "ok",
           "passed": 4,
           "failed": 0,
@@ -1233,7 +1256,7 @@
         },
         {
           "target": "tests/goose_compaction.rs (target/debug/deps/goose_compaction-9809de466e80d526)",
-          "result_line": "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 10.90s",
+          "result_line": "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 10.35s",
           "status": "ok",
           "passed": 4,
           "failed": 0,
@@ -1242,7 +1265,7 @@
         },
         {
           "target": "tests/goose_completion.rs (target/debug/deps/goose_completion-ca2ef6b6014c0e6c)",
-          "result_line": "test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 24.79s",
+          "result_line": "test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 23.24s",
           "status": "ok",
           "passed": 9,
           "failed": 0,
@@ -1251,7 +1274,7 @@
         },
         {
           "target": "tests/goose_conversation.rs (target/debug/deps/goose_conversation-dd7b3b3d834a5196)",
-          "result_line": "test result: FAILED. 12 passed; 1 failed; 0 ignored; 0 measured; 6 filtered out; finished in 55.45s",
+          "result_line": "test result: FAILED. 12 passed; 1 failed; 0 ignored; 0 measured; 6 filtered out; finished in 53.61s",
           "status": "FAILED",
           "passed": 12,
           "failed": 1,
@@ -1260,7 +1283,7 @@
         },
         {
           "target": "tests/goose_development_environment.rs (target/debug/deps/goose_development_environment-c9771977c05373c1)",
-          "result_line": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 28.09s",
+          "result_line": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 19.95s",
           "status": "ok",
           "passed": 1,
           "failed": 0,
@@ -1269,7 +1292,7 @@
         },
         {
           "target": "tests/goose_distribution.rs (target/debug/deps/goose_distribution-f611efd9dd0b3648)",
-          "result_line": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 86.70s",
+          "result_line": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 85.40s",
           "status": "ok",
           "passed": 1,
           "failed": 0,
@@ -1278,7 +1301,7 @@
         },
         {
           "target": "tests/goose_elicitation.rs (target/debug/deps/goose_elicitation-8dbbe93a95596a8c)",
-          "result_line": "test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 20.96s",
+          "result_line": "test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 20.71s",
           "status": "ok",
           "passed": 10,
           "failed": 0,
@@ -1287,7 +1310,7 @@
         },
         {
           "target": "tests/goose_library.rs (target/debug/deps/goose_library-c835bf3f74c01dfa)",
-          "result_line": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 8.10s",
+          "result_line": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 8.13s",
           "status": "ok",
           "passed": 1,
           "failed": 0,
@@ -1296,7 +1319,7 @@
         },
         {
           "target": "tests/goose_media.rs (target/debug/deps/goose_media-600d35c7a6be7201)",
-          "result_line": "test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 18.89s",
+          "result_line": "test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 18.81s",
           "status": "ok",
           "passed": 6,
           "failed": 0,
@@ -1305,7 +1328,7 @@
         },
         {
           "target": "tests/goose_model_settings.rs (target/debug/deps/goose_model_settings-73ebe9c738b68f60)",
-          "result_line": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 10.96s",
+          "result_line": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 8.67s",
           "status": "ok",
           "passed": 2,
           "failed": 0,
@@ -1314,7 +1337,7 @@
         },
         {
           "target": "tests/goose_native_activation_spike.rs (target/debug/deps/goose_native_activation_spike-5ab1c4459672beab)",
-          "result_line": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 1.75s",
+          "result_line": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 1.41s",
           "status": "ok",
           "passed": 2,
           "failed": 0,
@@ -1323,16 +1346,16 @@
         },
         {
           "target": "tests/goose_persistent_assistant.rs (target/debug/deps/goose_persistent_assistant-b7f39e70a7118dd8)",
-          "result_line": "test result: FAILED. 10 passed; 2 failed; 0 ignored; 0 measured; 6 filtered out; finished in 38.73s",
-          "status": "FAILED",
-          "passed": 10,
-          "failed": 2,
+          "result_line": "test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 38.65s",
+          "status": "ok",
+          "passed": 12,
+          "failed": 0,
           "ignored": 0,
           "filtered": 6
         },
         {
           "target": "tests/goose_pilot.rs (target/debug/deps/goose_pilot-a4630c45c8053a1a)",
-          "result_line": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 8.40s",
+          "result_line": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 8.08s",
           "status": "ok",
           "passed": 2,
           "failed": 0,
@@ -1341,7 +1364,7 @@
         },
         {
           "target": "tests/goose_pilot_attachments.rs (target/debug/deps/goose_pilot_attachments-7c36d89ca963fad6)",
-          "result_line": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 11.71s",
+          "result_line": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 11.44s",
           "status": "ok",
           "passed": 2,
           "failed": 0,
@@ -1350,7 +1373,7 @@
         },
         {
           "target": "tests/goose_pilot_authoring.rs (target/debug/deps/goose_pilot_authoring-0385b6be1fdd8253)",
-          "result_line": "test result: FAILED. 3 passed; 1 failed; 0 ignored; 0 measured; 6 filtered out; finished in 11.25s",
+          "result_line": "test result: FAILED. 3 passed; 1 failed; 0 ignored; 0 measured; 6 filtered out; finished in 11.08s",
           "status": "FAILED",
           "passed": 3,
           "failed": 1,
@@ -1359,7 +1382,7 @@
         },
         {
           "target": "tests/goose_pilot_compaction.rs (target/debug/deps/goose_pilot_compaction-c8d21b57d29ccd3e)",
-          "result_line": "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 10.25s",
+          "result_line": "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 10.15s",
           "status": "ok",
           "passed": 3,
           "failed": 0,
@@ -1368,7 +1391,7 @@
         },
         {
           "target": "tests/goose_plugin_configuration.rs (target/debug/deps/goose_plugin_configuration-7610a3a328046644)",
-          "result_line": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 55.60s",
+          "result_line": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 55.78s",
           "status": "ok",
           "passed": 1,
           "failed": 0,
@@ -1377,7 +1400,7 @@
         },
         {
           "target": "tests/goose_plugin_disclosure.rs (target/debug/deps/goose_plugin_disclosure-3a192943b2753d2c)",
-          "result_line": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 4.45s",
+          "result_line": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 4.28s",
           "status": "ok",
           "passed": 1,
           "failed": 0,
@@ -1395,7 +1418,7 @@
         },
         {
           "target": "tests/goose_plugin_summary.rs (target/debug/deps/goose_plugin_summary-e09c290a414f6bf1)",
-          "result_line": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 9.30s",
+          "result_line": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 9.29s",
           "status": "ok",
           "passed": 2,
           "failed": 0,
@@ -1404,7 +1427,7 @@
         },
         {
           "target": "tests/goose_plugin_turns.rs (target/debug/deps/goose_plugin_turns-d2508360c926fcc5)",
-          "result_line": "test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 25.11s",
+          "result_line": "test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 25.49s",
           "status": "ok",
           "passed": 6,
           "failed": 0,
@@ -1413,7 +1436,7 @@
         },
         {
           "target": "tests/goose_provider_errors.rs (target/debug/deps/goose_provider_errors-d5563a6c3bb890ec)",
-          "result_line": "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 15.05s",
+          "result_line": "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 14.56s",
           "status": "ok",
           "passed": 4,
           "failed": 0,
@@ -1422,7 +1445,7 @@
         },
         {
           "target": "tests/goose_responses.rs (target/debug/deps/goose_responses-f4abfbc168e036f5)",
-          "result_line": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 9.24s",
+          "result_line": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 9.35s",
           "status": "ok",
           "passed": 2,
           "failed": 0,
@@ -1431,16 +1454,16 @@
         },
         {
           "target": "tests/goose_session_calls.rs (target/debug/deps/goose_session_calls-7e4f7300c514ca30)",
-          "result_line": "test result: FAILED. 1 passed; 3 failed; 0 ignored; 0 measured; 6 filtered out; finished in 10.96s",
-          "status": "FAILED",
-          "passed": 1,
-          "failed": 3,
+          "result_line": "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 13.93s",
+          "status": "ok",
+          "passed": 4,
+          "failed": 0,
           "ignored": 0,
           "filtered": 6
         },
         {
           "target": "tests/goose_trace.rs (target/debug/deps/goose_trace-afb462695a4d28e4)",
-          "result_line": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 8.78s",
+          "result_line": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 8.80s",
           "status": "ok",
           "passed": 2,
           "failed": 0,
@@ -1476,7 +1499,7 @@
         },
         {
           "target": "tests/native_plugins.rs (target/debug/deps/native_plugins-08c1d7c873f0770a)",
-          "result_line": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 26.47s",
+          "result_line": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 27.49s",
           "status": "ok",
           "passed": 2,
           "failed": 0,
@@ -1500,6 +1523,15 @@
           "failed": 0,
           "ignored": 0,
           "filtered": 5
+        },
+        {
+          "target": "tests/run_access_fence.rs (target/debug/deps/run_access_fence-7dd27808611064fe)",
+          "result_line": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s",
+          "status": "ok",
+          "passed": 0,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 1
         },
         {
           "target": "tests/standalone_graph_call.rs (target/debug/deps/standalone_graph_call-61ba83a49e501ffa)",
@@ -1539,10 +1571,10 @@
         }
       ],
       "totals": {
-        "passed": 112,
-        "failed": 7,
+        "passed": 117,
+        "failed": 2,
         "ignored": 0,
-        "filtered": 1134
+        "filtered": 1136
       },
       "failed_tests": [
         {
@@ -1550,65 +1582,10 @@
           "test": "next_conversation_invocation_changes_model_and_endpoint_without_losing_history"
         },
         {
-          "target": "tests/goose_persistent_assistant.rs (target/debug/deps/goose_persistent_assistant-b7f39e70a7118dd8)",
-          "test": "idle_wait_pause_resume_dispatches_no_model_until_new_input_and_stop_exits"
-        },
-        {
-          "target": "tests/goose_persistent_assistant.rs (target/debug/deps/goose_persistent_assistant-b7f39e70a7118dd8)",
-          "test": "host_restart_requires_explicit_resume_when_automatic_recovery_is_disabled"
-        },
-        {
           "target": "tests/goose_pilot_authoring.rs (target/debug/deps/goose_pilot_authoring-0385b6be1fdd8253)",
           "test": "candidate_declaration_cannot_enable_network_or_credentials_and_command_cancel_can_continue"
-        },
-        {
-          "target": "tests/goose_session_calls.rs (target/debug/deps/goose_session_calls-7e4f7300c514ca30)",
-          "test": "native_goose_session_call_yield_foreground_restart_continue_same_run_without_replay"
-        },
-        {
-          "target": "tests/goose_session_calls.rs (target/debug/deps/goose_session_calls-7e4f7300c514ca30)",
-          "test": "native_goose_session_call_wait_admission_lineage_and_ack_restart_settlement"
-        },
-        {
-          "target": "tests/goose_session_calls.rs (target/debug/deps/goose_session_calls-7e4f7300c514ca30)",
-          "test": "native_goose_session_call_wrong_session_and_previous_reject_without_model_calls"
         }
       ]
-    },
-    "retry": {
-      "raw_output": "/tmp/anchor-m15/goose-retry-final.log",
-      "targets": [
-        {
-          "target": "tests/goose_persistent_assistant.rs (target/debug/deps/goose_persistent_assistant-b7f39e70a7118dd8)",
-          "result_line": "test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 136.43s",
-          "status": "ok",
-          "passed": 12,
-          "failed": 0,
-          "ignored": 0,
-          "filtered": 6
-        },
-        {
-          "target": "tests/goose_session_calls.rs (target/debug/deps/goose_session_calls-7e4f7300c514ca30)",
-          "result_line": "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 44.75s",
-          "status": "ok",
-          "passed": 4,
-          "failed": 0,
-          "ignored": 0,
-          "filtered": 6
-        }
-      ],
-      "totals": {
-        "passed": 16,
-        "failed": 0,
-        "ignored": 0,
-        "filtered": 12
-      },
-      "failed_tests": []
-    },
-    "effective_totals": {
-      "passed": 117,
-      "failed": 2,
-      "ignored": 0
     },
     "baseline": {
       "source": "G0 completed full suite plus independent retries",
@@ -1998,9 +1975,520 @@
             "test": "candidate_declaration_cannot_enable_network_or_credentials_and_command_cancel_can_continue"
           }
         ]
-      }
+      },
+      "accepted_fix_commit": "250435d54510230b63dd64521bff9614c3a0bef1",
+      "confirmed_retries": [
+        {
+          "suite": "goose_conversation",
+          "test": "next_conversation_invocation_changes_model_and_endpoint_without_losing_history",
+          "exit_code": 101,
+          "log": "confirm-goose_conversation-1.log",
+          "attempt": 1,
+          "overlap": false,
+          "command": [
+            "cargo",
+            "+stable",
+            "test",
+            "--manifest-path",
+            "rust/Cargo.toml",
+            "-p",
+            "anchor-runner-host",
+            "--locked",
+            "--test",
+            "goose_conversation",
+            "next_conversation_invocation_changes_model_and_endpoint_without_losing_history",
+            "--",
+            "--ignored",
+            "--exact",
+            "--test-threads=1",
+            "--nocapture"
+          ]
+        },
+        {
+          "suite": "goose_distribution",
+          "test": "extracted_goose_runtime_resumes_without_sources_or_replaying_workspace_effects",
+          "exit_code": 101,
+          "log": "confirm-goose_distribution-1.log",
+          "attempt": 1,
+          "overlap": false,
+          "command": [
+            "cargo",
+            "+stable",
+            "test",
+            "--manifest-path",
+            "rust/Cargo.toml",
+            "-p",
+            "anchor-runner-host",
+            "--locked",
+            "--test",
+            "goose_distribution",
+            "extracted_goose_runtime_resumes_without_sources_or_replaying_workspace_effects",
+            "--",
+            "--ignored",
+            "--exact",
+            "--test-threads=1",
+            "--nocapture"
+          ]
+        },
+        {
+          "suite": "goose_pilot_authoring",
+          "test": "candidate_declaration_cannot_enable_network_or_credentials_and_command_cancel_can_continue",
+          "exit_code": 101,
+          "log": "confirm-goose_pilot_authoring-1.log",
+          "attempt": 1,
+          "overlap": false,
+          "command": [
+            "cargo",
+            "+stable",
+            "test",
+            "--manifest-path",
+            "rust/Cargo.toml",
+            "-p",
+            "anchor-runner-host",
+            "--locked",
+            "--test",
+            "goose_pilot_authoring",
+            "candidate_declaration_cannot_enable_network_or_credentials_and_command_cancel_can_continue",
+            "--",
+            "--ignored",
+            "--exact",
+            "--test-threads=1",
+            "--nocapture"
+          ]
+        }
+      ],
+      "raw_evidence_availability": "G0 handoff originally referenced this directory; it is unavailable at final commit verification. Full target summaries and confirmed retry metadata from the handoff are preserved here; no substitute raw log is claimed."
     },
-    "new_failures": []
+    "new_failures": [],
+    "pre_f0": {
+      "full": {
+        "raw_output": "/tmp/anchor-m15/goose-relay.log",
+        "targets": [
+          {
+            "target": "unittests src/bin/anchor-net-relay.rs (target/debug/deps/anchor_net_relay-f9dfdafbe2553ea8)",
+            "result_line": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.00s",
+            "status": "ok",
+            "passed": 0,
+            "failed": 0,
+            "ignored": 0,
+            "filtered": 3
+          },
+          {
+            "target": "unittests src/main.rs (target/debug/deps/anchor_runner_host-9683335c973b02ed)",
+            "result_line": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 942 filtered out; finished in 31.06s",
+            "status": "ok",
+            "passed": 2,
+            "failed": 0,
+            "ignored": 0,
+            "filtered": 942
+          },
+          {
+            "target": "tests/channel_startup.rs (target/debug/deps/channel_startup-099d2157b8bc88b9)",
+            "result_line": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s",
+            "status": "ok",
+            "passed": 0,
+            "failed": 0,
+            "ignored": 0,
+            "filtered": 1
+          },
+          {
+            "target": "tests/goose_acp.rs (target/debug/deps/goose_acp-5c84a9ca968694cd)",
+            "result_line": "test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 8 filtered out; finished in 33.27s",
+            "status": "ok",
+            "passed": 15,
+            "failed": 0,
+            "ignored": 0,
+            "filtered": 8
+          },
+          {
+            "target": "tests/goose_channel.rs (target/debug/deps/goose_channel-e3130d996b18dd5e)",
+            "result_line": "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 10.30s",
+            "status": "ok",
+            "passed": 4,
+            "failed": 0,
+            "ignored": 0,
+            "filtered": 6
+          },
+          {
+            "target": "tests/goose_compaction.rs (target/debug/deps/goose_compaction-9809de466e80d526)",
+            "result_line": "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 10.90s",
+            "status": "ok",
+            "passed": 4,
+            "failed": 0,
+            "ignored": 0,
+            "filtered": 6
+          },
+          {
+            "target": "tests/goose_completion.rs (target/debug/deps/goose_completion-ca2ef6b6014c0e6c)",
+            "result_line": "test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 24.79s",
+            "status": "ok",
+            "passed": 9,
+            "failed": 0,
+            "ignored": 0,
+            "filtered": 6
+          },
+          {
+            "target": "tests/goose_conversation.rs (target/debug/deps/goose_conversation-dd7b3b3d834a5196)",
+            "result_line": "test result: FAILED. 12 passed; 1 failed; 0 ignored; 0 measured; 6 filtered out; finished in 55.45s",
+            "status": "FAILED",
+            "passed": 12,
+            "failed": 1,
+            "ignored": 0,
+            "filtered": 6
+          },
+          {
+            "target": "tests/goose_development_environment.rs (target/debug/deps/goose_development_environment-c9771977c05373c1)",
+            "result_line": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 28.09s",
+            "status": "ok",
+            "passed": 1,
+            "failed": 0,
+            "ignored": 0,
+            "filtered": 6
+          },
+          {
+            "target": "tests/goose_distribution.rs (target/debug/deps/goose_distribution-f611efd9dd0b3648)",
+            "result_line": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 86.70s",
+            "status": "ok",
+            "passed": 1,
+            "failed": 0,
+            "ignored": 0,
+            "filtered": 6
+          },
+          {
+            "target": "tests/goose_elicitation.rs (target/debug/deps/goose_elicitation-8dbbe93a95596a8c)",
+            "result_line": "test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 20.96s",
+            "status": "ok",
+            "passed": 10,
+            "failed": 0,
+            "ignored": 0,
+            "filtered": 6
+          },
+          {
+            "target": "tests/goose_library.rs (target/debug/deps/goose_library-c835bf3f74c01dfa)",
+            "result_line": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 8.10s",
+            "status": "ok",
+            "passed": 1,
+            "failed": 0,
+            "ignored": 0,
+            "filtered": 6
+          },
+          {
+            "target": "tests/goose_media.rs (target/debug/deps/goose_media-600d35c7a6be7201)",
+            "result_line": "test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 18.89s",
+            "status": "ok",
+            "passed": 6,
+            "failed": 0,
+            "ignored": 0,
+            "filtered": 6
+          },
+          {
+            "target": "tests/goose_model_settings.rs (target/debug/deps/goose_model_settings-73ebe9c738b68f60)",
+            "result_line": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 10.96s",
+            "status": "ok",
+            "passed": 2,
+            "failed": 0,
+            "ignored": 0,
+            "filtered": 6
+          },
+          {
+            "target": "tests/goose_native_activation_spike.rs (target/debug/deps/goose_native_activation_spike-5ab1c4459672beab)",
+            "result_line": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 1.75s",
+            "status": "ok",
+            "passed": 2,
+            "failed": 0,
+            "ignored": 0,
+            "filtered": 6
+          },
+          {
+            "target": "tests/goose_persistent_assistant.rs (target/debug/deps/goose_persistent_assistant-b7f39e70a7118dd8)",
+            "result_line": "test result: FAILED. 10 passed; 2 failed; 0 ignored; 0 measured; 6 filtered out; finished in 38.73s",
+            "status": "FAILED",
+            "passed": 10,
+            "failed": 2,
+            "ignored": 0,
+            "filtered": 6
+          },
+          {
+            "target": "tests/goose_pilot.rs (target/debug/deps/goose_pilot-a4630c45c8053a1a)",
+            "result_line": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 8.40s",
+            "status": "ok",
+            "passed": 2,
+            "failed": 0,
+            "ignored": 0,
+            "filtered": 6
+          },
+          {
+            "target": "tests/goose_pilot_attachments.rs (target/debug/deps/goose_pilot_attachments-7c36d89ca963fad6)",
+            "result_line": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 11.71s",
+            "status": "ok",
+            "passed": 2,
+            "failed": 0,
+            "ignored": 0,
+            "filtered": 6
+          },
+          {
+            "target": "tests/goose_pilot_authoring.rs (target/debug/deps/goose_pilot_authoring-0385b6be1fdd8253)",
+            "result_line": "test result: FAILED. 3 passed; 1 failed; 0 ignored; 0 measured; 6 filtered out; finished in 11.25s",
+            "status": "FAILED",
+            "passed": 3,
+            "failed": 1,
+            "ignored": 0,
+            "filtered": 6
+          },
+          {
+            "target": "tests/goose_pilot_compaction.rs (target/debug/deps/goose_pilot_compaction-c8d21b57d29ccd3e)",
+            "result_line": "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 10.25s",
+            "status": "ok",
+            "passed": 3,
+            "failed": 0,
+            "ignored": 0,
+            "filtered": 6
+          },
+          {
+            "target": "tests/goose_plugin_configuration.rs (target/debug/deps/goose_plugin_configuration-7610a3a328046644)",
+            "result_line": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 55.60s",
+            "status": "ok",
+            "passed": 1,
+            "failed": 0,
+            "ignored": 0,
+            "filtered": 6
+          },
+          {
+            "target": "tests/goose_plugin_disclosure.rs (target/debug/deps/goose_plugin_disclosure-3a192943b2753d2c)",
+            "result_line": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 4.45s",
+            "status": "ok",
+            "passed": 1,
+            "failed": 0,
+            "ignored": 0,
+            "filtered": 6
+          },
+          {
+            "target": "tests/goose_plugin_mcp.rs (target/debug/deps/goose_plugin_mcp-2e326b307b820df5)",
+            "result_line": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 21.34s",
+            "status": "ok",
+            "passed": 2,
+            "failed": 0,
+            "ignored": 0,
+            "filtered": 6
+          },
+          {
+            "target": "tests/goose_plugin_summary.rs (target/debug/deps/goose_plugin_summary-e09c290a414f6bf1)",
+            "result_line": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 9.30s",
+            "status": "ok",
+            "passed": 2,
+            "failed": 0,
+            "ignored": 0,
+            "filtered": 6
+          },
+          {
+            "target": "tests/goose_plugin_turns.rs (target/debug/deps/goose_plugin_turns-d2508360c926fcc5)",
+            "result_line": "test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 25.11s",
+            "status": "ok",
+            "passed": 6,
+            "failed": 0,
+            "ignored": 0,
+            "filtered": 6
+          },
+          {
+            "target": "tests/goose_provider_errors.rs (target/debug/deps/goose_provider_errors-d5563a6c3bb890ec)",
+            "result_line": "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 15.05s",
+            "status": "ok",
+            "passed": 4,
+            "failed": 0,
+            "ignored": 0,
+            "filtered": 6
+          },
+          {
+            "target": "tests/goose_responses.rs (target/debug/deps/goose_responses-f4abfbc168e036f5)",
+            "result_line": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 9.24s",
+            "status": "ok",
+            "passed": 2,
+            "failed": 0,
+            "ignored": 0,
+            "filtered": 6
+          },
+          {
+            "target": "tests/goose_session_calls.rs (target/debug/deps/goose_session_calls-7e4f7300c514ca30)",
+            "result_line": "test result: FAILED. 1 passed; 3 failed; 0 ignored; 0 measured; 6 filtered out; finished in 10.96s",
+            "status": "FAILED",
+            "passed": 1,
+            "failed": 3,
+            "ignored": 0,
+            "filtered": 6
+          },
+          {
+            "target": "tests/goose_trace.rs (target/debug/deps/goose_trace-afb462695a4d28e4)",
+            "result_line": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 8.78s",
+            "status": "ok",
+            "passed": 2,
+            "failed": 0,
+            "ignored": 0,
+            "filtered": 6
+          },
+          {
+            "target": "tests/local_inputs.rs (target/debug/deps/local_inputs-856b75fad4bf35ec)",
+            "result_line": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 4 filtered out; finished in 0.00s",
+            "status": "ok",
+            "passed": 0,
+            "failed": 0,
+            "ignored": 0,
+            "filtered": 4
+          },
+          {
+            "target": "tests/local_network.rs (target/debug/deps/local_network-d466575049c550bc)",
+            "result_line": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s",
+            "status": "ok",
+            "passed": 0,
+            "failed": 0,
+            "ignored": 0,
+            "filtered": 1
+          },
+          {
+            "target": "tests/multinode.rs (target/debug/deps/multinode-88319c06881e2b75)",
+            "result_line": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.00s",
+            "status": "ok",
+            "passed": 0,
+            "failed": 0,
+            "ignored": 0,
+            "filtered": 3
+          },
+          {
+            "target": "tests/native_plugins.rs (target/debug/deps/native_plugins-08c1d7c873f0770a)",
+            "result_line": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 26.47s",
+            "status": "ok",
+            "passed": 2,
+            "failed": 0,
+            "ignored": 0,
+            "filtered": 6
+          },
+          {
+            "target": "tests/parallel.rs (target/debug/deps/parallel-d811058bd64d7f98)",
+            "result_line": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.00s",
+            "status": "ok",
+            "passed": 0,
+            "failed": 0,
+            "ignored": 0,
+            "filtered": 3
+          },
+          {
+            "target": "tests/routing.rs (target/debug/deps/routing-930af8c8e8b96359)",
+            "result_line": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 5 filtered out; finished in 0.00s",
+            "status": "ok",
+            "passed": 0,
+            "failed": 0,
+            "ignored": 0,
+            "filtered": 5
+          },
+          {
+            "target": "tests/standalone_graph_call.rs (target/debug/deps/standalone_graph_call-61ba83a49e501ffa)",
+            "result_line": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s",
+            "status": "ok",
+            "passed": 0,
+            "failed": 0,
+            "ignored": 0,
+            "filtered": 2
+          },
+          {
+            "target": "tests/standalone_library.rs (target/debug/deps/standalone_library-d7d84ada8b606cdc)",
+            "result_line": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s",
+            "status": "ok",
+            "passed": 0,
+            "failed": 0,
+            "ignored": 0,
+            "filtered": 1
+          },
+          {
+            "target": "tests/standard_host.rs (target/debug/deps/standard_host-fcbfecf2e8a50e18)",
+            "result_line": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.00s",
+            "status": "ok",
+            "passed": 0,
+            "failed": 0,
+            "ignored": 0,
+            "filtered": 3
+          },
+          {
+            "target": "tests/writer_lease.rs (target/debug/deps/writer_lease-b43c7ee83228960c)",
+            "result_line": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s",
+            "status": "ok",
+            "passed": 0,
+            "failed": 0,
+            "ignored": 0,
+            "filtered": 2
+          }
+        ],
+        "totals": {
+          "passed": 112,
+          "failed": 7,
+          "ignored": 0,
+          "filtered": 1134
+        },
+        "failed_tests": [
+          {
+            "target": "tests/goose_conversation.rs (target/debug/deps/goose_conversation-dd7b3b3d834a5196)",
+            "test": "next_conversation_invocation_changes_model_and_endpoint_without_losing_history"
+          },
+          {
+            "target": "tests/goose_persistent_assistant.rs (target/debug/deps/goose_persistent_assistant-b7f39e70a7118dd8)",
+            "test": "idle_wait_pause_resume_dispatches_no_model_until_new_input_and_stop_exits"
+          },
+          {
+            "target": "tests/goose_persistent_assistant.rs (target/debug/deps/goose_persistent_assistant-b7f39e70a7118dd8)",
+            "test": "host_restart_requires_explicit_resume_when_automatic_recovery_is_disabled"
+          },
+          {
+            "target": "tests/goose_pilot_authoring.rs (target/debug/deps/goose_pilot_authoring-0385b6be1fdd8253)",
+            "test": "candidate_declaration_cannot_enable_network_or_credentials_and_command_cancel_can_continue"
+          },
+          {
+            "target": "tests/goose_session_calls.rs (target/debug/deps/goose_session_calls-7e4f7300c514ca30)",
+            "test": "native_goose_session_call_yield_foreground_restart_continue_same_run_without_replay"
+          },
+          {
+            "target": "tests/goose_session_calls.rs (target/debug/deps/goose_session_calls-7e4f7300c514ca30)",
+            "test": "native_goose_session_call_wait_admission_lineage_and_ack_restart_settlement"
+          },
+          {
+            "target": "tests/goose_session_calls.rs (target/debug/deps/goose_session_calls-7e4f7300c514ca30)",
+            "test": "native_goose_session_call_wrong_session_and_previous_reject_without_model_calls"
+          }
+        ]
+      },
+      "retry": {
+        "raw_output": "/tmp/anchor-m15/goose-retry-final.log",
+        "targets": [
+          {
+            "target": "tests/goose_persistent_assistant.rs (target/debug/deps/goose_persistent_assistant-b7f39e70a7118dd8)",
+            "result_line": "test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 136.43s",
+            "status": "ok",
+            "passed": 12,
+            "failed": 0,
+            "ignored": 0,
+            "filtered": 6
+          },
+          {
+            "target": "tests/goose_session_calls.rs (target/debug/deps/goose_session_calls-7e4f7300c514ca30)",
+            "result_line": "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 44.75s",
+            "status": "ok",
+            "passed": 4,
+            "failed": 0,
+            "ignored": 0,
+            "filtered": 6
+          }
+        ],
+        "totals": {
+          "passed": 16,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 12
+        },
+        "failed_tests": []
+      },
+      "effective_totals": {
+        "passed": 117,
+        "failed": 2,
+        "ignored": 0
+      }
+    }
   },
   "constraints": {
     "C1_kernel_diff_empty": true,
@@ -2010,10 +2498,30 @@
     "deleted_tests": 0,
     "new_ignores": 0
   },
+  "fence": {
+    "business_before_maximum": 224,
+    "business_after_maximum": 192,
+    "business_actual": 192,
+    "runtime_actual": 93,
+    "production_files": 153,
+    "runtime_allowlist_changed": false,
+    "raw_output": "/tmp/anchor-m15/f0-fence-final.log"
+  },
+  "assertion_edits": {
+    "rust_sites": 21,
+    "web_fixture_sites": 1,
+    "note": "Expanded parameter expectations are registered in docs/constitution-refactor-log.md, M1.5. The inherited F0 HTTP test was renamed for the branch phase vocabulary; all ten cases remain."
+  },
   "source_hashes": {
     "/tmp/anchor-m15/goose-relay.log": "4eaa3e1b9ae059e4ad775ba24bf762f54d9406f67c037982bb00f39583f90aee",
     "/tmp/anchor-m15/goose-retry-final.log": "9fad19d538ab6b772027885cd153909fae9e0ea7b508b6998823de40f7063246",
+    "/tmp/anchor-m15/f0-goose.log": "c58536b9d8a74e973c7dd2cc78af7cf666fe95d55cce9c4bb3a69fe2131286c1",
     "/tmp/anchor-m15/workspace.log": "59abf217dbdf44ca07f29b81747628fa34aaffa0a4d5bfa8028a6ce940706f94",
+    "/tmp/anchor-m15/f0-workspace.log": "af44b65d4b473a8d87759e413dba7bbebb1c0ab5f742a8762899883d5e614373",
+    "/tmp/anchor-m15/f0-fence-final.log": "7ffefdbf7859d2708ac96d15206196be0df820bb0c634bc42f6e62a3449379cd",
+    "/tmp/anchor-m15/f0-json.log": "a0d36a4e1803414ae07ef4db1d93f9e5c74ea210c3e0941c7e3d474a2dc29910",
+    "/tmp/anchor-m15/f0-fmt-final.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "/tmp/anchor-m15/f0-clippy-final.log": "535bb3c25a6afc5e5bce26f717c8f1b91e4d6802fc2733c676f5e1e1d6d94be2",
     "/tmp/anchor-m15/web-test-final.log": "496dd002a78d3ae3c428f5c1fd7126673476841b7dec03353db9a6d20c1639a6",
     "/tmp/anchor-m15/web-build.log": "8ceac719c5219dfc2f7a61837425621d08f5e9022d9743e0ba32ede123e5a558",
     "/tmp/anchor-m15/web-e2e-final.log": "be502f15e19627d7f2b316906e3651d0f43a2cf7a91cc7ef777b874ec7c173d6"

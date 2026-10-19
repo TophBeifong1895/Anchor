@@ -4,7 +4,7 @@ use anchor_kernel::{Outcome, Phase, Reason, Waiter};
 use anchor_runtime::graph::{GraphRunRecord, RunStatus};
 
 /// The only old lifecycle -> Phase mapping. No legacy display/action rules.
-pub(super) fn phase(status: RunStatus, error: Option<&str>) -> Phase {
+pub(in crate::application) fn phase(status: RunStatus, error: Option<&str>) -> Phase {
     let detail = error.unwrap_or_default().to_owned();
     match status {
         RunStatus::Ready | RunStatus::Running => Phase::Executing,
@@ -47,7 +47,7 @@ pub(super) fn phase(status: RunStatus, error: Option<&str>) -> Phase {
         },
     }
 }
-pub(super) fn view(record: &GraphRunRecord, worker: bool) -> RunView {
+pub(in crate::application) fn view(record: &GraphRunRecord, worker: bool) -> RunView {
     RunView {
         phase: phase(record.status, record.error.as_deref()),
         graph: record.into(),
@@ -60,7 +60,7 @@ pub(super) fn view(record: &GraphRunRecord, worker: bool) -> RunView {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::application::{run_projection::RunProjection, run_view::GraphProgress};
+    use crate::application::{run_access::run_view::GraphProgress, run_projection::RunProjection};
     #[test]
     fn every_legacy_status_maps_lossily_with_both_worker_observations() {
         for (status, phase_name, waiter, outcome, reason) in [

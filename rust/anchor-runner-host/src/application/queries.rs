@@ -141,20 +141,3 @@ impl RunApplication {
         Ok(runs)
     }
 }
-
-impl RunApplication {
-    pub(crate) fn read_view(
-        &self,
-        record: &GraphRunRecord,
-        worker: bool,
-    ) -> Result<super::run_view::RunView, ApplicationError> {
-        if let Some(runs) = self.kernel_owner(&record.run_id)? {
-            return runs.view(
-                &runs
-                    .load(&record.run_id)?
-                    .ok_or(ApplicationError::Missing)?,
-            );
-        }
-        Ok(super::legacy_run_view::view(record, worker))
-    }
-}

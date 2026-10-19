@@ -58,6 +58,19 @@ impl Drop for ExecutionGuard<'_> {
 }
 
 impl KernelRuns {
+    pub(crate) fn abandon(
+        &self,
+        run_id: &str,
+        reason: String,
+    ) -> Result<super::super::abandon::AbandonResult, ApplicationError> {
+        self.control(run_id, "abandon", Some(&reason))?;
+        Ok(super::super::abandon::AbandonResult {
+            action: super::super::AbandonAction::Abandoned,
+            status: anchor_runtime::graph::RunStatus::Aborted,
+            reason: Some(reason),
+            requested_at: None,
+        })
+    }
     fn open(root: &Path) -> Result<Self, ApplicationError> {
         std::fs::create_dir_all(root).map_err(super::storage)?;
         let lease = OpenOptions::new()

@@ -1,0 +1,27 @@
+# Business-side maximum occurrences per src-relative file; lower after migration.
+# Runtime exemptions are fixed in tests/run_access_fence.rs, not in this baseline.
+api.rs 3
+api/assistant_recovery.rs 5
+api/files.rs 3
+api/runs.rs 2
+api/turns.rs 5
+api/wecom.rs 20
+api/wecom_progress.rs 9
+application.rs 7
+application/abandon.rs 15
+application/admission.rs 11
+application/assistants.rs 2
+application/control.rs 19
+application/conversations.rs 15
+application/deletion.rs 3
+application/dispatch.rs 13
+application/graphs.rs 3
+application/liveness.rs 2
+application/queries.rs 4
+application/recovery.rs 13
+application/run_projection.rs 2
+application/session_calls.rs 12
+assistant.rs 5
+assistant_plugins.rs 10
+conversation_resources.rs 6
+local_inputs.rs 3

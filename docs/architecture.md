@@ -69,6 +69,8 @@ Graph Call 的 `wait` 子执行在 Runner 返回成功、错误或合作取消�
 
 [RunProjection](../rust/anchor-runner-host/src/application/run_projection.rs) 在查询时组合既有持久状态、执行登记和控制前置条件，供 HTTP/Pilot 列表、详情、时间线及子调用共用；Web 只展示该操作投影，最终控制仍核验现场。运行画布从该 Run 的冻结 snapshot 投影只读拓扑，包含展开后的模块，不读取当前 Graph 或编辑草稿，也不暴露执行脚本、输入和 host 参数。投影不新增持久格式或恢复游标。
 
+Host 的 [Run 访问围栏](run-access-facade.md) 按业务文件限制内部类型引用上限，新增能力不得扩大直接耦合。本分支已按迁移任务书 §10.8 同步 F0，将原生 Run 所有权、读视图和兼容桥归拢到 `application/run_access/`，围栏运行时范围不扩大。master 的 F1/F2 尚未合入，仍有旧控制写入与规则待迁移；模块移动和围栏通过不代表规则已经收敛。
+
 ## Graph 与节点
 
 作者 JSON 定义 `agents`、`ops`、`graphs`、`nodes`、`edges` 和 `layout`。`GraphSnapshot::from_authoring` 编译为执行 IR，保留作者定义供 Web 编辑；内联模块在执行前展开。bundle loader 绑定清单内资源并校验摘要。资源安装与 Graph 保存都经过 canonical Library 校验。

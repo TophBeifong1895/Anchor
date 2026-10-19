@@ -5,13 +5,9 @@ mod assistants;
 mod control;
 mod deletion;
 mod dispatch;
-mod legacy_run_view;
 mod liveness;
-mod run_json;
-mod run_observations;
-mod run_view;
+pub(crate) mod run_access;
 pub(crate) use liveness::RunLiveness;
-pub(crate) mod kernel_runs;
 mod queries;
 mod recovery;
 pub(crate) use abandon::AbandonAction;
@@ -129,7 +125,7 @@ pub(crate) struct RunApplication {
     pub(super) oauth: Option<Arc<dyn oauth_management::OAuthManagementPort>>,
     pub(super) channels: Option<Arc<dyn channel_management::ChannelManagementPort>>,
     executor: Option<tokio::runtime::Handle>,
-    kernel_probe: Arc<std::sync::Mutex<Option<Arc<kernel_runs::KernelRuns>>>>,
+    kernel_probe: Arc<std::sync::Mutex<Option<Arc<run_access::kernel_runs::KernelRuns>>>>,
 }
 
 impl RunApplication {

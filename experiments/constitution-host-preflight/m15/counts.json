@@ -3,8 +3,8 @@
   "milestone": "M1.5",
   "baseline_revision": "1d1ba54035b2f25a45fd52c2536f5dc19cbd85e2",
   "after_snapshot": {
-    "head": "2d70ca2521b7c3cfcf53f43a0a52a27bee23bea9",
-    "merge_head": "2b3b7a2b6e451d4dd1b499fe5c17b22665b38153",
+    "head": "c6454c31d9ebb03c71133a337f557e5a0090e65b",
+    "merge_head": "e3a5778f0e17c763c723407306a5f4ea7c1b3c8d",
     "description": "merge --no-commit 工作树；仅对所列 source hash 有效，提交前复核"
   },
   "method": {
@@ -49,14 +49,14 @@
             "source_line": "RunStatus::Ready"
           },
           {
-            "path": "rust/anchor-runner-host/src/application/legacy_run_view.rs",
+            "path": "rust/anchor-runner-host/src/application/run_access/legacy_run_view.rs",
             "line": 36,
             "symbol": "legacy_run_view::phase",
             "decision": "旧 status 到相位的唯一适配定义；Completed/Failed/Aborted 被解释为 Settled。",
             "source_line": "RunStatus::Completed => Phase::Settled {"
           },
           {
-            "path": "rust/anchor-runner-host/src/application/run_view.rs",
+            "path": "rust/anchor-runner-host/src/application/run_access/run_view.rs",
             "line": 50,
             "symbol": "RunView::is_settled",
             "decision": "原生 View 的终态谓词；消费此谓词的 abandon/actions 不再计一处终态定义。",
@@ -139,7 +139,7 @@
             "source_line": "if record.status.is_terminal() {"
           },
           {
-            "path": "rust/anchor-runner-host/src/application/run_view.rs",
+            "path": "rust/anchor-runner-host/src/application/run_access/run_view.rs",
             "line": 37,
             "symbol": "RunView::actions",
             "decision": "共享 View 的 stop 建议值；旧/原生读取共用。",
@@ -305,29 +305,29 @@
             "source_line": "let resumable = session_context.is_none()"
           },
           {
-            "path": "rust/anchor-runner-host/src/application/run_view.rs",
+            "path": "rust/anchor-runner-host/src/application/run_access/run_view.rs",
             "line": 38,
             "symbol": "RunView::actions",
             "decision": "共享建议：Executing/Human wait 且无 worker；child/effect 不接受人的普通 resume。",
             "source_line": "resume: (self.phase == Phase::Executing"
           },
           {
-            "path": "rust/anchor-runner-host/src/application/kernel_runs.rs",
-            "line": 183,
+            "path": "rust/anchor-runner-host/src/application/run_access/kernel_runs.rs",
+            "line": 196,
             "symbol": "KernelRuns::control",
             "decision": "原生控制提交前禁止 worker 未退出时 resume。",
             "source_line": "if operation == \"resume\" && active.contains_key(id) {"
           },
           {
-            "path": "rust/anchor-runner-host/src/application/kernel_runs.rs",
-            "line": 331,
+            "path": "rust/anchor-runner-host/src/application/run_access/kernel_runs.rs",
+            "line": 344,
             "symbol": "RunApplication::kernel_control",
             "decision": "原生续跑用例在准备执行端口前再检查 worker。",
             "source_line": "if runs.active(id) {"
           },
           {
-            "path": "rust/anchor-runner-host/src/application/kernel_runs.rs",
-            "line": 351,
+            "path": "rust/anchor-runner-host/src/application/run_access/kernel_runs.rs",
+            "line": 364,
             "symbol": "RunApplication::kernel_control",
             "decision": "Executing 且无 worker 可直接重进调度；其他相位先提交 resume。",
             "source_line": "if resource.phase() != Some(&Phase::Executing) {"
@@ -388,20 +388,20 @@
           },
           {
             "path": "rust/anchor-runner-host/src/application/abandon.rs",
-            "line": 213,
+            "line": 207,
             "symbol": "abandon_run",
             "decision": "放弃前置条件：Aborted 幂等，Completed/Failed 拒绝，其余可请求。",
             "source_line": "match record.status {"
           },
           {
             "path": "rust/anchor-runner-host/src/application/abandon.rs",
-            "line": 299,
+            "line": 293,
             "symbol": "abandon_run",
             "decision": "取消后重新检查事实；已完成/失败不可反转为放弃。",
             "source_line": "match status {"
           },
           {
-            "path": "rust/anchor-runner-host/src/application/run_view.rs",
+            "path": "rust/anchor-runner-host/src/application/run_access/run_view.rs",
             "line": 46,
             "symbol": "RunView::actions",
             "decision": "新增共享 abandon 建议；调用 is_settled，不再重复定义终态。",
@@ -483,14 +483,14 @@
             "source_line": "if operation == \"pause\" {"
           },
           {
-            "path": "rust/anchor-runner-host/src/application/run_view.rs",
+            "path": "rust/anchor-runner-host/src/application/run_access/run_view.rs",
             "line": 36,
             "symbol": "RunView::actions",
             "decision": "共享建议：Executing 且有 worker。",
             "source_line": "pause: self.phase == Phase::Executing && self.worker,"
           },
           {
-            "path": "rust/anchor-runner-host/src/application/kernel_runs/pause.rs",
+            "path": "rust/anchor-runner-host/src/application/run_access/kernel_runs/pause.rs",
             "line": 92,
             "symbol": "KernelRuns::request_pause",
             "decision": "原生 pause 写入同样校验 worker 和 Executing，然后保存意图。",
@@ -502,7 +502,7 @@
       "kernel_after": [],
       "edge_after": [
         {
-          "path": "rust/anchor-runner-host/src/application/kernel_runs/pause.rs",
+          "path": "rust/anchor-runner-host/src/application/run_access/kernel_runs/pause.rs",
           "line": 43,
           "symbol": "PauseBoundary::before_dispatch",
           "decision": "当前结果提交后的边界把 pause 意图转为 reason=paused 的 stop；已等待/结算不改事实。",
@@ -860,7 +860,7 @@
             "source_line": "if is_abort {"
           },
           {
-            "path": "rust/anchor-runner-host/src/application/legacy_run_view.rs",
+            "path": "rust/anchor-runner-host/src/application/run_access/legacy_run_view.rs",
             "line": 31,
             "symbol": "legacy_run_view::phase",
             "decision": "旧 WaitingRecovery 解释为 Effect wait，不伪装成普通人等待。",
@@ -957,7 +957,7 @@
             "source_line": "| RunStatus::BudgetStopped"
           },
           {
-            "path": "rust/anchor-runner-host/src/application/legacy_run_view.rs",
+            "path": "rust/anchor-runner-host/src/application/run_access/legacy_run_view.rs",
             "line": 21,
             "symbol": "legacy_run_view::phase",
             "decision": "新读取把旧 BudgetStopped 显示为 Human wait，reason=budget。",
@@ -1111,7 +1111,7 @@
     {
       "id": "action_authorization",
       "path": "rust/anchor-runner-host/src/application/run_projection.rs",
-      "line": 71,
+      "line": 73,
       "symbol": "",
       "decision": "身份、scope、assistant 当前性收窄 advisory actions；写入仍在用例校验。",
       "source_line": "let identity = metadata.filter(|m| control::validate_control_identity(record, m).is_ok());"
@@ -1288,7 +1288,7 @@
     {
       "revision": "WORKTREE",
       "path": "rust/anchor-runner-host/src/application/abandon.rs",
-      "sha256": "72854f170d01a482c09c96381b529253410bd34de350bfbfa5d4c861cf474f79"
+      "sha256": "339338a3b155a05667f4d13fcbb52f5f7e78a0ce361287d390c3f2c0d56d8d18"
     },
     {
       "revision": "WORKTREE",
@@ -1317,23 +1317,8 @@
     },
     {
       "revision": "WORKTREE",
-      "path": "rust/anchor-runner-host/src/application/kernel_runs.rs",
-      "sha256": "fc05c7a0dd9ec48bdc6d9f86426acf941cb61bd0e32ee71acb77b12371930b3e"
-    },
-    {
-      "revision": "WORKTREE",
-      "path": "rust/anchor-runner-host/src/application/kernel_runs/pause.rs",
-      "sha256": "f4b72d67c8efbe45f40d232ea67c656c93a887e133408e343385a61b69130467"
-    },
-    {
-      "revision": "WORKTREE",
-      "path": "rust/anchor-runner-host/src/application/legacy_run_view.rs",
-      "sha256": "72f4b8186dc0c918e0514cfa06534512a6dd667eeb6a842c25965d616ef22f53"
-    },
-    {
-      "revision": "WORKTREE",
       "path": "rust/anchor-runner-host/src/application/liveness.rs",
-      "sha256": "2146530483a330239a08a519d5d86f01cccc2ff4fc0da858f28b3ba7a1dfc64a"
+      "sha256": "bf765effd81826891ed54b3cde939b26372dc02f09e66267e02f410424bac507"
     },
     {
       "revision": "WORKTREE",
@@ -1342,13 +1327,28 @@
     },
     {
       "revision": "WORKTREE",
-      "path": "rust/anchor-runner-host/src/application/run_projection.rs",
-      "sha256": "9d836413da5f0c63902007ac54cbc1d1d1a7be253e92067459fce37099dc7487"
+      "path": "rust/anchor-runner-host/src/application/run_access/kernel_runs.rs",
+      "sha256": "663393e3c9e36cb5f6adda48738af56d477e1b4e3f6540475c02ae59d3825354"
     },
     {
       "revision": "WORKTREE",
-      "path": "rust/anchor-runner-host/src/application/run_view.rs",
+      "path": "rust/anchor-runner-host/src/application/run_access/kernel_runs/pause.rs",
+      "sha256": "f4b72d67c8efbe45f40d232ea67c656c93a887e133408e343385a61b69130467"
+    },
+    {
+      "revision": "WORKTREE",
+      "path": "rust/anchor-runner-host/src/application/run_access/legacy_run_view.rs",
+      "sha256": "22809056a97142af1ab472dda19eb21d53320935fc4ec3f3047176ed645ce135"
+    },
+    {
+      "revision": "WORKTREE",
+      "path": "rust/anchor-runner-host/src/application/run_access/run_view.rs",
       "sha256": "e6d61f29cd1497fd339b00292071123a9f6ee1b5b2e3bfdeecdccf961f8a88ef"
+    },
+    {
+      "revision": "WORKTREE",
+      "path": "rust/anchor-runner-host/src/application/run_projection.rs",
+      "sha256": "d4b5eb726f877a2ad047eab38c4a811b3f8e8beda70b7d2d06ffb3f262d3ccb8"
     },
     {
       "revision": "WORKTREE",

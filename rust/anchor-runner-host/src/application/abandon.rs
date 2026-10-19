@@ -189,13 +189,7 @@ impl RunApplication {
         }
         let reason = parse_reason(reason)?;
         if let Some(runs) = self.kernel_owner(run_id)? {
-            runs.control(run_id, "abandon", Some(&reason))?;
-            return Ok(AbandonResult {
-                action: AbandonAction::Abandoned,
-                status: RunStatus::Aborted,
-                reason: Some(reason),
-                requested_at: None,
-            });
+            return runs.abandon(run_id, reason);
         }
         let record = self
             .store()

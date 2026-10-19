@@ -1,5 +1,5 @@
 //! Native quiescence uses phase and the Host's worker observation.
-use super::run_view::RunView;
+use super::run_access::run_view::RunView;
 use anchor_kernel::{Phase, Waiter};
 pub(crate) struct RunLiveness {
     pub(super) quiescent: bool,
@@ -21,7 +21,10 @@ impl RunLiveness {
         }
     }
     pub(crate) fn observed(status: anchor_runtime::graph::RunStatus, worker: bool) -> Self {
-        Self::from_phase(&super::legacy_run_view::phase(status, None), worker)
+        Self::from_phase(
+            &super::run_access::legacy_run_view::phase(status, None),
+            worker,
+        )
     }
     pub(super) fn with_registry(
         record: &anchor_runtime::graph::GraphRunRecord,
