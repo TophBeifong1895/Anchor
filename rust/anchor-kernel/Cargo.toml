@@ -6,6 +6,8 @@ license.workspace = true
 description = "Anchor's constitutional kernel: adjudicate, record, settle, measure. Knows no Graph, model or protocol."
 
 [dependencies]
+anchor-file-lease = { path = "../anchor-file-lease" }
+sha2.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true

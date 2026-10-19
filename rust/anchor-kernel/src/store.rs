@@ -8,6 +8,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use crate::model::{Record, Resource};
+use anchor_file_lease::{FileLease, FlockOperation};
+use sha2::{Digest, Sha256};
 
 #[derive(Debug, thiserror::Error)]
 pub enum StoreError {
@@ -129,8 +131,78 @@ impl FileStore {
         Ok(Self { root })
     }
 
+    /// Physically remove a resource and all of its history. The caller owns
+    /// authorization and must exclude new writers for the resource's lifetime.
+    /// The directory rename is the deletion's visibility boundary; a later
+    /// read completes cleanup after a crash. Lock files are retained separately.
+    pub fn remove(&self, id: &str) -> Result<(), StoreError> {
+        let _lease = self.lease(id)?;
+        self.finish_removal(id)?;
+        let live = self.dir(id)?;
+        match fs::rename(&live, self.deleting_dir(id)?) {
+            Ok(()) => {
+                File::open(&self.root)?.sync_all()?;
+                self.finish_removal(id)
+            }
+            Err(error) => self.absent_directory(&live, error),
+        }
+    }
+
     fn dir(&self, id: &str) -> Result<PathBuf, StoreError> {
         Ok(self.root.join(encode(id)?))
+    }
+
+    fn deleting_dir(&self, id: &str) -> Result<PathBuf, StoreError> {
+        Ok(self.root.join(format!(".deleting-{}", encode(id)?)))
+    }
+
+    /// A new descriptor per operation serializes threads and separate store
+    /// instances alike. Never acquire it recursively (load uses history_at).
+    fn lease(&self, id: &str) -> Result<FileLease, StoreError> {
+        encode(id)?;
+        let locks = self.root.join(".locks");
+        fs::create_dir_all(&locks)?;
+        let file = OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .read(true)
+            .write(true)
+            // A valid id can encode to more than a filesystem component can
+            // hold. Keep the lock name bounded without changing resource ids.
+            .open(locks.join(format!("{:x}", Sha256::digest(id.as_bytes()))))?;
+        Ok(
+            FileLease::acquire(file, FlockOperation::LockExclusive)
+                .map_err(std::io::Error::from)?,
+        )
+    }
+
+    /// Also called with a live directory present: a stale tombstone belongs to
+    /// an older deletion and must never remove a newly created resource.
+    fn finish_removal(&self, id: &str) -> Result<(), StoreError> {
+        let deleting = self.deleting_dir(id)?;
+        match fs::remove_dir_all(&deleting) {
+            Ok(()) => File::open(&self.root)?.sync_all().map_err(StoreError::from),
+            Err(error) => self.absent_directory(&deleting, error),
+        }
+    }
+
+    /// An overlong encoded filename cannot exist on this filesystem. Confirm
+    /// absence by enumerating the parent instead of making normal reads fail
+    /// merely because the deletion prefix makes their probe too long.
+    fn absent_directory(&self, path: &Path, error: std::io::Error) -> Result<(), StoreError> {
+        if error.kind() == std::io::ErrorKind::NotFound {
+            return Ok(());
+        }
+        if error.kind() == std::io::ErrorKind::InvalidFilename {
+            let name = path.file_name().expect("resource directory name");
+            for entry in fs::read_dir(&self.root)? {
+                if entry?.file_name() == name {
+                    return Err(error.into());
+                }
+            }
+            return Ok(());
+        }
+        Err(error.into())
     }
 }
 
@@ -198,13 +270,15 @@ fn trim_incomplete_tail(file: &mut File) -> Result<(), std::io::Error> {
 
 impl Store for FileStore {
     fn load(&self, id: &str) -> Result<Option<Resource>, StoreError> {
+        let _lease = self.lease(id)?;
+        self.finish_removal(id)?;
         let dir = self.dir(id)?;
         let path = dir.join("resource.json");
         if !path.exists() {
             return Ok(None);
         }
         let mut resource = read_resource(&path)?;
-        let history = self.history(id)?;
+        let history = history_at(&dir.join("history.jsonl"))?;
         // Crash window: the record was appended but the state not yet saved.
         // The record carries the resulting resource, so recovery is a read.
         if let Some(after) = history.iter().rev().find_map(|r| r.after.as_ref())
@@ -217,6 +291,8 @@ impl Store for FileStore {
     }
 
     fn create(&self, resource: &Resource) -> Result<(), StoreError> {
+        let _lease = self.lease(&resource.id)?;
+        self.finish_removal(&resource.id)?;
         let dir = self.dir(&resource.id)?;
         match fs::create_dir(&dir) {
             Ok(()) => {}
@@ -230,6 +306,8 @@ impl Store for FileStore {
     }
 
     fn commit(&self, id: &str, record: &Record) -> Result<(), StoreError> {
+        let _lease = self.lease(id)?;
+        self.finish_removal(id)?;
         let dir = self.dir(id)?;
         if !dir.join("resource.json").exists() {
             return Err(StoreError::Missing(id.into()));
@@ -254,37 +332,20 @@ impl Store for FileStore {
     }
 
     fn history(&self, id: &str) -> Result<Vec<Record>, StoreError> {
-        let path = self.dir(id)?.join("history.jsonl");
-        if !path.exists() {
-            return Ok(Vec::new());
-        }
-        let mut records = Vec::new();
-        let mut reader = BufReader::new(File::open(&path)?);
-        let mut line = Vec::new();
-        while reader.read_until(b'\n', &mut line)? > 0 {
-            // Even valid JSON without its final newline was never a complete
-            // record. Only this unterminated tail may be ignored.
-            if line.last() != Some(&b'\n') {
-                break;
-            }
-            let record = serde_json::from_slice(&line).map_err(|error| {
-                StoreError::Corrupt(format!(
-                    "{}: line {}: {error}",
-                    path.display(),
-                    records.len() + 1
-                ))
-            })?;
-            records.push(record);
-            line.clear();
-        }
-        Ok(records)
+        let _lease = self.lease(id)?;
+        self.finish_removal(id)?;
+        history_at(&self.dir(id)?.join("history.jsonl"))
     }
 
     fn list(&self, prefix: &str) -> Result<Vec<String>, StoreError> {
         let mut ids = Vec::new();
         for entry in fs::read_dir(&self.root)? {
             let name = entry?.file_name();
-            if let Some(id) = name.to_str().and_then(decode)
+            // Internal directories (.locks and .deleting-*) can never be a
+            // canonical encoded resource name, even for ids with those words.
+            if let Some(name) = name.to_str()
+                && let Some(id) = decode(name)
+                && encode(&id).ok().as_deref() == Some(name)
                 && id.starts_with(prefix)
             {
                 ids.push(id);
@@ -293,6 +354,33 @@ impl Store for FileStore {
         ids.sort();
         Ok(ids)
     }
+}
+
+/// Read a history while the caller already holds the resource lease.
+fn history_at(path: &Path) -> Result<Vec<Record>, StoreError> {
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+    let mut records = Vec::new();
+    let mut reader = BufReader::new(File::open(path)?);
+    let mut line = Vec::new();
+    while reader.read_until(b'\n', &mut line)? > 0 {
+        // Even valid JSON without its final newline was never a complete
+        // record. Only this unterminated tail may be ignored.
+        if line.last() != Some(&b'\n') {
+            break;
+        }
+        let record = serde_json::from_slice(&line).map_err(|error| {
+            StoreError::Corrupt(format!(
+                "{}: line {}: {error}",
+                path.display(),
+                records.len() + 1
+            ))
+        })?;
+        records.push(record);
+        line.clear();
+    }
+    Ok(records)
 }
 
 fn decode(name: &str) -> Option<String> {

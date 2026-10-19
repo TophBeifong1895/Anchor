@@ -1063,3 +1063,10 @@ KernelScheduler 以开放槽位唯一标识管理并发执行，已完成的单�
 | 新增测试 | Runtime 9（含 3 组实际调度器随机对照），Host 1 |
 
 本次只完成并行垂直切片并记录存储边界，不替代完整 M2 验收。实际命令与结果见 [M2 验证](../experiments/constitution-host-preflight/m2/verification.md)；未新增 workspace/Web/Goose/真实模型 Provider 验收。
+
+
+### 已批准的 FileStore 删除操作
+
+用户已批准具体 FileStore 的 remove(id)，原存储边界解除。删除通过 rename 到 `.deleting-<encode(id)>` 后 sync parent、remove_dir_all 后再次 sync parent 完成；读取幂等清理遗留目录，正常与删除目录并存时保留正常资源。单资源读写/删除复用 anchor-file-lease，锁文件位于独立 `.locks` 目录并留存，list 不暴露内部目录。Store trait、MemoryStore、Kernel 生命周期、Reason/Phase/Waiter 均不改。
+
+新增存储测试 7 项通过，包含两线程 100 轮并发 load/remove（同实例和独立实例）；Kernel 全量 44 通过、clippy 通过，无旧断言修改/删除。当前例外只涉及 FileStore 存储、锁依赖和测试，kernel.rs/model.rs/lib.rs 相对 6ee2b0e 零 diff。实际命令与证据见 [M2 存储操作](../experiments/constitution-host-preflight/m2/deletion-boundary.md)。Host 删除与其余 M2 切片继续，不将存储测试当作真实 Provider 或完整 M2 验收。

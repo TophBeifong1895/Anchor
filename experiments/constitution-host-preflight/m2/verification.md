@@ -1,6 +1,10 @@
 # M2 验证与当前边界
 
-M2 进行中。已批准的并行模块校验器与 Host 多槽位调度均已实现并通过本地确定性验证。下一项删除能力需要 FileStore 公开删除操作，已按任务书 §8 停下交回；见 [具体边界与最小授权建议](deletion-boundary.md)。Op.call、助手、结果补齐、恢复决定、删除与 Probe 尚未完成，不开始 M3。这不是完整 M2 交回。
+M2 进行中。已批准的并行模块校验器与 Host 多槽位调度均已实现并通过本地确定性验证。FileStore 删除操作现已按用户批准实现并通过存储测试，原 §8 边界解除，继续 Host 删除与其余能力；见 [具体边界与最小授权建议](deletion-boundary.md)。Op.call、助手、结果补齐、恢复决定、删除与 Probe 尚未完成，不开始 M3。这不是完整 M2 交回。
+
+## FileStore 删除存储切片
+
+Store trait 和 MemoryStore 未改；FileStore 提供获批 remove，rename/sync/remove/sync，load 幂等清理遗留目录，资源锁文件单独留存。定向 7 项、Kernel 全量 44 项及 clippy 通过，详见 [存储操作与证据](deletion-boundary.md)。当前 Kernel diff 仅限获批存储切片与测试，不再声称整个 crate 零 diff；生命周期代码仍零 diff。Host Run/Graph 删除接线尚在进行。
 
 ## Host 多槽位调度
 

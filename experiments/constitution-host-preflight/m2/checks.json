@@ -121,7 +121,7 @@
       "/tmp/anchor-m2/old-module-test.log": "9e3f9cf458e485f070db36b9595fa60c76aed5afcc43cfb5300f402edb2b6556"
     }
   },
-  "status": "stopped_at_required_storage_boundary_after_parallel_slice",
+  "status": "m2_in_progress_storage_exception_authorized",
   "authorization": "User approved the four-point parallel-module extension on 2026-10-19; Kernel remains unchanged.",
   "parallel_module_slice": {
     "status": "implemented_and_locally_verified",
@@ -556,9 +556,100 @@
     "stop_rule": "docs/constitution-migration-task.md section 8: anchor-kernel changes require handback",
     "observed": "Store and FileStore expose no resource deletion operation; FileStore resource directory encoding is private",
     "proposal": "Add FileStore::remove(id) only, without changing Store trait or Kernel lifecycle; host phase/worker guards remain under run_access",
-    "kernel_changed": false,
+    "kernel_changed": true,
     "evidence": "deletion-boundary.md",
     "m2_complete": false,
-    "m3_started": false
+    "m3_started": false,
+    "resolved_by": "explicit user approval of FileStore::remove and recovery requirements"
+  },
+  "file_store_deletion_slice": {
+    "authorized_exception": "FileStore::remove, rename/sync/remove/sync, load recovery, independent retained locks",
+    "store_trait_changed": false,
+    "memory_store_changed": false,
+    "kernel_lifecycle_changed": false,
+    "new_tests": 7,
+    "kernel_total_tests": 44,
+    "concurrency_rounds": 100,
+    "checks": [
+      {
+        "command": "cargo test --manifest-path rust/Cargo.toml -p anchor-kernel --test file_store_deletion -- --nocapture",
+        "working_directory": ".",
+        "passed": true,
+        "raw_output": "/tmp/anchor-m2/file-store-deletion.log",
+        "sha256": "cb8a88cc976bdf9dc69a53d3740816b6b97c5d221ceeb99ba58757b8a0015517",
+        "result": {
+          "targets": [
+            {
+              "passed": 7,
+              "failed": 0,
+              "ignored": 0
+            }
+          ]
+        }
+      },
+      {
+        "command": "cargo test --manifest-path rust/Cargo.toml -p anchor-kernel",
+        "working_directory": ".",
+        "passed": true,
+        "raw_output": "/tmp/anchor-m2/file-store-kernel-regression.log",
+        "sha256": "10d10b424f4abcefb1367d07ee7cc02aaf42e2208e4626ac730ce3e6d5abb239",
+        "result": {
+          "targets": [
+            {
+              "passed": 0,
+              "failed": 0,
+              "ignored": 0
+            },
+            {
+              "passed": 12,
+              "failed": 0,
+              "ignored": 0
+            },
+            {
+              "passed": 17,
+              "failed": 0,
+              "ignored": 0
+            },
+            {
+              "passed": 7,
+              "failed": 0,
+              "ignored": 0
+            },
+            {
+              "passed": 8,
+              "failed": 0,
+              "ignored": 0
+            },
+            {
+              "passed": 0,
+              "failed": 0,
+              "ignored": 0
+            }
+          ]
+        }
+      },
+      {
+        "command": "cargo clippy --manifest-path rust/Cargo.toml -p anchor-kernel --all-targets -- -D warnings",
+        "working_directory": ".",
+        "passed": true,
+        "raw_output": "/tmp/anchor-m2/file-store-clippy.log",
+        "sha256": "edfa38f9aae610e31bad74712684426f7e1344b56bb68dd3515ca5f5bb843675"
+      }
+    ],
+    "initial_compile_failure": {
+      "reason": "lease Errno needed conversion through std::io::Error",
+      "corrected": true,
+      "raw_output": "/tmp/anchor-m2/file-store-deletion-initial-compile.log"
+    },
+    "long_ids": {
+      "lock_name": "sha256(id)",
+      "missing_id_remove": "idempotent, including maximum-length and percent-expanded ids",
+      "existing_id_exceeding_tombstone_NAME_MAX": "Io with live resource preserved; prescribed encoding unchanged",
+      "tests": 1
+    },
+    "fmt": {
+      "command": "cargo fmt --manifest-path rust/Cargo.toml -p anchor-kernel -- --check",
+      "exit_code": 0
+    }
   }
 }
