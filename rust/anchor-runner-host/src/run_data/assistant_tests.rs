@@ -1,9 +1,6 @@
 use super::{tests::record, tests::write, *};
 use crate::assistant::TurnBinding;
-use anchor_runtime::graph::{
-    CommitRef, NodeCompletion, ParallelActivation, ParallelBranchRecord, ParallelBranchStatus,
-    RunCursor, RunResult,
-};
+use anchor_runtime::graph::{CommitRef, NodeCompletion, RunResult};
 use serde_json::json;
 
 fn key(record: &GraphRunRecord, invocation: u64) -> InvocationKey {
@@ -17,15 +14,6 @@ fn key(record: &GraphRunRecord, invocation: u64) -> InvocationKey {
 
 fn turn(number: u64) -> String {
     format!("{number:08x}-0000-4000-8000-{number:012x}")
-}
-
-fn cursor(key: InvocationKey) -> RunCursor {
-    RunCursor {
-        node_id: key.node_id.clone(),
-        key,
-        input_commits: vec![],
-        prepared_input: json!({}),
-    }
 }
 
 fn result(key: InvocationKey) -> RunResult {
@@ -105,32 +93,16 @@ fn assert_saved(files: &[(PathBuf, Vec<u8>)]) {
 }
 
 #[test]
-fn cleanup_enumerates_cursor_results_and_uncommitted_bindings_without_crossing_runs() {
+fn cleanup_enumerates_frontier_results_and_uncommitted_bindings_without_crossing_runs() {
     let root = tempfile::tempdir().unwrap();
     let data = root.path().join("data");
     let work = root.path().join("work");
     let mut target = record("target");
     let other = record("other");
-    target.cursor = Some(cursor(key(&target, 3)));
+    let frontier = vec![key(&target, 3), key(&target, 7)];
     target
         .results
         .insert("agent".into(), vec![result(key(&target, 5))]);
-    target.parallel = Some(ParallelActivation {
-        activation_id: "fixture".into(),
-        fanout_node: "agent".into(),
-        join_node: "agent".into(),
-        fanout_invocation: 1,
-        branches: vec![ParallelBranchRecord {
-            branch_id: "branch".into(),
-            entry: "agent".into(),
-            nodes: vec!["agent".into()],
-            next_index: 0,
-            status: ParallelBranchStatus::Running,
-            cursor: Some(cursor(key(&target, 7))),
-            completed: vec![],
-            error: None,
-        }],
-    });
     let artifacts = crate::HostArtifacts::new(data.join("artifacts"), work.clone());
     artifacts
         .bind_node_workspace(&target.run_id, &target.graph_digest, "agent")
@@ -154,8 +126,8 @@ fn cleanup_enumerates_cursor_results_and_uncommitted_bindings_without_crossing_r
     let foreign_artifact = data.join("artifacts/foreign/files/output.txt");
     write(&foreign_artifact, b"foreign");
 
-    delete_run_data(&target, &data, &work).unwrap();
-    delete_run_data(&target, &data, &work).unwrap();
+    delete_run_data(&target, &frontier, &data, &work).unwrap();
+    delete_run_data(&target, &frontier, &data, &work).unwrap();
 
     assert!(owned.iter().all(|path| !path.exists()));
     assert!(!work.join(&target.run_id).exists());
@@ -196,8 +168,8 @@ fn pending_inbounds_and_model_values_do_not_authorize_other_turn_cleanup() {
         .insert("agent".into(), vec![result(target_key)]);
     let other_saved = saved_files(&other_paths);
 
-    delete_run_data(&target, &data, &work).unwrap();
-    delete_run_data(&target, &data, &work).unwrap();
+    delete_run_data(&target, &[], &data, &work).unwrap();
+    delete_run_data(&target, &[], &data, &work).unwrap();
 
     assert!(target_paths.iter().all(|path| !path.exists()));
     assert_saved(&other_saved);
@@ -240,7 +212,10 @@ fn partial_delete_keeps_binding_authority_until_cleanup_can_be_replayed() {
             std::fs::create_dir(&blocker).unwrap();
         }
 
-        assert!(delete_run_data(&target, &data, &work).is_err(), "{blocked}");
+        assert!(
+            delete_run_data(&target, &[], &data, &work).is_err(),
+            "{blocked}"
+        );
         assert!(binding_path(&data, &bound_key).exists(), "{blocked}");
         assert!(
             !data
@@ -255,8 +230,8 @@ fn partial_delete_keeps_binding_authority_until_cleanup_can_be_replayed() {
         } else {
             std::fs::remove_dir(blocker).unwrap();
         }
-        delete_run_data(&target, &data, &work).unwrap();
-        delete_run_data(&target, &data, &work).unwrap();
+        delete_run_data(&target, &[], &data, &work).unwrap();
+        delete_run_data(&target, &[], &data, &work).unwrap();
         assert!(paths.iter().all(|path| !path.exists()), "{blocked}");
         assert_saved(&other_saved);
     }
@@ -287,7 +262,10 @@ fn invalid_known_bindings_fail_before_any_owned_or_foreign_files_are_deleted() {
         let target_saved = saved_files(&target_paths);
         let other_saved = saved_files(&other_paths);
 
-        assert!(delete_run_data(&target, &data, &work).is_err(), "{invalid}");
+        assert!(
+            delete_run_data(&target, &[], &data, &work).is_err(),
+            "{invalid}"
+        );
         assert_saved(&target_saved);
         assert_saved(&other_saved);
     }
@@ -301,7 +279,7 @@ fn discovery_ignores_unowned_or_misnamed_facts_and_filters_foreign_record_keys()
     let mut target = record("target");
     let target_paths = install(&data, &work, &key(&target, 1), &turn(1));
     let foreign_key = key(&record("other"), 1);
-    target.cursor = Some(cursor(foreign_key.clone()));
+    let frontier = vec![foreign_key.clone()];
     target
         .results
         .insert("agent".into(), vec![result(foreign_key.clone())]);
@@ -340,8 +318,8 @@ fn discovery_ignores_unowned_or_misnamed_facts_and_filters_foreign_record_keys()
     let saved = saved_files(&preserved);
 
     assert_eq!(invocation_keys(&target), vec![key(&target, 1)]);
-    delete_run_data(&target, &data, &work).unwrap();
-    delete_run_data(&target, &data, &work).unwrap();
+    delete_run_data(&target, &frontier, &data, &work).unwrap();
+    delete_run_data(&target, &frontier, &data, &work).unwrap();
 
     assert!(target_paths.iter().all(|path| !path.exists()));
     assert_saved(&saved);
@@ -372,10 +350,34 @@ fn assistant_cleanup_does_not_follow_symlinked_fact_or_reply_directories() {
         std::os::unix::fs::symlink(&outside, &source).unwrap();
 
         assert!(
-            delete_run_data(&target, &data, &work).is_err(),
+            delete_run_data(&target, &[], &data, &work).is_err(),
             "{directory}"
         );
         assert_saved(&saved);
         assert!(binding_path(&data, &target_key).exists());
     }
+}
+
+#[test]
+fn cleanup_removes_uncommitted_frontier_facts_without_accepting_foreign_keys() {
+    let root = tempfile::tempdir().unwrap();
+    let data = root.path().join("data");
+    let work = root.path().join("work");
+    let mut target = record("target");
+    target.invocations.clear();
+    let pending = key(&target, 1);
+    let foreign = key(&record("other"), 1);
+    let owned = data
+        .join("goose-acp")
+        .join(format!("{}.json", key_hash(&pending)));
+    let unowned = data
+        .join("goose-acp")
+        .join(format!("{}.json", key_hash(&foreign)));
+    write(&owned, b"pending native session");
+    write(&unowned, b"other native session");
+    let frontier = [pending, foreign];
+    delete_run_data(&target, &frontier, &data, &work).unwrap();
+    delete_run_data(&target, &frontier, &data, &work).unwrap();
+    assert!(!owned.exists());
+    assert_eq!(std::fs::read(unowned).unwrap(), b"other native session");
 }

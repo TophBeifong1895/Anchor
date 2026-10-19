@@ -1,4 +1,5 @@
 //! Real subprocess + Bubblewrap acceptance, with no model/provider dependency.
+use anchor_kernel::{FileStore, Resource, Store};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::{
@@ -64,10 +65,17 @@ fn finish(child: Child) -> Value {
     let len = u32::from_be_bytes(output.stdout[..4].try_into().unwrap()) as usize;
     serde_json::from_slice(&output.stdout[4..4 + len]).unwrap()
 }
-fn record(root: &Path, run: &str) -> Value {
-    serde_json::from_slice(&fs::read(root.join("state/runs").join(format!("{run}.json"))).unwrap())
-        .unwrap()
+fn resource(root: &Path, run: &str) -> Option<Resource> {
+    FileStore::new(root.join("state/kernel-runs"))
+        .ok()?
+        .load(&anchor_runtime::graph::validator::run_resource_id(run))
+        .ok()
+        .flatten()
 }
+fn record(root: &Path, run: &str) -> Value {
+    resource(root, run).expect("durable Kernel Run").state
+}
+
 fn workspace(root: &Path, key: &Value) -> std::path::PathBuf {
     let identity = format!(
         "{}:{}:{}:{}",
@@ -103,7 +111,7 @@ fn serial_bundle_transfers_exact_readonly_snapshots_and_reloads_without_reexecut
         ("verify", "sh -c 'cat /in/transform/report.txt > final.txt'"),
     ]);
     let response = finish(spawn(root.path(), &graph, "serial"));
-    assert_eq!(response["status"], "completed", "{response}");
+    assert_eq!(response["projection"]["outcome"], "done", "{response}");
     let saved = record(root.path(), "serial");
     assert_eq!(saved["results"].as_object().unwrap().len(), 3);
     assert_eq!(
@@ -120,7 +128,7 @@ fn serial_bundle_transfers_exact_readonly_snapshots_and_reloads_without_reexecut
     assert!(!verify_work.join("source.txt").exists());
     fs::write(producer_work.join("source.txt"), "changed after commit").unwrap();
     let response = finish(spawn(root.path(), &graph, "serial"));
-    assert_eq!(response["status"], "completed", "{response}");
+    assert_eq!(response["projection"]["outcome"], "done", "{response}");
     // Re-entering a completed Run is a read: the stored record must stay
     // byte-identical, including its write stamp.
     assert_eq!(saved, record(root.path(), "serial"));
@@ -135,12 +143,12 @@ fn known_failure_stops_the_pipeline_and_does_not_create_downstream_workspace() {
     let root = tempfile::tempdir().unwrap();
     let graph = graph(&[("fail", "false"), ("never", "true")]);
     let response = finish(spawn(root.path(), &graph, "failure"));
-    assert_eq!(response["status"], "failed", "{response}");
+    assert_eq!(response["projection"]["outcome"], "failed", "{response}");
     let saved = record(root.path(), "failure");
     assert!(saved["results"].as_object().unwrap().is_empty());
     assert!(saved["invocations"].get("never").is_none());
     assert_eq!(
-        finish(spawn(root.path(), &graph, "failure"))["status"],
+        finish(spawn(root.path(), &graph, "failure"))["projection"]["outcome"],
         "failed"
     );
 }
@@ -156,12 +164,14 @@ fn killed_host_keeps_unknown_node_effects_and_never_replays_them() {
     let deadline = Instant::now() + Duration::from_secs(10);
     let mut attempts = None;
     while Instant::now() < deadline {
-        let path = root.path().join("state/runs/interrupted.json");
-        if let Ok(bytes) = fs::read(path)
-            && let Ok(saved) = serde_json::from_slice::<Value>(&bytes)
-            && saved["cursor"]["key"].is_object()
+        if let Some(resource) = resource(root.path(), "interrupted")
+            && let Ok(frontier) =
+                anchor_runtime::graph::validator::GraphValidator::frontier(&resource)
+            && let Some(dispatch) = frontier.iter().find(|dispatch| dispatch.node.id == "slow")
         {
-            let candidate = workspace(root.path(), &saved["cursor"]["key"]).join("attempts.txt");
+            let key = json!({"run_id":"interrupted", "graph_digest":resource.state["graph_digest"],
+                "node_id":"slow", "invocation":dispatch.invocation});
+            let candidate = workspace(root.path(), &key).join("attempts.txt");
             if fs::read(&candidate).is_ok_and(|content| content == b"once") {
                 attempts = Some(candidate);
                 break;
@@ -173,8 +183,15 @@ fn killed_host_keeps_unknown_node_effects_and_never_replays_them() {
     child.wait().unwrap();
     let attempts = attempts.expect("command must have run before killing host");
     let response = finish(spawn(root.path(), &graph, "interrupted"));
-    assert_eq!(response["status"], "failed", "{response}");
-    assert!(response["error"].as_str().unwrap().contains("uncertain"));
+    assert_eq!(response["projection"]["phase"], "waiting", "{response}");
+    assert_eq!(response["projection"]["waiting_for"], "human", "{response}");
+    assert!(
+        response["projection"]["reason"]
+            .as_str()
+            .unwrap()
+            .contains("durably started"),
+        "{response}"
+    );
     assert_eq!(fs::read(attempts).unwrap(), b"once");
     assert!(
         record(root.path(), "interrupted")["invocations"]

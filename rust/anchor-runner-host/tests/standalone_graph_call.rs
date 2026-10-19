@@ -1,8 +1,8 @@
 //! Framed/standalone (stdio `start_bundle`) Op.call regression, provider-free.
 //!
-//! The framed host has no HTTP RunApplication, so a top-level Run must record
-//! its own manual identity metadata before GraphRunner can admit an Op.call
-//! child. RunnerGraphCatalog fails closed without it.
+//! Framing uses the same application facade and Kernel as HTTP. A top-level
+//! Run records its manual identity before the Kernel admits an Op.call child.
+use anchor_kernel::{FileStore, Resource, Store};
 use serde_json::{Value, json};
 use std::{
     fs,
@@ -90,9 +90,22 @@ fn finish(child: Child) -> Value {
     serde_json::from_slice(&output.stdout[4..4 + len]).unwrap()
 }
 
-fn record(root: &Path, run: &str) -> Value {
-    serde_json::from_slice(&fs::read(root.join("state/runs").join(format!("{run}.json"))).unwrap())
+fn resource(root: &Path, run: &str) -> Resource {
+    FileStore::new(root.join("state/kernel-runs"))
         .unwrap()
+        .load(&anchor_runtime::graph::validator::run_resource_id(run))
+        .unwrap()
+        .unwrap()
+}
+
+fn record(root: &Path, run: &str) -> Value {
+    resource(root, run).state
+}
+
+fn assert_done(response: &Value) {
+    assert_eq!(response["projection"]["phase"], "settled", "{response}");
+    assert_eq!(response["projection"]["outcome"], "done", "{response}");
+    assert!(response["projection"]["reason"].is_null(), "{response}");
 }
 
 fn metadata(root: &Path, run: &str) -> Value {
@@ -114,8 +127,7 @@ fn standalone_start_bundle_persists_parent_metadata_before_child_admission() {
     let root = fixture();
     let run = "standalone-parent";
     let response = finish(spawn(root.path(), run, None));
-    assert_eq!(response["status"], "completed", "{response}");
-    assert!(response["error"].is_null(), "{response}");
+    assert_done(&response);
 
     let saved = record(root.path(), run);
     let meta = metadata(root.path(), run);
@@ -143,15 +155,23 @@ fn standalone_start_bundle_persists_parent_metadata_before_child_admission() {
         .as_str()
         .unwrap()
         .to_owned();
-    let child = record(root.path(), &child_id);
-    assert_eq!(child["status"], "completed", "{child}");
+    let child = resource(root.path(), &child_id);
+    assert!(
+        matches!(
+            child.phase(),
+            Some(anchor_kernel::Phase::Settled {
+                result: anchor_kernel::Outcome::Done
+            })
+        ),
+        "{child:?}"
+    );
     let child_meta = metadata(root.path(), &child_id);
     assert_eq!(child_meta["trigger_source"], "graph_call");
     assert_eq!(child_meta["graph"], "child");
 
     // Idempotent replay records the same metadata and does not re-admit the child.
     let response = finish(spawn(root.path(), run, None));
-    assert_eq!(response["status"], "completed", "{response}");
+    assert_done(&response);
     assert_eq!(meta, metadata(root.path(), run));
     assert_eq!(saved, record(root.path(), run));
 }
@@ -161,8 +181,42 @@ fn standalone_graph_name_override_is_recorded_in_parent_metadata() {
     let root = fixture();
     let run = "standalone-named";
     let response = finish(spawn(root.path(), run, Some("custom-parent")));
-    assert_eq!(response["status"], "completed", "{response}");
+    assert_done(&response);
     let meta = metadata(root.path(), run);
     assert_eq!(meta["graph"], "custom-parent");
     assert_eq!(meta["trigger_source"], "manual");
+}
+
+#[test]
+fn standalone_refuses_retired_storage_without_reading_or_rewriting_it() {
+    let root = fixture();
+    let run = "retired-parent";
+    let directory = root.path().join("state/runs");
+    fs::create_dir_all(&directory).unwrap();
+    let path = directory.join(format!("{run}.json"));
+    let original = b"retired storage is deliberately not valid JSON";
+    fs::write(&path, original).unwrap();
+
+    let response = finish(spawn(root.path(), run, None));
+    assert_eq!(response["kind"], "rejected", "{response}");
+    assert!(
+        response["reason"]
+            .as_str()
+            .unwrap()
+            .contains("legacy_run_record"),
+        "{response}"
+    );
+    assert_eq!(fs::read(&path).unwrap(), original);
+    assert!(
+        !root
+            .path()
+            .join(format!("state/run-metadata/{run}.json"))
+            .exists()
+    );
+    assert!(
+        !root
+            .path()
+            .join(format!("state/kernel-runs/run%2F{run}"))
+            .exists()
+    );
 }

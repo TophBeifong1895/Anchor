@@ -1,24 +1,25 @@
 use super::*;
 
-fn save_run(application: &RunApplication, name: &str, run_id: &str, status: RunStatus) {
+fn create_run(application: &RunApplication, name: &str, run_id: &str) {
     let (path, bundle) = application.load_graph(name).unwrap();
     let mut record = GraphRunRecord::create_with_id(bundle.snapshot, json!({}), run_id).unwrap();
-    record.status = status;
     record.plugin_bindings_initialized = true;
-    FileRunStore::new(application.data_root.join("runs"))
-        .save(&record)
-        .unwrap();
+    fixtures::create(application, &record);
     metadata::save(
         &application.data_root,
-        &RunMetadata::new(
-            run_id.into(),
-            name.into(),
-            record.graph_digest.clone(),
-            &path,
-        )
-        .unwrap(),
+        &RunMetadata::new(run_id.into(), name.into(), record.graph_digest, &path).unwrap(),
     )
     .unwrap();
+}
+
+fn finished_run(application: &RunApplication, name: &str, run_id: &str) {
+    create_run(application, name, run_id);
+    fixtures::finish(application, run_id);
+}
+
+fn stopped_run(application: &RunApplication, name: &str, run_id: &str) {
+    create_run(application, name, run_id);
+    fixtures::control(application, run_id, "stop", "stopped");
 }
 
 fn plugin_bundle(application: &RunApplication) -> PathBuf {
@@ -77,8 +78,8 @@ async fn unchanged_snapshot_survives_reopen_and_reuses_terminal_run_cleanup() {
     let _env_guard = crate::PROCESS_ENV_LOCK.lock().await;
     let (root, application) = fixture();
     application.create_graph("other", None).await.unwrap();
-    save_run(&application, "fixture", "target-run", RunStatus::Completed);
-    save_run(&application, "other", "other-run", RunStatus::Completed);
+    finished_run(&application, "fixture", "target-run");
+    finished_run(&application, "other", "other-run");
     let workspace_root = root.path().join("workspaces");
     let target_workspace = workspace_root.join("target-run");
     std::fs::create_dir_all(&target_workspace).unwrap();
@@ -102,6 +103,7 @@ async fn unchanged_snapshot_survives_reopen_and_reuses_terminal_run_cleanup() {
         application.catalog_root.clone(),
     )
     .with_configured_graph("fixture".into(), target_path.clone());
+    drop(application);
     assert_eq!(
         reopened.graph_delete_precondition("fixture").await.unwrap(),
         expected
@@ -115,11 +117,11 @@ async fn unchanged_snapshot_survives_reopen_and_reuses_terminal_run_cleanup() {
     );
     assert!(!target_path.exists());
     assert!(!target_workspace.exists());
-    assert!(!application.data_root.join("runs/target-run.json").exists());
-    assert!(application.data_root.join("runs/other-run.json").exists());
-    assert!(application.read_graph("other").is_ok());
+    assert!(reopened.read_run("target-run").unwrap().is_none());
+    assert!(reopened.read_run("other-run").unwrap().is_some());
+    assert!(reopened.read_graph("other").is_ok());
     assert!(matches!(
-        application
+        reopened
             .remove_graph_if_unchanged("fixture", &workspace_root, &expected)
             .await,
         Err(GraphManagementError::Missing(_))
@@ -282,12 +284,7 @@ async fn invalid_and_changed_resources_fail_closed_without_cleanup() {
         .graph_delete_precondition("fixture")
         .await
         .unwrap();
-    save_run(
-        &application,
-        "fixture",
-        "retained-run",
-        RunStatus::Completed,
-    );
+    finished_run(&application, "fixture", "retained-run");
     let resource = path.join("graph.json");
     std::fs::write(&resource, "not a graph").unwrap();
     let before = files(root.path());
@@ -309,12 +306,7 @@ async fn invalid_and_changed_resources_fail_closed_without_cleanup() {
             .await
             .is_err()
     );
-    assert!(
-        application
-            .data_root
-            .join("runs/retained-run.json")
-            .exists()
-    );
+    assert!(application.read_run("retained-run").unwrap().is_some());
 }
 
 #[tokio::test]
@@ -525,7 +517,7 @@ async fn guarded_delete_rechecks_unfinished_runs_created_after_the_snapshot() {
         .graph_delete_precondition("fixture")
         .await
         .unwrap();
-    save_run(&application, "fixture", "unfinished", RunStatus::Stopped);
+    stopped_run(&application, "fixture", "unfinished");
     assert_conflict_unchanged(
         &application,
         "fixture",
@@ -533,30 +525,21 @@ async fn guarded_delete_rechecks_unfinished_runs_created_after_the_snapshot() {
         &expected,
     )
     .await;
-    assert!(application.data_root.join("runs/unfinished.json").exists());
+    assert!(application.read_run("unfinished").unwrap().is_some());
 }
 
 #[tokio::test]
 async fn guarded_delete_rechecks_active_execution_even_with_a_terminal_record() {
-    use crate::application::ActiveRun;
-    use std::sync::{Arc, atomic::AtomicBool};
-
     let (root, application) = fixture();
     let expected = application
         .graph_delete_precondition("fixture")
         .await
         .unwrap();
-    save_run(&application, "fixture", "active", RunStatus::Completed);
-    application.active.lock().await.insert(
-        "active".into(),
-        ActiveRun::new(
-            application.graph_path_checked("fixture").unwrap(),
-            crate::HostControl {
-                cancellation: Arc::new(AtomicBool::new(false)),
-                pause: Arc::new(AtomicBool::new(false)),
-            },
-        ),
-    );
+    create_run(&application, "fixture", "active");
+    let drive = fixtures::gated_drive(&application, "active").await;
+    fixtures::finish(&application, "active");
+    assert!(fixtures::view(&application, "active").has_succeeded());
+    assert!(fixtures::view(&application, "active").active());
     assert_conflict_unchanged(
         &application,
         "fixture",
@@ -564,7 +547,8 @@ async fn guarded_delete_rechecks_active_execution_even_with_a_terminal_record() 
         &expected,
     )
     .await;
-    assert!(application.data_root.join("runs/active.json").exists());
+    assert!(application.read_run("active").unwrap().is_some());
+    drive.drain(&application, "active").await;
 }
 
 #[tokio::test]
@@ -576,7 +560,7 @@ async fn guarded_delete_preserves_pending_session_delivery() {
         .graph_delete_precondition("fixture")
         .await
         .unwrap();
-    save_run(&application, "fixture", "pending", RunStatus::Completed);
+    finished_run(&application, "fixture", "pending");
     let mut run_metadata = application.metadata("pending").unwrap().unwrap();
     run_metadata.session_call = Some(SessionCall {
         context: SessionContext {
@@ -596,7 +580,7 @@ async fn guarded_delete_preserves_pending_session_delivery() {
         &expected,
     )
     .await;
-    assert!(application.data_root.join("runs/pending.json").exists());
+    assert!(application.read_run("pending").unwrap().is_some());
 }
 
 #[tokio::test]
@@ -650,7 +634,7 @@ async fn guarded_delete_preserves_unfinished_callers_frozen_in_run_snapshots() {
         .create_graph("caller", Some(caller_definition("fixture")))
         .await
         .unwrap();
-    save_run(&application, "caller", "caller-run", RunStatus::Stopped);
+    stopped_run(&application, "caller", "caller-run");
     application
         .update_graph("caller", definition("no longer calls"))
         .await
@@ -666,7 +650,7 @@ async fn guarded_delete_preserves_unfinished_callers_frozen_in_run_snapshots() {
         &expected,
     )
     .await;
-    assert!(application.data_root.join("runs/caller-run.json").exists());
+    assert!(application.read_run("caller-run").unwrap().is_some());
 }
 
 #[tokio::test]
@@ -730,12 +714,12 @@ async fn concurrent_admission_is_rechecked_after_the_guarded_delete_gets_its_lea
             .await
             .is_err()
     );
-    save_run(&application, "fixture", "admitted", RunStatus::Running);
+    create_run(&application, "fixture", "admitted");
     drop(held);
     assert!(
         matches!(delete.await.unwrap(), Err(GraphManagementError::Conflict(message)) if message.contains("unfinished Run `admitted`"))
     );
-    assert!(application.data_root.join("runs/admitted.json").exists());
+    assert!(application.read_run("admitted").unwrap().is_some());
     assert!(path.exists());
 }
 
@@ -747,7 +731,7 @@ async fn guarded_delete_holds_the_graph_lease_until_cleanup_finishes() {
         .await
         .unwrap();
     let path = application.graph_path_checked("fixture").unwrap();
-    let active = application.active.lock().await;
+    let active = application.admission.lock().await;
     let delete_application = application.clone();
     let workspace_root = root.path().join("workspaces");
     let mut delete = tokio::spawn(async move {

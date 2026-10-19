@@ -6,8 +6,7 @@ async fn channel_plugin_status_readers_share_a_lease_without_allowing_graph_writ
     let (root, state) = fixture();
     set_host_env(root.path(), &state.data_root);
     let (_, session, _) = saved_assistant(&state, "local");
-    let run_path = state.data_root.join("runs/persistent-fixture-run.json");
-    let before = std::fs::read(&run_path).unwrap();
+    let before = fixtures::record(&state.application, "persistent-fixture-run");
     let graph_path = state.bundle_root.join("graph.json");
     let graph_before = std::fs::read(&graph_path).unwrap();
     let reader =
@@ -32,7 +31,10 @@ async fn channel_plugin_status_readers_share_a_lease_without_allowing_graph_writ
         crate::application::graphs::GraphManagementError::Conflict(_)
     ));
     assert_eq!(std::fs::read(&graph_path).unwrap(), graph_before);
-    assert_eq!(std::fs::read(&run_path).unwrap(), before);
+    assert_eq!(
+        fixtures::record(&state.application, "persistent-fixture-run"),
+        before
+    );
     drop(reader);
 
     let writer =
@@ -45,7 +47,10 @@ async fn channel_plugin_status_readers_share_a_lease_without_allowing_graph_writ
     let (status, current) = call(app, "GET", &endpoint, None).await;
     assert_eq!(status, StatusCode::OK, "{current}");
     assert_eq!(current["plugin_update"]["state"], "current");
-    assert_eq!(std::fs::read(&run_path).unwrap(), before);
+    assert_eq!(
+        fixtures::record(&state.application, "persistent-fixture-run"),
+        before
+    );
 }
 
 #[tokio::test]
@@ -69,7 +74,7 @@ async fn operator_plugin_save_preserves_run_and_delivery_and_reports_pending() {
             },
         )
         .unwrap();
-    let before = std::fs::read(state.data_root.join("runs/persistent-fixture-run.json")).unwrap();
+    let before = fixtures::record(&state.application, "persistent-fixture-run");
     let mut next = definition();
     next["nodes"][1]["plugins"] = json!(["docmost"]);
     let app = router_with_web_root(state.clone(), root.path().join("web"));
@@ -83,7 +88,7 @@ async fn operator_plugin_save_preserves_run_and_delivery_and_reports_pending() {
     assert_eq!(status, StatusCode::OK, "{saved}");
     assert_eq!(saved["plugin_activation"]["mode"], "next_turn");
     assert_eq!(
-        std::fs::read(state.data_root.join("runs/persistent-fixture-run.json")).unwrap(),
+        fixtures::record(&state.application, "persistent-fixture-run"),
         before
     );
     assert_eq!(
@@ -151,7 +156,7 @@ async fn operator_plugin_save_preserves_run_and_delivery_and_reports_pending() {
             .unwrap();
     assert!(!approved.bindings["docmost"].same_authorization(&refreshed.bindings["docmost"]));
     assert_eq!(
-        std::fs::read(state.data_root.join("runs/persistent-fixture-run.json")).unwrap(),
+        fixtures::record(&state.application, "persistent-fixture-run"),
         before
     );
     assert_eq!(

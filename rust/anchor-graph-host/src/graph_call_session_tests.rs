@@ -1,9 +1,17 @@
 use super::*;
+use crate::PluginCatalog;
 use crate::{FilePluginCatalog, LoadedGraphBundle};
-use anchor_runtime::graph::{CompletionFact, FileRunStore, NodeCompletion, RunCursor};
+use anchor_kernel::{Outcome, Phase};
+use anchor_runtime::graph::GraphSnapshot;
+use anchor_runtime::graph::{CompletionFact, NodeCompletion};
+mod fixture {
+    use super::{CallRun, CallRunAccess, ChildExecutionPort, PluginCatalog};
+    include!("../tests/support/kernel.rs");
+}
+use fixture::{Executor, Runs, parent_call};
 use serde_json::json;
 use std::sync::{
-    Mutex,
+    Arc, Mutex,
     atomic::{AtomicUsize, Ordering},
 };
 
@@ -86,20 +94,6 @@ impl NodeExecutionPort for Nodes {
     }
 }
 
-struct Control;
-
-impl RunControl for Control {
-    fn pause_requested(&self) -> bool {
-        false
-    }
-    fn stop_requested(&self) -> bool {
-        false
-    }
-    fn cancellation(&self) -> Cancellation {
-        Cancellation::default()
-    }
-}
-
 fn child_snapshot() -> GraphSnapshot {
     GraphSnapshot::from_authoring(json!({
         "objective":"child", "input":{"default":1}, "entry":"work",
@@ -130,7 +124,7 @@ enum SessionAction {
 }
 
 struct SessionCatalog<'a> {
-    store: FileRunStore,
+    store: Arc<Runs>,
     artifacts: &'a Artifacts,
     context: Value,
     authorized: bool,
@@ -141,7 +135,7 @@ struct SessionCatalog<'a> {
 }
 
 impl<'a> SessionCatalog<'a> {
-    fn new(store: &FileRunStore, artifacts: &'a Artifacts, action: SessionAction) -> Self {
+    fn new(store: &Arc<Runs>, artifacts: &'a Artifacts, action: SessionAction) -> Self {
         Self {
             store: store.clone(),
             artifacts,
@@ -229,11 +223,20 @@ impl GraphCatalog for SessionCatalog<'_> {
                 }
                 SessionAction::Complete => {
                     let child = self.store.load(run_id)?.unwrap();
-                    let completed =
-                        GraphRunner::new(&self.store, self.artifacts, &self.nodes, &Control)
-                            .run(child)
-                            .await?;
-                    assert_eq!(completed.status, RunStatus::Completed);
+                    let completed = Executor {
+                        runs: &self.store,
+                        artifacts: self.artifacts,
+                        nodes: &self.nodes,
+                        plugins: None,
+                    }
+                    .execute(child, Cancellation::default())
+                    .await?;
+                    assert_eq!(
+                        completed.phase,
+                        Phase::Settled {
+                            result: Outcome::Done
+                        }
+                    );
                     Ok(None)
                 }
                 SessionAction::Unproven => Ok(None),
@@ -247,40 +250,6 @@ impl GraphCatalog for SessionCatalog<'_> {
     ) -> Pin<Box<dyn Future<Output = Result<(), GraphError>> + Send + 'a>> {
         Box::pin(async { panic!("Session child bypassed its owning host") })
     }
-}
-
-fn parent_call(store: &FileRunStore, spec: &Value) -> (CallIdentity, Value) {
-    let snapshot = GraphSnapshot::from_authoring(json!({
-        "objective":"parent", "entry":"invoke", "agents":{},
-        "ops":{"invoke":{"call":spec}},
-        "nodes":[{"id":"invoke","op":"invoke"}], "edges":[]
-    }))
-    .unwrap();
-    let mut parent = GraphRunRecord::create(snapshot, json!({})).unwrap();
-    let input = json!({"input":{"session":"forged", "channel":{"sender_id":"forged"}}});
-    parent.status = RunStatus::Running;
-    parent.invocations.insert("invoke".into(), 1);
-    parent.passes.insert("invoke".into(), 1);
-    parent.cursor = Some(RunCursor {
-        node_id: "invoke".into(),
-        key: InvocationKey {
-            run_id: parent.run_id.clone(),
-            graph_digest: parent.graph_digest.clone(),
-            node_id: "invoke".into(),
-            invocation: 1,
-        },
-        input_commits: Vec::new(),
-        prepared_input: input.clone(),
-    });
-    let identity = CallIdentity {
-        parent_run_id: parent.run_id.clone(),
-        parent_graph_digest: parent.graph_digest.clone(),
-        node_id: "invoke".into(),
-        invocation: 1,
-        call_spec_digest: format!("{:x}", Sha256::digest(serde_json::to_vec(spec).unwrap())),
-    };
-    store.save(&parent).unwrap();
-    (identity, input)
 }
 
 fn session_spec(mode: &str) -> Value {
@@ -375,11 +344,18 @@ async fn an_existing_child_resolves_current_library_code_and_records_its_observa
     std::fs::write(plugin.join("instructions.md"), "original").unwrap();
     let plugins = FilePluginCatalog::new(root.path());
     let original = plugins.resolve(&["review".into()]).unwrap().remove(0);
-    let store = FileRunStore::new(root.path().join("runs"));
+    let store = Arc::new(Runs::new(&root.path().join("runs")));
     let artifacts = Artifacts::default();
     let nodes = HotNodes::default();
-    let host = InProcessGraphHost::new(&Catalog, &store, &artifacts, &nodes, &Control)
-        .with_plugin_catalog(&plugins);
+    let executor = Executor {
+        runs: &store,
+        artifacts: &artifacts,
+        nodes: &nodes,
+        plugins: Some(&plugins),
+    };
+    let host = InProcessGraphHost::new(&Catalog, &*store, &artifacts, &nodes)
+        .with_plugin_catalog(&plugins)
+        .with_child_executor(&executor, false);
     let spec = json!({"graph":"child", "mode":"wait"});
     let (identity, input) = parent_call(&store, &spec);
     let first = host
@@ -387,9 +363,16 @@ async fn an_existing_child_resolves_current_library_code_and_records_its_observa
         .await
         .unwrap();
     assert!(matches!(first, GraphCallOutcome::Waiting { .. }));
+    let parked = host
+        .call(&identity, &spec, &input, &[], Cancellation::default())
+        .await
+        .unwrap();
+    assert!(matches!(parked, GraphCallOutcome::Waiting { .. }));
+    assert_eq!(nodes.0.lock().unwrap().len(), 1);
     std::fs::create_dir_all(plugin.join("skills/new")).unwrap();
     std::fs::write(plugin.join("skills/new/SKILL.md"), "current").unwrap();
     let current = plugins.resolve(&["review".into()]).unwrap().remove(0);
+    store.control(&child_run_id(&identity), "resume");
     let next = host
         .call(&identity, &spec, &input, &[], Cancellation::default())
         .await
@@ -397,13 +380,13 @@ async fn an_existing_child_resolves_current_library_code_and_records_its_observa
     assert!(matches!(next, GraphCallOutcome::Completed { .. }));
     assert_eq!(nodes.0.lock().unwrap()[1].plugins, vec![current.clone()]);
     let child = store.load(&child_run_id(&identity)).unwrap().unwrap();
-    assert_eq!(child.plugin_bindings["review"], original);
+    assert_eq!(child.record.plugin_bindings["review"], original);
     assert_eq!(
-        child.results["work"][0].plugin_digests["review"],
+        child.record.results["work"][0].plugin_digests["review"],
         current.digest
     );
     assert_eq!(
-        child.results["work"][0].plugin_views["review"],
+        child.record.results["work"][0].plugin_views["review"],
         "observed-view"
     );
 }
@@ -411,11 +394,18 @@ async fn an_existing_child_resolves_current_library_code_and_records_its_observa
 #[tokio::test]
 async fn session_wait_reuses_admission_and_exports_completed_result() {
     let dir = tempfile::tempdir().unwrap();
-    let store = FileRunStore::new(dir.path());
+    let store = Arc::new(Runs::new(dir.path()));
     let artifacts = Artifacts::default();
     let catalog = SessionCatalog::new(&store, &artifacts, SessionAction::Waiting);
     let nodes = Nodes::default();
-    let host = InProcessGraphHost::new(&catalog, &store, &artifacts, &nodes, &Control);
+    let executor = Executor {
+        runs: &store,
+        artifacts: &artifacts,
+        nodes: &nodes,
+        plugins: None,
+    };
+    let host = InProcessGraphHost::new(&catalog, &*store, &artifacts, &nodes)
+        .with_child_executor(&executor, false);
     let mut spec = session_spec("wait");
     spec["result"] = json!({"node":"work", "files":["report.txt"]});
     let (identity, input) = parent_call(&store, &spec);
@@ -431,9 +421,9 @@ async fn session_wait_reuses_admission_and_exports_completed_result() {
         }
     );
     let child = store.load(&child_id).unwrap().unwrap();
-    assert_eq!(child.status, RunStatus::Ready);
-    assert_eq!(child.input["session"], catalog.context["session"]);
-    assert_eq!(child.input["channel"], catalog.context["channel"]);
+    assert_eq!(child.phase, Phase::Executing);
+    assert_eq!(child.record.input["session"], catalog.context["session"]);
+    assert_eq!(child.record.input["channel"], catalog.context["channel"]);
     assert_eq!(catalog.contexts.lock().unwrap()[0], catalog.context);
     assert_eq!(nodes.0.load(Ordering::SeqCst), 0);
 
@@ -466,11 +456,18 @@ async fn session_wait_reuses_admission_and_exports_completed_result() {
 #[tokio::test]
 async fn session_detach_uses_session_host_dispatch() {
     let dir = tempfile::tempdir().unwrap();
-    let store = FileRunStore::new(dir.path());
+    let store = Arc::new(Runs::new(dir.path()));
     let artifacts = Artifacts::default();
     let catalog = SessionCatalog::new(&store, &artifacts, SessionAction::Detached);
     let nodes = Nodes::default();
-    let host = InProcessGraphHost::new(&catalog, &store, &artifacts, &nodes, &Control);
+    let executor = Executor {
+        runs: &store,
+        artifacts: &artifacts,
+        nodes: &nodes,
+        plugins: None,
+    };
+    let host = InProcessGraphHost::new(&catalog, &*store, &artifacts, &nodes)
+        .with_child_executor(&executor, false);
     let spec = session_spec("detach");
     let (identity, input) = parent_call(&store, &spec);
     assert_eq!(
@@ -492,7 +489,7 @@ async fn session_rejection_or_invalid_context_never_admits_child() {
         Some(json!({"session":"trusted-session", "channel":false})),
     ] {
         let dir = tempfile::tempdir().unwrap();
-        let store = FileRunStore::new(dir.path());
+        let store = Arc::new(Runs::new(dir.path()));
         let artifacts = Artifacts::default();
         let mut catalog = SessionCatalog::new(&store, &artifacts, SessionAction::Complete);
         if let Some(context) = context {
@@ -501,7 +498,14 @@ async fn session_rejection_or_invalid_context_never_admits_child() {
             catalog.authorized = false;
         }
         let nodes = Nodes::default();
-        let host = InProcessGraphHost::new(&catalog, &store, &artifacts, &nodes, &Control);
+        let executor = Executor {
+            runs: &store,
+            artifacts: &artifacts,
+            nodes: &nodes,
+            plugins: None,
+        };
+        let host = InProcessGraphHost::new(&catalog, &*store, &artifacts, &nodes)
+            .with_child_executor(&executor, false);
         let spec = session_spec("wait");
         let (identity, input) = parent_call(&store, &spec);
         let result = host
@@ -520,11 +524,18 @@ async fn session_rejection_or_invalid_context_never_admits_child() {
 #[tokio::test]
 async fn session_delivery_confirmation_requires_completed_child() {
     let dir = tempfile::tempdir().unwrap();
-    let store = FileRunStore::new(dir.path());
+    let store = Arc::new(Runs::new(dir.path()));
     let artifacts = Artifacts::default();
     let catalog = SessionCatalog::new(&store, &artifacts, SessionAction::Unproven);
     let nodes = Nodes::default();
-    let host = InProcessGraphHost::new(&catalog, &store, &artifacts, &nodes, &Control);
+    let executor = Executor {
+        runs: &store,
+        artifacts: &artifacts,
+        nodes: &nodes,
+        plugins: None,
+    };
+    let host = InProcessGraphHost::new(&catalog, &*store, &artifacts, &nodes)
+        .with_child_executor(&executor, false);
     let spec = session_spec("wait");
     let (identity, input) = parent_call(&store, &spec);
     assert!(matches!(
@@ -538,10 +549,17 @@ async fn session_delivery_confirmation_requires_completed_child() {
 #[tokio::test]
 async fn ordinary_host_rejects_session_but_keeps_ordinary_wait_behavior() {
     let dir = tempfile::tempdir().unwrap();
-    let store = FileRunStore::new(dir.path());
+    let store = Arc::new(Runs::new(dir.path()));
     let artifacts = Artifacts::default();
     let nodes = Nodes::default();
-    let host = InProcessGraphHost::new(&OrdinaryCatalog, &store, &artifacts, &nodes, &Control);
+    let executor = Executor {
+        runs: &store,
+        artifacts: &artifacts,
+        nodes: &nodes,
+        plugins: None,
+    };
+    let host = InProcessGraphHost::new(&OrdinaryCatalog, &*store, &artifacts, &nodes)
+        .with_child_executor(&executor, false);
     let spec = session_spec("wait");
     let (identity, input) = parent_call(&store, &spec);
     assert!(matches!(
@@ -558,5 +576,124 @@ async fn ordinary_host_rejects_session_but_keeps_ordinary_wait_behavior() {
             .await,
         Ok(GraphCallOutcome::Completed { .. })
     ));
+    assert_eq!(nodes.0.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn missing_kernel_executor_refuses_wait_call_before_child_admission() {
+    let dir = tempfile::tempdir().unwrap();
+    let runs = Runs::new(dir.path());
+    let artifacts = Artifacts::default();
+    let nodes = Nodes::default();
+    let host = InProcessGraphHost::new(&OrdinaryCatalog, &runs, &artifacts, &nodes);
+    let spec = json!({"graph":"child","mode":"wait"});
+    let (identity, input) = parent_call(&runs, &spec);
+    assert!(matches!(
+        host.call(&identity, &spec, &input, &[], Cancellation::default()).await,
+        Err(GraphError::Unsupported(message)) if message.contains("shared Kernel child executor")
+    ));
+    assert!(runs.load(&child_run_id(&identity)).unwrap().is_none());
+    assert_eq!(nodes.0.load(Ordering::SeqCst), 0);
+    assert!(artifacts.exports.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn parent_identity_input_and_provenance_must_match_the_kernel_frontier() {
+    let dir = tempfile::tempdir().unwrap();
+    let runs = Runs::new(dir.path());
+    let artifacts = Artifacts::default();
+    let nodes = Nodes::default();
+    let executor = Executor {
+        runs: &runs,
+        artifacts: &artifacts,
+        nodes: &nodes,
+        plugins: None,
+    };
+    let host = InProcessGraphHost::new(&OrdinaryCatalog, &runs, &artifacts, &nodes)
+        .with_child_executor(&executor, false);
+    let spec = json!({"graph":"child","mode":"wait"});
+    let (identity, input) = parent_call(&runs, &spec);
+    for altered in ["invocation", "graph", "spec", "input", "provenance"] {
+        let mut candidate = identity.clone();
+        let mut candidate_input = input.clone();
+        let mut commits = Vec::new();
+        match altered {
+            "invocation" => candidate.invocation += 1,
+            "graph" => candidate.parent_graph_digest = "unproven-graph".into(),
+            "spec" => candidate.call_spec_digest = "unproven-spec".into(),
+            "input" => candidate_input["input"]["session"] = json!("another-session"),
+            "provenance" => commits.push(CommitRef {
+                id: "unproven-commit".into(),
+                node_id: "source".into(),
+                invocation: 1,
+            }),
+            _ => unreachable!(),
+        }
+        assert!(
+            matches!(
+                host.call(
+                    &candidate,
+                    &spec,
+                    &candidate_input,
+                    &commits,
+                    Cancellation::default()
+                )
+                .await,
+                Err(GraphError::CorruptRun(_))
+            ),
+            "{altered}"
+        );
+        assert!(
+            runs.load(&child_run_id(&candidate)).unwrap().is_none(),
+            "{altered}"
+        );
+    }
+    assert_eq!(nodes.0.load(Ordering::SeqCst), 0);
+    assert!(artifacts.exports.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn deferred_wait_admits_once_before_the_shared_executor_runs_the_child() {
+    let dir = tempfile::tempdir().unwrap();
+    let runs = Runs::new(dir.path());
+    let artifacts = Artifacts::default();
+    let nodes = Nodes::default();
+    let executor = Executor {
+        runs: &runs,
+        artifacts: &artifacts,
+        nodes: &nodes,
+        plugins: None,
+    };
+    let spec = json!({"graph":"child","mode":"wait"});
+    let (identity, input) = parent_call(&runs, &spec);
+    let host = InProcessGraphHost::new(&OrdinaryCatalog, &runs, &artifacts, &nodes)
+        .with_child_executor(&executor, true);
+    let child_id = child_run_id(&identity);
+    assert_eq!(
+        host.call(&identity, &spec, &input, &[], Cancellation::default())
+            .await
+            .unwrap(),
+        GraphCallOutcome::Waiting {
+            child_run_id: child_id.clone()
+        }
+    );
+    let admitted = runs.load(&child_id).unwrap().unwrap();
+    assert_eq!(admitted.phase, Phase::Executing);
+    assert_eq!(nodes.0.load(Ordering::SeqCst), 0);
+    let host = InProcessGraphHost::new(&OrdinaryCatalog, &runs, &artifacts, &nodes)
+        .with_child_executor(&executor, false);
+    assert!(
+        matches!(host.call(&identity, &spec, &input, &[], Cancellation::default()).await.unwrap(),
+        GraphCallOutcome::Completed { child_run_id, .. } if child_run_id == child_id)
+    );
+    let completed = runs.load(&child_id).unwrap().unwrap();
+    assert_eq!(
+        completed.phase,
+        Phase::Settled {
+            result: Outcome::Done
+        }
+    );
+    assert_eq!(completed.record.graph_digest, admitted.record.graph_digest);
+    assert_eq!(completed.record.input, admitted.record.input);
     assert_eq!(nodes.0.load(Ordering::SeqCst), 1);
 }

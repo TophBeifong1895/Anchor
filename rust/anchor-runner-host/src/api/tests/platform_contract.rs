@@ -1,11 +1,7 @@
 use super::*;
 
 fn persisted_updated(state: &ApiState, run: &str) -> String {
-    let modified = std::fs::metadata(state.data_root.join("runs").join(format!("{run}.json")))
-        .unwrap()
-        .modified()
-        .unwrap();
-    chrono::DateTime::<chrono::Utc>::from(modified).to_rfc3339()
+    state.application.run_updated(run).unwrap().unwrap()
 }
 
 #[tokio::test]
@@ -54,11 +50,11 @@ async fn trigger_freezes_objective_and_manual_or_schedule_source() {
         assert_eq!(accepted.as_object().unwrap().len(), 2);
         let run = accepted["run"].as_str().unwrap();
         wait_idle(&state).await;
-        let record = FileRunStore::new(state.data_root.join("runs"))
+        let record = fixtures::Reader::new(&state.application)
             .load(run)
             .unwrap()
             .unwrap();
-        assert_eq!(record.status, RunStatus::Completed);
+        assert!(record.has_succeeded());
         assert_eq!(record.snapshot.objective, objective);
         assert_eq!(record.graph_digest, record.snapshot.digest().unwrap());
         let metadata = state.application.metadata(run).unwrap().unwrap();
@@ -173,7 +169,7 @@ async fn busy_schedule_creates_no_run_or_source_metadata() {
 
 #[tokio::test]
 async fn updated_tracks_persisted_pause_stop_and_resume_after_restart() {
-    let (root, state) = fixture();
+    let (root, mut state) = fixture();
     let _env_guard = PROCESS_ENV.lock().await;
     set_host_env(root.path(), &state.data_root);
     write_graph_bundle(&state.bundle_root, &two_node_definition("true")).unwrap();
@@ -204,10 +200,9 @@ async fn updated_tracks_persisted_pause_stop_and_resume_after_restart() {
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{changed}");
-    let mut restarted = state.clone();
-    restarted.application =
-        RunApplication::new(state.data_root.clone(), state.catalog_root.clone())
-            .with_configured_graph(state.graph_name.clone(), state.bundle_root.clone());
+    state.application = RunApplication::new(state.data_root.clone(), state.catalog_root.clone())
+        .with_configured_graph(state.graph_name.clone(), state.bundle_root.clone());
+    let restarted = state.clone();
     let restarted_app = router(restarted.clone());
     let (_, reopened) = call(restarted_app.clone(), "GET", &format!("/runs/{run}"), None).await;
     assert_eq!(reopened["state"]["updated"], paused["state"]["updated"]);
@@ -267,14 +262,13 @@ async fn legacy_metadata_without_schedule_fields_remains_readable() {
         .load()
         .unwrap()
         .snapshot;
-    let store = FileRunStore::new(state.data_root.join("runs"));
     std::fs::create_dir_all(state.data_root.join("run-metadata")).unwrap();
     for format in [1, 2] {
         let id = format!("legacy-format-{format}");
-        let mut record =
+        let record =
             GraphRunRecord::create_with_id(snapshot.clone(), json!({}), id.clone()).unwrap();
-        record.status = RunStatus::Failed;
-        store.save(&record).unwrap();
+        fixtures::create(&state.application, &record);
+        fixtures::fail(&state.application, &id, "work", "recorded failure");
         std::fs::write(
             state
                 .data_root

@@ -84,7 +84,7 @@ impl RunApplication {
         attachments: &crate::channel_inputs::PreparedAttachments,
         channel: Option<&ChannelRunSource>,
     ) -> Result<Option<String>, ApplicationError> {
-        let _active = self.active.lock().await;
+        let _active = self.admission.lock().await;
         self.retry_conversation(request, graph_path, attachments, channel)
     }
 
@@ -264,7 +264,7 @@ impl RunApplication {
         &self,
         record: impl Into<run_access::RunView<'record>>,
         metadata: &RunMetadata,
-        active: &HashMap<String, ActiveRun>,
+        _admission: &(),
     ) -> Result<(), ApplicationError> {
         let record = record.into();
         if metadata.conversation.is_none() {
@@ -272,7 +272,7 @@ impl RunApplication {
                 "Run has no conversation identity".into(),
             ));
         }
-        if record.active() || active.contains_key(record.progress().run_id) {
+        if record.active() {
             return Err(ApplicationError::Conflict(
                 "that Run is still running".into(),
             ));
@@ -375,7 +375,7 @@ impl RunApplication {
     pub(super) fn check_execution_scope(
         &self,
         metadata: &RunMetadata,
-        active: &HashMap<String, ActiveRun>,
+        _admission: &(),
     ) -> Result<(), ApplicationError> {
         if metadata.graph_call.is_some() {
             self.reject_superseded_conversation_execution(&metadata.run_id)?;
@@ -397,7 +397,7 @@ impl RunApplication {
                 if id == metadata.run_id || record.is_settled() {
                     continue;
                 }
-                let worker = record.active() || active.contains_key(&id);
+                let worker = record.active();
                 let Some(other) = self.metadata(&id)? else {
                     return Err(ApplicationError::Conflict(
                         "an unfinished Run has no immutable Graph identity".into(),
@@ -417,11 +417,6 @@ impl RunApplication {
                 }
             }
         } else {
-            if active.values().any(|run| run.graph_path == graph_path) {
-                return Err(ApplicationError::Conflict(
-                    "this graph is already running".into(),
-                ));
-            }
             for (id, record) in self.run_views()? {
                 if id == metadata.run_id || record.is_settled() {
                     continue;

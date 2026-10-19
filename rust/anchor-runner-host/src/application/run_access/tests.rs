@@ -1,4 +1,6 @@
+use super::fixtures;
 use super::*;
+use fixtures::{scenarios, work_record as record};
 use serde_json::json;
 
 #[test]
@@ -45,8 +47,7 @@ fn projected_schedule_rule_recognizes_only_public_phases() {
 
 #[tokio::test]
 async fn intent_controls_preserve_missing_and_unknown_operation_errors() {
-    use crate::application::RunApplication;
-    let root = tempfile::TempDir::new().unwrap();
+    let root = tempfile::tempdir().unwrap();
     let application = RunApplication::new(root.path().into(), root.path().join("catalog"));
     assert!(matches!(
         application.stop("missing").await,
@@ -60,56 +61,20 @@ async fn intent_controls_preserve_missing_and_unknown_operation_errors() {
         application.resume("missing").await,
         Err(ApplicationError::Missing)
     ));
-    assert!(matches!(
-        application.control("missing", "unknown").await,
-        Err(ApplicationError::Invalid(message)) if message == "unknown Run control"
-    ));
-}
-
-pub(super) fn set_valid_state(record: &mut GraphRunRecord, status: RunStatus) {
-    use anchor_runtime::graph::{InvocationKey, PendingRecovery, RecoveryAttempt, RunCursor};
-    record.status = status;
-    record.recovery.clear();
-    record.cursor = None;
-    if matches!(
-        status,
-        RunStatus::BudgetStopped | RunStatus::WaitingRecovery
-    ) {
-        let key = InvocationKey {
-            run_id: record.run_id.clone(),
-            graph_digest: record.graph_digest.clone(),
-            node_id: "worker".into(),
-            invocation: 1,
-        };
-        record.invocations.insert("worker".into(), 1);
-        record.passes.insert("worker".into(), 1);
-        record.cursor = Some(RunCursor {
-            node_id: "worker".into(),
-            key: key.clone(),
-            input_commits: Vec::new(),
-            prepared_input: serde_json::Value::Null,
-        });
-        if status == RunStatus::WaitingRecovery {
-            record.recovery.push(PendingRecovery {
-                key,
-                attempt: RecoveryAttempt {
-                    attempt_id: 1,
-                    step: 1,
-                    tool: "fixture-effect".into(),
-                    started_at: "2026-10-19T00:00:00Z".into(),
-                },
-            });
-        }
-    }
+    assert!(matches!(application.control("missing", "unknown").await,
+        Err(ApplicationError::Invalid(message)) if message == "unknown Run control"));
 }
 
 #[test]
 fn read_contract_exposes_timestamp_and_reserves_unmapped_outcomes() {
-    let mut record = record();
-    record.updated = Some("2026-10-19T12:00:00Z".into());
+    let root = tempfile::tempdir().unwrap();
+    let application = RunApplication::new(root.path().into(), root.path().join("catalog"));
+    fixtures::create(&application, &record("timestamp"));
+    let view = fixtures::view(&application, "timestamp");
+    assert!(view.updated().is_some());
     assert_eq!(
-        RunView::inactive(&record).updated(),
-        Some("2026-10-19T12:00:00Z")
+        view.updated(),
+        application.run_updated("timestamp").unwrap().as_deref()
     );
     for (wire, expected) in [
         ("escalated", RunOutcome::Escalated),
@@ -123,337 +88,216 @@ fn read_contract_exposes_timestamp_and_reserves_unmapped_outcomes() {
 }
 
 #[test]
-fn dispatch_success_and_stopped_execution_rules_cover_every_legacy_state() {
-    let mut record = record();
-    for (status, dispatch, stopped, success, occupied) in [
-        (RunStatus::Ready, true, false, false, true),
-        (RunStatus::Running, false, false, false, true),
-        (RunStatus::Paused, false, false, false, false),
-        (RunStatus::BudgetStopped, false, false, false, false),
-        (RunStatus::WaitingCall, false, false, false, false),
-        (RunStatus::WaitingRecovery, false, false, false, false),
-        (RunStatus::Completed, false, true, true, false),
-        (RunStatus::Failed, false, true, false, false),
-        (RunStatus::Aborted, false, true, false, false),
-        (RunStatus::Stopped, false, true, false, false),
-    ] {
-        record.status = status;
-        let view = RunView::inactive(&record);
-        assert_eq!(view.can_dispatch(), dispatch, "{status:?}");
-        assert_eq!(view.has_stopped_execution(), stopped, "{status:?}");
-        assert_eq!(view.has_succeeded(), success, "{status:?}");
+fn dispatch_success_and_stopped_execution_rules_cover_kernel_facts() {
+    let root = tempfile::tempdir().unwrap();
+    let application = RunApplication::new(root.path().into(), root.path().join("catalog"));
+    for id in scenarios(&application) {
+        let view = fixtures::view(&application, id);
+        assert_eq!(view.can_dispatch(), id == "executing", "{id}");
+        assert_eq!(
+            view.has_stopped_execution(),
+            matches!(id, "stopped" | "done" | "failed" | "aborted"),
+            "{id}"
+        );
+        assert_eq!(view.has_succeeded(), id == "done", "{id}");
         assert_eq!(
             view.occupies_conversation_execution(),
-            occupied,
-            "{status:?}"
+            id == "executing",
+            "{id}"
         );
         assert!(
             view.with_active(true).occupies_conversation_execution(),
-            "{status:?}"
+            "{id}"
         );
     }
 }
 
 #[test]
 fn pilot_session_retained_records_keep_progress_bytes_order_and_filtering() {
-    use crate::application::RunApplication;
-    use anchor_runtime::graph::RunStore;
-    let root = tempfile::TempDir::new().unwrap();
+    let root = tempfile::tempdir().unwrap();
     let application = RunApplication::new(root.path().into(), root.path().join("catalog"));
-    let mut record = record();
-    for status in [
-        RunStatus::Ready,
-        RunStatus::Running,
-        RunStatus::Paused,
-        RunStatus::Stopped,
-        RunStatus::BudgetStopped,
-        RunStatus::WaitingCall,
-        RunStatus::WaitingRecovery,
-        RunStatus::Completed,
-        RunStatus::Failed,
-        RunStatus::Aborted,
-    ] {
-        set_valid_state(&mut record, status);
-        application.store().save(&record).unwrap();
-        let original = serde_json::to_string(&record).unwrap();
-        let status_field = format!("\"status\":{},", serde_json::to_string(&status).unwrap());
-        assert_eq!(original.matches(&status_field).count(), 1);
-        let progress = original.replacen(&status_field, "", 1);
-        let expected = format!(r#"[{{"run":"facade-test","record":{progress}}}]"#);
-        let actual = application
-            .pilot_session_runs(&["missing".into(), "facade-test".into()])
-            .unwrap();
-        assert_eq!(
-            serde_json::to_vec(&actual).unwrap(),
-            expected.as_bytes(),
-            "{status:?}"
+    for id in scenarios(&application) {
+        let record = fixtures::record(&application, id);
+        let expected = format!(
+            r#"[{{"run":"{id}","record":{}}}]"#,
+            serde_json::to_string(&record).unwrap()
         );
-        assert!(application.pilot_session_runs(&[]).unwrap().is_empty());
+        assert_eq!(
+            serde_json::to_vec(
+                &application
+                    .pilot_session_runs(&["missing".into(), id.into()])
+                    .unwrap()
+            )
+            .unwrap(),
+            expected.as_bytes(),
+            "{id}"
+        );
     }
-}
-
-fn record() -> GraphRunRecord {
-    GraphRunRecord::create_with_id(
-        serde_json::from_value(json!({
-            "objective":"test", "entry":"worker",
-            "agents":{"role":{"model":"fixture","instructions":"work"}},
-            "nodes":[{"id":"worker","agent":"role"}], "edges":[]
-        }))
-        .unwrap(),
-        json!({}),
-        "facade-test",
-    )
-    .unwrap()
+    assert!(application.pilot_session_runs(&[]).unwrap().is_empty());
 }
 
 #[test]
-fn phase_maps_each_legacy_state_without_exposing_its_vocabulary() {
-    let mut record = record();
-    record.error = Some("recorded reason".into());
-    for (status, expected) in [
-        (RunStatus::Ready, RunPhase::Executing),
-        (RunStatus::Running, RunPhase::Executing),
-        (
-            RunStatus::Paused,
-            RunPhase::Waiting {
-                for_what: RunWait::Human,
-                reason: Some("paused"),
-            },
-        ),
-        (
-            RunStatus::Stopped,
-            RunPhase::Waiting {
-                for_what: RunWait::Human,
-                reason: Some("recorded reason"),
-            },
-        ),
-        (
-            RunStatus::BudgetStopped,
-            RunPhase::Waiting {
-                for_what: RunWait::Human,
-                reason: Some("budget"),
-            },
-        ),
-        (
-            RunStatus::WaitingCall,
-            RunPhase::Waiting {
-                for_what: RunWait::Child,
-                reason: Some("recorded reason"),
-            },
-        ),
-        (
-            RunStatus::WaitingRecovery,
-            RunPhase::Waiting {
-                for_what: RunWait::Effect,
-                reason: Some("recorded reason"),
-            },
-        ),
-        (
-            RunStatus::Completed,
-            RunPhase::Settled {
-                outcome: RunOutcome::Done,
-                reason: None,
-            },
-        ),
-        (
-            RunStatus::Failed,
-            RunPhase::Settled {
-                outcome: RunOutcome::Failed,
-                reason: Some("recorded reason"),
-            },
-        ),
-        (
-            RunStatus::Aborted,
-            RunPhase::Settled {
-                outcome: RunOutcome::Aborted,
-                reason: Some("recorded reason"),
-            },
-        ),
-    ] {
-        record.status = status;
-        let view = RunView::inactive(&record);
-        assert_eq!(view.phase(), expected, "{status:?}");
-        assert_eq!(view.progress().snapshot.objective, "test");
-        assert!(view.progress().executed_nodes().is_empty());
+fn phase_reads_kernel_controls_node_completion_and_call_binding() {
+    let root = tempfile::tempdir().unwrap();
+    let application = RunApplication::new(root.path().into(), root.path().join("catalog"));
+    for id in scenarios(&application) {
+        let view = fixtures::view(&application, id);
+        match id {
+            "executing" => assert_eq!(view.phase(), RunPhase::Executing),
+            "paused" | "stopped" | "budget" => assert_eq!(
+                view.phase(),
+                RunPhase::Waiting {
+                    for_what: RunWait::Human,
+                    reason: Some(id)
+                }
+            ),
+            "recovery" => assert_eq!(
+                view.phase(),
+                RunPhase::Waiting {
+                    for_what: RunWait::Human,
+                    reason: Some("unknown external tool effects")
+                }
+            ),
+            "child" => assert!(matches!(
+                view.phase(),
+                RunPhase::Waiting {
+                    for_what: RunWait::Child,
+                    ..
+                }
+            )),
+            "done" => assert_eq!(
+                view.phase(),
+                RunPhase::Settled {
+                    outcome: RunOutcome::Done,
+                    reason: None
+                }
+            ),
+            "failed" => assert_eq!(
+                view.phase(),
+                RunPhase::Settled {
+                    outcome: RunOutcome::Failed,
+                    reason: Some("worker failed: recorded reason")
+                }
+            ),
+            "aborted" => assert_eq!(
+                view.phase(),
+                RunPhase::Settled {
+                    outcome: RunOutcome::Aborted,
+                    reason: Some("recorded reason")
+                }
+            ),
+            _ => unreachable!(),
+        }
+        if id != "child" {
+            assert_eq!(view.progress().snapshot.objective, "test");
+        }
+        let executed = if id == "done" {
+            vec!["worker".to_string()]
+        } else {
+            Vec::new()
+        };
+        assert_eq!(view.progress().executed_nodes(), executed);
     }
 }
 
 #[test]
 fn predicates_follow_public_phase_waiter_and_outcome_distinctions() {
-    let mut record = record();
-    for (status, settled, quiescent, attention, resume, stop, abandon) in [
-        (RunStatus::Ready, false, false, true, true, true, true),
-        (RunStatus::Running, false, false, true, true, true, true),
-        (RunStatus::Paused, false, true, true, true, false, true),
-        (RunStatus::Stopped, false, true, true, true, false, true),
-        (
-            RunStatus::BudgetStopped,
-            false,
-            true,
-            true,
-            true,
-            false,
-            true,
-        ),
-        (
-            RunStatus::WaitingCall,
-            false,
-            false,
-            true,
-            false,
-            false,
-            true,
-        ),
-        (
-            RunStatus::WaitingRecovery,
-            false,
-            false,
-            true,
-            false,
-            false,
-            true,
-        ),
-        (RunStatus::Completed, true, true, false, false, false, false),
-        (RunStatus::Failed, true, true, true, false, false, false),
-        (RunStatus::Aborted, true, true, true, false, false, false),
-    ] {
-        record.status = status;
-        let view = RunView::inactive(&record);
-        assert_eq!(view.is_settled(), settled, "{status:?}");
-        assert_eq!(view.is_quiescent(), quiescent, "{status:?}");
-        assert_eq!(view.needs_attention(), attention, "{status:?}");
-        assert_eq!(view.can_resume(), resume, "{status:?}");
-        assert_eq!(view.can_stop(), stop, "{status:?}");
-        assert_eq!(view.can_abandon(), abandon, "{status:?}");
-        assert!(!view.can_pause(), "{status:?}");
+    let root = tempfile::tempdir().unwrap();
+    let application = RunApplication::new(root.path().into(), root.path().join("catalog"));
+    for id in scenarios(&application) {
+        let view = fixtures::view(&application, id);
+        let settled = matches!(id, "done" | "failed" | "aborted");
+        assert_eq!(view.is_settled(), settled, "{id}");
+        assert_eq!(
+            view.is_quiescent(),
+            !matches!(id, "executing" | "child" | "recovery"),
+            "{id}"
+        );
+        assert_eq!(view.needs_attention(), id != "done", "{id}");
+        assert_eq!(
+            view.can_resume(),
+            !settled && !matches!(id, "child" | "recovery"),
+            "{id}"
+        );
+        assert_eq!(view.can_stop(), id == "executing", "{id}");
+        assert_eq!(view.can_abandon(), !settled, "{id}");
+        assert!(!view.can_pause(), "{id}");
     }
 }
 
 #[test]
 fn active_and_session_observations_do_not_reinterpret_durable_state() {
-    let mut record = record();
-    for status in [
-        RunStatus::Ready,
-        RunStatus::Running,
-        RunStatus::Paused,
-        RunStatus::Stopped,
-        RunStatus::BudgetStopped,
-        RunStatus::WaitingCall,
-        RunStatus::WaitingRecovery,
-        RunStatus::Completed,
-        RunStatus::Failed,
-        RunStatus::Aborted,
-    ] {
-        record.status = status;
-        for requested in [None, Some("pause"), Some("stop")] {
-            for session_coordinated in [false, true] {
-                let view = RunView::observed(&record, true, requested, session_coordinated);
-                assert!(view.active());
-                assert!(!view.is_quiescent(), "{status:?}");
-                assert!(!view.can_resume(), "{status:?}");
-                let executing = matches!(status, RunStatus::Ready | RunStatus::Running);
-                assert_eq!(view.can_stop(), executing, "{status:?}/{requested:?}");
-                assert_eq!(
-                    view.can_pause(),
-                    executing && !session_coordinated,
-                    "{status:?}/{requested:?}"
-                );
-                assert_eq!(
-                    view.can_abandon(),
-                    !matches!(
-                        status,
-                        RunStatus::Completed | RunStatus::Failed | RunStatus::Aborted
-                    ),
-                    "{status:?}/{requested:?}"
-                );
-                assert_eq!(view.phase(), RunView::inactive(&record).phase());
-                assert_eq!(
-                    view.needs_attention(),
-                    !matches!(
-                        status,
-                        RunStatus::Ready | RunStatus::Running | RunStatus::Completed
-                    ),
-                    "{status:?}/{requested:?}"
-                );
-            }
+    let root = tempfile::tempdir().unwrap();
+    let application = RunApplication::new(root.path().into(), root.path().join("catalog"));
+    for id in scenarios(&application) {
+        let durable = fixtures::view(&application, id);
+        for coordinated in [false, true] {
+            let mut observed = durable.clone().with_active(true);
+            observed.session_coordinated = coordinated;
+            assert!(observed.active());
+            assert!(!observed.is_quiescent(), "{id}");
+            assert!(!observed.can_resume(), "{id}");
+            assert_eq!(observed.can_stop(), id == "executing", "{id}");
+            assert_eq!(
+                observed.can_pause(),
+                id == "executing" && !coordinated,
+                "{id}"
+            );
+            assert_eq!(observed.can_abandon(), !durable.is_settled(), "{id}");
+            assert_eq!(observed.phase(), durable.phase());
         }
-        let session = RunView::observed(&record, false, None, true);
-        assert!(!session.can_resume(), "{status:?}");
-        assert!(!session.can_pause(), "{status:?}");
     }
 }
 
 #[test]
-fn inactive_control_keeps_the_original_validation_order_and_messages() {
-    let mut record = record();
-    for (status, operation, message) in [
-        (
-            RunStatus::WaitingRecovery,
-            "pause",
-            "Run recovery context is not ready",
-        ),
-        (
-            RunStatus::WaitingRecovery,
-            "resume",
-            "Run recovery context is not ready",
-        ),
-        (
-            RunStatus::Completed,
-            "pause",
-            "terminal Run cannot be controlled",
-        ),
-        (
-            RunStatus::Failed,
-            "stop",
-            "terminal Run cannot be controlled",
-        ),
-        (
-            RunStatus::Aborted,
-            "resume",
-            "terminal Run cannot be controlled",
-        ),
-        (RunStatus::Paused, "pause", "that Run is not active"),
-    ] {
-        record.status = status;
+fn inactive_controls_are_decided_by_kernel_and_recovery_remains_held() {
+    let root = tempfile::tempdir().unwrap();
+    let application = RunApplication::new(root.path().into(), root.path().join("catalog"));
+    scenarios(&application);
+    for id in ["done", "failed", "aborted"] {
+        let runs = application.kernel_owner(id).unwrap().unwrap();
         assert!(matches!(
-            validate_inactive_control(&record, operation),
-            Err(ApplicationError::Conflict(actual)) if actual == message
+            runs.control(id, "stop", None),
+            Err(ApplicationError::Conflict(_))
+        ));
+        assert!(matches!(
+            runs.control(id, "resume", None),
+            Err(ApplicationError::Conflict(_))
         ));
     }
-    record.status = RunStatus::BudgetStopped;
-    assert!(validate_inactive_control(&record, "resume").is_ok());
-    assert!(matches!(
-        validate_resume_budget(&record),
-        Err(ApplicationError::Conflict(message))
-            if message == "budget-stopped Run requires an explicit budget policy"
-    ));
+    assert!(fixtures::view(&application, "recovery").has_pending_recovery());
+    assert!(!fixtures::view(&application, "recovery").can_resume());
+    assert!(
+        application
+            .kernel_owner("budget")
+            .unwrap()
+            .unwrap()
+            .control("budget", "resume", None)
+            .is_ok()
+    );
+    assert_eq!(
+        fixtures::view(&application, "budget").phase(),
+        RunPhase::Executing
+    );
 }
 
 #[tokio::test]
 async fn pilot_read_tools_keep_phase_json_bytes_and_progress_field_order() {
-    use crate::application::RunApplication;
-    use anchor_runtime::graph::RunStore;
-
-    let root = tempfile::TempDir::new().unwrap();
+    let root = tempfile::tempdir().unwrap();
     let application = RunApplication::new(root.path().into(), root.path().join("catalog"));
-    let mut record = record();
-    record.started = Some("2026-10-19T00:00:00Z".into());
-    record.updated = record.started.clone();
-    application.store().save(&record).unwrap();
-    std::fs::File::open(root.path().join("runs/facade-test.json"))
-        .unwrap()
-        .set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_secs(1))
-        .unwrap();
-    let projection = r#"{"phase":"executing","reason":null,"active":false,"actions":{"pause":false,"stop":false,"resume":false,"abandon":false},"updated":"1970-01-01T00:00:01+00:00"}"#;
+    fixtures::create(&application, &record("facade-test"));
+    let updated =
+        serde_json::to_string(&fixtures::view(&application, "facade-test").updated()).unwrap();
+    let projection = format!(
+        r#"{{"phase":"executing","reason":null,"active":false,"actions":{{"pause":false,"stop":false,"resume":false,"abandon":false}},"updated":{updated}}}"#
+    );
     let expected_list =
         format!(r#"{{"runs":[{{"run":"facade-test","projection":{projection}}}]}}"#);
     assert_eq!(
         serde_json::to_vec(&application.pilot_run_list().await.unwrap()).unwrap(),
         expected_list.as_bytes()
     );
-    let original = serde_json::to_string(&record).unwrap();
-    assert_eq!(original.matches("\"status\":\"ready\",").count(), 1);
-    let progress = original.replacen("\"status\":\"ready\",", "", 1);
+    let progress = serde_json::to_string(&fixtures::record(&application, "facade-test")).unwrap();
     let expected_status =
         format!(r#"{{"run":"facade-test","record":{progress},"projection":{projection}}}"#);
     assert_eq!(

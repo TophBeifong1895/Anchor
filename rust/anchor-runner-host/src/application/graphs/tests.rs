@@ -1,6 +1,7 @@
 use super::*;
+use crate::application::run_access::fixtures;
 use crate::application::{RunMetadata, metadata};
-use anchor_runtime::graph::{FileRunStore, GraphRunRecord, RunStatus, RunStore};
+use anchor_runtime::graph::GraphRunRecord;
 use std::{collections::BTreeMap, time::Duration};
 
 mod deletion;
@@ -148,43 +149,34 @@ fn load_distinguishes_missing_and_invalid_bundles() {
 async fn active_nodes_require_a_live_executor_and_running_record() {
     let (_root, application) = fixture();
     let (path, bundle) = application.load_graph("fixture").unwrap();
-    let mut record = GraphRunRecord::create(bundle.snapshot, json!({})).unwrap();
-    record.status = RunStatus::Running;
-    record.invocations.insert("work".into(), 1);
-    record.passes.insert("work".into(), 1);
-    record.cursor = Some(anchor_runtime::graph::RunCursor {
-        node_id: "work".into(),
-        key: anchor_runtime::graph::InvocationKey {
-            run_id: record.run_id.clone(),
-            graph_digest: record.graph_digest.clone(),
-            node_id: "work".into(),
-            invocation: 1,
-        },
-        input_commits: Vec::new(),
-        prepared_input: json!({}),
-    });
-    application.store().save(&record).unwrap();
+    let record = GraphRunRecord::create(bundle.snapshot, json!({})).unwrap();
+    fixtures::create(&application, &record);
+    metadata::save(
+        &application.data_root,
+        &RunMetadata::new(
+            record.run_id.clone(),
+            "fixture".into(),
+            record.graph_digest.clone(),
+            &path,
+        )
+        .unwrap(),
+    )
+    .unwrap();
     assert_eq!(
         application.list_graphs().await.unwrap()["graphs"][0]["active_nodes"],
         json!([])
     );
-    application.active.lock().await.insert(
-        record.run_id.clone(),
-        crate::application::ActiveRun::new(
-            RunApplication::graph_identity(&path).unwrap(),
-            crate::application::new_control(),
-        ),
-    );
+    let drive = fixtures::gated_drive(&application, &record.run_id).await;
     assert_eq!(
         application.list_graphs().await.unwrap()["graphs"][0]["active_nodes"],
         json!(["work"])
     );
-    record.status = RunStatus::Paused;
-    application.store().save(&record).unwrap();
+    fixtures::control(&application, &record.run_id, "stop", "paused");
     assert_eq!(
         application.list_graphs().await.unwrap()["graphs"][0]["active_nodes"],
         json!([])
     );
+    drive.drain(&application, &record.run_id).await;
 }
 
 #[tokio::test]
@@ -382,10 +374,9 @@ async fn update_preserves_run_snapshot_and_delete_reuses_unfinished_run_checks()
     let (root, application) = fixture();
     let (path, bundle) = application.load_graph("fixture").unwrap();
     let mut record = GraphRunRecord::create_with_id(bundle.snapshot, json!({}), "frozen").unwrap();
-    record.status = RunStatus::Stopped;
     record.plugin_bindings_initialized = true;
-    let store = FileRunStore::new(application.data_root.join("runs"));
-    store.save(&record).unwrap();
+    fixtures::create(&application, &record);
+    fixtures::control(&application, &record.run_id, "stop", "stopped");
     let run_metadata = RunMetadata::new(
         "frozen".into(),
         "fixture".into(),
@@ -394,15 +385,12 @@ async fn update_preserves_run_snapshot_and_delete_reuses_unfinished_run_checks()
     )
     .unwrap();
     metadata::save(&application.data_root, &run_metadata).unwrap();
-    let before = std::fs::read(application.data_root.join("runs/frozen.json")).unwrap();
+    let before = fixtures::record(&application, "frozen");
     application
         .update_graph("bundle", definition("edited"))
         .await
         .unwrap();
-    assert_eq!(
-        std::fs::read(application.data_root.join("runs/frozen.json")).unwrap(),
-        before
-    );
+    assert_eq!(fixtures::record(&application, "frozen"), before);
     assert_eq!(
         application.read_graph("fixture").unwrap()["definition"]["objective"],
         "edited"
@@ -411,8 +399,8 @@ async fn update_preserves_run_snapshot_and_delete_reuses_unfinished_run_checks()
         application.remove_graph("bundle", &root.path().join("workspaces")).await,
         Err(GraphManagementError::Conflict(message)) if message.contains("unfinished Run `frozen`")
     ));
-    record.status = RunStatus::Completed;
-    store.save(&record).unwrap();
+    fixtures::control(&application, "frozen", "resume", "resumed");
+    fixtures::finish(&application, "frozen");
     assert_eq!(
         application
             .remove_graph("bundle", &root.path().join("workspaces"))

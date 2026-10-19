@@ -7,20 +7,18 @@
 
 use super::*;
 use anchor_platform_session::{ChannelIdentity, ChannelInboundRequest, SessionStore, TurnStatus};
-use anchor_runtime::graph::{
-    InvocationKey, PendingRecovery, PluginBinding, RecoveryAttempt, RunCursor,
-};
+use anchor_runtime::graph::{InvocationKey, PluginBinding, RecoveryAttempt};
 
-fn run_store(state: &ApiState) -> FileRunStore {
-    FileRunStore::new(state.data_root.join("runs"))
+fn run_store(state: &ApiState) -> fixtures::Reader<'_> {
+    fixtures::Reader::new(&state.application)
 }
 
-fn record_of(state: &ApiState, run: &str) -> GraphRunRecord {
+fn record_of(state: &ApiState, run: &str) -> fixtures::Observation {
     run_store(state).load(run).unwrap().unwrap()
 }
 
 fn record_bytes(state: &ApiState, run: &str) -> Vec<u8> {
-    std::fs::read(state.data_root.join("runs").join(format!("{run}.json"))).unwrap()
+    std::fs::read(kernel_record_path(state, run)).unwrap()
 }
 
 fn intent_path(state: &ApiState, run: &str) -> PathBuf {
@@ -30,14 +28,19 @@ fn intent_path(state: &ApiState, run: &str) -> PathBuf {
         .join(format!("{run}.json"))
 }
 
-fn seed_run(state: &ApiState, run: &str, status: RunStatus) -> GraphRunRecord {
+fn seed_run(state: &ApiState, run: &str, scenario: &str) -> fixtures::Observation {
     let bundle = FileGraphBundleLoader::new(&state.bundle_root)
         .load()
         .unwrap();
-    let mut record = GraphRunRecord::create_with_id(bundle.snapshot, json!({}), run).unwrap();
-    record.status = status;
-    let store = run_store(state);
-    store.save(&record).unwrap();
+    let record = GraphRunRecord::create_with_id(bundle.snapshot, json!({}), run).unwrap();
+    fixtures::create(&state.application, &record);
+    match scenario {
+        "stopped" => fixtures::control(&state.application, run, "stop", "stopped"),
+        "done" => fixtures::finish(&state.application, run),
+        "failed" => fixtures::fail(&state.application, run, "work", "recorded failure"),
+        "aborted" => fixtures::control(&state.application, run, "abandon", "operator"),
+        _ => unreachable!(),
+    }
     metadata::save(
         &state.data_root,
         &RunMetadata::new(
@@ -49,44 +52,31 @@ fn seed_run(state: &ApiState, run: &str, status: RunStatus) -> GraphRunRecord {
         .unwrap(),
     )
     .unwrap();
-    record
+    record_of(state, run)
 }
 
 /// A Run parked at an unresolved external effect: the ordinary recovery entry
 /// point applies to it until it is abandoned.
-fn seed_waiting_recovery(state: &ApiState, run: &str) -> GraphRunRecord {
+fn seed_waiting_recovery(state: &ApiState, run: &str) -> fixtures::Observation {
     let snapshot = GraphSnapshot::admit(json!({
         "objective":"unknown-effect fixture","entry":"work",
         "agents":{"worker":{"model":"fixture","instructions":"fixture"}},
         "ops":{},"nodes":[{"id":"work","agent":"worker"}],"edges":[],
     }))
     .unwrap();
-    let mut record = GraphRunRecord::create_with_id(snapshot, Value::Null, run).unwrap();
-    let key = InvocationKey {
-        run_id: record.run_id.clone(),
-        graph_digest: record.graph_digest.clone(),
-        node_id: "work".into(),
-        invocation: 1,
-    };
-    record.invocations.insert("work".into(), 1);
-    record.passes.insert("work".into(), 1);
-    record.cursor = Some(RunCursor {
-        node_id: "work".into(),
-        key: key.clone(),
-        input_commits: vec![],
-        prepared_input: json!({"input":null,"committed_inputs":[]}),
-    });
-    record.status = RunStatus::WaitingRecovery;
-    record.recovery = vec![PendingRecovery {
-        key,
-        attempt: RecoveryAttempt {
+    let record = GraphRunRecord::create_with_id(snapshot, Value::Null, run).unwrap();
+    fixtures::create(&state.application, &record);
+    fixtures::recovery(
+        &state.application,
+        run,
+        "work",
+        vec![RecoveryAttempt {
             attempt_id: 17,
             step: 1,
             tool: "unknown-effect-fixture".into(),
             started_at: "fixture".into(),
-        },
-    }];
-    run_store(state).save(&record).unwrap();
+        }],
+    );
     metadata::save(
         &state.data_root,
         &RunMetadata::new(
@@ -98,7 +88,7 @@ fn seed_waiting_recovery(state: &ApiState, run: &str) -> GraphRunRecord {
         .unwrap(),
     )
     .unwrap();
-    record
+    record_of(state, run)
 }
 
 #[tokio::test]
@@ -126,13 +116,13 @@ async fn abandon_cancels_the_running_node_and_makes_the_run_terminal_aborted() {
     assert_eq!(status, StatusCode::ACCEPTED, "{accepted}");
     let run = accepted["run"].as_str().unwrap().to_owned();
     for _ in 0..400 {
-        if record_of(&state, &run).cursor.is_some() {
+        if !record_of(&state, &run).view.dispatches().is_empty() {
             break;
         }
         tokio::time::sleep(std::time::Duration::from_millis(5)).await;
     }
     assert!(
-        record_of(&state, &run).cursor.is_some(),
+        !record_of(&state, &run).view.dispatches().is_empty(),
         "node never started"
     );
     assert!(state.application.run_is_active(&run).await);
@@ -152,10 +142,9 @@ async fn abandon_cancels_the_running_node_and_makes_the_run_terminal_aborted() {
     assert!(body["requested_at"].as_str().is_some());
 
     let record = record_of(&state, &run);
-    assert_eq!(record.status, RunStatus::Aborted);
-    let error = record.error.clone().unwrap();
-    assert!(error.contains("abandoned"), "{error}");
-    assert!(error.contains("plugin_update"), "{error}");
+    assert!(is_aborted(&record));
+    let error = observed_error(&record).unwrap().to_owned();
+    assert_eq!(error, "plugin_update");
     assert!(!state.application.run_is_active(&run).await);
     assert!(state.application.active_runs(None).await.is_empty());
     assert!(intent_path(&state, &run).is_file());
@@ -176,10 +165,7 @@ async fn abandon_cancels_the_running_node_and_makes_the_run_terminal_aborted() {
     // One-way: a resumed Run would continue the round the operator gave up.
     let (status, rejected) = call(app.clone(), "POST", &format!("/runs/{run}/resume"), None).await;
     assert_eq!(status, StatusCode::CONFLICT, "{rejected}");
-    assert!(
-        rejected["error"].as_str().unwrap().contains("abandoned"),
-        "{rejected}"
-    );
+    assert_eq!(rejected["error"], "Kernel control refused: TaskSettled");
 
     // Idempotent: the repeat returns the identical body and rewrites nothing.
     let (status, repeated) = call(
@@ -211,24 +197,21 @@ async fn abandon_is_idempotent_and_rejects_terminal_unknown_or_invalid_requests(
     let app = router(state.clone());
 
     // A body is optional; the default reason is `operator`.
-    let stopped = seed_run(&state, "abandon-stopped", RunStatus::Stopped);
-    assert_eq!(stopped.status, RunStatus::Stopped);
+    let stopped = seed_run(&state, "abandon-stopped", "stopped");
+    assert!(stopped.waits_reason("stopped"));
     let (status, defaulted) =
         call(app.clone(), "POST", "/runs/abandon-stopped/abandon", None).await;
     assert_eq!(status, StatusCode::OK, "{defaulted}");
     assert_eq!(defaulted["reason"], "operator");
     assert_eq!(defaulted["projection"]["outcome"], "aborted");
-    assert_eq!(
-        record_of(&state, "abandon-stopped").status,
-        RunStatus::Aborted
-    );
+    assert!(is_aborted(&record_of(&state, "abandon-stopped")));
     let (status, repeated) = call(app.clone(), "POST", "/runs/abandon-stopped/abandon", None).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(repeated, defaulted);
 
     // An empty reason object behaves like an absent body.
-    let stopped = seed_run(&state, "abandon-blank", RunStatus::Stopped);
-    assert_eq!(stopped.status, RunStatus::Stopped);
+    let stopped = seed_run(&state, "abandon-blank", "stopped");
+    assert!(stopped.waits_reason("stopped"));
     let (status, blank) = call(
         app.clone(),
         "POST",
@@ -262,8 +245,8 @@ async fn abandon_is_idempotent_and_rejects_terminal_unknown_or_invalid_requests(
     }
 
     // Completed and failed Runs cannot be abandoned; missing Runs are 404.
-    seed_run(&state, "abandon-completed", RunStatus::Completed);
-    seed_run(&state, "abandon-failed", RunStatus::Failed);
+    seed_run(&state, "abandon-completed", "done");
+    seed_run(&state, "abandon-failed", "failed");
     for run in ["abandon-completed", "abandon-failed"] {
         let before = record_bytes(&state, run);
         let (status, rejected) = call(
@@ -298,7 +281,7 @@ async fn abandon_is_idempotent_and_rejects_terminal_unknown_or_invalid_requests(
 
     // A Run that was already terminal `Aborted` for another reason reports that
     // existing state and records no new abandon request.
-    seed_run(&state, "abandon-already", RunStatus::Aborted);
+    seed_run(&state, "abandon-already", "aborted");
     let (status, existing) = call(
         app.clone(),
         "POST",
@@ -365,7 +348,6 @@ async fn graph_updates_do_not_require_abandoning_stopped_plugin_runs() {
         .unwrap();
     let mut record =
         GraphRunRecord::create_with_id(bundle.snapshot, json!({}), "abandon-plugin").unwrap();
-    record.status = RunStatus::Stopped;
     record.plugin_bindings_initialized = true;
     record.plugin_bindings.insert(
         "demo".into(),
@@ -379,7 +361,8 @@ async fn graph_updates_do_not_require_abandoning_stopped_plugin_runs() {
                 .expect("non-empty fixture authority"),
         },
     );
-    run_store(&state).save(&record).unwrap();
+    fixtures::create(&state.application, &record);
+    fixtures::control(&state.application, &record.run_id, "stop", "stopped");
     metadata::save(
         &state.data_root,
         &RunMetadata::new(
@@ -394,7 +377,7 @@ async fn graph_updates_do_not_require_abandoning_stopped_plugin_runs() {
 
     // Saving authoring data does not replace Library resources or the frozen
     // Run. An unfinished Run does not need to be abandoned just to edit a Graph.
-    let frozen = std::fs::read(state.data_root.join("runs/abandon-plugin.json")).unwrap();
+    let frozen = std::fs::read(kernel_record_path(&state, "abandon-plugin")).unwrap();
     let (status, updated) = call(
         app.clone(),
         "PUT",
@@ -404,7 +387,7 @@ async fn graph_updates_do_not_require_abandoning_stopped_plugin_runs() {
     .await;
     assert_eq!(status, StatusCode::OK, "{updated}");
     assert_eq!(
-        std::fs::read(state.data_root.join("runs/abandon-plugin.json")).unwrap(),
+        std::fs::read(kernel_record_path(&state, "abandon-plugin")).unwrap(),
         frozen
     );
     let graph_before = std::fs::read(state.bundle_root.join("graph.json")).unwrap();
@@ -436,10 +419,7 @@ async fn graph_updates_do_not_require_abandoning_stopped_plugin_runs() {
         std::fs::read(state.bundle_root.join("graph.json")).unwrap(),
         graph_before
     );
-    assert_eq!(
-        record_of(&state, "abandon-plugin").status,
-        RunStatus::Aborted
-    );
+    assert!(is_aborted(&record_of(&state, "abandon-plugin")));
 
     // A later stopped Run likewise keeps its own definition and authorization.
     let bundle = FileGraphBundleLoader::new(&state.bundle_root)
@@ -447,10 +427,10 @@ async fn graph_updates_do_not_require_abandoning_stopped_plugin_runs() {
         .unwrap();
     let mut next =
         GraphRunRecord::create_with_id(bundle.snapshot, json!({}), "abandon-plugin-two").unwrap();
-    next.status = RunStatus::Stopped;
     next.plugin_bindings = record.plugin_bindings.clone();
     next.plugin_bindings_initialized = true;
-    run_store(&state).save(&next).unwrap();
+    fixtures::create(&state.application, &next);
+    fixtures::control(&state.application, &next.run_id, "stop", "stopped");
     metadata::save(
         &state.data_root,
         &RunMetadata::new(
@@ -462,7 +442,7 @@ async fn graph_updates_do_not_require_abandoning_stopped_plugin_runs() {
         .unwrap(),
     )
     .unwrap();
-    let frozen = std::fs::read(state.data_root.join("runs/abandon-plugin-two.json")).unwrap();
+    let frozen = std::fs::read(kernel_record_path(&state, "abandon-plugin-two")).unwrap();
     let (status, updated) = call(
         app.clone(),
         "PUT",
@@ -472,7 +452,7 @@ async fn graph_updates_do_not_require_abandoning_stopped_plugin_runs() {
     .await;
     assert_eq!(status, StatusCode::OK, "{updated}");
     assert_eq!(
-        std::fs::read(state.data_root.join("runs/abandon-plugin-two.json")).unwrap(),
+        std::fs::read(kernel_record_path(&state, "abandon-plugin-two")).unwrap(),
         frozen
     );
 }
@@ -526,9 +506,8 @@ fn assistant_fixture(state: &ApiState) -> (SessionStore, String, String) {
     )
     .unwrap();
     // A crash can leave the record Running with nothing executing it.
-    record.status = RunStatus::Running;
     record.plugin_bindings_initialized = true;
-    run_store(state).save(&record).unwrap();
+    fixtures::create(&state.application, &record);
     let mut saved = RunMetadata::new(
         run.into(),
         "fixture".into(),
@@ -608,11 +587,11 @@ async fn abandon_keeps_the_assistant_binding_workspace_and_history_for_handover(
     assert_eq!(abandoned["projection"]["outcome"], "aborted");
 
     let after = record_of(&state, run);
-    assert_eq!(after.status, RunStatus::Aborted);
+    assert!(is_aborted(&after));
     // Only the status and the audit reason changed.
     assert_eq!(after.snapshot, before.snapshot);
     assert_eq!(after.input, before.input);
-    assert_eq!(after.cursor, before.cursor);
+    assert_eq!(after.invocations, before.invocations);
     assert_eq!(after.results, before.results);
     assert_eq!(after.recovery, before.recovery);
     assert_eq!(after.plugin_bindings, before.plugin_bindings);
@@ -665,7 +644,7 @@ async fn abandon_keeps_the_assistant_binding_workspace_and_history_for_handover(
         .unwrap();
     assert_ne!(handed_over.run_id, run);
     assert!(handed_over.run_id.starts_with("assistant-resume-"));
-    assert_eq!(record_of(&state, run).status, RunStatus::Aborted);
+    assert!(is_aborted(&record_of(&state, run)));
     assert!(workspace.join("draft.txt").is_file());
     assert!(
         sessions
@@ -715,10 +694,11 @@ async fn abandon_leaves_other_runs_and_their_recovery_entry_points_unchanged() {
     .await;
     assert_eq!(status, StatusCode::OK, "{abandoned_body}");
     let durable = record_of(&state, "abandon-recovery-target");
-    assert_eq!(durable.status, RunStatus::Aborted);
+    assert!(is_aborted(&durable));
     // Unresolved attempts stay as read-only facts, exactly like a stop.
     assert_eq!(durable.recovery, abandoned.recovery);
-    assert_eq!(durable.cursor, abandoned.cursor);
+    assert_eq!(durable.invocations, abandoned.invocations);
+    assert_eq!(durable.results, abandoned.results);
 
     // Its own entry points now refuse, because it is terminal.
     for (path, body) in [
@@ -730,9 +710,13 @@ async fn abandon_leaves_other_runs_and_their_recovery_entry_points_unchanged() {
     ] {
         let (status, rejected) = call(app.clone(), "POST", &path, body).await;
         assert_eq!(status, StatusCode::CONFLICT, "{rejected}");
-        assert!(
-            rejected["error"].as_str().unwrap().contains("abandoned"),
-            "{rejected}"
+        assert_eq!(
+            rejected["error"],
+            if path.ends_with("/resume") {
+                "Kernel control refused: TaskSettled"
+            } else {
+                "settled Run cannot record recovery decisions"
+            }
         );
     }
 
@@ -744,9 +728,10 @@ async fn abandon_leaves_other_runs_and_their_recovery_entry_points_unchanged() {
         record_bytes(&state, "abandon-recovery-sibling"),
         sibling_before
     );
-    assert_eq!(
-        record_of(&state, "abandon-recovery-sibling").status,
-        RunStatus::WaitingRecovery
+    assert!(
+        record_of(&state, "abandon-recovery-sibling")
+            .view
+            .has_pending_recovery()
     );
     assert_eq!(
         record_of(&state, "abandon-recovery-sibling").recovery,
@@ -758,9 +743,6 @@ async fn abandon_leaves_other_runs_and_their_recovery_entry_points_unchanged() {
     let (status, _) = call(app.clone(), "POST", &format!("/runs/{paused}/resume"), None).await;
     assert_eq!(status, StatusCode::ACCEPTED);
     wait_idle(&state).await;
-    assert_eq!(record_of(&state, &paused).status, RunStatus::Completed);
-    assert_eq!(
-        record_of(&state, "abandon-recovery-target").status,
-        RunStatus::Aborted
-    );
+    assert!(record_of(&state, &paused).has_succeeded());
+    assert!(is_aborted(&record_of(&state, "abandon-recovery-target")));
 }

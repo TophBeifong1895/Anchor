@@ -1,4 +1,4 @@
-//! Differential test: the old push-model `GraphRunner` against the kernel with
+//! Differential test: frozen legacy observations against the Kernel with
 //! `GraphValidator`, on thousands of random Graphs and route scripts.
 //!
 //! Both sides see the same Graph and the same deterministic route choices.
@@ -18,7 +18,9 @@ use super::{
     SettleSubmission, call_identity, record_of, run_resource,
 };
 
-use super::super::test_support::snapshots::{FrozenOutcome, Population, Snapshots};
+use super::super::test_support::snapshots::{
+    FrozenOldRecord, FrozenOutcome, FrozenStatus, Population, Snapshots,
+};
 use super::super::test_support::*;
 
 // ---------------------------------------------------------------------------
@@ -240,7 +242,7 @@ fn result_set(record: &GraphRunRecord) -> BTreeSet<(String, u64)> {
 /// facts after accounting for the documented late wave and ceiling effects.
 pub(crate) fn check_failed_run(
     seed: u64,
-    old: &GraphRunRecord,
+    old: &FrozenOldRecord,
     new: &GraphRunRecord,
     failures: &BTreeMap<(String, u64), String>,
     history: &[anchor_kernel::Record],
@@ -407,7 +409,7 @@ pub(crate) fn check_failed_run(
         "lost failure, seed {seed}"
     );
 
-    let mut accounted = new.clone();
+    let mut accounted = FrozenOldRecord::from_graph(new);
     let mut expected = old.clone();
     // Remove only the final look-ahead's exact ceased/edge writes. Restore
     // overwritten decisions from the preceding accepted state, not defaults.
@@ -521,10 +523,11 @@ pub(crate) fn check_failed_run(
                 branch: Some(index),
                 inputs: vec![],
             };
-            let routes = super::routes_of(&accounted, node);
+            let mut graph = accounted.graph_record();
+            let routes = super::routes_of(&graph, node);
             assert_eq!(routes.len(), 1);
             super::record_result(
-                &mut accounted,
+                &mut graph,
                 &dispatch,
                 NodeCompletion {
                     submission: content.summary,
@@ -541,6 +544,7 @@ pub(crate) fn check_failed_run(
                 &routes,
                 routes.first(),
             );
+            accounted = FrozenOldRecord::from_graph(&graph);
             let branch = &mut accounted.parallel.as_mut().unwrap().branches[index];
             branch.completed.push(content.commit);
             branch.next_index += 1;
@@ -592,8 +596,8 @@ pub(crate) fn check_failed_run(
     expected.invocations.retain(|_, v| *v > 0);
     expected.passes.retain(|_, v| *v > 0);
     assert_eq!(
-        facts(&expected),
-        facts(&accounted),
+        facts(&expected.graph_record()),
+        facts(&accounted.graph_record()),
         "all accounted Graph facts, seed {seed}"
     );
     for node in old.snapshot.nodes.iter().filter(|n| n.agent.is_some()) {
@@ -658,32 +662,16 @@ async fn check_with_failures(
             return;
         }
     };
-    let (old_trace, old) = run_old(record.clone(), seed, inject_failures).await;
-    frozen.assert_old(&old_trace, &old);
     let new = run_new(record, seed, inject_failures);
-    let mut frozen_tally = tally.clone();
+    let (old_trace, old) = frozen.accepted();
     compare_new(
         &snapshot,
         seed,
         inject_failures,
-        &old_trace,
+        old_trace,
         &old,
         &new,
         tally,
-    );
-    let (frozen_trace, frozen_record) = frozen.accepted();
-    compare_new(
-        &snapshot,
-        seed,
-        inject_failures,
-        frozen_trace,
-        &frozen_record,
-        &new,
-        &mut frozen_tally,
-    );
-    assert_eq!(
-        *tally, frozen_tally,
-        "live/frozen comparison coverage, seed {seed}"
     );
 }
 
@@ -692,7 +680,7 @@ fn compare_new(
     seed: u64,
     inject_failures: bool,
     old_trace: &Trace,
-    old: &GraphRunRecord,
+    old: &FrozenOldRecord,
     new_run: &NewRun,
     tally: &mut Tally,
 ) {
@@ -732,7 +720,7 @@ fn compare_new(
         tally.node_failed += 1;
         tally.multi_failure_waves += u64::from(failures.len() > 1);
     }
-    if old.status == RunStatus::Failed && !call_ended_it {
+    if old.status == FrozenStatus::Failed && !call_ended_it {
         let (phantoms, ceiling_preempted) = check_failed_run(seed, old, new, &failures, history);
         tally.phantom_invocations += phantoms;
         tally.ceiling_preempted_failures += u64::from(ceiling_preempted);
@@ -740,35 +728,39 @@ fn compare_new(
         tally.late_refusals += late.len() as u64;
     } else {
         assert!(late.is_empty(), "seed {seed}");
-        assert_eq!(facts(old), facts(new), "Graph facts differ, seed {seed}");
+        assert_eq!(
+            facts(&old.graph_record()),
+            facts(new),
+            "Graph facts differ, seed {seed}"
+        );
         match (old.status, phase) {
             (
-                RunStatus::Completed,
+                FrozenStatus::Completed,
                 Phase::Settled {
                     result: Outcome::Done,
                 },
             ) => tally.completed += 1,
             (
-                RunStatus::Stopped,
+                FrozenStatus::Stopped,
                 Phase::Settled {
                     result: Outcome::Escalated { .. },
                 },
             ) if !old.ceased.is_empty() => tally.round_limited += 1,
             (
-                RunStatus::Failed,
+                FrozenStatus::Failed,
                 Phase::Settled {
                     result: Outcome::Failed { .. },
                 },
             ) if node_failed => {}
             (
-                RunStatus::Failed,
+                FrozenStatus::Failed,
                 Phase::Settled {
                     result: Outcome::Failed { .. },
                 },
             ) if call_ended_it => tally.call_failed += 1,
             // S7: an unknown admission settles as unknown, not as failed.
             (
-                RunStatus::Failed,
+                FrozenStatus::Failed,
                 Phase::Settled {
                     result: Outcome::Unknown { .. },
                 },

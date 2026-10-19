@@ -77,7 +77,7 @@ async fn graph_webhook_missing_input_defaults_to_empty_object() {
     assert_eq!(status, StatusCode::ACCEPTED, "{accepted}");
     let run = accepted["run"].as_str().unwrap();
     wait_idle(&state).await;
-    let record = FileRunStore::new(state.data_root.join("runs"))
+    let record = fixtures::Reader::new(&state.application)
         .load(run)
         .unwrap()
         .unwrap();

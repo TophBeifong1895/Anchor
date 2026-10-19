@@ -3,9 +3,8 @@
 //! Each seed retains both original run-id/input namespaces. In particular,
 //! changing the run id changes durable invocation and GraphCall identities.
 use super::*;
-use flate2::{Compression, read::GzDecoder, write::GzEncoder};
+use flate2::read::GzDecoder;
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 use std::{
     fs::File,
     io::{BufRead, BufReader, Lines},
@@ -22,7 +21,7 @@ const ROOT: &str = concat!(
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub(crate) enum Population {
+pub enum Population {
     Serial,
     ParallelFailures,
     ParallelNoFailures,
@@ -31,7 +30,7 @@ pub(crate) enum Population {
 }
 
 impl Population {
-    pub(crate) const ALL: [Self; 5] = [
+    pub const ALL: [Self; 5] = [
         Self::Serial,
         Self::ParallelFailures,
         Self::ParallelNoFailures,
@@ -49,21 +48,12 @@ impl Population {
         }
     }
 
-    pub(crate) fn seeds(self) -> u64 {
+    pub fn seeds(self) -> u64 {
         if self == Self::Serial { 10_000 } else { 5_000 }
     }
 
-    pub(crate) fn inject_failures(self) -> bool {
+    pub fn inject_failures(self) -> bool {
         matches!(self, Self::Serial | Self::ParallelFailures)
-    }
-
-    fn graph(self, seed: u64) -> GraphSnapshot {
-        match self {
-            Self::Serial => random_graph(seed),
-            Self::ParallelFailures | Self::ParallelNoFailures => random_parallel_graph(seed),
-            Self::ParallelModules => random_parallel_module_graph(seed),
-            Self::Calls => random_call_graph(seed),
-        }
     }
 
     fn path(self) -> PathBuf {
@@ -92,9 +82,213 @@ struct Header {
     comparison: String,
 }
 
+// Historical wire types only. These have no executor, store, control or
+// compatibility role in the product; they retain evidence needed by S18.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FrozenStatus {
+    Ready,
+    Running,
+    Paused,
+    BudgetStopped,
+    WaitingCall,
+    WaitingRecovery,
+    Completed,
+    Aborted,
+    Stopped,
+    Failed,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FrozenCursor {
+    pub node_id: String,
+    pub key: InvocationKey,
+    pub input_commits: Vec<CommitRef>,
+    pub prepared_input: Value,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FrozenParallelBranch {
+    pub branch_id: String,
+    pub entry: String,
+    pub nodes: Vec<String>,
+    pub next_index: usize,
+    pub status: ParallelBranchStatus,
+    pub cursor: Option<FrozenCursor>,
+    /// Commits for the completed prefix of `nodes`, in dependency order.
+    pub completed: Vec<CommitRef>,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FrozenParallelActivation {
+    pub activation_id: String,
+    pub fanout_node: String,
+    pub join_node: String,
+    pub fanout_invocation: u64,
+    pub branches: Vec<FrozenParallelBranch>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FrozenOldRecord {
+    pub format: u32,
+    /// RFC 3339 UTC when the record was created. Absent on records written
+    /// before format 8: the real creation time is unknown and is deliberately
+    /// not inferred from file mtime.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub started: Option<String>,
+    /// Original legacy write time, retained as evidence.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub updated: Option<String>,
+    pub run_id: String,
+    pub graph_digest: String,
+    pub snapshot: GraphSnapshot,
+    pub input: Value,
+    pub status: FrozenStatus,
+    pub cursor: Option<FrozenCursor>,
+    #[serde(default)]
+    pub parallel: Option<FrozenParallelActivation>,
+    /// Persisted unresolved tool attempts. Each attempt is tied to
+    /// the exact serial or parallel invocation whose cursor remains active.
+    #[serde(default)]
+    pub recovery: Vec<PendingRecovery>,
+    #[serde(default)]
+    pub recovery_submissions: Vec<RecoverySubmission>,
+    #[serde(default)]
+    pub graph_calls: BTreeMap<String, GraphCallRecord>,
+    #[serde(default)]
+    pub plugin_bindings: BTreeMap<String, PluginBinding>,
+    #[serde(default)]
+    pub plugin_bindings_initialized: bool,
+    #[serde(default)]
+    pub invocations: BTreeMap<String, u64>,
+    pub passes: BTreeMap<String, u64>,
+    pub module_activations: BTreeMap<String, u64>,
+    pub ceased: BTreeSet<String>,
+    pub results: BTreeMap<String, Vec<RunResult>>,
+    pub decided: BTreeMap<String, EdgeDecision>,
+    pub sequence: u64,
+    pub error: Option<String>,
+}
+
+impl FrozenParallelActivation {
+    fn graph_progress(&self) -> ParallelActivation {
+        ParallelActivation {
+            activation_id: self.activation_id.clone(),
+            fanout_node: self.fanout_node.clone(),
+            join_node: self.join_node.clone(),
+            fanout_invocation: self.fanout_invocation,
+            branches: self
+                .branches
+                .iter()
+                .map(|branch| ParallelBranchRecord {
+                    branch_id: branch.branch_id.clone(),
+                    entry: branch.entry.clone(),
+                    nodes: branch.nodes.clone(),
+                    next_index: branch.next_index,
+                    status: branch.status,
+                    completed: branch.completed.clone(),
+                    error: branch.error.clone(),
+                })
+                .collect(),
+        }
+    }
+    #[cfg(test)]
+    fn from_graph(activation: &ParallelActivation) -> Self {
+        Self {
+            activation_id: activation.activation_id.clone(),
+            fanout_node: activation.fanout_node.clone(),
+            join_node: activation.join_node.clone(),
+            fanout_invocation: activation.fanout_invocation,
+            branches: activation
+                .branches
+                .iter()
+                .map(|branch| FrozenParallelBranch {
+                    branch_id: branch.branch_id.clone(),
+                    entry: branch.entry.clone(),
+                    nodes: branch.nodes.clone(),
+                    next_index: branch.next_index,
+                    status: branch.status,
+                    cursor: None,
+                    completed: branch.completed.clone(),
+                    error: branch.error.clone(),
+                })
+                .collect(),
+        }
+    }
+}
+
+impl FrozenOldRecord {
+    /// Test-only structural projection. Lifecycle and cursors stay in this
+    /// historical wire value and never enter live Graph facts or persistence.
+    pub fn graph_record(&self) -> GraphRunRecord {
+        GraphRunRecord {
+            format: RunRecordFormat,
+            started: self.started.clone(),
+            updated: self.updated.clone(),
+            run_id: self.run_id.clone(),
+            graph_digest: self.graph_digest.clone(),
+            snapshot: self.snapshot.clone(),
+            input: self.input.clone(),
+            parallel: self
+                .parallel
+                .as_ref()
+                .map(FrozenParallelActivation::graph_progress),
+            recovery: self.recovery.clone(),
+            recovery_submissions: self.recovery_submissions.clone(),
+            graph_calls: self.graph_calls.clone(),
+            plugin_bindings: self.plugin_bindings.clone(),
+            plugin_bindings_initialized: self.plugin_bindings_initialized,
+            invocations: self.invocations.clone(),
+            passes: self.passes.clone(),
+            module_activations: self.module_activations.clone(),
+            ceased: self.ceased.clone(),
+            results: self.results.clone(),
+            decided: self.decided.clone(),
+            sequence: self.sequence,
+            error: self.error.clone(),
+        }
+    }
+    #[cfg(test)]
+    pub(crate) fn from_graph(record: &GraphRunRecord) -> Self {
+        Self {
+            status: FrozenStatus::Ready,
+            cursor: None,
+            format: u32::from(record.format),
+            started: record.started.clone(),
+            updated: record.updated.clone(),
+            run_id: record.run_id.clone(),
+            graph_digest: record.graph_digest.clone(),
+            snapshot: record.snapshot.clone(),
+            input: record.input.clone(),
+            parallel: record
+                .parallel
+                .as_ref()
+                .map(FrozenParallelActivation::from_graph),
+            recovery: record.recovery.clone(),
+            recovery_submissions: record.recovery_submissions.clone(),
+            graph_calls: record.graph_calls.clone(),
+            plugin_bindings: record.plugin_bindings.clone(),
+            plugin_bindings_initialized: record.plugin_bindings_initialized,
+            invocations: record.invocations.clone(),
+            passes: record.passes.clone(),
+            module_activations: record.module_activations.clone(),
+            ceased: record.ceased.clone(),
+            results: record.results.clone(),
+            decided: record.decided.clone(),
+            sequence: record.sequence,
+            error: record.error.clone(),
+        }
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "admission", rename_all = "snake_case")]
-pub(crate) enum FrozenOutcome {
+pub enum FrozenOutcome {
     Accepted {
         trace: Trace,
         /// Complete legacy record, including branch cursors, full Work
@@ -107,7 +301,7 @@ pub(crate) enum FrozenOutcome {
 }
 
 impl FrozenOutcome {
-    pub(crate) fn accepted(&self) -> (&Trace, GraphRunRecord) {
+    pub fn accepted(&self) -> (&Trace, FrozenOldRecord) {
         match self {
             Self::Accepted { trace, record } => (
                 trace,
@@ -117,56 +311,16 @@ impl FrozenOutcome {
         }
     }
 
-    pub(crate) fn assert_rejection(&self, error: &GraphError) {
+    pub fn assert_rejection(&self, error: &GraphError) {
         match self {
             Self::Rejected { reason } => assert_eq!(reason, &error.to_string()),
             Self::Accepted { .. } => panic!("previously accepted seed rejected: {error}"),
         }
     }
-
-    pub(crate) fn assert_old(&self, trace: &Trace, record: &GraphRunRecord) {
-        let (frozen_trace, frozen_record) = self.accepted();
-        assert_eq!(
-            trace, frozen_trace,
-            "legacy trace differs from frozen baseline"
-        );
-        // Preserve all original bytes in the artifact. Only wall-clock times
-        // are omitted when a fresh legacy execution is checked against it.
-        let normalize = |r: &GraphRunRecord| {
-            let mut value = serde_json::to_value(r).unwrap();
-            value.as_object_mut().unwrap().remove("started");
-            value.as_object_mut().unwrap().remove("updated");
-            // Workspace feature unification can enable serde_json/preserve_order.
-            // Join/Call summaries are generated JSON, so compare their complete
-            // structure while leaving executor-authored text byte-exact.
-            for node in &r.snapshot.nodes {
-                let control = node
-                    .op
-                    .as_ref()
-                    .and_then(|id| r.snapshot.ops.get(id))
-                    .is_some_and(|op| op.get("join").is_some() || op.get("call").is_some());
-                if control && let Some(results) = value["results"][&node.id].as_array_mut() {
-                    for result in results {
-                        if let Some(summary) = result["completion"]["submission"].as_str()
-                            && let Ok(json) = serde_json::from_str::<Value>(summary)
-                        {
-                            result["completion"]["submission"] = json;
-                        }
-                    }
-                }
-            }
-            value
-        };
-        assert_eq!(
-            normalize(record),
-            normalize(&frozen_record),
-            "complete legacy facts differ from frozen baseline"
-        );
-    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub(crate) struct FrozenCase {
+pub struct FrozenCase {
     pub seed: u64,
     pub validator: FrozenOutcome,
     pub scheduler: FrozenOutcome,
@@ -174,14 +328,14 @@ pub(crate) struct FrozenCase {
 
 /// Stream one population so regular regression does not retain tens of
 /// thousands of complete legacy records in memory.
-pub(crate) struct Snapshots {
+pub struct Snapshots {
     lines: Lines<BufReader<GzDecoder<File>>>,
     population: Population,
     next_seed: u64,
 }
 
 impl Snapshots {
-    pub(crate) fn open(population: Population) -> Self {
+    pub fn open(population: Population) -> Self {
         let file = File::open(population.path()).expect("committed legacy snapshot");
         let mut lines = BufReader::new(GzDecoder::new(file)).lines();
         let header: Header =
@@ -210,7 +364,7 @@ impl Snapshots {
         }
     }
 
-    pub(crate) fn next(&mut self, seed: u64) -> FrozenCase {
+    pub fn next(&mut self, seed: u64) -> FrozenCase {
         assert_eq!(seed, self.next_seed, "snapshot seed order");
         let case: FrozenCase =
             serde_json::from_str(&self.lines.next().expect("snapshot missing seed").unwrap())
@@ -226,7 +380,7 @@ impl Snapshots {
         case
     }
 
-    pub(crate) fn at(population: Population, seed: u64) -> FrozenCase {
+    pub fn at(population: Population, seed: u64) -> FrozenCase {
         let mut snapshots = Self::open(population);
         for skipped in 0..seed {
             snapshots.next(skipped);
@@ -235,112 +389,8 @@ impl Snapshots {
     }
 }
 
-async fn freeze_outcome(
-    snapshot: GraphSnapshot,
-    input: Value,
-    run_id: String,
-    seed: u64,
-    inject_failures: bool,
-) -> FrozenOutcome {
-    match GraphRunRecord::create_with_id(snapshot, input, run_id) {
-        Ok(record) => {
-            let (trace, record) = run_old(record, seed, inject_failures).await;
-            FrozenOutcome::Accepted {
-                trace,
-                record: serde_json::to_value(record).unwrap(),
-            }
-        }
-        Err(error) => FrozenOutcome::Rejected {
-            reason: error.to_string(),
-        },
-    }
-}
-
-async fn freeze(population: Population) {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let sources = [
-        "src/graph/test_support.rs",
-        "src/graph/runner.rs",
-        "src/graph/parallel.rs",
-        "src/graph/logic.rs",
-        "src/graph/state.rs",
-        "src/graph/test_support/snapshots.rs",
-    ]
-    .into_iter()
-    .map(|path| Source {
-        path: format!("rust/anchor-runtime/{path}"),
-        sha256: format!("{:x}", Sha256::digest(fs::read(root.join(path)).unwrap())),
-    })
-    .collect();
-    let header = Header {
-        format: FORMAT,
-        generator_version: GENERATOR_VERSION.into(),
-        generator_sources: sources,
-        legacy_runner_baseline: BASELINE.into(),
-        population,
-        seed_start: 0,
-        seed_end_exclusive: population.seeds(),
-        cases: population.seeds(),
-        inject_failures: population.inject_failures(),
-        namespaces: BTreeMap::from([
-            ("validator".into(), "run_id=r{seed}; input={}".into()),
-            ("scheduler".into(), if population == Population::Calls {
-                "run_id=scheduler-calls-{seed}; input={}"
-            } else {
-                "run_id=scheduler-diff-{seed}; input=null"
-            }.into()),
-        ]),
-        comparison: "Preserve full legacy records; omit only started/updated wall-clock fields when comparing fresh legacy execution. Kernel comparisons retain the existing differential rules and S18 invariants; no byte-equality requirement between legacy and Kernel.".into(),
-    };
-    fs::create_dir_all(ROOT).unwrap();
-    let temporary = population.path().with_extension("gz.new");
-    let mut output = GzEncoder::new(File::create(&temporary).unwrap(), Compression::default());
-    serde_json::to_writer(&mut output, &header).unwrap();
-    output.write_all(b"\n").unwrap();
-    for seed in 0..population.seeds() {
-        let snapshot = population.graph(seed);
-        let validator = freeze_outcome(
-            snapshot.clone(),
-            serde_json::json!({}),
-            format!("r{seed}"),
-            seed,
-            population.inject_failures(),
-        )
-        .await;
-        let (run_id, input) = if population == Population::Calls {
-            (format!("scheduler-calls-{seed}"), serde_json::json!({}))
-        } else {
-            (format!("scheduler-diff-{seed}"), Value::Null)
-        };
-        let scheduler =
-            freeze_outcome(snapshot, input, run_id, seed, population.inject_failures()).await;
-        serde_json::to_writer(
-            &mut output,
-            &FrozenCase {
-                seed,
-                validator,
-                scheduler,
-            },
-        )
-        .unwrap();
-        output.write_all(b"\n").unwrap();
-    }
-    output.finish().unwrap().sync_all().unwrap();
-    fs::rename(temporary, population.path()).unwrap();
-    eprintln!(
-        "frozen {:?}: {} seeds, validator + scheduler namespaces",
-        population,
-        population.seeds()
-    );
-}
-
-#[tokio::test]
-async fn old_runner_snapshots_have_provenance_and_refresh_only_when_explicit() {
-    if std::env::var("ANCHOR_UPDATE_LEGACY_SNAPSHOTS").as_deref() == Ok("1") {
-        for population in Population::ALL {
-            freeze(population).await;
-        }
-    }
+#[test]
+fn frozen_snapshots_have_complete_provenance() {
     for population in Population::ALL {
         let _ = Snapshots::open(population);
     }

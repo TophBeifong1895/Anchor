@@ -2,11 +2,13 @@
 
 ## 当前实现
 
-按迁移任务书 §10.11 同步 master `d968ba5` 的门面实现。F0 为 `e3a5778`，F1 切片为 `06f7b8a`、`c21b382`、`0116074`，G0 `250435d` 经 `3b7d1d9` 合入。`application/run_access` 统一 Run 读取、状态规则、意图写入及 HTTP/Pilot/通道兼容序列化。Graph/会话用例只消费安全视图、谓词及意图操作；不可拆开的执行/保存协议留在门面内部，避免暴露原始 record 作为中间产物。master 的 F1/F2 保留原持久格式、对外词汇、权限、锁顺序及写入顺序，未修改既有测试断言。本分支继续采用已批准的三相位、独立 pause 和 phase/waiter/outcome/actions 对外契约；历史 wire 字节基线按该契约对齐。F1 后另交 `cc99091` 修正用户指定的三项 G0 fixture/断言，与门面重构分开。
+`application/run_access` 是 Host 读取与改变 Run 的唯一门面。HTTP、Pilot、Graph、会话、助手与渠道只消费安全视图、谓词或意图操作；平台和独立宿主统一调用 KernelScheduler，不再按存储分派。原执行器、整体记录存储、旧状态枚举与兼容序列化桥已删除。旧 Run 文件只检查存在性并具名拒绝，不读取内容；当前 GraphRunRecord format 为 14。
 
-读取切片补齐 Graph/会话/恢复/删除规则和 Pilot Session 兼容输出；F2 迁入最后恢复决定写入协议后，业务围栏从 224 经 193、99、5 降为 0，无新增运行时豁免。`RunView` 只提供新相位、活动观察、持久更新时间、只读 Graph 进度及谓词；record 为私有 Cow，既不 Deref 也没有原始 record getter，不公开 status/error/cursor/recovery/recovery_submissions。`read_run`、`run_views`、`runs_for_graph` 返回拥有数据的安全视图；原始枚举仅在门面内部可用，旧 `records()` 只在测试编译保留。outcome 保留 escalated/unknown 契约，master 旧状态映射为 done/failed/aborted。围栏数不是规则度量；上述规则收敛与测试数属于上游已验基线；本次合并已通过 workspace、Web 与完整 Goose ignored 回归；Kernel 显式路径由 workspace 覆盖，Goose 保持默认旧 Runner，见[合并验证](../experiments/constitution-host-preflight/m2/merge-verification.md)。M2 后续能力与最终验证见 [M2 交回](../experiments/constitution-host-preflight/m2/completion-verification.md)。
+业务围栏从 F0 的 224 降为 0，无新增运行时豁免。`RunView` 提供 Phase、worker、Host 更新时间、只读 Graph 进度与 frontier；私有 record 既不 Deref 也无 getter。生命周期仅来自 Kernel，GraphRunRecord 不再持有 status/cursor。历史 error/recovery 等残余字段留待 M4 清理，不能作为生命周期权威。原 16 save / 36 mutation 的逐项去向见 [C2 审计](../experiments/constitution-host-preflight/m3/c2-destinations.md)。
 
-默认入口仍保留旧 Runner 作为 M2 对照。显式 `execution=kernel_probe` 的所有权、相位、删除、Call、测量与人工恢复均在门面内；常驻助手用 `ANCHOR_ASSISTANT_EXECUTION=kernel_probe` 显式选择。RunView 的 invocation、绑定与活动节点从 GraphValidator frontier 只读派生；未知效果的 attempts/决定从已接受 Kernel history 投影，普通 resume 不释放 pending。原生工具观察先追加核查说明，再 Human resume/abandon，不制造工具成功或模型完成。并行分支 Op.call 由两条路径的共用 `reject_snapshot` 准入拒绝，按 §10.12 属于产品规则。M2 本地实现与验收见 [M2 交回](../experiments/constitution-host-preflight/m2/completion-verification.md)，M3 未开始。
+所有新 Run 默认走 Kernel，`execution` 选择字段被拒绝。frontier 决定当前 invocation；未知效果 attempts/人工决定从已接受 Kernel history 投影，执行端口先追加核查说明，再 Human resume/abandon，不制造工具成功或模型完成。未结算时普通 resume 不释放 pending；显式 abandon 后保留观察而允许 Session 交接。并行分支 Op.call 仍由 Host 共用 `reject_snapshot` 准入拒绝，不改 GraphValidator。
+
+唯一 worker 表属于 KernelRuns：同步登记后才返回触发结果，guard 在退出、abort 或未 poll future 丢弃时释放。abandon 同步结算并等待 worker 排空；stop 先提交停止再取消；pause 通过持久意图与事件在结果后的派发边界消费，无停止标志轮询。逐条规则和 Session 单写入者审计见 [M3 规则表](../experiments/constitution-host-preflight/m3/rules-session-audit.md)。
 
 [围栏测试](../rust/anchor-runner-host/tests/run_access_fence.rs) 扫描 `anchor-runner-host/src/**/*.rs`，对 `RunStatus`、`GraphRunRecord`、`RunStore`、`FileRunStore`、`GraphRunner`、`RunCursor` 六种内部类型的精确标识符逐次计数。[业务基线](../rust/anchor-runner-host/run-access-fence.txt) 是逐文件上限：超过上限或清单外业务文件出现引用会失败；下降或删除文件时提示同步降低清单，不自动改写它。
 
@@ -28,28 +30,28 @@
 
 ## 意图写入与存储边界
 
-生产 `store()` 仅 `application/run_access` 可见，`prepare_resume`、`spawn` 与原始状态校验也限定在门面；没有可从业务调用的通用 save 或 status setter。测试编译单独保留 application 范围的 store 入口及旧 records 入口，供原有 fixture 构造，不扩大生产权限。
+没有业务可调用的通用 save、status setter 或可变 record。创建是纯初始值准入，其后的 Run 状态与 Graph 事实均经 Kernel::submit；测试夹具同样通过实际 Kernel 创建及 Code/Human 提交推进，不直接改写持久相位。
 
 | 意图操作 | 权威实现（`application/run_access/`） | 保留的不变量 |
 | --- | --- | --- |
 | `admit` | `admission.rs` | 原准入校验、冻结 Graph/权限、元数据、保存与启动顺序 |
 | `admit_conversation`、`admit_assistant_run` | `conversations.rs`、`graph_policy.rs` | 原会话去重、前驱与助手范围、Graph/Run 租约与执行登记 |
-| `stop`、`pause`、`resume` | `control.rs` | 旧 `control` 仅兼容分发；身份、Session 协调、恢复、控制原子量及保存顺序不变 |
-| `finish_abandon` | `abandon.rs` | 用例先持久 abandon intent、取消并等待；门面核验后终结，不新增 touch |
-| `record_recovery_decision` | `recovery.rs`、`kernel_runs/recovery.rs` | 旧路径协议保留；Kernel 先持久化端口核查事实，再提交 Human 控制；多 pending、幂等、冲突与排空检查在门面内 |
+| `stop`、`pause`、`resume` | `control.rs`、`kernel_runs.rs` | 身份/Session 协调与宿主执行约束保留；生命周期由 Kernel 控制裁决 |
+| `finish_kernel_abandon` | `abandon.rs` | 先保存 abandon intent，再 Human abandon、取消并等待 worker；重启幂等收尾 |
+| `record_recovery_decision` | `recovery.rs`、`kernel_runs/recovery.rs` | 先持久化端口核查事实，再提交 Human 控制；多 pending、幂等、冲突与排空检查在门面内 |
 | `stop_session_call`、`yield_session_call`、`execute_session_call`、`settle_session_call` | `session_calls.rs` | Session 仲裁、交付、执行登记与写入先后不变 |
-| `release_parent_after_recorded_delivery`、`child_finished` | `dispatch.rs` | 先持久交付再释放父 Run，保留等待匹配及取消传播 |
+| `release_parent_after_recorded_delivery`、`kernel_child_finished` | `dispatch.rs` | 先持久交付再释放父 Run，保留等待匹配及取消传播 |
 | `delete_cascaded_run`、`delete_inactive_run` | `graph_policy.rs` | 各自保留原前置条件；清理 owned data 后再删除 Run/元数据，Graph 级联继续持有 Graph 租约 |
 
 业务 `recover` 只把决策交给 `record_recovery_decision`，不再持有原始 record。Graph/单 Run 删除也通过门面的原有按意图清理协议，不用通用可变访问器替代。
 
 ## HTTP 字节基线
 
-[新增 HTTP 回归](../rust/anchor-runner-host/src/api/tests/run_access_json.rs) 固定 Run 身份与时间，逐字节比较 `/runs` 的原始响应，不先解析或重新序列化 JSON。覆盖十种旧存储状态及其非活动投影；按已批准 S19–S24、S26 改为 phase/waiter/outcome/reason、四动作及宿主更新时间，仍逐字节比较字段顺序，不保留旧 status、terminal、quiescent 或 needs_attention 字段。等待恢复的样本保留有效 cursor 与待处理 attempt。
+[新增 HTTP 回归](../rust/anchor-runner-host/src/api/tests/run_access_json.rs) 固定 Run 身份与时间，逐字节比较 `/runs` 的原始响应，不先解析或重新序列化 JSON。通过真实 Kernel 提交构造十类相位与活动投影；按已批准 S19–S24、S26 改为 phase/waiter/outcome/reason、四动作及宿主更新时间，仍逐字节比较字段顺序，不保留旧 status、terminal、quiescent 或 needs_attention 字段。等待恢复的样本保留同一 frontier invocation 与待处理 attempt。
 
 当前序列化保留字段插入顺序。本次 F1/F2 接口对齐仍须比较原始响应字节；新相位词汇断言调整已登记在工作记录 M1.5。新增基线不替代后续详情、Pilot、活动执行、并发控制和恢复路径的原有断言与专项核查。
 
-master 的 [详情/abandon 字节回归](../rust/anchor-runner-host/src/application/run_access/http.rs) 固定十种状态的完整详情与 abandon 原始序列化；上游的 [Pilot 字节回归](../rust/anchor-runner-host/src/application/run_access/tests.rs) 固定 Run 列表/详情及十种状态的 Session retained-record 输出。record 部分与重构前直接序列化的字段顺序逐字节比较，不用解析后的对象等价替代。HTTP 的更新时间继续取文件元数据，不改为 `RunView::updated()` 的持久字段；后者保留为只读契约并有独立测试。
+master 的 [详情/abandon 字节回归](../rust/anchor-runner-host/src/application/run_access/http.rs) 覆盖真实 Kernel 场景的完整详情与 abandon 原始序列化；上游的 [Pilot 字节回归](../rust/anchor-runner-host/src/application/run_access/tests.rs) 固定 Run 列表/详情及十种状态的 Session retained-record 输出。record 部分与重构前直接序列化的字段顺序逐字节比较，不用解析后的对象等价替代。HTTP 更新时间取 Host 的接受提交观察；字节基线使用本次观察值，独立控制测试验证更新时间与只读列表/详情一致。
 
 ## 规则度量：全 Host 读取规则
 

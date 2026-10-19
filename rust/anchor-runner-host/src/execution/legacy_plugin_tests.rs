@@ -1,12 +1,11 @@
 use super::*;
+use crate::application::run_access::fixtures;
 use anchor_graph_host::{FilePluginCatalog, PluginCatalog};
-use anchor_runtime::graph::{GraphCallRecord, GraphCallStatus, RunCursor};
 use serde_json::{Value, json};
 use std::{
     ffi::OsString,
     fs,
     path::{Path, PathBuf},
-    sync::{Arc, atomic::AtomicBool},
 };
 
 struct Environment(Vec<(&'static str, Option<OsString>)>);
@@ -121,13 +120,12 @@ fn legacy_record(id: &str, current: &PluginBinding) -> GraphRunRecord {
         .plugin_bindings
         .insert(current.id.clone(), current.clone());
     record.plugin_bindings_initialized = true;
-    record.status = RunStatus::Paused;
     record
 }
 
 /// Persist the pre-baseline authorization shape: a current-format record whose
 /// bindings omit `authorization_digest`, as the old serializer wrote them.
-fn legacy_file(root: &Path, record: &GraphRunRecord) -> (FileRunStore, PathBuf, Vec<u8>) {
+fn legacy_file(root: &Path, record: &GraphRunRecord) -> (PathBuf, Vec<u8>) {
     legacy_file_with_format(root, record, None)
 }
 
@@ -136,7 +134,7 @@ fn legacy_file_with_format(
     root: &Path,
     record: &GraphRunRecord,
     format: Option<u32>,
-) -> (FileRunStore, PathBuf, Vec<u8>) {
+) -> (PathBuf, Vec<u8>) {
     let directory = root.join("state/runs");
     fs::create_dir_all(&directory).unwrap();
     let path = directory.join(format!("{}.json", record.run_id));
@@ -156,7 +154,7 @@ fn legacy_file_with_format(
     }
     let bytes = serde_json::to_vec(&value).unwrap();
     fs::write(&path, &bytes).unwrap();
-    (FileRunStore::new(directory), path, bytes)
+    (path, bytes)
 }
 
 fn prepare(
@@ -168,7 +166,6 @@ fn prepare(
         record,
         HostControl {
             cancellation: Default::default(),
-            pause: Arc::new(AtomicBool::new(true)),
         },
         bindings,
         Some(root.to_path_buf()),
@@ -178,32 +175,26 @@ fn prepare(
 }
 
 #[tokio::test]
-async fn legacy_mcp_preparation_and_load_require_offline_migration_without_rewrite() {
+async fn legacy_mcp_preparation_and_load_refuse_retired_records_without_rewrite() {
     let _env_guard = crate::PROCESS_ENV_LOCK.lock().await;
     let root = tempfile::tempdir().unwrap();
     let _environment = Environment::configure(root.path());
     let (_, current) = plugin(root.path());
-    // Old authorization alone, then together with an old record schema. The
-    // caller's in-memory view is current; only the durable decode can refuse.
-    for (id, format, refusal) in [
-        ("legacy-mcp", None, "old authorization format"),
-        ("legacy-mcp-format", Some(12), "old Graph Run format"),
-    ] {
+    // Retired storage is refused by identity without decoding or rewriting
+    // either authorization shape.
+    for (id, format) in [("legacy-mcp", None), ("legacy-mcp-format", Some(12))] {
         let record = legacy_record(id, &current);
-        let (store, path, original_bytes) = legacy_file_with_format(root.path(), &record, format);
+        let (path, original_bytes) = legacy_file_with_format(root.path(), &record, format);
         let error = match prepare(root.path(), &record, record.plugin_bindings.clone()) {
             Ok(_) => panic!("legacy {id} was accepted"),
             Err(error) => error,
         };
-        assert!(
-            error.contains(refusal) && error.contains("offline migration required"),
-            "{error}"
-        );
-        let error = store.load(&record.run_id).unwrap_err().to_string();
-        assert!(
-            error.contains(refusal) && error.contains("offline migration required"),
-            "{error}"
-        );
+        assert!(error.contains("legacy_run_record"), "{error}");
+        let error =
+            crate::application::run_access::load(&root.path().join("state"), &record.run_id)
+                .unwrap_err()
+                .to_string();
+        assert!(error.contains("legacy_run_record"), "{error}");
         assert_eq!(fs::read(path).unwrap(), original_bytes);
         assert_no_execution_state(root.path(), &record.run_id);
     }
@@ -260,22 +251,19 @@ async fn changed_or_ambiguous_legacy_mcp_bindings_fail_before_durable_state_chan
         }
         // The durable file carries the changed binding without an authorization
         // baseline; no in-memory copy of that binding can exist.
-        let (store, path, original_bytes) = legacy_file(root.path(), &record);
+        let (path, original_bytes) = legacy_file(root.path(), &record);
         let current = FilePluginCatalog::new(root.path().join("library"))
             .resolve(&["research".into()])
             .unwrap()
             .remove(0);
-        // The application obtains durable bindings only by loading the saved
-        // record, so its path is refused at that decode.
-        let error = store.load(&record.run_id).unwrap_err().to_string();
-        assert!(
-            error.contains("old authorization format")
-                && error.contains("offline migration required"),
-            "{change}: {error}"
-        );
+        // Every entrypoint refuses the retired owner before consuming bindings.
+        let error =
+            crate::application::run_access::load(&root.path().join("state"), &record.run_id)
+                .unwrap_err()
+                .to_string();
+        assert!(error.contains("legacy_run_record"), "{change}: {error}");
         assert_eq!(fs::read(&path).unwrap(), original_bytes);
-        // The CLI supplies current bindings before it loads the saved record.
-        // Preparation must still reach the durable decode and refuse there.
+        // Fresh caller bindings cannot give a retired Run a new authority.
         let expected = legacy_record(&record.run_id, &current);
         let error = match prepare(
             root.path(),
@@ -285,11 +273,7 @@ async fn changed_or_ambiguous_legacy_mcp_bindings_fail_before_durable_state_chan
             Ok(_) => panic!("legacy {change} change was accepted"),
             Err(error) => error,
         };
-        assert!(
-            error.contains("old authorization format")
-                && error.contains("offline migration required"),
-            "{change}: {error}"
-        );
+        assert!(error.contains("legacy_run_record"), "{change}: {error}");
         assert_eq!(fs::read(&path).unwrap(), original_bytes);
         assert_no_execution_state(root.path(), &record.run_id);
     }
@@ -302,7 +286,7 @@ async fn a_waiting_parents_preparation_validates_its_legacy_child_without_upgrad
     let _environment = Environment::configure(root.path());
     let (directory, current) = plugin(root.path());
     let child = legacy_record("legacy-child", &current);
-    let (_, child_path, child_bytes) = legacy_file(root.path(), &child);
+    let (child_path, child_bytes) = legacy_file(root.path(), &child);
     let spec = json!({"graph":"child","mode":"wait"});
     let snapshot = GraphSnapshot::admit(json!({
         "objective":"validate a waiting child's legacy identity",
@@ -310,55 +294,23 @@ async fn a_waiting_parents_preparation_validates_its_legacy_child_without_upgrad
         "nodes":[{"id":"invoke","op":"invoke"}],"edges":[]
     }))
     .unwrap();
-    let mut parent =
-        GraphRunRecord::create_with_id(snapshot, Value::Null, "waiting-parent").unwrap();
-    let identity = CallIdentity {
-        parent_run_id: parent.run_id.clone(),
-        parent_graph_digest: parent.graph_digest.clone(),
-        node_id: "invoke".into(),
-        invocation: 1,
-        call_spec_digest: format!(
-            "{:x}",
-            sha2::Sha256::digest(serde_json::to_vec(&spec).unwrap())
-        ),
-    };
-    parent.graph_calls.insert(
-        identity.durable_key(),
-        GraphCallRecord {
-            identity,
-            graph: "child".into(),
-            child_run_id: Some(child.run_id),
-            mode: "wait".into(),
-            status: GraphCallStatus::Waiting,
-            output: None,
-            error: None,
-        },
-    );
-    parent.cursor = Some(RunCursor {
-        node_id: "invoke".into(),
-        key: InvocationKey {
-            run_id: parent.run_id.clone(),
-            graph_digest: parent.graph_digest.clone(),
-            node_id: "invoke".into(),
-            invocation: 1,
-        },
-        input_commits: vec![],
-        prepared_input: json!({"input":Value::Null,"committed_inputs":[]}),
-    });
-    parent.invocations.insert("invoke".into(), 1);
-    parent.passes.insert("invoke".into(), 1);
-    parent.status = RunStatus::WaitingCall;
-    let (_, parent_path, parent_bytes) = legacy_file(root.path(), &parent);
+    let parent = GraphRunRecord::create_with_id(snapshot, Value::Null, "waiting-parent").unwrap();
+    let application = crate::node_host::test_runs::application(&root.path().join("state"));
+    fixtures::create(&application, &parent);
+    fixtures::bind_child(&application, &parent.run_id, "invoke", &child.run_id);
+    let parent = fixtures::record(&application, &parent.run_id);
+    drop(application);
+    let parent_path = root
+        .path()
+        .join("state/kernel-runs/run%2Fwaiting-parent/resource.json");
+    let parent_bytes = fs::read(&parent_path).unwrap();
     let error = match prepare(root.path(), &parent, BTreeMap::new()) {
         Ok(_) => panic!("legacy child was accepted"),
         Err(error) => error,
     };
-    // The parent holds no Plugin binding, so its file is current; the refusal
-    // must come from decoding the waiting child's legacy authorization.
-    assert!(
-        error.contains("old authorization format") && error.contains("offline migration required"),
-        "{error}"
-    );
+    // The Kernel parent is current. Its independently owned child remains
+    // retired and must be refused without modifying either fact.
+    assert!(error.contains("legacy_run_record"), "{error}");
     assert_eq!(fs::read(&child_path).unwrap(), child_bytes);
     assert_eq!(fs::read(&parent_path).unwrap(), parent_bytes);
 
@@ -367,10 +319,7 @@ async fn a_waiting_parents_preparation_validates_its_legacy_child_without_upgrad
         Ok(_) => panic!("parent preparation ignored its child's legacy identity"),
         Err(error) => error,
     };
-    assert!(
-        error.contains("old authorization format") && error.contains("offline migration required"),
-        "{error}"
-    );
+    assert!(error.contains("legacy_run_record"), "{error}");
     assert_eq!(fs::read(child_path).unwrap(), child_bytes);
     assert_eq!(fs::read(parent_path).unwrap(), parent_bytes);
 }
@@ -380,13 +329,20 @@ async fn legacy_mcp_preparation_refuses_mutable_declaration_files() {
     let _env_guard = crate::PROCESS_ENV_LOCK.lock().await;
     let root = tempfile::tempdir().unwrap();
     let _environment = Environment::configure(root.path());
-    for (path, config) in [(".mcp.json", ".mcp.json"), ("state/", "state/mcp.json")] {
+    for (index, (path, config)) in [(".mcp.json", ".mcp.json"), ("state/", "state/mcp.json")]
+        .into_iter()
+        .enumerate()
+    {
         let (directory, current) = plugin(root.path());
-        let mut record = legacy_record("mutable-mcp", &current);
+        let mut record = legacy_record(&format!("mutable-mcp-{index}"), &current);
         record.plugin_bindings.insert(current.id.clone(), current);
-        let store = FileRunStore::new(root.path().join("state/runs"));
-        store.save(&record).unwrap();
-        let record_path = root.path().join("state/runs/mutable-mcp.json");
+        let application = crate::node_host::test_runs::application(&root.path().join("state"));
+        fixtures::create(&application, &record);
+        fixtures::control(&application, &record.run_id, "stop", "paused");
+        drop(application);
+        let record_path = root.path().join(format!(
+            "state/kernel-runs/run%2Fmutable-mcp-{index}/resource.json"
+        ));
         let original_bytes = fs::read(&record_path).unwrap();
         fs::write(
             directory.join("plugin.json"),

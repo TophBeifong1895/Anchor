@@ -29,11 +29,8 @@ fn kernel_unknown_native_effect_requires_a_durable_human_decision_before_continu
         );
         let host = Host::new(&graph).default_runtime();
         let mut server = host.serve(&provider);
-        let (status, accepted) = server.request(
-            "POST",
-            "/trigger",
-            Some(&json!({"graph":"fixture","execution":"kernel_probe"})),
-        );
+        let (status, accepted) =
+            server.request("POST", "/trigger", Some(&json!({"graph":"fixture"})));
         assert_eq!(status, 202, "{accepted}");
         let run = accepted["run"].as_str().unwrap();
         wait_until("tool effect exists before its result", || {

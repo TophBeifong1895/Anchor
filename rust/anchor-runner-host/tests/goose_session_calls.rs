@@ -404,20 +404,23 @@ fn metadata(host: &Host, run: &str) -> Value {
 }
 
 fn record_bytes(host: &Host, run: &str, directory: &str) -> Vec<u8> {
-    fs::read(
-        host.base
-            .root
-            .path()
-            .join("state")
-            .join(directory)
-            .join(format!("{run}.json")),
-    )
-    .unwrap()
+    let root = host.base.root.path().join("state");
+    let path = if directory == "runs" {
+        root.join("kernel-runs")
+            .join(format!("run%2F{run}"))
+            .join("resource.json")
+    } else {
+        root.join(directory).join(format!("{run}.json"))
+    };
+    fs::read(path).unwrap()
 }
 
 fn assert_artifact(host: &Host, run: &str, node: &str, name: &str, expected: &[u8]) -> Value {
     let record = host.record(run);
-    assert_eq!(record["status"], "completed", "{record}");
+    assert_eq!(
+        record["projection"]["result"]["outcome"], "done",
+        "{record}"
+    );
     assert_eq!(record["invocations"][node], 1);
     assert_eq!(host.base.file(&record, node, name), expected);
     assert_eq!(
@@ -785,7 +788,7 @@ fn native_goose_session_call_yield_foreground_restart_continue_same_run_without_
     gate.open();
     assert_eq!(stopped_detail["session_call"]["status"], "pending");
     let stopped = host.record(&child);
-    assert_eq!(stopped["cursor"]["key"], before_fact["key"]);
+    assert_eq!(stopped["frontier"][0]["key"], before_fact["key"]);
     let frozen_record = record_bytes(&host, &child, "runs");
     let frozen_metadata = record_bytes(&host, &child, "run-metadata");
     provider.append(foreground_steps(&foreground_marker, Some(&call_marker)));
@@ -921,6 +924,132 @@ fn native_goose_session_call_yield_foreground_restart_continue_same_run_without_
         "changed_binding_rejected":changed_binding,"ordinary_old_run_resume_rejected":old_run_resume,
         "tool_effect_count":1,
         "fresh_observation_required":true,"local_ack":receipt,
+        "boundary":"local public Session APIs and ACK fixture only; no channel supervisor or platform delivery"
+    }));
+}
+
+#[test]
+#[ignore = "requires explicit pinned Goose v1.53.0 binary in ANCHOR_GOOSE_BINARY"]
+fn native_goose_session_call_recovers_unknown_effect_by_inspection_without_replay() {
+    let marker = nonce("pending-effect");
+    let provider = Provider::new(
+        "goose-session-call-pending-effect-recovery",
+        vec![command(&format!(
+            "set -eu; test ! -e effects.txt; printf once >> effects.txt; printf %s '{marker}' > evidence.txt; sleep 3600"
+        ))],
+    );
+    let boundary = SessionBoundary::new(&provider);
+    let host = host("wait", &marker, &boundary);
+    let mut server = host.serve(&provider);
+    create_child(&server);
+    let (parent, child) = admit_child(&server, "wait", &marker, "pending-map");
+    execute(&server, &child, None);
+    wait_until("Session call effect exists before its result", || {
+        host.base.workspace_files(&child, "effects.txt") == vec![b"once".to_vec()]
+    });
+    let before = host.native_fact(&child, "worker", 1);
+    assert!(before["completion"].is_null());
+    assert!(before["tool_observation"]["result"].is_null());
+    assert_eq!(before["tool_observation"]["tool"], "anchor_run");
+    let binding = record_bytes(&host, &child, "run-metadata");
+    server.kill();
+    drop(server);
+
+    let server = host.serve(&provider);
+    assert_eq!(provider.requests().len(), 1);
+    // The first drive observes the interrupted native attempt and persists
+    // the Kernel stop, without starting a model request or repeating the tool.
+    execute(&server, &child, None);
+    let mut pending = Value::Null;
+    wait_until("Session call records its unresolved native attempt", || {
+        let (status, detail) = server.request("GET", &format!("/runs/{child}"), None);
+        assert_eq!(status, 200, "{detail}");
+        pending = detail;
+        pending["active"] == false
+            && pending["projection"]["waiting_for"] == "human"
+            && pending["state"]["recovery"]
+                .as_array()
+                .is_some_and(|a| a.len() == 1)
+    });
+    assert_eq!(provider.requests().len(), 1);
+    let frozen = record_bytes(&host, &child, "runs");
+    let attempt = pending["state"]["recovery"][0]["attempt"]["attempt_id"].clone();
+    for (operation, body) in [
+        ("resume", None),
+        (
+            "recovery",
+            Some(
+                json!({"node_id":"worker","invocation":1,"attempt_id":attempt,
+            "decision":"completed","observation":"Inspect the actual existing effect"}),
+            ),
+        ),
+    ] {
+        let (status, rejected) =
+            server.request("POST", &format!("/runs/{child}/{operation}"), body.as_ref());
+        assert_eq!(status, 409, "{rejected}");
+        assert_eq!(record_bytes(&host, &child, "runs"), frozen);
+        assert_eq!(record_bytes(&host, &child, "run-metadata"), binding);
+        assert_eq!(provider.requests().len(), 1);
+    }
+    for (session, previous) in [("another-session", None), (SESSION, Some("missing-run"))] {
+        let (status, rejected) = execution(&server, &child, session, previous);
+        assert_eq!(status, 409, "{rejected}");
+        assert_eq!(record_bytes(&host, &child, "runs"), frozen);
+        assert_eq!(host.native_fact(&child, "worker", 1), before);
+        assert_eq!(provider.requests().len(), 1);
+    }
+
+    let gate = Gate::new();
+    provider.append(vec![
+        complete("verify").expect_request_contains("Its effect is unknown").gated(&gate),
+        command(&format!("set -eu; test \"$(cat effects.txt)\" = once; test \"$(cat evidence.txt)\" = '{marker}'; printf inspected-once; cat evidence.txt"))
+            .after("final_result.observed_receipt must match"),
+        complete("verify").after("inspected-once"),
+    ]);
+    execute(&server, &child, None);
+    gate.wait_entered();
+    let inspected = host.native_fact(&child, "worker", 1);
+    assert_eq!(inspected["key"], before["key"]);
+    assert_eq!(inspected["session_id"], before["session_id"]);
+    assert_eq!(inspected["tool_observation"]["result"], Value::Null);
+    assert_eq!(inspected["completion"], Value::Null);
+    assert_eq!(
+        inspected["tool_observation"]["operator_decision"]["decision"],
+        "completed"
+    );
+    assert!(
+        inspected["tool_observation"]["operator_decision"]["observation"]
+            .as_str()
+            .unwrap()
+            .contains("do not blindly repeat it")
+    );
+    gate.open();
+    let completed = server.wait_status(&child, "completed");
+    assert!(
+        completed["state"]["recovery"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(record_bytes(&host, &child, "run-metadata"), binding);
+    let after = host.native_fact(&child, "worker", 1);
+    assert_eq!(after["key"], before["key"]);
+    assert_eq!(after["session_id"], before["session_id"]);
+    assert_eq!(host.record(&child)["invocations"]["worker"], 1);
+    assert_artifact(&host, &child, "worker", "effects.txt", b"once");
+    assert_artifact(&host, &child, "worker", "evidence.txt", marker.as_bytes());
+    assert_artifact(&host, &child, "verify", "verified-effects.txt", b"once");
+    provider.assert_consumed();
+    assert_eq!(provider.requests().len(), 4);
+    let receipt = boundary.ack(&completed);
+    settle(&server, &child);
+    server.wait_status(&parent, "completed");
+    boundary.assert_resolved_once(&parent);
+    host.evidence(&provider, &child, json!({
+        "case_source":CASE_SOURCE,"before_fact":before,"pending":pending,
+        "native_inspection_decision":inspected,"after_fact":after,"local_ack":receipt,
+        "same_run_invocation_and_session":true,"tool_effect_count":1,
+        "ordinary_resume_and_recovery_rejected":true,"fresh_observation_required":true,
         "boundary":"local public Session APIs and ACK fixture only; no channel supervisor or platform delivery"
     }));
 }

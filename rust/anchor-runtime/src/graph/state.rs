@@ -39,28 +39,6 @@ pub struct NodeCompletion {
     pub output: Value,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum RunStatus {
-    Ready,
-    Running,
-    Paused,
-    BudgetStopped,
-    WaitingCall,
-    WaitingRecovery,
-    Completed,
-    Aborted,
-    Stopped,
-    Failed,
-}
-
-impl RunStatus {
-    /// A terminal Run cannot resume. Stopped and parked Runs are not terminal.
-    pub fn is_terminal(self) -> bool {
-        matches!(self, Self::Completed | Self::Failed | Self::Aborted)
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct EdgeDecision {
@@ -69,15 +47,6 @@ pub struct EdgeDecision {
     pub source_invocation: u64,
     #[serde(default)]
     pub result_sequence: u64,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct RunCursor {
-    pub node_id: String,
-    pub key: InvocationKey,
-    pub input_commits: Vec<CommitRef>,
-    pub prepared_input: Value,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -182,7 +151,6 @@ pub struct ParallelBranchRecord {
     pub nodes: Vec<String>,
     pub next_index: usize,
     pub status: ParallelBranchStatus,
-    pub cursor: Option<RunCursor>,
     /// Commits for the completed prefix of `nodes`, in dependency order.
     pub completed: Vec<CommitRef>,
     pub error: Option<String>,
@@ -199,7 +167,7 @@ pub struct ParallelActivation {
 }
 
 /// Current persisted Graph Run record format. Older records require offline migration.
-pub const RUN_RECORD_FORMAT: u32 = 13;
+pub const RUN_RECORD_FORMAT: u32 = 14;
 
 /// The only supported persisted Run schema. No invalid in-memory format can be constructed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -251,12 +219,10 @@ pub struct GraphRunRecord {
     pub graph_digest: String,
     pub snapshot: GraphSnapshot,
     pub input: Value,
-    pub status: RunStatus,
-    pub cursor: Option<RunCursor>,
     #[serde(default)]
     pub parallel: Option<ParallelActivation>,
-    /// Persisted unresolved tool attempts. Each attempt is tied to
-    /// the exact serial or parallel invocation whose cursor remains active.
+    /// Retained tool-attempt observations tied to their exact invocation.
+    /// Kernel history owns current recovery and lifecycle decisions.
     #[serde(default)]
     pub recovery: Vec<PendingRecovery>,
     #[serde(default)]
@@ -295,12 +261,10 @@ struct GraphRunRecordWire {
     pub graph_digest: String,
     pub snapshot: GraphSnapshot,
     pub input: Value,
-    pub status: RunStatus,
-    pub cursor: Option<RunCursor>,
     #[serde(default)]
     pub parallel: Option<ParallelActivation>,
-    /// Persisted unresolved tool attempts. Each attempt is tied to
-    /// the exact serial or parallel invocation whose cursor remains active.
+    /// Retained tool-attempt observations tied to their exact invocation.
+    /// Kernel history owns current recovery and lifecycle decisions.
     #[serde(default)]
     pub recovery: Vec<PendingRecovery>,
     #[serde(default)]
@@ -345,7 +309,7 @@ impl<'de> Deserialize<'de> for GraphRunRecord {
                         let Some(key) = self.0.next_key::<String>()? else {
                             return Ok(None);
                         };
-                        if key == "environments" {
+                        if matches!(key.as_str(), "environments" | "status" | "cursor") {
                             return Err(serde::de::Error::custom(
                                 "old Graph Run format; offline migration required",
                             ));
@@ -372,11 +336,7 @@ impl<'de> Deserialize<'de> for GraphRunRecord {
                 ))
             }
         }
-        let record = deserializer.deserialize_any(RecordVisitor)?;
-        record
-            .refuse_old_cursor()
-            .map_err(serde::de::Error::custom)?;
-        Ok(record)
+        deserializer.deserialize_any(RecordVisitor)
     }
 }
 
@@ -395,9 +355,8 @@ impl GraphRunRecord {
 
     /// Create a Run using an identity assigned by the owning host.
     ///
-    /// This is used when a platform has already admitted a Run and needs the
-    /// Rust Runner to persist that same identity rather than inventing a
-    /// second one. The ID is validated before it can become a store path.
+    /// A platform admission passes its identity into the shared Runtime.
+    /// The ID is validated before it can become a store path.
     pub fn create_with_id(
         snapshot: GraphSnapshot,
         input: Value,
@@ -417,8 +376,6 @@ impl GraphRunRecord {
             graph_digest,
             snapshot,
             input,
-            status: RunStatus::Ready,
-            cursor: None,
             parallel: None,
             recovery: Vec::new(),
             recovery_submissions: Vec::new(),
@@ -436,11 +393,42 @@ impl GraphRunRecord {
         })
     }
 
+    /// Admit the Graph and its complete frozen Plugin authority in one value.
+    /// This constructor performs no storage or lifecycle mutation.
+    pub fn create_with_plugins(
+        snapshot: GraphSnapshot,
+        input: Value,
+        run_id: impl Into<String>,
+        plugins: Vec<PluginBinding>,
+    ) -> Result<Self, GraphError> {
+        let mut record = Self::create_with_id(snapshot, input, run_id)?;
+        let expected = record
+            .snapshot
+            .nodes
+            .iter()
+            .flat_map(|node| node.plugins.iter().map(|reference| reference.id.clone()))
+            .collect::<BTreeSet<_>>();
+        for binding in plugins {
+            if binding.digest.is_empty() || record.plugin_bindings.contains_key(&binding.id) {
+                return Err(GraphError::InvalidSnapshot(
+                    "Plugin admission has an empty code digest or duplicate binding".into(),
+                ));
+            }
+            record.plugin_bindings.insert(binding.id.clone(), binding);
+        }
+        if !record.plugin_bindings.keys().eq(expected.iter()) {
+            return Err(GraphError::InvalidSnapshot(
+                "Plugin admission must bind exactly the Graph's referenced Plugins".into(),
+            ));
+        }
+        record.plugin_bindings_initialized = true;
+        Ok(record)
+    }
+
     /// Mark the record as written now.
     ///
-    /// Writers (the Runner and the Host's operator paths) call this immediately
-    /// before persisting, so the stored record says when it was last updated and
-    /// the in-memory record agrees with it.
+    /// Graph fact writers may refresh this observation before publishing.
+    /// Kernel task history remains the authority for Run lifecycle changes.
     pub fn touch(&mut self) {
         self.updated = Some(timestamp_now());
     }
@@ -459,26 +447,8 @@ impl GraphRunRecord {
             .collect()
     }
 
-    fn refuse_old_cursor(&self) -> Result<(), GraphError> {
-        if let Some(cursor) = &self.cursor
-            && self
-                .invocations
-                .get(&cursor.node_id)
-                .copied()
-                .unwrap_or(0)
-                .checked_add(1)
-                == Some(cursor.key.invocation)
-        {
-            return Err(GraphError::CorruptRun(
-                "old cursor format; offline migration required".into(),
-            ));
-        }
-        Ok(())
-    }
-
-    pub(crate) fn validate(&self) -> Result<(), GraphError> {
+    pub fn validate(&self) -> Result<(), GraphError> {
         validate_component(&self.run_id)?;
-        self.refuse_old_cursor()?;
         self.snapshot.validate()?;
         if self.snapshot.digest()? != self.graph_digest {
             return Err(GraphError::CorruptRun("snapshot digest mismatch".into()));
@@ -510,65 +480,9 @@ impl GraphRunRecord {
                 ));
             }
         }
-        match self.status {
-            RunStatus::Ready if self.cursor.is_some() || self.parallel.is_some() => {
-                return Err(GraphError::CorruptRun(
-                    "ready Run cannot have an active cursor".into(),
-                ));
-            }
-            RunStatus::BudgetStopped
-                if self.cursor.is_none()
-                    && !self.parallel.as_ref().is_some_and(|activation| {
-                        activation
-                            .branches
-                            .iter()
-                            .any(|branch| branch.cursor.is_some())
-                    }) =>
-            {
-                return Err(GraphError::CorruptRun(
-                    "budget-stopped Run must retain its cursor".into(),
-                ));
-            }
-            RunStatus::Completed if self.cursor.is_some() || self.parallel.is_some() => {
-                return Err(GraphError::CorruptRun(
-                    "completed Run cannot have an active cursor".into(),
-                ));
-            }
-            _ => {}
-        }
-        if self.status == RunStatus::WaitingRecovery && self.recovery.is_empty() {
-            return Err(GraphError::CorruptRun(
-                "recovery-waiting Run has no pending attempt".into(),
-            ));
-        }
-        if !matches!(
-            self.status,
-            RunStatus::WaitingRecovery
-                | RunStatus::Running
-                | RunStatus::Aborted
-                | RunStatus::Stopped
-        ) && !self.recovery.is_empty()
-        {
-            return Err(GraphError::CorruptRun(
-                "non-recovery Run has pending recovery attempts".into(),
-            ));
-        }
         let mut recovery_ids = BTreeSet::new();
         for pending in &self.recovery {
-            let key_is_active = self
-                .cursor
-                .as_ref()
-                .is_some_and(|cursor| cursor.key == pending.key)
-                || self.parallel.as_ref().is_some_and(|activation| {
-                    activation.branches.iter().any(|branch| {
-                        branch
-                            .cursor
-                            .as_ref()
-                            .is_some_and(|cursor| cursor.key == pending.key)
-                    })
-                });
-            if !key_is_active
-                || pending.key.run_id != self.run_id
+            if pending.key.run_id != self.run_id
                 || pending.key.graph_digest != self.graph_digest
                 || pending.attempt.attempt_id <= 0
                 || pending.attempt.tool.is_empty()
@@ -595,33 +509,6 @@ impl GraphRunRecord {
                     "recovery submission identity is invalid or duplicated".into(),
                 ));
             }
-        }
-        if let Some(cursor) = &self.cursor
-            && (cursor.key.node_id != cursor.node_id
-                || cursor.key.run_id != self.run_id
-                || cursor.key.graph_digest != self.graph_digest
-                || self.invocations.get(&cursor.node_id).copied() != Some(cursor.key.invocation)
-                || self.passes.get(&cursor.node_id).copied().unwrap_or(0) == 0
-                || !self
-                    .snapshot
-                    .nodes
-                    .iter()
-                    .any(|node| node.id == cursor.node_id))
-        {
-            return Err(GraphError::CorruptRun(
-                "cursor identity does not match its Graph Run".into(),
-            ));
-        }
-        if self.cursor.is_some()
-            && self.parallel.as_ref().is_some_and(|activation| {
-                self.cursor
-                    .as_ref()
-                    .is_none_or(|cursor| cursor.node_id != activation.join_node)
-            })
-        {
-            return Err(GraphError::CorruptRun(
-                "serial cursor cannot coexist with a parallel activation".into(),
-            ));
         }
         let regions = self.snapshot.parallel_regions().map_err(|error| {
             GraphError::CorruptRun(format!("invalid parallel snapshot: {error}"))
@@ -655,19 +542,6 @@ impl GraphRunRecord {
                 ));
             }
             let fanout_result = fanout_result.expect("checked above");
-            if self
-                .cursor
-                .as_ref()
-                .is_some_and(|cursor| cursor.node_id == activation.join_node)
-                && activation
-                    .branches
-                    .iter()
-                    .any(|branch| branch.status != ParallelBranchStatus::Completed)
-            {
-                return Err(GraphError::CorruptRun(
-                    "join cursor requires every branch in this activation to complete".into(),
-                ));
-            }
             for (index, (branch, path)) in
                 activation.branches.iter().zip(&region.branches).enumerate()
             {
@@ -700,47 +574,35 @@ impl GraphRunRecord {
                         )));
                     }
                 }
-                let cursor_matches = branch.cursor.as_ref().is_some_and(|cursor| {
-                    path.get(branch.next_index).is_some_and(|node_id| {
-                        cursor.node_id == *node_id
-                            && cursor.key.run_id == self.run_id
-                            && cursor.key.graph_digest == self.graph_digest
-                            && cursor.key.node_id == cursor.node_id
-                            && cursor.key.invocation > 0
-                            && self.passes.get(&cursor.node_id).copied().unwrap_or(0) > 0
-                            && self.invocations.get(&cursor.node_id).copied()
-                                == Some(cursor.key.invocation)
-                            && expected_input_commits(self, &cursor.node_id)
-                                .is_ok_and(|expected| expected == cursor.input_commits)
-                    })
-                });
                 let valid_state = match branch.status {
-                    ParallelBranchStatus::Ready => {
-                        branch.cursor.is_none() && branch.next_index < path.len()
-                    }
-                    ParallelBranchStatus::Running => cursor_matches,
+                    ParallelBranchStatus::Ready
+                    | ParallelBranchStatus::Running
+                    | ParallelBranchStatus::Stopped => branch.next_index < path.len(),
                     ParallelBranchStatus::Completed => {
-                        branch.cursor.is_none()
-                            && branch.next_index == path.len()
-                            && branch.error.is_none()
+                        branch.next_index == path.len() && branch.error.is_none()
                     }
-                    ParallelBranchStatus::Failed => {
-                        branch.cursor.is_none() && branch.error.is_some()
-                    }
-                    ParallelBranchStatus::Stopped => branch.cursor.is_none() || cursor_matches,
+                    ParallelBranchStatus::Failed => branch.error.is_some(),
                 };
                 if !valid_state {
                     return Err(GraphError::CorruptRun(format!(
-                        "parallel branch `{index}` status disagrees with its cursor"
+                        "parallel branch `{index}` status disagrees with its completed prefix"
                     )));
                 }
             }
             for path in &region.branches {
                 let key = edge_key(&activation.fanout_node, &path[0]);
                 if !self.decided.get(&key).is_some_and(|decision| {
-                    decision.selected
+                    (decision.selected
                         && decision.source_invocation == activation.fanout_invocation
-                        && decision.result_sequence == fanout_result.sequence
+                        && decision.result_sequence == fanout_result.sequence)
+                        || (!decision.selected
+                            && decision.source_invocation == 0
+                            && decision.result_sequence == 0
+                            && decision.sequence > fanout_result.sequence
+                            && self.snapshot.module_rounds.iter().any(|(scope, limit)| {
+                                path[0].starts_with(&format!("{scope}/"))
+                                    && self.ceased.contains(&format!("{scope}@{limit}"))
+                            }))
                 }) {
                     return Err(GraphError::CorruptRun(format!(
                         "parallel activation branch `{}` lacks its selected fanout edge fact",
@@ -911,57 +773,6 @@ impl GraphRunRecord {
                 }
             }
             let _ = to;
-        }
-        if let Some(cursor) = &self.cursor {
-            let mut expected_input_commits = Vec::new();
-            for edge in self
-                .snapshot
-                .edges
-                .iter()
-                .filter(|edge| edge.to_node == cursor.node_id)
-            {
-                let Some(decision) = self.decided.get(&edge_key(&edge.from_node, &edge.to_node))
-                else {
-                    continue;
-                };
-                if !decision.selected {
-                    continue;
-                }
-                let result = self
-                    .results
-                    .get(&edge.from_node)
-                    .and_then(|results| {
-                        results.iter().find(|result| {
-                            result.key.invocation == decision.source_invocation
-                                && result.sequence == decision.result_sequence
-                        })
-                    })
-                    .ok_or_else(|| {
-                        GraphError::CorruptRun(format!(
-                            "cursor input edge {} -> {} has no source result",
-                            edge.from_node, edge.to_node
-                        ))
-                    })?;
-                expected_input_commits.push(result.commit.clone());
-            }
-            let expected_input_commits = self
-                .parallel
-                .as_ref()
-                .filter(|activation| activation.join_node == cursor.node_id)
-                .map(|activation| {
-                    activation
-                        .branches
-                        .iter()
-                        .flat_map(|branch| branch.completed.iter().cloned())
-                        .collect::<Vec<_>>()
-                })
-                .unwrap_or(expected_input_commits);
-            if cursor.input_commits != expected_input_commits {
-                return Err(GraphError::CorruptRun(format!(
-                    "cursor input commits do not match selected inputs for `{}`",
-                    cursor.node_id
-                )));
-            }
         }
         Ok(())
     }

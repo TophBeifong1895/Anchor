@@ -74,17 +74,13 @@ fn host_for(definition: &Value) -> Host {
             node["plugins"] = json!(["wecom"]);
         }
     }
-    let mut host = Host::new(&definition)
+    let host = Host::new(&definition)
         .default_runtime()
         .with_extra_environment([
             ("ANCHOR_WECOM_GRAPH", "fixture".to_owned()),
             ("ANCHOR_WECOM_REPLY_NODE", "assistant".to_owned()),
             ("ANCHOR_WECOM_USERS", format!("{ALICE},{BOB}")),
         ]);
-    if module_path!().split("::").next() == Some("goose_kernel_persistent_assistant") {
-        host = host
-            .with_extra_environment([("ANCHOR_ASSISTANT_EXECUTION", "kernel_probe".to_owned())]);
-    }
     // Deployment routing settings do not enable a channel by themselves. Give
     // the real supervisor an isolated channel process; these tests submit HTTP
     // events directly and verify Run lifecycles, not external WeCom delivery.
@@ -188,19 +184,22 @@ fn waiting(host: &Host, run: &str, replies: usize) -> Value {
         saved = host.record(run);
         assert!(
             matches!(
-                saved["status"].as_str(),
-                Some("running" | "paused" | "ready")
+                saved["projection"]["phase"].as_str(),
+                Some("executing" | "waiting")
             ),
             "{saved}"
         );
-        saved["status"] == "running"
+        saved["projection"]["phase"] == "executing"
             && saved["results"]["reply"]
                 .as_array()
                 .is_some_and(|results| results.len() == replies)
-            && saved["cursor"]["node_id"] == "wait_input"
-            && saved["cursor"]["key"]["invocation"] == replies + 1
+            && saved["frontier"][0]["node_id"] == "wait_input"
+            && saved["frontier"][0]["key"]["invocation"] == replies + 1
     });
-    let record: GraphRunRecord = serde_json::from_value(saved.clone()).unwrap();
+    let mut committed = saved.clone();
+    committed.as_object_mut().unwrap().remove("projection");
+    committed.as_object_mut().unwrap().remove("frontier");
+    let record: GraphRunRecord = serde_json::from_value(committed).unwrap();
     assert!(
         record
             .snapshot
@@ -239,18 +238,15 @@ fn snapshot_inventory(artifact: &Path) -> Value {
 }
 
 fn evidence(host: &Host, provider: &Provider, run: &str, checks: Value) {
-    if module_path!().split("::").next() == Some("goose_kernel_persistent_assistant") {
-        use anchor_kernel::Store;
-        let root = host.base.root.path().join("state");
-        let store = anchor_kernel::FileStore::new(root.join("kernel-runs")).unwrap();
-        assert!(
-            store
-                .load(&anchor_runtime::graph::validator::run_resource_id(run))
-                .unwrap()
-                .is_some()
-        );
-        assert!(!root.join("runs").join(format!("{run}.json")).exists());
-    }
+    assert!(host.base.resource_for(run).is_some());
+    assert!(
+        !host
+            .base
+            .state_root()
+            .join("runs")
+            .join(format!("{run}.json"))
+            .exists()
+    );
     provider.assert_consumed();
     let saved = host.record(run);
     let results = saved["results"]["assistant"].as_array().unwrap();
@@ -366,31 +362,17 @@ fn stop(server: &HttpHost, provider: &Provider, run: &str) -> Value {
 }
 
 fn runs(host: &Host) -> Vec<Value> {
-    let kernel = host.base.root.path().join("state/kernel-runs");
-    if kernel.exists() {
-        use anchor_kernel::Store;
-        let store = anchor_kernel::FileStore::new(kernel).unwrap();
-        return store
-            .list("")
-            .unwrap()
-            .iter()
-            .filter_map(|id| {
-                let resource = store.load(id).unwrap()?;
-                let run = resource.state["run_id"].as_str()?;
-                Some(host.record(run))
-            })
-            .collect();
-    }
-    fs::read_dir(host.base.root.path().join("state/runs"))
+    use anchor_kernel::Store;
+    let store = anchor_kernel::FileStore::new(host.base.state_root().join("kernel-runs")).unwrap();
+    store
+        .list("")
         .unwrap()
-        .map(Result::unwrap)
-        .filter(|entry| {
-            entry
-                .path()
-                .extension()
-                .is_some_and(|extension| extension == "json")
+        .iter()
+        .filter_map(|id| {
+            let resource = store.load(id).unwrap()?;
+            let run = resource.state["run_id"].as_str()?;
+            Some(host.record(run))
         })
-        .map(|entry| fixture::read_json(entry.path()))
         .collect()
 }
 
@@ -711,8 +693,8 @@ fn new_input_interrupts_gated_execution_suppresses_late_reply_and_retains_uncomm
             interrupted["results"]["reply"][0]["completion"]["output"]["suppressed"],
             true
         );
-        assert_eq!(interrupted["cursor"]["node_id"], "assistant");
-        assert_eq!(interrupted["cursor"]["key"]["invocation"], 2);
+        assert_eq!(interrupted["frontier"][0]["node_id"], "assistant");
+        assert_eq!(interrupted["frontier"][0]["key"]["invocation"], 2);
         let new_native = host.native_fact(&run, "assistant", 2);
         assert_eq!(new_native["session_id"], old_native["session_id"]);
         assert_eq!(
@@ -965,12 +947,12 @@ fn idle_wait_pause_resume_dispatches_no_model_until_new_input_and_stop_exits() {
     action(&server, run, "pause");
     let paused = server.wait_status(run, "paused");
     let paused_record = host.record(run);
-    assert_eq!(paused_record["cursor"], before["cursor"]);
+    assert_eq!(paused_record["frontier"], before["frontier"]);
     assert_eq!(paused_record["results"], before["results"]);
     idle(&provider, 2);
     action(&server, run, "resume");
     let resumed = waiting(&host, run, 1);
-    assert_eq!(resumed["cursor"], before["cursor"]);
+    assert_eq!(resumed["frontier"], before["frontier"]);
     assert_eq!(resumed["results"], before["results"]);
     assert_eq!(host.native_fact(run, "assistant", 1), native);
     idle(&provider, 2);
@@ -1003,7 +985,7 @@ fn idle_wait_pause_resume_dispatches_no_model_until_new_input_and_stop_exits() {
         run,
         json!({
             "case_source":CASE_SOURCE,"responses":[first,second],"paused":paused,
-            "cursor_preserved":true,"model_requests_during_idle_pause_resume":0,"stopped":stopped
+            "frontier_preserved":true,"model_requests_during_idle_pause_resume":0,"stopped":stopped
         }),
     );
 }
@@ -1050,7 +1032,7 @@ fn host_restart_requires_explicit_resume_when_automatic_recovery_is_disabled() {
     let (status, inactive) = restarted.request("GET", &format!("/runs/{run}"), None);
     assert_eq!(status, 200, "{inactive}");
     assert_eq!(inactive["active"], false);
-    assert_eq!(host.record(run)["cursor"], before["cursor"]);
+    assert_eq!(host.record(run)["frontier"], before["frontier"]);
     assert_eq!(host.record(run)["results"], before["results"]);
     assert_eq!(fs::metadata(&directory).unwrap().ino(), directory_identity);
     assert_eq!(goose::file_inventory(&directory), files);
@@ -1063,7 +1045,7 @@ fn host_restart_requires_explicit_resume_when_automatic_recovery_is_disabled() {
     idle(&provider, 2);
     action(&restarted, run, "resume");
     let resumed = waiting(&host, run, 1);
-    assert_eq!(resumed["cursor"], before["cursor"]);
+    assert_eq!(resumed["frontier"], before["frontier"]);
     assert_eq!(resumed["results"], before["results"]);
     idle(&provider, 2);
     provider.append(vec![
@@ -1185,12 +1167,19 @@ fn host_restart_automatically_resumes_the_instance_with_its_workspace_and_sessio
         "unexpected recovery Run: {resumed}"
     );
     assert_eq!(binding["needs_recovery"], json!(false), "{binding}");
-    assert_eq!(host.record(&run)["status"], "stopped");
+    let previous = host.record(&run);
+    assert_eq!(previous["projection"]["phase"], "waiting");
+    assert_eq!(previous["projection"]["waiter"]["on"], "human");
+    assert!(
+        previous["projection"]["waiter"]["reason"]
+            .as_str()
+            .is_some_and(|reason| !reason.is_empty())
+    );
     wait_until("recovered assistant waiting for input", || {
         let saved = host.record(&resumed);
-        saved["status"] == "running"
-            && saved["cursor"]["node_id"] == "wait_input"
-            && saved["cursor"]["key"]["invocation"] == 1
+        saved["projection"]["phase"] == "executing"
+            && saved["frontier"][0]["node_id"] == "wait_input"
+            && saved["frontier"][0]["key"]["invocation"] == 1
             && saved["results"].get("reply").is_none()
     });
     idle(&provider, 2);
@@ -1270,7 +1259,7 @@ fn host_restart_automatically_resumes_the_instance_with_its_workspace_and_sessio
         json!({
             "case_source":CASE_SOURCE,"first_response":first,"second_response":second,
             "recovery_binding":binding,"automatic_event":automatic.data,
-            "resumed_run":resumed,"previous_run":run,"previous_status":host.record(&run)["status"],
+            "resumed_run":resumed,"previous_run":run,"previous_projection":host.record(&run)["projection"],
             "same_native_session":native["session_id"],
             "new_workspace":resumed_directory,"old_workspace":directory,
             "inherited_workspace":true,"old_fs2_snapshot_unchanged":true,"stopped":stopped

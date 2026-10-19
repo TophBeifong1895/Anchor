@@ -33,24 +33,26 @@ async fn kernel_op_call_wait_projects_durable_child_run_through_host_api() {
         app.clone(),
         "POST",
         "/trigger",
-        Some(r#"{"graph":"fixture","execution":"kernel_probe"}"#),
+        Some(r#"{"graph":"fixture"}"#),
     )
     .await;
     assert_eq!(status, StatusCode::ACCEPTED);
     let parent_id = started["run"].as_str().unwrap().to_owned();
     let mut child_id = String::new();
     for _ in 0..200 {
-        let parent_record = state.application.load_run(&parent_id).unwrap().unwrap();
+        let parent_record = fixtures::Reader::new(&state.application)
+            .load(&parent_id)
+            .unwrap()
+            .unwrap();
         if let Some(call) = parent_record.graph_calls.values().next() {
             child_id = call.child_run_id.clone().unwrap_or_default();
         }
         if !child_id.is_empty()
-            && state
-                .application
-                .load_run(&child_id)
+            && fixtures::Reader::new(&state.application)
+                .load(&child_id)
                 .unwrap()
-                .is_some_and(|record| record.status == RunStatus::Completed)
-            && parent_record.status == RunStatus::Completed
+                .is_some_and(|record| record.has_succeeded())
+            && parent_record.has_succeeded()
         {
             break;
         }
@@ -59,17 +61,20 @@ async fn kernel_op_call_wait_projects_durable_child_run_through_host_api() {
     assert!(
         !child_id.is_empty(),
         "parent did not admit child: {:?}",
-        state.application.load_run(&parent_id).unwrap().unwrap()
+        fixtures::Reader::new(&state.application)
+            .load(&parent_id)
+            .unwrap()
+            .unwrap()
     );
-    let store = &state.application;
-    let child_record = store.load_run(&child_id).unwrap().unwrap();
-    assert_eq!(child_record.status, RunStatus::Completed);
+    let store = fixtures::Reader::new(&state.application);
+    let child_record = store.load(&child_id).unwrap().unwrap();
+    assert!(child_record.has_succeeded());
     assert!(state.application.kernel_owner(&child_id).unwrap().is_some());
     assert!(
-        FileRunStore::new(state.data_root.join("runs"))
+        fixtures::Reader::new(&state.application)
             .load(&child_id)
             .unwrap()
-            .is_none()
+            .is_some()
     );
     assert_eq!(child_record.input["from"], "parent");
     let parent_metadata = state.application.metadata(&parent_id).unwrap().unwrap();
@@ -145,15 +150,15 @@ async fn kernel_op_call_wait_hands_off_input_map_files_and_selected_result() {
         app.clone(),
         "POST",
         "/trigger",
-        Some(r#"{"graph":"fixture","execution":"kernel_probe"}"#),
+        Some(r#"{"graph":"fixture"}"#),
     )
     .await;
     assert_eq!(status, StatusCode::ACCEPTED);
     let parent_id = started["run"].as_str().unwrap().to_owned();
-    let store = &state.application;
+    let store = fixtures::Reader::new(&state.application);
     let mut child_id = String::new();
     for _ in 0..300 {
-        let record = store.load_run(&parent_id).unwrap().unwrap();
+        let record = store.load(&parent_id).unwrap().unwrap();
         if let Some(id) = record
             .graph_calls
             .values()
@@ -162,29 +167,16 @@ async fn kernel_op_call_wait_hands_off_input_map_files_and_selected_result() {
         {
             child_id = id;
         }
-        if matches!(
-            record.status,
-            RunStatus::Completed | RunStatus::Failed | RunStatus::Stopped | RunStatus::Aborted
-        ) {
+        if record.is_settled() || record.has_stopped_execution() {
             break;
         }
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
     }
-    let parent_record = store.load_run(&parent_id).unwrap().unwrap();
-    assert_eq!(
-        parent_record.status,
-        RunStatus::Completed,
-        "{:?}",
-        parent_record.error
-    );
+    let parent_record = store.load(&parent_id).unwrap().unwrap();
+    assert!(parent_record.has_succeeded(), "{:?}", parent_record.error);
     assert!(!child_id.is_empty(), "parent did not admit a child Run");
-    let child_record = store.load_run(&child_id).unwrap().unwrap();
-    assert_eq!(
-        child_record.status,
-        RunStatus::Completed,
-        "{:?}",
-        child_record.error
-    );
+    let child_record = store.load(&child_id).unwrap().unwrap();
+    assert!(child_record.has_succeeded(), "{:?}", child_record.error);
     // `input` constants override and `input_map` pointers select the parent input,
     // all merged under the child's own declared input.
     assert_eq!(child_record.input["constant"], "yes");
@@ -245,20 +237,17 @@ async fn kernel_op_call_wait_fails_closed_on_missing_input_map_pointer() {
         app.clone(),
         "POST",
         "/trigger",
-        Some(r#"{"graph":"fixture","execution":"kernel_probe"}"#),
+        Some(r#"{"graph":"fixture"}"#),
     )
     .await;
     assert_eq!(status, StatusCode::ACCEPTED);
     let parent_id = started["run"].as_str().unwrap().to_owned();
-    let store = &state.application;
+    let store = fixtures::Reader::new(&state.application);
     for _ in 0..300 {
-        let record = store.load_run(&parent_id).unwrap().unwrap();
-        if matches!(
-            record.status,
-            RunStatus::Completed | RunStatus::Failed | RunStatus::Stopped | RunStatus::Aborted
-        ) {
-            let error = record.error.unwrap_or_default();
-            assert_eq!(record.status, RunStatus::Failed, "{error}");
+        let record = store.load(&parent_id).unwrap().unwrap();
+        if record.is_settled() || record.has_stopped_execution() {
+            let error = observed_error(&record).unwrap_or_default().to_owned();
+            assert!(is_failed(&record), "{error}");
             assert!(error.contains("input_map"), "{error}");
             assert!(
                 record.graph_calls.is_empty(),
@@ -295,15 +284,18 @@ async fn kernel_op_call_detach_dispatches_child_and_projects_parent_relation() {
         app.clone(),
         "POST",
         "/trigger",
-        Some(r#"{"graph":"fixture","execution":"kernel_probe"}"#),
+        Some(r#"{"graph":"fixture"}"#),
     )
     .await;
     assert_eq!(status, StatusCode::ACCEPTED);
     let parent_id = started["run"].as_str().unwrap().to_owned();
     let mut child_id = None;
     for _ in 0..200 {
-        let record = state.application.load_run(&parent_id).unwrap().unwrap();
-        if record.status == RunStatus::Completed {
+        let record = fixtures::Reader::new(&state.application)
+            .load(&parent_id)
+            .unwrap()
+            .unwrap();
+        if record.has_succeeded() {
             child_id = record
                 .graph_calls
                 .values()
@@ -315,24 +307,26 @@ async fn kernel_op_call_detach_dispatches_child_and_projects_parent_relation() {
     }
     let child_id = child_id.expect("detach should durably admit a child");
     for _ in 0..200 {
-        if state
-            .application
-            .load_run(&child_id)
+        if fixtures::Reader::new(&state.application)
+            .load(&child_id)
             .unwrap()
-            .is_some_and(|child| child.status == RunStatus::Completed)
+            .is_some_and(|child| child.has_succeeded())
         {
             break;
         }
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
     }
-    let child_record = state.application.load_run(&child_id).unwrap().unwrap();
-    assert_eq!(child_record.status, RunStatus::Completed);
+    let child_record = fixtures::Reader::new(&state.application)
+        .load(&child_id)
+        .unwrap()
+        .unwrap();
+    assert!(child_record.has_succeeded());
     assert!(state.application.kernel_owner(&child_id).unwrap().is_some());
     assert!(
-        FileRunStore::new(state.data_root.join("runs"))
+        fixtures::Reader::new(&state.application)
             .load(&child_id)
             .unwrap()
-            .is_none()
+            .is_some()
     );
     let metadata = state.application.metadata(&child_id).unwrap().unwrap();
     assert_eq!(metadata.trigger_source, "graph_call");
@@ -443,7 +437,7 @@ async fn kernel_call_rechecks_a_child_that_settled_before_parent_worker_release(
             &child_id,
         )
         .unwrap();
-        let catalog = crate::execution::RunnerGraphCatalog {
+        let catalog = crate::execution::HostGraphCatalog {
             root: root.path().into(),
             state: state.data_root.clone(),
             application: Some(state.application.clone()),
@@ -551,11 +545,14 @@ async fn kernel_call_rechecks_a_child_that_settled_before_parent_worker_release(
         })
         .await
         .unwrap();
-        let parent = state.application.load_run(&parent.run_id).unwrap().unwrap();
+        let parent = fixtures::Reader::new(&state.application)
+            .load(&parent.run_id)
+            .unwrap()
+            .unwrap();
         let resource = runs.load(&parent.run_id).unwrap().unwrap();
         match outcome {
             "done" => {
-                assert_eq!(parent.status, RunStatus::Completed);
+                assert!(parent.has_succeeded());
                 assert_eq!(
                     parent.results["call"][0].completion.output["proof"],
                     "settled before release"

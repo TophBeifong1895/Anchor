@@ -1,15 +1,9 @@
 use crate::application::RunApplication;
-use anchor_runtime::graph::{FileRunStore, GraphRunRecord};
+use anchor_runtime::graph::{FileRunLeaseProvider, GraphRunRecord};
 
 impl RunApplication {
-    #[cfg(not(test))]
-    pub(in crate::application::run_access) fn store(&self) -> FileRunStore {
-        FileRunStore::new(self.data_root.join("runs"))
-    }
-
-    #[cfg(test)]
-    pub(in crate::application) fn store(&self) -> FileRunStore {
-        FileRunStore::new(self.data_root.join("runs"))
+    pub(in crate::application::run_access) fn run_leases(&self) -> FileRunLeaseProvider {
+        FileRunLeaseProvider::new(self.data_root.join("run-locks"))
     }
 }
 

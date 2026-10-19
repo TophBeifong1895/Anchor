@@ -130,6 +130,7 @@ dependencies = [
 name = "anchor-graph-host"
 version = "0.1.0"
 dependencies = [
+ "anchor-kernel",
  "anchor-runtime",
  "http",
  "serde",

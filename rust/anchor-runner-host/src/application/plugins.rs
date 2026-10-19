@@ -1623,8 +1623,9 @@ mod tests {
 #[cfg(test)]
 mod impact_tests {
     use super::*;
+    use crate::application::run_access::fixtures;
     use anchor_graph_host::PluginCatalog;
-    use anchor_runtime::graph::{GraphRunRecord, RunStore};
+    use anchor_runtime::graph::GraphRunRecord;
     use serde_json::json;
     use std::fs;
 
@@ -1647,7 +1648,7 @@ mod impact_tests {
     /// A non-terminal Run that froze a binding for this Plugin.
     fn unfinished_run(root: &std::path::Path, id: &str) -> String {
         let state = root.join("state");
-        let store = anchor_runtime::graph::FileRunStore::new(state.join("runs"));
+        let application = RunApplication::new(state, root.to_path_buf());
         let mut record = GraphRunRecord::create_with_id(
             serde_json::from_value(json!({
                 "objective": "fixture",
@@ -1675,7 +1676,7 @@ mod impact_tests {
             },
         );
         record.plugin_bindings_initialized = true;
-        store.save(&record).unwrap();
+        fixtures::create(&application, &record);
         record.run_id
     }
 
@@ -1957,9 +1958,10 @@ mod impact_tests {
 #[cfg(test)]
 mod uninstall_tests {
     use super::*;
+    use crate::application::run_access::fixtures;
     use anchor_graph_host::{plugin_view_path, store_root, views_root};
     use anchor_platform_session::{CreateSession, SessionStore};
-    use anchor_runtime::graph::{FileRunStore, GraphRunRecord, GraphSnapshot, RunStatus, RunStore};
+    use anchor_runtime::graph::{GraphRunRecord, GraphSnapshot};
     use serde_json::json;
     use std::{collections::BTreeMap, fs, path::Path};
 
@@ -2011,7 +2013,7 @@ mod uninstall_tests {
         root: &Path,
         sessions: &SessionStore,
         data: &[u8],
-    ) -> (FileRunStore, PluginUninstallPrecondition) {
+    ) -> (RunApplication, PluginUninstallPrecondition) {
         let library_root = root.join("library");
         let application = RunApplication::new(root.join("state"), root.to_path_buf());
         let precondition = application
@@ -2027,12 +2029,11 @@ mod uninstall_tests {
             .await
             .unwrap();
         fs::write(library_root.join("plugins/demo/state/data.bin"), data).unwrap();
-        let runs = FileRunStore::new(root.join("state/runs"));
         let uninstall = application
             .plugin_uninstall_precondition(&library_root, "demo", sessions)
             .await
             .unwrap();
-        (runs, uninstall)
+        (application, uninstall)
     }
 
     fn session_store(root: &Path) -> SessionStore {
@@ -2265,7 +2266,7 @@ mod uninstall_tests {
         let root = tempfile::tempdir().unwrap();
         let root = root.path();
         let sessions = session_store(root);
-        let (runs, _) = installed(root, &sessions, b"data").await;
+        let (application, _) = installed(root, &sessions, b"data").await;
         let snapshot = GraphSnapshot::admit(json!({
             "objective":"uninstall","entry":"work",
             "agents":{"worker":{"model":"fixture"}},
@@ -2273,11 +2274,9 @@ mod uninstall_tests {
             "edges":[]
         }))
         .unwrap();
-        let mut running =
+        let running =
             GraphRunRecord::create_with_id(snapshot.clone(), json!({}), "running").unwrap();
-        running.status = RunStatus::Running;
-        runs.save(&running).unwrap();
-        let application = RunApplication::new(root.join("state"), root.to_path_buf());
+        fixtures::create(&application, &running);
         let precondition = application
             .plugin_uninstall_precondition(&root.join("library"), "demo", &sessions)
             .await
@@ -2288,9 +2287,9 @@ mod uninstall_tests {
         assert!(refusal.contains("未结束的 Run"), "{refusal}");
 
         // A terminal Run is history, not a holder.
-        let mut finished = GraphRunRecord::create_with_id(snapshot, json!({}), "finished").unwrap();
-        finished.status = RunStatus::Completed;
-        runs.save(&finished).unwrap();
+        let finished = GraphRunRecord::create_with_id(snapshot, json!({}), "finished").unwrap();
+        fixtures::create(&application, &finished);
+        fixtures::finish(&application, "finished");
         let precondition = application
             .plugin_uninstall_precondition(&root.join("library"), "demo", &sessions)
             .await

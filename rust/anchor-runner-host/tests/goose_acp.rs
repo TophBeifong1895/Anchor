@@ -428,7 +428,7 @@ fn native_goose_rejects_guessed_receipt_then_accepts_observed_result() {
     );
     let host = Host::new(&graph()).native();
     let response = host.run(&provider);
-    assert_eq!(response["status"], "completed", "{response}");
+    assert_eq!(response["projection"]["outcome"], "done", "{response}");
     provider.assert_consumed();
     let (_, native, _) = host.native_record("fixture", "worker", 1);
     assert_eq!(native["tool_calls"][1]["result"]["ok"], false);
@@ -706,7 +706,7 @@ fn real_goose_tools_route_artifacts_and_completed_restart_without_provider_repla
         ],
     );
     let host = Host::new(&graph());
-    assert_eq!(host.run(&provider)["status"], "completed");
+    assert_eq!(host.run(&provider)["projection"]["outcome"], "done");
     let saved = host.record("fixture");
     assert_eq!(saved["results"]["worker"].as_array().unwrap().len(), 1);
     assert_eq!(saved["results"]["verify"].as_array().unwrap().len(), 1);
@@ -730,7 +730,7 @@ fn real_goose_tools_route_artifacts_and_completed_restart_without_provider_repla
             .to_string()
             .contains("exit_code")
     );
-    assert_eq!(host.run(&provider)["status"], "completed");
+    assert_eq!(host.run(&provider)["projection"]["outcome"], "done");
     assert_eq!(host.record("fixture"), saved);
     assert_eq!(provider.requests(), requests);
     host.evidence(&provider, "fixture", json!({"nodes_recorded":2,"branch":"verify","tool_result_roundtrip":true,"workspace_checked":true,"artifact_hashes_checked":true,"completed_restart_model_requests":0,"tool_effects":1}));
@@ -749,7 +749,7 @@ fn real_goose_invalid_route_feedback_is_corrected_before_branch_commit() {
         ],
     );
     let host = Host::new(&graph());
-    assert_eq!(host.run(&provider)["status"], "completed");
+    assert_eq!(host.run(&provider)["projection"]["outcome"], "done");
     let saved = host.record("fixture");
     assert!(saved["results"].get("unused").is_none());
     assert_eq!(saved["results"]["worker"].as_array().unwrap().len(), 1);
@@ -813,7 +813,7 @@ fn denied_command_and_absolute_path(native: bool) {
     );
     let host = Host::new(&graph()).with_allowed_commands("sh,cat,true");
     let host = if native { host.native() } else { host };
-    assert_eq!(host.run(&provider)["status"], "completed");
+    assert_eq!(host.run(&provider)["projection"]["outcome"], "done");
     assert_eq!(fs::read(&protected).unwrap(), b"operator-data");
     let requests = provider.requests();
     assert_eq!(requests.len(), if native { 4 } else { 5 });
@@ -917,7 +917,7 @@ fn cancel_settles_and_restart_does_not_invoke_provider(native: bool) {
     restarted.wait_status(&run, "stopped");
     assert_eq!(host.record(&run), stopped);
     assert_eq!(provider.requests(), requests);
-    host.evidence(&provider, &run, json!({"stop_requested":true,"stop_settled":true,"downstream_started":false,"restart_requests":0,"tool_effects":1}));
+    host.evidence(&provider, &run, json!({"stop_submitted":true,"stop_settled":true,"downstream_started":false,"restart_requests":0,"tool_effects":1}));
 }
 
 #[test]
@@ -934,9 +934,14 @@ fn real_goose_business_after_final_result_is_rejected_without_commit() {
         ],
     );
     let host = Host::new(&graph());
-    assert_eq!(host.run(&provider)["status"], "failed");
+    assert_eq!(host.run(&provider)["projection"]["outcome"], "failed");
     let saved = host.record("fixture");
-    assert!(saved["error"].as_str().unwrap().contains("final_result"));
+    assert!(
+        saved["projection"]["result"]["detail"]
+            .as_str()
+            .unwrap()
+            .contains("final_result")
+    );
     assert!(saved["results"].get("worker").is_none());
     assert!(saved["results"].get("verify").is_none());
     assert!(
@@ -1038,7 +1043,7 @@ fn real_goose_external_effect_then_host_kill_is_spike_failclosed_not_native_safe
     let (status, accepted) = restarted.request("POST", &format!("/runs/{run}/resume"), None);
     assert_eq!(status, 202, "{accepted}");
     let failed = restarted.wait_status(&run, "failed");
-    let reason = failed["state"]["error"].as_str().unwrap();
+    let reason = failed["projection"]["reason"].as_str().unwrap();
     assert!(
         reason.contains("Goose") && reason.contains("replay") && reason.contains("refused"),
         "expected explicit spike failclosed limitation: {reason}"

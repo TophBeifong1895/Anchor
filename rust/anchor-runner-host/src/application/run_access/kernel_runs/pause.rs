@@ -89,15 +89,17 @@ impl KernelRuns {
 
     pub(super) fn request_pause(&self, id: &str) -> Result<(), ApplicationError> {
         let active = self.active.lock().unwrap();
-        let execution = active
-            .get(id)
-            .ok_or_else(|| ApplicationError::Conflict("that Run is not active".into()))?;
+        let execution = active.get(id);
         let resource = self.load(id)?.ok_or(ApplicationError::Missing)?;
-        if resource.phase() != Some(&Phase::Executing) {
+        if !Self::project(&resource, execution.is_some(), None)?
+            .actions()
+            .pause
+        {
             return Err(ApplicationError::Conflict(
-                "only an executing Run can be paused".into(),
+                "only an active executing Run can be paused".into(),
             ));
         }
+        let execution = execution.expect("pause action requires a registered worker");
         std::fs::create_dir_all(&self.pause_root).map_err(super::super::storage)?;
         let mut temporary =
             tempfile::NamedTempFile::new_in(&self.pause_root).map_err(super::super::storage)?;

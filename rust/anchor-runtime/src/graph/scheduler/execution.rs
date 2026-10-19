@@ -42,19 +42,26 @@ impl<S: Store, A: ArtifactPort + ?Sized, N: NodeExecutionPort + ?Sized>
                     )));
                 }
                 CompletionFact::NotStarted | CompletionFact::Resumable => {
-                    let cursor = self.cursor(&record, &dispatch, key.clone()).await?;
+                    let input = self.input(&record, &dispatch, key.clone()).await?;
                     if let Some(boundary) = self.boundary {
                         boundary.before_dispatch(&resource.id)?;
                     }
                     if self.load(&resource.id)?.phase() != Some(&Phase::Executing) {
                         return Ok(None);
                     }
-                    let request = authorized_execution_request(
+                    let request = match authorized_execution_request(
                         &record,
-                        &cursor,
+                        &input,
                         self.nodes,
                         self.cancellation.clone(),
-                    )?;
+                    ) {
+                        Ok(request) => request,
+                        Err(error) => {
+                            return self
+                                .known_failure(&resource, &dispatch, error.to_string(), 0)
+                                .map(Some);
+                        }
+                    };
                     self.nodes.execute(request).await?
                 }
                 CompletionFact::Yielded { reason, route } => {
@@ -65,13 +72,17 @@ impl<S: Store, A: ArtifactPort + ?Sized, N: NodeExecutionPort + ?Sized>
         let (outcome, interruption) = match outcome {
             NodeExecutionOutcome::Yielded { reason, route } => {
                 if dispatch.branch.is_some() {
-                    return Err(GraphError::CorruptRun(
-                        "interruption cannot complete a parallel branch".into(),
-                    ));
+                    return self
+                        .known_failure(
+                            &resource,
+                            &dispatch,
+                            "interruption cannot complete a parallel branch".into(),
+                            0,
+                        )
+                        .map(Some);
                 }
                 let completion = interruption_completion(&reason, route);
-                // Use the same routing function as the validator and legacy
-                // Runner before publishing an immutable control artifact.
+                // Use the same routing function as the validator before publishing an immutable control artifact.
                 match select_route(&completion, &routes_of(&record, &key.node_id)) {
                     Ok(_) => (NodeExecutionOutcome::Completed(completion), Some(reason)),
                     Err(error) => (
@@ -86,6 +97,16 @@ impl<S: Store, A: ArtifactPort + ?Sized, N: NodeExecutionPort + ?Sized>
         };
         match outcome {
             NodeExecutionOutcome::Completed(c) => {
+                if dispatch.kind == DispatchKind::Work
+                    && let Err(error) = select_route(&c, &routes_of(&record, &key.node_id))
+                {
+                    return self.known_failure(
+                        &resource,
+                        &dispatch,
+                        error.to_string(),
+                        c.model_requests,
+                    ).map(Some);
+                }
                 let context = ArtifactFreezeContext {
                     kind: match dispatch.kind {
                         _ if interruption.is_some() => ArtifactKind::Interruption,
@@ -134,16 +155,9 @@ impl<S: Store, A: ArtifactPort + ?Sized, N: NodeExecutionPort + ?Sized>
                         .evidence(evidence),
                 )))
             }
-            NodeExecutionOutcome::Failed { reason } => Ok(Some((
-                Principal::new(HOST_ID, PrincipalKind::Code),
-                0,
-                Submission::new(&resource.id, resource.version, Action::Settle)
-                    .slot(dispatch.slot())
-                    .content(
-                        serde_json::to_value(SettleSubmission { reason })
-                            .map_err(GraphError::RunDecode)?,
-                    ),
-            ))),
+            NodeExecutionOutcome::Failed { reason } => self
+                .known_failure(&resource, &dispatch, reason, 0)
+                .map(Some),
             NodeExecutionOutcome::WaitingRecovery { attempts } => Ok(Some(self.observation_stop(
                 &resource,
                 &key,
@@ -173,13 +187,32 @@ impl<S: Store, A: ArtifactPort + ?Sized, N: NodeExecutionPort + ?Sized>
         }
     }
 
-    pub(super) async fn cursor(
+    fn known_failure(
+        &self,
+        resource: &Resource,
+        dispatch: &Dispatch,
+        reason: String,
+        model_requests: u64,
+    ) -> Result<StampedSubmission, GraphError> {
+        Ok((
+            Principal::new(HOST_ID, PrincipalKind::Code),
+            model_requests,
+            Submission::new(&resource.id, resource.version, Action::Settle)
+                .slot(dispatch.slot())
+                .content(
+                    serde_json::to_value(SettleSubmission { reason })
+                        .map_err(GraphError::RunDecode)?,
+                ),
+        ))
+    }
+
+    pub(super) async fn input(
         &self,
         record: &GraphRunRecord,
         dispatch: &Dispatch,
         key: InvocationKey,
-    ) -> Result<RunCursor, GraphError> {
-        dispatch_cursor(self.artifacts, record, dispatch, key).await
+    ) -> Result<DispatchInput, GraphError> {
+        dispatch_input(self.artifacts, record, dispatch, key).await
     }
 
     fn observation_stop(
@@ -198,12 +231,12 @@ impl<S: Store, A: ArtifactPort + ?Sized, N: NodeExecutionPort + ?Sized>
 
 /// Resolve one validator dispatch through the same provenance/input adapter
 /// used by execution and by Host call admission validation.
-pub async fn dispatch_cursor<A: ArtifactPort + ?Sized>(
+pub async fn dispatch_input<A: ArtifactPort + ?Sized>(
     artifacts: &A,
     record: &GraphRunRecord,
     dispatch: &Dispatch,
     key: InvocationKey,
-) -> Result<RunCursor, GraphError> {
+) -> Result<DispatchInput, GraphError> {
     let mut resolved = Vec::new();
     for commit in &dispatch.inputs {
         resolved.push(artifacts.resolve(commit).await?);
@@ -214,7 +247,7 @@ pub async fn dispatch_cursor<A: ArtifactPort + ?Sized>(
         prepared_input["parallel_activation"] = serde_json::json!(activation.activation_id);
         prepared_input["branch_id"] = serde_json::json!(activation.branches[index].branch_id);
     }
-    Ok(RunCursor {
+    Ok(DispatchInput {
         node_id: dispatch.node.id.clone(),
         key,
         input_commits: dispatch.inputs.clone(),

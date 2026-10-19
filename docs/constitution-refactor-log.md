@@ -1171,3 +1171,41 @@ M2 的最终命令、原样 Goose target 结果、失败与复跑、规则清单
 | rust/anchor-runner-host/src/goose_acp/trace.rs | 使用 master 的共享 write_durable 原子发布，移除重复 writer；保留 master 两项交错/连续读写回归及本分支单快照回归。旧单快照夹具先显式设置 0600 再替换，以验证权限保留；既有权限断言不变，首次创建权限遵循 master 的 umask 契约。 |
 
 main.rs 与 goose_acp.rs 自动合并；恢复模块和助手接入均保留。最终合并树 workspace 130 个 target，2,139 / 0 / 136；固定 Goose 完整串行 ignored 133 / 0 / 0，含 Kernel 助手 12 项和人工恢复 1 项；严格 clippy/fmt、sandbox 构建通过。Web 311 项与 build 在合并前通过，合并未改 Web 源码。原样结果、失败与中止登记见 M2 交回。
+
+
+## M3 §10.13：唯一 Kernel 路径与旧执行器退出
+
+先以 `0d029eb` 冻结旧侧 30,000 个 seed（串行 10,000、并行有失败/无失败各 5,000、模块 5,000、Call 5,000），两个命名空间分别完成旧执行与快照双对照后才删除旧 Runner。快照头、比较契约与尺寸见 [冻结基线](../experiments/constitution-host-preflight/m3/snapshots/README.md)。M3 的完整验收尚在进行，不把定向通过作为最终验收。
+
+全部新 Run 默认 Kernel，HTTP 不再接收 execution 选择。旧存储仅具名拒绝；GraphRunRecord 格式 14 不再保存生命周期或 cursor。唯一生命周期来自 Kernel Phase，唯一 worker 表是 KernelRuns.active。Host、standalone、Graph/Session Call 与助手共用该执行路径，旧执行器、旧存储类型、兼容投影和控制轮询均退出。C2 的 [16 save / 36 mutation 去向](../experiments/constitution-host-preflight/m3/c2-destinations.md) 已逐项清零；[规则与 Session 所有权](../experiments/constitution-host-preflight/m3/rules-session-audit.md) 单独审计，不用消费者数量冒充规则计数。
+
+### S 候选
+
+| 候选 | 结论与现场 |
+| --- | --- |
+| S27（承接 S4） | 退役只移动 Session current 指针；未结算 Run 仍可 Human abandon。按任务书 §3.4 对齐 Kernel，不把 retired 解释成结算。`application::run_access::abandon::tests::retired_assistant_can_be_abandoned_without_restoring_its_session_binding` 验证真实 Session 退役后放弃，保留原退役指针和 Run 进度。 |
+
+### 断言修改
+
+| 编号/范围 | 修改及保持的业务约束 |
+| --- | --- |
+| A1 生命周期词汇 | status/cursor/旧 phase 改读 Kernel Phase、frontier 与独立 operation 回执；不构造可写兼容记录。各消失测试逐项见下表。 |
+| A2 action/静止/关注 | 旧双路径矩阵改为真实 Kernel create/control/complete；stop 默认 reason 为 stopped，pause 为 paused；worker 排空与 pending recovery 仍保守阻挡。 |
+| A3 恢复错误文字 | 已结算 resume 精确拒绝 `Kernel control refused: TaskSettled`；新 recovery 决定精确拒绝 `settled Run cannot record recovery decisions`。相同既有决定仍幂等，验证先于端口写入。 |
+| A4 放弃原因与同步返回 | detail 保存原 reason（例如 plugin_update），不拼旧 abandoned 文字。正常及重复成功均等待同一 worker registry 排空，其他终态仍拒绝。 |
+| A5 执行观察 | 开放 frontier 不等于执行已开始；时间/暂停夹具等到端口 durable started 再停止。保留原结果数、成本与产物断言，不以增加预期结果掩盖竞态。 |
+| A6 未提交对话继承 | 前驱保留读取 Host 与 Goose 原生 started 事实；未 commit 的 workspace/native history 仍保护，未开始的开放槽位不延长保留。后继首轮证据与缺少 admission 的原业务断言保留。 |
+| A7 Session-call 核查 | 认证 Session 协调仍可持久化未知效果核查提示后继续同一 Run；通过既有 recover_attempt 与端口观察，不清空数组、不自动重放工具。普通控制/恢复仍不能越过 Session 协调。 |
+| A8 旧数据及入口 | execution 选择具名拒绝；旧 RunStore 与旧 Kernel record 格式具名拒绝。用户明确取消迁移工具，旧本地状态不自动删除。 |
+| A9 持久错误与路由 | 非法 route、Yielded、纯授权失败仍按原业务终态和一次成本断言验证；不放宽 S18，不修改 GraphValidator 裁决。record_of 保持纯 decode，结构校验在 load 边界。 |
+| A10 ignored 重复 target | 删除 goose_kernel_persistent_assistant 对普通 assistant 模块的重复 include；原 12 个业务用例仍在默认 Kernel target，未新增 ignore。独立 Kernel 未知效果 recovery 用例保留。 |
+
+### 删除测试映射
+
+| 范围 | 映射与理由 |
+| --- | --- |
+| Runtime 原主模块 73 项 | [逐项映射](../experiments/constitution-host-preflight/m3/runtime-test-mapping.md)，原测试名全部保留；夹具改为真实 Kernel 提交，损坏记录测试只修改用于验证拒绝的测试副本。 |
+| Host 39 个消失函数 | [逐项映射](../experiments/constitution-host-preflight/m3/host-test-mapping.md)，包含重命名、合并、旧机制退出及无规则 forwarder；每项给出等价目标或行为退出理由。 |
+| Goose 重复 12 项 | 同一模块曾被两个 target 编译，M2 的 136 比字面 124 多 12；只删除重复 target，12 个普通 assistant 场景保留，名单与实际最终计数在交回证据。 |
+
+按用户 §10.13 决定不做生产数据迁移，不修改现有开发状态；交回提供 [新开发状态根与保留范围](../experiments/constitution-host-preflight/m3/local-development-state.md)。W4、真实模型 Provider、外部渠道与部署不由固定 Goose/本地 Provider 验收代替。M4/M5 由用户后续授权；本分支不自行合回 master。

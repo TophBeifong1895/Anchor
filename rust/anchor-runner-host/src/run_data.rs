@@ -198,16 +198,6 @@ pub(crate) fn invocation_keys(record: &GraphRunRecord) -> Vec<InvocationKey> {
             });
         }
     }
-    if let Some(cursor) = &record.cursor {
-        keys.push(cursor.key.clone());
-    }
-    if let Some(parallel) = &record.parallel {
-        for branch in &parallel.branches {
-            if let Some(cursor) = &branch.cursor {
-                keys.push(cursor.key.clone());
-            }
-        }
-    }
     keys.extend(
         record
             .results
@@ -223,10 +213,20 @@ pub(crate) fn invocation_keys(record: &GraphRunRecord) -> Vec<InvocationKey> {
 
 fn assistant_bindings(
     record: &GraphRunRecord,
+    extra_keys: &[InvocationKey],
     data_root: &Path,
 ) -> Result<Vec<crate::assistant::TurnBinding>, String> {
     let mut bindings = BTreeMap::new();
-    for key in invocation_keys(record) {
+    let mut keys = invocation_keys(record);
+    keys.extend(
+        extra_keys
+            .iter()
+            .filter(|key| owns_invocation(record, key))
+            .cloned(),
+    );
+    keys.sort_by_key(|key| key.durable_key());
+    keys.dedup();
+    for key in keys {
         if let Some(binding) = crate::assistant::binding(data_root, &key)? {
             bindings.insert(key_hash(&key), binding);
         }
@@ -327,10 +327,11 @@ fn remove_io_recovery_intents(data_root: &Path, stem: &str) {
 /// recovery sidecars), and workspace owned by this Run. Missing files are fine.
 pub(crate) fn delete_run_data(
     record: &GraphRunRecord,
+    extra_keys: &[InvocationKey],
     data_root: &Path,
     workspace_root: &Path,
 ) -> Result<(), String> {
-    let bindings = assistant_bindings(record, data_root)?;
+    let bindings = assistant_bindings(record, extra_keys, data_root)?;
     crate::assistant_plugins::cleanup(data_root, record)?;
     let mut turns = bindings
         .iter()
@@ -347,6 +348,12 @@ pub(crate) fn delete_run_data(
         remove_assistant_file_if_exists(&reply.with_extension("tmp"))?;
     }
     let mut keys = invocation_keys(record);
+    keys.extend(
+        extra_keys
+            .iter()
+            .filter(|key| owns_invocation(record, key))
+            .cloned(),
+    );
     keys.extend(bindings.iter().map(|binding| binding.key.clone()));
     keys.sort_by_key(|key| key.durable_key());
     keys.dedup();
@@ -567,8 +574,8 @@ mod tests {
                 write(path, b"owned");
             }
         }
-        delete_run_data(&target, &data, &work).unwrap();
-        delete_run_data(&target, &data, &work).unwrap();
+        delete_run_data(&target, &[], &data, &work).unwrap();
+        delete_run_data(&target, &[], &data, &work).unwrap();
         assert!(target_paths.iter().all(|path| !path.exists()));
         assert!(
             other_paths

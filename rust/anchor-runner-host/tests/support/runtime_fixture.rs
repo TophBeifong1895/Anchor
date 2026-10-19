@@ -111,66 +111,42 @@ impl Host {
         self.record_for("fixture")
     }
 
-    pub fn record_for(&self, run: &str) -> Value {
-        let legacy = self
-            .root
-            .path()
-            .join("state/runs")
-            .join(format!("{run}.json"));
-        if legacy.exists() {
-            return read_json(legacy);
-        }
-        // Test-only compatibility view for running the identical legacy
-        // behavior assertions over a Kernel Run. Never saved to either store.
-        use anchor_kernel::{Outcome, Phase, Store, Waiter};
-        use anchor_runtime::graph::{
-            InvocationKey, RunCursor, RunStatus,
-            validator::{GraphValidator, record_of, run_resource_id},
-        };
-        let store =
-            anchor_kernel::FileStore::new(self.root.path().join("state/kernel-runs")).unwrap();
-        let resource = store
-            .load(&run_resource_id(run))
+    pub fn resource_for(&self, run: &str) -> Option<anchor_kernel::Resource> {
+        use anchor_kernel::Store;
+        let store = anchor_kernel::FileStore::new(self.state_root().join("kernel-runs")).unwrap();
+        store
+            .load(&anchor_runtime::graph::validator::run_resource_id(run))
             .unwrap()
-            .expect("Kernel Run");
-        let mut record = record_of(&resource).unwrap();
-        record.status = match resource.phase().unwrap() {
-            Phase::Executing => RunStatus::Running,
-            Phase::Waiting {
-                waiter: Waiter::Human { reason },
-            } if reason == "paused" => RunStatus::Paused,
-            Phase::Waiting {
-                waiter: Waiter::Human { .. },
-            } => RunStatus::Stopped,
-            Phase::Waiting { .. } => RunStatus::WaitingCall,
-            Phase::Settled {
-                result: Outcome::Done,
-            } => RunStatus::Completed,
-            Phase::Settled {
-                result: Outcome::Aborted { .. },
-            } => RunStatus::Aborted,
-            Phase::Settled { .. } => RunStatus::Failed,
+    }
+
+    pub fn record_for(&self, run: &str) -> Value {
+        use anchor_runtime::graph::{
+            InvocationKey,
+            validator::{GraphValidator, record_of},
         };
-        if !resource.is_settled()
-            && record.parallel.is_none()
-            && let Some(d) = GraphValidator::frontier(&resource).unwrap().first()
-        {
-            record.invocations.insert(d.node.id.clone(), d.invocation);
-            let passes = record.passes.entry(d.node.id.clone()).or_default();
-            *passes = (*passes).max(1);
-            record.cursor = Some(RunCursor {
-                node_id: d.node.id.clone(),
-                key: InvocationKey {
-                    run_id: record.run_id.clone(),
-                    graph_digest: record.graph_digest.clone(),
-                    node_id: d.node.id.clone(),
-                    invocation: d.invocation,
-                },
-                input_commits: d.inputs.clone(),
-                prepared_input: Value::Null,
-            });
-        }
-        serde_json::to_value(record).unwrap()
+        let resource = self.resource_for(run).expect("Kernel Run");
+        let record = record_of(&resource).unwrap();
+        let mut facts = serde_json::to_value(&record).unwrap();
+        // Observe the persisted Kernel phase and the validator's read-only
+        // frontier. Dispatch preparation must not fabricate committed counts.
+        facts["projection"] = serde_json::to_value(resource.phase().unwrap()).unwrap();
+        facts["frontier"] = serde_json::to_value(
+            GraphValidator::frontier(&resource)
+                .unwrap()
+                .into_iter()
+                .map(|dispatch| {
+                    let key = InvocationKey {
+                        run_id: record.run_id.clone(),
+                        graph_digest: record.graph_digest.clone(),
+                        node_id: dispatch.node.id.clone(),
+                        invocation: dispatch.invocation,
+                    };
+                    json!({"node_id":dispatch.node.id,"key":key,"input_commits":dispatch.inputs})
+                })
+                .collect::<Vec<_>>(),
+        )
+        .unwrap();
+        facts
     }
 
     pub fn serve_without_model(&self) -> HttpHost {

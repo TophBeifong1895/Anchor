@@ -1,15 +1,19 @@
 use super::RunView;
 use crate::application::{
-    ActiveRun, ApplicationError, ConversationSource, RunApplication, RunMetadata, metadata,
-    new_control,
+    ApplicationError, ConversationSource, RunApplication, RunMetadata, metadata, new_control,
 };
-use anchor_runtime::graph::{GraphRunRecord, RecoveryDecision, RunStatus, RunStore};
-use std::sync::atomic::Ordering;
+use anchor_runtime::graph::{GraphRunRecord, RecoveryDecision};
 
 impl RunView<'_> {
     fn can_continue_session_call(&self) -> bool {
         (!self.is_settled() || self.has_succeeded())
-            && self.record.status != RunStatus::BudgetStopped
+            && !matches!(
+                self.phase(),
+                super::RunPhase::Waiting {
+                    reason: Some("budget"),
+                    ..
+                }
+            )
     }
 }
 
@@ -63,7 +67,7 @@ impl RunApplication {
     }
 
     pub(crate) async fn stop_session_call(&self, run_id: &str) -> Result<(), ApplicationError> {
-        let active = self.active.lock().await;
+        let active = self.admission.lock().await;
         let mut metadata = self.metadata(run_id)?.ok_or(ApplicationError::Missing)?;
         let call = metadata
             .session_call
@@ -74,50 +78,36 @@ impl RunApplication {
                 "Session delivery already settled".into(),
             ));
         }
-        let lease = if active.contains_key(run_id) {
-            None
-        } else {
-            Some(self.store().acquire_lease(run_id)?)
-        };
-        let mut record = self
-            .store()
-            .load(run_id)?
+        let runs = self
+            .kernel_owner(run_id)?
             .ok_or(ApplicationError::Missing)?;
+        let view = self.read_run(run_id)?.ok_or(ApplicationError::Missing)?;
+        if !view.is_settled() {
+            runs.control(run_id, "stop", None)?;
+        }
         call.status = "failed".into();
         call.error = "background call stopped".into();
         metadata::save(&self.data_root, &metadata)?;
-        if let Some(run) = active.get(run_id) {
-            run.control.cancellation.store(true, Ordering::Release);
-        } else if !RunView::inactive(&record).is_settled() {
-            record.status = RunStatus::Stopped;
-            self.store().save(&record)?;
-        }
-        drop(lease);
         drop(active);
-        self.child_finished(run_id, &metadata.graph, RunStatus::Completed)
-            .await
+        self.kernel_child_finished(run_id).await
     }
 
     pub(crate) async fn yield_session_call(&self, run_id: &str) -> Result<(), ApplicationError> {
-        let active = self.active.lock().await;
         let metadata = self.metadata(run_id)?.ok_or(ApplicationError::Missing)?;
         if metadata.session_call.is_none() {
             return Err(ApplicationError::Invalid(
                 "Run is not a Session call".into(),
             ));
         }
-        if let Some(run) = active.get(run_id) {
-            run.control.cancellation.store(true, Ordering::Release);
-            return Ok(());
-        }
-        let _lease = self.store().acquire_lease(run_id)?;
-        let mut record = self
-            .store()
-            .load(run_id)?
+        let runs = self
+            .kernel_owner(run_id)?
             .ok_or(ApplicationError::Missing)?;
-        if !RunView::inactive(&record).is_settled() {
-            record.status = RunStatus::Stopped;
-            self.store().save(&record)?;
+        if !self
+            .read_run(run_id)?
+            .ok_or(ApplicationError::Missing)?
+            .is_settled()
+        {
+            runs.control(run_id, "stop", None)?;
         }
         Ok(())
     }
@@ -130,7 +120,7 @@ impl RunApplication {
         session: &str,
         previous: Option<String>,
     ) -> Result<(), ApplicationError> {
-        let mut active = self.active.lock().await;
+        let active = self.admission.lock().await;
         let mut metadata = self.metadata(run_id)?.ok_or(ApplicationError::Missing)?;
         let call = metadata
             .session_call
@@ -155,31 +145,32 @@ impl RunApplication {
                 "Session execution binding changed".into(),
             ));
         }
-        if active.contains_key(run_id) {
+        let runs = self
+            .kernel_owner(run_id)?
+            .ok_or(ApplicationError::Missing)?;
+        if runs.active(run_id) {
             return Ok(());
         }
         let _graph_lease = self.graph_admission_lease(&metadata.bundle_source)?;
-        let lease = self.store().acquire_lease(run_id)?;
-        let mut record = self
-            .store()
-            .load(run_id)?
-            .ok_or(ApplicationError::Missing)?;
-        if RunView::inactive(&record).has_succeeded() {
+        let lease = self.run_leases().acquire_lease(run_id)?;
+        let view = self.read_run(run_id)?.ok_or(ApplicationError::Missing)?;
+        if view.has_succeeded() {
             return Ok(());
         }
-        if !RunView::inactive(&record).can_continue_session_call() {
+        if !view.can_continue_session_call() {
             return Err(ApplicationError::Conflict(
                 "Session call execution cannot be continued".into(),
             ));
         }
+        let record = &view.record;
         if metadata.graph_digest != record.graph_digest {
             return Err(ApplicationError::Conflict(
                 "Session call Graph identity changed".into(),
             ));
         }
         let graph_path = Self::graph_identity(&metadata.bundle_source)?;
-        for (id, other) in self.raw_records()? {
-            if id == run_id || RunView::inactive(&other).is_settled() {
+        for (id, other) in self.run_views()? {
+            if id == run_id || other.is_settled() {
                 continue;
             }
             if let Some(identity) = self.metadata(&id)?
@@ -221,38 +212,40 @@ impl RunApplication {
         }
         let control = new_control();
         let execution = self.prepare_resume(&record, &metadata, control.clone())?;
-        // Ordinary recovery records an unknown effect as context; it never replays a tool.
-        for pending in std::mem::take(&mut record.recovery) {
+        // The authenticated Session host releases its existing invocation for
+        // inspection. Persist the native observation through the same recovery
+        // authority as ordinary Runs; an unknown effect is never replayed here.
+        for pending in runs.recovery_facts(run_id)?.0 {
             let decision = RecoveryDecision::Completed {
                 observation: format!(
                     "The previous {} tool call was interrupted before its result was recorded. Its effect is unknown. Inspect the actual state before continuing; do not blindly repeat it.",
                     pending.attempt.tool
                 ),
             };
-            execution
-                .record_recovery_decision(
-                    &pending.key,
-                    pending.attempt.attempt_id,
-                    decision.clone(),
-                )
-                .map_err(ApplicationError::Conflict)?;
-            record
-                .recovery_submissions
-                .push(anchor_runtime::graph::RecoverySubmission {
-                    key: pending.key,
-                    attempt_id: pending.attempt.attempt_id,
-                    decision,
-                });
+            runs.recover_attempt(
+                &pending.key,
+                pending.attempt.attempt_id,
+                decision.clone(),
+                || {
+                    execution
+                        .record_recovery_decision(
+                            &pending.key,
+                            pending.attempt.attempt_id,
+                            decision,
+                        )
+                        .map_err(anchor_runtime::graph::GraphError::CorruptRun)
+                },
+            )?;
         }
-        record.status = RunStatus::Running;
-        self.store().save(&record)?;
-        active.insert(
-            run_id.into(),
-            ActiveRun::new(Self::graph_identity(&metadata.bundle_source)?, control),
-        );
+        let resumed = self.read_run(run_id)?.ok_or(ApplicationError::Missing)?;
+        if !matches!(resumed.phase(), super::RunPhase::Executing) {
+            runs.control(run_id, "resume", None)?;
+        }
+        let record = record.clone().into_owned();
         drop(lease);
         drop(_graph_lease);
-        self.spawn(record, execution)?;
+        drop(active);
+        self.spawn_kernel(record, execution, control)?;
         Ok(())
     }
 
@@ -267,18 +260,15 @@ impl RunApplication {
                 "invalid Session delivery status".into(),
             ));
         }
-        let active = self.active.lock().await;
-        if active.contains_key(run_id) {
+        let active = self.admission.lock().await;
+        if self.read_run(run_id)?.is_some_and(|view| view.active()) {
             return Err(ApplicationError::Conflict(
                 "Session execution has not settled".into(),
             ));
         }
-        let lease = self.store().acquire_lease(run_id)?;
-        let record = self
-            .store()
-            .load(run_id)?
-            .ok_or(ApplicationError::Missing)?;
-        if status == "delivered" && !RunView::inactive(&record).has_succeeded() {
+        let lease = self.run_leases().acquire_lease(run_id)?;
+        let view = self.read_run(run_id)?.ok_or(ApplicationError::Missing)?;
+        if status == "delivered" && !view.has_succeeded() {
             return Err(ApplicationError::Conflict(
                 "only completed execution can be delivered".into(),
             ));
@@ -298,43 +288,24 @@ impl RunApplication {
         metadata::save(&self.data_root, &metadata)?;
         drop(lease);
         drop(active);
-        self.child_finished(run_id, &metadata.graph, RunStatus::Completed)
-            .await
+        self.kernel_child_finished(run_id).await
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use super::super::fixtures;
     use super::*;
-    use anchor_runtime::graph::GraphSnapshot;
-    use serde_json::json;
 
     #[test]
-    fn session_continuation_preserves_budget_and_completion_distinctions() {
-        let snapshot = GraphSnapshot::from_authoring(json!({
-            "entry":"work", "agents":{}, "ops":{"work":{"run":"true"}},
-            "nodes":[{"id":"work","op":"work"}], "edges":[]
-        }))
-        .unwrap();
-        let mut record =
-            GraphRunRecord::create_with_id(snapshot, json!({}), "session-call").unwrap();
-        for (status, allowed) in [
-            (RunStatus::Ready, true),
-            (RunStatus::Running, true),
-            (RunStatus::Paused, true),
-            (RunStatus::Stopped, true),
-            (RunStatus::BudgetStopped, false),
-            (RunStatus::WaitingCall, true),
-            (RunStatus::WaitingRecovery, true),
-            (RunStatus::Completed, true),
-            (RunStatus::Failed, false),
-            (RunStatus::Aborted, false),
-        ] {
-            record.status = status;
+    fn session_continuation_preserves_budget_recovery_and_completion_distinctions() {
+        let root = tempfile::tempdir().unwrap();
+        let application = RunApplication::new(root.path().join("state"), root.path().into());
+        for id in fixtures::scenarios(&application) {
             assert_eq!(
-                RunView::inactive(&record).can_continue_session_call(),
-                allowed,
-                "{status:?}"
+                fixtures::view(&application, id).can_continue_session_call(),
+                !matches!(id, "budget" | "failed" | "aborted"),
+                "{id}"
             );
         }
     }

@@ -151,17 +151,15 @@ impl HostNodes {
             && let Some(input) = assistant::input(root, key).map_err(graph_error)?
             && stopped_input(&input)
         {
-            let record = self
+            let inputs = self
                 .io_resolver
-                .load_run(&key.run_id)?
-                .ok_or_else(|| graph_error("assistant Run is missing"))?;
-            let cursor = record
-                .cursor
-                .as_ref()
-                .filter(|cursor| cursor.key == *key)
-                .ok_or_else(|| graph_error("assistant interrupted cursor is missing"))?;
+                .run_application()
+                .dispatch_inputs(key)
+                .map_err(|error| {
+                    graph_error(format!("assistant interrupted dispatch: {error:?}"))
+                })?;
             self.io_resolver
-                .prepare_node_workspace(key, &cursor.input_commits)
+                .prepare_node_workspace(key, &inputs)
                 .map_err(graph_error)?;
             return self.yield_assistant(key, source.reply_node).map(Some);
         }
@@ -242,9 +240,6 @@ impl HostNodes {
                     notified.as_mut().enable();
                     if request.cancellation.load(Ordering::Acquire) {
                         return Ok(NodeExecutionOutcome::Cancelled);
-                    }
-                    if self.control.pause.load(Ordering::Acquire) {
-                        return Ok(NodeExecutionOutcome::Suspended);
                     }
                     let input = assistant::sessions(root)
                         .map_err(graph_error)?

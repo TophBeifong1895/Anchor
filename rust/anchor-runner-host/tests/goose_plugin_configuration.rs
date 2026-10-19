@@ -153,6 +153,6 @@ fn managed_configuration_rotates_atomically_without_restarting_or_changing_live_
         "atomic_consumers":true,"live_invocation_keeps_snapshot":true,"rotation_without_restart":true,
         "clear_does_not_fallback_to_environment":true,"secrets_absent_from_model":true,
         "management_probe_initializes_without_business_calls":true,
-        "boundary":"Host, GraphRunner, NodeExecutionPort, Goose ACP and sandboxed MCP; deterministic model transport"
+        "boundary":"Host, KernelScheduler, NodeExecutionPort, Goose ACP and sandboxed MCP; deterministic model transport"
     }));
 }

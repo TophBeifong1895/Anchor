@@ -54,7 +54,7 @@ impl HostNodes {
             .as_ref()
             .and_then(serde_json::Value::as_str)
             .ok_or_else(|| GraphError::Unsupported("Op.run must be a command string".into()))?;
-        // GraphRunner wraps the frozen Run input with upstream artifact metadata.
+        // Kernel scheduler wraps the frozen Run input with upstream artifact metadata.
         // Business commands receive only the effective Graph input.
         let run_input = request.input.get("input").ok_or_else(|| {
             GraphError::Unsupported("Op.run request is missing effective Graph input".into())
@@ -235,23 +235,7 @@ impl NodeExecutionPort for HostNodes {
     ) -> Pin<
         Box<dyn std::future::Future<Output = Result<NodeExecutionOutcome, GraphError>> + Send + 'a>,
     > {
-        let kernel_owned = match self
-            .io_resolver
-            .run_application
-            .get()
-            .map(|app| app.kernel_owner(&request.key.run_id))
-            .transpose()
-        {
-            Ok(owner) => owner.flatten().is_some(),
-            Err(error) => {
-                return Box::pin(async move {
-                    Err(GraphError::CorruptRun(format!(
-                        "Run ownership unavailable: {error:?}"
-                    )))
-                });
-            }
-        };
-        if kernel_owned && let Some(nodes) = &self.goose_nodes {
+        if let Some(nodes) = &self.goose_nodes {
             match nodes.pending_recovery(&request.key) {
                 Ok(attempts) if !attempts.is_empty() => {
                     return Box::pin(async move {

@@ -2,6 +2,7 @@
 //!
 //! Graph remains the desired configuration. These secret-free facts prove an
 //! operator authorized its grants and what a particular Turn actually received.
+use crate::application::run_access::RunProgress;
 use crate::application::{
     RunMetadata,
     run_access::{self, RunView},
@@ -246,10 +247,9 @@ pub(crate) fn load(
 /// Runs keep the Kernel's frozen admission policy.
 pub(crate) fn invocation_authority<'record>(
     root: &Path,
-    record: impl Into<RunView<'record>>,
+    record: impl Into<RunProgress<'record>>,
 ) -> Result<bool, String> {
-    let view = record.into();
-    let progress = view.progress();
+    let progress = record.into();
     let Some(metadata) = crate::application::metadata::load(root, progress.run_id)
         .map_err(|error| format!("Run identity unavailable: {error:?}"))?
     else {
@@ -371,10 +371,9 @@ fn remove_owned_facts(
 
 pub(crate) fn cleanup<'record>(
     root: &Path,
-    record: impl Into<RunView<'record>>,
+    record: impl Into<RunProgress<'record>>,
 ) -> Result<(), String> {
-    let view = record.into();
-    let progress = view.progress();
+    let progress = record.into();
     let metadata = crate::application::metadata::load(root, progress.run_id)
         .map_err(|error| format!("policy cleanup identity unavailable: {error:?}"))?;
     remove_owned_facts(

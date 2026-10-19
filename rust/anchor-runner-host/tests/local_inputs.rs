@@ -1,4 +1,5 @@
 //! Production framing and Bubblewrap coverage for operator-owned local inputs.
+use anchor_kernel::{FileStore, Store};
 use serde_json::{Value, json};
 use std::{
     fs,
@@ -69,7 +70,12 @@ fn invoke(root: &Path, run: &str, local: bool, graph: Option<&str>) -> Value {
 }
 
 fn record(root: &Path, run: &str) -> Value {
-    serde_json::from_slice(&fs::read(root.join(format!("state/runs/{run}.json"))).unwrap()).unwrap()
+    FileStore::new(root.join("state/kernel-runs"))
+        .unwrap()
+        .load(&anchor_runtime::graph::validator::run_resource_id(run))
+        .unwrap()
+        .unwrap()
+        .state
 }
 
 fn collect_graph() -> Value {
@@ -99,7 +105,7 @@ fn operator_inputs_are_readonly_visible_only_to_the_granted_op_and_frozen_on_res
         &json!({"collect":{"history":source}}),
     );
     let completed = invoke(root.path(), "local-granted", true, Some("weekly"));
-    assert_eq!(completed["status"], "completed", "{completed}");
+    assert_eq!(completed["projection"]["outcome"], "done", "{completed}");
     assert!(!source.join("forbidden").exists());
     let saved = record(root.path(), "local-granted");
     assert_eq!(
@@ -107,8 +113,8 @@ fn operator_inputs_are_readonly_visible_only_to_the_granted_op_and_frozen_on_res
         "approved-local-evidence"
     );
     assert_eq!(
-        invoke(root.path(), "local-granted", true, Some("weekly"))["status"],
-        "completed"
+        invoke(root.path(), "local-granted", true, Some("weekly"))["projection"]["outcome"],
+        "done"
     );
 
     grants(root.path(), "weekly", &json!({"collect":{"history":other}}));
@@ -142,7 +148,12 @@ fn unknown_nodes_and_missing_standalone_identity_are_rejected_before_command_exe
     let unknown = invoke(root.path(), "unknown-node", true, Some("weekly"));
     assert_eq!(unknown["kind"], "rejected", "{unknown}");
     assert!(unknown["reason"].as_str().unwrap().contains("unknown node"));
-    assert!(!root.path().join("state/runs/unknown-node.json").exists());
+    assert!(
+        !root
+            .path()
+            .join("state/kernel-runs/run%2Funknown-node/resource.json")
+            .exists()
+    );
     let nameless = invoke(root.path(), "nameless", true, None);
     assert_eq!(nameless["kind"], "rejected", "{nameless}");
     assert!(
@@ -171,7 +182,7 @@ fn absent_operator_authority_is_frozen_and_cannot_be_added_to_an_existing_run() 
         &json!({"collect":{"history":source}}),
     );
     let original = invoke(root.path(), "empty-grants", false, None);
-    assert_eq!(original["status"], "completed", "{original}");
+    assert_eq!(original["projection"]["outcome"], "done", "{original}");
     let added = invoke(root.path(), "empty-grants", true, Some("weekly"));
     assert_eq!(added["kind"], "rejected", "{added}");
     assert!(added["reason"].as_str().unwrap().contains("grants"));
@@ -205,7 +216,7 @@ fn wait_child_uses_its_own_grants_and_never_inherits_parent_authority() {
     );
     grants(root.path(), "child", &json!({}));
     let response = invoke(root.path(), "child-no-inheritance", true, Some("parent"));
-    assert_eq!(response["status"], "completed", "{response}");
+    assert_eq!(response["projection"]["outcome"], "done", "{response}");
 
     bundle(
         &child,
@@ -215,10 +226,10 @@ fn wait_child_uses_its_own_grants_and_never_inherits_parent_authority() {
         }),
     );
     let denied = invoke(root.path(), "child-without-grant", true, Some("parent"));
-    assert_eq!(denied["status"], "failed", "{denied}");
+    assert_eq!(denied["projection"]["outcome"], "failed", "{denied}");
     grants(root.path(), "child", &json!({"collect":{"history":source}}));
     let allowed = invoke(root.path(), "child-with-grant", true, Some("parent"));
-    assert_eq!(allowed["status"], "completed", "{allowed}");
+    assert_eq!(allowed["projection"]["outcome"], "done", "{allowed}");
     let parent = record(root.path(), "child-with-grant");
     let child_id = parent["graph_calls"]
         .as_object()

@@ -28,11 +28,11 @@ async fn channel_attachment_is_a_readonly_input_for_the_same_op_runner() {
     .await;
     assert_eq!(status, StatusCode::ACCEPTED, "{result}");
     wait_idle(&state).await;
-    let record = FileRunStore::new(state.data_root.join("runs"))
+    let record = fixtures::Reader::new(&state.application)
         .load(run)
         .unwrap()
         .unwrap();
-    assert_eq!(record.status, RunStatus::Completed, "{record:?}");
+    assert!(record.has_succeeded(), "{record:?}");
     let artifacts = HostArtifacts::new(
         state.data_root.join("artifacts"),
         state.workspace_root.clone(),

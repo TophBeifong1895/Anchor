@@ -3,9 +3,18 @@ use anchor_platform_session::{
     ChannelDeliveryRequest, ChannelDeliveryStatus, ChannelIdentity, ChannelInboundRequest,
     SessionStore, TurnStatus,
 };
-use anchor_runtime::graph::{FileRunStore, GraphRunRecord, GraphSnapshot, RunStore};
+use anchor_runtime::graph::{GraphRunRecord, GraphSnapshot};
 
 mod plugin_updates;
+
+fn kernel_resource(state: &ApiState, id: &str) -> anchor_kernel::Resource {
+    use anchor_kernel::Store;
+    anchor_kernel::FileStore::new(state.data_root.join("kernel-runs"))
+        .unwrap()
+        .load(&anchor_runtime::graph::validator::run_resource_id(id))
+        .unwrap()
+        .unwrap()
+}
 
 #[tokio::test]
 async fn claimed_input_survives_restart_before_artifact_even_after_new_input_arrives() {
@@ -35,7 +44,7 @@ async fn claimed_input_survives_restart_before_artifact_even_after_new_input_arr
     let first = sessions
         .admit_channel_inbound("local", inbound("crash-before-artifact"))
         .unwrap();
-    let record = FileRunStore::new(state.data_root.join("runs"))
+    let record = fixtures::Reader::new(&state.application)
         .load("persistent-fixture-run")
         .unwrap()
         .unwrap();
@@ -73,15 +82,18 @@ async fn claimed_input_survives_restart_before_artifact_even_after_new_input_arr
     for _ in 0..2 {
         let control = HostControl {
             cancellation: std::sync::Arc::new(AtomicBool::new(false)),
-            pause: std::sync::Arc::new(AtomicBool::new(false)),
         };
-        let (_, _, nodes, _) = crate::make_host_with_control(
+        let (_, nodes) = crate::make_host_with_control(
             &record.run_id,
             control,
             Some(crate::library_root(&state.catalog_root)),
             None,
         )
         .unwrap();
+        let _ = nodes
+            .io_resolver
+            .run_application
+            .set(state.application.clone());
         let NodeExecutionOutcome::Completed(completion) = nodes.execute(request()).await.unwrap()
         else {
             panic!("claimed input did not complete");
@@ -133,12 +145,12 @@ fn definition() -> Value {
 #[tokio::test]
 async fn yielded_invocation_projection_never_claims_successful_submission() {
     use anchor_runtime::graph::{
-        ArtifactFreezeContext, ArtifactKind, ArtifactPort, InvocationKey, NodeCompletion, RunResult,
+        ArtifactFreezeContext, ArtifactKind, ArtifactPort, InvocationKey, NodeCompletion,
     };
     let (root, state) = fixture();
     let (_, _, _) = saved_assistant(&state, "local");
-    let store = FileRunStore::new(state.data_root.join("runs"));
-    let mut record = store.load("persistent-fixture-run").unwrap().unwrap();
+    let store = fixtures::Reader::new(&state.application);
+    let record = store.load("persistent-fixture-run").unwrap().unwrap();
     let key = InvocationKey {
         run_id: record.run_id.clone(),
         graph_digest: record.graph_digest.clone(),
@@ -155,33 +167,40 @@ async fn yielded_invocation_projection_never_claims_successful_submission() {
         state.data_root.join("artifacts"),
         state.workspace_root.clone(),
     );
+    let wait_key = InvocationKey {
+        node_id: "wait_input".into(),
+        ..key.clone()
+    };
+    std::fs::create_dir_all(artifacts.workspace_path(&wait_key).unwrap()).unwrap();
+    let wait_completion = fixtures::completion(json!({}));
+    let wait_commit = artifacts.freeze(&wait_key, &wait_completion).await.unwrap();
     let commit = artifacts
         .freeze_with_context(
             &key,
             &completion,
             &ArtifactFreezeContext {
                 kind: ArtifactKind::Interruption,
-                input_commits: Vec::new(),
+                input_commits: vec![wait_commit.clone()],
             },
         )
         .await
         .unwrap();
-    record.invocations.insert("assistant".into(), 1);
-    record.sequence = 1;
-    record.results.insert(
-        "assistant".into(),
-        vec![RunResult {
-            plugin_views: Default::default(),
-            plugin_digests: Default::default(),
-            sequence: 1,
-            key,
-            node_id: "assistant".into(),
-            completion,
-            commit,
-            interruption: Some("superseded by a newer Turn".into()),
-        }],
+    fixtures::control(&state.application, &record.run_id, "resume", "resumed");
+    fixtures::complete(
+        &state.application,
+        &record.run_id,
+        "wait_input",
+        wait_completion,
+        Some(wait_commit),
     );
-    store.save(&record).unwrap();
+    fixtures::interrupted(
+        &state.application,
+        &record.run_id,
+        "assistant",
+        completion,
+        Some(commit),
+        "superseded by a newer Turn",
+    );
     let (status, projected) = call(
         router_with_web_root(state, root.path().join("web")),
         "GET",
@@ -258,11 +277,9 @@ fn saved_assistant_with_kind(
         run,
     )
     .unwrap();
-    record.status = RunStatus::Stopped;
     record.plugin_bindings_initialized = true;
-    FileRunStore::new(state.data_root.join("runs"))
-        .save(&record)
-        .unwrap();
+    fixtures::create(&state.application, &record);
+    fixtures::control(&state.application, run, "stop", "stopped");
     let mut saved = RunMetadata::new(
         run.into(),
         "fixture".into(),
@@ -297,7 +314,7 @@ async fn group_wait_input_preserves_current_and_interrupted_actors_and_turn_atta
     set_host_env(root.path(), &state.data_root);
     let (sessions, session, _) =
         saved_assistant_with_kind(&state, "local", ChannelConversationKind::Group);
-    let record = FileRunStore::new(state.data_root.join("runs"))
+    let record = fixtures::Reader::new(&state.application)
         .load("persistent-fixture-run")
         .unwrap()
         .unwrap();
@@ -383,15 +400,18 @@ async fn group_wait_input_preserves_current_and_interrupted_actors_and_turn_atta
     };
     let control = HostControl {
         cancellation: std::sync::Arc::new(AtomicBool::new(false)),
-        pause: std::sync::Arc::new(AtomicBool::new(false)),
     };
-    let (_, _, nodes, _) = crate::make_host_with_control(
+    let (_, nodes) = crate::make_host_with_control(
         &record.run_id,
         control,
         Some(crate::library_root(&state.catalog_root)),
         None,
     )
     .unwrap();
+    let _ = nodes
+        .io_resolver
+        .run_application
+        .set(state.application.clone());
     let NodeExecutionOutcome::Completed(completion) = nodes.execute(request).await.unwrap() else {
         panic!("group wait did not complete")
     };
@@ -454,8 +474,7 @@ async fn stopped_assistant_rejects_inbound_without_leaving_a_running_turn_or_res
     set_host_env(root.path(), &state.data_root);
     state.wecom.reply_node = "assistant".into();
     let (sessions, session, _) = saved_assistant(&state, "local");
-    let run_path = state.data_root.join("runs/persistent-fixture-run.json");
-    let stopped_record = std::fs::read(&run_path).unwrap();
+    let stopped_resource = kernel_resource(&state, "persistent-fixture-run");
     let binding = sessions.get_channel_assistant("local", &session).unwrap();
     let event = json!({"event":{
         "source":"wecom", "event_id":"stopped-assistant-input", "sender_id":"user-a",
@@ -483,7 +502,10 @@ async fn stopped_assistant_rejects_inbound_without_leaving_a_running_turn_or_res
         assert!(inbound.turn.runs.is_empty());
     }
     assert_eq!(sessions.list_turns("local", &session).unwrap().len(), 2);
-    assert_eq!(std::fs::read(run_path).unwrap(), stopped_record);
+    assert_eq!(
+        kernel_resource(&state, "persistent-fixture-run"),
+        stopped_resource
+    );
     assert_eq!(
         sessions.get_channel_assistant("local", &session).unwrap(),
         binding
@@ -528,7 +550,6 @@ async fn unbound_host_operation_is_rejected_before_a_run_is_saved() {
     .unwrap();
     let control = HostControl {
         cancellation: std::sync::Arc::new(AtomicBool::new(false)),
-        pause: std::sync::Arc::new(AtomicBool::new(false)),
     };
     let rejected = crate::execution::PreparedExecution::prepare_with_bindings(
         &record,
@@ -540,7 +561,7 @@ async fn unbound_host_operation_is_rejected_before_a_run_is_saved() {
     );
     assert!(matches!(rejected, Err(message) if message.contains("explicitly admitted assistant")));
     assert!(
-        FileRunStore::new(state.data_root.join("runs"))
+        fixtures::Reader::new(&state.application)
             .load(&record.run_id)
             .unwrap()
             .is_none()
@@ -590,7 +611,7 @@ async fn pending_input_scope_reports_truncation_and_authorizes_only_the_latest_e
     let current = sessions
         .admit_channel_inbound("local", inbound("current-input"))
         .unwrap();
-    let record = FileRunStore::new(state.data_root.join("runs"))
+    let record = fixtures::Reader::new(&state.application)
         .load("persistent-fixture-run")
         .unwrap()
         .unwrap();
@@ -618,15 +639,18 @@ async fn pending_input_scope_reports_truncation_and_authorizes_only_the_latest_e
     };
     let control = HostControl {
         cancellation: std::sync::Arc::new(AtomicBool::new(false)),
-        pause: std::sync::Arc::new(AtomicBool::new(false)),
     };
-    let (_, _, nodes, _) = crate::make_host_with_control(
+    let (_, nodes) = crate::make_host_with_control(
         &record.run_id,
         control,
         Some(crate::library_root(&state.catalog_root)),
         None,
     )
     .unwrap();
+    let _ = nodes
+        .io_resolver
+        .run_application
+        .set(state.application.clone());
     let NodeExecutionOutcome::Completed(completion) = nodes.execute(request).await.unwrap() else {
         panic!("waiting input did not complete");
     };
@@ -914,8 +938,8 @@ fn recovery_inbound(identity: &str) -> ChannelInboundRequest {
     }
 }
 
-fn run_store(state: &ApiState) -> FileRunStore {
-    FileRunStore::new(state.data_root.join("runs"))
+fn run_store(state: &ApiState) -> fixtures::Reader<'_> {
+    fixtures::Reader::new(&state.application)
 }
 
 fn wait_key(run: &str, digest: &str) -> String {
@@ -951,12 +975,12 @@ async fn restart_hands_a_live_assistant_instance_over_and_carries_its_round() {
     let _environment = PROCESS_ENV.lock().await;
     set_host_env(root.path(), &state.data_root);
     let (sessions, session, _) = saved_assistant(&state, "local");
-    let mut stale = run_store(&state)
-        .load("persistent-fixture-run")
-        .unwrap()
-        .unwrap();
-    stale.status = RunStatus::Running;
-    run_store(&state).save(&stale).unwrap();
+    fixtures::control(
+        &state.application,
+        "persistent-fixture-run",
+        "resume",
+        "resumed",
+    );
     let carried = sessions
         .admit_channel_inbound("local", recovery_inbound("recovery-carried-input"))
         .unwrap();
@@ -989,13 +1013,12 @@ async fn restart_hands_a_live_assistant_instance_over_and_carries_its_round() {
             .unwrap()
     );
     // The stale Run was reconciled into a settled predecessor, not revived.
-    assert_eq!(
+    assert!(
         run_store(&state)
             .load("persistent-fixture-run")
             .unwrap()
             .unwrap()
-            .status,
-        RunStatus::Stopped
+            .waits_reason("stopped")
     );
     // The claimed round travelled with the instance and answers the new Run's
     // wait key; the retired Run can no longer retrieve it. The new Run owns its
@@ -1075,12 +1098,16 @@ async fn restart_adopts_a_committed_handover_whose_admission_never_ran() {
     let _environment = PROCESS_ENV.lock().await;
     set_host_env(root.path(), &state.data_root);
     let (sessions, session, _) = saved_assistant(&state, "local");
-    let mut stale = run_store(&state)
+    let stale = run_store(&state)
         .load("persistent-fixture-run")
         .unwrap()
         .unwrap();
-    stale.status = RunStatus::Running;
-    run_store(&state).save(&stale).unwrap();
+    fixtures::control(
+        &state.application,
+        "persistent-fixture-run",
+        "resume",
+        "resumed",
+    );
     let target = "assistant-resume-pending";
     sessions
         .handover_channel_assistant(
@@ -1116,13 +1143,12 @@ async fn restart_adopts_a_committed_handover_whose_admission_never_ran() {
         "persistent-fixture-run"
     );
     assert!(sessions.list_channel_assistants().unwrap().len() == 1);
-    assert_eq!(
+    assert!(
         run_store(&state)
             .load("persistent-fixture-run")
             .unwrap()
             .unwrap()
-            .status,
-        RunStatus::Stopped
+            .waits_reason("stopped")
     );
     // The interrupted admission left its immutable metadata behind; the next
     // recovery must keep the same target and report it instead of churning.
@@ -1187,8 +1213,7 @@ async fn automatic_recovery_ignores_retired_and_unbound_sessions() {
             .load("persistent-fixture-run")
             .unwrap()
             .unwrap()
-            .status
-            == RunStatus::Stopped
+            .waits_reason("stopped")
     );
     assert!(auto_resume_events(&sessions, "local", &session).is_empty());
     assert!(auto_resume_events(&sessions, "local", &unbound.session.id).is_empty());
@@ -1334,11 +1359,8 @@ async fn timeline_marks_an_idle_resident_run_without_turn_windows() {
         idle,
     )
     .unwrap();
-    record.status = RunStatus::Running;
     record.plugin_bindings_initialized = true;
-    FileRunStore::new(state.data_root.join("runs"))
-        .save(&record)
-        .unwrap();
+    fixtures::create(&state.application, &record);
     let mut saved = RunMetadata::new(
         idle.into(),
         "fixture".into(),

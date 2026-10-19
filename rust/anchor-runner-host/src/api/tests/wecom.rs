@@ -2,8 +2,7 @@ use super::*;
 use anchor_platform_session::{
     ChannelDeliveryStatus, ChannelIdentity, ChannelInboundRequest, SessionStore, TurnStatus,
 };
-use anchor_runtime::graph::FileRunStore;
-use anchor_runtime::graph::{CommitRef, GraphRunRecord, InvocationKey, NodeCompletion, RunResult};
+use anchor_runtime::graph::{CommitRef, GraphRunRecord, InvocationKey, NodeCompletion};
 use base64::{Engine, engine::general_purpose::STANDARD};
 use image::{DynamicImage, ImageFormat};
 use std::io::Cursor;
@@ -74,7 +73,7 @@ async fn group_events_share_context_check_each_actor_and_pin_receipt_identity() 
     .await;
     assert_eq!(status, StatusCode::OK, "{two}");
     assert_eq!(two["session"], session);
-    let record = FileRunStore::new(state.data_root.join("runs"))
+    let record = fixtures::Reader::new(&state.application)
         .load(two["run"].as_str().unwrap())
         .unwrap()
         .unwrap();
@@ -174,7 +173,7 @@ async fn group_events_share_context_check_each_actor_and_pin_receipt_identity() 
         .await;
         assert_eq!(status, StatusCode::OK, "{response}");
         assert!(ids.insert(response["session"].as_str().unwrap().to_owned()));
-        let record = FileRunStore::new(state.data_root.join("runs"))
+        let record = fixtures::Reader::new(&state.application)
             .load(response["run"].as_str().unwrap())
             .unwrap()
             .unwrap();
@@ -190,7 +189,7 @@ async fn group_events_share_context_check_each_actor_and_pin_receipt_identity() 
     .await;
     assert_eq!(status, StatusCode::OK, "{three}");
     assert_eq!(three["session"], session);
-    let record = FileRunStore::new(state.data_root.join("runs"))
+    let record = fixtures::Reader::new(&state.application)
         .load(three["run"].as_str().unwrap())
         .unwrap()
         .unwrap();
@@ -573,11 +572,11 @@ async fn wecom_host_handoff_freezes_image_file_and_mixed_attachment_manifests() 
             assert_eq!(attachment.sha256, format!("{:x}", Sha256::digest(bytes)));
             assert_eq!(std::fs::read(mount.source.join(name)).unwrap(), *bytes);
         }
-        let run_record = FileRunStore::new(state.data_root.join("runs"))
+        let run_record = fixtures::Reader::new(&state.application)
             .load(run)
             .unwrap()
             .unwrap();
-        assert_eq!(run_record.status, RunStatus::Completed, "case {index}");
+        assert!(run_record.has_succeeded(), "case {index}");
     }
 }
 
@@ -612,7 +611,7 @@ async fn recovery_admits_completed_wecom_delivery_once_without_rerunning_the_gra
     let bundle = FileGraphBundleLoader::new(&state.bundle_root)
         .load()
         .unwrap();
-    let mut record = GraphRunRecord::create_with_id(
+    let record = GraphRunRecord::create_with_id(
         bundle.snapshot,
         json!({
             "message":"recover this",
@@ -627,39 +626,6 @@ async fn recovery_admits_completed_wecom_delivery_once_without_rerunning_the_gra
         run_id,
     )
     .unwrap();
-    record.status = RunStatus::Completed;
-    record.invocations.insert("work".into(), 1);
-    record.passes.insert("work".into(), 1);
-    record.sequence = 1;
-    let key = InvocationKey {
-        run_id: run_id.into(),
-        graph_digest: record.graph_digest.clone(),
-        node_id: "work".into(),
-        invocation: 1,
-    };
-    record.results.insert(
-        "work".into(),
-        vec![RunResult {
-            plugin_views: Default::default(),
-            plugin_digests: Default::default(),
-            interruption: None,
-            node_id: "work".into(),
-            key,
-            completion: NodeCompletion {
-                submission: "recovered reply".into(),
-                route: None,
-                model_requests: 0,
-                output: json!({}),
-            },
-            commit: CommitRef {
-                id: "recovery-commit".into(),
-                node_id: "work".into(),
-                invocation: 1,
-            },
-            sequence: 1,
-        }],
-    );
-    let before = record.clone();
     let mut metadata = RunMetadata::new(
         run_id.into(),
         "fixture".into(),
@@ -679,9 +645,24 @@ async fn recovery_admits_completed_wecom_delivery_once_without_rerunning_the_gra
         previous_run: None,
     });
     metadata::save(&state.data_root, &metadata).unwrap();
-    FileRunStore::new(state.data_root.join("runs"))
-        .save(&record)
-        .unwrap();
+    fixtures::create(&state.application, &record);
+    fixtures::complete(
+        &state.application,
+        run_id,
+        "work",
+        NodeCompletion {
+            submission: "recovered reply".into(),
+            route: None,
+            model_requests: 0,
+            output: json!({}),
+        },
+        Some(CommitRef {
+            id: "recovery-commit".into(),
+            node_id: "work".into(),
+            invocation: 1,
+        }),
+    );
+    let before = fixtures::record(&state.application, run_id);
 
     recover_pilot_turns(&state).await.unwrap();
     let deliveries = sessions
@@ -700,10 +681,11 @@ async fn recovery_admits_completed_wecom_delivery_once_without_rerunning_the_gra
         TurnStatus::Completed
     );
     assert_eq!(
-        FileRunStore::new(state.data_root.join("runs"))
+        fixtures::Reader::new(&state.application)
             .load(run_id)
             .unwrap()
-            .unwrap(),
+            .unwrap()
+            .record,
         before
     );
 
@@ -773,7 +755,7 @@ async fn superseded_completed_wecom_run_does_not_create_a_reply_delivery() {
     let bundle = FileGraphBundleLoader::new(&state.bundle_root)
         .load()
         .unwrap();
-    let mut record = GraphRunRecord::create_with_id(
+    let record = GraphRunRecord::create_with_id(
         bundle.snapshot,
         json!({
             "message":"older message",
@@ -783,38 +765,6 @@ async fn superseded_completed_wecom_run_does_not_create_a_reply_delivery() {
         run_id,
     )
     .unwrap();
-    record.status = RunStatus::Completed;
-    record.invocations.insert("work".into(), 1);
-    record.passes.insert("work".into(), 1);
-    record.sequence = 1;
-    let key = InvocationKey {
-        run_id: run_id.into(),
-        graph_digest: record.graph_digest.clone(),
-        node_id: "work".into(),
-        invocation: 1,
-    };
-    record.results.insert(
-        "work".into(),
-        vec![RunResult {
-            plugin_views: Default::default(),
-            plugin_digests: Default::default(),
-            interruption: None,
-            node_id: "work".into(),
-            key,
-            completion: NodeCompletion {
-                submission: "stale reply".into(),
-                route: None,
-                model_requests: 0,
-                output: json!({}),
-            },
-            commit: CommitRef {
-                id: "superseded-commit".into(),
-                node_id: "work".into(),
-                invocation: 1,
-            },
-            sequence: 1,
-        }],
-    );
     let mut metadata = RunMetadata::new(
         run_id.into(),
         "fixture".into(),
@@ -834,14 +784,25 @@ async fn superseded_completed_wecom_run_does_not_create_a_reply_delivery() {
         previous_run: None,
     });
     metadata::save(&state.data_root, &metadata).unwrap();
-    FileRunStore::new(state.data_root.join("runs"))
-        .save(&record)
-        .unwrap();
+    fixtures::create(&state.application, &record);
+    fixtures::complete(
+        &state.application,
+        run_id,
+        "work",
+        NodeCompletion {
+            submission: "stale reply".into(),
+            route: None,
+            model_requests: 0,
+            output: json!({}),
+        },
+        Some(CommitRef {
+            id: "superseded-commit".into(),
+            node_id: "work".into(),
+            invocation: 1,
+        }),
+    );
 
-    state
-        .application
-        .settle_channel_run(run_id, RunStatus::Completed)
-        .unwrap();
+    state.application.settle_channel_run(run_id).unwrap();
     assert_eq!(
         sessions
             .get_turn("local", &previous.session.id, &previous.turn.id)
@@ -925,7 +886,7 @@ async fn interrupted_wecom_message_travels_with_the_next_run_of_the_session() {
     assert_eq!(status, StatusCode::OK, "{two}");
     let run_two = two["run"].as_str().unwrap().to_owned();
     assert_ne!(run_one, run_two);
-    let record = FileRunStore::new(state.data_root.join("runs"))
+    let record = fixtures::Reader::new(&state.application)
         .load(&run_two)
         .unwrap()
         .unwrap();
@@ -971,7 +932,7 @@ async fn interrupted_wecom_message_travels_with_the_next_run_of_the_session() {
     .await;
     assert_eq!(status, StatusCode::OK, "{three}");
     let run_three = three["run"].as_str().unwrap();
-    let record = FileRunStore::new(state.data_root.join("runs"))
+    let record = fixtures::Reader::new(&state.application)
         .load(run_three)
         .unwrap()
         .unwrap();
@@ -1117,9 +1078,7 @@ async fn persistent_assistant_progress_resolves_the_bound_round() {
         run,
     )
     .unwrap();
-    FileRunStore::new(state.data_root.join("runs"))
-        .save(&record)
-        .unwrap();
+    fixtures::create(&state.application, &record);
 
     sessions
         .bind_channel_assistant(owner, &session, run, "wait_input", "assistant", "reply")
@@ -1497,9 +1456,7 @@ fn seed_running_assistant_round(
         run,
     )
     .unwrap();
-    FileRunStore::new(state.data_root.join("runs"))
-        .save(&record)
-        .unwrap();
+    fixtures::create(&state.application, &record);
     sessions
         .bind_channel_assistant(owner, &session, run, "wait_input", "assistant", "reply")
         .unwrap();

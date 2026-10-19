@@ -1,4 +1,5 @@
 //! Tests the real host boundary, not just parallel fake execution ports.
+use anchor_kernel::{FileStore, Resource, Store};
 use serde_json::{Value, json};
 use std::{
     fs,
@@ -58,9 +59,19 @@ fn finish(child: Child) -> Value {
     );
     serde_json::from_slice(&output.stdout[4..]).unwrap()
 }
-fn record(root: &Path) -> Value {
-    serde_json::from_slice(&fs::read(root.join("state/runs/parallel.json")).unwrap()).unwrap()
+fn resource(root: &Path) -> Option<Resource> {
+    FileStore::new(root.join("state/kernel-runs"))
+        .ok()?
+        .load(&anchor_runtime::graph::validator::run_resource_id(
+            "parallel",
+        ))
+        .ok()
+        .flatten()
 }
+fn record(root: &Path) -> Value {
+    resource(root).expect("durable Kernel Run").state
+}
+
 fn file(root: &Path, saved: &Value, node: &str, path: &str) -> Vec<u8> {
     let commit = saved["results"][node][0]["commit"]["id"].as_str().unwrap();
     fs::read(
@@ -81,7 +92,7 @@ fn paired_parallel_nodes_overlap_and_join_delivers_exact_branch_files() {
     let root = tempfile::tempdir().unwrap();
     let graph = graph(BRANCH, BRANCH);
     let response = finish(spawn(root.path(), &graph));
-    assert_eq!(response["status"], "completed", "{response}");
+    assert_eq!(response["projection"]["outcome"], "done", "{response}");
     let saved = record(root.path());
     let timestamp = |node, name| {
         String::from_utf8(file(root.path(), &saved, node, name))
@@ -107,7 +118,10 @@ fn paired_parallel_nodes_overlap_and_join_delivers_exact_branch_files() {
             );
         }
     }
-    assert_eq!(finish(spawn(root.path(), &graph))["status"], "completed");
+    assert_eq!(
+        finish(spawn(root.path(), &graph))["projection"]["outcome"],
+        "done"
+    );
     // Re-entering a completed Run is a read: the stored record must stay
     // byte-identical, including its write stamp.
     assert_eq!(saved, record(root.path()));
@@ -118,11 +132,14 @@ fn failed_branch_never_produces_join_or_downstream_files() {
     let root = tempfile::tempdir().unwrap();
     let graph = graph(BRANCH, "false");
     let response = finish(spawn(root.path(), &graph));
-    assert_eq!(response["status"], "failed", "{response}");
+    assert_eq!(response["projection"]["outcome"], "failed", "{response}");
     let saved = record(root.path());
     assert!(saved["results"].get("join").is_none());
     assert!(saved["results"].get("combine").is_none());
-    assert_eq!(finish(spawn(root.path(), &graph))["status"], "failed");
+    assert_eq!(
+        finish(spawn(root.path(), &graph))["projection"]["outcome"],
+        "failed"
+    );
 }
 
 #[test]
@@ -136,18 +153,19 @@ fn killing_a_wave_preserves_completed_branch_and_fences_unknown_branch() {
     let deadline = Instant::now() + Duration::from_secs(10);
     let mut before = None;
     while Instant::now() < deadline {
-        if let Ok(bytes) = fs::read(root.path().join("state/runs/parallel.json"))
-            && let Ok(saved) = serde_json::from_slice::<Value>(&bytes)
-            && saved["results"].get("left").is_some()
-            && fs::read_dir(root.path().join("state/facts"))
-                .unwrap()
-                .filter_map(Result::ok)
-                .filter(|entry| entry.path().extension().is_some_and(|e| e == "started"))
-                .count()
-                == 3
-        {
-            before = Some(saved);
-            break;
+        if let Some(resource) = resource(root.path()) {
+            let saved = resource.state;
+            if saved["results"].get("left").is_some()
+                && fs::read_dir(root.path().join("state/facts"))
+                    .unwrap()
+                    .filter_map(Result::ok)
+                    .filter(|entry| entry.path().extension().is_some_and(|e| e == "started"))
+                    .count()
+                    == 3
+            {
+                before = Some(saved);
+                break;
+            }
         }
         std::thread::sleep(Duration::from_millis(20));
     }
@@ -155,8 +173,15 @@ fn killing_a_wave_preserves_completed_branch_and_fences_unknown_branch() {
     child.wait().unwrap();
     let before = before.expect("one branch must settle while the other was started");
     let response = finish(spawn(root.path(), &graph));
-    assert_eq!(response["status"], "failed", "{response}");
-    assert!(response["error"].as_str().unwrap().contains("uncertain"));
+    assert_eq!(response["projection"]["phase"], "waiting", "{response}");
+    assert_eq!(response["projection"]["waiting_for"], "human", "{response}");
+    assert!(
+        response["projection"]["reason"]
+            .as_str()
+            .unwrap()
+            .contains("durably started"),
+        "{response}"
+    );
     let after = record(root.path());
     assert_eq!(after["results"]["left"], before["results"]["left"]);
     assert!(after["results"].get("join").is_none());

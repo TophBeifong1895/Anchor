@@ -1,11 +1,13 @@
 # 小型 Runtime Graph 回归：Goose 确定性入口
 
 当前标准回归使用现有纯 Rust `anchor-devtools`，实际经过 Host、共享
-GraphRunner、Goose ACP、授权 MCP、Bubblewrap 和 Artifact，只替换模型传输及
+KernelScheduler、Goose ACP、授权 MCP、Bubblewrap 和 Artifact，只替换模型传输及
 远程业务 endpoint。官方执行和回归入口均在 Rust workspace；历史验收证据
 保留在台账和归档中，不自动成为当前源码的验收。
 
-串行 Kernel 概念探针另有 `application/run_access/kernel_runs/tests.rs` 的七类应用层用例、1000 个共享生成器 seed，以及 `api/tests/kernel_probe.rs` 的真实 Op.run/Bubblewrap/Artifact 路径。它们使用 FileStore 与既有端口，未启动 Goose，不能替代下列固定 Goose 确定性回归；执行范围和原始结果见[探针验收](../experiments/constitution-host-preflight/p/verification.md)。
+所有新 Run 默认使用 Kernel；回归不再选择 `execution=kernel_probe`，也不保留旧执行器。Runtime 的 30,000 例冻结旧侧对照覆盖串行、并行成功/失败、模块和 Call；Host 门面另持久化回放其中 1,000 个串行 seed，HTTP 测试经过真实 Op.run/Bubblewrap/Artifact。它们不启动 Goose，不能替代下列固定 Goose 确定性回归。快照来源与比较规则见 [M3 基线](../experiments/constitution-host-preflight/m3/snapshots/README.md)。
+
+`constitution-core` 与 master 并行时，按迁移任务书 §10.14 将下列所有命令的 target 改为 `/tmp/anchor-goose-regression-target-core`，relay 也使用该目录；两份 worktree 不得共享构建输出。
 
 ## 标准命令
 

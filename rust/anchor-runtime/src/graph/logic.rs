@@ -89,54 +89,7 @@ pub(crate) fn next_node(record: &GraphRunRecord) -> Result<Option<GraphNode>, Gr
             return Ok(Some(node.clone()));
         }
     }
-    Ok(record.cursor.as_ref().and_then(|c| {
-        record
-            .snapshot
-            .nodes
-            .iter()
-            .find(|n| n.id == c.node_id)
-            .cloned()
-    }))
-}
-
-pub(crate) fn expected_input_commits(
-    record: &GraphRunRecord,
-    node_id: &str,
-) -> Result<Vec<CommitRef>, GraphError> {
-    let mut expected = Vec::new();
-    for edge in record
-        .snapshot
-        .edges
-        .iter()
-        .filter(|edge| edge.to_node == node_id)
-    {
-        let Some(decision) = record
-            .decided
-            .get(&edge_key(&edge.from_node, &edge.to_node))
-        else {
-            continue;
-        };
-        if !decision.selected {
-            continue;
-        }
-        let result = record
-            .results
-            .get(&edge.from_node)
-            .and_then(|results| {
-                results.iter().find(|result| {
-                    result.key.invocation == decision.source_invocation
-                        && result.sequence == decision.result_sequence
-                })
-            })
-            .ok_or_else(|| {
-                GraphError::CorruptRun(format!(
-                    "selected input edge {} -> {} has no source result",
-                    edge.from_node, edge.to_node
-                ))
-            })?;
-        expected.push(result.commit.clone());
-    }
-    Ok(expected)
+    Ok(None)
 }
 
 /// Persist false decisions through nodes that were structurally skipped because
@@ -144,10 +97,6 @@ pub(crate) fn expected_input_commits(
 /// inactive again only when it receives a newer false input than its latest
 /// result; this retires stale outgoing selections on later loop rounds.
 pub(crate) fn propagate_inactive_edges(record: &mut GraphRunRecord) -> Result<bool, GraphError> {
-    if record.cursor.is_some() {
-        return Ok(false);
-    }
-
     let mut changed = false;
     loop {
         let mut pass_changed = false;
@@ -159,12 +108,7 @@ pub(crate) fn propagate_inactive_edges(record: &mut GraphRunRecord) -> Result<bo
             .nodes
             .iter()
             .filter(|node| {
-                node.id != record.snapshot.entry
-                    && !record.invocations.contains_key(&node.id)
-                    && record
-                        .cursor
-                        .as_ref()
-                        .is_none_or(|cursor| cursor.node_id != node.id)
+                node.id != record.snapshot.entry && !record.invocations.contains_key(&node.id)
             })
             .map(|node| node.id.clone())
             .collect::<BTreeSet<_>>();
@@ -233,9 +177,7 @@ pub(crate) fn propagate_inactive_edges(record: &mut GraphRunRecord) -> Result<bo
             }
         }
         for node in &record.snapshot.nodes {
-            if node.id == record.snapshot.entry
-                || record.cursor.as_ref().is_some_and(|c| c.node_id == node.id)
-            {
+            if node.id == record.snapshot.entry {
                 continue;
             }
             let incoming = record
@@ -562,15 +504,15 @@ pub(crate) fn node_task(
 
 pub(crate) fn execution_request(
     record: &GraphRunRecord,
-    cursor: &RunCursor,
+    input: &scheduler::DispatchInput,
     cancellation: crate::Cancellation,
 ) -> Result<NodeExecutionRequest, GraphError> {
     let node = record
         .snapshot
         .nodes
         .iter()
-        .find(|node| node.id == cursor.node_id)
-        .expect("validated cursor node");
+        .find(|node| node.id == input.node_id)
+        .expect("validator dispatch node");
     let agent = node
         .agent
         .as_ref()
@@ -637,18 +579,18 @@ pub(crate) fn execution_request(
         .and_then(Value::as_str)
         .unwrap_or_default();
     Ok(NodeExecutionRequest {
-        key: cursor.key.clone(),
+        key: input.key.clone(),
         model,
         task: node_task(
             &record.snapshot.objective,
             &instructions,
             local_instruction,
-            &cursor.prepared_input,
+            &input.prepared_input,
         ),
         instructions,
         routes,
-        input: cursor.prepared_input.clone(),
-        input_commits: cursor.input_commits.clone(),
+        input: input.prepared_input.clone(),
+        input_commits: input.input_commits.clone(),
         plugins: node
             .plugins
             .iter()
@@ -717,14 +659,26 @@ pub(crate) fn validate_wall_time(value: Option<f64>, node_id: &str) -> Result<()
     Ok(())
 }
 
-/// Shared dispatch authorization for the old runner and Kernel scheduler.
+/// Dispatch authorization for the shared Kernel scheduler.
 pub(crate) fn authorized_execution_request<N: NodeExecutionPort + ?Sized>(
     record: &GraphRunRecord,
-    cursor: &RunCursor,
+    input: &scheduler::DispatchInput,
     nodes: &N,
     cancellation: crate::Cancellation,
 ) -> Result<NodeExecutionRequest, GraphError> {
-    let mut request = execution_request(record, cursor, cancellation)?;
+    if record
+        .snapshot
+        .nodes
+        .iter()
+        .find(|node| node.id == input.node_id)
+        .is_some_and(|node| !node.plugins.is_empty())
+        && !record.plugin_bindings_initialized
+    {
+        return Err(GraphError::Unsupported(
+            "Run has no valid admitted Plugin record".into(),
+        ));
+    }
+    let mut request = execution_request(record, input, cancellation)?;
     if nodes.invocation_plugin_authority(record)? {
         return Ok(request);
     }
@@ -752,4 +706,52 @@ pub(crate) fn authorized_execution_request<N: NodeExecutionPort + ?Sized>(
     }
     request.plugins = current;
     Ok(request)
+}
+
+pub(crate) fn admit_capabilities<N: NodeExecutionPort + ?Sized>(
+    nodes: &N,
+    snapshot: &GraphSnapshot,
+) -> Result<(), GraphError> {
+    let caps = nodes.capabilities();
+    for node in &snapshot.nodes {
+        if node.agent.is_some() && !caps.agent {
+            return Err(GraphError::Unsupported(format!(
+                "NodeExecutionPort does not support Agent node `{}`",
+                node.id
+            )));
+        }
+        let op = node.op.as_ref().and_then(|name| snapshot.ops.get(name));
+        let is_fanout = op.is_some_and(|op| op.get("fanout").is_some());
+        let is_join = op.is_some_and(|op| op.get("join").is_some());
+        let is_call = op.is_some_and(|op| op.get("call").is_some());
+        let is_host = op.is_some_and(|op| op.get("host").is_some());
+        if is_call && nodes.graph_call_port().is_none() {
+            return Err(GraphError::Unsupported(format!(
+                "op.call node `{}` requires a GraphCallPort",
+                node.id
+            )));
+        }
+        if is_host && !caps.host_operations {
+            return Err(GraphError::Unsupported(format!(
+                "NodeExecutionPort does not support host operation node `{}`",
+                node.id
+            )));
+        }
+        if node.op.is_some() && !is_fanout && !is_join && !is_call && !is_host && !caps.op_run {
+            return Err(GraphError::Unsupported(format!(
+                "NodeExecutionPort does not support Op.run node `{}`",
+                node.id
+            )));
+        }
+        if let Some(agent) = node.agent.as_ref().and_then(|n| snapshot.agents.get(n))
+            && agent.max_steps.is_some()
+            && !caps.exact_provider_request_budget
+        {
+            return Err(GraphError::Unsupported(format!(
+                "Agent node `{}` has max_steps but NodeExecutionPort cannot enforce cumulative provider-request budget",
+                node.id
+            )));
+        }
+    }
+    Ok(())
 }

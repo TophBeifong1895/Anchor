@@ -142,7 +142,7 @@ impl RunApplication {
                 callers.join(", ")
             )));
         }
-        let active = self.active.lock().await;
+        let active = self.admission.lock().await;
         let mut targets = self.runs_for_graph(&graph_path)?;
         let deletion = self
             .reserve_run_deletions(&targets.iter().map(|(id, _)| id.clone()).collect::<Vec<_>>())?;
@@ -165,7 +165,7 @@ impl RunApplication {
         }
         for (run_id, record) in &targets {
             self.reject_pending_session_delivery(run_id)?;
-            if active.contains_key(run_id) || record.active() {
+            if record.active() {
                 return Err(ApplicationError::Conflict(
                     "Graph still has active execution".into(),
                 ));
@@ -260,8 +260,8 @@ impl RunApplication {
             ),
             _ => None,
         };
-        let active = self.active.lock().await;
-        if active.contains_key(run_id) {
+        let active = self.admission.lock().await;
+        if self.read_run(run_id)?.is_some_and(|view| view.active()) {
             return Err(ApplicationError::Conflict(
                 "that Run is still running".into(),
             ));

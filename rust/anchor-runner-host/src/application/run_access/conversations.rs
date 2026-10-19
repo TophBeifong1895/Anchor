@@ -1,19 +1,16 @@
 use super::RunView;
 use crate::application::{
-    ActiveRun, ApplicationError, ChannelRunSource, ConversationAdmission, RunApplication,
-    RunMetadata, WECOM_REPLY_KEY_PREFIX, WECOM_REPLY_KIND, metadata, new_control, storage,
+    ApplicationError, ChannelRunSource, ConversationAdmission, RunApplication, RunMetadata,
+    WECOM_REPLY_KEY_PREFIX, WECOM_REPLY_KIND, metadata, new_control,
 };
-use crate::{create_durable_directory, execution::PreparedExecution};
+use crate::execution::PreparedExecution;
 use anchor_graph_host::LoadedGraphBundle;
 use anchor_kernel::{Outcome, Phase, Waiter};
 use anchor_platform_session::{ChannelDeliveryRequest, SessionError, SessionStore, TurnStatus};
-use anchor_runtime::graph::{GraphRunRecord, RunLease, RunStatus, RunStore};
+use anchor_runtime::graph::{GraphRunRecord, RunLease};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
-use std::{
-    collections::{BTreeSet, HashMap},
-    path::Path,
-};
+use std::{collections::BTreeSet, path::Path};
 
 fn channel_turn_status(phase: &Phase, assistant: bool) -> Option<TurnStatus> {
     match phase {
@@ -63,20 +60,15 @@ impl RunApplication {
         })
     }
 
-    pub(crate) fn settle_channel_run(
-        &self,
-        run_id: &str,
-        status: RunStatus,
-    ) -> Result<(), ApplicationError> {
+    pub(crate) fn settle_channel_run(&self, run_id: &str) -> Result<(), ApplicationError> {
         let Some(metadata) = self.metadata(run_id)? else {
             return Ok(());
         };
-        // Kernel outcomes and waiting reasons are read from their authority;
-        // the callback status is only the legacy fallback for missing Runs.
-        let phase = self
-            .read_run(run_id)?
-            .map(|view| view.lifecycle.phase)
-            .unwrap_or_else(|| super::legacy_run_view::phase(status, None));
+        let view = self.read_run(run_id)?.ok_or(ApplicationError::Missing)?;
+        if view.has_pending_recovery() {
+            return Ok(());
+        }
+        let phase = view.lifecycle.phase;
         if let Some(source) = metadata.assistant.as_ref() {
             let Some(turn_status) = channel_turn_status(&phase, true) else {
                 return Ok(());
@@ -204,7 +196,7 @@ impl RunApplication {
     pub(in crate::application) fn ensure_predecessor_settled<'record>(
         &self,
         record: impl Into<RunView<'record>>,
-        active: &HashMap<String, ActiveRun>,
+        active: &(),
     ) -> Result<(), ApplicationError> {
         self.ensure_wait_closure_settled(record, active, false)
     }
@@ -212,7 +204,7 @@ impl RunApplication {
     pub(in crate::application) fn ensure_conversation_delete_settled<'record>(
         &self,
         record: impl Into<RunView<'record>>,
-        active: &HashMap<String, ActiveRun>,
+        active: &(),
     ) -> Result<(), ApplicationError> {
         self.ensure_wait_closure_settled(record, active, true)
     }
@@ -220,7 +212,7 @@ impl RunApplication {
     fn ensure_wait_closure_settled<'record>(
         &self,
         record: impl Into<RunView<'record>>,
-        active: &HashMap<String, ActiveRun>,
+        _active: &(),
         allow_deleted_children: bool,
     ) -> Result<(), ApplicationError> {
         let mut pending = vec![record.into()];
@@ -234,11 +226,7 @@ impl RunApplication {
                 Some(current) => current,
                 None => record,
             };
-            let worker = if current.kernel_owned {
-                current.active()
-            } else {
-                active.contains_key(&run_id)
-            };
+            let worker = current.active();
             let record = current.with_active(worker);
             // A physically parked conversation still owns its current turn
             // while paused or held for budget. Session handoff requires an
@@ -250,7 +238,7 @@ impl RunApplication {
                     reason: Some("paused" | "budget"),
                 }
             );
-            if turn_held || !record.is_quiescent() {
+            if turn_held || record.has_pending_recovery() || !record.is_quiescent() {
                 return Err(ApplicationError::Conflict(
                     "previous conversation execution has not stopped; wait for it to become inactive".into(),
                 ));
@@ -320,9 +308,23 @@ impl RunApplication {
         if self.has_conversation_successor(successor.progress().run_id)? {
             return Ok(false);
         }
+        let mut reading = BTreeSet::new();
+        for dispatch in predecessor.dispatches() {
+            // An open slot has not necessarily executed. Protect uncommitted
+            // history only when the execution port has durably claimed it.
+            if !matches!(
+                crate::node_host::load_host_completion_fact(
+                    &self.data_root.join("facts"),
+                    &dispatch.key,
+                )?,
+                anchor_runtime::graph::CompletionFact::NotStarted
+            ) || crate::goose_acp::has_invocation_fact(&self.data_root, &dispatch.key)?
+            {
+                reading.insert(dispatch.node_id.clone());
+            }
+        }
         let predecessor = predecessor.progress();
         let successor = successor.progress();
-        let mut reading = BTreeSet::new();
         for node in &predecessor.snapshot.nodes {
             let executed = predecessor.invocations.get(&node.id).copied().unwrap_or(0) > 0
                 || predecessor
@@ -374,7 +376,7 @@ impl RunApplication {
         } else {
             Some(self.plugin_reference_lease().await?)
         };
-        let mut active = self.active.lock().await;
+        let active = self.admission.lock().await;
         if let Some(run) =
             self.retry_conversation(&request, &graph_path, attachments, channel.as_ref())?
         {
@@ -428,10 +430,12 @@ impl RunApplication {
             ));
         }
         let plugin_bindings = self.bundle_plugin_bindings(&bundle)?;
-        let mut record =
-            GraphRunRecord::create_with_id(bundle.snapshot, request.input, request.run.clone())?;
-        record.plugin_bindings = plugin_bindings;
-        record.plugin_bindings_initialized = true;
+        let record = GraphRunRecord::create_with_plugins(
+            bundle.snapshot,
+            request.input,
+            request.run.clone(),
+            plugin_bindings.into_values().collect(),
+        )?;
         self.check_store()?;
         let mut metadata = RunMetadata::new(
             request.run.clone(),
@@ -444,7 +448,7 @@ impl RunApplication {
         metadata.conversation = Some(conversation);
         metadata.channel = channel;
         metadata.attachments = attachments.manifest();
-        let lease = self.store().acquire_lease(&request.run)?;
+        let lease = self.run_leases().acquire_lease(&request.run)?;
         if chain.is_empty() {
             let workspaces = crate::env_path("ANCHOR_RUNNER_WORKSPACE_ROOT")
                 .map_err(ApplicationError::Invalid)?;
@@ -472,30 +476,31 @@ impl RunApplication {
         execution
             .bind_local_inputs(&record, &request.graph)
             .map_err(ApplicationError::Invalid)?;
-        create_durable_directory(&self.data_root.join("runs")).map_err(storage)?;
-        self.store().save(&record)?;
-        active.insert(request.run.clone(), ActiveRun::new(graph_path, control));
+        self.kernel_runs(true)?
+            .expect("Run store initialized")
+            .create(&record, u64::MAX)?;
+        drop(active);
         drop(lease);
         drop(plugin_lease);
         drop(graph_lease);
-        self.spawn(record, execution)?;
+        self.spawn_kernel(record, execution, control)?;
         Ok(request.run)
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use super::super::fixtures;
     use super::*;
-    use anchor_runtime::graph::{
-        CommitRef, GraphSnapshot, InvocationKey, NodeCompletion, RunResult,
-    };
+    use anchor_runtime::graph::GraphSnapshot;
     use serde_json::json;
 
     fn record(run_id: &str) -> GraphRunRecord {
         GraphRunRecord::create_with_id(
             GraphSnapshot::from_authoring(json!({
                 "entry":"work", "agents":{}, "ops":{"work":{"run":"true"}},
-                "nodes":[{"id":"work","op":"work"}], "edges":[]
+                "nodes":[{"id":"work","op":"work"},{"id":"later","op":"work"}],
+                "edges":[{"from":"work","to":"later"}]
             }))
             .unwrap(),
             json!({}),
@@ -506,79 +511,114 @@ mod tests {
 
     #[test]
     fn channel_settlement_preserves_assistant_completion_distinction() {
-        for (status, normal, assistant) in [
-            (RunStatus::Ready, None, None),
-            (RunStatus::Running, None, None),
-            (RunStatus::Paused, None, None),
+        for (phase, normal, assistant) in [
+            (Phase::Executing, None, None),
             (
-                RunStatus::Stopped,
+                Phase::Waiting {
+                    waiter: Waiter::Human {
+                        reason: "paused".into(),
+                    },
+                },
+                None,
+                None,
+            ),
+            (
+                Phase::Waiting {
+                    waiter: Waiter::Human {
+                        reason: "budget".into(),
+                    },
+                },
+                None,
+                None,
+            ),
+            (
+                Phase::Waiting {
+                    waiter: Waiter::Human {
+                        reason: "stopped".into(),
+                    },
+                },
                 Some(TurnStatus::Stopped),
                 Some(TurnStatus::Stopped),
             ),
-            (RunStatus::BudgetStopped, None, None),
-            (RunStatus::WaitingCall, None, None),
-            (RunStatus::WaitingRecovery, None, None),
-            (RunStatus::Completed, Some(TurnStatus::Completed), None),
             (
-                RunStatus::Failed,
+                Phase::Waiting {
+                    waiter: Waiter::Child {
+                        task: "child".into(),
+                    },
+                },
+                None,
+                None,
+            ),
+            (
+                Phase::Settled {
+                    result: Outcome::Done,
+                },
+                Some(TurnStatus::Completed),
+                None,
+            ),
+            (
+                Phase::Settled {
+                    result: Outcome::Failed {
+                        reason: anchor_kernel::Reason::Unclassified,
+                        detail: "known failure".into(),
+                    },
+                },
                 Some(TurnStatus::Failed),
                 Some(TurnStatus::Failed),
             ),
             (
-                RunStatus::Aborted,
+                Phase::Settled {
+                    result: Outcome::Aborted {
+                        detail: "operator".into(),
+                    },
+                },
                 Some(TurnStatus::Failed),
                 Some(TurnStatus::Failed),
             ),
         ] {
-            let phase = super::super::legacy_run_view::phase(status, None);
-            assert_eq!(channel_turn_status(&phase, false), normal, "{status:?}");
-            assert_eq!(channel_turn_status(&phase, true), assistant, "{status:?}");
+            assert_eq!(channel_turn_status(&phase, false), normal, "{phase:?}");
+            assert_eq!(channel_turn_status(&phase, true), assistant, "{phase:?}");
         }
     }
 
-    #[test]
-    fn predecessor_checks_keep_executor_registration_and_parked_states_distinct() {
+    #[tokio::test]
+    async fn predecessor_checks_keep_kernel_workers_and_parked_states_distinct() {
         let root = tempfile::tempdir().unwrap();
         let application = RunApplication::new(root.path().into(), root.path().join("catalog"));
-        let mut record = record("predecessor");
-        for (status, inactive_allowed) in [
-            (RunStatus::Ready, false),
-            (RunStatus::Running, false),
-            (RunStatus::Paused, false),
-            (RunStatus::Stopped, true),
-            (RunStatus::BudgetStopped, false),
-            (RunStatus::WaitingCall, false),
-            (RunStatus::WaitingRecovery, false),
-            (RunStatus::Completed, true),
-            (RunStatus::Failed, true),
-            (RunStatus::Aborted, true),
-        ] {
-            record.status = status;
-            for registered in [false, true] {
-                let mut active = HashMap::new();
-                if registered {
-                    active.insert(
-                        record.run_id.clone(),
-                        ActiveRun::new(root.path().into(), new_control()),
-                    );
-                }
-                let expected = inactive_allowed && !registered;
-                assert_eq!(
-                    application
-                        .ensure_predecessor_settled(&record, &active)
-                        .is_ok(),
-                    expected,
-                    "{status:?}, registered={registered}"
-                );
-                assert_eq!(
-                    application
-                        .ensure_conversation_delete_settled(&record, &active)
-                        .is_ok(),
-                    expected,
-                    "{status:?}, registered={registered}"
-                );
-            }
+        for id in fixtures::scenarios(&application) {
+            let view = fixtures::view(&application, id);
+            let expected = matches!(id, "stopped" | "done" | "failed" | "aborted");
+            assert_eq!(
+                application.ensure_predecessor_settled(&view, &()).is_ok(),
+                expected,
+                "{id}"
+            );
+            assert_eq!(
+                application
+                    .ensure_conversation_delete_settled(&view, &())
+                    .is_ok(),
+                expected,
+                "{id}"
+            );
         }
+        fixtures::create(&application, &fixtures::work_record("draining"));
+        let drive = fixtures::gated_drive(&application, "draining").await;
+        fixtures::control(&application, "draining", "stop", "stopped");
+        let view = fixtures::view(&application, "draining");
+        assert!(view.active());
+        assert!(application.ensure_predecessor_settled(&view, &()).is_err());
+        assert!(
+            application
+                .ensure_conversation_delete_settled(&view, &())
+                .is_err()
+        );
+        drive.drain(&application, "draining").await;
+        assert!(application.ensure_predecessor_settled(&view, &()).is_ok());
+        assert!(
+            application
+                .ensure_conversation_delete_settled(&view, &())
+                .is_ok()
+        );
     }
 
     #[test]
@@ -586,42 +626,24 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let application =
             RunApplication::new(root.path().join("state"), root.path().join("catalog"));
-        let mut compatibility = record("kernel-predecessor");
-        let runs = application.kernel_runs(true).unwrap().unwrap();
-        runs.create(&compatibility, u64::MAX).unwrap();
-        // An incoming lossy projection cannot turn an executing Kernel Run
-        // into a predecessor that has stopped.
-        compatibility.status = RunStatus::Completed;
-        let mut active = HashMap::new();
-        assert!(
-            application
-                .ensure_predecessor_settled(&compatibility, &active)
-                .is_err()
-        );
+        fixtures::create(&application, &record("kernel-predecessor"));
+        let stale = fixtures::view(&application, "kernel-predecessor");
+        assert!(application.ensure_predecessor_settled(&stale, &()).is_err());
         for (reason, allowed) in [("paused", false), ("budget", false), ("stopped", true)] {
-            runs.control(&compatibility.run_id, "stop", Some(reason))
-                .unwrap();
-            // Kernel activity comes from its worker registry, independent of
-            // an old Host cancellation-forwarding registration.
-            active.insert(
-                compatibility.run_id.clone(),
-                ActiveRun::new(root.path().into(), new_control()),
-            );
+            fixtures::control(&application, "kernel-predecessor", "stop", reason);
             assert_eq!(
-                application
-                    .ensure_predecessor_settled(&compatibility, &active)
-                    .is_ok(),
+                application.ensure_predecessor_settled(&stale, &()).is_ok(),
                 allowed,
                 "{reason}"
             );
             assert_eq!(
                 application
-                    .ensure_conversation_delete_settled(&compatibility, &active)
+                    .ensure_conversation_delete_settled(&stale, &())
                     .is_ok(),
                 allowed,
                 "{reason}"
             );
-            runs.control(&compatibility.run_id, "resume", None).unwrap();
+            fixtures::control(&application, "kernel-predecessor", "resume", "");
         }
     }
 
@@ -630,49 +652,119 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let application =
             RunApplication::new(root.path().join("state"), root.path().join("catalog"));
-        let mut predecessor = record("predecessor");
-        predecessor.invocations.insert("work".into(), 1);
-        let mut compatibility = record("kernel-successor");
-        let runs = application.kernel_runs(true).unwrap().unwrap();
-        runs.create(&compatibility, u64::MAX).unwrap();
+        fixtures::create(&application, &record("predecessor"));
+        fixtures::complete(
+            &application,
+            "predecessor",
+            "work",
+            fixtures::completion(json!({})),
+            None,
+        );
+        let predecessor = fixtures::view(&application, "predecessor");
+        let successor = record("kernel-successor");
+        fixtures::create(&application, &successor);
+        let stale = fixtures::view(&application, "kernel-successor");
         let metadata = RunMetadata::new(
-            compatibility.run_id.clone(),
+            successor.run_id.clone(),
             "fixture".into(),
-            compatibility.graph_digest.clone(),
+            successor.graph_digest.clone(),
             root.path(),
         )
         .unwrap();
-        compatibility.status = RunStatus::Completed;
         assert!(
             application
-                .successor_reads_predecessor(
-                    &predecessor,
-                    &metadata,
-                    Some(&RunView::inactive(&compatibility))
-                )
+                .successor_reads_predecessor(&predecessor, &metadata, Some(&stale))
                 .unwrap()
         );
-        runs.control(&compatibility.run_id, "abandon", Some("operator"))
-            .unwrap();
-        compatibility.status = RunStatus::Ready;
+        fixtures::control(&application, "kernel-successor", "abandon", "operator");
         assert!(
             !application
-                .successor_reads_predecessor(
-                    &predecessor,
-                    &metadata,
-                    Some(&RunView::inactive(&compatibility))
-                )
+                .successor_reads_predecessor(&predecessor, &metadata, Some(&stale))
                 .unwrap()
         );
+    }
+
+    #[test]
+    fn successor_retains_uncommitted_goose_history_but_not_unstarted_slots() {
+        for (directory, version) in [("goose-acp", 2), ("goose-acp-spike", 1)] {
+            let root = tempfile::tempdir().unwrap();
+            let application = RunApplication::new(root.path().into(), root.path().join("catalog"));
+            let snapshot = GraphSnapshot::from_authoring(json!({
+                "entry":"work", "agents":{"role":{"model":"fixture","instructions":"work"}},
+                "nodes":[{"id":"work","agent":"role"}], "edges":[]
+            }))
+            .unwrap();
+            for id in ["predecessor", "successor"] {
+                let record =
+                    GraphRunRecord::create_with_id(snapshot.clone(), json!({}), id).unwrap();
+                fixtures::create(&application, &record);
+            }
+            let predecessor = fixtures::view(&application, "predecessor");
+            let successor = fixtures::view(&application, "successor");
+            let metadata = RunMetadata::new(
+                "successor".into(),
+                "fixture".into(),
+                successor.record.graph_digest.clone(),
+                root.path(),
+            )
+            .unwrap();
+            assert!(predecessor.record.invocations.is_empty());
+            assert!(predecessor.record.results.is_empty());
+            assert!(
+                !application
+                    .successor_reads_predecessor(&predecessor, &metadata, Some(&successor))
+                    .unwrap()
+            );
+            let key = &predecessor.dispatches()[0].key;
+            let path = root.path().join(directory).join(format!(
+                "{:x}.json",
+                Sha256::digest(key.durable_key().as_bytes())
+            ));
+            crate::create_durable_directory(path.parent().unwrap()).unwrap();
+            crate::write_durable(
+                &path,
+                &serde_json::to_vec(&json!({
+                    "version":version,"key":key,"binary_sha256":"fixture",
+                    "session_id":"native-history","completion":null,"reason":null
+                }))
+                .unwrap(),
+            )
+            .unwrap();
+            assert!(
+                application
+                    .successor_reads_predecessor(&predecessor, &metadata, Some(&successor))
+                    .unwrap()
+            );
+            fixtures::complete(
+                &application,
+                "successor",
+                "work",
+                fixtures::completion(json!({})),
+                None,
+            );
+            assert!(
+                !application
+                    .successor_reads_predecessor(&predecessor, &metadata, Some(&successor))
+                    .unwrap()
+            );
+        }
     }
 
     #[test]
     fn successor_retention_keeps_missing_and_first_invocation_evidence_distinct() {
         let root = tempfile::tempdir().unwrap();
         let application = RunApplication::new(root.path().into(), root.path().join("catalog"));
-        let mut predecessor = record("predecessor");
-        predecessor.invocations.insert("work".into(), 1);
-        let mut successor = record("successor");
+        fixtures::create(&application, &record("predecessor"));
+        fixtures::complete(
+            &application,
+            "predecessor",
+            "work",
+            fixtures::completion(json!({})),
+            None,
+        );
+        let predecessor = fixtures::view(&application, "predecessor");
+        let successor = record("successor");
+        fixtures::create(&application, &successor);
         let metadata = RunMetadata::new(
             successor.run_id.clone(),
             "fixture".into(),
@@ -685,66 +777,36 @@ mod tests {
                 .successor_reads_predecessor(&predecessor, &metadata, None)
                 .unwrap()
         );
-        for (status, retained) in [
-            (RunStatus::Ready, true),
-            (RunStatus::Running, true),
-            (RunStatus::Paused, true),
-            (RunStatus::Stopped, true),
-            (RunStatus::BudgetStopped, true),
-            (RunStatus::WaitingCall, true),
-            (RunStatus::WaitingRecovery, true),
-            (RunStatus::Completed, false),
-            (RunStatus::Failed, false),
-            (RunStatus::Aborted, false),
-        ] {
-            successor.status = status;
-            assert_eq!(
-                application
-                    .successor_reads_predecessor(
-                        &predecessor,
-                        &metadata,
-                        Some(&RunView::inactive(&successor))
-                    )
-                    .unwrap(),
-                retained,
-                "{status:?}"
-            );
-        }
-        successor.status = RunStatus::Running;
-        successor.results.insert(
-            "work".into(),
-            vec![RunResult {
-                node_id: "work".into(),
-                key: InvocationKey {
-                    run_id: successor.run_id.clone(),
-                    graph_digest: successor.graph_digest.clone(),
-                    node_id: "work".into(),
-                    invocation: 1,
-                },
-                plugin_views: Default::default(),
-                plugin_digests: Default::default(),
-                completion: NodeCompletion {
-                    submission: String::new(),
-                    route: None,
-                    model_requests: 0,
-                    output: json!({}),
-                },
-                interruption: None,
-                commit: CommitRef {
-                    id: "first".into(),
-                    node_id: "work".into(),
-                    invocation: 1,
-                },
-                sequence: 1,
-            }],
+        let stale = fixtures::view(&application, "successor");
+        assert!(
+            application
+                .successor_reads_predecessor(&predecessor, &metadata, Some(&stale))
+                .unwrap()
         );
+        fixtures::control(&application, "successor", "stop", "paused");
+        assert!(
+            application
+                .successor_reads_predecessor(&predecessor, &metadata, Some(&stale))
+                .unwrap()
+        );
+        fixtures::control(&application, "successor", "resume", "");
+        fixtures::complete(
+            &application,
+            "successor",
+            "work",
+            fixtures::completion(json!({"inherited":true})),
+            None,
+        );
+        assert!(!fixtures::view(&application, "successor").is_settled());
         assert!(
             !application
-                .successor_reads_predecessor(
-                    &predecessor,
-                    &metadata,
-                    Some(&RunView::inactive(&successor))
-                )
+                .successor_reads_predecessor(&predecessor, &metadata, Some(&stale))
+                .unwrap()
+        );
+        fixtures::control(&application, "successor", "stop", "stopped");
+        assert!(
+            !application
+                .successor_reads_predecessor(&predecessor, &metadata, Some(&stale))
                 .unwrap()
         );
     }

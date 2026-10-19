@@ -1,120 +1,9 @@
-use super::RunView;
-use crate::application::{ActiveRun, new_control};
 use crate::{
     HostControl,
-    application::{ApplicationError, RunApplication, RunMetadata},
+    application::{ApplicationError, RunApplication, RunMetadata, new_control},
     execution::PreparedExecution,
 };
-use anchor_runtime::graph::RunStore;
-use anchor_runtime::graph::{GraphRunRecord, InvocationKey, RecoveryDecision, RunStatus};
-
-enum RecoveryTargetMismatch {
-    Cursor,
-    Attempt,
-    Phase,
-}
-
-impl RunView<'_> {
-    pub(crate) fn recorded_recovery_decision(
-        &self,
-        key: &InvocationKey,
-        attempt_id: i64,
-    ) -> Option<&RecoveryDecision> {
-        self.record
-            .recovery_submissions
-            .iter()
-            .find(|submission| submission.key == *key && submission.attempt_id == attempt_id)
-            .map(|submission| &submission.decision)
-    }
-
-    pub(crate) fn needs_recovery_replay(&self) -> bool {
-        self.record.status == RunStatus::Running && !self.active()
-    }
-
-    fn has_recovery_cursor(&self, key: &InvocationKey) -> bool {
-        self.record
-            .cursor
-            .as_ref()
-            .is_some_and(|cursor| &cursor.key == key)
-            || self.record.parallel.as_ref().is_some_and(|activation| {
-                activation.branches.iter().any(|branch| {
-                    branch
-                        .cursor
-                        .as_ref()
-                        .is_some_and(|cursor| &cursor.key == key)
-                })
-            })
-    }
-
-    fn has_pending_attempt(&self, key: &InvocationKey, attempt_id: i64) -> bool {
-        self.record
-            .recovery
-            .iter()
-            .any(|pending| &pending.key == key && pending.attempt.attempt_id == attempt_id)
-    }
-
-    fn recovery_target(
-        &self,
-        key: &InvocationKey,
-        attempt_id: i64,
-    ) -> Result<(), RecoveryTargetMismatch> {
-        if !self.has_recovery_cursor(key) {
-            return Err(RecoveryTargetMismatch::Cursor);
-        }
-        if !self.has_pending_attempt(key, attempt_id) {
-            return Err(RecoveryTargetMismatch::Attempt);
-        }
-        if !self.has_pending_recovery() {
-            return Err(RecoveryTargetMismatch::Phase);
-        }
-        Ok(())
-    }
-
-    pub(crate) fn validate_recovery_target(
-        &self,
-        key: &InvocationKey,
-        attempt_id: i64,
-    ) -> Result<(), ApplicationError> {
-        self.recovery_target(key, attempt_id).map_err(|mismatch| {
-            ApplicationError::Conflict(
-                match mismatch {
-                    RecoveryTargetMismatch::Cursor => {
-                        "recovery invocation does not match an active cursor in this Run"
-                    }
-                    RecoveryTargetMismatch::Attempt => {
-                        "attempt is not pending recovery for this Run"
-                    }
-                    RecoveryTargetMismatch::Phase => "Run is not waiting for a recovery decision",
-                }
-                .into(),
-            )
-        })?;
-        if !self
-            .progress()
-            .snapshot
-            .nodes
-            .iter()
-            .any(|node| node.id == key.node_id && node.agent.is_some())
-        {
-            return Err(ApplicationError::Conflict(
-                "only an AgentNode can own an io-harness recovery attempt".into(),
-            ));
-        }
-        Ok(())
-    }
-
-    pub(crate) fn validate_leased_recovery_target(
-        &self,
-        key: &InvocationKey,
-        attempt_id: i64,
-    ) -> Result<(), ApplicationError> {
-        self.recovery_target(key, attempt_id).map_err(|_| {
-            ApplicationError::Conflict(
-                "Run recovery state changed before the decision was accepted".into(),
-            )
-        })
-    }
-}
+use anchor_runtime::graph::{GraphRunRecord, InvocationKey, RecoveryDecision};
 
 impl RunApplication {
     pub(in crate::application) async fn record_recovery_decision(
@@ -138,152 +27,47 @@ impl RunApplication {
                 "node_id, invocation, and positive attempt_id are required".into(),
             ));
         }
-        if let Some(runs) = self.kernel_owner(run_id)? {
-            self.reject_superseded_conversation_execution(run_id)?;
-            let resource = runs.load(run_id)?.ok_or(ApplicationError::Missing)?;
-            let record = super::kernel_runs::KernelRuns::record(&resource)?;
-            let metadata = self.metadata(run_id)?.ok_or(ApplicationError::Missing)?;
-            super::validate_control_identity(&record, &metadata)?;
-            let active = self.active.lock().await;
-            self.check_execution_scope(&metadata, &active)?;
-            let key = InvocationKey {
-                run_id: run_id.into(),
-                graph_digest: record.graph_digest.clone(),
-                node_id: node_id.into(),
-                invocation,
-            };
-            let control = new_control();
-            let execution = self.prepare_resume(&record, &metadata, control.clone())?;
-            let drive = runs.recover_attempt(&key, attempt_id, decision.clone(), || {
-                execution
-                    .record_recovery_decision(&key, attempt_id, decision)
-                    .map_err(|e| anchor_runtime::graph::GraphError::CorruptRun(e.to_string()))
-            })?;
-            if drive {
-                self.spawn_kernel(record, execution, control)?;
-            }
-            return Ok(());
-        }
-        if self.abandon_intent(run_id)?.is_some() {
-            // A recorded abandon request is one-way: a recovery decision must
-            // not restart the round the operator gave up on.
-            return Err(ApplicationError::Conflict(
-                "that Run was abandoned; start a new Run instead of recovering it".into(),
-            ));
-        }
-        let mut active = self.active.lock().await;
-        self.reject_superseded_conversation_execution(run_id)?;
-        let mut record = self
-            .store()
-            .load(run_id)?
+        let runs = self
+            .kernel_owner(run_id)?
             .ok_or(ApplicationError::Missing)?;
-        let metadata = self.metadata(run_id)?.ok_or_else(|| {
-            ApplicationError::Invalid(
-                "Run has no immutable Graph identity metadata; it cannot be recovered".into(),
-            )
-        })?;
+        self.reject_superseded_conversation_execution(run_id)?;
+        let resource = runs.load(run_id)?.ok_or(ApplicationError::Missing)?;
+        let record = super::kernel_runs::KernelRuns::record(&resource)?;
+        let metadata = self.metadata(run_id)?.ok_or(ApplicationError::Missing)?;
         super::validate_control_identity(&record, &metadata)?;
+        let active = self.admission.lock().await;
+        self.check_execution_scope(&metadata, &active)?;
         let key = InvocationKey {
-            run_id: run_id.to_owned(),
-            graph_digest: super::RunView::inactive(&record)
-                .progress()
-                .graph_digest
-                .to_owned(),
-            node_id: node_id.to_owned(),
+            run_id: run_id.into(),
+            graph_digest: record.graph_digest.clone(),
+            node_id: node_id.into(),
             invocation,
         };
-        if let Some(existing) =
-            super::RunView::inactive(&record).recorded_recovery_decision(&key, attempt_id)
-        {
-            if existing != &decision {
-                return Err(ApplicationError::Conflict(
-                    "a different decision is already recorded for this attempt".into(),
-                ));
-            }
-            // The response may have been lost after the Run was committed as
-            // Running but before its task entered the active map. Replaying the
-            // same decision must be able to kick that same durable cursor.
-            if super::RunView::inactive(&record)
-                .with_active(active.contains_key(run_id))
-                .needs_recovery_replay()
-            {
-                drop(active);
-                // The same decision may be submitted again after its response
-                // was lost. Re-enter control through one heap indirection so
-                // the idempotent kick does not create an infinitely sized
-                // async future (control itself may handle a waiting record).
-                Box::pin(self.control(run_id, "resume")).await?;
-            }
-            return Ok(());
-        }
-        self.check_execution_scope(&metadata, &active)?;
-        if active.contains_key(run_id) {
-            return Err(ApplicationError::Conflict("Run is already active".into()));
-        }
-        super::RunView::inactive(&record).validate_recovery_target(&key, attempt_id)?;
-        let graph_path = Self::graph_identity(&metadata.bundle_source)?;
-        let _graph_lease = self.graph_lease(&metadata.bundle_source)?;
-        let _lease = self.store().acquire_lease(run_id)?;
-        record = self
-            .store()
-            .load(run_id)?
-            .ok_or(ApplicationError::Missing)?;
-        if let Some(existing) =
-            super::RunView::inactive(&record).recorded_recovery_decision(&key, attempt_id)
-        {
-            return if existing == &decision {
-                Ok(())
-            } else {
-                Err(ApplicationError::Conflict(
-                    "a different decision is already recorded for this attempt".into(),
-                ))
-            };
-        }
-        super::RunView::inactive(&record).validate_leased_recovery_target(&key, attempt_id)?;
         let control = new_control();
-        let is_abort = decision == RecoveryDecision::Abort;
-        // The Harness intent is the first durable side of the handoff. If the
-        // following Graph write fails or the host dies, the still-pending Graph
-        // attempt can safely resubmit this exact idempotent decision.
-        let execution = self.prepare_resume(&record, &metadata, control.clone())?;
-        execution
-            .record_recovery_decision(&key, attempt_id, decision.clone())
-            .map_err(ApplicationError::Conflict)?;
-        record
-            .recovery_submissions
-            .push(anchor_runtime::graph::RecoverySubmission {
-                key: key.clone(),
-                attempt_id,
-                decision: decision.clone(),
-            });
-        record
-            .recovery
-            .retain(|pending| !(pending.key == key && pending.attempt.attempt_id == attempt_id));
-        if is_abort {
-            // Abort is a Run-level stop: make the Run terminal before touching
-            // any other branch. Remaining unresolved attempts are retained as
-            // read-only facts and no cached Retry/Completed intent is executed.
-            // The Harness abort intent and journal close are already durable.
-            record.status = RunStatus::Aborted;
-            record.error = Some(format!("{} aborted by operator", node_id));
-            record.touch();
-            self.store().save(&record)?;
-            return Ok(());
+        let mut prepared = None;
+        let drive = runs.recover_attempt(&key, attempt_id, decision.clone(), || {
+            let execution = self
+                .prepare_resume(&record, &metadata, control.clone())
+                .map_err(|error| {
+                    anchor_runtime::graph::GraphError::CorruptRun(format!(
+                        "recovery port: {error:?}"
+                    ))
+                })?;
+            execution
+                .record_recovery_decision(&key, attempt_id, decision)
+                .map_err(|error| {
+                    anchor_runtime::graph::GraphError::CorruptRun(error.to_string())
+                })?;
+            prepared = Some(execution);
+            Ok(())
+        })?;
+        if drive {
+            let execution = match prepared {
+                Some(execution) => execution,
+                None => self.prepare_resume(&record, &metadata, control.clone())?,
+            };
+            self.spawn_kernel(record, execution, control)?;
         }
-        if super::RunView::inactive(&record).has_pending_recovery() {
-            record.status = RunStatus::WaitingRecovery;
-            record.touch();
-            self.store().save(&record)?;
-            return Ok(());
-        }
-        record.status = RunStatus::Running;
-        record.touch();
-        self.store().save(&record)?;
-        self.check_store()?;
-        active.insert(run_id.to_owned(), ActiveRun::new(graph_path, control));
-        drop(_lease);
-        drop(_graph_lease);
-        self.spawn(record, execution)?;
         Ok(())
     }
 
@@ -309,168 +93,51 @@ impl RunApplication {
 
 #[cfg(test)]
 mod tests {
+    use super::super::fixtures;
     use super::*;
-    use anchor_runtime::graph::{
-        GraphSnapshot, ParallelActivation, ParallelBranchRecord, ParallelBranchStatus,
-        PendingRecovery, RecoveryAttempt, RecoverySubmission, RunCursor,
-    };
+    use anchor_runtime::graph::{GraphSnapshot, RecoveryAttempt};
     use serde_json::json;
 
-    fn pending_record() -> (GraphRunRecord, InvocationKey) {
-        let snapshot = GraphSnapshot::admit(json!({
-            "objective":"recovery fixture", "entry":"worker",
-            "agents":{"role":{"model":"fixture","instructions":"work"}},
-            "nodes":[{"id":"worker","agent":"role"}], "edges":[]
-        }))
-        .unwrap();
-        let mut record =
-            GraphRunRecord::create_with_id(snapshot, json!({}), "recovery-view").unwrap();
-        let key = InvocationKey {
-            run_id: record.run_id.clone(),
-            graph_digest: record.graph_digest.clone(),
-            node_id: "worker".into(),
-            invocation: 1,
-        };
-        record.cursor = Some(RunCursor {
-            node_id: key.node_id.clone(),
-            key: key.clone(),
-            input_commits: vec![],
-            prepared_input: json!({}),
-        });
-        record.status = RunStatus::WaitingRecovery;
-        record.recovery.push(PendingRecovery {
-            key: key.clone(),
-            attempt: RecoveryAttempt {
-                attempt_id: 17,
-                step: 1,
-                tool: "fixture".into(),
-                started_at: "fixture".into(),
-            },
-        });
-        (record, key)
-    }
-
-    fn conflict(result: Result<(), ApplicationError>) -> String {
-        match result {
-            Err(ApplicationError::Conflict(message)) => message,
-            unexpected => panic!("expected a conflict, got {unexpected:?}"),
-        }
-    }
-
-    #[test]
-    fn recovery_validation_keeps_initial_error_priority_and_lease_conflict() {
-        let (mut record, key) = pending_record();
-        assert!(
-            RunView::inactive(&record)
-                .validate_recovery_target(&key, 17)
-                .is_ok()
-        );
-        assert!(
-            RunView::inactive(&record)
-                .validate_leased_recovery_target(&key, 17)
-                .is_ok()
-        );
-        let cursor = record.cursor.take();
-        let pending = std::mem::take(&mut record.recovery);
-        record.status = RunStatus::Stopped;
-        assert_eq!(
-            conflict(RunView::inactive(&record).validate_recovery_target(&key, 17)),
-            "recovery invocation does not match an active cursor in this Run"
-        );
-        assert_eq!(
-            conflict(RunView::inactive(&record).validate_leased_recovery_target(&key, 17)),
-            "Run recovery state changed before the decision was accepted"
-        );
-        record.cursor = cursor;
-        assert_eq!(
-            conflict(RunView::inactive(&record).validate_recovery_target(&key, 17)),
-            "attempt is not pending recovery for this Run"
-        );
-        record.recovery = pending;
-        assert_eq!(
-            conflict(RunView::inactive(&record).validate_recovery_target(&key, 17)),
-            "Run is not waiting for a recovery decision"
-        );
-        assert_eq!(
-            conflict(RunView::inactive(&record).validate_leased_recovery_target(&key, 17)),
-            "Run recovery state changed before the decision was accepted"
-        );
-    }
-
-    #[test]
-    fn only_initial_validation_checks_the_agent_node_after_recovery_facts() {
-        let (mut record, key) = pending_record();
-        record.snapshot.nodes[0].agent = None;
-        assert_eq!(
-            conflict(RunView::inactive(&record).validate_recovery_target(&key, 17)),
-            "only an AgentNode can own an io-harness recovery attempt"
-        );
-        assert!(
-            RunView::inactive(&record)
-                .validate_leased_recovery_target(&key, 17)
-                .is_ok()
-        );
-        record.recovery.clear();
-        assert_eq!(
-            conflict(RunView::inactive(&record).validate_recovery_target(&key, 17)),
-            "attempt is not pending recovery for this Run"
-        );
-    }
-
-    #[test]
-    fn recovery_validation_accepts_a_matching_parallel_cursor() {
-        let (mut record, key) = pending_record();
-        record.parallel = Some(ParallelActivation {
-            activation_id: "activation".into(),
-            fanout_node: "fanout".into(),
-            join_node: "join".into(),
-            fanout_invocation: 1,
-            branches: vec![ParallelBranchRecord {
-                branch_id: "branch".into(),
-                entry: "worker".into(),
-                nodes: vec!["worker".into()],
-                next_index: 0,
-                status: ParallelBranchStatus::Running,
-                cursor: record.cursor.take(),
-                completed: vec![],
-                error: None,
-            }],
-        });
-        assert!(
-            RunView::inactive(&record)
-                .validate_recovery_target(&key, 17)
-                .is_ok()
-        );
-        assert!(
-            RunView::inactive(&record)
-                .validate_leased_recovery_target(&key, 17)
-                .is_ok()
-        );
-        let other_key = InvocationKey {
-            invocation: 2,
-            ..key
-        };
-        assert_eq!(
-            conflict(RunView::inactive(&record).validate_recovery_target(&other_key, 17)),
-            "recovery invocation does not match an active cursor in this Run"
-        );
-    }
-
-    #[test]
-    fn recovery_submission_lookup_matches_the_entire_key_and_attempt() {
-        let (mut record, key) = pending_record();
-        record.recovery_submissions.push(RecoverySubmission {
-            key: key.clone(),
+    fn attempts() -> Vec<RecoveryAttempt> {
+        vec![RecoveryAttempt {
             attempt_id: 17,
-            decision: RecoveryDecision::Abort,
-        });
-        let view = RunView::inactive(&record);
-        assert_eq!(
-            view.recorded_recovery_decision(&key, 17),
-            Some(&RecoveryDecision::Abort)
-        );
-        assert_eq!(view.recorded_recovery_decision(&key, 18), None);
-        for other_key in [
+            step: 1,
+            tool: "fixture".into(),
+            started_at: "2026-10-19T00:00:00Z".into(),
+        }]
+    }
+
+    fn pending(application: &RunApplication) -> InvocationKey {
+        fixtures::create(application, &fixtures::work_record("recovery-view"));
+        fixtures::recovery(application, "recovery-view", "worker", attempts())
+    }
+
+    #[tokio::test]
+    async fn recovery_validation_keeps_invalid_input_before_missing_run() {
+        let root = tempfile::tempdir().unwrap();
+        let application = RunApplication::new(root.path().join("state"), root.path().into());
+        for (node, invocation, attempt) in [("", 1, 17), ("worker", 0, 17), ("worker", 1, 0)] {
+            assert!(matches!(application.record_recovery_decision(
+                "missing", node, invocation, attempt, RecoveryDecision::Abort
+            ).await, Err(ApplicationError::Invalid(message))
+                if message == "node_id, invocation, and positive attempt_id are required"));
+        }
+        assert!(matches!(
+            application
+                .record_recovery_decision("missing", "worker", 1, 17, RecoveryDecision::Abort)
+                .await,
+            Err(ApplicationError::Missing)
+        ));
+    }
+
+    #[test]
+    fn recovery_target_requires_the_entire_current_key_and_attempt_without_port_writes() {
+        let root = tempfile::tempdir().unwrap();
+        let application = RunApplication::new(root.path().join("state"), root.path().into());
+        let key = pending(&application);
+        let runs = application.kernel_owner(&key.run_id).unwrap().unwrap();
+        let before = runs.load(&key.run_id).unwrap().unwrap();
+        for other in [
             InvocationKey {
                 run_id: "other".into(),
                 ..key.clone()
@@ -488,35 +155,142 @@ mod tests {
                 ..key.clone()
             },
         ] {
-            assert_eq!(view.recorded_recovery_decision(&other_key, 17), None);
+            assert!(
+                runs.recover_attempt(&other, 17, RecoveryDecision::Abort, || panic!(
+                    "invalid target must never reach the port"
+                ))
+                .is_err()
+            );
         }
+        assert!(
+            runs.recover_attempt(&key, 18, RecoveryDecision::Abort, || panic!(
+                "unknown attempt must never reach the port"
+            ))
+            .is_err()
+        );
+        assert_eq!(runs.load(&key.run_id).unwrap().unwrap(), before);
     }
 
     #[test]
-    fn recovery_replay_only_kicks_running_records_without_a_registered_executor() {
-        let (mut record, _) = pending_record();
-        for status in [
-            RunStatus::Ready,
-            RunStatus::Running,
-            RunStatus::Paused,
-            RunStatus::Stopped,
-            RunStatus::BudgetStopped,
-            RunStatus::WaitingCall,
-            RunStatus::WaitingRecovery,
-            RunStatus::Completed,
-            RunStatus::Failed,
-            RunStatus::Aborted,
+    fn only_an_agent_node_can_own_an_io_harness_recovery_attempt() {
+        let root = tempfile::tempdir().unwrap();
+        let application = RunApplication::new(root.path().join("state"), root.path().into());
+        let record = GraphRunRecord::create_with_id(
+            GraphSnapshot::from_authoring(json!({
+                "entry":"work", "agents":{}, "ops":{"work":{"run":"true"}},
+                "nodes":[{"id":"work","op":"work"}], "edges":[]
+            }))
+            .unwrap(),
+            json!({}),
+            "op-recovery",
+        )
+        .unwrap();
+        fixtures::create(&application, &record);
+        let key = fixtures::recovery(&application, "op-recovery", "work", attempts());
+        let runs = application.kernel_owner(&key.run_id).unwrap().unwrap();
+        let before = runs.load(&key.run_id).unwrap().unwrap();
+        assert!(
+            matches!(runs.recover_attempt(&key, 17, RecoveryDecision::Abort,
+            || panic!("an Op attempt cannot reach the io-harness port")),
+            Err(ApplicationError::Conflict(message))
+                if message == "only an AgentNode can own an io-harness recovery attempt")
+        );
+        assert_eq!(runs.load(&key.run_id).unwrap().unwrap(), before);
+    }
+
+    #[test]
+    fn recovery_validation_accepts_a_matching_parallel_frontier() {
+        let root = tempfile::tempdir().unwrap();
+        let application = RunApplication::new(root.path().join("state"), root.path().into());
+        let record = GraphRunRecord::create_with_id(
+            GraphSnapshot::from_authoring(json!({
+                "entry":"fork", "agents":{"role":{"model":"fixture","instructions":"work"}},
+                "ops":{"fork":{"fanout":{"join":"join"}},"join":{"join":{}}},
+                "nodes":[{"id":"fork","op":"fork"},{"id":"left","agent":"role"},
+                    {"id":"right","agent":"role"},{"id":"join","op":"join"}],
+                "edges":[{"from":"fork","to":"left"},{"from":"fork","to":"right"},
+                    {"from":"left","to":"join"},{"from":"right","to":"join"}]
+            }))
+            .unwrap(),
+            json!({}),
+            "parallel-recovery",
+        )
+        .unwrap();
+        fixtures::create(&application, &record);
+        fixtures::complete(
+            &application,
+            "parallel-recovery",
+            "fork",
+            fixtures::completion(json!({})),
+            None,
+        );
+        let key = fixtures::recovery(&application, "parallel-recovery", "left", attempts());
+        let runs = application.kernel_owner(&key.run_id).unwrap().unwrap();
+        assert_eq!(runs.recovery_facts(&key.run_id).unwrap().0[0].key, key);
+        assert!(
+            !runs
+                .recover_attempt(&key, 17, RecoveryDecision::Abort, || Ok(()))
+                .unwrap()
+        );
+        assert!(fixtures::view(&application, &key.run_id).is_settled());
+        assert!(
+            fixtures::record(&application, &key.run_id)
+                .results
+                .get("left")
+                .is_none()
+        );
+        assert!(
+            fixtures::record(&application, &key.run_id)
+                .results
+                .get("right")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn recovery_submission_lookup_matches_the_entire_key_and_attempt() {
+        let root = tempfile::tempdir().unwrap();
+        let application = RunApplication::new(root.path().join("state"), root.path().into());
+        let key = pending(&application);
+        let runs = application.kernel_owner(&key.run_id).unwrap().unwrap();
+        runs.recover_attempt(&key, 17, RecoveryDecision::Abort, || Ok(()))
+            .unwrap();
+        let view = fixtures::view(&application, &key.run_id);
+        let decisions = &view.record.recovery_submissions;
+        let lookup = |target: &InvocationKey, attempt| {
+            decisions
+                .iter()
+                .find(|decision| decision.key == *target && decision.attempt_id == attempt)
+                .map(|decision| &decision.decision)
+        };
+        assert_eq!(lookup(&key, 17), Some(&RecoveryDecision::Abort));
+        assert_eq!(lookup(&key, 18), None);
+        for other in [
+            InvocationKey {
+                run_id: "other".into(),
+                ..key.clone()
+            },
+            InvocationKey {
+                graph_digest: "other".into(),
+                ..key.clone()
+            },
+            InvocationKey {
+                node_id: "other".into(),
+                ..key.clone()
+            },
+            InvocationKey {
+                invocation: 2,
+                ..key.clone()
+            },
         ] {
-            record.status = status;
-            for active in [false, true] {
-                assert_eq!(
-                    RunView::inactive(&record)
-                        .with_active(active)
-                        .needs_recovery_replay(),
-                    status == RunStatus::Running && !active,
-                    "{status:?}, active={active}"
-                );
-            }
+            assert_eq!(lookup(&other, 17), None);
         }
+        assert!(
+            !runs
+                .recover_attempt(&key, 17, RecoveryDecision::Abort, || panic!(
+                    "duplicate decision must reuse durable fact"
+                ))
+                .unwrap()
+        );
     }
 }

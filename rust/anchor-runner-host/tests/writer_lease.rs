@@ -140,8 +140,8 @@ fn http_writer_blocks_other_writers_but_exit_releases_lease() {
     http.kill().unwrap();
     http.wait().unwrap();
     assert_eq!(
-        response(framed(root.path(), "start_bundle", "released"))["status"],
-        "completed"
+        response(framed(root.path(), "start_bundle", "released"))["projection"]["outcome"],
+        "done"
     );
 }
 
@@ -151,7 +151,11 @@ fn stdio_writer_blocks_http_until_process_exit() {
     prepare(root.path(), "sh -c 'sleep 20'");
     let mut stdio = framed(root.path(), "start_bundle", "holder");
     let deadline = Instant::now() + Duration::from_secs(5);
-    while !root.path().join("state/runs/holder.json").exists() {
+    while !root
+        .path()
+        .join("state/kernel-runs/run%2Fholder/resource.json")
+        .exists()
+    {
         assert!(Instant::now() < deadline, "stdio holder did not start");
         std::thread::sleep(Duration::from_millis(20));
     }

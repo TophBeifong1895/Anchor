@@ -1,4 +1,5 @@
 //! End-to-end tests for deterministic Op routing through the production Host.
+use anchor_kernel::{FileStore, Store};
 use serde_json::{Value, json};
 use std::{
     fs,
@@ -97,9 +98,9 @@ fn operator_library_tools_reach_op_without_graph_host_path_grants() {
         "nodes":[{"id":"first","op":"tool"}], "edges":[]
     });
     let denied = finish(spawn(root.path(), "no-grant", &definition, &json!({})));
-    assert_eq!(denied["status"], "failed", "{denied}");
+    assert_eq!(denied["projection"]["outcome"], "failed", "{denied}");
     assert!(
-        denied["error"]
+        denied["projection"]["reason"]
             .as_str()
             .unwrap()
             .contains("exit_code=Some(127)"),
@@ -112,7 +113,7 @@ fn operator_library_tools_reach_op_without_graph_host_path_grants() {
         &json!({}),
         Some(&library),
     ));
-    assert_eq!(response["status"], "completed", "{response}");
+    assert_eq!(response["projection"]["outcome"], "done", "{response}");
     assert_eq!(
         record(root.path(), "granted")["results"]["first"][0]["completion"]["submission"],
         "external-tool"
@@ -130,8 +131,12 @@ fn finish(child: Child) -> Value {
 }
 
 fn record(root: &Path, run_id: &str) -> Value {
-    serde_json::from_slice(&fs::read(root.join(format!("state/runs/{run_id}.json"))).unwrap())
+    FileStore::new(root.join("state/kernel-runs"))
         .unwrap()
+        .load(&anchor_runtime::graph::validator::run_resource_id(run_id))
+        .unwrap()
+        .unwrap()
+        .state
 }
 
 #[test]
@@ -141,7 +146,7 @@ fn successful_op_marker_routes_one_branch_and_invalid_or_failed_choices_stop() {
         (
             "routed",
             r#"sh -c 'test "$ANCHOR_ROUTES" = "good,bad" && printf "ANCHOR_ROUTE: good\ninput=%s\n" "$ANCHOR_INPUT"'"#,
-            "completed",
+            "done",
             None,
         ),
         (
@@ -164,18 +169,21 @@ fn successful_op_marker_routes_one_branch_and_invalid_or_failed_choices_stop() {
         ),
     ];
 
-    for (run_id, gate_command, expected_status, expected_error) in scenarios {
+    for (run_id, gate_command, expected_outcome, expected_error) in scenarios {
         let response = finish(spawn(
             root.path(),
             run_id,
             &graph(gate_command),
             &json!({"release":"binary"}),
         ));
-        assert_eq!(response["status"], expected_status, "{response}");
+        assert_eq!(
+            response["projection"]["outcome"], expected_outcome,
+            "{response}"
+        );
         let saved = record(root.path(), run_id);
         if let Some(expected_error) = expected_error {
             assert!(
-                saved["error"]
+                response["projection"]["reason"]
                     .as_str()
                     .unwrap_or_default()
                     .contains(expected_error),
@@ -213,7 +221,7 @@ fn command_input_contains_merged_run_input_without_artifact_metadata() {
         "input":null
     });
     let response = finish(spawn(root.path(), "input", &definition, &input));
-    assert_eq!(response["status"], "completed", "{response}");
+    assert_eq!(response["projection"]["outcome"], "done", "{response}");
     let saved = record(root.path(), "input");
     assert_eq!(saved["input"], expected);
     for node in ["first", "second"] {
@@ -245,7 +253,7 @@ esac"#;
         &definition,
         &json!({}),
     ));
-    assert_eq!(response["status"], "completed", "{response}");
+    assert_eq!(response["projection"]["outcome"], "done", "{response}");
     let saved = record(root.path(), "original-shell");
     assert_eq!(saved["snapshot"]["ops"]["gate"]["run"], command);
     assert_eq!(saved["results"]["gate"][0]["completion"]["route"], "good");
@@ -271,7 +279,7 @@ esac"#;
         ("shell-malformed", "printf 'unfinished"),
     ] {
         let response = finish(spawn(root.path(), run_id, &graph(command), &json!({})));
-        assert_eq!(response["status"], "failed", "{response}");
+        assert_eq!(response["projection"]["outcome"], "failed", "{response}");
         let saved = record(root.path(), run_id);
         assert!(saved["results"].get("good").is_none());
         assert!(saved["results"].get("bad").is_none());
@@ -305,7 +313,7 @@ fn op_network_declaration_controls_business_network_access() {
         &definition,
         &json!({}),
     ));
-    assert_eq!(denied["status"], "failed", "{denied}");
+    assert_eq!(denied["projection"]["outcome"], "failed", "{denied}");
     assert!(listener.accept().is_err());
 
     let received = std::thread::spawn(move || {
@@ -338,6 +346,6 @@ fn op_network_declaration_controls_business_network_access() {
         &definition,
         &json!({}),
     ));
-    assert_eq!(allowed["status"], "completed", "{allowed}");
+    assert_eq!(allowed["projection"]["outcome"], "done", "{allowed}");
     assert_eq!(received.join().unwrap(), "business-network-authorized");
 }

@@ -5,6 +5,7 @@
 
 use super::*;
 
+use crate::application::run_access::fixtures;
 use anchor_platform_session::CreateSession;
 
 #[tokio::test]
@@ -84,23 +85,17 @@ fn fixture() -> (tempfile::TempDir, PilotTools) {
 
 #[tokio::test]
 async fn run_pause_requests_the_node_boundary_without_cancelling_the_worker() {
-    use std::sync::atomic::{AtomicBool, Ordering};
-
     let (_root, mut tools) = fixture();
     let run = "pilot-pause";
-    let control = tools
-        .application
-        .begin_wait_child(run, "fixture", Arc::new(AtomicBool::new(false)))
-        .await
-        .unwrap();
+    fixtures::create(&tools.application, &fixtures::work_record(run));
+    let drive = fixtures::gated_drive(&tools.application, run).await;
     assert!(
         tools
             .execute("run_pause", json!({"run":run}))
             .await
             .is_err()
     );
-    assert!(!control.pause.load(Ordering::Acquire));
-    assert!(!control.cancellation.load(Ordering::Acquire));
+    assert!(!drive.cancelled());
 
     let (turn, _) = tools
         .sessions
@@ -115,8 +110,11 @@ async fn run_pause_requests_the_node_boundary_without_cancelling_the_worker() {
         receipt,
         json!({"run":run,"operation":"pause","requested":true})
     );
-    assert!(control.pause.load(Ordering::Acquire));
-    assert!(!control.cancellation.load(Ordering::Acquire));
+    assert!(matches!(
+        fixtures::view(&tools.application, run).phase(),
+        crate::application::run_access::RunPhase::Executing
+    ));
+    assert!(!drive.cancelled());
     assert!(tools.application.run_is_active(run).await);
 
     tools
@@ -130,24 +128,18 @@ async fn run_pause_requests_the_node_boundary_without_cancelling_the_worker() {
         )
         .unwrap();
     assert!(tools.execute("run_stop", json!({"run":run})).await.is_err());
-    assert!(!control.cancellation.load(Ordering::Acquire));
-    tools.application.end_wait_child(run).await;
+    assert!(!drive.cancelled());
+    drive.drain(&tools.application, run).await;
 }
 
 #[tokio::test]
 async fn run_stop_cancels_the_worker_without_requesting_a_boundary_pause() {
-    use std::sync::atomic::{AtomicBool, Ordering};
-
     let (_root, mut tools) = fixture();
     let run = "pilot-stop";
-    let control = tools
-        .application
-        .begin_wait_child(run, "fixture", Arc::new(AtomicBool::new(false)))
-        .await
-        .unwrap();
+    fixtures::create(&tools.application, &fixtures::work_record(run));
+    let drive = fixtures::gated_drive(&tools.application, run).await;
     assert!(tools.execute("run_stop", json!({"run":run})).await.is_err());
-    assert!(!control.pause.load(Ordering::Acquire));
-    assert!(!control.cancellation.load(Ordering::Acquire));
+    assert!(!drive.cancelled());
 
     let (turn, _) = tools
         .sessions
@@ -159,10 +151,10 @@ async fn run_stop_cancels_the_worker_without_requesting_a_boundary_pause() {
         receipt,
         json!({"run":run,"operation":"stop","requested":true})
     );
-    assert!(control.cancellation.load(Ordering::Acquire));
-    assert!(!control.pause.load(Ordering::Acquire));
+    assert!(drive.cancelled());
+    assert!(fixtures::view(&tools.application, run).has_stopped_execution());
     assert!(tools.application.run_is_active(run).await);
-    tools.application.end_wait_child(run).await;
+    drive.drain(&tools.application, run).await;
 }
 
 #[tokio::test]

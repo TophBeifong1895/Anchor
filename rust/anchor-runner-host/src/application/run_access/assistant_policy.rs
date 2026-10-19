@@ -1,10 +1,10 @@
 use super::RunView;
 use crate::{application::RunMetadata, assistant::TurnBinding};
-use anchor_runtime::graph::{FileRunStore, GraphError, InvocationKey, RunLease, RunStore};
+use anchor_runtime::graph::{FileRunLeaseProvider, GraphError, InvocationKey, RunLease};
 use std::path::Path;
 
 pub(crate) fn graph_lease(root: &Path, source: &Path) -> Result<Box<dyn RunLease>, GraphError> {
-    FileRunStore::new(root.join("admission-locks"))
+    FileRunLeaseProvider::new(root.join("admission-locks"))
         .acquire_lease(&crate::assistant_plugins::graph_lease_key(source)?)
 }
 
@@ -12,7 +12,7 @@ pub(crate) fn graph_read_lease(
     root: &Path,
     source: &Path,
 ) -> Result<Box<dyn RunLease>, GraphError> {
-    FileRunStore::new(root.join("admission-locks"))
+    FileRunLeaseProvider::new(root.join("admission-locks"))
         .acquire_read_lease(&crate::assistant_plugins::graph_lease_key(source)?)
 }
 
@@ -75,34 +75,50 @@ impl RunView<'_> {
 
 #[cfg(test)]
 mod tests {
+    use super::super::fixtures;
     use super::*;
-    use crate::application::metadata::AssistantSource;
-    use anchor_runtime::graph::{
-        CommitRef, GraphRunRecord, GraphSnapshot, NodeCompletion, RunCursor, RunResult,
-    };
+    use crate::application::{RunApplication, metadata::AssistantSource};
+    use anchor_runtime::graph::{GraphRunRecord, GraphSnapshot};
     use serde_json::json;
     use sha2::{Digest, Sha256};
     use std::path::PathBuf;
 
-    fn fixture() -> (tempfile::TempDir, GraphRunRecord, RunMetadata) {
+    fn fixture(
+        parallel: bool,
+    ) -> (
+        tempfile::TempDir,
+        RunApplication,
+        GraphRunRecord,
+        RunMetadata,
+    ) {
         let root = tempfile::tempdir().unwrap();
-        let snapshot = GraphSnapshot::from_authoring(json!({
-            "objective":"assistant", "entry":"wait",
-            "agents":{"worker":{"model":"fixture","instructions":"work"}},
-            "ops":{"wait":{"host":{"operation":"session.wait_input"}},"reply":{"host":{"operation":"session.reply"}}},
-            "nodes":[{"id":"wait","op":"wait"},{"id":"agent","agent":"worker"},{"id":"reply","op":"reply"}],
-            "edges":[{"from":"wait","to":"agent"},{"from":"agent","to":"reply"},{"from":"reply","to":"wait"}]
-        }))
+        let application = RunApplication::new(root.path().into(), root.path().join("catalog"));
+        let graph = if parallel {
+            json!({
+                "objective":"assistant", "entry":"fork",
+                "agents":{"worker":{"model":"fixture","instructions":"work"}},
+                "ops":{"fork":{"fanout":{"join":"join"}},"join":{"join":{}}},
+                "nodes":[{"id":"fork","op":"fork"},{"id":"left","agent":"worker"},
+                    {"id":"right","agent":"worker"},{"id":"join","op":"join"}],
+                "edges":[{"from":"fork","to":"left"},{"from":"fork","to":"right"},
+                    {"from":"left","to":"join"},{"from":"right","to":"join"}]
+            })
+        } else {
+            json!({
+                "objective":"assistant", "entry":"wait",
+                "agents":{"worker":{"model":"fixture","instructions":"work"}},
+                "ops":{"wait":{"host":{"operation":"session.wait_input"}},"reply":{"host":{"operation":"session.reply"}}},
+                "nodes":[{"id":"wait","op":"wait"},{"id":"agent","agent":"worker"},{"id":"reply","op":"reply"}],
+                "edges":[{"from":"wait","to":"agent"},{"from":"agent","to":"reply"},{"from":"reply","to":"wait"}]
+            })
+        };
+        let record = GraphRunRecord::create_with_id(
+            GraphSnapshot::from_authoring(graph).unwrap(),
+            json!({}),
+            "assistant-policy-test",
+        )
         .unwrap();
-        let mut record =
-            GraphRunRecord::create_with_id(snapshot, json!({}), "assistant-policy-test").unwrap();
-        let key = invocation(&record, "agent", 1);
-        record.cursor = Some(RunCursor {
-            node_id: key.node_id.clone(),
-            key,
-            input_commits: Vec::new(),
-            prepared_input: json!({}),
-        });
+        fixtures::create(&application, &record);
         let mut metadata = RunMetadata::new(
             record.run_id.clone(),
             "assistant".into(),
@@ -117,7 +133,7 @@ mod tests {
             work_node: "agent".into(),
             reply_node: "reply".into(),
         });
-        (root, record, metadata)
+        (root, application, record, metadata)
     }
 
     fn invocation(record: &GraphRunRecord, node: &str, number: u64) -> InvocationKey {
@@ -129,12 +145,25 @@ mod tests {
         }
     }
 
-    fn commit(key: &InvocationKey) -> CommitRef {
-        CommitRef {
-            id: format!("commit-{}-{}", key.node_id, key.invocation),
-            node_id: key.node_id.clone(),
-            invocation: key.invocation,
+    fn advance_to(application: &RunApplication, node: &str, number: u64) {
+        for _ in 0..20 {
+            let keys = application.dispatch_keys("assistant-policy-test").unwrap();
+            if keys
+                .iter()
+                .any(|key| key.node_id == node && key.invocation == number)
+            {
+                return;
+            }
+            let next = keys.first().expect("fixture frontier");
+            fixtures::complete(
+                application,
+                &next.run_id,
+                &next.node_id,
+                fixtures::completion(json!({})),
+                None,
+            );
         }
+        panic!("fixture did not reach requested invocation");
     }
 
     fn binding_path(root: &Path, key: &InvocationKey) -> PathBuf {
@@ -157,41 +186,17 @@ mod tests {
         binding
     }
 
-    fn complete(record: &mut GraphRunRecord, key: &InvocationKey, sequence: u64) {
-        record
-            .results
-            .entry(key.node_id.clone())
-            .or_default()
-            .push(RunResult {
-                plugin_views: Default::default(),
-                plugin_digests: Default::default(),
-                node_id: key.node_id.clone(),
-                key: key.clone(),
-                completion: NodeCompletion {
-                    submission: "fixture".into(),
-                    route: None,
-                    model_requests: 0,
-                    output: json!({}),
-                },
-                interruption: None,
-                commit: commit(key),
-                sequence,
-            });
-    }
-
     #[test]
-    fn executable_binding_prefers_cursor_then_first_bound_input_commit() {
-        let (root, mut record, metadata) = fixture();
-        let current = record.cursor.as_ref().unwrap().key.clone();
-        let missing = invocation(&record, "reply", 99);
-        let first = invocation(&record, "wait", 1);
-        let second = invocation(&record, "agent", 2);
+    fn executable_binding_prefers_frontier_then_first_bound_input_commit() {
+        let (root, application, record, metadata) = fixture(true);
+        advance_to(&application, "join", 1);
+        let current = invocation(&record, "join", 1);
+        let first = invocation(&record, "left", 1);
+        let second = invocation(&record, "right", 1);
         let expected = save_binding(root.path(), &first, "first");
         save_binding(root.path(), &second, "second");
-        record.cursor.as_mut().unwrap().input_commits =
-            vec![commit(&missing), commit(&first), commit(&second)];
         assert_eq!(
-            RunView::from(&record)
+            fixtures::view(&application, &record.run_id)
                 .executable_assistant_binding(root.path(), &metadata)
                 .unwrap(),
             Some(expected)
@@ -199,7 +204,7 @@ mod tests {
         let expected = save_binding(root.path(), &current, "current");
         std::fs::write(binding_path(root.path(), &first), b"{invalid").unwrap();
         assert_eq!(
-            RunView::from(&record)
+            fixtures::view(&application, &record.run_id)
                 .executable_assistant_binding(root.path(), &metadata)
                 .unwrap(),
             Some(expected)
@@ -208,37 +213,33 @@ mod tests {
 
     #[test]
     fn executable_binding_requires_work_binding_but_does_not_scan_idle_history() {
-        let (root, mut record, mut metadata) = fixture();
-        let prior = invocation(&record, "agent", 99);
-        save_binding(root.path(), &prior, "prior");
-        complete(&mut record, &prior, 1);
+        let (root, application, record, mut metadata) = fixture(false);
+        advance_to(&application, "agent", 1);
+        save_binding(root.path(), &invocation(&record, "agent", 1), "prior");
+        advance_to(&application, "wait", 2);
         assert_eq!(
-            RunView::from(&record)
-                .executable_assistant_binding(root.path(), &metadata)
-                .unwrap_err(),
-            "assistant active invocation has no Turn binding"
-        );
-        let wait = invocation(&record, "wait", 2);
-        let cursor = record.cursor.as_mut().unwrap();
-        cursor.node_id = wait.node_id.clone();
-        cursor.key = wait;
-        cursor.input_commits = vec![commit(&prior)];
-        assert_eq!(
-            RunView::from(&record)
+            fixtures::view(&application, &record.run_id)
                 .executable_assistant_binding(root.path(), &metadata)
                 .unwrap(),
             None
         );
-        record.cursor = None;
+        advance_to(&application, "agent", 2);
         assert_eq!(
-            RunView::from(&record)
+            fixtures::view(&application, &record.run_id)
+                .executable_assistant_binding(root.path(), &metadata)
+                .unwrap_err(),
+            "assistant active invocation has no Turn binding"
+        );
+        fixtures::control(&application, &record.run_id, "abandon", "operator");
+        assert_eq!(
+            fixtures::view(&application, &record.run_id)
                 .executable_assistant_binding(root.path(), &metadata)
                 .unwrap(),
             None
         );
         metadata.assistant = None;
         assert_eq!(
-            RunView::from(&record)
+            fixtures::view(&application, &record.run_id)
                 .executable_assistant_binding(root.path(), &metadata)
                 .unwrap(),
             None
@@ -246,32 +247,29 @@ mod tests {
     }
 
     #[test]
-    fn latest_binding_prefers_cursor_then_highest_sequence_result() {
-        let (root, mut record, _) = fixture();
-        let current = record.cursor.as_ref().unwrap().key.clone();
-        let earlier = invocation(&record, "reply", 2);
-        let latest = invocation(&record, "wait", 3);
-        save_binding(root.path(), &earlier, "earlier");
+    fn latest_binding_prefers_frontier_then_highest_sequence_result() {
+        let (root, application, record, _) = fixture(false);
+        advance_to(&application, "wait", 2);
+        save_binding(root.path(), &invocation(&record, "wait", 1), "earlier");
+        let latest = invocation(&record, "reply", 1);
         let latest_binding = save_binding(root.path(), &latest, "latest");
-        complete(&mut record, &latest, 9);
-        complete(&mut record, &earlier, 2);
         assert_eq!(
-            RunView::from(&record)
+            fixtures::view(&application, &record.run_id)
                 .latest_assistant_binding(root.path())
                 .unwrap(),
             Some(latest_binding.clone())
         );
-        let current_binding = save_binding(root.path(), &current, "current");
+        let current_binding = save_binding(root.path(), &invocation(&record, "wait", 2), "current");
         std::fs::write(binding_path(root.path(), &latest), b"{invalid").unwrap();
         assert_eq!(
-            RunView::from(&record)
+            fixtures::view(&application, &record.run_id)
                 .latest_assistant_binding(root.path())
                 .unwrap(),
             Some(current_binding)
         );
-        record.cursor = None;
+        fixtures::control(&application, &record.run_id, "abandon", "operator");
         assert!(
-            RunView::from(&record)
+            fixtures::view(&application, &record.run_id)
                 .latest_assistant_binding(root.path())
                 .is_err()
         );
@@ -281,7 +279,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            RunView::from(&record)
+            fixtures::view(&application, &record.run_id)
                 .latest_assistant_binding(root.path())
                 .unwrap(),
             Some(latest_binding)
@@ -290,15 +288,11 @@ mod tests {
 
     #[test]
     fn latest_binding_does_not_search_older_results_or_input_commits() {
-        let (root, mut record, _) = fixture();
-        let earlier = invocation(&record, "wait", 1);
-        let latest = invocation(&record, "reply", 2);
-        save_binding(root.path(), &earlier, "earlier");
-        record.cursor.as_mut().unwrap().input_commits = vec![commit(&earlier)];
-        complete(&mut record, &earlier, 1);
-        complete(&mut record, &latest, 2);
+        let (root, application, record, _) = fixture(true);
+        advance_to(&application, "join", 1);
+        save_binding(root.path(), &invocation(&record, "left", 1), "earlier");
         assert_eq!(
-            RunView::from(&record)
+            fixtures::view(&application, &record.run_id)
                 .latest_assistant_binding(root.path())
                 .unwrap(),
             None
@@ -306,17 +300,15 @@ mod tests {
     }
 
     #[test]
-    fn corrupt_cursor_binding_is_not_masked_by_commits_or_history() {
-        let (root, mut record, metadata) = fixture();
-        let current = record.cursor.as_ref().unwrap().key.clone();
-        let prior = invocation(&record, "wait", 1);
+    fn corrupt_frontier_binding_is_not_masked_by_commits_or_history() {
+        let (root, application, record, metadata) = fixture(false);
+        advance_to(&application, "agent", 1);
+        let current = invocation(&record, "agent", 1);
         save_binding(root.path(), &current, "current");
-        save_binding(root.path(), &prior, "prior");
-        record.cursor.as_mut().unwrap().input_commits = vec![commit(&prior)];
-        complete(&mut record, &prior, 1);
+        save_binding(root.path(), &invocation(&record, "wait", 1), "prior");
         std::fs::write(binding_path(root.path(), &current), b"{invalid").unwrap();
         let expected = crate::assistant::binding(root.path(), &current).unwrap_err();
-        let view = RunView::from(&record);
+        let view = fixtures::view(&application, &record.run_id);
         assert_eq!(
             view.executable_assistant_binding(root.path(), &metadata)
                 .unwrap_err(),
@@ -330,15 +322,14 @@ mod tests {
 
     #[test]
     fn corrupt_input_binding_stops_the_ordered_commit_scan() {
-        let (root, mut record, metadata) = fixture();
-        let first = invocation(&record, "wait", 1);
-        let second = invocation(&record, "reply", 2);
+        let (root, application, record, metadata) = fixture(true);
+        advance_to(&application, "join", 1);
+        let first = invocation(&record, "left", 1);
         save_binding(root.path(), &first, "first");
-        save_binding(root.path(), &second, "second");
-        record.cursor.as_mut().unwrap().input_commits = vec![commit(&first), commit(&second)];
+        save_binding(root.path(), &invocation(&record, "right", 1), "second");
         std::fs::write(binding_path(root.path(), &first), b"{invalid").unwrap();
         assert_eq!(
-            RunView::from(&record)
+            fixtures::view(&application, &record.run_id)
                 .executable_assistant_binding(root.path(), &metadata)
                 .unwrap_err(),
             crate::assistant::binding(root.path(), &first).unwrap_err()

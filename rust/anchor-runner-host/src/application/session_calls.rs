@@ -159,23 +159,18 @@ impl RunApplication {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::application::run_access::fixtures;
     use anchor_runtime::graph::GraphSnapshot;
     use serde_json::json;
 
-    fn seed(
-        application: &RunApplication,
-        path: &Path,
-        id: &str,
-        mode: Option<&str>,
-        status: RunStatus,
-    ) {
+    fn seed(application: &RunApplication, path: &Path, id: &str, mode: Option<&str>) {
         let snapshot = GraphSnapshot::from_authoring(json!({
             "entry":"work","agents":{},"ops":{"work":{"run":"true"}},
             "nodes":[{"id":"work","op":"work"}],"edges":[],
         }))
         .unwrap();
-        let mut record = GraphRunRecord::create_with_id(snapshot, json!({}), id).unwrap();
-        record.status = status;
+        let record = GraphRunRecord::create_with_id(snapshot, json!({}), id).unwrap();
+        fixtures::create(application, &record);
         let mut meta = RunMetadata::new(
             id.into(),
             "fixture".into(),
@@ -184,6 +179,7 @@ mod tests {
         )
         .unwrap();
         if let Some(mode) = mode {
+            fixtures::finish(application, id);
             meta.trigger_source = "graph_call".into();
             meta.graph_call = Some(metadata::GraphCallSource {
                 parent_run: "parent".into(),
@@ -206,44 +202,41 @@ mod tests {
             });
         }
         metadata::save(&application.data_root, &meta).unwrap();
-        application.store().save(&record).unwrap();
     }
 
     async fn stopped_parent_cancels_wait_delivery(active_parent: bool) {
         let root = tempfile::tempdir().unwrap();
         let application = RunApplication::new(root.path().join("state"), root.path().into());
-        seed(
-            &application,
-            root.path(),
-            "parent",
-            None,
-            if active_parent {
-                RunStatus::Running
-            } else {
-                RunStatus::WaitingCall
-            },
-        );
-        seed(
-            &application,
-            root.path(),
-            "wait-child",
-            Some("wait"),
-            RunStatus::Completed,
-        );
-        seed(
-            &application,
-            root.path(),
-            "detach-child",
-            Some("detach"),
-            RunStatus::Completed,
-        );
-        let original = application.store().load("wait-child").unwrap().unwrap();
         if active_parent {
-            application.active.lock().await.insert(
-                "parent".into(),
-                ActiveRun::new(root.path().into(), new_control()),
-            );
+            seed(&application, root.path(), "parent", None);
+        } else {
+            let snapshot = GraphSnapshot::from_authoring(json!({
+                "entry":"call","agents":{},"ops":{"call":{"call":{"graph":"fixture","mode":"wait"}}},
+                "nodes":[{"id":"call","op":"call"}],"edges":[],
+            })).unwrap();
+            let record = GraphRunRecord::create_with_id(snapshot, json!({}), "parent").unwrap();
+            fixtures::create(&application, &record);
+            metadata::save(
+                &application.data_root,
+                &RunMetadata::new(
+                    "parent".into(),
+                    "fixture".into(),
+                    record.graph_digest.clone(),
+                    root.path(),
+                )
+                .unwrap(),
+            )
+            .unwrap();
+            fixtures::bind_child(&application, "parent", "call", "wait-child");
         }
+        seed(&application, root.path(), "wait-child", Some("wait"));
+        seed(&application, root.path(), "detach-child", Some("detach"));
+        let original = fixtures::record(&application, "wait-child");
+        let worker = if active_parent {
+            Some(fixtures::gated_drive(&application, "parent").await)
+        } else {
+            None
+        };
         application.control("parent", "stop").await.unwrap();
         assert_eq!(
             application
@@ -265,36 +258,18 @@ mod tests {
                 .status,
             "pending"
         );
-        assert_eq!(
-            serde_json::to_value(application.store().load("wait-child").unwrap().unwrap()).unwrap(),
-            serde_json::to_value(original).unwrap()
-        );
-        if active_parent {
-            let parent = application.store().load("parent").unwrap().unwrap();
-            let metadata = application.metadata("parent").unwrap();
-            assert_eq!(
-                application
-                    .project_run(&parent, metadata.as_ref())
-                    .await
-                    .unwrap()
-                    .phase,
-                "executing"
-            );
-        } else {
-            assert_eq!(
-                application.store().load("parent").unwrap().unwrap().status,
-                RunStatus::Stopped
-            );
-            tokio::task::yield_now().await;
-            assert!(application.active_runs(None).await.is_empty());
+        assert_eq!(fixtures::record(&application, "wait-child"), original);
+        assert!(fixtures::view(&application, "parent").has_stopped_execution());
+        if let Some(worker) = worker {
+            worker.drain(&application, "parent").await;
         }
+        assert!(application.active_runs(None).await.is_empty());
     }
 
     #[tokio::test]
     async fn active_parent_stop_cancels_wait_session_delivery_but_not_detach() {
         stopped_parent_cancels_wait_delivery(true).await;
     }
-
     #[tokio::test]
     async fn waiting_parent_stop_cancels_completed_pending_session_child_without_waking_parent() {
         stopped_parent_cancels_wait_delivery(false).await;

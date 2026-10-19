@@ -479,9 +479,7 @@ async fn native_sessions_cannot_reclaim_or_delete_identity_retained_by_runtime_f
             });
         }
         metadata::save(&state.data_root, &facts).unwrap();
-        FileRunStore::new(state.data_root.join("runs"))
-            .save(&record)
-            .unwrap();
+        fixtures::create(&state.application, &record);
         let (status, _) = call(app.clone(), "DELETE", "/sessions/retained-runtime", None).await;
         assert_eq!(status, StatusCode::CONFLICT);
         SessionStore::open(state.data_root.join("platform/sessions.sqlite"))
@@ -545,9 +543,7 @@ async fn startup_reconciles_accepted_pilot_run_without_replaying_or_late_deliver
         turn: turn.id.clone(),
     });
     metadata::save(&state.data_root, &facts).unwrap();
-    FileRunStore::new(state.data_root.join("runs"))
-        .save(&record)
-        .unwrap();
+    fixtures::create(&state.application, &record);
     assert!(
         sessions
             .get_turn("local", "pilot-reconcile", &turn.id)
@@ -585,10 +581,11 @@ async fn startup_reconciles_accepted_pilot_run_without_replaying_or_late_deliver
         events
     );
     assert_eq!(
-        FileRunStore::new(state.data_root.join("runs"))
+        fixtures::Reader::new(&state.application)
             .load("pilot-admitted")
             .unwrap()
-            .unwrap(),
+            .unwrap()
+            .record,
         record
     );
     assert!(state.application.active_runs(None).await.is_empty());

@@ -21,7 +21,6 @@ async fn run_plugins_retain_frozen_identity_order_and_node_scope_after_library_d
     }))
     .unwrap();
     let mut record = GraphRunRecord::create_with_id(snapshot, json!({}), "plugin-history").unwrap();
-    record.status = RunStatus::Completed;
     record.plugin_bindings_initialized = true;
     for (id, digest) in [("alpha", "a".repeat(64)), ("beta", "b".repeat(64))] {
         record.plugin_bindings.insert(
@@ -37,8 +36,10 @@ async fn run_plugins_retain_frozen_identity_order_and_node_scope_after_library_d
             },
         );
     }
-    let store = FileRunStore::new(state.data_root.join("runs"));
-    store.save(&record).unwrap();
+    let store = fixtures::Reader::new(&state.application);
+    fixtures::create(&state.application, &record);
+    finish_with_artifacts(&state, &record.run_id).await;
+    let record = fixtures::record(&state.application, &record.run_id);
     metadata::save(
         &state.data_root,
         &RunMetadata::new(
@@ -68,9 +69,9 @@ async fn run_plugins_retain_frozen_identity_order_and_node_scope_after_library_d
     std::fs::create_dir_all(&library).unwrap();
     std::fs::write(library.join("input.txt"), "changed after Run").unwrap();
     std::fs::write(state.bundle_root.join("graph.json"), "{}").unwrap();
-    let app = router(state);
+    let app = router(state.clone());
     let (status, reopened) = call(app, "GET", "/runs/plugin-history", None).await;
     assert_eq!(status, StatusCode::OK, "{reopened}");
     assert_eq!(reopened["plugins"], expected);
-    assert_eq!(store.load(&record.run_id).unwrap().unwrap(), record);
+    assert_eq!(store.load(&record.run_id).unwrap().unwrap().record, record);
 }

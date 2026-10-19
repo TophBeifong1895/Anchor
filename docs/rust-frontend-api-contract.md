@@ -1,6 +1,6 @@
 # Rust Host 与 WebUI API 契约
 
-React/TypeScript WebUI 调用 Rust Host 的资源 API。Host 可直接托管编译 Web bundle；应用服务按 Run 归属调用共享 Runner 或显式 Kernel 探针，持有执行事实，前端负责投影与控制请求。当前证据与待验收项见 [开发台账](pilot-development-plan.md)。
+React/TypeScript WebUI 调用 Rust Host 的资源 API。Host 可直接托管编译 Web bundle；应用服务统一调用共享 Kernel 调度器，持有执行事实，前端负责投影与控制请求。当前证据与待验收项见 [开发台账](pilot-development-plan.md)。
 
 ## Graph、Run 与 Artifact
 
@@ -12,7 +12,7 @@ React/TypeScript WebUI 调用 Rust Host 的资源 API。Host 可直接托管编�
 | `POST /graph-validation` | `{definition:{...}}` 校验而不保存/执行；无效输入与语义诊断区分 |
 | `GET /graphs/{graph}/delete-precondition` | 返回 `{graph,precondition}` 与 ETag，`no-store`；交互确认在打开时捕获版本 |
 | `DELETE /graphs/{graph}` | Web/Pilot 确认使用捕获的版本；HTTP 发送 `If-Match: "{precondition}"`，资源变化或重建返回 409。省略头保留显式无条件兼容语义；活动/可继续 Run、定义或未结算调用引用仍阻止删除，只清本 Graph 数据 |
-| `POST /trigger` | `{graph,input?,execution?}` 接纳为 `{run,graph}`，busy 冲突；execution 缺省或 `legacy` 使用旧路径，`kernel_probe` 显式选择串行探针，其他值/类型返回400；不接受调用方绝对路径 |
+| `POST /trigger` | `{graph,input?}` 接纳为 `{run,graph}`，busy 冲突；所有新 Run 走 Kernel，携带已移除的 `execution` 字段返回400；不接受调用方绝对路径 |
 | `GET /runs`、`GET /runs/{run}` | 状态、路径/轮次、trace、节点、调用、Plugin 与触发来源 |
 | `POST /runs/{run}/pause\|stop\|resume` | pause 等当前节点提交后在下一派发边界等待人；stop 立即提交停止并取消 worker；返回实际 operation，保留 snapshot/input/身份 |
 | `GET /runs/{run}/files/{node}`、`.../{path}` | 不可变 Artifact 文件、预览/下载；拒绝 host-path 越权 |
@@ -21,15 +21,17 @@ React/TypeScript WebUI 调用 Rust Host 的资源 API。Host 可直接托管编�
 
 `GET/PUT /graphs/{graph}` 的 `plugin_activation: {mode,graph_digest}` 表示配置生效规则：`next_turn` 为常驻助手，`new_run` 为普通 Graph，不表示外部插件已可用。`GET /channel-sessions/{session}/assistant` 另投影 `plugin_update: {state,message?}`，状态为 `current/pending/restart_required/unavailable`；未知或读取失败不能显示为已生效。Web 在保存后提示下一条消息生效，活动 Graph 打开已有运行，渠道 Graph 打开助手管理，避免重复 trigger。
 
-HTTP DTO 是产品投影，不直接输出执行器私有记录。未知结束时间、exit status 或来源必须保持未知；下游失败不能改变上游已提交事实。文件复制/迁移可能改变基于 mtime 的历史时间精度。
+HTTP DTO 是产品投影，不直接输出执行器私有记录。未知结束时间、exit status 或来源必须保持未知；下游失败不能改变上游已提交事实。更新时间来自 Host 对已接受提交的独立观察，不读取文件 mtime。
 
-本分支 M1 的 Run 列表、详情、时间线、子调用及 Pilot Run 查询共用 `projection: {phase,waiting_for?,outcome?,reason,active,actions:{pause,stop,resume,abandon},updated}`。phase 为 executing / waiting / settled；waiting 才含 human / child / effect，settled 才含 done / failed / escalated / unknown / aborted。旧顶层 status、state.status 和 control_requested、投影 terminal/quiescent/needs_attention 均退出对外 Run 契约；Session Turn、投递、监听与节点结果的状态仍属各自事实。
+Run 列表、详情、时间线、子调用及 Pilot Run 查询共用 `projection: {phase,waiting_for?,outcome?,reason,active,actions:{pause,stop,resume,abandon},updated}`。phase 为 executing / waiting / settled；waiting 才含 human / child / effect，settled 才含 done / failed / escalated / unknown / aborted。旧顶层 status、state.status 和 control_requested、投影 terminal/quiescent/needs_attention 均退出对外 Run 契约；Session Turn、投递、监听与节点结果的状态仍属各自事实。
 
-基础动作只由 Phase 和 worker 派生：Executing 且有 worker 可 pause，执行中可 stop，未结算可 abandon，无 worker 的 Executing 或 Waiting(Human) 可 resume。Session/身份/当前助手/被取代会话条件在边界收窄；写入仍执行现有授权、scope、lease 和控制守卫。旧 BudgetStopped 等实际写入拒绝仍存在，不能把新读取动作当成写入已迁移。Web 直接使用服务端 actions；缺少投影时显示不可用。
+基础动作只由 Phase 和 worker 派生：Executing 且有 worker 可 pause，执行中可 stop，未结算可 abandon，无 worker 的 Executing 或 Waiting(Human) 可 resume。Session/身份/当前助手/被取代会话条件在边界收窄；写入仍执行现有授权、scope、lease 和控制守卫。未知效果尚待核查时不提供普通 resume；未结算退役实例仍可 abandon。Web 直接使用服务端 actions；缺少投影时显示不可用。
 
-`kernel_probe` 持久权威为 Kernel FileStore；内部兼容 GraphRunRecord 不回写。updated 来自 Host 的独立观察文件，无观察为 null；旧 Run 仍读取 FileRunStore mtime。时间不参与控制。stop 接受后进入等待并取消 worker，排空前不能 resume；无 worker 的 Executing 以 active=false 表示可接续。HTTP pause 和 Pilot run_pause 独立传入 pause，返回 operation=pause；旧 Run 保持旧 Runner 边界暂停。Kernel Run 将持久宿主意图交给调度边界：先提交当前节点结果与成本，再以 Human stop、reason=paused 进入 waiting/human；当前节点不取消，最终节点已结算时保留结算。重启先核对执行端口已有完成事实，再消费暂停意图，不重放未知效果。Session call 仍拒绝通用 pause/resume；暂停或预算保留中的 conversation 即使 worker 已排空，也仍占有当前轮，须显式 stop 或结算后才能交接或删除。旧 attempt recovery decision 和 Kernel Run/所属 Graph 删除仍具名拒绝，未扩展非串行支持。
+所有 Run 的持久权威为 Kernel FileStore。updated 来自 Host 的独立观察文件，无观察为 null，不参与控制。stop 接受后进入 waiting/human 并取消 worker，排空前不能 resume；无 worker 的 Executing 可接续。HTTP pause 与 Pilot run_pause 返回 operation=pause：持久宿主意图交给调度边界，当前节点结果与成本先提交，再以 Human stop、reason=paused 等待；不取消当前节点，最终节点已结算时保留结算。重启先核对端口已有完成事实，不重放未知效果。
 
-R2 的暂停别名决定已由 [M1 任务书](constitution-migration-task.md#1-m1完成-r2对外状态词汇) 纠正，S25 作废；其余 S19–S24、S26 保持待批。M1 的本地验证见 [验收证据](../experiments/constitution-host-preflight/m1/verification.md)。真实 Goose/Provider 与部署未新增验收。
+Session Call 拒绝通用 pause/resume；未绑定的排队调用不在启动时自动执行。暂停或预算保留中的 conversation 仍占有当前轮，须显式 stop 或结算后才能交接。未知效果必须先持久化人工观察，再 resume 或 abandon；已放弃后的历史观察仍保留，但不阻止新轮次。Run/Graph 删除继续受 Session、调用引用、worker 和相位约束。并行分支 Op.call 属于 Host 准入拒绝的组合。
+
+旧 `<state>/runs/*.json` 与旧 GraphRunRecord 格式不读取、不兼容，返回具名错误。Anchor 尚未投入生产，不提供离线迁移工具；本地状态清理范围见 M3 交回。已批准 S19–S24、S26 的相位与未知效果语义继续有效；W4、真实模型 Provider 与部署仍未验。
 
 Run 详情另返回 `definition: {entry,nodes,edges,ops}`，仅来自该 Run 的冻结 snapshot，包含已展开的 inline 模块。它是只读展示拓扑，不含作者 layout、脚本、指令、输入及 host 参数，不能当作完整可重运行的作者定义；当前 Graph 的修改、损坏、移除或未保存草稿均不改变它。Run 文件与 Pilot 附件统一通过鉴权 Blob 下载并显示失败反馈。
 

@@ -98,25 +98,27 @@ async fn kernel_restart_dispatches_detach_child_only_with_staged_call_inputs() {
         .await
         .unwrap();
     for _ in 0..200 {
-        if state
-            .application
-            .load_run(child_id)
+        if fixtures::Reader::new(&state.application)
+            .load(child_id)
             .unwrap()
-            .is_some_and(|record| record.status == RunStatus::Completed)
+            .is_some_and(|record| record.has_succeeded())
         {
             break;
         }
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
     }
-    let child = state.application.load_run(child_id).unwrap().unwrap();
+    let child = fixtures::Reader::new(&state.application)
+        .load(child_id)
+        .unwrap()
+        .unwrap();
     assert!(state.application.kernel_owner(child_id).unwrap().is_some());
     assert!(
-        FileRunStore::new(state.data_root.join("runs"))
+        fixtures::Reader::new(&state.application)
             .load(child_id)
             .unwrap()
-            .is_none()
+            .is_some()
     );
-    assert_eq!(child.status, RunStatus::Completed, "{:?}", child.error);
+    assert!(child.has_succeeded(), "{:?}", child.error);
     assert_eq!(
         child.results["answer"][0].completion.submission.trim(),
         "parent-report"
@@ -214,7 +216,10 @@ async fn kernel_restart_parks_started_detach_child_without_replaying_effects() {
     })
     .await
     .unwrap();
-    let child = state.application.load_run(child_id).unwrap().unwrap();
+    let child = fixtures::Reader::new(&state.application)
+        .load(child_id)
+        .unwrap()
+        .unwrap();
     assert!(child.results.is_empty());
     assert_eq!(
         std::fs::read_to_string(&effect).unwrap(),

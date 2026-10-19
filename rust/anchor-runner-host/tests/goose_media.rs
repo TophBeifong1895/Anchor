@@ -557,7 +557,7 @@ fn native_goose_mixed_media_preserves_blocks_vision_wire_receipt_and_artifacts()
         .with_extra_environment([("ANCHOR_NODE_TOOL_DISCLOSURE", "1")]);
     let binding = install_plugin(&host, &media);
     let response = host.run(&provider);
-    assert_eq!(response["status"], "completed", "{response}");
+    assert_eq!(response["projection"]["outcome"], "done", "{response}");
     provider.assert_consumed();
     let requests = provider.requests();
     assert_eq!(requests.len(), 4);
@@ -618,7 +618,7 @@ fn native_goose_mixed_media_preserves_blocks_vision_wire_receipt_and_artifacts()
     assert!(snapshot["tool_lists"].as_u64().unwrap() > 0);
     assert_eq!(snapshot["calls"].as_array().unwrap().len(), 1);
     assert_eq!(snapshot["effects"].as_array().unwrap().len(), 1);
-    assert_eq!(host.run(&provider)["status"], "completed");
+    assert_eq!(host.run(&provider)["projection"]["outcome"], "done");
     assert_eq!(host.record("fixture"), saved);
     assert_eq!(provider.requests(), requests);
     assert_eq!(media.snapshot(), snapshot);
@@ -651,7 +651,14 @@ fn rejected_media(scenario: &str, mode: &str) {
     let host = Host::new(&graph()).native();
     let binding = install_plugin(&host, &media);
     let response = host.run(&provider);
-    assert_eq!(response["status"], "stopped", "{response}");
+    assert_eq!(response["projection"]["phase"], "waiting", "{response}");
+    assert_eq!(response["projection"]["waiting_for"], "human", "{response}");
+    assert!(
+        response["projection"]["reason"]
+            .as_str()
+            .is_some_and(|reason| !reason.is_empty()),
+        "{response}"
+    );
     provider.assert_consumed();
     let requests = provider.requests();
     assert_eq!(requests.len(), 2);

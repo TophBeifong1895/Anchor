@@ -4,7 +4,7 @@ use crate::application::{
     metadata::GraphCallSource,
     session_calls::{SessionCall, SessionContext},
 };
-use anchor_runtime::graph::GraphCallOutcome;
+use anchor_runtime::graph::{GraphCallOutcome, RecoveryAttempt};
 use std::time::Duration;
 
 async fn resolve_session_call(Json(request): Json<Value>) -> Json<Value> {
@@ -63,9 +63,7 @@ fn seed_session_call(state: &ApiState, run: &str, mode: &str, bound: bool) {
         });
     }
     metadata::save(&state.data_root, &child).unwrap();
-    FileRunStore::new(state.data_root.join("runs"))
-        .save(&record)
-        .unwrap();
+    fixtures::create(&state.application, &record);
 }
 
 fn foreground(serial: u64, session: &str, previous: Option<&str>) -> Value {
@@ -92,7 +90,7 @@ async fn execute(
 }
 
 fn record_bytes(state: &ApiState, run: &str) -> Vec<u8> {
-    std::fs::read(state.data_root.join("runs").join(format!("{run}.json"))).unwrap()
+    std::fs::read(kernel_record_path(state, run)).unwrap()
 }
 
 fn metadata_bytes(state: &ApiState, run: &str) -> Vec<u8> {
@@ -110,13 +108,12 @@ async fn completed_session_call(state: &ApiState, app: &Router, run: &str) {
     let (status, accepted) = execute(app, run, "alice", None).await;
     assert_eq!(status, StatusCode::OK, "{accepted}");
     wait_idle(state).await;
-    assert_eq!(
-        FileRunStore::new(state.data_root.join("runs"))
+    assert!(
+        fixtures::Reader::new(&state.application)
             .load(run)
             .unwrap()
             .unwrap()
-            .status,
-        RunStatus::Completed,
+            .has_succeeded()
     );
 }
 
@@ -190,18 +187,16 @@ async fn queued_session_call_allows_foreground_and_is_not_dispatched_at_startup(
     .await;
     assert_eq!(status, StatusCode::ACCEPTED, "{accepted}");
     wait_idle(&state).await;
-    let store = FileRunStore::new(state.data_root.join("runs"));
-    assert_eq!(
-        store.load("queued-session-call").unwrap().unwrap().status,
-        RunStatus::Ready
-    );
-    assert_eq!(
+    let store = fixtures::Reader::new(&state.application);
+    assert!(is_executing(
+        &store.load("queued-session-call").unwrap().unwrap()
+    ));
+    assert!(
         store
             .load(body["run"].as_str().unwrap())
             .unwrap()
             .unwrap()
-            .status,
-        RunStatus::Completed
+            .has_succeeded()
     );
     let context = state
         .application
@@ -214,13 +209,13 @@ async fn queued_session_call_allows_foreground_and_is_not_dispatched_at_startup(
 
 #[tokio::test]
 async fn bound_session_call_yields_and_continues_same_run_after_foreground_and_restart() {
-    let (root, state) = fixture();
+    let (root, mut state) = fixture();
     let _env = PROCESS_ENV.lock().await;
     set_host_env(root.path(), &state.data_root);
     let run = "bound-session-call";
     // This is the durable boundary after binding and before dispatch on a prior host.
     seed_session_call(&state, run, "wait", true);
-    let frozen = FileRunStore::new(state.data_root.join("runs"))
+    let frozen = fixtures::Reader::new(&state.application)
         .load(run)
         .unwrap()
         .unwrap();
@@ -233,32 +228,31 @@ async fn bound_session_call_yields_and_continues_same_run_after_foreground_and_r
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{yielded}");
-    let stopped = FileRunStore::new(state.data_root.join("runs"))
+    let stopped = fixtures::Reader::new(&state.application)
         .load(run)
         .unwrap()
         .unwrap();
-    assert_eq!(stopped.status, RunStatus::Stopped);
+    assert!(stopped.waits_reason("stopped"));
     assert_eq!(stopped.input, frozen.input);
     let next = foreground(120, "alice", Some(run));
     let (status, accepted) = call(app, "POST", "/conversation-runs", Some(&next.to_string())).await;
     assert_eq!(status, StatusCode::ACCEPTED, "{accepted}");
     wait_idle(&state).await;
 
-    let mut restarted = state.clone();
-    restarted.application =
-        RunApplication::new(state.data_root.clone(), state.catalog_root.clone())
-            .with_configured_graph("fixture".into(), state.bundle_root.clone());
+    state.application = RunApplication::new(state.data_root.clone(), state.catalog_root.clone())
+        .with_configured_graph("fixture".into(), state.bundle_root.clone());
+    let restarted = state.clone();
     let app = router(restarted.clone());
     let (status, rejected) = execute(&app, run, "alice", Some(next["run"].as_str().unwrap())).await;
     assert_eq!(status, StatusCode::CONFLICT, "{rejected}");
     let (status, accepted) = execute(&app, run, "alice", None).await;
     assert_eq!(status, StatusCode::OK, "{accepted}");
     wait_idle(&restarted).await;
-    let resumed = FileRunStore::new(state.data_root.join("runs"))
+    let resumed = fixtures::Reader::new(&state.application)
         .load(run)
         .unwrap()
         .unwrap();
-    assert_eq!(resumed.status, RunStatus::Completed, "{resumed:?}");
+    assert!(resumed.has_succeeded(), "{resumed:?}");
     assert_eq!(resumed.run_id, run);
     assert_eq!(resumed.snapshot, frozen.snapshot);
     assert_eq!(resumed.input, frozen.input);
@@ -289,15 +283,15 @@ async fn active_session_call_yield_releases_execution_without_settling_delivery(
     assert_eq!(status, StatusCode::OK, "{accepted}");
     tokio::time::timeout(Duration::from_secs(5), async {
         loop {
-            let record = FileRunStore::new(state.data_root.join("runs"))
+            let record = fixtures::Reader::new(&state.application)
                 .load(run)
                 .unwrap()
                 .unwrap();
             assert!(
-                !matches!(record.status, RunStatus::Failed | RunStatus::Completed),
+                !(is_failed(&record) || record.has_succeeded()),
                 "{record:?}"
             );
-            if let Some(cursor) = record.cursor.as_ref() {
+            if let Some(cursor) = record.view.dispatches().first() {
                 let workspace = HostArtifacts::new(
                     state.data_root.join("artifacts"),
                     state.workspace_root.clone(),
@@ -322,12 +316,12 @@ async fn active_session_call_yield_releases_execution_without_settling_delivery(
     .await;
     assert_eq!(status, StatusCode::OK, "{yielded}");
     wait_idle(&state).await;
-    let record = FileRunStore::new(state.data_root.join("runs"))
+    let record = fixtures::Reader::new(&state.application)
         .load(run)
         .unwrap()
         .unwrap();
-    assert_eq!(record.status, RunStatus::Stopped);
-    assert!(record.cursor.is_some());
+    assert!(record.waits_reason("stopped"));
+    assert!(!record.view.dispatches().is_empty());
     assert_eq!(
         state
             .application
@@ -346,11 +340,11 @@ async fn active_session_call_yield_releases_execution_without_settling_delivery(
     tokio::time::timeout(Duration::from_secs(5), async {
         loop {
             let next_run = next["run"].as_str().unwrap();
-            let record = FileRunStore::new(state.data_root.join("runs"))
+            let record = fixtures::Reader::new(&state.application)
                 .load(next_run)
                 .unwrap()
                 .unwrap();
-            if let Some(cursor) = record.cursor.as_ref() {
+            if let Some(cursor) = record.view.dispatches().first() {
                 let workspace = HostArtifacts::new(
                     state.data_root.join("artifacts"),
                     state.workspace_root.clone(),
@@ -363,7 +357,7 @@ async fn active_session_call_yield_releases_execution_without_settling_delivery(
                 }
             }
             assert!(
-                !matches!(record.status, RunStatus::Failed | RunStatus::Completed),
+                !(is_failed(&record) || record.has_succeeded()),
                 "{record:?}"
             );
             tokio::time::sleep(Duration::from_millis(10)).await;
@@ -373,7 +367,7 @@ async fn active_session_call_yield_releases_execution_without_settling_delivery(
     .expect("the foreground Op did not reach its local fixture gate");
     wait_idle(&state).await;
     assert_eq!(
-        FileRunStore::new(state.data_root.join("runs"))
+        fixtures::Reader::new(&state.application)
             .load(run)
             .unwrap()
             .unwrap(),
@@ -497,14 +491,14 @@ async fn completed_pending_wait_child_recovers_delivery_and_parent_after_restart
     let parent = accepted["run"].as_str().unwrap().to_owned();
     tokio::time::timeout(Duration::from_secs(5), async {
         loop {
-            let record = FileRunStore::new(state.data_root.join("runs"))
+            let record = fixtures::Reader::new(&state.application)
                 .load(&parent)
                 .unwrap()
                 .unwrap();
-            if record.status == RunStatus::WaitingCall {
+            if record.waits_for_children() {
                 break;
             }
-            assert_ne!(record.status, RunStatus::Failed, "{record:?}");
+            assert!(!is_failed(&record), "{record:?}");
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
     })
@@ -517,13 +511,12 @@ async fn completed_pending_wait_child_recovers_delivery_and_parent_after_restart
     let (status, admitted) = execute(&app, &child, "alice", None).await;
     assert_eq!(status, StatusCode::OK, "{admitted}");
     wait_idle(&state).await;
-    assert_eq!(
-        FileRunStore::new(state.data_root.join("runs"))
+    assert!(
+        fixtures::Reader::new(&state.application)
             .load(&parent)
             .unwrap()
             .unwrap()
-            .status,
-        RunStatus::WaitingCall
+            .waits_for_children()
     );
     let child_record = record_bytes(&state, &child);
     let child_metadata = metadata_bytes(&state, &child);
@@ -539,6 +532,7 @@ async fn completed_pending_wait_child_recovers_delivery_and_parent_after_restart
         "pending"
     );
 
+    drop(app);
     state.application = RunApplication::new(state.data_root.clone(), state.catalog_root.clone())
         .with_configured_graph("fixture".into(), state.bundle_root.clone());
     let restarted_app = router(state.clone());
@@ -561,13 +555,12 @@ async fn completed_pending_wait_child_recovers_delivery_and_parent_after_restart
     assert_eq!(child_projection["session_call"]["status"], "pending");
     assert_eq!(record_bytes(&state, &child), child_record);
     assert_eq!(metadata_bytes(&state, &child), child_metadata);
-    assert_eq!(
-        FileRunStore::new(state.data_root.join("runs"))
+    assert!(
+        fixtures::Reader::new(&state.application)
             .load(&parent)
             .unwrap()
             .unwrap()
-            .status,
-        RunStatus::WaitingCall
+            .waits_for_children()
     );
 
     let (status, readmitted) = execute(&restarted_app, &child, "alice", None).await;
@@ -588,25 +581,25 @@ async fn completed_pending_wait_child_recovers_delivery_and_parent_after_restart
     }
     tokio::time::timeout(Duration::from_secs(5), async {
         loop {
-            let record = FileRunStore::new(state.data_root.join("runs"))
+            let record = fixtures::Reader::new(&state.application)
                 .load(&parent)
                 .unwrap()
                 .unwrap();
-            if record.status == RunStatus::Completed {
+            if record.has_succeeded() {
                 break record;
             }
-            assert_ne!(record.status, RunStatus::Failed, "{record:?}");
+            assert!(!is_failed(&record), "{record:?}");
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
     })
     .await
     .expect("settled Session child did not resume its waiting parent");
     wait_idle(&state).await;
-    let child_record_after = FileRunStore::new(state.data_root.join("runs"))
+    let child_record_after = fixtures::Reader::new(&state.application)
         .load(&child)
         .unwrap()
         .unwrap();
-    assert_eq!(child_record_after.status, RunStatus::Completed);
+    assert!(child_record_after.has_succeeded());
     assert_eq!(child_record_after.passes["work"], 1);
     assert_eq!(child_record_after.results["work"].len(), 1);
     assert_eq!(
@@ -620,7 +613,7 @@ async fn completed_pending_wait_child_recovers_delivery_and_parent_after_restart
             .status,
         "delivered"
     );
-    let parent_record = FileRunStore::new(state.data_root.join("runs"))
+    let parent_record = fixtures::Reader::new(&state.application)
         .load(&parent)
         .unwrap()
         .unwrap();
@@ -669,7 +662,26 @@ async fn stopping_completed_pending_session_call_preserves_completed_run() {
 async fn generic_session_resume_pause_and_recovery_cannot_bypass_host_arbitration() {
     let (_root, state) = fixture();
     let run = "session-controls";
-    seed_session_call(&state, run, "wait", false);
+    write_graph_bundle(
+        &state.bundle_root,
+        &json!({
+            "entry":"work","agents":{"worker":{"model":"fixture"}},
+            "nodes":[{"id":"work","agent":"worker"}],"edges":[]
+        }),
+    )
+    .unwrap();
+    seed_session_call(&state, run, "wait", true);
+    fixtures::recovery(
+        &state.application,
+        run,
+        "work",
+        vec![RecoveryAttempt {
+            attempt_id: 17,
+            step: 0,
+            tool: "anchor_run".into(),
+            started_at: "unknown".into(),
+        }],
+    );
     let original_record = record_bytes(&state, run);
     let original_metadata = metadata_bytes(&state, run);
     let app = router(state.clone());
@@ -678,7 +690,13 @@ async fn generic_session_resume_pause_and_recovery_cannot_bypass_host_arbitratio
         ("pause", None),
         (
             "recovery",
-            Some(r#"{"node_id":"work","invocation":1,"attempt_id":1,"decision":"retry"}"#),
+            Some(r#"{"node_id":"work","invocation":1,"attempt_id":17,"decision":"retry"}"#),
+        ),
+        (
+            "recovery",
+            Some(
+                r#"{"node_id":"work","invocation":1,"attempt_id":17,"decision":"completed","observation":"Inspect the existing effect before continuing"}"#,
+            ),
         ),
     ] {
         let (status, rejected) = call(
@@ -693,6 +711,148 @@ async fn generic_session_resume_pause_and_recovery_cannot_bypass_host_arbitratio
         assert_eq!(metadata_bytes(&state, run), original_metadata);
         assert!(state.application.active_runs(None).await.is_empty());
     }
+}
+
+#[tokio::test]
+async fn session_recovery_native_persistence_failure_keeps_attempt_pending_without_dispatch() {
+    let (root, state) = fixture();
+    let _env = PROCESS_ENV.lock().await;
+    struct Restore(Vec<(&'static str, Option<std::ffi::OsString>)>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            for (name, value) in &self.0 {
+                unsafe {
+                    match value {
+                        Some(value) => env::set_var(name, value),
+                        None => env::remove_var(name),
+                    }
+                }
+            }
+        }
+    }
+    let names = [
+        "ANCHOR_RUNNER_STATE_ROOT",
+        "ANCHOR_RUNNER_WORKSPACE_ROOT",
+        "ANCHOR_RUNNER_ALLOWED_COMMANDS",
+        "ANCHOR_RUNNER_CATALOG_ROOT",
+        "ANCHOR_RUNNER_AGENT_RUNTIME",
+        "ANCHOR_GOOSE_BINARY",
+        "ANCHOR_GOOSE_BINARY_SHA256",
+        "ANCHOR_GOOSE_LOCAL_NETWORK",
+        "ANCHOR_GOOSE_ALLOW_SHARED_NETWORK",
+        "ANCHOR_MODEL_API_KEY",
+        "ANCHOR_MODEL_URL",
+        "ANCHOR_MODEL_NAME",
+        "ANCHOR_MODEL_DIRECT",
+    ];
+    let _restore = Restore(
+        names
+            .iter()
+            .map(|name| (*name, env::var_os(name)))
+            .collect(),
+    );
+    set_host_env(root.path(), &state.data_root);
+    let binary = root.path().join("unstarted-goose");
+    let bytes = b"This fixture must stop before dispatch";
+    std::fs::write(&binary, bytes).unwrap();
+    let binary_sha256 = format!("{:x}", Sha256::digest(bytes));
+    unsafe {
+        env::set_var("ANCHOR_RUNNER_AGENT_RUNTIME", "goose");
+        env::set_var("ANCHOR_GOOSE_BINARY", &binary);
+        env::set_var("ANCHOR_GOOSE_BINARY_SHA256", &binary_sha256);
+        env::set_var("ANCHOR_GOOSE_LOCAL_NETWORK", "0");
+        env::set_var("ANCHOR_GOOSE_ALLOW_SHARED_NETWORK", "1");
+        env::set_var("ANCHOR_MODEL_DIRECT", "0");
+    }
+    crate::model_configuration::ModelConfiguration::from_env(&state.data_root)
+        .unwrap()
+        .save(
+            serde_json::from_value(json!({
+                "endpoint":"http://127.0.0.1:1/v1","wire_api":"chat","model":"fixture",
+                "api_key":{"action":"set","value":"unstarted-fixture-only"}
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+    write_graph_bundle(
+        &state.bundle_root,
+        &json!({
+            "entry":"work","agents":{"worker":{"model":"fixture"}},
+            "nodes":[{"id":"work","agent":"worker"}],"edges":[]
+        }),
+    )
+    .unwrap();
+    let run = "session-recovery-write-failure";
+    seed_session_call(&state, run, "wait", true);
+    let key = state
+        .application
+        .read_run(run)
+        .unwrap()
+        .unwrap()
+        .dispatches()[0]
+        .key
+        .clone();
+    let observation = json!({
+        "tool":"anchor_run","arguments":{"command":"inspect existing effect"},
+        "native_tool_call":{"session":"native-session","tool_call":"pending-tool"},"result":null
+    });
+    let identity = serde_json::to_vec(&(
+        &key,
+        "anchor_run",
+        &observation["arguments"],
+        &observation["native_tool_call"],
+    ))
+    .unwrap();
+    let digest = Sha256::digest(identity);
+    let attempt_id =
+        (u64::from_be_bytes(digest[..8].try_into().unwrap()) & i64::MAX as u64).max(1) as i64;
+    fixtures::recovery(
+        &state.application,
+        run,
+        "work",
+        vec![RecoveryAttempt {
+            attempt_id,
+            step: 0,
+            tool: "anchor_run".into(),
+            started_at: "unknown".into(),
+        }],
+    );
+    let facts = state.data_root.join("goose-acp");
+    std::fs::create_dir_all(&facts).unwrap();
+    let fact_path = facts.join(format!(
+        "{:x}.json",
+        Sha256::digest(key.durable_key().as_bytes())
+    ));
+    let fact = serde_json::to_vec_pretty(&json!({
+        "version":2,"key":key,"binary_sha256":binary_sha256,"session_id":"native-session",
+        "completion":null,"reason":null,"model_binding":null,"tool_observation":observation
+    }))
+    .unwrap();
+    std::fs::write(&fact_path, &fact).unwrap();
+    // Reading and validating the real native fact succeeds; only its durable
+    // decision write fails when store_fact opens the temporary path.
+    std::fs::create_dir(fact_path.with_extension("tmp")).unwrap();
+    let original_record = record_bytes(&state, run);
+    let original_metadata = metadata_bytes(&state, run);
+    let app = router(state.clone());
+    let (status, failed) = execute(&app, run, "alice", None).await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{failed}");
+    assert!(
+        failed["error"].as_str().unwrap().contains("Is a directory"),
+        "{failed}"
+    );
+    assert_eq!(record_bytes(&state, run), original_record);
+    assert_eq!(metadata_bytes(&state, run), original_metadata);
+    assert_eq!(std::fs::read(fact_path).unwrap(), fact);
+    assert!(
+        state
+            .application
+            .read_run(run)
+            .unwrap()
+            .unwrap()
+            .has_pending_recovery()
+    );
+    assert!(state.application.active_runs(None).await.is_empty());
 }
 
 #[tokio::test]

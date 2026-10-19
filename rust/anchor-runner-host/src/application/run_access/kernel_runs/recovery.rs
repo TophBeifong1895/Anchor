@@ -79,9 +79,6 @@ impl KernelRuns {
         decision: RecoveryDecision,
         persist: impl FnOnce() -> Result<(), GraphError>,
     ) -> Result<bool, ApplicationError> {
-        if decision == RecoveryDecision::Retry {
-            return Err(ApplicationError::Conflict("unknown effects cannot be automatically replayed; inspect and record an observation, or abandon".into()));
-        }
         let active = self.active.lock().unwrap();
         self.ensure_not_deleting(&key.run_id)?;
         let resource = self.load(&key.run_id)?.ok_or(ApplicationError::Missing)?;
@@ -99,6 +96,14 @@ impl KernelRuns {
                 resource.phase() == Some(&Phase::Executing) && !active.contains_key(&key.run_id)
             );
         }
+        if resource.is_settled() {
+            return Err(ApplicationError::Conflict(
+                "settled Run cannot record recovery decisions".into(),
+            ));
+        }
+        if decision == RecoveryDecision::Retry {
+            return Err(ApplicationError::Conflict("unknown effects cannot be automatically replayed; inspect and record an observation, or abandon".into()));
+        }
         if active.contains_key(&key.run_id) {
             return Err(ApplicationError::Conflict(
                 "Kernel execution is still draining".into(),
@@ -115,6 +120,16 @@ impl KernelRuns {
         {
             return Err(ApplicationError::Conflict(
                 "attempt is not pending recovery for this Run".into(),
+            ));
+        }
+        if !record_of(&resource)?
+            .snapshot
+            .nodes
+            .iter()
+            .any(|node| node.id == key.node_id && node.agent.is_some())
+        {
+            return Err(ApplicationError::Conflict(
+                "only an AgentNode can own an io-harness recovery attempt".into(),
             ));
         }
         if let RecoveryDecision::Completed { observation } = &decision

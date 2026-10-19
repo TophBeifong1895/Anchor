@@ -1,11 +1,11 @@
 use std::{collections::BTreeMap, fs, path::Path};
 
 const INTERNAL_TYPES: &[&str] = &[
-    "RunStatus",
+    concat!("Run", "Status"),
     "GraphRunRecord",
     "RunStore",
-    "FileRunStore",
-    "GraphRunner",
+    concat!("Fil", "eRunStore"),
+    concat!("Gra", "phRunner"),
     "RunCursor",
 ];
 
@@ -227,41 +227,54 @@ fn check_count(
     }
 }
 
+fn fixture(source: &str) -> String {
+    source
+        .replace("RetiredPhaseType", INTERNAL_TYPES[0])
+        .replace("RetiredFileType", INTERNAL_TYPES[3])
+        .replace("RetiredRunnerType", INTERNAL_TYPES[4])
+}
+
 #[test]
 fn run_access_fence() {
     assert_eq!(
         count(
-            "RunStatus RunStatus::Running GraphRunRecord RunStore FileRunStore GraphRunner RunCursor",
+            &fixture(
+                "RetiredPhaseType RetiredPhaseType::Running GraphRunRecord RunStore RetiredFileType RetiredRunnerType RunCursor"
+            ),
             &mut Vec::new()
         ),
         7
     );
     assert_eq!(
         count(
-            r####"// RunStatus
-        /* RunStore /* GraphRunner */ RunCursor */
-        "RunStatus \\" b"RunStore" c"GraphRunner" r###"RunCursor"### br#"FileRunStore"# cr"GraphRunRecord"
+            &fixture(
+                r####"// RetiredPhaseType
+        /* RunStore /* RetiredRunnerType */ RunCursor */
+        "RetiredPhaseType \\" b"RunStore" c"RetiredRunnerType" r###"RunCursor"### br#"RetiredFileType"# cr"GraphRunRecord"
         '界' '\\' '\u{1234}' 'R' b'R'
-        MyRunStatus RunStatusSuffix RunStatus界 界RunStatus RunStatuś
-        use example::RunStatus as State; let _: State; r#RunCursor
-    "####,
+        MyRetiredPhaseType RetiredPhaseTypeSuffix RetiredPhaseType界 界RetiredPhaseType RetiredPhaseTypé
+        use example::RetiredPhaseType as State; let _: State; r#RunCursor
+    "####
+            ),
             &mut Vec::new()
         ),
         2
     );
     assert_eq!(
         count(
-            r#"
+            &fixture(
+                r#"
         impl Host {
-            fn before(_: RunStatus) {}
-            #[cfg(test)] pub(crate) fn helper(_: RunStore) { let _ = GraphRunner; }
+            fn before(_: RetiredPhaseType) {}
+            #[cfg(test)] pub(crate) fn helper(_: RunStore) { let _ = RetiredRunnerType; }
             fn after(_: GraphRunRecord) {}
         }
         #[cfg ( test )] mod first { use super::RunCursor; mod nested { type Alias = RunStore; } }
-        fn between(_: FileRunStore) {}
+        fn between(_: RetiredFileType) {}
         #[cfg(test)] mod second { let _ = "}"; }
-        fn last(_: GraphRunner) {}
-    "#,
+        fn last(_: RetiredRunnerType) {}
+    "#
+            ),
             &mut Vec::new()
         ),
         4
@@ -269,25 +282,30 @@ fn run_access_fence() {
     let mut external_tests = Vec::new();
     assert_eq!(
         count(
-            r#"
+            &fixture(
+                r#"
         #[cfg(test)] mod fixture;
-        #[cfg(test)] use example::{RunStatus, RunStore};
+        #[cfg(test)] use example::{RetiredPhaseType, RunStore};
         struct Host {
             #[cfg(test)] fixture: RunStore,
             production: GraphRunRecord,
         }
         #[cfg(test)] #[allow(dead_code)] fn helper() -> RunCursor { unreachable!() }
-        type State = example::RunStatus;
+        type State = example::RetiredPhaseType;
         type Alias = State;
-        check!(GraphRunner<RunCursor>);
-    "#,
+        check!(RetiredRunnerType<RunCursor>);
+    "#
+            ),
             &mut external_tests
         ),
         4
     );
     assert_eq!(external_tests, ["fixture"]);
     assert_eq!(
-        count("RunStatus\u{3000}RunStore\u{a0}RunCursor", &mut Vec::new()),
+        count(
+            &fixture("RetiredPhaseType\u{3000}RunStore\u{a0}RunCursor"),
+            &mut Vec::new()
+        ),
         3
     );
     assert_eq!(

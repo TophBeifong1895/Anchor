@@ -1,10 +1,9 @@
 //! Host catalog, admission and child execution lifecycle ports.
 
 use crate::LoadedGraphBundle;
+use anchor_kernel::Phase;
 use anchor_runtime::Cancellation;
-use anchor_runtime::graph::{
-    CallIdentity, GraphCallOutcome, GraphError, GraphSnapshot, RunLease, RunStatus,
-};
+use anchor_runtime::graph::{CallIdentity, GraphCallOutcome, GraphError, GraphSnapshot, RunLease};
 use serde_json::Value;
 use std::{future::Future, pin::Pin};
 
@@ -132,7 +131,7 @@ pub trait GraphCatalog: Send + Sync {
         &'a self,
         _run_id: &'a str,
         _graph: &'a str,
-        _status: RunStatus,
+        _phase: Phase,
     ) -> Pin<Box<dyn Future<Output = Result<(), GraphError>> + Send + 'a>> {
         Box::pin(async { Ok(()) })
     }
@@ -186,14 +185,10 @@ impl RunLease for NoopLease {}
 #[derive(Clone)]
 pub struct ChildRunControl {
     pub cancellation: Cancellation,
-    pub pause: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl ChildRunControl {
     pub fn linked_to_parent(cancellation: Cancellation) -> Self {
-        Self {
-            cancellation,
-            pause: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
-        }
+        Self { cancellation }
     }
 }

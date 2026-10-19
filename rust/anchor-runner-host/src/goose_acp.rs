@@ -110,6 +110,24 @@ fn read_fact(path: &Path) -> Result<Option<Fact>, GraphError> {
         .map_err(|error| GraphError::CorruptRun(error.to_string()))
 }
 
+/// Read the durable execution claim without preparing a provider or loading a
+/// native Session. Retention must also cover interrupted, uncommitted history.
+pub(crate) fn has_invocation_fact(state: &Path, key: &InvocationKey) -> Result<bool, GraphError> {
+    let stem = GooseNodePort::stem(key);
+    let mut started = false;
+    for (directory, version) in [("goose-acp", 2), ("goose-acp-spike", 1)] {
+        if let Some(fact) = read_fact(&state.join(directory).join(format!("{stem}.json")))? {
+            if fact.version != version || fact.key != *key {
+                return Err(GraphError::CorruptRun(
+                    "Goose invocation identity changed".into(),
+                ));
+            }
+            started = true;
+        }
+    }
+    Ok(started)
+}
+
 struct CancelTools(Cancellation);
 
 impl Drop for CancelTools {

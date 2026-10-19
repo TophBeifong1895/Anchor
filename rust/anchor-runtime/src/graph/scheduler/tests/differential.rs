@@ -1,7 +1,7 @@
 //! Exercise the production scheduler with exactly the legacy fixture ports.
 //! The existing failure checker keeps all three S18 invariants unchanged.
 use super::*;
-use crate::graph::test_support::snapshots::{FrozenOutcome, Population, Snapshots};
+use crate::graph::test_support::snapshots::{FrozenOutcome, FrozenStatus, Population, Snapshots};
 use crate::graph::{test_support::*, validator::differential::check_failed_run};
 
 async fn compare(
@@ -21,8 +21,7 @@ async fn compare(
             return None;
         }
     };
-    let (old_trace, old) = run_old(record.clone(), seed, inject_failures).await;
-    frozen.assert_old(&old_trace, &old);
+    let (old_trace, old) = frozen.accepted();
     let mut kernel = Kernel::new(MemoryStore::default(), Box::new(AuthorityFixture)).unwrap();
     kernel
         .install(validator::GRAPH_VALIDATOR, Arc::new(GraphValidator))
@@ -62,28 +61,32 @@ async fn compare(
     } else {
         BTreeMap::new()
     };
-    let (frozen_trace, frozen_record) = frozen.accepted();
-    for (mut old_trace, old) in [(old_trace, &old), (frozen_trace.clone(), &frozen_record)] {
+    {
+        let mut old_trace = old_trace.clone();
         old_trace.sort();
         new_trace.sort();
         assert_eq!(
             old_trace, new_trace,
             "dispatch multiset seed {seed}, failures {inject_failures}"
         );
-        if old.status == RunStatus::Failed {
-            check_failed_run(seed, old, &new, &failures, &history);
+        if old.status == FrozenStatus::Failed {
+            check_failed_run(seed, &old, &new, &failures, &history);
         } else {
-            assert_eq!(facts(old), facts(&new), "Graph facts seed {seed}");
+            assert_eq!(
+                facts(&old.graph_record()),
+                facts(&new),
+                "Graph facts seed {seed}"
+            );
             assert!(
                 matches!(
                     (old.status, resource.phase()),
                     (
-                        RunStatus::Completed,
+                        FrozenStatus::Completed,
                         Some(Phase::Settled {
                             result: Outcome::Done
                         })
                     ) | (
-                        RunStatus::Stopped,
+                        FrozenStatus::Stopped,
                         Some(Phase::Settled {
                             result: Outcome::Escalated { .. }
                         })
@@ -206,9 +209,8 @@ async fn production_scheduler_matches_old_runner_on_five_thousand_call_seeds() {
             format!("scheduler-calls-{seed}"),
         )
         .unwrap();
-        let (old_trace, old) = run_old(record.clone(), seed, false).await;
         let frozen_case = frozen.next(seed);
-        frozen_case.scheduler.assert_old(&old_trace, &old);
+        let (old_trace, old) = frozen_case.scheduler.accepted();
         let mut kernel = Kernel::new(MemoryStore::default(), Box::new(AuthorityFixture)).unwrap();
         kernel
             .install(validator::GRAPH_VALIDATOR, Arc::new(GraphValidator))
@@ -236,27 +238,31 @@ async fn production_scheduler_matches_old_runner_on_five_thousand_call_seeds() {
         let resource = scheduler.run(&id).await.unwrap();
         let new = record_of(&resource).unwrap();
         let mut new_trace = nodes.trace.lock().unwrap().clone();
-        let (frozen_trace, frozen_record) = frozen_case.scheduler.accepted();
-        for (mut old_trace, old) in [(old_trace, &old), (frozen_trace.clone(), &frozen_record)] {
+        {
+            let mut old_trace = old_trace.clone();
             old_trace.sort();
             new_trace.sort();
             assert_eq!(old_trace, new_trace, "call dispatch multiset seed {seed}");
-            assert_eq!(facts(old), facts(&new), "call Graph facts seed {seed}");
+            assert_eq!(
+                facts(&old.graph_record()),
+                facts(&new),
+                "call Graph facts seed {seed}"
+            );
             assert!(
                 matches!(
                     (old.status, resource.phase()),
                     (
-                        RunStatus::Completed,
+                        FrozenStatus::Completed,
                         Some(Phase::Settled {
                             result: Outcome::Done
                         })
                     ) | (
-                        RunStatus::Stopped,
+                        FrozenStatus::Stopped,
                         Some(Phase::Settled {
                             result: Outcome::Escalated { .. }
                         })
                     ) | (
-                        RunStatus::Failed,
+                        FrozenStatus::Failed,
                         Some(Phase::Settled {
                             result: Outcome::Failed { .. } | Outcome::Unknown { .. }
                         })

@@ -200,7 +200,7 @@ fn native_goose_reads_plugin_skill_and_calls_rust_stdio_mcp() {
     let plugin = install_plugin(&host, &business);
     let original_skill = fs::read(plugin.join("skills/wecom/SKILL.md")).unwrap();
     let response = host.run(&provider);
-    assert_eq!(response["status"], "completed", "{response}");
+    assert_eq!(response["projection"]["outcome"], "done", "{response}");
     provider.assert_consumed();
     let saved = host.record("fixture");
     assert_eq!(
@@ -297,7 +297,7 @@ fn native_goose_reaches_a_hidden_plugin_tool_through_disclosure() {
         .with_extra_environment([("ANCHOR_NODE_TOOL_DISCLOSURE", "1")]);
     install_plugin(&host, &business);
     let response = host.run(&provider);
-    assert_eq!(response["status"], "completed", "{response}");
+    assert_eq!(response["projection"]["outcome"], "done", "{response}");
     provider.assert_consumed();
 
     let mut advertised = provider.requests()[0]["tools"]

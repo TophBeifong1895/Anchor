@@ -1,9 +1,8 @@
 //! Deterministic Graph fixtures shared by Runtime differential and Host probe tests.
 use super::*;
-use std::sync::{Arc, Mutex};
+use std::sync::Mutex;
 
-#[cfg(test)]
-pub(crate) mod snapshots;
+pub mod snapshots;
 
 // ---------------------------------------------------------------------------
 // Deterministic randomness
@@ -359,32 +358,8 @@ pub fn random_call_graph(seed: u64) -> GraphSnapshot {
 }
 
 // ---------------------------------------------------------------------------
-// Old side: GraphRunner with scripted ports
+// Deterministic ports shared by the Kernel comparisons
 // ---------------------------------------------------------------------------
-
-#[derive(Default)]
-pub struct MemStore {
-    record: Mutex<Option<GraphRunRecord>>,
-}
-pub struct Lease;
-impl RunLease for Lease {}
-impl RunStore for MemStore {
-    fn load(&self, id: &str) -> Result<Option<GraphRunRecord>, GraphError> {
-        Ok(self
-            .record
-            .lock()
-            .unwrap()
-            .clone()
-            .filter(|r| r.run_id == id))
-    }
-    fn save(&self, r: &GraphRunRecord) -> Result<(), GraphError> {
-        *self.record.lock().unwrap() = Some(r.clone());
-        Ok(())
-    }
-    fn acquire_lease(&self, _: &str) -> Result<Box<dyn RunLease>, GraphError> {
-        Ok(Box::new(Lease))
-    }
-}
 
 pub struct Artifacts;
 impl ArtifactPort for Artifacts {
@@ -511,49 +486,6 @@ impl NodeExecutionPort for Scripted {
             }))
         })
     }
-}
-
-pub struct NoControl(crate::Cancellation);
-impl RunControl for NoControl {
-    fn pause_requested(&self) -> bool {
-        false
-    }
-    fn stop_requested(&self) -> bool {
-        false
-    }
-    fn cancellation(&self) -> crate::Cancellation {
-        self.0.clone()
-    }
-}
-
-pub async fn run_old(
-    record: GraphRunRecord,
-    seed: u64,
-    inject_failures: bool,
-) -> (Trace, GraphRunRecord) {
-    let store = MemStore::default();
-    let nodes = Scripted {
-        seed,
-        inject_failures: inject_failures && !record.snapshot.ops.contains_key("callw"),
-        trace: Mutex::default(),
-        calls: ScriptedCalls {
-            seed,
-            ..Default::default()
-        },
-    };
-    let control = NoControl(Arc::new(std::sync::atomic::AtomicBool::new(false)));
-    let mut done = record;
-    // A waiting parent is re-entered by its host once the child settles.
-    for _ in 0..1_000 {
-        done = GraphRunner::new(&store, &Artifacts, &nodes, &control)
-            .run(done)
-            .await
-            .expect("old runner");
-        if done.status != RunStatus::WaitingCall {
-            break;
-        }
-    }
-    (nodes.trace.into_inner().unwrap(), done)
 }
 
 /// (invocation, sequence, route, commit id) of one result.

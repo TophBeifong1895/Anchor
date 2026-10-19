@@ -1,18 +1,12 @@
 use super::*;
-use serde_json;
 
-pub trait RunStore: Send + Sync {
-    fn load(&self, run_id: &str) -> Result<Option<GraphRunRecord>, GraphError>;
-    fn save(&self, record: &GraphRunRecord) -> Result<(), GraphError>;
-    fn acquire_lease(&self, run_id: &str) -> Result<Box<dyn RunLease>, GraphError>;
-}
 pub trait RunLease: Send {}
 
 #[derive(Debug, Clone)]
-pub struct FileRunStore {
+pub struct FileRunLeaseProvider {
     root: PathBuf,
 }
-impl FileRunStore {
+impl FileRunLeaseProvider {
     pub fn new(root: impl Into<PathBuf>) -> Self {
         Self { root: root.into() }
     }
@@ -52,57 +46,8 @@ impl FileRunStore {
         file.sync_all()?;
         Ok(Box::new(FileRunLease { _file: file }))
     }
-    fn path(&self, id: &str) -> Result<PathBuf, GraphError> {
-        validate_component(id)?;
-        Ok(self.root.join(format!("{id}.json")))
-    }
-}
-impl RunStore for FileRunStore {
-    fn load(&self, run_id: &str) -> Result<Option<GraphRunRecord>, GraphError> {
-        let bytes = match fs::read(self.path(run_id)?) {
-            Ok(b) => b,
-            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
-            Err(e) => return Err(e.into()),
-        };
-        let record: GraphRunRecord =
-            serde_json::from_slice(&bytes).map_err(GraphError::RunDecode)?;
-        if record.run_id != run_id {
-            return Err(GraphError::CorruptRun(
-                "run identity or format mismatch".into(),
-            ));
-        }
-        record.validate()?;
-        Ok(Some(record))
-    }
-    fn save(&self, record: &GraphRunRecord) -> Result<(), GraphError> {
-        // The store persists what it is given: stamping `updated` is the writer's
-        // job (the Runner does it in `persist`), so the in-memory record and the
-        // stored record always agree on the mutation time.
-        record.validate()?;
-        let path = self.path(&record.run_id)?;
-        fs::create_dir_all(&self.root)?;
-        let stamp = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos();
-        let tmp = self.root.join(format!(
-            ".{}.{}.{}.tmp",
-            record.run_id,
-            std::process::id(),
-            stamp
-        ));
-        let bytes = serde_json::to_vec(record).map_err(GraphError::RunDecode)?;
-        let mut file = OpenOptions::new().write(true).create_new(true).open(&tmp)?;
-        file.write_all(&bytes)?;
-        file.sync_all()?;
-        if let Err(e) = fs::rename(&tmp, &path) {
-            let _ = fs::remove_file(tmp);
-            return Err(e.into());
-        }
-        fs::File::open(&self.root)?.sync_all()?;
-        Ok(())
-    }
-    fn acquire_lease(&self, run_id: &str) -> Result<Box<dyn RunLease>, GraphError> {
+    /// Hold an exclusive process lease without owning Run persistence.
+    pub fn acquire_lease(&self, run_id: &str) -> Result<Box<dyn RunLease>, GraphError> {
         self.acquire_file_lease(
             run_id,
             anchor_file_lease::FlockOperation::NonBlockingLockExclusive,

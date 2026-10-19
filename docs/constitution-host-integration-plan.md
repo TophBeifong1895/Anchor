@@ -1,10 +1,10 @@
 # 宪法内核接入 Host：临时开发计划
 
-编制日期：2026-10-16。状态：H1、H2.1、P、R、M1、M1.5 与 §10.11 同步已验收；M2 按 §10.12 完成本地实现与验证，见 [M2 交回与边界](../experiments/constitution-host-preflight/m2/completion-verification.md)。并行 Call 复用 Host 既有准入拒绝，不扩展校验器。默认仍用旧 Runner，M3–M5 未开始，由用户决定下一阶段。2026-10-19 用户选择全量迁移，后续按 [迁移任务书](constitution-migration-task.md) 执行；本文 H3–H6 阶段划分已被取代，约束 C1–C6 与 §2 语义仍有效。K0.1 审查见 [结论](../experiments/constitution-host-preflight/k01/review.md)，FileStore 删除与资源租约的 K0.2 追认见 [工作记录](constitution-refactor-log.md#k02filestore-删除与资源租约)。
+编制日期：2026-10-16。当前迁移以 [M1–M5 任务书](constitution-migration-task.md) 为准；本计划的 H3–H6 划分已被取代，约束 C1–C6 与 §2 语义仍有效。
 
-预检阻塞的修订范围已由[审查决定 D1–D5](constitution-preflight-decision.md)明确授权；实现与验收入口见[工作记录](constitution-refactor-log.md#k01内核修订与中断事实)。K0.1 与 H1 已验收；默认 Host 仍使用旧 Runner；显式 `execution=kernel_probe` 的 Run 已走 Kernel FileStore 与多槽位调度器。S18 已批准，H2.1 本地确定性验收完成；P 七类场景、1000 seed 对照、真实 Op.run Host 路径与量化测量已交付，真实 Goose/Provider 未执行。见[H2.1验收与完整Tally](../experiments/constitution-host-preflight/h2/h21-completion.md)、[P验收](../experiments/constitution-host-preflight/p/verification.md)、[测量与未决](../experiments/constitution-host-preflight/p/measurement.md)。
+M1、M1.5、M2 已验收。M3 已先冻结 30,000 例旧执行事实与轨迹，所有新 Run 统一走 KernelScheduler，旧执行器、旧存储与兼容状态桥已删除；C2 16 save / 36 mutation 归零。完整验收仍在收敛，见 [快照](../experiments/constitution-host-preflight/m3/snapshots/README.md)、[C2 去向](../experiments/constitution-host-preflight/m3/c2-destinations.md) 与 [规则及 Session 审计](../experiments/constitution-host-preflight/m3/rules-session-audit.md)。不自动推进 M4/M5；W4、真实模型 Provider 和部署未验。
 
-R0 收口为唯一文件租约类型，已同步 master。R 的 RunView 直接读取 Phase、Graph 进度和宿主观察；更新时间不再依赖 Kernel 文件布局。所选四消费者的生产 RunStatus 引用清零，但包含保留适配的判断点82→90，不能作为全量迁移收益证据。真实Goose/Provider及默认路径切换未新增验收。
+K0.1 审查见 [结论](../experiments/constitution-host-preflight/k01/review.md)；已批准的 K0.2 FileStore 删除与资源租约见 [工作记录](constitution-refactor-log.md#k02filestore-删除与资源租约)。Kernel 自 `0859373` 零 diff。H2.1、P、R 的历史度量不代表当前实现；M3 逐规则审计按独立判断体计数。
 
 - 分支：`constitution-core`；worktree：`/home/mansteinl/code/anchor-constitution-core`
 - 起点 commit：`7c196d8`

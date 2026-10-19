@@ -1,5 +1,4 @@
-//! Explicit Kernel execution path. FileStore is the sole authority for these Runs;
-//! legacy status values are read-only projections for existing consumers.
+//! Kernel Run authority and execution registration.
 use super::{ApplicationError, RunApplication};
 use anchor_kernel::{
     Action, Authority, FileStore, Kernel, Phase, Principal, PrincipalKind, Resource, Store,
@@ -29,10 +28,11 @@ struct KernelExecution {
     cancellation: anchor_runtime::Cancellation,
     pause: tokio::sync::mpsc::UnboundedSender<()>,
     wait_pause: Arc<tokio::sync::Notify>,
+    finished: Arc<tokio::sync::Notify>,
 }
 
-struct ProbeAuthority;
-impl Authority for ProbeAuthority {
+struct RunAuthority;
+impl Authority for RunAuthority {
     fn permits(&self, p: &Principal, action: Action, _: &str) -> bool {
         match (p.id.as_str(), p.kind) {
             (EXECUTOR_ID, PrincipalKind::Agent) => action == Action::Write,
@@ -48,7 +48,7 @@ impl Authority for ProbeAuthority {
 pub(crate) struct KernelRuns {
     pub(crate) kernel: Kernel<FileStore>,
     observations: super::run_observations::RunObservations,
-    active: Mutex<HashMap<String, KernelExecution>>,
+    active: Arc<Mutex<HashMap<String, KernelExecution>>>,
     // Deletion reserves inactive Runs across filesystem cleanup. Registration,
     // creation and controls take active before this mutex.
     deleting: Mutex<BTreeSet<String>>,
@@ -56,30 +56,25 @@ pub(crate) struct KernelRuns {
     _lease: anchor_file_lease::FileLease,
 }
 
-struct ExecutionGuard<'a> {
-    owner: &'a KernelRuns,
+struct ExecutionGuard {
+    active: Arc<Mutex<HashMap<String, KernelExecution>>>,
     id: String,
+    finished: Arc<tokio::sync::Notify>,
 }
-impl Drop for ExecutionGuard<'_> {
+impl Drop for ExecutionGuard {
     fn drop(&mut self) {
-        self.owner.active.lock().unwrap().remove(&self.id);
+        self.active.lock().unwrap().remove(&self.id);
+        self.finished.notify_waiters();
     }
 }
 
+struct RegisteredExecution {
+    guard: ExecutionGuard,
+    requests: tokio::sync::mpsc::UnboundedReceiver<()>,
+    cancellation: anchor_runtime::Cancellation,
+}
+
 impl KernelRuns {
-    pub(crate) fn abandon(
-        &self,
-        run_id: &str,
-        reason: String,
-    ) -> Result<super::super::abandon::AbandonResult, ApplicationError> {
-        self.control(run_id, "abandon", Some(&reason))?;
-        Ok(super::super::abandon::AbandonResult {
-            action: super::super::AbandonAction::Abandoned,
-            status: anchor_runtime::graph::RunStatus::Aborted,
-            reason: Some(reason),
-            requested_at: None,
-        })
-    }
     fn open(root: &Path) -> Result<Self, ApplicationError> {
         std::fs::create_dir_all(root).map_err(super::storage)?;
         let lease = OpenOptions::new()
@@ -94,11 +89,11 @@ impl KernelRuns {
             rustix::fs::FlockOperation::NonBlockingLockExclusive,
         )
         .map_err(|e| {
-            ApplicationError::Conflict(format!("Kernel probe store already has a writer: {e}"))
+            ApplicationError::Conflict(format!("Kernel Run store already has a writer: {e}"))
         })?;
         let mut kernel = Kernel::new(
             FileStore::new(root).map_err(|e| ApplicationError::Storage(e.to_string()))?,
-            Box::new(ProbeAuthority),
+            Box::new(RunAuthority),
         )
         .map_err(kernel_error)?;
         let probe = probe::HostProbe::new(
@@ -111,7 +106,7 @@ impl KernelRuns {
             .map_err(kernel_error)?;
         Ok(Self {
             kernel,
-            active: Mutex::default(),
+            active: Arc::default(),
             deleting: Mutex::default(),
             pause_root: root
                 .parent()
@@ -155,15 +150,59 @@ impl KernelRuns {
     pub(crate) fn active(&self, id: &str) -> bool {
         self.active.lock().unwrap().contains_key(id)
     }
-    pub(crate) async fn drive<A: ArtifactPort + ?Sized, N: NodeExecutionPort + ?Sized>(
+    pub(crate) async fn wait_idle(&self, id: &str) {
+        loop {
+            let Some(finished) = self
+                .active
+                .lock()
+                .unwrap()
+                .get(id)
+                .map(|execution| Arc::clone(&execution.finished))
+            else {
+                return;
+            };
+            let notified = finished.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
+            // Enable before rechecking the same registration, so both a
+            // completed worker and a replacement worker avoid lost wakeups.
+            let same_worker = self
+                .active
+                .lock()
+                .unwrap()
+                .get(id)
+                .is_some_and(|execution| Arc::ptr_eq(&execution.finished, &finished));
+            if same_worker {
+                notified.await;
+            }
+        }
+    }
+    fn ensure_idle(worker: bool) -> Result<(), ApplicationError> {
+        if worker {
+            return Err(ApplicationError::Conflict(
+                "Kernel Run execution is still draining".into(),
+            ));
+        }
+        Ok(())
+    }
+    pub(crate) fn drive<'a, A: ArtifactPort + ?Sized, N: NodeExecutionPort + ?Sized>(
+        &'a self,
+        id: &str,
+        artifacts: &'a A,
+        nodes: &'a N,
+        cancellation: anchor_runtime::Cancellation,
+    ) -> impl std::future::Future<Output = Result<Resource, GraphError>> + 'a {
+        let registration = self.register(id, cancellation);
+        async move { self.drive_registered(registration?, artifacts, nodes).await }
+    }
+    fn register(
         &self,
         id: &str,
-        artifacts: &A,
-        nodes: &N,
         cancellation: anchor_runtime::Cancellation,
-    ) -> Result<Resource, GraphError> {
+    ) -> Result<RegisteredExecution, GraphError> {
         let (pause, requests) = tokio::sync::mpsc::unbounded_channel();
         let wait_pause = Arc::new(tokio::sync::Notify::new());
+        let finished = Arc::new(tokio::sync::Notify::new());
         {
             let mut active = self.active.lock().unwrap();
             if active.contains_key(id) {
@@ -171,8 +210,8 @@ impl KernelRuns {
             }
             self.ensure_not_deleting(id)
                 .map_err(|_| GraphError::RunBusy(id.to_owned()))?;
-            // A worker may have been queued before deletion acquired its
-            // reservation. It must observe absence before executing any slot.
+            // Registration and deletion share this lock. A worker must observe
+            // an existing Run before reserving its execution slot.
             if self
                 .load(id)
                 .map_err(|error| {
@@ -192,13 +231,31 @@ impl KernelRuns {
                     cancellation: cancellation.clone(),
                     pause,
                     wait_pause,
+                    finished: Arc::clone(&finished),
                 },
             );
         }
-        let _guard = ExecutionGuard {
-            owner: self,
-            id: id.to_owned(),
-        };
+        Ok(RegisteredExecution {
+            guard: ExecutionGuard {
+                active: Arc::clone(&self.active),
+                id: id.to_owned(),
+                finished,
+            },
+            requests,
+            cancellation,
+        })
+    }
+    async fn drive_registered<A: ArtifactPort + ?Sized, N: NodeExecutionPort + ?Sized>(
+        &self,
+        registration: RegisteredExecution,
+        artifacts: &A,
+        nodes: &N,
+    ) -> Result<Resource, GraphError> {
+        let RegisteredExecution {
+            guard,
+            requests,
+            cancellation,
+        } = registration;
         let boundary = pause::PauseBoundary::new(self, requests);
         KernelScheduler {
             kernel: &self.kernel,
@@ -208,7 +265,7 @@ impl KernelRuns {
             nodes,
             cancellation,
         }
-        .run(&run_resource_id(id))
+        .run(&run_resource_id(&guard.id))
         .await
     }
     pub(crate) fn control(
@@ -227,14 +284,12 @@ impl KernelRuns {
         }
         let active = self.active.lock().unwrap();
         self.ensure_not_deleting(id)?;
-        if operation == "resume" && active.contains_key(id) {
-            return Err(ApplicationError::Conflict(
-                "Kernel probe execution is still draining".into(),
-            ));
+        if operation == "resume" {
+            Self::ensure_idle(active.contains_key(id))?;
         }
         let resource = self.load(id)?.ok_or(ApplicationError::Missing)?;
         let submission = Submission::new(&resource.id, resource.version, Action::Request)
-            .content(serde_json::json!({"control":operation,"reason":reason.unwrap_or(operation)}));
+            .content(serde_json::json!({"control":operation,"reason":reason.unwrap_or(if operation == "stop" { "stopped" } else { operation })}));
         let verdict = submit_with_retry(
             &self.kernel,
             &Principal::new(OPERATOR_ID, PrincipalKind::Human),
@@ -257,7 +312,9 @@ impl KernelRuns {
         Ok(())
     }
     pub(crate) fn record(resource: &Resource) -> Result<GraphRunRecord, ApplicationError> {
-        super::run_json::record(resource)
+        let record = record_of(resource)?;
+        record.validate()?;
+        Ok(record)
     }
     pub(crate) fn view(
         &self,
@@ -292,7 +349,7 @@ impl RunApplication {
         &self,
         create: bool,
     ) -> Result<Option<Arc<KernelRuns>>, ApplicationError> {
-        let mut cached = self.kernel_probe.lock().unwrap();
+        let mut cached = self.kernel_run_owner.lock().unwrap();
         if cached.is_none() && (create || self.data_root.join("kernel-runs").exists()) {
             *cached = Some(Arc::new(KernelRuns::open(
                 &self.data_root.join("kernel-runs"),
@@ -307,15 +364,14 @@ impl RunApplication {
         if !Self::valid_run_component(id) {
             return Err(ApplicationError::Invalid("invalid Run id".into()));
         }
+        self.reject_legacy_run(id)?;
         let Some(runs) = self.kernel_runs(false)? else {
             return Ok(None);
         };
         if runs.load(id)?.is_none() {
             return Ok(None);
         }
-        if self.store().load(id)?.is_some() {
-            return Err(ApplicationError::Conflict("Run has two authorities".into()));
-        }
+        self.reject_legacy_run(id)?;
         Ok(Some(runs))
     }
     pub(in crate::application::run_access) fn load_run_impl(
@@ -325,7 +381,7 @@ impl RunApplication {
         if let Some(runs) = self.kernel_owner(id)? {
             return runs.load(id)?.as_ref().map(KernelRuns::record).transpose();
         }
-        Ok(self.store().load(id)?)
+        Ok(None)
     }
     #[cfg(not(test))]
     pub(in crate::application::run_access) fn load_run(
@@ -365,16 +421,13 @@ impl RunApplication {
                 .filter(|r| r.validator == GRAPH_VALIDATOR)
             {
                 let id = record_of(&resource)?.run_id;
-                if self.store().load(&id)?.is_some() {
-                    return Err(ApplicationError::Conflict("Run has two authorities".into()));
-                }
+                self.reject_legacy_run(&id)?;
                 records.push((id, KernelRuns::record(&resource)?));
             }
         }
         Ok(records)
     }
 }
-use anchor_runtime::graph::RunStore;
 
 #[cfg(test)]
 mod tests;
@@ -399,20 +452,22 @@ impl RunApplication {
         execution: crate::execution::PreparedExecution,
         control: crate::HostControl,
     ) -> Result<(), ApplicationError> {
-        let runs = self.kernel_runs(true)?.expect("Kernel probe enabled");
+        let executor = self.executor()?.clone();
+        let runs = self.kernel_runs(true)?.expect("Kernel Run enabled");
+        // Reserve the sole worker slot before returning to admission. Moving
+        // its guard into the task also releases an unpolled or aborted worker.
+        let registration = runs.register(&record.run_id, control.cancellation)?;
         let (artifacts, nodes) = execution.kernel_ports(self.clone());
         let application = self.clone();
-        self.executor()?.spawn(async move {
+        executor.spawn(async move {
             let nodes = super::kernel_calls::KernelCallNodes::new(&application, &artifacts, &nodes);
             if let Err(error) = runs
-                .drive(&record.run_id, &artifacts, &nodes, control.cancellation)
+                .drive_registered(registration, &artifacts, &nodes)
                 .await
             {
-                eprintln!("Kernel probe {} suspended: {error}", record.run_id);
+                eprintln!("Kernel Run {} suspended: {error}", record.run_id);
             }
-            if let Err(error) = application
-                .settle_channel_run(&record.run_id, anchor_runtime::graph::RunStatus::Stopped)
-            {
+            if let Err(error) = application.settle_channel_run(&record.run_id) {
                 eprintln!(
                     "Kernel channel {} settlement failed: {error:?}",
                     record.run_id
@@ -444,16 +499,18 @@ impl RunApplication {
         if operation != "resume" {
             return runs.control(id, operation, None);
         }
-        if runs.active(id) {
-            return Err(ApplicationError::Conflict(
-                "Kernel probe execution is still draining".into(),
-            ));
-        }
+        KernelRuns::ensure_idle(runs.active(id))?;
         let resource = runs.load(id)?.ok_or(ApplicationError::Missing)?;
+        // Let Kernel reject a settled control before preparing any execution
+        // resources. Settlement is irreversible even for a retained attempt.
+        if resource.is_settled() {
+            return runs.control(id, "resume", None);
+        }
         let record = KernelRuns::record(&resource)?;
         let metadata = self.metadata(id)?.ok_or(ApplicationError::Missing)?;
-        let active = self.active.lock().await;
+        let active = self.admission.lock().await;
         self.check_execution_scope(&metadata, &active)?;
+        super::validate_control_identity(&record, &metadata)?;
         if !runs.recovery_facts(id)?.0.is_empty() {
             return Err(ApplicationError::Conflict(
                 "record a recovery observation or abandon before resuming an unknown effect".into(),
@@ -465,9 +522,117 @@ impl RunApplication {
         execution
             .bind_local_inputs(&record, &metadata.graph)
             .map_err(ApplicationError::Invalid)?;
-        if resource.phase() != Some(&Phase::Executing) {
+        if matches!(
+            resource.phase(),
+            Some(Phase::Waiting {
+                waiter: anchor_kernel::Waiter::Child { .. }
+            })
+        ) {
+            // Human resume asks the Host to continue the wait closure. Only
+            // observing the bound child can release a Child wait in Kernel.
+            drop(active);
+            for child in super::wait_child_ids(&record) {
+                if let Some(child_view) = self.read_run(&child)?
+                    && !child_view.is_settled()
+                    && !child_view.active()
+                    && !child_view.waits_for_children()
+                {
+                    Box::pin(self.resume(&child)).await?;
+                }
+            }
+        } else if resource.phase() != Some(&Phase::Executing) {
             runs.control(id, "resume", None)?;
         }
         self.spawn_kernel(record, execution, control)
+    }
+}
+
+impl RunApplication {
+    pub(crate) fn dispatch_keys(
+        &self,
+        id: &str,
+    ) -> Result<Vec<anchor_runtime::graph::InvocationKey>, ApplicationError> {
+        let view = self.read_run(id)?.ok_or(ApplicationError::Missing)?;
+        Ok(view
+            .frontier
+            .into_iter()
+            .map(|dispatch| dispatch.key)
+            .collect())
+    }
+
+    pub(crate) fn dispatch_inputs(
+        &self,
+        key: &anchor_runtime::graph::InvocationKey,
+    ) -> Result<Vec<anchor_runtime::graph::CommitRef>, ApplicationError> {
+        let view = self
+            .read_run(&key.run_id)?
+            .ok_or(ApplicationError::Missing)?;
+        view.frontier
+            .into_iter()
+            .find(|dispatch| dispatch.key == *key)
+            .map(|dispatch| dispatch.input_commits)
+            .ok_or_else(|| {
+                ApplicationError::Conflict("invocation is not a current Kernel dispatch".into())
+            })
+    }
+
+    pub(crate) fn predecessor_history_allowed(&self, id: &str) -> Result<bool, ApplicationError> {
+        Ok(self
+            .read_run(id)?
+            .is_some_and(|view| view.has_stopped_execution()))
+    }
+
+    /// The standalone protocol and platform Host share admission and execution.
+    pub(crate) async fn execute_standalone(
+        &self,
+        record: GraphRunRecord,
+        cancellation: anchor_runtime::Cancellation,
+        reference_lease: Option<anchor_library::InstallLease>,
+    ) -> Result<super::RunView<'static>, ApplicationError> {
+        self.reject_legacy_run(&record.run_id)?;
+        let mut control = super::new_control();
+        control.cancellation = cancellation;
+        let prepared = crate::execution::PreparedExecution::prepare_with_catalog(
+            &record,
+            control.clone(),
+            record.plugin_bindings.clone(),
+            self.catalog_root.clone(),
+            self.clone(),
+        )
+        .map_err(ApplicationError::Invalid)?;
+        let owner = self.kernel_runs(true)?.expect("Run store initialized");
+        let should_drive = if let Some(resource) = owner.load(&record.run_id)? {
+            let existing = KernelRuns::record(&resource)?;
+            if existing.snapshot != record.snapshot
+                || existing.input != record.input
+                || existing.graph_digest != record.graph_digest
+            {
+                return Err(ApplicationError::Conflict(
+                    "supplied Run differs from durable admission".into(),
+                ));
+            }
+            resource.phase() == Some(&Phase::Executing)
+                || matches!(
+                    resource.phase(),
+                    Some(Phase::Waiting {
+                        waiter: anchor_kernel::Waiter::Child { .. }
+                    })
+                )
+        } else {
+            owner.create(&record, u64::MAX)?;
+            true
+        };
+        drop(reference_lease);
+        if should_drive {
+            let (artifacts, nodes) = prepared.kernel_ports(self.clone());
+            let nodes = super::kernel_calls::KernelCallNodes::new(self, &artifacts, &nodes);
+            owner
+                .drive(&record.run_id, &artifacts, &nodes, control.cancellation)
+                .await?;
+            self.settle_channel_run(&record.run_id)?;
+            self.kernel_child_finished(&record.run_id).await?;
+        }
+        self.read_run(&record.run_id)?
+            .ok_or(ApplicationError::Missing)
     }
 }

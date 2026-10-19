@@ -1,5 +1,111 @@
 use super::*;
+use crate::application::run_access::fixtures;
 use crate::application::{RunMetadata, metadata};
+
+fn is_executing(run: &fixtures::Observation) -> bool {
+    matches!(run.phase, anchor_kernel::Phase::Executing)
+}
+fn is_failed(run: &fixtures::Observation) -> bool {
+    matches!(
+        run.phase,
+        anchor_kernel::Phase::Settled {
+            result: anchor_kernel::Outcome::Failed { .. }
+        }
+    )
+}
+fn is_aborted(run: &fixtures::Observation) -> bool {
+    matches!(
+        run.phase,
+        anchor_kernel::Phase::Settled {
+            result: anchor_kernel::Outcome::Aborted { .. }
+        }
+    )
+}
+
+fn observed_error(run: &fixtures::Observation) -> Option<&str> {
+    match run.view.phase() {
+        crate::application::run_access::RunPhase::Settled { reason, .. } => reason,
+        crate::application::run_access::RunPhase::Waiting { reason, .. } => reason,
+        _ => None,
+    }
+}
+
+fn kernel_record_path(state: &ApiState, id: &str) -> PathBuf {
+    state
+        .data_root
+        .join("kernel-runs")
+        .join(format!("run%2F{id}"))
+        .join("resource.json")
+}
+pub(in crate::api) async fn finish_with_artifacts(state: &ApiState, id: &str) {
+    use anchor_runtime::graph::{ArtifactPort, InvocationKey};
+    for _ in 0..100 {
+        let view = state.application.read_run(id).unwrap().unwrap();
+        if view.is_settled() {
+            return;
+        }
+        let dispatch = view.dispatches().first().unwrap();
+        let key: InvocationKey = dispatch.key.clone();
+        let completion = fixtures::completion(json!({}));
+        let artifacts = HostArtifacts::new(
+            state.data_root.join("artifacts"),
+            state.workspace_root.clone(),
+        );
+        std::fs::create_dir_all(artifacts.workspace_path(&key).unwrap()).unwrap();
+        let commit = artifacts.freeze(&key, &completion).await.unwrap();
+        fixtures::complete(
+            &state.application,
+            id,
+            &key.node_id,
+            completion,
+            Some(commit),
+        );
+    }
+    panic!("fixture exceeded finite graph bound");
+}
+
+pub(in crate::api) async fn seed_scenario(state: &ApiState, id: &str) -> GraphRunRecord {
+    let record = if id == "child" {
+        GraphRunRecord::create_with_id(
+            GraphSnapshot::from_authoring(json!({
+                "objective":"test", "entry":"invoke", "agents":{},
+                "ops":{"invoke":{"call":{"graph":"child","mode":"wait"}}},
+                "nodes":[{"id":"invoke","op":"invoke"}],"edges":[]
+            }))
+            .unwrap(),
+            json!({}),
+            id,
+        )
+        .unwrap()
+    } else {
+        fixtures::work_record(id)
+    };
+    fixtures::create(&state.application, &record);
+    match id {
+        "paused" | "stopped" | "budget" => fixtures::control(&state.application, id, "stop", id),
+        "done" => finish_with_artifacts(state, id).await,
+        "failed" => fixtures::fail(&state.application, id, "worker", "recorded reason"),
+        "aborted" => fixtures::control(&state.application, id, "abandon", "recorded reason"),
+        "child" => fixtures::bind_child(&state.application, id, "invoke", "child-target"),
+        "recovery" => {
+            fixtures::recovery(
+                &state.application,
+                id,
+                "worker",
+                vec![anchor_runtime::graph::RecoveryAttempt {
+                    attempt_id: 1,
+                    step: 1,
+                    tool: "fixture-effect".into(),
+                    started_at: "2026-10-19T00:00:00Z".into(),
+                }],
+            );
+        }
+        "executing" => {}
+        other => panic!("undefined fixture: {other}"),
+    }
+    fixtures::record(&state.application, id)
+}
+
 use axum::{
     body::{Body, to_bytes},
     http::Request,
@@ -534,7 +640,7 @@ async fn trigger_persists_run_and_projects_list_detail_and_control() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(detail["projection"]["outcome"], "done");
     assert_eq!(detail["state"]["nodes"]["work"]["files"][0], "report.txt");
-    let record = FileRunStore::new(state.data_root.join("runs"))
+    let record = fixtures::Reader::new(&state.application)
         .load(run)
         .unwrap()
         .unwrap();
@@ -674,7 +780,7 @@ async fn op_call_wait_projects_durable_child_run_through_host_api() {
     let parent_id = started["run"].as_str().unwrap().to_owned();
     let mut child_id = String::new();
     for _ in 0..200 {
-        let parent_record = FileRunStore::new(state.data_root.join("runs"))
+        let parent_record = fixtures::Reader::new(&state.application)
             .load(&parent_id)
             .unwrap()
             .unwrap();
@@ -682,11 +788,11 @@ async fn op_call_wait_projects_durable_child_run_through_host_api() {
             child_id = call.child_run_id.clone().unwrap_or_default();
         }
         if !child_id.is_empty()
-            && FileRunStore::new(state.data_root.join("runs"))
+            && fixtures::Reader::new(&state.application)
                 .load(&child_id)
                 .unwrap()
-                .is_some_and(|record| record.status == RunStatus::Completed)
-            && parent_record.status == RunStatus::Completed
+                .is_some_and(|record| record.has_succeeded())
+            && parent_record.has_succeeded()
         {
             break;
         }
@@ -695,14 +801,14 @@ async fn op_call_wait_projects_durable_child_run_through_host_api() {
     assert!(
         !child_id.is_empty(),
         "parent did not admit child: {:?}",
-        FileRunStore::new(state.data_root.join("runs"))
+        fixtures::Reader::new(&state.application)
             .load(&parent_id)
             .unwrap()
             .unwrap()
     );
-    let store = FileRunStore::new(state.data_root.join("runs"));
+    let store = fixtures::Reader::new(&state.application);
     let child_record = store.load(&child_id).unwrap().unwrap();
-    assert_eq!(child_record.status, RunStatus::Completed);
+    assert!(child_record.has_succeeded());
     assert_eq!(child_record.input["from"], "parent");
     let parent_metadata = state.application.metadata(&parent_id).unwrap().unwrap();
     assert_eq!(parent_metadata.oauth_owner.as_deref(), Some("local"));
@@ -782,7 +888,7 @@ async fn op_call_wait_hands_off_input_map_files_and_selected_result() {
     .await;
     assert_eq!(status, StatusCode::ACCEPTED);
     let parent_id = started["run"].as_str().unwrap().to_owned();
-    let store = FileRunStore::new(state.data_root.join("runs"));
+    let store = fixtures::Reader::new(&state.application);
     let mut child_id = String::new();
     for _ in 0..300 {
         let record = store.load(&parent_id).unwrap().unwrap();
@@ -794,29 +900,16 @@ async fn op_call_wait_hands_off_input_map_files_and_selected_result() {
         {
             child_id = id;
         }
-        if matches!(
-            record.status,
-            RunStatus::Completed | RunStatus::Failed | RunStatus::Stopped | RunStatus::Aborted
-        ) {
+        if record.is_settled() || record.has_stopped_execution() {
             break;
         }
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
     }
     let parent_record = store.load(&parent_id).unwrap().unwrap();
-    assert_eq!(
-        parent_record.status,
-        RunStatus::Completed,
-        "{:?}",
-        parent_record.error
-    );
+    assert!(parent_record.has_succeeded(), "{:?}", parent_record.error);
     assert!(!child_id.is_empty(), "parent did not admit a child Run");
     let child_record = store.load(&child_id).unwrap().unwrap();
-    assert_eq!(
-        child_record.status,
-        RunStatus::Completed,
-        "{:?}",
-        child_record.error
-    );
+    assert!(child_record.has_succeeded(), "{:?}", child_record.error);
     // `input` constants override and `input_map` pointers select the parent input,
     // all merged under the child's own declared input.
     assert_eq!(child_record.input["constant"], "yes");
@@ -882,15 +975,12 @@ async fn op_call_wait_fails_closed_on_missing_input_map_pointer() {
     .await;
     assert_eq!(status, StatusCode::ACCEPTED);
     let parent_id = started["run"].as_str().unwrap().to_owned();
-    let store = FileRunStore::new(state.data_root.join("runs"));
+    let store = fixtures::Reader::new(&state.application);
     for _ in 0..300 {
         let record = store.load(&parent_id).unwrap().unwrap();
-        if matches!(
-            record.status,
-            RunStatus::Completed | RunStatus::Failed | RunStatus::Stopped | RunStatus::Aborted
-        ) {
-            let error = record.error.unwrap_or_default();
-            assert_eq!(record.status, RunStatus::Failed, "{error}");
+        if record.is_settled() || record.has_stopped_execution() {
+            let error = observed_error(&record).unwrap_or_default().to_owned();
+            assert!(is_failed(&record), "{error}");
             assert!(error.contains("input_map"), "{error}");
             assert!(
                 record.graph_calls.is_empty(),
@@ -934,11 +1024,11 @@ async fn op_call_detach_dispatches_child_and_projects_parent_relation() {
     let parent_id = started["run"].as_str().unwrap().to_owned();
     let mut child_id = None;
     for _ in 0..200 {
-        let record = FileRunStore::new(state.data_root.join("runs"))
+        let record = fixtures::Reader::new(&state.application)
             .load(&parent_id)
             .unwrap()
             .unwrap();
-        if record.status == RunStatus::Completed {
+        if record.has_succeeded() {
             child_id = record
                 .graph_calls
                 .values()
@@ -950,20 +1040,20 @@ async fn op_call_detach_dispatches_child_and_projects_parent_relation() {
     }
     let child_id = child_id.expect("detach should durably admit a child");
     for _ in 0..200 {
-        if FileRunStore::new(state.data_root.join("runs"))
+        if fixtures::Reader::new(&state.application)
             .load(&child_id)
             .unwrap()
-            .is_some_and(|child| child.status == RunStatus::Completed)
+            .is_some_and(|child| child.has_succeeded())
         {
             break;
         }
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
     }
-    let child_record = FileRunStore::new(state.data_root.join("runs"))
+    let child_record = fixtures::Reader::new(&state.application)
         .load(&child_id)
         .unwrap()
         .unwrap();
-    assert_eq!(child_record.status, RunStatus::Completed);
+    assert!(child_record.has_succeeded());
     let metadata = state.application.metadata(&child_id).unwrap().unwrap();
     assert_eq!(metadata.trigger_source, "graph_call");
     let (status, detail) = call(app, "GET", &format!("/runs/{child_id}"), None).await;
@@ -1003,12 +1093,12 @@ async fn startup_recovery_dispatches_only_ready_detached_children() {
     )
     .unwrap();
     let snapshot = anchor_runtime::graph::GraphSnapshot::admit(definition).unwrap();
-    let store = FileRunStore::new(state.data_root.join("runs"));
+    let store = fixtures::Reader::new(&state.application);
     let parent_digest = "parent-digest".to_owned();
     for (id, mode) in [("detached-ready", "detach"), ("waiting-ready", "wait")] {
         let mut record = GraphRunRecord::create_with_id(snapshot.clone(), json!({}), id).unwrap();
         record.plugin_bindings_initialized = true;
-        store.save(&record).unwrap();
+        fixtures::create(&state.application, &record);
         let metadata = RunMetadata::graph_call_child(
             id.to_owned(),
             "child".into(),
@@ -1033,19 +1123,24 @@ async fn startup_recovery_dispatches_only_ready_detached_children() {
         .await
         .unwrap();
     for _ in 0..100 {
-        if store.load("detached-ready").unwrap().unwrap().status == RunStatus::Completed {
+        if store
+            .load("detached-ready")
+            .unwrap()
+            .unwrap()
+            .has_succeeded()
+        {
             break;
         }
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
     }
-    assert_eq!(
-        store.load("detached-ready").unwrap().unwrap().status,
-        RunStatus::Completed
+    assert!(
+        store
+            .load("detached-ready")
+            .unwrap()
+            .unwrap()
+            .has_succeeded()
     );
-    assert_eq!(
-        store.load("waiting-ready").unwrap().unwrap().status,
-        RunStatus::Ready
-    );
+    assert!(is_executing(&store.load("waiting-ready").unwrap().unwrap()));
 }
 
 #[tokio::test]
@@ -1113,10 +1208,10 @@ async fn restart_dispatches_ready_detach_child_only_with_staged_call_inputs() {
         .unwrap();
 
     let snapshot = GraphSnapshot::admit(definition).unwrap();
-    let store = FileRunStore::new(state.data_root.join("runs"));
+    let store = fixtures::Reader::new(&state.application);
     let mut record = GraphRunRecord::create_with_id(snapshot, json!({}), child_id).unwrap();
     record.plugin_bindings_initialized = true;
-    store.save(&record).unwrap();
+    fixtures::create(&state.application, &record);
     let metadata = RunMetadata::graph_call_child(
         child_id.to_owned(),
         "child".into(),
@@ -1144,14 +1239,14 @@ async fn restart_dispatches_ready_detach_child_only_with_staged_call_inputs() {
         if store
             .load(child_id)
             .unwrap()
-            .is_some_and(|record| record.status == RunStatus::Completed)
+            .is_some_and(|record| record.has_succeeded())
         {
             break;
         }
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
     }
     let child = store.load(child_id).unwrap().unwrap();
-    assert_eq!(child.status, RunStatus::Completed, "{:?}", child.error);
+    assert!(child.has_succeeded(), "{:?}", child.error);
     assert_eq!(
         child.results["answer"][0].completion.submission.trim(),
         "parent-report"
@@ -1193,7 +1288,7 @@ async fn paused_wait_child_resumes_independently_then_releases_parent() {
     .await;
     assert_eq!(status, StatusCode::ACCEPTED);
     let parent_id = started["run"].as_str().unwrap().to_owned();
-    let store = FileRunStore::new(state.data_root.join("runs"));
+    let store = fixtures::Reader::new(&state.application);
     let mut child_id = None;
     for _ in 0..500 {
         let (_, detail) = call(app.clone(), "GET", &format!("/runs/{parent_id}"), None).await;
@@ -1206,7 +1301,7 @@ async fn paused_wait_child_resumes_independently_then_releases_parent() {
             store
                 .load(id)
                 .unwrap()
-                .is_some_and(|child| child.status == RunStatus::Running)
+                .is_some_and(|child| is_executing(&child))
         }) {
             break;
         }
@@ -1227,18 +1322,29 @@ async fn paused_wait_child_resumes_independently_then_releases_parent() {
     .await;
     assert_eq!(status, StatusCode::ACCEPTED, "{pause_response:?}");
     for _ in 0..200 {
-        if store.load(&child_id).unwrap().unwrap().status == RunStatus::Paused {
+        if store
+            .load(&child_id)
+            .unwrap()
+            .unwrap()
+            .waits_reason("paused")
+        {
             break;
         }
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
     }
-    assert_eq!(
-        store.load(&child_id).unwrap().unwrap().status,
-        RunStatus::Paused
+    assert!(
+        store
+            .load(&child_id)
+            .unwrap()
+            .unwrap()
+            .waits_reason("paused")
     );
-    assert_eq!(
-        store.load(&parent_id).unwrap().unwrap().status,
-        RunStatus::WaitingCall
+    assert!(
+        store
+            .load(&parent_id)
+            .unwrap()
+            .unwrap()
+            .waits_for_children()
     );
     let (status, _) = call(
         app.clone(),
@@ -1249,19 +1355,13 @@ async fn paused_wait_child_resumes_independently_then_releases_parent() {
     .await;
     assert_eq!(status, StatusCode::ACCEPTED);
     for _ in 0..300 {
-        if store.load(&parent_id).unwrap().unwrap().status == RunStatus::Completed {
+        if store.load(&parent_id).unwrap().unwrap().has_succeeded() {
             break;
         }
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
     }
-    assert_eq!(
-        store.load(&child_id).unwrap().unwrap().status,
-        RunStatus::Completed
-    );
-    assert_eq!(
-        store.load(&parent_id).unwrap().unwrap().status,
-        RunStatus::Completed
-    );
+    assert!(store.load(&child_id).unwrap().unwrap().has_succeeded());
+    assert!(store.load(&parent_id).unwrap().unwrap().has_succeeded());
 }
 
 #[tokio::test]
@@ -1296,7 +1396,7 @@ async fn stopping_wait_parent_stops_only_its_wait_child() {
     .await;
     assert_eq!(status, StatusCode::ACCEPTED);
     let parent_id = started["run"].as_str().unwrap().to_owned();
-    let store = FileRunStore::new(state.data_root.join("runs"));
+    let store = fixtures::Reader::new(&state.application);
     let mut child_id = None;
     for _ in 0..300 {
         let (_, detail) = call(app.clone(), "GET", &format!("/runs/{parent_id}"), None).await;
@@ -1309,7 +1409,7 @@ async fn stopping_wait_parent_stops_only_its_wait_child() {
             store
                 .load(id)
                 .unwrap()
-                .is_some_and(|child| child.status == RunStatus::Running)
+                .is_some_and(|child| is_executing(&child))
         }) {
             break;
         }
@@ -1325,20 +1425,34 @@ async fn stopping_wait_parent_stops_only_its_wait_child() {
     .await;
     assert_eq!(status, StatusCode::ACCEPTED);
     for _ in 0..200 {
-        if store.load(&parent_id).unwrap().unwrap().status == RunStatus::Stopped
-            && store.load(&child_id).unwrap().unwrap().status == RunStatus::Stopped
+        if store
+            .load(&parent_id)
+            .unwrap()
+            .unwrap()
+            .waits_reason("stopped")
+            && store
+                .load(&child_id)
+                .unwrap()
+                .unwrap()
+                .waits_reason("stopped")
         {
             break;
         }
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
     }
-    assert_eq!(
-        store.load(&parent_id).unwrap().unwrap().status,
-        RunStatus::Stopped
+    assert!(
+        store
+            .load(&parent_id)
+            .unwrap()
+            .unwrap()
+            .waits_reason("stopped")
     );
-    assert_eq!(
-        store.load(&child_id).unwrap().unwrap().status,
-        RunStatus::Stopped
+    assert!(
+        store
+            .load(&child_id)
+            .unwrap()
+            .unwrap()
+            .waits_reason("stopped")
     );
 }
 
@@ -1373,7 +1487,7 @@ async fn stopping_detach_parent_does_not_cancel_detached_child() {
     .await;
     assert_eq!(status, StatusCode::ACCEPTED);
     let parent_id = started["run"].as_str().unwrap().to_owned();
-    let store = FileRunStore::new(state.data_root.join("runs"));
+    let store = fixtures::Reader::new(&state.application);
     let mut child_id = None;
     for _ in 0..300 {
         let (_, detail) = call(app.clone(), "GET", &format!("/runs/{parent_id}"), None).await;
@@ -1386,7 +1500,7 @@ async fn stopping_detach_parent_does_not_cancel_detached_child() {
             store
                 .load(id)
                 .unwrap()
-                .is_some_and(|child| child.status == RunStatus::Running)
+                .is_some_and(|child| is_executing(&child))
         }) {
             break;
         }
@@ -1402,19 +1516,19 @@ async fn stopping_detach_parent_does_not_cancel_detached_child() {
     .await;
     assert_eq!(status, StatusCode::ACCEPTED);
     for _ in 0..300 {
-        if store.load(&child_id).unwrap().unwrap().status == RunStatus::Completed {
+        if store.load(&child_id).unwrap().unwrap().has_succeeded() {
             break;
         }
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
     }
-    assert_eq!(
-        store.load(&parent_id).unwrap().unwrap().status,
-        RunStatus::Stopped
+    assert!(
+        store
+            .load(&parent_id)
+            .unwrap()
+            .unwrap()
+            .waits_reason("stopped")
     );
-    assert_eq!(
-        store.load(&child_id).unwrap().unwrap().status,
-        RunStatus::Completed
-    );
+    assert!(store.load(&child_id).unwrap().unwrap().has_succeeded());
 }
 
 #[tokio::test]
@@ -1468,10 +1582,10 @@ async fn distinct_parent_call_identities_run_same_target_concurrently() {
             .collect();
         if child_ids.len() == 2
             && child_ids.iter().all(|id| {
-                FileRunStore::new(state.data_root.join("runs"))
+                fixtures::Reader::new(&state.application)
                     .load(id)
                     .unwrap()
-                    .is_some_and(|record| record.status == RunStatus::Running)
+                    .is_some_and(|record| is_executing(&record))
             })
         {
             break;
@@ -1480,13 +1594,13 @@ async fn distinct_parent_call_identities_run_same_target_concurrently() {
     }
     assert_eq!(child_ids.len(), 2);
     assert_ne!(child_ids[0], child_ids[1]);
-    let store = FileRunStore::new(state.data_root.join("runs"));
+    let store = fixtures::Reader::new(&state.application);
     for _ in 0..200 {
         if child_ids.iter().all(|id| {
             store
                 .load(id)
                 .unwrap()
-                .is_some_and(|record| record.status == RunStatus::Completed)
+                .is_some_and(|record| record.has_succeeded())
         }) {
             break;
         }
@@ -1495,7 +1609,7 @@ async fn distinct_parent_call_identities_run_same_target_concurrently() {
     assert!(
         child_ids
             .iter()
-            .all(|id| store.load(id).unwrap().unwrap().status == RunStatus::Completed)
+            .all(|id| store.load(id).unwrap().unwrap().has_succeeded())
     );
 }
 
@@ -1505,32 +1619,12 @@ async fn stopped_and_budget_stopped_runs_block_graph_retrigger_but_allow_update(
     let bundle = FileGraphBundleLoader::new(&state.bundle_root)
         .load()
         .unwrap();
-    let store = FileRunStore::new(state.data_root.join("runs"));
-    for (run_id, status) in [
-        ("stopped-child", RunStatus::Stopped),
-        ("budget-child", RunStatus::BudgetStopped),
-    ] {
+    for (run_id, status) in [("stopped-child", "stopped"), ("budget-child", "budget")] {
         let mut record =
             GraphRunRecord::create_with_id(bundle.snapshot.clone(), json!({}), run_id).unwrap();
-        record.status = status;
-        if status == RunStatus::BudgetStopped {
-            let node_id = record.snapshot.entry.clone();
-            record.invocations.insert(node_id.clone(), 1);
-            record.passes.insert(node_id.clone(), 1);
-            record.cursor = Some(anchor_runtime::graph::RunCursor {
-                node_id: node_id.clone(),
-                key: anchor_runtime::graph::InvocationKey {
-                    run_id: record.run_id.clone(),
-                    graph_digest: record.graph_digest.clone(),
-                    node_id,
-                    invocation: 1,
-                },
-                input_commits: vec![],
-                prepared_input: Value::Null,
-            });
-        }
         record.plugin_bindings_initialized = true;
-        store.save(&record).unwrap();
+        fixtures::create(&state.application, &record);
+        fixtures::control(&state.application, run_id, "stop", status);
         let metadata = RunMetadata::graph_call_child(
             run_id.into(),
             state.graph_name.clone(),
@@ -1636,7 +1730,7 @@ async fn admission_is_per_graph_and_same_graph_is_atomic() {
     assert!(
         records
             .iter()
-            .all(|(_, record)| record.status == RunStatus::Completed)
+            .all(|(id, _)| fixtures::view(&state.application, id).has_succeeded())
     );
 }
 
@@ -1671,11 +1765,17 @@ async fn start_and_pause_request(state: &ApiState, app: &Router, body: &str) -> 
     assert_eq!(status, StatusCode::ACCEPTED, "{accepted}");
     let run = accepted["run"].as_str().unwrap().to_owned();
     for _ in 0..200 {
-        let record = FileRunStore::new(state.data_root.join("runs"))
+        let record = fixtures::Reader::new(&state.application)
             .load(&run)
             .unwrap()
             .unwrap();
-        if record.cursor.is_some() {
+        if record.active()
+            && record.view.dispatches().iter().any(|dispatch| {
+                !matches!(crate::load_host_completion_fact(
+                &state.data_root.join("facts"), &dispatch.key,
+            ).unwrap(), anchor_runtime::graph::CompletionFact::NotStarted)
+            })
+        {
             break;
         }
         tokio::time::sleep(std::time::Duration::from_millis(2)).await;
@@ -1685,18 +1785,18 @@ async fn start_and_pause_request(state: &ApiState, app: &Router, body: &str) -> 
     assert_eq!(paused["operation"], "pause");
     assert!(paused.get("alias").is_none());
     wait_idle(state).await;
-    let record = FileRunStore::new(state.data_root.join("runs"))
+    let record = fixtures::Reader::new(&state.application)
         .load(&run)
         .unwrap()
         .unwrap();
-    assert_eq!(record.status, RunStatus::Paused);
+    assert!(record.waits_reason("paused"));
     assert_eq!(record.results.len(), 1);
     run
 }
 
 #[tokio::test]
 async fn pause_resume_uses_same_frozen_run_after_graph_edit_and_service_object_restart() {
-    let (root, state) = fixture();
+    let (root, mut state) = fixture();
     let _env_guard = PROCESS_ENV.lock().await;
     set_host_env(root.path(), &state.data_root);
     let original = two_node_definition("sh -c 'cat /in/first/count.txt > frozen.txt'");
@@ -1711,7 +1811,7 @@ async fn pause_resume_uses_same_frozen_run_after_graph_edit_and_service_object_r
     )
     .await;
     assert_eq!(status, StatusCode::CONFLICT);
-    let before = FileRunStore::new(state.data_root.join("runs"))
+    let before = fixtures::Reader::new(&state.application)
         .load(&run)
         .unwrap()
         .unwrap();
@@ -1729,10 +1829,10 @@ async fn pause_resume_uses_same_frozen_run_after_graph_edit_and_service_object_r
     );
     // Editing the catalog definition does not change the paused Run's durable
     // snapshot; only subsequently admitted Runs see the updated command.
-    let mut restarted = state.clone();
-    restarted.application =
-        RunApplication::new(state.data_root.clone(), state.catalog_root.clone())
-            .with_configured_graph(state.graph_name.clone(), state.bundle_root.clone());
+    drop(app);
+    state.application = RunApplication::new(state.data_root.clone(), state.catalog_root.clone())
+        .with_configured_graph(state.graph_name.clone(), state.bundle_root.clone());
+    let restarted = state.clone();
     let restarted_app = router(restarted.clone());
     let (status, _) = call(
         restarted_app.clone(),
@@ -1743,11 +1843,11 @@ async fn pause_resume_uses_same_frozen_run_after_graph_edit_and_service_object_r
     .await;
     assert_eq!(status, StatusCode::ACCEPTED);
     wait_idle(&restarted).await;
-    let after = FileRunStore::new(state.data_root.join("runs"))
+    let after = fixtures::Reader::new(&state.application)
         .load(&run)
         .unwrap()
         .unwrap();
-    assert_eq!(after.status, RunStatus::Completed);
+    assert!(after.has_succeeded());
     assert_eq!(after.snapshot, before.snapshot);
     assert_eq!(after.input, before.input);
     assert_eq!(after.results["first"], before.results["first"]);
@@ -1811,11 +1911,11 @@ async fn active_run_can_update_graph_and_finishes_from_its_admitted_snapshot() {
     .await;
     assert_eq!(status, StatusCode::OK, "{body}");
     wait_idle(&state).await;
-    let record = FileRunStore::new(state.data_root.join("runs"))
+    let record = fixtures::Reader::new(&state.application)
         .load(&run)
         .unwrap()
         .unwrap();
-    assert_eq!(record.status, RunStatus::Completed);
+    assert!(record.has_succeeded());
     assert_eq!(record.snapshot.objective, "active snapshot");
     assert_eq!(
         record.snapshot.ops["work"]["run"],
@@ -1844,7 +1944,6 @@ async fn graph_delete_is_rejected_while_its_own_run_is_unfinished() {
     let snapshot = GraphSnapshot::admit(definition).unwrap();
     let mut record =
         GraphRunRecord::create_with_id(snapshot, json!({}), "plugin-dependent-run").unwrap();
-    record.status = RunStatus::Paused;
     record.plugin_bindings.insert(
         "source-plugin".into(),
         anchor_runtime::graph::PluginBinding {
@@ -1858,9 +1957,8 @@ async fn graph_delete_is_rejected_while_its_own_run_is_unfinished() {
         },
     );
     record.plugin_bindings_initialized = true;
-    FileRunStore::new(state.data_root.join("runs"))
-        .save(&record)
-        .unwrap();
+    fixtures::create(&state.application, &record);
+    fixtures::control(&state.application, "plugin-dependent-run", "stop", "paused");
     let run_metadata = RunMetadata::child(
         record.run_id.clone(),
         graph.into(),
@@ -2058,13 +2156,10 @@ async fn graph_delete_removes_only_its_run_data_and_preserves_other_graph_runs()
     let target_definition = definition("target");
     write_graph_bundle(&target_path, &target_definition).unwrap();
     let target_snapshot = GraphSnapshot::admit(target_definition).unwrap();
-    let mut target_run =
+    let target_run =
         GraphRunRecord::create_with_id(target_snapshot, json!({}), "target-run").unwrap();
-    target_run.status = RunStatus::Completed;
-    target_run.invocations.insert("work".into(), 1);
-    FileRunStore::new(state.data_root.join("runs"))
-        .save(&target_run)
-        .unwrap();
+    fixtures::create(&state.application, &target_run);
+    fixtures::finish(&state.application, &target_run.run_id);
     metadata::save(
         &state.data_root,
         &RunMetadata::child(
@@ -2109,9 +2204,7 @@ async fn graph_delete_removes_only_its_run_data_and_preserves_other_graph_runs()
     let grandchild_snapshot = GraphSnapshot::admit(grandchild_definition).unwrap();
     let grandchild_run =
         GraphRunRecord::create_with_id(grandchild_snapshot, json!({}), "grandchild-run").unwrap();
-    FileRunStore::new(state.data_root.join("runs"))
-        .save(&grandchild_run)
-        .unwrap();
+    fixtures::create(&state.application, &grandchild_run);
     let mut grandchild_meta = RunMetadata::child(
         "grandchild-run".into(),
         "grandchild".into(),
@@ -2188,11 +2281,8 @@ async fn graph_delete_is_rejected_while_a_current_graph_definition_calls_it() {
         "terminal-target-run",
     )
     .unwrap();
-    let mut target_run = target_run;
-    target_run.status = RunStatus::Completed;
-    FileRunStore::new(state.data_root.join("runs"))
-        .save(&target_run)
-        .unwrap();
+    fixtures::create(&state.application, &target_run);
+    fixtures::finish(&state.application, &target_run.run_id);
     metadata::save(
         &state.data_root,
         &RunMetadata::child(
@@ -2215,7 +2305,7 @@ async fn graph_delete_is_rejected_while_a_current_graph_definition_calls_it() {
     assert!(error["error"].as_str().unwrap().contains("Graph `caller`"));
     assert!(target_path.exists());
     assert!(
-        FileRunStore::new(state.data_root.join("runs"))
+        fixtures::Reader::new(&state.application)
             .load("terminal-target-run")
             .unwrap()
             .is_some()
@@ -2251,16 +2341,14 @@ async fn unfinished_run_snapshot_blocks_delete_after_current_definition_is_edite
     "ops":{"work":{"run":"true"}},"nodes":[{"id":"work","op":"work","plugins":[]}],"edges":[]});
     write_graph_bundle(&target_path, &target_definition).unwrap();
     write_graph_bundle(&caller_path, &current_definition).unwrap();
-    let mut parent = GraphRunRecord::create_with_id(
+    let parent = GraphRunRecord::create_with_id(
         GraphSnapshot::admit(call_definition).unwrap(),
         json!({}),
         "paused-caller-run",
     )
     .unwrap();
-    parent.status = RunStatus::Paused;
-    FileRunStore::new(state.data_root.join("runs"))
-        .save(&parent)
-        .unwrap();
+    fixtures::create(&state.application, &parent);
+    fixtures::control(&state.application, "paused-caller-run", "stop", "paused");
     metadata::save(
         &state.data_root,
         &RunMetadata::child(
@@ -2280,15 +2368,26 @@ async fn unfinished_run_snapshot_blocks_delete_after_current_definition_is_edite
     assert!(target_path.exists());
 
     // Completed historical snapshots remain, but do not keep the target alive.
-    parent.status = RunStatus::Completed;
-    FileRunStore::new(state.data_root.join("runs"))
-        .save(&parent)
-        .unwrap();
+    fixtures::control(&state.application, &parent.run_id, "resume", "");
+    fixtures::call(
+        &state.application,
+        &parent.run_id,
+        "call",
+        anchor_runtime::graph::validator::CallSubmission::Completed {
+            child_run_id: "historical-child".into(),
+            output: json!({}),
+            commit: anchor_runtime::graph::CommitRef {
+                id: "historical-call".into(),
+                node_id: "call".into(),
+                invocation: 1,
+            },
+        },
+    );
     let (status, _) = call(app, "DELETE", "/graphs/target", None).await;
     assert_eq!(status, StatusCode::NO_CONTENT);
     assert!(!target_path.exists());
     assert!(
-        FileRunStore::new(state.data_root.join("runs"))
+        fixtures::Reader::new(&state.application)
             .load("paused-caller-run")
             .unwrap()
             .is_some()
@@ -2422,31 +2521,27 @@ async fn missing_host_config_or_shell_authority_reject_before_acceptance() {
 #[tokio::test]
 async fn legacy_unfinished_run_quarantines_admission_and_graph_creation() {
     let (_root, state) = fixture();
-    let bundle = FileGraphBundleLoader::new(&state.bundle_root)
-        .load()
-        .unwrap();
-    let record = GraphRunRecord::create_with_id(bundle.snapshot, Value::Null, "legacy").unwrap();
-    FileRunStore::new(state.data_root.join("runs"))
-        .save(&record)
-        .unwrap();
+    std::fs::create_dir_all(state.data_root.join("runs")).unwrap();
+    std::fs::write(
+        state.data_root.join("runs/legacy.json"),
+        b"legacy bytes are never decoded",
+    )
+    .unwrap();
     let app = router(state);
-    assert_eq!(
-        call(
-            app.clone(),
-            "POST",
-            "/trigger",
-            Some(r#"{"graph":"fixture"}"#)
-        )
-        .await
-        .0,
-        StatusCode::CONFLICT
-    );
-    assert_eq!(
-        call(app, "POST", "/graphs", Some(r#"{"name":"other"}"#))
-            .await
-            .0,
-        StatusCode::CONFLICT
-    );
+    for (uri, body) in [
+        ("/trigger", r#"{"graph":"fixture"}"#),
+        ("/graphs", r#"{"name":"other"}"#),
+    ] {
+        let (status, rejected) = call(app.clone(), "POST", uri, Some(body)).await;
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{rejected}");
+        assert!(
+            rejected["error"]
+                .as_str()
+                .unwrap()
+                .contains("legacy_run_record"),
+            "{rejected}"
+        );
+    }
 }
 
 #[tokio::test]
@@ -2498,15 +2593,13 @@ async fn a_changed_plugin_does_not_block_resume_but_mismatched_metadata_does() {
     .unwrap();
     let mut record =
         GraphRunRecord::create_with_id(snapshot, Value::Null, "paused-plugin").unwrap();
-    record.status = RunStatus::Paused;
     record.plugin_bindings_initialized = true;
     record.plugin_bindings = bindings
         .into_iter()
         .map(|binding| (binding.id.clone(), binding))
         .collect();
-    FileRunStore::new(state.data_root.join("runs"))
-        .save(&record)
-        .unwrap();
+    fixtures::create(&state.application, &record);
+    fixtures::control(&state.application, "paused-plugin", "stop", "paused");
     let metadata_path = state.data_root.join("run-metadata/paused-plugin.json");
     std::fs::create_dir_all(metadata_path.parent().unwrap()).unwrap();
     let mut metadata = json!({"format":1,"run_id":"paused-plugin","graph":"fixture",
@@ -2540,7 +2633,7 @@ async fn a_changed_plugin_does_not_block_resume_but_mismatched_metadata_does() {
             .contains("identity metadata")
     );
     assert_eq!(
-        FileRunStore::new(state.data_root.join("runs"))
+        fixtures::Reader::new(&state.application)
             .load("paused-plugin")
             .unwrap()
             .unwrap(),
@@ -2617,7 +2710,7 @@ async fn waiting_parent_rejects_child_grant_drift_then_restores_same_child_witho
     .await;
     assert_eq!(status, StatusCode::ACCEPTED, "{started}");
     let parent_id = started["run"].as_str().unwrap().to_owned();
-    let store = FileRunStore::new(state.data_root.join("runs"));
+    let store = fixtures::Reader::new(&state.application);
     let artifacts = HostArtifacts::new(
         state.data_root.join("artifacts"),
         state.workspace_root.clone(),
@@ -2635,8 +2728,8 @@ async fn waiting_parent_rejects_child_grant_drift_then_restores_same_child_witho
             .map(|metadata| metadata.run_id.clone());
         if let Some(id) = &child_id
             && let Some(child) = store.load(id).unwrap()
-            && child.status == RunStatus::Running
-            && let Some(cursor) = child.cursor
+            && is_executing(&child)
+            && let Some(cursor) = child.view.dispatches().first()
             && cursor.node_id == "slow"
             && std::fs::read(
                 artifacts
@@ -2669,8 +2762,8 @@ async fn waiting_parent_rejects_child_grant_drift_then_restores_same_child_witho
     wait_idle(&state).await;
     let parent_before = store.load(&parent_id).unwrap().unwrap();
     let child_before = store.load(&child_id).unwrap().unwrap();
-    assert_eq!(parent_before.status, RunStatus::WaitingCall);
-    assert_eq!(child_before.status, RunStatus::Paused);
+    assert!(parent_before.waits_for_children());
+    assert!(child_before.waits_reason("paused"));
     assert_eq!(child_before.results["slow"].len(), 1);
     let first_commit = child_before.results["slow"][0].commit.clone();
     let first_key = child_before.results["slow"][0].key.clone();
@@ -2684,8 +2777,8 @@ async fn waiting_parent_rejects_child_grant_drift_then_restores_same_child_witho
         .unwrap(),
         b"once"
     );
-    let parent_record_path = state.data_root.join(format!("runs/{parent_id}.json"));
-    let child_record_path = state.data_root.join(format!("runs/{child_id}.json"));
+    let parent_record_path = kernel_record_path(&state, &parent_id);
+    let child_record_path = kernel_record_path(&state, &child_id);
     let parent_bytes = std::fs::read(&parent_record_path).unwrap();
     let child_bytes = std::fs::read(&child_record_path).unwrap();
 
@@ -2719,8 +2812,8 @@ async fn waiting_parent_rejects_child_grant_drift_then_restores_same_child_witho
     wait_idle(&state).await;
     let parent = store.load(&parent_id).unwrap().unwrap();
     let child = store.load(&child_id).unwrap().unwrap();
-    assert_eq!(parent.status, RunStatus::Completed, "{:?}", parent.error);
-    assert_eq!(child.status, RunStatus::Completed, "{:?}", child.error);
+    assert!(parent.has_succeeded(), "{:?}", parent.error);
+    assert!(child.has_succeeded(), "{:?}", child.error);
     assert_eq!(
         parent
             .graph_calls

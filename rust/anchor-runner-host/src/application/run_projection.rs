@@ -1,9 +1,5 @@
 //! Read-only Run presentation shared by HTTP and Pilot. These observations are
 //! advisory; control still validates identity, scope and leases at write time.
-#[cfg(test)]
-use super::run_access::observed;
-#[cfg(test)]
-pub(crate) use super::run_access::projection::RunProjection;
 use anchor_runtime::graph::GraphSnapshot;
 use serde_json::{Value, json};
 
@@ -49,107 +45,134 @@ pub(crate) fn run_definition(snapshot: &GraphSnapshot) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use anchor_runtime::graph::{GraphRunRecord, RunStatus};
+    use crate::application::{RunApplication, RunMetadata, run_access::fixtures};
 
-    fn record() -> GraphRunRecord {
-        GraphRunRecord::create_with_id(
-            serde_json::from_value(json!({
-                "objective":"test", "entry":"worker",
-                "agents":{"role":{"model":"fixture","instructions":"work"}},
-                "nodes":[{"id":"worker","agent":"role"}], "edges":[]
-            }))
-            .unwrap(),
-            json!({}),
-            "projection-test",
+    fn metadata(application: &RunApplication, id: &str) -> RunMetadata {
+        let record = fixtures::record(application, id);
+        RunMetadata::new(
+            id.into(),
+            "fixture".into(),
+            record.graph_digest,
+            &application.catalog_root,
         )
         .unwrap()
     }
 
-    #[test]
-    fn inactive_states_reuse_control_guards_and_liveness() {
-        let mut record = record();
-        for (status, resume, stop, attention, quiescent) in [
-            (RunStatus::Ready, true, true, false, false),
-            (RunStatus::Running, true, true, true, false),
-            (RunStatus::Paused, true, false, true, true),
-            (RunStatus::WaitingCall, false, false, true, false),
-            (RunStatus::WaitingRecovery, false, false, true, false),
-            (RunStatus::BudgetStopped, true, false, true, true),
-            (RunStatus::Stopped, true, false, true, true),
-            (RunStatus::Completed, false, false, false, true),
-            (RunStatus::Failed, false, false, true, true),
-            (RunStatus::Aborted, false, false, true, true),
-        ] {
-            record.status = status;
-            let projection = observed(&record, false, None, false);
-            assert!(!projection.actions.pause, "{status:?}");
-            assert_eq!(projection.actions.resume, resume, "{status:?}");
-            assert_eq!(projection.actions.stop, stop, "{status:?}");
+    #[tokio::test]
+    async fn inactive_phases_reuse_control_guards_and_liveness() {
+        let root = tempfile::tempdir().unwrap();
+        let application = RunApplication::new(root.path().into(), root.path().join("catalog"));
+        std::fs::create_dir_all(&application.catalog_root).unwrap();
+        for id in fixtures::scenarios(&application) {
+            let view = fixtures::view(&application, id);
+            let metadata = metadata(&application, id);
+            let projection = application
+                .project_run(&view, Some(&metadata))
+                .await
+                .unwrap();
+            assert!(!projection.actions.pause, "{id}");
+            assert_eq!(
+                projection.actions.resume,
+                matches!(id, "executing" | "paused" | "stopped" | "budget"),
+                "{id}"
+            );
+            assert_eq!(projection.actions.stop, id == "executing", "{id}");
             assert_eq!(
                 projection.actions.abandon,
-                !matches!(
-                    status,
-                    RunStatus::Completed | RunStatus::Failed | RunStatus::Aborted
-                )
+                !matches!(id, "done" | "failed" | "aborted"),
+                "{id}"
             );
             assert_eq!(
                 projection.phase == "waiting"
                     || matches!(projection.outcome, Some("failed" | "aborted"))
                     || (projection.phase == "executing" && !projection.active),
-                attention || status == RunStatus::Ready,
-                "{status:?}"
+                id != "done",
+                "{id}"
             );
             assert_eq!(
-                super::super::RunLiveness::observed(status, false).is_quiescent(),
-                quiescent,
-                "{status:?}"
+                view.is_quiescent(),
+                !matches!(id, "executing" | "child" | "recovery"),
+                "{id}"
             );
         }
     }
 
-    #[test]
-    fn pending_control_and_session_coordination_are_observed_once() {
-        let mut record = record();
-        record.status = RunStatus::Running;
-        let projection = observed(&record, true, Some("pause"), false);
+    #[tokio::test]
+    async fn pending_control_and_session_coordination_are_observed_once() {
+        let root = tempfile::tempdir().unwrap();
+        let application = RunApplication::new(root.path().into(), root.path().join("catalog"));
+        std::fs::create_dir_all(&application.catalog_root).unwrap();
+        fixtures::create(&application, &fixtures::work_record("projection-test"));
+        let stale = fixtures::view(&application, "projection-test");
+        let metadata = metadata(&application, "projection-test");
+        let drive = fixtures::gated_drive(&application, "projection-test").await;
+        application.pause("projection-test").await.unwrap();
+        let projection = application
+            .project_run(&stale, Some(&metadata))
+            .await
+            .unwrap();
         assert_eq!(projection.phase, "executing");
-        assert!(projection.actions.abandon);
+        assert!(projection.active);
         assert!(projection.actions.pause);
         assert!(projection.actions.stop);
+        assert!(projection.actions.abandon);
         assert!(!projection.actions.resume);
-        let projection = observed(&record, true, Some("stop"), false);
-        assert_eq!(projection.phase, "executing");
-        assert!(projection.actions.stop);
-        let projection = observed(&record, true, None, true);
+        application.stop("projection-test").await.unwrap();
+        let projection = application
+            .project_run(&stale, Some(&metadata))
+            .await
+            .unwrap();
+        assert_eq!(projection.phase, "waiting");
+        assert!(projection.active);
+        assert!(!projection.actions.resume);
+        drive.drain(&application, "projection-test").await;
+        let mut coordinated = metadata;
+        coordinated.session_call = Some(serde_json::from_value(json!({
+            "context":{"session":"session","reply_node":"worker","conversation_id":"conversation","channel":{}},
+            "status":"pending","error":""
+        })).unwrap());
+        let projection = application
+            .project_run(&stale, Some(&coordinated))
+            .await
+            .unwrap();
         assert!(!projection.actions.pause);
-        let projection = observed(&record, false, None, true);
         assert!(!projection.actions.resume);
-        assert!(projection.actions.stop);
+        assert_eq!(projection.phase, "waiting");
     }
 
-    #[test]
-    fn legacy_projection_serialization_preserves_ready_paused_and_stopped_bytes() {
-        let mut record = record();
-        record.updated = None;
-        for (status, expected) in [
+    #[tokio::test]
+    async fn projection_serialization_preserves_executing_paused_and_stopped_bytes() {
+        let root = tempfile::tempdir().unwrap();
+        let application = RunApplication::new(root.path().into(), root.path().join("catalog"));
+        std::fs::create_dir_all(&application.catalog_root).unwrap();
+        fixtures::scenarios(&application);
+        for (id, prefix) in [
             (
-                RunStatus::Ready,
-                r#"{"phase":"executing","reason":null,"active":false,"actions":{"pause":false,"stop":true,"resume":true,"abandon":true},"updated":null}"#,
+                "executing",
+                r#"{"phase":"executing","reason":null,"active":false,"actions":{"pause":false,"stop":true,"resume":true,"abandon":true},"updated":"#,
             ),
             (
-                RunStatus::Paused,
-                r#"{"phase":"waiting","waiting_for":"human","reason":"paused","active":false,"actions":{"pause":false,"stop":false,"resume":true,"abandon":true},"updated":null}"#,
+                "paused",
+                r#"{"phase":"waiting","waiting_for":"human","reason":"paused","active":false,"actions":{"pause":false,"stop":false,"resume":true,"abandon":true},"updated":"#,
             ),
             (
-                RunStatus::Stopped,
-                r#"{"phase":"waiting","waiting_for":"human","reason":"stopped","active":false,"actions":{"pause":false,"stop":false,"resume":true,"abandon":true},"updated":null}"#,
+                "stopped",
+                r#"{"phase":"waiting","waiting_for":"human","reason":"stopped","active":false,"actions":{"pause":false,"stop":false,"resume":true,"abandon":true},"updated":"#,
             ),
         ] {
-            record.status = status;
+            let view = fixtures::view(&application, id);
+            let projection = application
+                .project_run(&view, Some(&metadata(&application, id)))
+                .await
+                .unwrap();
+            let expected = format!(
+                "{prefix}{}}}",
+                serde_json::to_string(&application.run_updated(id).unwrap()).unwrap()
+            );
             assert_eq!(
-                serde_json::to_vec(&observed(&record, false, None, false)).unwrap(),
+                serde_json::to_vec(&projection).unwrap(),
                 expected.as_bytes(),
-                "{status:?}"
+                "{id}"
             );
         }
     }

@@ -4,18 +4,7 @@ impl RunApplication {
     pub(crate) async fn active_runs(&self, graph: Option<&str>) -> Vec<String> {
         let graph_path =
             graph.and_then(|name| Self::graph_identity(&self.graph_bundle_path(name)).ok());
-        let mut ids: Vec<String> = self
-            .active
-            .lock()
-            .await
-            .iter()
-            .filter(|(_, active)| {
-                graph_path
-                    .as_ref()
-                    .is_none_or(|path| &active.graph_path == path)
-            })
-            .map(|(id, _)| id.clone())
-            .collect();
+        let mut ids = Vec::new();
         for (id, run) in self.run_views().unwrap_or_default() {
             let matches_graph = graph_path.as_ref().is_none_or(|path| {
                 self.metadata(&id).ok().flatten().is_some_and(|metadata| {
@@ -32,15 +21,10 @@ impl RunApplication {
     }
 
     pub(crate) async fn run_is_active(&self, run_id: &str) -> bool {
-        if self
-            .read_run(run_id)
+        self.read_run(run_id)
             .ok()
             .flatten()
             .is_some_and(|run| run.active())
-        {
-            return true;
-        }
-        self.active.lock().await.contains_key(run_id)
     }
 
     pub(crate) fn metadata(&self, run_id: &str) -> Result<Option<RunMetadata>, ApplicationError> {

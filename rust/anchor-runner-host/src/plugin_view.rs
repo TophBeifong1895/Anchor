@@ -47,7 +47,7 @@ impl std::fmt::Display for Unusable {
 }
 
 impl Unusable {
-    /// The GraphRunner's class for this cause, so every path agrees.
+    /// The Kernel scheduler's class for this cause, so every path agrees.
     pub(crate) fn into_graph_error(self) -> anchor_runtime::graph::GraphError {
         use anchor_runtime::graph::GraphError;
         match self {

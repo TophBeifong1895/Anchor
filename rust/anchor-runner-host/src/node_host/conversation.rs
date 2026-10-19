@@ -3,7 +3,6 @@
 use super::*;
 use anchor_runtime::{
     ReadOnlyInput, ToolDefinition, ToolError, ToolName, ToolPort, ToolResultContent,
-    graph::RunStatus,
 };
 use serde::Deserialize;
 use serde_json::Value;
@@ -30,7 +29,8 @@ impl HostIoResolver {
         let current = crate::application::metadata::load(root, &key.run_id)
             .map_err(|error| format!("conversation metadata: {error:?}"))?
             .ok_or("conversation metadata is missing")?;
-        let successors = crate::application::RunApplication::new(root.to_owned(), root.to_owned())
+        let successors = self
+            .run_application()
             .settled_session_call_successors(&current)
             .map_err(|error| format!("conversation Session continuation: {error:?}"))?;
         for invocation in (1..key.invocation).rev() {
@@ -48,7 +48,10 @@ impl HostIoResolver {
             {
                 continue;
             }
-            for invocation in (1..=record.invocations.get(&key.node_id).copied().unwrap_or(0)).rev()
+            for invocation in self
+                .conversation_invocations(&record, &key.node_id)?
+                .into_iter()
+                .rev()
             {
                 keys.push(InvocationKey {
                     run_id: record.run_id.clone(),
@@ -59,6 +62,24 @@ impl HostIoResolver {
             }
         }
         Ok(keys)
+    }
+
+    fn conversation_invocations(
+        &self,
+        record: &GraphRunRecord,
+        node: &str,
+    ) -> Result<Vec<u64>, String> {
+        let mut invocations =
+            (1..=record.invocations.get(node).copied().unwrap_or(0)).collect::<BTreeSet<_>>();
+        invocations.extend(
+            self.run_application()
+                .dispatch_keys(&record.run_id)
+                .map_err(|error| format!("conversation invocations: {error:?}"))?
+                .into_iter()
+                .filter(|key| key.node_id == node)
+                .map(|key| key.invocation),
+        );
+        Ok(invocations.into_iter().collect())
     }
     pub(super) fn conversation(&self, key: &InvocationKey) -> Result<Option<Conversation>, String> {
         let root = self.local_inputs.state_root();
@@ -120,13 +141,10 @@ impl HostIoResolver {
                 .map_err(|error| error.to_string())?
                 .ok_or("conversation predecessor has no admitted Run")?;
             if record.graph_digest != metadata.graph_digest
-                || !matches!(
-                    record.status,
-                    RunStatus::Completed
-                        | RunStatus::Stopped
-                        | RunStatus::Failed
-                        | RunStatus::Aborted
-                )
+                || !self
+                    .run_application()
+                    .predecessor_history_allowed(&id)
+                    .map_err(|error| format!("conversation predecessor: {error:?}"))?
             {
                 return Err("conversation predecessor is not a settled matching Run".into());
             }
@@ -149,7 +167,11 @@ impl HostIoResolver {
             return Ok(None);
         }
         for prior in &conversation.previous {
-            let Some(&invocation) = prior.invocations.get(&key.node_id) else {
+            let Some(invocation) = self
+                .conversation_invocations(prior, &key.node_id)?
+                .last()
+                .copied()
+            else {
                 continue;
             };
             let source = InvocationKey {
@@ -195,6 +217,7 @@ impl HostIoResolver {
             inner,
             node: key.node_id.clone(),
             data_root: self.local_inputs.state_root().to_path_buf(),
+            application: self.run_application(),
             previous: conversation.previous,
         })
     }
@@ -204,6 +227,7 @@ struct HistoryTools {
     inner: Arc<dyn ToolPort>,
     node: String,
     data_root: PathBuf,
+    application: crate::application::RunApplication,
     previous: Vec<GraphRunRecord>,
 }
 
@@ -267,8 +291,22 @@ impl ToolPort for HistoryTools {
                     .map_err(ToolError::Failed)?;
                 invocations.push(json!({"invocation":invocation, "messages":messages}));
             }
+            let view = self
+                .application
+                .read_run(&record.run_id)
+                .map_err(|error| ToolError::Failed(format!("history Run: {error:?}")))?
+                .ok_or_else(|| ToolError::Failed("history Run is missing".into()))?;
+            let metadata = self
+                .application
+                .metadata(&record.run_id)
+                .map_err(|error| ToolError::Failed(format!("history identity: {error:?}")))?;
+            let projection = self
+                .application
+                .project_run(&view, metadata.as_ref())
+                .await
+                .map_err(|error| ToolError::Failed(format!("history projection: {error:?}")))?;
             Ok(vec![ToolResultContent::json(
-                json!({"run":record.run_id, "status":record.status,
+                json!({"run":record.run_id, "projection":projection,
                 "node":self.node, "invocations":invocations,
                 "previous_run":self.previous.get(index + 1).map(|record| &record.run_id),
                 "incomplete_outcomes":"A tool call without its result is unknown, not proof of success."}),
@@ -280,6 +318,7 @@ impl ToolPort for HistoryTools {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::application::run_access::fixtures;
     use crate::application::{ConversationSource, RunMetadata, metadata};
     use anchor_runtime::graph::GraphSnapshot;
     use anchor_sandbox_bwrap::BubblewrapPolicy;
@@ -297,7 +336,6 @@ mod tests {
             ),
             Arc::new(tool_host::PluginToolHost::new(Vec::<String>::new())),
             tool_host::McpToolConfig::default(),
-            FileRunStore::new(root.join("runs")),
             LocalInputs::new(root.to_owned(), None).unwrap(),
             Arc::new(crate::plugin_mounts::SessionMounts::open(root).unwrap()),
             None,
@@ -315,10 +353,14 @@ mod tests {
             GraphSnapshot::admit(json!({"objective":"conversation test", "entry":"agent", "agents":{"a":{"model":"fixture"}},
             "nodes":[{"id":"agent", "agent":"a"}], "edges":[]}))
             .unwrap();
-        let mut run = GraphRunRecord::create_with_id(snapshot, json!({}), id).unwrap();
-        run.status = RunStatus::Stopped;
-        run.invocations.insert("agent".into(), 1);
-        resolver.run_store.save(&run).unwrap();
+        let run = GraphRunRecord::create_with_id(snapshot, json!({}), id).unwrap();
+        test_runs::seed(resolver.state_root(), &run);
+        fixtures::control(
+            &test_runs::application(resolver.state_root()),
+            id,
+            "stop",
+            "stopped",
+        );
         let root = resolver.local_inputs.state_root();
         let mut meta =
             RunMetadata::new(id.into(), "graph".into(), run.graph_digest.clone(), root).unwrap();
@@ -414,17 +456,19 @@ mod tests {
             resolver.conversation_predecessors(&first).unwrap(),
             Vec::<InvocationKey>::new()
         );
-        let mut active = resolver.load_run("foreground").unwrap().unwrap();
-        active.status = RunStatus::Running;
-        resolver.run_store.save(&active).unwrap();
+        fixtures::control(
+            &test_runs::application(resolver.state_root()),
+            "foreground",
+            "resume",
+            "resumed",
+        );
         assert!(
             resolver
                 .conversation_predecessors(&background)
                 .unwrap_err()
                 .contains("not settled")
         );
-        active.status = RunStatus::Completed;
-        resolver.run_store.save(&active).unwrap();
+        fixtures::finish(&test_runs::application(resolver.state_root()), "foreground");
         metadata.session_call.as_mut().unwrap().context.session = "bob".into();
         metadata::save(root.path(), &metadata).unwrap();
         assert!(
@@ -449,7 +493,7 @@ mod tests {
         admit(&resolver, "first", "alice", None);
         let second = admit(&resolver, "second", "alice", Some("first"));
         std::fs::remove_file(root.path().join("run-metadata/first.json")).unwrap();
-        std::fs::remove_file(root.path().join("runs/first.json")).unwrap();
+        test_runs::remove(root.path(), "first");
         assert!(
             resolver
                 .conversation(&second)
@@ -519,7 +563,7 @@ mod tests {
         )
         .unwrap();
         std::fs::remove_file(root.path().join("run-metadata/second.json")).unwrap();
-        std::fs::remove_file(root.path().join("runs/second.json")).unwrap();
+        test_runs::remove(root.path(), "second");
         let previous = resolver.conversation(&third).unwrap().unwrap().previous;
         assert_eq!(
             previous
@@ -571,7 +615,7 @@ mod tests {
 
     #[tokio::test]
     async fn interruption_control_artifact_does_not_replace_the_predecessor_draft() {
-        use anchor_runtime::graph::{ArtifactFreezeContext, ArtifactKind, ArtifactPort, RunResult};
+        use anchor_runtime::graph::{ArtifactFreezeContext, ArtifactKind, ArtifactPort};
         let root = tempfile::tempdir().unwrap();
         let resolver = resolver(root.path());
         let prior = admit(&resolver, "prior", "alice", None);
@@ -603,22 +647,17 @@ mod tests {
             )
             .await
             .unwrap();
-        let mut previous = resolver.load_run(&prior.run_id).unwrap().unwrap();
-        previous.sequence = 1;
-        previous.results.insert(
-            "agent".into(),
-            vec![RunResult {
-                plugin_views: Default::default(),
-                plugin_digests: Default::default(),
-                sequence: 1,
-                node_id: "agent".into(),
-                key: prior.clone(),
-                completion,
-                commit,
-                interruption: Some("input superseded".into()),
-            }],
+        let application = test_runs::application(resolver.state_root());
+        fixtures::control(&application, &prior.run_id, "resume", "resumed");
+        fixtures::interrupted(
+            &application,
+            &prior.run_id,
+            "agent",
+            completion,
+            Some(commit),
+            "input superseded",
         );
-        resolver.run_store.save(&previous).unwrap();
+        drop(application);
         let current = admit(&resolver, "current", "alice", Some("prior"));
         let conversation = resolver.conversation(&current).unwrap().unwrap();
         let mount = resolver

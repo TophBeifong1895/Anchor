@@ -28,12 +28,12 @@ fn png_bytes() -> Vec<u8> {
 async fn wait_completed(state: &ApiState, run: &str) {
     tokio::time::timeout(Duration::from_secs(5), async {
         loop {
-            let record = FileRunStore::new(state.data_root.join("runs"))
+            let record = fixtures::Reader::new(&state.application)
                 .load(run)
                 .unwrap()
                 .unwrap();
-            assert_ne!(record.status, RunStatus::Failed, "{record:?}");
-            if record.status == RunStatus::Completed
+            assert!(!is_failed(&record), "{record:?}");
+            if record.has_succeeded()
                 && !state
                     .application
                     .active_runs(None)
@@ -52,7 +52,7 @@ async fn wait_completed(state: &ApiState, run: &str) {
 
 #[tokio::test]
 async fn attachment_admission_retry_restart_and_public_manifest_use_frozen_facts() {
-    let (root, state) = fixture();
+    let (root, mut state) = fixture();
     let _env = PROCESS_ENV.lock().await;
     set_host_env(root.path(), &state.data_root);
     let app = router(state.clone());
@@ -106,7 +106,7 @@ async fn attachment_admission_retry_restart_and_public_manifest_use_frozen_facts
             "size":jpeg.len(), "media_type":"image/jpeg",
         })
     );
-    let record_path = state.data_root.join("runs").join(format!("{run}.json"));
+    let record_path = kernel_record_path(&state, run);
     let record_before = std::fs::read(&record_path).unwrap();
     let directory = crate::channel_inputs::input_directory(&state.data_root, run).unwrap();
     let manifest_before = std::fs::read(directory.join("input.json")).unwrap();
@@ -149,10 +149,10 @@ async fn attachment_admission_retry_restart_and_public_manifest_use_frozen_facts
         .await;
         assert_eq!(status, StatusCode::CONFLICT, "{rejected}");
     }
-    let mut restarted = state.clone();
-    restarted.application =
-        RunApplication::new(state.data_root.clone(), state.catalog_root.clone())
-            .with_configured_graph("fixture".into(), state.bundle_root.clone());
+    drop(app);
+    state.application = RunApplication::new(state.data_root.clone(), state.catalog_root.clone())
+        .with_configured_graph("fixture".into(), state.bundle_root.clone());
+    let restarted = state.clone();
     let app = router(restarted.clone());
     let (status, repeated) = call(
         app.clone(),

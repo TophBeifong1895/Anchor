@@ -353,9 +353,7 @@ async fn existing_graph_lease_and_unfinished_run_do_not_conflict_with_validation
         .load()
         .unwrap();
     let record = GraphRunRecord::create_with_id(bundle.snapshot, json!({}), "unfinished").unwrap();
-    FileRunStore::new(state.data_root.join("runs"))
-        .save(&record)
-        .unwrap();
+    fixtures::create(&state.application, &record);
     let app = router(state.clone());
     let before = filesystem(root.path());
     let (status, result) = validate(&app, &bundle.authoring_definition).await;

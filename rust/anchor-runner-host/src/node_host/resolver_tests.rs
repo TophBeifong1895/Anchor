@@ -69,6 +69,20 @@ fn session_fixture(
     std::sync::Arc<FixedMounts>,
     NodeExecutionRequest,
 ) {
+    session_fixture_with_snapshot(installed, declared, switches, None)
+}
+
+fn session_fixture_with_snapshot(
+    installed: &[&str],
+    declared: &[(&str, bool, Option<bool>)],
+    switches: &[(&str, bool)],
+    snapshot: Option<GraphSnapshot>,
+) -> (
+    tempfile::TempDir,
+    HostIoResolver,
+    std::sync::Arc<FixedMounts>,
+    NodeExecutionRequest,
+) {
     let root = tempfile::tempdir().unwrap();
     let state = root.path().join("state");
     let workspace = root.path().join("workspaces");
@@ -86,12 +100,14 @@ fn session_fixture(
             item
         })
         .collect::<Vec<_>>();
-    let snapshot = GraphSnapshot::admit(json!({
-        "objective":"session mounts","entry":"agent",
-        "agents":{"worker":{"model":"fixture"}},
-        "nodes":[{"id":"agent","agent":"worker","plugins":declared_json}],"edges":[]
-    }))
-    .unwrap();
+    let snapshot = snapshot.unwrap_or_else(|| {
+        GraphSnapshot::admit(json!({
+            "objective":"session mounts","entry":"agent",
+            "agents":{"worker":{"model":"fixture"}},
+            "nodes":[{"id":"agent","agent":"worker","plugins":declared_json}],"edges":[]
+        }))
+        .unwrap()
+    });
     let mut record = GraphRunRecord::create_with_id(snapshot, json!({}), "session-mounts").unwrap();
     record.plugin_bindings = anchor_graph_host::FilePluginCatalog::new(&library)
         .resolve(
@@ -105,8 +121,7 @@ fn session_fixture(
         .map(|binding| (binding.id.clone(), binding))
         .collect();
     record.plugin_bindings_initialized = true;
-    let store = FileRunStore::new(state.join("runs"));
-    store.save(&record).unwrap();
+    test_runs::seed(&state, &record);
     let mut metadata = crate::application::RunMetadata::new(
         record.run_id.clone(),
         "session-mounts".into(),
@@ -126,7 +141,6 @@ fn session_fixture(
         sandbox(&workspace),
         std::sync::Arc::new(tool_host::PluginToolHost::new(Vec::<String>::new())),
         tool_host::McpToolConfig::default(),
-        store,
         LocalInputs::new(state, None).unwrap(),
         mounts.clone(),
         None,
@@ -169,11 +183,8 @@ fn seed_admitted_binding(
     request: &mut NodeExecutionRequest,
     binding: PluginBinding,
 ) {
-    let mut record = resolver.load_run(&request.key.run_id).unwrap().unwrap();
-    record
-        .plugin_bindings
-        .insert(binding.id.clone(), binding.clone());
-    resolver.run_store.save(&record).unwrap();
+    let record = resolver.load_run(&request.key.run_id).unwrap().unwrap();
+    assert_eq!(record.plugin_bindings.get(&binding.id), Some(&binding));
     request.plugins = vec![binding];
 }
 

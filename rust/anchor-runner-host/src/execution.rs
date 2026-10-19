@@ -1,22 +1,19 @@
-//! Prepared host execution shared by application use cases and legacy framing.
+//! Validated host ports shared by platform and standalone Kernel execution.
 use crate::application::RunApplication;
 use crate::{HostArtifacts, HostControl, HostNodes, make_host_with_control, reject_snapshot};
-use anchor_graph_host::{GraphCatalog, InProcessGraphHost, LoadedGraphBundle};
+use anchor_graph_host::{GraphCatalog, LoadedGraphBundle};
 use anchor_runtime::graph::{CallIdentity, PluginBinding};
 use anchor_runtime::graph::{
-    FileRunStore, GraphError, GraphRunRecord, GraphRunner, GraphSnapshot, InvocationKey,
-    NodeExecutionPort, RecoveryDecision, RunStatus, RunStore,
+    FileRunLeaseProvider, GraphError, GraphRunRecord, GraphSnapshot, InvocationKey,
+    NodeExecutionPort, RecoveryDecision,
 };
 use sha2::Digest;
 use std::collections::BTreeMap;
 use std::{future::Future, pin::Pin};
 
 pub(crate) struct PreparedExecution {
-    pub(crate) store: FileRunStore,
     artifacts: HostArtifacts,
     nodes: HostNodes,
-    control: HostControl,
-    catalog_root: Option<std::path::PathBuf>,
     application: Option<RunApplication>,
 }
 
@@ -45,12 +42,17 @@ impl PreparedExecution {
         record: &GraphRunRecord,
         control: HostControl,
         bindings: BTreeMap<String, PluginBinding>,
-        catalog_root: Option<std::path::PathBuf>,
+        _catalog_root: Option<std::path::PathBuf>,
         application: Option<RunApplication>,
         library_root: Option<std::path::PathBuf>,
     ) -> Result<Self, String> {
         reject_snapshot(&record.snapshot)?;
-        let (store, artifacts, nodes, control) = make_host_with_control(
+        let state_root = crate::env_path("ANCHOR_RUNNER_STATE_ROOT")?;
+        // Old storage has no Kernel lifecycle authority. Refuse it before host
+        // setup can publish any execution state or invocation inputs.
+        crate::application::run_access::load(&state_root, &record.run_id)
+            .map_err(|error| error.to_string())?;
+        let (artifacts, nodes) = make_host_with_control(
             &record.run_id,
             control,
             library_root,
@@ -58,6 +60,10 @@ impl PreparedExecution {
                 .as_ref()
                 .and_then(|application| application.runtime_configuration().cloned()),
         )?;
+        let reader = application
+            .clone()
+            .unwrap_or_else(|| RunApplication::new(state_root.clone(), state_root));
+        let _ = nodes.io_resolver.run_application.set(reader);
         // Admission validates the Plugin declarations and host wiring. The
         // per-node network flag is enforced when the node is dispatched.
         if !nodes
@@ -80,11 +86,8 @@ impl PreparedExecution {
             }
         }
         let execution = Self {
-            store,
             artifacts,
             nodes,
-            control,
-            catalog_root,
             application,
         };
         let metadata = crate::application::metadata::load(
@@ -122,13 +125,12 @@ impl PreparedExecution {
                 )?;
             execution.bind_local_inputs(record, &graph)?;
         }
-        // The framed entrypoint prepares from the submitted snapshot before
-        // loading its stored cursor. Validate the durable record here too, so
-        // configuration mistakes cannot turn a recoverable Run into Failed.
-        if let Some(existing) = execution
-            .store
-            .load(&record.run_id)
-            .map_err(|error| error.to_string())?
+        // A saved Kernel Run may already have admitted a waiting child. Check
+        // that child's independent grants before either task resumes.
+        let application = execution.run_application();
+        if let Some(existing) = application
+            .execution_record(&record.run_id)
+            .map_err(|error| format!("Run configuration: {error:?}"))?
         {
             execution.validate_configuration(&existing)?;
         }
@@ -181,14 +183,28 @@ impl PreparedExecution {
             .validate_plugin_configuration(&bindings.values().cloned().collect::<Vec<_>>())
     }
 
+    fn run_application(&self) -> RunApplication {
+        self.nodes
+            .io_resolver
+            .run_application
+            .get()
+            .expect("prepared execution binds one Run reader")
+            .clone()
+    }
+
     fn validate_configuration(&self, root: &GraphRunRecord) -> Result<(), String> {
+        let application = self.run_application();
         let mut pending = vec![root.clone()];
         let mut checked = std::collections::BTreeSet::new();
         while let Some(record) = pending.pop() {
             if !checked.insert(record.run_id.clone()) {
                 continue;
             }
-            if !record.status.is_terminal()
+            let settled = application
+                .read_run(&record.run_id)
+                .map_err(|error| format!("Run configuration: {error:?}"))?
+                .is_some_and(|view| view.is_settled());
+            if !settled
                 && !self
                     .nodes
                     .invocation_plugin_authority(&record)
@@ -197,7 +213,7 @@ impl PreparedExecution {
                 Self::validate_plugin_bindings(&self.nodes, &record.plugin_bindings)?;
             }
             let metadata = crate::application::metadata::load(
-                &crate::env_path("ANCHOR_RUNNER_STATE_ROOT")?,
+                self.nodes.io_resolver.state_root(),
                 &record.run_id,
             )
             .map_err(|error| format!("Run configuration identity unavailable: {error:?}"))?;
@@ -206,9 +222,17 @@ impl PreparedExecution {
                 metadata.as_ref().map(|metadata| metadata.graph.as_str()),
             )?;
             self.nodes.io_resolver.verify_local_inputs(&record)?;
-            for key in crate::run_data::invocation_keys(&record) {
+            let mut invocation_keys = crate::run_data::invocation_keys(&record);
+            invocation_keys.extend(
+                application
+                    .dispatch_keys(&record.run_id)
+                    .map_err(|error| format!("Run dispatch identity: {error:?}"))?,
+            );
+            invocation_keys.sort_by_key(|key| key.durable_key());
+            invocation_keys.dedup();
+            for key in invocation_keys {
                 if crate::run_data::legacy_invocation_exists(
-                    &crate::env_path("ANCHOR_RUNNER_STATE_ROOT")?,
+                    self.nodes.io_resolver.state_root(),
                     &key,
                 )? {
                     return Err(
@@ -216,24 +240,23 @@ impl PreparedExecution {
                     );
                 }
             }
-            // A waiting parent may resume an already admitted child in-process.
-            // Its authority and model configuration must pass before either Run
-            // enters execution; the parent's grants never authorize the child.
             for call in record.graph_calls.values() {
                 if call.mode != "wait"
-                    || !record.cursor.as_ref().is_some_and(|cursor| {
-                        cursor.node_id == call.identity.node_id
-                            && cursor.key.invocation == call.identity.invocation
-                    })
+                    || call.status != anchor_runtime::graph::GraphCallStatus::Waiting
                 {
                     continue;
                 }
-                if let Some(child) = &call.child_run_id
-                    && let Some(child) =
-                        self.store.load(child).map_err(|error| error.to_string())?
-                    && !child.status.is_terminal()
-                {
-                    pending.push(child);
+                if let Some(child) = &call.child_run_id {
+                    let view = application
+                        .read_run(child)
+                        .map_err(|error| format!("waiting child configuration: {error:?}"))?;
+                    if view.is_some_and(|view| !view.is_settled()) {
+                        let child = application
+                            .execution_record(child)
+                            .map_err(|error| format!("waiting child configuration: {error:?}"))?
+                            .ok_or("waiting child Run is missing")?;
+                        pending.push(child);
+                    }
                 }
             }
         }
@@ -241,79 +264,8 @@ impl PreparedExecution {
     }
 
     pub(crate) fn kernel_ports(self, application: RunApplication) -> (HostArtifacts, HostNodes) {
-        self.nodes
-            .io_resolver
-            .run_application
-            .set(application)
-            .unwrap_or_else(|_| panic!("Run reader already bound"));
+        let _ = self.nodes.io_resolver.run_application.set(application);
         (self.artifacts, self.nodes)
-    }
-
-    pub(crate) async fn run(self, record: GraphRunRecord) -> Result<GraphRunRecord, String> {
-        self.validate_configuration(&record)?;
-        let run_id = record.run_id.clone();
-        let graph_calls = record
-            .snapshot
-            .ops
-            .values()
-            .any(|op| op.get("call").is_some());
-        let outcome = if graph_calls {
-            let catalog_root = self
-                .catalog_root
-                .clone()
-                .or_else(|| {
-                    std::env::var_os("ANCHOR_RUNNER_CATALOG_ROOT").map(std::path::PathBuf::from)
-                })
-                .ok_or_else(|| "ANCHOR_RUNNER_CATALOG_ROOT is required for Op.call".to_owned())?;
-            let state_root = std::env::var_os("ANCHOR_RUNNER_STATE_ROOT")
-                .map(std::path::PathBuf::from)
-                .ok_or_else(|| "ANCHOR_RUNNER_STATE_ROOT is required".to_owned())?;
-            let catalog = RunnerGraphCatalog {
-                root: catalog_root,
-                state: state_root,
-                application: self.application.clone(),
-            };
-            let host = InProcessGraphHost::new(
-                &catalog,
-                &self.store,
-                &self.artifacts,
-                &self.nodes,
-                &self.control,
-            );
-            GraphRunner::new(&self.store, &self.artifacts, &host, &self.control)
-                .run(record)
-                .await
-        } else {
-            GraphRunner::new(&self.store, &self.artifacts, &self.nodes, &self.control)
-                .run(record)
-                .await
-        };
-        match outcome {
-            Ok(record) => Ok(record),
-            Err(error) => {
-                // Only the fresh durable record may be updated after Runner releases its lease.
-                if matches!(error, GraphError::RunBusy(_) | GraphError::RunConflict) {
-                    return Err(error.to_string());
-                }
-                let _lease = self
-                    .store
-                    .acquire_lease(&run_id)
-                    .map_err(|e| e.to_string())?;
-                let mut durable = self
-                    .store
-                    .load(&run_id)
-                    .map_err(|e| e.to_string())?
-                    .ok_or_else(|| format!("{error}; accepted Run is missing"))?;
-                if matches!(durable.status, RunStatus::Ready | RunStatus::Running) {
-                    durable.status = RunStatus::Failed;
-                    durable.error = Some(format!(
-                        "host execution interrupted: {error}; unfinished effects are not automatically replayed"
-                    ));
-                    self.store.save(&durable).map_err(|e| e.to_string())?;
-                }
-                Ok(durable)
-            }
-        }
     }
 
     pub(crate) fn record_recovery_decision(
@@ -328,7 +280,7 @@ impl PreparedExecution {
     }
 }
 
-pub(crate) struct RunnerGraphCatalog {
+pub(crate) struct HostGraphCatalog {
     pub(crate) root: std::path::PathBuf,
     pub(crate) state: std::path::PathBuf,
     pub(crate) application: Option<RunApplication>,
@@ -340,7 +292,7 @@ struct PluginReferenceLease {
 
 impl anchor_runtime::graph::RunLease for PluginReferenceLease {}
 
-impl RunnerGraphCatalog {
+impl HostGraphCatalog {
     fn path(&self, name: &str) -> Result<std::path::PathBuf, GraphError> {
         if name.is_empty()
             || !name
@@ -360,7 +312,7 @@ impl RunnerGraphCatalog {
     }
 }
 
-impl GraphCatalog for RunnerGraphCatalog {
+impl GraphCatalog for HostGraphCatalog {
     fn lock_plugin_references<'a>(
         &'a self,
         cancellation: anchor_runtime::Cancellation,
@@ -575,7 +527,7 @@ impl GraphCatalog for RunnerGraphCatalog {
                     "graph-{:x}",
                     sha2::Sha256::digest(path.as_os_str().as_encoded_bytes())
                 );
-                FileRunStore::new(self.state.join("admission-locks")).acquire_lease(&id)
+                FileRunLeaseProvider::new(self.state.join("admission-locks")).acquire_lease(&id)
             }
         }
     }
@@ -663,8 +615,8 @@ impl GraphCatalog for RunnerGraphCatalog {
                 "child Run metadata does not match its durable Graph call identity".into(),
             ));
         }
-        let child = FileRunStore::new(self.state.join("runs")).load(run_id)?;
-        if child.is_some_and(|child| child.status.is_terminal()) {
+        let child = crate::application::run_access::load(&self.state, run_id)?;
+        if child.is_some_and(|child| child.is_settled()) {
             return Ok(());
         }
         crate::local_inputs::LocalInputs::from_env(self.state.clone())
@@ -761,13 +713,13 @@ impl GraphCatalog for RunnerGraphCatalog {
     fn child_execution_finished<'a>(
         &'a self,
         run_id: &'a str,
-        graph: &'a str,
-        status: RunStatus,
+        _graph: &'a str,
+        _phase: anchor_kernel::Phase,
     ) -> Pin<Box<dyn Future<Output = Result<(), GraphError>> + Send + 'a>> {
         Box::pin(async move {
             if let Some(application) = &self.application {
                 application
-                    .child_finished(run_id, graph, status)
+                    .kernel_child_finished(run_id)
                     .await
                     .map_err(|error| {
                         GraphError::Unsupported(format!("resume waiting parent: {error:?}"))
@@ -786,8 +738,8 @@ mod graph_call_ancestry_tests {
     use super::*;
     use crate::application::metadata::{self, GraphCallSource, RunMetadata};
 
-    fn catalog(state: &std::path::Path) -> RunnerGraphCatalog {
-        RunnerGraphCatalog {
+    fn catalog(state: &std::path::Path) -> HostGraphCatalog {
+        HostGraphCatalog {
             root: state.join("graphs"),
             state: state.to_path_buf(),
             application: None,

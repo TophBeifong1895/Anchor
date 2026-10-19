@@ -103,9 +103,7 @@ fn freeze_run(
         RUNS.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
     );
     let record = GraphRunRecord::create_with_id(snapshot, json!({}), run).unwrap();
-    FileRunStore::new(state.data_root.join("runs"))
-        .save(&record)
-        .unwrap();
+    fixtures::create(&state.application, &record);
     let metadata = RunMetadata::new(
         record.run_id.clone(),
         graph.into(),

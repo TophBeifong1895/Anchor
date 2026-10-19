@@ -1,7 +1,7 @@
 use super::*;
 use crate::application::AdmissionOptions;
+use crate::application::run_access::fixtures;
 use anchor_platform_session::{CreateSession, SessionStore};
-use anchor_runtime::graph::{RunStatus, RunStore};
 use serde_json::json;
 use sha2::{Digest, Sha256};
 use std::{ffi::OsString, fs, time::Duration};
@@ -155,17 +155,14 @@ async fn wait_for_library_reader(library: &Path) {
 async fn stop_gate(application: &RunApplication, root: &Path, run: &str) {
     tokio::time::timeout(Duration::from_secs(5), async {
         loop {
-            let record = application.store().load(run).unwrap().unwrap();
-            assert!(
-                !matches!(record.status, RunStatus::Completed | RunStatus::Failed),
-                "{record:?}"
-            );
-            if let Some(cursor) = record.cursor {
+            let record = fixtures::view(application, run);
+            assert!(!record.is_settled(), "{record:?}");
+            if let Some(dispatch) = record.dispatches().first() {
                 let workspace = crate::HostArtifacts::new(
                     root.join("state/artifacts"),
                     root.join("workspaces"),
                 )
-                .workspace_path(&cursor.key)
+                .workspace_path(&dispatch.key)
                 .unwrap();
                 if workspace.join("gate.ready").is_file() {
                     break;
@@ -185,9 +182,9 @@ async fn stop_gate(application: &RunApplication, root: &Path, run: &str) {
     application.control(run, "stop").await.unwrap();
     tokio::time::timeout(Duration::from_secs(5), async {
         loop {
-            let record = application.store().load(run).unwrap().unwrap();
-            assert_ne!(record.status, RunStatus::Failed, "{record:?}");
-            if record.status == RunStatus::Stopped && !application.run_is_active(run).await {
+            let record = fixtures::view(application, run);
+            assert!(!record.is_settled(), "{record:?}");
+            if record.has_stopped_execution() && !application.run_is_active(run).await {
                 return;
             }
             tokio::time::sleep(Duration::from_millis(5)).await;
@@ -211,7 +208,7 @@ async fn concurrent_run_admission_publishes_its_reference_before_uninstall_reche
     assert!(precondition.refusal().is_none());
     let (source, bundle) = application.load_graph("fixture").unwrap();
     let graph_lease = application.graph_admission_lease(&source).unwrap();
-    let held_active = application.active.lock().await;
+    let held_active = application.admission.lock().await;
     let admitting = tokio::spawn({
         let application = application.clone();
         async move {
@@ -250,11 +247,7 @@ async fn concurrent_run_admission_publishes_its_reference_before_uninstall_reche
         "{error:?}"
     );
     assert!(
-        application
-            .store()
-            .load(&run)
-            .unwrap()
-            .unwrap()
+        fixtures::record(&application, &run)
             .plugin_bindings
             .contains_key("demo")
     );

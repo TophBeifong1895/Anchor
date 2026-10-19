@@ -20,7 +20,6 @@ async fn resolver_returns_owned_anchor_tools_under_admitted_plugin_authority() {
     let bindings = tools
         .resolve_fixture_plugins(&["fake-tools".into()])
         .unwrap();
-    let store = FileRunStore::new(root.path().join("runs"));
     let snapshot = anchor_runtime::graph::GraphSnapshot::admit(json!({
         "objective":"resolver test","entry":"agent","agents":{"worker":{"model":"fixture"}},
         "ops":{},"nodes":[{"id":"agent","agent":"worker","plugins":["fake-tools"]}],"edges":[]
@@ -33,13 +32,12 @@ async fn resolver_returns_owned_anchor_tools_under_admitted_plugin_authority() {
         .map(|b| (b.id.clone(), b))
         .collect();
     admitted.plugin_bindings_initialized = true;
-    store.save(&admitted).unwrap();
-    let resolver = HostIoResolver::new(
+    test_runs::seed(root.path(), &admitted);
+    let mut resolver = HostIoResolver::new(
         HostArtifacts::new(artifacts_root, workspace_root),
         sandbox,
         std::sync::Arc::new(tools),
         tool_host::McpToolConfig::default(),
-        store,
         LocalInputs::new(root.path().to_path_buf(), None).unwrap(),
         fixed(&[]),
         None,
@@ -88,20 +86,23 @@ async fn resolver_returns_owned_anchor_tools_under_admitted_plugin_authority() {
     );
     assert!(workspace.is_dir());
 
-    let mut record = resolver
-        .run_store
-        .load(&request.key.run_id)
-        .unwrap()
-        .unwrap();
-    record
-        .plugin_bindings
-        .get_mut("fake-tools")
-        .unwrap()
-        .authorization_digest = "sha256:drift"
-        .try_into()
-        .expect("non-empty fixture authority");
-    resolver.run_store.save(&record).unwrap();
-    assert!(resolver.tools(&request).await.is_err());
+    let replacement = root.path().join("plugins/fake-tools");
+    std::fs::create_dir_all(&replacement).unwrap();
+    std::fs::write(
+        replacement.join("plugin.json"),
+        json!({"name":"replacement","network":true}).to_string(),
+    )
+    .unwrap();
+    resolver.tools = std::sync::Arc::new(tool_host::PluginToolHost::new(Vec::new()));
+    let error = resolver
+        .tools(&request)
+        .await
+        .err()
+        .expect("changed Host authority was accepted");
+    assert!(
+        error.to_string().contains("Host authorization changed"),
+        "{error}"
+    );
 }
 
 #[tokio::test]
@@ -148,8 +149,7 @@ async fn agent_tools_mount_plugins_without_a_run_policy_grant() {
         .map(|binding| (binding.id.clone(), binding))
         .collect();
     record.plugin_bindings_initialized = true;
-    let store = FileRunStore::new(state.join("runs"));
-    store.save(&record).unwrap();
+    test_runs::seed(&state, &record);
     crate::application::metadata::save(
         &state,
         &crate::application::RunMetadata::new(
@@ -176,7 +176,6 @@ async fn agent_tools_mount_plugins_without_a_run_policy_grant() {
         sandbox,
         std::sync::Arc::new(tool_host::PluginToolHost::new(Vec::<String>::new())),
         tool_host::McpToolConfig::default(),
-        store,
         LocalInputs::new(state.clone(), None).unwrap(),
         fixed(&[]),
         None,
@@ -251,8 +250,7 @@ async fn agent_command_tools_receive_only_the_nodes_frozen_local_inputs() {
             true,
         )
         .unwrap();
-    let store = FileRunStore::new(state.join("runs"));
-    store.save(&record).unwrap();
+    test_runs::seed(&state, &record);
     crate::application::metadata::save(
         &state,
         &crate::application::RunMetadata::new(
@@ -278,7 +276,6 @@ async fn agent_command_tools_receive_only_the_nodes_frozen_local_inputs() {
         sandbox,
         std::sync::Arc::new(tool_host::PluginToolHost::new(Vec::<String>::new())),
         tool_host::McpToolConfig::default(),
-        store,
         local,
         fixed(&[]),
         None,

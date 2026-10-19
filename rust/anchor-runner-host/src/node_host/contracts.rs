@@ -19,7 +19,7 @@ pub(crate) struct NodeConversationHint {
 ///
 /// Most failures here are "this host cannot do that", but one of them is "the
 /// Run recorded a fact this host can no longer honor". The second must reach the
-/// GraphRunner as the class it is, so the resolver carries it instead of
+/// Kernel scheduler as the class it is, so the resolver carries it instead of
 /// flattening every cause into a string that the caller then relabels.
 #[derive(Debug)]
 pub(crate) enum ResolutionError {

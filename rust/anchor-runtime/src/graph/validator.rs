@@ -634,7 +634,6 @@ impl Validator for GraphValidator {
                             nodes,
                             next_index: 0,
                             status: ParallelBranchStatus::Ready,
-                            cursor: None,
                             completed: Vec::new(),
                             error: None,
                         })

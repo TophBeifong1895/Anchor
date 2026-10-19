@@ -106,7 +106,7 @@ fn graph_mcp_startup_errors_settle_without_repolling_completed_resolution() {
         assert_eq!(detail["projection"]["outcome"], "failed", "{detail}\n{log}");
         assert_eq!(detail["active"], false, "{detail}");
         assert!(
-            detail["state"]["error"]
+            detail["projection"]["reason"]
                 .as_str()
                 .unwrap()
                 .contains(expected),
@@ -167,6 +167,6 @@ fn graph_agent_calls_its_sandboxed_stdio_plugin_and_publishes_an_artifact() {
     assert!(!log.contains("panicked"), "{log}");
     host.evidence(&provider, &run, json!({
         "case_source":CASE_SOURCE,"sandboxed_stdio_plugin_called":true,"artifact_checked":true,
-        "boundary":"real Host, GraphRunner, NodeExecutionPort, Goose ACP and Plugin MCP; deterministic model transport"
+        "boundary":"real Host, KernelScheduler, NodeExecutionPort, Goose ACP and Plugin MCP; deterministic model transport"
     }));
 }

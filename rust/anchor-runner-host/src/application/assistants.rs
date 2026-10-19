@@ -19,14 +19,14 @@ impl RunApplication {
         session: &str,
         run: &str,
     ) -> Result<(), ApplicationError> {
-        let active = self.active.lock().await;
+        let _admission = self.admission.lock().await;
         let metadata = self.metadata(run)?.ok_or(ApplicationError::Missing)?;
         let source = metadata.assistant.ok_or(ApplicationError::Missing)?;
         if source.owner != owner || source.session != session {
             return Err(ApplicationError::Missing);
         }
         let record = self.read_run(run)?.ok_or(ApplicationError::Missing)?;
-        if !record.with_active(active.contains_key(run)).is_quiescent() {
+        if !record.is_quiescent() {
             return Err(ApplicationError::Conflict(
                 "stop the assistant before retiring its instance".into(),
             ));

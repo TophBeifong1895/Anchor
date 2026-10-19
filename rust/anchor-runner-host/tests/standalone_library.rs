@@ -74,7 +74,7 @@ fn bundle_and_inline_admission_require_an_explicit_library_for_plugin_references
         assert!(
             !root
                 .path()
-                .join(format!("state/runs/{operation}.json"))
+                .join(format!("state/kernel-runs/run%2F{operation}"))
                 .exists()
         );
     }

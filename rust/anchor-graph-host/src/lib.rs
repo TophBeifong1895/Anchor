@@ -1,10 +1,9 @@
 //! Standalone Graph bundle loading and minimal in-process host adapter for
 //! recursive Graph calls.
 //!
-//! The host supplies a graph catalog, the shared FileRunStore, artifact port,
-//! node executor, and run control. Child Runs are always executed by the same
-//! `GraphRunner` implementation. Bundle loading is read-only; result
-//! materialization, session handoff, and platform APIs are outside this adapter.
+//! The host supplies Run access, artifacts and execution through small ports.
+//! Lifecycle and progress belong to the shared Kernel; this crate owns Call
+//! admission identity, input staging, Session handoff and result export.
 
 mod bundle;
 mod dependencies;
@@ -24,7 +23,9 @@ pub use dependencies::{
     VIEWS_DIRECTORY, mutable_paths_from_manifest, plugin_view_path, resolved_library_root,
     store_root, views_root,
 };
-pub use graph_call::{ChildExecutionPort, InProcessGraphHost, child_run_id};
+pub use graph_call::{
+    CallRun, CallRunAccess, ChildExecutionPort, InProcessGraphHost, child_run_id,
+};
 pub use graph_catalog::{ChildRunControl, GraphCatalog, PluginReferenceLeaseFuture};
 pub use mcp::{McpServerDefinition, host_environment_references};
 pub use plugin_catalog::{

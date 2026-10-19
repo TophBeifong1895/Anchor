@@ -1,5 +1,5 @@
 use crate::application::{ApplicationError, RunApplication, RunMetadata};
-use anchor_runtime::graph::{CommitRef, InvocationKey, RunStatus};
+use anchor_runtime::graph::{CommitRef, InvocationKey};
 use serde_json::Value;
 use std::collections::BTreeMap;
 
@@ -87,8 +87,8 @@ fn channel_reply_is_unsuccessful(view: &super::RunView<'_>) -> bool {
         } => true,
         super::RunPhase::Waiting {
             for_what: super::RunWait::Human,
-            reason,
-        } => !matches!(reason, Some("paused" | "budget")),
+            ..
+        } => view.has_stopped_execution(),
         super::RunPhase::Executing
         | super::RunPhase::Waiting { .. }
         | super::RunPhase::Settled {
@@ -114,8 +114,8 @@ fn startup_settlement(view: &super::RunView<'_>) -> Option<StartupChannelSettlem
         } => Some(StartupChannelSettlement::Abort),
         super::RunPhase::Waiting {
             for_what: super::RunWait::Human,
-            reason,
-        } if !matches!(reason, Some("paused" | "budget")) => Some(StartupChannelSettlement::Stop),
+            ..
+        } if view.has_stopped_execution() => Some(StartupChannelSettlement::Stop),
         super::RunPhase::Executing
         | super::RunPhase::Waiting { .. }
         | super::RunPhase::Settled {
@@ -222,10 +222,9 @@ impl RunApplication {
         let started = progress.invocations.get(work_node).copied().unwrap_or(0);
         let has_current_invocation = view.active()
             || view
-                .record
-                .cursor
-                .as_ref()
-                .is_some_and(|cursor| cursor.node_id == work_node);
+                .frontier
+                .iter()
+                .any(|dispatch| dispatch.node_id == work_node);
         if has_current_invocation
             && started > latest_result.map_or(0, |result| result.key.invocation)
         {
@@ -250,13 +249,14 @@ impl RunApplication {
         match self.read_channel_run(run) {
             Ok(Some(view)) => {
                 view.is_settled()
-                    || matches!(
-                        view.phase(),
-                        super::RunPhase::Waiting {
-                            for_what: super::RunWait::Human,
-                            reason,
-                        } if reason != Some("paused")
-                    )
+                    || (!view.has_pending_recovery()
+                        && matches!(
+                            view.phase(),
+                            super::RunPhase::Waiting {
+                                for_what: super::RunWait::Human,
+                                reason,
+                            } if reason != Some("paused")
+                        ))
             }
             _ => true,
         }
@@ -283,213 +283,77 @@ impl RunApplication {
         &self,
         run: &ChannelStartupRun,
     ) -> Result<(), ApplicationError> {
-        let status = match run.settlement {
-            Some(StartupChannelSettlement::Complete) => RunStatus::Completed,
-            Some(StartupChannelSettlement::Fail) => RunStatus::Failed,
-            Some(StartupChannelSettlement::Abort) => RunStatus::Aborted,
-            Some(StartupChannelSettlement::Stop) => RunStatus::Stopped,
-            None => return Ok(()),
-        };
-        self.settle_channel_run(&run.run_id, status)
+        if run.settlement.is_none() {
+            return Ok(());
+        }
+        self.settle_channel_run(&run.run_id)
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use super::super::fixtures;
     use super::*;
-    use anchor_runtime::graph::{
-        GraphRunRecord, NodeCompletion, PendingRecovery, RecoveryAttempt, RunCursor, RunResult,
-        RunStore,
-    };
+    use anchor_runtime::graph::{GraphRunRecord, GraphSnapshot};
     use serde_json::json;
 
-    fn record() -> GraphRunRecord {
-        record_with_id("channel-facade-test")
-    }
-
-    fn record_with_id(run_id: &str) -> GraphRunRecord {
-        GraphRunRecord::create_with_id(
-            serde_json::from_value(json!({
-                "objective":"test", "entry":"work",
-                "agents":{"role":{"model":"fixture","instructions":"work"}},
-                "nodes":[{"id":"work","agent":"role"}], "edges":[]
-            }))
-            .unwrap(),
-            json!({}),
-            run_id,
-        )
-        .unwrap()
-    }
-
-    fn key(record: &GraphRunRecord, invocation: u64) -> InvocationKey {
-        InvocationKey {
-            run_id: record.run_id.clone(),
-            graph_digest: record.graph_digest.clone(),
-            node_id: "work".into(),
-            invocation,
-        }
-    }
-
     #[test]
-    fn channel_queries_preserve_each_legacy_state_and_startup_action() {
+    fn channel_queries_preserve_kernel_facts_and_startup_actions() {
         use StartupChannelSettlement::{Abort, Complete, Fail, Stop};
-
         let root = tempfile::tempdir().unwrap();
         let application = RunApplication::new(root.path().into(), root.path().join("catalog"));
-        for (status, wire, completed, unsuccessful, executor, settled, settlement) in [
-            (
-                RunStatus::Ready,
-                "executing",
-                false,
-                false,
-                true,
-                false,
-                None,
-            ),
-            (
-                RunStatus::Running,
-                "executing",
-                false,
-                false,
-                true,
-                false,
-                None,
-            ),
-            (
-                RunStatus::Paused,
-                "waiting",
-                false,
-                false,
-                false,
-                false,
-                None,
-            ),
-            (
-                RunStatus::BudgetStopped,
-                "waiting",
-                false,
-                false,
-                false,
-                true,
-                None,
-            ),
-            (
-                RunStatus::WaitingCall,
-                "waiting",
-                false,
-                false,
-                false,
-                false,
-                None,
-            ),
-            (
-                RunStatus::WaitingRecovery,
-                "waiting",
-                false,
-                false,
-                false,
-                false,
-                None,
-            ),
-            (
-                RunStatus::Completed,
-                "settled",
-                true,
-                false,
-                false,
-                true,
-                Some(Complete),
-            ),
-            (
-                RunStatus::Failed,
-                "settled",
-                false,
-                true,
-                false,
-                true,
-                Some(Fail),
-            ),
-            (
-                RunStatus::Aborted,
-                "settled",
-                false,
-                true,
-                false,
-                true,
-                Some(Abort),
-            ),
-            (
-                RunStatus::Stopped,
-                "waiting",
-                false,
-                true,
-                false,
-                true,
-                Some(Stop),
-            ),
-        ] {
-            let mut record = record();
-            record.status = status;
-            if matches!(
-                status,
-                RunStatus::BudgetStopped | RunStatus::WaitingRecovery
-            ) {
-                let key = key(&record, 1);
-                record.invocations.insert("work".into(), 1);
-                record.passes.insert("work".into(), 1);
-                record.cursor = Some(RunCursor {
-                    node_id: "work".into(),
-                    key: key.clone(),
-                    input_commits: Vec::new(),
-                    prepared_input: Value::Null,
-                });
-                if status == RunStatus::WaitingRecovery {
-                    record.recovery.push(PendingRecovery {
-                        key,
-                        attempt: RecoveryAttempt {
-                            attempt_id: 1,
-                            step: 1,
-                            tool: "fixture-effect".into(),
-                            started_at: "2026-10-19T00:00:00+00:00".into(),
-                        },
-                    });
-                }
-            }
-            application.store().save(&record).unwrap();
-            let run = record.run_id.as_str();
-            let reply = application.channel_reply_run(run).unwrap().unwrap();
-            assert_eq!(reply.completed, completed, "{wire}");
-            assert_eq!(reply.unsuccessful, unsuccessful, "{wire}");
-            assert_eq!(reply.assistant_expects_executor, executor, "{wire}");
+        for id in fixtures::scenarios(&application) {
+            let record = fixtures::record(&application, id);
+            let completed = id == "done";
+            let unsuccessful = matches!(id, "stopped" | "failed" | "aborted");
+            let executor = id == "executing";
+            let settled = matches!(id, "budget" | "stopped" | "done" | "failed" | "aborted");
+            let wire = if id == "executing" {
+                "executing"
+            } else if matches!(id, "done" | "failed" | "aborted") {
+                "settled"
+            } else {
+                "waiting"
+            };
+            let settlement = match id {
+                "done" => Some(Complete),
+                "failed" => Some(Fail),
+                "aborted" => Some(Abort),
+                "stopped" => Some(Stop),
+                _ => None,
+            };
+            let reply = application.channel_reply_run(id).unwrap().unwrap();
+            assert_eq!(reply.completed, completed, "{id}");
+            assert_eq!(reply.unsuccessful, unsuccessful, "{id}");
+            assert_eq!(reply.assistant_expects_executor, executor, "{id}");
             assert_eq!(
-                application.channel_reply_is_completed(run).unwrap(),
+                application.channel_reply_is_completed(id).unwrap(),
                 Some(completed)
             );
-            assert_eq!(
-                application.channel_progress_is_settled(run),
-                settled,
-                "{wire}"
-            );
-            assert_eq!(application.channel_progress_status(run), wire);
-            assert!(application.channel_run_is_admitted(run).unwrap());
-            let candidates = application.channel_startup_runs().unwrap();
-            assert_eq!(candidates.len(), 1);
-            assert_eq!(candidates[0].run_id, run);
-            assert_eq!(candidates[0].settlement, settlement, "{wire}");
+            assert_eq!(application.channel_progress_is_settled(id), settled, "{id}");
+            assert_eq!(application.channel_progress_status(id), wire);
+            assert!(application.channel_run_is_admitted(id).unwrap());
+            let candidate = application
+                .channel_startup_runs()
+                .unwrap()
+                .into_iter()
+                .find(|candidate| candidate.run_id == id)
+                .unwrap();
+            assert_eq!(candidate.settlement, settlement, "{id}");
             let mut metadata = RunMetadata::new(
-                run.into(),
+                id.into(),
                 "fixture".into(),
-                record.graph_digest.clone(),
+                record.graph_digest,
                 root.path(),
             )
             .unwrap();
             assert_eq!(
-                candidates[0].preserves_assistant(&metadata),
+                candidate.preserves_assistant(&metadata),
                 !completed && !unsuccessful,
-                "{wire}"
+                "{id}"
             );
             metadata.graph_digest = "another-graph".into();
-            assert!(!candidates[0].preserves_assistant(&metadata));
+            assert!(!candidate.preserves_assistant(&metadata));
         }
     }
 
@@ -523,7 +387,13 @@ mod tests {
         assert!(application.channel_startup_runs().unwrap().is_empty());
         std::fs::create_dir_all(root.path().join("runs")).unwrap();
         std::fs::write(root.path().join(format!("runs/{run}.json")), b"not JSON").unwrap();
-        let expected = application.store().load(run).unwrap_err().to_string();
+        let expected = match application.read_run(run).err().unwrap() {
+            ApplicationError::Conflict(message)
+            | ApplicationError::Invalid(message)
+            | ApplicationError::Storage(message) => message,
+            ApplicationError::Missing => panic!("legacy bytes must be rejected by name"),
+        };
+        assert!(expected.contains("legacy"));
         assert_eq!(
             application.channel_run_is_admitted(run).err(),
             Some(expected.clone())
@@ -552,41 +422,37 @@ mod tests {
     }
 
     #[test]
-    fn reply_and_file_projections_keep_result_order_and_cursor_fallback() {
+    fn reply_and_file_projections_keep_result_order_and_frontier_fallback() {
         let root = tempfile::tempdir().unwrap();
         let application = RunApplication::new(root.path().into(), root.path().join("catalog"));
-        let mut record = record();
-        record.status = RunStatus::Running;
-        let results = (1..=2)
-            .map(|invocation| RunResult {
-                node_id: "work".into(),
-                key: key(&record, invocation),
-                plugin_views: Default::default(),
-                plugin_digests: Default::default(),
-                interruption: None,
-                completion: NodeCompletion {
-                    submission: format!("  reply {invocation}  "),
-                    route: None,
-                    model_requests: 0,
-                    output: json!({"suppressed":true,"reply_for":"turn","source_commit":"invalid-until-used","items":[{"type":"image"}]}),
-                },
-                commit: CommitRef { id: format!("commit-{invocation}"), node_id: "work".into(), invocation },
-                sequence: invocation,
-            })
-            .collect();
-        record.results.insert("work".into(), results);
-        record.sequence = 2;
-        record.invocations.insert("work".into(), 3);
-        record.passes.insert("work".into(), 3);
-        let current = key(&record, 3);
-        record.cursor = Some(RunCursor {
-            node_id: "work".into(),
-            key: current.clone(),
-            input_commits: Vec::new(),
-            prepared_input: Value::Null,
-        });
-        application.store().save(&record).unwrap();
+        let record = GraphRunRecord::create_with_id(
+            GraphSnapshot::from_authoring(json!({
+                "objective":"test", "entry":"work",
+                "agents":{"role":{"model":"fixture","instructions":"work"}},
+                "nodes":[{"id":"work","agent":"role","max_rounds":10}],
+                "edges":[{"from":"work","to":"work"}]
+            }))
+            .unwrap(),
+            json!({}),
+            "channel-facade-test",
+        )
+        .unwrap();
+        fixtures::create(&application, &record);
         let run = record.run_id.as_str();
+        for invocation in 1..=2 {
+            let mut completion = fixtures::completion(json!({
+                "suppressed":true,"reply_for":"turn","source_commit":"invalid-until-used",
+                "items":[{"type":"image"}]
+            }));
+            completion.submission = format!("  reply {invocation}  ");
+            fixtures::complete(&application, run, "work", completion, None);
+        }
+        let current = InvocationKey {
+            run_id: run.into(),
+            graph_digest: record.graph_digest.clone(),
+            node_id: "work".into(),
+            invocation: 3,
+        };
         assert_eq!(
             application
                 .assistant_progress_work_invocation(run, "work")
@@ -613,13 +479,14 @@ mod tests {
         assert_eq!(replies[1].reply_for.as_deref(), Some("turn"));
         assert_eq!(replies[1].source_commit, json!("invalid-until-used"));
         assert_eq!(replies[1].items, json!([{"type":"image"}]));
+        let committed = fixtures::record(&application, run);
         assert_eq!(
             application
                 .channel_file_snapshot(run, "work")
                 .unwrap()
                 .unwrap()
                 .commit,
-            Some(record.results["work"][1].commit.clone())
+            Some(committed.results["work"][1].commit.clone())
         );
         assert!(
             application
@@ -629,13 +496,12 @@ mod tests {
                 .commit
                 .is_none()
         );
-        record.cursor = None;
-        application.store().save(&record).unwrap();
+        fixtures::control(&application, run, "abandon", "operator");
         assert_eq!(
             application
                 .assistant_progress_work_invocation(run, "work")
                 .unwrap(),
-            Some(key(&record, 2))
+            Some(committed.results["work"][1].key.clone())
         );
     }
 }

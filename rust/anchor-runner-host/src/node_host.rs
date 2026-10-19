@@ -8,9 +8,9 @@ use crate::{
 };
 use anchor_graph_host::PluginCatalog;
 use anchor_runtime::graph::{
-    CommitRef, CompletionFact, FileRunStore, GraphError, GraphRunRecord, InvocationKey,
-    NodeCompletion, NodeExecutionCapabilities, NodeExecutionOutcome, NodeExecutionPort,
-    NodeExecutionRequest, NodeKind, PluginBinding, RecoveryDecision, RunStore,
+    CommitRef, CompletionFact, GraphError, GraphRunRecord, InvocationKey, NodeCompletion,
+    NodeExecutionCapabilities, NodeExecutionOutcome, NodeExecutionPort, NodeExecutionRequest,
+    NodeKind, PluginBinding, RecoveryDecision,
 };
 use anchor_runtime::{NetworkPolicy, SandboxError, SandboxPort, SandboxRequest, SandboxStatus};
 use anchor_sandbox_bwrap::BubblewrapSandbox;
@@ -56,7 +56,6 @@ pub(crate) fn conversation_hint_for(
 }
 
 pub(crate) struct HostNodes {
-    pub(crate) control: crate::HostControl,
     pub(crate) sandbox: std::sync::Arc<BubblewrapSandbox>,
     pub(crate) allowed_commands: Vec<String>,
     pub(crate) artifacts: HostArtifacts,
@@ -75,7 +74,6 @@ pub(crate) struct HostIoResolver {
     mcp: tool_host::McpToolConfig,
     runtime_configuration:
         Option<std::sync::Arc<crate::runtime_configuration::RuntimeConfiguration>>,
-    run_store: FileRunStore,
     pub(crate) run_application: std::sync::OnceLock<crate::application::RunApplication>,
     /// The one place Plugins exist: the deployment's Library root. There is no
     /// second resolution path (no bundle-first, no catalog-first fallback).
@@ -107,7 +105,6 @@ impl HostIoResolver {
         sandbox: std::sync::Arc<BubblewrapSandbox>,
         tools: std::sync::Arc<tool_host::PluginToolHost>,
         mcp: tool_host::McpToolConfig,
-        run_store: FileRunStore,
         local_inputs: LocalInputs,
         mounts: std::sync::Arc<dyn PluginMountSource>,
         pilot_graph: Option<String>,
@@ -118,7 +115,6 @@ impl HostIoResolver {
             tools,
             mcp,
             runtime_configuration: None,
-            run_store,
             run_application: std::sync::OnceLock::new(),
             library_root: None,
             observed_views: std::sync::Mutex::new(BTreeMap::new()),
@@ -159,8 +155,21 @@ impl HostIoResolver {
 
 #[cfg(test)]
 mod resolver_tests;
+#[cfg(test)]
+pub(crate) mod test_runs;
 
 impl HostIoResolver {
+    pub(crate) fn state_root(&self) -> &Path {
+        self.local_inputs.state_root()
+    }
+
+    fn run_application(&self) -> crate::application::RunApplication {
+        self.run_application.get().cloned().unwrap_or_else(|| {
+            let root = self.local_inputs.state_root().to_path_buf();
+            crate::application::RunApplication::new(root.clone(), root)
+        })
+    }
+
     fn load_run(
         &self,
         id: &str,
@@ -171,6 +180,8 @@ impl HostIoResolver {
                 anchor_runtime::graph::GraphError::Unsupported(format!("Run lookup: {e:?}"))
             });
         }
-        self.run_store.load(id)
+        self.run_application()
+            .execution_record(id)
+            .map_err(|error| GraphError::Unsupported(format!("Run lookup: {error:?}")))
     }
 }

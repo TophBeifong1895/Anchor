@@ -56,10 +56,9 @@ async fn publishing_network_and_plugin_changes_preserves_live_runs_and_library_b
         let (_, bundle) = application.load_graph("assistant").unwrap();
         let mut record =
             GraphRunRecord::create_with_id(bundle.snapshot, json!({}), "live-assistant").unwrap();
-        record.status = RunStatus::Running;
         record.plugin_bindings = referenced_plugin_bindings(&catalog, &["offline".into()]).unwrap();
         record.plugin_bindings_initialized = true;
-        application.store().save(&record).unwrap();
+        fixtures::create(&application, &record);
         metadata::save(
             &application.data_root,
             &RunMetadata::new(
@@ -71,15 +70,8 @@ async fn publishing_network_and_plugin_changes_preserves_live_runs_and_library_b
             .unwrap(),
         )
         .unwrap();
-        application.active.lock().await.insert(
-            record.run_id.clone(),
-            crate::application::ActiveRun::new(
-                RunApplication::graph_identity(&bundle_path).unwrap(),
-                crate::application::new_control(),
-            ),
-        );
-        let frozen_path = application.data_root.join("runs/live-assistant.json");
-        let frozen_bytes = std::fs::read(&frozen_path).unwrap();
+        let drive = fixtures::gated_drive(&application, &record.run_id).await;
+        let frozen_record = fixtures::record(&application, &record.run_id);
         let plugin_bytes = files(&catalog.join("plugins"));
         let mut next = original;
         next["agents"]["worker"]["network"] = json!(true);
@@ -89,7 +81,10 @@ async fn publishing_network_and_plugin_changes_preserves_live_runs_and_library_b
             .await
             .unwrap();
 
-        assert_eq!(std::fs::read(&frozen_path).unwrap(), frozen_bytes);
+        assert_eq!(
+            fixtures::record(&application, &record.run_id),
+            frozen_record
+        );
         assert_eq!(files(&catalog.join("plugins")), plugin_bytes);
         assert_eq!(
             application.read_graph("assistant").unwrap()["definition"],
@@ -101,5 +96,6 @@ async fn publishing_network_and_plugin_changes_preserves_live_runs_and_library_b
         assert!(!record.snapshot.agents["worker"].network);
         assert_eq!(record.plugin_bindings.len(), 1);
         assert!(application.active_runs(None).await.contains(&record.run_id));
+        drive.drain(&application, &record.run_id).await;
     }
 }

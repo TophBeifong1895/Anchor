@@ -21,7 +21,7 @@ pub struct ArtifactFreezeContext {
 
 pub trait ArtifactPort: Send + Sync {
     /// Must be idempotent for an InvocationKey. A retry after freeze succeeded
-    /// but before the RunStore commit must resolve to the same immutable commit.
+    /// but before the Kernel result submission must resolve to the same immutable commit.
     fn freeze<'a>(
         &'a self,
         key: &'a InvocationKey,
@@ -128,7 +128,7 @@ pub enum GraphCallOutcome {
 /// atomically persist identity → child Run admission, return that same child
 /// for every retry, and report `Uncertain` when they cannot prove the durable
 /// fact. `Detached` is legal only after admission is durable. Child execution
-/// itself uses the host's ordinary GraphRunner instance.
+/// itself uses the host's ordinary Kernel scheduler.
 pub trait GraphCallPort: Send + Sync {
     fn call<'a>(
         &'a self,
@@ -421,7 +421,7 @@ pub enum NodeExecutionOutcome {
         route: Option<String>,
     },
     /// Unknown external tool effects require an operator decision before this
-    /// invocation can advance. The Graph cursor remains unchanged.
+    /// invocation can advance. Its Graph frontier remains open.
     WaitingRecovery {
         attempts: Vec<RecoveryAttempt>,
     },
@@ -442,10 +442,4 @@ pub enum NodeExecutionOutcome {
     Failed {
         reason: String,
     },
-}
-
-pub trait RunControl: Send + Sync {
-    fn pause_requested(&self) -> bool;
-    fn stop_requested(&self) -> bool;
-    fn cancellation(&self) -> crate::Cancellation;
 }

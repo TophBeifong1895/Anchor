@@ -21,7 +21,7 @@ impl<S: Store, A: ArtifactPort + ?Sized, N: NodeExecutionPort + ?Sized>
             node_id: dispatch.node.id.clone(),
             invocation: dispatch.invocation,
         };
-        let cursor = self.cursor(&record, dispatch, key.clone()).await?;
+        let input = self.input(&record, dispatch, key.clone()).await?;
         let port = self
             .nodes
             .graph_call_port()
@@ -30,7 +30,7 @@ impl<S: Store, A: ArtifactPort + ?Sized, N: NodeExecutionPort + ?Sized>
             .call(
                 &identity,
                 spec,
-                &cursor.prepared_input,
+                &input.prepared_input,
                 &dispatch.inputs,
                 self.cancellation.clone(),
             )

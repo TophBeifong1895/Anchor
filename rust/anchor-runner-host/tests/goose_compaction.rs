@@ -202,7 +202,7 @@ fn assert_compaction(history: &Value, facts: &Facts) -> Value {
 
 fn assert_artifacts(host: &Host, run: &str, facts: &Facts) -> Value {
     let saved = host.record(run);
-    assert_eq!(saved["status"], "completed", "{saved}");
+    assert_eq!(saved["projection"]["result"]["outcome"], "done", "{saved}");
     for (node, name, expected) in [
         ("worker", "evidence.txt", facts.workspace.as_bytes()),
         ("worker", "workspace.txt", facts.workspace.as_bytes()),
@@ -285,7 +285,14 @@ fn assert_identity(host: &Host, run: &str, before: &Value) -> Value {
             "Goose identity changed at {name}"
         );
     }
-    assert_eq!(host.record(run)["invocations"]["worker"], 1);
+    let saved = host.record(run);
+    if saved["results"]["worker"].is_array() {
+        assert_eq!(saved["invocations"]["worker"], 1);
+        assert_eq!(saved["results"]["worker"][0]["key"], before["key"]);
+    } else {
+        assert!(saved["invocations"].get("worker").is_none());
+        assert_eq!(saved["frontier"][0]["key"], before["key"]);
+    }
     after
 }
 
@@ -703,8 +710,8 @@ fn native_goose_context_length_error_compacts_same_prompt_and_rereads_plugin_wit
         "completed-or-failed-reactive-compaction",
     );
     assert_eq!(
-        response["status"],
-        "completed",
+        response["projection"]["outcome"],
+        "done",
         "{response}; evidence {}",
         provider.root.display()
     );

@@ -1,21 +1,14 @@
 //! Deletion consumes the owning store through the Run access boundary. Native
 //! reservations exclude controls and worker registration during host cleanup.
 use super::{RunView, kernel_runs::deletion::KernelDeletion};
-use crate::application::{ActiveRun, ApplicationError, RunApplication};
-use anchor_runtime::graph::RunStore;
-use std::{collections::HashMap, path::Path};
+use crate::application::{ApplicationError, RunApplication};
+use std::path::Path;
 
 pub(in crate::application) struct RunDeletionBatch {
     kernel: Option<KernelDeletion>,
 }
 
 impl RunDeletionBatch {
-    fn owns(&self, id: &str) -> bool {
-        self.kernel
-            .as_ref()
-            .is_some_and(|deletion| deletion.contains(id))
-    }
-
     fn remove(&self, id: &str) -> Result<(), ApplicationError> {
         if let Some(deletion) = self
             .kernel
@@ -58,7 +51,16 @@ impl RunApplication {
         workspace_root: &Path,
         deletion: &RunDeletionBatch,
     ) -> Result<(), String> {
-        crate::run_data::delete_run_data(&record.record, &self.data_root, workspace_root)?;
+        crate::run_data::delete_run_data(
+            &record.record,
+            &record
+                .frontier
+                .iter()
+                .map(|dispatch| dispatch.key.clone())
+                .collect::<Vec<_>>(),
+            &self.data_root,
+            workspace_root,
+        )?;
         deletion
             .remove(run_id)
             .map_err(|error| format!("{error:?}"))?;
@@ -69,11 +71,11 @@ impl RunApplication {
         &self,
         run_id: &str,
         workspace_root: &Path,
-        active: &HashMap<String, ActiveRun>,
+        active: &(),
     ) -> Result<(), ApplicationError> {
         let deletion = self.reserve_run_deletions(&[run_id.to_owned()])?;
         let view = self.read_run(run_id)?.ok_or(ApplicationError::Missing)?;
-        if active.contains_key(run_id) || view.active() {
+        if view.active() {
             return Err(ApplicationError::Conflict(
                 "that Run is still running".into(),
             ));
@@ -108,12 +110,6 @@ impl RunApplication {
                 ));
             }
         }
-        let store = self.store();
-        let _lease = if deletion.owns(run_id) {
-            None
-        } else {
-            Some(store.acquire_lease(run_id)?)
-        };
         let artifacts = crate::HostArtifacts::new(
             self.data_root.join("artifacts"),
             workspace_root.to_path_buf(),
@@ -164,8 +160,17 @@ impl RunApplication {
                 workspace_root,
             )?;
         }
-        crate::run_data::delete_run_data(record, &self.data_root, workspace_root)
-            .map_err(ApplicationError::Storage)?;
+        crate::run_data::delete_run_data(
+            record,
+            &view
+                .frontier
+                .iter()
+                .map(|dispatch| dispatch.key.clone())
+                .collect::<Vec<_>>(),
+            &self.data_root,
+            workspace_root,
+        )
+        .map_err(ApplicationError::Storage)?;
         deletion.remove(run_id)?;
         crate::run_data::remove_run_files(&self.data_root, run_id)
             .map_err(ApplicationError::Storage)

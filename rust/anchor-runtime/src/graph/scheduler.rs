@@ -10,13 +10,23 @@ use std::{collections::VecDeque, panic::AssertUnwindSafe};
 
 mod calls;
 mod execution;
-pub use execution::dispatch_cursor;
+pub use execution::dispatch_input;
 #[cfg(test)]
 mod tests;
 
-pub const EXECUTOR_ID: &str = "kernel-probe/executor";
-pub const HOST_ID: &str = "kernel-probe/host";
-pub const OPERATOR_ID: &str = "kernel-probe/operator";
+/// Input for one live dispatch, derived from the current validator frontier.
+/// It is never persisted as a second execution cursor.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DispatchInput {
+    pub node_id: String,
+    pub key: InvocationKey,
+    pub input_commits: Vec<CommitRef>,
+    pub prepared_input: Value,
+}
+
+pub const EXECUTOR_ID: &str = "anchor/executor";
+pub const HOST_ID: &str = "anchor/host";
+pub const OPERATOR_ID: &str = "anchor/operator";
 
 pub fn kernel_error(error: anchor_kernel::KernelError) -> GraphError {
     GraphError::Io(io::Error::other(error.to_string()))
@@ -81,13 +91,21 @@ impl<S: Store, A: ArtifactPort + ?Sized, N: NodeExecutionPort + ?Sized>
     KernelScheduler<'_, S, A, N>
 {
     fn load(&self, id: &str) -> Result<Resource, GraphError> {
-        self.kernel
+        let resource = self
+            .kernel
             .load(id)
             .map_err(kernel_error)?
-            .ok_or_else(|| GraphError::CorruptRun(format!("missing Kernel Run {id}")))
+            .ok_or_else(|| GraphError::CorruptRun(format!("missing Kernel Run {id}")))?;
+        record_of(&resource)?.validate()?;
+        Ok(resource)
     }
 
     pub async fn run(&self, id: &str) -> Result<Resource, GraphError> {
+        let initial = self.load(id)?;
+        if initial.is_settled() {
+            return Ok(initial);
+        }
+        admit_capabilities(self.nodes, &record_of(&initial)?.snapshot)?;
         // These sets only own live futures. All progress, limits and lifecycle
         // decisions are recomputed by the Graph validator, never by this loop.
         let mut pending = FuturesUnordered::new();

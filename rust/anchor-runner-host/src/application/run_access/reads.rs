@@ -1,115 +1,85 @@
 use super::RunView;
 use crate::application::{ApplicationError, RunApplication, storage};
-use anchor_runtime::graph::{GraphError, GraphRunRecord, RunStore};
+use anchor_runtime::graph::{GraphError, GraphRunRecord};
 use std::path::Path;
+
+fn reject_legacy(data_root: &Path, run_id: &str) -> Result<(), GraphError> {
+    if !RunApplication::valid_run_component(run_id) {
+        return Err(GraphError::InvalidRunId(run_id.into()));
+    }
+    match std::fs::symlink_metadata(data_root.join("runs").join(format!("{run_id}.json"))) {
+        Ok(_) => Err(GraphError::CorruptRun(format!(
+            "legacy_run_record: Run {run_id} uses the retired record format; remove local development state before continuing"
+        ))),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error.into()),
+    }
+}
 
 pub(crate) fn load(data_root: &Path, run_id: &str) -> Result<Option<RunView<'static>>, GraphError> {
     use anchor_kernel::Store;
-    let legacy = anchor_runtime::graph::FileRunStore::new(data_root.join("runs")).load(run_id)?;
+    reject_legacy(data_root, run_id)?;
     let root = data_root.join("kernel-runs");
-    if root.exists() {
-        let store = anchor_kernel::FileStore::new(&root)
-            .map_err(|error| GraphError::CorruptRun(error.to_string()))?;
-        if let Some(resource) = store
-            .load(&anchor_runtime::graph::validator::run_resource_id(run_id))
-            .map_err(|error| GraphError::CorruptRun(error.to_string()))?
-        {
-            if legacy.is_some() {
-                return Err(GraphError::CorruptRun("Run has two authorities".into()));
-            }
-            let record = super::run_json::record(&resource)
-                .map_err(|error| GraphError::CorruptRun(format!("Run view: {error:?}")))?;
-            let updated = super::run_observations::RunObservations::new(
-                &data_root.join("kernel-run-observations"),
-            )
+    if !root.exists() {
+        return Ok(None);
+    }
+    let store = anchor_kernel::FileStore::new(&root)
+        .map_err(|error| GraphError::CorruptRun(error.to_string()))?;
+    let Some(resource) = store
+        .load(&anchor_runtime::graph::validator::run_resource_id(run_id))
+        .map_err(|error| GraphError::CorruptRun(error.to_string()))?
+    else {
+        return Ok(None);
+    };
+    let record = anchor_runtime::graph::validator::record_of(&resource)?;
+    record.validate()?;
+    let updated =
+        super::run_observations::RunObservations::new(&data_root.join("kernel-run-observations"))
             .load(run_id)
             .ok()
             .flatten();
-            let lifecycle = super::kernel_runs::KernelRuns::project(&resource, false, updated)
-                .map_err(|error| GraphError::CorruptRun(format!("Run view: {error:?}")))?;
-            return Ok(Some(
-                RunView::from_kernel(record, lifecycle).with_kernel_frontier(&resource)?,
-            ));
-        }
-    }
-    Ok(legacy.map(RunView::owned))
+    let lifecycle = super::kernel_runs::KernelRuns::project(&resource, false, updated)
+        .map_err(|error| GraphError::CorruptRun(format!("Run view: {error:?}")))?;
+    Ok(Some(
+        RunView::from_kernel(record, lifecycle).with_kernel_frontier(&resource)?,
+    ))
 }
 
 impl RunApplication {
-    pub(in crate::application) async fn resume_interrupted_attempts(
+    pub(in crate::application::run_access) fn reject_legacy_run(
         &self,
         run_id: &str,
-    ) -> Result<bool, ApplicationError> {
-        let Some(record) = self.store().load(run_id)? else {
-            return Ok(false);
-        };
-        if !RunView::inactive(&record).has_pending_recovery() {
-            return Ok(false);
-        }
-        for pending in record.recovery {
-            let observation = format!(
-                "The previous `{}` tool call (step {}) was interrupted before its result was recorded. Its external effect is unknown. Inspect the workspace, artifacts, and any available external state before deciding what to do; do not blindly repeat the call.",
-                pending.attempt.tool, pending.attempt.step
-            );
-            self.recover(
-                run_id,
-                &pending.key.node_id,
-                pending.key.invocation,
-                pending.attempt.attempt_id,
-                anchor_runtime::graph::RecoveryDecision::Completed { observation },
-            )
-            .await?;
-        }
-        Ok(true)
+    ) -> Result<(), ApplicationError> {
+        Ok(reject_legacy(&self.data_root, run_id)?)
     }
+
     pub(crate) fn run_updated(&self, run_id: &str) -> Result<Option<String>, ApplicationError> {
-        if run_id.is_empty()
-            || run_id == "."
-            || run_id == ".."
-            || !run_id
-                .chars()
-                .all(|c| c.is_ascii_alphanumeric() || "-_.".contains(c))
-        {
-            return Err(ApplicationError::Invalid("invalid Run id".into()));
-        }
-        if let Some(runs) = self.kernel_owner(run_id)? {
-            return Ok(runs
-                .view(&runs.load(run_id)?.ok_or(ApplicationError::Missing)?)?
-                .updated);
-        }
-        let path = self.data_root.join("runs").join(format!("{run_id}.json"));
-        let modified = match std::fs::metadata(path).and_then(|metadata| metadata.modified()) {
-            Ok(modified) => modified,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-            Err(error) => return Err(storage(error)),
-        };
-        Ok(Some(
-            chrono::DateTime::<chrono::Utc>::from(modified).to_rfc3339(),
-        ))
+        self.read_run(run_id)
+            .map(|view| view.and_then(|view| view.lifecycle.updated))
     }
 
     pub(in crate::application::run_access) fn raw_records(
         &self,
     ) -> Result<Vec<(String, GraphRunRecord)>, ApplicationError> {
         let root = self.data_root.join("runs");
-        if !root.exists() {
-            return self.kernel_records();
-        }
-        let mut records = Vec::new();
-        for entry in std::fs::read_dir(root).map_err(storage)? {
-            let entry = entry.map_err(storage)?;
-            let name = entry.file_name().to_string_lossy().into_owned();
-            if let Some(id) = name.strip_suffix(".json")
-                && let Some(record) = self.store().load(id)?
-            {
-                if self.kernel_owner(id)?.is_some() {
-                    return Err(ApplicationError::Conflict("Run has two authorities".into()));
+        match std::fs::read_dir(root) {
+            Ok(entries) => {
+                for entry in entries {
+                    let entry = entry.map_err(storage)?;
+                    if let Some(id) = entry
+                        .file_name()
+                        .to_str()
+                        .and_then(|name| name.strip_suffix(".json"))
+                    {
+                        self.reject_legacy_run(id)?;
+                    }
                 }
-                records.push((id.to_owned(), record));
             }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(storage(error)),
         }
-        records.extend(self.kernel_records()?);
-        records.sort_by(|left, right| left.0.cmp(&right.0));
+        let mut records = self.kernel_records()?;
+        records.sort_by(|a, b| a.0.cmp(&b.0));
         Ok(records)
     }
 
@@ -119,37 +89,33 @@ impl RunApplication {
     ) -> Result<Vec<(String, GraphRunRecord)>, ApplicationError> {
         let mut runs = Vec::new();
         for (id, record) in self.raw_records()? {
-            let Some(metadata) = self.metadata(&id)? else {
-                continue;
-            };
-            if Self::graph_identity(&metadata.bundle_source)? == graph_path {
+            if let Some(metadata) = self.metadata(&id)?
+                && Self::graph_identity(&metadata.bundle_source)? == graph_path
+            {
                 runs.push((id, record));
             }
         }
         Ok(runs)
     }
+
     pub(crate) fn read_run(
         &self,
         run_id: &str,
     ) -> Result<Option<RunView<'static>>, ApplicationError> {
-        if let Some(owner) = self.kernel_owner(run_id)? {
-            let resource = owner.load(run_id)?.ok_or(ApplicationError::Missing)?;
-            let lifecycle = owner.view(&resource)?;
-            let mut record = super::kernel_runs::KernelRuns::record(&resource)?;
-            if matches!(
-                resource.phase(),
-                Some(anchor_kernel::Phase::Waiting {
-                    waiter: anchor_kernel::Waiter::Human { .. }
-                })
-            ) {
-                (record.recovery, record.recovery_submissions) = owner.recovery_facts(run_id)?;
-            }
-            return Ok(Some(
-                RunView::from_kernel(record, lifecycle).with_kernel_frontier(&resource)?,
-            ));
-        }
-        Ok(self.store().load(run_id)?.map(RunView::owned))
+        let Some(owner) = self.kernel_owner(run_id)? else {
+            return Ok(None);
+        };
+        let resource = owner.load(run_id)?.ok_or(ApplicationError::Missing)?;
+        let lifecycle = owner.view(&resource)?;
+        let mut record = super::kernel_runs::KernelRuns::record(&resource)?;
+        (record.recovery, record.recovery_submissions) = owner.recovery_facts(run_id)?;
+        let mut view = RunView::from_kernel(record, lifecycle).with_kernel_frontier(&resource)?;
+        view.session_coordinated = self
+            .metadata(run_id)?
+            .is_some_and(|metadata| metadata.session_call.is_some());
+        Ok(Some(view))
     }
+
     pub(crate) fn run_views(&self) -> Result<Vec<(String, RunView<'static>)>, ApplicationError> {
         self.raw_records()?
             .into_iter()
@@ -160,6 +126,7 @@ impl RunApplication {
             })
             .collect()
     }
+
     pub(crate) fn runs_for_graph(
         &self,
         path: &Path,
@@ -173,21 +140,6 @@ impl RunApplication {
             })
             .collect()
     }
-    pub(in crate::application::run_access) fn read_view(
-        &self,
-        record: &GraphRunRecord,
-        worker: bool,
-    ) -> Result<super::run_view::RunView, ApplicationError> {
-        if let Some(runs) = self.kernel_owner(&record.run_id)? {
-            return runs.view(
-                &runs
-                    .load(&record.run_id)?
-                    .ok_or(ApplicationError::Missing)?,
-            );
-        }
-        Ok(super::legacy_run_view::view(record, worker))
-    }
-
     #[cfg(test)]
     pub(crate) fn records(&self) -> Result<Vec<(String, GraphRunRecord)>, ApplicationError> {
         self.raw_records()
@@ -196,36 +148,25 @@ impl RunApplication {
 
 impl RunView<'_> {
     pub(crate) fn visible_active_nodes(&self) -> std::collections::BTreeSet<String> {
-        let mut active_nodes = std::collections::BTreeSet::new();
         if !self.active || !matches!(self.phase(), super::RunPhase::Executing) {
-            return active_nodes;
+            return Default::default();
         }
-        if let Some(cursor) = self.cursor() {
-            let waiting = self
-                .record
-                .snapshot
-                .nodes
-                .iter()
-                .find(|node| node.id == cursor.node_id)
-                .and_then(|node| node.op.as_ref())
-                .and_then(|name| self.record.snapshot.ops.get(name))
-                .and_then(|operation| operation.get("host"))
-                .and_then(|operation| operation.get("operation"))
-                .and_then(serde_json::Value::as_str)
-                == Some(crate::assistant::WAIT_INPUT);
-            if !waiting {
-                active_nodes.insert(cursor.node_id.clone());
-            }
-        }
-        if let Some(parallel) = &self.record.parallel {
-            for branch in &parallel.branches {
-                if branch.status == anchor_runtime::graph::ParallelBranchStatus::Running
-                    && let Some(cursor) = &branch.cursor
-                {
-                    active_nodes.insert(cursor.node_id.clone());
-                }
-            }
-        }
-        active_nodes
+        self.frontier
+            .iter()
+            .filter(|dispatch| {
+                self.record
+                    .snapshot
+                    .nodes
+                    .iter()
+                    .find(|node| node.id == dispatch.node_id)
+                    .and_then(|node| node.op.as_ref())
+                    .and_then(|name| self.record.snapshot.ops.get(name))
+                    .and_then(|op| op.get("host"))
+                    .and_then(|host| host.get("operation"))
+                    .and_then(serde_json::Value::as_str)
+                    != Some(crate::assistant::WAIT_INPUT)
+            })
+            .map(|dispatch| dispatch.node_id.clone())
+            .collect()
     }
 }

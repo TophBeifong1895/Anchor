@@ -34,7 +34,6 @@ async fn invocation_authority_is_explicit_and_keeps_the_run_admission_immutable(
     for authority in [false, true] {
         let mut snapshot = graph(&["work"], &[], "work");
         snapshot.nodes[0].plugins = vec!["removed".into()];
-        let mut record = GraphRunRecord::create(snapshot, Value::Null).unwrap();
         let binding = PluginBinding {
             id: "removed".into(),
             digest: "old-code".into(),
@@ -44,8 +43,13 @@ async fn invocation_authority_is_explicit_and_keeps_the_run_admission_immutable(
                 .try_into()
                 .expect("non-empty fixture authority"),
         };
-        record.plugin_bindings.insert(binding.id.clone(), binding);
-        record.plugin_bindings_initialized = true;
+        let record = GraphRunRecord::create_with_plugins(
+            snapshot,
+            Value::Null,
+            "invocation-authority",
+            vec![binding],
+        )
+        .unwrap();
         let original = record.clone();
         // Current Library deliberately has no old Plugin. The explicitly opted
         // in Host owns the invocation's replacement policy, not this baseline.
@@ -53,21 +57,27 @@ async fn invocation_authority_is_explicit_and_keeps_the_run_admission_immutable(
             inner: FakeNodes::default(),
             authority,
         };
-        let store = MemStore::default();
         let artifacts = MemoryArtifacts::default();
-        let control = Control::default();
-        let result = GraphRunner::new(&store, &artifacts, &nodes, &control)
-            .run(record)
-            .await
-            .unwrap();
+        let harness = Harness::memory(record);
+        harness.run(&artifacts, &nodes).await.unwrap();
         assert_eq!(
-            result.status,
-            if authority {
-                RunStatus::Completed
-            } else {
-                RunStatus::Failed
-            }
+            matches!(
+                harness.phase(),
+                Phase::Settled {
+                    result: Outcome::Done
+                }
+            ),
+            authority
         );
+        if !authority {
+            assert!(matches!(
+                harness.phase(),
+                Phase::Settled {
+                    result: Outcome::Failed { .. }
+                }
+            ));
+        }
+        let result = harness.record();
         assert_eq!(
             nodes.inner.calls.lock().unwrap().len(),
             usize::from(authority)
@@ -86,19 +96,21 @@ async fn invocation_authority_does_not_establish_a_missing_admission_baseline() 
         inner: FakeNodes::default(),
         authority: true,
     };
-    let store = MemStore::default();
     let artifacts = MemoryArtifacts::default();
-    let control = Control::default();
-    let result = GraphRunner::new(&store, &artifacts, &nodes, &control)
-        .run(record)
-        .await
-        .unwrap();
-    assert_eq!(result.status, RunStatus::Failed);
+    let harness = Harness::memory(record);
+    harness.run(&artifacts, &nodes).await.unwrap();
+    assert!(matches!(
+        harness.phase(),
+        Phase::Settled {
+            result: Outcome::Failed { .. }
+        }
+    ));
     assert!(
-        result
-            .error
-            .unwrap()
-            .contains("valid admitted Plugin record")
+        harness
+            .failure_detail()
+            .contains("valid admitted Plugin record"),
+        "{}",
+        harness.failure_detail()
     );
     assert!(nodes.inner.calls.lock().unwrap().is_empty());
 }

@@ -168,12 +168,12 @@ fn waiting(host: &Host, run: &str, replies: usize) -> Value {
         record = host.record(run);
         assert!(
             matches!(
-                record["status"].as_str(),
-                Some("running" | "ready" | "paused")
+                record["projection"]["phase"].as_str(),
+                Some("executing" | "waiting")
             ),
             "{record}"
         );
-        record["cursor"]["node_id"] == record["snapshot"]["entry"]
+        record["frontier"][0]["node_id"] == record["snapshot"]["entry"]
             && record["results"]["reply"]
                 .as_array()
                 .is_some_and(|values| values.len() == replies)
@@ -220,7 +220,7 @@ fn evidence(host: &Host, provider: &Provider, runs: &[&str], checks: Value) {
     fs::write(provider.root.join("evidence.json"), serde_json::to_vec_pretty(&json!({
         "status":"passed","case_source":"tests/goose_plugin_turns.rs",
         "runtime":"real Goose native loop over ACP",
-        "runtime_description":"actual pinned Goose ACP, Host, GraphRunner, Sandbox and stdio Plugin MCP",
+        "runtime_description":"actual pinned Goose ACP, Host, KernelScheduler, Sandbox and stdio Plugin MCP",
         "goose_binary_sha256":goose::GOOSE_SHA256,
         "host_binary_sha256":goose::digest(&host.base.root.path().join("anchor-runner-host")),
         "test_source_sha256":goose::digest(&PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/goose_plugin_turns.rs")),
@@ -635,8 +635,8 @@ fn retirement_and_idle_restart(wait: &str, evidence_name: &str) {
     assert_ne!(resumed, current_run);
     wait_until("idle recovery waiting in the current workflow", || {
         let record = host.record(&resumed);
-        assert_eq!(record["status"], "running", "{record}");
-        record["cursor"]["node_id"] == wait && record["results"].get("reply").is_none()
+        assert_eq!(record["projection"]["phase"], "executing", "{record}");
+        record["frontier"][0]["node_id"] == wait && record["results"].get("reply").is_none()
     });
     assert_eq!(
         provider.requests().len(),

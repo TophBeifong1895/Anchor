@@ -1,139 +1,75 @@
 //! Recursive Graph Call admission, execution and result projection over shared Kernel ports.
 
-use crate::graph_catalog::{ChildRunControl, GraphCatalog};
+use crate::graph_catalog::GraphCatalog;
 use crate::plugin_catalog::PluginCatalog;
+use anchor_kernel::{Outcome, Phase};
 use anchor_runtime::Cancellation;
 use anchor_runtime::graph::{
     ArtifactPort, CallFileSelection, CallIdentity, CommitRef, GraphCallOutcome, GraphCallPort,
-    GraphError, GraphRunRecord, GraphRunner, GraphSnapshot, InvocationKey,
-    NodeExecutionCapabilities, NodeExecutionOutcome, NodeExecutionPort, NodeExecutionRequest,
-    RunControl, RunStatus, RunStore,
+    GraphError, GraphRunRecord, InvocationKey, NodeExecutionCapabilities, NodeExecutionOutcome,
+    NodeExecutionPort, NodeExecutionRequest,
 };
 use serde::Deserialize;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::{collections::BTreeMap, future::Future, pin::Pin};
 
-/// Adapts GraphCallPort on top of shared kernel ports. Instantiate one host
-/// around the same store/artifact/node/control ports used by the outer Runner.
-pub struct InProcessGraphHost<'a, S, A, N, C> {
+/// Call admission and projection over Host-owned access to the shared Kernel.
+pub struct InProcessGraphHost<'a, R, A, N> {
     catalog: &'a dyn GraphCatalog,
-    store: &'a S,
+    runs: &'a R,
     artifacts: &'a A,
     nodes: &'a N,
     plugin_catalog: Option<&'a dyn PluginCatalog>,
     child_executor: Option<&'a dyn ChildExecutionPort>,
     defer_wait_execution: bool,
-    _control: std::marker::PhantomData<fn() -> C>,
 }
 
-/// Alternate Host execution for an already admitted wait child. Admission,
-/// input staging, immutable identity checks and result export remain shared.
-pub trait ChildExecutionPort: Send + Sync {
-    fn execute<'a>(
+/// The authoritative phase and Graph facts of one Kernel-owned Run.
+#[derive(Clone)]
+pub struct CallRun {
+    pub record: GraphRunRecord,
+    pub phase: Phase,
+}
+
+/// The only Run access needed by Call admission. The Host implements these
+/// operations through its Run facade; validation proves the current Kernel
+/// dispatch, its prepared input and exact committed input provenance.
+pub trait CallRunAccess: Send + Sync {
+    fn load(&self, id: &str) -> Result<Option<CallRun>, GraphError>;
+    fn admit(&self, record: &GraphRunRecord) -> Result<(), GraphError>;
+    fn acquire_lease(
+        &self,
+        id: &str,
+    ) -> Result<Box<dyn anchor_runtime::graph::RunLease>, GraphError>;
+    fn validate_parent<'a>(
         &'a self,
-        child: GraphRunRecord,
-        cancellation: Cancellation,
+        identity: &'a CallIdentity,
+        input: &'a Value,
+        input_commits: &'a [CommitRef],
     ) -> Pin<Box<dyn Future<Output = Result<GraphRunRecord, GraphError>> + Send + 'a>>;
 }
 
-struct BoundNodes<'a, N> {
-    nodes: &'a N,
-    plugin_catalog: Option<&'a dyn PluginCatalog>,
-    graph_calls: &'a dyn GraphCallPort,
+/// Host execution for an already admitted wait child. Admission, input staging,
+/// immutable identity checks and result export remain shared.
+pub trait ChildExecutionPort: Send + Sync {
+    fn execute<'a>(
+        &'a self,
+        child: CallRun,
+        cancellation: Cancellation,
+    ) -> Pin<Box<dyn Future<Output = Result<CallRun, GraphError>> + Send + 'a>>;
 }
 
-impl<N: NodeExecutionPort> NodeExecutionPort for BoundNodes<'_, N> {
-    fn capabilities(&self) -> NodeExecutionCapabilities {
-        self.nodes.capabilities()
-    }
-    fn resolve_plugins(
-        &self,
-        ids: &[String],
-    ) -> Result<Vec<anchor_runtime::graph::PluginBinding>, GraphError> {
-        match self.plugin_catalog {
-            Some(catalog) => catalog.resolve(ids),
-            None => self.nodes.resolve_plugins(ids),
-        }
-    }
-    fn observed_plugin_views(
-        &self,
-        key: &anchor_runtime::graph::InvocationKey,
-    ) -> std::collections::BTreeMap<String, String> {
-        self.nodes.observed_plugin_views(key)
-    }
-    fn observed_plugin_digests(
-        &self,
-        key: &anchor_runtime::graph::InvocationKey,
-    ) -> std::collections::BTreeMap<String, String> {
-        self.nodes.observed_plugin_digests(key)
-    }
-    fn completion_fact<'b>(
-        &'b self,
-        key: &'b anchor_runtime::graph::InvocationKey,
-    ) -> Pin<
-        Box<
-            dyn Future<Output = Result<anchor_runtime::graph::CompletionFact, GraphError>>
-                + Send
-                + 'b,
-        >,
-    > {
-        self.nodes.completion_fact(key)
-    }
-    fn execute<'b>(
-        &'b self,
-        request: NodeExecutionRequest,
-    ) -> Pin<Box<dyn Future<Output = Result<NodeExecutionOutcome, GraphError>> + Send + 'b>> {
-        self.nodes.execute(request)
-    }
-    fn graph_call_port(&self) -> Option<&dyn GraphCallPort> {
-        Some(self.graph_calls)
-    }
-}
-
-struct ChildControl {
-    control: ChildRunControl,
-}
-
-impl ChildControl {
-    fn new(control: ChildRunControl) -> Self {
-        Self { control }
-    }
-}
-
-impl RunControl for ChildControl {
-    fn pause_requested(&self) -> bool {
-        self.control
-            .pause
-            .load(std::sync::atomic::Ordering::Acquire)
-    }
-    fn stop_requested(&self) -> bool {
-        self.control
-            .cancellation
-            .load(std::sync::atomic::Ordering::Acquire)
-    }
-    fn cancellation(&self) -> Cancellation {
-        self.control.cancellation.clone()
-    }
-}
-
-impl<'a, S, A, N, C> InProcessGraphHost<'a, S, A, N, C> {
-    pub fn new(
-        catalog: &'a dyn GraphCatalog,
-        store: &'a S,
-        artifacts: &'a A,
-        nodes: &'a N,
-        _control: &'a C,
-    ) -> Self {
+impl<'a, R, A, N> InProcessGraphHost<'a, R, A, N> {
+    pub fn new(catalog: &'a dyn GraphCatalog, runs: &'a R, artifacts: &'a A, nodes: &'a N) -> Self {
         Self {
             catalog,
-            store,
+            runs,
             artifacts,
             nodes,
             plugin_catalog: None,
             child_executor: None,
             defer_wait_execution: false,
-            _control: std::marker::PhantomData,
         }
     }
 
@@ -163,8 +99,8 @@ impl<'a, S, A, N, C> InProcessGraphHost<'a, S, A, N, C> {
         self
     }
 
-    /// Defer a newly admitted child until the caller has durably bound it.
-    /// Legacy hosts omit this adapter and retain their ordinary Runner path.
+    /// Configure the shared Kernel executor. Defer a newly admitted wait child
+    /// until the caller has durably bound it; there is no alternate executor.
     pub fn with_child_executor(
         mut self,
         executor: &'a dyn ChildExecutionPort,
@@ -176,8 +112,8 @@ impl<'a, S, A, N, C> InProcessGraphHost<'a, S, A, N, C> {
     }
 }
 
-impl<S: RunStore, A: ArtifactPort, N: NodeExecutionPort, C: RunControl> NodeExecutionPort
-    for InProcessGraphHost<'_, S, A, N, C>
+impl<R: CallRunAccess, A: ArtifactPort, N: NodeExecutionPort> NodeExecutionPort
+    for InProcessGraphHost<'_, R, A, N>
 {
     fn capabilities(&self) -> NodeExecutionCapabilities {
         self.nodes.capabilities()
@@ -226,8 +162,8 @@ impl<S: RunStore, A: ArtifactPort, N: NodeExecutionPort, C: RunControl> NodeExec
     }
 }
 
-impl<S: RunStore, A: ArtifactPort, N: NodeExecutionPort, C: RunControl> GraphCallPort
-    for InProcessGraphHost<'_, S, A, N, C>
+impl<R: CallRunAccess, A: ArtifactPort, N: NodeExecutionPort> GraphCallPort
+    for InProcessGraphHost<'_, R, A, N>
 {
     fn call<'b>(
         &'b self,
@@ -242,21 +178,34 @@ impl<S: RunStore, A: ArtifactPort, N: NodeExecutionPort, C: RunControl> GraphCal
                 call_spec,
                 session_context,
                 child_input,
-            } = self.prepare_call(identity, spec, input).await?;
+            } = self
+                .prepare_call(identity, spec, input, input_commits)
+                .await?;
             let graph_name = call_spec.graph.as_str();
             let mode = call_spec.mode.as_str();
+            if session_context.is_none() && mode == "wait" && self.child_executor.is_none() {
+                return Err(GraphError::Unsupported(
+                    "Graph Call requires a configured shared Kernel child executor".into(),
+                ));
+            }
             let file_selections = call_spec.file_selections();
             let run_id = child_run_id(identity);
             let child_lease = self
-                .store
+                .runs
                 .acquire_lease(&run_id)
                 .map_err(|e| GraphError::Unsupported(format!("acquire child lease: {e}")))?;
             let existing = self
-                .store
+                .runs
                 .load(&run_id)
                 .map_err(|e| GraphError::Unsupported(format!("load child Run: {e}")))?;
             let mut child = if let Some(existing) = existing {
-                self.verify_existing_child(&existing, &run_id, identity, &call_spec, &child_input)?;
+                self.verify_existing_child(
+                    &existing.record,
+                    &run_id,
+                    identity,
+                    &call_spec,
+                    &child_input,
+                )?;
                 self.artifacts
                     .stage_call_inputs(&run_id, input_commits, &file_selections)
                     .await?;
@@ -268,9 +217,9 @@ impl<S: RunStore, A: ArtifactPort, N: NodeExecutionPort, C: RunControl> GraphCal
                 let _admission_lease = self.catalog.lock_admission(graph_name)?;
                 // Recheck after taking the target lock in case another call won
                 // the same identity between the first read and admission.
-                if let Some(existing) = self.store.load(&run_id)? {
+                if let Some(existing) = self.runs.load(&run_id)? {
                     self.verify_existing_child(
-                        &existing,
+                        &existing.record,
                         &run_id,
                         identity,
                         &call_spec,
@@ -317,14 +266,12 @@ impl<S: RunStore, A: ArtifactPort, N: NodeExecutionPort, C: RunControl> GraphCal
                     self.artifacts
                         .stage_call_inputs(&run_id, input_commits, &file_selections)
                         .await?;
-                    let mut record = GraphRunRecord::create(snapshot.clone(), child_input)?;
-                    record.run_id = run_id.clone();
-                    record.plugin_bindings = referenced
-                        .iter()
-                        .cloned()
-                        .map(|plugin| (plugin.id.clone(), plugin))
-                        .collect();
-                    record.plugin_bindings_initialized = true;
+                    let record = GraphRunRecord::create_with_plugins(
+                        snapshot.clone(),
+                        child_input,
+                        run_id.clone(),
+                        referenced,
+                    )?;
                     self.persist_child_admission(
                         &record,
                         identity,
@@ -332,7 +279,9 @@ impl<S: RunStore, A: ArtifactPort, N: NodeExecutionPort, C: RunControl> GraphCal
                         mode,
                         session_context.as_ref(),
                     )?;
-                    record
+                    self.runs.load(&run_id)?.ok_or_else(|| {
+                        GraphError::CorruptRun("newly admitted child Run is missing".into())
+                    })?
                 }
             };
             drop(child_lease);
@@ -344,16 +293,20 @@ impl<S: RunStore, A: ArtifactPort, N: NodeExecutionPort, C: RunControl> GraphCal
                 {
                     return Ok(outcome);
                 }
-                child = self.store.load(&run_id)?.ok_or_else(|| {
+                child = self.runs.load(&run_id)?.ok_or_else(|| {
                     GraphError::CorruptRun("completed Session child Run is missing".into())
                 })?;
-                if child.status != RunStatus::Completed {
+                if child.phase
+                    != (Phase::Settled {
+                        result: Outcome::Done,
+                    })
+                {
                     return Err(GraphError::CorruptRun(
                         "Session host confirmed delivery without a completed child Run".into(),
                     ));
                 }
             }
-            // FileRunStore's record is the durable identity → child admission:
+            // The Kernel Run is the durable identity → child admission:
             // deterministic ID plus frozen snapshot/input are checked on retry.
             if mode == "detach" && session_context.is_none() {
                 self.catalog.dispatch_detached(&run_id).await?;
@@ -361,19 +314,15 @@ impl<S: RunStore, A: ArtifactPort, N: NodeExecutionPort, C: RunControl> GraphCal
                     child_run_id: run_id,
                 });
             }
-            // A durable child that already reached a terminal or recovery state
-            // is never re-entered: its own facts decide the parent outcome and
-            // re-running it could replay an unknown side effect. Only the
-            // non-terminal states are resumed along the same child Run.
+            // Human and effect waits remain parked. Child waits are observed
+            // by the shared scheduler; a parent never manufactures a release.
             let resumable = session_context.is_none()
                 && matches!(
-                    child.status,
-                    RunStatus::Ready
-                        | RunStatus::Running
-                        | RunStatus::WaitingCall
-                        | RunStatus::Paused
-                        | RunStatus::Stopped
-                        | RunStatus::BudgetStopped
+                    child.phase,
+                    Phase::Executing
+                        | Phase::Waiting {
+                            waiter: anchor_kernel::Waiter::Child { .. }
+                        }
                 );
             if resumable {
                 if self.defer_wait_execution {
@@ -402,32 +351,18 @@ struct PreparedCall {
     child_input: Value,
 }
 
-impl<S: RunStore, A: ArtifactPort, N: NodeExecutionPort, C: RunControl>
-    InProcessGraphHost<'_, S, A, N, C>
-{
+impl<R: CallRunAccess, A: ArtifactPort, N: NodeExecutionPort> InProcessGraphHost<'_, R, A, N> {
     async fn prepare_call(
         &self,
         identity: &CallIdentity,
         spec: &Value,
         input: &Value,
+        input_commits: &[CommitRef],
     ) -> Result<PreparedCall, GraphError> {
         let parent = self
-            .store
-            .load(&identity.parent_run_id)
-            .map_err(|e| GraphError::Unsupported(format!("load parent Run for call: {e}")))?
-            .ok_or_else(|| GraphError::CorruptRun("Graph call parent Run is missing".into()))?;
-        let cursor = parent.cursor.as_ref().ok_or_else(|| {
-            GraphError::CorruptRun("Graph call parent has no active cursor".into())
-        })?;
-        if parent.graph_digest != identity.parent_graph_digest
-            || cursor.node_id != identity.node_id
-            || cursor.key.invocation != identity.invocation
-            || cursor.prepared_input != *input
-        {
-            return Err(GraphError::CorruptRun(
-                "Graph call identity does not match durable parent cursor".into(),
-            ));
-        }
+            .runs
+            .validate_parent(identity, input, input_commits)
+            .await?;
         let parent_node = parent
             .snapshot
             .nodes
@@ -441,7 +376,9 @@ impl<S: RunStore, A: ArtifactPort, N: NodeExecutionPort, C: RunControl>
             .as_ref()
             .and_then(|op_name| parent.snapshot.ops.get(op_name))
             .and_then(|op| op.get("call"))
-            .ok_or_else(|| GraphError::CorruptRun("parent cursor is not an Op.call node".into()))?;
+            .ok_or_else(|| {
+                GraphError::CorruptRun("parent dispatch is not an Op.call node".into())
+            })?;
         let spec_digest = format!(
             "{:x}",
             Sha256::digest(serde_json::to_vec(frozen_spec).map_err(GraphError::SnapshotDecode)?)
@@ -514,7 +451,9 @@ impl<S: RunStore, A: ArtifactPort, N: NodeExecutionPort, C: RunControl>
     ) -> Result<(), GraphError> {
         let graph_name = call_spec.graph.as_str();
         let mode = call_spec.mode.as_str();
-        if existing.input != expected_input(&existing.snapshot, child_input) {
+        let expected =
+            GraphRunRecord::create_with_id(existing.snapshot.clone(), child_input.clone(), run_id)?;
+        if existing.input != expected.input {
             return Err(GraphError::RunConflict);
         }
         self.catalog.verify_child_identity(
@@ -559,58 +498,56 @@ impl<S: RunStore, A: ArtifactPort, N: NodeExecutionPort, C: RunControl>
         if let Some(context) = session_context {
             self.catalog.record_session_call(run_id, context)?;
         }
-        self.store
-            .save(record)
+        self.runs
+            .admit(record)
             .map_err(|e| GraphError::Unsupported(format!("persist child Run: {e}")))?;
         Ok(())
     }
 
     async fn execute_wait_child(
         &self,
-        child: GraphRunRecord,
+        child: CallRun,
         run_id: &str,
         graph_name: &str,
         cancellation: Cancellation,
-    ) -> Result<GraphRunRecord, GraphError> {
-        let child_control = ChildControl::new(
-            self.catalog
-                .begin_child_execution(run_id, graph_name, cancellation)
-                .await?,
-        );
-        let child_nodes = BoundNodes {
-            nodes: self.nodes,
-            plugin_catalog: self.plugin_catalog,
-            graph_calls: self,
-        };
-        let execution = match self.child_executor {
-            Some(executor) => executor.execute(child, child_control.cancellation()).await,
-            None => {
-                GraphRunner::new(self.store, self.artifacts, &child_nodes, &child_control)
-                    .run(child)
-                    .await
-            }
-        };
-        // Registration ends on success, storage/lease errors and cooperative cancellation.
-        // Preserve the Runner's error and all durable recovery/unknown-effect facts.
+    ) -> Result<CallRun, GraphError> {
+        let executor = self.child_executor.ok_or_else(|| {
+            GraphError::Unsupported(
+                "Graph Call requires a configured shared Kernel child executor".into(),
+            )
+        })?;
+        let control = self
+            .catalog
+            .begin_child_execution(run_id, graph_name, cancellation)
+            .await?;
+        let execution = executor.execute(child, control.cancellation).await;
+        // Always await registration cleanup, including execution errors and
+        // cooperative cancellation. Preserve the original error and facts.
         self.catalog.end_child_execution(run_id).await;
         let child =
             execution.map_err(|e| GraphError::Unsupported(format!("execute child Run: {e}")))?;
         self.catalog
-            .child_execution_finished(run_id, graph_name, child.status)
+            .child_execution_finished(run_id, graph_name, child.phase.clone())
             .await?;
         Ok(child)
     }
 
     async fn project_child_outcome(
         &self,
-        child: GraphRunRecord,
+        child: CallRun,
         run_id: String,
         identity: &CallIdentity,
         call_spec: &CallSpec,
     ) -> Result<GraphCallOutcome, GraphError> {
         let graph_name = call_spec.graph.as_str();
-        match child.status {
-            RunStatus::Completed => {
+        let CallRun {
+            record: child,
+            phase,
+        } = child;
+        match phase {
+            Phase::Settled {
+                result: Outcome::Done,
+            } => {
                 let output = if let Some(selector) = call_spec.result.as_ref() {
                     let result = child
                         .results
@@ -660,35 +597,30 @@ impl<S: RunStore, A: ArtifactPort, N: NodeExecutionPort, C: RunControl>
                     output,
                 })
             }
-            RunStatus::WaitingCall
-            | RunStatus::WaitingRecovery
-            | RunStatus::BudgetStopped
-            | RunStatus::Paused
-            | RunStatus::Stopped => Ok(GraphCallOutcome::Waiting {
+            Phase::Waiting { .. } => Ok(GraphCallOutcome::Waiting {
                 child_run_id: run_id,
             }),
-            RunStatus::Aborted => Ok(GraphCallOutcome::Failed {
+            Phase::Settled {
+                result: Outcome::Unknown { detail },
+            } => Ok(GraphCallOutcome::Uncertain {
                 child_run_id: Some(run_id),
-                reason: child.error.unwrap_or_else(|| "child Graph failed".into()),
+                reason: detail,
             }),
-            // A known failure clears its cursor; a retained cursor means the
-            // child could not prove its terminal fact (unknown side effect
-            // or an unproven completion). Report that as Uncertain so the
-            // parent records it and never treats the call as a settled
-            // known failure it may replay.
-            RunStatus::Failed if child.cursor.is_some() => Ok(GraphCallOutcome::Uncertain {
+            Phase::Settled { result } => {
+                let reason = match result {
+                    Outcome::Failed { detail, .. }
+                    | Outcome::Aborted { detail }
+                    | Outcome::Escalated { detail } => detail,
+                    _ => unreachable!("Done and Unknown handled above"),
+                };
+                Ok(GraphCallOutcome::Failed {
+                    child_run_id: Some(run_id),
+                    reason,
+                })
+            }
+            Phase::Executing => Ok(GraphCallOutcome::Uncertain {
                 child_run_id: Some(run_id),
-                reason: child
-                    .error
-                    .unwrap_or_else(|| "child Graph failed without a proven terminal fact".into()),
-            }),
-            RunStatus::Failed => Ok(GraphCallOutcome::Failed {
-                child_run_id: Some(run_id),
-                reason: child.error.unwrap_or_else(|| "child Graph failed".into()),
-            }),
-            RunStatus::Ready | RunStatus::Running => Ok(GraphCallOutcome::Uncertain {
-                child_run_id: Some(run_id),
-                reason: format!("child Run returned nonterminal status {:?}", child.status),
+                reason: "child Run returned before reaching a wait or settlement".into(),
             }),
         }
     }
@@ -776,30 +708,6 @@ impl CallSpec {
             })
             .collect()
     }
-}
-
-fn expected_input(snapshot: &GraphSnapshot, provided: &Value) -> Value {
-    // GraphRunRecord::create applies the kernel's input merge rules. Keep this
-    // helper aligned with the currently supported object merge behavior.
-    fn merge(base: &Value, over: &Value) -> Value {
-        match (base, over) {
-            (Value::Object(a), Value::Object(b)) => {
-                let mut result = a.clone();
-                for (key, value) in b {
-                    let merged = result
-                        .get(key)
-                        .filter(|old| old.is_object() && value.is_object())
-                        .map(|old| merge(old, value))
-                        .unwrap_or_else(|| value.clone());
-                    result.insert(key.clone(), merged);
-                }
-                Value::Object(result)
-            }
-            (_, Value::Null) => base.clone(),
-            (_, value) => value.clone(),
-        }
-    }
-    merge(&snapshot.input, provided)
 }
 
 #[cfg(test)]

@@ -1,17 +1,14 @@
-//! Run admission and control. Graph routing and node scheduling belong to GraphRunner.
+//! Run admission and control. Graph routing and node scheduling belong to the Kernel scheduler.
 pub(crate) mod abandon;
 mod admission;
 mod assistants;
+mod conversations;
 mod deletion;
 mod dispatch;
 #[cfg(test)]
 mod liveness;
-#[cfg(test)]
-pub(crate) use run_access::RunLiveness;
 mod queries;
 mod recovery;
-pub(crate) use abandon::AbandonAction;
-mod conversations;
 pub(crate) use assistants::AssistantAdmission;
 pub(crate) mod channel_management;
 pub(crate) mod development_dependencies;
@@ -33,14 +30,12 @@ pub(crate) use metadata::RunMetadata;
 pub(crate) use metadata::RunTrigger;
 
 use crate::{HostControl, create_durable_directory};
+#[cfg(test)]
+use anchor_runtime::graph::GraphRunRecord;
 use anchor_runtime::graph::{GraphError, RunLease};
-#[cfg(test)]
-use anchor_runtime::graph::{GraphRunRecord, RunStatus, RunStore};
 use serde_json::Value;
-#[cfg(test)]
-use std::sync::atomic::Ordering;
 use std::{
-    collections::{HashMap, VecDeque},
+    collections::VecDeque,
     path::{Path, PathBuf},
     sync::{Arc, atomic::AtomicBool},
 };
@@ -70,47 +65,12 @@ impl From<GraphError> for ApplicationError {
     }
 }
 
-struct ActiveRun {
-    graph_path: PathBuf,
-    control: HostControl,
-    wait_cancellation: Option<tokio::task::JoinHandle<()>>,
-}
-
-impl ActiveRun {
-    fn new(graph_path: PathBuf, control: HostControl) -> Self {
-        Self {
-            graph_path,
-            control,
-            wait_cancellation: None,
-        }
-    }
-
-    async fn finish_wait_cancellation(&mut self) {
-        if let Some(task) = self.wait_cancellation.take() {
-            task.abort();
-            // Join after abort so completion also releases the captured parent
-            // and child tokens before returning to the caller.
-            let _ = task.await;
-        }
-    }
-}
-
-impl Drop for ActiveRun {
-    fn drop(&mut self) {
-        if let Some(task) = &self.wait_cancellation {
-            // A registration dropped outside ordinary child completion must
-            // not detach its cancellation forwarder.
-            task.abort();
-        }
-    }
-}
-
 #[derive(Clone)]
 pub(crate) struct RunApplication {
     data_root: PathBuf,
     catalog_root: PathBuf,
     configured_graph: Option<(String, PathBuf)>,
-    active: Arc<Mutex<HashMap<String, ActiveRun>>>,
+    admission: Arc<Mutex<()>>,
     catalog_mutations: Arc<Mutex<()>>,
     /// The deployment's authorized dependency preparation, when it configured
     /// any. Absent means "this deployment cannot fetch or build dependencies", which is
@@ -125,7 +85,7 @@ pub(crate) struct RunApplication {
     pub(super) oauth: Option<Arc<dyn oauth_management::OAuthManagementPort>>,
     pub(super) channels: Option<Arc<dyn channel_management::ChannelManagementPort>>,
     executor: Option<tokio::runtime::Handle>,
-    kernel_probe: Arc<std::sync::Mutex<Option<Arc<run_access::kernel_runs::KernelRuns>>>>,
+    kernel_run_owner: Arc<std::sync::Mutex<Option<Arc<run_access::kernel_runs::KernelRuns>>>>,
 }
 
 impl RunApplication {
@@ -294,7 +254,7 @@ impl RunApplication {
             data_root,
             catalog_root,
             configured_graph: None,
-            active: Arc::new(Mutex::new(HashMap::new())),
+            admission: Arc::new(Mutex::new(())),
             catalog_mutations: Arc::new(Mutex::new(())),
             dependency_provision: None,
             runtime_configuration: None,
@@ -303,7 +263,7 @@ impl RunApplication {
             oauth: None,
             channels: None,
             executor: tokio::runtime::Handle::try_current().ok(),
-            kernel_probe: Arc::default(),
+            kernel_run_owner: Arc::default(),
         }
     }
 
@@ -395,7 +355,6 @@ impl RunApplication {
 fn new_control() -> HostControl {
     HostControl {
         cancellation: Arc::new(AtomicBool::new(false)),
-        pause: Arc::new(AtomicBool::new(false)),
     }
 }
 

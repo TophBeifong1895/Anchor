@@ -1,7 +1,8 @@
-//! The shared Graph-call admission adapter over Kernel-owned Runs. The
-//! compatibility cursor below is local to one validated call and never saved.
+//! Shared Call admission over authoritative Kernel resources and dispatch facts.
 use super::{ApplicationError, RunApplication, kernel_runs::KernelRuns};
-use anchor_graph_host::{ChildExecutionPort, FilePluginCatalog, InProcessGraphHost};
+use anchor_graph_host::{
+    CallRun, CallRunAccess, ChildExecutionPort, FilePluginCatalog, InProcessGraphHost,
+};
 use anchor_kernel::{Phase, Waiter};
 use anchor_runtime::{Cancellation, graph::*};
 use std::{collections::BTreeMap, future::Future, pin::Pin};
@@ -65,37 +66,93 @@ impl<A: ArtifactPort, N: NodeExecutionPort> NodeExecutionPort for KernelCallNode
     }
 }
 
-struct KernelCallStore<'a> {
+struct KernelCallAccess<'a, A> {
     application: &'a RunApplication,
-    parent: GraphRunRecord,
+    artifacts: &'a A,
 }
-impl RunStore for KernelCallStore<'_> {
-    fn load(&self, id: &str) -> Result<Option<GraphRunRecord>, GraphError> {
-        if id == self.parent.run_id {
-            return Ok(Some(self.parent.clone()));
-        }
-        self.application.load_run(id).map_err(application_error)
-    }
-    fn save(&self, record: &GraphRunRecord) -> Result<(), GraphError> {
-        // InProcessGraphHost writes only admission here. The executor submits
-        // all later progress/lifecycle changes through the Kernel.
-        if self
+impl<A: ArtifactPort> CallRunAccess for KernelCallAccess<'_, A> {
+    fn load(&self, id: &str) -> Result<Option<CallRun>, GraphError> {
+        let Some(owner) = self
             .application
-            .load_run(&record.run_id)
+            .kernel_owner(id)
             .map_err(application_error)?
-            .is_some()
-        {
-            return Err(GraphError::RunConflict);
-        }
+        else {
+            return Ok(None);
+        };
+        let resource = owner
+            .load(id)
+            .map_err(application_error)?
+            .ok_or_else(|| GraphError::CorruptRun("missing Call Run".into()))?;
+        Ok(Some(CallRun {
+            record: validator::record_of(&resource)?,
+            phase: resource
+                .phase()
+                .ok_or_else(|| GraphError::CorruptRun("missing Call Run phase".into()))?
+                .clone(),
+        }))
+    }
+    fn admit(&self, record: &GraphRunRecord) -> Result<(), GraphError> {
         self.application
             .kernel_runs(true)
             .map_err(application_error)?
-            .expect("enabled")
+            .expect("Run store initialized")
             .create(record, u64::MAX)
             .map_err(application_error)
     }
     fn acquire_lease(&self, id: &str) -> Result<Box<dyn RunLease>, GraphError> {
-        self.application.store().acquire_lease(id)
+        self.application.run_leases().acquire_lease(id)
+    }
+    fn validate_parent<'a>(
+        &'a self,
+        identity: &'a CallIdentity,
+        input: &'a serde_json::Value,
+        commits: &'a [CommitRef],
+    ) -> Pin<Box<dyn Future<Output = Result<GraphRunRecord, GraphError>> + Send + 'a>> {
+        Box::pin(async move {
+            let parent = self
+                .load(&identity.parent_run_id)?
+                .ok_or_else(|| GraphError::CorruptRun("missing Call parent".into()))?;
+            let owner = self
+                .application
+                .kernel_owner(&identity.parent_run_id)
+                .map_err(application_error)?
+                .expect("parent loaded");
+            let resource = owner
+                .load(&identity.parent_run_id)
+                .map_err(application_error)?
+                .expect("parent loaded");
+            let dispatch = validator::GraphValidator::frontier(&resource)?
+                .into_iter()
+                .find(|dispatch| {
+                    dispatch.kind == validator::DispatchKind::Call
+                        && dispatch.node.id == identity.node_id
+                        && dispatch.invocation == identity.invocation
+                })
+                .ok_or_else(|| {
+                    GraphError::CorruptRun("call is not a current Kernel dispatch".into())
+                })?;
+            if validator::call_identity(&parent.record, &dispatch)? != *identity
+                || dispatch.inputs != commits
+            {
+                return Err(GraphError::CorruptRun(
+                    "call identity or provenance differs from Kernel dispatch".into(),
+                ));
+            }
+            let key = InvocationKey {
+                run_id: identity.parent_run_id.clone(),
+                graph_digest: identity.parent_graph_digest.clone(),
+                node_id: identity.node_id.clone(),
+                invocation: identity.invocation,
+            };
+            let prepared =
+                scheduler::dispatch_input(self.artifacts, &parent.record, &dispatch, key).await?;
+            if prepared.prepared_input != *input {
+                return Err(GraphError::CorruptRun(
+                    "call input differs from Kernel dispatch".into(),
+                ));
+            }
+            Ok(parent.record)
+        })
     }
 }
 
@@ -109,64 +166,27 @@ impl<A: ArtifactPort, N: NodeExecutionPort> GraphCallPort for KernelCallNodes<'_
         cancellation: Cancellation,
     ) -> Pin<Box<dyn Future<Output = Result<GraphCallOutcome, GraphError>> + Send + 'a>> {
         Box::pin(async move {
-            let owner = self
-                .application
-                .kernel_owner(&identity.parent_run_id)
-                .map_err(application_error)?
-                .ok_or_else(|| GraphError::CorruptRun("call parent is not Kernel-owned".into()))?;
-            let resource = owner
-                .load(&identity.parent_run_id)
-                .map_err(application_error)?
-                .ok_or_else(|| GraphError::CorruptRun("missing Kernel call parent".into()))?;
-            let mut parent = KernelRuns::record(&resource).map_err(application_error)?;
-            let dispatch = validator::GraphValidator::frontier(&resource)?
-                .into_iter()
-                .find(|d| {
-                    d.kind == validator::DispatchKind::Call
-                        && d.node.id == identity.node_id
-                        && d.invocation == identity.invocation
-                })
-                .ok_or_else(|| {
-                    GraphError::CorruptRun("call is not a current Kernel dispatch".into())
-                })?;
-            if validator::call_identity(&parent, &dispatch)? != *identity
-                || dispatch.inputs != commits
-            {
-                return Err(GraphError::CorruptRun(
-                    "call identity or provenance differs from Kernel dispatch".into(),
-                ));
-            }
-            let key = InvocationKey {
-                run_id: parent.run_id.clone(),
-                graph_digest: parent.graph_digest.clone(),
-                node_id: identity.node_id.clone(),
-                invocation: identity.invocation,
-            };
-            let cursor =
-                scheduler::dispatch_cursor(self.artifacts, &parent, &dispatch, key).await?;
-            if cursor.prepared_input != *input {
-                return Err(GraphError::CorruptRun(
-                    "call input differs from Kernel dispatch".into(),
-                ));
-            }
-            let defer = !parent.graph_calls.contains_key(&identity.durable_key());
-            parent.cursor = Some(cursor);
-            let store = KernelCallStore {
+            let store = KernelCallAccess {
                 application: self.application,
-                parent,
+                artifacts: self.artifacts,
             };
-            let catalog = crate::execution::RunnerGraphCatalog {
+            let parent = store
+                .load(&identity.parent_run_id)?
+                .ok_or_else(|| GraphError::CorruptRun("missing Kernel Call parent".into()))?;
+            let defer = !parent
+                .record
+                .graph_calls
+                .contains_key(&identity.durable_key());
+            let catalog = crate::execution::HostGraphCatalog {
                 root: self.application.catalog_root.clone(),
                 state: self.application.data_root.clone(),
                 application: Some(self.application.clone()),
             };
             let plugins =
                 FilePluginCatalog::new(crate::library_root(&self.application.catalog_root));
-            let control = super::new_control();
-            let host =
-                InProcessGraphHost::new(&catalog, &store, self.artifacts, self.nodes, &control)
-                    .with_plugin_catalog(&plugins)
-                    .with_child_executor(self, defer);
+            let host = InProcessGraphHost::new(&catalog, &store, self.artifacts, self.nodes)
+                .with_plugin_catalog(&plugins)
+                .with_child_executor(self, defer);
             match host
                 .call(identity, spec, input, commits, cancellation)
                 .await
@@ -192,40 +212,6 @@ impl<A: ArtifactPort, N: NodeExecutionPort> GraphCallPort for KernelCallNodes<'_
                         Err(GraphError::InvalidSnapshot(reason))
                     }
                 }
-                Ok(GraphCallOutcome::Failed {
-                    child_run_id: Some(id),
-                    reason,
-                }) => {
-                    // The compatibility record has one legacy Failed label;
-                    // the Kernel Unknown fact remains authoritative.
-                    let unknown = self
-                        .application
-                        .kernel_owner(&id)
-                        .map_err(application_error)?
-                        .map(|owner| owner.load(&id))
-                        .transpose()
-                        .map_err(application_error)?
-                        .flatten()
-                        .is_some_and(|resource| {
-                            matches!(
-                                resource.phase(),
-                                Some(Phase::Settled {
-                                    result: anchor_kernel::Outcome::Unknown { .. }
-                                })
-                            )
-                        });
-                    Ok(if unknown {
-                        GraphCallOutcome::Uncertain {
-                            child_run_id: Some(id),
-                            reason,
-                        }
-                    } else {
-                        GraphCallOutcome::Failed {
-                            child_run_id: Some(id),
-                            reason,
-                        }
-                    })
-                }
                 outcome => outcome,
             }
         })
@@ -235,19 +221,19 @@ impl<A: ArtifactPort, N: NodeExecutionPort> GraphCallPort for KernelCallNodes<'_
 impl<A: ArtifactPort, N: NodeExecutionPort> ChildExecutionPort for KernelCallNodes<'_, A, N> {
     fn execute<'a>(
         &'a self,
-        child: GraphRunRecord,
+        child: CallRun,
         cancellation: Cancellation,
-    ) -> Pin<Box<dyn Future<Output = Result<GraphRunRecord, GraphError>> + Send + 'a>> {
+    ) -> Pin<Box<dyn Future<Output = Result<CallRun, GraphError>> + Send + 'a>> {
         Box::pin(async move {
             let owner = self
                 .application
-                .kernel_owner(&child.run_id)
+                .kernel_owner(&child.record.run_id)
                 .map_err(application_error)?
                 .ok_or_else(|| {
                     GraphError::CorruptRun("child admission is not Kernel-owned".into())
                 })?;
             let resource = owner
-                .load(&child.run_id)
+                .load(&child.record.run_id)
                 .map_err(application_error)?
                 .expect("owned child");
             // A Human wait remains parked. Child waits are observed by the
@@ -262,21 +248,29 @@ impl<A: ArtifactPort, N: NodeExecutionPort> ChildExecutionPort for KernelCallNod
             }
             let metadata = self
                 .application
-                .metadata(&child.run_id)
+                .metadata(&child.record.run_id)
                 .map_err(application_error)?
                 .ok_or_else(|| GraphError::CorruptRun("missing child metadata".into()))?;
             let mut control = super::new_control();
             control.cancellation = cancellation;
             let prepared = self
                 .application
-                .prepare_resume(&child, &metadata, control.clone())
+                .prepare_resume(&child.record, &metadata, control.clone())
                 .map_err(application_error)?;
             let (artifacts, nodes) = prepared.kernel_ports(self.application.clone());
             let nodes = KernelCallNodes::new(self.application, &artifacts, &nodes);
             let resource = owner
-                .drive(&child.run_id, &artifacts, &nodes, control.cancellation)
+                .drive(
+                    &child.record.run_id,
+                    &artifacts,
+                    &nodes,
+                    control.cancellation,
+                )
                 .await?;
-            KernelRuns::record(&resource).map_err(application_error)
+            Ok(CallRun {
+                record: KernelRuns::record(&resource).map_err(application_error)?,
+                phase: resource.phase().expect("Graph Run phase").clone(),
+            })
         })
     }
 }
@@ -307,6 +301,7 @@ impl RunApplication {
     }
 
     pub(crate) async fn kernel_dispatch_detached(&self, id: &str) -> Result<(), ApplicationError> {
+        self.executor()?;
         let owner = self.kernel_owner(id)?.ok_or(ApplicationError::Missing)?;
         if owner.active(id) {
             return Ok(());
@@ -317,6 +312,11 @@ impl RunApplication {
         }
         let record = KernelRuns::record(&resource)?;
         let metadata = self.metadata(id)?.ok_or(ApplicationError::Missing)?;
+        // Unbound Session calls are queued deliveries, not detached workers.
+        // The Session host owns the transition that binds their execution.
+        if metadata.session_call.is_some() && metadata.conversation.is_none() {
+            return Ok(());
+        }
         let source = metadata.graph_call.as_ref().ok_or_else(|| {
             ApplicationError::Invalid("detached child has no Graph call source".into())
         })?;

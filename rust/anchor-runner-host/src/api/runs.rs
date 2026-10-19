@@ -236,12 +236,12 @@ pub(super) async fn trigger_as_owner(
         .get("graph")
         .and_then(Value::as_str)
         .ok_or_else(|| error(StatusCode::BAD_REQUEST, "graph is required"))?;
-    let kernel_probe = match body.get("execution") {
-        None => false,
-        Some(Value::String(execution)) if execution == "legacy" => false,
-        Some(Value::String(execution)) if execution == "kernel_probe" => true,
-        Some(_) => return Err(error(StatusCode::BAD_REQUEST, "unknown execution path")),
-    };
+    if body.get("execution").is_some() {
+        return Err(error(
+            StatusCode::BAD_REQUEST,
+            "execution selection has been removed; Runs use the Kernel",
+        ));
+    }
     let input = body.get("input").cloned().unwrap_or(Value::Null);
     if !input.is_null() && !input.is_object() {
         return Err(error(StatusCode::BAD_REQUEST, "input must be an object"));
@@ -267,7 +267,7 @@ pub(super) async fn trigger_as_owner(
     let (path, bundle) = load_graph_definition(&state, requested)?;
     let run_id = state
         .application
-        .admit_selected(
+        .admit(
             requested.to_owned(),
             &path,
             bundle,
@@ -279,7 +279,6 @@ pub(super) async fn trigger_as_owner(
                 oauth_owner: Some(oauth_owner),
             },
             graph_lease,
-            kernel_probe,
         )
         .await
         .map_err(application_error)?;
@@ -499,10 +498,6 @@ pub(super) async fn abandon_run(
         .abandon_run(&id, reason.as_deref())
         .await
         .map_err(application_error)?;
-    let code = match result.action {
-        crate::application::AbandonAction::Abandoning => StatusCode::ACCEPTED,
-        _ => StatusCode::OK,
-    };
     let view = state
         .application
         .read_run(&id)
@@ -516,7 +511,7 @@ pub(super) async fn abandon_run(
         .map_err(application_error)?;
     let mut response = abandon_response(&id, &result);
     response["projection"] = serde_json::to_value(projection).expect("Run projection");
-    Ok((code, Json(response)))
+    Ok((StatusCode::OK, Json(response)))
 }
 
 pub(super) async fn execute_session_call(

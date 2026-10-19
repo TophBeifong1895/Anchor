@@ -1,6 +1,7 @@
 //! Operator-owned per-node grants, frozen separately from distributable Graphs.
 
-use crate::{application::run_access::RunView, create_durable_directory};
+use crate::application::run_access::RunProgress;
+use crate::create_durable_directory;
 #[cfg(test)]
 use anchor_runtime::graph::GraphRunRecord;
 use anchor_runtime::{
@@ -102,10 +103,9 @@ impl LocalInputs {
 
     pub(crate) fn verify<'record>(
         &self,
-        record: impl Into<RunView<'record>>,
+        record: impl Into<RunProgress<'record>>,
     ) -> Result<(), String> {
-        let view = record.into();
-        let record = view.progress();
+        let record = record.into();
         let frozen = self
             .load(record.run_id)?
             .ok_or("Run has no frozen local input authorization")?;
@@ -120,11 +120,10 @@ impl LocalInputs {
 
     pub(crate) fn mounts<'record>(
         &self,
-        record: impl Into<RunView<'record>>,
+        record: impl Into<RunProgress<'record>>,
         key: &InvocationKey,
     ) -> Result<Vec<ReadOnlyInput>, String> {
-        let view = record.into();
-        let record = view.progress();
+        let record = record.into();
         if key.run_id != record.run_id
             || key.graph_digest != record.graph_digest
             || !record
@@ -135,7 +134,7 @@ impl LocalInputs {
         {
             return Err("local input request does not match the admitted Run/node".into());
         }
-        self.verify(&view)?;
+        self.verify(&record)?;
         let frozen = self
             .load(record.run_id)?
             .ok_or("Run has no frozen local input authorization")?;

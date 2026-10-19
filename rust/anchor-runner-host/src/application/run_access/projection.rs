@@ -2,8 +2,6 @@ use super::run_view::RunView as LifecycleView;
 use super::{RunView, validate_control_identity};
 use crate::application::{ApplicationError, RunApplication, RunMetadata};
 use anchor_kernel::{Outcome, Phase, Waiter};
-#[cfg(test)]
-use anchor_runtime::graph::GraphRunRecord;
 use serde::Serialize;
 use serde_json::{Value, json};
 pub(crate) fn projected_run_is_unfinished(run: &Value) -> bool {
@@ -72,25 +70,13 @@ impl RunApplication {
         metadata: Option<&RunMetadata>,
     ) -> Result<RunProjection, ApplicationError> {
         let supplied = record.into();
-        let supplied = if self.kernel_owner(&supplied.record.run_id)?.is_some() {
-            self.read_run(&supplied.record.run_id)?
-                .ok_or(ApplicationError::Missing)?
-        } else {
-            supplied
-        };
-        let record = supplied.record.as_ref();
-        let mut view = self.read_view(record, self.run_is_active(&record.run_id).await)?;
-        view.updated = self.run_updated(&record.run_id)?;
-        let observed = RunView {
-            record: std::borrow::Cow::Borrowed(record),
-            active: view.worker,
-            requested: supplied.requested,
-            session_coordinated: metadata.is_some_and(|m| m.session_call.is_some()),
-            lifecycle: view.clone(),
-            kernel_owned: supplied.kernel_owned,
-            kernel_cursor: supplied.kernel_cursor.clone(),
-        };
+        let observed = self
+            .read_run(&supplied.record.run_id)?
+            .ok_or(ApplicationError::Missing)?;
+        let record = observed.record.as_ref();
+        let view = &observed.lifecycle;
         let mut projection = RunProjection::from_view(&view);
+        projection.actions.abandon = observed.can_abandon();
         projection.actions.pause = observed.can_pause();
         projection.actions.stop = observed.can_stop();
         projection.actions.resume = observed.can_resume();
@@ -179,7 +165,14 @@ impl RunApplication {
             let view = self.read_run(&id)?.ok_or(ApplicationError::Missing)?;
             let progress = view.progress();
             let executed = progress.executed_nodes();
-            let projection = self.project_run(&record, metadata.as_ref()).await?;
+            let projection = self
+                .project_run(
+                    &self
+                        .read_run(&record.run_id)?
+                        .ok_or(ApplicationError::Missing)?,
+                    metadata.as_ref(),
+                )
+                .await?;
             runs.push(json!({"session_call":metadata.as_ref().and_then(|m| m.session_call.as_ref()),"run":id,"graph":graph,"running":projection.active,"projection":projection,"started":created,"updated":projection.updated,"executed":executed,"objective":progress.snapshot.objective,"trigger":trigger}));
         }
         Ok(runs)
@@ -189,7 +182,14 @@ impl RunApplication {
         let mut runs = Vec::new();
         for (id, record) in self.raw_records()? {
             let metadata = self.metadata(&id)?;
-            let projection = self.project_run(&record, metadata.as_ref()).await?;
+            let projection = self
+                .project_run(
+                    &self
+                        .read_run(&record.run_id)?
+                        .ok_or(ApplicationError::Missing)?,
+                    metadata.as_ref(),
+                )
+                .await?;
             runs.push(json!({"run":id,"projection":projection}));
         }
         Ok(json!({"runs":runs}))
@@ -203,7 +203,14 @@ impl RunApplication {
             .ok_or(ApplicationError::Missing)?
             .1;
         let metadata = self.metadata(run)?;
-        let projection = self.project_run(&record, metadata.as_ref()).await?;
+        let projection = self
+            .project_run(
+                &self
+                    .read_run(&record.run_id)?
+                    .ok_or(ApplicationError::Missing)?,
+                metadata.as_ref(),
+            )
+            .await?;
         let mut progress = serde_json::to_value(record)
             .map_err(|error| ApplicationError::Storage(error.to_string()))?;
         progress
@@ -212,17 +219,4 @@ impl RunApplication {
             .shift_remove("status");
         Ok(json!({"run":run,"record":progress,"projection":projection}))
     }
-}
-
-#[cfg(test)]
-pub(in crate::application) fn observed(
-    record: &GraphRunRecord,
-    active: bool,
-    _requested: Option<&'static str>,
-    session_coordinated: bool,
-) -> RunProjection {
-    let mut projection = RunProjection::from_view(&super::legacy_run_view::view(record, active));
-    projection.actions.pause &= !session_coordinated;
-    projection.actions.resume = projection.actions.resume && !session_coordinated;
-    projection
 }

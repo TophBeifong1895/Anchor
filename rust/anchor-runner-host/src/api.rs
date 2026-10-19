@@ -30,8 +30,6 @@ use super::*;
 use crate::application::{ApplicationError, RunApplication};
 use crate::deployment::configured_pilot_graph;
 use anchor_graph_host::{FileGraphBundleLoader, FilePluginCatalog};
-#[cfg(test)]
-use anchor_runtime::graph::{FileRunStore, RunStatus};
 use axum::{
     Json, Router,
     extract::{DefaultBodyLimit, Path as AxumPath, Query, State},

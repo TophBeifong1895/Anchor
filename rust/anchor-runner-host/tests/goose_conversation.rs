@@ -130,7 +130,10 @@ fn node_steps(value: &str, route: &str, previous: Option<&str>) -> Vec<Step> {
 
 fn assert_artifact(host: &Host, run: &str, node: &str, value: &[u8]) -> Value {
     let record = host.record(run);
-    assert_eq!(record["status"], "completed", "{record}");
+    assert_eq!(
+        record["projection"]["result"]["outcome"], "done",
+        "{record}"
+    );
     assert_eq!(record["invocations"][node], 1);
     let name = if node == "verify" {
         "verified.txt"
@@ -239,14 +242,7 @@ fn native_goose_channel_two_turns_restart_reuse_history_but_not_workspace() {
     let (first_fact, first_process) = assert_scope(&host, &first, "worker");
     let first_history = host.native_conversation(&first, "worker", 1);
     assert!(first_history.to_string().contains(&first_nonce));
-    let frozen_record = fs::read(
-        host.base
-            .root
-            .path()
-            .join("state/runs")
-            .join(format!("{first}.json")),
-    )
-    .unwrap();
+    let frozen_record = host.base.resource_for(&first).unwrap();
     server.kill();
     drop(server);
 
@@ -297,16 +293,10 @@ fn native_goose_channel_two_turns_restart_reuse_history_but_not_workspace() {
     // deleted link.
     let (status, rejected) = server.request("POST", &format!("/runs/{first}/resume"), None);
     assert_eq!(status, 409, "{rejected}");
-    let first_record = host
-        .base
-        .root
-        .path()
-        .join("state/runs")
-        .join(format!("{first}.json"));
-    assert_eq!(fs::read(&first_record).unwrap(), frozen_record);
+    assert_eq!(host.base.resource_for(&first).unwrap(), frozen_record);
     let (status, deleted) = server.request("DELETE", &format!("/runs/{first}"), None);
     assert_eq!(status, 204, "{deleted}");
-    assert!(!first_record.exists());
+    assert!(host.base.resource_for(&first).is_none());
     assert!(
         host.base
             .root
@@ -523,16 +513,10 @@ fn native_goose_channel_unknown_effect_new_turn_checks_state_and_rejects_old_rec
         rejected_completion.contains("final_result.observed_receipt must match"),
         "{rejected_completion}"
     );
-    let old_record_path = host
-        .base
-        .root
-        .path()
-        .join("state/runs")
-        .join(format!("{first}.json"));
-    let frozen_record = fs::read(&old_record_path).unwrap();
+    let frozen_record = host.base.resource_for(&first).unwrap();
     let (status, rejected_resume) = server.request("POST", &format!("/runs/{first}/resume"), None);
     assert_eq!(status, 409, "{rejected_resume}");
-    assert_eq!(fs::read(&old_record_path).unwrap(), frozen_record);
+    assert_eq!(host.base.resource_for(&first).unwrap(), frozen_record);
     assert_eq!(provider.requests().len(), 5);
     let saved = host.record(&second);
     let bytes = host.base.file(&saved, "worker", "evidence.txt");

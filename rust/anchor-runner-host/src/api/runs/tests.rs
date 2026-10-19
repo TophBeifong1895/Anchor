@@ -1,7 +1,9 @@
 use super::*;
+use crate::api::tests::{finish_with_artifacts, seed_scenario};
+use crate::application::run_access::fixtures;
 use crate::application::{RunMetadata, metadata};
 
-fn frozen_record(state: &ApiState, status: RunStatus) -> GraphRunRecord {
+fn frozen_record(state: &ApiState) -> GraphRunRecord {
     let snapshot = GraphSnapshot::from_authoring(json!({
         "objective":"frozen graph", "entry":"module",
         "agents":{"worker":{"model":"fixture","instructions":"private instructions"}},
@@ -11,11 +13,8 @@ fn frozen_record(state: &ApiState, status: RunStatus) -> GraphRunRecord {
         "nodes":[{"id":"module","graph":"review"}],"edges":[]
     }))
     .unwrap();
-    let mut record = GraphRunRecord::create_with_id(snapshot, json!({}), "frozen-run").unwrap();
-    record.status = status;
-    FileRunStore::new(state.data_root.join("runs"))
-        .save(&record)
-        .unwrap();
+    let record = GraphRunRecord::create_with_id(snapshot, json!({}), "frozen-run").unwrap();
+    fixtures::create(&state.application, &record);
     metadata::save(
         &state.data_root,
         &RunMetadata::new(
@@ -33,7 +32,8 @@ fn frozen_record(state: &ApiState, status: RunStatus) -> GraphRunRecord {
 #[tokio::test]
 async fn frozen_topology_survives_live_graph_changes_and_missing_definition() {
     let (_root, state) = super::super::tests::fixture();
-    let record = frozen_record(&state, RunStatus::Completed);
+    let record = frozen_record(&state);
+    finish_with_artifacts(&state, &record.run_id).await;
     let initial = get_run(State(state.clone()), AxumPath(record.run_id.clone()))
         .await
         .unwrap()
@@ -66,98 +66,60 @@ async fn frozen_topology_survives_live_graph_changes_and_missing_definition() {
 
 #[tokio::test]
 async fn list_and_detail_share_status_control_and_attention_projection() {
-    let (_root, state) = super::super::tests::fixture();
-    let mut record = frozen_record(&state, RunStatus::Ready);
-    for (status, phase, waiter, outcome, resume, stop, attention) in [
-        (RunStatus::Ready, "executing", None, None, true, true, true),
+    for (id, phase, waiter, outcome, resume, stop, attention) in [
+        ("executing", "executing", None, None, true, true, true),
+        ("child", "waiting", Some("child"), None, false, false, true),
         (
-            RunStatus::WaitingCall,
-            "waiting",
-            Some("child"),
-            None,
-            false,
-            false,
-            true,
-        ),
-        (
-            RunStatus::Running,
-            "executing",
-            None,
-            None,
-            true,
-            true,
-            true,
-        ),
-        (
-            RunStatus::WaitingRecovery,
-            "waiting",
-            Some("effect"),
-            None,
-            false,
-            false,
-            true,
-        ),
-        (
-            RunStatus::BudgetStopped,
+            "recovery",
             "waiting",
             Some("human"),
             None,
-            true,
+            false,
             false,
             true,
         ),
-        (
-            RunStatus::Completed,
-            "settled",
-            None,
-            Some("done"),
-            false,
-            false,
-            false,
-        ),
+        ("budget", "waiting", Some("human"), None, true, false, true),
+        ("done", "settled", None, Some("done"), false, false, false),
     ] {
-        record.status = status;
-        record.cursor = None;
-        record.recovery.clear();
-        if matches!(
-            status,
-            RunStatus::WaitingRecovery | RunStatus::BudgetStopped
-        ) {
-            let key = json!({"run_id":record.run_id,"graph_digest":record.graph_digest,"node_id":"module/first","invocation":1});
-            record.cursor = Some(serde_json::from_value(json!({"node_id":"module/first","key":key,"input_commits":[],"prepared_input":{}})).unwrap());
-            record.invocations.insert("module/first".into(), 1);
-            record.passes.insert("module/first".into(), 1);
-            if status == RunStatus::WaitingRecovery {
-                record.recovery.push(serde_json::from_value(json!({"key":key,"attempt":{"attempt_id":1,"step":1,"tool":"anchor_run","started_at":"2026-10-16T00:00:00Z"}})).unwrap());
-            }
-        }
-        FileRunStore::new(state.data_root.join("runs"))
-            .save(&record)
-            .unwrap();
-        let detail = get_run(State(state.clone()), AxumPath(record.run_id.clone()))
+        let (_root, state) = super::super::tests::fixture();
+        let record = seed_scenario(&state, id).await;
+        metadata::save(
+            &state.data_root,
+            &RunMetadata::new(
+                id.into(),
+                "fixture".into(),
+                record.graph_digest.clone(),
+                &state.bundle_root,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let detail = get_run(State(state.clone()), AxumPath(id.into()))
             .await
             .unwrap()
-            .0;
+            .0["projection"]
+            .clone();
         let runs = projected_runs(&state).await.unwrap();
-        assert_eq!(detail["projection"], runs[0]["projection"]);
-        assert_eq!(detail["projection"]["phase"], phase);
-        assert_eq!(detail["projection"]["actions"]["resume"], resume);
-        assert_eq!(detail["projection"]["actions"]["stop"], stop);
-        assert_eq!(detail["projection"]["waiting_for"].as_str(), waiter);
-        assert_eq!(detail["projection"]["outcome"].as_str(), outcome);
-        assert_eq!(detail["projection"]["actions"]["pause"], false);
+        let listed = runs.iter().find(|run| run["run"] == id).unwrap();
+        assert_eq!(detail, listed["projection"]);
+        assert_eq!(detail["phase"], phase);
+        assert_eq!(detail["actions"]["resume"], resume);
+        assert_eq!(detail["actions"]["stop"], stop);
+        assert_eq!(detail["waiting_for"].as_str(), waiter);
+        assert_eq!(detail["outcome"].as_str(), outcome);
+        assert_eq!(detail["actions"]["pause"], false);
         assert_eq!(
-            phase == "waiting" || (phase == "executing" && detail["projection"]["active"] == false),
+            phase == "waiting" || (phase == "executing" && detail["active"] == false),
             attention
         );
-        assert!(detail["projection"].get("needs_attention").is_none());
+        assert!(detail.get("needs_attention").is_none());
     }
 }
 
 #[tokio::test]
 async fn incomplete_run_identity_does_not_offer_inactive_controls() {
     let (_root, state) = super::super::tests::fixture();
-    let record = frozen_record(&state, RunStatus::Ready);
+    let record = frozen_record(&state);
     let mut metadata = state.application.metadata(&record.run_id).unwrap().unwrap();
     metadata.graph_digest = "different-frozen-graph".into();
     metadata::save(&state.data_root, &metadata).unwrap();

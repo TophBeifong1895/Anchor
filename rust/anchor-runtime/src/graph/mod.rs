@@ -8,7 +8,7 @@ pub(crate) use std::{
     collections::{BTreeMap, BTreeSet},
     fs::{self, OpenOptions},
     future::Future,
-    io::{self, Write},
+    io,
     path::PathBuf,
     pin::Pin,
     sync::atomic::Ordering,
@@ -30,9 +30,6 @@ pub use store::*;
 mod ports;
 pub use ports::*;
 mod control_completion;
-mod runner;
-pub use runner::*;
-mod parallel;
 pub mod scheduler;
 pub mod validator;
 
@@ -41,3 +38,6 @@ mod tests;
 
 #[cfg(any(test, feature = "test-fixtures"))]
 pub mod test_support;
+
+#[cfg(test)]
+pub(crate) use std::io::Write;

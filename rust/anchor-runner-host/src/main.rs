@@ -42,7 +42,6 @@ mod run_deletions;
 mod tool_disclosure;
 mod tool_environment;
 mod tool_host;
-use execution::PreparedExecution;
 use node_host::HostNodes;
 #[cfg(test)]
 use node_host::load_host_completion_fact;
@@ -50,7 +49,7 @@ use node_host::load_host_completion_fact;
 use anchor_runtime::Cancellation;
 #[cfg(test)]
 use anchor_runtime::graph::{CompletionFact, InvocationKey};
-use anchor_runtime::graph::{GraphRunRecord, GraphSnapshot, RunControl, RunStatus, RunStore};
+use anchor_runtime::graph::{GraphRunRecord, GraphSnapshot};
 use anchor_sandbox_bwrap::{BubblewrapPolicy, BubblewrapSandbox};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -135,8 +134,7 @@ enum Response {
         version: u32,
         request_id: String,
         run_id: String,
-        status: RunStatus,
-        error: Option<String>,
+        projection: Value,
     },
     #[serde(rename = "missing")]
     Missing {
@@ -155,18 +153,6 @@ enum Response {
 #[derive(Clone)]
 struct HostControl {
     cancellation: Cancellation,
-    pause: Arc<std::sync::atomic::AtomicBool>,
-}
-impl RunControl for HostControl {
-    fn pause_requested(&self) -> bool {
-        self.pause.load(std::sync::atomic::Ordering::Relaxed)
-    }
-    fn stop_requested(&self) -> bool {
-        self.cancellation.load(std::sync::atomic::Ordering::Relaxed)
-    }
-    fn cancellation(&self) -> Cancellation {
-        self.cancellation.clone()
-    }
 }
 
 fn reject_snapshot(snapshot: &GraphSnapshot) -> Result<(), String> {
@@ -302,24 +288,16 @@ fn env_path(name: &str) -> Result<PathBuf, String> {
 
 fn acquire_deployment_writer() -> Result<Box<dyn anchor_runtime::graph::RunLease>, String> {
     let root = env_path("ANCHOR_RUNNER_STATE_ROOT")?;
-    anchor_runtime::graph::FileRunStore::new(root.join("deployment-locks"))
+    anchor_runtime::graph::FileRunLeaseProvider::new(root.join("deployment-locks"))
         .acquire_lease("deployment-writer")
         .map_err(|error| format!("state root already has a writing host: {error}"))
 }
 fn make_host_with_control(
     run_id: &str,
-    control: HostControl,
+    _control: HostControl,
     library_root: Option<PathBuf>,
     runtime_configuration: Option<Arc<runtime_configuration::RuntimeConfiguration>>,
-) -> Result<
-    (
-        anchor_runtime::graph::FileRunStore,
-        HostArtifacts,
-        HostNodes,
-        HostControl,
-    ),
-    String,
-> {
+) -> Result<(HostArtifacts, HostNodes), String> {
     let state = env_path("ANCHOR_RUNNER_STATE_ROOT")?;
     let work_root = env_path("ANCHOR_RUNNER_WORKSPACE_ROOT")?;
     let _ = run_id;
@@ -373,7 +351,6 @@ fn make_host_with_control(
             Arc::clone(&sandbox),
             Arc::new(tools.clone()),
             mcp.clone(),
-            anchor_runtime::graph::FileRunStore::new(state.join("runs")),
             local_inputs::LocalInputs::from_env(state.clone())?,
             session_mounts,
             deployment::configured_pilot_graph(),
@@ -388,10 +365,8 @@ fn make_host_with_control(
         Arc::clone(&sandbox),
     )?;
     Ok((
-        anchor_runtime::graph::FileRunStore::new(state.join("runs")),
         artifacts.clone(),
         HostNodes {
-            control: control.clone(),
             sandbox,
             allowed_commands: commands
                 .split(',')
@@ -403,8 +378,43 @@ fn make_host_with_control(
             io_resolver,
             goose_nodes,
         },
-        control,
     ))
+}
+
+async fn standalone_response(
+    application: &application::RunApplication,
+    view: application::run_access::RunView<'static>,
+    run_id: String,
+    request_id: String,
+) -> Response {
+    let projected = async {
+        let metadata = application.metadata(&run_id)?;
+        let projection = application.project_run(&view, metadata.as_ref()).await?;
+        serde_json::to_value(projection)
+            .map_err(|error| application::ApplicationError::Storage(error.to_string()))
+    }
+    .await;
+    match projected {
+        Ok(projection) => Response::Run {
+            version: 1,
+            request_id,
+            run_id,
+            projection,
+        },
+        Err(error) => Response::Rejected {
+            version: 1,
+            request_id,
+            reason: format!("{error:?}"),
+        },
+    }
+}
+
+fn standalone_application() -> Result<application::RunApplication, String> {
+    let state = env_path("ANCHOR_RUNNER_STATE_ROOT")?;
+    let catalog = env::var_os("ANCHOR_RUNNER_CATALOG_ROOT")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| state.clone());
+    Ok(application::RunApplication::new(state, catalog))
 }
 
 async fn handle(request: Request) -> Response {
@@ -474,32 +484,27 @@ async fn handle(request: Request) -> Response {
                     reason: "unsupported protocol version".into(),
                 };
             }
-            match env_path("ANCHOR_RUNNER_STATE_ROOT") {
-                Ok(root) => match anchor_runtime::graph::FileRunStore::new(root.join("runs"))
-                    .load(&run_id)
-                {
-                    Ok(Some(record)) => Response::Run {
+            let application = match standalone_application() {
+                Ok(application) => application,
+                Err(reason) => {
+                    return Response::Rejected {
                         version: 1,
                         request_id,
-                        run_id,
-                        status: record.status,
-                        error: record.error,
-                    },
-                    Ok(None) => Response::Missing {
-                        version: 1,
-                        request_id,
-                        run_id,
-                    },
-                    Err(e) => Response::Rejected {
-                        version: 1,
-                        request_id,
-                        reason: e.to_string(),
-                    },
-                },
-                Err(reason) => Response::Rejected {
+                        reason,
+                    };
+                }
+            };
+            match application.read_run(&run_id) {
+                Ok(Some(view)) => standalone_response(&application, view, run_id, request_id).await,
+                Ok(None) => Response::Missing {
                     version: 1,
                     request_id,
-                    reason,
+                    run_id,
+                },
+                Err(error) => Response::Rejected {
+                    version: 1,
+                    request_id,
+                    reason: format!("{error:?}"),
                 },
             }
         }
@@ -557,7 +562,7 @@ async fn execute_snapshot_with_control(
             };
         }
     };
-    let mut expected = match GraphRunRecord::create_with_id(snapshot, input, run_id.clone()) {
+    let expected = match GraphRunRecord::create_with_id(snapshot, input, run_id.clone()) {
         Ok(record) => record,
         Err(error) => {
             return Response::Rejected {
@@ -569,7 +574,6 @@ async fn execute_snapshot_with_control(
     };
     let control = supplied_control.unwrap_or_else(|| HostControl {
         cancellation: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-        pause: Arc::new(std::sync::atomic::AtomicBool::new(false)),
     });
     let library_root = standalone_library_root();
     let plugin_ids = expected
@@ -628,39 +632,13 @@ async fn execute_snapshot_with_control(
         }
         None => BTreeMap::new(),
     };
-    expected.plugin_bindings = plugin_bindings.clone();
-    expected.plugin_bindings_initialized = true;
-    let execution = match PreparedExecution::prepare_with_bindings(
-        &expected,
-        control,
-        plugin_bindings,
-        None,
-        None,
-        library_root,
+    let expected = match GraphRunRecord::create_with_plugins(
+        expected.snapshot,
+        expected.input,
+        run_id.clone(),
+        plugin_bindings.values().cloned().collect(),
     ) {
-        Ok(execution) => execution,
-        Err(reason) => {
-            return Response::Rejected {
-                version: 1,
-                request_id,
-                reason,
-            };
-        }
-    };
-    let (record, newly_admitted) = match execution.store.load(&run_id) {
-        Ok(Some(record))
-            if record.snapshot == expected.snapshot && record.input == expected.input =>
-        {
-            (record, false)
-        }
-        Ok(Some(_)) => {
-            return Response::Rejected {
-                version: 1,
-                request_id,
-                reason: "run identity is already bound to a different snapshot or input".into(),
-            };
-        }
-        Ok(None) => (expected, true),
+        Ok(record) => record,
         Err(error) => {
             return Response::Rejected {
                 version: 1,
@@ -669,39 +647,72 @@ async fn execute_snapshot_with_control(
             };
         }
     };
-    if let Err(reason) = ensure_standalone_run_metadata(&record, bundle_root.as_deref()) {
+    let application = match standalone_application() {
+        Ok(application) => application,
+        Err(reason) => {
+            return Response::Rejected {
+                version: 1,
+                request_id,
+                reason,
+            };
+        }
+    };
+    // Reject retired storage and conflicting identities before publishing any
+    // metadata or frozen input authorization for this request.
+    match application.execution_record(&run_id) {
+        Ok(Some(record))
+            if record.snapshot != expected.snapshot || record.input != expected.input =>
+        {
+            return Response::Rejected {
+                version: 1,
+                request_id,
+                reason: "run identity is already bound to a different snapshot or input".into(),
+            };
+        }
+        Ok(_) => {}
+        Err(error) => {
+            return Response::Rejected {
+                version: 1,
+                request_id,
+                reason: format!("{error:?}"),
+            };
+        }
+    }
+    if expected
+        .snapshot
+        .ops
+        .values()
+        .any(|op| op.get("call").is_some())
+        && env::var_os("ANCHOR_RUNNER_CATALOG_ROOT").is_none()
+    {
+        return Response::Rejected {
+            version: 1,
+            request_id,
+            reason: "ANCHOR_RUNNER_CATALOG_ROOT is required for Op.call".into(),
+        };
+    }
+    if let Err(reason) = ensure_standalone_run_metadata(&expected, bundle_root.as_deref()) {
         return Response::Rejected {
             version: 1,
             request_id,
             reason,
         };
     }
-    if newly_admitted && let Err(error) = execution.store.save(&record) {
-        return Response::Rejected {
-            version: 1,
-            request_id,
-            reason: error.to_string(),
-        };
-    }
-    drop(reference_lease);
-    match execution.run(record).await {
-        Ok(record) => Response::Run {
-            version: 1,
-            request_id,
-            run_id,
-            status: record.status,
-            error: record.error,
-        },
+    match application
+        .execute_standalone(expected, control.cancellation, reference_lease)
+        .await
+    {
+        Ok(view) => standalone_response(&application, view, run_id, request_id).await,
         Err(error) => Response::Rejected {
             version: 1,
             request_id,
-            reason: error.to_string(),
+            reason: format!("{error:?}"),
         },
     }
 }
 
 /// Persist the manual Run identity metadata a framed/standalone top-level Run
-/// needs before GraphRunner can admit an `Op.call` child. `RunnerGraphCatalog`
+/// needs before the shared Kernel can admit an `Op.call` child. `HostGraphCatalog`
 /// fails closed when the parent Run has no durable source metadata, so a
 /// `start_bundle`/`start` Run records the same manual identity the HTTP
 /// RunApplication writes. This is idempotent, verifies graph/source/digest on

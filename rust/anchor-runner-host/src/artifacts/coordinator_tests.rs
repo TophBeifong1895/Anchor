@@ -1,5 +1,7 @@
 use super::*;
-use anchor_runtime::{Cancellation, graph::*};
+use anchor_kernel::{Kernel, MemoryStore, Outcome, Phase};
+use anchor_runtime::graph::*;
+use anchor_runtime::graph::{scheduler::KernelScheduler, validator::run_resource};
 use serde_json::json;
 use std::sync::{Arc, atomic::AtomicBool};
 
@@ -69,19 +71,6 @@ impl NodeExecutionPort for Nodes<'_> {
         })
     }
 }
-struct Control;
-impl RunControl for Control {
-    fn pause_requested(&self) -> bool {
-        false
-    }
-    fn stop_requested(&self) -> bool {
-        false
-    }
-    fn cancellation(&self) -> Cancellation {
-        Arc::new(AtomicBool::new(false))
-    }
-}
-
 #[tokio::test]
 async fn shared_coordinator_pins_every_cursor_input_in_node_and_control_manifests() {
     let temp = tempfile::tempdir().unwrap();
@@ -96,18 +85,49 @@ async fn shared_coordinator_pins_every_cursor_input_in_node_and_control_manifest
         "edges":[{"from":"producer","to":"fanout"},{"from":"fanout","to":"left1"},{"from":"left1","to":"left2"},{"from":"left2","to":"join"},{"from":"fanout","to":"right"},{"from":"right","to":"join"},{"from":"join","to":"downstream"}]
     })).unwrap();
     let record = GraphRunRecord::create_with_id(snapshot, json!({}), "coordinator-test").unwrap();
-    let store = FileRunStore::new(temp.path().join("runs"));
-    let nodes = Nodes(&artifacts);
-    let completed = GraphRunner::new(&store, &artifacts, &nodes, &Control)
-        .run(record)
-        .await
+    struct Authority;
+    impl anchor_kernel::Authority for Authority {
+        fn permits(
+            &self,
+            principal: &anchor_kernel::Principal,
+            action: anchor_kernel::Action,
+            _: &str,
+        ) -> bool {
+            principal.kind == anchor_kernel::PrincipalKind::Code
+                || action == anchor_kernel::Action::Write
+        }
+    }
+    let mut kernel = Kernel::new(MemoryStore::default(), Box::new(Authority)).unwrap();
+    kernel
+        .install(
+            anchor_runtime::graph::validator::GRAPH_VALIDATOR,
+            Arc::new(anchor_runtime::graph::validator::GraphValidator),
+        )
         .unwrap();
+    kernel
+        .create(run_resource(&record, u64::MAX).unwrap())
+        .unwrap();
+    let nodes = Nodes(&artifacts);
+    let resource = KernelScheduler {
+        kernel: &kernel,
+        observer: None,
+        boundary: None,
+        artifacts: &artifacts,
+        nodes: &nodes,
+        cancellation: Arc::new(AtomicBool::new(false)),
+    }
+    .run(&anchor_runtime::graph::validator::run_resource_id(
+        &record.run_id,
+    ))
+    .await
+    .unwrap();
     assert_eq!(
-        completed.status,
-        RunStatus::Completed,
-        "{:?}",
-        completed.error
+        resource.phase(),
+        Some(&Phase::Settled {
+            result: Outcome::Done
+        })
     );
+    let completed = anchor_runtime::graph::validator::record_of(&resource).unwrap();
     for (node, parents, kind) in [
         ("producer", vec![], ArtifactKind::Node),
         ("fanout", vec!["producer"], ArtifactKind::Fanout),

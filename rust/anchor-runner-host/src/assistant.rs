@@ -620,8 +620,9 @@ pub(crate) fn graph_error(error: impl std::fmt::Display) -> GraphError {
 mod tests {
     use super::*;
     use crate::application::metadata::{AssistantSource, ConversationSource, RunMetadata};
+    use crate::application::{RunApplication, run_access::fixtures};
     use anchor_platform_session::{ChannelIdentity, ChannelInboundRequest};
-    use anchor_runtime::graph::{FileRunStore, GraphRunRecord, GraphSnapshot, RunStore};
+    use anchor_runtime::graph::{GraphRunRecord, GraphSnapshot};
     use serde_json::json;
 
     const OWNER: &str = "local";
@@ -672,6 +673,7 @@ mod tests {
         _temp: tempfile::TempDir,
         root: PathBuf,
         graph: PathBuf,
+        application: RunApplication,
     }
 
     fn fixture() -> Fixture {
@@ -680,10 +682,12 @@ mod tests {
         std::fs::create_dir_all(root.join("platform")).unwrap();
         let graph = temp.path().join("bundle");
         std::fs::create_dir_all(&graph).unwrap();
+        let application = RunApplication::new(root.clone(), graph.clone());
         Fixture {
             _temp: temp,
             root,
             graph,
+            application,
         }
     }
 
@@ -712,9 +716,9 @@ mod tests {
         let record =
             GraphRunRecord::create_with_id(snapshot, json!({"session":session}), run).unwrap();
         let digest = record.graph_digest.clone();
-        FileRunStore::new(fixture.root.join("runs"))
-            .save(&record)
-            .unwrap();
+        if fixture.application.read_run(run).unwrap().is_none() {
+            fixtures::create(&fixture.application, &record);
+        }
         let mut metadata =
             RunMetadata::new(run.into(), "fixture".into(), digest.clone(), &fixture.graph).unwrap();
         metadata.assistant = Some(AssistantSource {
@@ -842,14 +846,17 @@ mod tests {
         assert_eq!(handover_predecessor(&fixture.root, &foreign).unwrap(), None);
         // The recorded invocation is the round of the handed-over Run that last
         // prepared the very same scene.
-        let mut record = FileRunStore::new(fixture.root.join("runs"))
-            .load("assistant-old")
-            .unwrap()
-            .unwrap();
-        record.invocations.insert("assistant".into(), 4);
-        FileRunStore::new(fixture.root.join("runs"))
-            .save(&record)
-            .unwrap();
+        for _ in 0..4 {
+            for node in ["wait_input", "assistant", "reply"] {
+                fixtures::complete(
+                    &fixture.application,
+                    "assistant-old",
+                    node,
+                    fixtures::completion(json!({})),
+                    None,
+                );
+            }
+        }
         assert_eq!(
             handover_predecessor(&fixture.root, &new)
                 .unwrap()
@@ -1046,11 +1053,18 @@ mod tests {
             .unwrap();
         let scene = artifacts.prepare_workspace(&old, &[]).unwrap();
         std::fs::write(scene.join("draft.md"), "retained work").unwrap();
-        // The Runner can have allocated a later invocation without preparing it.
-        let store = FileRunStore::new(fixture.root.join("runs"));
-        let mut record = store.load(&old.run_id).unwrap().unwrap();
-        record.invocations.insert("assistant".into(), 8);
-        store.save(&record).unwrap();
+        // Completed invocations can advance without preparing a newer workspace.
+        for _ in 0..8 {
+            for node in ["wait_input", "assistant", "reply"] {
+                fixtures::complete(
+                    &fixture.application,
+                    &old.run_id,
+                    node,
+                    fixtures::completion(json!({})),
+                    None,
+                );
+            }
+        }
         let middle = admit(&fixture, "assistant-middle", &session, Some(&old.run_id));
         sessions
             .handover_channel_assistant(OWNER, &session, &old.run_id, &middle.run_id, "middle-key")

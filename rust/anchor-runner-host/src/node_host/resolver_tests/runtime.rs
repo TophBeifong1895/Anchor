@@ -76,10 +76,6 @@ async fn managed_python_is_shared_by_agent_commands_and_op_without_dependency_pl
     assert!(text.contains(python.to_str().unwrap()), "{text}");
     drop(tools);
     let nodes = HostNodes {
-        control: crate::HostControl {
-            cancellation: request.cancellation.clone(),
-            pause: std::sync::Arc::new(AtomicBool::new(false)),
-        },
         sandbox: resolver.sandbox.clone(),
         allowed_commands: vec!["sh".into()],
         artifacts: resolver.artifacts.clone(),

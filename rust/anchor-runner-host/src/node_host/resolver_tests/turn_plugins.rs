@@ -8,8 +8,6 @@ fn assistant_fixture(
         .iter()
         .map(|id| (*id, false, None))
         .collect::<Vec<_>>();
-    let (root, resolver, _, mut request) = session_fixture(installed, &declared, &[]);
-    let state = resolver.local_inputs.state_root();
     let plugins = declared
         .iter()
         .map(|(id, _, _)| json!({"id":id,"required":false}))
@@ -21,22 +19,10 @@ fn assistant_fixture(
         "nodes":[{"id":"wait","op":"wait"},{"id":"agent","agent":"worker","plugins":plugins},{"id":"reply","op":"reply"}],
         "edges":[{"from":"wait","to":"agent"},{"from":"agent","to":"reply"},{"from":"reply","to":"wait"}]
     })).unwrap();
-    let mut record =
-        GraphRunRecord::create_with_id(snapshot.clone(), json!({}), request.key.run_id.clone())
-            .unwrap();
-    record.plugin_bindings = resolver
-        .resolve_plugins(
-            &declared
-                .iter()
-                .map(|(id, _, _)| id.to_string())
-                .collect::<Vec<_>>(),
-        )
-        .unwrap()
-        .into_iter()
-        .map(|binding| (binding.id.clone(), binding))
-        .collect();
-    record.plugin_bindings_initialized = true;
-    resolver.run_store.save(&record).unwrap();
+    let (root, resolver, _, mut request) =
+        session_fixture_with_snapshot(installed, &declared, &[], Some(snapshot.clone()));
+    let state = resolver.local_inputs.state_root();
+    let record = resolver.load_run(&request.key.run_id).unwrap().unwrap();
     let bundle = root.path().join("assistant-graph");
     std::fs::create_dir_all(&bundle).unwrap();
     write_bundle(&bundle, &snapshot);
@@ -99,8 +85,7 @@ fn desired(
             .unwrap()
             .unwrap();
     let mut snapshot = resolver
-        .run_store
-        .load(&request.key.run_id)
+        .load_run(&request.key.run_id)
         .unwrap()
         .unwrap()
         .snapshot;
@@ -160,11 +145,7 @@ async fn freeze(
 #[tokio::test]
 async fn assistant_turn_add_remove_and_retry_preserve_original_run_and_current_turn() {
     let (_root, resolver, mut request) = assistant_fixture(&["old", "new"], &["old"]);
-    let original = resolver
-        .run_store
-        .load(&request.key.run_id)
-        .unwrap()
-        .unwrap();
+    let original = resolver.load_run(&request.key.run_id).unwrap().unwrap();
     freeze(&resolver, &request, "one").await.unwrap();
     assert_eq!(
         mounted_ids(&resolver.mounted_plugins(&request).unwrap()),
@@ -202,11 +183,7 @@ async fn assistant_turn_add_remove_and_retry_preserve_original_run_and_current_t
             .is_empty()
     );
     assert_eq!(
-        resolver
-            .run_store
-            .load(&request.key.run_id)
-            .unwrap()
-            .unwrap(),
+        resolver.load_run(&request.key.run_id).unwrap().unwrap(),
         original
     );
 }
@@ -270,18 +247,14 @@ async fn same_turn_policy_survives_repeated_handover_before_replacement_prepares
         .unwrap();
     freeze(&resolver, &request, &carried_turn).await.unwrap();
     desired(&resolver, &request, &["new"], false, true);
-    let original = resolver
-        .run_store
-        .load(&request.key.run_id)
-        .unwrap()
-        .unwrap();
+    let original = resolver.load_run(&request.key.run_id).unwrap().unwrap();
     let mut previous = request.key.run_id.clone();
     for next in ["replacement-empty", "replacement-current"] {
         let mut record =
             GraphRunRecord::create_with_id(original.snapshot.clone(), json!({}), next).unwrap();
         record.plugin_bindings = original.plugin_bindings.clone();
         record.plugin_bindings_initialized = true;
-        resolver.run_store.save(&record).unwrap();
+        test_runs::seed(resolver.state_root(), &record);
         let mut metadata = original_meta.clone();
         metadata.run_id = next.into();
         metadata.conversation.as_mut().unwrap().previous_run = Some(previous.clone());
@@ -348,11 +321,7 @@ async fn new_turn_after_idle_handover_ignores_earlier_explicit_instance_replacem
             None,
         )
         .unwrap();
-    let original = resolver
-        .run_store
-        .load(&request.key.run_id)
-        .unwrap()
-        .unwrap();
+    let original = resolver.load_run(&request.key.run_id).unwrap().unwrap();
     let mut metadata = crate::application::metadata::load(state, &request.key.run_id)
         .unwrap()
         .unwrap();
@@ -361,7 +330,7 @@ async fn new_turn_after_idle_handover_ignores_earlier_explicit_instance_replacem
         let mut record = GraphRunRecord::create_with_id(snapshot, json!({}), run).unwrap();
         record.plugin_bindings = original.plugin_bindings.clone();
         record.plugin_bindings_initialized = true;
-        resolver.run_store.save(&record).unwrap();
+        test_runs::seed(resolver.state_root(), &record);
         let mut meta = metadata.clone();
         meta.run_id = run.into();
         meta.graph_digest = record.graph_digest;
@@ -408,11 +377,13 @@ async fn new_turn_after_idle_handover_ignores_earlier_explicit_instance_replacem
         .unwrap();
     // Explicitly recreate from an older conversation scene. Its conversation
     // predecessor differs from the most recently retired assistant instance.
-    admit(
-        &request.key.run_id,
-        Some("history-origin"),
-        original.snapshot.clone(),
-    );
+    let mut recreated = metadata.clone();
+    recreated.conversation = Some(crate::application::metadata::ConversationSource {
+        session: session.clone(),
+        reply_node: "agent".into(),
+        previous_run: Some("history-origin".into()),
+    });
+    crate::application::metadata::save(state, &recreated).unwrap();
     sessions
         .bind_channel_assistant(
             "alice",
@@ -541,8 +512,7 @@ async fn unapproved_or_structural_graph_and_corrupt_turn_policy_never_grant_tool
             .unwrap()
             .unwrap();
     let mut changed = resolver
-        .run_store
-        .load(&request.key.run_id)
+        .load_run(&request.key.run_id)
         .unwrap()
         .unwrap()
         .snapshot;

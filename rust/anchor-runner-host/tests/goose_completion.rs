@@ -38,7 +38,7 @@ fn checked(host: &Host, provider: &Provider, run: &str, expected: &str, count: u
     provider.assert_consumed();
     assert_eq!(provider.requests().len(), count);
     let saved = host.record(run);
-    assert_eq!(saved["status"], "completed", "{saved}");
+    assert_eq!(saved["projection"]["result"]["outcome"], "done", "{saved}");
     assert_eq!(saved["results"]["worker"].as_array().unwrap().len(), 1);
     assert_eq!(saved["results"]["done"].as_array().unwrap().len(), 1);
     let (fact, evidence, _) = host.native_record(run, "worker", 1);

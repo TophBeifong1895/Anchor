@@ -5,7 +5,7 @@ use crate::application::{
 };
 use anchor_kernel::Outcome;
 use anchor_runtime::graph::{
-    CallIdentity, GraphCallRecord, GraphCallStatus, GraphSnapshot, InvocationKey,
+    GraphCallStatus, GraphSnapshot, InvocationKey,
     test_support::{Artifacts, Scripted, ScriptedCalls},
 };
 use serde_json::json;
@@ -199,15 +199,9 @@ async fn kernel_delete_rechecks_active_worker_even_with_a_settled_resource() {
     create(&application, "target", "draining");
     complete(&application, &workspace, "draining").await;
     let runs = application.kernel_runs(false).unwrap().unwrap();
-    let (pause, _requests) = tokio::sync::mpsc::unbounded_channel();
-    runs.active.lock().unwrap().insert(
-        "draining".into(),
-        KernelExecution {
-            cancellation: cancellation(),
-            pause,
-            wait_pause: Arc::new(tokio::sync::Notify::new()),
-        },
-    );
+    let port = nodes();
+    let registered = runs.drive("draining", &Artifacts, &port, cancellation());
+    assert!(runs.active("draining"));
     assert!(matches!(
         application.delete_run("draining", &workspace).await,
         Err(ApplicationError::Conflict(_))
@@ -219,7 +213,7 @@ async fn kernel_delete_rechecks_active_worker_even_with_a_settled_resource() {
         Err(ApplicationError::Conflict(_))
     ));
     assert!(runs.load("draining").unwrap().is_some());
-    runs.active.lock().unwrap().remove("draining");
+    drop(registered);
     application
         .delete_run("draining", &workspace)
         .await
@@ -309,39 +303,48 @@ async fn kernel_delete_preserves_pending_session_delivery() {
 #[tokio::test]
 async fn kernel_single_delete_preserves_call_owner_and_child_references() {
     let (_root, application, workspace) = fixture();
-    let mut parent = create(&application, "parent", "parent");
+    let parent_path = application.catalog_root.join("parent");
+    let definition = json!({"objective":"parent call","entry":"work","agents":{},
+        "ops":{"work":{"call":{"graph":"child","mode":"wait"}}},
+        "nodes":[{"id":"work","op":"work"}],"edges":[]});
+    crate::application::graphs::write_graph_bundle(&parent_path, &definition).unwrap();
+    let parent = GraphRunRecord::create_with_id(
+        GraphSnapshot::admit(definition).unwrap(),
+        json!({}),
+        "parent",
+    )
+    .unwrap();
+    crate::application::run_access::fixtures::create(&application, &parent);
+    metadata::save(
+        &application.data_root,
+        &RunMetadata::child(
+            "parent".into(),
+            "parent".into(),
+            parent.graph_digest.clone(),
+            &parent_path,
+        )
+        .unwrap(),
+    )
+    .unwrap();
     create(&application, "child", "child");
-    let runs = application.kernel_runs(false).unwrap().unwrap();
-    let identity = CallIdentity {
-        parent_run_id: "parent".into(),
-        parent_graph_digest: parent.graph_digest.clone(),
-        call_spec_digest: "fixture-call".into(),
-        node_id: "work".into(),
-        invocation: 1,
-    };
-    parent.graph_calls.insert(
-        identity.durable_key(),
-        GraphCallRecord {
-            identity,
-            graph: "child".into(),
-            child_run_id: Some("child".into()),
-            mode: "wait".into(),
-            status: GraphCallStatus::Waiting,
-            output: None,
-            error: None,
-        },
-    );
-    // A durable call fact is created through the public store API for this
-    // reference-protection fixture; deletion never infers ownership from paths.
-    runs.kernel
-        .store()
-        .remove(&run_resource_id("parent"))
-        .unwrap();
-    runs.create(&parent, 100).unwrap();
+    crate::application::run_access::fixtures::bind_child(&application, "parent", "work", "child");
+    let before_parent = application.load_run("parent").unwrap().unwrap();
+    let before_child = application.load_run("child").unwrap().unwrap();
+    let call = before_parent.graph_calls.values().next().unwrap();
+    assert_eq!(call.status, GraphCallStatus::Waiting);
+    assert_eq!(call.child_run_id.as_deref(), Some("child"));
     for id in ["parent", "child"] {
         assert!(matches!(application.delete_run(id, &workspace).await,
             Err(ApplicationError::Conflict(message)) if message.contains("Graph call")));
         assert!(application.load_run(id).unwrap().is_some());
+        assert_eq!(
+            application.load_run("parent").unwrap().unwrap(),
+            before_parent
+        );
+        assert_eq!(
+            application.load_run("child").unwrap().unwrap(),
+            before_child
+        );
     }
 }
 
@@ -396,20 +399,14 @@ async fn kernel_graph_conversation_delete_rechecks_wait_child_phase_and_worker()
         Err(ApplicationError::Conflict(message)) if message.contains("has not stopped"))
     );
     complete(&application, &workspace, "wait-child").await;
-    let (pause, _requests) = tokio::sync::mpsc::unbounded_channel();
-    runs.active.lock().unwrap().insert(
-        "wait-child".into(),
-        KernelExecution {
-            cancellation: cancellation(),
-            pause,
-            wait_pause: Arc::new(tokio::sync::Notify::new()),
-        },
-    );
+    let port = nodes();
+    let registered = runs.drive("wait-child", &Artifacts, &port, cancellation());
+    assert!(runs.active("wait-child"));
     assert!(
         matches!(application.delete_graph(&application.catalog_root.join("target"), &workspace).await,
             Err(ApplicationError::Conflict(message)) if message.contains("has not stopped"))
     );
-    runs.active.lock().unwrap().remove("wait-child");
+    drop(registered);
     assert_eq!(
         application
             .delete_graph(&application.catalog_root.join("target"), &workspace)

@@ -3,11 +3,12 @@ use super::*;
 mod parallel;
 mod recovery;
 use anchor_kernel::{Evidence, Outcome, Reason, Waiter};
+use anchor_runtime::graph::test_support::snapshots::{FrozenStatus, Population, Snapshots};
 use anchor_runtime::graph::test_support::{
-    Artifacts, Scripted, ScriptedCalls, facts, random_graph, run_old,
+    Artifacts, Scripted, ScriptedCalls, facts, random_graph,
 };
 use anchor_runtime::graph::*;
-use serde_json::json;
+use serde_json::{Value, json};
 use std::{future::Future, pin::Pin, sync::atomic::AtomicBool};
 use tokio::sync::{Notify, Semaphore};
 
@@ -146,6 +147,98 @@ fn cancel() -> anchor_runtime::Cancellation {
 }
 
 #[tokio::test]
+async fn worker_registration_is_visible_before_poll_and_drops_with_its_future() {
+    let root = tempfile::tempdir().unwrap();
+    let application = app(root.path());
+    let runs = application.kernel_runs(true).unwrap().unwrap();
+    let record = record("registered-before-poll");
+    runs.create(&record, 30).unwrap();
+    let nodes = Nodes::new(&root.path().join("facts"), Mode::Complete);
+    let worker = runs.drive(&record.run_id, &Artifacts, &nodes, cancel());
+    assert!(runs.active(&record.run_id));
+    assert!(matches!(
+        runs.drive(&record.run_id, &Artifacts, &nodes, cancel())
+            .await,
+        Err(GraphError::RunBusy(_))
+    ));
+    assert!(runs.active(&record.run_id));
+    drop(worker);
+    assert!(!runs.active(&record.run_id));
+    assert!(nodes.trace.lock().unwrap().is_empty());
+    runs.drive(&record.run_id, &Artifacts, &nodes, cancel())
+        .await
+        .unwrap();
+    assert!(!runs.active(&record.run_id));
+    assert_eq!(nodes.trace.lock().unwrap().len(), 3);
+}
+
+#[tokio::test]
+async fn registered_worker_aborted_before_first_poll_releases_the_same_registry() {
+    let root = tempfile::tempdir().unwrap();
+    let application = app(root.path());
+    let runs = application.kernel_runs(true).unwrap().unwrap();
+    let record = record("registered-aborted-before-poll");
+    runs.create(&record, 30).unwrap();
+    let registration = runs.register(&record.run_id, cancel()).unwrap();
+    let owner = Arc::clone(&runs);
+    let nodes = Nodes::new(&root.path().join("facts"), Mode::Complete);
+    let worker = tokio::spawn(async move {
+        owner
+            .drive_registered(registration, &Artifacts, &nodes)
+            .await
+    });
+    assert!(runs.active(&record.run_id));
+    worker.abort();
+    assert!(worker.await.unwrap_err().is_cancelled());
+    assert!(!runs.active(&record.run_id));
+    tokio::time::timeout(
+        std::time::Duration::from_secs(1),
+        runs.wait_idle(&record.run_id),
+    )
+    .await
+    .unwrap();
+    assert!(
+        KernelRuns::record(&runs.load(&record.run_id).unwrap().unwrap())
+            .unwrap()
+            .results
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn wait_idle_releases_all_waiters_when_an_unpolled_worker_is_dropped() {
+    let root = tempfile::tempdir().unwrap();
+    let application = app(root.path());
+    let runs = application.kernel_runs(true).unwrap().unwrap();
+    let record = record("registered-waiters");
+    runs.create(&record, 30).unwrap();
+    let nodes = Nodes::new(&root.path().join("facts"), Mode::Complete);
+    let worker = runs.drive(&record.run_id, &Artifacts, &nodes, cancel());
+    let first = runs.wait_idle(&record.run_id);
+    let second = runs.wait_idle(&record.run_id);
+    tokio::pin!(first, second);
+    assert!(
+        std::future::poll_fn(|cx| std::task::Poll::Ready(first.as_mut().poll(cx)))
+            .await
+            .is_pending()
+    );
+    assert!(
+        std::future::poll_fn(|cx| std::task::Poll::Ready(second.as_mut().poll(cx)))
+            .await
+            .is_pending()
+    );
+    assert!(runs.active(&record.run_id));
+    drop(worker);
+    tokio::time::timeout(std::time::Duration::from_secs(1), async {
+        tokio::join!(first, second);
+    })
+    .await
+    .unwrap();
+    assert!(!runs.active(&record.run_id));
+    assert!(nodes.trace.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
 async fn serial_probe_commits_artifacts_cost_and_phase_through_application() {
     let root = tempfile::tempdir().unwrap();
     let application = app(root.path());
@@ -165,7 +258,13 @@ async fn serial_probe_commits_artifacts_cost_and_phase_through_application() {
     );
     assert_eq!(resource.task.as_ref().unwrap().budget.spent, 9);
     let projected = application.load_run(&record.run_id).unwrap().unwrap();
-    assert_eq!(projected.status, RunStatus::Completed);
+    assert!(
+        application
+            .read_run(&record.run_id)
+            .unwrap()
+            .unwrap()
+            .has_succeeded()
+    );
     assert_eq!(projected.results.len(), 3);
     for report in runs
         .kernel
@@ -181,7 +280,10 @@ async fn serial_probe_commits_artifacts_cost_and_phase_through_application() {
     }
     assert!(
         application
-            .project_run(&projected, None)
+            .project_run(
+                &application.read_run(&record.run_id).unwrap().unwrap(),
+                None
+            )
             .await
             .unwrap()
             .phase
@@ -311,7 +413,7 @@ async fn stop_preempts_pending_pause_without_repausing_the_resumed_run() {
         resource.phase(),
         Some(&Phase::Waiting {
             waiter: Waiter::Human {
-                reason: "stop".into()
+                reason: "stopped".into()
             }
         })
     );
@@ -485,7 +587,7 @@ async fn abandon_waiting_probe_is_terminal_and_refuses_late_submission() {
     assert_eq!(verdict.reason, Reason::TaskSettled);
     assert!(
         application
-            .project_run(&application.load_run("p-abandon").unwrap().unwrap(), None)
+            .project_run(&application.read_run("p-abandon").unwrap().unwrap(), None)
             .await
             .unwrap()
             .phase
@@ -619,15 +721,20 @@ async fn waiting_recovery_outcome_parks_and_known_failure_settles() {
 }
 
 #[tokio::test]
-async fn application_probe_matches_old_runner_on_one_thousand_serial_seeds() {
+async fn application_matches_frozen_baseline_on_one_thousand_serial_seeds() {
     let root = tempfile::tempdir().unwrap();
     let application = app(root.path());
     let runs = application.kernel_runs(true).unwrap().unwrap();
+    let mut snapshots = Snapshots::open(Population::Serial);
     for seed in 0..1000 {
-        let record =
-            GraphRunRecord::create_with_id(random_graph(seed), json!({}), format!("p-diff-{seed}"))
-                .unwrap();
-        let (old_trace, old) = run_old(record.clone(), seed, true).await;
+        let record = GraphRunRecord::create_with_id(
+            random_graph(seed),
+            Value::Null,
+            format!("scheduler-diff-{seed}"),
+        )
+        .unwrap();
+        let case = snapshots.next(seed);
+        let (old_trace, old) = case.scheduler.accepted();
         runs.create(&record, u64::MAX).unwrap();
         let nodes = Scripted {
             seed,
@@ -642,26 +749,30 @@ async fn application_probe_matches_old_runner_on_one_thousand_serial_seeds() {
             .drive(&record.run_id, &Artifacts, &nodes, cancel())
             .await
             .unwrap();
-        assert_eq!(old_trace, *nodes.trace.lock().unwrap(), "trace seed {seed}");
         assert_eq!(
-            facts(&old),
+            old_trace,
+            &*nodes.trace.lock().unwrap(),
+            "trace seed {seed}"
+        );
+        assert_eq!(
+            facts(&old.graph_record()),
             facts(&record_of(&resource).unwrap()),
             "facts seed {seed}"
         );
         match old.status {
-            RunStatus::Completed => assert_eq!(
+            FrozenStatus::Completed => assert_eq!(
                 resource.phase(),
                 Some(&Phase::Settled {
                     result: Outcome::Done
                 })
             ),
-            RunStatus::Stopped => assert!(matches!(
+            FrozenStatus::Stopped => assert!(matches!(
                 resource.phase(),
                 Some(Phase::Settled {
                     result: Outcome::Escalated { .. }
                 })
             )),
-            RunStatus::Failed => assert!(
+            FrozenStatus::Failed => assert!(
                 matches!(resource.phase(), Some(Phase::Settled { result:Outcome::Failed { detail, .. } }) if Some(detail) == old.error.as_ref())
             ),
             status => panic!("unexpected {status:?}"),
@@ -730,12 +841,11 @@ fn probe_guards_keep_one_writer_and_charge_stale_work_once() {
         )
         .unwrap();
     assert_eq!(refused.reason, Reason::Unauthorized);
-    FileRunStore::new(root.path().join("runs"))
-        .save(&record)
-        .unwrap();
+    std::fs::create_dir_all(root.path().join("runs")).unwrap();
+    std::fs::write(root.path().join("runs/p-stale.json"), b"{}").unwrap();
     assert!(matches!(
         application.load_run("p-stale"),
-        Err(ApplicationError::Conflict(_))
+        Err(ApplicationError::Storage(message)) if message.contains("legacy_run_record")
     ));
 }
 

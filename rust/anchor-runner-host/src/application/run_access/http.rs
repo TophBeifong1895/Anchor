@@ -100,14 +100,8 @@ impl RunApplication {
         if let Some(cursor) = view.cursor() {
             trace_keys.push(cursor.key.clone());
         }
-        if let Some(parallel) = &record.parallel {
-            trace_keys.extend(
-                parallel
-                    .branches
-                    .iter()
-                    .filter_map(|branch| branch.cursor.as_ref().map(|cursor| cursor.key.clone())),
-            );
-        }
+        trace_keys.extend(view.frontier.iter().map(|dispatch| dispatch.key.clone()));
+
         trace_keys.sort_by_key(|key| key.durable_key());
         trace_keys.dedup();
         for key in trace_keys {
@@ -144,7 +138,7 @@ impl RunApplication {
         let mut calls = Vec::new();
         for call in record.graph_calls.values() {
             if let Some(child_id) = &call.child_run_id {
-                let child = self.load_run(child_id).map_err(RunHttpError::Application)?;
+                let child = self.read_run(child_id).map_err(RunHttpError::Application)?;
                 let child_metadata = self.metadata(child_id)?;
                 let source = child_metadata
                     .as_ref()
@@ -180,7 +174,7 @@ impl RunApplication {
                 continue;
             }
             let child = self
-                .load_run(&child_metadata.run_id)
+                .read_run(&child_metadata.run_id)
                 .map_err(RunHttpError::Application)?;
             let projection = if let Some(child) = &child {
                 Some(self.project_run(child, Some(&child_metadata)).await?)
@@ -249,36 +243,16 @@ pub(crate) fn abandon_response(run: &str, result: &AbandonResult) -> Value {
 
 #[cfg(test)]
 mod tests {
+    use super::super::fixtures;
     use super::*;
     use crate::application::{RunMetadata, metadata};
-    use anchor_runtime::graph::RunStore;
-    use anchor_runtime::graph::{
-        GraphRunRecord, InvocationKey, PendingRecovery, RecoveryAttempt, RunCursor, RunStatus,
-    };
-    use std::time::{Duration, UNIX_EPOCH};
-
-    fn fixture() -> (tempfile::TempDir, RunApplication, GraphRunRecord) {
-        let root = tempfile::TempDir::new().unwrap();
-        let application = RunApplication::new(root.path().into(), root.path().join("catalog"));
-        let record = GraphRunRecord::create_with_id(
-            serde_json::from_value(json!({
-                "objective":"test", "entry":"worker",
-                "agents":{"role":{"model":"fixture","instructions":"work"}},
-                "nodes":[{"id":"worker","agent":"role"}], "edges":[]
-            }))
-            .unwrap(),
-            json!({"message":"test input"}),
-            "http-run",
-        )
-        .unwrap();
-        (root, application, record)
-    }
+    use anchor_runtime::graph::{ArtifactPort, RecoveryAttempt};
 
     #[tokio::test]
-    async fn detail_preserves_phase_json_bytes_for_each_legacy_fixture() {
-        for (status, phase_fields, reason, resume, stop, abandon) in [
+    async fn detail_preserves_phase_json_bytes_for_actual_kernel_facts() {
+        for (id, phase_fields, reason, resume, stop, abandon) in [
             (
-                RunStatus::Ready,
+                "executing",
                 r#""phase":"executing""#,
                 "null",
                 true,
@@ -286,15 +260,7 @@ mod tests {
                 true,
             ),
             (
-                RunStatus::Running,
-                r#""phase":"executing""#,
-                "null",
-                true,
-                true,
-                true,
-            ),
-            (
-                RunStatus::Paused,
+                "paused",
                 r#""phase":"waiting","waiting_for":"human""#,
                 r#""paused""#,
                 true,
@@ -302,7 +268,15 @@ mod tests {
                 true,
             ),
             (
-                RunStatus::BudgetStopped,
+                "stopped",
+                r#""phase":"waiting","waiting_for":"human""#,
+                r#""stopped""#,
+                true,
+                false,
+                true,
+            ),
+            (
+                "budget",
                 r#""phase":"waiting","waiting_for":"human""#,
                 r#""budget""#,
                 true,
@@ -310,23 +284,15 @@ mod tests {
                 true,
             ),
             (
-                RunStatus::WaitingCall,
-                r#""phase":"waiting","waiting_for":"child""#,
-                r#""recorded error""#,
+                "recovery",
+                r#""phase":"waiting","waiting_for":"human""#,
+                r#""unknown external tool effects""#,
                 false,
                 false,
                 true,
             ),
             (
-                RunStatus::WaitingRecovery,
-                r#""phase":"waiting","waiting_for":"effect""#,
-                r#""recorded error""#,
-                false,
-                false,
-                true,
-            ),
-            (
-                RunStatus::Completed,
+                "done",
                 r#""phase":"settled","outcome":"done""#,
                 "null",
                 false,
@@ -334,74 +300,58 @@ mod tests {
                 false,
             ),
             (
-                RunStatus::Aborted,
-                r#""phase":"settled","outcome":"aborted""#,
-                r#""recorded error""#,
-                false,
-                false,
-                false,
-            ),
-            (
-                RunStatus::Stopped,
-                r#""phase":"waiting","waiting_for":"human""#,
-                r#""recorded error""#,
-                true,
-                false,
-                true,
-            ),
-            (
-                RunStatus::Failed,
+                "failed",
                 r#""phase":"settled","outcome":"failed""#,
-                r#""recorded error""#,
+                r#""worker failed: recorded reason""#,
+                false,
+                false,
+                false,
+            ),
+            (
+                "aborted",
+                r#""phase":"settled","outcome":"aborted""#,
+                r#""recorded reason""#,
                 false,
                 false,
                 false,
             ),
         ] {
-            let (root, application, mut record) = fixture();
-            record.status = status;
-            record.error = Some("recorded error".into());
-            let mut cursor = "null";
-            let mut passes = "{}";
-            if matches!(
-                status,
-                RunStatus::BudgetStopped | RunStatus::WaitingRecovery
-            ) {
-                let key = InvocationKey {
-                    run_id: record.run_id.clone(),
-                    graph_digest: record.graph_digest.clone(),
-                    node_id: "worker".into(),
-                    invocation: 1,
-                };
-                record.invocations.insert("worker".into(), 1);
-                record.passes.insert("worker".into(), 1);
-                record.cursor = Some(RunCursor {
-                    node_id: "worker".into(),
-                    key: key.clone(),
-                    input_commits: Vec::new(),
-                    prepared_input: Value::Null,
-                });
-                cursor = r#"{"node":"worker","pass":1,"dir":""}"#;
-                passes = r#"{"worker":1}"#;
-                if status == RunStatus::WaitingRecovery {
-                    record.recovery.push(PendingRecovery {
-                        key,
-                        attempt: RecoveryAttempt {
+            let root = tempfile::tempdir().unwrap();
+            let application = RunApplication::new(root.path().into(), root.path().join("catalog"));
+            let record = fixtures::work_record(id);
+            fixtures::create(&application, &record);
+            let workspace = root.path().join("workspaces");
+            match id {
+                "paused" | "stopped" | "budget" => fixtures::control(&application, id, "stop", id),
+                "recovery" => {
+                    fixtures::recovery(
+                        &application,
+                        id,
+                        "worker",
+                        vec![RecoveryAttempt {
                             attempt_id: 1,
                             step: 1,
                             tool: "fixture-effect".into(),
-                            started_at: "2026-10-19T00:00:00+00:00".into(),
-                        },
-                    });
+                            started_at: "2026-10-19T00:00:00Z".into(),
+                        }],
+                    );
                 }
+                "done" => {
+                    let key = application.dispatch_keys(id).unwrap().remove(0);
+                    let artifacts =
+                        HostArtifacts::new(root.path().join("artifacts"), workspace.clone());
+                    artifacts.prepare_workspace(&key, &[]).unwrap();
+                    let completion = fixtures::completion(json!({}));
+                    let commit = artifacts.freeze(&key, &completion).await.unwrap();
+                    fixtures::complete(&application, id, "worker", completion, Some(commit));
+                }
+                "failed" => fixtures::fail(&application, id, "worker", "recorded reason"),
+                "aborted" => fixtures::control(&application, id, "abandon", "recorded reason"),
+                _ => {}
             }
-            application.store().save(&record).unwrap();
-            std::fs::File::open(root.path().join("runs/http-run.json"))
-                .unwrap()
-                .set_modified(UNIX_EPOCH + Duration::from_secs(1))
-                .unwrap();
+            let record = fixtures::view(&application, id).record.into_owned();
             let mut metadata = RunMetadata::new(
-                record.run_id.clone(),
+                id.into(),
                 "fixture".into(),
                 record.graph_digest.clone(),
                 root.path(),
@@ -409,21 +359,38 @@ mod tests {
             .unwrap();
             metadata.created = "2026-10-19T00:00:00+00:00".into();
             metadata::save(root.path(), &metadata).unwrap();
+            let updated = serde_json::to_string(&application.run_updated(id).unwrap()).unwrap();
             let projection = format!(
-                r#"{{{phase_fields},"reason":{reason},"active":false,"actions":{{"pause":false,"stop":{stop},"resume":{resume},"abandon":{abandon}}},"updated":"1970-01-01T00:00:01+00:00"}}"#
+                r#"{{{phase_fields},"reason":{reason},"active":false,"actions":{{"pause":false,"stop":{stop},"resume":{resume},"abandon":{abandon}}},"updated":{updated}}}"#
             );
+            let cursor = if matches!(id, "done" | "failed" | "aborted") {
+                "null"
+            } else {
+                r#"{"node":"worker","pass":1,"dir":""}"#
+            };
+            let nodes = if id == "done" {
+                let result = &record.results["worker"][0];
+                serde_json::to_string(&json!({"worker":{
+                    "node_id":"worker","pass_number":1,"submission":"fixture result","files":[],
+                    "submitted":true,"exit_status":null,"interruption":null,"route":null,
+                    "commit":result.commit.id,"inputs":[]
+                }}))
+                .unwrap()
+            } else {
+                "{}".into()
+            };
+            let passes = serde_json::to_string(&record.passes).unwrap();
             let recovery = serde_json::to_string(&record.recovery).unwrap();
+            let error = serde_json::to_string(record.error.as_deref().unwrap_or_default()).unwrap();
+            let executed = if id == "done" { r#"["worker"]"# } else { "[]" };
             let expected = format!(
-                r#"{{"session_call":null,"channel_reply":false,"graph":"fixture","run":"http-run","attachments":[],"plugins":{{"worker":[]}},"definition":{{"entry":"worker","nodes":[{{"id":"worker","plugins":[],"agent":"role"}}],"edges":[],"ops":{{}}}},"state":{{"objective":"test","started":"2026-10-19T00:00:00+00:00","updated":"1970-01-01T00:00:01+00:00","trigger":{{"source":"manual","schedule":null,"scheduled_at":null}},"input":{{"message":"test input"}},"cursor":{cursor},"passes":{passes},"decided":{{}},"nodes":{{}},"executed":[],"skipped":[],"error":"recorded error","parallel":null,"recovery":{recovery}}},"calls":[],"traces":{{}},"nodes":["worker"],"active":false,"projection":{projection}}}"#
+                r#"{{"session_call":null,"channel_reply":false,"graph":"fixture","run":"{id}","attachments":[],"plugins":{{"worker":[]}},"definition":{{"entry":"worker","nodes":[{{"id":"worker","plugins":[],"agent":"role"}}],"edges":[],"ops":{{}}}},"state":{{"objective":"test","started":"2026-10-19T00:00:00+00:00","updated":{updated},"trigger":{{"source":"manual","schedule":null,"scheduled_at":null}},"input":{{}},"cursor":{cursor},"passes":{passes},"decided":{{}},"nodes":{nodes},"executed":{executed},"skipped":[],"error":{error},"parallel":null,"recovery":{recovery}}},"calls":[],"traces":{{}},"nodes":["worker"],"active":false,"projection":{projection}}}"#
             );
-            let detail = application
-                .http_run_detail(&record.run_id, &root.path().join("workspaces"))
-                .await
-                .unwrap();
+            let detail = application.http_run_detail(id, &workspace).await.unwrap();
             assert_eq!(
                 serde_json::to_vec(&detail).unwrap(),
                 expected.as_bytes(),
-                "{status:?}"
+                "{id}"
             );
         }
     }
@@ -433,11 +400,9 @@ mod tests {
         for (action, wire, abandoned) in [
             (AbandonAction::Abandoned, "abandoned", true),
             (AbandonAction::AlreadyAborted, "already_aborted", false),
-            (AbandonAction::Abandoning, "abandoning", false),
         ] {
             let result = AbandonResult {
                 action,
-                status: RunStatus::Aborted,
                 reason: Some("operator".into()),
                 requested_at: Some("2026-10-19T00:00:00+00:00".into()),
             };
@@ -453,37 +418,30 @@ mod tests {
 
     #[tokio::test]
     async fn detail_keeps_store_and_application_errors_distinct_and_ordered() {
-        let (root, application, record) = fixture();
+        let root = tempfile::tempdir().unwrap();
+        let application = RunApplication::new(root.path().into(), root.path().join("catalog"));
         let workspace = root.path().join("workspaces");
         assert!(matches!(
-            application
-                .http_run_detail(&record.run_id, &workspace)
-                .await,
+            application.http_run_detail("http-run", &workspace).await,
             Err(RunHttpError::Missing)
         ));
-        application.store().save(&record).unwrap();
-        assert!(matches!(
-            application.http_run_detail(&record.run_id, &workspace).await,
-            Err(RunHttpError::Unprocessable(message))
-                if message == "Run has no immutable Graph identity metadata"
-        ));
+        fixtures::create(&application, &fixtures::work_record("http-run"));
+        assert!(
+            matches!(application.http_run_detail("http-run", &workspace).await,
+            Err(RunHttpError::Unprocessable(message)) if message == "Run has no immutable Graph identity metadata")
+        );
         std::fs::create_dir_all(root.path().join("run-metadata")).unwrap();
         std::fs::write(root.path().join("run-metadata/http-run.json"), "{}").unwrap();
-        assert!(matches!(
-            application
-                .http_run_detail(&record.run_id, &workspace)
-                .await,
-            Err(RunHttpError::Application(ApplicationError::Storage(_)))
-        ));
-        std::fs::write(root.path().join("runs/http-run.json"), "{}").unwrap();
-        let expected = application
-            .store()
-            .load(&record.run_id)
-            .unwrap_err()
-            .to_string();
-        assert!(matches!(
-            application.http_run_detail(&record.run_id, &workspace).await,
-            Err(RunHttpError::Internal(message)) if message == expected
-        ));
+        assert!(
+            matches!(application.http_run_detail("http-run", &workspace).await,
+            Err(RunHttpError::Internal(message)) if message.contains("missing field"))
+        );
+        // The removed Run store is rejected by name before metadata interpretation.
+        std::fs::create_dir_all(root.path().join("runs")).unwrap();
+        std::fs::write(root.path().join("runs/old-run.json"), "{}").unwrap();
+        assert!(
+            matches!(application.http_run_detail("old-run", &workspace).await,
+            Err(RunHttpError::Internal(message)) if message.contains("legacy"))
+        );
     }
 }

@@ -2,7 +2,6 @@ use super::*;
 
 mod calls;
 use anchor_kernel::{Outcome, Phase};
-use anchor_runtime::graph::RunStore;
 
 #[tokio::test]
 async fn parallel_call_is_rejected_by_shared_admission_without_persisting_parent_or_child() {
@@ -15,10 +14,7 @@ async fn parallel_call_is_rejected_by_shared_admission_without_persisting_parent
         "edges":[{"from":"fan","to":"nested-call"},{"from":"fan","to":"work"},{"from":"nested-call","to":"join"},{"from":"work","to":"join"}]});
     std::fs::write(state.bundle_root.join("graph.json"), definition.to_string()).unwrap();
     let router = router(state.clone());
-    for body in [
-        json!({"graph":"fixture"}),
-        json!({"graph":"fixture","execution":"kernel_probe"}),
-    ] {
+    for body in [json!({"graph":"fixture"}), json!({"graph":"fixture"})] {
         let (status, response) =
             call(router.clone(), "POST", "/trigger", Some(&body.to_string())).await;
         assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{response}");
@@ -49,7 +45,7 @@ async fn explicit_kernel_probe_runs_real_host_ops_and_projects_existing_queries(
         router.clone(),
         "POST",
         "/trigger",
-        Some(r#"{"graph":"fixture","input":{},"execution":"kernel_probe"}"#),
+        Some(r#"{"graph":"fixture","input":{}}"#),
     )
     .await;
     assert_eq!(status, StatusCode::ACCEPTED, "{body}");
@@ -72,10 +68,10 @@ async fn explicit_kernel_probe_runs_real_host_ops_and_projects_existing_queries(
         })
     );
     assert!(
-        FileRunStore::new(state.data_root.join("runs"))
+        fixtures::Reader::new(&state.application)
             .load(id)
             .unwrap()
-            .is_none()
+            .is_some()
     );
     let (status, detail) = call(router.clone(), "GET", &format!("/runs/{id}"), None).await;
     assert_eq!(status, StatusCode::OK, "{detail}");
@@ -244,16 +240,16 @@ async fn legacy_and_kernel_http_share_executing_paused_and_settled_projections()
     })).unwrap();
     let app = router(state.clone());
     let mut projections = Vec::new();
-    for kernel in [false, true] {
-        let mut request = json!({"graph":"fixture","input":{}});
-        if kernel {
-            request["execution"] = json!("kernel_probe");
-        }
+    for _attempt in 0..2 {
+        let request = json!({"graph":"fixture","input":{}});
         let (status, accepted) =
             call(app.clone(), "POST", "/trigger", Some(&request.to_string())).await;
         assert_eq!(status, StatusCode::ACCEPTED, "{accepted}");
         let id = accepted["run"].as_str().unwrap();
-        let record = state.application.load_run(id).unwrap().unwrap();
+        let record = fixtures::Reader::new(&state.application)
+            .load(id)
+            .unwrap()
+            .unwrap();
         let artifacts = HostArtifacts::new(
             state.data_root.join("artifacts"),
             state.workspace_root.clone(),
@@ -261,7 +257,7 @@ async fn legacy_and_kernel_http_share_executing_paused_and_settled_projections()
         let workspace = artifacts
             .workspace_path(&InvocationKey {
                 run_id: id.into(),
-                graph_digest: record.graph_digest,
+                graph_digest: record.graph_digest.clone(),
                 node_id: "work".into(),
                 invocation: 1,
             })
@@ -297,7 +293,10 @@ async fn legacy_and_kernel_http_share_executing_paused_and_settled_projections()
         })
         .await
         .expect("pause must drain the current node before waiting");
-        let paused_record = state.application.load_run(id).unwrap().unwrap();
+        let paused_record = fixtures::Reader::new(&state.application)
+            .load(id)
+            .unwrap()
+            .unwrap();
         assert_eq!(paused_record.results.len(), 1);
         assert_eq!(paused_record.results["work"].len(), 1);
         let first = &paused_record.results["work"][0];
@@ -328,7 +327,10 @@ async fn legacy_and_kernel_http_share_executing_paused_and_settled_projections()
         })
         .await
         .expect("resume must finish the same Run");
-        let finished = state.application.load_run(id).unwrap().unwrap();
+        let finished = fixtures::Reader::new(&state.application)
+            .load(id)
+            .unwrap()
+            .unwrap();
         assert_eq!(finished.results.len(), 2);
         assert_eq!(finished.results["work"].len(), 1);
         assert_eq!(finished.results["work"][0].commit, first.commit);
