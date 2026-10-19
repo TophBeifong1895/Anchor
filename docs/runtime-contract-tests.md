@@ -12,9 +12,16 @@ GraphRunner、Goose ACP、授权 MCP、Bubblewrap 和 Artifact，只替换模型
 从仓库根目录运行，显式指定已经审查的 Anchor 自建 lean Goose ACP 二进制（[构建脚本](../scripts/build-goose-acp.sh)，上游 v1.53.0 源码）：
 
 ```sh
+export CARGO_TARGET_DIR=/tmp/anchor-goose-regression-target
+export CARGO_BUILD_JOBS=2
+cargo +stable build --manifest-path rust/Cargo.toml --locked \
+  -p anchor-runner-host -p anchor-sandbox-bwrap -p anchor-wecom-tools -p anchor-docmost-tools --bins
+cargo +stable build --manifest-path rust/Cargo.toml --locked \
+  -p anchor-mcp-host --example http_fixture
+
 ANCHOR_GOOSE_BINARY=/absolute/path/to/goose \
-CARGO_TARGET_DIR=/tmp/anchor-goose-regression-target \
-CARGO_BUILD_JOBS=2 \
+ANCHOR_GOOSE_LOCAL_NETWORK=1 \
+ANCHOR_GOOSE_RELAY_BINARY="$CARGO_TARGET_DIR/debug/anchor-net-relay" \
 cargo +stable run --manifest-path rust/Cargo.toml -p anchor-devtools --locked -- \
   regression goose-fixture --evidence-root /tmp/anchor-goose-regression
 ```
@@ -34,10 +41,144 @@ user/mount/network namespace。入口在测试前校验 Goose 可执行权限和
 | `--target-dir` | 默认 `CARGO_TARGET_DIR`，未设置时为 `/tmp/anchor-native-regression-target` |
 | `--evidence-root` | 新私有证据目录的 parent，默认系统临时目录 |
 | `ANCHOR_GOOSE_BINARY` | 已验证的固定 Goose 可执行文件的绝对路径 |
+| `ANCHOR_GOOSE_LOCAL_NETWORK` | 标准回归显式设为 `1`，通过 Unix socket 与 relay 访问 Host 控制面 |
+| `ANCHOR_GOOSE_RELAY_BINARY` | 与本次 Host 同一构建的 `anchor-net-relay` 绝对路径；Goose 位于其他目录时必须显式指定 |
 | `CARGO_BUILD_JOBS` | 编译并发，可按机器资源设置；不是模型请求限制 |
 
 不同编译工作流使用独立 target，不同时覆盖正在采证的 Host binary。
+构建必须包含 `anchor-sandbox-bwrap --bins`，使 `anchor-sandbox-network`
+与 Host 位于同一目录；仅构建 Host 不会构建依赖 crate 的 binary。
+缺少该 helper 时，已授权任务仍不能联网，外部效果用例会在模型收到工具错误后超时；
+不能把已有 target 恰好保留的 helper 当作干净环境前提。
+Plugin MCP/披露/托管配置场景还要求同一 target 的 `examples/http_fixture`；
+上述第二条 build 显式准备该原生测试工具，普通 `--bins` 不会构建 example。
 每次执行创建新 `anchor-goose-regression-*` 根，不从旧证据目录推断本次通过。
+Goose 套件逐套串行运行，不与其他 Goose 回归进程并行。并发负载下出现的
+失败须单独重跑，首轮和复跑结果分别保留。
+
+`ANCHOR_GOOSE_ALLOW_SHARED_NETWORK=1` 不能代替 relay。当前 Sandbox 的任务
+联网通过 slirp 保留独立 network namespace，不能访问宿主 loopback；没有
+relay 的构建目录会导致 ACP 扩展初始化出现 `-32603`，模型尚未收到请求。
+fixture 在缺少 relay 时直接报告构建命令及所需环境，不输出原始 ACP 或 stderr。
+
+完整运行 Host 的全部忽略测试（包含发行包与原生接口实验）时，沿用上面的
+target 和构建结果，另需 `uv` 在 PATH、`/usr/bin/python3.12` 支持 ensurepip，
+以及本机已安装的 stable Rust 工具链：
+
+```sh
+ANCHOR_GOOSE_BINARY=/absolute/path/to/goose \
+ANCHOR_GOOSE_LOCAL_NETWORK=1 \
+ANCHOR_GOOSE_RELAY_BINARY="$CARGO_TARGET_DIR/debug/anchor-net-relay" \
+ANCHOR_TEST_RUST_TOOLCHAIN=stable-x86_64-unknown-linux-gnu \
+ANCHOR_PILOT_RUSTUP="$(command -v rustup)" \
+ANCHOR_PILOT_RUSTUP_HOME="$(rustup show home)" \
+ANCHOR_TEST_EVIDENCE_ROOT=/tmp/anchor-goose-baseline-evidence \
+cargo +stable test --manifest-path rust/Cargo.toml -p anchor-runner-host \
+  --locked --no-fail-fast -- --ignored --test-threads=1
+```
+
+普通 fixture helper 的 filtered 数不是忽略测试数；完整命令的 `--no-fail-fast`
+保证一个套件失败后仍采集后续套件。真实模型与外部服务不由本地 Provider
+结果代验。
+
+## Goose 比较基线（G0，2026-10-19）
+
+基点 `e3a5778`，在独立 worktree `/var/tmp/anchor-g0` 的
+`fix/goose-baseline` 分支验证。固定 Goose 摘要保持 `17e065a7…`。
+共同的 `extensions/add -32603` 来自回归启动缺少 relay：原始 ACP 响应为
+MCP discover 的 loopback 连接失败；stderr 的 39 字节实际是 slirp 初始化
+信息。旧 `dc2a4352…` 与固定二进制在相同网络条件下结果一致，不需要更换
+Goose。原本机证据位于该 worktree 的 `.local/goose-baseline-20261019/`，
+已随用户要求清理 worktree，不再作为当前可访问证据；此处保留提交中的基线结论。
+
+以上完整忽略测试命令实际退出 `101`：**116 passed、3 failed、0 ignored**。
+其中 Goose 套件为 112/3/0，`native_plugins` 为 2/0/0，Host 忽略单测为
+2/0/0；1,114 filtered 仅表示未选择普通测试。完整命令内部逐套执行、每套
+`--test-threads=1`；三个失败随后逐项独立复跑，监测期间无其他 Goose
+套件运行，均为 0/1/0。它们是当前残留基线，不算全绿或真实 Provider 验收。
+
+| 套件 | 通过 | 失败 | 忽略 |
+| --- | ---: | ---: | ---: |
+| `anchor_net_relay` | 0 | 0 | 0 |
+| `anchor_runner_host` | 2 | 0 | 0 |
+| `channel_startup` | 0 | 0 | 0 |
+| `goose_acp` | 15 | 0 | 0 |
+| `goose_channel` | 4 | 0 | 0 |
+| `goose_compaction` | 4 | 0 | 0 |
+| `goose_completion` | 9 | 0 | 0 |
+| `goose_conversation` | 12 | 1 | 0 |
+| `goose_development_environment` | 1 | 0 | 0 |
+| `goose_distribution` | 0 | 1 | 0 |
+| `goose_elicitation` | 10 | 0 | 0 |
+| `goose_library` | 1 | 0 | 0 |
+| `goose_media` | 6 | 0 | 0 |
+| `goose_model_settings` | 2 | 0 | 0 |
+| `goose_native_activation_spike` | 2 | 0 | 0 |
+| `goose_persistent_assistant` | 12 | 0 | 0 |
+| `goose_pilot` | 2 | 0 | 0 |
+| `goose_pilot_attachments` | 2 | 0 | 0 |
+| `goose_pilot_authoring` | 3 | 1 | 0 |
+| `goose_pilot_compaction` | 3 | 0 | 0 |
+| `goose_plugin_configuration` | 1 | 0 | 0 |
+| `goose_plugin_disclosure` | 1 | 0 | 0 |
+| `goose_plugin_mcp` | 2 | 0 | 0 |
+| `goose_plugin_summary` | 2 | 0 | 0 |
+| `goose_plugin_turns` | 6 | 0 | 0 |
+| `goose_provider_errors` | 4 | 0 | 0 |
+| `goose_responses` | 2 | 0 | 0 |
+| `goose_session_calls` | 4 | 0 | 0 |
+| `goose_trace` | 2 | 0 | 0 |
+| `local_inputs` | 0 | 0 | 0 |
+| `local_network` | 0 | 0 | 0 |
+| `multinode` | 0 | 0 | 0 |
+| `native_plugins` | 2 | 0 | 0 |
+| `parallel` | 0 | 0 | 0 |
+| `routing` | 0 | 0 | 0 |
+| `run_access_fence` | 0 | 0 | 0 |
+| `standalone_graph_call` | 0 | 0 | 0 |
+| `standalone_library` | 0 | 0 | 0 |
+| `standard_host` | 0 | 0 | 0 |
+| `writer_lease` | 0 | 0 | 0 |
+
+G0 留下的三项失败及原因：
+
+- `goose_conversation::next_conversation_invocation_changes_model_and_endpoint_without_losing_history`：fixture 重启只切换 Provider 启动参数，没有更新已保存的模型配置；第二个 Provider 收到 0 次请求，旧 Provider 的脚本耗尽，Run 停止而测试等待 completed 超时。后续应通过现有模型设置 API 更新该 fixture 的配置。
+- `goose_distribution::extracted_goose_runtime_resumes_without_sources_or_replaying_workspace_effects`：fixture 将 `anchor-sandbox-network` 以硬链接暂存，发行 builder 在 Goose 执行前按原契约返回 `only regular, non-hardlinked files are supported`。后续应为打包输入准备独立的普通文件，保留发行检查。
+- `goose_pilot_authoring::candidate_declaration_cannot_enable_network_or_credentials_and_command_cancel_can_continue`：最终仍断言 Session 插件列表为空，与当前新 Pilot 默认挂载 `network` 的契约不符；实际返回只有默认 network 项。候选越权拒绝和取消后继续已到达最终检查，但本测试整体仍失败。
+
+本轮仅补齐测试环境、缺 relay 的明确提示及基线文档；未改既有断言、忽略标记、
+超时、生产权限或恢复语义。首次受其他工作流并发影响的复跑日志单独保留，
+不作为独立确认；最终逐例日志和并发监测在本机证据内。没有新增真实模型、
+外部渠道、部署或 source-free 成功验收。后续任务应与这份名单比较，新增
+失败须独立确认，不能把残留项悄然计为通过。
+
+## F1 后的 G0 fixture 修正（2026-10-19）
+
+F1 完成提交 `0116074` 保留旧断言，并以 G0 三项为失败上限；随后按用户要求
+单独修正以下测试，不改变生产实现、权限、持久格式或恢复规则：
+
+- 模型切换通过现有 `PUT /settings/model` 更新保存的配置及 `models.worker` alias。
+  仅替换启动参数不会覆盖持久配置；原有切换 endpoint、模型和保留原生历史的断言不变。
+- 发行输入将暂存的 `anchor-sandbox-network` 硬链接替换为独立普通文件。
+  builder 的普通文件与链接检查保持不变，不通过放松发行约束来修正 fixture。
+- Pilot 最终断言改为插件数量恰为 1 且 id 为 `network`，不是允许任意非空列表。
+  理由是新 Pilot 默认挂载 network，原空列表断言已不符合当前契约；候选自报联网声明
+  不能授予权限、宿主凭据不授权、真实命令取消后回收及继续核查的检查全部保留。
+
+三项按标准环境、逐项 `--ignored --exact --test-threads=1` 复跑，各为 1/0/0；
+证据见[修正验证](../.local/run-access-facade-20261019/g0-fixes/README.md)。
+这不是另一次完整回归或真实 Provider 验收；G0 表保留为迁移比较基线。
+
+标准入口现已通过：20 套、105 项通过，0 失败、0 忽略，逐项核验 105 份有效场景证据；
+入口外补集另行串行执行，15 项全部通过。两次命令覆盖合计 120 项，不写成一次完整 ignored
+命令通过。全部使用固定 Goose、实际 Host/ACP 与确定性模型传输，真实模型请求为 0，
+未使用生产数据或部署。命令、原始报告与此前证据校验失败见 [F2 验证](../.local/run-access-facade-20261019/f2/README.md)。
+
+证据修正独立于门面重构：会话删除场景补齐真实 Host/Goose 身份、原生事实、Provider
+transcript 与删除后的现场清单，Plugin Turn 的 runtime 使用既有契约值并保留原描述。
+原重新授权测试循环产生两份报告，与“每个通过测试恰有一份有效证据”的既有检查不符；
+两参数分支现显式列为两例，共用原实现、全部断言与固定 Goose 执行条件。因此测试数比
+G0 的 119 项增加 1，默认忽略数也增加 1，实际场景和覆盖不变；未放松校验器、断言、超时或权限。
 
 ## 套件与证据
 

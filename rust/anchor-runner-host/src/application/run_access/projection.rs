@@ -1,0 +1,221 @@
+use super::run_view::RunView as LifecycleView;
+use super::{RunView, validate_control_identity};
+use crate::application::{ApplicationError, RunApplication, RunMetadata};
+use anchor_kernel::{Outcome, Phase, Waiter};
+#[cfg(test)]
+use anchor_runtime::graph::GraphRunRecord;
+use serde::Serialize;
+use serde_json::{Value, json};
+pub(crate) fn projected_run_is_unfinished(run: &Value) -> bool {
+    run.get("projection")
+        .and_then(|p| p.get("phase"))
+        .and_then(Value::as_str)
+        .is_some_and(|phase| matches!(phase, "executing" | "waiting"))
+}
+pub(crate) use super::run_view::AvailableActions as RunActions;
+#[derive(Debug, Serialize)]
+pub(crate) struct RunProjection {
+    pub(crate) phase: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) waiting_for: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) outcome: Option<&'static str>,
+    pub(crate) reason: Option<String>,
+    pub(crate) active: bool,
+    pub(crate) actions: RunActions,
+    pub(crate) updated: Option<String>,
+}
+impl RunProjection {
+    pub(crate) fn from_view(view: &LifecycleView) -> Self {
+        let (phase, waiting_for, outcome, reason) = match &view.phase {
+            Phase::Executing => ("executing", None, None, None),
+            Phase::Waiting {
+                waiter: Waiter::Human { reason },
+            } => ("waiting", Some("human"), None, Some(reason.clone())),
+            Phase::Waiting {
+                waiter: Waiter::Child { .. },
+            } => ("waiting", Some("child"), None, view.reason.clone()),
+            Phase::Waiting {
+                waiter: Waiter::Effect { .. },
+            } => ("waiting", Some("effect"), None, view.reason.clone()),
+            Phase::Settled {
+                result: Outcome::Done,
+            } => ("settled", None, Some("done"), None),
+            Phase::Settled {
+                result: Outcome::Failed { detail, .. },
+            } => ("settled", None, Some("failed"), Some(detail.clone())),
+            Phase::Settled {
+                result: Outcome::Escalated { detail },
+            } => ("settled", None, Some("escalated"), Some(detail.clone())),
+            Phase::Settled {
+                result: Outcome::Unknown { detail },
+            } => ("settled", None, Some("unknown"), Some(detail.clone())),
+            Phase::Settled {
+                result: Outcome::Aborted { detail },
+            } => ("settled", None, Some("aborted"), Some(detail.clone())),
+        };
+        Self {
+            phase,
+            waiting_for,
+            outcome,
+            reason,
+            active: view.worker,
+            actions: view.actions(),
+            updated: view.updated.clone(),
+        }
+    }
+}
+impl RunApplication {
+    pub(crate) async fn project_run<'record>(
+        &self,
+        record: impl Into<RunView<'record>>,
+        metadata: Option<&RunMetadata>,
+    ) -> Result<RunProjection, ApplicationError> {
+        let supplied = record.into();
+        let record = supplied.record.as_ref();
+        let mut view = self.read_view(record, self.run_is_active(&record.run_id).await)?;
+        view.updated = self.run_updated(&record.run_id)?;
+        let observed = RunView {
+            record: std::borrow::Cow::Borrowed(record),
+            active: view.worker,
+            requested: supplied.requested,
+            session_coordinated: metadata.is_some_and(|m| m.session_call.is_some()),
+            lifecycle: view.clone(),
+            kernel_owned: supplied.kernel_owned,
+        };
+        let mut projection = RunProjection::from_view(&view);
+        projection.actions.pause = observed.can_pause();
+        projection.actions.stop = observed.can_stop();
+        projection.actions.resume = observed.can_resume();
+        // Scope and identity narrow advisory actions; writes still revalidate.
+        let identity = metadata.filter(|m| validate_control_identity(record, m).is_ok());
+        let coordinated = metadata.is_some_and(|m| m.session_call.is_some());
+        if !view.worker && !coordinated && identity.is_none() {
+            projection.actions.pause = false;
+            projection.actions.stop = false;
+            projection.actions.resume = false;
+            projection.actions.abandon = false;
+        }
+        projection.actions.pause &= !coordinated;
+        projection.actions.resume = projection.actions.resume
+            && !coordinated
+            && identity.is_some_and(|m| self.ensure_current_assistant(m).is_ok())
+            && self.abandon_intent(&record.run_id)?.is_none()
+            && self
+                .reject_superseded_conversation_execution(&record.run_id)
+                .is_ok();
+        Ok(projection)
+    }
+    pub(crate) fn pilot_session_runs(
+        &self,
+        run_ids: &[String],
+    ) -> Result<Vec<Value>, ApplicationError> {
+        self.raw_records()?
+            .into_iter()
+            .filter(|(id, _)| run_ids.contains(id))
+            .map(|(id, record)| {
+                let mut value = serde_json::to_value(record)
+                    .map_err(|error| ApplicationError::Storage(error.to_string()))?;
+                value
+                    .as_object_mut()
+                    .expect("record")
+                    .shift_remove("status");
+                Ok(json!({"run":id,"record":value}))
+            })
+            .collect()
+    }
+    pub(crate) async fn projected_runs(&self) -> Result<Vec<Value>, ApplicationError> {
+        let mut runs = Vec::new();
+        for (id, record) in self.raw_records()? {
+            let metadata = self.metadata(&id)?;
+            let (graph, created, mut trigger) = metadata
+                .as_ref()
+                .map(|metadata| (
+                    metadata.graph.clone(),
+                    metadata.created.clone(),
+                    json!({"source":metadata.trigger_source,"schedule":metadata.schedule,"scheduled_at":metadata.scheduled_at}),
+                ))
+                .unwrap_or_else(|| (
+                    "unknown".into(),
+                    String::new(),
+                    json!({"source":"unknown"}),
+                ));
+            if let Some(source) = metadata
+                .as_ref()
+                .and_then(|metadata| metadata.graph_call.as_ref())
+            {
+                trigger["graph"] = json!(source.parent_graph);
+                trigger["run"] = json!(source.parent_run);
+                trigger["node"] = json!(source.node);
+                trigger["invocation"] = json!(source.invocation);
+                trigger["mode"] = json!(source.mode);
+                trigger["root_run"] = json!(source.root_run);
+            }
+            if let Some(source) = metadata
+                .as_ref()
+                .and_then(|metadata| metadata.conversation.as_ref())
+            {
+                trigger["session"] = json!(source.session);
+                trigger["reply_node"] = json!(source.reply_node);
+                trigger["previous_run"] = json!(source.previous_run);
+            }
+            if let Some(source) = metadata
+                .as_ref()
+                .and_then(|metadata| metadata.channel.as_ref())
+            {
+                trigger["channel"] = json!({
+                    "session": source.session,
+                    "inbound": source.inbound,
+                    "turn": source.turn,
+                });
+            }
+            let view = self.read_run(&id)?.ok_or(ApplicationError::Missing)?;
+            let progress = view.progress();
+            let executed = progress.executed_nodes();
+            let projection = self.project_run(&record, metadata.as_ref()).await?;
+            runs.push(json!({"session_call":metadata.as_ref().and_then(|m| m.session_call.as_ref()),"run":id,"graph":graph,"running":projection.active,"projection":projection,"started":created,"updated":projection.updated,"executed":executed,"objective":progress.snapshot.objective,"trigger":trigger}));
+        }
+        Ok(runs)
+    }
+
+    pub(crate) async fn pilot_run_list(&self) -> Result<Value, ApplicationError> {
+        let mut runs = Vec::new();
+        for (id, record) in self.raw_records()? {
+            let metadata = self.metadata(&id)?;
+            let projection = self.project_run(&record, metadata.as_ref()).await?;
+            runs.push(json!({"run":id,"projection":projection}));
+        }
+        Ok(json!({"runs":runs}))
+    }
+
+    pub(crate) async fn pilot_run_status(&self, run: &str) -> Result<Value, ApplicationError> {
+        let record = self
+            .raw_records()?
+            .into_iter()
+            .find(|(id, _)| id == run)
+            .ok_or(ApplicationError::Missing)?
+            .1;
+        let metadata = self.metadata(run)?;
+        let projection = self.project_run(&record, metadata.as_ref()).await?;
+        let mut progress = serde_json::to_value(record)
+            .map_err(|error| ApplicationError::Storage(error.to_string()))?;
+        progress
+            .as_object_mut()
+            .expect("record")
+            .shift_remove("status");
+        Ok(json!({"run":run,"record":progress,"projection":projection}))
+    }
+}
+
+#[cfg(test)]
+pub(in crate::application) fn observed(
+    record: &GraphRunRecord,
+    active: bool,
+    _requested: Option<&'static str>,
+    session_coordinated: bool,
+) -> RunProjection {
+    let mut projection = RunProjection::from_view(&super::legacy_run_view::view(record, active));
+    projection.actions.pause &= !session_coordinated;
+    projection.actions.resume = projection.actions.resume && !session_coordinated;
+    projection
+}

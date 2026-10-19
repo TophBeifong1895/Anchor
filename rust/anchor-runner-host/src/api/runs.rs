@@ -1,4 +1,5 @@
 use super::*;
+use crate::application::run_access::http::{RunHttpError, abandon_response};
 use anchor_platform_session::{ChannelInboundAdmission, TurnStatus};
 #[cfg(test)]
 mod tests;
@@ -235,6 +236,12 @@ pub(super) async fn trigger_as_owner(
         .get("graph")
         .and_then(Value::as_str)
         .ok_or_else(|| error(StatusCode::BAD_REQUEST, "graph is required"))?;
+    let kernel_probe = match body.get("execution") {
+        None => false,
+        Some(Value::String(execution)) if execution == "legacy" => false,
+        Some(Value::String(execution)) if execution == "kernel_probe" => true,
+        Some(_) => return Err(error(StatusCode::BAD_REQUEST, "unknown execution path")),
+    };
     let input = body.get("input").cloned().unwrap_or(Value::Null);
     if !input.is_null() && !input.is_object() {
         return Err(error(StatusCode::BAD_REQUEST, "input must be an object"));
@@ -272,12 +279,7 @@ pub(super) async fn trigger_as_owner(
                 oauth_owner: Some(oauth_owner),
             },
             graph_lease,
-            match body.get("execution") {
-                None => false,
-                Some(Value::String(value)) if value == "legacy" => false,
-                Some(Value::String(value)) if value == "kernel_probe" => true,
-                _ => return Err(error(StatusCode::BAD_REQUEST, "unknown execution path")),
-            },
+            kernel_probe,
         )
         .await
         .map_err(application_error)?;
@@ -293,59 +295,11 @@ pub(super) async fn list_runs(State(state): State<ApiState>) -> Result<Json<Valu
 
 #[allow(clippy::result_large_err)]
 pub(super) async fn projected_runs(state: &ApiState) -> Result<Vec<Value>, HttpResponse> {
-    let mut runs = Vec::new();
-    for (id, record) in state.application.records().map_err(application_error)? {
-        let metadata = state.application.metadata(&id).map_err(application_error)?;
-        let (graph, created, mut trigger) = metadata
-            .as_ref()
-            .map(|metadata| (
-                metadata.graph.clone(),
-                metadata.created.clone(),
-                json!({"source":metadata.trigger_source,"schedule":metadata.schedule,"scheduled_at":metadata.scheduled_at}),
-            ))
-            .unwrap_or_else(|| (
-                "unknown".into(),
-                String::new(),
-                json!({"source":"unknown"}),
-            ));
-        if let Some(source) = metadata
-            .as_ref()
-            .and_then(|metadata| metadata.graph_call.as_ref())
-        {
-            trigger["graph"] = json!(source.parent_graph);
-            trigger["run"] = json!(source.parent_run);
-            trigger["node"] = json!(source.node);
-            trigger["invocation"] = json!(source.invocation);
-            trigger["mode"] = json!(source.mode);
-            trigger["root_run"] = json!(source.root_run);
-        }
-        if let Some(source) = metadata
-            .as_ref()
-            .and_then(|metadata| metadata.conversation.as_ref())
-        {
-            trigger["session"] = json!(source.session);
-            trigger["reply_node"] = json!(source.reply_node);
-            trigger["previous_run"] = json!(source.previous_run);
-        }
-        if let Some(source) = metadata
-            .as_ref()
-            .and_then(|metadata| metadata.channel.as_ref())
-        {
-            trigger["channel"] = json!({
-                "session": source.session,
-                "inbound": source.inbound,
-                "turn": source.turn,
-            });
-        }
-        let executed = record.executed_nodes();
-        let projection = state
-            .application
-            .project_run(&record, metadata.as_ref())
-            .await
-            .map_err(application_error)?;
-        runs.push(json!({"session_call":metadata.as_ref().and_then(|m| m.session_call.as_ref()),"run":id,"graph":graph,"running":projection.active,"projection":projection,"started":created,"updated":projection.updated,"executed":executed,"objective":record.snapshot.objective,"trigger":trigger}));
-    }
-    Ok(runs)
+    state
+        .application
+        .projected_runs()
+        .await
+        .map_err(application_error)
 }
 
 pub(super) async fn get_run(
@@ -355,249 +309,73 @@ pub(super) async fn get_run(
     if id.is_empty() || id.contains('/') || id == "." || id == ".." {
         return Err(error(StatusCode::BAD_REQUEST, "invalid run id"));
     }
-    let record = state
+    state
         .application
-        .load_run(&id)
-        .map_err(application_error)?
-        .ok_or_else(|| error(StatusCode::NOT_FOUND, "no such run"))?;
-    let artifacts = HostArtifacts::new(
-        state.data_root.join("artifacts"),
-        state.workspace_root.clone(),
-    );
-    let mut nodes = serde_json::Map::new();
-    for (name, results) in &record.results {
-        if let Some(result) = results.last() {
-            let files = artifacts
-                .list_files(&result.commit)
-                .map_err(|e| error(StatusCode::UNPROCESSABLE_ENTITY, e.to_string()))?;
-            nodes.insert(
-                name.clone(),
-                json!({
-                    "node_id":name,
-                    "pass_number":result.key.invocation,
-                    "submission":result.completion.submission,
-                    "files":files.into_iter().map(|(path, _)| path).collect::<Vec<_>>(),
-                    "submitted":result.interruption.is_none(),
-                    "exit_status":result.interruption.as_ref().map(|_| "interrupted"),
-                    "interruption":result.interruption,
-                    "route":result.completion.route,
-                    "commit":result.commit.id,
-                    "inputs":[]
-                }),
+        .http_run_detail(&id, &state.workspace_root)
+        .await
+        .map(Json)
+        .map_err(run_http_error)
+}
+
+fn run_http_error(failure: RunHttpError) -> HttpResponse {
+    match failure {
+        RunHttpError::Application(failure) => application_error(failure),
+        RunHttpError::Missing => error(StatusCode::NOT_FOUND, "no such run"),
+        RunHttpError::Internal(message) => error(StatusCode::INTERNAL_SERVER_ERROR, message),
+        RunHttpError::Unprocessable(message) => error(StatusCode::UNPROCESSABLE_ENTITY, message),
+    }
+}
+
+#[cfg(test)]
+mod http_error_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn detail_error_adapter_preserves_http_status_and_message_bytes() {
+        for (failure, status, message) in [
+            (RunHttpError::Missing, StatusCode::NOT_FOUND, "no such run"),
+            (
+                RunHttpError::Internal("raw store error".into()),
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "raw store error",
+            ),
+            (
+                RunHttpError::Unprocessable("raw artifact error".into()),
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "raw artifact error",
+            ),
+            (
+                RunHttpError::Application(ApplicationError::Missing),
+                StatusCode::NOT_FOUND,
+                "no such run",
+            ),
+            (
+                RunHttpError::Application(ApplicationError::Conflict("conflict".into())),
+                StatusCode::CONFLICT,
+                "conflict",
+            ),
+            (
+                RunHttpError::Application(ApplicationError::Invalid("invalid".into())),
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "invalid",
+            ),
+            (
+                RunHttpError::Application(ApplicationError::Storage("storage".into())),
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "storage",
+            ),
+        ] {
+            let response = run_http_error(failure);
+            assert_eq!(response.status(), status);
+            let body = axum::body::to_bytes(response.into_body(), 1024)
+                .await
+                .unwrap();
+            assert_eq!(
+                body.as_ref(),
+                format!(r#"{{"error":"{message}"}}"#).as_bytes()
             );
         }
     }
-    let mut plugins = record
-        .snapshot
-        .nodes
-        .iter()
-        .map(|node| {
-            let bindings = node
-                .plugins
-                .iter()
-                .filter_map(|reference| record.plugin_bindings.get(&reference.id))
-                .map(|binding| {
-                    json!({
-                        "id":binding.id,
-                        "name":binding.id,
-                        "description":"",
-                        "digest":binding.digest
-                    })
-                })
-                .collect::<Vec<_>>();
-            (node.id.clone(), json!(bindings))
-        })
-        .collect::<serde_json::Map<_, _>>();
-    let decided = record
-        .decided
-        .iter()
-        .map(|(key, decision)| (key.clone(), json!([decision.selected, decision.sequence])))
-        .collect::<serde_json::Map<_, _>>();
-    let cursor = record
-        .cursor
-        .as_ref()
-        .map(|cursor| json!({"node":cursor.node_id,"pass":cursor.key.invocation,"dir":""}));
-    let executed = record.executed_nodes();
-    let mut traces = serde_json::Map::new();
-    let mut trace_keys = record
-        .results
-        .values()
-        .flatten()
-        .map(|result| result.key.clone())
-        .collect::<Vec<_>>();
-    if let Some(cursor) = &record.cursor {
-        trace_keys.push(cursor.key.clone());
-    }
-    if let Some(parallel) = &record.parallel {
-        trace_keys.extend(
-            parallel
-                .branches
-                .iter()
-                .filter_map(|branch| branch.cursor.as_ref().map(|cursor| cursor.key.clone())),
-        );
-    }
-    trace_keys.sort_by_key(|key| key.durable_key());
-    trace_keys.dedup();
-    for key in trace_keys {
-        let messages = crate::goose_acp::trace_messages(&state.data_root, &key)
-            .map_err(|message| error(StatusCode::INTERNAL_SERVER_ERROR, message))?;
-        if !messages.is_empty() {
-            let trace_key = serde_json::to_string(&(&key.node_id, key.invocation))
-                .map_err(|e| error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-            traces.insert(trace_key, Value::Array(messages));
-        }
-    }
-    let active = state.application.active_runs(None).await;
-    let metadata = state
-        .application
-        .metadata(&id)
-        .map_err(application_error)?
-        .ok_or_else(|| {
-            error(
-                StatusCode::UNPROCESSABLE_ENTITY,
-                "Run has no immutable Graph identity metadata",
-            )
-        })?;
-    if metadata.assistant.is_some()
-        && let Some(policy) =
-            crate::assistant_plugins::latest_policy(&state.data_root, &record, &metadata)
-                .map_err(|message| error(StatusCode::INTERNAL_SERVER_ERROR, message))?
-    {
-        plugins.insert(
-            policy.node,
-            json!(
-                policy
-                    .bindings
-                    .values()
-                    .map(|binding| json!({
-                        "id":binding.id,"name":binding.id,"description":"","digest":binding.digest
-                    }))
-                    .collect::<Vec<_>>()
-            ),
-        );
-    }
-    let mut calls = Vec::new();
-    for call in record.graph_calls.values() {
-        if let Some(child_id) = &call.child_run_id {
-            let child = FileRunStore::new(state.data_root.join("runs"))
-                .load(child_id)
-                .map_err(|e| error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-            let child_metadata = state
-                .application
-                .metadata(child_id)
-                .map_err(application_error)?;
-            let source = child_metadata
-                .as_ref()
-                .and_then(|metadata| metadata.graph_call.as_ref());
-            let projection = if let Some(child) = &child {
-                Some(
-                    state
-                        .application
-                        .project_run(child, child_metadata.as_ref())
-                        .await
-                        .map_err(application_error)?,
-                )
-            } else {
-                None
-            };
-            calls.push(json!({
-                "run":child_id,
-                "child_id":child_id,
-                "graph":call.graph,
-                "node":call.identity.node_id,
-                "op":call.identity.node_id,
-                "target":call.graph,
-                "invocation":call.identity.invocation,
-                "mode":call.mode,
-                "active":active.contains(child_id),
-                "projection":projection,
-                "root_run":source.map(|source| &source.root_run),
-            }));
-        }
-    }
-    for child_metadata in state
-        .application
-        .child_metadata(&id)
-        .map_err(application_error)?
-    {
-        let Some(source) = child_metadata.graph_call.as_ref() else {
-            continue;
-        };
-        if calls
-            .iter()
-            .any(|call| call["run"] == child_metadata.run_id)
-        {
-            continue;
-        }
-        let child = FileRunStore::new(state.data_root.join("runs"))
-            .load(&child_metadata.run_id)
-            .map_err(|e| error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-        let projection = if let Some(child) = &child {
-            Some(
-                state
-                    .application
-                    .project_run(child, Some(&child_metadata))
-                    .await
-                    .map_err(application_error)?,
-            )
-        } else {
-            None
-        };
-        calls.push(json!({
-            "run":child_metadata.run_id,
-            "child_id":child_metadata.run_id,
-            "graph":child_metadata.graph,
-            "node":source.node,
-            "op":source.node,
-            "target":child_metadata.graph,
-            "invocation":source.invocation,
-            "mode":source.mode,
-            "active":active.contains(&child_metadata.run_id),
-            "projection":projection,
-            "root_run":source.root_run,
-        }));
-    }
-    let mut trigger = json!({"source":metadata.trigger_source,"schedule":metadata.schedule,"scheduled_at":metadata.scheduled_at});
-    if let Some(source) = metadata.graph_call.as_ref() {
-        trigger["graph"] = json!(source.parent_graph);
-        trigger["run"] = json!(source.parent_run);
-        trigger["node"] = json!(source.node);
-        trigger["invocation"] = json!(source.invocation);
-        trigger["mode"] = json!(source.mode);
-        trigger["root_run"] = json!(source.root_run);
-    }
-    if let Some(source) = metadata.conversation.as_ref() {
-        trigger["session"] = json!(source.session);
-        trigger["reply_node"] = json!(source.reply_node);
-        trigger["previous_run"] = json!(source.previous_run);
-    }
-    if let Some(source) = metadata.channel.as_ref() {
-        trigger["channel"] = json!({
-            "session": source.session,
-            "inbound": source.inbound,
-            "turn": source.turn,
-        });
-    }
-    let channel_reply = metadata.conversation.is_some()
-        && state
-            .data_root
-            .join("channel-replies")
-            .join(format!("{id}.json"))
-            .try_exists()
-            .map_err(|e| error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    let projection = state
-        .application
-        .project_run(&record, Some(&metadata))
-        .await
-        .map_err(application_error)?;
-    let view = state
-        .application
-        .read_view(&record, projection.active)
-        .map_err(application_error)?;
-    let definition = crate::application::run_projection::run_definition(&record.snapshot);
-    Ok(Json(
-        json!({"session_call":metadata.session_call,"channel_reply":channel_reply,"graph":metadata.graph,"run":id,"attachments":metadata.attachments,"plugins":plugins,"definition":definition,"state":{"objective":record.snapshot.objective,"started":metadata.created,"updated":projection.updated,"trigger":trigger,"input":record.input,"cursor":cursor,"passes":view.graph.passes,"decided":decided,"nodes":nodes,"executed":executed,"skipped":[],"error":record.error.unwrap_or_default(),"parallel":record.parallel,"recovery":record.recovery},"calls":calls,"traces":traces,"nodes":record.snapshot.nodes.iter().map(|node|node.id.clone()).collect::<Vec<_>>(),"active":projection.active,"projection":projection}),
-    ))
 }
 
 pub(super) async fn delete_run(
@@ -721,35 +499,24 @@ pub(super) async fn abandon_run(
         .abandon_run(&id, reason.as_deref())
         .await
         .map_err(application_error)?;
-    let _legacy_receipt_status = result.status;
     let code = match result.action {
         crate::application::AbandonAction::Abandoning => StatusCode::ACCEPTED,
         _ => StatusCode::OK,
     };
-    let record = state
+    let view = state
         .application
-        .load_run(&id)
+        .read_run(&id)
         .map_err(application_error)?
         .ok_or_else(|| error(StatusCode::NOT_FOUND, "no such run"))?;
     let metadata = state.application.metadata(&id).map_err(application_error)?;
     let projection = state
         .application
-        .project_run(&record, metadata.as_ref())
+        .project_run(&view, metadata.as_ref())
         .await
         .map_err(application_error)?;
-    Ok((
-        code,
-        Json(json!({
-            "run": id,
-            "action": result.action.as_str(),
-            // True only when a recorded abandon request makes this Run terminal;
-            // an already-aborted Run from another cause reports `false`.
-            "abandoned": matches!(result.action, crate::application::AbandonAction::Abandoned),
-            "projection": projection,
-            "reason": result.reason,
-            "requested_at": result.requested_at,
-        })),
-    ))
+    let mut response = abandon_response(&id, &result);
+    response["projection"] = serde_json::to_value(projection).expect("Run projection");
+    Ok((code, Json(response)))
 }
 
 pub(super) async fn execute_session_call(

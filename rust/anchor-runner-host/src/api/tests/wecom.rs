@@ -1018,7 +1018,7 @@ async fn wecom_progress_reports_only_settled_state_for_a_finished_turn() {
     // turn can report is that it is over.
     assert!(body.contains("event: settled"), "{body}");
     assert!(body.contains("\"settled\":true"), "{body}");
-    assert!(body.contains("\"status\":\"completed\""), "{body}");
+    assert!(body.contains("\"status\":\"settled\""), "{body}");
     assert!(!body.contains("event: update"), "{body}");
     assert!(!body.contains("正在"), "{body}");
 

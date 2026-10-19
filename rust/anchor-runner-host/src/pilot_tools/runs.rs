@@ -25,17 +25,10 @@ impl PilotTools {
     }
 
     pub(super) async fn run_list(&self, _arguments: &Value) -> Result<Value, ToolError> {
-        let mut runs = Vec::new();
-        for (id, record) in self.application.records().map_err(|_| failed())? {
-            let metadata = self.application.metadata(&id).map_err(|_| failed())?;
-            let projection = self
-                .application
-                .project_run(&record, metadata.as_ref())
-                .await
-                .map_err(|_| failed())?;
-            runs.push(json!({"run":id,"projection":projection}));
-        }
-        Ok(json!({"runs":runs}))
+        self.application
+            .pilot_run_list()
+            .await
+            .map_err(|_| failed())
     }
 
     pub(super) async fn run_status(&self, arguments: &Value) -> Result<Value, ToolError> {
@@ -43,25 +36,9 @@ impl PilotTools {
         if !identifier(&run) {
             return Err(failed());
         }
-        let record = self
-            .application
-            .records()
-            .map_err(|_| failed())?
-            .into_iter()
-            .find(|(id, _)| id == &run)
-            .ok_or_else(failed)?
-            .1;
-        let metadata = self.application.metadata(&run).map_err(|_| failed())?;
-        let projection = self
-            .application
-            .project_run(&record, metadata.as_ref())
+        self.application
+            .pilot_run_status(&run)
             .await
-            .map_err(|_| failed())?;
-        let mut progress = serde_json::to_value(record).map_err(|_| failed())?;
-        progress
-            .as_object_mut()
-            .expect("record object")
-            .remove("status");
-        Ok(json!({"run":run,"record":progress,"projection":projection}))
+            .map_err(|_| failed())
     }
 }

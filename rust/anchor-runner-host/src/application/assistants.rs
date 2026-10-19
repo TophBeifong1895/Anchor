@@ -1,6 +1,5 @@
 use super::*;
-use crate::execution::PreparedExecution;
-use crate::{HostArtifacts, application::metadata::AssistantSource, assistant::AssistantPlan};
+use crate::assistant::AssistantPlan;
 use anchor_graph_host::LoadedGraphBundle;
 use anchor_platform_session::{SessionError, SessionStore};
 
@@ -26,8 +25,8 @@ impl RunApplication {
         if source.owner != owner || source.session != session {
             return Err(ApplicationError::Missing);
         }
-        let record = self.store().load(run)?.ok_or(ApplicationError::Missing)?;
-        if !RunLiveness::with_registry(&record, &active).is_quiescent() {
+        let record = self.read_run(run)?.ok_or(ApplicationError::Missing)?;
+        if !record.with_active(active.contains_key(run)).is_quiescent() {
             return Err(ApplicationError::Conflict(
                 "stop the assistant before retiring its instance".into(),
             ));
@@ -83,169 +82,12 @@ impl RunApplication {
         graph_lease: Box<dyn RunLease>,
         plan: AssistantPlan,
     ) -> Result<String, ApplicationError> {
-        let AssistantAdmission {
-            graph,
-            session,
-            owner,
-            oauth_owner,
-            run,
-            previous_run,
-        } = request;
-        let plugin_lease = if bundle.plugins.is_empty() {
-            None
-        } else {
-            Some(self.plugin_reference_lease().await?)
-        };
-        let mut active = self.active.lock().await;
-        let graph_path = Self::graph_identity(source)?;
-        if let Some(saved) = self.metadata(&run)? {
-            let binding = saved.assistant.ok_or_else(|| {
-                ApplicationError::Conflict("Run is not an assistant instance".into())
-            })?;
-            if binding.owner != owner
-                || binding.session != session
-                || saved.bundle_source != graph_path
-            {
-                return Err(ApplicationError::Conflict(
-                    "assistant instance identity changed".into(),
-                ));
-            }
-            let Some(record) = self.store().load(&run)? else {
-                return Err(ApplicationError::Conflict(
-                    "assistant admission is incomplete; inspect retained facts".into(),
-                ));
-            };
-            if record.graph_digest != saved.graph_digest {
-                return Err(ApplicationError::Invalid(
-                    "assistant admission Graph identity changed".into(),
-                ));
-            }
-            SessionStore::open(self.data_root.join("platform/sessions.sqlite"))
-                .map_err(assistant_session_error)?
-                .bind_channel_assistant(
-                    &owner,
-                    &session,
-                    &run,
-                    &binding.wait_node,
-                    &binding.work_node,
-                    &binding.reply_node,
-                )
-                .map_err(assistant_session_error)?;
-            return Ok(run);
-        }
-        for (_, record) in self.records()? {
-            if !record.status.is_terminal() {
-                let metadata = self.metadata(&record.run_id)?.ok_or_else(|| {
-                    ApplicationError::Conflict("unfinished Run has no immutable identity".into())
-                })?;
-                if record.status != RunStatus::Stopped
-                    && metadata
-                        .assistant
-                        .as_ref()
-                        .is_some_and(|source| source.owner == owner && source.session == session)
-                {
-                    return Err(ApplicationError::Conflict(format!(
-                        "assistant admission retains unfinished Run `{}`; resume that instance before creating another",
-                        record.run_id
-                    )));
-                }
-                if Self::graph_identity(&metadata.bundle_source)? == graph_path
-                    && metadata.conversation.is_none()
-                    && metadata.session_call.is_none()
-                {
-                    return Err(ApplicationError::Conflict(
-                        "Graph has an unfinished non-conversation Run".into(),
-                    ));
-                }
-            }
-        }
-        if let Some(previous) = previous_run.as_deref() {
-            let record = self
-                .store()
-                .load(previous)?
-                .ok_or(ApplicationError::Missing)?;
-            self.ensure_predecessor_settled(&record, &active)?;
-            let metadata = self.metadata(previous)?.ok_or(ApplicationError::Missing)?;
-            if metadata.conversation.as_ref().is_none_or(|binding| {
-                binding.session != session || binding.reply_node != plan.work_node
-            }) || metadata.bundle_source != graph_path
-            {
-                return Err(ApplicationError::Conflict(
-                    "assistant predecessor belongs to another conversation".into(),
-                ));
-            }
-        }
-        let plugin_bindings = self.bundle_plugin_bindings(&bundle)?;
-        let mut record = GraphRunRecord::create_with_id(
-            bundle.snapshot,
-            serde_json::json!({"session":session}),
-            run.clone(),
-        )?;
-        record.plugin_bindings = plugin_bindings;
-        record.plugin_bindings_initialized = true;
-        let mut metadata = RunMetadata::new(
-            run.clone(),
-            graph.clone(),
-            record.graph_digest.clone(),
-            source,
-        )?;
-        metadata.trigger_source = "channel".into();
-        metadata.oauth_owner = Some(oauth_owner);
-        metadata.conversation = Some(ConversationSource {
-            session: session.clone(),
-            reply_node: plan.work_node.clone(),
-            previous_run,
-        });
-        metadata.assistant = Some(AssistantSource {
-            owner: owner.clone(),
-            session: session.clone(),
-            wait_node: plan.wait_node.clone(),
-            work_node: plan.work_node.clone(),
-            reply_node: plan.reply_node.clone(),
-        });
-        let lease = self.store().acquire_lease(&run)?;
-        metadata::save(&self.data_root, &metadata)?;
-        let artifacts = HostArtifacts::new(
-            self.data_root.join("artifacts"),
-            crate::env_path("ANCHOR_RUNNER_WORKSPACE_ROOT").map_err(ApplicationError::Invalid)?,
-        );
-        let control = new_control();
-        let execution = PreparedExecution::prepare_with_catalog(
-            &record,
-            control.clone(),
-            record.plugin_bindings.clone(),
-            self.catalog_root.clone(),
-            self.clone(),
-        )
-        .map_err(ApplicationError::Invalid)?;
-        execution
-            .bind_local_inputs(&record, &graph)
-            .map_err(ApplicationError::Invalid)?;
-        for node in &record.snapshot.nodes {
-            artifacts.bind_node_workspace(&run, &record.graph_digest, &node.id)?;
-        }
-        self.store().save(&record)?;
-        SessionStore::open(self.data_root.join("platform/sessions.sqlite"))
-            .map_err(storage)?
-            .bind_channel_assistant(
-                &owner,
-                &session,
-                &run,
-                &plan.wait_node,
-                &plan.work_node,
-                &plan.reply_node,
-            )
-            .map_err(storage)?;
-        active.insert(run.clone(), ActiveRun::new(graph_path, control));
-        drop(lease);
-        drop(plugin_lease);
-        drop(graph_lease);
-        self.spawn(record, execution)?;
-        Ok(run)
+        self.admit_assistant_run(request, source, bundle, graph_lease, plan)
+            .await
     }
 }
 
-fn assistant_session_error(error: SessionError) -> ApplicationError {
+pub(super) fn assistant_session_error(error: SessionError) -> ApplicationError {
     match error {
         SessionError::Missing => ApplicationError::Missing,
         SessionError::Conflict(message) => ApplicationError::Conflict(message),

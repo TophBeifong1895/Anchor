@@ -1,19 +1,6 @@
 //! Read-only lifecycle facts. No Session policy or writable Run state lives here.
 use anchor_kernel::{Phase, Waiter};
-use anchor_runtime::graph::GraphRunRecord;
 
-/// Graph progress without any legacy lifecycle field.
-#[derive(Debug, Clone)]
-pub(crate) struct GraphProgress {
-    pub(crate) passes: std::collections::BTreeMap<String, u64>,
-}
-impl From<&GraphRunRecord> for GraphProgress {
-    fn from(record: &GraphRunRecord) -> Self {
-        Self {
-            passes: record.passes.clone(),
-        }
-    }
-}
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 pub(crate) struct AvailableActions {
     pub(crate) pause: bool,
@@ -24,7 +11,6 @@ pub(crate) struct AvailableActions {
 #[derive(Debug, Clone)]
 pub(crate) struct RunView {
     pub(crate) phase: Phase,
-    pub(crate) graph: GraphProgress,
     pub(crate) worker: bool,
     pub(crate) updated: Option<String>,
     /// Legacy effect waits may have an explanation outside the Kernel waiter.
@@ -99,12 +85,10 @@ mod tests {
                 },
             },
         ];
-        let record = GraphRunRecord::create_with_id(serde_json::from_value(serde_json::json!({"objective":"view","entry":"a","agents":{"role":{"model":"fixture","instructions":"work"}},"nodes":[{"id":"a","agent":"role"}],"edges":[]})).unwrap(),serde_json::Value::Null,"view").unwrap();
         for (index, phase) in phases.into_iter().enumerate() {
             for worker in [false, true] {
                 let view = RunView {
                     phase: phase.clone(),
-                    graph: (&record).into(),
                     worker,
                     updated: None,
                     reason: None,

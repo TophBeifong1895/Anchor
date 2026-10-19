@@ -2,12 +2,14 @@
 //!
 //! Graph remains the desired configuration. These secret-free facts prove an
 //! operator authorized its grants and what a particular Turn actually received.
-use crate::application::RunMetadata;
-use anchor_graph_host::{FilePluginCatalog, PluginCatalog};
-use anchor_runtime::graph::{
-    FileRunStore, GraphError, GraphRunRecord, GraphSnapshot, PluginBinding, PluginRef, RunLease,
-    RunStore,
+use crate::application::{
+    RunMetadata,
+    run_access::{self, RunView},
 };
+use anchor_graph_host::{FilePluginCatalog, PluginCatalog};
+#[cfg(test)]
+use anchor_runtime::graph::GraphRunRecord;
+use anchor_runtime::graph::{GraphError, GraphSnapshot, PluginBinding, PluginRef, RunLease};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
@@ -22,17 +24,17 @@ fn hash(value: &[u8]) -> String {
 /// Shared with Graph publication/admission: reading desired policy and freezing
 /// its grants is serialized with saving the Graph, never with model execution.
 pub(crate) fn graph_lease(root: &Path, source: &Path) -> Result<Box<dyn RunLease>, GraphError> {
-    FileRunStore::new(root.join("admission-locks")).acquire_lease(&graph_lease_key(source)?)
+    run_access::graph_lease(root, source)
 }
 
 pub(crate) fn graph_read_lease(
     root: &Path,
     source: &Path,
 ) -> Result<Box<dyn RunLease>, GraphError> {
-    FileRunStore::new(root.join("admission-locks")).acquire_read_lease(&graph_lease_key(source)?)
+    run_access::graph_read_lease(root, source)
 }
 
-fn graph_lease_key(source: &Path) -> Result<String, GraphError> {
+pub(crate) fn graph_lease_key(source: &Path) -> Result<String, GraphError> {
     let identity = crate::application::RunApplication::graph_identity(source).map_err(|error| {
         GraphError::Unsupported(format!("Graph identity unavailable: {error:?}"))
     })?;
@@ -242,8 +244,13 @@ pub(crate) fn load(
 
 /// A verified Host-only fact selects invocation authority. Generic and legacy
 /// Runs keep the Kernel's frozen admission policy.
-pub(crate) fn invocation_authority(root: &Path, record: &GraphRunRecord) -> Result<bool, String> {
-    let Some(metadata) = crate::application::metadata::load(root, &record.run_id)
+pub(crate) fn invocation_authority<'record>(
+    root: &Path,
+    record: impl Into<RunView<'record>>,
+) -> Result<bool, String> {
+    let view = record.into();
+    let progress = view.progress();
+    let Some(metadata) = crate::application::metadata::load(root, progress.run_id)
         .map_err(|error| format!("Run identity unavailable: {error:?}"))?
     else {
         return Ok(false);
@@ -251,9 +258,10 @@ pub(crate) fn invocation_authority(root: &Path, record: &GraphRunRecord) -> Resu
     let Some(source) = metadata.assistant else {
         return Ok(false);
     };
-    let plan = crate::assistant::AssistantPlan::from_snapshot(&record.snapshot, &source.work_node)?
-        .ok_or("assistant Graph plan is missing")?;
-    if metadata.graph_digest != record.graph_digest
+    let plan =
+        crate::assistant::AssistantPlan::from_snapshot(progress.snapshot, &source.work_node)?
+            .ok_or("assistant Graph plan is missing")?;
+    if metadata.graph_digest != progress.graph_digest
         || source.owner.is_empty()
         || source.session.is_empty()
         || plan.wait_node != source.wait_node
@@ -265,64 +273,44 @@ pub(crate) fn invocation_authority(root: &Path, record: &GraphRunRecord) -> Resu
 }
 
 /// Only the cursor's still executable Turn holds references, never old history.
-pub(crate) fn active_plugin_ids(
+pub(crate) fn active_bindings<'record>(
     root: &Path,
-    record: &GraphRunRecord,
+    record: impl Into<RunView<'record>>,
     metadata: &RunMetadata,
-) -> Result<std::collections::BTreeSet<String>, String> {
+) -> Result<BTreeMap<String, PluginBinding>, String> {
+    let view = record.into();
+    let progress = view.progress();
     let Some(source) = &metadata.assistant else {
-        return Ok(std::collections::BTreeSet::new());
+        return Ok(BTreeMap::new());
     };
-    let Some(cursor) = &record.cursor else {
-        return Ok(std::collections::BTreeSet::new());
+    let Some(binding) = view.executable_assistant_binding(root, metadata)? else {
+        return Ok(BTreeMap::new());
     };
-    let mut binding = crate::assistant::binding(root, &cursor.key)?;
-    if binding.is_none() && cursor.node_id != source.wait_node {
-        for commit in &cursor.input_commits {
-            let key = anchor_runtime::graph::InvocationKey {
-                node_id: commit.node_id.clone(),
-                invocation: commit.invocation,
-                ..cursor.key.clone()
-            };
-            if let Some(prior) = crate::assistant::binding(root, &key)? {
-                binding = Some(prior);
-                break;
-            }
-        }
-    }
-    let Some(binding) = binding else {
-        if cursor.node_id != source.wait_node {
-            return Err("assistant active invocation has no Turn binding".into());
-        }
-        return Ok(std::collections::BTreeSet::new());
-    };
-    if let Some(policy) = load(root, &record.run_id, &source.session, &binding.turn)? {
+    if let Some(policy) = load(root, progress.run_id, &source.session, &binding.turn)? {
         if policy.node != source.work_node {
             return Err("assistant Turn Plugin node identity changed".into());
         }
-        return Ok(policy.bindings.into_keys().collect());
+        return Ok(policy.bindings);
     }
-    if initialized(root, &record.run_id)? {
+    if initialized(root, progress.run_id)? {
         return Err("assistant Turn Plugin policy is missing".into());
     }
     // Only pre-upgrade active Turns lack a policy. Retain conservative baseline
     // references until that Turn finishes; idle assistants hold no such grants.
-    let mut ids = record
-        .plugin_bindings
-        .keys()
-        .cloned()
-        .collect::<std::collections::BTreeSet<_>>();
+    let bindings = progress.plugin_bindings.clone();
     let path = crate::plugin_mounts::snapshot_path(root, &source.session, &binding.turn);
     if let Some(snapshot) =
         crate::plugin_mounts::read_snapshot_strict(&path, &source.session, &binding.turn)?
     {
         for (id, enabled) in snapshot.mounts {
-            if enabled {
-                ids.insert(id);
+            if enabled && !bindings.contains_key(&id) {
+                return Err(
+                    "old assistant Plugin authority format; offline migration required".into(),
+                );
             }
         }
     }
-    Ok(ids)
+    Ok(bindings)
 }
 
 /// Delete only parsed facts whose exact owner and hashed filename agree. Open
@@ -381,18 +369,23 @@ fn remove_owned_facts(
     fsync(&parent).map_err(|error| error.to_string())
 }
 
-pub(crate) fn cleanup(root: &Path, record: &GraphRunRecord) -> Result<(), String> {
-    let metadata = crate::application::metadata::load(root, &record.run_id)
+pub(crate) fn cleanup<'record>(
+    root: &Path,
+    record: impl Into<RunView<'record>>,
+) -> Result<(), String> {
+    let view = record.into();
+    let progress = view.progress();
+    let metadata = crate::application::metadata::load(root, progress.run_id)
         .map_err(|error| format!("policy cleanup identity unavailable: {error:?}"))?;
     remove_owned_facts(
         root,
         "assistant-plugin-turns",
-        &hash(record.run_id.as_bytes()),
+        &hash(progress.run_id.as_bytes()),
         |name, bytes| {
             if name == "initialized.json" {
                 let owner: String =
                     serde_json::from_slice(bytes).map_err(|error| error.to_string())?;
-                if owner == record.run_id {
+                if owner == progress.run_id {
                     return Ok(());
                 }
                 return Err("policy cleanup marker owner changed".into());
@@ -403,9 +396,9 @@ pub(crate) fn cleanup(root: &Path, record: &GraphRunRecord) -> Result<(), String
                 .as_ref()
                 .and_then(|metadata| metadata.assistant.as_ref())
                 .ok_or("policy cleanup has no assistant owner")?;
-            let expected = turn_path(root, &record.run_id, &source.session, &policy.mounts.turn);
+            let expected = turn_path(root, progress.run_id, &source.session, &policy.mounts.turn);
             if policy.format != 1
-                || policy.run != record.run_id
+                || policy.run != progress.run_id
                 || policy.node != source.work_node
                 || policy.mounts.session != source.session
                 || expected.file_name().and_then(|name| name.to_str()) != Some(name)
@@ -447,35 +440,20 @@ pub(crate) struct PluginUpdateStatus {
 
 /// Current claimed Turn, or the last committed Turn while the assistant waits.
 /// This is a display projection of execution facts, never an authorization source.
-pub(crate) fn latest_policy(
+pub(crate) fn latest_policy<'record>(
     root: &Path,
-    record: &GraphRunRecord,
+    record: impl Into<RunView<'record>>,
     metadata: &RunMetadata,
 ) -> Result<Option<TurnPluginPolicy>, String> {
+    let view = record.into();
+    let progress = view.progress();
     let source = metadata
         .assistant
         .as_ref()
         .ok_or("Run is not an assistant")?;
-    let last = record
-        .results
-        .values()
-        .flatten()
-        .max_by_key(|result| result.sequence);
-    let cursor_binding = record
-        .cursor
-        .as_ref()
-        .map(|cursor| crate::assistant::binding(root, &cursor.key))
-        .transpose()?
-        .flatten();
-    let binding = match cursor_binding {
-        Some(binding) => Some(binding),
-        None => last
-            .map(|result| crate::assistant::binding(root, &result.key))
-            .transpose()?
-            .flatten(),
-    };
+    let binding = view.latest_assistant_binding(root)?;
     let policy = binding
-        .map(|binding| load(root, &record.run_id, &source.session, &binding.turn))
+        .map(|binding| load(root, progress.run_id, &source.session, &binding.turn))
         .transpose()?
         .flatten();
     if policy
@@ -487,17 +465,19 @@ pub(crate) fn latest_policy(
     Ok(policy)
 }
 
-pub(crate) fn status(
+pub(crate) fn status<'record>(
     root: &Path,
-    record: &GraphRunRecord,
+    record: impl Into<RunView<'record>>,
     metadata: &RunMetadata,
     current: &GraphSnapshot,
 ) -> Result<PluginUpdateStatus, String> {
+    let view = record.into();
+    let progress = view.progress();
     let source = metadata
         .assistant
         .as_ref()
         .ok_or("Run is not an assistant")?;
-    if !compatible(&record.snapshot, current, &source.work_node) {
+    if !compatible(progress.snapshot, current, &source.work_node) {
         return Ok(PluginUpdateStatus {
             state: "restart_required",
             message: Some(
@@ -506,7 +486,7 @@ pub(crate) fn status(
         });
     }
     let desired = current.digest().map_err(|error| error.to_string())?;
-    if desired != record.graph_digest
+    if desired != progress.graph_digest
         && publication(root, &metadata.bundle_source, &desired)?.is_none()
     {
         return Ok(PluginUpdateStatus {
@@ -514,9 +494,9 @@ pub(crate) fn status(
             message: Some("Graph Plugin permissions have no operator authorization".into()),
         });
     }
-    let effective = latest_policy(root, record, metadata)?
+    let effective = latest_policy(root, &view, metadata)?
         .map(|policy| policy.graph_digest)
-        .unwrap_or_else(|| record.graph_digest.clone());
+        .unwrap_or_else(|| progress.graph_digest.to_owned());
     Ok(PluginUpdateStatus {
         state: if effective == desired {
             "current"

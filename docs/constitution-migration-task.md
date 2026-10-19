@@ -2,7 +2,7 @@
 
 编制：2026-10-19。决定：用户选择全量迁移（见工作记录"R2 审查结论"）。目标是**统一定律、崩溃与计费正确、删除旧 Runner**，不是让 Host 变小。起点：`d915314`（R2 停止现场）。
 
-**当前状态（2026-10-19）**：M1 已验收（`2d70ca2`，审查方重跑 workspace 121 个 target 1922 / 0 / 115、Web 290 通过）。**M1.5 已验收（§10.10）**：先以 `c6454c3` 合并 `2b3b7a2`，再按 §10.8 仅同步 F0 `e3a5778`，未合入 F1。workspace 2023 / 0 / 122，Web 311 通过且构建通过，Goose 117 / 2 / 0，相对 §10.9 基线新增失败 0；规则清单与原样 target 结果见 [M1.5 验证](../experiments/constitution-host-preflight/m15/verification.md)。M2 已按 §10.10 开工；并行模块作用域扩展已获用户批准并实现，校验器与 5,000 模块随机样本验证通过，Host 多槽位调度已通过定向与随机对照；FileStore 与 Host 删除、Probe 投影已提交，串行 Call 与 detached 启动恢复已通过本地验证，当前按 §10.11 提交切片并立即同步 master F1/F2；并行 Call 裁决扩展按 §8 待批，见 [删除边界](../experiments/constitution-host-preflight/m2/deletion-boundary.md)；验证见 [M2 验证与当前边界](../experiments/constitution-host-preflight/m2/verification.md)。M1.5 要求如下：
+**当前状态（2026-10-19）**：M1 已验收（`2d70ca2`，审查方重跑 workspace 121 个 target 1922 / 0 / 115、Web 290 通过）。**M1.5 已验收（§10.10）**：先以 `c6454c3` 合并 `2b3b7a2`，再按 §10.8 仅同步 F0 `e3a5778`，未合入 F1。workspace 2023 / 0 / 122，Web 311 通过且构建通过，Goose 117 / 2 / 0，相对 §10.9 基线新增失败 0；规则清单与原样 target 结果见 [M1.5 验证](../experiments/constitution-host-preflight/m15/verification.md)。M2 已按 §10.10 开工；并行模块作用域扩展已获用户批准并实现，校验器与 5,000 模块随机样本验证通过，Host 多槽位调度已通过定向与随机对照；FileStore 与 Host 删除、Probe 投影已提交，串行 Call 与 detached 启动恢复已通过本地验证，串行 Call 切片已提交 `2582528`，§10.11 的 master F1/F2（`d968ba5`）已同步并通过[合并回归](../experiments/constitution-host-preflight/m2/merge-verification.md)；并行 Call 裁决扩展按 §8 待批，见 [删除边界](../experiments/constitution-host-preflight/m2/deletion-boundary.md)；验证见 [M2 验证与当前边界](../experiments/constitution-host-preflight/m2/verification.md)。M1.5 要求如下：
 
 1. 按 §10.2 合并 `master`，冲突逐文件登记；合并后 workspace 与 Web 全绿。
 2. 按 §10.3 用 master 的 Goose 锁定版本跑全部 Goose 忽略测试，原样贴出结果。**注意**：master 目前的 Goose 基线本身就是坏的（extensions/add 返回 -32603，由 master 的 G0 任务处理，见 `/home/mansteinl/Anchor/docs/goose-baseline-task.md`）。G0 修复之前，门槛改为"相对 master 基线没有新增失败"。master 侧基线**优先使用 G0 交回的失败名单**；如果 G0 还没交回，就用临时干净 worktree 在本次合并的那个 master 提交上跑，例如 `git worktree add /tmp/master-base <提交>`，用完删除。**不得**在 `/home/mansteinl/Anchor` 上跑基线，因为那里有其他 agent 正在修改。Goose 套件不要和 G0 同时跑：G0 正在跑时，先完成合并和规则表，Goose 对照放到最后。M1 时分支锁定的是旧摘要，本机没有对应二进制，所以不能执行；合并后不再适用这个理由。
@@ -13,7 +13,7 @@ S19–S24、S26 已由用户批准（2026-10-19）。M3 的前置条件见 §10.
 
 本文取代上位计划 H3–H6 的阶段划分；上位计划的约束 C1–C6、§2.1 调度器、§2.2 执行者语义仍然有效。
 
-当前进度（2026-10-19）：M1 已验收，S19–S24、S26 已批准，S25 作废。M1.5 已完成 `2b3b7a2` 与 F0 的同步、规则清点与相对 G0 无新增失败的验证，按 §0 交回；证据见 [M1.5 验证](../experiments/constitution-host-preflight/m15/verification.md)。M2 进行中，并行模块作用域校验器切片已完成本地确定性验证，Host 并行调度切片也已完成；FileStore/Host 删除与 Probe 已完成，串行 Call 已验证；并行 Call 组合待批，助手、执行结果与人工恢复决定未完成。按 §10.11 立即同步已完成的 master F1/F2；M3–M5 尚未开始。
+当前进度（2026-10-19）：M1 已验收，S19–S24、S26 已批准，S25 作废。M1.5 已完成 `2b3b7a2` 与 F0 的同步、规则清点与相对 G0 无新增失败的验证，按 §0 交回；证据见 [M1.5 验证](../experiments/constitution-host-preflight/m15/verification.md)。M2 进行中，并行模块作用域校验器切片已完成本地确定性验证，Host 并行调度切片也已完成；FileStore/Host 删除与 Probe 已完成，串行 Call 已验证；并行 Call 组合待批，助手、执行结果与人工恢复决定未完成。§10.11 的 master F1/F2 已同步并通过合并回归；M3–M5 尚未开始。
 
 ## 0. 工作方式（先读）
 

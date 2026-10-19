@@ -69,11 +69,11 @@ Web 工作台的颜色、字体、控件、面板标题和默认栏宽由 [共�
 
 Graph Call 的 `wait` 子执行在 Runner 返回成功、错误或合作取消后都注销登记。取消转发任务由该登记持有，退出时在 active 锁外中止并等待回收；正常结束不写入停止请求。Web 只在 Graph/Run 消费页面轮询工作台数据，其他页面拥有各自请求；首次直达仍核验 API key，返回消费页面立即刷新，离开页面后丢弃迟到响应。
 
-旧 Run 的 `RunStatus::is_terminal()` 在未迁写入路径仍只把 Completed、Failed、Aborted 视为终态。R2 读侧统一通过 Phase，RunLiveness 对新旧 Run 都采用“无 worker 且为 Settled 或 Waiting(Human)”；旧 Paused、BudgetStopped 因而与 Stopped 一样物理静止（S21 待审查）；Session conversation 的交接/删除额外保留当前轮占有规则，reason=paused/budget 时仍须显式 stop 或结算，不能只凭 worker 排空取代该轮。登记涵盖启动、清理与等待输入，不等于模型忙碌；查询不保存 Run 事实，调用者沿用 active 锁、Run lease 和读取顺序。旧 Session 结算写回仍保留 RunStatus→TurnStatus 规则，未把它计为读侧删除收益。M1 本地验证与待审查项见 [M1 验收](../experiments/constitution-host-preflight/m1/verification.md)；历史读侧测量保留在 [R2 测量](../experiments/constitution-host-preflight/r2/measurement.md)。
+旧 Run 的 `RunStatus::is_terminal()` 在未迁写入路径仍只把 Completed、Failed、Aborted 视为终态。R2 读侧统一通过 Phase，RunLiveness 对新旧 Run 都采用“无 worker 且为 Settled 或 Waiting(Human)”；旧 Paused、BudgetStopped 因而与 Stopped 一样物理静止（S21 已批准）；Session conversation 的交接/删除额外保留当前轮占有规则，reason=paused/budget 时仍须显式 stop 或结算，不能只凭 worker 排空取代该轮。登记涵盖启动、清理与等待输入，不等于模型忙碌；查询不保存 Run 事实，调用者沿用 active 锁、Run lease 和读取顺序。旧 Session 结算写回仍保留 RunStatus→TurnStatus 规则，未把它计为读侧删除收益。M1 本地验证与待审查项见 [M1 验收](../experiments/constitution-host-preflight/m1/verification.md)；历史读侧测量保留在 [R2 测量](../experiments/constitution-host-preflight/r2/measurement.md)。
 
-[RunProjection](../rust/anchor-runner-host/src/application/run_projection.rs) 在查询时组合既有持久状态、执行登记和控制前置条件，供 HTTP/Pilot 列表、详情、时间线及子调用共用；Web 只展示该操作投影，最终控制仍核验现场。运行画布从该 Run 的冻结 snapshot 投影只读拓扑，包含展开后的模块，不读取当前 Graph 或编辑草稿，也不暴露执行脚本、输入和 host 参数。投影不新增持久格式或恢复游标。
+[RunProjection](../rust/anchor-runner-host/src/application/run_access/projection.rs) 在查询时组合既有持久状态、执行登记和控制前置条件，供 HTTP/Pilot 列表、详情、时间线及子调用共用；Web 只展示该操作投影，最终控制仍核验现场。运行画布从该 Run 的冻结 snapshot 投影只读拓扑，包含展开后的模块，不读取当前 Graph 或编辑草稿，也不暴露执行脚本、输入和 host 参数。投影不新增持久格式或恢复游标。
 
-Host 的 [Run 访问围栏](run-access-facade.md) 按业务文件限制内部类型引用上限，新增能力不得扩大直接耦合。本分支已按迁移任务书 §10.8 同步 F0，将原生 Run 所有权、读视图和兼容桥归拢到 `application/run_access/`，围栏运行时范围不扩大。master 的 F1/F2 尚未合入，仍有旧控制写入与规则待迁移；模块移动和围栏通过不代表规则已经收敛。
+Host 的 [Run 访问边界](run-access-facade.md) 对业务内部类型引用实行零上限，新增能力先扩展门面。`application/run_access` 接管相位、只读视图、规则与 HTTP/Pilot/渠道兼容序列化，Graph/会话/助手只消费安全视图或按意图操作；准入、控制、恢复决定、放弃、Session 调用及子 Run 释放的执行与保存协议归门面，生产 `store()`、原始枚举与执行准备/派发仅在门面内部可用。锁与持久化顺序不变，规则表按原独立判断体计数，不以围栏通过代替规则验收。默认入口仍用旧 Runner；显式 `execution=kernel_probe` 的 Run 由同一门面接入 Kernel FileStore、新相位和多槽位调度器，剩余能力与验收边界见 [M2 当前边界](../experiments/constitution-host-preflight/m2/verification.md)。
 
 ## Graph 与节点
 

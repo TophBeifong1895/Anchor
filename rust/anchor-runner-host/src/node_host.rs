@@ -167,7 +167,7 @@ impl HostIoResolver {
     ) -> Result<Option<anchor_runtime::graph::GraphRunRecord>, anchor_runtime::graph::GraphError>
     {
         if let Some(application) = self.run_application.get() {
-            return application.load_run(id).map_err(|e| {
+            return application.execution_record(id).map_err(|e| {
                 anchor_runtime::graph::GraphError::Unsupported(format!("Run lookup: {e:?}"))
             });
         }

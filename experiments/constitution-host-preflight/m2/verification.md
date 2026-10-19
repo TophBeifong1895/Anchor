@@ -1,10 +1,10 @@
 # M2 验证与当前边界
 
-M2 未完成，当前按任务书 §8 交回并行 Call 裁决边界，不开始 M3。已完成并行模块、多槽位调度、获批 FileStore 删除、Host Run/Graph 删除和 Probe 投影；串行 Op.call 已接通并通过定向及 5,000 seed 对照。并行分支的 Call 仍被派发为 Work，需要单独批准校验器扩展，见 [可复现边界与建议](parallel-call-boundary.md)。助手、执行结果补齐与人工恢复决定仍待实现。这不是完整 M2 验收。
+M2 未完成，当前按任务书 §8 交回并行 Call 裁决边界，不开始 M3。已完成并行模块、多槽位调度、获批 FileStore 删除、Host Run/Graph 删除和 Probe 投影；串行 Op.call 已接通并通过定向及 5,000 seed 对照。并行分支的 Call 仍被派发为 Work，需要单独批准校验器扩展，见 [可复现边界与建议](parallel-call-boundary.md)。助手、执行结果补齐与人工恢复决定仍待实现。这不是完整 M2 验收。串行 Call 切片已提交 `2582528`；§10.11 要求的 master F1/F2（`d968ba5`）已通过 merge 同步，workspace、Web、完整串行 Goose ignored 与严格 clippy/fmt 均通过，见[合并验证与当前边界](merge-verification.md)。
 
 ## FileStore 删除存储切片
 
-Store trait 和 MemoryStore 未改；FileStore 提供获批 remove，rename/sync/remove/sync，load 幂等清理遗留目录，资源锁文件单独留存。定向 7 项、Kernel 全量 44 项及 clippy 通过，详见 [存储操作与证据](deletion-boundary.md)。当前 Kernel diff 仅限获批存储切片与测试；生命周期代码仍零 diff。提交：`0859373`。
+Store trait 和 MemoryStore 未改；FileStore 提供获批 remove，rename/sync/remove/sync，load 幂等清理遗留目录，资源锁文件单独留存。定向 7 项、Kernel 全量 44 项及 clippy 通过，详见 [存储操作与证据](deletion-boundary.md)。存储切片提交为 `0859373`，依赖与资源租约已按 §10.11 追认为 K0.2；当前 C1 以该提交为基线，后续 Kernel 零 diff，见[锁序与边界](../../../docs/constitution-refactor-log.md#k02filestore-删除与资源租约)。
 
 ## Host 删除、Probe 与串行 Call
 
@@ -14,7 +14,7 @@ Probe 投影已提交 `5293e65`；3 项定向测试通过。真实 Host 确定�
 
 串行 Call 复用 InProcessGraphHost 的准入、输入暂存、产物导出和调用身份；子 Run 同样只存 Kernel，后续进度只经 submit。父 Run 先 Bound，再由宿主观察子 Run 并提交 resume 和结算事实；回调覆盖父 worker 释放时子 Run 已结算的竞态。新增 Code 提交 AdmissionFailed 的理由与权限边界见 [预准入失败登记](call-admission.md)。定向 API、Runtime、Done/Failed/Unknown 竞态及 5,000 seed 调用差分通过，实际命令与最终范围见 [call-checks.json](call-checks.json)。未知效果不按未准入处理，不自动重放。
 
-F0 围栏测试文件与 `e3a5778` 保持字节一致。既有业务断言修改 0、删除 0、新增 ignore 0；M2 尚未执行 workspace、Web、Goose 与真实模型 Provider 验收。
+以上切片交回时，F0 围栏测试文件与 `e3a5778` 保持字节一致，既有业务断言修改 0、删除 0、新增 ignore 0；当时未执行完整 workspace、Web、Goose 或真实模型 Provider 验收。后续 §10.11 合并回归及断言迁移单独登记在 [master 合并验证](merge-verification.md)。
 
 ## Host 多槽位调度
 
@@ -39,7 +39,7 @@ F0 围栏测试文件与 `e3a5778` 保持字节一致。既有业务断言修改
 
 该并行调度切片的 fmt、git diff --check、工程措辞检查通过，实施当时 Kernel 相对 6ee2b0e 零 diff；后续唯一存储例外见上文。新增 Runtime 9 项、Host 1 项，既有业务断言修改 0、删除 0、新增 ignore 0。Runtime 分两条实际命令覆盖全部 target，不合成为一次测试输出。
 
-初次新 fixture 编译因 Runtime 未启用 tokio sync 失败，已补 dev feature；初次 Host 命令误用 --lib（该 crate 只有 bin），已改为 --bin。这两次临时日志被随后运行覆盖，原输出现不可获取，不计为通过证据。未新增完整 workspace、Web、Goose 或真实模型 Provider 验收；因 §8 边界交回，不宣称 M2 完成。
+初次新 fixture 编译因 Runtime 未启用 tokio sync 失败，已补 dev feature；初次 Host 命令误用 --lib（该 crate 只有 bin），已改为 --bin。这两次临时日志被随后运行覆盖，原输出现不可获取，不计为通过证据。该调度切片交回时未新增完整 workspace、Web、Goose 或真实模型 Provider 验收；后续合并回归见 [master 合并验证](merge-verification.md)，不宣称 M2 完成。
 
 ## 并行模块规则
 
@@ -66,7 +66,7 @@ F0 围栏测试文件与 `e3a5778` 保持字节一致。既有业务断言修改
 
 初次新定向测试曾错误地比较迟到前后的完整 Resource，忽略 D1 要求拒绝提交也计费；已修正为验证 phase、version、Graph state 不变且 spent 增加实际成本 3。既有断言未放宽。
 
-workspace、Web、Goose 与真实模型 Provider 尚未在 M2 新增验收；M2 结束时仍按任务书执行全部要求。
+该校验器切片交回时未新增完整 workspace、Web、Goose 或真实模型 Provider 验收；后续合并回归见 [master 合并验证](merge-verification.md)。M2 结束时仍须按任务书对最终能力执行全部要求。
 
 ## 开工时的边界（已获批准并实现）
 

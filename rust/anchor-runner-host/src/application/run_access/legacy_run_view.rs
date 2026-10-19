@@ -50,7 +50,6 @@ pub(in crate::application) fn phase(status: RunStatus, error: Option<&str>) -> P
 pub(in crate::application) fn view(record: &GraphRunRecord, worker: bool) -> RunView {
     RunView {
         phase: phase(record.status, record.error.as_deref()),
-        graph: record.into(),
         worker,
         updated: record.updated.clone(),
         reason: record.error.clone(),
@@ -60,7 +59,7 @@ pub(in crate::application) fn view(record: &GraphRunRecord, worker: bool) -> Run
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::application::{run_access::run_view::GraphProgress, run_projection::RunProjection};
+    use crate::application::run_projection::RunProjection;
     #[test]
     fn every_legacy_status_maps_lossily_with_both_worker_observations() {
         for (status, phase_name, waiter, outcome, reason) in [
@@ -120,9 +119,6 @@ mod tests {
             for worker in [false, true] {
                 let view = RunView {
                     phase: phase(status, Some("explanation")),
-                    graph: GraphProgress {
-                        passes: Default::default(),
-                    },
                     worker,
                     updated: None,
                     reason: Some("explanation".into()),

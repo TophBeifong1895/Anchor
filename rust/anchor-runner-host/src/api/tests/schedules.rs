@@ -146,7 +146,7 @@ fn timeline_marks_persisted_admission_blockers_busy_across_history_pages() {
             enabled: false,
         }];
         let run = json!({
-            "run":"blocking-run", "graph":"fixture", "status":status,
+            "run":"blocking-run", "graph":"fixture", "projection":{"phase": if status == "paused" {"waiting"} else {"executing"}},
             "running":running, "started":began.format("%Y-%m-%dT%H:%M:%S").to_string(),
             "updated":(at - chrono::Duration::minutes(10)).format("%Y-%m-%dT%H:%M:%S").to_string(),
             "trigger":{"source":"manual"}

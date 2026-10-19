@@ -1098,3 +1098,33 @@ FileStore 的 load/create/commit/history/remove 各自取得同一资源租约�
 当前锁序为 Host `kernel_runs` 缓存互斥量 → 非阻塞 `.writer.lock`（仅打开时取得、持有至 owner 释放）；单次创建/控制/派发注册按 active → deleting → Kernel writer（提交时）→ FileStore 资源租约。删除在 active/deleting 下预留后释放这两把互斥量，再经 FileStore.remove 取资源租约；读取也可直接取资源租约。FileStore 不回调 Host，不持资源租约获取 Host 互斥量或 Kernel writer；每次 Store 操作结束便释放，后续 Probe/观察发生在 Store 操作之外，因此没有反向等待环。
 
 Host `.writer.lock` 暂不能删除。资源租约只保护一次文件操作；Kernel 的 load→裁决→commit 跨多个 Store 调用，writer mutex 仅覆盖同一 Kernel 实例，跨进程仍需排除第二个裁决者。它也不代替 active/deleting 对 worker 与控制的协调。M3 保留该锁，除非后续能证明单写入者由等价机制保证；不能因为 FileStore 已有 flock 就删去宿主写入者边界。
+
+## §10.11：同步 master F1/F2
+
+按任务书 §10.11，以 `2582528` 为本分支父提交、`d968ba5` 为 master 父提交执行 merge，不 rebase。采用 master 的安全 RunView、读取与意图操作接口；保留本分支已批准的新相位、独立 pause、对外词汇和 M2 Kernel 路径。默认入口仍是旧 Runner，不在本次合并中开始 M3。以下登记合并产生的 19 个冲突路径及处理依据；合并回归通过，见[合并验证](../experiments/constitution-host-preflight/m2/merge-verification.md)。
+
+| 冲突路径 | 处理依据 |
+| --- | --- |
+| `docs/architecture.md` | 保留 master 的门面所有权、安全视图与意图写入边界，保留本分支 Phase/S21 和显式 Kernel 路径；M2 未完成能力链接到当前验收入口。 |
+| `docs/pilot-development-plan.md` | 保留 master F0/F1/F2 的已验结论，并明确其测试数只对应上游提交；保留本分支 M2 未关闭项，移除“F1 尚未合入”的失效待办。 |
+| `docs/run-access-facade.md` | 保留 master 接口、规则清单与 36→13 的上游测量；本分支新相位和 wire 以已批准契约为准；本次合并回归通过，M2 全量能力验收仍未完成。 |
+| `rust/anchor-runner-host/run-access-fence.txt` | 接受 master 业务引用零上限的清单；新增原生访问归门面，不恢复业务例外，不扩大测试固定的运行时范围。合并回归已实测通过，围栏测试文件与 master 字节一致。 |
+| `rust/anchor-runner-host/src/api/runs.rs` | HTTP 读取和序列化采用 master 门面；显式 `execution=kernel_probe` 选择及本分支 phase/waiter/outcome/actions、独立控制回执保留，入口不持有可写 Run。 |
+| `rust/anchor-runner-host/src/application.rs` | 采用 master 模块与可见性边界；保留 KernelRuns 缓存和既有宿主装配，生产 store、原始枚举及执行准备留在 run_access 内。 |
+| `rust/anchor-runner-host/src/application/abandon.rs` | 保留业务的 abandon intent、取消等待和启动收尾；Run 终结委托门面，Kernel 分支保留 Human abandon 及原生 worker 排空处理。 |
+| `rust/anchor-runner-host/src/application/admission.rs` | 业务只保留 Graph 准入租约等用例协调，读取改用 run_views；实际接纳、冻结、保存和启动迁到门面 admission，显式 Kernel 选择在该门面后实现。 |
+| `rust/anchor-runner-host/src/application/conversations.rs` | 接受 master 的安全视图、谓词和会话意图接口；保留本分支 paused/budget 轮次占有、继任和 wait-child 保护，跨新旧存储读取经同一门面。 |
+| `rust/anchor-runner-host/src/application/deletion.rs` | 保留 Graph/单 Run 删除的业务协调与 Session 保护；Run 清理和实际存储删除迁到门面 deletion，接回 M2 的 Kernel 删除预留与 FileStore.remove。 |
+| `rust/anchor-runner-host/src/application/dispatch.rs` | 启动恢复枚举采用 run_views/can_dispatch；执行、子 Run 释放与持久写入采用 master 门面 dispatch，保留原生 detached 子 Run 与结算回调。 |
+| `rust/anchor-runner-host/src/application/liveness.rs` | 业务生产判断归门面，旧模块只保留测试兼容入口；本分支“无 worker 且 Settled 或 Waiting(Human)”语义保留，不恢复 master 的旧 Paused/BudgetStopped 例外。 |
+| `rust/anchor-runner-host/src/application/queries.rs` | 用 master 的 read_run/run_views 安全视图替代业务原始枚举；原生活动观察和旧 active registry 合并只用于查询，不写回状态。 |
+| `rust/anchor-runner-host/src/application/recovery.rs` | 业务 recover 只转交门面 record_recovery_decision；master 的恢复目标校验、幂等与保存协议归门面。原生未知效果人工决定仍是 M2 未完成项，不因合并接口而记为支持。 |
+| `rust/anchor-runner-host/src/application/run_access.rs` | 以 master 的私有 Cow、RunView/progress/谓词及意图模块为公共边界；内接本分支 Kernel 所有权、Phase 和宿主时间观察，不暴露原始 record 或新增业务可变入口。 |
+| `rust/anchor-runner-host/src/application/run_access/control.rs` | 采用 master 的 stop/pause/resume 意图入口和原用例核验顺序；在门面内按所有权调用 Kernel 控制，保留本分支独立 pause 与节点结果后暂停边界，不恢复旧业务 control 实现。 |
+| `rust/anchor-runner-host/src/application/run_projection.rs` | 生产 Run 投影采用 master 门面 projection；旧文件保留只读冻结拓扑与测试兼容入口，M1 已批准的新字段、动作和独立 pause 期望保留。 |
+| `rust/anchor-runner-host/src/assistant_plugins.rs` | 采用 master 的 RunView、progress、共享可执行绑定谓词和 active_bindings 返回接口；保留非空 AuthorizationDigest/C6，旧快照缺冻结授权时明确要求离线迁移，不构造空授权。 |
+| `rust/anchor-runner-host/src/pilot_tools/runs.rs` | 列表和详情委托 master 的 Pilot 门面序列化；控制保持本分支 operation 回执与独立 pause，不在工具适配层解释或改写 Run 状态。 |
+
+接口移动涉及的 `run_access/admission`、`abandon`、`conversations`、`dispatch`、`deletion`、`recovery`、`projection`、`reads` 等新路径属于以上冲突的归属调整，不另建第二套业务规则。K0.2 的依赖、资源租约与 C1 基线见前节，本次合并不扩大 Kernel 授权范围。
+
+本次合并回归通过：workspace 128 个 target，2,113 / 0 / 123；严格 workspace/all-targets clippy、fmt、Web 311 项及构建通过；固定 Goose 完整串行 ignored 为 120 / 0 / 0，满足 §10.11 的无失败门槛。C1 相对 `0859373` 零 diff，围栏测试与 master 字节一致，业务引用为 0。合并修复保留 Kernel 显式选择、operation 回执、当前 invocation、投递/删除与父 stop 子调用的原业务保护；另修复 trace evidence 原子发布竞态并补齐插件披露报告身份。原先失败和独立复跑均保留在[合并验证与断言登记](../experiments/constitution-host-preflight/m2/merge-verification.md)，不以定向通过抹去失败。本次不验收 M2 完成；并行 Call 裁决扩展仍按 §8 待批，助手、执行结果补齐、原生人工恢复决定、真实 Provider 和生产数据迁移仍未关闭。

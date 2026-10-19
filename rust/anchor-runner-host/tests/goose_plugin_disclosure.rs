@@ -210,7 +210,10 @@ fn pilot_discovers_only_frozen_plugins_reads_selected_files_and_executes_origina
         saved["goose"]["session"].as_str().unwrap(),
     );
     assert!(history.to_string().contains("native:pilot-marker"));
-    fs::write(provider.root.join("evidence.json"),serde_json::to_vec_pretty(&json!({"status":"passed","runtime":"goose","real_model_requests":0,"case_source":"tests/goose_plugin_disclosure.rs","provider_requests":requests,"turn":saved,"pilot_fact":fact,"production_data_used":false})).unwrap()).unwrap();
+    fs::write(provider.root.join("evidence.json"),serde_json::to_vec_pretty(&json!({"status":"passed","runtime":"goose","real_model_requests":0,
+        "goose_binary_sha256":goose::GOOSE_SHA256,
+        "host_binary_sha256":goose::digest(&host.base.root.path().join("anchor-runner-host")),
+        "case_source":"tests/goose_plugin_disclosure.rs","provider_requests":requests,"turn":saved,"pilot_fact":fact,"production_data_used":false})).unwrap()).unwrap();
     println!(
         "evidence: {}",
         provider.root.join("evidence.json").display()

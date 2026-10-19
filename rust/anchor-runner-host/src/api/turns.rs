@@ -25,37 +25,28 @@ pub(super) async fn recover_pilot_turns(state: &ApiState) -> Result<(), String> 
             .recover_channel_deliveries()
             .map_err(|_| "Channel delivery startup recovery failed".to_owned())?;
         let mut recoverable_assistants = Vec::new();
-        for (run, record) in state
+        for candidate in state
             .application
-            .records()
+            .channel_startup_runs()
             .map_err(|_| "Pilot Run facts unavailable".to_owned())?
         {
-            if matches!(
-                record.status,
-                anchor_runtime::graph::RunStatus::Completed
-                    | anchor_runtime::graph::RunStatus::Failed
-                    | anchor_runtime::graph::RunStatus::Stopped
-                    | anchor_runtime::graph::RunStatus::Aborted
-            ) {
-                state
-                    .application
-                    .settle_channel_run(&run, record.status)
-                    .map_err(|_| "Channel Turn startup settlement failed".to_owned())?;
-            }
+            let run = &candidate.run_id;
+            state
+                .application
+                .settle_startup_channel_run(&candidate)
+                .map_err(|_| "Channel Turn startup settlement failed".to_owned())?;
             let metadata = state
                 .application
-                .metadata(&run)
+                .metadata(run)
                 .map_err(|_| "Pilot Run identity unavailable".to_owned())?;
             if let Some(metadata) = &metadata
-                && metadata.graph_digest == record.graph_digest
-                && !record.status.is_terminal()
-                && record.status != anchor_runtime::graph::RunStatus::Stopped
+                && candidate.preserves_assistant(metadata)
                 && let Some(source) = &metadata.assistant
                 && sessions
                     .get_channel_assistant(&source.owner, &source.session)
                     .map_err(|_| "Assistant startup identity unavailable".to_owned())?
                     .is_some_and(|current| {
-                        current.run_id == run
+                        current.run_id == *run
                             && current.wait_node == source.wait_node
                             && current.work_node == source.work_node
                             && current.reply_node == source.reply_node
@@ -67,7 +58,7 @@ pub(super) async fn recover_pilot_turns(state: &ApiState) -> Result<(), String> 
                 .as_ref()
                 .and_then(|metadata| metadata.pilot.clone())
             {
-                match sessions.associate_run(&source.owner, &source.session, &source.turn, &run) {
+                match sessions.associate_run(&source.owner, &source.session, &source.turn, run) {
                     Ok(_) | Err(anchor_platform_session::SessionError::Missing) => {}
                     Err(_) => return Err("Pilot Run association recovery failed".into()),
                 }
@@ -77,7 +68,7 @@ pub(super) async fn recover_pilot_turns(state: &ApiState) -> Result<(), String> 
                     &source.owner,
                     &source.session,
                     &source.inbound,
-                    &run,
+                    run,
                 ) {
                     Ok(_) | Err(anchor_platform_session::SessionError::Missing) => {}
                     Err(_) => return Err("Channel Run association recovery failed".into()),

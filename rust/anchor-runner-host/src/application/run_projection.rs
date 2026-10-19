@@ -1,108 +1,11 @@
-//! One external lifecycle vocabulary for HTTP, Pilot and Web.
-use super::{
-    ApplicationError, RunApplication, RunMetadata, control, run_access::run_view::RunView,
-};
-use anchor_kernel::{Outcome, Phase, Waiter};
-use anchor_runtime::graph::{GraphRunRecord, GraphSnapshot};
-use serde::Serialize;
-use serde_json::{Value, json};
-
-pub(crate) use super::run_access::run_view::AvailableActions as RunActions;
-#[derive(Debug, Serialize)]
-pub(crate) struct RunProjection {
-    pub(crate) phase: &'static str,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) waiting_for: Option<&'static str>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) outcome: Option<&'static str>,
-    pub(crate) reason: Option<String>,
-    pub(crate) active: bool,
-    pub(crate) actions: RunActions,
-    pub(crate) updated: Option<String>,
-}
-impl RunProjection {
-    pub(crate) fn from_view(view: &RunView) -> Self {
-        let (phase, waiting_for, outcome, reason) = match &view.phase {
-            Phase::Executing => ("executing", None, None, None),
-            Phase::Waiting {
-                waiter: Waiter::Human { reason },
-            } => ("waiting", Some("human"), None, Some(reason.clone())),
-            Phase::Waiting {
-                waiter: Waiter::Child { .. },
-            } => ("waiting", Some("child"), None, view.reason.clone()),
-            Phase::Waiting {
-                waiter: Waiter::Effect { .. },
-            } => ("waiting", Some("effect"), None, view.reason.clone()),
-            Phase::Settled {
-                result: Outcome::Done,
-            } => ("settled", None, Some("done"), None),
-            Phase::Settled {
-                result: Outcome::Failed { detail, .. },
-            } => ("settled", None, Some("failed"), Some(detail.clone())),
-            Phase::Settled {
-                result: Outcome::Escalated { detail },
-            } => ("settled", None, Some("escalated"), Some(detail.clone())),
-            Phase::Settled {
-                result: Outcome::Unknown { detail },
-            } => ("settled", None, Some("unknown"), Some(detail.clone())),
-            Phase::Settled {
-                result: Outcome::Aborted { detail },
-            } => ("settled", None, Some("aborted"), Some(detail.clone())),
-        };
-        Self {
-            phase,
-            waiting_for,
-            outcome,
-            reason,
-            active: view.worker,
-            actions: view.actions(),
-            updated: view.updated.clone(),
-        }
-    }
-}
-impl RunApplication {
-    pub(crate) async fn project_run(
-        &self,
-        record: &GraphRunRecord,
-        metadata: Option<&RunMetadata>,
-    ) -> Result<RunProjection, ApplicationError> {
-        let mut view = self.read_view(record, self.run_is_active(&record.run_id).await)?;
-        view.updated = self.run_updated(&record.run_id)?;
-        let mut projection = RunProjection::from_view(&view);
-        // Scope and identity narrow advisory actions; writes still revalidate.
-        let identity = metadata.filter(|m| control::validate_control_identity(record, m).is_ok());
-        let coordinated = metadata.is_some_and(|m| m.session_call.is_some());
-        if !view.worker && !coordinated && identity.is_none() {
-            projection.actions.pause = false;
-            projection.actions.stop = false;
-            projection.actions.resume = false;
-            projection.actions.abandon = false;
-        }
-        projection.actions.pause &= !coordinated;
-        projection.actions.resume = projection.actions.resume
-            && !coordinated
-            && identity.is_some_and(|m| self.ensure_current_assistant(m).is_ok())
-            && self.abandon_intent(&record.run_id)?.is_none()
-            && self
-                .reject_superseded_conversation_execution(&record.run_id)
-                .is_ok();
-        Ok(projection)
-    }
-}
-
+//! Read-only Run presentation shared by HTTP and Pilot. These observations are
+//! advisory; control still validates identity, scope and leases at write time.
 #[cfg(test)]
-fn observed(
-    record: &GraphRunRecord,
-    active: bool,
-    _requested: Option<&'static str>,
-    session_coordinated: bool,
-) -> RunProjection {
-    let mut projection =
-        RunProjection::from_view(&super::run_access::legacy_run_view::view(record, active));
-    projection.actions.pause &= !session_coordinated;
-    projection.actions.resume = projection.actions.resume && !session_coordinated;
-    projection
-}
+use super::run_access::observed;
+#[cfg(test)]
+pub(crate) use super::run_access::projection::RunProjection;
+use anchor_runtime::graph::GraphSnapshot;
+use serde_json::{Value, json};
 
 /// Canvas data comes exclusively from the compiled, frozen snapshot, including
 /// expanded inline modules. Do not expose execution input, scripts or host
@@ -146,7 +49,7 @@ pub(crate) fn run_definition(snapshot: &GraphSnapshot) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use anchor_runtime::graph::RunStatus;
+    use anchor_runtime::graph::{GraphRunRecord, RunStatus};
 
     fn record() -> GraphRunRecord {
         GraphRunRecord::create_with_id(

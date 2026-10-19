@@ -3,12 +3,12 @@
 use super::*;
 use std::collections::BTreeMap;
 
-pub(crate) struct KernelDeletion<'a> {
-    runs: &'a KernelRuns,
+pub(in crate::application::run_access) struct KernelDeletion {
+    runs: Arc<KernelRuns>,
     resources: BTreeMap<String, Resource>,
 }
 
-impl Drop for KernelDeletion<'_> {
+impl Drop for KernelDeletion {
     fn drop(&mut self) {
         let mut deleting = self.runs.deleting.lock().unwrap();
         for id in self.resources.keys() {
@@ -27,10 +27,10 @@ impl KernelRuns {
         Ok(())
     }
 
-    pub(crate) fn reserve_deletion(
-        &self,
+    pub(in crate::application::run_access) fn reserve_deletion(
+        self: &Arc<Self>,
         ids: &[String],
-    ) -> Result<KernelDeletion<'_>, ApplicationError> {
+    ) -> Result<KernelDeletion, ApplicationError> {
         let active = self.active.lock().unwrap();
         let mut deleting = self.deleting.lock().unwrap();
         let mut resources = BTreeMap::new();
@@ -50,15 +50,15 @@ impl KernelRuns {
         }
         deleting.extend(resources.keys().cloned());
         Ok(KernelDeletion {
-            runs: self,
+            runs: Arc::clone(self),
             resources,
         })
     }
 }
 
-impl KernelDeletion<'_> {
-    pub(crate) fn record(&self, id: &str) -> Result<Option<GraphRunRecord>, ApplicationError> {
-        self.resources.get(id).map(KernelRuns::record).transpose()
+impl KernelDeletion {
+    pub(in crate::application::run_access) fn contains(&self, id: &str) -> bool {
+        self.resources.contains_key(id)
     }
 
     pub(crate) fn remove(&self, id: &str) -> Result<(), ApplicationError> {

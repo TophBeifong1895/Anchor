@@ -21,21 +21,20 @@ pub(super) fn workspace_path(
     {
         return Err(error(StatusCode::BAD_REQUEST, "invalid Run or node id"));
     }
-    let record = FileRunStore::new(state.data_root.join("runs"))
-        .load(run)
-        .map_err(|e| error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    let snapshot = state
+        .application
+        .channel_file_snapshot(run, node)
+        .map_err(|message| error(StatusCode::INTERNAL_SERVER_ERROR, message))?
         .ok_or_else(|| error(StatusCode::NOT_FOUND, "no such run"))?;
-    let result = record
-        .results
-        .get(node)
-        .and_then(|results| results.last())
+    let commit = snapshot
+        .commit
         .ok_or_else(|| error(StatusCode::NOT_FOUND, "node has no committed file snapshot"))?;
     let artifacts = HostArtifacts::new(
         state.data_root.join("artifacts"),
         state.workspace_root.clone(),
     );
     let root = artifacts
-        .files_path(&result.commit)
+        .files_path(&commit)
         .map_err(|e| error(StatusCode::UNPROCESSABLE_ENTITY, e.to_string()))?;
     let path = if let Some(relative) = relative {
         let relative_path = std::path::Path::new(relative);
@@ -189,13 +188,12 @@ pub(super) async fn read_channel_reply(
         .data_root
         .join("channel-replies")
         .join(format!("{run}.json"));
-    let record = FileRunStore::new(state.data_root.join("runs"))
-        .load(&run)
-        .map_err(|e| error(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    let completed = state
+        .application
+        .channel_reply_is_completed(&run)
+        .map_err(|message| error(StatusCode::INTERNAL_SERVER_ERROR, message))?
         .ok_or_else(|| error(StatusCode::NOT_FOUND, "no such run"))?;
-    if record.status != RunStatus::Completed
-        || state.application.active_runs(None).await.contains(&run)
-    {
+    if !completed || state.application.active_runs(None).await.contains(&run) {
         return Err(error(StatusCode::CONFLICT, "channel Run has not completed"));
     }
     use tokio::io::AsyncReadExt;

@@ -1,8 +1,7 @@
 use crate::application::metadata::{AssistantSource, RunMetadata};
+use crate::application::run_access;
 use anchor_platform_session::{ChannelInboundAdmission, SessionStore};
-use anchor_runtime::graph::{
-    FileRunStore, GraphError, GraphSnapshot, InvocationKey, NodeExecutionRequest, RunStore,
-};
+use anchor_runtime::graph::{GraphError, GraphSnapshot, InvocationKey, NodeExecutionRequest};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
@@ -314,23 +313,22 @@ pub(crate) fn handover_predecessor(
     }
     // Plugin-only publications preserve this node's scene and native history.
     // Structural or instruction changes still require an explicit new instance.
-    let store = FileRunStore::new(root.join("runs"));
-    let prior_record = store
-        .load(previous)
+    let prior_view = run_access::load(root, previous)
         .map_err(|error| error.to_string())?
         .ok_or("assistant handover source Run is missing")?;
-    let current_record = store
-        .load(&key.run_id)
+    let current_view = run_access::load(root, &key.run_id)
         .map_err(|error| error.to_string())?
         .ok_or("assistant handover target Run is missing")?;
+    let prior_record = prior_view.progress();
+    let current_record = current_view.progress();
     if prior_record.graph_digest != prior.graph_digest
         || current_record.graph_digest != metadata.graph_digest
     {
         return Err("assistant handover Run identity changed".into());
     }
     let compatible_revision = crate::assistant_plugins::compatible(
-        &prior_record.snapshot,
-        &current_record.snapshot,
+        prior_record.snapshot,
+        current_record.snapshot,
         &source.work_node,
     );
     if prior_assistant.work_node != source.work_node
@@ -376,11 +374,10 @@ pub(crate) fn handover_workspace_source(
         .assistant
         .as_ref()
         .ok_or("assistant source binding is missing")?;
-    let current = FileRunStore::new(root.join("runs"))
-        .load(&key.run_id)
+    let current_view = run_access::load(root, &key.run_id)
         .map_err(|error| error.to_string())?
         .ok_or("assistant Run is missing")?;
-    let store = FileRunStore::new(root.join("runs"));
+    let current = current_view.progress();
     let sessions = sessions(root)?;
     let mut visited = std::collections::BTreeSet::new();
     loop {
@@ -419,10 +416,10 @@ pub(crate) fn handover_workspace_source(
             .assistant
             .as_ref()
             .ok_or("assistant workspace ancestor is not an assistant")?;
-        let older_record = store
-            .load(older)
+        let older_view = run_access::load(root, older)
             .map_err(|error| error.to_string())?
             .ok_or("assistant workspace ancestor Run is missing")?;
+        let older_record = older_view.progress();
         if older_source.owner != source.owner
             || older_source.session != source.session
             || older_meta.conversation.as_ref().is_none_or(|conversation| {
@@ -443,8 +440,8 @@ pub(crate) fn handover_workspace_source(
         if older_source.work_node != source.work_node
             || older_meta.bundle_source != metadata.bundle_source
             || !crate::assistant_plugins::compatible(
-                &older_record.snapshot,
-                &current.snapshot,
+                older_record.snapshot,
+                current.snapshot,
                 &source.work_node,
             )
         {
@@ -452,7 +449,7 @@ pub(crate) fn handover_workspace_source(
         }
         previous = InvocationKey {
             run_id: older.into(),
-            graph_digest: older_record.graph_digest,
+            graph_digest: older_record.graph_digest.to_owned(),
             node_id: source.work_node.clone(),
             invocation: 1,
         };

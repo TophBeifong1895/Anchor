@@ -750,8 +750,8 @@ impl RunApplication {
     /// Attached Runs that are not terminal and bind this Plugin.
     fn unfinished_runs_binding(&self, id: &str) -> Result<Vec<String>, ApplicationError> {
         let mut runs = Vec::new();
-        for (run, record) in self.records()? {
-            if record.status.is_terminal() {
+        for (run, record) in self.run_views()? {
+            if record.is_settled() {
                 continue;
             }
             let metadata = self.metadata(&run)?;
@@ -760,13 +760,14 @@ impl RunApplication {
                 .filter(|metadata| metadata.assistant.is_some())
             {
                 Some(metadata) => {
-                    crate::assistant_plugins::active_plugin_ids(&self.data_root, &record, metadata)
+                    crate::assistant_plugins::active_bindings(&self.data_root, &record, metadata)
                         .map_err(ApplicationError::Conflict)?
-                        .contains(id)
+                        .contains_key(id)
                 }
                 None => {
-                    record.plugin_bindings.contains_key(id)
+                    record.progress().plugin_bindings.contains_key(id)
                         || record
+                            .progress()
                             .snapshot
                             .nodes
                             .iter()

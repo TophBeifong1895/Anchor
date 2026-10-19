@@ -1,7 +1,6 @@
 use super::{ApplicationError, RunApplication, graphs, metadata, storage};
 use crate::run_data;
-use anchor_kernel::{Phase, Waiter};
-use anchor_runtime::graph::{GraphSnapshot, RunLease, RunStore};
+use anchor_runtime::graph::{GraphSnapshot, RunLease};
 use serde_json::Value;
 use std::{collections::BTreeSet, path::Path, time::Duration};
 
@@ -74,10 +73,9 @@ impl RunApplication {
                 callers.insert(format!("Graph `{name}`"));
             }
         }
-        for (run_id, record) in self.records()? {
-            let view = self.read_view(&record, false)?;
-            if (!view.is_settled() || view.worker)
-                && self.snapshot_calls_graph(&record.snapshot, target_path)?
+        for (run_id, record) in self.run_views()? {
+            if (!record.is_settled() || record.active())
+                && self.snapshot_calls_graph(record.progress().snapshot, target_path)?
             {
                 let graph = self
                     .metadata(&run_id)?
@@ -146,26 +144,12 @@ impl RunApplication {
         }
         let active = self.active.lock().await;
         let mut targets = self.runs_for_graph(&graph_path)?;
-        let kernel = self.kernel_runs(false)?;
-        let mut kernel_ids = Vec::new();
-        for (id, _) in &targets {
-            if self.kernel_owner(id)?.is_some() {
-                kernel_ids.push(id.clone());
-            }
-        }
-        let kernel_deletion = kernel
-            .as_ref()
-            .map(|runs| runs.reserve_deletion(&kernel_ids))
-            .transpose()?;
+        let deletion = self
+            .reserve_run_deletions(&targets.iter().map(|(id, _)| id.clone()).collect::<Vec<_>>())?;
+        // Native registration and controls cannot pass the reservation. Read
+        // again so every precondition observes the reserved authority version.
         for (id, record) in &mut targets {
-            if let Some(refreshed) = kernel_deletion
-                .as_ref()
-                .map(|deletion| deletion.record(id))
-                .transpose()?
-                .flatten()
-            {
-                *record = refreshed;
-            }
+            *record = self.read_run(id)?.ok_or(ApplicationError::Missing)?;
         }
         // A durable hand-off may have metadata before its Run is admitted. It
         // still owns history and cannot be erased by an empty cascade.
@@ -181,23 +165,17 @@ impl RunApplication {
         }
         for (run_id, record) in &targets {
             self.reject_pending_session_delivery(run_id)?;
-            let view = self.read_view(record, active.contains_key(run_id))?;
-            if view.worker {
+            if active.contains_key(run_id) || record.active() {
                 return Err(ApplicationError::Conflict(
                     "Graph still has active execution".into(),
                 ));
             }
-            if !view.is_settled() {
+            if !record.is_settled() {
                 let conversation = self
                     .metadata(run_id)?
                     .is_some_and(|metadata| metadata.conversation.is_some());
                 if !conversation
-                    || (!matches!(
-                        view.phase,
-                        Phase::Waiting {
-                            waiter: Waiter::Human { .. }
-                        }
-                    ) && !self.has_conversation_successor(run_id)?)
+                    || (!record.is_quiescent() && !self.has_conversation_successor(run_id)?)
                 {
                     return Err(ApplicationError::Conflict(format!(
                         "Graph has unfinished Run `{run_id}`; resume it, or stop and delete its record before deleting the Graph"
@@ -218,7 +196,7 @@ impl RunApplication {
         for (run_id, record) in &targets {
             if let Some(metadata) = self.metadata(run_id)? {
                 crate::conversation_resources::retain(&self.data_root, record, &metadata)?;
-                for node in &record.snapshot.nodes {
+                for node in &record.progress().snapshot.nodes {
                     if let Some(hint) = crate::node_host::conversation_hint_for(&metadata, &node.id)
                     {
                         conversations.insert(hint.key);
@@ -254,15 +232,8 @@ impl RunApplication {
                 )
                 .map_err(ApplicationError::Storage)?;
             }
-            run_data::delete_run_data(record, &self.data_root, workspace_root)
+            self.delete_cascaded_run(id, record, workspace_root, &deletion)
                 .map_err(ApplicationError::Storage)?;
-            if kernel_ids.contains(id) {
-                kernel_deletion
-                    .as_ref()
-                    .expect("Kernel deletion reserved")
-                    .remove(id)?;
-            }
-            run_data::remove_run_files(&self.data_root, id).map_err(ApplicationError::Storage)?;
         }
 
         // Remove the bundle itself while still holding the Graph lease, so no
@@ -280,7 +251,6 @@ impl RunApplication {
         run_id: &str,
         workspace_root: &Path,
     ) -> Result<(), ApplicationError> {
-        let kernel = self.kernel_owner(run_id)?;
         // Match admission's lock order. A saved hand-off may precede its Run,
         // so the Graph lease must cover reference inspection and cleanup.
         let _graph_lease = match self.metadata(run_id)? {
@@ -291,114 +261,11 @@ impl RunApplication {
             _ => None,
         };
         let active = self.active.lock().await;
-        let kernel_deletion = kernel
-            .as_ref()
-            .map(|runs| runs.reserve_deletion(&[run_id.to_owned()]))
-            .transpose()?;
         if active.contains_key(run_id) {
             return Err(ApplicationError::Conflict(
                 "that Run is still running".into(),
             ));
         }
-        let store = self.store();
-        let record = match kernel_deletion.as_ref() {
-            Some(deletion) => deletion.record(run_id)?,
-            None => store.load(run_id)?,
-        }
-        .ok_or(ApplicationError::Missing)?;
-        let metadata = self.metadata(run_id)?;
-        self.reject_pending_session_delivery(run_id)?;
-        if let Some(metadata) = metadata.as_ref() {
-            self.ensure_channel_delivery_settled(metadata)?;
-        }
-        match metadata
-            .as_ref()
-            .filter(|metadata| metadata.conversation.is_some())
-        {
-            // A conversation Run may only go once every later Run has stopped
-            // reading it; see `ensure_conversation_delete_allowed`.
-            Some(metadata) => {
-                self.ensure_conversation_delete_allowed(&record, metadata, &active)?;
-            }
-            None => self.reject_conversation_successor(run_id)?,
-        }
-        if !record.graph_calls.is_empty() {
-            return Err(ApplicationError::Conflict(
-                "Run is referenced by or owns a Graph call".into(),
-            ));
-        }
-        for (other_id, other) in self.records()? {
-            if other_id != run_id
-                && other
-                    .graph_calls
-                    .values()
-                    .any(|call| call.child_run_id.as_deref() == Some(run_id))
-            {
-                return Err(ApplicationError::Conflict(
-                    "Run is referenced by another Graph call".into(),
-                ));
-            }
-        }
-        let _lease = if kernel_deletion.is_none() {
-            Some(store.acquire_lease(run_id)?)
-        } else {
-            None
-        };
-        let artifacts = crate::HostArtifacts::new(
-            self.data_root.join("artifacts"),
-            workspace_root.to_path_buf(),
-        );
-        for result in record.results.values().flatten() {
-            if self
-                .data_root
-                .join("artifacts")
-                .join(&result.commit.id)
-                .exists()
-            {
-                artifacts
-                    .list_files(&result.commit)
-                    .map_err(|error| ApplicationError::Invalid(error.to_string()))?;
-            }
-            if result.key.run_id != run_id
-                || result.key.graph_digest != record.graph_digest
-                || result.commit.node_id != result.key.node_id
-                || result.commit.invocation != result.key.invocation
-            {
-                return Err(ApplicationError::Invalid(
-                    "Run artifact identity mismatch".into(),
-                ));
-            }
-        }
-        // Durable before anything is removed: a Host that dies in the middle of
-        // this cleanup leaves an explained lineage gap, not corruption.
-        if let Some(metadata) = metadata.as_ref()
-            && let Some(source) = metadata.conversation.as_ref()
-        {
-            crate::conversation_resources::retain(&self.data_root, &record, metadata)?;
-            crate::run_deletions::save(
-                &self.data_root,
-                &crate::run_deletions::RunDeletion::new(
-                    run_id,
-                    &Self::graph_identity(&metadata.bundle_source)?.to_string_lossy(),
-                    &source.session,
-                    &source.reply_node,
-                    source.previous_run.as_deref(),
-                ),
-            )
-            .map_err(ApplicationError::Storage)?;
-            crate::conversation_resources::release_unreferenced(
-                self,
-                &self.data_root,
-                &Self::graph_identity(&metadata.bundle_source)?,
-                run_id,
-                workspace_root,
-            )?;
-        }
-        run_data::delete_run_data(&record, &self.data_root, workspace_root)
-            .map_err(ApplicationError::Storage)?;
-        if let Some(deletion) = kernel_deletion.as_ref() {
-            deletion.remove(run_id)?;
-        }
-        run_data::remove_run_files(&self.data_root, run_id).map_err(ApplicationError::Storage)
+        self.delete_inactive_run(run_id, workspace_root, &active)
     }
 }

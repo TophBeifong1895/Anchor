@@ -222,11 +222,11 @@ impl Cursor {
                 _ => None,
             }
             .or_else(|| {
-                anchor_runtime::graph::FileRunStore::new(self.state.data_root.join("runs"))
-                    .load(&run)
+                self.state
+                    .application
+                    .assistant_progress_work_invocation(&run, &source.work_node)
                     .ok()
                     .flatten()
-                    .and_then(|record| current_work_key(&record, &source.work_node))
             });
             // The Turn is admitted and still running, so it is owed at least the
             // guidance line: the user's message is accepted and the round will
@@ -248,8 +248,8 @@ impl Cursor {
         }
         // A settled Run is reported as settled and nothing else: this projection
         // describes work in progress, not the history of a finished turn.
-        if run_settled(&self.state, Some(&run)) {
-            self.settle(&run_status(&self.state, Some(&run)));
+        if self.state.application.channel_progress_is_settled(&run) {
+            self.settle(&self.state.application.channel_progress_status(&run));
             return;
         }
         let notifications = notifications(&self.state, &run)
@@ -318,26 +318,6 @@ fn split_durable_key(value: &str) -> Option<(&str, &str, &str, &str)> {
         .then_some((run, digest, node, invocation))
 }
 
-/// The work invocation the Run is executing, or the last one it finished.
-///
-/// Only used when the persisted round association is unavailable (a record
-/// admitted before it existed, or a fixture key that is not a durable key).
-fn current_work_key(
-    record: &GraphRunRecord,
-    work_node: &str,
-) -> Option<anchor_runtime::graph::InvocationKey> {
-    if let Some(cursor) = record.cursor.as_ref()
-        && cursor.node_id == work_node
-    {
-        return Some(cursor.key.clone());
-    }
-    record
-        .results
-        .get(work_node)
-        .and_then(|results| results.last())
-        .map(|result| result.key.clone())
-}
-
 fn notifications(state: &ApiState, run: &str) -> Result<Option<Vec<Value>>, ()> {
     let Some(metadata) =
         crate::application::metadata::load(&state.data_root, run).map_err(|_| ())?
@@ -354,36 +334,6 @@ fn notifications(state: &ApiState, run: &str) -> Result<Option<Vec<Value>>, ()> 
         invocation: 1,
     };
     crate::goose_acp::live_notifications(&state.data_root, &key).map_err(|_| ())
-}
-
-fn run_status(state: &ApiState, run: Option<&str>) -> String {
-    let Some(run) = run else {
-        return "missing".to_owned();
-    };
-    match FileRunStore::new(state.data_root.join("runs")).load(run) {
-        Ok(Some(record)) => serde_json::to_value(record.status)
-            .ok()
-            .and_then(|value| value.as_str().map(str::to_owned))
-            .unwrap_or_else(|| "missing".to_owned()),
-        _ => "missing".to_owned(),
-    }
-}
-
-fn run_settled(state: &ApiState, run: Option<&str>) -> bool {
-    let Some(run) = run else {
-        return false;
-    };
-    match FileRunStore::new(state.data_root.join("runs")).load(run) {
-        Ok(Some(record)) => !matches!(
-            record.status,
-            RunStatus::Ready
-                | RunStatus::Running
-                | RunStatus::Paused
-                | RunStatus::WaitingCall
-                | RunStatus::WaitingRecovery
-        ),
-        _ => true,
-    }
 }
 
 /// The incremental step of the stream: project the retained notifications, drop

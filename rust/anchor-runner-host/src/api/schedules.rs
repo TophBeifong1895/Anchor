@@ -315,17 +315,7 @@ pub(super) fn timeline_projection(
                 // Admission treats persisted unfinished records as blockers,
                 // including paused/orphan Runs after a service restart. Their
                 // file mtime is only the last update, not their end time.
-                let status = run.get("status").and_then(Value::as_str).unwrap_or("");
-                let unfinished = matches!(
-                    status,
-                    "ready"
-                        | "running"
-                        | "paused"
-                        | "budget_stopped"
-                        | "waiting_call"
-                        | "waiting_recovery"
-                        | "stopped"
-                );
+                let unfinished = crate::application::run_access::projected_run_is_unfinished(run);
                 let ended = if unfinished {
                     now
                 } else {

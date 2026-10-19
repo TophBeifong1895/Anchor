@@ -17,6 +17,27 @@ use std::{
 
 const CASE_SOURCE: &str = "tests/goose_conversation.rs";
 
+fn deleted_conversation_evidence(host: &Host, provider: &Provider, checks: Value) {
+    provider.assert_consumed();
+    let path = provider.root.join("evidence.json");
+    fs::write(
+        &path,
+        serde_json::to_vec_pretty(&json!({
+            "status":"passed", "runtime":"real Goose native loop over ACP",
+            "goose_version":"1.53.0", "goose_binary_sha256":goose::GOOSE_SHA256,
+            "host_binary_sha256":goose::digest(&host.base.root.path().join("anchor-runner-host")),
+            "test_source_sha256":goose::digest(&PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(CASE_SOURCE)),
+            "real_model_requests":0, "production_data_used":false, "dotenv_loaded":false,
+            "provider_requests":provider.requests(), "checks":checks,
+            "state_files":goose::file_inventory(&host.base.root.path().join("state")),
+            "workspace_files":goose::file_inventory(&host.base.root.path().join("work"))
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    println!("evidence: {}", path.display());
+}
+
 fn editable_host() -> Host {
     let host = Host::new(&graph(false))
         .default_runtime()
@@ -732,6 +753,17 @@ fn next_conversation_invocation_changes_model_and_endpoint_without_losing_histor
     server.kill();
     drop(server);
     let server = host.serve(&second_provider);
+    let (status, configured) = server.request(
+        "PUT",
+        "/settings/model",
+        Some(&json!({
+            "endpoint":format!("{}/v1", second_provider.url),
+            "wire_api":"chat", "model":second_provider.model,
+            "aliases":{"models.worker":second_provider.model},
+            "api_key":{"action":"set","value":"fixture-only-model-update"}
+        })),
+    );
+    assert_eq!(status, 200, "{configured}");
     let second = submit(&server, &turn("model-user", &second_nonce, Some(&first)));
     server.wait_status(&second, "completed");
     let (second_fact, _) = assert_scope(&host, &second, "worker");
@@ -908,10 +940,13 @@ fn deleting_all_runs_releases_scope_and_same_session_can_start_a_new_chain() {
     assert!(!next_scope.parent().unwrap().exists());
     let (status, result) = server.request("DELETE", "/graphs/fixture", None);
     assert_eq!(status, 204, "{result}");
-    provider.assert_consumed();
-    fs::write(provider.root.join("evidence.json"),serde_json::to_vec_pretty(&json!({"case_source":CASE_SOURCE,
+    deleted_conversation_evidence(
+        &host,
+        &provider,
+        json!({"case_source":CASE_SOURCE,
         "last_reference_released":true,"same_session_new_chain_completed":true,
-        "graph_after_all_runs_deleted":true,"real_model_requests":0,"provider_requests":provider.requests()})).unwrap()).unwrap();
+        "graph_after_all_runs_deleted":true,"first_fact":first_fact,"next_fact":next_fact}),
+    );
 }
 
 #[test]
@@ -952,10 +987,13 @@ fn deleting_a_last_run_obeys_native_scope_lease_and_can_retry() {
     assert!(!process.parent().unwrap().exists());
     let (status, deleted) = server.request("DELETE", "/graphs/fixture", None);
     assert_eq!(status, 204, "{deleted}");
-    provider.assert_consumed();
-    fs::write(provider.root.join("evidence.json"),serde_json::to_vec_pretty(&json!({"case_source":CASE_SOURCE,
+    deleted_conversation_evidence(
+        &host,
+        &provider,
+        json!({"case_source":CASE_SOURCE,
         "native_lease_kept_scope":true,"partial_cleanup_retry_completed":true,
-        "graph_after_all_runs_deleted":true,"real_model_requests":0,"provider_requests":provider.requests()})).unwrap()).unwrap();
+        "graph_after_all_runs_deleted":true,"native_fact":fact}),
+    );
 }
 
 fn fact_path_for_request(host: &Host, request: &Value, previous_fact: &Value) -> PathBuf {

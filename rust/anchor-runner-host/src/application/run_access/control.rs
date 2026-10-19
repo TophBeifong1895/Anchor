@@ -1,48 +1,73 @@
 use super::{
-    ActiveRun, ApplicationError, RunApplication, RunMetadata, new_control, wait_child_ids,
+    RunView, reject_terminal_control, validate_control_identity, validate_inactive_control,
+    validate_resume_budget, wait_child_ids,
 };
+use crate::application::{ActiveRun, ApplicationError, RunApplication, RunMetadata, new_control};
 use crate::execution::PreparedExecution;
-use anchor_runtime::graph::{GraphRunRecord, RecoveryDecision, RunStatus, RunStore};
+use anchor_runtime::graph::{GraphRunRecord, RunStatus, RunStore};
 use std::sync::atomic::Ordering;
 
 impl RunApplication {
+    pub(crate) async fn control(
+        &self,
+        run_id: &str,
+        operation: &str,
+    ) -> Result<(), ApplicationError> {
+        match operation {
+            "stop" => self.stop(run_id).await,
+            "pause" => self.pause(run_id).await,
+            "resume" => self.resume(run_id).await,
+            _ => Err(ApplicationError::Invalid("unknown Run control".into())),
+        }
+    }
+
+    pub(crate) async fn stop(&self, run_id: &str) -> Result<(), ApplicationError> {
+        self.control_expected(run_id, "stop", None).await
+    }
+
+    pub(crate) async fn pause(&self, run_id: &str) -> Result<(), ApplicationError> {
+        self.control_expected(run_id, "pause", None).await
+    }
+
+    pub(crate) async fn resume(&self, run_id: &str) -> Result<(), ApplicationError> {
+        self.control_expected(run_id, "resume", None).await
+    }
+
     /// Stop every child Run a parked parent still waits on, plus their pending
     /// Session deliveries, exactly as an explicit `stop` does.
-    pub(super) async fn stop_wait_children(
+    pub(in crate::application) async fn stop_wait_children(
         &self,
         run_id: &str,
         wait_children: Vec<String>,
     ) -> Result<(), ApplicationError> {
         self.stop_wait_session_children(run_id).await?;
         for child_id in wait_children {
-            if self.store().load(&child_id)?.is_some_and(|child| {
-                !child.status.is_terminal() && child.status != RunStatus::Stopped
-            }) {
+            if self
+                .read_run(&child_id)?
+                .is_some_and(|child| !child.has_stopped_execution())
+            {
                 let _ = Box::pin(self.control(&child_id, "stop")).await;
             }
         }
         Ok(())
     }
 
-    pub(crate) async fn control(
-        &self,
-        run_id: &str,
-        operation: &str,
-    ) -> Result<(), ApplicationError> {
-        if let Some(runs) = self.kernel_owner(run_id)? {
-            return self.kernel_control(runs, run_id, operation).await;
-        }
-        self.control_expected(run_id, operation, None).await
-    }
-
-    pub(super) async fn control_expected(
+    pub(in crate::application::run_access) async fn control_expected(
         &self,
         run_id: &str,
         operation: &str,
         waiting: Option<(&str, u64)>,
     ) -> Result<(), ApplicationError> {
-        if !matches!(operation, "pause" | "resume" | "stop") {
-            return Err(ApplicationError::Invalid("unknown Run control".into()));
+        if let Some(runs) = self.kernel_owner(run_id)? {
+            if let Some((node, invocation)) = waiting {
+                let expected = self
+                    .read_run(run_id)?
+                    .is_some_and(|parent| parent.waits_for_invocation(node, invocation));
+                if !expected || runs.active(run_id) {
+                    return Ok(());
+                }
+            }
+            return self.kernel_control(runs, run_id, operation).await;
         }
         if operation == "resume" && self.abandon_intent(run_id)?.is_some() {
             // Abandonment is one-way: a resumed Run would continue the round the
@@ -71,12 +96,9 @@ impl RunApplication {
         }
         let mut active = self.active.lock().await;
         if let Some((node, invocation)) = waiting {
-            let expected = self.store().load(run_id)?.is_some_and(|parent| {
-                parent.status == RunStatus::WaitingCall
-                    && parent.cursor.as_ref().is_some_and(|cursor| {
-                        cursor.node_id == node && cursor.key.invocation == invocation
-                    })
-            });
+            let expected = self
+                .read_run(run_id)?
+                .is_some_and(|parent| parent.waits_for_invocation(node, invocation));
             if !expected || active.contains_key(run_id) {
                 return Ok(());
             }
@@ -123,7 +145,7 @@ impl RunApplication {
             .load(run_id)?
             .ok_or(ApplicationError::Missing)?;
         reject_terminal_control(&record)?;
-        if operation == "stop" && record.status == RunStatus::WaitingCall {
+        if operation == "stop" && RunView::inactive(&record).waits_for_children() {
             record.status = RunStatus::Stopped;
             record.touch();
             self.store().save(&record)?;
@@ -133,7 +155,7 @@ impl RunApplication {
             self.stop_wait_children(run_id, wait_children).await?;
             let lease = self.store().acquire_lease(run_id)?;
             if let Some(mut current) = self.store().load(run_id)?
-                && current.status == RunStatus::WaitingCall
+                && RunView::inactive(&current).waits_for_children()
             {
                 current.status = RunStatus::Stopped;
                 current.touch();
@@ -171,32 +193,6 @@ impl RunApplication {
         Ok(())
     }
 
-    /// Ordinary resume turns uncertain effects into durable context for the
-    /// same Agent, before acquiring the active execution registration.
-    async fn resume_interrupted_attempts(&self, run_id: &str) -> Result<bool, ApplicationError> {
-        let Some(record) = self.store().load(run_id)? else {
-            return Ok(false);
-        };
-        if record.status != RunStatus::WaitingRecovery || record.recovery.is_empty() {
-            return Ok(false);
-        }
-        for pending in record.recovery {
-            let observation = format!(
-                "The previous `{}` tool call (step {}) was interrupted before its result was recorded. Its external effect is unknown. Inspect the workspace, artifacts, and any available external state before deciding what to do; do not blindly repeat the call.",
-                pending.attempt.tool, pending.attempt.step
-            );
-            self.recover(
-                run_id,
-                &pending.key.node_id,
-                pending.key.invocation,
-                pending.attempt.attempt_id,
-                RecoveryDecision::Completed { observation },
-            )
-            .await?;
-        }
-        Ok(true)
-    }
-
     fn control_metadata(&self, record: &GraphRunRecord) -> Result<RunMetadata, ApplicationError> {
         let metadata = self.metadata(&record.run_id)?.ok_or_else(|| {
             ApplicationError::Invalid(
@@ -206,50 +202,4 @@ impl RunApplication {
         validate_control_identity(record, &metadata)?;
         Ok(metadata)
     }
-}
-
-pub(super) fn validate_control_identity(
-    record: &GraphRunRecord,
-    metadata: &RunMetadata,
-) -> Result<(), ApplicationError> {
-    if metadata.graph_digest != record.graph_digest {
-        return Err(ApplicationError::Invalid(
-            "Run Graph identity metadata does not match its frozen snapshot".into(),
-        ));
-    }
-    Ok(())
-}
-
-fn reject_terminal_control(record: &GraphRunRecord) -> Result<(), ApplicationError> {
-    if record.status.is_terminal() {
-        return Err(ApplicationError::Conflict(
-            "terminal Run cannot be controlled".into(),
-        ));
-    }
-    Ok(())
-}
-
-pub(super) fn validate_inactive_control(
-    record: &GraphRunRecord,
-    operation: &str,
-) -> Result<(), ApplicationError> {
-    if record.status == RunStatus::WaitingRecovery && operation != "stop" {
-        return Err(ApplicationError::Conflict(
-            "Run recovery context is not ready".into(),
-        ));
-    }
-    reject_terminal_control(record)?;
-    if operation == "pause" {
-        return Err(ApplicationError::Conflict("that Run is not active".into()));
-    }
-    Ok(())
-}
-
-pub(super) fn validate_resume_budget(record: &GraphRunRecord) -> Result<(), ApplicationError> {
-    if record.status == RunStatus::BudgetStopped {
-        return Err(ApplicationError::Conflict(
-            "budget-stopped Run requires an explicit budget policy".into(),
-        ));
-    }
-    Ok(())
 }

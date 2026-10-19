@@ -10,7 +10,7 @@ use super::*;
 use crate::application::{AssistantAdmission, metadata};
 use crate::assistant::AssistantPlan;
 use anchor_platform_session::ChannelAssistant;
-use anchor_runtime::graph::{FileRunStore, GraphRunRecord, InvocationKey, RunStore};
+use anchor_runtime::graph::InvocationKey;
 use sha2::{Digest, Sha256};
 use std::time::Duration;
 
@@ -132,7 +132,7 @@ async fn resume_instance(
             // mean admitting a Run id the Host already refused as incomplete,
             // and replacing it would change the recovery target on every
             // attempt, so nothing is moved and the retained facts are reported.
-            if run_record(state, &from)?.is_none() {
+            if !state.application.channel_run_is_admitted(&from)? {
                 return Err(
                     "the current assistant Run has immutable metadata but no admitted record"
                         .into(),
@@ -263,12 +263,6 @@ async fn resume_instance(
         session, recovery.previous
     );
     Ok(())
-}
-
-fn run_record(state: &ApiState, run: &str) -> Result<Option<GraphRunRecord>, String> {
-    FileRunStore::new(state.data_root.join("runs"))
-        .load(run)
-        .map_err(|error| error.to_string())
 }
 
 fn plan_for(

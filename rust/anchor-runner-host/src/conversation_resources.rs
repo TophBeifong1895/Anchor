@@ -1,8 +1,8 @@
 //! Minimal Graph ownership that outlives deleted Run metadata. Native scope
 //! leases and surviving Run/hand-off checks remain the cleanup authorities.
 
+use crate::application::run_access::{self, RunView};
 use crate::application::{ApplicationError, RunApplication, RunMetadata};
-use anchor_runtime::graph::{FileRunStore, GraphRunRecord, RunStore};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
@@ -16,11 +16,13 @@ struct Ownership {
     hint: String,
 }
 
-pub(crate) fn retain(
+pub(crate) fn retain<'record>(
     data: &Path,
-    record: &GraphRunRecord,
+    record: impl Into<RunView<'record>>,
     metadata: &RunMetadata,
 ) -> Result<(), ApplicationError> {
+    let view = record.into();
+    let record = view.progress();
     let Some(conversation) = &metadata.conversation else {
         return Ok(());
     };
@@ -113,7 +115,6 @@ pub(crate) fn release_unreferenced(
         .filter(|id| id != deleting)
         .map(|id| application.metadata(&id).map(|metadata| (id, metadata)))
         .collect::<Result<Vec<_>, _>>()?;
-    let store = FileRunStore::new(data.join("runs"));
     for ownership in ownerships(data, graph)? {
         let mut referenced = false;
         for (id, metadata) in &references {
@@ -128,9 +129,9 @@ pub(crate) fn release_unreferenced(
             {
                 continue;
             }
-            let record = store.load(id)?;
-            if record.as_ref().is_none_or(|record| {
-                record
+            let view = run_access::load(data, id)?;
+            if view.as_ref().is_none_or(|view| {
+                view.progress()
                     .snapshot
                     .nodes
                     .iter()
@@ -156,7 +157,6 @@ pub(crate) fn start_fresh(
     session: &str,
     workspaces: &Path,
 ) -> Result<(), ApplicationError> {
-    let store = FileRunStore::new(data.join("runs"));
     for id in crate::application::metadata::ids(data)? {
         if let Some(metadata) = application.metadata(&id)?
             && RunApplication::graph_identity(&metadata.bundle_source)? == graph
@@ -164,7 +164,7 @@ pub(crate) fn start_fresh(
                 .conversation
                 .as_ref()
                 .is_some_and(|source| source.session == session)
-            && store.load(&id)?.is_none()
+            && run_access::load(data, &id)?.is_none()
         {
             return Err(ApplicationError::Conflict(format!(
                 "Session has retained hand-off `{id}` without its Run"

@@ -1,13 +1,29 @@
 use super::{Fact, GooseNodePort};
 use crate::resource_read::open_resource;
-use anchor_runtime::graph::InvocationKey;
+use anchor_runtime::graph::{GraphError, InvocationKey};
 use serde_json::{Value, json};
-use std::{io::Read, path::Path};
+use std::{
+    io::{Read, Write},
+    path::Path,
+};
 
 mod live;
 pub(crate) use live::LiveTrace;
 
 const MAX_PROJECTION_BYTES: u64 = 160 * 1024 * 1024;
+
+pub(super) fn store_evidence(path: &Path, evidence: &Value) -> Result<(), GraphError> {
+    let parent = path.parent().expect("trace evidence directory");
+    let mut temporary = tempfile::NamedTempFile::new_in(parent)?;
+    temporary.write_all(
+        &serde_json::to_vec_pretty(evidence)
+            .map_err(|error| GraphError::CorruptRun(error.to_string()))?,
+    )?;
+    temporary.as_file().sync_all()?;
+    temporary.persist(path).map_err(|error| error.error)?;
+    std::fs::File::open(parent)?.sync_all()?;
+    Ok(())
+}
 
 fn read_json(root: &Path, name: &str) -> Result<Option<Value>, String> {
     let file = match open_resource(root, name) {
@@ -205,6 +221,32 @@ fn project_update(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn trace_reader_retains_complete_snapshot_during_evidence_publication() {
+        use std::os::unix::fs::PermissionsExt;
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("trace.evidence.json");
+        let previous = json!({"notifications":["previous".repeat(8192)]});
+        let current = json!({"notifications":["current".repeat(8192)]});
+        store_evidence(&path, &previous).unwrap();
+        let snapshot = std::fs::File::open(&path).unwrap();
+        store_evidence(&path, &current).unwrap();
+        // A reader can retain the old inode while publication replaces the
+        // pathname. It must see one complete document throughout that read.
+        assert_eq!(
+            serde_json::from_reader::<_, Value>(snapshot).unwrap(),
+            previous
+        );
+        assert_eq!(
+            read_json(directory.path(), "trace.evidence.json").unwrap(),
+            Some(current)
+        );
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+    }
 
     #[test]
     fn image_only_tool_updates_keep_their_native_content_projection() {

@@ -869,6 +869,28 @@ impl Host {
             GOOSE_SHA256,
             "Goose binary differs from the pinned Anchor-built lean v1.53.0 ACP binary (scripts/build-goose-acp.sh)"
         );
+        // Task egress cannot reach the Host's loopback. The ACP control plane
+        // needs its own relay even when the Goose build lives outside target/.
+        let relay = std::env::var_os("ANCHOR_GOOSE_RELAY_BINARY")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| {
+                goose
+                    .canonicalize()
+                    .unwrap()
+                    .with_file_name("anchor-net-relay")
+            });
+        use std::os::unix::fs::PermissionsExt;
+        assert!(
+            relay.is_absolute()
+                && relay
+                    .metadata()
+                    .is_ok_and(|meta| meta.is_file() && meta.permissions().mode() & 0o111 != 0),
+            "Goose fixtures require an executable anchor-net-relay: {}; build with \
+             cargo build -p anchor-runner-host --bins and set ANCHOR_GOOSE_RELAY_BINARY \
+             to its absolute path with ANCHOR_GOOSE_LOCAL_NETWORK=1; task egress \
+             cannot reach the Host loopback MCP endpoint",
+            relay.display()
+        );
         let base = crate::fixture::Host::new(graph);
         if let Ok(expected) = std::env::var("ANCHOR_TEST_HOST_BINARY_SHA256") {
             assert_eq!(

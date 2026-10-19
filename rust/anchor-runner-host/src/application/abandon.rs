@@ -11,16 +11,17 @@
 //! as they were, so a channel instance can still be handed over to a new Run by
 //! the existing (automatic or explicit) recovery path.
 
-use super::*;
+pub(crate) use super::run_access::AbandonResult;
+use super::{ApplicationError, RunApplication, storage};
 use crate::assistant::{read_json, save_immutable};
 use serde::{Deserialize, Serialize};
-use std::time::Duration;
+use std::{path::PathBuf, sync::atomic::Ordering, time::Duration};
 
 pub(crate) const REASON_OPERATOR: &str = "operator";
 pub(crate) const REASON_PLUGIN_UPDATE: &str = "plugin_update";
 
 /// Directory of durable abandon intents, relative to the Host state root.
-const ABANDON_DIR: &str = "run-abandons";
+pub(super) const ABANDON_DIR: &str = "run-abandons";
 /// How long an abandon request waits for an active Run to observe cancellation
 /// before reporting that the terminal transition is still in flight.
 const CANCEL_POLL: Duration = Duration::from_millis(50);
@@ -59,14 +60,6 @@ impl AbandonAction {
             Self::Abandoning => "abandoning",
         }
     }
-}
-
-#[derive(Debug, Clone)]
-pub(crate) struct AbandonResult {
-    pub(crate) action: AbandonAction,
-    pub(crate) status: RunStatus,
-    pub(crate) reason: Option<String>,
-    pub(crate) requested_at: Option<String>,
 }
 
 fn parse_reason(reason: Option<&str>) -> Result<String, ApplicationError> {
@@ -117,55 +110,6 @@ impl RunApplication {
         Ok(intent)
     }
 
-    /// Apply a recorded abandon request once the Run holds no execution slot.
-    ///
-    /// `Ok(None)` means no request was ever recorded; the caller keeps the
-    /// status the Runner produced.
-    pub(crate) async fn finalize_recorded_abandon(
-        &self,
-        run_id: &str,
-    ) -> Result<Option<RunStatus>, ApplicationError> {
-        let Some(intent) = self.abandon_intent(run_id)? else {
-            return Ok(None);
-        };
-        Ok(Some(
-            self.finalize_abandoned_run(run_id, &intent.reason, &intent.requested_at)
-                .await?,
-        ))
-    }
-
-    /// Make the Run terminal `Aborted` unless it is still executing (or already
-    /// terminal). Holds the execution lock so a concurrent resume cannot slip
-    /// between the liveness check and the durable write.
-    async fn finalize_abandoned_run(
-        &self,
-        run_id: &str,
-        reason: &str,
-        requested_at: &str,
-    ) -> Result<RunStatus, ApplicationError> {
-        let active = self.active.lock().await;
-        if active.contains_key(run_id) {
-            return Ok(self
-                .store()
-                .load(run_id)?
-                .ok_or(ApplicationError::Missing)?
-                .status);
-        }
-        let _lease = self.store().acquire_lease(run_id)?;
-        let mut record = self
-            .store()
-            .load(run_id)?
-            .ok_or(ApplicationError::Missing)?;
-        if !record.status.is_terminal() {
-            record.status = RunStatus::Aborted;
-            record.error = Some(format!(
-                "Run abandoned by operator (reason {reason}, requested at {requested_at})"
-            ));
-            self.store().save(&record)?;
-        }
-        Ok(record.status)
-    }
-
     async fn request_active_cancellation(&self, run_id: &str) {
         let active = self.active.lock().await;
         if let Some(run) = active.get(run_id) {
@@ -188,15 +132,10 @@ impl RunApplication {
             return Err(ApplicationError::Invalid("invalid Run id".into()));
         }
         let reason = parse_reason(reason)?;
-        if let Some(runs) = self.kernel_owner(run_id)? {
-            let result = runs.abandon(run_id, reason)?;
-            self.kernel_child_finished(run_id).await?;
+        if let Some(result) = self.try_abandon_kernel_run(run_id, &reason).await? {
             return Ok(result);
         }
-        let record = self
-            .store()
-            .load(run_id)?
-            .ok_or(ApplicationError::Missing)?;
+        let record = self.read_run(run_id)?.ok_or(ApplicationError::Missing)?;
         let recorded = self.abandon_intent(run_id)?;
         if let Some(intent) = &recorded
             && intent.reason != reason
@@ -206,30 +145,8 @@ impl RunApplication {
                 intent.reason
             )));
         }
-        match record.status {
-            RunStatus::Aborted => {
-                // Terminal already: report the existing state and never rewrite
-                // it. A recorded request answers exactly like the call that
-                // recorded it, so repeating the request is idempotent.
-                let action = if recorded.is_some() {
-                    AbandonAction::Abandoned
-                } else {
-                    AbandonAction::AlreadyAborted
-                };
-                return Ok(AbandonResult {
-                    action,
-                    status: RunStatus::Aborted,
-                    reason: recorded.as_ref().map(|intent| intent.reason.clone()),
-                    requested_at: recorded.map(|intent| intent.requested_at),
-                });
-            }
-            RunStatus::Completed | RunStatus::Failed => {
-                // Aborted is an idempotent success above, not this rejection.
-                return Err(ApplicationError::Conflict(
-                    "terminal Run cannot be abandoned".into(),
-                ));
-            }
-            _ => {}
+        if let Some(result) = record.existing_abandon_result(recorded.as_ref())? {
+            return Ok(result);
         }
         // Durable before any cancellation: a Host that dies mid-request still
         // makes this Run terminal on its next start.
@@ -264,102 +181,19 @@ impl RunApplication {
         while self.run_is_active(run_id).await {
             self.request_active_cancellation(run_id).await;
             if polls >= CANCEL_POLLS {
-                let status = self
-                    .store()
-                    .load(run_id)?
-                    .ok_or(ApplicationError::Missing)?
-                    .status;
-                return Ok(AbandonResult {
-                    action: AbandonAction::Abandoning,
-                    status,
-                    reason: Some(intent.reason),
-                    requested_at: Some(intent.requested_at),
-                });
+                let record = self.read_run(run_id)?.ok_or(ApplicationError::Missing)?;
+                return Ok(record.abandoning_result(&intent));
             }
             polls += 1;
             tokio::time::sleep(CANCEL_POLL).await;
         }
-        let record = self
-            .store()
-            .load(run_id)?
-            .ok_or(ApplicationError::Missing)?;
-        if record.status == RunStatus::WaitingCall {
+        let record = self.read_run(run_id)?.ok_or(ApplicationError::Missing)?;
+        if record.waits_for_children() {
             // Nothing executes this Run any more, but its waiting children can.
             // Stop them exactly as `stop` does before this Run turns terminal.
-            let wait_children = wait_child_ids(&record);
+            let wait_children = record.abandon_wait_children();
             self.stop_wait_children(run_id, wait_children).await?;
         }
-        let status = self
-            .finalize_abandoned_run(run_id, &intent.reason, &intent.requested_at)
-            .await?;
-        match status {
-            RunStatus::Aborted => {
-                self.settle_channel_run(run_id, RunStatus::Aborted)?;
-                Ok(AbandonResult {
-                    action: AbandonAction::Abandoned,
-                    status,
-                    reason: Some(intent.reason),
-                    requested_at: Some(intent.requested_at),
-                })
-            }
-            // Aborted settles the recorded intent above; these terminal states reject it.
-            RunStatus::Completed | RunStatus::Failed => Err(ApplicationError::Conflict(
-                "Run finished before it was abandoned".into(),
-            )),
-            // A resume that won the race before the request was recorded keeps
-            // executing; cancellation will settle it into the requested state.
-            _ => Ok(AbandonResult {
-                action: AbandonAction::Abandoning,
-                status,
-                reason: Some(intent.reason),
-                requested_at: Some(intent.requested_at),
-            }),
-        }
-    }
-
-    /// Make every recorded, still-unfinished abandon request terminal. Called at
-    /// startup, before channel assistant recovery hands instances over, so an
-    /// interrupted abandon cannot keep blocking Graph/Plugin replacement.
-    pub(crate) async fn finalize_recorded_abandons_at_startup(
-        &self,
-    ) -> Result<(), ApplicationError> {
-        let root = self.data_root.join(ABANDON_DIR);
-        let entries = match std::fs::read_dir(&root) {
-            Ok(entries) => entries,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-            Err(error) => return Err(storage(error)),
-        };
-        for entry in entries {
-            let entry = entry.map_err(storage)?;
-            let Some(run_id) = entry
-                .file_name()
-                .to_str()
-                .and_then(|name| name.strip_suffix(".json"))
-                .map(str::to_owned)
-            else {
-                continue;
-            };
-            let intent = match self.abandon_intent(&run_id) {
-                Ok(Some(intent)) => intent,
-                Ok(None) => continue,
-                Err(error) => {
-                    eprintln!("Run {run_id} abandon intent is unreadable: {error:?}");
-                    continue;
-                }
-            };
-            match self
-                .finalize_abandoned_run(&run_id, &intent.reason, &intent.requested_at)
-                .await
-            {
-                Ok(RunStatus::Aborted) => {
-                    if let Err(error) = self.settle_channel_run(&run_id, RunStatus::Aborted) {
-                        eprintln!("Run {run_id} abandon settlement failed: {error:?}");
-                    }
-                }
-                Ok(_) => {}
-                Err(error) => eprintln!("Run {run_id} abandon finalization failed: {error:?}"),
-            }
-        }
-        Ok(())
+        self.finish_abandon(run_id, intent).await
     }
 }

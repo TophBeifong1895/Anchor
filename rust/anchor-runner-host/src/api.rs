@@ -30,6 +30,7 @@ use super::*;
 use crate::application::{ApplicationError, RunApplication};
 use crate::deployment::configured_pilot_graph;
 use anchor_graph_host::{FileGraphBundleLoader, FilePluginCatalog};
+#[cfg(test)]
 use anchor_runtime::graph::{FileRunStore, RunStatus};
 use axum::{
     Json, Router,
@@ -728,12 +729,12 @@ fn session_plugin_declarations(
     session: &anchor_platform_session::Session,
 ) -> BTreeMap<String, PluginDeclaration> {
     let configured_pilot_graph = configured_pilot_graph();
-    let runs = FileRunStore::new(state.data_root.join("runs"));
     let mut declarations: BTreeMap<String, PluginDeclaration> = BTreeMap::new();
     for run in &session.run_ids {
-        let Ok(Some(record)) = runs.load(run) else {
+        let Ok(Some(view)) = crate::application::run_access::load(&state.data_root, run) else {
             continue;
         };
+        let record = view.progress();
         // A Run that declares no Plugin cannot contribute a declaration, so its
         // Graph name does not matter either.
         if record

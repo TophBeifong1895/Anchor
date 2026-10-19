@@ -20,7 +20,7 @@ use std::{
     sync::{Arc, Mutex, atomic::Ordering},
 };
 
-mod deletion;
+pub(super) mod deletion;
 mod pause;
 #[path = "kernel_probe.rs"]
 mod probe;
@@ -260,16 +260,25 @@ impl KernelRuns {
         resource: &Resource,
     ) -> Result<super::run_view::RunView, ApplicationError> {
         let record = record_of(resource)?;
+        Self::project(
+            resource,
+            self.active(&record.run_id),
+            self.observations.load(&record.run_id).ok().flatten(),
+        )
+    }
+    pub(super) fn project(
+        resource: &Resource,
+        worker: bool,
+        updated: Option<String>,
+    ) -> Result<super::run_view::RunView, ApplicationError> {
         Ok(super::run_view::RunView {
             reason: None,
             phase: resource
                 .phase()
                 .ok_or_else(|| ApplicationError::Storage("Kernel Run has no phase".into()))?
                 .clone(),
-            worker: self.active(&record.run_id),
-            // Read observation failures never affect lifecycle or Session eligibility.
-            updated: self.observations.load(&record.run_id).ok().flatten(),
-            graph: (&record).into(),
+            worker,
+            updated,
         })
     }
 }
@@ -305,13 +314,36 @@ impl RunApplication {
         }
         Ok(Some(runs))
     }
-    pub(crate) fn load_run(&self, id: &str) -> Result<Option<GraphRunRecord>, ApplicationError> {
+    pub(in crate::application::run_access) fn load_run_impl(
+        &self,
+        id: &str,
+    ) -> Result<Option<GraphRunRecord>, ApplicationError> {
         if let Some(runs) = self.kernel_owner(id)? {
             return runs.load(id)?.as_ref().map(KernelRuns::record).transpose();
         }
         Ok(self.store().load(id)?)
     }
-    pub(crate) fn kernel_records(&self) -> Result<Vec<(String, GraphRunRecord)>, ApplicationError> {
+    #[cfg(not(test))]
+    pub(in crate::application::run_access) fn load_run(
+        &self,
+        id: &str,
+    ) -> Result<Option<GraphRunRecord>, ApplicationError> {
+        self.load_run_impl(id)
+    }
+    #[cfg(test)]
+    pub(crate) fn load_run(&self, id: &str) -> Result<Option<GraphRunRecord>, ApplicationError> {
+        self.load_run_impl(id)
+    }
+    /// Runtime adapter only; business consumers use read_run and RunView.
+    pub(crate) fn execution_record(
+        &self,
+        id: &str,
+    ) -> Result<Option<GraphRunRecord>, ApplicationError> {
+        self.load_run_impl(id)
+    }
+    pub(in crate::application::run_access) fn kernel_records(
+        &self,
+    ) -> Result<Vec<(String, GraphRunRecord)>, ApplicationError> {
         let Some(runs) = self.kernel_runs(false)? else {
             return Ok(Vec::new());
         };

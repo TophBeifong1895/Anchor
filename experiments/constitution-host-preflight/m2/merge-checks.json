@@ -1,0 +1,3503 @@
+{
+  "status": "merge verification passed; M2 incomplete",
+  "branch": "constitution-core",
+  "parents": [
+    "2582528084a5bc749330bc494ff1424dae191cab",
+    "d968ba52828e014ed7f2c5fc9eb52874275ab25a"
+  ],
+  "kernel_c1_baseline": "0859373",
+  "goose_binary_sha256": "17e065a79cb0508413af714724aed51d6b76972dda9feebdda701330134fb640",
+  "final_checks": [
+    {
+      "command": [
+        "cargo",
+        "test",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "--workspace",
+        "--all-features",
+        "--locked",
+        "--no-fail-fast",
+        "--",
+        "--test-threads=8"
+      ],
+      "environment": {},
+      "raw_output": "/tmp/anchor-m2/merge-workspace-complete.log",
+      "exit_code": 0,
+      "elapsed_seconds": 429.333,
+      "sha256": "54337c5b915954033e43b982fa1105af044bd4f74315ef8e8978db09086add77",
+      "targets": [
+        {
+          "target": "Running unittests src/lib.rs (rust/target/debug/deps/anchor_devtools-89c3be9ce3b563c9)",
+          "result_line": "test result: ok. 84 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.58s",
+          "passed": 84,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running unittests src/main.rs (rust/target/debug/deps/anchor_devtools-1ef3db80429db865)",
+          "result_line": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+          "passed": 0,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/cli.rs (rust/target/debug/deps/cli-c85a5c9fdff2b36f)",
+          "result_line": "test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s",
+          "passed": 6,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/dev_launcher.rs (rust/target/debug/deps/dev_launcher-ebc174156d93b478)",
+          "result_line": "test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.21s",
+          "passed": 7,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running unittests src/lib.rs (rust/target/debug/deps/anchor_distribution-6fc47d7b97f8b543)",
+          "result_line": "test result: ok. 39 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.78s",
+          "passed": 39,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running unittests src/main.rs (rust/target/debug/deps/anchor_distribution-6402153aef513245)",
+          "result_line": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+          "passed": 0,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running unittests src/bin/anchor-platform.rs (rust/target/debug/deps/anchor_platform-f2b51731a209ed48)",
+          "result_line": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+          "passed": 0,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/cli.rs (rust/target/debug/deps/cli-8054acb078d5463c)",
+          "result_line": "test result: ok. 5 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+          "passed": 5,
+          "failed": 0,
+          "ignored": 1,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/platform_cli.rs (rust/target/debug/deps/platform_cli-fcc269f2b38b57ae)",
+          "result_line": "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+          "passed": 4,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running unittests src/lib.rs (rust/target/debug/deps/anchor_docmost_tools-176d1d1c8dd7ad3d)",
+          "result_line": "test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.32s",
+          "passed": 7,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running unittests src/main.rs (rust/target/debug/deps/anchor_docmost_tools-a6a291d034105d8a)",
+          "result_line": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+          "passed": 0,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/boundaries.rs (rust/target/debug/deps/boundaries-8b467327be89e768)",
+          "result_line": "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+          "passed": 4,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/package.rs (rust/target/debug/deps/package-92023d0aab132ec0)",
+          "result_line": "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.41s",
+          "passed": 4,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/stdio.rs (rust/target/debug/deps/stdio-7c98ab4ef2136480)",
+          "result_line": "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s",
+          "passed": 4,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/upload.rs (rust/target/debug/deps/upload-a2276d96aeabe558)",
+          "result_line": "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.25s",
+          "passed": 4,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running unittests src/lib.rs (rust/target/debug/deps/anchor_file_lease-4e3c49a0777b97b5)",
+          "result_line": "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+          "passed": 3,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running unittests src/lib.rs (rust/target/debug/deps/anchor_graph_host-3e7fdb2ee8602643)",
+          "result_line": "test result: ok. 58 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.18s",
+          "passed": 58,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/child_lifecycle.rs (rust/target/debug/deps/child_lifecycle-ba12a8164dbe847a)",
+          "result_line": "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.11s",
+          "passed": 4,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/in_process.rs (rust/target/debug/deps/in_process-6929f1925a9a750a)",
+          "result_line": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+          "passed": 0,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running unittests src/lib.rs (rust/target/debug/deps/anchor_kernel-3150523c8efc98b4)",
+          "result_line": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+          "passed": 0,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/accounting_lifecycle.rs (rust/target/debug/deps/accounting_lifecycle-c011a12aea317321)",
+          "result_line": "test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+          "passed": 12,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/constitution.rs (rust/target/debug/deps/constitution-81e94e2cacc5c08a)",
+          "result_line": "test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.14s",
+          "passed": 17,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/file_store_deletion.rs (rust/target/debug/deps/file_store_deletion-5de5ad08fc7e0eb6)",
+          "result_line": "test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.78s",
+          "passed": 7,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/storage_regressions.rs (rust/target/debug/deps/storage_regressions-8b0df3f757905dde)",
+          "result_line": "test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.17s",
+          "passed": 8,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running unittests src/lib.rs (rust/target/debug/deps/anchor_library-9bd2fed134718f5a)",
+          "result_line": "test result: ok. 21 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.13s",
+          "passed": 21,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running unittests src/main.rs (rust/target/debug/deps/anchor_library-6074dfaea3ab3c5d)",
+          "result_line": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+          "passed": 0,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/cli.rs (rust/target/debug/deps/cli-d9dcad8f4a5cb881)",
+          "result_line": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s",
+          "passed": 2,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/development.rs (rust/target/debug/deps/development-64ff6a524d5929f7)",
+          "result_line": "test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.00s",
+          "passed": 10,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/install.rs (rust/target/debug/deps/install-e4b221fb5a57fad9)",
+          "result_line": "test result: ok. 21 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.90s",
+          "passed": 21,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/reclaim.rs (rust/target/debug/deps/reclaim-08dd5ad6c19cf227)",
+          "result_line": "test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.08s",
+          "passed": 11,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/review.rs (rust/target/debug/deps/review-1c718d378e1a7c71)",
+          "result_line": "test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.17s",
+          "passed": 9,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running unittests src/lib.rs (rust/target/debug/deps/anchor_mcp_host-50b49a84642c1977)",
+          "result_line": "test result: ok. 25 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 0.50s",
+          "passed": 25,
+          "failed": 0,
+          "ignored": 2,
+          "filtered": 0
+        },
+        {
+          "target": "Running unittests src/lib.rs (rust/target/debug/deps/anchor_network_tools-706affa7e9d55165)",
+          "result_line": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s",
+          "passed": 2,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running unittests src/main.rs (rust/target/debug/deps/anchor_network_tools-f286324a29a5f0bc)",
+          "result_line": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+          "passed": 0,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running unittests src/lib.rs (rust/target/debug/deps/anchor_platform_session-8130049f7a2e6099)",
+          "result_line": "test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.06s",
+          "passed": 12,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/channel_assistant.rs (rust/target/debug/deps/channel_assistant-d0747e9e88248a3f)",
+          "result_line": "test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.35s",
+          "passed": 10,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/channel_assistant_retirement.rs (rust/target/debug/deps/channel_assistant_retirement-4cc9d6a5fc692ae6)",
+          "result_line": "test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.46s",
+          "passed": 8,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/channel_group.rs (rust/target/debug/deps/channel_group-01a0f2eb21da40a6)",
+          "result_line": "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.16s",
+          "passed": 3,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/channel_session.rs (rust/target/debug/deps/channel_session-434ec42c03744c8f)",
+          "result_line": "test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.34s",
+          "passed": 13,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/execution_links.rs (rust/target/debug/deps/execution_links-2dfd1ae5d8c66af6)",
+          "result_line": "test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.37s",
+          "passed": 18,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/goose_links.rs (rust/target/debug/deps/goose_links-46267a836c56fbc7)",
+          "result_line": "test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.83s",
+          "passed": 14,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/questions.rs (rust/target/debug/deps/questions-b2e1166be05d9cd3)",
+          "result_line": "test result: ok. 22 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.85s",
+          "passed": 22,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/schema_v3.rs (rust/target/debug/deps/schema_v3-4848f6b49a958b89)",
+          "result_line": "test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 7.10s",
+          "passed": 6,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/schema_v5.rs (rust/target/debug/deps/schema_v5-ad356628c8fbc613)",
+          "result_line": "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.86s",
+          "passed": 3,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/session_store.rs (rust/target/debug/deps/session_store-24973e80ab847bb5)",
+          "result_line": "test result: ok. 27 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.57s",
+          "passed": 27,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/turn_store.rs (rust/target/debug/deps/turn_store-e82808e9004a455f)",
+          "result_line": "test result: ok. 26 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.88s",
+          "passed": 26,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running unittests src/lib.rs (rust/target/debug/deps/anchor_rsi-1a141dfc48af57d9)",
+          "result_line": "test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s",
+          "passed": 11,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running unittests src/main.rs (rust/target/debug/deps/anchor_rsi-7350fc83fa04bdf3)",
+          "result_line": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+          "passed": 0,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/business.rs (rust/target/debug/deps/business-5cb3d978c2619b65)",
+          "result_line": "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.09s",
+          "passed": 4,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/evidence.rs (rust/target/debug/deps/evidence-ef282f169e6c7f6d)",
+          "result_line": "test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.11s",
+          "passed": 10,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/history_discovery.rs (rust/target/debug/deps/history_discovery-96e1a407d0b8be66)",
+          "result_line": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+          "passed": 2,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/weekly.rs (rust/target/debug/deps/weekly-1e4adf393a0e3878)",
+          "result_line": "test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s",
+          "passed": 16,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running unittests src/bin/anchor-net-relay.rs (rust/target/debug/deps/anchor_net_relay-d505111220f302c0)",
+          "result_line": "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+          "passed": 3,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running unittests src/main.rs (rust/target/debug/deps/anchor_runner_host-ae4f878f46f5f402)",
+          "result_line": "test result: ok. 1008 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 212.32s",
+          "passed": 1008,
+          "failed": 0,
+          "ignored": 2,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/channel_startup.rs (rust/target/debug/deps/channel_startup-ad2dcec945c48b3c)",
+          "result_line": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.33s",
+          "passed": 1,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/goose_acp.rs (rust/target/debug/deps/goose_acp-da4cefdd59f0fe53)",
+          "result_line": "test result: ok. 8 passed; 0 failed; 15 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+          "passed": 8,
+          "failed": 0,
+          "ignored": 15,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/goose_channel.rs (rust/target/debug/deps/goose_channel-8bdd741307320a51)",
+          "result_line": "test result: ok. 6 passed; 0 failed; 4 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+          "passed": 6,
+          "failed": 0,
+          "ignored": 4,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/goose_compaction.rs (rust/target/debug/deps/goose_compaction-76d5f07695adb0ff)",
+          "result_line": "test result: ok. 6 passed; 0 failed; 4 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+          "passed": 6,
+          "failed": 0,
+          "ignored": 4,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/goose_completion.rs (rust/target/debug/deps/goose_completion-b69092f2cd829242)",
+          "result_line": "test result: ok. 6 passed; 0 failed; 9 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+          "passed": 6,
+          "failed": 0,
+          "ignored": 9,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/goose_conversation.rs (rust/target/debug/deps/goose_conversation-815becd7140d3b26)",
+          "result_line": "test result: ok. 6 passed; 0 failed; 13 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+          "passed": 6,
+          "failed": 0,
+          "ignored": 13,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/goose_development_environment.rs (rust/target/debug/deps/goose_development_environment-33c7cc676f17ccbb)",
+          "result_line": "test result: ok. 6 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+          "passed": 6,
+          "failed": 0,
+          "ignored": 1,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/goose_distribution.rs (rust/target/debug/deps/goose_distribution-e038f01277fa1940)",
+          "result_line": "test result: ok. 6 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+          "passed": 6,
+          "failed": 0,
+          "ignored": 1,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/goose_elicitation.rs (rust/target/debug/deps/goose_elicitation-83d4e7e46d3275ff)",
+          "result_line": "test result: ok. 6 passed; 0 failed; 10 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+          "passed": 6,
+          "failed": 0,
+          "ignored": 10,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/goose_library.rs (rust/target/debug/deps/goose_library-406580931158f1ce)",
+          "result_line": "test result: ok. 6 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+          "passed": 6,
+          "failed": 0,
+          "ignored": 1,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/goose_media.rs (rust/target/debug/deps/goose_media-7031189e021e9dea)",
+          "result_line": "test result: ok. 6 passed; 0 failed; 6 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+          "passed": 6,
+          "failed": 0,
+          "ignored": 6,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/goose_model_settings.rs (rust/target/debug/deps/goose_model_settings-833831cae89137b0)",
+          "result_line": "test result: ok. 6 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+          "passed": 6,
+          "failed": 0,
+          "ignored": 2,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/goose_native_activation_spike.rs (rust/target/debug/deps/goose_native_activation_spike-aaabe67ddcb076ac)",
+          "result_line": "test result: ok. 6 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+          "passed": 6,
+          "failed": 0,
+          "ignored": 2,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/goose_persistent_assistant.rs (rust/target/debug/deps/goose_persistent_assistant-fdde56ae95043745)",
+          "result_line": "test result: ok. 6 passed; 0 failed; 12 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+          "passed": 6,
+          "failed": 0,
+          "ignored": 12,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/goose_pilot.rs (rust/target/debug/deps/goose_pilot-31741aba068a4c80)",
+          "result_line": "test result: ok. 6 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+          "passed": 6,
+          "failed": 0,
+          "ignored": 2,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/goose_pilot_attachments.rs (rust/target/debug/deps/goose_pilot_attachments-a019fcd8aad8d0e0)",
+          "result_line": "test result: ok. 6 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+          "passed": 6,
+          "failed": 0,
+          "ignored": 2,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/goose_pilot_authoring.rs (rust/target/debug/deps/goose_pilot_authoring-e2ed8d04c8a1be6b)",
+          "result_line": "test result: ok. 6 passed; 0 failed; 4 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+          "passed": 6,
+          "failed": 0,
+          "ignored": 4,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/goose_pilot_compaction.rs (rust/target/debug/deps/goose_pilot_compaction-51c07fdc5e3d7630)",
+          "result_line": "test result: ok. 6 passed; 0 failed; 3 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+          "passed": 6,
+          "failed": 0,
+          "ignored": 3,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/goose_plugin_configuration.rs (rust/target/debug/deps/goose_plugin_configuration-4765f3bedad37243)",
+          "result_line": "test result: ok. 6 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+          "passed": 6,
+          "failed": 0,
+          "ignored": 1,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/goose_plugin_disclosure.rs (rust/target/debug/deps/goose_plugin_disclosure-21323882917c0caa)",
+          "result_line": "test result: ok. 6 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+          "passed": 6,
+          "failed": 0,
+          "ignored": 1,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/goose_plugin_mcp.rs (rust/target/debug/deps/goose_plugin_mcp-a380eeedcb52ac71)",
+          "result_line": "test result: ok. 6 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+          "passed": 6,
+          "failed": 0,
+          "ignored": 2,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/goose_plugin_summary.rs (rust/target/debug/deps/goose_plugin_summary-6333e7a0fc1a43d9)",
+          "result_line": "test result: ok. 6 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+          "passed": 6,
+          "failed": 0,
+          "ignored": 2,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/goose_plugin_turns.rs (rust/target/debug/deps/goose_plugin_turns-aee446e442b72633)",
+          "result_line": "test result: ok. 6 passed; 0 failed; 7 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+          "passed": 6,
+          "failed": 0,
+          "ignored": 7,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/goose_provider_errors.rs (rust/target/debug/deps/goose_provider_errors-926a18bfcbdda677)",
+          "result_line": "test result: ok. 6 passed; 0 failed; 4 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+          "passed": 6,
+          "failed": 0,
+          "ignored": 4,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/goose_responses.rs (rust/target/debug/deps/goose_responses-50b7afb99bb9ebd7)",
+          "result_line": "test result: ok. 6 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+          "passed": 6,
+          "failed": 0,
+          "ignored": 2,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/goose_session_calls.rs (rust/target/debug/deps/goose_session_calls-06c92fafa08019ba)",
+          "result_line": "test result: ok. 6 passed; 0 failed; 4 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+          "passed": 6,
+          "failed": 0,
+          "ignored": 4,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/goose_trace.rs (rust/target/debug/deps/goose_trace-9b769351f6e8a4e4)",
+          "result_line": "test result: ok. 6 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+          "passed": 6,
+          "failed": 0,
+          "ignored": 2,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/local_inputs.rs (rust/target/debug/deps/local_inputs-b97006033751f3dd)",
+          "result_line": "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.14s",
+          "passed": 4,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/local_network.rs (rust/target/debug/deps/local_network-842afdeecdfdde3f)",
+          "result_line": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.17s",
+          "passed": 1,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/multinode.rs (rust/target/debug/deps/multinode-0699d4ff384a7ab8)",
+          "result_line": "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.78s",
+          "passed": 3,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/native_plugins.rs (rust/target/debug/deps/native_plugins-1a860a884ab0d346)",
+          "result_line": "test result: ok. 6 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+          "passed": 6,
+          "failed": 0,
+          "ignored": 2,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/parallel.rs (rust/target/debug/deps/parallel-91183c533cf8e29f)",
+          "result_line": "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.28s",
+          "passed": 3,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/routing.rs (rust/target/debug/deps/routing-c335a9fc6195c44b)",
+          "result_line": "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.20s",
+          "passed": 5,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/run_access_fence.rs (rust/target/debug/deps/run_access_fence-6718f0f2986c4d2a)",
+          "result_line": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.11s",
+          "passed": 1,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/standalone_graph_call.rs (rust/target/debug/deps/standalone_graph_call-63effe2bd05839c7)",
+          "result_line": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.59s",
+          "passed": 2,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/standalone_library.rs (rust/target/debug/deps/standalone_library-61e4516bf1a94b0c)",
+          "result_line": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s",
+          "passed": 1,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/standard_host.rs (rust/target/debug/deps/standard_host-334699cb15689463)",
+          "result_line": "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.53s",
+          "passed": 3,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/writer_lease.rs (rust/target/debug/deps/writer_lease-ec5f6771f09db668)",
+          "result_line": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.40s",
+          "passed": 2,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running unittests src/lib.rs (rust/target/debug/deps/anchor_runtime-3289c4895e14b847)",
+          "result_line": "test result: ok. 148 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 128.55s",
+          "passed": 148,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/weekly_work_report_graphs.rs (rust/target/debug/deps/weekly_work_report_graphs-6e069e33af30f9d7)",
+          "result_line": "test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+          "passed": 7,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running unittests src/lib.rs (rust/target/debug/deps/anchor_sandbox_bwrap-97aa2ce7f13a0006)",
+          "result_line": "test result: ok. 19 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.58s",
+          "passed": 19,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running unittests src/bin/anchor-sandbox-network.rs (rust/target/debug/deps/anchor_sandbox_network-ce3c7ce6f92de0e0)",
+          "result_line": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+          "passed": 1,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/network_boundary.rs (rust/target/debug/deps/network_boundary-13e3fce795fbcab6)",
+          "result_line": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.23s",
+          "passed": 2,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running unittests src/lib.rs (rust/target/debug/deps/anchor_scholarly-ee2cbcdb0339ca47)",
+          "result_line": "test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s",
+          "passed": 18,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running unittests src/main.rs (rust/target/debug/deps/anchor_scholarly-7dad492d961d5536)",
+          "result_line": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+          "passed": 0,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/batch.rs (rust/target/debug/deps/batch-ef00f8d0dadfd8ca)",
+          "result_line": "test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.01s",
+          "passed": 7,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/boundaries.rs (rust/target/debug/deps/boundaries-4c2d1b1f041759b2)",
+          "result_line": "test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.00s",
+          "passed": 9,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/mcp.rs (rust/target/debug/deps/mcp-05ca9edac438c6f5)",
+          "result_line": "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+          "passed": 3,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/read.rs (rust/target/debug/deps/read-846dee6c94c1543a)",
+          "result_line": "test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.01s",
+          "passed": 9,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/search.rs (rust/target/debug/deps/search-19ff9d07c8eac253)",
+          "result_line": "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.00s",
+          "passed": 5,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running unittests src/lib.rs (rust/target/debug/deps/anchor_wecom_gateway-1e26d125864e28f3)",
+          "result_line": "test result: ok. 26 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.47s",
+          "passed": 26,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running unittests src/main.rs (rust/target/debug/deps/anchor_wecom_gateway-3f7dc9877900599f)",
+          "result_line": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+          "passed": 0,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/cli.rs (rust/target/debug/deps/cli-653f4d30c3f23955)",
+          "result_line": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.27s",
+          "passed": 2,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/transport.rs (rust/target/debug/deps/transport-b8a03cd300b11384)",
+          "result_line": "test result: ok. 50 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.38s",
+          "passed": 50,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running unittests src/lib.rs (rust/target/debug/deps/anchor_wecom_tools-6ce454fb5c6066d9)",
+          "result_line": "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s",
+          "passed": 4,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running unittests src/main.rs (rust/target/debug/deps/anchor_wecom_tools-db547ec35fed9df5)",
+          "result_line": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+          "passed": 0,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/api.rs (rust/target/debug/deps/api-c8c093eeff5d8d41)",
+          "result_line": "test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.10s",
+          "passed": 11,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/stdio_package.rs (rust/target/debug/deps/stdio_package-10f0eee43e6f222f)",
+          "result_line": "test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.63s",
+          "passed": 6,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Doc-tests anchor_devtools",
+          "result_line": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+          "passed": 0,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Doc-tests anchor_distribution",
+          "result_line": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+          "passed": 0,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Doc-tests anchor_docmost_tools",
+          "result_line": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+          "passed": 0,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Doc-tests anchor_file_lease",
+          "result_line": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+          "passed": 0,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Doc-tests anchor_graph_host",
+          "result_line": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+          "passed": 0,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Doc-tests anchor_kernel",
+          "result_line": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+          "passed": 0,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Doc-tests anchor_library",
+          "result_line": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+          "passed": 0,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Doc-tests anchor_mcp_host",
+          "result_line": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+          "passed": 0,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Doc-tests anchor_network_tools",
+          "result_line": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+          "passed": 0,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Doc-tests anchor_platform_session",
+          "result_line": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+          "passed": 0,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Doc-tests anchor_rsi",
+          "result_line": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+          "passed": 0,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Doc-tests anchor_runtime",
+          "result_line": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s",
+          "passed": 2,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Doc-tests anchor_sandbox_bwrap",
+          "result_line": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+          "passed": 0,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Doc-tests anchor_scholarly",
+          "result_line": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+          "passed": 0,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Doc-tests anchor_wecom_gateway",
+          "result_line": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+          "passed": 0,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Doc-tests anchor_wecom_tools",
+          "result_line": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+          "passed": 0,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        }
+      ],
+      "totals": {
+        "passed": 2113,
+        "failed": 0,
+        "ignored": 123,
+        "filtered": 0
+      },
+      "failed_tests": []
+    },
+    {
+      "command": [
+        "cargo",
+        "clippy",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "--workspace",
+        "--all-features",
+        "--all-targets",
+        "--locked",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "environment": {},
+      "raw_output": "/tmp/anchor-m2/merge-clippy-complete.log",
+      "exit_code": 0,
+      "elapsed_seconds": 6.35,
+      "sha256": "ee04fbdf4b8d599fe55e0ce8c2e303b25166a23f246008aa2427612614a11dbd",
+      "failed_tests": []
+    },
+    {
+      "command": [
+        "cargo",
+        "+stable",
+        "build",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "--locked",
+        "-p",
+        "anchor-runner-host",
+        "-p",
+        "anchor-sandbox-bwrap",
+        "-p",
+        "anchor-wecom-tools",
+        "-p",
+        "anchor-docmost-tools",
+        "--bins"
+      ],
+      "environment": {},
+      "raw_output": "/tmp/anchor-m2/merge-goose-build-complete.log",
+      "exit_code": 0,
+      "elapsed_seconds": 14.045,
+      "sha256": "cfa451fa3a222c79877a767c6c640dd25610b15a06bbece4a66d3844fdf558f8",
+      "failed_tests": []
+    },
+    {
+      "command": [
+        "cargo",
+        "+stable",
+        "build",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "--locked",
+        "-p",
+        "anchor-mcp-host",
+        "--example",
+        "http_fixture"
+      ],
+      "environment": {},
+      "raw_output": "/tmp/anchor-m2/merge-goose-http-fixture-build.log",
+      "exit_code": 0,
+      "elapsed_seconds": 5.35,
+      "sha256": "cb43f1761760e4e0e35bd819801817d62b9b442a98d98296c37901ca75472aa2",
+      "failed_tests": []
+    },
+    {
+      "command": [
+        "cargo",
+        "+stable",
+        "test",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "-p",
+        "anchor-runner-host",
+        "--locked",
+        "--no-fail-fast",
+        "--no-run"
+      ],
+      "environment": {},
+      "raw_output": "/tmp/anchor-m2/merge-goose-test-build.log",
+      "exit_code": 0,
+      "elapsed_seconds": 0.138,
+      "sha256": "266756e6b0b4f9420fc92537b9b3047870f88a12ae4fda55db80b7e438bbcbe6",
+      "failed_tests": []
+    },
+    {
+      "command": [
+        "cargo",
+        "+stable",
+        "test",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "-p",
+        "anchor-runner-host",
+        "--locked",
+        "--no-fail-fast",
+        "--",
+        "--ignored",
+        "--test-threads=1"
+      ],
+      "environment": {
+        "ANCHOR_GOOSE_BINARY": "/var/tmp/anchor-goose-build/artifacts/goose-acp.first",
+        "ANCHOR_GOOSE_LOCAL_NETWORK": "1",
+        "ANCHOR_GOOSE_RELAY_BINARY": "/home/mansteinl/code/anchor-constitution-core/rust/target/debug/anchor-net-relay",
+        "ANCHOR_TEST_RUST_TOOLCHAIN": "stable-x86_64-unknown-linux-gnu",
+        "ANCHOR_PILOT_RUSTUP": "/home/mansteinl/.cargo/bin/rustup",
+        "ANCHOR_PILOT_RUSTUP_HOME": "/home/mansteinl/.rustup",
+        "ANCHOR_TEST_EVIDENCE_ROOT": "/tmp/anchor-m2/merge-goose-final-evidence",
+        "ANCHOR_TEST_HOST_BINARY_SHA256": "fd145063321727c47274507752f44042f21530cdf322a634bffc0c2d615b3ad3"
+      },
+      "raw_output": "/tmp/anchor-m2/merge-goose-complete.log",
+      "exit_code": 0,
+      "elapsed_seconds": 1778.169,
+      "sha256": "b3baebd782d09cdc9b7ec6756eef1a2e05ff65eea811548793615ba5a1c89ea8",
+      "targets": [
+        {
+          "target": "Running unittests src/bin/anchor-net-relay.rs (rust/target/debug/deps/anchor_net_relay-23fa5a40612fd062)",
+          "result_line": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.00s",
+          "passed": 0,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 3
+        },
+        {
+          "target": "Running unittests src/main.rs (rust/target/debug/deps/anchor_runner_host-3a992d23f5a5c9b7)",
+          "result_line": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 1008 filtered out; finished in 31.82s",
+          "passed": 2,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 1008
+        },
+        {
+          "target": "Running tests/channel_startup.rs (rust/target/debug/deps/channel_startup-0007a54f5d9ad168)",
+          "result_line": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s",
+          "passed": 0,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 1
+        },
+        {
+          "target": "Running tests/goose_acp.rs (rust/target/debug/deps/goose_acp-10b8bd26159f8551)",
+          "result_line": "test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 8 filtered out; finished in 177.43s",
+          "passed": 15,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 8
+        },
+        {
+          "target": "Running tests/goose_channel.rs (rust/target/debug/deps/goose_channel-5764eb0d21116180)",
+          "result_line": "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 53.00s",
+          "passed": 4,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 6
+        },
+        {
+          "target": "Running tests/goose_compaction.rs (rust/target/debug/deps/goose_compaction-b229b305fd0e4565)",
+          "result_line": "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 55.87s",
+          "passed": 4,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 6
+        },
+        {
+          "target": "Running tests/goose_completion.rs (rust/target/debug/deps/goose_completion-5975d85e2901607e)",
+          "result_line": "test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 109.93s",
+          "passed": 9,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 6
+        },
+        {
+          "target": "Running tests/goose_conversation.rs (rust/target/debug/deps/goose_conversation-ac5da1d7a89c0072)",
+          "result_line": "test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 173.68s",
+          "passed": 13,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 6
+        },
+        {
+          "target": "Running tests/goose_development_environment.rs (rust/target/debug/deps/goose_development_environment-ae2a8efed31fa048)",
+          "result_line": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 24.40s",
+          "passed": 1,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 6
+        },
+        {
+          "target": "Running tests/goose_distribution.rs (rust/target/debug/deps/goose_distribution-7601fa7d5bba4fab)",
+          "result_line": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 90.96s",
+          "passed": 1,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 6
+        },
+        {
+          "target": "Running tests/goose_elicitation.rs (rust/target/debug/deps/goose_elicitation-2407891011f2cc0a)",
+          "result_line": "test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 111.37s",
+          "passed": 10,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 6
+        },
+        {
+          "target": "Running tests/goose_library.rs (rust/target/debug/deps/goose_library-cb2332c9cdf73e83)",
+          "result_line": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 12.62s",
+          "passed": 1,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 6
+        },
+        {
+          "target": "Running tests/goose_media.rs (rust/target/debug/deps/goose_media-f1d34d4bd5fe51a0)",
+          "result_line": "test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 82.31s",
+          "passed": 6,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 6
+        },
+        {
+          "target": "Running tests/goose_model_settings.rs (rust/target/debug/deps/goose_model_settings-e9cb3b89e4f5b0df)",
+          "result_line": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 25.13s",
+          "passed": 2,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 6
+        },
+        {
+          "target": "Running tests/goose_native_activation_spike.rs (rust/target/debug/deps/goose_native_activation_spike-9aa28061523444aa)",
+          "result_line": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 2.68s",
+          "passed": 2,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 6
+        },
+        {
+          "target": "Running tests/goose_persistent_assistant.rs (rust/target/debug/deps/goose_persistent_assistant-ab7798b248843ef6)",
+          "result_line": "test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 190.53s",
+          "passed": 12,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 6
+        },
+        {
+          "target": "Running tests/goose_pilot.rs (rust/target/debug/deps/goose_pilot-95763c2cf5ea0117)",
+          "result_line": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 24.44s",
+          "passed": 2,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 6
+        },
+        {
+          "target": "Running tests/goose_pilot_attachments.rs (rust/target/debug/deps/goose_pilot_attachments-62314e6dcee34ef0)",
+          "result_line": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 28.91s",
+          "passed": 2,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 6
+        },
+        {
+          "target": "Running tests/goose_pilot_authoring.rs (rust/target/debug/deps/goose_pilot_authoring-e9b11a1cb9b0312b)",
+          "result_line": "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 53.97s",
+          "passed": 4,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 6
+        },
+        {
+          "target": "Running tests/goose_pilot_compaction.rs (rust/target/debug/deps/goose_pilot_compaction-2532f83d24db6067)",
+          "result_line": "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 42.19s",
+          "passed": 3,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 6
+        },
+        {
+          "target": "Running tests/goose_plugin_configuration.rs (rust/target/debug/deps/goose_plugin_configuration-3efd69f9284bbf70)",
+          "result_line": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 60.45s",
+          "passed": 1,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 6
+        },
+        {
+          "target": "Running tests/goose_plugin_disclosure.rs (rust/target/debug/deps/goose_plugin_disclosure-5e7cdad0f08dca5f)",
+          "result_line": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 13.20s",
+          "passed": 1,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 6
+        },
+        {
+          "target": "Running tests/goose_plugin_mcp.rs (rust/target/debug/deps/goose_plugin_mcp-cb11fa25e387b8a1)",
+          "result_line": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 45.97s",
+          "passed": 2,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 6
+        },
+        {
+          "target": "Running tests/goose_plugin_summary.rs (rust/target/debug/deps/goose_plugin_summary-e4b38d4dd48e0e4e)",
+          "result_line": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 26.84s",
+          "passed": 2,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 6
+        },
+        {
+          "target": "Running tests/goose_plugin_turns.rs (rust/target/debug/deps/goose_plugin_turns-4dff9b42256d2fc5)",
+          "result_line": "test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 108.45s",
+          "passed": 7,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 6
+        },
+        {
+          "target": "Running tests/goose_provider_errors.rs (rust/target/debug/deps/goose_provider_errors-d8eb4a799a0742be)",
+          "result_line": "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 57.25s",
+          "passed": 4,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 6
+        },
+        {
+          "target": "Running tests/goose_responses.rs (rust/target/debug/deps/goose_responses-ecf7802723d03f7c)",
+          "result_line": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 25.25s",
+          "passed": 2,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 6
+        },
+        {
+          "target": "Running tests/goose_session_calls.rs (rust/target/debug/deps/goose_session_calls-d5055908672910a6)",
+          "result_line": "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 62.76s",
+          "passed": 4,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 6
+        },
+        {
+          "target": "Running tests/goose_trace.rs (rust/target/debug/deps/goose_trace-4e6351ec0b65585b)",
+          "result_line": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 25.36s",
+          "passed": 2,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 6
+        },
+        {
+          "target": "Running tests/local_inputs.rs (rust/target/debug/deps/local_inputs-b3dcce8860b0e9af)",
+          "result_line": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 4 filtered out; finished in 0.00s",
+          "passed": 0,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 4
+        },
+        {
+          "target": "Running tests/local_network.rs (rust/target/debug/deps/local_network-0824845d8757759a)",
+          "result_line": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s",
+          "passed": 0,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 1
+        },
+        {
+          "target": "Running tests/multinode.rs (rust/target/debug/deps/multinode-432cc26aa63b9914)",
+          "result_line": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.00s",
+          "passed": 0,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 3
+        },
+        {
+          "target": "Running tests/native_plugins.rs (rust/target/debug/deps/native_plugins-19ba4f7e85cee030)",
+          "result_line": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 61.20s",
+          "passed": 2,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 6
+        },
+        {
+          "target": "Running tests/parallel.rs (rust/target/debug/deps/parallel-d0be665d75c0fd8b)",
+          "result_line": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.00s",
+          "passed": 0,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 3
+        },
+        {
+          "target": "Running tests/routing.rs (rust/target/debug/deps/routing-54e47e426045387b)",
+          "result_line": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 5 filtered out; finished in 0.00s",
+          "passed": 0,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 5
+        },
+        {
+          "target": "Running tests/run_access_fence.rs (rust/target/debug/deps/run_access_fence-d3e334e8ac114b93)",
+          "result_line": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s",
+          "passed": 0,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 1
+        },
+        {
+          "target": "Running tests/standalone_graph_call.rs (rust/target/debug/deps/standalone_graph_call-652cb222778c1857)",
+          "result_line": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s",
+          "passed": 0,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 2
+        },
+        {
+          "target": "Running tests/standalone_library.rs (rust/target/debug/deps/standalone_library-9de65a9b734279ec)",
+          "result_line": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s",
+          "passed": 0,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 1
+        },
+        {
+          "target": "Running tests/standard_host.rs (rust/target/debug/deps/standard_host-a1b191cb99246b03)",
+          "result_line": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.00s",
+          "passed": 0,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 3
+        },
+        {
+          "target": "Running tests/writer_lease.rs (rust/target/debug/deps/writer_lease-9846566d4323f625)",
+          "result_line": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s",
+          "passed": 0,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 2
+        }
+      ],
+      "totals": {
+        "passed": 120,
+        "failed": 0,
+        "ignored": 0,
+        "filtered": 1201
+      },
+      "failed_tests": []
+    },
+    {
+      "command": "npm --prefix apps/web test",
+      "exit_code": 0,
+      "raw_output": "/tmp/anchor-m2/merge-web-tests.log",
+      "sha256": "977e21a5164ffd83827a2122f6831f47fc2441c9179996c1f63429a395988120",
+      "failed_tests": []
+    },
+    {
+      "command": "npm --prefix apps/web run build",
+      "exit_code": 0,
+      "raw_output": "/tmp/anchor-m2/merge-web-build.log",
+      "sha256": "b6295c9ca7af4f4ae2f5f76ae47f76cb99eee45c39430c7fcc12782f387f3d81",
+      "failed_tests": []
+    },
+    {
+      "command": "cargo fmt --manifest-path rust/Cargo.toml --all -- --check",
+      "exit_code": 0,
+      "raw_output": "/tmp/anchor-m2/merge-fmt-final.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "failed_tests": []
+    },
+    {
+      "command": "git diff --exit-code 0859373 -- rust/anchor-kernel",
+      "exit_code": 0,
+      "raw_output": "/tmp/anchor-m2/merge-c1-final.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "failed_tests": []
+    },
+    {
+      "command": "bash scripts/check-sensitive-wording.sh",
+      "exit_code": 0,
+      "raw_output": "/tmp/anchor-m2/merge-wording-final.log",
+      "sha256": "78cf26da99b1c5272368f0baa3013d9de0bf2cdf766c0d58feb6b413525dc5d1",
+      "failed_tests": []
+    },
+    {
+      "command": "git diff --check",
+      "exit_code": 0,
+      "raw_output": "/tmp/anchor-m2/merge-diff-final.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "failed_tests": []
+    }
+  ],
+  "earlier_results": [
+    {
+      "invocation_description": "cargo test --manifest-path rust/Cargo.toml --workspace --all-features --all-targets --locked -- --test-threads=8",
+      "exit_code": 101,
+      "raw_output": "/tmp/anchor-m2/merge-workspace-final.log",
+      "note": "stopped after Host target; not a complete workspace result",
+      "sha256": "241334eb24c0ce25fcfbaa6c03aa22eb93d213409c3296efd18327a28e4497ac",
+      "targets": [
+        {
+          "target": "Running unittests src/lib.rs (rust/target/debug/deps/anchor_devtools-89c3be9ce3b563c9)",
+          "result_line": "test result: ok. 84 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.38s",
+          "passed": 84,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running unittests src/main.rs (rust/target/debug/deps/anchor_devtools-1ef3db80429db865)",
+          "result_line": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+          "passed": 0,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/cli.rs (rust/target/debug/deps/cli-c85a5c9fdff2b36f)",
+          "result_line": "test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s",
+          "passed": 6,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/dev_launcher.rs (rust/target/debug/deps/dev_launcher-ebc174156d93b478)",
+          "result_line": "test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.21s",
+          "passed": 7,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running unittests src/lib.rs (rust/target/debug/deps/anchor_distribution-6fc47d7b97f8b543)",
+          "result_line": "test result: ok. 39 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.54s",
+          "passed": 39,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running unittests src/main.rs (rust/target/debug/deps/anchor_distribution-6402153aef513245)",
+          "result_line": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+          "passed": 0,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running unittests src/bin/anchor-platform.rs (rust/target/debug/deps/anchor_platform-f2b51731a209ed48)",
+          "result_line": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+          "passed": 0,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/cli.rs (rust/target/debug/deps/cli-8054acb078d5463c)",
+          "result_line": "test result: ok. 5 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+          "passed": 5,
+          "failed": 0,
+          "ignored": 1,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/platform_cli.rs (rust/target/debug/deps/platform_cli-fcc269f2b38b57ae)",
+          "result_line": "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+          "passed": 4,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running unittests src/lib.rs (rust/target/debug/deps/anchor_docmost_tools-176d1d1c8dd7ad3d)",
+          "result_line": "test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.54s",
+          "passed": 7,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running unittests src/main.rs (rust/target/debug/deps/anchor_docmost_tools-a6a291d034105d8a)",
+          "result_line": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+          "passed": 0,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/boundaries.rs (rust/target/debug/deps/boundaries-8b467327be89e768)",
+          "result_line": "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+          "passed": 4,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/package.rs (rust/target/debug/deps/package-92023d0aab132ec0)",
+          "result_line": "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.57s",
+          "passed": 4,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/stdio.rs (rust/target/debug/deps/stdio-7c98ab4ef2136480)",
+          "result_line": "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s",
+          "passed": 4,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/upload.rs (rust/target/debug/deps/upload-a2276d96aeabe558)",
+          "result_line": "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.25s",
+          "passed": 4,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running unittests src/lib.rs (rust/target/debug/deps/anchor_file_lease-4e3c49a0777b97b5)",
+          "result_line": "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+          "passed": 3,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running unittests src/lib.rs (rust/target/debug/deps/anchor_graph_host-3e7fdb2ee8602643)",
+          "result_line": "test result: ok. 58 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.26s",
+          "passed": 58,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/child_lifecycle.rs (rust/target/debug/deps/child_lifecycle-ba12a8164dbe847a)",
+          "result_line": "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.18s",
+          "passed": 4,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/in_process.rs (rust/target/debug/deps/in_process-6929f1925a9a750a)",
+          "result_line": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+          "passed": 0,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running unittests src/lib.rs (rust/target/debug/deps/anchor_kernel-3150523c8efc98b4)",
+          "result_line": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+          "passed": 0,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/accounting_lifecycle.rs (rust/target/debug/deps/accounting_lifecycle-c011a12aea317321)",
+          "result_line": "test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+          "passed": 12,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/constitution.rs (rust/target/debug/deps/constitution-81e94e2cacc5c08a)",
+          "result_line": "test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.13s",
+          "passed": 17,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/file_store_deletion.rs (rust/target/debug/deps/file_store_deletion-5de5ad08fc7e0eb6)",
+          "result_line": "test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.82s",
+          "passed": 7,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/storage_regressions.rs (rust/target/debug/deps/storage_regressions-8b0df3f757905dde)",
+          "result_line": "test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.18s",
+          "passed": 8,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running unittests src/lib.rs (rust/target/debug/deps/anchor_library-9bd2fed134718f5a)",
+          "result_line": "test result: ok. 21 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.13s",
+          "passed": 21,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running unittests src/main.rs (rust/target/debug/deps/anchor_library-6074dfaea3ab3c5d)",
+          "result_line": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+          "passed": 0,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/cli.rs (rust/target/debug/deps/cli-d9dcad8f4a5cb881)",
+          "result_line": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s",
+          "passed": 2,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/development.rs (rust/target/debug/deps/development-64ff6a524d5929f7)",
+          "result_line": "test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.99s",
+          "passed": 10,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/install.rs (rust/target/debug/deps/install-e4b221fb5a57fad9)",
+          "result_line": "test result: ok. 21 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.87s",
+          "passed": 21,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/reclaim.rs (rust/target/debug/deps/reclaim-08dd5ad6c19cf227)",
+          "result_line": "test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.08s",
+          "passed": 11,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/review.rs (rust/target/debug/deps/review-1c718d378e1a7c71)",
+          "result_line": "test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.16s",
+          "passed": 9,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running unittests src/lib.rs (rust/target/debug/deps/anchor_mcp_host-50b49a84642c1977)",
+          "result_line": "test result: ok. 25 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 0.50s",
+          "passed": 25,
+          "failed": 0,
+          "ignored": 2,
+          "filtered": 0
+        },
+        {
+          "target": "Running unittests examples/http_fixture.rs (rust/target/debug/examples/http_fixture-2c0cfe717daa6c8a)",
+          "result_line": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+          "passed": 0,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running unittests src/lib.rs (rust/target/debug/deps/anchor_network_tools-706affa7e9d55165)",
+          "result_line": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s",
+          "passed": 2,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running unittests src/main.rs (rust/target/debug/deps/anchor_network_tools-f286324a29a5f0bc)",
+          "result_line": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+          "passed": 0,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running unittests src/lib.rs (rust/target/debug/deps/anchor_platform_session-8130049f7a2e6099)",
+          "result_line": "test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.04s",
+          "passed": 12,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/channel_assistant.rs (rust/target/debug/deps/channel_assistant-d0747e9e88248a3f)",
+          "result_line": "test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.43s",
+          "passed": 10,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/channel_assistant_retirement.rs (rust/target/debug/deps/channel_assistant_retirement-4cc9d6a5fc692ae6)",
+          "result_line": "test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.46s",
+          "passed": 8,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/channel_group.rs (rust/target/debug/deps/channel_group-01a0f2eb21da40a6)",
+          "result_line": "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.16s",
+          "passed": 3,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/channel_session.rs (rust/target/debug/deps/channel_session-434ec42c03744c8f)",
+          "result_line": "test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.35s",
+          "passed": 13,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/execution_links.rs (rust/target/debug/deps/execution_links-2dfd1ae5d8c66af6)",
+          "result_line": "test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.43s",
+          "passed": 18,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/goose_links.rs (rust/target/debug/deps/goose_links-46267a836c56fbc7)",
+          "result_line": "test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.89s",
+          "passed": 14,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/questions.rs (rust/target/debug/deps/questions-b2e1166be05d9cd3)",
+          "result_line": "test result: ok. 22 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.86s",
+          "passed": 22,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/schema_v3.rs (rust/target/debug/deps/schema_v3-4848f6b49a958b89)",
+          "result_line": "test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 7.06s",
+          "passed": 6,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/schema_v5.rs (rust/target/debug/deps/schema_v5-ad356628c8fbc613)",
+          "result_line": "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.87s",
+          "passed": 3,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/session_store.rs (rust/target/debug/deps/session_store-24973e80ab847bb5)",
+          "result_line": "test result: ok. 27 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.66s",
+          "passed": 27,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/turn_store.rs (rust/target/debug/deps/turn_store-e82808e9004a455f)",
+          "result_line": "test result: ok. 26 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.84s",
+          "passed": 26,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running unittests src/lib.rs (rust/target/debug/deps/anchor_rsi-1a141dfc48af57d9)",
+          "result_line": "test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s",
+          "passed": 11,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running unittests src/main.rs (rust/target/debug/deps/anchor_rsi-7350fc83fa04bdf3)",
+          "result_line": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+          "passed": 0,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/business.rs (rust/target/debug/deps/business-5cb3d978c2619b65)",
+          "result_line": "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.09s",
+          "passed": 4,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/evidence.rs (rust/target/debug/deps/evidence-ef282f169e6c7f6d)",
+          "result_line": "test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.10s",
+          "passed": 10,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/history_discovery.rs (rust/target/debug/deps/history_discovery-96e1a407d0b8be66)",
+          "result_line": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+          "passed": 2,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/weekly.rs (rust/target/debug/deps/weekly-1e4adf393a0e3878)",
+          "result_line": "test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s",
+          "passed": 16,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running unittests src/bin/anchor-net-relay.rs (rust/target/debug/deps/anchor_net_relay-d505111220f302c0)",
+          "result_line": "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+          "passed": 3,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running unittests src/main.rs (rust/target/debug/deps/anchor_runner_host-ae4f878f46f5f402)",
+          "result_line": "test result: FAILED. 992 passed; 15 failed; 2 ignored; 0 measured; 0 filtered out; finished in 211.73s",
+          "passed": 992,
+          "failed": 15,
+          "ignored": 2,
+          "filtered": 0
+        }
+      ],
+      "totals": {
+        "passed": 1578,
+        "failed": 15,
+        "ignored": 5,
+        "filtered": 0
+      },
+      "failed_tests": [
+        "api::tests::kernel_probe::calls::kernel_op_call_detach_dispatches_child_and_projects_parent_relation",
+        "api::tests::kernel_probe::calls::kernel_op_call_wait_projects_durable_child_run_through_host_api",
+        "api::tests::kernel_probe::explicit_kernel_probe_runs_real_host_ops_and_projects_existing_queries",
+        "api::tests::kernel_probe::legacy_and_kernel_http_share_executing_paused_and_settled_projections",
+        "api::tests::pause_resume_uses_same_frozen_run_after_graph_edit_and_service_object_restart",
+        "api::tests::platform_contract::busy_schedule_creates_no_run_or_source_metadata",
+        "api::tests::platform_contract::updated_tracks_persisted_pause_stop_and_resume_after_restart",
+        "api::tests::schedules::timeline_marks_persisted_admission_blockers_busy_across_history_pages",
+        "api::tests::run_abandon::abandon_leaves_other_runs_and_their_recovery_entry_points_unchanged",
+        "api::tests::schedules::busy_due_schedule_skips_existing_admission_without_creating_a_run",
+        "api::tests::wecom::wecom_progress_reports_only_settled_state_for_a_finished_turn",
+        "application::run_access::channels::tests::reply_and_file_projections_keep_result_order_and_cursor_fallback",
+        "application::run_access::kernel_runs::deletion::tests::kernel_graph_conversation_delete_preserves_pause_and_budget_waits",
+        "application::run_access::kernel_runs::deletion::tests::kernel_graph_conversation_delete_rechecks_wait_child_phase_and_worker",
+        "application::run_access::tests::dispatch_success_and_stopped_execution_rules_cover_every_legacy_state"
+      ]
+    },
+    {
+      "invocation_description": "cargo test --manifest-path rust/Cargo.toml --workspace --all-features --locked --no-fail-fast -- --test-threads=8",
+      "exit_code": 101,
+      "raw_output": "/tmp/anchor-m2/merge-workspace-verified.log",
+      "note": "complete previous revision; paused wait-child stop fixed afterward",
+      "sha256": "2911b5fda1b79e3138594931610342244cccd7838bd5893f20807822af833273",
+      "targets": [
+        {
+          "target": "Running unittests src/lib.rs (rust/target/debug/deps/anchor_devtools-89c3be9ce3b563c9)",
+          "result_line": "test result: ok. 84 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.51s",
+          "passed": 84,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running unittests src/main.rs (rust/target/debug/deps/anchor_devtools-1ef3db80429db865)",
+          "result_line": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+          "passed": 0,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/cli.rs (rust/target/debug/deps/cli-c85a5c9fdff2b36f)",
+          "result_line": "test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s",
+          "passed": 6,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/dev_launcher.rs (rust/target/debug/deps/dev_launcher-ebc174156d93b478)",
+          "result_line": "test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.21s",
+          "passed": 7,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running unittests src/lib.rs (rust/target/debug/deps/anchor_distribution-6fc47d7b97f8b543)",
+          "result_line": "test result: ok. 39 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.89s",
+          "passed": 39,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running unittests src/main.rs (rust/target/debug/deps/anchor_distribution-6402153aef513245)",
+          "result_line": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+          "passed": 0,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running unittests src/bin/anchor-platform.rs (rust/target/debug/deps/anchor_platform-f2b51731a209ed48)",
+          "result_line": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+          "passed": 0,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/cli.rs (rust/target/debug/deps/cli-8054acb078d5463c)",
+          "result_line": "test result: ok. 5 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+          "passed": 5,
+          "failed": 0,
+          "ignored": 1,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/platform_cli.rs (rust/target/debug/deps/platform_cli-fcc269f2b38b57ae)",
+          "result_line": "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+          "passed": 4,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running unittests src/lib.rs (rust/target/debug/deps/anchor_docmost_tools-176d1d1c8dd7ad3d)",
+          "result_line": "test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.33s",
+          "passed": 7,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running unittests src/main.rs (rust/target/debug/deps/anchor_docmost_tools-a6a291d034105d8a)",
+          "result_line": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+          "passed": 0,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/boundaries.rs (rust/target/debug/deps/boundaries-8b467327be89e768)",
+          "result_line": "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+          "passed": 4,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/package.rs (rust/target/debug/deps/package-92023d0aab132ec0)",
+          "result_line": "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.39s",
+          "passed": 4,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/stdio.rs (rust/target/debug/deps/stdio-7c98ab4ef2136480)",
+          "result_line": "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s",
+          "passed": 4,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/upload.rs (rust/target/debug/deps/upload-a2276d96aeabe558)",
+          "result_line": "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.25s",
+          "passed": 4,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running unittests src/lib.rs (rust/target/debug/deps/anchor_file_lease-4e3c49a0777b97b5)",
+          "result_line": "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+          "passed": 3,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running unittests src/lib.rs (rust/target/debug/deps/anchor_graph_host-3e7fdb2ee8602643)",
+          "result_line": "test result: ok. 58 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.18s",
+          "passed": 58,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/child_lifecycle.rs (rust/target/debug/deps/child_lifecycle-ba12a8164dbe847a)",
+          "result_line": "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.12s",
+          "passed": 4,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/in_process.rs (rust/target/debug/deps/in_process-6929f1925a9a750a)",
+          "result_line": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+          "passed": 0,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running unittests src/lib.rs (rust/target/debug/deps/anchor_kernel-3150523c8efc98b4)",
+          "result_line": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+          "passed": 0,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/accounting_lifecycle.rs (rust/target/debug/deps/accounting_lifecycle-c011a12aea317321)",
+          "result_line": "test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+          "passed": 12,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/constitution.rs (rust/target/debug/deps/constitution-81e94e2cacc5c08a)",
+          "result_line": "test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.14s",
+          "passed": 17,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/file_store_deletion.rs (rust/target/debug/deps/file_store_deletion-5de5ad08fc7e0eb6)",
+          "result_line": "test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.77s",
+          "passed": 7,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/storage_regressions.rs (rust/target/debug/deps/storage_regressions-8b0df3f757905dde)",
+          "result_line": "test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.18s",
+          "passed": 8,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running unittests src/lib.rs (rust/target/debug/deps/anchor_library-9bd2fed134718f5a)",
+          "result_line": "test result: ok. 21 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.14s",
+          "passed": 21,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running unittests src/main.rs (rust/target/debug/deps/anchor_library-6074dfaea3ab3c5d)",
+          "result_line": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+          "passed": 0,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/cli.rs (rust/target/debug/deps/cli-d9dcad8f4a5cb881)",
+          "result_line": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s",
+          "passed": 2,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/development.rs (rust/target/debug/deps/development-64ff6a524d5929f7)",
+          "result_line": "test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.00s",
+          "passed": 10,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/install.rs (rust/target/debug/deps/install-e4b221fb5a57fad9)",
+          "result_line": "test result: ok. 21 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.91s",
+          "passed": 21,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/reclaim.rs (rust/target/debug/deps/reclaim-08dd5ad6c19cf227)",
+          "result_line": "test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.07s",
+          "passed": 11,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/review.rs (rust/target/debug/deps/review-1c718d378e1a7c71)",
+          "result_line": "test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.16s",
+          "passed": 9,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running unittests src/lib.rs (rust/target/debug/deps/anchor_mcp_host-50b49a84642c1977)",
+          "result_line": "test result: ok. 25 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 0.50s",
+          "passed": 25,
+          "failed": 0,
+          "ignored": 2,
+          "filtered": 0
+        },
+        {
+          "target": "Running unittests src/lib.rs (rust/target/debug/deps/anchor_network_tools-706affa7e9d55165)",
+          "result_line": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s",
+          "passed": 2,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running unittests src/main.rs (rust/target/debug/deps/anchor_network_tools-f286324a29a5f0bc)",
+          "result_line": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+          "passed": 0,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running unittests src/lib.rs (rust/target/debug/deps/anchor_platform_session-8130049f7a2e6099)",
+          "result_line": "test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.04s",
+          "passed": 12,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/channel_assistant.rs (rust/target/debug/deps/channel_assistant-d0747e9e88248a3f)",
+          "result_line": "test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.35s",
+          "passed": 10,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/channel_assistant_retirement.rs (rust/target/debug/deps/channel_assistant_retirement-4cc9d6a5fc692ae6)",
+          "result_line": "test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.46s",
+          "passed": 8,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/channel_group.rs (rust/target/debug/deps/channel_group-01a0f2eb21da40a6)",
+          "result_line": "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.16s",
+          "passed": 3,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/channel_session.rs (rust/target/debug/deps/channel_session-434ec42c03744c8f)",
+          "result_line": "test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.35s",
+          "passed": 13,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/execution_links.rs (rust/target/debug/deps/execution_links-2dfd1ae5d8c66af6)",
+          "result_line": "test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.48s",
+          "passed": 18,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/goose_links.rs (rust/target/debug/deps/goose_links-46267a836c56fbc7)",
+          "result_line": "test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.83s",
+          "passed": 14,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/questions.rs (rust/target/debug/deps/questions-b2e1166be05d9cd3)",
+          "result_line": "test result: ok. 22 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.87s",
+          "passed": 22,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/schema_v3.rs (rust/target/debug/deps/schema_v3-4848f6b49a958b89)",
+          "result_line": "test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 7.16s",
+          "passed": 6,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/schema_v5.rs (rust/target/debug/deps/schema_v5-ad356628c8fbc613)",
+          "result_line": "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.87s",
+          "passed": 3,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/session_store.rs (rust/target/debug/deps/session_store-24973e80ab847bb5)",
+          "result_line": "test result: ok. 27 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.59s",
+          "passed": 27,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/turn_store.rs (rust/target/debug/deps/turn_store-e82808e9004a455f)",
+          "result_line": "test result: ok. 26 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.94s",
+          "passed": 26,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running unittests src/lib.rs (rust/target/debug/deps/anchor_rsi-1a141dfc48af57d9)",
+          "result_line": "test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s",
+          "passed": 11,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running unittests src/main.rs (rust/target/debug/deps/anchor_rsi-7350fc83fa04bdf3)",
+          "result_line": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+          "passed": 0,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/business.rs (rust/target/debug/deps/business-5cb3d978c2619b65)",
+          "result_line": "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.09s",
+          "passed": 4,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/evidence.rs (rust/target/debug/deps/evidence-ef282f169e6c7f6d)",
+          "result_line": "test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.09s",
+          "passed": 10,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/history_discovery.rs (rust/target/debug/deps/history_discovery-96e1a407d0b8be66)",
+          "result_line": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+          "passed": 2,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/weekly.rs (rust/target/debug/deps/weekly-1e4adf393a0e3878)",
+          "result_line": "test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s",
+          "passed": 16,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running unittests src/bin/anchor-net-relay.rs (rust/target/debug/deps/anchor_net_relay-d505111220f302c0)",
+          "result_line": "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+          "passed": 3,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running unittests src/main.rs (rust/target/debug/deps/anchor_runner_host-ae4f878f46f5f402)",
+          "result_line": "test result: FAILED. 1006 passed; 1 failed; 2 ignored; 0 measured; 0 filtered out; finished in 234.43s",
+          "passed": 1006,
+          "failed": 1,
+          "ignored": 2,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/channel_startup.rs (rust/target/debug/deps/channel_startup-ad2dcec945c48b3c)",
+          "result_line": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.70s",
+          "passed": 1,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/goose_acp.rs (rust/target/debug/deps/goose_acp-da4cefdd59f0fe53)",
+          "result_line": "test result: ok. 8 passed; 0 failed; 15 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+          "passed": 8,
+          "failed": 0,
+          "ignored": 15,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/goose_channel.rs (rust/target/debug/deps/goose_channel-8bdd741307320a51)",
+          "result_line": "test result: ok. 6 passed; 0 failed; 4 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+          "passed": 6,
+          "failed": 0,
+          "ignored": 4,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/goose_compaction.rs (rust/target/debug/deps/goose_compaction-76d5f07695adb0ff)",
+          "result_line": "test result: ok. 6 passed; 0 failed; 4 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+          "passed": 6,
+          "failed": 0,
+          "ignored": 4,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/goose_completion.rs (rust/target/debug/deps/goose_completion-b69092f2cd829242)",
+          "result_line": "test result: ok. 6 passed; 0 failed; 9 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+          "passed": 6,
+          "failed": 0,
+          "ignored": 9,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/goose_conversation.rs (rust/target/debug/deps/goose_conversation-815becd7140d3b26)",
+          "result_line": "test result: ok. 6 passed; 0 failed; 13 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+          "passed": 6,
+          "failed": 0,
+          "ignored": 13,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/goose_development_environment.rs (rust/target/debug/deps/goose_development_environment-33c7cc676f17ccbb)",
+          "result_line": "test result: ok. 6 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+          "passed": 6,
+          "failed": 0,
+          "ignored": 1,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/goose_distribution.rs (rust/target/debug/deps/goose_distribution-e038f01277fa1940)",
+          "result_line": "test result: ok. 6 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+          "passed": 6,
+          "failed": 0,
+          "ignored": 1,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/goose_elicitation.rs (rust/target/debug/deps/goose_elicitation-83d4e7e46d3275ff)",
+          "result_line": "test result: ok. 6 passed; 0 failed; 10 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+          "passed": 6,
+          "failed": 0,
+          "ignored": 10,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/goose_library.rs (rust/target/debug/deps/goose_library-406580931158f1ce)",
+          "result_line": "test result: ok. 6 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+          "passed": 6,
+          "failed": 0,
+          "ignored": 1,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/goose_media.rs (rust/target/debug/deps/goose_media-7031189e021e9dea)",
+          "result_line": "test result: ok. 6 passed; 0 failed; 6 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+          "passed": 6,
+          "failed": 0,
+          "ignored": 6,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/goose_model_settings.rs (rust/target/debug/deps/goose_model_settings-833831cae89137b0)",
+          "result_line": "test result: ok. 6 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+          "passed": 6,
+          "failed": 0,
+          "ignored": 2,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/goose_native_activation_spike.rs (rust/target/debug/deps/goose_native_activation_spike-aaabe67ddcb076ac)",
+          "result_line": "test result: ok. 6 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+          "passed": 6,
+          "failed": 0,
+          "ignored": 2,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/goose_persistent_assistant.rs (rust/target/debug/deps/goose_persistent_assistant-fdde56ae95043745)",
+          "result_line": "test result: ok. 6 passed; 0 failed; 12 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+          "passed": 6,
+          "failed": 0,
+          "ignored": 12,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/goose_pilot.rs (rust/target/debug/deps/goose_pilot-31741aba068a4c80)",
+          "result_line": "test result: ok. 6 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+          "passed": 6,
+          "failed": 0,
+          "ignored": 2,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/goose_pilot_attachments.rs (rust/target/debug/deps/goose_pilot_attachments-a019fcd8aad8d0e0)",
+          "result_line": "test result: ok. 6 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+          "passed": 6,
+          "failed": 0,
+          "ignored": 2,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/goose_pilot_authoring.rs (rust/target/debug/deps/goose_pilot_authoring-e2ed8d04c8a1be6b)",
+          "result_line": "test result: ok. 6 passed; 0 failed; 4 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+          "passed": 6,
+          "failed": 0,
+          "ignored": 4,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/goose_pilot_compaction.rs (rust/target/debug/deps/goose_pilot_compaction-51c07fdc5e3d7630)",
+          "result_line": "test result: ok. 6 passed; 0 failed; 3 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+          "passed": 6,
+          "failed": 0,
+          "ignored": 3,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/goose_plugin_configuration.rs (rust/target/debug/deps/goose_plugin_configuration-4765f3bedad37243)",
+          "result_line": "test result: ok. 6 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+          "passed": 6,
+          "failed": 0,
+          "ignored": 1,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/goose_plugin_disclosure.rs (rust/target/debug/deps/goose_plugin_disclosure-21323882917c0caa)",
+          "result_line": "test result: ok. 6 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+          "passed": 6,
+          "failed": 0,
+          "ignored": 1,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/goose_plugin_mcp.rs (rust/target/debug/deps/goose_plugin_mcp-a380eeedcb52ac71)",
+          "result_line": "test result: ok. 6 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+          "passed": 6,
+          "failed": 0,
+          "ignored": 2,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/goose_plugin_summary.rs (rust/target/debug/deps/goose_plugin_summary-6333e7a0fc1a43d9)",
+          "result_line": "test result: ok. 6 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+          "passed": 6,
+          "failed": 0,
+          "ignored": 2,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/goose_plugin_turns.rs (rust/target/debug/deps/goose_plugin_turns-aee446e442b72633)",
+          "result_line": "test result: ok. 6 passed; 0 failed; 7 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+          "passed": 6,
+          "failed": 0,
+          "ignored": 7,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/goose_provider_errors.rs (rust/target/debug/deps/goose_provider_errors-926a18bfcbdda677)",
+          "result_line": "test result: ok. 6 passed; 0 failed; 4 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+          "passed": 6,
+          "failed": 0,
+          "ignored": 4,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/goose_responses.rs (rust/target/debug/deps/goose_responses-50b7afb99bb9ebd7)",
+          "result_line": "test result: ok. 6 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+          "passed": 6,
+          "failed": 0,
+          "ignored": 2,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/goose_session_calls.rs (rust/target/debug/deps/goose_session_calls-06c92fafa08019ba)",
+          "result_line": "test result: ok. 6 passed; 0 failed; 4 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+          "passed": 6,
+          "failed": 0,
+          "ignored": 4,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/goose_trace.rs (rust/target/debug/deps/goose_trace-9b769351f6e8a4e4)",
+          "result_line": "test result: ok. 6 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+          "passed": 6,
+          "failed": 0,
+          "ignored": 2,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/local_inputs.rs (rust/target/debug/deps/local_inputs-b97006033751f3dd)",
+          "result_line": "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.59s",
+          "passed": 4,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/local_network.rs (rust/target/debug/deps/local_network-842afdeecdfdde3f)",
+          "result_line": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.17s",
+          "passed": 1,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/multinode.rs (rust/target/debug/deps/multinode-0699d4ff384a7ab8)",
+          "result_line": "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.92s",
+          "passed": 3,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/native_plugins.rs (rust/target/debug/deps/native_plugins-1a860a884ab0d346)",
+          "result_line": "test result: ok. 6 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+          "passed": 6,
+          "failed": 0,
+          "ignored": 2,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/parallel.rs (rust/target/debug/deps/parallel-91183c533cf8e29f)",
+          "result_line": "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.85s",
+          "passed": 3,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/routing.rs (rust/target/debug/deps/routing-c335a9fc6195c44b)",
+          "result_line": "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.61s",
+          "passed": 5,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/run_access_fence.rs (rust/target/debug/deps/run_access_fence-6718f0f2986c4d2a)",
+          "result_line": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.11s",
+          "passed": 1,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/standalone_graph_call.rs (rust/target/debug/deps/standalone_graph_call-63effe2bd05839c7)",
+          "result_line": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.78s",
+          "passed": 2,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/standalone_library.rs (rust/target/debug/deps/standalone_library-61e4516bf1a94b0c)",
+          "result_line": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s",
+          "passed": 1,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/standard_host.rs (rust/target/debug/deps/standard_host-334699cb15689463)",
+          "result_line": "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.71s",
+          "passed": 3,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/writer_lease.rs (rust/target/debug/deps/writer_lease-ec5f6771f09db668)",
+          "result_line": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.51s",
+          "passed": 2,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running unittests src/lib.rs (rust/target/debug/deps/anchor_runtime-3289c4895e14b847)",
+          "result_line": "test result: ok. 148 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 129.18s",
+          "passed": 148,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/weekly_work_report_graphs.rs (rust/target/debug/deps/weekly_work_report_graphs-6e069e33af30f9d7)",
+          "result_line": "test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+          "passed": 7,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running unittests src/lib.rs (rust/target/debug/deps/anchor_sandbox_bwrap-97aa2ce7f13a0006)",
+          "result_line": "test result: ok. 19 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.57s",
+          "passed": 19,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running unittests src/bin/anchor-sandbox-network.rs (rust/target/debug/deps/anchor_sandbox_network-ce3c7ce6f92de0e0)",
+          "result_line": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+          "passed": 1,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/network_boundary.rs (rust/target/debug/deps/network_boundary-13e3fce795fbcab6)",
+          "result_line": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.24s",
+          "passed": 2,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running unittests src/lib.rs (rust/target/debug/deps/anchor_scholarly-ee2cbcdb0339ca47)",
+          "result_line": "test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s",
+          "passed": 18,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running unittests src/main.rs (rust/target/debug/deps/anchor_scholarly-7dad492d961d5536)",
+          "result_line": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+          "passed": 0,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/batch.rs (rust/target/debug/deps/batch-ef00f8d0dadfd8ca)",
+          "result_line": "test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.01s",
+          "passed": 7,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/boundaries.rs (rust/target/debug/deps/boundaries-4c2d1b1f041759b2)",
+          "result_line": "test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.01s",
+          "passed": 9,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/mcp.rs (rust/target/debug/deps/mcp-05ca9edac438c6f5)",
+          "result_line": "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s",
+          "passed": 3,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/read.rs (rust/target/debug/deps/read-846dee6c94c1543a)",
+          "result_line": "test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.01s",
+          "passed": 9,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/search.rs (rust/target/debug/deps/search-19ff9d07c8eac253)",
+          "result_line": "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.03s",
+          "passed": 5,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running unittests src/lib.rs (rust/target/debug/deps/anchor_wecom_gateway-1e26d125864e28f3)",
+          "result_line": "test result: ok. 26 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.79s",
+          "passed": 26,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running unittests src/main.rs (rust/target/debug/deps/anchor_wecom_gateway-3f7dc9877900599f)",
+          "result_line": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+          "passed": 0,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/cli.rs (rust/target/debug/deps/cli-653f4d30c3f23955)",
+          "result_line": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.34s",
+          "passed": 2,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/transport.rs (rust/target/debug/deps/transport-b8a03cd300b11384)",
+          "result_line": "test result: ok. 50 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 7.59s",
+          "passed": 50,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running unittests src/lib.rs (rust/target/debug/deps/anchor_wecom_tools-6ce454fb5c6066d9)",
+          "result_line": "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.10s",
+          "passed": 4,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running unittests src/main.rs (rust/target/debug/deps/anchor_wecom_tools-db547ec35fed9df5)",
+          "result_line": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+          "passed": 0,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/api.rs (rust/target/debug/deps/api-c8c093eeff5d8d41)",
+          "result_line": "test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.10s",
+          "passed": 11,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Running tests/stdio_package.rs (rust/target/debug/deps/stdio_package-10f0eee43e6f222f)",
+          "result_line": "test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.73s",
+          "passed": 6,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Doc-tests anchor_devtools",
+          "result_line": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+          "passed": 0,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Doc-tests anchor_distribution",
+          "result_line": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+          "passed": 0,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Doc-tests anchor_docmost_tools",
+          "result_line": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+          "passed": 0,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Doc-tests anchor_file_lease",
+          "result_line": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+          "passed": 0,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Doc-tests anchor_graph_host",
+          "result_line": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+          "passed": 0,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Doc-tests anchor_kernel",
+          "result_line": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+          "passed": 0,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Doc-tests anchor_library",
+          "result_line": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+          "passed": 0,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Doc-tests anchor_mcp_host",
+          "result_line": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+          "passed": 0,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Doc-tests anchor_network_tools",
+          "result_line": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+          "passed": 0,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Doc-tests anchor_platform_session",
+          "result_line": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+          "passed": 0,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Doc-tests anchor_rsi",
+          "result_line": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+          "passed": 0,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Doc-tests anchor_runtime",
+          "result_line": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s",
+          "passed": 2,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Doc-tests anchor_sandbox_bwrap",
+          "result_line": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+          "passed": 0,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Doc-tests anchor_scholarly",
+          "result_line": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+          "passed": 0,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Doc-tests anchor_wecom_gateway",
+          "result_line": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+          "passed": 0,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        },
+        {
+          "target": "Doc-tests anchor_wecom_tools",
+          "result_line": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+          "passed": 0,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 0
+        }
+      ],
+      "totals": {
+        "passed": 2111,
+        "failed": 1,
+        "ignored": 123,
+        "filtered": 0
+      },
+      "failed_tests": [
+        "api::tests::conversations::superseded_conversation_cannot_resume_or_recover_its_wait_child"
+      ]
+    },
+    {
+      "invocation_description": "cargo test --manifest-path rust/Cargo.toml -p anchor-runner-host --bin anchor-runner-host superseded_conversation_cannot_resume_or_recover_its_wait_child",
+      "exit_code": 0,
+      "raw_output": "/tmp/anchor-m2/merge-conversation-stop.log",
+      "note": "targeted confirmation after the parent stop fix",
+      "sha256": "7b1f72febbe6cab7a2d0b5a94346632efbc0e6cdbc407b3e6c4489de4111278b",
+      "targets": [
+        {
+          "target": "Running unittests src/main.rs (rust/target/debug/deps/anchor_runner_host-3a992d23f5a5c9b7)",
+          "result_line": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1008 filtered out; finished in 1.04s",
+          "passed": 1,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 1008
+        }
+      ],
+      "totals": {
+        "passed": 1,
+        "failed": 0,
+        "ignored": 0,
+        "filtered": 1008
+      },
+      "failed_tests": []
+    },
+    {
+      "invocation_description": "standard complete Host ignored command; same environment as final except no expected Host digest and evidence root /tmp/anchor-m2/merge-goose-evidence",
+      "exit_code": 101,
+      "raw_output": "/tmp/anchor-m2/merge-goose-full.log",
+      "note": "frozen pre-trace-fix Host; single evidence publication race",
+      "sha256": "f7bedeec9b6faf29fce6c69fc62dad68884ee3f08ab081b057c304f4dc6d1fd6",
+      "targets": [
+        {
+          "target": "Running unittests src/bin/anchor-net-relay.rs (rust/target/debug/deps/anchor_net_relay-23fa5a40612fd062)",
+          "result_line": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.00s",
+          "passed": 0,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 3
+        },
+        {
+          "target": "Running unittests src/main.rs (rust/target/debug/deps/anchor_runner_host-3a992d23f5a5c9b7)",
+          "result_line": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 1007 filtered out; finished in 31.89s",
+          "passed": 2,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 1007
+        },
+        {
+          "target": "Running tests/channel_startup.rs (rust/target/debug/deps/channel_startup-0007a54f5d9ad168)",
+          "result_line": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s",
+          "passed": 0,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 1
+        },
+        {
+          "target": "Running tests/goose_acp.rs (rust/target/debug/deps/goose_acp-10b8bd26159f8551)",
+          "result_line": "test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 8 filtered out; finished in 109.30s",
+          "passed": 15,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 8
+        },
+        {
+          "target": "Running tests/goose_channel.rs (rust/target/debug/deps/goose_channel-5764eb0d21116180)",
+          "result_line": "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 33.40s",
+          "passed": 4,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 6
+        },
+        {
+          "target": "Running tests/goose_compaction.rs (rust/target/debug/deps/goose_compaction-b229b305fd0e4565)",
+          "result_line": "test result: FAILED. 3 passed; 1 failed; 0 ignored; 0 measured; 6 filtered out; finished in 29.66s",
+          "passed": 3,
+          "failed": 1,
+          "ignored": 0,
+          "filtered": 6
+        },
+        {
+          "target": "Running tests/goose_completion.rs (rust/target/debug/deps/goose_completion-5975d85e2901607e)",
+          "result_line": "test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 66.05s",
+          "passed": 9,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 6
+        },
+        {
+          "target": "Running tests/goose_conversation.rs (rust/target/debug/deps/goose_conversation-ac5da1d7a89c0072)",
+          "result_line": "test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 110.37s",
+          "passed": 13,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 6
+        },
+        {
+          "target": "Running tests/goose_development_environment.rs (rust/target/debug/deps/goose_development_environment-ae2a8efed31fa048)",
+          "result_line": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 19.61s",
+          "passed": 1,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 6
+        },
+        {
+          "target": "Running tests/goose_distribution.rs (rust/target/debug/deps/goose_distribution-7601fa7d5bba4fab)",
+          "result_line": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 83.46s",
+          "passed": 1,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 6
+        },
+        {
+          "target": "Running tests/goose_elicitation.rs (rust/target/debug/deps/goose_elicitation-2407891011f2cc0a)",
+          "result_line": "test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 64.73s",
+          "passed": 10,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 6
+        },
+        {
+          "target": "Running tests/goose_library.rs (rust/target/debug/deps/goose_library-cb2332c9cdf73e83)",
+          "result_line": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 8.08s",
+          "passed": 1,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 6
+        },
+        {
+          "target": "Running tests/goose_media.rs (rust/target/debug/deps/goose_media-f1d34d4bd5fe51a0)",
+          "result_line": "test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 54.35s",
+          "passed": 6,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 6
+        },
+        {
+          "target": "Running tests/goose_model_settings.rs (rust/target/debug/deps/goose_model_settings-e9cb3b89e4f5b0df)",
+          "result_line": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 15.73s",
+          "passed": 2,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 6
+        },
+        {
+          "target": "Running tests/goose_native_activation_spike.rs (rust/target/debug/deps/goose_native_activation_spike-9aa28061523444aa)",
+          "result_line": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 2.64s",
+          "passed": 2,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 6
+        },
+        {
+          "target": "Running tests/goose_persistent_assistant.rs (rust/target/debug/deps/goose_persistent_assistant-ab7798b248843ef6)",
+          "result_line": "test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 133.52s",
+          "passed": 12,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 6
+        },
+        {
+          "target": "Running tests/goose_pilot.rs (rust/target/debug/deps/goose_pilot-95763c2cf5ea0117)",
+          "result_line": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 15.00s",
+          "passed": 2,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 6
+        },
+        {
+          "target": "Running tests/goose_pilot_attachments.rs (rust/target/debug/deps/goose_pilot_attachments-62314e6dcee34ef0)",
+          "result_line": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 19.40s",
+          "passed": 2,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 6
+        },
+        {
+          "target": "Running tests/goose_pilot_authoring.rs (rust/target/debug/deps/goose_pilot_authoring-e9b11a1cb9b0312b)",
+          "result_line": "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 34.97s",
+          "passed": 4,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 6
+        },
+        {
+          "target": "Running tests/goose_pilot_compaction.rs (rust/target/debug/deps/goose_pilot_compaction-2532f83d24db6067)",
+          "result_line": "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 27.79s",
+          "passed": 3,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 6
+        },
+        {
+          "target": "Running tests/goose_plugin_configuration.rs (rust/target/debug/deps/goose_plugin_configuration-3efd69f9284bbf70)",
+          "result_line": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 53.85s",
+          "passed": 1,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 6
+        },
+        {
+          "target": "Running tests/goose_plugin_disclosure.rs (rust/target/debug/deps/goose_plugin_disclosure-5e7cdad0f08dca5f)",
+          "result_line": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 4.30s",
+          "passed": 1,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 6
+        },
+        {
+          "target": "Running tests/goose_plugin_mcp.rs (rust/target/debug/deps/goose_plugin_mcp-cb11fa25e387b8a1)",
+          "result_line": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 31.82s",
+          "passed": 2,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 6
+        },
+        {
+          "target": "Running tests/goose_plugin_summary.rs (rust/target/debug/deps/goose_plugin_summary-e4b38d4dd48e0e4e)",
+          "result_line": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 17.32s",
+          "passed": 2,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 6
+        },
+        {
+          "target": "Running tests/goose_plugin_turns.rs (rust/target/debug/deps/goose_plugin_turns-4dff9b42256d2fc5)",
+          "result_line": "test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 74.63s",
+          "passed": 7,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 6
+        },
+        {
+          "target": "Running tests/goose_provider_errors.rs (rust/target/debug/deps/goose_provider_errors-d8eb4a799a0742be)",
+          "result_line": "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 38.72s",
+          "passed": 4,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 6
+        },
+        {
+          "target": "Running tests/goose_responses.rs (rust/target/debug/deps/goose_responses-ecf7802723d03f7c)",
+          "result_line": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 15.96s",
+          "passed": 2,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 6
+        },
+        {
+          "target": "Running tests/goose_session_calls.rs (rust/target/debug/deps/goose_session_calls-d5055908672910a6)",
+          "result_line": "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 43.71s",
+          "passed": 4,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 6
+        },
+        {
+          "target": "Running tests/goose_trace.rs (rust/target/debug/deps/goose_trace-4e6351ec0b65585b)",
+          "result_line": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 15.77s",
+          "passed": 2,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 6
+        },
+        {
+          "target": "Running tests/local_inputs.rs (rust/target/debug/deps/local_inputs-b3dcce8860b0e9af)",
+          "result_line": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 4 filtered out; finished in 0.00s",
+          "passed": 0,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 4
+        },
+        {
+          "target": "Running tests/local_network.rs (rust/target/debug/deps/local_network-0824845d8757759a)",
+          "result_line": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s",
+          "passed": 0,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 1
+        },
+        {
+          "target": "Running tests/multinode.rs (rust/target/debug/deps/multinode-432cc26aa63b9914)",
+          "result_line": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.00s",
+          "passed": 0,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 3
+        },
+        {
+          "target": "Running tests/native_plugins.rs (rust/target/debug/deps/native_plugins-19ba4f7e85cee030)",
+          "result_line": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 50.23s",
+          "passed": 2,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 6
+        },
+        {
+          "target": "Running tests/parallel.rs (rust/target/debug/deps/parallel-d0be665d75c0fd8b)",
+          "result_line": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.00s",
+          "passed": 0,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 3
+        },
+        {
+          "target": "Running tests/routing.rs (rust/target/debug/deps/routing-54e47e426045387b)",
+          "result_line": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 5 filtered out; finished in 0.00s",
+          "passed": 0,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 5
+        },
+        {
+          "target": "Running tests/run_access_fence.rs (rust/target/debug/deps/run_access_fence-d3e334e8ac114b93)",
+          "result_line": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s",
+          "passed": 0,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 1
+        },
+        {
+          "target": "Running tests/standalone_graph_call.rs (rust/target/debug/deps/standalone_graph_call-652cb222778c1857)",
+          "result_line": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s",
+          "passed": 0,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 2
+        },
+        {
+          "target": "Running tests/standalone_library.rs (rust/target/debug/deps/standalone_library-9de65a9b734279ec)",
+          "result_line": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s",
+          "passed": 0,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 1
+        },
+        {
+          "target": "Running tests/standard_host.rs (rust/target/debug/deps/standard_host-a1b191cb99246b03)",
+          "result_line": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.00s",
+          "passed": 0,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 3
+        },
+        {
+          "target": "Running tests/writer_lease.rs (rust/target/debug/deps/writer_lease-9846566d4323f625)",
+          "result_line": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s",
+          "passed": 0,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 2
+        }
+      ],
+      "totals": {
+        "passed": 119,
+        "failed": 1,
+        "ignored": 0,
+        "filtered": 1200
+      },
+      "failed_tests": [
+        "native_goose_compacted_effect_survives_host_kill_and_is_inspected_without_replay"
+      ]
+    },
+    {
+      "invocation_description": "rust/target/debug/deps/goose_compaction-b229b305fd0e4565 --exact native_goose_compacted_effect_survives_host_kill_and_is_inspected_without_replay --ignored --test-threads=1",
+      "exit_code": 0,
+      "raw_output": "/tmp/anchor-m2/merge-goose-compaction-retry.log",
+      "note": "same frozen pre-fix Host; independent retry, new evidence root /tmp/anchor-m2/merge-goose-compaction-retry-evidence; does not erase first failure",
+      "sha256": "ce6ea0e4a2290183454bbf9d71c04d18a6641c05d2f8f716bb9781f876534950",
+      "targets": [
+        {
+          "target": "direct test binary",
+          "result_line": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 9 filtered out; finished in 9.57s",
+          "passed": 1,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 9
+        }
+      ],
+      "totals": {
+        "passed": 1,
+        "failed": 0,
+        "ignored": 0,
+        "filtered": 9
+      },
+      "failed_tests": []
+    },
+    {
+      "invocation_description": "cargo test --manifest-path rust/Cargo.toml -p anchor-runner-host --bin anchor-runner-host goose_acp::trace",
+      "exit_code": 0,
+      "raw_output": "/tmp/anchor-m2/merge-trace-publication.log",
+      "note": "atomic publication and existing trace cases",
+      "sha256": "ed8a3f754127a8f87640173daffc7475e30762f9064da23051d6c71245570ca0",
+      "targets": [
+        {
+          "target": "Running unittests src/main.rs (rust/target/debug/deps/anchor_runner_host-3a992d23f5a5c9b7)",
+          "result_line": "test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 1002 filtered out; finished in 0.12s",
+          "passed": 8,
+          "failed": 0,
+          "ignored": 0,
+          "filtered": 1002
+        }
+      ],
+      "totals": {
+        "passed": 8,
+        "failed": 0,
+        "ignored": 0,
+        "filtered": 1002
+      },
+      "failed_tests": []
+    }
+  ],
+  "invalid_identity_invocation": {
+    "status": "aborted invalid invocation",
+    "termination_exit_code": 143,
+    "reason": "Expected Host digest captured before cargo test relinked the Host. Identity guard rejected before Graph admission.",
+    "raw_output": "/tmp/anchor-m2/merge-goose-identity-aborted.log",
+    "sha256": "d331355c5cca939ddc9a5cbf8047715d234aa773141a8a8ba686338a015e7a14"
+  },
+  "earlier_scenario_validation": {
+    "path": "/tmp/anchor-m2/merge-initial-scenario-validation.json",
+    "sha256": "8cd5cbdb95b4c5e142f2f121baa1a98550c65a8010bb04281c8152528be8bf30",
+    "result": "missing Host/Goose identities in disclosure report; metadata corrected without changing assertions"
+  },
+  "scenario_validation": {
+    "path": "/tmp/anchor-m2/merge-scenario-validation.json",
+    "sha256": "a1f1e671d8d6e8871412c090aeb7cdb2f68abab0d7b67fb7d2ac21c635ba22f6",
+    "canonical_count": 109,
+    "complement_count": 8,
+    "failures": [],
+    "validator_source": "/tmp/anchor-m2/validate-goose-evidence.rs",
+    "validator_source_sha256": "7da705b0b6cfac7c61dcd17ddea1a0336df1ec7cb769697fb6d10e07136e3340"
+  },
+  "limits": [
+    "No real model provider validation, production migration or deployment.",
+    "M2 parallel Call, persistent assistant interruption, result completion and native recovery decisions remain open.",
+    "Full ignored command includes native API probes and ignored Host unit tests; canonical scenario report validation is reported separately."
+  ]
+}
