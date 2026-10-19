@@ -178,20 +178,26 @@ prepare_api() {
   local relay
   relay=$(realpath -m -- "$ANCHOR_GOOSE_RELAY_BINARY")
   export ANCHOR_GOOSE_RELAY_BINARY="$relay"
-  if [[ ! -x "$binary" || ! -x "$relay" ]]; then
-    if [[ "$binary" != "$target_dir/debug/anchor-runner-host" || "$relay" != "$target_dir/debug/anchor-net-relay" ]]; then
-      echo "Explicit Host/relay paths must both be executable: $binary ; $relay" >&2
-      return 1
-    fi
+  if [[ "$binary" == "$target_dir/debug/anchor-runner-host" && "$relay" == "$target_dir/debug/anchor-net-relay" ]]; then
     require_command cargo "Install Rust stable with rustup and the system C build tools."
-    echo "Building Rust Host and network relay..."
+    echo "Preparing Rust Host and network relay (incremental build)..."
     CARGO_TARGET_DIR="$target_dir" cargo build --manifest-path "$repo/rust/Cargo.toml" -p anchor-runner-host --bins --locked
+  elif [[ ! -x "$binary" || ! -x "$relay" ]]; then
+    echo "Explicit Host/relay paths must both be executable: $binary ; $relay" >&2
+    return 1
   fi
   [[ -x "$binary" && -x "$relay" ]] || { echo "Rust build did not produce Host and relay." >&2; return 1; }
   export ANCHOR_GOOSE_BINARY="$(realpath -m -- "${ANCHOR_GOOSE_BINARY:-$repo/.local/bin/goose}")"
-  echo "Checking pinned Goose ACP runtime (first build may take several minutes)..."
+  echo "Preparing Goose ACP runtime (first build may take several minutes)..."
   "$repo/scripts/build-goose-acp.sh" --ensure --output "$ANCHOR_GOOSE_BINARY"
-  if [[ ! -f "$ANCHOR_RUNNER_WEB_ROOT/index.html" && "$ANCHOR_RUNNER_WEB_ROOT" == "$repo/apps/web/dist" ]]; then
+  # Source builds use their own bytes; users never configure a build checksum.
+  export ANCHOR_GOOSE_BINARY_SHA256="$(sha256sum "$ANCHOR_GOOSE_BINARY" | cut -d' ' -f1)"
+  if [[ "$ANCHOR_RUNNER_WEB_ROOT" == "$repo/apps/web/dist" ]] && {
+    [[ ! -f "$ANCHOR_RUNNER_WEB_ROOT/index.html" ]] ||
+    [[ -n "$(find "$repo/apps/web/src" "$repo/apps/web/index.html" "$repo/apps/web/package.json" \
+      "$repo/apps/web/package-lock.json" "$repo/apps/web/vite.config.ts" "$repo/apps/web/tsconfig.json" \
+      -type f -newer "$ANCHOR_RUNNER_WEB_ROOT/index.html" -print -quit)" ]];
+  }; then
     echo "Building WebUI assets..."
     npm --prefix "$repo/apps/web" run build
   fi
@@ -205,8 +211,8 @@ start_api() {
     echo "External service at $ANCHOR_WEB_API_URL (not managed by dev.sh)"
     api_ready || { echo "External service does not satisfy Rust Host health/readiness" >&2; return 1; }
   else
-    local binary
-    prepare_api
+    local binary=${1:-}
+    [[ -n "$binary" ]] || prepare_api
     mkdir -p "$ANCHOR_RUNNER_CATALOG_ROOT" "$ANCHOR_RUNNER_STATE_ROOT" \
       "$ANCHOR_RUNNER_WORKSPACE_ROOT" "$ANCHOR_RUNNER_LIBRARY_ROOT/plugins"
     nohup setsid "$binary" serve >"$state/native-host.log" 2>&1 < /dev/null 9>&- &
@@ -284,6 +290,8 @@ case "$action" in
     prepare_web
     start_api
     start_web
+    echo "Web UI: $web_url"
+    echo 'Open Settings -> Model service, save the default Flash URL/key/model, then chat with Pilot.'
     echo "Logs: $state/"
     ;;
   stop)
@@ -296,7 +304,7 @@ case "$action" in
     prepare_api
     stop_one "Web UI" "$web_pid"
     stop_one "Anchor API" "$api_pid"
-    start_api
+    start_api "$binary"
     start_web
     ;;
   status)

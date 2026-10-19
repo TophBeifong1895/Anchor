@@ -6,7 +6,7 @@
 
 `rust/` 是唯一 Cargo workspace，官方 Host、Kernel、工具、发行和开发检查共享 [Cargo.lock](../rust/Cargo.lock)。`apps/web/` 使用 React/TypeScript；依赖见 [package.json](../apps/web/package.json) 和其 lock。官方 Plugin 清单/Skill 位于 `plugins/`，Graph 示例位于 `examples/`。
 
-运行与构建需要 Linux x86_64、Git、Bubblewrap、Rust/rustup、Node.js 和 C 构建工具；系统工具清单见[使用指南](usage.md#安装与本地启动)。执行 `./scripts/dev.sh start` 自动准备锁定的前端依赖、缺少的 debug Host/relay、固定 Goose 与 Web 资产；`setup` 只准备不启动，Goose 配方自动安装所需 musl target。不需要 `.env`，开发脚本与 Web 构建忽略旧环境文件。`scripts/dev.sh` 管理独立 Rust 开发根和本次服务 PID；修改后端需要重建并重启才能加载，不因文档变化或仅验证而重启用户服务。
+运行与构建需要 Linux x86_64、Git、Bubblewrap、Rust/rustup、Node.js 和 C 构建工具；系统工具清单见[使用指南](usage.md#安装与本地启动)。执行 `./scripts/dev.sh start` 自动准备锁定的前端依赖，增量构建 debug Host/relay、准备固定版本及补丁的 Goose，并更新 Web 资产；`setup` 只准备不启动，Goose 配方自动安装所需 musl target。不需要 `.env`，开发脚本与 Web 构建忽略旧环境文件。`scripts/dev.sh` 管理独立 Rust 开发根和本次服务 PID；拉取更新或修改后端后执行 `./scripts/dev.sh restart` 自动增量构建并加载，不因文档变化或仅验证而重启用户服务。
 
 ## 工作节奏
 
@@ -37,7 +37,7 @@ ANCHOR_GOOSE_BINARY=/absolute/path/to/goose \
   regression fixture
 ```
 
-`ANCHOR_GOOSE_BINARY` 指向 [构建脚本](../scripts/build-goose-acp.sh) 产出的 Anchor 自建 lean Goose ACP 二进制；该脚本固定上游源码与 musl 工具链摘要、校验静态 ELF，并可复现 digest。
+`ANCHOR_GOOSE_BINARY` 指向 [构建脚本](../scripts/build-goose-acp.sh) 产出的 Anchor 自建 lean Goose ACP 二进制；该脚本固定上游源码、补丁及 musl 工具链，按 lock 编译并校验静态 ELF；源码启动自动使用本机产物摘要，无跨机器二进制 pin。
 
 浏览器测试使用 Node 本地 Provider 与实际 Rust Host/Goose；执行方式见回归指南。release 包用 [原生候选回归](rust-production-candidate.md) 检查。大型 RSI、深度研究、周报和真实业务服务按低频内容验收单独运行。
 

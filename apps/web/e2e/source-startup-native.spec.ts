@@ -1,5 +1,6 @@
 import { expect, test } from '@playwright/test';
 import { execFile } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -50,6 +51,8 @@ test('source launcher prepares its runtime and WebUI configures Pilot and AgentN
   });
   try {
     await command('start');
+    const goosePath = join(checkout, '.local/bin/goose');
+    const gooseDigest = createHash('sha256').update(await readFile(goosePath)).digest('hex');
     expect((await request.get(`${base}/health`)).ok()).toBeTruthy();
     expect((await request.get(`${base}/ready`)).ok()).toBeTruthy();
     expect((await (await request.get(`${base}/settings/model`)).json()).execution.configured).toBe(false);
@@ -85,7 +88,9 @@ test('source launcher prepares its runtime and WebUI configures Pilot and AgentN
       { timeout: 30000 }).toBe('completed');
     const artifact = await request.get(`${base}/runs/${run}/files/build/result.txt?download=1`);
     expect(artifact.ok()).toBeTruthy(); expect(await artifact.text()).toBe('source-agent-artifact');
-    await command('restart'); await page.reload();
+    await command('restart');
+    expect(createHash('sha256').update(await readFile(goosePath)).digest('hex')).toBe(gooseDigest);
+    await page.reload();
     await expect(page.locator('.pilot-message.assistant').last()).toContainText('source-pilot-tool-marker');
     await expect(composer).toBeEnabled();
     await composer.fill('Recall the saved result.'); await composer.press('Enter');
@@ -95,7 +100,7 @@ test('source launcher prepares its runtime and WebUI configures Pilot and AgentN
     expect(provider.failures).toEqual([]); expect(provider.calls).toHaveLength(5); expect(problems).toEqual([]);
     await page.screenshot({ path: info.outputPath('source-configured-pilot.png'), fullPage: true });
     await writeFile(info.outputPath('evidence.json'), JSON.stringify({ status: 'passed', checkout, root,
-      actual_source_launcher: true, actual_host: true, actual_goose: true, real_model_calls: 0,
+      goose_binary_sha256: gooseDigest, restart_reused_local_build: true, actual_source_launcher: true, actual_host: true, actual_goose: true, real_model_calls: 0,
       runtime_path_overrides: false, model_configuration: 'WebUI', missing_model_hint: true,
       pilot_authorized_tool: true, agent_node_artifact: true, restart_history_preserved: true,
       provider_requests: provider.calls.length, run }, null, 2));

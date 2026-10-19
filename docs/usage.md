@@ -15,13 +15,14 @@ sudo apt-get install build-essential curl git bubblewrap patch rsync binutils ut
 Rust/rustup 和符合上述版本的 Node.js/npm 需预先安装。启动脚本不会自动使用 sudo 或修改系统的 namespace 策略。
 
 ```sh
+git clone https://github.com/manstein-lzn/Anchor.git
+cd Anchor
 ./scripts/dev.sh start
-./scripts/dev.sh status
 ```
 
-开发时打开 <http://127.0.0.1:5173>，Vite 将 API 请求转发到 <http://127.0.0.1:8077> 的 Rust Host；Host 也提供已构建的 WebUI。脚本使用 `.local/rust`，分别保存 catalog、state、workspace 和 Library；默认从可编辑的空 catalog 启动，不创建占位 Graph、不调用模型。首次 `start` 自动执行锁定的 `npm ci`、构建缺少的 debug Host/relay、准备 `.local/bin/goose` 并构建缺少的 Web 资产。Goose 配方自动安装固定工具链的 musl target 和已校验的交叉编译器；首次需要联网，后续复用产物。`setup` 执行相同准备但不启动服务；`status`/`stop` 不下载或构建。缺少系统工具或现有 Goose 摘要不匹配时明确失败，保留现有文件。
+启动后打开 <http://127.0.0.1:5173>，先在「设置 → 模型服务」保存 default Flash，再回到 Pilot 对话。Vite 将 API 请求转发到 <http://127.0.0.1:8077> 的 Rust Host；Host 也提供已构建的 WebUI。脚本使用 `.local/rust`，分别保存 catalog、state、workspace 和 Library；默认从可编辑的空 catalog 启动，不创建占位 Graph、不调用模型。首次 `start` 自动执行锁定的 `npm ci`、增量构建 debug Host/relay、准备 `.local/bin/goose` 并构建缺少或已更新的 Web 资产。Goose 配方自动安装固定工具链的 musl target 和已校验的交叉编译器；首次需要联网，后续复用产物；Goose 版本、补丁或配方变动时才重新准备。`setup` 执行相同准备但不启动服务；`status`/`stop` 不下载或构建。缺少系统工具时提示具体缺项；源码构建成功后使用本机产物，不检查跨机器固定二进制摘要。
 
-默认使用 `rust/target/debug`（或 `CARGO_TARGET_DIR/debug`），不自动选取旧 release 产物；指定自定义 Host/relay 时要求路径已经可执行。修改后端应主动执行 `cargo build --manifest-path rust/Cargo.toml -p anchor-runner-host --bins --locked` 并重启，修改静态网页应主动执行 `npm --prefix apps/web run build`。开发脚本和 Vite 均不加载 `.env`；旧文件存在也不会执行其中内容。可选的路径、端口等覆盖只取显式进程设置，见 [脚本](../scripts/dev.sh) 和下方部署参数。
+默认使用 `rust/target/debug`（或 `CARGO_TARGET_DIR/debug`），不自动选取旧 release 产物；指定自定义 Host/relay 时要求路径已经可执行。拉取更新或修改代码后执行 `./scripts/dev.sh restart`，脚本完成增量构建和必要的 Web 资产更新。开发脚本和 Vite 均不加载 `.env`；旧文件存在也不会执行其中内容。可选的路径、端口等覆盖只取显式进程设置，见 [脚本](../scripts/dev.sh) 和下方部署参数。
 
 ```sh
 ./scripts/dev.sh restart
@@ -32,13 +33,9 @@ Rust/rustup 和符合上述版本的 Node.js/npm 需预先安装。启动脚本�
 
 ## 模型与 Goose
 
-使用 Goose v1.53.0 上游源码的 lean ACP-only 入口构建的静态 x86_64 musl 二进制（不含完整 CLI、调度器、bundled MCP 与平台扩展），SHA256 固定为：
+源码启动固定 Goose v1.53.0、仓库补丁和上游 Cargo.lock，构建静态 x86_64 musl lean ACP-only 二进制，不含完整 CLI、调度器、bundled MCP 与平台扩展。`scripts/dev.sh start` 调用[构建脚本](../scripts/build-goose-acp.sh)准备本机产物，并自动将实际摘要传给 Host，同时定位 relay 隔离模型控制网络。源码用户无需设置 `ANCHOR_GOOSE_BINARY_SHA256`。
 
-```text
-17e065a79cb0508413af714724aed51d6b76972dda9feebdda701330134fb640
-```
-
-源码开发由 `scripts/dev.sh start` 调用[构建脚本](../scripts/build-goose-acp.sh)准备并核验该二进制，同时定位 Host 同目录的 relay，隔离模型控制网络。完整平台发行包已包含这些基础组件。
+下载完整平台包时，安装器按该包的发行规则核验二进制，工具已随包提供；当前固定发行产物说明见[发行 builder](../rust/anchor-distribution/README.md)。源码启动不受该成品摘要约束。
 
 Host 可以在没有模型配置时启动。Pilot 发送消息或继续回复遇到服务不可用时，网页读取 Host 的默认模型执行状态；确认配置尚未齐备后，提示先配置默认服务的地址、Flash 模型和 API key，并提供「前往模型设置」按钮。原文字和附件保留，保存设置后返回即可重试；已配置或状态读取失败时保留原错误，不推断是配置缺失。
 
@@ -56,9 +53,9 @@ WebUI「设置 → 模型服务」固定提供 `default`、`backup` 两组，每
 ./scripts/dev.sh setup
 ```
 
-手动重建 Goose 时使用 `scripts/build-goose-acp.sh --output "$PWD/.local/bin/goose"`；默认启动的 `--ensure` 模式只复用摘要相符的可执行文件或构建缺失文件，不覆盖不匹配的已有文件。构建配方固定来源、补丁、Rust 工具链与 musl 产物，首次构建不做两次 clean build；维护者复核可额外指定 `--check-reproducible`。
+手动重建 Goose 时使用 `scripts/build-goose-acp.sh --output "$PWD/.local/bin/goose"`；日常启动的 `--ensure` 按配方输入标记和本机输出校验和复用缓存，输入更新或文件缺失/损坏则重新构建。`.sha256` 和 `.build-record.json` 是可重建的构建记录，摘要不要求与其他机器相同。源码、交叉编译器的下载仍核验固定摘要，依赖按 `--locked` 编译。
 
-Host 内置固定 Goose 的摘要。完整平台启动器直接定位随包二进制，不从调用进程继承部署或凭据设置。开发者可在命令前显式覆盖 `ANCHOR_GOOSE_BINARY`、`ANCHOR_GOOSE_RELAY_BINARY` 等路径，但 `dev.sh` 仍要求固定 Goose；实验性非固定 runtime 应使用独立 Host 部署入口，不经默认启动准备流程。
+完整平台启动器直接定位随包二进制，不从调用进程继承部署或凭据设置。开发者可显式覆盖 `ANCHOR_GOOSE_BINARY`、`ANCHOR_GOOSE_RELAY_BINARY` 等路径；默认源码启动会在所选 Goose 输出路径准备本机产物并自动传递其摘要。
 
 `ANCHOR_MODEL_CONTEXT_WINDOW`（正整数，可选）会作为 `GOOSE_CONTEXT_LIMIT` 传给 Goose，覆盖它按模型名推断的上下文窗口——本机部署用别名与 OpenAI 兼容端点时该推断不可靠。
 

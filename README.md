@@ -91,7 +91,7 @@ Goose 拥有 Agent loop、Provider、原生会话和上下文压缩；Anchor 拥
 | Rust stable、`rustup` | 构建 Rust 和固定 Goose 时需要 | 不需要 |
 | Node.js、npm | 构建 WebUI、运行 Vite 时需要；Node.js 20.19+ 或 22.12+ | 不需要；Rust Host 直接提供编译后的 WebUI |
 | Git、`sh`、Bubblewrap | 需要，沙箱须有可用的 user/mount/network namespace | 同样需要 |
-| 固定 Goose ACP 二进制 | 首次启动自动构建并核对摘要 | 发行包已包含 `bin/goose` |
+| Goose ACP 二进制 | 首次启动自动构建固定版本与仓库补丁，使用本机产物 | 发行包已包含 `bin/goose` |
 | 系统动态库 | 满足所构建 ELF 的依赖 | 按 `runtime-manifest.json` 中 Host 和工具的 ELF 依赖准备 |
 | 模型与外部服务配置 | 运行相应 Agent/Plugin 时需要 | 同样需要；凭据和状态放在包外 |
 
@@ -106,14 +106,14 @@ Goose 拥有 Agent loop、Provider、原生会话和上下文压缩；Anchor 拥
 ### 从源码启动本地开发服务
 
 ```sh
-# 自动准备前端依赖、Host/relay 和固定 Goose；启动时不调用模型。
+git clone https://github.com/manstein-lzn/Anchor.git
+cd Anchor
 ./scripts/dev.sh start
-./scripts/dev.sh status
 ```
 
-首次启动需要联网下载并编译依赖，耗时取决于机器和网络；后续启动复用已核验的产物。系统依赖与故障提示见[使用指南](docs/usage.md#安装与本地启动)。只准备依赖而不启动服务可执行 `./scripts/dev.sh setup`。
+首次启动自动下载依赖并编译 Host、WebUI 与 Goose，通常需要几分钟，耗时取决于机器和网络；后续启动复用 Goose/前端依赖并对 Host 做增量构建。系统依赖与故障提示见[使用指南](docs/usage.md#安装与本地启动)。只准备依赖而不启动服务可执行 `./scripts/dev.sh setup`。
 
-打开 <http://127.0.0.1:5173> 使用 Vite 开发界面，或打开 <http://127.0.0.1:8077> 使用 Rust Host 提供的 WebUI/API。`scripts/dev.sh` 使用独立的 `.local/rust` 数据根，不会接管仓库里已有的 Graph、运行记录或环境。
+打开 <http://127.0.0.1:5173>，在「设置 → 模型服务」保存 default 的服务地址、协议、API key 和 Flash 模型名，再返回 Pilot 对话。无需 `.env`，不用手动安装 Goose 或填写二进制摘要。也可打开 <http://127.0.0.1:8077> 使用 Rust Host 提供的 WebUI/API。`scripts/dev.sh` 使用独立的 `.local/rust` 数据根，不会接管仓库里已有的 Graph、运行记录或环境。
 
 停止或重启服务：
 
@@ -124,7 +124,7 @@ Goose 拥有 Agent loop、Provider、原生会话和上下文压缩；Anchor 拥
 
 ### 从源码启用 AgentNode 与 Pilot
 
-`./scripts/dev.sh start` 会自动安装锁定的 Web 依赖，在缺少产物时构建 debug Host 与 `anchor-net-relay`，并将仓库固定的 Goose v1.53.0 lean ACP 准备到 `.local/bin/goose`。Goose 构建脚本安装其固定 Rust 工具链的 musl target，不要求用户另外执行 `rustup target add`；已存在的 Goose 必须通过固定摘要校验。手动复核构建可用 `scripts/build-goose-acp.sh --check-reproducible --output "$PWD/.local/bin/goose"`。
+`./scripts/dev.sh start` 自动安装锁定的 Web 依赖，增量构建 debug Host 与 `anchor-net-relay`，并将 Goose v1.53.0 加仓库补丁的 lean ACP 准备到 `.local/bin/goose`。Goose 构建脚本安装其固定 Rust 工具链的 musl target，不要求用户另外执行 `rustup target add`；源码构建记录本机产物摘要，由启动脚本自动传给 Host，不要求匹配其他机器的产物。版本、补丁或构建脚本变动后自动重新准备，未变则复用缓存。
 
 启动后到 WebUI「设置 → 模型服务」填写服务地址、协议、API key 和 Flash 模型名，即可与 Pilot 对话；Pro/backup 可暂不配置。模型设置保存后下一轮生效，无需重启。凭据保存在 Host 私有存储，无需创建或编辑 `.env`。
 

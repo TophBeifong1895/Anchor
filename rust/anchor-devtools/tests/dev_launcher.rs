@@ -54,7 +54,10 @@ impl SourceCheckout {
         let tools = root.path().join("tools");
         fs::create_dir_all(&tools).unwrap();
         fs::create_dir_all(root.path().join("scripts")).unwrap();
-        fs::create_dir_all(root.path().join("apps/web")).unwrap();
+        fs::create_dir_all(root.path().join("apps/web/src")).unwrap();
+        for name in ["index.html", "vite.config.ts", "tsconfig.json"] {
+            fs::write(root.path().join("apps/web").join(name), "").unwrap();
+        }
         fs::write(
             root.path().join("scripts/dev.sh"),
             include_bytes!("../../../scripts/dev.sh"),
@@ -154,10 +157,22 @@ fn fresh_source_setup_prepares_web_host_relay_and_goose_and_reuses_them() {
     );
     let output = checkout.run("setup", &[]);
     assert!(output.status.success(), "{output:?}");
+    let second = checkout.log();
     assert_eq!(
-        checkout.log(),
-        first,
-        "repeated setup must not rebuild or reinstall"
+        second.matches(" ci\n").count(),
+        1,
+        "dependencies are reused"
+    );
+    assert_eq!(second.matches("goose build").count(), 1, "Goose is reused");
+    assert_eq!(
+        second.matches("run build").count(),
+        1,
+        "Web assets are reused"
+    );
+    assert_eq!(
+        second.matches("cargo ").count(),
+        2,
+        "Cargo checks source updates incrementally"
     );
     // A missing relay is repaired even when the Host already exists.
     fs::remove_file(
@@ -169,7 +184,7 @@ fn fresh_source_setup_prepares_web_host_relay_and_goose_and_reuses_them() {
     .unwrap();
     let output = checkout.run("setup", &[]);
     assert!(output.status.success(), "{output:?}");
-    assert_eq!(checkout.log().matches("cargo ").count(), 2);
+    assert_eq!(checkout.log().matches("cargo ").count(), 3);
     // Updating the dependency lock invalidates the install stamp.
     fs::write(
         checkout.root.path().join("apps/web/package-lock.json"),
@@ -213,7 +228,9 @@ fn source_status_and_invalid_action_do_not_prepare_dependencies() {
 }
 
 #[test]
-fn ensure_goose_rejects_wrong_existing_output_without_overwriting_it() {
+fn ensure_goose_reuses_machine_local_output_and_rebuilds_changed_inputs() {
+    use sha2::{Digest, Sha256};
+
     let root = tempfile::tempdir().unwrap();
     let script = root.path().join("build-goose-acp.sh");
     fs::write(
@@ -221,19 +238,60 @@ fn ensure_goose_rejects_wrong_existing_output_without_overwriting_it() {
         include_bytes!("../../../scripts/build-goose-acp.sh"),
     )
     .unwrap();
+    let patches = root.path().join("patches");
+    fs::create_dir(&patches).unwrap();
+    let mut inputs = format!("{:x}\n", Sha256::digest(fs::read(&script).unwrap()));
+    for (name, contents) in [
+        (
+            "goose-1.53.0-responses-reasoning.patch",
+            include_str!("../../../scripts/patches/goose-1.53.0-responses-reasoning.patch"),
+        ),
+        (
+            "goose-1.53.0-external-completion.patch",
+            include_str!("../../../scripts/patches/goose-1.53.0-external-completion.patch"),
+        ),
+        (
+            "goose-1.53.0-provider-errors.patch",
+            include_str!("../../../scripts/patches/goose-1.53.0-provider-errors.patch"),
+        ),
+    ] {
+        fs::write(patches.join(name), contents).unwrap();
+        inputs.push_str(&format!("{:x}\n", Sha256::digest(contents.as_bytes())));
+    }
+    let input_digest = format!("{:x}", Sha256::digest(inputs.as_bytes()));
     let output_path = root.path().join("goose");
-    let contents = "#!/bin/sh\nexit 0\n";
+    let contents = "#!/bin/sh\n# local compiler output\nexit 0\n";
     executable(&output_path, contents);
-    let output = Command::new("bash")
-        .arg(&script)
-        .args(["--ensure", "--output"])
-        .arg(&output_path)
-        .env_clear()
-        .env("PATH", "/usr/bin:/bin")
-        .output()
-        .unwrap();
+    let digest = format!("{:x}", Sha256::digest(contents.as_bytes()));
+    fs::write(
+        root.path().join("goose.sha256"),
+        format!("{digest}  goose\n#source-inputs {input_digest}\n"),
+    )
+    .unwrap();
+    let run = || {
+        Command::new("bash")
+            .arg(&script)
+            .args(["--ensure", "--output"])
+            .arg(&output_path)
+            .env_clear()
+            .env("PATH", "/usr/bin:/bin")
+            .output()
+            .unwrap()
+    };
+    let output = run();
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), digest);
+    assert_eq!(fs::read_to_string(&output_path).unwrap(), contents);
+
+    // A changed patch requires a build, even when the previous executable exists.
+    fs::write(
+        patches.join("goose-1.53.0-provider-errors.patch"),
+        "changed patch",
+    )
+    .unwrap();
+    let output = run();
     assert!(!output.status.success(), "{output:?}");
-    assert!(String::from_utf8_lossy(&output.stderr).contains("does not match the pinned runtime"));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("missing build prerequisite: rustup"));
     assert_eq!(fs::read_to_string(output_path).unwrap(), contents);
     let output = Command::new("bash")
         .arg(script)

@@ -110,7 +110,7 @@ Library 审查、候选准备与导入共用代码暂存规则：选中 root 或
 
 ## Goose 与恢复
 
-Goose 固定为 v1.53.0；Anchor 在上游源码应用[已审查的本地兼容补丁](../scripts/patches/README.md)，再用 lean ACP-only 入口构建静态 x86_64 musl 二进制（recipe 见 [构建脚本](../scripts/build-goose-acp.sh)），SHA256 为 `17e065a79cb0508413af714724aed51d6b76972dda9feebdda701330134fb640`。它与官方完整 CLI 共用 `goose::acp::server::run`。补丁在 Goose 原生 Thinking 的可选元数据中保存完整 reasoning item，并在后续 Responses 请求按原序单次回传，包括 opaque/encrypted 字段；同时忽略空 text delta 保活，非空畸形帧仍报错。Anchor Bridge 和产品事实不复制或重写 reasoning，旧历史已丢失的数据也不重建。
+Goose 固定为 v1.53.0；Anchor 在上游源码应用[已审查的本地兼容补丁](../scripts/patches/README.md)，再用 lean ACP-only 入口构建静态 x86_64 musl 二进制（recipe 见 [构建脚本](../scripts/build-goose-acp.sh)）。现有固定发行产物的 SHA256 为 `17e065a79cb0508413af714724aed51d6b76972dda9feebdda701330134fb640`；源码启动使用本机编译产物，由启动脚本自动提供实际摘要。它与官方完整 CLI 共用 `goose::acp::server::run`。补丁在 Goose 原生 Thinking 的可选元数据中保存完整 reasoning item，并在后续 Responses 请求按原序单次回传，包括 opaque/encrypted 字段；同时忽略空 text delta 保活，非空畸形帧仍报错。Anchor Bridge 和产品事实不复制或重写 reasoning，旧历史已丢失的数据也不重建。
 
 AgentNode 与 Pilot 共用 ACP/MCP 接入。当前执行及同 invocation 恢复严格绑定二进制、模型/endpoint 和原生 Session，不静默换模型或创建替代历史。新 invocation 可选择最新模型；跨 Goose 二进制版本的 Graph 原生历史接续，仅允许[已审查的旧固定摘要到当前摘要](../rust/anchor-runner-host/src/goose_acp/conversation/revision.rs)单向升级，核对前驱与 scope 事实后仍加载同一 Session，不授权逆向回滚或未审查二进制。Pilot 的新 Turn 通过公开 `session/load` 接续保留的 Session。跨不同 Provider、模型或账号的 opaque reasoning 兼容尚未验收。固定 Goose 将请求、网络、拒答及终止的压缩错误保存为原生结构化 Error，并通过 ACP 错误结束；成功的压缩恢复继续原路径。Host 仅依据经协议校验的错误代码与原因区分模型请求失败和运行中断，Pilot 分别结算为 `failed` 与 `interrupted`，用户取消仍为 `stopped`；原始服务正文不进入 Web 错误信息。普通助手正文不参与分类，Turn `completed` 仍不替代业务成功验收。实际 Host/Goose 错误场景及真实 Provider 验收边界见[验证记录](../.local/closeout-20261018/README.md)。
 
@@ -208,7 +208,7 @@ Pilot 的 `channel_configure`/`channel_enable` 经原生确认管理 owner-bound
 
 WebUI 的 Anchor API key 只保存在当前标签页。输入框先检查请求头可接受的格式，再通过只读 `GET /graphs` 验证；成功才保存并关闭，错误 key、格式错误或服务异常保留输入框并分别提示。JSON 请求与 Pilot SSE 共用缓存恢复：含非 ASCII 字符、空格或控制字符的无效缓存不会进入请求头，401 后重新输入；较早请求的迟到 401 不丢弃其他请求刚验证成功的新 key。取消验证会中止请求，迟到结果不保存。
 
-平台安装启动器从自身位置解析只读 release、固定 Goose/relay 与 `data/` 私有根，清除调用进程配置，不读取环境文件。systemd 调用同一启动器；预检 `--launcher` 复用其命令配置，并通过安装器同一 validator 检查 format-2 平台。开发脚本和 Vite 也不加载 `.env`；源码启动先探测系统工具与 namespace，按 lock 准备前端依赖，并构建缺少的 debug Host/relay 与 Web 资产；Goose 缺失时通过既有固定配方构建到 `.local/bin/goose`（含固定工具链的 musl target 准备），已存在时校验固定摘要，不覆盖不匹配文件。`setup` 只准备，`status`/`stop` 不构建。默认不自动使用旧 release 产物，显式 Host/relay 路径需已可执行；固定 Goose 摘要仍由 Host 独立核对。旧文件保留原样；显式进程覆盖仍是开发/独立 Graph 宿主的部署接口，不是模型、Plugin 或渠道的产品配置源。
+平台安装启动器从自身位置解析只读 release、固定 Goose/relay 与 `data/` 私有根，清除调用进程配置，不读取环境文件。systemd 调用同一启动器；预检 `--launcher` 复用其命令配置，并通过安装器同一 validator 检查 format-2 平台。开发脚本和 Vite 也不加载 `.env`；源码启动先探测系统工具与 namespace，按 lock 准备前端依赖，增量构建 debug Host/relay，并更新缺少或变化的 Web 资产；Goose 通过既有固定版本/补丁配方构建到 `.local/bin/goose`（含固定工具链的 musl target 准备），输入未变且本机校验和相符则复用缓存，否则重新准备。源码启动自动把实际产物摘要传给 Host，不以跨机器固定摘要作为启动条件。`setup` 只准备，`status`/`stop` 不构建。默认不自动使用旧 release 产物，显式 Host/relay 路径需已可执行；Host 仍独立核对启动器提供的摘要，既有发行校验和同 invocation 的执行器身份绑定保持原契约。旧文件保留原样；显式进程覆盖仍是开发/独立 Graph 宿主的部署接口，不是模型、Plugin 或渠道的产品配置源。
 
 模型设置由 WebUI 经 Host 管理接口写入同一个私有 `state/managed/model-config.json`，执行只读该事实来源。`ANCHOR_MODEL_URL/API_KEY/NAME/WIRE_API/ALIASES` 已退出平台配置，旧安装 `config/model.env` 不再加载；不自动迁移或覆盖已有凭据。Goose 路径、网络和运行预算仍为部署控制。固定 `default/backup × flash/pro`，两槽凭据独立。Pilot 和未指定模型的节点默认使用 `models.default.flash`；其余三种引用由 Graph 明确选择，不自动降级。每个新 Turn/invocation 直接读取最新槽设置，当前执行持有独立快照；已有原生 Session 加载后通过 `session/set_config_option` 选定本轮模型。Chat/Responses 由固定 Goose 原生 Provider 按显式协议生成和解析，Host Bridge 只转发到本轮冻结的服务。
 
