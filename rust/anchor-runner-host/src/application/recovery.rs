@@ -1,6 +1,5 @@
-use super::{ActiveRun, ApplicationError, RunApplication, RunMetadata, new_control};
-use crate::{HostControl, execution::PreparedExecution};
-use anchor_runtime::graph::{GraphRunRecord, InvocationKey, RecoveryDecision, RunStatus, RunStore};
+use super::{ActiveRun, ApplicationError, RunApplication, new_control, run_access};
+use anchor_runtime::graph::{InvocationKey, RecoveryDecision, RunStatus, RunStore};
 
 impl RunApplication {
     pub(crate) async fn recover(
@@ -42,23 +41,20 @@ impl RunApplication {
                 "Run has no immutable Graph identity metadata; it cannot be recovered".into(),
             )
         })?;
-        if metadata.graph_digest != record.graph_digest {
-            return Err(ApplicationError::Invalid(
-                "Run Graph identity metadata does not match its frozen snapshot".into(),
-            ));
-        }
+        run_access::validate_control_identity(&record, &metadata)?;
         let key = InvocationKey {
             run_id: run_id.to_owned(),
-            graph_digest: record.graph_digest.clone(),
+            graph_digest: run_access::RunView::inactive(&record)
+                .progress()
+                .graph_digest
+                .to_owned(),
             node_id: node_id.to_owned(),
             invocation,
         };
-        if let Some(existing) = record
-            .recovery_submissions
-            .iter()
-            .find(|submission| submission.key == key && submission.attempt_id == attempt_id)
+        if let Some(existing) =
+            run_access::RunView::inactive(&record).recorded_recovery_decision(&key, attempt_id)
         {
-            if existing.decision != decision {
+            if existing != &decision {
                 return Err(ApplicationError::Conflict(
                     "a different decision is already recorded for this attempt".into(),
                 ));
@@ -66,7 +62,10 @@ impl RunApplication {
             // The response may have been lost after the Run was committed as
             // Running but before its task entered the active map. Replaying the
             // same decision must be able to kick that same durable cursor.
-            if record.status == RunStatus::Running && !active.contains_key(run_id) {
+            if run_access::RunView::inactive(&record)
+                .with_active(active.contains_key(run_id))
+                .needs_recovery_replay()
+            {
                 drop(active);
                 // The same decision may be submitted again after its response
                 // was lost. Re-enter control through one heap indirection so
@@ -80,7 +79,7 @@ impl RunApplication {
         if active.contains_key(run_id) {
             return Err(ApplicationError::Conflict("Run is already active".into()));
         }
-        validate_recovery_target(&record, &key, attempt_id)?;
+        run_access::RunView::inactive(&record).validate_recovery_target(&key, attempt_id)?;
         let graph_path = Self::graph_identity(&metadata.bundle_source)?;
         let _graph_lease = self.graph_lease(&metadata.bundle_source)?;
         let _lease = self.store().acquire_lease(run_id)?;
@@ -88,12 +87,10 @@ impl RunApplication {
             .store()
             .load(run_id)?
             .ok_or(ApplicationError::Missing)?;
-        if let Some(existing) = record
-            .recovery_submissions
-            .iter()
-            .find(|submission| submission.key == key && submission.attempt_id == attempt_id)
+        if let Some(existing) =
+            run_access::RunView::inactive(&record).recorded_recovery_decision(&key, attempt_id)
         {
-            return if existing.decision == decision {
+            return if existing == &decision {
                 Ok(())
             } else {
                 Err(ApplicationError::Conflict(
@@ -101,14 +98,7 @@ impl RunApplication {
                 ))
             };
         }
-        if !has_recovery_cursor(&record, &key)
-            || !has_pending_attempt(&record, &key, attempt_id)
-            || record.status != RunStatus::WaitingRecovery
-        {
-            return Err(ApplicationError::Conflict(
-                "Run recovery state changed before the decision was accepted".into(),
-            ));
-        }
+        run_access::RunView::inactive(&record).validate_leased_recovery_target(&key, attempt_id)?;
         let control = new_control();
         let is_abort = decision == RecoveryDecision::Abort;
         // The Harness intent is the first durable side of the handoff. If the
@@ -139,7 +129,7 @@ impl RunApplication {
             self.store().save(&record)?;
             return Ok(());
         }
-        if !record.recovery.is_empty() {
+        if run_access::RunView::inactive(&record).has_pending_recovery() {
             record.status = RunStatus::WaitingRecovery;
             record.touch();
             self.store().save(&record)?;
@@ -155,78 +145,4 @@ impl RunApplication {
         self.spawn(record, execution)?;
         Ok(())
     }
-
-    pub(super) fn prepare_resume(
-        &self,
-        record: &GraphRunRecord,
-        metadata: &RunMetadata,
-        control: HostControl,
-    ) -> Result<PreparedExecution, ApplicationError> {
-        self.ensure_current_assistant(metadata)?;
-        // Resuming never re-checks the Plugin: the next node call uses whatever is
-        // installed now, and records which view that was.
-        PreparedExecution::prepare_with_catalog(
-            record,
-            control,
-            record.plugin_bindings.clone(),
-            self.catalog_root.clone(),
-            self.clone(),
-        )
-        .map_err(ApplicationError::Invalid)
-    }
-}
-
-fn has_recovery_cursor(record: &GraphRunRecord, key: &InvocationKey) -> bool {
-    record
-        .cursor
-        .as_ref()
-        .is_some_and(|cursor| &cursor.key == key)
-        || record.parallel.as_ref().is_some_and(|activation| {
-            activation.branches.iter().any(|branch| {
-                branch
-                    .cursor
-                    .as_ref()
-                    .is_some_and(|cursor| &cursor.key == key)
-            })
-        })
-}
-
-fn has_pending_attempt(record: &GraphRunRecord, key: &InvocationKey, attempt_id: i64) -> bool {
-    record
-        .recovery
-        .iter()
-        .any(|pending| &pending.key == key && pending.attempt.attempt_id == attempt_id)
-}
-
-fn validate_recovery_target(
-    record: &GraphRunRecord,
-    key: &InvocationKey,
-    attempt_id: i64,
-) -> Result<(), ApplicationError> {
-    if !has_recovery_cursor(record, key) {
-        return Err(ApplicationError::Conflict(
-            "recovery invocation does not match an active cursor in this Run".into(),
-        ));
-    }
-    if !has_pending_attempt(record, key, attempt_id) {
-        return Err(ApplicationError::Conflict(
-            "attempt is not pending recovery for this Run".into(),
-        ));
-    }
-    if record.status != RunStatus::WaitingRecovery {
-        return Err(ApplicationError::Conflict(
-            "Run is not waiting for a recovery decision".into(),
-        ));
-    }
-    if !record
-        .snapshot
-        .nodes
-        .iter()
-        .any(|node| node.id == key.node_id && node.agent.is_some())
-    {
-        return Err(ApplicationError::Conflict(
-            "only an AgentNode can own an io-harness recovery attempt".into(),
-        ));
-    }
-    Ok(())
 }

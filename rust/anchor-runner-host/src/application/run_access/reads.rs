@@ -58,7 +58,9 @@ impl RunApplication {
         Ok(chrono::DateTime::<chrono::Utc>::from(modified).to_rfc3339())
     }
 
-    pub(crate) fn records(&self) -> Result<Vec<(String, GraphRunRecord)>, ApplicationError> {
+    pub(in crate::application::run_access) fn raw_records(
+        &self,
+    ) -> Result<Vec<(String, GraphRunRecord)>, ApplicationError> {
         let root = self.data_root.join("runs");
         if !root.exists() {
             return Ok(Vec::new());
@@ -77,12 +79,12 @@ impl RunApplication {
         Ok(records)
     }
 
-    pub(crate) fn runs_for_graph(
+    pub(in crate::application::run_access) fn raw_runs_for_graph(
         &self,
         graph_path: &Path,
     ) -> Result<Vec<(String, GraphRunRecord)>, ApplicationError> {
         let mut runs = Vec::new();
-        for (id, record) in self.records()? {
+        for (id, record) in self.raw_records()? {
             let Some(metadata) = self.metadata(&id)? else {
                 continue;
             };
@@ -101,7 +103,7 @@ impl RunApplication {
 
     pub(crate) fn run_views(&self) -> Result<Vec<(String, RunView<'static>)>, ApplicationError> {
         Ok(self
-            .records()?
+            .raw_records()?
             .into_iter()
             .map(|(run_id, record)| {
                 (
@@ -115,6 +117,32 @@ impl RunApplication {
                 )
             })
             .collect())
+    }
+
+    pub(crate) fn runs_for_graph(
+        &self,
+        path: &Path,
+    ) -> Result<Vec<(String, RunView<'static>)>, ApplicationError> {
+        Ok(self
+            .raw_runs_for_graph(path)?
+            .into_iter()
+            .map(|(id, record)| {
+                (
+                    id,
+                    RunView {
+                        record: Cow::Owned(record),
+                        active: false,
+                        requested: None,
+                        session_coordinated: false,
+                    },
+                )
+            })
+            .collect())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn records(&self) -> Result<Vec<(String, GraphRunRecord)>, ApplicationError> {
+        self.raw_records()
     }
 }
 

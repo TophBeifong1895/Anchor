@@ -1,18 +1,28 @@
+mod abandon;
+mod admission;
 mod assistant_policy;
 mod channels;
+mod control;
+mod conversations;
+mod dispatch;
+mod graph_policy;
 pub(crate) mod http;
 mod liveness;
 mod projection;
 mod reads;
+mod recovery;
+mod session_calls;
+mod store;
 
 pub(crate) use assistant_policy::{graph_lease, graph_read_lease};
 pub(crate) use liveness::RunLiveness;
 #[cfg(test)]
 pub(super) use projection::observed;
 pub(crate) use reads::load;
+pub(in crate::application) use store::wait_child_ids;
 
 use super::{ApplicationError, RunMetadata};
-use anchor_runtime::graph::{GraphRunRecord, GraphSnapshot, PluginBinding, RunStatus};
+use anchor_runtime::graph::{GraphRunRecord, GraphSnapshot, PluginBinding, RunResult, RunStatus};
 use std::{borrow::Cow, collections::BTreeMap};
 
 #[derive(Debug, PartialEq, Eq)]
@@ -49,6 +59,7 @@ pub(crate) struct RunProgress<'record> {
     pub(crate) run_id: &'record str,
     pub(crate) graph_digest: &'record str,
     pub(crate) snapshot: &'record GraphSnapshot,
+    pub(crate) results: &'record BTreeMap<String, Vec<RunResult>>,
     pub(crate) plugin_bindings: &'record BTreeMap<String, PluginBinding>,
     pub(crate) invocations: &'record BTreeMap<String, u64>,
     executed: Vec<String>,
@@ -100,11 +111,20 @@ impl<'record> RunView<'record> {
         self.active
     }
 
+    #[allow(
+        dead_code,
+        reason = "Required read facade contract; current HTTP timestamps retain filesystem metadata semantics"
+    )]
+    pub(crate) fn updated(&self) -> Option<&str> {
+        self.record.updated.as_deref()
+    }
+
     pub(crate) fn progress(&self) -> RunProgress<'_> {
         RunProgress {
             run_id: &self.record.run_id,
             graph_digest: &self.record.graph_digest,
             snapshot: &self.record.snapshot,
+            results: &self.record.results,
             plugin_bindings: &self.record.plugin_bindings,
             invocations: &self.record.invocations,
             executed: self.record.executed_nodes(),
@@ -155,7 +175,7 @@ impl<'record> RunView<'record> {
     }
 
     pub(crate) fn waits_for_children(&self) -> bool {
-        self.record.status == RunStatus::WaitingCall
+        waits_for_children(self.record.status)
     }
 
     pub(crate) fn waits_for_invocation(&self, node: &str, invocation: u64) -> bool {
@@ -258,6 +278,10 @@ fn has_stopped_execution(status: RunStatus) -> bool {
     is_settled(status) || is_stopped(status)
 }
 
+fn waits_for_children(status: RunStatus) -> bool {
+    status == RunStatus::WaitingCall
+}
+
 fn is_stopped(status: RunStatus) -> bool {
     status == RunStatus::Stopped
 }
@@ -329,3 +353,4 @@ pub(super) fn validate_resume_budget(record: &GraphRunRecord) -> Result<(), Appl
 
 #[cfg(test)]
 mod tests;
+pub(crate) use abandon::AbandonResult;

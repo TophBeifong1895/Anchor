@@ -98,8 +98,8 @@ cd /home/mansteinl/Anchor/rust
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace --no-fail-fast
-ANCHOR_GOOSE_BINARY=/var/tmp/anchor-goose-build/artifacts/goose-acp.first \
-  cargo test -p anchor-runner-host -- --ignored    # 先用 sha256sum 核对与锁定版本一致
+# Goose 构建、环境与标准/完整忽略命令见 docs/runtime-contract-tests.md。
+# G0 合入后只允许其已记录的三项残留；F1 完成后另一个小提交修正 fixture/断言。
 cd ../apps/web && npm test && npm run build
 ```
 

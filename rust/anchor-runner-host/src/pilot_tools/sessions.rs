@@ -15,13 +15,14 @@ impl PilotTools {
         }
         let record = self
             .application
-            .records()
+            .run_views()
             .map_err(|_| failed())?
             .into_iter()
             .find(|(id, _)| id == &run)
             .ok_or_else(failed)?
             .1;
-        let result = record
+        let progress = record.progress();
+        let result = progress
             .results
             .get(&node)
             .and_then(|results| results.last())
@@ -42,12 +43,8 @@ impl PilotTools {
             .map_err(|_| failed())?;
         let retained = self
             .application
-            .records()
-            .map_err(|_| failed())?
-            .into_iter()
-            .filter(|(id, _)| session.run_ids.contains(id))
-            .map(|(id, record)| json!({"run":id,"record":record}))
-            .collect::<Vec<_>>();
+            .pilot_session_runs(&session.run_ids)
+            .map_err(|_| failed())?;
         Ok(json!({"session":session,"runs":retained}))
     }
 }

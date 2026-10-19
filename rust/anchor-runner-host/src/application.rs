@@ -5,8 +5,8 @@ mod assistants;
 mod control;
 mod deletion;
 mod dispatch;
+#[cfg(test)]
 mod liveness;
-pub(crate) use liveness::RunLiveness;
 mod queries;
 mod recovery;
 pub(crate) use abandon::AbandonAction;
@@ -32,17 +32,16 @@ pub(crate) use metadata::RunMetadata;
 pub(crate) use metadata::RunTrigger;
 
 use crate::{HostControl, create_durable_directory};
-use anchor_runtime::graph::{
-    FileRunStore, GraphError, GraphRunRecord, RunLease, RunStatus, RunStore,
-};
+use anchor_runtime::graph::{GraphError, RunLease};
+#[cfg(test)]
+use anchor_runtime::graph::{GraphRunRecord, RunStatus, RunStore};
 use serde_json::Value;
+#[cfg(test)]
+use std::sync::atomic::Ordering;
 use std::{
     collections::{HashMap, VecDeque},
     path::{Path, PathBuf},
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-    },
+    sync::{Arc, atomic::AtomicBool},
 };
 use tokio::sync::{Mutex, OwnedMutexGuard};
 
@@ -366,10 +365,6 @@ impl RunApplication {
         )?)
     }
 
-    fn store(&self) -> FileRunStore {
-        FileRunStore::new(self.data_root.join("runs"))
-    }
-
     fn check_store(&self) -> Result<(), ApplicationError> {
         self.executor()?;
         // The host uses deployment environment, never HTTP-supplied paths.
@@ -399,17 +394,6 @@ fn new_control() -> HostControl {
         cancellation: Arc::new(AtomicBool::new(false)),
         pause: Arc::new(AtomicBool::new(false)),
     }
-}
-
-/// Child Runs a parked parent still waits on. Only `wait` calls remain part of
-/// the caller's execution; a detach boundary has independent authority.
-fn wait_child_ids(record: &GraphRunRecord) -> Vec<String> {
-    record
-        .graph_calls
-        .values()
-        .filter(|call| call.mode == "wait")
-        .filter_map(|call| call.child_run_id.clone())
-        .collect()
 }
 
 fn storage(error: impl std::fmt::Display) -> ApplicationError {

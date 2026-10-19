@@ -1,6 +1,6 @@
 use super::{ApplicationError, RunApplication, graphs, metadata, storage};
 use crate::run_data;
-use anchor_runtime::graph::{GraphSnapshot, RunLease, RunStatus, RunStore};
+use anchor_runtime::graph::{GraphSnapshot, RunLease};
 use serde_json::Value;
 use std::{collections::BTreeSet, path::Path, time::Duration};
 
@@ -73,9 +73,9 @@ impl RunApplication {
                 callers.insert(format!("Graph `{name}`"));
             }
         }
-        for (run_id, record) in self.records()? {
-            if !record.status.is_terminal()
-                && self.snapshot_calls_graph(&record.snapshot, target_path)?
+        for (run_id, record) in self.run_views()? {
+            if !record.is_settled()
+                && self.snapshot_calls_graph(record.progress().snapshot, target_path)?
             {
                 let graph = self
                     .metadata(&run_id)?
@@ -163,12 +163,12 @@ impl RunApplication {
                     "Graph still has active execution".into(),
                 ));
             }
-            if !record.status.is_terminal() {
+            if !record.is_settled() {
                 let conversation = self
                     .metadata(run_id)?
                     .is_some_and(|metadata| metadata.conversation.is_some());
                 if !conversation
-                    || (record.status != RunStatus::Stopped
+                    || (!record.has_stopped_execution()
                         && !self.has_conversation_successor(run_id)?)
                 {
                     return Err(ApplicationError::Conflict(format!(
@@ -190,7 +190,7 @@ impl RunApplication {
         for (run_id, record) in &targets {
             if let Some(metadata) = self.metadata(run_id)? {
                 crate::conversation_resources::retain(&self.data_root, record, &metadata)?;
-                for node in &record.snapshot.nodes {
+                for node in &record.progress().snapshot.nodes {
                     if let Some(hint) = crate::node_host::conversation_hint_for(&metadata, &node.id)
                     {
                         conversations.insert(hint.key);
@@ -226,7 +226,8 @@ impl RunApplication {
                 )
                 .map_err(ApplicationError::Storage)?;
             }
-            run_data::delete_run_data(record, &self.data_root, workspace_root)
+            record
+                .delete_owned_run_data(&self.data_root, workspace_root)
                 .map_err(ApplicationError::Storage)?;
             run_data::remove_run_files(&self.data_root, id).map_err(ApplicationError::Storage)?;
         }
@@ -261,94 +262,6 @@ impl RunApplication {
                 "that Run is still running".into(),
             ));
         }
-        let store = self.store();
-        let record = store.load(run_id)?.ok_or(ApplicationError::Missing)?;
-        let metadata = self.metadata(run_id)?;
-        self.reject_pending_session_delivery(run_id)?;
-        if let Some(metadata) = metadata.as_ref() {
-            self.ensure_channel_delivery_settled(metadata)?;
-        }
-        match metadata
-            .as_ref()
-            .filter(|metadata| metadata.conversation.is_some())
-        {
-            // A conversation Run may only go once every later Run has stopped
-            // reading it; see `ensure_conversation_delete_allowed`.
-            Some(metadata) => {
-                self.ensure_conversation_delete_allowed(&record, metadata, &active)?;
-            }
-            None => self.reject_conversation_successor(run_id)?,
-        }
-        if !record.graph_calls.is_empty() {
-            return Err(ApplicationError::Conflict(
-                "Run is referenced by or owns a Graph call".into(),
-            ));
-        }
-        for (other_id, other) in self.records()? {
-            if other_id != run_id
-                && other.graph_calls.values().any(|call| {
-                    call.child_run_id.as_deref() == Some(run_id)
-                        && call.status != anchor_runtime::graph::GraphCallStatus::Deleted
-                })
-            {
-                return Err(ApplicationError::Conflict(
-                    "Run is referenced by another Graph call".into(),
-                ));
-            }
-        }
-        let _lease = store.acquire_lease(run_id)?;
-        let artifacts = crate::HostArtifacts::new(
-            self.data_root.join("artifacts"),
-            workspace_root.to_path_buf(),
-        );
-        for result in record.results.values().flatten() {
-            if self
-                .data_root
-                .join("artifacts")
-                .join(&result.commit.id)
-                .exists()
-            {
-                artifacts
-                    .list_files(&result.commit)
-                    .map_err(|error| ApplicationError::Invalid(error.to_string()))?;
-            }
-            if result.key.run_id != run_id
-                || result.key.graph_digest != record.graph_digest
-                || result.commit.node_id != result.key.node_id
-                || result.commit.invocation != result.key.invocation
-            {
-                return Err(ApplicationError::Invalid(
-                    "Run artifact identity mismatch".into(),
-                ));
-            }
-        }
-        // Durable before anything is removed: a Host that dies in the middle of
-        // this cleanup leaves an explained lineage gap, not corruption.
-        if let Some(metadata) = metadata.as_ref()
-            && let Some(source) = metadata.conversation.as_ref()
-        {
-            crate::conversation_resources::retain(&self.data_root, &record, metadata)?;
-            crate::run_deletions::save(
-                &self.data_root,
-                &crate::run_deletions::RunDeletion::new(
-                    run_id,
-                    &Self::graph_identity(&metadata.bundle_source)?.to_string_lossy(),
-                    &source.session,
-                    &source.reply_node,
-                    source.previous_run.as_deref(),
-                ),
-            )
-            .map_err(ApplicationError::Storage)?;
-            crate::conversation_resources::release_unreferenced(
-                self,
-                &self.data_root,
-                &Self::graph_identity(&metadata.bundle_source)?,
-                run_id,
-                workspace_root,
-            )?;
-        }
-        run_data::delete_run_data(&record, &self.data_root, workspace_root)
-            .map_err(ApplicationError::Storage)?;
-        run_data::remove_run_files(&self.data_root, run_id).map_err(ApplicationError::Storage)
+        self.delete_inactive_run(run_id, workspace_root, &active)
     }
 }

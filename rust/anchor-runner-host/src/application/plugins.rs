@@ -750,8 +750,8 @@ impl RunApplication {
     /// Attached Runs that are not terminal and bind this Plugin.
     fn unfinished_runs_binding(&self, id: &str) -> Result<Vec<String>, ApplicationError> {
         let mut runs = Vec::new();
-        for (run, record) in self.records()? {
-            if record.status.is_terminal() {
+        for (run, record) in self.run_views()? {
+            if record.is_settled() {
                 continue;
             }
             let metadata = self.metadata(&run)?;
@@ -765,8 +765,9 @@ impl RunApplication {
                         .contains_key(id)
                 }
                 None => {
-                    record.plugin_bindings.contains_key(id)
+                    record.progress().plugin_bindings.contains_key(id)
                         || record
+                            .progress()
                             .snapshot
                             .nodes
                             .iter()

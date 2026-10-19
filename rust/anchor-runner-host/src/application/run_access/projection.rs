@@ -24,11 +24,25 @@ pub(crate) struct RunProjection {
 }
 
 impl RunApplication {
-    pub(crate) async fn project_run(
+    pub(crate) fn pilot_session_runs(
         &self,
-        record: &GraphRunRecord,
+        run_ids: &[String],
+    ) -> Result<Vec<Value>, ApplicationError> {
+        Ok(self
+            .raw_records()?
+            .into_iter()
+            .filter(|(id, _)| run_ids.contains(id))
+            .map(|(id, record)| json!({"run":id,"record":record}))
+            .collect())
+    }
+
+    pub(crate) async fn project_run<'record>(
+        &self,
+        record: impl Into<RunView<'record>>,
         metadata: Option<&RunMetadata>,
     ) -> Result<RunProjection, ApplicationError> {
+        let view = record.into();
+        let record = view.record.as_ref();
         let active = self.active.lock().await;
         let executor = active.get(&record.run_id);
         let requested = executor.and_then(|run| {
@@ -61,7 +75,7 @@ impl RunApplication {
 
     pub(crate) async fn projected_runs(&self) -> Result<Vec<Value>, ApplicationError> {
         let mut runs = Vec::new();
-        for (id, record) in self.records()? {
+        for (id, record) in self.raw_records()? {
             let updated = self.run_updated(&id)?;
             let metadata = self.metadata(&id)?;
             let (graph, created, mut trigger) = metadata
@@ -116,7 +130,7 @@ impl RunApplication {
 
     pub(crate) async fn pilot_run_list(&self) -> Result<Value, ApplicationError> {
         let mut runs = Vec::new();
-        for (id, record) in self.records()? {
+        for (id, record) in self.raw_records()? {
             let metadata = self.metadata(&id)?;
             let projection = self.project_run(&record, metadata.as_ref()).await?;
             runs.push(
@@ -128,7 +142,7 @@ impl RunApplication {
 
     pub(crate) async fn pilot_run_status(&self, run: &str) -> Result<Value, ApplicationError> {
         let record = self
-            .records()?
+            .raw_records()?
             .into_iter()
             .find(|(id, _)| id == run)
             .ok_or(ApplicationError::Missing)?

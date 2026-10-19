@@ -168,7 +168,7 @@ impl RunApplication {
 
     pub(crate) fn channel_startup_runs(&self) -> Result<Vec<ChannelStartupRun>, ApplicationError> {
         Ok(self
-            .records()?
+            .raw_records()?
             .into_iter()
             .map(|(run_id, record)| ChannelStartupRun {
                 run_id,

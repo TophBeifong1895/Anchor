@@ -89,7 +89,7 @@ impl RunApplication {
                     .is_some_and(|binding| binding.run_id == run_id)
                 {
                     if !crate::assistant_plugins::compatible(
-                        &record.snapshot,
+                        record.progress().snapshot,
                         &next,
                         &source.work_node,
                     ) {
