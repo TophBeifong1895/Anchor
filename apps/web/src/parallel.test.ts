@@ -5,12 +5,12 @@ import { toFlowEdges, toFlowNodes, type OurGraph, type OurRunState, type RunProj
 const empty: OurGraph = { entry: '', nodes: [], edges: [] };
 const defaultModel = 'models.default.flash';
 const region = addParallelRegion(empty, defaultModel).graph;
-const state: OurRunState = { objective: '', started: '', updated: '', status: 'running', cursor: null,
+const state: OurRunState = { objective: '', started: '', updated: '', cursor: null,
   active: { 'branch-a': { node: 'branch-a', pass: 2, run: 2, dir: 'a' }, 'branch-b': { node: 'branch-b', pass: 2, run: 2, dir: 'b' } },
   parallel: { fanout: 'fanout', join: 'join', invocation: 2 }, passes: { 'branch-a': 2, 'branch-b': 2 },
   decided: { 'fanout|branch-a': [true, 2], 'fanout|branch-b': [true, 2] }, nodes: {}, executed: ['fanout'], skipped: [], error: '' };
-const observation: RunProjection = { phase: 'running', active: true, control_requested: null,
-  terminal: false, quiescent: false, needs_attention: false, actions: { pause: true, stop: true, resume: false } };
+const observation: RunProjection = { phase: 'executing', active: true, reason: null, updated: null,
+  actions: { stop: true, resume: false, abandon: true } };
 
 describe('same-run parallel authoring and observation', () => {
   it('separates full node identities and invocation numbers in persisted trace keys', () => {
@@ -47,10 +47,10 @@ describe('same-run parallel authoring and observation', () => {
 
   it('shows both active branches, animates both selected inputs, and leaves join pending', () => {
     const nodes = toFlowNodes(region, 'parallel', state, observation);
-    expect(nodes.filter(node => node.data.state === 'running').map(node => node.id)).toEqual(['branch-a', 'branch-b']);
+    expect(nodes.filter(node => node.data.state === 'executing' && node.data.live).map(node => node.id)).toEqual(['branch-a', 'branch-b']);
     expect(nodes.find(node => node.id === 'join')?.data).toMatchObject({ state: 'pending', control: 'join', kind: '展开自 fanout' });
     expect(toFlowEdges(region, state, observation).filter(edge => edge.animated).map(edge => edge.target)).toEqual(['branch-a', 'branch-b']);
-    expect(toFlowNodes(region, 'parallel', { ...state, active: {} }, observation).filter(node => node.data.state === 'running')).toEqual([]);
+    expect(toFlowNodes(region, 'parallel', { ...state, active: {} }, observation).filter(node => node.data.live)).toEqual([]);
   });
 
   it('preserves legacy cursor runs and de-duplicates an active cursor', () => {
@@ -69,23 +69,26 @@ describe('same-run parallel authoring and observation', () => {
       ],
     } };
     expect(activeNodes(native).map(cursor => cursor.node)).toEqual(['branch-a', 'branch-b']);
-    expect(toFlowNodes(region, 'parallel', native, observation).filter(node => node.data.state === 'running').map(node => node.id))
+    expect(toFlowNodes(region, 'parallel', native, observation).filter(node => node.data.state === 'executing' && node.data.live).map(node => node.id))
       .toEqual(['branch-a', 'branch-b']);
     expect(toFlowEdges(region, native, observation).filter(edge => edge.animated).map(edge => edge.target)).toEqual(['branch-a', 'branch-b']);
     expect(activeNodes({ ...native, parallel: null })).toEqual([]);
   });
 
-  it.each(['waiting_resume', 'waiting_recovery', 'paused', 'stopped'])('keeps retained %s branch cursors quiet instead of rendering execution', phase => {
-    const inactive = { ...observation, phase, active: false };
+  it.each([
+    { phase: 'executing' }, { phase: 'waiting', waiting_for: 'effect' },
+    { phase: 'waiting', waiting_for: 'human', reason: 'paused' }, { phase: 'waiting', waiting_for: 'human', reason: 'stopped' },
+  ] as const)('keeps retained %s branch cursors quiet instead of rendering execution', view => {
+    const inactive = { ...observation, ...view, active: false };
     const nodes = toFlowNodes(region, 'parallel', state, inactive);
-    expect(nodes.filter(node => node.data.state === phase).map(node => node.id)).toEqual(['branch-a', 'branch-b']);
-    expect(nodes.filter(node => node.data.state === 'running')).toEqual([]);
+    expect(nodes.filter(node => node.data.state === view.phase).map(node => node.id)).toEqual(['branch-a', 'branch-b']);
+    expect(nodes.filter(node => node.data.live)).toEqual([]);
     expect(toFlowEdges(region, state, inactive).filter(edge => edge.animated)).toEqual([]);
   });
 
   it('keeps unknown Run observations quiet while retaining definition-only editor nodes', () => {
     const unknown = toFlowNodes(region, 'parallel', state);
-    expect(unknown.filter(node => node.data.state === 'running')).toEqual([]);
+    expect(unknown.filter(node => node.data.live)).toEqual([]);
     expect(unknown.filter(node => node.data.state === 'unavailable')).toHaveLength(region.nodes.length);
     expect(toFlowEdges(region, state).filter(edge => edge.animated)).toEqual([]);
     const definition = toFlowNodes(region, 'parallel', null);

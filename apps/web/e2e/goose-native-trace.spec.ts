@@ -52,7 +52,7 @@ test('real Rust Host and Goose retain active trace, canonical completion and rec
     const run = (await response.json()).run;
     await expect.poll(() => provider.calls.length).toBe(2);
     const during = await (await request.get(`${base}/runs/${run}`)).json();
-    expect(during.state.status).toBe('running');
+    expect(during.projection?.phase).toBe('executing');
     expect(during.state.nodes.worker).toBeUndefined();
     await page.goto(base);
     await page.getByRole('button', { name: '查看当前运行', exact: true }).click();
@@ -63,7 +63,7 @@ test('real Rust Host and Goose retain active trace, canonical completion and rec
     await expect(call).toContainText('once');
     await page.screenshot({ path: join(root, 'live-desktop.png') });
     release();
-    await expect.poll(async () => (await (await request.get(`${base}/runs/${run}`)).json()).state.status).toBe('completed');
+    await expect.poll(async () => (await (await request.get(`${base}/runs/${run}`)).json()).projection.outcome).toBe('done');
     await expect(page.locator('.inspector .node-summary')).toContainText('Canonical native reply');
     const saved = JSON.parse(await readFile(join(root, 'state/runs', `${run}.json`), 'utf8'));
     const binding = saved.plugin_bindings['browser-plugin'];

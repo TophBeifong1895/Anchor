@@ -169,7 +169,8 @@ async fn serial_probe_commits_artifacts_cost_and_phase_through_application() {
             .project_run(&projected, None)
             .await
             .unwrap()
-            .terminal
+            .phase
+            == "settled"
     );
     assert!(!root.path().join("runs").exists());
     assert_eq!(application.records().unwrap().len(), 1);
@@ -268,7 +269,8 @@ async fn abandon_waiting_probe_is_terminal_and_refuses_late_submission() {
             .project_run(&application.load_run("p-abandon").unwrap().unwrap(), None)
             .await
             .unwrap()
-            .terminal
+            .phase
+            == "settled"
     );
 }
 

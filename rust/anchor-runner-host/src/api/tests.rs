@@ -335,11 +335,8 @@ async fn graph_crud_round_trips_authoring_modules_and_layout() {
     let mut completed = false;
     for _ in 0..100 {
         let (status, detail) = call(app.clone(), "GET", &format!("/runs/{run}"), None).await;
-        if status == StatusCode::OK
-            && detail["state"]["status"] != "running"
-            && detail["state"]["status"] != "ready"
-        {
-            assert_eq!(detail["state"]["status"], "completed", "{detail}");
+        if status == StatusCode::OK && detail["projection"]["phase"] != "executing" {
+            assert_eq!(detail["projection"]["outcome"], "done", "{detail}");
             assert_eq!(detail["nodes"][0], "stage/inside");
             assert_eq!(detail["state"]["executed"][0], "stage/inside");
             completed = true;
@@ -524,10 +521,7 @@ async fn trigger_persists_run_and_projects_list_detail_and_control() {
     let run = started["run"].as_str().unwrap();
     for _ in 0..100 {
         let (status, value) = call(app.clone(), "GET", &format!("/runs/{run}"), None).await;
-        if status == StatusCode::OK
-            && value["state"]["status"] != "running"
-            && value["state"]["status"] != "ready"
-        {
+        if status == StatusCode::OK && value["projection"]["phase"] != "executing" {
             break;
         }
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
@@ -537,7 +531,7 @@ async fn trigger_persists_run_and_projects_list_detail_and_control() {
     assert_eq!(runs["runs"][0]["run"], run);
     let (status, detail) = call(app.clone(), "GET", &format!("/runs/{run}"), None).await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(detail["state"]["status"], "completed");
+    assert_eq!(detail["projection"]["outcome"], "done");
     assert_eq!(detail["state"]["nodes"]["work"]["files"][0], "report.txt");
     let record = FileRunStore::new(state.data_root.join("runs"))
         .load(run)
@@ -1232,14 +1226,14 @@ async fn paused_wait_child_resumes_independently_then_releases_parent() {
     .await;
     assert_eq!(status, StatusCode::ACCEPTED, "{pause_response:?}");
     for _ in 0..200 {
-        if store.load(&child_id).unwrap().unwrap().status == RunStatus::Paused {
+        if store.load(&child_id).unwrap().unwrap().status == RunStatus::Stopped {
             break;
         }
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
     }
     assert_eq!(
         store.load(&child_id).unwrap().unwrap().status,
-        RunStatus::Paused
+        RunStatus::Stopped
     );
     assert_eq!(
         store.load(&parent_id).unwrap().unwrap().status,
@@ -1685,14 +1679,16 @@ async fn start_and_pause_request(state: &ApiState, app: &Router, body: &str) -> 
         }
         tokio::time::sleep(std::time::Duration::from_millis(2)).await;
     }
-    let (status, _) = call(app.clone(), "POST", &format!("/runs/{run}/pause"), None).await;
+    let (status, alias) = call(app.clone(), "POST", &format!("/runs/{run}/pause"), None).await;
     assert_eq!(status, StatusCode::ACCEPTED);
+    assert_eq!(alias["operation"], "stop");
+    assert_eq!(alias["alias"], true);
     wait_idle(state).await;
     let record = FileRunStore::new(state.data_root.join("runs"))
         .load(&run)
         .unwrap()
         .unwrap();
-    assert_eq!(record.status, RunStatus::Paused);
+    assert_eq!(record.status, RunStatus::Stopped);
     assert_eq!(record.results.len(), 1);
     run
 }
@@ -2470,7 +2466,7 @@ async fn downstream_failure_does_not_reclassify_committed_upstream_result() {
     wait_idle(&state).await;
     let run = accepted["run"].as_str().unwrap();
     let (_, detail) = call(app, "GET", &format!("/runs/{run}"), None).await;
-    assert_eq!(detail["state"]["status"], "failed");
+    assert_eq!(detail["projection"]["outcome"], "failed");
     assert_eq!(detail["state"]["nodes"]["first"]["submitted"], true);
     assert_eq!(
         detail["state"]["nodes"]["first"]["exit_status"],
@@ -2673,7 +2669,7 @@ async fn waiting_parent_rejects_child_grant_drift_then_restores_same_child_witho
     let parent_before = store.load(&parent_id).unwrap().unwrap();
     let child_before = store.load(&child_id).unwrap().unwrap();
     assert_eq!(parent_before.status, RunStatus::WaitingCall);
-    assert_eq!(child_before.status, RunStatus::Paused);
+    assert_eq!(child_before.status, RunStatus::Stopped);
     assert_eq!(child_before.results["slow"].len(), 1);
     let first_commit = child_before.results["slow"][0].commit.clone();
     let first_key = child_before.results["slow"][0].key.clone();

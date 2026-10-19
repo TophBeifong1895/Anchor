@@ -3,7 +3,7 @@ import { ArrowUpRight, Check, ChevronDown, Radio, RefreshCw, Trash2 } from 'luci
 import { api, reason } from './api';
 import { listenerLabel, type GraphSummary, type RunProjection } from './model';
 import { RunControls } from './RunControls';
-import { runPhase, runPhaseLabel } from './runPresentation';
+import { runPhase, runPhaseLabel, runQuiescent } from './runPresentation';
 import { PluginCredentials } from './PluginCredentials';
 import { Modal } from './ui';
 import './ChannelsPage.css';
@@ -18,7 +18,7 @@ type ChannelSession = { id: string; title: string; graph: string; platform: stri
 type Assistant = { run_id: string; wait_node: string; work_node: string; reply_node: string };
 type AssistantStatus = { assistant: Assistant | null; needs_recovery: boolean;
   plugin_update?: { state: 'current' | 'pending' | 'restart_required' | 'unavailable'; message?: string } };
-type RunStatus = { run: string; active: boolean; projection?: RunProjection; control_requested?: string | null; state: { status: string; cursor?: { node: string } | null } };
+type RunStatus = { run: string; active: boolean; projection?: RunProjection; state: { cursor?: { node: string } | null } };
 type Delivery = { key: string; status: string; error?: string | null };
 type SessionDetail = { session: { run_ids: string[] } };
 const emptyBinding: Binding = { graph: '', reply_node: 'assistant', plugin: '', users: [], send_users: [] };
@@ -196,11 +196,11 @@ function AssistantRow({ session, revision, onChanged, onOpenRun }: { session: Ch
   const pluginUpdateLabel = pluginUpdate?.state === 'pending' ? '插件待生效'
     : pluginUpdate?.state === 'restart_required' ? '插件需重建实例'
       : pluginUpdate?.state === 'unavailable' ? '插件状态不可用' : '';
-  const settled = run?.projection?.quiescent;
+  const settled = runQuiescent(run?.projection);
   const canRetire = Boolean(bound && settled && deliveries?.length === 0);
   const status = !assistant ? '正在读取…' : !bound ? '无当前实例' : !run ? '运行状态不可用'
-    : runPhase(run) === 'running' && run.projection?.active && run.state.cursor?.node === bound.wait_node ? '等待消息'
-      : runPhaseLabel(runPhase(run));
+    : runPhase(run) === 'executing' && run.projection?.active && run.state.cursor?.node === bound.wait_node ? '等待消息'
+      : runPhaseLabel(run.projection);
   const cleanup = async () => {
     const path = `/channel-sessions/${enc(session.id)}`;
     // Re-read the exact deletion scope; a new trusted message may have arrived.

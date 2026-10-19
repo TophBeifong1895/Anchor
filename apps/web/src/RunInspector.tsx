@@ -41,7 +41,7 @@ export function RunInspector({ run, node, detail, targetPath = '', onOpenRun }:
       {detail.calls.filter(call => !node || call.node === node).map(call => <article className="call-record" key={`${call.node}/${call.invocation}`}>
         <header><strong>{call.graph}</strong><span>第 {call.invocation} 轮 · {call.node}</span></header>
         <p>{callModeLabel(call.mode)}</p>
-        <p>目标运行：<span className={`pill ${runPhase(call)}`}>{runPhaseLabel(runPhase(call))}</span></p>
+        <p>目标运行：<span className={`pill ${runPhase(call)}`}>{runPhaseLabel(call.projection)}</span></p>
         <button className="full-button" onClick={() => onOpenRun?.(call.run, call.graph)}>查看目标运行 ↗</button>
         <small className="call-run-id">{call.run}</small>
         {call.summary && <p>{call.summary}</p>}

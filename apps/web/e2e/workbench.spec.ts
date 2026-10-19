@@ -137,8 +137,7 @@ test('edit a graph, inspect a run and read its files across screen sizes', async
   const errors: string[] = [];
   page.on('pageerror', error => errors.push(error.message));
   const run = { run: 'run-demo', graph: 'academic-survey', status: 'running', running: true,
-    projection: { phase: 'running', active: true, control_requested: null, terminal: false, quiescent: false,
-      needs_attention: false, actions: { pause: true, stop: true, resume: false } },
+    projection: { phase: 'executing', active: true, reason: null, updated: null, actions: { stop: true, resume: false, abandon: true } },
     started: '2026-09-22T08:30:00Z', updated: '2026-09-22T08:32:00Z',
     executed: ['plan', 'gather', 'write'], objective: '调研多智能体协作：从证据收集到可靠的研究结论' };
   await page.route('**/graphs', route => route.fulfill({ json: { graphs: [
@@ -148,15 +147,13 @@ test('edit a graph, inspect a run and read its files across screen sizes', async
   await page.route('**/graphs/*', route => route.fulfill({ json: { definition: graph } }));
   const history = Array.from({ length: 5 }, (_, index) => ({ ...run, run: `run-history-${index}`,
     running: false, status: index === 0 ? 'failed' : 'finished',
-    projection: { phase: index === 0 ? 'failed' : 'completed', active: false, control_requested: null, terminal: true,
-      quiescent: true, needs_attention: index === 0, actions: { pause: false, stop: false, resume: false } },
+    projection: { phase: 'settled', outcome: index === 0 ? 'failed' : 'done', active: false, reason: null, updated: null, actions: { stop: false, resume: false, abandon: false } },
     started: `2026-09-${21 - index}T08:30:00Z`, updated: `2026-09-${21 - index}T08:32:00Z` }));
   await page.route('**/runs', route => route.fulfill({ json: { runs: [run, ...history] } }));
   await page.route('**/timeline*', route => route.fulfill({ json: { runs: [run], scheduled: [], schedules: [] } }));
   await page.route('**/runs/run-demo', route => route.fulfill({ json: {
     graph: run.graph, run: run.run, definition: graph, nodes: graph.nodes.map((node: { id: string }) => node.id),
-    projection: { phase: 'running', active: true, control_requested: null, terminal: false, quiescent: false,
-      needs_attention: false, actions: { pause: true, stop: true, resume: false } },
+    projection: { phase: 'executing', active: true, reason: null, updated: null, actions: { stop: true, resume: false, abandon: true } },
     state: { ...run, cursor: { node: 'structure', pass: 1, dir: '' }, passes: { plan: 1, gather: 1, write: 1, structure: 1 },
       decided: { 'plan|gather': [true, 1], 'gather|write': [true, 2], 'write|structure': [true, 3] },
       nodes: Object.fromEntries(['plan', 'gather', 'write'].map(node => [node, {

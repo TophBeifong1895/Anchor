@@ -224,21 +224,6 @@ fn constant_time_eq(left: &str, right: &str) -> bool {
     difference == 0
 }
 
-fn status(value: RunStatus) -> &'static str {
-    match value {
-        RunStatus::Ready => "ready",
-        RunStatus::Running => "running",
-        RunStatus::Paused => "paused",
-        RunStatus::BudgetStopped => "budget_stopped",
-        RunStatus::WaitingCall => "waiting_call",
-        RunStatus::WaitingRecovery => "waiting_recovery",
-        RunStatus::Completed => "completed",
-        RunStatus::Aborted => "aborted",
-        RunStatus::Stopped => "stopped",
-        RunStatus::Failed => "failed",
-    }
-}
-
 pub async fn serve() -> io::Result<()> {
     let configured_bundle = env::var_os("ANCHOR_RUNNER_BUNDLE_ROOT")
         .filter(|path| !path.is_empty())

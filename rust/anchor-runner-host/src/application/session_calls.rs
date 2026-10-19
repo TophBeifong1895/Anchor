@@ -568,8 +568,8 @@ mod tests {
                     .project_run(&parent, metadata.as_ref())
                     .await
                     .unwrap()
-                    .control_requested,
-                Some("stop")
+                    .phase,
+                "executing"
             );
         } else {
             assert_eq!(

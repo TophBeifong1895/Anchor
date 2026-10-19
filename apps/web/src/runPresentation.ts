@@ -2,32 +2,39 @@ import { label } from './execution';
 import type { OurRunState, RunProjection } from './model';
 import { activeNodes } from './parallel';
 
-export type RunControl = 'pause' | 'stop' | 'resume';
+export type RunControl = 'stop' | 'resume' | 'abandon';
 export type ProjectedRun = { projection?: RunProjection | null };
 
-/** A missing projection is unknown, including on an older Host. Never grant a
- * control by independently interpreting its durable status in the browser. */
+/** All entry points consume the Host's actions; a missing projection grants nothing. */
 export const runPhase = (run: ProjectedRun) => run.projection?.phase ?? 'unavailable';
-export const runNeedsAttention = (run: ProjectedRun) => run.projection?.needs_attention ?? true;
-export const runPhaseLabel = (phase: string) => ({
-  waiting_resume: '等待接续', waiting_call: '等待调用结果',
-  budget_stopped: '预算已耗尽',
-  stopping: '正在停止…', pausing: '正在暂停…', unavailable: '运行状态不可用',
-  uncertain: '待核查', planned: '已计划', missed_busy: '忙碌错过', missed_downtime: '停机错过',
-}[phase] ?? label(phase));
+export const runNeedsAttention = ({ projection: p }: ProjectedRun) => !p || p.phase === 'waiting'
+  || (p.phase === 'executing' && !p.active) || (p.phase === 'settled' && p.outcome !== 'done');
+export const runQuiescent = (p?: RunProjection) => !!p && !p.active
+  && (p.phase === 'settled' || (p.phase === 'waiting' && p.waiting_for === 'human'));
 
-export const runControlLabels: Record<RunControl, string> = { pause: '暂停', stop: '停止', resume: '继续' };
+export function runPhaseLabel(value?: RunProjection | string | null): string {
+  if (!value) return '运行状态不可用';
+  if (typeof value === 'string') return ({ executing: '执行中', waiting: '等待处理', settled: '已结算',
+    unavailable: '运行状态不可用', planned: '已计划', missed_busy: '忙碌错过', missed_downtime: '停机错过',
+  }[value] ?? label(value));
+  if (value.phase === 'executing') return value.active ? '执行中' : '等待接续';
+  if (value.phase === 'waiting') {
+    const who = { human: '你处理', child: '子任务', effect: '核查效果' }[value.waiting_for ?? 'human'];
+    return `等待${who}${value.reason ? `：${value.reason}` : ''}`;
+  }
+  return ({ done: '已完成', failed: '失败', escalated: '已升级处理', unknown: '结果未知', aborted: '已放弃' }[value.outcome ?? 'unknown']);
+}
 
-/** A cursor locates a retained invocation; only the Host observation says it
- * still has an executor. Completed node results remain historical facts even
- * when that current observation is missing. A null state is a pure definition. */
+export const runControlLabels: Record<RunControl, string> = { stop: '停止', resume: '继续', abandon: '放弃' };
+
+/** A cursor locates retained progress; only an active executing observation is live. */
 export function runNodePresentation(state: OurRunState | null | undefined, node: string, projection?: RunProjection | null) {
   const atCursor = activeNodes(state).some(cursor => cursor.node === node);
   const phase = runPhase({ projection });
-  const live = atCursor && projection?.active === true && ['running', 'pausing', 'stopping'].includes(phase);
+  const live = atCursor && projection?.active === true && phase === 'executing';
   if (atCursor) {
-    const status = phase === 'running' && !live ? 'unavailable' : phase;
-    return { status, label: runPhaseLabel(status), summaryLabel: runPhaseLabel(status), atCursor, live };
+    const text = runPhaseLabel(projection);
+    return { status: phase, label: text, summaryLabel: text, atCursor, live };
   }
   const result = state?.nodes?.[node];
   if (result) {

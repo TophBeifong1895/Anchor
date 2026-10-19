@@ -9,14 +9,10 @@ vi.mock('./Files', () => ({ Files: () => null }));
 vi.mock('./Plugins', () => ({ Plugins: () => null }));
 vi.mock('./Transcript', () => ({ Transcript: () => null }));
 
-const fixture = (phase?: string): OurRunDetail => ({
+const fixture = (projection?: RunProjection): OurRunDetail => ({
   run: 'run', graph: 'graph', nodes: ['worker'], traces: {},
-  active: true, control_requested: 'stop',
-  projection: phase ? {
-    phase, active: false, control_requested: null, terminal: false, quiescent: false,
-    needs_attention: true, actions: { pause: false, stop: true, resume: true },
-  } satisfies RunProjection : undefined,
-  state: { status: 'running', objective: '', started: '', updated: '',
+  active: true, projection,
+  state: { objective: '', started: '', updated: '',
     cursor: { node: 'worker', pass: 1, dir: '' }, nodes: {}, passes: {}, decided: {}, executed: [], skipped: [], error: '' },
 });
 
@@ -30,10 +26,12 @@ describe('Run Inspector status projection', () => {
   afterEach(async () => { await act(async () => root.unmount()); element.remove(); });
 
   it.each([
-    ['waiting_resume', '等待接续'], ['waiting_recovery', '等待恢复上下文'], ['paused', '已暂停'],
-  ])('uses %s for a retained cursor instead of claiming it is executing', async (phase, label) => {
-    const detail = fixture(phase);
-    detail.calls = [{ node: 'worker', invocation: 1, graph: 'target', run: 'child', mode: 'wait', status: 'running' }];
+    [{ phase: 'executing' }, '等待接续'],
+    [{ phase: 'waiting', waiting_for: 'effect', reason: '工具结果未记录' }, '等待核查效果：工具结果未记录'],
+    [{ phase: 'waiting', waiting_for: 'human', reason: 'paused' }, '等待你处理：paused'],
+  ] as const)('uses %s for a retained cursor instead of claiming it is executing', async (view, label) => {
+    const detail = fixture({ active: false, reason: null, updated: null, actions: { stop: false, resume: false, abandon: false }, ...view });
+    detail.calls = [{ node: 'worker', invocation: 1, graph: 'target', run: 'child', mode: 'wait' }];
     await render(detail);
     expect(element.querySelector('.node-summary .pill')?.textContent).toBe(label);
     expect(element.querySelector('.call-records')?.textContent).toContain(`本节点：${label}`);

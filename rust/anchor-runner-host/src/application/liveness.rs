@@ -6,16 +6,28 @@ pub(crate) struct RunLiveness {
 }
 impl RunLiveness {
     pub(crate) fn from_view(view: &RunView) -> Self {
+        Self::from_phase(&view.phase, view.worker)
+    }
+    fn from_phase(phase: &Phase, worker: bool) -> Self {
         Self {
-            quiescent: !view.worker
-                && (view.is_settled()
+            quiescent: !worker
+                && (matches!(phase, Phase::Settled { .. })
                     || matches!(
-                        view.phase,
+                        phase,
                         Phase::Waiting {
                             waiter: Waiter::Human { .. }
                         }
                     )),
         }
+    }
+    pub(crate) fn observed(status: anchor_runtime::graph::RunStatus, worker: bool) -> Self {
+        Self::from_phase(&super::legacy_run_view::phase(status, None), worker)
+    }
+    pub(super) fn with_registry(
+        record: &anchor_runtime::graph::GraphRunRecord,
+        active: &std::collections::HashMap<String, super::ActiveRun>,
+    ) -> Self {
+        Self::observed(record.status, active.contains_key(&record.run_id))
     }
     pub(crate) fn is_quiescent(&self) -> bool {
         self.quiescent
@@ -32,8 +44,8 @@ mod tests {
         for (status, inactive_quiescent) in [
             (RunStatus::Ready, false),
             (RunStatus::Running, false),
-            (RunStatus::Paused, false),
-            (RunStatus::BudgetStopped, false),
+            (RunStatus::Paused, true),
+            (RunStatus::BudgetStopped, true),
             (RunStatus::WaitingCall, false),
             (RunStatus::WaitingRecovery, false),
             (RunStatus::Completed, true),

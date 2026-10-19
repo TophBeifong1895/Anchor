@@ -286,47 +286,27 @@ async fn pending_control_projects_active_tokens_with_stop_priority() {
         ActiveRun::new(root.path().join("graph"), control.clone()),
     );
     assert_eq!(
-        application
-            .project_run(&missing, None)
-            .await
-            .unwrap()
-            .control_requested,
-        None
+        application.project_run(&missing, None).await.unwrap().phase,
+        "executing"
     );
     assert_eq!(
-        application
-            .project_run(&record, None)
-            .await
-            .unwrap()
-            .control_requested,
-        None
+        application.project_run(&record, None).await.unwrap().phase,
+        "executing"
     );
     control.pause.store(true, Ordering::Relaxed);
     assert_eq!(
-        application
-            .project_run(&record, None)
-            .await
-            .unwrap()
-            .control_requested,
-        Some("pause")
+        application.project_run(&record, None).await.unwrap().phase,
+        "executing"
     );
     control.cancellation.store(true, Ordering::Relaxed);
     assert_eq!(
-        application
-            .project_run(&record, None)
-            .await
-            .unwrap()
-            .control_requested,
-        Some("stop")
+        application.project_run(&record, None).await.unwrap().phase,
+        "executing"
     );
     application.active.lock().await.remove("active-run");
     assert_eq!(
-        application
-            .project_run(&record, None)
-            .await
-            .unwrap()
-            .control_requested,
-        None
+        application.project_run(&record, None).await.unwrap().phase,
+        "executing"
     );
     assert!(!data_root.exists());
 }

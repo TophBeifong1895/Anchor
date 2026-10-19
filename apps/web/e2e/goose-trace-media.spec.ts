@@ -12,7 +12,7 @@ test('projected native trace images, ordering and tool identities remain usable 
   page.on('request', request => { if (request.url().includes('evil.test')) remote.push(request.url()); });
   const graph = { objective: 'Native media UI projection fixture', entry: 'worker',
     agents: { worker: { model: 'fixture' } }, nodes: [{ id: 'worker', agent: 'worker' }], edges: [] };
-  const run = { graph: 'media-trace', run: 'media-run', status: 'running', running: true, projection: runProjectionFixture('running', { active: true }),
+  const run = { graph: 'media-trace', run: 'media-run', status: 'running', running: true, projection: runProjectionFixture('executing', { active: true }),
     started: '2026-10-07T01:00:00Z', updated: '2026-10-07T01:00:00Z', executed: [], objective: graph.objective };
   await page.route('**/graphs', route => route.fulfill({ json: { graphs: [{ graph: run.graph, running: run.run }] } }));
   await page.route('**/graphs/*', route => route.fulfill({ json: { definition: graph } }));

@@ -14,7 +14,7 @@ impl From<&GraphRunRecord> for GraphProgress {
         }
     }
 }
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 pub(crate) struct AvailableActions {
     pub(crate) stop: bool,
     pub(crate) resume: bool,
@@ -26,17 +26,21 @@ pub(crate) struct RunView {
     pub(crate) graph: GraphProgress,
     pub(crate) worker: bool,
     pub(crate) updated: Option<String>,
+    /// Legacy effect waits may have an explanation outside the Kernel waiter.
+    pub(crate) reason: Option<String>,
 }
 impl RunView {
     pub(crate) fn actions(&self) -> AvailableActions {
         AvailableActions {
             stop: self.phase == Phase::Executing,
-            resume: matches!(
-                self.phase,
-                Phase::Waiting {
-                    waiter: Waiter::Human { .. }
-                }
-            ) && !self.worker,
+            resume: (self.phase == Phase::Executing
+                || matches!(
+                    self.phase,
+                    Phase::Waiting {
+                        waiter: Waiter::Human { .. }
+                    }
+                ))
+                && !self.worker,
             abandon: !self.is_settled(),
         }
     }
@@ -101,12 +105,13 @@ mod tests {
                     graph: (&record).into(),
                     worker,
                     updated: None,
+                    reason: None,
                 };
                 assert_eq!(
                     view.actions(),
                     AvailableActions {
                         stop: index == 0,
-                        resume: index == 1 && !worker,
+                        resume: index < 2 && !worker,
                         abandon: index < 4
                     },
                     "{phase:?} worker={worker}"

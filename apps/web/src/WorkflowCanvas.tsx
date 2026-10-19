@@ -11,7 +11,7 @@ import { RoutedEdge } from './RoutedEdge';
 
 type WorkflowNode = Node<{
   name: string; kind: string; nodeKind: 'agent' | 'op' | 'subgraph'; entry: boolean; terminal: boolean;
-  state: string; statusLabel?: string; attempt?: number; ports: Port[]; editing: boolean;
+  state: string; live?: boolean; statusLabel?: string; attempt?: number; ports: Port[]; editing: boolean;
   control?: 'fanout' | 'join'; plugins?: NodePluginRef[]; call?: GraphCall; targetMissing?: boolean; onOpenTarget?: (target: string, node: string) => void;
 }, 'workflow'>;
 
@@ -19,7 +19,7 @@ function WorkflowNodeView({ id, data, selected }: NodeProps<WorkflowNode>) {
   const update = useUpdateNodeInternals();
   useEffect(() => { update(id); }, [id, data.ports, update]);
   const Icon = data.control === 'fanout' ? GitFork : data.control === 'join' ? GitMerge : data.call ? Workflow : data.nodeKind === 'op' ? Terminal : data.nodeKind === 'subgraph' ? Layers : Bot;
-  return <div className={`workflow-node ${data.editing ? 'graph-node' : 'execution-node'} kind-${data.nodeKind} state-${data.state} ${selected ? 'selected' : ''}`}>
+  return <div className={`workflow-node ${data.editing ? 'graph-node' : 'execution-node'} kind-${data.nodeKind} state-${data.state} ${data.live ? 'is-live' : ''} ${selected ? 'selected' : ''}`}>
     <div className="workflow-node-heading"><Icon size={14} />
       <span>{data.control === 'fanout' ? '并行展开' : data.control === 'join' ? '等待收束' : data.call ? '调用工作流' : data.nodeKind === 'op' ? '命令' : data.nodeKind === 'subgraph' ? '子图' : '智能体'}</span>
       {data.entry ? <span className="entry-tag">入口</span> : data.terminal && <span className="entry-tag">终点</span>}

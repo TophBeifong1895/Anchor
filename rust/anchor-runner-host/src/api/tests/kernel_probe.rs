@@ -47,15 +47,15 @@ async fn explicit_kernel_probe_runs_real_host_ops_and_projects_existing_queries(
     );
     let (status, detail) = call(router.clone(), "GET", &format!("/runs/{id}"), None).await;
     assert_eq!(status, StatusCode::OK, "{detail}");
-    assert_eq!(detail["state"]["status"], "completed");
-    assert_eq!(detail["projection"]["terminal"], true);
+    assert_eq!(detail["projection"]["phase"], "settled");
+    assert_eq!(detail["projection"]["outcome"], "done");
     for node in ["a", "b", "c"] {
         assert_eq!(detail["state"]["nodes"][node]["files"][0], "report.txt");
     }
     let (status, list) = call(router.clone(), "GET", "/runs", None).await;
     assert_eq!(status, StatusCode::OK, "{list}");
     assert_eq!(list["runs"].as_array().unwrap().len(), 1);
-    assert_eq!(list["runs"][0]["status"], "completed");
+    assert_eq!(list["runs"][0]["projection"]["outcome"], "done");
     let (status, late) = call(router, "POST", &format!("/runs/{id}/stop"), None).await;
     assert_eq!(status, StatusCode::CONFLICT, "{late}");
 }
@@ -144,19 +144,19 @@ async fn kernel_read_view_http_tracks_running_human_wait_and_settlement_with_hos
     std::fs::write(&observation, json!({"updated":sentinel}).to_string()).unwrap();
     let (status, running) = call(router.clone(), "GET", &format!("/runs/{id}"), None).await;
     assert_eq!(status, StatusCode::OK, "{running}");
-    assert_eq!(running["projection"]["phase"], "running");
+    assert_eq!(running["projection"]["phase"], "executing");
     assert_eq!(
         running["projection"]["actions"],
-        json!({"pause":false,"stop":true,"resume":false})
+        json!({"stop":true,"resume":false,"abandon":true})
     );
     assert_eq!(running["state"]["updated"], sentinel);
     let (status, body) = call(router.clone(), "POST", &format!("/runs/{id}/stop"), None).await;
     assert_eq!(status, StatusCode::ACCEPTED, "{body}");
     let (_, waiting) = call(router.clone(), "GET", &format!("/runs/{id}"), None).await;
-    assert_eq!(waiting["projection"]["phase"], "stopped");
+    assert_eq!(waiting["projection"]["phase"], "waiting");
     assert_eq!(
         waiting["projection"]["actions"],
-        json!({"pause":false,"stop":false,"resume":false})
+        json!({"stop":false,"resume":false,"abandon":true})
     );
     let updated: Value = serde_json::from_slice(&std::fs::read(&observation).unwrap()).unwrap();
     assert_ne!(updated["updated"], sentinel);
@@ -178,11 +178,11 @@ async fn kernel_read_view_http_tracks_running_human_wait_and_settlement_with_hos
     .await;
     assert_eq!(status, StatusCode::OK, "{body}");
     let (_, settled) = call(router.clone(), "GET", &format!("/runs/{id}"), None).await;
-    assert_eq!(settled["projection"]["phase"], "aborted");
-    assert_eq!(settled["projection"]["terminal"], true);
+    assert_eq!(settled["projection"]["phase"], "settled");
+    assert_eq!(settled["projection"]["outcome"], "aborted");
     assert_eq!(
         settled["projection"]["actions"],
-        json!({"pause":false,"stop":false,"resume":false})
+        json!({"stop":false,"resume":false,"abandon":false})
     );
     let before = std::fs::read(&observation).unwrap();
     let (status, _) = call(router, "POST", &format!("/runs/{id}/stop"), None).await;

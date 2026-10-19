@@ -5,15 +5,15 @@ import { runProjectionFixture } from './fixtures/runProjection';
 test('unknown tool result resumes through the normal Agent context path', async ({ page }) => {
   const started = new Date().toISOString();
   const graph: OurGraph = { entry: 'work', nodes: [{ id: 'work', op: 'work' }], edges: [], ops: { work: { run: 'true' } } };
-  const run: OurRun = { run: 'recovery-run', graph: 'recovery', status: 'waiting_recovery', running: false,
-    projection: runProjectionFixture('waiting_recovery', { needs_attention: true, actions: { pause: false, stop: true, resume: true } }),
+  const run: OurRun = { run: 'recovery-run', graph: 'recovery', running: false,
+    projection: runProjectionFixture('waiting', { waiting_for: 'human', reason: 'Agent 上次工具调用的结果未记录', actions: { stop: false, resume: true, abandon: true } }),
     started, updated: started, executed: ['work'], objective: '恢复 Agent 上下文' };
   let status = 'waiting_recovery';
   let resumed = false;
   const detail = (): OurRunDetail => ({ active: status === 'running', run: run.run, graph: run.graph, definition: graph,
-    projection: status === 'running' ? runProjectionFixture('running', { active: true, actions: { pause: true, stop: true, resume: false } }) : run.projection,
+    projection: status === 'running' ? runProjectionFixture('executing', { active: true, actions: { stop: true, resume: false, abandon: true } }) : run.projection,
     nodes: ['work'], traces: {}, state: {
-    objective: run.objective, started, updated: started, status, cursor: { node: 'work', pass: 1, dir: 'work' },
+    objective: run.objective, started, updated: started, cursor: { node: 'work', pass: 1, dir: 'work' },
     recovery: [{ key: { run_id: run.run, graph_digest: 'graph-sha256', node_id: 'work', invocation: 1 },
       attempt: { attempt_id: 1, step: 3, tool: 'anchor_run', started_at: started } }],
     passes: { work: 1 }, decided: {}, nodes: {}, executed: ['work'], skipped: [], error: '',
@@ -36,7 +36,7 @@ test('unknown tool result resumes through the normal Agent context path', async 
   await page.goto('/');
   await page.locator('[data-id="work"]').waitFor();
   await page.getByRole('button', { name: '查看最近运行' }).click();
-  await expect(page.getByText('Agent 上次工具调用的结果未记录')).toBeVisible();
+  await expect(page.locator('.canvas-head .pill', { hasText: '等待你处理：Agent 上次工具调用的结果未记录' })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Retry' })).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'Completed' })).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'Abort' })).toHaveCount(0);
@@ -48,15 +48,15 @@ test('unknown tool result resumes through the normal Agent context path', async 
 test('inactive running Run can be resumed from its existing detail page', async ({ page }) => {
   const started = new Date().toISOString();
   const graph: OurGraph = { entry: 'work', nodes: [{ id: 'work', op: 'work' }], edges: [], ops: { work: { run: 'true' } } };
-  const run: OurRun = { run: 'interrupted-run', graph: 'recovery', status: 'running', running: false,
-    projection: runProjectionFixture('waiting_resume', { needs_attention: true, actions: { pause: false, stop: true, resume: true } }),
+  const run: OurRun = { run: 'interrupted-run', graph: 'recovery', running: false,
+    projection: runProjectionFixture('executing', { actions: { stop: true, resume: true, abandon: true } }),
     started, updated: started, executed: [], objective: '恢复已保存的 cursor' };
   let active = false;
   let resumed = false;
   const detail = (): OurRunDetail => ({ active, run: run.run, graph: run.graph, definition: graph,
-    projection: active ? runProjectionFixture('running', { active: true, actions: { pause: true, stop: true, resume: false } }) : run.projection,
+    projection: active ? runProjectionFixture('executing', { active: true, actions: { stop: true, resume: false, abandon: true } }) : run.projection,
     nodes: ['work'], traces: {}, state: {
-    objective: run.objective, started, updated: started, status: 'running', cursor: { node: 'work', pass: 1, dir: 'work' },
+    objective: run.objective, started, updated: started, cursor: { node: 'work', pass: 1, dir: 'work' },
     recovery: [], passes: { work: 1 }, decided: {}, nodes: {}, executed: [], skipped: [], error: '',
   } });
 
@@ -78,10 +78,10 @@ test('inactive running Run can be resumed from its existing detail page', async 
   await page.locator('[data-id="work"]').waitFor();
   await page.getByRole('button', { name: '查看最近运行' }).click();
   await expect(page.locator('.canvas-head .pill')).toHaveText('等待接续');
-  await expect(page.locator('.execution-node.state-running')).toHaveCount(0);
-  await expect(page.locator('.execution-node.state-waiting_resume')).toHaveCount(1);
+  await expect(page.locator('.execution-node.is-live')).toHaveCount(0);
+  await expect(page.locator('.execution-node.state-executing')).toHaveCount(1);
   await expect(page.locator('.react-flow__edge.animated')).toHaveCount(0);
-  await expect(page.getByText('宿主重启后尚未接续')).toBeVisible();
+  await expect(page.locator('[aria-label="活动节点"]')).toContainText('等待接续');
   await page.getByRole('button', { name: '继续', exact: true }).click();
   await expect.poll(() => resumed).toBe(true);
   await expect(page.locator('.canvas-head .pill')).toHaveText('执行中');
@@ -90,15 +90,15 @@ test('inactive running Run can be resumed from its existing detail page', async 
 test('timeline marks an inactive running Run as waiting to resume', async ({ page }) => {
   const started = new Date().toISOString();
   const graph: OurGraph = { entry: 'work', nodes: [{ id: 'work', op: 'work' }], edges: [], ops: { work: { run: 'true' } } };
-  const run: OurRun = { run: 'waiting-run', graph: 'recovery', status: 'running', running: false,
-    projection: runProjectionFixture('waiting_resume', { needs_attention: true, actions: { pause: false, stop: true, resume: true } }),
+  const run: OurRun = { run: 'waiting-run', graph: 'recovery', running: false,
+    projection: runProjectionFixture('executing', { actions: { stop: true, resume: true, abandon: true } }),
     started, updated: '', executed: [], objective: '显示准确的接续状态' };
   await page.route('**/graphs', route => route.fulfill({ json: { graphs: [{ graph: run.graph, running: null, active_runs: [] }] } }));
   await page.route('**/graphs/*', route => route.fulfill({ json: { definition: graph } }));
   await page.route('**/runs', route => route.fulfill({ json: { runs: [run] } }));
   await page.route('**/timeline*', route => route.fulfill({ json: { runs: [run], schedules: [], scheduled: [], capabilities: { scheduling: false } } }));
   await page.route('**/runs/**', route => route.fulfill({ json: { run: run.run, graph: run.graph, definition: graph, projection: run.projection, state: {
-    objective: run.objective, started, updated: '', status: 'running', recovery: [], passes: {}, decided: {}, nodes: {},
+    objective: run.objective, started, updated: '', recovery: [], passes: {}, decided: {}, nodes: {},
     executed: [], skipped: [], error: '', input: {},
   }, traces: {}, nodes: [], active: false } }));
 

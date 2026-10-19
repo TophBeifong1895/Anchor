@@ -137,7 +137,7 @@ export function GraphEditorPage({ name, editor, graphs, runs, graphColors, busy,
                   <span>{activeRun?.running ? '当前运行' : '最近运行'}</span>
                   {activeRun ? <>
                     <span className={`pill ${runPhase(activeRun)}`}>
-                      {runPhaseLabel(runPhase(activeRun))}
+                      {runPhaseLabel(activeRun.projection)}
                     </span>
                     <time dateTime={activeRun.started} title="开始时间">{runTime(activeRun.started)} 开始</time>
                     <button className="graph-run-link" onClick={() => openRun(activeRun)}
@@ -159,7 +159,7 @@ export function GraphEditorPage({ name, editor, graphs, runs, graphColors, busy,
                     {graphRuns.map(item => <button key={item.run} className="graph-run-row" onClick={() => openRun(item)}>
                       <span className={`run-status-dot ${runPhase(item)}`}
                         style={{ '--graph-color': graphColors[name] } as CSSProperties} />
-                      <span className="graph-run-row-main"><strong>{runPhaseLabel(runPhase(item))}</strong><small>{runTime(item.started)} 开始</small></span>
+                      <span className="graph-run-row-main"><strong>{runPhaseLabel(item.projection)}</strong><small>{runTime(item.started)} 开始</small></span>
                       <span className="graph-run-row-id" title={item.run}>{item.run}</span>
                       <span className="graph-run-row-open">查看详情 →</span>
                     </button>)}

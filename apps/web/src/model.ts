@@ -47,7 +47,7 @@ export type RunTrigger = { source: string; schedule?: string; scheduled_at?: str
    *  nothing newer still reads it. */
   session?: string; reply_node?: string; previous_run?: string | null };
 export type CallRecord = { node: string; invocation: number; graph: string; run: string;
-  mode: 'wait' | 'detach'; status: string; active?: boolean; projection?: RunProjection | null;
+  mode: 'wait' | 'detach'; active?: boolean; projection?: RunProjection | null;
   summary?: string; input?: Record<string, unknown>; result?: unknown };
 export type GraphRelationsData = { graphs: { graph: string; schedules: number }[];
   calls: { graph: string; node: string; op: string; target: string; mode: 'wait' | 'detach' }[] };
@@ -135,8 +135,7 @@ export type OurRunState = {
   input?: Record<string, unknown>;
   objective: string;
   started: string;
-  status: string;
-  updated: string;
+  updated: string | null;
   cursor: { node: string; pass: number; dir: string } | null;
   active?: Record<string, { node: string; pass: number; run?: number; dir: string }>;
   parallel?: { fanout?: string; join?: string; invocation?: number; fanout_node?: string; join_node?: string;
@@ -162,10 +161,9 @@ export type RecoveryAttempt = {
 export type OurRun = {
   run: string;
   graph: string;
-  status: string;
   running: boolean;
   started: string;
-  updated: string;
+  updated: string | null;
   executed: string[];
   objective: string;
   trigger?: RunTrigger;
@@ -213,7 +211,6 @@ export type OurFileBody = {
 };
 
 export type OurRunDetail = {
-  control_requested?: 'pause' | 'stop' | null;
   /** Whether this host currently owns a live execution task for the durable Run. */
   active?: boolean;
   projection?: RunProjection;
@@ -230,17 +227,17 @@ export type OurRunDetail = {
 };
 
 export type RunProjection = {
-  phase: string;
+  phase: 'executing' | 'waiting' | 'settled';
+  waiting_for?: 'human' | 'child' | 'effect';
+  outcome?: 'done' | 'failed' | 'escalated' | 'unknown' | 'aborted';
+  reason: string | null;
   active: boolean;
-  control_requested: 'pause' | 'stop' | null;
-  terminal: boolean;
-  quiescent: boolean;
-  needs_attention: boolean;
-  actions: { pause: boolean; stop: boolean; resume: boolean };
+  actions: { stop: boolean; resume: boolean; abandon: boolean };
+  updated: string | null;
 };
 
 export type FlowNode = Node<{
-  name: string; kind: string; state: string; detail: string;
+  name: string; kind: string; state: string; live?: boolean; detail: string;
   plugins?: NodePluginRef[];
   call?: GraphCall;
   control?: 'fanout' | 'join';
@@ -291,6 +288,7 @@ function nodeState(nodeId: string, graph: OurGraph, state: OurRunState | null, p
       // said in words rather than drawn as a different shape.
       kind: nodeKindLabel(graph, nodeId),
       state: presentation.status,
+      live: presentation.live,
       detail,
       nodeKind: kindOf(graph.nodes.find(item => item.id === nodeId)!),
       plugins: graph.nodes.find(item => item.id === nodeId)?.plugins,

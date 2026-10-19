@@ -84,8 +84,8 @@ test('real backend: author wait and detach calls, follow results and concurrent 
     await expect(async () => {
       const detail = await json(request, `${base}/runs/${waitRun}`);
       expect(detail.calls).toHaveLength(1);
-      expect(detail.state.status).toBe('running');
-      expect(detail.calls[0].status).toBe('running');
+      expect(detail.projection?.phase).toBe('executing');
+      expect(detail.calls[0].projection.phase).toBe('executing');
     }).toPass({ timeout: 10000 });
     await page.locator('[data-id="call"]').click();
     const records = page.getByRole('region', { name: '工作流调用记录' });
@@ -95,7 +95,7 @@ test('real backend: author wait and detach calls, follow results and concurrent 
     await page.getByRole('button', { name: '返回来源运行' }).click();
     await expect(records).toContainText('本节点：已完成', { timeout: 20000 });
     const waitDetail: OurRunDetail = await json(request, `${base}/runs/${waitRun}`);
-    expect(waitDetail.state.status).toBe('completed');
+    expect(waitDetail.projection?.outcome).toBe('done');
     const childDetail = await json(request, `${base}/runs/${waitDetail.calls![0].run}`);
     expect(childDetail.state.input).toEqual({ default: 'kept', constant: 'browser', code: 'BROWSER-47' });
     const returned = await json(request, `${base}/runs/${waitRun}/files/call/result/answer.txt`);
@@ -120,9 +120,9 @@ test('real backend: author wait and detach calls, follow results and concurrent 
       const run = (await (await response).json()).run as string;
       await expect(async () => {
         const detail = await json(request, `${base}/runs/${run}`);
-        expect(detail.state.status).toBe('completed');
+        expect(detail.projection?.outcome).toBe('done');
         expect(detail.calls).toHaveLength(1);
-        expect(detail.calls[0].status).toBe('running');
+        expect(detail.calls[0].projection.phase).toBe('executing');
       }).toPass({ timeout: 10000 });
       detached.push(await json(request, `${base}/runs/${run}`));
     }
@@ -155,7 +155,7 @@ test('real backend: author wait and detach calls, follow results and concurrent 
     await page.getByLabel('筛选调用链').selectOption(detached[1].run);
     await expect(page.locator('.timeline-entry')).toHaveCount(2);
     await expect(async () => {
-      for (const detail of detached) expect((await json(request, `${base}/runs/${detail.calls![0].run}`)).state.status).toBe('completed');
+      for (const detail of detached) expect((await json(request, `${base}/runs/${detail.calls![0].run}`)).projection.outcome).toBe('done');
     }).toPass({ timeout: 25000 });
     evidence.detachedRuns = await Promise.all(detached.map(detail => json(request, `${base}/runs/${detail.run}`)));
     evidence.browserErrors = errors;

@@ -4,7 +4,7 @@ import { asDefinition, toFlowNodes, type OurGraph, type OurRunState, type RunPro
 
 const graph: OurGraph = assistant;
 const state: OurRunState = {
-  objective: graph.objective ?? '', started: '', updated: '', status: 'paused', cursor: null,
+  objective: graph.objective ?? '', started: '', updated: '', cursor: null,
   passes: { assistant: 1 }, decided: {}, executed: ['assistant'], skipped: [], error: '',
   nodes: {
     assistant: {
@@ -14,8 +14,8 @@ const state: OurRunState = {
     },
   },
 };
-const observation: RunProjection = { phase: 'paused', active: false, control_requested: null,
-  terminal: false, quiescent: false, needs_attention: false, actions: { pause: false, stop: true, resume: true } };
+const observation: RunProjection = { phase: 'waiting', waiting_for: 'human', reason: 'paused', active: false, updated: null,
+  actions: { stop: false, resume: true, abandon: true } };
 
 describe('persistent assistant Graph projections', () => {
   it('uses ordinary Op nodes for host operations and preserves the loop', () => {

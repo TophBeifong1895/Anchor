@@ -1,87 +1,101 @@
-//! Read-only Run presentation shared by HTTP and Pilot. These observations are
-//! advisory; control still validates identity, scope and leases at write time.
-use super::{ApplicationError, RunApplication, RunMetadata, control};
+//! One external lifecycle vocabulary for HTTP, Pilot and Web.
+use super::{ApplicationError, RunApplication, RunMetadata, control, run_view::RunView};
+use anchor_kernel::{Outcome, Phase, Waiter};
 use anchor_runtime::graph::{GraphRunRecord, GraphSnapshot};
 use serde::Serialize;
 use serde_json::{Value, json};
-use std::sync::atomic::Ordering;
 
-#[derive(Debug, Serialize)]
-pub(crate) struct RunActions {
-    pub(crate) pause: bool,
-    pub(crate) stop: bool,
-    pub(crate) resume: bool,
-}
-
+pub(crate) use super::run_view::AvailableActions as RunActions;
 #[derive(Debug, Serialize)]
 pub(crate) struct RunProjection {
-    pub(crate) phase: String,
+    pub(crate) phase: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) waiting_for: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) outcome: Option<&'static str>,
+    pub(crate) reason: Option<String>,
     pub(crate) active: bool,
-    pub(crate) control_requested: Option<&'static str>,
-    pub(crate) terminal: bool,
-    pub(crate) quiescent: bool,
-    pub(crate) needs_attention: bool,
     pub(crate) actions: RunActions,
+    pub(crate) updated: Option<String>,
 }
-
+impl RunProjection {
+    pub(crate) fn from_view(view: &RunView) -> Self {
+        let (phase, waiting_for, outcome, reason) = match &view.phase {
+            Phase::Executing => ("executing", None, None, None),
+            Phase::Waiting {
+                waiter: Waiter::Human { reason },
+            } => ("waiting", Some("human"), None, Some(reason.clone())),
+            Phase::Waiting {
+                waiter: Waiter::Child { .. },
+            } => ("waiting", Some("child"), None, view.reason.clone()),
+            Phase::Waiting {
+                waiter: Waiter::Effect { .. },
+            } => ("waiting", Some("effect"), None, view.reason.clone()),
+            Phase::Settled {
+                result: Outcome::Done,
+            } => ("settled", None, Some("done"), None),
+            Phase::Settled {
+                result: Outcome::Failed { detail, .. },
+            } => ("settled", None, Some("failed"), Some(detail.clone())),
+            Phase::Settled {
+                result: Outcome::Escalated { detail },
+            } => ("settled", None, Some("escalated"), Some(detail.clone())),
+            Phase::Settled {
+                result: Outcome::Unknown { detail },
+            } => ("settled", None, Some("unknown"), Some(detail.clone())),
+            Phase::Settled {
+                result: Outcome::Aborted { detail },
+            } => ("settled", None, Some("aborted"), Some(detail.clone())),
+        };
+        Self {
+            phase,
+            waiting_for,
+            outcome,
+            reason,
+            active: view.worker,
+            actions: view.actions(),
+            updated: view.updated.clone(),
+        }
+    }
+}
 impl RunApplication {
     pub(crate) async fn project_run(
         &self,
         record: &GraphRunRecord,
         metadata: Option<&RunMetadata>,
     ) -> Result<RunProjection, ApplicationError> {
-        if let Some(runs) = self.kernel_owner(&record.run_id)? {
-            return Ok(runs.projection(
-                &runs
-                    .load(&record.run_id)?
-                    .ok_or(ApplicationError::Missing)?,
-            ));
-        }
-        let active = self.active.lock().await;
-        let executor = active.get(&record.run_id);
-        let requested = executor.and_then(|run| {
-            if run.control.cancellation.load(Ordering::Relaxed) {
-                Some("stop")
-            } else if run.control.pause.load(Ordering::Relaxed) {
-                Some("pause")
-            } else {
-                None
-            }
-        });
-        let session_coordinated = metadata.is_some_and(|value| value.session_call.is_some());
-        let mut projection = observed(record, executor.is_some(), requested, session_coordinated);
-        let identity = metadata
-            .filter(|metadata| control::validate_control_identity(record, metadata).is_ok());
-        if !projection.active && !session_coordinated && identity.is_none() {
+        let mut view = self.read_view(record, self.run_is_active(&record.run_id).await)?;
+        view.updated = self.run_updated(&record.run_id)?;
+        let mut projection = RunProjection::from_view(&view);
+        // Scope and identity narrow advisory actions; writes still revalidate.
+        let identity = metadata.filter(|m| control::validate_control_identity(record, m).is_ok());
+        let coordinated = metadata.is_some_and(|m| m.session_call.is_some());
+        if !view.worker && !coordinated && identity.is_none() {
             projection.actions.stop = false;
             projection.actions.resume = false;
+            projection.actions.abandon = false;
         }
-        // The same immutable identity and lifecycle guards used by control.
-        // Scope/lease races remain the final control use case's responsibility.
-        if projection.actions.resume {
-            projection.actions.resume = identity
-                .is_some_and(|metadata| self.ensure_current_assistant(metadata).is_ok())
-                && self.abandon_intent(&record.run_id)?.is_none()
-                && self
-                    .reject_superseded_conversation_execution(&record.run_id)
-                    .is_ok();
-        }
+        projection.actions.resume = projection.actions.resume
+            && !coordinated
+            && identity.is_some_and(|m| self.ensure_current_assistant(m).is_ok())
+            && self.abandon_intent(&record.run_id)?.is_none()
+            && self
+                .reject_superseded_conversation_execution(&record.run_id)
+                .is_ok();
         Ok(projection)
     }
 }
 
+#[cfg(test)]
 fn observed(
     record: &GraphRunRecord,
     active: bool,
-    requested: Option<&'static str>,
+    _requested: Option<&'static str>,
     session_coordinated: bool,
 ) -> RunProjection {
-    super::legacy_run_view::projection(
-        &super::legacy_run_view::view(record, active),
-        record,
-        requested,
-        session_coordinated,
-    )
+    let mut projection = RunProjection::from_view(&super::legacy_run_view::view(record, active));
+    projection.actions.resume = projection.actions.resume && !session_coordinated;
+    projection
 }
 
 /// Canvas data comes exclusively from the compiled, frozen snapshot, including
@@ -148,11 +162,11 @@ mod tests {
         for (status, resume, stop, attention, quiescent) in [
             (RunStatus::Ready, true, true, false, false),
             (RunStatus::Running, true, true, true, false),
-            (RunStatus::Paused, true, true, false, false),
-            (RunStatus::WaitingCall, true, true, false, false),
-            (RunStatus::WaitingRecovery, false, true, true, false),
-            (RunStatus::BudgetStopped, false, true, true, false),
-            (RunStatus::Stopped, true, true, false, true),
+            (RunStatus::Paused, true, false, true, true),
+            (RunStatus::WaitingCall, false, false, true, false),
+            (RunStatus::WaitingRecovery, false, false, true, false),
+            (RunStatus::BudgetStopped, true, false, true, true),
+            (RunStatus::Stopped, true, false, true, true),
             (RunStatus::Completed, false, false, false, true),
             (RunStatus::Failed, false, false, true, true),
             (RunStatus::Aborted, false, false, true, true),
@@ -161,9 +175,25 @@ mod tests {
             let projection = observed(&record, false, None, false);
             assert_eq!(projection.actions.resume, resume, "{status:?}");
             assert_eq!(projection.actions.stop, stop, "{status:?}");
-            assert!(!projection.actions.pause);
-            assert_eq!(projection.needs_attention, attention, "{status:?}");
-            assert_eq!(projection.quiescent, quiescent, "{status:?}");
+            assert_eq!(
+                projection.actions.abandon,
+                !matches!(
+                    status,
+                    RunStatus::Completed | RunStatus::Failed | RunStatus::Aborted
+                )
+            );
+            assert_eq!(
+                projection.phase == "waiting"
+                    || matches!(projection.outcome, Some("failed" | "aborted"))
+                    || (projection.phase == "executing" && !projection.active),
+                attention || status == RunStatus::Ready,
+                "{status:?}"
+            );
+            assert_eq!(
+                super::super::RunLiveness::observed(status, false).is_quiescent(),
+                quiescent,
+                "{status:?}"
+            );
         }
     }
 
@@ -172,13 +202,13 @@ mod tests {
         let mut record = record();
         record.status = RunStatus::Running;
         let projection = observed(&record, true, Some("pause"), false);
-        assert_eq!(projection.phase, "pausing");
-        assert!(!projection.actions.pause);
+        assert_eq!(projection.phase, "executing");
+        assert!(projection.actions.abandon);
         assert!(projection.actions.stop);
         assert!(!projection.actions.resume);
         let projection = observed(&record, true, Some("stop"), false);
-        assert_eq!(projection.phase, "stopping");
-        assert!(!projection.actions.stop);
+        assert_eq!(projection.phase, "executing");
+        assert!(projection.actions.stop);
         let projection = observed(&record, false, None, true);
         assert!(!projection.actions.resume);
         assert!(projection.actions.stop);
@@ -187,18 +217,19 @@ mod tests {
     #[test]
     fn legacy_projection_serialization_preserves_ready_paused_and_stopped_bytes() {
         let mut record = record();
+        record.updated = None;
         for (status, expected) in [
             (
                 RunStatus::Ready,
-                r#"{"phase":"ready","active":false,"control_requested":null,"terminal":false,"quiescent":false,"needs_attention":false,"actions":{"pause":false,"stop":true,"resume":true}}"#,
+                r#"{"phase":"executing","reason":null,"active":false,"actions":{"stop":true,"resume":true,"abandon":true},"updated":null}"#,
             ),
             (
                 RunStatus::Paused,
-                r#"{"phase":"paused","active":false,"control_requested":null,"terminal":false,"quiescent":false,"needs_attention":false,"actions":{"pause":false,"stop":true,"resume":true}}"#,
+                r#"{"phase":"waiting","waiting_for":"human","reason":"paused","active":false,"actions":{"stop":false,"resume":true,"abandon":true},"updated":null}"#,
             ),
             (
                 RunStatus::Stopped,
-                r#"{"phase":"stopped","active":false,"control_requested":null,"terminal":false,"quiescent":true,"needs_attention":false,"actions":{"pause":false,"stop":true,"resume":true}}"#,
+                r#"{"phase":"waiting","waiting_for":"human","reason":"stopped","active":false,"actions":{"stop":false,"resume":true,"abandon":true},"updated":null}"#,
             ),
         ] {
             record.status = status;

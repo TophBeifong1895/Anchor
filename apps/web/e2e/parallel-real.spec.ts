@@ -61,7 +61,7 @@ test('real backend: paired authoring, simultaneous native nodes, joined artifact
     await page.screenshot({ path: join(root, 'parallel-active.png'), fullPage: true });
     await expect(async () => {
       const detail: OurRunDetail = await (await request.get(`${base}/runs/${run}`)).json();
-      expect(detail.state.status).toBe('completed');
+      expect(detail.projection?.outcome).toBe('done');
       expect(activeNodes(detail.state)).toEqual([]);
     }).toPass({ timeout: 20000 });
     const detail = await (await request.get(`${base}/runs/${run}`)).json();

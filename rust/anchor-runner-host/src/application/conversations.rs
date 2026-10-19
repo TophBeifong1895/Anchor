@@ -856,3 +856,24 @@ impl RunApplication {
         Ok(request.run)
     }
 }
+
+// Existing Session write callback; R2 does not change control settlement semantics.
+impl RunApplication {
+    pub(crate) fn settle_channel_run(
+        &self,
+        run_id: &str,
+        status: RunStatus,
+    ) -> Result<(), ApplicationError> {
+        use anchor_platform_session::TurnStatus;
+        let Some(metadata) = self.metadata(run_id)? else {
+            return Ok(());
+        };
+        let turn_status = match status {
+            RunStatus::Completed if metadata.assistant.is_none() => TurnStatus::Completed,
+            RunStatus::Failed | RunStatus::Aborted => TurnStatus::Failed,
+            RunStatus::Stopped => TurnStatus::Stopped,
+            _ => return Ok(()),
+        };
+        self.settle_channel_turn(run_id, turn_status)
+    }
+}

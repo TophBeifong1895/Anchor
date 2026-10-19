@@ -16,7 +16,7 @@ describe('channel and resident assistant management', () => {
   let status: Record<string, unknown>;
   let instance: { assistant: { run_id: string; wait_node: string; work_node: string; reply_node: string } | null; needs_recovery: boolean;
     plugin_update?: { state: 'current' | 'pending' | 'restart_required' | 'unavailable'; message?: string } };
-  let execution: { run: string; active: boolean; control_requested: string | null; projection?: RunProjection; state: { status: string; cursor: { node: string } } };
+  let execution: { run: string; active: boolean; waiting: boolean; projection?: RunProjection; state: { cursor: { node: string } } };
   let sessions: { id: string; title: string; graph: string; platform: string }[];
   let deliveries: { key: string; status: string }[];
   let runIds: string[];
@@ -33,7 +33,7 @@ describe('channel and resident assistant management', () => {
     status = { platform: 'wecom', configured: true, configuration_owner: 'host', mutable: true, owner_matches: true, enabled: true, binding, listener: 'connecting' };
     sessions = [{ id: 'channel-session', title: 'Alice 的对话', graph: binding.graph, platform: 'wecom' }];
     instance = { assistant: { run_id: 'current-run', wait_node: 'wait_input', work_node: 'assistant', reply_node: 'reply' }, needs_recovery: false };
-    execution = { run: 'current-run', active: true, control_requested: null, state: { status: 'running', cursor: { node: 'wait_input' } } };
+    execution = { run: 'current-run', active: true, waiting: false, state: { cursor: { node: 'wait_input' } } };
     deliveries = []; runIds = ['current-run'];
     fetchMock = vi.fn(async (path: string, init: RequestInit = {}) => {
       const method = init.method ?? 'GET';
@@ -46,12 +46,12 @@ describe('channel and resident assistant management', () => {
       if (path === '/channel-sessions/channel-session/deliveries/unresolved') return response(200, { deliveries });
       if (path === '/channel-sessions/channel-session' && method === 'GET') return response(200, { session: { run_ids: runIds } });
       if (path === '/runs/current-run' && method === 'GET') return response(200, { ...execution, projection: execution.projection ?? {
-        phase: execution.control_requested === 'stop' ? 'stopping' : execution.active ? 'running' : 'stopped',
-        active: execution.active, control_requested: execution.control_requested,
-        terminal: false, quiescent: !execution.active, needs_attention: false,
-        actions: { pause: execution.active && !execution.control_requested, stop: execution.control_requested !== 'stop', resume: !execution.active },
+        phase: execution.waiting ? 'waiting' : 'executing',
+        ...(execution.waiting ? { waiting_for: 'human', reason: 'stopped' } : { reason: null }),
+        active: execution.active, updated: null,
+        actions: { stop: !execution.waiting, resume: !execution.active, abandon: true },
       } });
-      if (path === '/runs/current-run/stop') { execution = { ...execution, control_requested: 'stop' }; return response(202, { asked: 'stop' }); }
+      if (path === '/runs/current-run/stop') { execution = { ...execution, waiting: true }; return response(202, { asked: 'stop' }); }
       if (path.endsWith('/assistant/retire')) { instance = { assistant: null, needs_recovery: false }; return response(200, { retired: 'current-run' }); }
       if (path.startsWith('/runs/') && method === 'DELETE') { runIds = runIds.filter(id => path !== `/runs/${id}`); return response(200, { deleted: path }); }
       if (path === '/channel-sessions/channel-session' && method === 'DELETE') { sessions = []; return response(200, { deleted: 'channel-session' }); }
@@ -127,10 +127,10 @@ describe('channel and resident assistant management', () => {
   it('waits for the executor to exit before allowing retirement and binds it to the current Run', async () => {
     await render();
     await click('停止');
-    expect(container.textContent).toContain('正在停止…');
+    expect(container.textContent).toContain('等待你处理：stopped');
     expect(button('退役实例').disabled).toBe(true);
     expect(requests().filter(item => item.path.endsWith('/assistant/retire'))).toHaveLength(0);
-    execution = { ...execution, active: false, control_requested: null, state: { ...execution.state, status: 'stopped' } };
+    execution = { ...execution, active: false, waiting: true };
     instance.needs_recovery = true;
     await click('刷新状态');
     expect(button('退役实例').disabled).toBe(false);
@@ -144,8 +144,8 @@ describe('channel and resident assistant management', () => {
   it('uses the same Run projection for an inactive execution and its allowed controls', async () => {
     execution.active = false;
     execution.projection = {
-      phase: 'waiting_resume', active: false, control_requested: null, terminal: false,
-      quiescent: false, needs_attention: true, actions: { pause: false, stop: true, resume: true },
+      phase: 'executing', active: false, reason: null, updated: null,
+      actions: { stop: true, resume: true, abandon: true },
     };
     await render();
     expect(container.querySelector('.channels-instance-status')?.textContent).toBe('等待接续');
@@ -154,19 +154,19 @@ describe('channel and resident assistant management', () => {
     expect(button('退役实例').disabled).toBe(true);
   });
 
-  it('does not infer resumability or retirement when the Host denies those actions', async () => {
-    execution.active = false; execution.state.status = 'stopped';
+  it('does not infer resumability when controls are denied and uses human quiescence for retirement', async () => {
+    execution.active = false; execution.waiting = true;
     execution.projection = {
-      phase: 'stopped', active: false, control_requested: null, terminal: false,
-      quiescent: false, needs_attention: false, actions: { pause: false, stop: false, resume: false },
+      phase: 'waiting', waiting_for: 'human', active: false, reason: 'stopped', updated: null,
+      actions: { stop: false, resume: false, abandon: false },
     };
     await render();
     expect(container.querySelector('.run-controls button')).toBeNull();
-    expect(button('退役实例').disabled).toBe(true);
+    expect(button('退役实例').disabled).toBe(false);
   });
 
   it('shows unknown deliveries and prevents retirement and cleanup without silently settling them', async () => {
-    execution.active = false; execution.state.status = 'stopped';
+    execution.active = false; execution.waiting = true;
     deliveries = [{ key: 'reply-unknown', status: 'unknown' }];
     await render();
     expect(container.textContent).toContain('结果未知');
@@ -185,7 +185,7 @@ describe('channel and resident assistant management', () => {
   });
 
   it('keeps the confirmed retirement target fixed if the current instance changes', async () => {
-    execution.active = false; execution.state.status = 'stopped';
+    execution.active = false; execution.waiting = true;
     await render(); await click('退役实例');
     instance = { assistant: { run_id: 'fresh-run', wait_node: 'wait', work_node: 'work', reply_node: 'reply' }, needs_recovery: false };
     await click('刷新状态');

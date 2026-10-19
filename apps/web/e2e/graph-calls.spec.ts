@@ -7,21 +7,21 @@ const source: OurGraph = { entry: 'prepare', nodes: [{ id: 'prepare', op: 'prepa
   edges: [{ from: 'prepare', to: 'notify' }], ops: { prepare: { run: 'true' }, notify: { call: { graph: 'assistant', mode: 'detach' } } } };
 const target: OurGraph = { entry: 'reply', nodes: [{ id: 'reply', op: 'reply' }], edges: [], ops: { reply: { run: 'true' } } };
 const started = new Date().toISOString();
-const parent: OurRun = { run: 'parent-run', graph: 'report', status: 'finished', running: false, started, updated: started, executed: ['prepare', 'notify'], objective: '发布周报', projection: runProjectionFixture('finished', { terminal: true, quiescent: true }) };
-const child: OurRun = { ...parent, run: 'child-run', graph: 'assistant', status: 'running', running: true,
-  projection: runProjectionFixture('running', { active: true, actions: { pause: true, stop: true, resume: false } }),
+const parent: OurRun = { run: 'parent-run', graph: 'report', running: false, started, updated: started, executed: ['prepare', 'notify'], objective: '发布周报', projection: runProjectionFixture('settled', { outcome: 'done' }) };
+const child: OurRun = { ...parent, run: 'child-run', graph: 'assistant', running: true,
+  projection: runProjectionFixture('executing', { active: true, actions: { stop: true, resume: false, abandon: true } }),
   trigger: { source: 'graph_call', graph: 'report', run: 'parent-run', node: 'notify', invocation: 2, mode: 'detach', root_run: 'parent-run' } };
 const waitChild: OurRun = { ...child, run: 'wait-child', trigger: { ...child.trigger!, mode: 'wait' } };
 const other: OurRun = { ...child, run: 'other-child', running: false,
-  projection: runProjectionFixture('waiting_resume', { needs_attention: true, actions: { pause: false, stop: true, resume: true } }),
+  projection: runProjectionFixture('executing', { actions: { stop: true, resume: true, abandon: true } }),
   trigger: { ...child.trigger!, root_run: 'other-parent', run: 'other-parent' } };
 const detail = (run: OurRun): OurRunDetail => ({ run: run.run, graph: run.graph, nodes: run.graph === 'report' ? ['prepare', 'notify'] : ['reply'], traces: {},
   definition: run.graph === 'report' ? source : target, projection: run.projection,
   active: run.running,
-  state: { objective: run.objective, started, status: run.status, updated: started, trigger: run.trigger, cursor: null, passes: { notify: 2 }, decided: {}, nodes: run.graph === 'report' ? { notify: { node_id: 'notify', pass_number: 2, submission: '已接纳', files: ['call.json'], submitted: true, exit_status: 'completed', route: null } } : {}, executed: run.executed, skipped: [], error: '' },
-  calls: run.graph === 'report' ? [{ node: 'notify', invocation: 1, graph: 'assistant', run: 'first-child', mode: 'detach', status: 'failed', projection: runProjectionFixture('failed', { terminal: true, quiescent: true, needs_attention: true }) },
-    { node: 'notify', invocation: 2, graph: 'assistant', run: 'wait-child', mode: 'wait', status: 'running', active: true, projection: child.projection, input: { report: 'weekly' } },
-    { node: 'notify', invocation: 3, graph: 'assistant', run: 'child-run', mode: 'detach', status: 'running', active: true, projection: child.projection, input: { report: 'weekly' } }] : [] });
+  state: { objective: run.objective, started, updated: started, trigger: run.trigger, cursor: null, passes: { notify: 2 }, decided: {}, nodes: run.graph === 'report' ? { notify: { node_id: 'notify', pass_number: 2, submission: '已接纳', files: ['call.json'], submitted: true, exit_status: 'completed', route: null } } : {}, executed: run.executed, skipped: [], error: '' },
+  calls: run.graph === 'report' ? [{ node: 'notify', invocation: 1, graph: 'assistant', run: 'first-child', mode: 'detach', projection: runProjectionFixture('settled', { outcome: 'failed' }) },
+    { node: 'notify', invocation: 2, graph: 'assistant', run: 'wait-child', mode: 'wait', active: true, projection: child.projection, input: { report: 'weekly' } },
+    { node: 'notify', invocation: 3, graph: 'assistant', run: 'child-run', mode: 'detach', active: true, projection: child.projection, input: { report: 'weekly' } }] : [] });
 async function fixture(page: Page) {
   const saved: OurGraph[] = [];
   let current = structuredClone(source);
@@ -109,7 +109,7 @@ test('mocked: show wait/detach child Runs, source links and active controls', as
   await page.screenshot({ path: 'test-results/graph-call-run.png' });
   await records.getByRole('button', { name: '查看目标运行' }).last().click();
   await expect(page.locator('.run-origin')).toContainText('report / notify · 第 2 轮');
-  await expect(page.getByRole('button', { name: '暂停' })).toBeVisible();
+  await expect(page.getByRole('button', { name: '放弃', exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: '停止', exact: true })).toBeVisible();
   await page.getByRole('button', { name: '返回来源运行' }).click();
   await expect(records).toContainText('本节点：已完成');

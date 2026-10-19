@@ -1,31 +1,36 @@
-//! Temporary legacy Run adapter. Delete after the old Runner/RunStore migration.
-//! Status distinctions retained for compatibility are measured separately.
-use super::run_projection::{RunActions, RunProjection};
+//! Temporary, lossy legacy read adapter. Delete after the old Runner migration.
 use super::run_view::RunView;
-use super::{ActiveRun, ApplicationError, RunApplication, RunLiveness, control};
 use anchor_kernel::{Outcome, Phase, Reason, Waiter};
 use anchor_runtime::graph::{GraphRunRecord, RunStatus};
-use std::collections::HashMap;
 
-pub(super) fn phase(record: &GraphRunRecord) -> Phase {
-    let detail = record.error.clone().unwrap_or_default();
-    match record.status {
+/// The only old lifecycle -> Phase mapping. No legacy display/action rules.
+pub(super) fn phase(status: RunStatus, error: Option<&str>) -> Phase {
+    let detail = error.unwrap_or_default().to_owned();
+    match status {
         RunStatus::Ready | RunStatus::Running => Phase::Executing,
-        RunStatus::Paused | RunStatus::Stopped | RunStatus::BudgetStopped => Phase::Waiting {
-            waiter: Waiter::Human { reason: detail },
+        RunStatus::Paused => Phase::Waiting {
+            waiter: Waiter::Human {
+                reason: "paused".into(),
+            },
+        },
+        RunStatus::Stopped => Phase::Waiting {
+            waiter: Waiter::Human {
+                reason: error.unwrap_or("stopped").into(),
+            },
+        },
+        RunStatus::BudgetStopped => Phase::Waiting {
+            waiter: Waiter::Human {
+                reason: "budget".into(),
+            },
         },
         RunStatus::WaitingCall => Phase::Waiting {
             waiter: Waiter::Child {
-                task: record
-                    .graph_calls
-                    .values()
-                    .find_map(|c| c.child_run_id.clone())
-                    .unwrap_or_default(),
+                task: String::new(),
             },
         },
         RunStatus::WaitingRecovery => Phase::Waiting {
             waiter: Waiter::Effect {
-                effect: record.run_id.clone(),
+                effect: String::new(),
             },
         },
         RunStatus::Completed => Phase::Settled {
@@ -33,7 +38,6 @@ pub(super) fn phase(record: &GraphRunRecord) -> Phase {
         },
         RunStatus::Failed => Phase::Settled {
             result: Outcome::Failed {
-                // Old records have no Kernel reason code; do not invent one.
                 reason: Reason::Unclassified,
                 detail,
             },
@@ -45,90 +49,111 @@ pub(super) fn phase(record: &GraphRunRecord) -> Phase {
 }
 pub(super) fn view(record: &GraphRunRecord, worker: bool) -> RunView {
     RunView {
-        phase: phase(record),
+        phase: phase(record.status, record.error.as_deref()),
         graph: record.into(),
         worker,
         updated: record.updated.clone(),
-    }
-}
-pub(super) fn quiescent(status: RunStatus, worker: bool) -> bool {
-    !worker && (status.is_terminal() || status == RunStatus::Stopped)
-}
-// Old callers keep their synchronization protocol until their paths migrate.
-impl RunLiveness {
-    pub(crate) fn observed(status: RunStatus, worker: bool) -> Self {
-        Self {
-            quiescent: quiescent(status, worker),
-        }
-    }
-    pub(super) fn with_registry(
-        record: &GraphRunRecord,
-        active: &HashMap<String, ActiveRun>,
-    ) -> Self {
-        Self::observed(record.status, active.contains_key(&record.run_id))
-    }
-}
-pub(super) fn projection(
-    view: &RunView,
-    record: &GraphRunRecord,
-    requested: Option<&'static str>,
-    session_coordinated: bool,
-) -> RunProjection {
-    let active = view.worker;
-    let terminal = view.is_settled();
-    let phase = match (active, requested, record.status) {
-        (true, Some("stop"), _) => "stopping".into(),
-        (true, Some("pause"), _) => "pausing".into(),
-        (false, _, RunStatus::Running) => "waiting_resume".into(),
-        _ => serde_json::to_value(record.status)
-            .expect("RunStatus is serializable")
-            .as_str()
-            .expect("RunStatus serializes as a string")
-            .to_owned(),
-    };
-    let resume = !active
-        && !session_coordinated
-        && control::validate_resume_budget(record).is_ok()
-        && (control::validate_inactive_control(record, "resume").is_ok()
-            || (record.status == RunStatus::WaitingRecovery && !record.recovery.is_empty()));
-    RunProjection {
-        needs_attention: matches!(
-            phase.as_str(),
-            "failed" | "aborted" | "waiting_resume" | "waiting_recovery" | "budget_stopped"
-        ),
-        phase,
-        active,
-        control_requested: requested,
-        terminal,
-        quiescent: quiescent(record.status, active),
-        actions: RunActions {
-            pause: active && !terminal && !session_coordinated && requested.is_none(),
-            stop: if active {
-                requested != Some("stop")
-            } else {
-                control::validate_inactive_control(record, "stop").is_ok()
-            },
-            resume,
-        },
+        reason: record.error.clone(),
     }
 }
 
-impl RunApplication {
-    pub(crate) fn settle_channel_run(
-        &self,
-        run_id: &str,
-        status: RunStatus,
-    ) -> Result<(), ApplicationError> {
-        use anchor_platform_session::TurnStatus;
-        let Some(metadata) = self.metadata(run_id)? else {
-            return Ok(());
-        };
-        let turn_status = match status {
-            RunStatus::Completed if metadata.assistant.is_none() => TurnStatus::Completed,
-            RunStatus::Failed | RunStatus::Aborted => TurnStatus::Failed,
-            RunStatus::Stopped => TurnStatus::Stopped,
-            _ => return Ok(()),
-        };
-        self.settle_channel_turn(run_id, turn_status)
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::application::{run_projection::RunProjection, run_view::GraphProgress};
+    #[test]
+    fn every_legacy_status_maps_lossily_with_both_worker_observations() {
+        for (status, phase_name, waiter, outcome, reason) in [
+            (RunStatus::Ready, "executing", None, None, None),
+            (RunStatus::Running, "executing", None, None, None),
+            (
+                RunStatus::Paused,
+                "waiting",
+                Some("human"),
+                None,
+                Some("paused"),
+            ),
+            (
+                RunStatus::Stopped,
+                "waiting",
+                Some("human"),
+                None,
+                Some("explanation"),
+            ),
+            (
+                RunStatus::BudgetStopped,
+                "waiting",
+                Some("human"),
+                None,
+                Some("budget"),
+            ),
+            (
+                RunStatus::WaitingRecovery,
+                "waiting",
+                Some("effect"),
+                None,
+                Some("explanation"),
+            ),
+            (
+                RunStatus::WaitingCall,
+                "waiting",
+                Some("child"),
+                None,
+                Some("explanation"),
+            ),
+            (RunStatus::Completed, "settled", None, Some("done"), None),
+            (
+                RunStatus::Failed,
+                "settled",
+                None,
+                Some("failed"),
+                Some("explanation"),
+            ),
+            (
+                RunStatus::Aborted,
+                "settled",
+                None,
+                Some("aborted"),
+                Some("explanation"),
+            ),
+        ] {
+            for worker in [false, true] {
+                let view = RunView {
+                    phase: phase(status, Some("explanation")),
+                    graph: GraphProgress {
+                        passes: Default::default(),
+                    },
+                    worker,
+                    updated: None,
+                    reason: Some("explanation".into()),
+                };
+                let projected = RunProjection::from_view(&view);
+                assert_eq!(
+                    (
+                        projected.phase,
+                        projected.waiting_for,
+                        projected.outcome,
+                        projected.reason.as_deref(),
+                        projected.active
+                    ),
+                    (phase_name, waiter, outcome, reason, worker),
+                    "{status:?}/{worker}"
+                );
+                assert_eq!(projected.actions.stop, phase_name == "executing");
+                assert_eq!(
+                    projected.actions.resume,
+                    !worker && (phase_name == "executing" || waiter == Some("human"))
+                );
+                assert_eq!(projected.actions.abandon, phase_name != "settled");
+                let json = serde_json::to_value(projected).unwrap();
+                assert_eq!(json.get("waiting_for").is_some(), waiter.is_some());
+                assert_eq!(json.get("outcome").is_some(), outcome.is_some());
+                assert!(json.get("status").is_none());
+                assert!(json["actions"].get("pause").is_none());
+            }
+        }
+        assert!(
+            matches!(phase(RunStatus::Stopped, None), Phase::Waiting { waiter: Waiter::Human { reason } } if reason == "stopped")
+        );
     }
 }

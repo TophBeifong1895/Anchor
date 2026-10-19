@@ -1,6 +1,6 @@
 //! Explicit serial probe. FileStore is the sole authority for these Runs;
 //! legacy status values are read-only projections for existing consumers.
-use super::{ApplicationError, RunApplication, run_projection::RunProjection};
+use super::{ApplicationError, RunApplication};
 use anchor_kernel::{
     Action, Authority, FileStore, Kernel, Phase, Principal, PrincipalKind, Resource, Store,
     Submission,
@@ -189,6 +189,7 @@ impl KernelRuns {
     ) -> Result<super::run_view::RunView, ApplicationError> {
         let record = record_of(resource)?;
         Ok(super::run_view::RunView {
+            reason: None,
             phase: resource
                 .phase()
                 .ok_or_else(|| ApplicationError::Storage("Kernel Run has no phase".into()))?
@@ -198,9 +199,6 @@ impl KernelRuns {
             updated: self.observations.load(&record.run_id).ok().flatten(),
             graph: (&record).into(),
         })
-    }
-    pub(crate) fn projection(&self, resource: &Resource) -> RunProjection {
-        super::run_json::projection(&self.view(resource).expect("validated Kernel Run"))
     }
 }
 

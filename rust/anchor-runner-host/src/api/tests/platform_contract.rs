@@ -69,7 +69,7 @@ async fn trigger_freezes_objective_and_manual_or_schedule_source() {
         let (_, detail) = call(app.clone(), "GET", &format!("/runs/{run}"), None).await;
         assert_eq!(detail["state"]["objective"], objective);
         assert_eq!(detail["state"]["trigger"], trigger);
-        assert_eq!(detail["control_requested"], Value::Null);
+        assert_eq!(detail["projection"]["phase"], "settled");
         assert_eq!(detail["state"]["updated"], persisted_updated(&state, run));
         let (_, listed) = call(app.clone(), "GET", "/runs", None).await;
         let listed_run = listed["runs"]
@@ -185,7 +185,7 @@ async fn updated_tracks_persisted_pause_stop_and_resume_after_restart() {
     .to_string();
     let run = start_and_pause_request(&state, &app, &request).await;
     let (_, paused) = call(app.clone(), "GET", &format!("/runs/{run}"), None).await;
-    assert_eq!(paused["state"]["status"], "paused");
+    assert_eq!(paused["projection"]["phase"], "waiting");
     assert_eq!(paused["state"]["objective"], "frozen run objective");
     assert_eq!(paused["state"]["trigger"], original_trigger);
     assert_eq!(paused["state"]["updated"], persisted_updated(&state, &run));
@@ -211,7 +211,7 @@ async fn updated_tracks_persisted_pause_stop_and_resume_after_restart() {
     let restarted_app = router(restarted.clone());
     let (_, reopened) = call(restarted_app.clone(), "GET", &format!("/runs/{run}"), None).await;
     assert_eq!(reopened["state"]["updated"], paused["state"]["updated"]);
-    assert_eq!(reopened["control_requested"], Value::Null);
+    assert_eq!(reopened["projection"]["phase"], "waiting");
     assert_eq!(
         call(
             restarted_app.clone(),
@@ -224,7 +224,7 @@ async fn updated_tracks_persisted_pause_stop_and_resume_after_restart() {
         StatusCode::ACCEPTED
     );
     let (_, stopped) = call(restarted_app.clone(), "GET", &format!("/runs/{run}"), None).await;
-    assert_eq!(stopped["state"]["status"], "stopped");
+    assert_eq!(stopped["projection"]["phase"], "waiting");
     assert_eq!(stopped["state"]["updated"], persisted_updated(&state, &run));
     let stopped_at =
         chrono::DateTime::parse_from_rfc3339(stopped["state"]["updated"].as_str().unwrap())
@@ -243,7 +243,7 @@ async fn updated_tracks_persisted_pause_stop_and_resume_after_restart() {
     );
     wait_idle(&restarted).await;
     let (_, completed) = call(restarted_app.clone(), "GET", &format!("/runs/{run}"), None).await;
-    assert_eq!(completed["state"]["status"], "completed");
+    assert_eq!(completed["projection"]["phase"], "settled");
     assert_eq!(completed["state"]["objective"], "frozen run objective");
     assert_eq!(completed["state"]["trigger"], original_trigger);
     assert_eq!(completed["state"]["started"], paused["state"]["started"]);

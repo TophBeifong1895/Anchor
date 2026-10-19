@@ -20,7 +20,7 @@ test('editor geometry survives edits while Run geometry stays frozen across view
   delete frozenDefinition.layout;
   const errors: string[] = [];
   page.on('pageerror', e => errors.push(e.message));
-  const run = { run: 'research-run', graph: 'research', status: 'running', running: true, projection: runProjectionFixture('running', { active: true }),
+  const run = { run: 'research-run', graph: 'research', status: 'running', running: true, projection: runProjectionFixture('executing', { active: true }),
     started: '2026-09-24T08:00:00Z', updated: '2026-09-24T08:00:00Z', objective: '研究',
     executed: ['frame', 'investigate', 'challenge', 'feedback', 'frame', 'investigate'] };
   await page.route('**/graphs', r => r.fulfill({ json: { graphs: [{ graph: 'research', running: run.run }] } }));

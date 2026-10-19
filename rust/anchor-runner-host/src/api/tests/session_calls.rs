@@ -397,7 +397,7 @@ async fn completed_session_execution_stays_waiting_until_delivery_settlement() {
         }),
     );
     let (_, detail) = call(app.clone(), "GET", &format!("/runs/{run}"), None).await;
-    assert_eq!(detail["state"]["status"], "completed");
+    assert_eq!(detail["projection"]["phase"], "settled");
     assert_eq!(detail["session_call"]["status"], "pending");
     for _ in 0..2 {
         let (status, settled) = call(
@@ -557,7 +557,7 @@ async fn completed_pending_wait_child_recovers_delivery_and_parent_after_restart
         .iter()
         .find(|run| run["run"] == child)
         .unwrap();
-    assert_eq!(child_projection["status"], "completed");
+    assert_eq!(child_projection["projection"]["outcome"], "done");
     assert_eq!(child_projection["session_call"]["status"], "pending");
     assert_eq!(record_bytes(&state, &child), child_record);
     assert_eq!(metadata_bytes(&state, &child), child_metadata);

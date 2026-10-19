@@ -14,15 +14,13 @@ type Props = {
   run: string; node: string; targetPath: string; detail: OurRunDetail | null;
   onPilot: () => void; selectGraph: (graph: string) => boolean; trigger: () => Promise<void>; onTimeline: () => void;
   navigateRun: (run: string, graph: string, node?: string) => Promise<void>;
-  controlRun: (what: 'pause' | 'stop' | 'resume') => Promise<void>; deleteRun: () => Promise<void>; onNode: (node: string) => void;
+  controlRun: (what: 'stop' | 'resume' | 'abandon') => Promise<void>; deleteRun: () => Promise<void>; onNode: (node: string) => void;
 };
 export function RunDetailPage({ name, graphs, dirty, busy, notice, run, node, targetPath, detail,
   selectGraph, trigger, onTimeline, navigateRun, controlRun, deleteRun, onNode, onPilot }: Props) {
   const phase = detail ? runPhase(detail) : 'unavailable';
   const cursors = activeNodes(detail?.state);
-  const cursorLabel = ({ running: '正在执行', waiting_resume: '宿主重启后尚未接续',
-    stopped: '停止于', waiting_recovery: '待恢复于', paused: '暂停于',
-  } as Record<string, string>)[phase] ?? runPhaseLabel(phase);
+  const cursorLabel = runPhaseLabel(detail?.projection);
   return (
         <Workspace running>
           <main className="main timeline-inspector">
@@ -43,21 +41,13 @@ export function RunDetailPage({ name, graphs, dirty, busy, notice, run, node, ta
             {notice && <p className={`notice ${notice.kind}`} role="status">{notice.text}</p>}
             <div className="canvas-head">
               {detail ? <>
-                <span className={`pill ${phase}`}>{runPhaseLabel(phase)}</span>
+                <span className={`pill ${phase}`}>{runPhaseLabel(detail.projection)}</span>
                 <span className="objective">{detail.state.objective}</span>
                 {cursors.length > 0 && <span className="hint" aria-label="活动节点">
                   {cursorLabel} {cursors.map(item => `${item.node}（第 ${item.pass} 轮）`).join('、')}</span>}
-                {detail.projection?.active && detail.projection.control_requested &&
-                  <span className="hint" role="status">请求已接收，等待当前节点收束。</span>}
                 <RunControls projection={detail.projection} busy={busy} onControl={operation => void controlRun(operation)} />
-                {detail.state.reason === 'asked' && (phase === 'paused' || phase === 'stopped') && <span className="hint">
-                  {phase === 'paused' ? '已按请求暂停' : '已按请求停止'}
-                </span>}
-                {detail.state.error && <span className="problem">{detail.state.error}</span>}
-                {phase === 'waiting_recovery' &&
-                  <span className="run-controls">
-                    <span className="hint">Agent 上次工具调用的结果未记录，继续后会先恢复上下文并核查现场。</span>
-                  </span>}
+                {detail.projection?.active && phase === 'waiting' && <span className="hint" role="status">等待当前执行者退出后继续。</span>}
+                {detail.projection?.reason && phase === 'settled' && <span className="problem">{detail.projection.reason}</span>}
                 {detail.projection && !detail.projection.active ?
                   <button className="danger-link" onClick={() => void deleteRun()} disabled={busy}>
                     <Trash2 size={14} />删除运行记录

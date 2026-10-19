@@ -147,7 +147,7 @@ async fn abandon_cancels_the_running_node_and_makes_the_run_terminal_aborted() {
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(body["action"], "abandoned");
     assert_eq!(body["abandoned"], true);
-    assert_eq!(body["status"], "aborted");
+    assert_eq!(body["projection"]["outcome"], "aborted");
     assert_eq!(body["reason"], "plugin_update");
     assert!(body["requested_at"].as_str().is_some());
 
@@ -217,7 +217,7 @@ async fn abandon_is_idempotent_and_rejects_terminal_unknown_or_invalid_requests(
         call(app.clone(), "POST", "/runs/abandon-stopped/abandon", None).await;
     assert_eq!(status, StatusCode::OK, "{defaulted}");
     assert_eq!(defaulted["reason"], "operator");
-    assert_eq!(defaulted["status"], "aborted");
+    assert_eq!(defaulted["projection"]["outcome"], "aborted");
     assert_eq!(
         record_of(&state, "abandon-stopped").status,
         RunStatus::Aborted
@@ -309,7 +309,7 @@ async fn abandon_is_idempotent_and_rejects_terminal_unknown_or_invalid_requests(
     assert_eq!(status, StatusCode::OK, "{existing}");
     assert_eq!(existing["action"], "already_aborted");
     assert_eq!(existing["abandoned"], false);
-    assert_eq!(existing["status"], "aborted");
+    assert_eq!(existing["projection"]["outcome"], "aborted");
     assert!(existing["reason"].is_null());
     assert!(!intent_path(&state, "abandon-already").exists());
 
@@ -605,7 +605,7 @@ async fn abandon_keeps_the_assistant_binding_workspace_and_history_for_handover(
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{abandoned}");
-    assert_eq!(abandoned["status"], "aborted");
+    assert_eq!(abandoned["projection"]["outcome"], "aborted");
 
     let after = record_of(&state, run);
     assert_eq!(after.status, RunStatus::Aborted);

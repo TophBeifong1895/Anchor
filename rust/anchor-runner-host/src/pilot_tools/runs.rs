@@ -17,11 +17,16 @@ impl PilotTools {
             return Err(failed());
         }
         let operation = name.strip_prefix("run_").expect("matched Run control");
+        let effective = if operation == "pause" {
+            "stop"
+        } else {
+            operation
+        };
         self.application
-            .control(&run, operation)
+            .control(&run, effective)
             .await
             .map_err(|failure| ToolError::Failed(format!("Run control rejected: {failure:?}")))?;
-        Ok(json!({"run":run,"operation":operation,"requested":true}))
+        Ok(json!({"run":run,"operation":effective,"alias":operation == "pause","requested":true}))
     }
 
     pub(super) async fn run_list(&self, _arguments: &Value) -> Result<Value, ToolError> {
@@ -33,7 +38,7 @@ impl PilotTools {
                 .project_run(&record, metadata.as_ref())
                 .await
                 .map_err(|_| failed())?;
-            runs.push(json!({"run":id,"status":record.status,"projection":projection}));
+            runs.push(json!({"run":id,"projection":projection}));
         }
         Ok(json!({"runs":runs}))
     }
@@ -57,6 +62,11 @@ impl PilotTools {
             .project_run(&record, metadata.as_ref())
             .await
             .map_err(|_| failed())?;
-        Ok(json!({"run":run,"record":record,"projection":projection}))
+        let mut progress = serde_json::to_value(record).map_err(|_| failed())?;
+        progress
+            .as_object_mut()
+            .expect("record object")
+            .remove("status");
+        Ok(json!({"run":run,"record":progress,"projection":projection}))
     }
 }

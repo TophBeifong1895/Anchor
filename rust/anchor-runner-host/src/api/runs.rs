@@ -295,10 +295,6 @@ pub(super) async fn list_runs(State(state): State<ApiState>) -> Result<Json<Valu
 pub(super) async fn projected_runs(state: &ApiState) -> Result<Vec<Value>, HttpResponse> {
     let mut runs = Vec::new();
     for (id, record) in state.application.records().map_err(application_error)? {
-        let updated = state
-            .application
-            .run_updated(&id)
-            .map_err(application_error)?;
         let metadata = state.application.metadata(&id).map_err(application_error)?;
         let (graph, created, mut trigger) = metadata
             .as_ref()
@@ -347,7 +343,7 @@ pub(super) async fn projected_runs(state: &ApiState) -> Result<Vec<Value>, HttpR
             .project_run(&record, metadata.as_ref())
             .await
             .map_err(application_error)?;
-        runs.push(json!({"session_call":metadata.as_ref().and_then(|m| m.session_call.as_ref()),"run":id,"graph":graph,"status":status(record.status),"running":projection.active,"projection":projection,"started":created,"updated":updated,"executed":executed,"objective":record.snapshot.objective,"trigger":trigger}));
+        runs.push(json!({"session_call":metadata.as_ref().and_then(|m| m.session_call.as_ref()),"run":id,"graph":graph,"running":projection.active,"projection":projection,"started":created,"updated":projection.updated,"executed":executed,"objective":record.snapshot.objective,"trigger":trigger}));
     }
     Ok(runs)
 }
@@ -364,10 +360,6 @@ pub(super) async fn get_run(
         .load_run(&id)
         .map_err(application_error)?
         .ok_or_else(|| error(StatusCode::NOT_FOUND, "no such run"))?;
-    let updated = state
-        .application
-        .run_updated(&id)
-        .map_err(application_error)?;
     let artifacts = HostArtifacts::new(
         state.data_root.join("artifacts"),
         state.workspace_root.clone(),
@@ -517,7 +509,6 @@ pub(super) async fn get_run(
                 "target":call.graph,
                 "invocation":call.identity.invocation,
                 "mode":call.mode,
-                "status":child.as_ref().map(|record| status(record.status)).unwrap_or("missing"),
                 "active":active.contains(child_id),
                 "projection":projection,
                 "root_run":source.map(|source| &source.root_run),
@@ -561,7 +552,6 @@ pub(super) async fn get_run(
             "target":child_metadata.graph,
             "invocation":source.invocation,
             "mode":source.mode,
-            "status":child.as_ref().map(|record| status(record.status)).unwrap_or("missing"),
             "active":active.contains(&child_metadata.run_id),
             "projection":projection,
             "root_run":source.root_run,
@@ -606,7 +596,7 @@ pub(super) async fn get_run(
         .map_err(application_error)?;
     let definition = crate::application::run_projection::run_definition(&record.snapshot);
     Ok(Json(
-        json!({"session_call":metadata.session_call,"channel_reply":channel_reply,"graph":metadata.graph,"run":id,"attachments":metadata.attachments,"plugins":plugins,"definition":definition,"state":{"objective":record.snapshot.objective,"started":metadata.created,"updated":updated,"status":status(record.status),"trigger":trigger,"input":record.input,"cursor":cursor,"passes":view.graph.passes,"decided":decided,"nodes":nodes,"executed":executed,"skipped":[],"error":record.error.unwrap_or_default(),"parallel":record.parallel,"recovery":record.recovery},"calls":calls,"traces":traces,"nodes":record.snapshot.nodes.iter().map(|node|node.id.clone()).collect::<Vec<_>>(),"active":projection.active,"control_requested":projection.control_requested,"projection":projection}),
+        json!({"session_call":metadata.session_call,"channel_reply":channel_reply,"graph":metadata.graph,"run":id,"attachments":metadata.attachments,"plugins":plugins,"definition":definition,"state":{"objective":record.snapshot.objective,"started":metadata.created,"updated":projection.updated,"trigger":trigger,"input":record.input,"cursor":cursor,"passes":view.graph.passes,"decided":decided,"nodes":nodes,"executed":executed,"skipped":[],"error":record.error.unwrap_or_default(),"parallel":record.parallel,"recovery":record.recovery},"calls":calls,"traces":traces,"nodes":record.snapshot.nodes.iter().map(|node|node.id.clone()).collect::<Vec<_>>(),"active":projection.active,"projection":projection}),
     ))
 }
 
@@ -691,14 +681,21 @@ pub(super) async fn control(
     if !matches!(operation.as_str(), "pause" | "resume" | "stop") {
         return Err(error(StatusCode::BAD_REQUEST, "unknown Run control"));
     }
+    let effective = if operation == "pause" {
+        "stop"
+    } else {
+        operation.as_str()
+    };
     state
         .application
-        .control(&id, &operation)
+        .control(&id, effective)
         .await
         .map_err(application_error)?;
     Ok((
         StatusCode::ACCEPTED,
-        Json(json!({"run":id,"asked":operation})),
+        Json(
+            json!({"run":id,"asked":operation,"operation":effective,"alias":operation == "pause"}),
+        ),
     ))
 }
 
@@ -731,10 +728,22 @@ pub(super) async fn abandon_run(
         .abandon_run(&id, reason.as_deref())
         .await
         .map_err(application_error)?;
+    let _legacy_receipt_status = result.status;
     let code = match result.action {
         crate::application::AbandonAction::Abandoning => StatusCode::ACCEPTED,
         _ => StatusCode::OK,
     };
+    let record = state
+        .application
+        .load_run(&id)
+        .map_err(application_error)?
+        .ok_or_else(|| error(StatusCode::NOT_FOUND, "no such run"))?;
+    let metadata = state.application.metadata(&id).map_err(application_error)?;
+    let projection = state
+        .application
+        .project_run(&record, metadata.as_ref())
+        .await
+        .map_err(application_error)?;
     Ok((
         code,
         Json(json!({
@@ -743,7 +752,7 @@ pub(super) async fn abandon_run(
             // True only when a recorded abandon request makes this Run terminal;
             // an already-aborted Run from another cause reports `false`.
             "abandoned": matches!(result.action, crate::application::AbandonAction::Abandoned),
-            "status": status(result.status),
+            "projection": projection,
             "reason": result.reason,
             "requested_at": result.requested_at,
         })),

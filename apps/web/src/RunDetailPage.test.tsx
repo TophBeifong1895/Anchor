@@ -10,13 +10,13 @@ vi.mock('./WorkflowCanvas', () => ({ WorkflowCanvas: (props: unknown) => { canva
 vi.mock('./RunInspector', () => ({ RunInspector: () => null }));
 
 const frozen: OurGraph = { entry: 'module/original', nodes: [{ id: 'module/original', agent: 'role' }], edges: [] };
-const projection = (phase: string): RunProjection => ({
-  phase, active: false, control_requested: null, terminal: false, quiescent: false,
-  needs_attention: phase === 'waiting_recovery', actions: { pause: false, stop: true, resume: true },
+const projection = (phase: RunProjection['phase'], extra: Partial<RunProjection> = {}): RunProjection => ({
+  phase, active: false, reason: null, updated: null,
+  actions: { stop: true, resume: true, abandon: true }, ...extra,
 });
-const detailFor = (status: string): OurRunDetail => ({
-  run: 'original-run', graph: 'original-graph', definition: frozen, projection: projection(status), nodes: ['module/original'], traces: {},
-  state: { status, objective: 'frozen objective', started: '', updated: '', cursor: null,
+const detailFor = (view: RunProjection): OurRunDetail => ({
+  run: 'original-run', graph: 'original-graph', definition: frozen, projection: view, nodes: ['module/original'], traces: {},
+  state: { objective: 'frozen objective', started: '', updated: '', cursor: null,
     nodes: {}, passes: {}, decided: {}, executed: [], skipped: [], error: '' },
 });
 
@@ -36,7 +36,7 @@ describe('Run-owned canvas and shared operation projection', () => {
   afterEach(async () => { await act(async () => root.unmount()); element.remove(); });
 
   it('renders the expanded frozen topology independently of the selected editor Graph', async () => {
-    const detail = detailFor('completed');
+    const detail = detailFor(projection('settled', { outcome: 'done' }));
     await render(detail);
     expect(canvas.render.mock.lastCall?.[0]).toMatchObject({ graph: frozen, name: 'original-graph', mode: 'run', projection: detail.projection });
     await render(detail, 'another-editor-graph');
@@ -44,24 +44,30 @@ describe('Run-owned canvas and shared operation projection', () => {
   });
 
   it('reports missing frozen topology without rendering a live authoring fallback', async () => {
-    await render({ ...detailFor('completed'), definition: undefined });
+    await render({ ...detailFor(projection('settled', { outcome: 'done' })), definition: undefined });
     expect(element.querySelector('[data-testid="canvas"]')).toBeNull();
     expect(element.textContent).toContain('该运行缺少冻结拓扑');
   });
 
-  it.each(['waiting_call', 'ready', 'waiting_recovery'])('exposes the server-projected stop and resume for %s', async status => {
-    await render(detailFor(status));
+  it.each([
+    [projection('waiting', { waiting_for: 'child' }), '等待子任务'],
+    [projection('executing'), '等待接续'],
+    [projection('waiting', { waiting_for: 'effect', reason: '工具结果未记录' }), '等待核查效果：工具结果未记录'],
+  ] as const)('exposes the server-projected actions for %s', async (view, label) => {
+    // Intentionally independent action facts: the component never derives authorization.
+    await render(detailFor(view));
     const buttons = [...element.querySelectorAll<HTMLButtonElement>('.run-controls button')];
-    expect(buttons.map(button => button.textContent)).toEqual(['停止', '继续']);
+    expect(buttons.map(button => button.textContent)).toEqual(['停止', '继续', '放弃']);
     await act(async () => buttons[0].click());
     await act(async () => buttons[1].click());
-    expect(control.mock.calls).toEqual([['stop'], ['resume']]);
-    expect(element.textContent).toContain(status === 'waiting_call' ? '等待调用结果' : status === 'ready' ? '等待执行' : '等待恢复上下文');
+    await act(async () => buttons[2].click());
+    expect(control.mock.calls).toEqual([['stop'], ['resume'], ['abandon']]);
+    expect(element.textContent).toContain(label);
   });
 
   it('obeys denied actions without deriving resume from durable status', async () => {
-    const detail = detailFor('paused');
-    detail.projection!.actions = { pause: false, stop: false, resume: false };
+    const detail = detailFor(projection('waiting', { waiting_for: 'human', reason: 'paused' }));
+    detail.projection!.actions = { stop: false, resume: false, abandon: false };
     await render(detail);
     expect(element.querySelectorAll('.run-controls button')).toHaveLength(0);
     await render({ ...detail, projection: undefined });
@@ -70,12 +76,12 @@ describe('Run-owned canvas and shared operation projection', () => {
   });
 
   it('uses the projection for cursor and control hints despite conflicting legacy fields', async () => {
-    const detail = detailFor('running');
-    detail.active = true; detail.control_requested = 'stop'; detail.state.reason = 'asked';
+    const detail = detailFor(projection('executing', { active: true }));
+    detail.active = true; detail.state.reason = 'asked';
     detail.state.cursor = { node: 'module/original', pass: 1, dir: '' };
-    detail.projection = projection('waiting_resume');
+    detail.projection = projection('executing');
     await render(detail);
-    expect(element.querySelector('[aria-label="活动节点"]')?.textContent).toContain('宿主重启后尚未接续');
+    expect(element.querySelector('[aria-label="活动节点"]')?.textContent).toContain('等待接续');
     expect(element.textContent).not.toContain('请求已接收');
     expect(element.textContent).not.toContain('已按请求停止');
     await render({ ...detail, projection: undefined });
@@ -84,11 +90,11 @@ describe('Run-owned canvas and shared operation projection', () => {
   });
 
   it('shows recovery guidance only when recovery is the projected phase', async () => {
-    const detail = detailFor('waiting_recovery');
-    detail.projection = projection('paused');
+    const detail = detailFor(projection('waiting', { waiting_for: 'human', reason: 'paused' }));
+    detail.state.error = 'Agent 上次工具调用的结果未记录';
     await render(detail);
     expect(element.textContent).not.toContain('Agent 上次工具调用的结果未记录');
-    detail.state.status = 'running'; detail.projection = projection('waiting_recovery');
+    detail.projection = projection('waiting', { waiting_for: 'effect', reason: 'Agent 上次工具调用的结果未记录' });
     await render(detail);
     expect(element.textContent).toContain('Agent 上次工具调用的结果未记录');
   });
