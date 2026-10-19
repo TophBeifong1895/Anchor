@@ -5,13 +5,12 @@ set -euo pipefail
 usage() {
   cat <<'HELP'
 Usage: scripts/install-platform.sh --archive PLATFORM.tar.gz --sha256 TRUSTED_SHA256
-       --install-root NEW_DIRECTORY [--model-config PRIVATE_MODEL.env]
+       --install-root NEW_DIRECTORY
        [--installer /reviewed/anchor-platform]
 
 Create a private installation, never overwrite an existing root. Configure the
-model and initialize Python/Rust later in WebUI Settings. Optional --model-config
-keeps model fields deployment-managed and read-only in WebUI. The model file is
-KEY=value data, not shell code, kept at <install-root>/config/model.env (0600).
+model and initialize Python/Rust later in WebUI Settings. Model credentials are
+managed by the Host; installation does not accept a model environment file.
 After installation run <install-root>/release/anchor-runtime/bin/anchor-platform start.
 Open http://127.0.0.1:8077. No startup or service registration is done here.
 
@@ -28,9 +27,10 @@ while (($#)); do
   case "$1" in
     --installer) installer=${2:?--installer needs a binary}; shift 2 ;;
     --archive) archive=${2:?--archive needs an archive}; shift 2 ;;
-    --sha256|--install-root|--model-config)
+    --sha256|--install-root)
       [[ "$1" != --sha256 ]] || digest=${2:?--sha256 needs a trusted digest}
       arguments+=("$1" "${2:?option needs a value}"); shift 2 ;;
+    --model-config) printf 'Configure model services in WebUI Settings; --model-config is retired.\n' >&2; exit 2 ;;
     --help|-h) usage; exit 0 ;;
     *) usage >&2; exit 2 ;;
   esac

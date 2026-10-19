@@ -22,6 +22,8 @@ mod oauth_links;
 mod pilot_host;
 mod pilot_resources;
 mod pilot_tools;
+mod plugin_configuration;
+mod plugin_configuration_test;
 mod plugin_dependencies;
 mod plugin_disclosure;
 mod plugin_mounts;

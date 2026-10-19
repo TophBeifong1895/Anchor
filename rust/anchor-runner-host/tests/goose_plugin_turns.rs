@@ -122,6 +122,15 @@ fn submit(server: &HttpHost, user: &str, id: &str, expected: &str) -> Value {
         Some(&event(user, id)),
         Duration::from_secs(30),
     );
+    if status != 200 {
+        let (_, runs) = server.request("GET", "/runs", None);
+        for row in runs["runs"].as_array().into_iter().flatten() {
+            if let Some(id) = row["run"].as_str() {
+                let (_, detail) = server.request("GET", &format!("/runs/{id}"), None);
+                eprintln!("failed fixture Run {id}: {}", detail["state"]);
+            }
+        }
+    }
     assert_eq!(status, 200, "{response}");
     assert_eq!(response["text"], expected, "{response}");
     response
@@ -164,7 +173,7 @@ fn waiting(host: &Host, run: &str, replies: usize) -> Value {
             ),
             "{record}"
         );
-        record["cursor"]["node_id"] == "wait_input"
+        record["cursor"]["node_id"] == record["snapshot"]["entry"]
             && record["results"]["reply"]
                 .as_array()
                 .is_some_and(|values| values.len() == replies)
@@ -286,6 +295,73 @@ fn add_call_remove_preserves_run_native_history_workspace_and_frozen_run_snapsho
         &[run],
         json!({"same_native_session_and_workspace":true,"snapshot_unchanged":true,"added":added,"removed":removed,"structural_change_rejection":rejection}),
     );
+}
+
+#[test]
+#[ignore = "requires pinned Goose binary, built http_fixture and local Bubblewrap"]
+fn operator_reapproves_changed_plugin_for_reused_and_admitted_graph_digests() {
+    for initially_mounted in [false, true] {
+        let provider = Provider::new(
+            if initially_mounted {
+                "goose-plugin-turn-reapprove-admitted"
+            } else {
+                "goose-plugin-turn-reapprove-reselected"
+            },
+            vec![
+                finish("before-approval"),
+                echo("reauthorized"),
+                finish("after-approval").after("turn:reauthorized"),
+            ],
+        );
+        let host = host(initially_mounted);
+        let server = host.serve(&provider);
+        let first = submit(&server, ALICE, "before-approval-input", "before-approval");
+        let run = first["run"].as_str().unwrap();
+        let initial = waiting(&host, run, 1);
+        let native = host.native_fact(run, "assistant", 1);
+        let policy_root = host.base.state_root().join("assistant-plugin-turns");
+        let frozen_policies = fs::read_dir(&policy_root)
+            .unwrap()
+            .map(Result::unwrap)
+            .flat_map(|directory| fs::read_dir(directory.path()).unwrap().map(Result::unwrap))
+            .map(|entry| (entry.path(), fs::read(entry.path()).unwrap()))
+            .collect::<Vec<_>>();
+        assert!(!frozen_policies.is_empty());
+        save(&server, true);
+        save(&server, false);
+        let source = host.base.root.path().join("checkout/demo");
+        let mut plugin = fixture::read_json(source.join("plugin.json"));
+        plugin["mutable"] = json!(["cache/"]);
+        fs::create_dir_all(source.join("cache")).unwrap();
+        fs::write(source.join("plugin.json"), plugin.to_string()).unwrap();
+        anchor_library::Library::new(host.base.root.path())
+            .install_directory("demo", &source, true)
+            .unwrap();
+        save(&server, true);
+        for (path, bytes) in frozen_policies {
+            assert_eq!(
+                fs::read(path).unwrap(),
+                bytes,
+                "reapproval rewrote a frozen Turn"
+            );
+        }
+        let second = submit(&server, ALICE, "after-approval-input", "after-approval");
+        let after = waiting(&host, run, 2);
+        assert_eq!(second["run"], first["run"]);
+        assert_eq!(after["snapshot"], initial["snapshot"]);
+        assert_eq!(after["plugin_bindings"], initial["plugin_bindings"]);
+        assert_eq!(
+            host.native_fact(run, "assistant", 2)["session_id"],
+            native["session_id"]
+        );
+        stop(&server, run);
+        evidence(
+            &host,
+            &provider,
+            &[run],
+            json!({"initially_mounted":initially_mounted,"operator_reapproval":true,"same_run_and_history":true}),
+        );
+    }
 }
 
 #[test]
@@ -454,12 +530,22 @@ fn default_restart_handover_restores_same_turn_grants_then_next_turn_revokes() {
 #[test]
 #[ignore = "requires pinned Goose binary, built http_fixture and local Bubblewrap"]
 fn idle_restart_after_retirement_and_instruction_change_uses_new_turn_current_plugins() {
-    let provider = Provider::new("goose-plugin-turn-retired-idle-restart", vec![
+    retirement_and_idle_restart("wait_input", "goose-plugin-turn-retired-idle-restart");
+}
+
+#[test]
+#[ignore = "requires pinned Goose binary, built http_fixture and local Bubblewrap"]
+fn renamed_wait_after_retirement_and_idle_restart_uses_current_workflow() {
+    retirement_and_idle_restart("current_wait", "goose-plugin-turn-renamed-wait-restart");
+}
+
+fn retirement_and_idle_restart(wait: &str, evidence_name: &str) {
+    let provider = Provider::new(evidence_name, vec![
         command("printf retired-instance > retired.txt; printf retired-workspace-written")
             .expect_request_contains("retired-original-input"),
         finish("retired-original-reply").after("retired-workspace-written"),
         echo("current-before-restart").expect_request_contains("retired-new-instance-input"),
-        command("printf current-instance > current.txt; printf current-workspace-written")
+        command("set -eu; test ! -e retired-live-only.txt; test \"$(cat retired.txt)\" = retired-instance; printf current-instance > current.txt; printf current-workspace-written")
             .after("turn:current-before-restart"),
         finish("retired-new-instance-reply").after("current-workspace-written"),
         echo("current-after-restart").expect_request_contains("retired-restart-new-input"),
@@ -478,6 +564,11 @@ fn idle_restart_after_retirement_and_instruction_change_uses_new_turn_current_pl
     let old_run = first["run"].as_str().unwrap();
     let session = first["session"].as_str().unwrap();
     let original = waiting(&host, old_run, 1);
+    fs::write(
+        workspace(&host, old_run).join("retired-live-only.txt"),
+        "uncommitted prior scene",
+    )
+    .unwrap();
     confirm_response(&server, "retired-original-input", &first);
     stop(&server, old_run);
     let assistant_path = format!("/channel-sessions/{session}/assistant");
@@ -493,6 +584,10 @@ fn idle_restart_after_retirement_and_instruction_change_uses_new_turn_current_pl
     // remains history, but its old instructions and Plugin grants cannot become a
     // permission predecessor for a fresh Turn after a later idle restart.
     let mut definition = graph(true);
+    definition["entry"] = json!(wait);
+    definition["nodes"][0]["id"] = json!(wait);
+    definition["edges"][0]["from"] = json!(wait);
+    definition["edges"][2]["to"] = json!(wait);
     definition["agents"]["assistant"]["instructions"] = json!(
         "Use the current workflow's authorized tools, retain its workspace, and finish with route reply."
     );
@@ -532,7 +627,7 @@ fn idle_restart_after_retirement_and_instruction_change_uses_new_turn_current_pl
     wait_until("idle recovery waiting in the current workflow", || {
         let record = host.record(&resumed);
         assert_eq!(record["status"], "running", "{record}");
-        record["cursor"]["node_id"] == "wait_input" && record["results"].get("reply").is_none()
+        record["cursor"]["node_id"] == wait && record["results"].get("reply").is_none()
     });
     assert_eq!(
         provider.requests().len(),
@@ -547,10 +642,10 @@ fn idle_restart_after_retirement_and_instruction_change_uses_new_turn_current_pl
     );
     assert_eq!(next["run"], resumed);
     let completed = waiting(&host, &resumed, 1);
-    let new_turn = completed["results"]["wait_input"][0]["completion"]["output"]["turn"]
+    let new_turn = completed["results"][wait][0]["completion"]["output"]["turn"]
         .as_str()
         .unwrap();
-    let previous_turn = current_record["results"]["wait_input"][0]["completion"]["output"]["turn"]
+    let previous_turn = current_record["results"][wait][0]["completion"]["output"]["turn"]
         .as_str()
         .unwrap();
     assert_ne!(new_turn, previous_turn);
@@ -579,6 +674,8 @@ fn idle_restart_after_retirement_and_instruction_change_uses_new_turn_current_pl
         json!({
             "retired":retired,"published":saved,"responses":[first,current,next],
             "explicit_retirement_then_instruction_and_plugin_change":true,
+            "current_wait_node":wait,"retired_uncommitted_scene_not_inherited":true,
+            "previous_committed_files_seeded":true,
             "idle_restart_no_model_call":true,"fresh_turn_belongs_only_to_current_run":true,
             "current_plugin_called_after_restart":true,"current_workspace_and_native_session_retained":true,
             "old_retirement_boundary_not_used_for_permission_inheritance":true

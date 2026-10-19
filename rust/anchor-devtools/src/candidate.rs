@@ -17,7 +17,7 @@ use crate::{TestCounts, digest, test_counts};
 mod evidence;
 
 const GOOSE_VERSION: &str = "1.53.0";
-const GOOSE_SHA256: &str = "dc2a4352279c16f3c665b280e4fc8fedbec3a67cce596bf460aa9fd416c27a15";
+const GOOSE_SHA256: &str = "17e065a79cb0508413af714724aed51d6b76972dda9feebdda701330134fb640";
 const DISTRIBUTION_TEST: &str =
     "extracted_goose_runtime_resumes_without_sources_or_replaying_workspace_effects";
 
@@ -247,18 +247,6 @@ fn run_inner(options: &CandidateOptions) -> io::Result<Value> {
     let executed = (|| -> io::Result<()> {
         let mut environment = build_environment(&root, &target)?;
         let web_root = workspace.join("apps/web");
-        for name in [
-            ".env",
-            ".env.local",
-            ".env.production",
-            ".env.production.local",
-        ] {
-            if web_root.join(name).symlink_metadata().is_ok() {
-                return Err(io::Error::other(format!(
-                    "candidate refuses Web dotenv input: {name}"
-                )));
-            }
-        }
         let web_command = ["npm", "--prefix", "apps/web", "run", "build"].map(str::to_owned);
         checked_command(
             &mut report,

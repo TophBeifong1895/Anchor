@@ -186,3 +186,39 @@ fn host_scoped_mcp_credentials_do_not_change_the_declaration_or_process_environm
         "Bearer owner-b-token"
     );
 }
+
+#[test]
+fn url_templates_support_full_urls_schemes_hosts_and_ports() {
+    for declaration in [
+        "${BASE_URL}/mcp",
+        "https://${HOST}:${PORT}/mcp",
+        "${SCHEME}://${HOST}:${PORT}/mcp",
+        "https://[${IPV6}]:${PORT}/mcp",
+    ] {
+        assert!(http_url_declaration_is_valid(declaration), "{declaration}");
+    }
+    let temp = tempfile::tempdir().unwrap();
+    let directory = temp.path().join("plugins/templated");
+    fs::create_dir_all(&directory).unwrap();
+    fs::write(
+        directory.join("plugin.json"),
+        serde_json::json!({
+            "name":"Templated", "mcpServers":{"remote":{
+                "url":"${SCHEME}://${HOST}:${PORT}/mcp"
+            }}
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let catalog = FilePluginCatalog::new(temp.path());
+    let definition = catalog.definition("templated").unwrap();
+    let servers = catalog
+        .resolve_mcp_servers_with(&definition, &|key| match key {
+            "SCHEME" => Some("http".into()),
+            "HOST" => Some("127.0.0.1".into()),
+            "PORT" => Some("8080".into()),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(servers[0].config["url"], "http://127.0.0.1:8080/mcp");
+}

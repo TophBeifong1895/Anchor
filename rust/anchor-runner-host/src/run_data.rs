@@ -373,7 +373,13 @@ pub(crate) fn delete_run_data(
                 .join("facts")
                 .join(format!("{node_stem}.yielded.json")),
         )?;
-        for suffix in ["json", "failed", "started", "model.json"] {
+        for suffix in [
+            "json",
+            "failed",
+            "started",
+            "model.json",
+            "plugin-configuration.json",
+        ] {
             remove_file_if_exists(
                 data_root
                     .join("facts")
@@ -543,7 +549,13 @@ mod tests {
                         .join(format!("np1-{hash}.{suffix}")),
                 );
             }
-            for suffix in ["json", "started", "failed", "model.json"] {
+            for suffix in [
+                "json",
+                "started",
+                "failed",
+                "model.json",
+                "plugin-configuration.json",
+            ] {
                 paths.push(data.join("facts").join(format!("nf1-{hash}.{suffix}")));
             }
             paths.push(

@@ -63,6 +63,53 @@ describe('standalone plugin management', () => {
     expect(localStorage.length).toBe(0); expect(sessionStorage.length).toBe(0);
   });
 
+
+  it('protects a legacy draft from focus refresh and clears detached inputs on target switch', async () => {
+    fetchMock.mockResolvedValue(response(200, metadata()));
+    await act(async () => root.render(<PluginCredentials pluginId="demo" />));
+    await click('轮换 API_KEY');
+    const input = container.querySelector<HTMLInputElement>('input[type="password"]')!;
+    input.value = 'legacy-draft';
+    const calls = fetchMock.mock.calls.length;
+    await act(async () => window.dispatchEvent(new Event('focus')));
+    expect(fetchMock).toHaveBeenCalledTimes(calls); expect(input.value).toBe('legacy-draft');
+    await act(async () => root.render(<PluginCredentials pluginId="demo" target="channel_wecom" />));
+    expect(input.value).toBe('');
+    expect(container.textContent).not.toContain('API_KEY');
+    expect(container.textContent).toContain('设置 BOT_TOKEN');
+  });
+
+  it('aborts legacy saves on unmount and ignores their delayed results', async () => {
+    const changed = vi.fn(); fetchMock.mockResolvedValueOnce(response(200, metadata()));
+    await act(async () => root.render(<PluginCredentials pluginId="demo" onChanged={changed} />));
+    await click('轮换 API_KEY');
+    const input = container.querySelector<HTMLInputElement>('input[type="password"]')!;
+    input.value = 'legacy-rotation';
+    let complete: (value: Response) => void = () => undefined;
+    fetchMock.mockImplementationOnce(() => new Promise<Response>(resolve => { complete = resolve; }));
+    await act(async () => container.querySelector('form')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })));
+    const signal = fetchMock.mock.calls.at(-1)![1].signal as AbortSignal;
+    expect(input.value).toBe('');
+    await act(async () => root.render(<p>已离开</p>));
+    expect(signal.aborted).toBe(true);
+    await act(async () => complete(response(200, metadata())));
+    expect(changed).not.toHaveBeenCalled(); expect(container.textContent).toBe('已离开');
+  });
+
+  it('clears a rejected legacy value and rereads metadata without echoing the server error', async () => {
+    fetchMock.mockResolvedValueOnce(response(200, metadata()));
+    await act(async () => root.render(<PluginCredentials pluginId="demo" />));
+    await click('轮换 API_KEY');
+    const input = container.querySelector<HTMLInputElement>('input[type="password"]')!;
+    input.value = 'rejected-legacy-secret';
+    fetchMock.mockResolvedValueOnce(response(409, { error: 'bad value rejected-legacy-secret' }));
+    fetchMock.mockResolvedValueOnce(response(200, metadata('missing')));
+    await act(async () => container.querySelector('form')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })));
+    expect(input.value).toBe(''); expect(container.textContent).toContain('凭据未保存');
+    expect(container.textContent).not.toContain('rejected-legacy-secret');
+    expect(container.textContent).toContain('设置 API_KEY');
+  });
+
   it('requires both uninstall confirmations and surfaces the existing holder refusal', async () => {
     const review = { token: 'review-token', operation: 'uninstall', plugin: 'demo', name: '示例', digest: 'digest',
       expires_at: 9999999999, graphs: ['research'], coverage: { kind: 'complete' }, mutable: [{ path: 'data/', bytes: null }] };

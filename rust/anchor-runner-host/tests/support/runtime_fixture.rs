@@ -291,14 +291,31 @@ impl HttpHost {
             let (status, saved) = self.request("GET", &format!("/runs/{run}"), None);
             assert_eq!(status, 200, "{saved}");
             detail = saved;
+            let projection = &detail["projection"];
             assert!(
-                !matches!(
-                    detail["state"]["status"].as_str(),
-                    Some("failed" | "budget_stopped")
-                ),
+                projection["reason"] != "budget" && projection["outcome"] != "failed",
                 "unexpected Run failure: {detail}"
             );
-            detail["state"]["status"] == expected && detail["active"] == false
+            // Scenario labels remain stable; assert the public phase, waiter
+            // and outcome instead of reading the removed state.status field.
+            let reached = match expected {
+                "completed" => projection["phase"] == "settled" && projection["outcome"] == "done",
+                "failed" => projection["phase"] == "settled" && projection["outcome"] == "failed",
+                "ready" => projection["phase"] == "executing",
+                "paused" => {
+                    projection["phase"] == "waiting"
+                        && projection["waiting_for"] == "human"
+                        && projection["reason"] == "paused"
+                }
+                "stopped" => {
+                    projection["phase"] == "waiting"
+                        && projection["waiting_for"] == "human"
+                        && projection["reason"] != "paused"
+                        && projection["reason"] != "budget"
+                }
+                other => panic!("unknown Run scenario: {other}"),
+            };
+            reached && detail["active"] == false
         });
         detail
     }

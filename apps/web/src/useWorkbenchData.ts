@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from './api';
 import type { GraphSummary, OurRun, TimelineData } from './model';
 
-export type WorkbenchView = 'graph' | 'runs' | 'runDetail' | 'pilot' | 'plugins' | 'settings' | 'channels';
+export type WorkbenchView = 'graph' | 'runs' | 'runDetail' | 'pilot' | 'plugins' | 'settings';
 type ApiFetcher = <T>(path: string) => Promise<T>;
 
 /** Timeline is an optional projection, requested only by its page. */

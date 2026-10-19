@@ -59,7 +59,7 @@ fn corrupt_or_foreign_turn_policy_fails_closed() {
 }
 
 #[test]
-fn authority_receipt_is_immutable_and_scoped_to_bundle_and_graph_digest() {
+fn operator_approval_refreshes_authority_and_stays_scoped_to_bundle_and_graph_digest() {
     let root = tempfile::tempdir().unwrap();
     let source = root.path().join("graph");
     let library = root.path().join("library");
@@ -104,7 +104,16 @@ fn authority_receipt_is_immutable_and_scoped_to_bundle_and_graph_digest() {
         r#"{"name":"demo","network":true}"#,
     )
     .unwrap();
-    assert!(publish(root.path(), &source, &snapshot, &library).is_err());
+    let previous = publication(root.path(), &source, &digest).unwrap().unwrap();
+    publish(root.path(), &source, &snapshot, &library).unwrap();
+    let refreshed = publication(root.path(), &source, &digest).unwrap().unwrap();
+    assert_eq!(refreshed.graph_digest, previous.graph_digest);
+    assert!(!previous.bindings["demo"].same_authorization(&refreshed.bindings["demo"]));
+    publish(root.path(), &source, &snapshot, &library).unwrap();
+    assert_eq!(
+        publication(root.path(), &source, &digest).unwrap().unwrap(),
+        refreshed
+    );
 }
 
 fn owned_policy(root: &Path, run: &str) -> GraphRunRecord {

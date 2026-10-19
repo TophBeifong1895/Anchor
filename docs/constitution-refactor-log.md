@@ -862,7 +862,7 @@ HTTP、Pilot、Web 共用四动作；Session call 通用 pause/resume 仍拒绝�
 
 ### S 候选
 
-S25 按任务书作废；无新增 S 编号。其余 **7 条待批**，未擅自记为批准。
+S25 按任务书作废；无新增 S 编号。其余 7 条（S19–S24、S26）**已由用户批准（2026-10-19）**。
 
 | 编号 | 当前结论 / 待审查边界 |
 | --- | --- |
@@ -922,7 +922,75 @@ S25 按任务书作废；无新增 S 编号。其余 **7 条待批**，未擅自
 ## 尚未完成
 
 - 并行分支内的模块作用域。
-- 全量 Host 迁移按 M1–M5 执行，H3–H6 阶段划分已被取代；M1 本地实现与验证交回，S19–S24、S26 待审查。M2 的并行/Call/助手、结果与恢复决定/删除，M3 默认切换，M4 旧 Runner 删除，M5 测量仍未完成。全局 C2 尚未验收，16 save / 36 mutation 为旧路径棘轮起点。
+- 全量 Host 迁移按 M1–M5 执行，H3–H6 阶段划分已被取代；M1 已验收，S19–S24、S26 已批准（2026-10-19）。M2 的并行/Call/助手、结果与恢复决定/删除，M3 默认切换，M4 旧 Runner 删除，M5 测量仍未完成。全局 C2 尚未验收，16 save / 36 mutation 为旧路径棘轮起点。
 - 旧 Runner 的删除。
 - M1 的本地验收不替代真实 Goose/Provider、部署与生产数据离线迁移；W4 未决定。当前实现缺时间观察为 null，不伪造历史时间。
 - 共享 conversation lease / Library 读锁 / `PROCESS_ENV_LOCK` 的既有多测试 flaky（见"待处理与观察"）。
+
+## M1 审查结论（2026-10-19）
+
+审查方重跑：workspace 121 个 target，1922 通过 / 0 失败 / 115 忽略；Web 34 个文件、290 项通过；内核相对 `6ee2b0e` 零 diff，生产校验器未改。M1 通过。
+
+pause 由调度边界钩子（`DispatchBoundary`）在节点结果提交之后、下一次派发之前消费持久化的暂停意图，提交人的 stop（reason=paused），不读执行标志，符合 C4。
+
+S21 的影响已核查：
+- 助手退役（`assistants.rs`）此前要求静止，旧 Paused 不算静止，所以暂停中的助手不能退役；现在 Paused 视为静止，暂停中的助手可以退役。
+- WeCom 替换旧渠道 Run 前（`api/wecom.rs`）不再先把 Paused 转为 Stopped。
+
+两者都与"暂停 = 等待人"一致，没有发现会在可恢复的 Run 上执行破坏性清理的路径。
+
+缺项：§10.1 规则清单表未交，并入 M1.5 补交。另有 19 个原始日志入库，§10.6 措辞有歧义，从 M1.5 起执行。
+
+**用户决定（2026-10-19）**：批准 S19–S24、S26。S23 中旧 Run 可能出现"显示可恢复、写入被拒"的不一致，属于过渡现象，到 M3 旧 Run 退出后消失；在此之前不为它补旧规则。
+
+## M1.5：master 同步与语义规则清点（2026-10-19）
+
+合并来源 `master@2b3b7a2`，使用 merge，未 rebase。M1 的独立 pause 与新相位词汇保持；master 的模型托管配置、Plugin 配置/测试、源代码启动和消息入口迁移保留。Kernel 相对 `6ee2b0e`、生产 GraphValidator 相对 M1 均无改动。规则清单与验证结果见 [M1.5 证据](../experiments/constitution-host-preflight/m15/verification.md)。
+
+### 冲突解决
+
+| 文件 | 解决依据 |
+| --- | --- |
+| `apps/web/src/ChannelSessions.test.tsx` | 保留 master 的新消息会话入口与打开/关闭检查；保留 M1 的 phase/waiter/actions fixture 和业务断言 |
+| `apps/web/src/ChannelsPage.tsx` | 接受 master 拆分删除；M1 的 RunControls、静止和文案逻辑接入 `ChannelSessions.tsx`，消息触发配置由 `MessageTrigger.tsx` 负责 |
+| `docs/pilot-development-plan.md` | 保留迁移待办；master 新的真实模型/周报/Docmost 结论取代已失效旧待办 |
+| `rust/Cargo.toml` | 保留 `anchor-kernel` workspace 成员 |
+| `rust/anchor-runtime/Cargo.toml` | 保留 Kernel 依赖与 test-fixtures feature |
+| `rust/anchor-devtools/Cargo.toml` | 保留 master 新增 distribution 依赖与共享 file lease |
+| `rust/Cargo.lock` | 合并两侧依赖并经 locked 构建验证，不升级 registry 版本 |
+| `rust/anchor-rsi/tests/evidence.rs` | 两侧同样显式初始化 ring provider，保留单一调用；原 HTTP MCP 断言不变 |
+| `rust/anchor-runner-host/src/credential_store.rs` | 保留 master 的 crate 可见 lease，使用共享 FileLease |
+| `rust/anchor-runtime/src/graph/store.rs` | 复用 master 读/写租约 helper，保留 H1 旧格式具名拒绝与记录校验 |
+
+自动合并后的编译适配：Plugin 配置的字符串边界显式读取 `AuthorizationDigest::as_ref()`，持久 JSON 保持字符串；新配置准入仍使用 `same_authorization`，移除 master 恢复引用的旧升级接口，延续 C6。Web 新入口使用同一 `runQuiescent` / `runPhaseLabel`，新增的浏览器 fixture 改为新相位并增加 abandon 动作。
+
+### S 候选
+
+| 新增数量 | 结论 |
+| --- | --- |
+| 0 | 保持已批准的 S19–S24、S26；S25 作废。旧 Run 的 S23 过渡边界按用户决定保留 |
+
+### 断言修改
+
+下列只迁移已移除的 HTTP `state.status` 词汇；原存储事实、Session/Turn 状态、产物、成本、权限拒绝和不重放检查保留。临时未配置 relay 的失败不用于放宽断言。
+
+| 登记 | 位置 / 旧 → 新 |
+| --- | --- |
+| M15R01–04 | `tests/goose_acp.rs` 四处 HTTP 完成断言：state.status=completed → projection.outcome=done |
+| M15R05 | 同文件重启后的未完成断言：state.status!=completed → outcome!=done |
+| M15R06 | `tests/goose_trace.rs::assert_live`：state.status=running → projection.phase=executing，active=true 保留 |
+| M15R07 | `tests/goose_session_calls.rs::ack`：HTTP 完成断言改 outcome=done；pending 投递与 inactive 不变 |
+| M15R08–10 | 同文件同 Run 续行：失败拒绝改 outcome!=failed；异常停止改 waiting/human；完成轮询改 settled/done。原调用数、同一历史与效果断言保留 |
+| M15R11 | `tests/goose_plugin_mcp.rs`：state.status=failed → outcome=failed；原错误内容/零 Provider 调用/无 panic 不变 |
+| M15R12–13 | `tests/support/goose_fixture.rs::wait_status`：失败拒绝与目标轮询改读 phase/waiter/outcome/reason，保留 inactive 及预算/失败拒绝；ready 是 Executing 且无 worker，paused 额外要求 reason=paused，waiting_call 要求 Waiting/Child |
+| M15R14–15 | `tests/support/runtime_fixture.rs::wait_status`：同上，仍拒绝 failed 与 budget；不加入旧 status 回退 |
+| M15R16 | `tests/goose_persistent_assistant.rs::action`：控制回执 asked → operation；HTTP 202 与 Run 身份、动作值检查保留 |
+| M15W01 | master 新增 `e2e/message-management.spec.ts` fixture：running → executing，移除 state.status，增加 actions.abandon；浏览器业务断言未改 |
+
+`ChannelSessions.test.tsx` 冲突解决保留 M1 既有新词汇断言，没有新增断言放宽。
+
+### 删除测试映射
+
+| 删除数量 | 对应新路径或理由 |
+| --- | --- |
+| 0 | 本里程碑未删除测试、未新增 ignore；master 消息管理组件/测试拆分随合并保留 |

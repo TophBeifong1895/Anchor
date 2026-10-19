@@ -153,6 +153,17 @@ pub(super) async fn completion(
             _ => break,
         }
     }
+    if let Reply::HttpError(status, message) = reply {
+        let response = json!({"error": {
+            "message": message, "type": "invalid_request_error", "code": "fixture_error"
+        }});
+        let mut state = shared.lock().unwrap();
+        state.exchanges.push(json!({
+            "sequence": sequence, "response_status": status, "response": response
+        }));
+        state.save();
+        return (StatusCode::from_u16(status).unwrap(), Json(response)).into_response();
+    }
     let mut selected_tool = Value::Null;
     let mut text = None;
     match reply {

@@ -1,7 +1,7 @@
 //! Owner-bound credentials are Host configuration. Values never enter Pilot
 //! history, question answers, workspace files, or public request metadata.
 mod management;
-pub(crate) use management::{configure, credentials};
+pub(crate) use management::{configure, credentials, resolve_pending_locked};
 
 use anchor_graph_host::{FilePluginCatalog, PluginDefinition};
 use anchor_platform_session::{Session, SessionStore, TurnStatus};
@@ -38,7 +38,24 @@ struct RequestFact {
     created_at: String,
     digest: String,
     authorization_digest: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    configuration_version: Option<crate::plugin_configuration::ConfigurationVersion>,
     request: CredentialRequest,
+}
+
+fn request_id(
+    turn: &str,
+    plugin: &str,
+    server: &str,
+    field: &str,
+    version: Option<&crate::plugin_configuration::ConfigurationVersion>,
+) -> String {
+    let identity = match version {
+        Some(version) => serde_json::to_vec(&(turn, plugin, server, field, version)),
+        None => serde_json::to_vec(&(turn, plugin, server, field)),
+    }
+    .expect("credential identity");
+    hash(&identity)
 }
 
 #[derive(Serialize, Deserialize)]
@@ -53,7 +70,7 @@ struct Secret {
     value: String,
 }
 
-fn hash(bytes: &[u8]) -> String {
+pub(crate) fn hash(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
 }
 fn requests_root(data: &Path, owner: &str, session: &Session) -> PathBuf {
@@ -82,7 +99,7 @@ fn valid_field(field: &str) -> bool {
     !field.is_empty()
         && field.len() <= 200
         && field.bytes().enumerate().all(|(index, byte)| {
-            byte.is_ascii_uppercase() || byte == b'_' || (index > 0 && byte.is_ascii_digit())
+            byte.is_ascii_alphabetic() || byte == b'_' || (index > 0 && byte.is_ascii_digit())
         })
 }
 
@@ -128,7 +145,7 @@ fn private_parent(path: &Path) -> Result<Option<rustix::fd::OwnedFd>, String> {
     }
     Ok(Some(directory))
 }
-fn load<T: serde::de::DeserializeOwned>(path: &Path) -> Result<Option<T>, String> {
+pub(crate) fn load<T: serde::de::DeserializeOwned>(path: &Path) -> Result<Option<T>, String> {
     use rustix::fs::{Mode, OFlags, openat};
     let Some(directory) = private_parent(path)? else {
         return Ok(None);
@@ -163,7 +180,7 @@ fn load<T: serde::de::DeserializeOwned>(path: &Path) -> Result<Option<T>, String
         .map(Some)
         .map_err(|_| "private credential fact malformed".into())
 }
-fn save(path: &Path, value: &impl Serialize) -> Result<(), String> {
+pub(crate) fn save(path: &Path, value: &impl Serialize) -> Result<(), String> {
     let parent = path
         .parent()
         .ok_or("private credential parent unavailable")?;
@@ -182,7 +199,7 @@ fn save(path: &Path, value: &impl Serialize) -> Result<(), String> {
         .and_then(|directory| directory.sync_all())
         .map_err(|_| "private credential directory sync failed".into())
 }
-fn lease(data: &Path) -> Result<anchor_file_lease::FileLease, String> {
+pub(crate) fn lease(data: &Path) -> Result<anchor_file_lease::FileLease, String> {
     let root = data.join("platform");
     crate::goose_acp::pilot::directory(&root)?;
     let file = fs::OpenOptions::new()
@@ -219,71 +236,7 @@ fn lease(data: &Path) -> Result<anchor_file_lease::FileLease, String> {
 }
 
 pub(crate) fn declared_fields(config: &Value) -> BTreeSet<String> {
-    fn inspect(value: &Value, fields: &mut BTreeSet<String>) {
-        match value {
-            Value::String(text) => {
-                let mut remaining = text.as_str();
-                while let Some(index) = remaining.find("${") {
-                    remaining = &remaining[index + 2..];
-                    let Some(end) = remaining.find('}') else {
-                        break;
-                    };
-                    let key = remaining[..end].split(":-").next().unwrap_or("");
-                    if valid_field(key)
-                        && !matches!(
-                            key,
-                            "PLUGIN_ROOT"
-                                | "CODEX_PLUGIN_ROOT"
-                                | "CLAUDE_PLUGIN_ROOT"
-                                | "ANCHOR_PLUGIN_VIEW"
-                        )
-                    {
-                        fields.insert(key.into());
-                    }
-                    remaining = &remaining[end + 1..];
-                }
-            }
-            Value::Array(values) => {
-                for value in values {
-                    inspect(value, fields)
-                }
-            }
-            Value::Object(values) => {
-                for value in values.values() {
-                    inspect(value, fields)
-                }
-            }
-            _ => {}
-        }
-    }
-    let mut fields = BTreeSet::new();
-    inspect(config, &mut fields);
-    for key in ["env_vars", "optional_env_vars"] {
-        for value in config
-            .get(key)
-            .and_then(Value::as_array)
-            .into_iter()
-            .flatten()
-            .filter_map(Value::as_str)
-        {
-            if valid_field(value) {
-                fields.insert(value.into());
-            }
-        }
-    }
-    for value in config
-        .get("env_http_headers")
-        .and_then(Value::as_object)
-        .into_iter()
-        .flat_map(|values| values.values())
-        .filter_map(Value::as_str)
-        .chain(config.get("bearer_token_env_var").and_then(Value::as_str))
-    {
-        if valid_field(value) {
-            fields.insert(value.into());
-        }
-    }
-    fields
+    anchor_graph_host::mcp_environment_fields(config)
 }
 
 pub(crate) fn target_authorization(
@@ -357,9 +310,6 @@ pub(crate) fn request(
     {
         return Err("invalid credential request".into());
     }
-    if std::env::var_os(field).is_some() {
-        return Err("this credential field is managed externally by the deployment".into());
-    }
     if sessions
         .get_turn(owner, &session.id, turn)
         .map_err(|error| error.to_string())?
@@ -372,12 +322,23 @@ pub(crate) fn request(
         .definition(plugin)
         .map_err(|_| "credential target Plugin is not installed")?;
     let (fields, authorization_digest) = target_authorization(&definition, server)?;
+    if crate::plugin_configuration::is_external(&definition, server, field)? {
+        return Err("this credential field is managed externally by the deployment".into());
+    }
     if !fields.contains(field) {
         return Err("credential field is not declared by this Plugin target".into());
     }
     let _lease = lease(data)?;
-    let id =
-        hash(&serde_json::to_vec(&(turn, plugin, server, field)).expect("credential identity"));
+    let configuration_version = if server.starts_with("channel_") {
+        None
+    } else {
+        Some(crate::plugin_configuration::request_version_locked(
+            data,
+            &binding_owner(owner),
+            &definition,
+        )?)
+    };
+    let id = request_id(turn, plugin, server, field, configuration_version.as_ref());
     let path = requests_root(data, owner, session).join(format!("{id}.json"));
     if let Some(fact) = load::<RequestFact>(&path)? {
         check_fact(&fact, owner, session)?;
@@ -402,20 +363,19 @@ pub(crate) fn request(
             created_at: session.created_at.to_rfc3339(),
             digest: definition.digest.clone(),
             authorization_digest,
+            configuration_version,
             request: request.clone(),
         },
     )?;
     Ok(request)
 }
 fn check_fact(fact: &RequestFact, owner: &str, session: &Session) -> Result<(), String> {
-    let id = hash(
-        &serde_json::to_vec(&(
-            &fact.request.turn,
-            &fact.request.plugin,
-            &fact.request.server,
-            &fact.request.field,
-        ))
-        .expect("credential identity"),
+    let id = request_id(
+        &fact.request.turn,
+        &fact.request.plugin,
+        &fact.request.server,
+        &fact.request.field,
+        fact.configuration_version.as_ref(),
     );
     if fact.format != 1
         || fact.owner != owner
@@ -504,17 +464,34 @@ pub(crate) fn submit(
     let path = request_path(data, owner, session, id)?;
     let mut fact = load::<RequestFact>(&path)?.ok_or("credential request unavailable")?;
     check_fact(&fact, owner, session)?;
+    let definition = FilePluginCatalog::new(library)
+        .definition(&fact.request.plugin)
+        .map_err(|_| "credential target no longer installed")?;
     if fact.request.status == "configured" {
-        let binding_owner = binding_owner(owner);
-        let previous = load::<Secret>(&secret_path(
-            data,
-            &binding_owner,
-            &fact.request.plugin,
+        let bound_owner = binding_owner(owner);
+        let previous = if let Some(logical) = crate::plugin_configuration::logical_field(
+            &definition,
             &fact.request.server,
             &fact.request.field,
-        ))?
+        ) {
+            crate::plugin_configuration::saved_value_locked(
+                data,
+                &bound_owner,
+                &definition,
+                logical,
+            )?
+        } else {
+            load::<Secret>(&secret_path(
+                data,
+                &bound_owner,
+                &fact.request.plugin,
+                &fact.request.server,
+                &fact.request.field,
+            ))?
+            .map(|secret| secret.value)
+        }
         .ok_or("configured credential value unavailable")?;
-        if previous.value != value {
+        if previous != value {
             return Err("this request already configured a different value; request a fresh credential form".into());
         }
         return Ok(fact.request);
@@ -529,18 +506,32 @@ pub(crate) fn submit(
     {
         return Err("credential request is no longer pending".into());
     }
-    if std::env::var_os(&fact.request.field).is_some() {
+    if crate::plugin_configuration::is_external(
+        &definition,
+        &fact.request.server,
+        &fact.request.field,
+    )? {
         return Err("credential ownership changed to the external deployment".into());
     }
-    let definition = FilePluginCatalog::new(library)
-        .definition(&fact.request.plugin)
-        .map_err(|_| "credential target no longer installed")?;
     if definition.digest != fact.digest
         || target_authorization(&definition, &fact.request.server)?.1 != fact.authorization_digest
     {
         return Err(
             "Plugin changed while credential input was pending; request a fresh form".into(),
         );
+    }
+    if !fact.request.server.starts_with("channel_") {
+        let current = crate::plugin_configuration::request_version_locked(
+            data,
+            &binding_owner(owner),
+            &definition,
+        )?;
+        if fact.configuration_version.as_ref() != Some(&current) {
+            return Err(
+                "Plugin configuration changed while credential input was pending; request a fresh form"
+                    .into(),
+            );
+        }
     }
     let _synchronization_warning = management::mutate_locked(
         data,
@@ -578,7 +569,75 @@ pub(crate) fn cancel(
     }
     Ok(fact.request)
 }
+/// One private, atomically read configuration snapshot for all servers of a Plugin.
+/// `owner` is already normalized with `binding_owner` by the execution adapter.
+pub(crate) fn environment_snapshot(
+    data: &Path,
+    owner: &str,
+    definition: &PluginDefinition,
+) -> Result<crate::plugin_configuration::ConfigurationSnapshot, String> {
+    let _lease = lease(data)?;
+    let mut snapshot = crate::plugin_configuration::snapshot_locked(data, owner, definition)?;
+    for target in definition
+        .mcp_servers
+        .iter()
+        .map(|server| server.name.clone())
+        .chain(
+            definition
+                .channels
+                .iter()
+                .map(|channel| format!("channel_{}", channel.platform)),
+        )
+    {
+        let values = legacy_environment_values(data, owner, definition, &target)?;
+        snapshot
+            .environments
+            .entry(target)
+            .or_default()
+            .extend(values);
+    }
+    Ok(snapshot)
+}
 pub(crate) fn environment_values(
+    data: &Path,
+    owner: &str,
+    definition: &PluginDefinition,
+    server: &str,
+) -> Result<BTreeMap<String, String>, String> {
+    if server.starts_with("channel_") {
+        let _lease = lease(data)?;
+        return legacy_environment_values(data, owner, definition, server);
+    }
+    Ok(environment_snapshot(data, owner, definition)?
+        .environments
+        .remove(server)
+        .unwrap_or_default())
+}
+/// Caller holds the credential lease. An unmapped legacy value has no logical
+/// field to reauthorize atomically with a destination change; require it to be
+/// cleared first, or its external deployment binding to be removed explicitly.
+pub(crate) fn has_legacy_mcp_values_locked(
+    data: &Path,
+    owner: &str,
+    definition: &PluginDefinition,
+) -> Result<bool, String> {
+    for server in &definition.mcp_servers {
+        for field in declared_fields(&server.config) {
+            if crate::plugin_configuration::logical_field(definition, &server.name, &field)
+                .is_none()
+                && crate::plugin_configuration::is_external(definition, &server.name, &field)?
+            {
+                return Ok(true);
+            }
+        }
+        if !legacy_environment_values(data, owner, definition, &server.name)?.is_empty() {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+fn legacy_environment_values(
     data: &Path,
     owner: &str,
     definition: &PluginDefinition,
@@ -587,7 +646,20 @@ pub(crate) fn environment_values(
     let (fields, authorization_digest) = target_authorization(definition, server)?;
     let mut values = BTreeMap::new();
     for field in fields {
-        if std::env::var_os(&field).is_some() {
+        if crate::plugin_configuration::logical_field(definition, server, &field).is_some() {
+            continue;
+        }
+        if server.starts_with("channel_") && std::env::var_os(&field).is_some() {
+            continue;
+        }
+        if !server.starts_with("channel_")
+            && let Some(environment) = crate::plugin_configuration::legacy_external_environment(
+                definition, server, &field,
+            )?
+        {
+            if let Ok(value) = std::env::var(environment) {
+                values.insert(field, value);
+            }
             continue;
         }
         let Some(secret) =

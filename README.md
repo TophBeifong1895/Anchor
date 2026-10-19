@@ -90,14 +90,14 @@ Goose 拥有 Agent loop、Provider、原生会话和上下文压缩；Anchor 拥
 | Linux x86_64 | 需要 | 需要，并满足包内二进制的系统兼容要求 |
 | Rust stable、`rustup` | 构建 Rust 和固定 Goose 时需要 | 不需要 |
 | Node.js、npm | 构建 WebUI、运行 Vite 时需要；Node.js 20.19+ 或 22.12+ | 不需要；Rust Host 直接提供编译后的 WebUI |
-| Git、`sh`、Bubblewrap | 需要，沙箱须有可用的 user/mount/network namespace | 同样需要 |
-| 固定 Goose ACP 二进制 | 按下文脚本构建并配置 | 发行包已包含 `bin/goose` |
+| Git、`sh`、Bubblewrap、slirp4netns | 需要，沙箱须有可用的 user/mount/network namespace | 同样需要 |
+| Goose ACP 二进制 | 首次启动自动构建固定版本与仓库补丁，使用本机产物 | 发行包已包含 `bin/goose` |
 | 系统动态库 | 满足所构建 ELF 的依赖 | 按 `runtime-manifest.json` 中 Host 和工具的 ELF 依赖准备 |
 | 模型与外部服务配置 | 运行相应 Agent/Plugin 时需要 | 同样需要；凭据和状态放在包外 |
 
 ### 使用预构建发行包
 
-完整 `anchor-runtime/` 包包含 Host、固定 Goose、Graph bundle 和声明的 Plugin 资源；使用 WebUI 的包还需包含编译后的 `web/`。安装环境满足上表后，配置包外的数据目录、权限和模型，再直接运行 `bin/anchor-runner-host serve`，或交给 systemd 管理。部署步骤见[生产部署指南](docs/rust-production-deployment.md)。
+完整平台包包含 Host、固定 Goose、编译后的 WebUI、联网 Plugin 和语言初始化工具，不附带业务 Graph 或用户凭据。安装后运行 `bin/anchor-platform start`，再在网页配置模型与其他能力；systemd 也调用同一启动器。独立 Graph 包仍包含自己的 Graph bundle 和声明的 Plugin 资源。部署步骤见[生产部署指南](docs/rust-production-deployment.md)。
 
 只有一个 `anchor-runner-host` 可执行文件时，还需要配齐 Goose、Graph/Plugin 资源和所需 Web 资产。官方发行不依赖 Python；第三方 Plugin 若使用其他语言，其运行环境由该 Plugin 的声明决定。Goose 是静态 musl 二进制，Host 和工具仍可能依赖动态库，具体以发行 manifest 为准。
 
@@ -106,15 +106,16 @@ Goose 拥有 Agent loop、Provider、原生会话和上下文压缩；Anchor 拥
 ### 从源码启动本地开发服务
 
 ```sh
-npm --prefix apps/web ci
-cp .env.example .env
-
-# 先启动不调用模型的 dev Graph；它包含一个确定性的 true Op。
+git clone https://github.com/manstein-lzn/Anchor.git
+cd Anchor
 ./scripts/dev.sh start
-./scripts/dev.sh status
 ```
 
-打开 <http://127.0.0.1:5173> 使用 Vite 开发界面，或打开 <http://127.0.0.1:8077> 使用 Rust Host 提供的 WebUI/API。`scripts/dev.sh` 使用独立的 `.local/rust` 数据根，不会接管仓库里已有的 Graph、运行记录或环境。
+首次启动自动下载依赖并编译 Host、WebUI 与 Goose，通常需要几分钟，耗时取决于机器和网络；后续启动复用 Goose/前端依赖并对 Host 做增量构建。系统依赖与故障提示见[使用指南](docs/usage.md#安装与本地启动)。只准备依赖而不启动服务可执行 `./scripts/dev.sh setup`。
+
+打开 <http://127.0.0.1:5173>，在「设置 → 模型服务」保存 default 的服务地址、协议、API key 和 Flash 模型名，再返回 Pilot 对话。无需 `.env`，不用手动安装 Goose 或填写二进制摘要。也可打开 <http://127.0.0.1:8077> 使用 Rust Host 提供的 WebUI/API。`scripts/dev.sh` 使用独立的 `.local/rust` 数据根，不会接管仓库里已有的 Graph、运行记录或环境。
+
+首次启动会在 WebUI 提供 **8 张示例 Graph 和 5 个官方 Plugin**，包括工作流调用、写作反馈、并行审查、学术调研和企微模板。建议先运行无需模型的 `call-report`，再配置模型尝试 `plugin-research`。Docmost 和企微按需在网页配置，默认不启用监听。已有同名内容、用户修改和删除会保留；完整清单见[上手示例](examples/README.md)。
 
 停止或重启服务：
 
@@ -125,35 +126,18 @@ cp .env.example .env
 
 ### 从源码启用 AgentNode 与 Pilot
 
-先构建仓库固定的 Goose v1.53.0 lean ACP 二进制。脚本会固定上游源码、musl 工具链和 SHA256，并检查静态 ELF；首次构建需要网络和几分钟时间。
+`./scripts/dev.sh start` 自动安装锁定的 Web 依赖，增量构建 debug Host 与 `anchor-net-relay`，并将 Goose v1.53.0 加仓库补丁的 lean ACP 准备到 `.local/bin/goose`。Goose 构建脚本安装其固定 Rust 工具链的 musl target，不要求用户另外执行 `rustup target add`；源码构建记录本机产物摘要，由启动脚本自动传给 Host，不要求匹配其他机器的产物。版本、补丁或构建脚本变动后自动重新准备，未变则复用缓存。
 
-```sh
-mkdir -p .local/bin
-scripts/build-goose-acp.sh \
-  --check-reproducible \
-  --output "$PWD/.local/bin/goose"
-```
+启动后到 WebUI「设置 → 模型服务」填写服务地址、协议、API key 和 Flash 模型名，即可与 Pilot 对话；Pro/backup 可暂不配置。模型设置保存后下一轮生效，无需重启。凭据保存在 Host 私有存储，无需创建或编辑 `.env`。
 
-然后编辑 `.env`，至少填写：
-
-```dotenv
-ANCHOR_GOOSE_BINARY=/absolute/path/to/Anchor/.local/bin/goose
-ANCHOR_GOOSE_BINARY_SHA256=dc2a4352279c16f3c665b280e4fc8fedbec3a67cce596bf460aa9fd416c27a15
-ANCHOR_GOOSE_ALLOW_SHARED_NETWORK=1
-ANCHOR_MODEL_URL=https://provider.example/v1
-ANCHOR_MODEL_API_KEY=replace-me
-ANCHOR_MODEL_NAME=replace-me
-ANCHOR_MODEL_WIRE_API=responses
-```
-
-保存后执行 `./scripts/dev.sh restart`。示例 Graph 中的 `models.academic` 在没有单独配置别名时会回退到 `ANCHOR_MODEL_NAME`；需要区分不同模型时再设置 `ANCHOR_MODEL_ALIASES`。凭据只放在部署环境；不要写入 Graph、Plugin、发行包或 Git。完整配置、监听地址、API key 和各数据根见[使用指南](docs/usage.md)。
+成品平台使用安装后的 `bin/anchor-platform start`，自动定位随包工具与独立数据目录；模型、插件、渠道和语言环境通过 WebUI 管理。开发脚本与 Web 构建均忽略遗留 `.env` 文件；开发者需要覆盖路径或端口时，可显式传入进程设置，见[使用指南](docs/usage.md)。
 
 ### 第一次运行开发示例
 
-1. 在 WebUI 打开 `dev` Graph，确认 Host 和 WebUI 都处于 ready。
-2. 运行内置的 `true` Op，查看 Run 的路径和完成状态。
-3. 配置 Goose 和模型后，先导入不依赖外部 Plugin 的 `examples/graphs/revise-loop.json`，观察 AgentNode、Artifact 和反馈路径。
-4. 需要精确的 Graph API 导入格式时，按[使用指南中的 Graph 小节](docs/usage.md#graph-与-webui)操作；Graph 保存时会校验作者定义和 Plugin 资源绑定。
+1. 打开 WebUI；首次启动的 Graph 目录为空，先到「设置 → 模型服务」保存 default Flash 配置。
+2. 返回 Pilot 对话，让它协助创建工作流，或在图编排页面新建 Graph。
+3. 需要 AgentNode 示例时，可导入不依赖外部 Plugin 的 `examples/graphs/revise-loop.json`，观察 Artifact 和反馈路径。
+4. Graph API 导入格式见[使用指南中的 Graph 小节](docs/usage.md#graph-与-webui)；Graph 保存时会校验作者定义和 Plugin 资源绑定。
 
 ## 示例
 
@@ -169,7 +153,7 @@ ANCHOR_MODEL_WIRE_API=responses
 | [`rsi.json`](examples/graphs/rsi.json) | 通过证据、评审和确定性门禁生成演进提案；发布提案不会自动修改项目。 |
 | [`wecom-persistent-assistant.json`](examples/graphs/wecom-persistent-assistant.json) | 可选的同 Run 多轮企业微信助手；不会原地替换一次性助手 Graph。 |
 
-`one-search.json`、`deep-academic-research.json` 和其他学术示例还需要先安装 `academic-research` Plugin，并为 Host 提供相应的外部学术服务配置；安装方式见 [Plugin 指南](docs/plugins.md)。它们不属于只启动本地 dev Graph 就能完成的最小示例。
+`one-search.json`、`deep-academic-research.json` 和其他学术示例还需要先安装 `academic-research` Plugin，并为 Host 提供相应的外部学术服务配置；安装方式见 [Plugin 指南](docs/plugins.md)。它们不属于源码启动即可完成的最小示例。
 
 <p align="center">
   <img src="docs/images/anchor-run-evidence.png" alt="Anchor Run 记录：执行路径、节点对话和生成文件" width="900">

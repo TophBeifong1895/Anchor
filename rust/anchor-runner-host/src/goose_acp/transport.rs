@@ -198,6 +198,7 @@ pub(crate) struct AcpConnection {
     stderr_task: Option<JoinHandle<()>>,
     diagnostics: Arc<Mutex<StderrDiagnostics>>,
     next_id: u64,
+    provider_failure: Option<&'static str>,
     in_flight: bool,
     poisoned: bool,
     closed: bool,
@@ -249,11 +250,18 @@ impl AcpConnection {
             stderr_task: Some(stderr_task),
             diagnostics,
             next_id: 1,
+            provider_failure: None,
             in_flight: false,
             poisoned: false,
             closed: false,
             elicitation: None,
         })
+    }
+
+    /// Only trusted ACP error codes/metadata classify a provider failure. Raw
+    /// provider details remain inside the native Session and are never exposed.
+    pub(crate) fn provider_failure(&self) -> Option<&'static str> {
+        self.provider_failure
     }
 
     pub(crate) fn set_elicitation_handler(&mut self, handler: Arc<dyn ServerRequestHandler>) {
@@ -455,8 +463,16 @@ impl AcpConnection {
                     if error.get("message").and_then(Value::as_str).is_none() {
                         return Err("ACP malformed JSON-RPC error message".into());
                     }
+                    if method == "session/prompt" {
+                        self.provider_failure = match (code, error["data"]["reason"].as_str()) {
+                            (-32000, _) => Some("authentication"),
+                            (_, Some("credits_exhausted")) => Some("credits_exhausted"),
+                            (_, Some("provider_error")) => Some("provider_error"),
+                            _ => None,
+                        };
+                    }
                     return Err(format!(
-                        "ACP JSON-RPC error code {code}; agent details withheld"
+                        "ACP {method} JSON-RPC error code {code}; agent details withheld"
                     ));
                 }
                 _ => return Err("ACP response must contain exactly one of result or error".into()),
@@ -746,6 +762,41 @@ mod tests {
                 }
                 Ok(self.answer.clone())
             })
+        }
+    }
+
+    #[tokio::test]
+    async fn provider_failures_use_only_validated_prompt_error_metadata() {
+        for (method, code, reason, expected) in [
+            (
+                "session/prompt",
+                -32603,
+                Some("provider_error"),
+                Some("provider_error"),
+            ),
+            ("session/prompt", -32000, None, Some("authentication")),
+            (
+                "session/prompt",
+                -32603,
+                Some("credits_exhausted"),
+                Some("credits_exhausted"),
+            ),
+            ("session/prompt", -32603, None, None),
+            ("session/load", -32603, Some("provider_error"), None),
+        ] {
+            let frame = json!({"jsonrpc":"2.0","id":1,"error":{
+                "code":code,"message":"provider_error raw-provider-detail",
+                "data":{"reason":reason},
+            }});
+            let mut connection =
+                peer(&format!("IFS= read -r request\nprintf '%s\\n' '{frame}'\n",)).await;
+            let error = connection
+                .request(method, json!({}), &cancellation(), deadline())
+                .await
+                .unwrap_err();
+            assert_eq!(connection.provider_failure(), expected);
+            assert!(!error.contains("raw-provider-detail"), "{error}");
+            connection.close().await.unwrap();
         }
     }
 

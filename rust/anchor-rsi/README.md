@@ -61,7 +61,8 @@ All model-facing evidence is untrusted task data, not an instruction source.
 Build with `cargo build -p anchor-rsi --locked` from `rust/`. The same binary
 provides the read-only evidence MCP service and deterministic business commands:
 `collect`, `research`, `rsi-review`, `rsi-gate`, `rsi-publish`, `native-gate`,
-`native-publish`, `weekly-collect`, `weekly-gate` and `weekly-publish`.
+`native-publish`, `weekly-discover`, `weekly-collect`, `weekly-gate` and
+`weekly-publish`.
 Use `anchor-rsi --help` for arguments. Gates call the existing Host
 `anchor-route`; publishing rechecks review, commit and evidence bindings.
 
@@ -72,6 +73,17 @@ Graph APIs, following [RSI setup](../../docs/rsi.md) or
 business Runner. For routine execution regression, use the
 [native deterministic Goose fixtures](../anchor-devtools/README.md).
 Real model/business acceptance and report quality remain separate.
+
+`weekly-discover` runs outside the sandbox as the local operator. It locates
+configured Codex, Claude Code and DeepSeek Harness history directories on disk
+and emits a discovery report plus proposed node-scoped `local_inputs` grants.
+It does not read credentials, install grants or scan other users' homes. Review
+the proposed paths before using the existing Host authorization mechanism.
+`weekly-collect` reads only the mounted history directories; unavailable sources
+and incomplete evidence remain explicit in its index rather than preventing
+collection from the other tools. The portable weekly Graph publishes local
+artifacts; Docmost publishing is an optional wrapper with operator-supplied
+destinations. See the weekly setup guide for configuration and evidence limits.
 
 The Graph uses five independent audit branches, a Coordinator join, synthesis,
 independent review with a revision edge, then a deterministic publish check.

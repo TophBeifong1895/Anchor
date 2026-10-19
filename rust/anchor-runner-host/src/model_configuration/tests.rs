@@ -178,13 +178,7 @@ fn rejected_edit_keeps_previous_file_and_deployment_fields_are_read_only() {
     assert_eq!(fs::read(&path).unwrap(), before);
     let external = ModelConfiguration::new(
         root.path(),
-        BTreeMap::from([
-            ("ANCHOR_MODEL_NAME".into(), "deployment-model".into()),
-            (
-                "ANCHOR_MODEL_API_KEY".into(),
-                "deployment-private-key".into(),
-            ),
-        ]),
+        BTreeMap::from([("ANCHOR_MODEL_CONTEXT_WINDOW".into(), "64000".into())]),
     )
     .unwrap();
     assert!(
@@ -196,23 +190,7 @@ fn rejected_edit_keeps_previous_file_and_deployment_fields_are_read_only() {
             ))
             .is_err()
     );
-    assert!(
-        external
-            .save(update(
-                "https://provider.example/v1",
-                "deployment-model",
-                json!({"action":"clear"})
-            ))
-            .is_err()
-    );
     assert_eq!(fs::read(&path).unwrap(), before);
-    assert!(
-        !external
-            .status()
-            .unwrap()
-            .to_string()
-            .contains("deployment-private-key")
-    );
 }
 #[tokio::test]
 async fn connection_test_calls_provider_without_saving_and_redacts_error_body() {
@@ -359,4 +337,86 @@ fn managed_model_file_refuses_fifo_and_symlink_without_waiting_for_a_writer() {
     fs::write(&target, b"{}").unwrap();
     std::os::unix::fs::symlink(&target, &path).unwrap();
     assert!(configuration.status().is_err());
+}
+
+#[tokio::test]
+async fn environment_cannot_configure_or_override_model_services_or_credentials() {
+    use std::ffi::OsString;
+    let _guard = crate::PROCESS_ENV_LOCK.lock().await;
+    struct Restore(Vec<(&'static str, Option<OsString>)>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            for (name, value) in &self.0 {
+                unsafe {
+                    match value {
+                        Some(value) => std::env::set_var(name, value),
+                        None => std::env::remove_var(name),
+                    }
+                }
+            }
+        }
+    }
+    let values = [
+        ("ANCHOR_MODEL_URL", "https://ignored-environment.example/v1"),
+        ("ANCHOR_MODEL_NAME", "ignored-environment-model"),
+        ("ANCHOR_MODEL_WIRE_API", "invalid-environment-protocol"),
+        ("ANCHOR_MODEL_ALIASES", "invalid-environment-aliases"),
+        ("ANCHOR_MODEL_API_KEY", "ignored-environment-key"),
+    ];
+    let _restore = Restore(
+        values
+            .iter()
+            .map(|(name, _)| (*name, std::env::var_os(name)))
+            .collect(),
+    );
+    for (name, value) in values {
+        unsafe {
+            std::env::set_var(name, value);
+        }
+    }
+    let root = tempfile::tempdir().unwrap();
+    let configuration = ModelConfiguration::from_env(root.path()).unwrap();
+    let initial = configuration.status().unwrap();
+    assert_eq!(initial["providers"]["default"]["source"], "empty");
+    assert_eq!(initial["execution"]["configured"], false);
+    assert_eq!(initial["execution"]["api_key_present"], false);
+    assert!(!initial.to_string().contains("ignored-environment"));
+    configuration
+        .save(update(
+            "https://saved.example/v1",
+            "saved-model",
+            json!({"action":"set","value":"saved-private-key"}),
+        ))
+        .unwrap();
+    let registry = configuration.execution_snapshot(None, None).unwrap();
+    assert_eq!(registry.resolve(None).unwrap().model, "saved-model");
+    assert_eq!(
+        registry.connection_test_upstream().api_key,
+        "saved-private-key"
+    );
+    let status = configuration.status().unwrap();
+    let id = status["retained_providers"][0]["id"].as_str().unwrap();
+    assert_eq!(status["retained_providers"][0]["deployment"], false);
+    configuration
+        .set_provider_credential(id, "rotated-private-key".into())
+        .unwrap();
+    assert_eq!(
+        configuration
+            .execution_snapshot(None, None)
+            .unwrap()
+            .connection_test_upstream()
+            .api_key,
+        "rotated-private-key"
+    );
+    configuration.clear_provider_credential(id).unwrap();
+    assert!(configuration.execution_snapshot(None, None).is_err());
+    assert_eq!(
+        configuration.status().unwrap()["execution"]["api_key_present"],
+        false
+    );
+    assert!(
+        !String::from_utf8(fs::read(root.path().join("managed/model-config.json")).unwrap())
+            .unwrap()
+            .contains("ignored-environment")
+    );
 }

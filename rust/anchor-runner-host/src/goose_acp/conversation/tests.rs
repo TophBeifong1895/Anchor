@@ -169,6 +169,22 @@ fn reviewed_provider_patches_load_old_history_only_for_a_new_invocation() {
         ),
         (revision::WITH_REASONING_FIX, revision::WITH_COMPLETION_FIX),
         (revision::WITH_MULTICALL_FIX, revision::WITH_COMPLETION_FIX),
+        (
+            revision::BEFORE_REASONING_FIX,
+            revision::WITH_PROVIDER_ERROR_FIX,
+        ),
+        (
+            revision::WITH_REASONING_FIX,
+            revision::WITH_PROVIDER_ERROR_FIX,
+        ),
+        (
+            revision::WITH_MULTICALL_FIX,
+            revision::WITH_PROVIDER_ERROR_FIX,
+        ),
+        (
+            revision::WITH_COMPLETION_FIX,
+            revision::WITH_PROVIDER_ERROR_FIX,
+        ),
     ] {
         let fixture = Fixture::new();
         let mut first = fact("first");

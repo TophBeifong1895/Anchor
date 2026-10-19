@@ -24,4 +24,8 @@
 .plugin-management-review code { overflow-wrap: anywhere; }
 .plugin-management-review pre { max-height: 220px; max-width: 100%; margin: 0; overflow: auto; font-size: 11px; }
 .plugin-management-note { margin: 0; color: var(--plugin-muted, var(--muted)); font-size: 13px; line-height: 1.65; }
+.plugin-connection-results { display: grid; gap: 10px; }
+.plugin-connection-result { display: grid; gap: 6px; padding: 12px; border: 1px solid var(--plugin-line, var(--line)); border-radius: var(--radius); font-size: 12px; }
+.plugin-connection-result p { margin: 0; line-height: 1.65; }
+.plugin-connection-result.is-error { color: var(--danger, var(--red)); }
 @media (max-width: 700px) { .plugin-management { padding: 16px; } .plugin-credential-form input { font-size: 16px; } }

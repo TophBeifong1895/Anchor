@@ -32,7 +32,7 @@ mod effects;
 mod responses;
 
 pub const MODEL: &str = "fixture-goose";
-pub const GOOSE_SHA256: &str = "dc2a4352279c16f3c665b280e4fc8fedbec3a67cce596bf460aa9fd416c27a15";
+pub const GOOSE_SHA256: &str = "17e065a79cb0508413af714724aed51d6b76972dda9feebdda701330134fb640";
 pub const SUMMARY_REQUEST: &str =
     "Please summarize the conversation history provided in the system prompt.";
 
@@ -45,6 +45,7 @@ pub enum Reply {
     Text(&'static str),
     Summary(String),
     ContextLengthExceeded,
+    HttpError(u16, &'static str),
     Gated(Arc<Gate>, Box<Reply>),
     Reasoning(Value, Box<Reply>),
 }
@@ -131,6 +132,17 @@ impl Step {
             preface: None,
             receipt_back: 0,
         }
+    }
+
+    pub fn http_error(status: u16, message: &'static str) -> Self {
+        let mut step = Self::text("");
+        step.reply = Reply::HttpError(status, message);
+        step
+    }
+
+    pub fn during_summary(mut self) -> Self {
+        self.summary = true;
+        self
     }
 
     pub fn with_usage(mut self, input: u32, output: u32) -> Self {
@@ -532,6 +544,17 @@ async fn completion(
         gate.release.acquire().await.unwrap().forget();
         reply = *next;
     }
+    if let Reply::HttpError(status, message) = reply {
+        let response = json!({"error": {
+            "message": message, "type": "invalid_request_error", "code": "fixture_error"
+        }});
+        let mut state = shared.lock().unwrap();
+        state.exchanges.push(json!({
+            "sequence": sequence, "response_status": status, "response": response
+        }));
+        state.save();
+        return (StatusCode::from_u16(status).unwrap(), Json(response)).into_response();
+    }
     if matches!(reply, Reply::ContextLengthExceeded) {
         let response = json!({"error":{
             "message":"maximum context length exceeded",
@@ -644,7 +667,7 @@ async fn completion(
             chunks.push(chunk(json!({"content":text}), Value::Null));
             "stop"
         }
-        Reply::ContextLengthExceeded => unreachable!(),
+        Reply::ContextLengthExceeded | Reply::HttpError(_, _) => unreachable!(),
         Reply::Gated(_, _) => unreachable!(),
         Reply::Reasoning(_, _) => {
             return shared
@@ -927,6 +950,21 @@ impl Host {
     }
 
     fn process(&self, provider: &Provider) -> Command {
+        // Native execution reads the same private model store as WebUI. Seed
+        // only a fresh fixture; restarts must observe settings saved by tests.
+        let path = self.base.state_root().join("managed/model-config.json");
+        if self.native && !path.exists() {
+            use std::os::unix::fs::PermissionsExt;
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            let endpoint = format!("{}/v1", provider.url);
+            let id = format!("{:x}", Sha256::digest(format!("chat\n{endpoint}")));
+            let managed = json!({"format":3,
+                "current":{"endpoint":endpoint,"wire_api":"chat","model":provider.model,
+                    "aliases":{"models.worker":provider.model}},
+                "credentials":{id:"fixture-only-not-a-secret"}});
+            fs::write(&path, managed.to_string()).unwrap();
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+        }
         let root = self.base.root.path();
         let mut process = Command::new(&self.binary);
         process
@@ -970,15 +1008,7 @@ impl Host {
             .env("ANCHOR_GOOSE_BINARY_SHA256", digest(&self.goose))
             .env("ANCHOR_GOOSE_OPENAI_HOST", &provider.url)
             .env("ANCHOR_GOOSE_MODEL", &provider.model)
-            .env("ANCHOR_MODEL_API_KEY", "fixture-only-not-a-secret")
-            .env("ANCHOR_MODEL_URL", format!("{}/v1", provider.url))
             .envs(self.extra_environment.iter().cloned())
-            .env("ANCHOR_MODEL_WIRE_API", "chat")
-            .env("ANCHOR_MODEL_NAME", &provider.model)
-            .env(
-                "ANCHOR_MODEL_ALIASES",
-                json!({"models.worker":provider.model}).to_string(),
-            )
             .current_dir(root);
         if self.runtime_default {
             process.env_remove("ANCHOR_RUNNER_AGENT_RUNTIME");
@@ -1387,12 +1417,35 @@ impl HttpHost {
             let (status, saved) = self.request("GET", &format!("/runs/{run}"), None);
             assert_eq!(status, 200, "{saved}");
             detail = saved;
+            let projection = &detail["projection"];
             assert!(
-                detail["state"]["status"] != "budget_stopped"
-                    && (expected == "failed" || detail["state"]["status"] != "failed"),
+                projection["reason"] != "budget"
+                    && (expected == "failed" || projection["outcome"] != "failed"),
                 "unexpected Run failure: {detail}"
             );
-            detail["state"]["status"] == expected && detail["active"] == false
+            // Scenario labels remain stable; assert the public phase, waiter
+            // and outcome instead of reading the removed state.status field.
+            let reached = match expected {
+                "completed" => projection["phase"] == "settled" && projection["outcome"] == "done",
+                "failed" => projection["phase"] == "settled" && projection["outcome"] == "failed",
+                "ready" => projection["phase"] == "executing",
+                "waiting_call" => {
+                    projection["phase"] == "waiting" && projection["waiting_for"] == "child"
+                }
+                "paused" => {
+                    projection["phase"] == "waiting"
+                        && projection["waiting_for"] == "human"
+                        && projection["reason"] == "paused"
+                }
+                "stopped" => {
+                    projection["phase"] == "waiting"
+                        && projection["waiting_for"] == "human"
+                        && projection["reason"] != "paused"
+                        && projection["reason"] != "budget"
+                }
+                other => panic!("unknown Run scenario: {other}"),
+            };
+            reached && detail["active"] == false
         });
         detail
     }

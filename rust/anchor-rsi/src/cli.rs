@@ -24,7 +24,8 @@ anchor-rsi rsi-gate [--inputs /in] [--output /workspace]\n\
 anchor-rsi rsi-publish [--inputs /in] [--output /workspace]\n\
 anchor-rsi native-gate --evidence DIR [--inputs /in] [--output /workspace]\n\
 anchor-rsi native-publish --evidence DIR [--inputs /in] [--output /workspace]\n\
-anchor-rsi weekly-collect [--codex DIR] [--deepseek DIR] [--end RFC3339] [--output DIR]\n\
+anchor-rsi weekly-discover\n\
+anchor-rsi weekly-collect [--codex DIR] [--claude DIR] [--deepseek DIR] [--end RFC3339] [--output DIR]\n\
 anchor-rsi weekly-gate [--inputs /in] [--output /workspace]\n\
 anchor-rsi weekly-publish [--inputs /in] [--output /workspace]\n\
 Gate commands write feedback and call the existing anchor-route helper.\n\
@@ -46,6 +47,16 @@ fn flags(arguments: &[String], allowed: &[&str]) -> Result<BTreeMap<String, Stri
 }
 
 fn path(flags: &BTreeMap<String, String>, name: &str, default: &str) -> Result<PathBuf, String> {
+    let path = absolute_path(flags, name, default)?;
+    safe_path(&path)?;
+    Ok(path)
+}
+
+fn absolute_path(
+    flags: &BTreeMap<String, String>,
+    name: &str,
+    default: &str,
+) -> Result<PathBuf, String> {
     let path = PathBuf::from(flags.get(name).map(String::as_str).unwrap_or(default));
     let path = if path.is_absolute() {
         path
@@ -54,7 +65,6 @@ fn path(flags: &BTreeMap<String, String>, name: &str, default: &str) -> Result<P
             .map_err(|error| error.to_string())?
             .join(path)
     };
-    safe_path(&path)?;
     Ok(path)
 }
 
@@ -209,10 +219,14 @@ pub async fn run(arguments: &[String]) -> Result<(), String> {
             )
             .await?;
         }
+        "weekly-discover" => {
+            flags(&arguments[1..], &[])?;
+            println!("{}", crate::history_discovery::discover()?);
+        }
         "weekly-collect" => {
             let flags = flags(
                 &arguments[1..],
-                &["--codex", "--deepseek", "--output", "--end"],
+                &["--codex", "--claude", "--deepseek", "--output", "--end"],
             )?;
             let input: Value = serde_json::from_str(
                 &std::env::var("ANCHOR_INPUT").unwrap_or_else(|_| "{}".into()),
@@ -226,11 +240,15 @@ pub async fn run(arguments: &[String]) -> Result<(), String> {
                 &[
                     (
                         "codex".into(),
-                        path(&flags, "--codex", "/local-inputs/codex")?,
+                        absolute_path(&flags, "--codex", "/local-inputs/codex")?,
+                    ),
+                    (
+                        "claude".into(),
+                        absolute_path(&flags, "--claude", "/local-inputs/claude")?,
                     ),
                     (
                         "deepseek".into(),
-                        path(&flags, "--deepseek", "/local-inputs/deepseek")?,
+                        absolute_path(&flags, "--deepseek", "/local-inputs/deepseek")?,
                     ),
                 ],
                 &path(&flags, "--output", "evidence")?,
@@ -238,7 +256,7 @@ pub async fn run(arguments: &[String]) -> Result<(), String> {
             )?;
             println!(
                 "{}",
-                json!({"start":value["start"],"end_exclusive":value["end_exclusive"],"sources":value["sources"]})
+                json!({"status":value["status"],"start":value["start"],"end_exclusive":value["end_exclusive"],"sources":value["sources"],"warnings":value["warnings"]})
             );
         }
         "weekly-gate" | "weekly-publish" | "rsi-review" | "rsi-gate" | "rsi-publish"

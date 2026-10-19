@@ -15,7 +15,7 @@ pub(crate) const PROCESSING_TEXT: &str = "正在处理";
 pub(crate) const FAILURE_TEXT: &str =
     "本次处理未能完成，请稍后补充一条消息继续；已执行的操作不会自动撤销。";
 pub(crate) const ASSISTANT_STOPPED_TEXT: &str =
-    "助手已停止。请打开 Anchor 的渠道页面，恢复该助手后再发消息。";
+    "助手已停止。请在 Anchor 运行看板的「消息会话」中恢复该助手后再发消息。";
 pub(crate) const SUPERSEDED_TEXT: &str = "已被你的新消息接续处理。";
 pub(crate) const GROUP_SUPERSEDED_TEXT: &str = "已由群内的新消息接续处理。";
 /// Progress lines update one bubble in place: at most this many per turn and at

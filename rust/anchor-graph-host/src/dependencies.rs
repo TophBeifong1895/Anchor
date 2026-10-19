@@ -50,6 +50,7 @@ const MANIFEST_FIELDS: &[&str] = &[
     "interface",
     "skills",
     "mcpServers",
+    "configuration",
     "dependencies",
     "network",
     "mutable",

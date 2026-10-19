@@ -39,7 +39,7 @@ Runtime IR 保存稳定展开节点、路由/反馈/并行、输入与权限、�
 
 Agent 的 `model` 可填写 `models.default.flash`、`models.default.pro`、`models.backup.flash` 或 `models.backup.pro`，分别读取设置页中的服务和模型。省略 `model` 或使用 `models.default` 时选择 default Flash。每个新节点 invocation 读取当时保存的配置，同一 Run 的后续节点与常驻助手下一轮也适用；进行中的 invocation 和同 invocation 恢复保留其模型/服务绑定。backup 仅在明确选择时使用，不自动降级。
 
-default 尚未保存时兼容旧默认配置；已保存但缺少所选模型或密钥时执行失败，不回退旧配置。上述四个设置引用以外，原 `ANCHOR_MODEL_ALIASES` 中的显式别名继续使用旧部署映射。旧 invocation 即使用过与新设置引用同名的别名，恢复时仍核对原绑定，不自动改写用户 Graph。模型请求和历史仍由 Goose 原生 Provider/Session 承担。
+default 尚未保存时兼容旧托管默认配置；已保存但缺少所选模型或密钥时执行失败，不回退旧配置。上述四个设置引用以外，仅已有托管配置中的显式别名保留旧映射；不读取 `ANCHOR_MODEL_ALIASES` 或其他环境模型服务字段。新 Graph 使用上述设置引用，仓库示例已按此选择模型。旧 invocation 即使用过与新设置引用同名的别名，恢复时仍核对原绑定，不自动改写用户 Graph。模型请求和历史仍由 Goose 原生 Provider/Session 承担。
 
 ## Host Op 与常驻助手
 

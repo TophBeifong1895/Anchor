@@ -16,8 +16,24 @@ impl HostIoResolver {
         &self,
         bindings: &[PluginBinding],
     ) -> Result<(), String> {
-        self.catalog_config(bindings)?
-            .validate_bindings(bindings, true)
+        // Admission checks declarations, not a user's private values. Those
+        // are resolved once the invocation's durable owner is known.
+        self.tools
+            .for_bindings(bindings)
+            .map_err(|error| error.to_string())?;
+        for binding in bindings.iter().filter(|binding| !is_fake_fixture(binding)) {
+            let definition = anchor_graph_host::FilePluginCatalog::new(self.plugin_library_root()?)
+                .definition(&binding.id)
+                .map_err(|error| error.to_string())?;
+            let current = definition.binding();
+            if !binding.same_authorization(&current) {
+                return Err(format!(
+                    "Plugin `{}` authorization changed before admission",
+                    binding.id
+                ));
+            }
+        }
+        Ok(())
     }
 }
 
@@ -44,6 +60,8 @@ impl HostIoResolver {
                     conversation,
                 } = self.prepare_tool_launch(request, &environment, prepared.mounts)?;
                 let mut mcp = prepared.mcp;
+                self.retain_plugin_configuration(&request.key, mcp.configuration_bindings.clone())
+                    .await?;
                 mcp.environment = environment.clone();
                 mcp.startup_cancellation = Some(request.cancellation.clone());
                 mcp.authorize_oauth(
@@ -69,6 +87,7 @@ impl HostIoResolver {
                         .map(|binding| (binding.id.clone(), binding.digest.clone()))
                         .collect(),
                     &mounted,
+                    &mcp.configuration_revisions,
                 );
                 let plugins = self
                     .tools
@@ -238,8 +257,11 @@ impl HostIoResolver {
             self.library_root.clone(),
             self.tools.as_ref().clone(),
             request.cancellation.clone(),
-            self.oauth_owner_for_run(&request.key.run_id)?
-                .map(|owner| (self.local_inputs.state_root().to_path_buf(), owner)),
+            Some((
+                self.local_inputs.state_root().to_path_buf(),
+                self.oauth_owner_for_run(&request.key.run_id)?
+                    .unwrap_or_else(|| "local".into()),
+            )),
         )
         .await
         .map_err(|error| ResolutionError::Graph(error.into_graph_error()))?;

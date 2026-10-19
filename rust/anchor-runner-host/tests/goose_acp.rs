@@ -42,7 +42,7 @@ fn native_goose_direct_model_transport_requires_observed_tool_receipt() {
     let server = host.serve(&provider);
     let run = server.trigger();
     let response = server.wait_status(&run, "completed");
-    assert_eq!(response["state"]["status"], "completed", "{response}");
+    assert_eq!(response["projection"]["outcome"], "done", "{response}");
     provider.assert_consumed();
     let saved = host.record(&run);
     assert_artifact(
@@ -149,7 +149,7 @@ fn native_goose_disclosed_tools_round_trip_keeps_the_completion_contract() {
     let server = host.serve(&provider);
     let run = server.trigger();
     let response = server.wait_status(&run, "completed");
-    assert_eq!(response["state"]["status"], "completed", "{response}");
+    assert_eq!(response["projection"]["outcome"], "done", "{response}");
     provider.assert_consumed();
     let requests = provider.requests();
     let names = requests
@@ -230,7 +230,7 @@ fn native_goose_turn_context_carries_the_host_boundary() {
     let server = host.serve(&provider);
     let run = server.trigger();
     let response = server.wait_status(&run, "completed");
-    assert_eq!(response["state"]["status"], "completed", "{response}");
+    assert_eq!(response["projection"]["outcome"], "done", "{response}");
     provider.assert_consumed();
     let boundary = provider
         .requests()
@@ -294,7 +294,7 @@ fn native_goose_file_tools_read_and_edit_through_the_bridge() {
     let server = host.serve(&provider);
     let run = server.trigger();
     let response = server.wait_status(&run, "completed");
-    assert_eq!(response["state"]["status"], "completed", "{response}");
+    assert_eq!(response["projection"]["outcome"], "done", "{response}");
     provider.assert_consumed();
     let saved = host.record(&run);
     // The edit reached the real workspace: the verify node copies the edited file.
@@ -1034,7 +1034,7 @@ fn real_goose_external_effect_then_host_kill_is_spike_failclosed_not_native_safe
     let (status, detail) = restarted.request("GET", &format!("/runs/{run}"), None);
     assert_eq!(status, 200, "{detail}");
     assert_eq!(detail["active"], false);
-    assert_ne!(detail["state"]["status"], "completed");
+    assert_ne!(detail["projection"]["outcome"], "done");
     let (status, accepted) = restarted.request("POST", &format!("/runs/{run}/resume"), None);
     assert_eq!(status, 202, "{accepted}");
     let failed = restarted.wait_status(&run, "failed");

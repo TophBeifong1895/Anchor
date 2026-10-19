@@ -31,7 +31,7 @@ fn check_secret(
 
 /// Only a new successful set/rotation acknowledges an existing request. Merely
 /// finding a saved value must never satisfy a request to replace that value.
-fn resolve_pending_locked(
+pub(crate) fn resolve_pending_locked(
     data: &Path,
     sessions: &SessionStore,
     owner: &str,
@@ -40,6 +40,15 @@ fn resolve_pending_locked(
     field: &str,
     digest: &str,
 ) -> Result<(), String> {
+    let configuration_version = if target.starts_with("channel_") {
+        None
+    } else {
+        Some(crate::plugin_configuration::request_version_locked(
+            data,
+            &binding_owner(owner),
+            definition,
+        )?)
+    };
     for session in sessions
         .list(owner)
         .map_err(|_| "credential request sessions unavailable")?
@@ -62,6 +71,14 @@ fn resolve_pending_locked(
                 || fact.authorization_digest != digest
                 || fact.request.expires_at < chrono::Utc::now().timestamp()
                 || path != request_path(data, owner, &session, &fact.request.id)?
+            {
+                continue;
+            }
+            if let Some(current) = &configuration_version
+                && fact.configuration_version.as_ref().is_none_or(|previous| {
+                    previous.revision.checked_add(1) != Some(current.revision)
+                        || previous.binding_digest != current.binding_digest
+                })
             {
                 continue;
             }
@@ -112,7 +129,10 @@ fn project(data: &Path, owner: &str, definition: &PluginDefinition) -> Result<Va
         }
         let mut records_fields = Vec::new();
         for field in fields {
-            let external = std::env::var_os(&field).is_some();
+            if crate::plugin_configuration::logical_field(definition, &target, &field).is_some() {
+                continue;
+            }
+            let external = crate::plugin_configuration::is_external(definition, &target, &field)?;
             let state = if external {
                 "deployment"
             } else {
@@ -129,6 +149,9 @@ fn project(data: &Path, owner: &str, definition: &PluginDefinition) -> Result<Va
                 }
             };
             records_fields.push(json!({"field":field,"state":state,"editable":!external}));
+        }
+        if records_fields.is_empty() {
+            continue;
         }
         records.push(json!({"target":target,"kind":if target.starts_with("channel_") {"channel"} else {"mcp"},
             "authorization_digest":digest,"fields":records_fields}));
@@ -208,8 +231,38 @@ pub(super) fn mutate_locked(
     if digest != expected_authorization {
         return Err("Plugin authorization changed; reload credentials before saving".into());
     }
-    if std::env::var_os(field).is_some() {
+    if crate::plugin_configuration::is_external(definition, target, field)? {
         return Err("this credential field is managed externally by the deployment".into());
+    }
+    if let Some(logical) = crate::plugin_configuration::logical_field(definition, target, field) {
+        crate::plugin_configuration::set_legacy_locked(
+            data,
+            &binding_owner(owner),
+            definition,
+            logical,
+            value,
+        )?;
+        let mut warning = false;
+        if value.is_some() {
+            for (mapped_target, mappings) in &definition.configuration.environment {
+                for (environment, mapped_field) in mappings {
+                    if mapped_field == logical {
+                        warning |= resolve_pending_locked(
+                            data,
+                            sessions,
+                            owner,
+                            definition,
+                            mapped_target,
+                            environment,
+                            &digest,
+                        )
+                        .is_err();
+                    }
+                }
+            }
+        }
+        return Ok(warning
+            .then(|| "凭据已保存，但部分会话配置请求未能同步；请重新读取会话状态后核查。".into()));
     }
     let request_owner = owner;
     let owner = binding_owner(owner);
@@ -217,6 +270,9 @@ pub(super) fn mutate_locked(
     if let Some(value) = value {
         if value.is_empty() || value.len() > 65536 || value.contains('\0') {
             return Err("credential value must be nonempty and bounded".into());
+        }
+        if !target.starts_with("channel_") {
+            crate::plugin_configuration::invalidate_legacy_locked(data, &owner, definition)?;
         }
         save(
             &path,
@@ -245,6 +301,9 @@ pub(super) fn mutate_locked(
     } else {
         if let Some(secret) = load::<Secret>(&path)? {
             check_secret(&secret, &owner, &definition.id, target, field)?;
+            if !target.starts_with("channel_") {
+                crate::plugin_configuration::invalidate_legacy_locked(data, &owner, definition)?;
+            }
             fs::remove_file(&path).map_err(|_| "credential clearing failed")?;
             fs::File::open(path.parent().ok_or("credential parent unavailable")?)
                 .and_then(|directory| directory.sync_all())
@@ -523,7 +582,8 @@ mod tests {
     async fn deployment_environment_is_reported_but_cannot_be_overwritten_or_cleared() {
         let _env = crate::PROCESS_ENV_LOCK.lock().await;
         const FIELD: &str = "ANCHOR_TEST_MANAGED_EXTERNALLY_ONLY";
-        struct Restore(Option<std::ffi::OsString>);
+        const EXTERNAL: &str = "ANCHOR_PLUGIN_EXTERNAL_CONFIGURATION";
+        struct Restore(Option<std::ffi::OsString>, Option<std::ffi::OsString>);
         impl Drop for Restore {
             fn drop(&mut self) {
                 unsafe {
@@ -531,17 +591,30 @@ mod tests {
                         Some(value) => std::env::set_var(FIELD, value),
                         None => std::env::remove_var(FIELD),
                     }
+                    match self.1.take() {
+                        Some(value) => std::env::set_var(EXTERNAL, value),
+                        None => std::env::remove_var(EXTERNAL),
+                    }
                 }
             }
         }
-        let _restore = Restore(std::env::var_os(FIELD));
+        let _restore = Restore(std::env::var_os(FIELD), std::env::var_os(EXTERNAL));
         let (root, sessions, _, _) = super::super::tests::fixture();
-        fs::write(root.path().join("plugins/demo/plugin.json"), json!({"name":"Demo","mcpServers":{"api":{"url":"https://example.com/mcp","bearer_token_env_var":FIELD}}}).to_string()).unwrap();
+        fs::rename(
+            root.path().join("plugins/demo"),
+            root.path().join("plugins/deployment-demo"),
+        )
+        .unwrap();
+        fs::write(root.path().join("plugins/deployment-demo/plugin.json"), json!({"name":"Demo","mcpServers":{"api":{"url":"https://example.com/mcp","bearer_token_env_var":FIELD}}}).to_string()).unwrap();
         unsafe {
             std::env::set_var(FIELD, "deployment-secret-never-public");
+            std::env::set_var(
+                EXTERNAL,
+                json!({"deployment-demo": {format!("api.{FIELD}"): FIELD}}).to_string(),
+            );
         }
         let data = root.path().join("state");
-        let projection = credentials(&data, root.path(), "owner-a", "demo").unwrap();
+        let projection = credentials(&data, root.path(), "owner-a", "deployment-demo").unwrap();
         assert_eq!(projection["targets"][0]["fields"][0]["state"], "deployment");
         assert_eq!(projection["targets"][0]["fields"][0]["editable"], false);
         assert!(!projection.to_string().contains("deployment-secret"));
@@ -553,7 +626,7 @@ mod tests {
                 &data,
                 root.path(),
                 "owner-a",
-                "demo",
+                "deployment-demo",
                 "api",
                 FIELD,
                 digest,
@@ -567,7 +640,7 @@ mod tests {
                 &data,
                 root.path(),
                 "owner-a",
-                "demo",
+                "deployment-demo",
                 "api",
                 FIELD,
                 digest,

@@ -136,7 +136,7 @@ fn v1_legacy_preview_imports_only_default_without_modifying_execution() {
 }
 
 #[test]
-fn editable_slots_do_not_take_over_environment_or_share_credentials() {
+fn slots_keep_independent_saved_credentials_and_never_inherit_environment_credentials() {
     let root = tempfile::tempdir().unwrap();
     let endpoint = "https://provider.example/v1";
     let configuration = ModelConfiguration::new(
@@ -201,12 +201,9 @@ fn editable_slots_do_not_take_over_environment_or_share_credentials() {
         slot_key(&configuration, "backup").as_deref(),
         Some("backup-private-key")
     );
-    let registry = configuration.snapshot(None, None).unwrap();
-    assert_eq!(registry.resolve(None).unwrap().model, "deployment-model");
-    assert_eq!(
-        registry.connection_test_upstream().api_key,
-        "deployment-private-key"
-    );
+    assert!(configuration.snapshot(None, None).is_err());
+    assert!(configuration.execution_snapshot(None, None).is_err());
+    assert_eq!(status["api_key_present"], false);
     let serialized = String::from_utf8(saved(&configuration)).unwrap();
     assert!(!serialized.contains("default-private-key"));
     assert_eq!(serialized.matches("backup-private-key").count(), 1);

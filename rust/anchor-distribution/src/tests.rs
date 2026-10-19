@@ -96,6 +96,40 @@ impl Fixture {
         directory
     }
 
+    fn configuration_plugin(&self) -> PathBuf {
+        let directory = self.plugin();
+        fs::write(
+            directory.join("plugin.json"),
+            json!({
+                "name":"Demo",
+                "configuration":{
+                    "fields":{
+                        "base_url":{"type":"url","default":"https://example.com"},
+                        "api_key":{"type":"secret","label":"API Key","required":true}
+                    },
+                    "environment":{
+                        "remote":{"DEMO_BASE_URL":"base_url","DEMO_API_KEY":"api_key"},
+                        "secondary":{"DEMO_API_KEY":"api_key"}
+                    }
+                },
+                "mcpServers":{
+                    "remote":{
+                        "type":"http","url":"${DEMO_BASE_URL}/mcp",
+                        "bearer_token_env_var":"DEMO_API_KEY"
+                    },
+                    "secondary":{
+                        "type":"http","url":"https://example.com/mcp",
+                        "bearer_token_env_var":"DEMO_API_KEY"
+                    }
+                }
+            })
+            .to_string(),
+        )
+        .unwrap();
+        self.write_bundle(&["demo"]);
+        directory
+    }
+
     fn first_party_plugin(&self, id: &str) -> PathBuf {
         let directory = self.request.bundle.join("plugins").join(id);
         fs::create_dir_all(directory.join("skills").join(id)).unwrap();
@@ -748,6 +782,46 @@ fn first_party_binary_inputs_are_required_only_for_referenced_plugins() {
 }
 
 #[test]
+fn first_party_mcp_arguments_must_match_the_declared_native_entrypoints() {
+    for (plugin_id, server_name, arguments) in [
+        ("docmost", "attachments", json!([])),
+        (
+            "docmost",
+            "attachments",
+            json!(["--endpoint", "https://other.example/api/files/upload"]),
+        ),
+        (
+            "docmost",
+            "attachments",
+            json!([
+                "--endpoint",
+                "${DOCMOST_BASE_URL}/api/files/upload",
+                "--extra"
+            ]),
+        ),
+        ("wecom", "wecom", json!(["--extra"])),
+    ] {
+        let mut fixture = Fixture::new();
+        let plugin = fixture.first_party_plugin(plugin_id);
+        let path = plugin.join("plugin.json");
+        let mut manifest: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        manifest["mcpServers"][server_name]["args"] = arguments;
+        fs::write(path, manifest.to_string()).unwrap();
+        if plugin_id == "docmost" {
+            fixture.request.docmost_tools = Some(fixture.request.host.clone());
+        } else {
+            fixture.request.wecom_tools = Some(fixture.request.host.clone());
+        }
+        let error = fixture.prepared().err().unwrap();
+        assert!(
+            matches!(error, PackageError::Invalid(_) | PackageError::Bundle),
+            "{error}"
+        );
+        assert!(!fixture.request.output.exists());
+    }
+}
+
+#[test]
 fn rejects_undeclared_bundle_files_plugin_files_and_empty_directories() {
     // A Plugin's own files are its *code* now (its digest follows them), so what
     // is refused is an undeclared entry in the input, an empty directory that
@@ -994,6 +1068,136 @@ fn compiled_javascript_is_only_allowed_in_explicit_web_assets() {
     fs::write(web.join("app.js.map"), "source map").unwrap();
     fixture.request.output = fixture.root.path().join("with-source-map.tar.gz");
     assert!(fixture.package().is_err());
+}
+
+#[test]
+fn plugin_configuration_declarations_preserve_secret_fields_and_environment_bindings() {
+    let fixture = Fixture::new();
+    let plugin = fixture.configuration_plugin();
+    let report = fixture.package().unwrap();
+    let extracted = tempfile::tempdir().unwrap();
+    tar::Archive::new(GzDecoder::new(File::open(&report.output).unwrap()))
+        .unpack(extracted.path())
+        .unwrap();
+    let shipped = extracted
+        .path()
+        .join("anchor-runtime/plugins/demo/plugin.json");
+    assert_eq!(
+        fs::read(shipped).unwrap(),
+        fs::read(plugin.join("plugin.json")).unwrap()
+    );
+    let definition = FilePluginCatalog::new(extracted.path().join("anchor-runtime"))
+        .definition("demo")
+        .unwrap();
+    assert!(definition.configuration.fields["api_key"].is_secret());
+    for target in ["remote", "secondary"] {
+        assert_eq!(
+            definition.configuration.environment_for(target).unwrap()["DEMO_API_KEY"],
+            "api_key"
+        );
+    }
+}
+
+#[test]
+fn plugin_configuration_rejects_credential_defaults_and_embedded_values_without_disclosing_them() {
+    let marker = "distribution-fixture-secret-not-production";
+    for field_name in ["api_key", "connection"] {
+        for field in [
+            json!({"type":"secret","default":marker}),
+            json!({"type":"secret","default":"${DEMO_API_KEY}"}),
+            json!({"type":"secret","default":""}),
+            json!({"type":"secret","default":null}),
+            json!({"type":"secret","default":{"token":marker}}),
+            json!({"type":"string","default":marker}),
+            json!({"type":"secret","value":marker}),
+            json!({"type":"secret","value":"${DEMO_API_KEY}"}),
+            json!({"type":"secret","credentials":{"token":marker}}),
+            json!({"type":"secret","label":format!("https://user:{marker}@example.com")}),
+        ] {
+            let fixture = Fixture::new();
+            let plugin = fixture.configuration_plugin();
+            let path = plugin.join("plugin.json");
+            let mut manifest: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+            manifest["configuration"]["fields"]
+                .as_object_mut()
+                .unwrap()
+                .remove("api_key");
+            manifest["configuration"]["fields"][field_name] = field.clone();
+            for target in ["remote", "secondary"] {
+                manifest["configuration"]["environment"][target]["DEMO_API_KEY"] =
+                    json!(field_name);
+            }
+            fs::write(path, manifest.to_string()).unwrap();
+            let error = fixture.prepared().err().unwrap().to_string();
+            assert!(error.contains("in plugins/demo/plugin.json"), "{error}");
+            assert!(!error.contains(marker), "{error}");
+            assert!(!fixture.request.output.exists());
+        }
+    }
+}
+
+#[test]
+fn plugin_configuration_does_not_exempt_literal_credentials_or_invalid_bindings() {
+    let marker = "distribution-fixture-secret-not-production";
+    for (pointer, value) in [
+        ("/api_key", json!(marker)),
+        (
+            "/mcpServers/remote/headers",
+            json!({"Authorization":format!("Bearer {marker}")}),
+        ),
+        (
+            "/configuration/fields/api_key",
+            json!({"type":"string","default":marker}),
+        ),
+        ("/configuration/values", json!({"api_key":marker})),
+        (
+            "/configuration/environment/remote/DEMO_API_KEY",
+            json!(marker),
+        ),
+        (
+            "/configuration/environment/remote/DEMO_API_KEY",
+            json!("${DEMO_API_KEY}"),
+        ),
+        (
+            "/configuration/environment/remote/DEMO_API_KEY",
+            json!({"value":marker}),
+        ),
+    ] {
+        let fixture = Fixture::new();
+        let plugin = fixture.configuration_plugin();
+        let path = plugin.join("plugin.json");
+        let mut manifest: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        let (parent, key) = pointer.rsplit_once('/').unwrap();
+        manifest.pointer_mut(parent).unwrap()[key] = value;
+        fs::write(path, manifest.to_string()).unwrap();
+        let error = fixture.prepared().err().unwrap().to_string();
+        assert!(error.contains("in plugins/demo/plugin.json"), "{error}");
+        assert!(!error.contains(marker), "{error}");
+        assert!(!fixture.request.output.exists());
+    }
+}
+
+#[test]
+fn plugin_configuration_exemptions_do_not_apply_to_other_resources_or_nested_objects() {
+    for relative in ["settings.json", "resources/plugin.json", "plugin.JSON"] {
+        let fixture = Fixture::new();
+        let plugin = fixture.configuration_plugin();
+        let path = plugin.join(relative);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::copy(plugin.join("plugin.json"), path).unwrap();
+        let error = fixture.prepared().err().unwrap().to_string();
+        assert!(error.contains("literal credential field"), "{error}");
+        assert!(!fixture.request.output.exists());
+    }
+    let fixture = Fixture::new();
+    let plugin = fixture.configuration_plugin();
+    let path = plugin.join("plugin.json");
+    let mut manifest: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    manifest["metadata"] = json!({"configuration":manifest["configuration"].clone()});
+    fs::write(path, manifest.to_string()).unwrap();
+    let error = fixture.prepared().err().unwrap().to_string();
+    assert!(error.contains("literal credential field"), "{error}");
+    assert!(!fixture.request.output.exists());
 }
 
 #[test]

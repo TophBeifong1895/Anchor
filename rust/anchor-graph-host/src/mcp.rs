@@ -1,6 +1,7 @@
 //! MCP declaration merge, validation and scoped environment expansion.
 
 use crate::dependencies::{PluginDependencies, VIEW_TOKEN};
+use crate::plugin_configuration::{PluginConfiguration, http_url_is_valid};
 use crate::resources::{
     inside_file, is_executable, normalize_inside, read_object, reject_symlink_components,
     valid_reference,
@@ -13,10 +14,20 @@ use std::{collections::BTreeSet, path::Path};
 /// One validated MCP server declaration from `.mcp.json` or `plugin.json`.
 /// The config is kept as JSON because the MCP adapter owns transport-specific
 /// details and credentials; the catalog owns validation and expansion only.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Clone, PartialEq)]
 pub struct McpServerDefinition {
     pub name: String,
     pub config: Value,
+}
+
+impl std::fmt::Debug for McpServerDefinition {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("McpServerDefinition")
+            .field("name", &self.name)
+            .field("config", &"<redacted>")
+            .finish()
+    }
 }
 
 pub(crate) fn servers_from_dir(
@@ -80,7 +91,7 @@ pub(crate) fn servers_from_manifest(
             &name,
             value,
             dir,
-            resolve_env,
+            false,
             root.parent().unwrap_or(root),
             &|key| std::env::var(key).ok(),
         )?
@@ -89,7 +100,33 @@ pub(crate) fn servers_from_manifest(
         };
         result.push(McpServerDefinition { name, config });
     }
-    Ok(result)
+    // Validate mappings against the declarations before template expansion
+    // removes references, on every catalog read path.
+    PluginConfiguration::parse(id, manifest, &result)?;
+    if !resolve_env {
+        return Ok(result);
+    }
+    result
+        .into_iter()
+        .filter_map(|server| {
+            match mcp_server(
+                id,
+                &server.name,
+                server.config,
+                dir,
+                true,
+                root.parent().unwrap_or(root),
+                &|key| std::env::var(key).ok(),
+            ) {
+                Ok(Some(config)) => Some(Ok(McpServerDefinition {
+                    name: server.name,
+                    config,
+                })),
+                Ok(None) => None,
+                Err(error) => Some(Err(error)),
+            }
+        })
+        .collect()
 }
 /// The non-path Host environment keys used by `${NAME}` / `${NAME:-default}`
 /// templates anywhere in a MCP configuration. This is the same projection that
@@ -112,15 +149,7 @@ fn environment_references(value: &Value, references: &mut BTreeSet<String>) {
                 let key = expression
                     .split_once(":-")
                     .map_or(expression, |(key, _)| key);
-                if valid_environment_key(key)
-                    && ![
-                        "PLUGIN_ROOT",
-                        "CODEX_PLUGIN_ROOT",
-                        "CLAUDE_PLUGIN_ROOT",
-                        VIEW_TOKEN,
-                    ]
-                    .contains(&key)
-                {
+                if valid_environment_key(key) && !host_path_environment_key(key) {
                     references.insert(key.to_owned());
                 }
             }
@@ -159,6 +188,19 @@ fn collect_server_values(
     Ok(())
 }
 
+/// These names are path facts supplied by the Host, never user credentials or
+/// configurable environment aliases. Keep reference discovery and configuration
+/// binding validation on the same reserved-name rule.
+pub(crate) fn host_path_environment_key(value: &str) -> bool {
+    [
+        "PLUGIN_ROOT",
+        "CODEX_PLUGIN_ROOT",
+        "CLAUDE_PLUGIN_ROOT",
+        VIEW_TOKEN,
+    ]
+    .contains(&value)
+}
+
 pub(crate) fn valid_environment_key(value: &str) -> bool {
     let mut chars = value.chars();
     let Some(first) = chars.next() else {
@@ -185,26 +227,55 @@ fn scoped_environment(
     })
 }
 
-fn http_url_is_valid(url: &str) -> bool {
-    let Some(rest) = url
-        .strip_prefix("http://")
-        .or_else(|| url.strip_prefix("https://"))
-    else {
-        return false;
-    };
-    if rest.contains('#') || rest.contains('\0') {
-        return false;
+fn http_url_declaration_is_valid(url: &str) -> bool {
+    if !url.contains("${") {
+        return http_url_is_valid(url);
     }
-    let authority = rest.split(['/', '?']).next().unwrap_or_default();
-    if authority.is_empty() || authority.contains('@') {
-        return false;
+    let mut projected = String::new();
+    let mut remaining = url;
+    while let Some((before, rest)) = remaining.split_once("${") {
+        projected.push_str(before);
+        let Some((expression, after)) = rest.split_once('}') else {
+            return false;
+        };
+        let key = expression
+            .split_once(":-")
+            .map_or(expression, |(key, _)| key);
+        if !valid_environment_key(key) {
+            return false;
+        }
+        // Placeholders can denote a full URL, scheme, host or port. Pick
+        // syntactically valid representatives only for declaration validation;
+        // the resolved endpoint is independently validated before transport.
+        let in_authority = projected
+            .split_once("://")
+            .is_some_and(|(_, rest)| !rest.contains(['/', '?', '#']));
+        let placeholder = if projected.is_empty() {
+            if after.starts_with("://") {
+                "https"
+            } else {
+                "https://configuration.invalid"
+            }
+        } else if in_authority && projected.ends_with('[') {
+            "::1"
+        } else if in_authority && projected.ends_with(':') && !projected.ends_with("://") {
+            "443"
+        } else {
+            "configuration.invalid"
+        };
+        projected.push_str(placeholder);
+        remaining = after;
     }
-    if let Some(rest) = authority.strip_prefix('[') {
-        return rest
-            .split_once(']')
-            .is_some_and(|(host, _)| !host.is_empty());
-    }
-    !authority.split(':').next().unwrap_or_default().is_empty()
+    projected.push_str(remaining);
+    http_url_is_valid(&projected)
+}
+
+fn http_headers_are_valid(headers: &serde_json::Map<String, Value>, selectors: bool) -> bool {
+    headers.iter().all(|(name, value)| {
+        http::HeaderName::from_bytes(name.as_bytes()).is_ok()
+            && (selectors
+                || http::HeaderValue::from_str(value.as_str().unwrap_or_default()).is_ok())
+    })
 }
 
 fn validate_mcp(
@@ -340,6 +411,53 @@ fn validate_mcp(
             }
         }
     }
+    for key in ["env_vars", "optional_env_vars"] {
+        if server
+            .get(key)
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .any(|name| !valid_environment_key(name))
+        {
+            return Err(invalid(format!(
+                "Plugin {id}, server {name}: {key} contains an invalid environment variable name"
+            )));
+        }
+    }
+    if server
+        .get("env")
+        .and_then(Value::as_object)
+        .is_some_and(|values| values.keys().any(|key| !valid_environment_key(key)))
+        || server
+            .get("bearer_token_env_var")
+            .and_then(Value::as_str)
+            .is_some_and(|key| !valid_environment_key(key))
+        || server
+            .get("env_http_headers")
+            .and_then(Value::as_object)
+            .is_some_and(|values| {
+                values
+                    .values()
+                    .filter_map(Value::as_str)
+                    .any(|key| !valid_environment_key(key))
+            })
+    {
+        return Err(invalid(format!(
+            "Plugin {id}, server {name}: invalid MCP environment variable name"
+        )));
+    }
+    for key in ["headers", "http_headers", "env_http_headers"] {
+        if server
+            .get(key)
+            .and_then(Value::as_object)
+            .is_some_and(|values| !http_headers_are_valid(values, key == "env_http_headers"))
+        {
+            return Err(invalid(format!(
+                "Plugin {id}, server {name}: invalid MCP HTTP header"
+            )));
+        }
+    }
     for key in ["startup_timeout_sec", "tool_timeout_sec"] {
         if let Some(value) = server.get(key)
             && !value
@@ -356,7 +474,7 @@ fn validate_mcp(
             .get("url")
             .and_then(Value::as_str)
             .unwrap_or_default();
-        if !http_url_is_valid(url) {
+        if !http_url_declaration_is_valid(url) {
             return Err(invalid(format!(
                 "Plugin {id}, server {name}: url must be HTTP(S), without embedded credentials or fragment"
             )));
@@ -515,6 +633,24 @@ pub(crate) fn mcp_server(
             .cloned()
             .ok_or_else(|| invalid("expanded MCP server is not an object".into()))?;
 
+        // Endpoint templates are only declarations until this boundary. Check
+        // the actual destination before handing any credentials to transport.
+        if !server.contains_key("command")
+            && !server
+                .get("url")
+                .and_then(Value::as_str)
+                .is_some_and(http_url_is_valid)
+        {
+            return Err(invalid(format!(
+                "Plugin {id}, server {name}: resolved url must be HTTP(S), without embedded credentials or fragment"
+            )));
+        }
+
+        // Configuration can introduce invalid process arguments or header
+        // values even when the original declaration is valid. Validate again
+        // without including expanded data in any diagnostic.
+        validate_mcp(id, name, &server)?;
+
         if let Some(command) = server.get("command").and_then(Value::as_str) {
             let executable = Path::new(command);
             // External interpreters are deployment resources. Preserve their
@@ -626,6 +762,17 @@ pub(crate) fn mcp_server(
                 );
             }
             server.insert("headers".into(), Value::Object(headers));
+        }
+        // Selectors have now become actual values. Validate those credentials
+        // before passing them to transport; diagnostics never contain values.
+        if server
+            .get("headers")
+            .and_then(Value::as_object)
+            .is_some_and(|headers| !http_headers_are_valid(headers, false))
+        {
+            return Err(invalid(format!(
+                "Plugin {id}, server {name}: invalid MCP HTTP header"
+            )));
         }
         server.insert("_anchor_plugin_id".into(), Value::String(id.into()));
         server.insert(

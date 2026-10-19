@@ -1,20 +1,28 @@
 # 使用指南
 
-当前安装使用 Rust Host、固定 Goose 与编译后的 WebUI。完整生产包与 systemd 操作见 [部署指南](rust-production-deployment.md)；本文介绍仓库开发方式和产品操作。
+当前安装使用 Rust Host、固定 Goose 与编译后的 WebUI。完整平台安装后直接运行 `release/anchor-runtime/bin/anchor-platform start`，自动定位随包资源及 `data/` 下的私有目录，再在 WebUI 配置模型、Plugin 和开发环境，全程不要求 `.env`。完整安装与 systemd 操作见 [部署指南](rust-production-deployment.md)；下文介绍仓库开发方式和产品操作。
 
 ## 安装与本地启动
 
-需要 Linux x86_64、Git、Bubblewrap、Rust stable，以及 Node.js 20.19+ 或 22.12+。沙箱需要可用的 user/mount/network namespace。模型调用和 Plugin 网络权限分别配置。
+需要 Linux x86_64、Git、Bubblewrap、slirp4netns、Rust stable（通过 rustup 安装），以及 Node.js 20.19+ 或 22.12+。构建固定 Goose 还需要 C 编译工具、curl、patch、rsync、binutils、util-linux 和 coreutils。沙箱需要可用的 user/mount/network namespace；脚本会先实际探测，失败时停止并提示，不使用共享宿主网络绕过。模型调用和 Plugin 网络权限分别配置。
+
+Debian/Ubuntu 可先安装系统工具：
 
 ```sh
-npm --prefix apps/web ci
-cp .env.example .env
-# 配置 .env 中固定 Goose 的路径和当前执行模型；下方说明模型设置的边界
-./scripts/dev.sh start
-./scripts/dev.sh status
+sudo apt-get install build-essential curl git bubblewrap slirp4netns patch rsync binutils util-linux
 ```
 
-开发时打开 <http://127.0.0.1:5173>，Vite 将 API 请求转发到 <http://127.0.0.1:8077> 的 Rust Host；Host 也提供已构建的 WebUI。脚本使用 `.local/rust`，分别保存 catalog、state、workspace 和 Library；默认从可编辑的空 catalog 启动，不创建占位 Graph、不调用模型。预构建 Host 和 Web 资产缺失时才构建；修改代码后应主动重建。可覆盖参数见 [脚本](../scripts/dev.sh) 和 [.env.example](../.env.example)。
+Rust/rustup 和符合上述版本的 Node.js/npm 需预先安装。启动脚本不会自动使用 sudo 或修改系统的 namespace 策略。
+
+```sh
+git clone https://github.com/manstein-lzn/Anchor.git
+cd Anchor
+./scripts/dev.sh start
+```
+
+启动后打开 <http://127.0.0.1:5173>，先在「设置 → 模型服务」保存 default Flash，再回到 Pilot 对话。Vite 将 API 请求转发到 <http://127.0.0.1:8077> 的 Rust Host；Host 也提供已构建的 WebUI。脚本使用 `.local/rust`，分别保存 catalog、state、workspace 和 Library；首次向可编辑 catalog 导入 8 张现有示例图，向 Library 安装 5 个官方 Plugin 及本地工具；不自动运行 Graph、调用模型或启用渠道。首次 `start` 自动执行锁定的 `npm ci`、增量构建 debug Host/relay、准备 `.local/bin/goose` 并构建缺少或已更新的 Web 资产。Goose 配方自动安装固定工具链的 musl target 和已校验的交叉编译器；首次需要联网，后续复用产物；Goose 版本、补丁或配方变动时才重新准备。`setup` 准备依赖和插件但不启动服务，示例 Graph 在 Host 启动后导入；`status`/`stop` 不下载或构建。缺少系统工具时提示具体缺项；源码构建成功后使用本机产物，不检查跨机器固定二进制摘要。
+
+默认使用 `rust/target/debug`（或 `CARGO_TARGET_DIR/debug`），不自动选取旧 release 产物；指定自定义 Host/relay 时要求路径已经可执行。拉取更新或修改代码后执行 `./scripts/dev.sh restart`，脚本完成增量构建和必要的 Web 资产更新。开发脚本和 Vite 均不加载 `.env`；旧文件存在也不会执行其中内容。可选的路径、端口等覆盖只取显式进程设置，见 [脚本](../scripts/dev.sh) 和下方部署参数。
 
 ```sh
 ./scripts/dev.sh restart
@@ -23,43 +31,43 @@ cp .env.example .env
 
 只操作脚本持有的 PID；启动前检查端口与当前运行任务。重启会中断活动节点，之后应查看持久记录并继续。现有 `.local/demo`、旧环境和运行历史不会被自动迁移或清理。
 
+## 附带的 Graph 与 Plugin
+
+源码启动后，工作流列表中可直接打开 `call-report`、`call-worker`、`revise-loop`、`parallel-audit`、`plugin-research`、`deep-academic-research`、`wecom-assistant` 和 `wecom-persistent-assistant`。建议先运行 `call-report`，输入 `{"report_code":"DEMO-001"}`；它仅使用 Op 和子工作流，无需模型。保存 default Flash 后可尝试写作或调研图。
+
+插件库已安装联网、学术调研、Docmost、企微和 Anchor 管家。Docmost、企微的服务配置仍在网页按需填写；首次安装不会自动连接账号或启用监听。图与插件的用途、配置条件及其他示例见[上手示例](../examples/README.md)。
+
+导入只在首次执行：同名内容不覆盖，后续源码更新/重启也保留用户修改和删除。显式指定 entry bundle、自定义 Host 或外部服务不自动导入。这是源码启动行为，完整平台发行包仍按自己的清单交付。
+
 ## 模型与 Goose
 
-使用 Goose v1.53.0 上游源码的 lean ACP-only 入口构建的静态 x86_64 musl 二进制（不含完整 CLI、调度器、bundled MCP 与平台扩展），SHA256 固定为：
+源码启动固定 Goose v1.53.0、仓库补丁和上游 Cargo.lock，构建静态 x86_64 musl lean ACP-only 二进制，不含完整 CLI、调度器、bundled MCP 与平台扩展。`scripts/dev.sh start` 调用[构建脚本](../scripts/build-goose-acp.sh)准备本机产物，并自动将实际摘要传给 Host，同时定位 relay 隔离模型控制网络。源码用户无需设置 `ANCHOR_GOOSE_BINARY_SHA256`。
 
-```text
-dc2a4352279c16f3c665b280e4fc8fedbec3a67cce596bf460aa9fd416c27a15
-```
+下载完整平台包时，安装器按该包的发行规则核验二进制，工具已随包提供；当前固定发行产物说明见[发行 builder](../rust/anchor-distribution/README.md)。源码启动不受该成品摘要约束。
 
-用 [构建脚本](../scripts/build-goose-acp.sh) 从固定上游源码构建并审查该二进制，放在稳定路径，并配置 Goose 的部署路径与网络隔离。完整平台发行包已包含这些基础组件。
+Host 可以在没有模型配置时启动。Pilot 发送消息或继续回复遇到服务不可用时，网页读取 Host 的默认模型执行状态；确认配置尚未齐备后，提示先配置默认服务的地址、Flash 模型和 API key，并提供「前往模型设置」按钮。原文字和附件保留，保存设置后返回即可重试；已配置或状态读取失败时保留原错误，不推断是配置缺失。
 
-Host 可以在没有模型配置时启动。WebUI「设置 → 模型服务」固定提供 `default`、`backup` 两组，每组填写服务地址、接口协议、模型服务商提供的 API key，以及 `flash`、`pro` 两个模型名。模型密钥与登录 Anchor 的密钥用途不同。两组独立保存，可只填写一部分；未填全会显示待配置。密钥不回显、不保存在浏览器，即使两组地址相同，也能分别使用和清除不同账户的密钥。连接测试会区分模型服务的认证失败（401）、权限拒绝（403）、接口错误、限流和临时故障，不把 Anchor 管理接口的 400 显示为上游服务状态。
+WebUI「设置 → 模型服务」固定提供 `default`、`backup` 两组，每组填写服务地址、接口协议、模型服务商提供的 API key，以及 `flash`、`pro` 两个模型名。模型密钥与登录 Anchor 的密钥用途不同。两组独立保存，可只填写一部分；未填全会显示待配置。密钥不回显、不保存在浏览器，即使两组地址相同，也能分别使用和清除不同账户的密钥。连接测试会区分模型服务的认证失败（401）、权限拒绝（403）、接口错误、限流和临时故障，不把 Anchor 管理接口的 400 显示为上游服务状态。
 
 点击「测试 Flash」或「测试 Pro」会发送一条小请求，可能产生少量费用；测试不保存草稿，保存也不会自动测试。**保存后，Pilot 下一轮使用 default 的 Flash 模型；当前正在执行的一轮保持原配置，无需重启服务。** 已有对话会保留历史。Graph 未指定模型时也使用 default Flash，可明确选择两组服务的 Flash/Pro；backup 不会自动接管失败任务。旧配置可预填 default 的地址、协议与 Flash，Pro 留空；首次在原地址保存可沿用密钥，随后各自独立。更换地址或协议需重新填密钥。
 
 测试等待上限为 20 秒。显示「已连接，但没有收到完整模型结果」时，说明服务已经响应，本次还没验证到模型输出；不能据此认定密钥错误或网络不通，也不能当作模型已可用。
 
-default 尚未保存时，默认模型兼容旧托管配置或以下部署环境变量；保存之后直接使用网页配置，缺少字段或密钥时不会退回旧服务。显式旧模型别名仍使用原配置。折叠的历史凭据区域用于恢复尚未完成的旧任务；部署提供的旧凭据仍由部署管理：
+模型服务地址、协议、模型名与 API key 只从 Host 私有管理存储读取，环境变量中的 `ANCHOR_MODEL_URL/API_KEY/NAME/WIRE_API/ALIASES` 不再作为配置或回退源。default 尚未保存时，仅兼容已有托管配置；保存之后缺少字段或密钥会明确失败，不退回旧服务。历史服务凭据用于恢复旧任务，可在网页折叠的凭据区域更新或清除。旧 `.env` 和安装中的 `config/model.env` 不会自动导入、覆盖或删除；请在 WebUI 核对并保存当前服务。新安装不接受 `--model-config`。
+
+仅准备源码依赖、不启动服务：
 
 ```sh
-ANCHOR_GOOSE_BINARY=/absolute/path/to/goose
-ANCHOR_GOOSE_BINARY_SHA256=dc2a4352279c16f3c665b280e4fc8fedbec3a67cce596bf460aa9fd416c27a15
-ANCHOR_GOOSE_ALLOW_SHARED_NETWORK=1
-ANCHOR_MODEL_URL=https://provider.example/v1
-ANCHOR_MODEL_API_KEY=REPLACE_WITH_PROVIDER_KEY
-ANCHOR_MODEL_NAME=REPLACE_WITH_MODEL_NAME
-ANCHOR_MODEL_WIRE_API=responses
-ANCHOR_MODEL_ALIASES={}
-ANCHOR_MODEL_CONTEXT_WINDOW=128000
-ANCHOR_MODEL_DIRECT=0
-# Isolation is the default when the relay sits beside the Goose binary; set 0 to share.
-ANCHOR_GOOSE_LOCAL_NETWORK=1
-ANCHOR_GOOSE_RELAY_BINARY=/absolute/path/to/anchor-net-relay
+./scripts/dev.sh setup
 ```
+
+手动重建 Goose 时使用 `scripts/build-goose-acp.sh --output "$PWD/.local/bin/goose"`；日常启动的 `--ensure` 按配方输入标记和本机输出校验和复用缓存，输入更新或文件缺失/损坏则重新构建。`.sha256` 和 `.build-record.json` 是可重建的构建记录，摘要不要求与其他机器相同。源码、交叉编译器的下载仍核验固定摘要，依赖按 `--locked` 编译。
+
+完整平台启动器直接定位随包二进制，不从调用进程继承部署或凭据设置。开发者可显式覆盖 `ANCHOR_GOOSE_BINARY`、`ANCHOR_GOOSE_RELAY_BINARY` 等路径；默认源码启动会在所选 Goose 输出路径准备本机产物并自动传递其摘要。
 
 `ANCHOR_MODEL_CONTEXT_WINDOW`（正整数，可选）会作为 `GOOSE_CONTEXT_LIMIT` 传给 Goose，覆盖它按模型名推断的上下文窗口——本机部署用别名与 OpenAI 兼容端点时该推断不可靠。
 
-`ANCHOR_MODEL_WIRE_API` 为 `chat` 或 `responses`。URL 接受 HTTPS，或仅用于本地测试的 HTTP loopback IP endpoint；拒绝 URL 用户凭据、query 和 fragment。Graph 的四个设置引用与旧别名规则见 [作者契约](rust-graph-authoring-contract.md#模型选择)。每个新 invocation 冻结绑定；恢复同一个未完成 invocation 仍使用原模型与服务。
+网页中的接口协议为 `chat` 或 `responses`。URL 接受 HTTPS，或仅用于本地测试的 HTTP loopback IP endpoint；拒绝 URL 用户凭据、query 和 fragment。Graph 的四个设置引用与旧别名规则见 [作者契约](rust-graph-authoring-contract.md#模型选择)。每个新 invocation 冻结绑定；恢复同一个未完成 invocation 仍使用原模型与服务。
 
 沙箱网络**默认隔离**：只要 `ANCHOR_GOOSE_BINARY` 同目录（或 `ANCHOR_GOOSE_RELAY_BINARY` 指定的绝对路径）存在沙箱中继 `anchor-net-relay`，Goose 就运行在自己的网络命名空间里，只能通过沙箱内中继经 UNIX socket 到达 Host bridge 与模型代理，真实 provider 凭据只留在宿主侧。发行包把中继放在 `bin/anchor-net-relay`（与 Host 同目录），部署时与 Goose 二进制放同一目录即可。设 `ANCHOR_GOOSE_LOCAL_NETWORK=0` 回到共享宿主网络（此时**必须**显式 `ANCHOR_GOOSE_ALLOW_SHARED_NETWORK=1`，该模式不是 loopback-only 隔离）；找不到中继二进制时同样回退到共享模式并需要该开关。`anchor-devtools preflight` 会校验隔离模式下的中继二进制存在。
 
@@ -67,9 +75,17 @@ ANCHOR_GOOSE_RELAY_BINARY=/absolute/path/to/anchor-net-relay
 
 模型调用默认由 Host 代理：Goose 进程只拿到 Host bridge 的 loopback 地址和一次性 token，provider 端点与真实 API key 留在宿主侧，宿主用真实响应流式回传。`ANCHOR_MODEL_DIRECT=1` 是显式回滚开关，会让沙箱像早期版本那样自己持有端点与凭据并直接拨号；仅在代理出问题时临时使用。
 
-`ANCHOR_GOOSE_ALLOW_SHARED_NETWORK=1` 是 Goose 进程的明确网络接入决定；业务工具和节点仍受 Host/Sandbox 授权。配置与凭据留在部署环境或 Host 的私有管理存储，不放进 Graph 包或版本库。
+`ANCHOR_GOOSE_ALLOW_SHARED_NETWORK=1` 是 Goose 进程的明确网络接入决定；业务工具和节点仍受 Host/Sandbox 授权。模型配置与凭据保存在 Host 的私有管理存储，不放进部署环境、Graph 包或版本库。
 
-「设置 → 开发环境」可初始化 Python 和 Rust，显示进度、停止并在失败后重试。完整发行包提供固定的初始化工具；初始化前需要勾选允许联网下载。关闭页面不会取消初始化，重新打开会读取 Host 上的操作状态。Python 当前版本自动检测，点击「刷新状态」会重新读取，不需要联网或初始化。已有解释器不代表依赖准备工具齐备；缺少工具时页面会禁用初始化并说明原因，已有解释器仍可使用。开发部署可按 [.env.example](../.env.example) 显式登记固定 uv、摘要与软件源，检查时复用原解释器；部署管理的版本只读显示，不能在网页修改。
+「设置 → 开发环境」可初始化 Python 和 Rust，显示进度、停止并在失败后重试。完整发行包提供固定的初始化工具；初始化前需要勾选允许联网下载。关闭页面不会取消初始化，重新打开会读取 Host 上的操作状态。Python 当前版本自动检测，点击「刷新状态」会重新读取，不需要联网或初始化。已有解释器不代表依赖准备工具齐备；缺少工具时页面会禁用初始化并说明原因，已有解释器仍可使用。源码开发部署也可通过显式进程设置登记固定 uv、摘要与软件源，检查时复用原解释器，见下方部署参数；部署管理的版本只读显示，不能在网页修改。完整平台安装自动提供这些固定工具。
+
+## 配置插件与 MCP
+
+在插件库打开插件详情，填写服务地址及访问凭据后保存，再点击「测试连接」。Docmost 的网页操作与附件工具共用一份 Key；轮换后下一次调用直接使用新值，无需编辑 `.env` 或重启。更换服务地址时需要重新填写 Key；清除后后续调用会提示缺失，不会使用旧环境值。
+
+「已保存」只表示 Host 保存成功；「初始化与工具发现成功」也不代表页面写入或附件上传已通过。秘密不会回显。默认配置属于当前登录身份，旧共享 local Session 不会自动获得个人凭据。
+
+仅当部署者通过 `ANCHOR_PLUGIN_EXTERNAL_CONFIGURATION` 明确托管字段时，网页显示「由部署管理」。具体声明及恢复边界见 [Plugin 连接配置](plugins.md#连接配置与凭据)。
 
 ## Host 根目录与权限
 
@@ -84,11 +100,13 @@ ANCHOR_GOOSE_RELAY_BINARY=/absolute/path/to/anchor-net-relay
 | `ANCHOR_RUNNER_GRAPH_NAME` | 可选的部署管理入口 Graph 名，与 bundle 使用同一身份及修改保护 |
 | `ANCHOR_RUNNER_LISTEN` | 默认 `127.0.0.1:8077` |
 | `ANCHOR_RUNNER_ALLOWED_COMMANDS` | 显式命令列表，例如 `sh,git` |
-| `ANCHOR_API_KEYS` | 部署 Bearer 白名单；结构见环境模板 |
+| `ANCHOR_API_KEYS` | 可选部署 Bearer 白名单，JSON 字符串数组；非 loopback 必填，每项至少 32 字节且不可重复 |
+| `ANCHOR_DEPENDENCIES_PYTHON`、`ANCHOR_PILOT_PYTHON_ENABLED` | 开发部署已有 Python 路径及可选 Pilot 使用许可；完整平台在网页初始化 |
+| `ANCHOR_DEPENDENCIES_UV`、`ANCHOR_DEPENDENCIES_UV_SHA256`、`ANCHOR_DEPENDENCIES_SOURCES` | 开发部署显式登记固定依赖工具与软件源；三项配套，完整平台由发行 manifest 提供 |
 
 可写根应彼此隔离并在 release 外。Host 在监听前验证 bundle、探测可写根并获取 deployment-writer lease；同一 state root 只允许一个 writer。第三方工具环境与本地输入只按明确注册/授权挂载，不因模型提出路径就允许读取。
 
-正式部署使用 [deploy/systemd/anchor.env.example](../deploy/systemd/anchor.env.example)。非 loopback 监听必须配置有效唯一 Bearer secrets 并有对应网络边界；本地白名单不等于完整多租户模型。
+正式平台部署使用 [systemd 模板](../deploy/systemd/anchor.service)，由安装启动器设置以上路径与控制参数，无需环境文件。非 loopback 监听必须配置有效唯一 Bearer secrets 并有对应网络边界；本地白名单不等于完整多租户模型。
 
 ## Graph 与 WebUI
 
@@ -97,6 +115,8 @@ ANCHOR_GOOSE_RELAY_BINARY=/absolute/path/to/anchor-net-relay
 「插件库」支持从本机目录或 GitHub 目录链接安装插件，预检展示来源、权限和替换影响，确认后执行。安装期间可离开页面或刷新，再从操作列表查看进度；Host 重启后按 Library 实际状态重新检查。插件详情可配置、轮换和清除声明的凭据，也可预检卸载影响后确认卸载。被运行或会话引用的插件按 Host 前置条件处理。
 
 「运行 → 定时计划」可创建、编辑、暂停、启用和删除计划，支持一次性、固定间隔、每天、每周和每月，按服务所在时区执行。重新启用只安排未来时点；暂停或删除计划不会删除既有 Run。
+
+企业微信入口在「图编排 → 消息触发」绑定当前工作流并启停，每个 Host 仍只有一个入口。绑定其他工作流时先保存当前图的绑定，再启用。「运行看板 → 消息会话」查看各对话的实例、打开 Run，以及按 Host 允许的操作停止、恢复、退役或清理。监听图的「查看会话」也打开同一管理界面；具体权限与恢复边界见 [企业微信](wecom-assistant.md)。
 
 ```sh
 curl -X POST http://127.0.0.1:8077/graphs \

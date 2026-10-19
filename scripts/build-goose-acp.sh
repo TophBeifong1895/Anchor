@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build the pinned lean Goose ACP server that Anchor ships as its AgentNode/Pilot runtime.
+# Build the versioned lean Goose ACP server that Anchor ships as its AgentNode/Pilot runtime.
 #
 # Why this exists
 # ---------------
@@ -31,35 +31,36 @@
 #                  Retains Responses reasoning in Goose native history and requests.
 #   patch        : patches/goose-1.53.0-external-completion.patch
 #                  Ends an opted-in host completion after native tool history is saved.
+#   patch        : patches/goose-1.53.0-provider-errors.patch
+#                  Persists structured provider failures and returns ACP prompt errors.
 #
-# Reproducibility
-# ---------------
-# rustc embeds source paths, so the same inputs built from a different directory produce a
-# different digest. Keep ANCHOR_GOOSE_BUILD_ROOT stable and use `--check-reproducible` to
-# prove a clean rebuild at that root yields identical bytes before you pin a digest.
+# Source builds fix the upstream version, reviewed patches and Cargo.lock. Each
+# machine may produce a different binary digest. Record the actual digest for
+# runtime identity and packaging; it is not a cross-machine build prerequisite.
+# `--check-reproducible` is an optional maintainer diagnostic on one build host.
 #
 # The output binary must be a fully static ELF: Anchor's production preflight rejects a
 # `bin/goose` that has a PT_INTERP or DT_NEEDED entry. The script verifies this itself.
 #
 # Usage
 # -----
-#   scripts/build-goose-acp.sh [--check-reproducible] [--output PATH]
+#   scripts/build-goose-acp.sh [--ensure] [--check-reproducible] [--output PATH]
+#   --ensure reuses this recipe's output, or builds it when missing/outdated.
 #
 # Environment:
 #   ANCHOR_GOOSE_BUILD_ROOT   build/cache root (default /var/tmp/anchor-goose-build)
 #   ANCHOR_GOOSE_MUSL_CC      existing x86_64-linux-musl-gcc to use instead of downloading
 #   CARGO_BUILD_JOBS          cargo parallelism (default 12)
 #
-# The resulting `goose-acp` binary and its digest are supplied to
-# `anchor-distribution --goose <path>`; the printed sha256 is the value to pin in
-# anchor-distribution / anchor-devtools / the Goose fixture and in
-# ANCHOR_GOOSE_BINARY_SHA256.
+# Source startup passes the resulting digest to the Host automatically. Release
+# packaging retains its own artifact verification policy.
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REASONING_PATCH="$SCRIPT_DIR/patches/goose-1.53.0-responses-reasoning.patch"
 COMPLETION_PATCH="$SCRIPT_DIR/patches/goose-1.53.0-external-completion.patch"
+PROVIDER_ERRORS_PATCH="$SCRIPT_DIR/patches/goose-1.53.0-provider-errors.patch"
 GOOSE_VERSION="1.53.0"
 SOURCE_URL="https://codeload.github.com/aaif-goose/goose/tar.gz/refs/tags/v${GOOSE_VERSION}"
 SOURCE_SHA256="85cc5e76a12e364032df4bec0ed0738a910c3e12ec12731b4405d1fdb18d96ae"
@@ -67,17 +68,16 @@ MUSL_URL="https://musl.cc/x86_64-linux-musl-cross.tgz"
 MUSL_SHA256="c5d410d9f82a4f24c549fe5d24f988f85b2679b452413a9f7e5f7b956f2fe7ea"
 TARGET="x86_64-unknown-linux-musl"
 FEATURES="rustls-tls,online-model-meta"
-# The digest the rest of the repository pins. It is reproducible only at the default
-# build root, because rustc embeds source paths; see the check before publication.
-PINNED_SHA256="dc2a4352279c16f3c665b280e4fc8fedbec3a67cce596bf460aa9fd416c27a15"
 
 ROOT="${ANCHOR_GOOSE_BUILD_ROOT:-/var/tmp/anchor-goose-build}"
 JOBS="${CARGO_BUILD_JOBS:-12}"
 CHECK_REPRODUCIBLE=0
+ENSURE=0
 OUTPUT=""
 
 while [ $# -gt 0 ]; do
     case "$1" in
+        --ensure) ENSURE=1 ;;
         --check-reproducible) CHECK_REPRODUCIBLE=1 ;;
         --output) OUTPUT="${2:?--output requires a path}"; shift ;;
         -h | --help)
@@ -100,6 +100,10 @@ die() {
 
 sha256_of() { sha256sum "$1" | cut -d' ' -f1; }
 
+if [ -n "$OUTPUT" ]; then
+    OUTPUT="$(realpath -m -- "$OUTPUT")"
+fi
+
 fetch_pinned() {
     local url="$1" path="$2" want="$3"
     if [ -f "$path" ] && [ "$(sha256_of "$path")" = "$want" ]; then
@@ -113,7 +117,40 @@ fetch_pinned() {
     [ "$got" = "$want" ] || die "digest mismatch for $url: got $got want $want"
 }
 
+# The input marker is a rebuildable cache key, not an executable policy.
+# Keep a checksum of the actual output so truncated files are rebuilt as well.
+command -v sha256sum >/dev/null || die "sha256sum is required (install coreutils)"
+INPUT_DIGEST="$({
+    sha256_of "$0"
+    sha256_of "$REASONING_PATCH"
+    sha256_of "$COMPLETION_PATCH"
+    sha256_of "$PROVIDER_ERRORS_PATCH"
+} | sha256sum | cut -d' ' -f1)"
+if [ "$ENSURE" = 1 ]; then
+    [ -n "$OUTPUT" ] || die "--ensure requires --output PATH"
+    [ "$CHECK_REPRODUCIBLE" = 0 ] || die "--ensure cannot be combined with --check-reproducible"
+    if [ -x "$OUTPUT" ] && [ -r "$OUTPUT.sha256" ]; then
+        saved_digest= saved_label= saved_inputs=
+        { read -r saved_digest _ || true; read -r saved_label saved_inputs || true; } < "$OUTPUT.sha256"
+        if [ "$saved_label" = "#source-inputs" ] && [ "$saved_inputs" = "$INPUT_DIGEST" ] &&
+            [ "$saved_digest" = "$(sha256_of "$OUTPUT")" ]; then
+            log "Goose source build ready: $OUTPUT"
+            printf '%s\n' "$saved_digest"
+            exit 0
+        fi
+    fi
+    log "preparing Goose ${GOOSE_VERSION} with repository patches (first build can take several minutes)"
+fi
+
+[ "$(uname -s)" = Linux ] && [ "$(uname -m)" = x86_64 ] || die "this recipe requires Linux x86_64"
+for tool in rustup cargo rustc cc curl tar gzip patch rsync readelf sha256sum install stat cmp flock realpath; do
+    command -v "$tool" >/dev/null || die "missing build prerequisite: $tool (install Rust/rustup, C build tools, curl, patch, rsync, binutils and util-linux)"
+done
+
 mkdir -p "$ROOT/cache" "$ROOT/toolchain" "$ROOT/artifacts" "$ROOT/src"
+# The stable source/cache path is shared by source checkouts. Serialize its mutation.
+exec 8>"$ROOT/build.lock"
+flock 8
 
 # --- pinned source -------------------------------------------------------------------
 SOURCE_ARCHIVE="$ROOT/cache/goose-source-v${GOOSE_VERSION}.tar.gz"
@@ -147,13 +184,22 @@ SRC="$ROOT/src/goose-${GOOSE_VERSION}"
 [ -f "$STAGED_SRC/Cargo.toml" ] || die "unexpected source layout under $STAGED_SRC"
 [ -f "$REASONING_PATCH" ] || die "missing reviewed Responses reasoning patch"
 [ -f "$COMPLETION_PATCH" ] || die "missing reviewed external completion patch"
+[ -f "$PROVIDER_ERRORS_PATCH" ] || die "missing reviewed provider errors patch"
 patch --batch --fuzz=0 -d "$STAGED_SRC" -p1 < "$REASONING_PATCH"
 patch --batch --fuzz=0 -d "$STAGED_SRC" -p1 < "$COMPLETION_PATCH"
+patch --batch --fuzz=0 -d "$STAGED_SRC" -p1 < "$PROVIDER_ERRORS_PATCH"
 mkdir -p "$SRC"
 rsync -rlc --delete --exclude=/target/ "$STAGED_SRC/" "$SRC/"
 PATCH_SHA256="$(sha256_of "$REASONING_PATCH")"
 COMPLETION_PATCH_SHA256="$(sha256_of "$COMPLETION_PATCH")"
+PROVIDER_ERRORS_PATCH_SHA256="$(sha256_of "$PROVIDER_ERRORS_PATCH")"
 cd "$SRC"
+# Keep the recipe output independent of a caller's Host target directory.
+export CARGO_TARGET_DIR="$SRC/target"
+# A caller's toolchain override must not change the reviewed recipe.
+RUSTUP_TOOLCHAIN=$(sed -n 's/^channel = "\([^"]*\)"$/\1/p' rust-toolchain.toml)
+[ -n "$RUSTUP_TOOLCHAIN" ] || die "verified source is missing its Rust toolchain pin"
+export RUSTUP_TOOLCHAIN
 
 command -v rustup >/dev/null || die "rustup is required (the source pins its toolchain)"
 rustup target add "$TARGET" >&2
@@ -179,7 +225,7 @@ if [ "$CHECK_REPRODUCIBLE" = 1 ]; then
     if cmp -s "$ROOT/artifacts/goose-acp.first" "$ARTIFACT"; then
         log "reproducible: identical bytes on rebuild"
     else
-        die "rebuild at $ROOT produced a different binary; the digest cannot be pinned as-is"
+        die "rebuild at $ROOT produced a different binary; inspect this build host's inputs"
     fi
 fi
 
@@ -191,30 +237,26 @@ needed="$(readelf -d "$ARTIFACT" | grep -ci 'needed' || true)"
 
 DIGEST="$(sha256_of "$ARTIFACT")"
 BYTES="$(stat -c%s "$ARTIFACT")"
-if [ "$DIGEST" != "$PINNED_SHA256" ]; then
-    die "built digest $DIGEST does not match the pinned $PINNED_SHA256.
-  Anchor pins this digest in anchor-distribution, anchor-devtools (goose/preflight/candidate),
-  the Goose fixture, the Web e2e fixture, the .env templates and this script, so a different
-  build cannot be shipped. The digest depends on the build root path because rustc embeds
-  source paths: rerun with ANCHOR_GOOSE_BUILD_ROOT=/var/tmp/anchor-goose-build (the default the
-  repository pin was produced with), or update every pin together."
-fi
 DEST="${OUTPUT:-$ROOT/artifacts/goose-acp}"
 if [ "$DEST" != "$ARTIFACT" ]; then
-    install -m 0755 "$ARTIFACT" "$DEST"
+    mkdir -p "$(dirname -- "$DEST")"
+    install -m 0755 "$ARTIFACT" "$DEST.part"
+    mv -f -- "$DEST.part" "$DEST"
 fi
-printf '%s  goose-acp\n' "$DIGEST" >"$DEST.sha256"
+printf '%s  %s\n#source-inputs %s\n' "$DIGEST" "$(basename -- "$DEST")" "$INPUT_DIGEST" >"$DEST.sha256"
 
 cat >"$DEST.build-record.json" <<JSON
 {
   "goose_version": "$GOOSE_VERSION",
   "source_url": "$SOURCE_URL",
   "source_sha256": "$SOURCE_SHA256",
+  "build_inputs_sha256": "$INPUT_DIGEST",
   "patch": "goose-1.53.0-responses-reasoning.patch",
   "patch_sha256": "$PATCH_SHA256",
   "patches": [
     {"path": "goose-1.53.0-responses-reasoning.patch", "sha256": "$PATCH_SHA256"},
-    {"path": "goose-1.53.0-external-completion.patch", "sha256": "$COMPLETION_PATCH_SHA256"}
+    {"path": "goose-1.53.0-external-completion.patch", "sha256": "$COMPLETION_PATCH_SHA256"},
+    {"path": "goose-1.53.0-provider-errors.patch", "sha256": "$PROVIDER_ERRORS_PATCH_SHA256"}
   ],
   "recipe": "cargo build -p goose --bin goose-acp --profile lean --locked --target $TARGET --no-default-features --features $FEATURES",
   "toolchain": "$(rustc -V)",

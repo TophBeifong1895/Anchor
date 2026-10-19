@@ -31,7 +31,7 @@ fn trace(detail: &Value) -> &Vec<Value> {
 fn assert_live(server: &HttpHost, run: &str) -> Value {
     let (status, detail) = server.request("GET", &format!("/runs/{run}"), None);
     assert_eq!(status, 200, "{detail}");
-    assert_eq!(detail["state"]["status"], "running");
+    assert_eq!(detail["projection"]["phase"], "executing");
     assert_eq!(detail["active"], true);
     let messages = trace(&detail);
     assert!(messages.iter().any(|message| message["text"] == DRAFT));

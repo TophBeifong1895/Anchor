@@ -1,0 +1,167 @@
+--- a/crates/goose/src/agents/agent.rs
++++ b/crates/goose/src/agents/agent.rs
+@@ -2454,11 +2454,16 @@
+                         compacted_conversation
+                     }
+                     Err(e) => {
+-                        yield AgentEvent::Message(
+-                            Message::assistant().with_text(
+-                                format!("Ran into this error trying to compact: {e}.\n\nPlease try again or create a new session")
+-                            )
+-                        );
++                        let message = persist_message_with_id(
++                            &session_manager,
++                            &session_config.id,
++                            Message::assistant().with_error(
++                                crate::conversation::message::MessageErrorKind::Other,
++                                format!("Ran into this error trying to compact: {e}.\n\nPlease try again or create a new session"),
++                            ),
++                        )
++                        .await?;
++                        yield AgentEvent::Message(message);
+                         return;
+                     }
+                 }
+@@ -3222,12 +3227,14 @@
+ 
+                             if compaction_attempts >= 2 {
+                                 error!("Context limit exceeded after compaction - prompt too large");
+-                                yield AgentEvent::Message(
+-                                    Message::assistant().with_system_notification(
+-                                        SystemNotificationType::InlineMessage,
+-                                        "Unable to continue: Context limit still exceeded after compaction. Try using a shorter message, a model with a larger context window, or start a new session."
+-                                    )
+-                                );
++                                let message = persist_and_push_message_with_id(
++                                    &session_manager,
++                                    &session_config.id,
++                                    &mut conversation,
++                                    Message::from_provider_error(provider_err),
++                                )
++                                .await?;
++                                yield AgentEvent::Message(message);
+                                 break;
+                             }
+ 
+@@ -3265,11 +3272,17 @@
+                                     #[cfg(feature = "telemetry")]
+                                     crate::posthog::emit_error("compaction_failed", &e.to_string());
+                                     error!("Compaction failed: {}", e);
+-                                    yield AgentEvent::Message(
+-                                        Message::assistant().with_text(
+-                                            format!("Ran into this error trying to compact: {e}.\n\nPlease try again or create a new session")
+-                                        )
+-                                    );
++                                    let message = persist_and_push_message_with_id(
++                                        &session_manager,
++                                        &session_config.id,
++                                        &mut conversation,
++                                        Message::assistant().with_error(
++                                            crate::conversation::message::MessageErrorKind::Other,
++                                            format!("Ran into this error trying to compact: {e}.\n\nPlease try again or create a new session"),
++                                        ),
++                                    )
++                                    .await?;
++                                    yield AgentEvent::Message(message);
+                                     break;
+                                 }
+                             }
+@@ -3306,9 +3319,17 @@
+                             error!("Error: {}", provider_err);
+ 
+                             let category = category.as_deref().map(|c| format!("\n\nCategory: {c}")).unwrap_or_default();
+-                            yield AgentEvent::Message(Message::assistant().with_text(format!(
+-                                "The provider refused this request.\n\n{details}{category}\n\nPlease start a new session to continue — resending this conversation is likely to be refused again."
+-                            )));
++                            let message = persist_and_push_message_with_id(
++                                &session_manager,
++                                &session_config.id,
++                                &mut conversation,
++                                Message::assistant().with_error(
++                                    crate::conversation::message::MessageErrorKind::Other,
++                                    format!("The provider refused this request.\n\n{details}{category}\n\nPlease start a new session to continue — resending this conversation is likely to be refused again."),
++                                ),
++                            )
++                            .await?;
++                            yield AgentEvent::Message(message);
+                             // A refusal is terminal: skip goal/grind nudges and
+                             // recipe retry_config, which would resend the same
+                             // refused conversation.
+@@ -3335,11 +3356,14 @@
+                             #[cfg(feature = "telemetry")]
+                             crate::posthog::emit_error(provider_err.telemetry_type(), &provider_err.to_string());
+                             error!("Error: {}", provider_err);
+-                            yield AgentEvent::Message(
+-                                Message::assistant().with_text(
+-                                    format!("{provider_err}\n\nPlease resend your message to try again.")
+-                                )
+-                            );
++                            let message = persist_and_push_message_with_id(
++                                &session_manager,
++                                &session_config.id,
++                                &mut conversation,
++                                Message::from_provider_error(provider_err),
++                            )
++                            .await?;
++                            yield AgentEvent::Message(message);
+                             break;
+                         }
+                         Err(ref provider_err) => {
+@@ -3347,11 +3371,14 @@
+                             #[cfg(feature = "telemetry")]
+                             crate::posthog::emit_error(provider_err.telemetry_type(), &provider_err.to_string());
+                             error!("Error: {}", provider_err);
+-                            yield AgentEvent::Message(
+-                                Message::assistant().with_text(
+-                                    format!("Ran into this error: {provider_err}.\n\nPlease retry if you think this is a transient or recoverable error.")
+-                                )
+-                            );
++                            let message = persist_and_push_message_with_id(
++                                &session_manager,
++                                &session_config.id,
++                                &mut conversation,
++                                Message::from_provider_error(provider_err),
++                            )
++                            .await?;
++                            yield AgentEvent::Message(message);
+                             break;
+                         }
+                     }
+--- a/crates/goose/src/acp/server.rs
++++ b/crates/goose/src/acp/server.rs
+@@ -1678,6 +1678,10 @@
+                     .data(serde_json::Value::Object(data)),
+             )
+         }
++        MessageContent::Error(error) => Some(
++            agent_client_protocol::Error::new(-32603, error.message.clone())
++                .data(serde_json::json!({"reason": "provider_error"})),
++        ),
+         _ => None,
+     }
+ }
+@@ -3383,6 +3387,24 @@
+     }
+ 
+     #[test]
++    fn test_provider_error_messages_fail_prompt_without_matching_text() {
++        use crate::conversation::message::MessageErrorKind;
++        for kind in [MessageErrorKind::Other, MessageErrorKind::ContextLengthExceeded] {
++            let content = MessageContent::error(kind, "opaque fixture failure");
++            let error = prompt_error_from_message_content(&content).expect("expected prompt error");
++            let value = serde_json::to_value(error).unwrap();
++            assert_eq!(value, serde_json::json!({
++                "code": -32603,
++                "message": "opaque fixture failure",
++                "data": {"reason": "provider_error"},
++            }));
++        }
++        assert!(prompt_error_from_message_content(&MessageContent::text(
++            "Ran into this error: ordinary assistant quotation",
++        )).is_none());
++    }
++
++    #[test]
+     fn test_non_credit_system_notification_does_not_map_to_prompt_error() {
+         let content = MessageContent::SystemNotification(SystemNotificationContent {
+             notification_type: SystemNotificationType::InlineMessage,

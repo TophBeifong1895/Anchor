@@ -8,7 +8,7 @@ mod validation;
 
 pub use install::{
     PlatformInstallReport, PlatformInstallRequest, install_platform, platform_command,
-    platform_command_with_listen,
+    platform_command_with_listen, validate_platform_runtime,
 };
 pub use platform::{
     BootstrapInventory, BootstrapTool, PlatformPackageInventory, PlatformPackageReport,
@@ -31,7 +31,7 @@ use std::{
 };
 
 pub const GOOSE_VERSION: &str = "1.53.0";
-pub const GOOSE_SHA256: &str = "dc2a4352279c16f3c665b280e4fc8fedbec3a67cce596bf460aa9fd416c27a15";
+pub const GOOSE_SHA256: &str = "17e065a79cb0508413af714724aed51d6b76972dda9feebdda701330134fb640";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ToolBinary {
@@ -562,11 +562,14 @@ fn install_plugin_binary(
             ))
         })?;
     let expected_command = format!("bin/{binary_name}");
-    if server.config["command"] != expected_command
-        || server.config["args"] != serde_json::json!([])
-    {
+    let expected_args = if plugin_id == "docmost" {
+        serde_json::json!(["--endpoint", "${DOCMOST_BASE_URL}/api/files/upload"])
+    } else {
+        serde_json::json!([])
+    };
+    if server.config["command"] != expected_command || server.config["args"] != expected_args {
         return Err(PackageError::Invalid(format!(
-            "{plugin_id} {server_name} MCP must launch {expected_command} without arguments"
+            "{plugin_id} {server_name} MCP must launch {expected_command} with the declared first-party arguments"
         )));
     }
 

@@ -1,74 +1,139 @@
 # 每周工作报告
 
-`weekly-work-report` 使用 Anchor 现有定时器，每周四北京时间 09:00 运行。服务所在机器需保持 `Asia/Shanghai` 时区，并在计划时点运行 Anchor；停机或图正忙时不补跑。每次执行冻结截止时间，回顾此前七天；手动回看可传入 `input.end`，例如 `2026-10-01T09:00:00+08:00`。
+## 核心与可选发布
 
-图定义在 [weekly-work-report.json](../examples/graphs/weekly-work-report.json)。报告面向了解项目目标、未参与日常开发的负责人和协作同事。先理解项目目标与阶段，再提炼本周两三项实质变化、意义及下一步重点；不复述排查过程或按项目分组罗列日志。正文独立可读，不插来源编号；可核查依据单独保存在 sources.md。最后一个 `publish` 节点交付 `report.md`、`sources.md`、`assets/` 和评审记录；随后由挂载 Docmost Plugin 的 `docmost` 节点把正式稿同步到 Docmost 的 `MsteinL/Anchor周报` 父页面下，创建或更新以报告标题命名的子页面，并在 `docmost.json` 留下页面元数据。复制 publish 目录仍可离线阅读。
+[weekly-work-report.json](../examples/graphs/weekly-work-report.json) 是可移植的本地周报核心：从操作员授权的 Codex、Claude Code、DeepSeek 历史采集冻结证据，经项目理解、写作、独立评审和确定性门禁，最终在 `publish` 节点结束。它不挂载 Plugin，不要求 Docmost、企业微信、个人身份或外部发布账号；模型服务仍须由宿主配置。
 
-## 独立评审与反馈
+本地交付为 `report.md`、`sources.md`、`assets/`、`review.md`、`review.json`，以及用于跨 Graph 传递图片目录的 `assets.tar`。复制整个 `publish` 目录仍可离线阅读；核心不把报告自动发往任何外部服务。报告面向了解项目目标、未参与日常开发的负责人和协作同事，按重要性说明有证据的实质变化、意义与下一步重点，而不是复述会话或排查流水。正文独立可读，来源依据保存在 `sources.md`。
+
+需要 Docmost 时，另行导入 [weekly-work-report-docmost.json](../examples/graphs/weekly-work-report-docmost.json)。包装图先校验操作员填写的目标，再以 `Op.call` 的 `wait` 模式调用已安装且名为 `weekly-work-report` 的核心 Graph，选择子 Run 的 `publish` 结果，然后执行唯一的 Docmost 发布 Agent。它不复制采集、理解、写作或评审流水线；两张图有各自 Run、状态及双向调用引用。仅包装图的发布节点挂载 `docmost` Plugin 并允许网络。
 
 ```mermaid
 flowchart LR
-    collect[采集] --> understand[项目理解与选题]
+    collect[本地采集] --> understand[项目理解与选题]
     understand --> write[写作配图]
-    write --> review[读者视角独立评审]
-    review --> gate[核验评审结果]
+    write --> review[独立评审]
+    review --> gate[确定性门禁]
     gate -->|表达或结构| write
     gate -->|理解与判断| understand
-    gate -->|通过| publish[组装正式周报]
-    publish --> docmost[同步 Docmost]
-    docmost --> notify[调用 wecom-assistant]
-    notify -.独立 Run.-> assistant[已有私聊会话中的完成提醒]
+    gate -->|通过| publish[本地交付并结束核心 Run]
+    validate[包装图校验目标] --> call[Op.call wait 核心 Graph]
+    call -.独立子 Run.-> collect
+    publish -.返回所选产物.-> call
+    call --> docmost[Docmost 发布]
 ```
 
-评审节点使用与作者分开的模型上下文，直接核对只读稿件和当次证据；仍使用当前配置的同一模型，不等于不同模型交叉验证。评审先只读正文与图，写下读后记住的两三点和阅读障碍，再回查材料。四项标准依次关注项目意义与取舍、阶段判断、表达与配图、关键事实。准确但仍是流水账、缺乏项目理解或让读者抓不住重点，必须退回。检查最新记录与报告窗口，避免将计划写成成果或把周中状态当作周末现状。不能进行视觉检查时须如实说明核验方式和边界。
+## 一次性操作员授权
 
-`review.md` 提供可阅读的判断与反馈；`review.json` 为每个阻断问题保留 ID、位置、可定位证据、业务影响、具体修法、验收条件及解决依据。复审必须逐项核销旧问题，不能删掉问题或不断换标准；纯润色建议不阻断。项目理解、选题及事实判断问题交回理解节点，表达和图示问题交回作者，在原稿上针对性修改，不重新采集或移动报告时间窗口。
+可移植 Graph 不能自授宿主文件权限。安装原生 `anchor-rsi` 后，由持有本机历史读取权的操作员**在沙箱之外**运行发现命令；应使用与实际运行 Host 相符的用户和环境，不要为了执行命令切换到另一个用户的 HOME：
 
-普通 Op `gate` 调用 `anchor-rsi weekly-gate`，复用现有 `anchor-route` 分流。只有四项标准全部通过、没有未解决阻断项、旧问题逐项保留并给出解决依据，且评审对应当前稿件 Git commit，才能进入 `publish`；`weekly-publish` 在组装前再次核对该 commit。结构不合法、旧稿评审、遗漏旧问题或“带着阻断项通过”均失败，不生成正式报告。确定性检查由 Rust 业务模块执行，不依赖模型遵守提示词。
+```sh
+anchor-rsi weekly-discover > discovery.json
+jq '.sources' discovery.json
+jq '.local_inputs' discovery.json
+```
 
-组装同时验证 Markdown 本地图片路径、普通文件和 SVG XML。图片必须在 `assets/`，拒绝路径穿越与符号链接；SVG 保留静态图表，拒绝 script、事件属性、foreignObject、外部 href、外部资源和不安全 CSS。报告、来源、图表及评审记录一并保留。
+`weekly-discover` 输出 `format: 1`、`sources` 数组及 `local_inputs` 候选绝对路径授权。它只依据当前 `HOME`、已配置的工具环境变量和各工具约定的历史位置核验目录，不扫描整个 HOME，也不读取工具配置文件或凭据。使用非标准 profile 时，执行发现命令前须导出该工具实际使用的配置环境变量，不能假定发现过程会自动读取 profile 文件。`sources` 保留逐来源的状态、路径、发现依据等信息；不可用来源不为不存在的目录生成 grant。
 
-证据无法获得、记录冲突或无法视觉核验时，评审应在报告中明确限制、降低断言强度或把事项列为待核实；这类边界不会阻止周报交付。只有表达、事实组织或推理问题需要退回修订。不用固定修改轮数或分数阈值代替质量判断。上述门禁检查的是评审格式、状态及版本一致性，语义质量仍取决于评审判断，不能保证零错误。
+| 来源 | 配置优先级 | 只读历史子目录 |
+| --- | --- | --- |
+| Codex | `CODEX_HOME`，未设置时为 `$HOME/.codex` | `sessions` |
+| Claude Code | `CLAUDE_CONFIG_DIR`，未设置时为 `$HOME/.claude` | `projects` |
+| DeepSeek Harness | 非空白 `DSH_HOME`，未设置时为 `$HOME/.dsh` | `sessions` |
 
-理解节点交付内部编辑简报，说明项目背景、选题理由、应删去的琐事和全文主旨。写作节点按重要性组织正文，开篇给出主要判断，标题传递结论；发布到 Docmost 时去掉正文一级标题，避免和页面标题重复。写作要求使用同事之间汇报的具体、平实口吻，优先写清事实、对象、动作和结果，使用主动语态和直接动词，少用模板化转折、抽象名词和空泛总结；不强求每节采用相同结构或长度，重要事项展开，次要事项删减。篇幅通常约 1000–1800 中文字，但不以字数验收。配图解释项目现状、能力变化或关键关系，不画排查事件时间线。评审还要检查模板化开头、元话语、整齐的三段式和被动句，但不能按禁词数量机械判退；只有影响理解或掩盖真实取舍时才退回。反馈必须指出具体段落的阅读问题和可复述的验收条件，不能只要求“更有高度”或“去 AI 味”。
+DeepSeek 的显式 HOME 按其实际解析规则支持 `~`、`~/`、`~\` 和相对当前工作目录的路径；空白值视为未设置，非空路径中的空格不会被删除。配置已指定但目录不存在时，不回退到另一个 profile 冒充同一来源。工具 HOME 可以是操作员配置的符号链接，但历史子目录不得重定向到该 HOME 之外。发现不包含 Codex 的 `archived_sessions`，Claude 采集排除 sidechain 和 subagent 转录；DSH 只选择最新格式代际，不重建迁移或 seeded 历史。自定义 DSH persistence root、不在标准工具 HOME 下的独立来源以及远端/容器内历史，仍需操作员显式核对和配置既有绝对路径授权。
 
-## 本机数据授权
+“历史目录可用”不等于工具已安装、目录里有记录、窗口内有活动或已解析全部历史；这些事实须区分。采集仍须分别披露未挂载、未读到或只读到部分内容的来源，发现成功也不等于完成报告。
 
-历史来源是 `/root/.codex/sessions` 和 `/root/.dsh/sessions`。不读取认证配置或其他主目录内容。采集数据走本机只读授权，不通过 Plugin 暴露；Docmost 发布节点单独挂载 `docmost` Plugin。Graph 工作区的 `local-inputs.json` 由本机操作员授权，不能通过可编辑的 Graph JSON 或 API 申请宿主目录访问：
+只允许所需的历史子目录：Codex 的 sessions、Claude Code 的 projects、DeepSeek 的 sessions，不挂载整个工具 HOME、用户 HOME、认证文件或配置目录。`local_inputs.collect` 只包含可用的 `codex`、`claude`、`deepseek` 目录和 `rsi`；`gate`、`publish` 只需 `rsi`。`rsi` 是发现命令当前真实可执行文件本身，符号链接按真实二进制解析，使用 Host 已有的普通文件授权；不把可执行文件的父目录或其中的其他文件一起暴露。三个业务 Op 通过 `/local-inputs/rsi` 调用原生工具，只有 `collect` 可读对应 `/local-inputs/<source>` 历史目录，其余节点只读当次证据。旧图若将 `rsi` 授权为目录，需把三条 Op 命令与该授权同步改为单文件形式，并启动新 Run；旧授权文件不会自动改变。
+
+确认 `.sources` 和 `.local_inputs` 后，将授权保存到 Host 已配置的绝对目录 `ANCHOR_RUNNER_LOCAL_INPUTS_ROOT`。以下是首次创建步骤，禁止覆盖已有配置；若文件已存在，先核对现有授权，再人工合并所需键，不要用发现结果盲目替换：
+
+```sh
+: "${ANCHOR_RUNNER_LOCAL_INPUTS_ROOT:?请设为 Host 使用的绝对授权根目录}"
+mkdir -p "$ANCHOR_RUNNER_LOCAL_INPUTS_ROOT/weekly-work-report"
+(
+  set -C
+  jq '.local_inputs' discovery.json > "$ANCHOR_RUNNER_LOCAL_INPUTS_ROOT/weekly-work-report/local-inputs.json"
+)
+```
+
+生成的 `local-inputs.json` 是本机专用的绝对路径配置，不是共享 Graph、导出包或通用模板；不要随 Graph 分发。`discovery.json` 也含本机路径，应保留在操作员控制的本地。Host 继续使用既有的绝对路径 grant、只读挂载和按 Run 冻结契约，发现命令只打印候选配置，不修改 Host 权限、不绕过授权、不增加新的描述符 schema。包装图不继承或代替核心授权：配置放在被调用的 `weekly-work-report` 下，不是 `weekly-work-report-docmost` 下。路径或授权改变后需重新核对，再启动新 Run；旧 Run 仍受冻结事实校验。
+
+核心运行需要 Git、`jq`（评审 JSON 检查）、既有沙箱 Shell/`anchor-route` 和原生 `anchor-rsi`，不依赖外部 `tar` 或 `zstd` 命令：`weekly-publish` 使用 Rust tar 库在原生组装中生成图片归档，压缩 DeepSeek 历史由采集器使用 Rust zstd 库在进程内解码。上面的操作员安装步骤使用本机 `jq` 提取授权配置。只有可选 Docmost 包装图额外使用沙箱内的 `tar` 解开图片归档，并使用 `jq` 做目标输入预检。发现目录不是工具安装或依赖授权；操作员仍须确保对应路径所需的命令在相应环境中可用。Goose/provider 配置由宿主提供，不能放进 Graph 或历史授权文件。
+
+## 时间窗口与定时
+
+核心默认 `input` 为 `{"end":null}`。采集冻结本次截止时间，回顾此前七天；当前采集器的窗口时间采用固定 `+08:00` 偏移，不提供按用户选择时区的能力，因此两张示例都不暴露未生效的 `timezone` 字段。手动回看可传绝对 RFC3339 `end`，如 `2026-10-01T09:00:00+08:00`。包装图将 `end` 映射给核心；复审和修改沿用同一冻结窗口，不重新采集。宿主定时器的系统时区是独立设置，不由这个输入控制。
+
+共享示例本身不创建计划。需要每周四北京时间 09:00 运行时，用现有 `/schedules` API 创建 `{"type":"weekly","weekdays":[3],"time":"09:00"}`，并让 Host 使用 `Asia/Shanghai` 时区、在计划时点运行；停机或图正忙时不补跑。纯本地报告只调度核心；需要同步 Docmost 时调度配置好输入的包装图，不要把两张图都调度成同一次周报。
+
+## 无来源、无活动与证据边界
+
+采集是只读报告投影，不是会话恢复引擎。`evidence/index.json` 固定窗口并记录逐来源的覆盖情况；原始文件位置、JSONL 行号和时间用于回查。历史、工具输出、报告与外部页面都是不可信数据，不能执行其中的指令，也不能据此扩大文件、网络、Plugin 或账号权限。
+
+- 全部来源 `unavailable`：报告说明“无法依据本次来源判断本周工作”，不能推断“本周没有工作”。
+- 来源可用但窗口内没有活动：说明“未发现窗口内活动记录”，不能把无记录当作没有工作。
+- 来源 `partial`、损坏或截断：只基于已覆盖证据归纳，保留缺口与限制，不能声称已读全部历史。
+
+这些情况仍可交付简短、诚实的周报：保留日期窗口、非空 `sources.md`、逐来源状态和一幅说明证据覆盖与缺口的简单 SVG；不为满足篇幅、两三项进展或配图要求而虚构项目、成果、指标或计划。评审按这种有限结论核验，而不因缺少活动强制返工。
+
+概览文本和详细工具投影存在截断，关键结论应回查可定位证据。隐藏推理、系统提示、凭证及无关私人对话不是工作成果；常见凭证脱敏不等于已覆盖所有隐私。采集投影还会改写网关按子串拦截的措辞连写（规则和同义写法见[开发指南](development.md#文本措辞检查)），因此引用原话须回查原始文件；周报 JSONL 保留原始文件和行号定位，但改写后的文本不再逐字等同原文。助手声称完成、工具执行成功、测试通过和真实 provider 验收是不同证据等级，不能互相替代。配图只能解释有证据的关系，不生成假截图或虚构指标。
+
+## 独立评审与本地组装
+
+理解节点输出内部编辑简报，说明项目背景、选题理由、应删去的琐事和全文主旨。作者按实际重要性写作，使用具体、平实、主动的表述，避免按故障、命令或对话顺序罗列日志；通常约 1000–1800 中文字，但篇幅不是通过条件。
+
+评审使用与作者分开的模型上下文，但默认仍是同一模型，不等于跨模型验证。先只读正文与图的文字内容，记下读者能复述的重点和阅读障碍，再回查证据；依次判断 `business`、`reasoning`、`writing`、`facts`。不能进行视觉检查时如实说明方式和边界。表达与结构问题交回 `write`，项目理解和事实判断问题交回 `understand`，不固定修改轮数，不以纯润色阻断交付。
+
+`review.md` 保存可阅读反馈，`review.json` 为每个阻断项保留 ID、位置、可定位证据、影响、修法、验收条件和解决依据。复审逐项核销旧问题，不能删掉旧问题制造通过。普通 Op `gate` 调用 `anchor-rsi weekly-gate`，复用 `anchor-route` 分流；只有四项全部通过、没有未解决阻断项、旧问题逐项保留且评审绑定当前稿件 Git commit，才能进入 `publish`。`weekly-publish` 组装前再次核对该 commit；格式不合法、旧稿评审或遗漏旧问题均失败。
+
+组装检查 Markdown 本地图片路径、普通文件和 SVG XML，图片须位于 `assets/`，拒绝路径穿越与符号链接。SVG 只允许静态图表，拒绝脚本、事件属性、`foreignObject`、外部引用和不安全 CSS。`weekly-publish` 在原生组装中使用 Rust tar 库将已验证的 `assets/` 写成 `assets.tar`，不调用外部归档命令，也不向归档加入会话历史或凭证。语义质量仍取决于模型判断，确定性门禁不能保证零错误。
+
+## Docmost 包装图
+
+先在 Host 的 canonical Library 安装并授权 Docmost Plugin，提供所需凭据，再填写包装图输入中的 `docmost_space` 和 `docmost_parent_title`；两者默认 `null`，没有预置个人空间或项目父页面。输入示意中的名称必须由操作员替换为实际精确名称：
 
 ```json
 {
-  "collect": {
-    "codex": "/root/.codex/sessions",
-    "deepseek": "/root/.dsh/sessions",
-    "rsi": "/opt/anchor/bin"
-  },
-  "gate": {"rsi": "/opt/anchor/bin"},
-  "publish": {"rsi": "/opt/anchor/bin"}
+  "end": null,
+  "docmost_space": "操作员指定的空间名称",
+  "docmost_parent_title": "操作员指定的根下父页面标题"
 }
 ```
 
-只有 `collect` 节点能只读访问 `/local-inputs/codex` 和 `/local-inputs/deepseek`。三个业务 Op 的 `rsi` 授权目录包含原生 `anchor-rsi` 二进制；collect 调用 `weekly-collect`，后续节点只读取当次冻结证据，不直接访问本机历史目录。授权由操作员配置并按 Run 冻结，不能通过 Graph 自行扩大。
+入口 `validate` 用普通 Op 检查两项为非空白字符串，失败时不调用核心或远端服务；这是输入检查，不是宿主授权。目标对象与权限仍由 Docmost 工具和宿主校验，不能从报告、历史或模型偏好猜测。
 
-运行需要 `anchor-rsi`、Git 和现有沙箱 Shell/`anchor-route`；读取压缩 DSH 历史时还需要外部 `zstd -dc`，部署者应安装并授权该命令。普通 JSONL 不使用 zstd。Goose/provider 配置由服务环境提供。定时规则为 `{"type":"weekly","weekdays":[3],"time":"09:00"}`，通过现有 `/schedules` API 创建；安装到其他机器时重新配置来源目录及其时区，不重复创建相同计划。
+结果选择遵循 [call-report.json](../examples/graphs/call-report.json) 与 [Graph 组合契约](graph-composition-design.md)：`report` 是包装图中的调用节点，目标结果节点是核心的 `publish`，发布 Agent 的返回输入位于 **`/in/report/result/`**，不是 `/in/publish/`。当前 Host 的 `export_call_result_files` 逐项校验普通文件，不展开目录或通配符，因此不把 `assets/` 直接写入 `result.files`。包装图选择 `report.md`、`sources.md`、`assets.tar`、`review.json`、`review.md`，再把核心生成的图片归档解到自己的 `/workspace/assets/`；不需要更改通用 Call 或复制业务流水线。
 
-## 证据边界
+发布时用报告第一行一级标题作为子页面标题，只在发布副本去掉该行。按操作员指定的精确名称选择唯一空间与根下父页面，父页面不存在才创建；报告完整标题精确匹配唯一子页面后原位更新，不存在才创建，歧义则停止。先读取既有页面核对空间与父页面，不删除、移动或修改其他页面；超时或未知外部效果先核对目标，不盲目重建。
 
-采集程序是只读的报告投影，不是历史恢复引擎。Codex 读取消息与工具记录；DSH 只选择各会话最新格式代际，避免迁移前后的重复。所有记录按事件时间纳入七天窗口，保留原始文件与 JSONL 行号。概览文本最多保留每条前 1800 字符，详细工具记录最多 4000 字符，截断均标明；关键结论须回查详细证据或原始只读记录。损坏记录、来源无本周活动与未验证状态必须如实披露。
+本地图片必须通过 `attachments_upload_page_image` 上传到该报告页面，使用返回 URL 替换 `assets/...` 地址并保留替代文本、图注。既有同名图片引用为 `/api/files/<attachmentId>/<filename>` 时传 `attachmentId` 原位替换，避免重复堆积。逐张上传成功后才更新完整正文；图片上传失败不发布坏链接，也不删图凑成功。附件来源是 `/workspace/assets/`，原始只读返回仍在 `/in/report/result/`。
 
-不把模型隐藏推理、系统提示词或计费信息作为成果；常见凭证形式会脱敏，但不承诺正则覆盖所有私密信息。评审通过后，正式报告及配图会同步到指定的 Docmost 页面；来源清单、评审记录和其他 Run 产物保留在本机，不会自动发送到其他渠道。助手声称“完成”、工具执行成功、测试通过和真实 provider 验收是不同的证据等级。配图表达有证据支持的关系，不生成假截图或虚构指标。
+成功后 `docmost.json` 记录空间、父页面、报告页面、创建或更新操作及实际返回的页面与附件元数据。只发布正式报告和图片，来源清单、评审与会话底稿不自动上传。缺少凭据、目标不唯一、权限、网络或远端调用失败均不能伪造成功；核心本地交付不受包装图后续发布失败影响，已发生的外部效果也不自动回滚。
 
-Rust 本地定向验证入口为 `cargo test --manifest-path rust/Cargo.toml -p anchor-rsi --locked --test weekly`。它覆盖窗口、代际去重、脱敏与截断、评审状态、提交绑定、安全 SVG 和产物装配；不执行真实模型、Docmost 或企业微信。历史验收在开发台账保留，不能替代当前原生 Graph 的业务内容验收。
+如另需企业微信提醒，可由操作员在本机包装图的 `docmost` 后连接普通 `Op.call` `detach` 到已有 `wecom-assistant`，明确指定获准的既有私聊 Session；共享示例不预置 Session 或个人账号。只传正式报告与 `docmost.json`，不传来源或评审。调用接纳不等于通知完成，通知失败不应重跑核心或撤销已完成发布，ACK 未知不自动重发。
 
-## Docmost 同步
+## 验证边界
 
-`docmost` 节点只在评审通过并完成本地组装后运行，挂载仓库中的 Docmost Plugin 并允许网络访问。它按报告一级标题确定子页面标题，精确解析 `MsteinL` 空间和 `Anchor周报` 父页面；同名子页面只更新一份，不重复创建。报告中的 SVG 通过 Docmost 附件上传接口上传，并以图片链接插入页面；已存在同名报告时替换对应附件，避免重复堆积。图片上传失败会阻止页面更新。`docmost.json` 记录页面及附件元数据，离线报告仍保留 SVG、来源清单和评审记录。缺少 `DOCMOST_API_KEY`、目标不唯一或远端调用失败时，节点失败且不伪造成功记录。
+新增的 [Graph 定向测试](../rust/anchor-runtime/tests/weekly_work_report_graphs.rs) 使用公开 `GraphSnapshot::from_authoring` 与 `admit` 检查两张示例图、核心终点与权限、包装图输入映射和返回文件约定：
 
+```sh
+cargo test --manifest-path rust/Cargo.toml -p anchor-runtime --locked --test weekly_work_report_graphs
+```
 
-## 企业微信完成提醒（本机配置）
+这类测试只验证 Graph 契约和包装约束，不执行 Goose、真实 provider、操作员机器的全部历史、Docmost 上传或企业微信投递。
 
-需要完成提醒时，在本机 Graph 的 `docmost` 后连接 `notify-wecom`，以普通 `Op.call` 的 `detach` 模式调用 `wecom-assistant`。它绑定操作员确认的既有私聊 Session；Session 标识保存在本机 Graph 定义，不写入共享示例或由模型猜测。该能力沿用现有 Host 调用契约，不建立第二个 Runner。
+2026-10-16 的本机确定性采集 fixture 实际经过 Host → GraphRunner → Bubblewrap → 新采集 CLI，三来源齐全、仅 Codex、无来源三种情况均完成，并核对节点隔离挂载、按 Run 冻结的 grants，以及授权变更后拒绝沿用旧 Run。它使用既有 debug Host，未因本任务重建；[原始摘要](../.local/weekly-history-portability-20261016/host-summary.json) 记录 Host 与采集 CLI 的 SHA-256，[复现脚本](../.local/weekly-history-portability-20261016/check-host.py) 保留 fixture 与断言。本机 [发现结果](../.local/weekly-history-portability-20261016/discovery.json) 另确认实际 HOME 下三种历史目录可用；定位只检查目录，不读取来源内容，不能据此证明记录完整或窗口内有活动。这些证据仅保存在验收机器的 `.local/`，不随仓库共享；其他 checkout 中缺失时不能视为可访问的验收产物。
 
-调用只传递正式 `report.md` 和发布元数据 `docmost.json`。助手读取报告，生成含日期范围、主要进展和 Docmost 链接的简短正文，并保存 `weekly-report.md` 供后续会话追问。由通道网关投递终态答复时，节点指令应禁止重复调用主动发送工具。来源底稿、完整会话证据和评审记录不会随通知传递。
+`anchor-rsi` 加入措辞改写后的全 crate 回归 42 项、严格 Clippy 和格式检查通过；采集边界测试覆盖三种来源的正文、工具调用、工具结果以及详细/概览投影。已安装的修复二进制通过上述三种 Host fixture，并重放真实失败源文件中的公开记录，确认详细和概览均不再携带被拦截连写。命令、原始输出、二进制身份与重放入口记录在本机 [修复验证](../.local/weekly-gateway-wording-20261016/README.md)。两张示例的 Graph 定向测试 7 项及发现、压缩历史和归档等原有验证见[可移植性摘要](../.local/weekly-history-portability-20261016/validation-summary.json)。
 
-周报 Run 在通知目标持久接纳后即可结束；企业微信助手有自己的 Run、状态和投递记录。区分“调用已接纳”和“通知已完成”：Docmost 发布失败不会进入通知节点；通知失败也不会重跑周报或撤销已完成的 Docmost 发布。平台 ACK 不确定时不自动重发。当前原生 Graph 的真实发布和通知仍需独立业务验收。
+真实模型小图另行通过 Host → GraphRunner → Bubblewrap 采集 → Goose ACP AgentNode → 本地验证：`deepseek-flash` 实际读取三来源的索引和全部六份详细/概览 JSONL，写入并回读验证文件，以带观察凭据的 `final_result` 完成。Host 记录 5 次模型请求，Run 为 `completed`；见本机 [provider 摘要](../.local/weekly-gateway-wording-20261016/provider-summary.json)。该图使用与运行中 Host 一致的已保存模型设置，不包含发布 Plugin 或通知。
+
+验收机器已更新原生采集工具，并按运行中 Host 的环境核对和补齐三类历史授权；为保留已有个人 Docmost/通知流程及其授权，没有覆盖已安装 Graph 或计划，旧图原有的工具目录 grant 仍保留。共享使用本页链接的新核心与可选包装图，不应直接导出个人安装版本作为通用模板；新生成配置对 `rsi` 只授权单个二进制文件。
+
+2026-10-16 的失败 Run `rust-18deefb96961559e` 已完成三来源采集，随后理解节点因历史措辞触发网关 HTTP 400；`Goose ended without a validated final_result` 是后续症状，不是目录缺失。该 Run 的冻结证据和原生历史仍保留旧文本，未被改写；应新建 Run 重新采集，不能仅恢复旧理解节点期待新采集工具自动清除已有上下文。旧失败 Run 也不复用新增权限。定位证据见本机 [失败摘要](../.local/weekly-gateway-wording-20261016/failure-diagnosis.json)。
+
+2026-10-18 使用本轮候选 Host、固定 Goose 与当前采集 CLI 新建隔离 Run，按发现结果显式授权三个历史子目录，实际完成核心图的 collect。understand 的原生结构化错误记录为上游 HTTP 502；核查没有模型工具调用后按现有路径接续一次，仍返回 502。冻结证据、原生记录与失败状态均保留，未发布报告或调用外部业务 Plugin，详见本机[收尾验收](../.local/closeout-20261018/README.md)。此结果不证明完整周报通过，也不能推断所有模型服务均不可用。
+
+上述证据不覆盖完整周报的理解、写作、评审流水线、空来源报告内容质量、全部真实历史格式、跨 Graph 产物实际传递、Docmost 图片更新幂等性、恢复后的远端效果核查或企业微信投递。真实模型小图只证明安全采集证据可被当前模型读取并完成节点，不等于完整周报真实 provider 端到端通过；本页不宣称完整报告或外部发布已完成。本轮修复的原始证据仍只保存在验收机器的 `.local/`，不随仓库共享。

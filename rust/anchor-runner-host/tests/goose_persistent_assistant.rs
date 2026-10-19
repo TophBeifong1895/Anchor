@@ -904,7 +904,7 @@ fn action(server: &HttpHost, run: &str, operation: &str) -> Value {
     let (status, response) = server.request("POST", &format!("/runs/{run}/{operation}"), None);
     assert_eq!(status, 202, "{response}");
     assert_eq!(response["run"], run);
-    assert_eq!(response["asked"], operation);
+    assert_eq!(response["operation"], operation);
     response
 }
 

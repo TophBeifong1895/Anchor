@@ -72,6 +72,19 @@ pub(super) fn check(env: &BTreeMap<String, String>, goose_sha256: &str) -> Resul
         &fs::read(manifest_path).map_err(|_| "runtime-manifest.json is missing or invalid")?,
     )
     .map_err(|_| "runtime-manifest.json is missing or invalid")?;
+    if manifest.get("format").and_then(Value::as_u64) == Some(2) {
+        anchor_distribution::validate_platform_runtime(&root).map_err(|error| error.to_string())?;
+        check_paths(env, &root, false, goose_sha256)?;
+        for executable in manifest["executables"]
+            .as_array()
+            .ok_or("runtime executable inventory is invalid")?
+        {
+            if let Some(interpreter) = executable["runtime"]["interpreter"].as_str() {
+                check_interpreter(interpreter)?;
+            }
+        }
+        return Ok(root);
+    }
     if !manifest.is_object() || manifest.get("format").and_then(Value::as_u64) != Some(1) {
         return Err("runtime-manifest.json must use format 1".into());
     }
@@ -171,20 +184,38 @@ pub(super) fn check(env: &BTreeMap<String, String>, goose_sha256: &str) -> Resul
             return Err("runtime ELF runtime metadata does not match the executable".into());
         }
         if let Some(interpreter) = &declared.interpreter {
-            let path = Path::new(interpreter);
-            if !path.is_absolute() || !path.is_file() || !accessible(path, Access::EXEC_OK) {
-                return Err("runtime ELF interpreter from runtime manifest is unavailable".into());
-            }
+            check_interpreter(interpreter)?;
         }
     }
     if !identities.contains("bin/anchor-runner-host") || !identities.contains("bin/goose") {
         return Err("runtime manifest must describe both Host and Goose executables".into());
     }
+    check_paths(env, &root, true, goose_sha256)?;
+    Ok(root)
+}
+
+fn check_interpreter(interpreter: &str) -> Result<(), String> {
+    let path = Path::new(interpreter);
+    if !path.is_absolute() || !path.is_file() || !accessible(path, Access::EXEC_OK) {
+        return Err("runtime ELF interpreter from runtime manifest is unavailable".into());
+    }
+    Ok(())
+}
+
+fn check_paths(
+    env: &BTreeMap<String, String>,
+    root: &Path,
+    bundle: bool,
+    goose_sha256: &str,
+) -> Result<(), String> {
     for (name, packaged) in [
         ("ANCHOR_GOOSE_BINARY", "bin/goose"),
         ("ANCHOR_RUNNER_BUNDLE_ROOT", "bundle"),
         ("ANCHOR_RUNNER_WEB_ROOT", "web"),
     ] {
+        if name == "ANCHOR_RUNNER_BUNDLE_ROOT" && !bundle {
+            continue;
+        }
         let path = absolute_path(required(env, name)?, name)?;
         reject_symlinks(&path, name)?;
         if fs::canonicalize(path).map_err(|_| format!("{name} is unavailable"))?
@@ -207,5 +238,5 @@ pub(super) fn check(env: &BTreeMap<String, String>, goose_sha256: &str) -> Resul
     if required(env, "ANCHOR_GOOSE_BINARY_SHA256")? != goose_sha256 {
         return Err("ANCHOR_GOOSE_BINARY_SHA256 must equal the fixed Goose v1.53.0 pin".into());
     }
-    Ok(root)
+    Ok(())
 }

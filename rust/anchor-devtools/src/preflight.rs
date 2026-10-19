@@ -15,7 +15,7 @@ mod elf;
 mod runtime;
 
 const GOOSE_VERSION: &str = "1.53.0";
-const GOOSE_SHA256: &str = "dc2a4352279c16f3c665b280e4fc8fedbec3a67cce596bf460aa9fd416c27a15";
+const GOOSE_SHA256: &str = "17e065a79cb0508413af714724aed51d6b76972dda9feebdda701330134fb640";
 
 pub fn run() -> Result<Value, String> {
     let mut environment = BTreeMap::new();
@@ -23,6 +23,16 @@ pub fn run() -> Result<Value, String> {
         let Ok(name) = name.into_string() else {
             continue;
         };
+        if matches!(
+            name.as_str(),
+            "ANCHOR_MODEL_URL"
+                | "ANCHOR_MODEL_API_KEY"
+                | "ANCHOR_MODEL_NAME"
+                | "ANCHOR_MODEL_WIRE_API"
+                | "ANCHOR_MODEL_ALIASES"
+        ) {
+            continue;
+        }
         match value.into_string() {
             Ok(value) => {
                 environment.insert(name, value);
@@ -36,14 +46,55 @@ pub fn run() -> Result<Value, String> {
     check(&environment)
 }
 
+/// Validate the exact command the installed launcher will use, without caller env values.
+pub fn run_installed(launcher: &Path) -> Result<Value, String> {
+    check(&installed_environment(launcher)?)
+}
+
+fn installed_environment(launcher: &Path) -> Result<BTreeMap<String, String>, String> {
+    let launcher = launcher
+        .canonicalize()
+        .map_err(|_| "platform launcher is unavailable")?;
+    let command =
+        anchor_distribution::platform_command(&launcher).map_err(|error| error.to_string())?;
+    let mut environment = BTreeMap::new();
+    for (name, value) in command.get_envs() {
+        let name = name
+            .to_str()
+            .ok_or("platform configuration must be UTF-8")?;
+        let value = value
+            .and_then(|value| value.to_str())
+            .ok_or("platform configuration must be UTF-8")?;
+        environment.insert(name.to_owned(), value.to_owned());
+    }
+    for (name, path) in [
+        (
+            "ANCHOR_DEPLOYMENT_ROOT",
+            command
+                .get_current_dir()
+                .ok_or("platform runtime root is unavailable")?,
+        ),
+        (
+            "ANCHOR_RUNNER_HOST_BINARY",
+            Path::new(command.get_program()),
+        ),
+    ] {
+        environment.insert(
+            name.to_owned(),
+            path.to_str()
+                .ok_or("platform configuration must be UTF-8")?
+                .to_owned(),
+        );
+    }
+    Ok(environment)
+}
+
 pub fn check(env: &BTreeMap<String, String>) -> Result<Value, String> {
     check_with_pin(env, GOOSE_SHA256)
 }
 
 fn check_with_pin(env: &BTreeMap<String, String>, goose_sha256: &str) -> Result<Value, String> {
-    check_env_file(env)?;
     check_api_keys(env)?;
-    check_endpoint(env)?;
     if let Some(window) = env.get("ANCHOR_MODEL_CONTEXT_WINDOW")
         && window
             .trim()
@@ -148,83 +199,6 @@ fn check_directory(path: &Path, name: &str) -> Result<(), String> {
             "{name} is not accessible with the required permissions"
         ));
     }
-    Ok(())
-}
-
-fn check_env_file(env: &BTreeMap<String, String>) -> Result<(), String> {
-    let path = absolute_path(required(env, "ANCHOR_ENV_FILE")?, "ANCHOR_ENV_FILE")?;
-    let metadata = metadata(&path, "ANCHOR_ENV_FILE")?;
-    if !metadata.is_file() || ![0, rustix::process::geteuid().as_raw()].contains(&metadata.uid()) {
-        return Err("ANCHOR_ENV_FILE must be a regular root- or service-owned file".into());
-    }
-    if metadata.mode() & 0o077 != 0 {
-        return Err("ANCHOR_ENV_FILE must have mode 0600 or stricter".into());
-    }
-    Ok(())
-}
-
-fn check_endpoint(env: &BTreeMap<String, String>) -> Result<(), String> {
-    let endpoint = required(env, "ANCHOR_MODEL_URL")?;
-    let invalid =
-        || "ANCHOR_MODEL_URL must be an absolute HTTPS URL or loopback HTTP URL".to_owned();
-    let (_, authority) = endpoint.split_once("://").ok_or_else(invalid)?;
-    let authority = authority.split(['/', '?', '#']).next().unwrap_or_default();
-    if authority.is_empty()
-        || authority.starts_with('/')
-        || authority.contains('@')
-        || endpoint
-            .chars()
-            .any(|character| character.is_control() || character.is_whitespace())
-        || endpoint.contains('\\')
-    {
-        return Err(invalid());
-    }
-    let parsed = url::Url::parse(endpoint).map_err(|_| invalid())?;
-    let raw_host = if let Some(bracketed) = authority.strip_prefix('[') {
-        bracketed.split(']').next().unwrap_or_default()
-    } else {
-        authority.split(':').next().unwrap_or_default()
-    };
-    let loopback = matches!(
-        parsed.host(),
-        Some(url::Host::Domain("localhost"))
-            | Some(url::Host::Ipv4(std::net::Ipv4Addr::LOCALHOST))
-            | Some(url::Host::Ipv6(std::net::Ipv6Addr::LOCALHOST))
-    );
-    if parsed.host().is_none()
-        || !parsed.username().is_empty()
-        || parsed.password().is_some()
-        || parsed.query().is_some_and(|query| !query.is_empty())
-        || parsed
-            .fragment()
-            .is_some_and(|fragment| !fragment.is_empty())
-        || !(parsed.scheme() == "https"
-            || parsed.scheme() == "http"
-                && loopback
-                && matches!(
-                    raw_host.to_ascii_lowercase().as_str(),
-                    "127.0.0.1" | "::1" | "localhost"
-                ))
-        || parsed.port() == Some(0)
-    {
-        return Err(invalid());
-    }
-    required(env, "ANCHOR_MODEL_API_KEY")?;
-    let model = required(env, "ANCHOR_MODEL_NAME")?;
-    if model.starts_with("REPLACE_") {
-        return Err("replace the model name placeholder before starting".into());
-    }
-    if model.chars().any(|character| (character as u32) < 32) {
-        return Err("model name contains control characters".into());
-    }
-    if !matches!(
-        value(env, "ANCHOR_MODEL_WIRE_API", "responses"),
-        "chat" | "responses"
-    ) {
-        return Err("ANCHOR_MODEL_WIRE_API must be chat or responses".into());
-    }
-    serde_json::from_str::<BTreeMap<String, String>>(value(env, "ANCHOR_MODEL_ALIASES", "{}"))
-        .map_err(|_| "ANCHOR_MODEL_ALIASES must be a JSON object of strings".to_owned())?;
     Ok(())
 }
 

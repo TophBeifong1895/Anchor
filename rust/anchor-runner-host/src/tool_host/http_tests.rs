@@ -149,12 +149,16 @@ fn config(endpoint: &str, _names: &[&str]) -> McpToolConfig {
         disabled: Default::default(),
         oauth_library_root: None,
         startup_cancellation: None,
+        startup_timeout: None,
+        configuration_revisions: BTreeMap::new(),
+        configuration_bindings: BTreeMap::new(),
         servers: BTreeMap::from([(
             "fixture-plugin-fixture".into(),
             ResolvedMcpServer {
                 plugin_id: "fixture-plugin".into(),
                 name: "fixture".into(),
                 plugin_directory: PathBuf::from("/tmp/fixture-plugin"),
+                declaration: json!({"type":"http", "url":endpoint, "headers":{}}),
                 config: json!({"type":"http", "url":endpoint, "headers":{}}),
             },
         )]),
@@ -299,6 +303,7 @@ async fn each_server_gets_its_own_prefix_and_duplicate_bindings_connect_once() {
                 plugin_id: "fixture-plugin".into(),
                 name: "second".into(),
                 plugin_directory: PathBuf::from("/tmp/fixture-plugin"),
+                declaration: json!({"type":"http", "url":second.endpoint, "headers":{}}),
                 config: json!({"type":"http", "url":second.endpoint, "headers":{}}),
             },
         );
@@ -345,6 +350,7 @@ async fn stdio_requires_the_sandbox_launcher() {
             plugin_id: "fixture-plugin".into(),
             name: "stdio".into(),
             plugin_directory: PathBuf::from("/tmp/fixture-plugin"),
+            declaration: json!({"type":"stdio", "command":"fixture-mcp", "args":[], "env":{}}),
             config: json!({"type":"stdio", "command":"fixture-mcp", "args":[], "env":{}}),
         },
     );

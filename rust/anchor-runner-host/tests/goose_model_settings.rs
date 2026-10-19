@@ -90,7 +90,13 @@ fn pilot_settings_apply_next_turn_without_restart_and_preserve_native_history() 
     );
     let backup = Provider::with_model("model-pilot-unused-backup", vec![], "fixture-backup");
     let graph = json!({"entry":"ready","ops":{"ready":{"run":"true"}},"nodes":[{"id":"ready","op":"ready"}],"edges":[]});
-    let host = Host::new(&graph).default_runtime();
+    let host = Host::new(&graph).default_runtime().with_extra_environment([
+        ("ANCHOR_MODEL_URL", "https://ignored-environment.example/v1"),
+        ("ANCHOR_MODEL_API_KEY", "ignored-environment-key"),
+        ("ANCHOR_MODEL_NAME", "ignored-environment-model"),
+        ("ANCHOR_MODEL_WIRE_API", "invalid-environment-protocol"),
+        ("ANCHOR_MODEL_ALIASES", "invalid-environment-aliases"),
+    ]);
     let mut server = host.serve(&first);
     save(&server, "default", &first, &first.model, &first.model);
     save(&server, "backup", &backup, &backup.model, &backup.model);
@@ -137,7 +143,7 @@ fn pilot_settings_apply_next_turn_without_restart_and_preserve_native_history() 
         &host,
         &[&first, &second, &backup],
         json!({"new_turn_latest":true,"active_turn_frozen":true,
-        "native_history_preserved":true,"restart_preserved":true,"missing_default_key_no_fallback":true}),
+        "native_history_preserved":true,"restart_preserved":true,"missing_default_key_no_fallback":true,"retired_environment_ignored":true}),
     );
 }
 
@@ -170,7 +176,13 @@ fn graph_nodes_resolve_latest_settings_and_explicit_provider_tiers() {
             {"id":"backup-flash","agent":"backup-flash"},{"id":"backup-pro","agent":"backup-pro"},{"id":"done","op":"done"}],
         "edges":[{"from":"flash","to":"pro"},{"from":"pro","to":"backup-flash"},
             {"from":"backup-flash","to":"backup-pro"},{"from":"backup-pro","to":"done"}]});
-    let host = Host::new(&graph).default_runtime();
+    let host = Host::new(&graph).default_runtime().with_extra_environment([
+        ("ANCHOR_MODEL_URL", "https://ignored-environment.example/v1"),
+        ("ANCHOR_MODEL_API_KEY", "ignored-environment-key"),
+        ("ANCHOR_MODEL_NAME", "ignored-environment-model"),
+        ("ANCHOR_MODEL_WIRE_API", "invalid-environment-protocol"),
+        ("ANCHOR_MODEL_ALIASES", "invalid-environment-aliases"),
+    ]);
     let server = host.serve(&first);
     save(
         &server,
@@ -192,6 +204,6 @@ fn graph_nodes_resolve_latest_settings_and_explicit_provider_tiers() {
         &host,
         &[&first, &second, &backup],
         json!({"same_run_new_node_latest":true,"active_node_frozen":true,
-        "all_four_references_executed":true,"explicit_backup_only":true}),
+        "all_four_references_executed":true,"explicit_backup_only":true,"retired_environment_ignored":true}),
     );
 }

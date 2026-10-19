@@ -172,7 +172,7 @@ impl SessionBoundary {
     }
 
     fn ack(&self, detail: &Value) -> Value {
-        assert_eq!(detail["state"]["status"], "completed");
+        assert_eq!(detail["projection"]["outcome"], "done");
         assert_eq!(detail["active"], false);
         assert_eq!(detail["session_call"]["status"], "pending");
         let run = detail["run"].as_str().unwrap();
@@ -856,11 +856,16 @@ fn native_goose_session_call_yield_foreground_restart_continue_same_run_without_
             serde_json::to_vec_pretty(&detail).unwrap(),
         )
         .unwrap();
-        assert_ne!(detail["state"]["status"], "failed", "{detail}");
-        if detail["active"] == false && detail["state"]["status"] == "stopped" {
+        assert_ne!(detail["projection"]["outcome"], "failed", "{detail}");
+        if detail["active"] == false
+            && detail["projection"]["phase"] == "waiting"
+            && detail["projection"]["waiting_for"] == "human"
+        {
             panic!("same Run continuation stopped before model execution: {detail}");
         }
-        detail["state"]["status"] == "completed" && detail["active"] == false
+        detail["projection"]["phase"] == "settled"
+            && detail["projection"]["outcome"] == "done"
+            && detail["active"] == false
     });
     let resumed = host.record(&child);
     assert_eq!(resumed["run_id"], stopped["run_id"]);

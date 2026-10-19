@@ -15,7 +15,11 @@ anchor-docmost-tools package-plugin /existing/parent/native-docmost
 Only `DOCMOST_API_KEY` is read from the environment. There is no dotenv loading,
 endpoint environment override, root CLI override, or endpoint fallback. The
 default upload endpoint is `https://docmost.cwise.dev/api/files/upload`.
-`--endpoint` is an explicit operator deployment/fixture setting; it accepts
+The Plugin requires an explicit shared `base_url` and `api_key` configuration,
+with no default service address in the distributable manifest. The Host
+injects the configured key and expands `--endpoint` from the same base URL used
+by the remote MCP; users manage these values in the WebUI. Direct binary use
+can also supply `--endpoint` as an operator deployment/fixture setting. It accepts
 absolute HTTP(S) URLs without userinfo or fragments. Redirects and retries are
 disabled, including reqwest transport retries. A failed upload can have an
 unknown external outcome; it is not automatically resent. HTTP error bodies,
@@ -44,7 +48,8 @@ partial destination presented as a completed plugin. The only files are
 `plugin.json`, the byte-identical `skills/docmost/SKILL.md`, and
 `bin/anchor-docmost-tools` copied from `current_exe`. The remote Docmost MCP URL,
 API-key environment references, and all other manifest fields are retained;
-only the attachments command/args/cwd change. No source, dotenv file,
+only the attachments command/cwd change; configured endpoint arguments remain
+intact. No source, dotenv file,
 or environment credentials are copied.
 
 ## Library and fixtures

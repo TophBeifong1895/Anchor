@@ -80,7 +80,7 @@ cargo build --manifest-path rust/Cargo.toml -p anchor-rsi --locked
 
 升级已有 Graph 时通过保存 API 更新完整定义，并在没有活动 Run 时修改操作员授权。历史提案可由原生 state 中成功发布的结果发现；独立报告根也可通过 `collect --previous DIR` 明确授予。计划和共享示例不保存凭证。
 
-综合与评审可通过现有 `ANCHOR_MODEL_ALIASES` 和角色的 model 字段选择模型。具体模型的语义质量须用失败稿反例与完整流程分别验收，不能以型号代替证据。[原生 RSI bundle](../examples/rust-rsi.md) 使用同一业务模块，并额外将引用绑定到冻结证据哈希和实际成功的 MCP 读取记录。
+综合与评审通过角色的 model 字段选择网页保存的 `models.default.flash/pro` 或 `models.backup.flash/pro`；不通过环境变量配置模型服务或凭据。具体模型的语义质量须用失败稿反例与完整流程分别验收，不能以型号代替证据。[原生 RSI bundle](../examples/rust-rsi.md) 使用同一业务模块，并额外将引用绑定到冻结证据哈希和实际成功的 MCP 读取记录。
 
 ## 边界和验收
 

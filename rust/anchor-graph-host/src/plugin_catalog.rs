@@ -4,6 +4,7 @@ use crate::dependencies::{MutablePaths, PluginDependencies};
 use crate::dependencies::{plugin_view_path, resolved_library_root};
 use crate::mcp::{McpServerDefinition, valid_environment_key};
 use crate::plugin_authorization::plugin_authorization_digest;
+use crate::plugin_configuration::PluginConfiguration;
 use crate::resources::{
     collect_skill_files, inside_directory, inside_file, read_object, read_object_bytes,
     reject_symlink_components, relative_of, resource_files, valid_reference,
@@ -41,6 +42,7 @@ pub struct PluginDefinition {
     pub unsupported: Vec<String>,
     pub mcp_servers: Vec<McpServerDefinition>,
     pub channels: Vec<ChannelDefinition>,
+    pub configuration: PluginConfiguration,
     /// The Plugin's own run-time dependencies. Empty when it declares none.
     pub dependencies: PluginDependencies,
     /// This Plugin needs task-tool network access. HTTP MCP also implies it.
@@ -71,6 +73,7 @@ pub struct PluginMetadata {
     pub unsupported: Vec<String>,
     pub mcp_servers: Vec<McpServerDefinition>,
     pub channels: Vec<ChannelDefinition>,
+    pub configuration: PluginConfiguration,
     pub dependencies: PluginDependencies,
     pub network: bool,
     pub mutable: MutablePaths,
@@ -94,6 +97,7 @@ impl PluginDefinition {
             unsupported: self.unsupported.clone(),
             mcp_servers: self.mcp_servers.clone(),
             channels: self.channels.clone(),
+            configuration: self.configuration.clone(),
             dependencies: self.dependencies.clone(),
             network: self.network,
             mutable: self.mutable.clone(),
@@ -156,11 +160,14 @@ impl FilePluginCatalog {
             }
         }
         let digest = format!("{:x}", hash.finalize());
-        let authorization_digest = plugin_authorization_digest(
-            &metadata.mcp_servers,
-            metadata.network,
-            metadata.mutable.paths(),
-        );
+        let authorization_digest =
+            metadata
+                .configuration
+                .authorization_digest(plugin_authorization_digest(
+                    &metadata.mcp_servers,
+                    metadata.network,
+                    metadata.mutable.paths(),
+                ));
         Ok(PluginDefinition {
             id: metadata.id,
             directory: metadata.directory,
@@ -170,6 +177,7 @@ impl FilePluginCatalog {
             unsupported: metadata.unsupported,
             mcp_servers: metadata.mcp_servers,
             channels: metadata.channels,
+            configuration: metadata.configuration,
             dependencies: metadata.dependencies,
             network: metadata.network,
             mutable: metadata.mutable,
@@ -278,6 +286,7 @@ impl FilePluginCatalog {
 
         let mcp_servers =
             mcp::servers_from_manifest(id, &root, &dir, &manifest, &dependencies, false)?;
+        let configuration = PluginConfiguration::parse(id, &manifest, &mcp_servers)?;
         let channels = channels_from_dir(id, &dir)?;
         let unsupported = ["hooks", "commands", "agents", "apps"]
             .into_iter()
@@ -312,6 +321,7 @@ impl FilePluginCatalog {
                 unsupported,
                 mcp_servers,
                 channels,
+                configuration,
                 dependencies,
                 network,
                 mutable,

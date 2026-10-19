@@ -1,0 +1,19 @@
+{
+  "plugins": {
+    "network": ["anchor-network-tools"],
+    "academic-research": ["anchor-scholarly"],
+    "docmost": ["anchor-docmost-tools"],
+    "wecom": ["anchor-wecom-tools", "anchor-wecom-gateway"],
+    "anchor-steward": []
+  },
+  "graphs": [
+    "call-worker",
+    "call-report",
+    "revise-loop",
+    "parallel-audit",
+    "plugin-research",
+    "deep-academic-research",
+    "wecom-assistant",
+    "wecom-persistent-assistant"
+  ]
+}

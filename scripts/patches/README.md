@@ -36,3 +36,11 @@ cargo clippy -p goose-provider-types --all-targets --locked -- -D warnings
 唯一完成工具成功后，Goose 先保存原生请求/结果，再结束本轮，不追加模型请求、不用取消冒充完成；原生保存错误继续通过 ACP 报错，用户取消仍返回取消。Host 仍独立校验结果和取消，并等待清理成功才持久化完成。未启用时保留原执行方式；实验性 state machine 与此选项组合明确拒绝。
 
 该补丁不改变原生会话 schema。新 invocation 可沿明确审查的单向 digest 对加载旧历史；已有 invocation 的执行器绑定仍严格保持。更新上游时应核查其外部完成工具、批次上下文与历史保存边界，避免重复维护同一机制。
+
+## Provider 错误
+
+`goose-1.53.0-provider-errors.patch` 在前述两份补丁后应用，复用 Goose 已有的 `MessageContent::Error` 和 ACP JSON-RPC 错误。普通请求错误、网络错误、模型拒答、上下文压缩后仍超窗及压缩摘要失败先保存原生、仅用户可见的 Error 消息，再交给 ACP 报错；成功恢复的超窗压缩仍沿正常执行路径继续。认证和额度不足保留原生专用错误代码或原因。助手普通文本不参与错误识别。
+
+ACP 为通用结构化 Error 返回 `data.reason=provider_error`。Anchor 只在当前 `session/prompt` 的响应 ID、错误代码与消息形状通过协议校验后读取固定错误类别，不回显服务端错误正文；Pilot 把明确的模型请求失败保存为 Turn `failed`，断连、进程与清理失败保留 `interrupted`，用户取消继续优先结算为 `stopped`。新的原生历史沿已审查的单向摘要对接续，当前 invocation 的二进制绑定不放宽。
+
+该补丁沿用现有原生消息 schema，不增加 Anchor Agent loop 或恢复游标。固定二进制构建与单元检查已有记录；实际 Host/Goose 错误场景及真实 Provider 的新增验收仍须以[本轮验证边界](../../.local/closeout-20261018/README.md)为准。

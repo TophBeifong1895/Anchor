@@ -75,14 +75,10 @@ Model configuration is optional at installation. Start the service and configure
 the provider in WebUI **Settings**; the Host stores it privately under
 `data/state/managed/`. Python and Rust initialization is available on the same page.
 
-To keep the model under deployment control, optionally prepare a private input
-using `deploy/platform/model.env.example` and pass `--model-config`. It
-accepts exactly `ANCHOR_MODEL_URL`, `ANCHOR_MODEL_API_KEY`, `ANCHOR_MODEL_NAME`,
-`ANCHOR_MODEL_WIRE_API`, `ANCHOR_MODEL_ALIASES`,
-`ANCHOR_MODEL_CONTEXT_WINDOW` and `ANCHOR_MODEL_DIRECT`. Model URL, API key and
-name are required. Lines use `KEY=value`, optionally enclosed in matching single
-or double quotes. Values are literal data: shell evaluation, interpolation,
-export statements, escapes and multiline values are unsupported.
+The launcher derives all resource and mutable roots from its installed location,
+clears inherited configuration, and does not read environment files. Model, Plugin,
+channel and language settings belong to the existing Host-managed WebUI flows.
+The retired `--model-config` option is rejected; old files are left untouched.
 
 ```sh
 scripts/install-platform.sh --archive /reviewed/platform.tar.gz \
@@ -173,7 +169,7 @@ optional `scholarly`, `docmost_tools`, `wecom_tools`, `wecom_gateway`, and
 
 Goose is fixed to the Anchor-built lean ACP binary from pinned upstream v1.53.0
 sources (`../scripts/build-goose-acp.sh`) SHA256
-`dc2a4352279c16f3c665b280e4fc8fedbec3a67cce596bf460aa9fd416c27a15`.
+`17e065a79cb0508413af714724aed51d6b76972dda9feebdda701330134fb640`.
 The builder does not build Goose itself; supply the binary produced by that
 script. There is no environment or CLI option to bypass this check. Host and tools must
 be executable ELF files with an executable entry point and matching platform.
@@ -241,6 +237,17 @@ implementation targets Linux and uses `/proc/self/fd` to anchor publication.
 Known source/repository, credential and mutable-state paths are denied. JSON,
 YAML and TOML are parsed to reject known literal credential fields and URL
 userinfo; environment references such as `${API_KEY}` are retained unexpanded.
+Only a Plugin's root `plugins/<id>/plugin.json` treats `configuration.fields`
+keys as field identifiers and `configuration.environment` values as references
+to those declared fields, using the public Host configuration types. Declaration
+metadata is still scanned; secret defaults (including empty or null defaults),
+embedded values and literal credentials elsewhere remain forbidden. Non-secret
+defaults under known credential field or mapped environment names retain the
+credential checks, even when the field is not typed as secret. Full
+Plugin/MCP binding validation remains owned by shared catalog admission.
+Native Docmost admission requires its declared `--endpoint` argument with
+`${DOCMOST_BASE_URL}/api/files/upload`; arbitrary endpoint or argument overrides
+are rejected, and WeCom's native MCP entrypoint still requires no arguments.
 Text assignments and PEM private-key markers are also checked. This is a
 conservative admission filter, not generic secret discovery: arbitrary prose,
 binary contents, images, generated JS and custom credential field names require

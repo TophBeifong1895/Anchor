@@ -103,7 +103,7 @@ fn graph_mcp_startup_errors_settle_without_repolling_completed_resolution() {
             "run":detail,"provider_requests":provider.requests(),"host_log_contains_panic":log.contains("panicked"),
             "production_data_used":false,"real_model_requests":0
         })).unwrap()).unwrap();
-        assert_eq!(detail["state"]["status"], "failed", "{detail}\n{log}");
+        assert_eq!(detail["projection"]["outcome"], "failed", "{detail}\n{log}");
         assert_eq!(detail["active"], false, "{detail}");
         assert!(
             detail["state"]["error"]

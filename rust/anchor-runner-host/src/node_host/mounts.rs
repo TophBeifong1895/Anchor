@@ -146,8 +146,15 @@ impl HostIoResolver {
         views: BTreeMap<String, String>,
         digests: BTreeMap<String, String>,
         mounted: &MountedPlugins,
+        configuration_revisions: &BTreeMap<String, u64>,
     ) {
         let mut observed = views;
+        for (plugin, revision) in configuration_revisions {
+            observed.insert(
+                format!("configuration:{plugin}"),
+                format!("revision={revision}"),
+            );
+        }
         if let Some(session) = &mounted.session {
             let source = if mounted.snapshot {
                 "this Turn's snapshot"
@@ -255,19 +262,6 @@ impl HostIoResolver {
             }
         }
         Ok(())
-    }
-
-    pub(super) fn catalog_config(
-        &self,
-        bindings: &[PluginBinding],
-    ) -> Result<tool_host::McpToolConfig, String> {
-        if bindings.iter().all(is_fake_fixture) {
-            return Ok(self.mcp.clone());
-        }
-        let root = self.plugin_library_root()?;
-        let mut config = tool_host::McpToolConfig::from_catalog(root, bindings)?;
-        config.environment = self.mcp.environment.clone();
-        Ok(config)
     }
 
     pub(super) fn oauth_owner_for_run(&self, run_id: &str) -> Result<Option<String>, String> {

@@ -1,0 +1,1409 @@
+{
+  "schema_version": 1,
+  "milestone": "M1.5",
+  "baseline_revision": "1d1ba54035b2f25a45fd52c2536f5dc19cbd85e2",
+  "after_snapshot": {
+    "head": "2d70ca2521b7c3cfcf53f43a0a52a27bee23bea9",
+    "merge_head": "2b3b7a2b6e451d4dd1b499fe5c17b22665b38153",
+    "description": "merge --no-commit 工作树；仅对所列 source hash 有效，提交前复核"
+  },
+  "method": {
+    "unit": "一个自主写出的 Run 规则判断/前置条件定义，不是消费者函数包络或语法出现次数",
+    "host_crates": [
+      "anchor-runner-host",
+      "anchor-graph-host"
+    ],
+    "exclude": [
+      "tests/fixtures",
+      "调用同一规则谓词、View actions 或派生结果",
+      "纯序列化、字段搬运、状态赋值本身",
+      "Session/授权/产物可见性边界策略（另列）"
+    ],
+    "count_note": "各行不相加；一个独立判断可能参与多个规则。带 worker/phase 的重复手写门禁仍分别计。runtime/Kernel/Web 不混入 Host 数。数量为人工语义审阅结果，source_line 和 sha256 供复核，不以 rg 命中自动计数。"
+  },
+  "rules": [
+    {
+      "id": "terminal",
+      "title": "是否终态",
+      "note": "只统计终态/未终态的通用分类定义；按结果细分的 abandon、子调用和 Session 投递策略在各自规则下登记。RunStatus::is_terminal 与 Resource::is_settled 的调用不计。",
+      "before": {
+        "host_run_count": 1,
+        "sites": [
+          {
+            "path": "rust/anchor-runner-host/src/application/admission.rs",
+            "line": 64,
+            "symbol": "RunApplication::admit",
+            "decision": "显式列举旧 Run 的全部未结算 status，决定是否仍占用 Graph 准入；不是调用 is_terminal。",
+            "source_line": "RunStatus::Ready"
+          }
+        ]
+      },
+      "after": {
+        "host_run_count": 3,
+        "sites": [
+          {
+            "path": "rust/anchor-runner-host/src/application/admission.rs",
+            "line": 64,
+            "symbol": "RunApplication::admit",
+            "decision": "显式列举旧 Run 的全部未结算 status，决定是否仍占用 Graph 准入；不是调用 is_terminal。",
+            "source_line": "RunStatus::Ready"
+          },
+          {
+            "path": "rust/anchor-runner-host/src/application/legacy_run_view.rs",
+            "line": 36,
+            "symbol": "legacy_run_view::phase",
+            "decision": "旧 status 到相位的唯一适配定义；Completed/Failed/Aborted 被解释为 Settled。",
+            "source_line": "RunStatus::Completed => Phase::Settled {"
+          },
+          {
+            "path": "rust/anchor-runner-host/src/application/run_view.rs",
+            "line": 50,
+            "symbol": "RunView::is_settled",
+            "decision": "原生 View 的终态谓词；消费此谓词的 abandon/actions 不再计一处终态定义。",
+            "source_line": "matches!(self.phase, Phase::Settled { .. })"
+          }
+        ]
+      },
+      "runtime_after": [
+        {
+          "path": "rust/anchor-runtime/src/graph/state.rs",
+          "line": 59,
+          "symbol": "RunStatus::is_terminal",
+          "decision": "旧 Run 的唯一通用终态谓词。",
+          "source_line": "pub fn is_terminal(self) -> bool {"
+        }
+      ],
+      "kernel_after": [
+        {
+          "path": "rust/anchor-kernel/src/kernel.rs",
+          "line": 227,
+          "symbol": "Kernel::adjudicate",
+          "decision": "结算不可逆；提交由 Kernel 拒绝。",
+          "source_line": "Phase::Settled { .. } => return refuse(Reason::TaskSettled),"
+        }
+      ],
+      "edge_after": []
+    },
+    {
+      "id": "can_stop",
+      "title": "可否 stop",
+      "note": "建议动作与旧控制写入门禁是不同独立判断。Kernel 控制写入不在 Host 再手写 phase 门禁，委托 Kernel；身份、scope 和 Session 协调收窄另列。",
+      "before": {
+        "host_run_count": 4,
+        "sites": [
+          {
+            "path": "rust/anchor-runner-host/src/application/control.rs",
+            "line": 87,
+            "symbol": "RunApplication::control_expected",
+            "decision": "旧 worker 已注册时只允许 pause/stop；resume 被拒绝。",
+            "source_line": "if let Some(run) = active.get(run_id) {"
+          },
+          {
+            "path": "rust/anchor-runner-host/src/application/control.rs",
+            "line": 224,
+            "symbol": "reject_terminal_control",
+            "decision": "旧控制的统一终态门禁；各调用点不重复计。",
+            "source_line": "if record.status.is_terminal() {"
+          },
+          {
+            "path": "rust/anchor-runner-host/src/application/run_projection.rs",
+            "line": 108,
+            "symbol": "observed",
+            "decision": "旧 active Run 的 stop 建议值还依赖请求标志。",
+            "source_line": "requested != Some(\"stop\")"
+          },
+          {
+            "path": "rust/anchor-runner-host/src/application/kernel_runs.rs",
+            "line": 226,
+            "symbol": "KernelRuns::projection",
+            "decision": "原生 probe 独立定义 Executing 可 stop。",
+            "source_line": "stop: executing,"
+          }
+        ]
+      },
+      "after": {
+        "host_run_count": 3,
+        "sites": [
+          {
+            "path": "rust/anchor-runner-host/src/application/control.rs",
+            "line": 87,
+            "symbol": "RunApplication::control_expected",
+            "decision": "旧 worker 已注册时只允许 pause/stop；resume 被拒绝。",
+            "source_line": "if let Some(run) = active.get(run_id) {"
+          },
+          {
+            "path": "rust/anchor-runner-host/src/application/control.rs",
+            "line": 224,
+            "symbol": "reject_terminal_control",
+            "decision": "旧控制的统一终态门禁；各调用点不重复计。",
+            "source_line": "if record.status.is_terminal() {"
+          },
+          {
+            "path": "rust/anchor-runner-host/src/application/run_view.rs",
+            "line": 37,
+            "symbol": "RunView::actions",
+            "decision": "共享 View 的 stop 建议值；旧/原生读取共用。",
+            "source_line": "stop: self.phase == Phase::Executing,"
+          }
+        ]
+      },
+      "runtime_after": [],
+      "kernel_after": [
+        {
+          "path": "rust/anchor-kernel/src/kernel.rs",
+          "line": 504,
+          "symbol": "task_control",
+          "decision": "Human 或带 Observation 的 Code 可提交 stop；结算门禁在 adjudicate。",
+          "source_line": "\"stop\" => {"
+        }
+      ],
+      "edge_after": []
+    },
+    {
+      "id": "can_resume",
+      "title": "可否 resume",
+      "note": "共享 helper 的每次调用不计；多个位置各自用 worker/phase 决定 resume，仍分别计。Session 当前实例、superseded Turn、abandon intent 的单向性另列边界，未混入此处。",
+      "before": {
+        "host_run_count": 12,
+        "sites": [
+          {
+            "path": "rust/anchor-runner-host/src/application/control.rs",
+            "line": 87,
+            "symbol": "RunApplication::control_expected",
+            "decision": "旧 worker 已注册时只允许 pause/stop；resume 被拒绝。",
+            "source_line": "if let Some(run) = active.get(run_id) {"
+          },
+          {
+            "path": "rust/anchor-runner-host/src/application/control.rs",
+            "line": 224,
+            "symbol": "reject_terminal_control",
+            "decision": "旧控制的统一终态门禁；各调用点不重复计。",
+            "source_line": "if record.status.is_terminal() {"
+          },
+          {
+            "path": "rust/anchor-runner-host/src/application/control.rs",
+            "line": 236,
+            "symbol": "validate_inactive_control",
+            "decision": "旧 inactive effect/recovery 状态不能直接续跑，先走恢复用例。",
+            "source_line": "if record.status == RunStatus::WaitingRecovery && operation != \"stop\" {"
+          },
+          {
+            "path": "rust/anchor-runner-host/src/application/control.rs",
+            "line": 249,
+            "symbol": "validate_resume_budget",
+            "decision": "旧 budget-stopped 需要显式预算策略，普通 resume 拒绝。",
+            "source_line": "if record.status == RunStatus::BudgetStopped {"
+          },
+          {
+            "path": "rust/anchor-runner-host/src/application/control.rs",
+            "line": 180,
+            "symbol": "resume_interrupted_attempts",
+            "decision": "普通 resume 遇到待核查效果，先为同一 Agent 保存观察上下文。",
+            "source_line": "if record.status != RunStatus::WaitingRecovery || record.recovery.is_empty() {"
+          },
+          {
+            "path": "rust/anchor-runner-host/src/application/control.rs",
+            "line": 74,
+            "symbol": "control_expected",
+            "decision": "子完成回调只可续跑同一 WaitingCall 节点和 invocation；已活动时不重复调度。",
+            "source_line": "let expected = self.store().load(run_id)?.is_some_and(|parent| {"
+          },
+          {
+            "path": "rust/anchor-graph-host/src/graph_call.rs",
+            "line": 342,
+            "symbol": "GraphCallPort::call",
+            "decision": "显式枚举可在父调用内重新进入的子 Run 状态。",
+            "source_line": "let resumable = session_context.is_none()"
+          },
+          {
+            "path": "rust/anchor-runner-host/src/application/run_projection.rs",
+            "line": 90,
+            "symbol": "observed",
+            "decision": "旧读取独立组合 worker、恢复上下文与共用门禁产生 resume 建议。",
+            "source_line": "let resume = !active"
+          },
+          {
+            "path": "rust/anchor-runner-host/src/application/kernel_runs.rs",
+            "line": 227,
+            "symbol": "KernelRuns::projection",
+            "decision": "原生读取独立定义 resume 建议。",
+            "source_line": "resume: (waiting || executing) && !active,"
+          },
+          {
+            "path": "rust/anchor-runner-host/src/application/kernel_runs.rs",
+            "line": 146,
+            "symbol": "KernelRuns::control",
+            "decision": "原生控制提交前禁止 worker 未退出时 resume。",
+            "source_line": "if operation == \"resume\" && self.active(id) {"
+          },
+          {
+            "path": "rust/anchor-runner-host/src/application/kernel_runs.rs",
+            "line": 330,
+            "symbol": "RunApplication::kernel_control",
+            "decision": "原生续跑用例在准备执行端口前再检查 worker。",
+            "source_line": "if runs.active(id) {"
+          },
+          {
+            "path": "rust/anchor-runner-host/src/application/kernel_runs.rs",
+            "line": 350,
+            "symbol": "RunApplication::kernel_control",
+            "decision": "Executing 且无 worker 可直接重进调度；其他相位先提交 resume。",
+            "source_line": "if resource.phase() != Some(&Phase::Executing) {"
+          }
+        ]
+      },
+      "after": {
+        "host_run_count": 11,
+        "sites": [
+          {
+            "path": "rust/anchor-runner-host/src/application/control.rs",
+            "line": 87,
+            "symbol": "RunApplication::control_expected",
+            "decision": "旧 worker 已注册时只允许 pause/stop；resume 被拒绝。",
+            "source_line": "if let Some(run) = active.get(run_id) {"
+          },
+          {
+            "path": "rust/anchor-runner-host/src/application/control.rs",
+            "line": 224,
+            "symbol": "reject_terminal_control",
+            "decision": "旧控制的统一终态门禁；各调用点不重复计。",
+            "source_line": "if record.status.is_terminal() {"
+          },
+          {
+            "path": "rust/anchor-runner-host/src/application/control.rs",
+            "line": 236,
+            "symbol": "validate_inactive_control",
+            "decision": "旧 inactive effect/recovery 状态不能直接续跑，先走恢复用例。",
+            "source_line": "if record.status == RunStatus::WaitingRecovery && operation != \"stop\" {"
+          },
+          {
+            "path": "rust/anchor-runner-host/src/application/control.rs",
+            "line": 249,
+            "symbol": "validate_resume_budget",
+            "decision": "旧 budget-stopped 需要显式预算策略，普通 resume 拒绝。",
+            "source_line": "if record.status == RunStatus::BudgetStopped {"
+          },
+          {
+            "path": "rust/anchor-runner-host/src/application/control.rs",
+            "line": 180,
+            "symbol": "resume_interrupted_attempts",
+            "decision": "普通 resume 遇到待核查效果，先为同一 Agent 保存观察上下文。",
+            "source_line": "if record.status != RunStatus::WaitingRecovery || record.recovery.is_empty() {"
+          },
+          {
+            "path": "rust/anchor-runner-host/src/application/control.rs",
+            "line": 74,
+            "symbol": "control_expected",
+            "decision": "子完成回调只可续跑同一 WaitingCall 节点和 invocation；已活动时不重复调度。",
+            "source_line": "let expected = self.store().load(run_id)?.is_some_and(|parent| {"
+          },
+          {
+            "path": "rust/anchor-graph-host/src/graph_call.rs",
+            "line": 342,
+            "symbol": "GraphCallPort::call",
+            "decision": "显式枚举可在父调用内重新进入的子 Run 状态。",
+            "source_line": "let resumable = session_context.is_none()"
+          },
+          {
+            "path": "rust/anchor-runner-host/src/application/run_view.rs",
+            "line": 38,
+            "symbol": "RunView::actions",
+            "decision": "共享建议：Executing/Human wait 且无 worker；child/effect 不接受人的普通 resume。",
+            "source_line": "resume: (self.phase == Phase::Executing"
+          },
+          {
+            "path": "rust/anchor-runner-host/src/application/kernel_runs.rs",
+            "line": 183,
+            "symbol": "KernelRuns::control",
+            "decision": "原生控制提交前禁止 worker 未退出时 resume。",
+            "source_line": "if operation == \"resume\" && active.contains_key(id) {"
+          },
+          {
+            "path": "rust/anchor-runner-host/src/application/kernel_runs.rs",
+            "line": 331,
+            "symbol": "RunApplication::kernel_control",
+            "decision": "原生续跑用例在准备执行端口前再检查 worker。",
+            "source_line": "if runs.active(id) {"
+          },
+          {
+            "path": "rust/anchor-runner-host/src/application/kernel_runs.rs",
+            "line": 351,
+            "symbol": "RunApplication::kernel_control",
+            "decision": "Executing 且无 worker 可直接重进调度；其他相位先提交 resume。",
+            "source_line": "if resource.phase() != Some(&Phase::Executing) {"
+          }
+        ]
+      },
+      "runtime_after": [],
+      "kernel_after": [
+        {
+          "path": "rust/anchor-kernel/src/kernel.rs",
+          "line": 522,
+          "symbol": "task_control",
+          "decision": "谁等待谁释放：Human wait 由人，Child/Effect wait 由 Code。",
+          "source_line": "let releaser = match &task.phase {"
+        }
+      ],
+      "edge_after": []
+    },
+    {
+      "id": "can_abandon",
+      "title": "可否 abandon",
+      "note": "旧路径保留取消/竞态保护；原生写入直接委托 Kernel。新增 advisory action 不代表旧写入判断已删除。",
+      "before": {
+        "host_run_count": 3,
+        "sites": [
+          {
+            "path": "rust/anchor-runner-host/src/application/abandon.rs",
+            "line": 159,
+            "symbol": "finalize_abandoned_run",
+            "decision": "最终落盘只把仍未结算且 worker 已退出的旧 Run 变 Aborted。",
+            "source_line": "if !record.status.is_terminal() {"
+          },
+          {
+            "path": "rust/anchor-runner-host/src/application/abandon.rs",
+            "line": 213,
+            "symbol": "abandon_run",
+            "decision": "放弃前置条件：Aborted 幂等，Completed/Failed 拒绝，其余可请求。",
+            "source_line": "match record.status {"
+          },
+          {
+            "path": "rust/anchor-runner-host/src/application/abandon.rs",
+            "line": 299,
+            "symbol": "abandon_run",
+            "decision": "取消后重新检查事实；已完成/失败不可反转为放弃。",
+            "source_line": "match status {"
+          }
+        ]
+      },
+      "after": {
+        "host_run_count": 4,
+        "sites": [
+          {
+            "path": "rust/anchor-runner-host/src/application/abandon.rs",
+            "line": 159,
+            "symbol": "finalize_abandoned_run",
+            "decision": "最终落盘只把仍未结算且 worker 已退出的旧 Run 变 Aborted。",
+            "source_line": "if !record.status.is_terminal() {"
+          },
+          {
+            "path": "rust/anchor-runner-host/src/application/abandon.rs",
+            "line": 213,
+            "symbol": "abandon_run",
+            "decision": "放弃前置条件：Aborted 幂等，Completed/Failed 拒绝，其余可请求。",
+            "source_line": "match record.status {"
+          },
+          {
+            "path": "rust/anchor-runner-host/src/application/abandon.rs",
+            "line": 299,
+            "symbol": "abandon_run",
+            "decision": "取消后重新检查事实；已完成/失败不可反转为放弃。",
+            "source_line": "match status {"
+          },
+          {
+            "path": "rust/anchor-runner-host/src/application/run_view.rs",
+            "line": 46,
+            "symbol": "RunView::actions",
+            "decision": "新增共享 abandon 建议；调用 is_settled，不再重复定义终态。",
+            "source_line": "abandon: !self.is_settled(),"
+          }
+        ]
+      },
+      "runtime_after": [],
+      "kernel_after": [
+        {
+          "path": "rust/anchor-kernel/src/kernel.rs",
+          "line": 538,
+          "symbol": "task_control",
+          "decision": "Human 可放弃未结算任务；结算任务此前统一拒绝。",
+          "source_line": "\"abandon\" => {"
+        }
+      ],
+      "edge_after": []
+    },
+    {
+      "id": "can_pause",
+      "title": "可否 pause",
+      "note": "原生 pause 的独立意图在派发边界消费，不取消当前节点；边界提交 stop 是动作实现，未再算一处可 pause 判断。旧 Runner 的轮询机制仍待 M3 删除。",
+      "before": {
+        "host_run_count": 5,
+        "sites": [
+          {
+            "path": "rust/anchor-runner-host/src/application/control.rs",
+            "line": 87,
+            "symbol": "RunApplication::control_expected",
+            "decision": "旧 worker 已注册时只允许 pause/stop；resume 被拒绝。",
+            "source_line": "if let Some(run) = active.get(run_id) {"
+          },
+          {
+            "path": "rust/anchor-runner-host/src/application/control.rs",
+            "line": 242,
+            "symbol": "validate_inactive_control",
+            "decision": "没有旧 worker 的 Run 不可 pause。",
+            "source_line": "if operation == \"pause\" {"
+          },
+          {
+            "path": "rust/anchor-runner-host/src/application/run_projection.rs",
+            "line": 106,
+            "symbol": "observed",
+            "decision": "旧 pause 建议额外要求没有控制请求。",
+            "source_line": "pause: active && !terminal && !session_coordinated && requested.is_none(),"
+          },
+          {
+            "path": "rust/anchor-runner-host/src/application/kernel_runs.rs",
+            "line": 225,
+            "symbol": "KernelRuns::projection",
+            "decision": "原生 probe 读取宣布 pause 不支持。",
+            "source_line": "pause: false,"
+          },
+          {
+            "path": "rust/anchor-runner-host/src/application/kernel_runs.rs",
+            "line": 141,
+            "symbol": "KernelRuns::control",
+            "decision": "原生 probe 写入宣布 pause 不支持。",
+            "source_line": "if !matches!(operation, \"stop\" | \"resume\" | \"abandon\") {"
+          }
+        ]
+      },
+      "after": {
+        "host_run_count": 4,
+        "sites": [
+          {
+            "path": "rust/anchor-runner-host/src/application/control.rs",
+            "line": 87,
+            "symbol": "RunApplication::control_expected",
+            "decision": "旧 worker 已注册时只允许 pause/stop；resume 被拒绝。",
+            "source_line": "if let Some(run) = active.get(run_id) {"
+          },
+          {
+            "path": "rust/anchor-runner-host/src/application/control.rs",
+            "line": 242,
+            "symbol": "validate_inactive_control",
+            "decision": "没有旧 worker 的 Run 不可 pause。",
+            "source_line": "if operation == \"pause\" {"
+          },
+          {
+            "path": "rust/anchor-runner-host/src/application/run_view.rs",
+            "line": 36,
+            "symbol": "RunView::actions",
+            "decision": "共享建议：Executing 且有 worker。",
+            "source_line": "pause: self.phase == Phase::Executing && self.worker,"
+          },
+          {
+            "path": "rust/anchor-runner-host/src/application/kernel_runs/pause.rs",
+            "line": 92,
+            "symbol": "KernelRuns::request_pause",
+            "decision": "原生 pause 写入同样校验 worker 和 Executing，然后保存意图。",
+            "source_line": "let execution = active"
+          }
+        ]
+      },
+      "runtime_after": [],
+      "kernel_after": [],
+      "edge_after": [
+        {
+          "path": "rust/anchor-runner-host/src/application/kernel_runs/pause.rs",
+          "line": 43,
+          "symbol": "PauseBoundary::before_dispatch",
+          "decision": "当前结果提交后的边界把 pause 意图转为 reason=paused 的 stop；已等待/结算不改事实。",
+          "source_line": "if resource.phase() == Some(&Phase::Executing) {"
+        }
+      ]
+    },
+    {
+      "id": "quiescent",
+      "title": "是否静止",
+      "note": "Session 仍可持有 paused/budget Turn；这不是重新定义 Run 静止。Web 仍有相同相位公式的独立实现，跨语言未收敛为一处。",
+      "before": {
+        "host_run_count": 2,
+        "sites": [
+          {
+            "path": "rust/anchor-runner-host/src/application/liveness.rs",
+            "line": 33,
+            "symbol": "RunLiveness::is_quiescent",
+            "decision": "旧静止定义：没有 worker，且旧终态或 Stopped。",
+            "source_line": "!self.executor_registered"
+          },
+          {
+            "path": "rust/anchor-runner-host/src/application/kernel_runs.rs",
+            "line": 220,
+            "symbol": "KernelRuns::projection",
+            "decision": "probe 的独立静止定义只看 worker。",
+            "source_line": "quiescent: !active,"
+          }
+        ]
+      },
+      "after": {
+        "host_run_count": 1,
+        "sites": [
+          {
+            "path": "rust/anchor-runner-host/src/application/liveness.rs",
+            "line": 13,
+            "symbol": "RunLiveness::from_phase",
+            "decision": "唯一 Host 定义：没有 worker，且 Settled/Human wait。",
+            "source_line": "quiescent: !worker"
+          }
+        ]
+      },
+      "runtime_after": [],
+      "kernel_after": [],
+      "edge_after": [
+        {
+          "path": "apps/web/src/runPresentation.ts",
+          "line": 12,
+          "symbol": "runQuiescent",
+          "decision": "Web 静止公式；Host 计数之外仍存在这一份定义。",
+          "source_line": "export const runQuiescent = (p?: RunProjection) => !!p && !p.active"
+        }
+      ]
+    },
+    {
+      "id": "needs_attention",
+      "title": "是否需要关注",
+      "note": "Host 已不提供该事实，Web 由 phase/outcome/active 生成显示规则。2→0 是规则迁出 Host，不是整个产品只剩零处。",
+      "before": {
+        "host_run_count": 2,
+        "sites": [
+          {
+            "path": "rust/anchor-runner-host/src/application/run_projection.rs",
+            "line": 96,
+            "symbol": "observed",
+            "decision": "旧状态集合决定是否需关注。",
+            "source_line": "needs_attention: matches!("
+          },
+          {
+            "path": "rust/anchor-runner-host/src/application/kernel_runs.rs",
+            "line": 221,
+            "symbol": "KernelRuns::projection",
+            "decision": "probe 独立按 waiting/丢失 worker/失败决定关注。",
+            "source_line": "needs_attention: waiting"
+          }
+        ]
+      },
+      "after": {
+        "host_run_count": 0,
+        "sites": []
+      },
+      "runtime_after": [],
+      "kernel_after": [],
+      "edge_after": [
+        {
+          "path": "apps/web/src/runPresentation.ts",
+          "line": 10,
+          "symbol": "runNeedsAttention",
+          "decision": "Web 独立定义关注状态；等待、非 Done 结算、失去 worker 等。",
+          "source_line": "export const runNeedsAttention = ({ projection: p }: ProjectedRun) => !p || p.phase === 'waiting'"
+        }
+      ]
+    },
+    {
+      "id": "late_result",
+      "title": "迟到结果如何处理",
+      "note": "Host 这一处是父子唤醒回调的防护；一般节点迟到提交由 Kernel 拒绝，Host 不重写相位。Session 的旧回复抑制属于投递规则，另列。",
+      "before": {
+        "host_run_count": 1,
+        "sites": [
+          {
+            "path": "rust/anchor-runner-host/src/application/control.rs",
+            "line": 74,
+            "symbol": "control_expected",
+            "decision": "迟到的子 Run 完成回调必须匹配仍等待的父节点与 invocation，且父无 worker。",
+            "source_line": "let expected = self.store().load(run_id)?.is_some_and(|parent| {"
+          }
+        ]
+      },
+      "after": {
+        "host_run_count": 1,
+        "sites": [
+          {
+            "path": "rust/anchor-runner-host/src/application/control.rs",
+            "line": 74,
+            "symbol": "control_expected",
+            "decision": "迟到的子 Run 完成回调必须匹配仍等待的父节点与 invocation，且父无 worker。",
+            "source_line": "let expected = self.store().load(run_id)?.is_some_and(|parent| {"
+          }
+        ]
+      },
+      "runtime_after": [
+        {
+          "path": "rust/anchor-runtime/src/graph/scheduler.rs",
+          "line": 55,
+          "symbol": "submit_with_retry",
+          "decision": "StaleVersion 刷新版本重提，重提成本归零。",
+          "source_line": "if verdict.reason != Reason::StaleVersion {"
+        },
+        {
+          "path": "rust/anchor-runtime/src/graph/scheduler.rs",
+          "line": 219,
+          "symbol": "KernelScheduler::run",
+          "decision": "TaskWaiting/TaskSettled 的晚到结果不推进 Graph；其他拒绝报错。",
+          "source_line": "if !verdict.is_accepted()"
+        }
+      ],
+      "kernel_after": [
+        {
+          "path": "rust/anchor-kernel/src/kernel.rs",
+          "line": 213,
+          "symbol": "Kernel::adjudicate",
+          "decision": "Waiting 时晚到 work 拒绝，成本仍按既定盖章处理。",
+          "source_line": "if waiting_work {"
+        },
+        {
+          "path": "rust/anchor-kernel/src/kernel.rs",
+          "line": 227,
+          "symbol": "Kernel::adjudicate",
+          "decision": "结算不可逆。",
+          "source_line": "Phase::Settled { .. } => return refuse(Reason::TaskSettled),"
+        },
+        {
+          "path": "rust/anchor-kernel/src/kernel.rs",
+          "line": 234,
+          "symbol": "Kernel::adjudicate",
+          "decision": "版本不匹配返回 StaleVersion。",
+          "source_line": "if submission.seen != resource.version {"
+        }
+      ],
+      "edge_after": []
+    },
+    {
+      "id": "unknown_effect",
+      "title": "未知效果如何处理",
+      "note": "本表同时列出未知识别与防重放/人工决定这些不同子规则，未把它们声称为同一份实现。原生 record_recovery_decision 当前仍 Unsupported，是 M2 缺口；Session-call 的观察回写另列。",
+      "before": {
+        "host_run_count": 13,
+        "sites": [
+          {
+            "path": "rust/anchor-runner-host/src/node_host/facts.rs",
+            "line": 45,
+            "symbol": "load_host_completion_fact",
+            "decision": "有 started 无终结结果就是 Uncertain，不自动重放。",
+            "source_line": "if read_optional(&root.join(format!(\"{stem}.started\")))?.is_some() {"
+          },
+          {
+            "path": "rust/anchor-runner-host/src/node_host/execution.rs",
+            "line": 207,
+            "symbol": "HostNodes::completion_fact",
+            "decision": "Host/Goose 结果不一致保留未知。",
+            "source_line": "_ => CompletionFact::Uncertain(\"host and Goose node facts conflict\".into()),"
+          },
+          {
+            "path": "rust/anchor-runner-host/src/goose_acp.rs",
+            "line": 378,
+            "symbol": "GooseNodes::completion_fact",
+            "decision": "fixture 缺终结结果为未知；原生 v2 有原生会话时仍可恢复。",
+            "source_line": "None => CompletionFact::Uncertain("
+          },
+          {
+            "path": "rust/anchor-runner-host/src/goose_acp.rs",
+            "line": 398,
+            "symbol": "GooseNodes::execute",
+            "decision": "只允许 NotStarted 或原生 Resumable 进入，未知事实不重放。",
+            "source_line": "\"Goose automatic replay is refused\".into(),"
+          },
+          {
+            "path": "rust/anchor-runner-host/src/goose_acp.rs",
+            "line": 249,
+            "symbol": "failure_outcome",
+            "decision": "原生传输等未知故障保留 Interrupted，合同错误才是已知失败。",
+            "source_line": "InvocationFailure::Uncertain(reason) => NodeExecutionOutcome::Interrupted { reason },"
+          },
+          {
+            "path": "rust/anchor-graph-host/src/graph_call.rs",
+            "line": 342,
+            "symbol": "GraphCallPort::call",
+            "decision": "子 Run 的 recovery/terminal 状态不自动重进执行。",
+            "source_line": "let resumable = session_context.is_none()"
+          },
+          {
+            "path": "rust/anchor-graph-host/src/graph_call.rs",
+            "line": 643,
+            "symbol": "project_child_outcome",
+            "decision": "子失败但保留 cursor、或仍 Ready/Running：向父暴露 Uncertain。",
+            "source_line": "RunStatus::Failed if child.cursor.is_some() => Ok(GraphCallOutcome::Uncertain {"
+          },
+          {
+            "path": "rust/anchor-runner-host/src/application/dispatch.rs",
+            "line": 51,
+            "symbol": "dispatch_detached",
+            "decision": "崩溃后 detached Running 可能已逃逸，只自动派发尚 Ready 的 child。",
+            "source_line": "if record.status != RunStatus::Ready {"
+          },
+          {
+            "path": "rust/anchor-runner-host/src/execution.rs",
+            "line": 307,
+            "symbol": "PreparedExecution::run",
+            "decision": "旧 Runner 异常只基于最新持久记录失败并保留未知现场，不自动回放。",
+            "source_line": "if matches!(durable.status, RunStatus::Ready | RunStatus::Running) {"
+          },
+          {
+            "path": "rust/anchor-runner-host/src/application/control.rs",
+            "line": 180,
+            "symbol": "resume_interrupted_attempts",
+            "decision": "人的普通 resume 先把未知工具调用写为核查上下文，不直接再执行该工具。",
+            "source_line": "if record.status != RunStatus::WaitingRecovery || record.recovery.is_empty() {"
+          },
+          {
+            "path": "rust/anchor-runner-host/src/application/recovery.rs",
+            "line": 219,
+            "symbol": "validate_recovery_target",
+            "decision": "恢复决定只针对当前 cursor/attempt 的 WaitingRecovery 接受。",
+            "source_line": "if record.status != RunStatus::WaitingRecovery {"
+          },
+          {
+            "path": "rust/anchor-runner-host/src/application/recovery.rs",
+            "line": 107,
+            "symbol": "recover",
+            "decision": "取得 lease 后再次独立检查 cursor/attempt/WaitingRecovery，避免写入迟到决定。",
+            "source_line": "if !has_recovery_cursor(&record, &key)"
+          },
+          {
+            "path": "rust/anchor-runner-host/src/application/recovery.rs",
+            "line": 134,
+            "symbol": "recover",
+            "decision": "Abort 结算；其余保留未解决 attempt，全部关闭后才续跑同一 Run。",
+            "source_line": "if is_abort {"
+          }
+        ]
+      },
+      "after": {
+        "host_run_count": 14,
+        "sites": [
+          {
+            "path": "rust/anchor-runner-host/src/node_host/facts.rs",
+            "line": 45,
+            "symbol": "load_host_completion_fact",
+            "decision": "有 started 无终结结果就是 Uncertain，不自动重放。",
+            "source_line": "if read_optional(&root.join(format!(\"{stem}.started\")))?.is_some() {"
+          },
+          {
+            "path": "rust/anchor-runner-host/src/node_host/execution.rs",
+            "line": 207,
+            "symbol": "HostNodes::completion_fact",
+            "decision": "Host/Goose 结果不一致保留未知。",
+            "source_line": "_ => CompletionFact::Uncertain(\"host and Goose node facts conflict\".into()),"
+          },
+          {
+            "path": "rust/anchor-runner-host/src/goose_acp.rs",
+            "line": 378,
+            "symbol": "GooseNodes::completion_fact",
+            "decision": "fixture 缺终结结果为未知；原生 v2 有原生会话时仍可恢复。",
+            "source_line": "None => CompletionFact::Uncertain("
+          },
+          {
+            "path": "rust/anchor-runner-host/src/goose_acp.rs",
+            "line": 398,
+            "symbol": "GooseNodes::execute",
+            "decision": "只允许 NotStarted 或原生 Resumable 进入，未知事实不重放。",
+            "source_line": "\"Goose automatic replay is refused\".into(),"
+          },
+          {
+            "path": "rust/anchor-runner-host/src/goose_acp.rs",
+            "line": 249,
+            "symbol": "failure_outcome",
+            "decision": "原生传输等未知故障保留 Interrupted，合同错误才是已知失败。",
+            "source_line": "InvocationFailure::Uncertain(reason) => NodeExecutionOutcome::Interrupted { reason },"
+          },
+          {
+            "path": "rust/anchor-graph-host/src/graph_call.rs",
+            "line": 342,
+            "symbol": "GraphCallPort::call",
+            "decision": "子 Run 的 recovery/terminal 状态不自动重进执行。",
+            "source_line": "let resumable = session_context.is_none()"
+          },
+          {
+            "path": "rust/anchor-graph-host/src/graph_call.rs",
+            "line": 643,
+            "symbol": "project_child_outcome",
+            "decision": "子失败但保留 cursor、或仍 Ready/Running：向父暴露 Uncertain。",
+            "source_line": "RunStatus::Failed if child.cursor.is_some() => Ok(GraphCallOutcome::Uncertain {"
+          },
+          {
+            "path": "rust/anchor-runner-host/src/application/dispatch.rs",
+            "line": 51,
+            "symbol": "dispatch_detached",
+            "decision": "崩溃后 detached Running 可能已逃逸，只自动派发尚 Ready 的 child。",
+            "source_line": "if record.status != RunStatus::Ready {"
+          },
+          {
+            "path": "rust/anchor-runner-host/src/execution.rs",
+            "line": 307,
+            "symbol": "PreparedExecution::run",
+            "decision": "旧 Runner 异常只基于最新持久记录失败并保留未知现场，不自动回放。",
+            "source_line": "if matches!(durable.status, RunStatus::Ready | RunStatus::Running) {"
+          },
+          {
+            "path": "rust/anchor-runner-host/src/application/control.rs",
+            "line": 180,
+            "symbol": "resume_interrupted_attempts",
+            "decision": "人的普通 resume 先把未知工具调用写为核查上下文，不直接再执行该工具。",
+            "source_line": "if record.status != RunStatus::WaitingRecovery || record.recovery.is_empty() {"
+          },
+          {
+            "path": "rust/anchor-runner-host/src/application/recovery.rs",
+            "line": 219,
+            "symbol": "validate_recovery_target",
+            "decision": "恢复决定只针对当前 cursor/attempt 的 WaitingRecovery 接受。",
+            "source_line": "if record.status != RunStatus::WaitingRecovery {"
+          },
+          {
+            "path": "rust/anchor-runner-host/src/application/recovery.rs",
+            "line": 107,
+            "symbol": "recover",
+            "decision": "取得 lease 后再次独立检查 cursor/attempt/WaitingRecovery，避免写入迟到决定。",
+            "source_line": "if !has_recovery_cursor(&record, &key)"
+          },
+          {
+            "path": "rust/anchor-runner-host/src/application/recovery.rs",
+            "line": 134,
+            "symbol": "recover",
+            "decision": "Abort 结算；其余保留未解决 attempt，全部关闭后才续跑同一 Run。",
+            "source_line": "if is_abort {"
+          },
+          {
+            "path": "rust/anchor-runner-host/src/application/legacy_run_view.rs",
+            "line": 31,
+            "symbol": "legacy_run_view::phase",
+            "decision": "旧 WaitingRecovery 解释为 Effect wait，不伪装成普通人等待。",
+            "source_line": "RunStatus::WaitingRecovery => Phase::Waiting {"
+          }
+        ]
+      },
+      "runtime_after": [
+        {
+          "path": "rust/anchor-runtime/src/graph/runner.rs",
+          "line": 304,
+          "symbol": "GraphRunner::run",
+          "decision": "旧串行路径保留 cursor 后失败。",
+          "source_line": "CompletionFact::Uncertain(reason) => {"
+        },
+        {
+          "path": "rust/anchor-runtime/src/graph/parallel.rs",
+          "line": 155,
+          "symbol": "run_parallel",
+          "decision": "旧并行路径保留现场并阻断新派发。",
+          "source_line": "CompletionFact::Uncertain(reason) => {"
+        },
+        {
+          "path": "rust/anchor-runtime/src/graph/scheduler.rs",
+          "line": 119,
+          "symbol": "KernelScheduler::run",
+          "decision": "原生调度器用 Code+Observation 停给人处理。",
+          "source_line": "CompletionFact::Uncertain(reason) => {"
+        }
+      ],
+      "kernel_after": [
+        {
+          "path": "rust/anchor-kernel/src/kernel.rs",
+          "line": 418,
+          "symbol": "Kernel::has_unknown_effect",
+          "decision": "已有同 endpoint 未知效果时不自行再次执行；效果事实归 Kernel。",
+          "source_line": "fn has_unknown_effect(&self, endpoint: &str) -> Result<bool, KernelError> {"
+        }
+      ],
+      "edge_after": []
+    },
+    {
+      "id": "budget_exhaustion",
+      "title": "预算耗尽如何处理",
+      "note": "预算检测及状态写入属于 runtime；原生 BudgetExhausted 结果仍落 unsupported 分支，M2 才接 Code+Observation stop。Kernel 自身账本预算硬上限的 Escalated 与该执行端口结果不是同一层规则，W4 未决定。",
+      "before": {
+        "host_run_count": 3,
+        "sites": [
+          {
+            "path": "rust/anchor-runner-host/src/application/control.rs",
+            "line": 249,
+            "symbol": "validate_resume_budget",
+            "decision": "旧预算停机不可直接普通 resume。",
+            "source_line": "if record.status == RunStatus::BudgetStopped {"
+          },
+          {
+            "path": "rust/anchor-graph-host/src/graph_call.rs",
+            "line": 342,
+            "symbol": "GraphCallPort::call",
+            "decision": "内联 wait child 白名单包含 BudgetStopped，决定是否重入。",
+            "source_line": "let resumable = session_context.is_none()"
+          },
+          {
+            "path": "rust/anchor-graph-host/src/graph_call.rs",
+            "line": 629,
+            "symbol": "project_child_outcome",
+            "decision": "子 budget stop 投影为 Waiting，不向父报告完成。",
+            "source_line": "| RunStatus::BudgetStopped"
+          }
+        ]
+      },
+      "after": {
+        "host_run_count": 4,
+        "sites": [
+          {
+            "path": "rust/anchor-runner-host/src/application/control.rs",
+            "line": 249,
+            "symbol": "validate_resume_budget",
+            "decision": "旧预算停机不可直接普通 resume。",
+            "source_line": "if record.status == RunStatus::BudgetStopped {"
+          },
+          {
+            "path": "rust/anchor-graph-host/src/graph_call.rs",
+            "line": 342,
+            "symbol": "GraphCallPort::call",
+            "decision": "内联 wait child 白名单包含 BudgetStopped，决定是否重入。",
+            "source_line": "let resumable = session_context.is_none()"
+          },
+          {
+            "path": "rust/anchor-graph-host/src/graph_call.rs",
+            "line": 629,
+            "symbol": "project_child_outcome",
+            "decision": "子 budget stop 投影为 Waiting，不向父报告完成。",
+            "source_line": "| RunStatus::BudgetStopped"
+          },
+          {
+            "path": "rust/anchor-runner-host/src/application/legacy_run_view.rs",
+            "line": 21,
+            "symbol": "legacy_run_view::phase",
+            "decision": "新读取把旧 BudgetStopped 显示为 Human wait，reason=budget。",
+            "source_line": "RunStatus::BudgetStopped => Phase::Waiting {"
+          }
+        ]
+      },
+      "runtime_after": [
+        {
+          "path": "rust/anchor-runtime/src/graph/runner.rs",
+          "line": 615,
+          "symbol": "GraphRunner::run",
+          "decision": "旧串行执行结果变 BudgetStopped。",
+          "source_line": "NodeExecutionOutcome::BudgetExhausted { .. } => {"
+        },
+        {
+          "path": "rust/anchor-runtime/src/graph/parallel.rs",
+          "line": 242,
+          "symbol": "run_parallel",
+          "decision": "旧并行执行结果变 BudgetStopped。",
+          "source_line": "NodeExecutionOutcome::BudgetExhausted { .. } => {"
+        },
+        {
+          "path": "rust/anchor-runtime/src/graph/scheduler.rs",
+          "line": 211,
+          "symbol": "KernelScheduler::run",
+          "decision": "原生 BudgetExhausted 目前未实现（Unsupported）。",
+          "source_line": "unsupported => {"
+        }
+      ],
+      "kernel_after": [
+        {
+          "path": "rust/anchor-kernel/src/kernel.rs",
+          "line": 457,
+          "symbol": "charge",
+          "decision": "Kernel 账本预算硬上限结算为 Escalated；与执行端口预算停止分层。",
+          "source_line": "fn charge(resource: &mut Resource, cost: u64) -> bool {"
+        }
+      ],
+      "edge_after": []
+    },
+    {
+      "id": "release_parent",
+      "title": "子 Run 结算后如何释放父 Run",
+      "note": "仍是旧 Graph call 与旧 parent cursor 机制；原生 scheduler 的 validate_probe 仍拒绝 Op.call，不能把本表当作 M2 Child wait 已实现。Session receipt 用同一 child_finished 唤醒，不重复计。",
+      "before": {
+        "host_run_count": 3,
+        "sites": [
+          {
+            "path": "rust/anchor-graph-host/src/graph_call.rs",
+            "line": 577,
+            "symbol": "project_child_outcome",
+            "decision": "已完成子 Run 导出结果；等待/失败/未知分别转为调用观察，供父 Runner 决定推进。",
+            "source_line": "RunStatus::Completed => {"
+          },
+          {
+            "path": "rust/anchor-runner-host/src/application/dispatch.rs",
+            "line": 149,
+            "symbol": "child_finished",
+            "decision": "独立完成回调只在 child Completed、delivery 非 pending、wait 模式且父无 worker 时触发唤醒。",
+            "source_line": "if status != RunStatus::Completed {"
+          },
+          {
+            "path": "rust/anchor-runner-host/src/application/control.rs",
+            "line": 74,
+            "symbol": "control_expected",
+            "decision": "唤醒写入前再次要求父 WaitingCall 与同一 node/invocation，防止旧回调作用于新位置。",
+            "source_line": "let expected = self.store().load(run_id)?.is_some_and(|parent| {"
+          }
+        ]
+      },
+      "after": {
+        "host_run_count": 3,
+        "sites": [
+          {
+            "path": "rust/anchor-graph-host/src/graph_call.rs",
+            "line": 577,
+            "symbol": "project_child_outcome",
+            "decision": "已完成子 Run 导出结果；等待/失败/未知分别转为调用观察，供父 Runner 决定推进。",
+            "source_line": "RunStatus::Completed => {"
+          },
+          {
+            "path": "rust/anchor-runner-host/src/application/dispatch.rs",
+            "line": 149,
+            "symbol": "child_finished",
+            "decision": "独立完成回调只在 child Completed、delivery 非 pending、wait 模式且父无 worker 时触发唤醒。",
+            "source_line": "if status != RunStatus::Completed {"
+          },
+          {
+            "path": "rust/anchor-runner-host/src/application/control.rs",
+            "line": 74,
+            "symbol": "control_expected",
+            "decision": "唤醒写入前再次要求父 WaitingCall 与同一 node/invocation，防止旧回调作用于新位置。",
+            "source_line": "let expected = self.store().load(run_id)?.is_some_and(|parent| {"
+          }
+        ]
+      },
+      "runtime_after": [
+        {
+          "path": "rust/anchor-runtime/src/graph/runner.rs",
+          "line": 432,
+          "symbol": "GraphRunner::run",
+          "decision": "旧 Runner 收到 child Completed 后冻结 call result 并推进。",
+          "source_line": "GraphCallOutcome::Completed {"
+        },
+        {
+          "path": "rust/anchor-runtime/src/graph/scheduler.rs",
+          "line": 16,
+          "symbol": "validate_probe",
+          "decision": "原生 Op.call 当前 Unsupported。",
+          "source_line": "if [\"fanout\", \"join\", \"call\", \"host\"]"
+        }
+      ],
+      "kernel_after": [],
+      "edge_after": []
+    }
+  ],
+  "boundary_policies_after": [
+    {
+      "id": "session_turn_settlement",
+      "path": "rust/anchor-runner-host/src/application/conversations.rs",
+      "line": 872,
+      "symbol": "",
+      "decision": "Run 结算到 Turn 结果/投递责任的映射归 Session，不是 Run 的第二份终态事实。",
+      "source_line": "pub(crate) fn settle_channel_run("
+    },
+    {
+      "id": "session_turn_ownership",
+      "path": "rust/anchor-runner-host/src/application/conversations.rs",
+      "line": 386,
+      "symbol": "",
+      "decision": "paused/budget 的 Turn 仍占用会话；物理 Run 静止不等于可建立后继 Turn。",
+      "source_line": "let turn_held = matches!("
+    },
+    {
+      "id": "session_superseded_run",
+      "path": "rust/anchor-runner-host/src/application/conversations.rs",
+      "line": 653,
+      "symbol": "",
+      "decision": "旧 Turn 被替代后不能恢复执行；Session 线性化规则。",
+      "source_line": "pub(super) fn reject_superseded_conversation_execution("
+    },
+    {
+      "id": "assistant_current_instance",
+      "path": "rust/anchor-runner-host/src/application/assistants.rs",
+      "line": 41,
+      "symbol": "",
+      "decision": "current assistant 指针属于 Session；退役规则不是 Run 的 resume 定律。",
+      "source_line": "pub(super) fn ensure_current_assistant("
+    },
+    {
+      "id": "action_authorization",
+      "path": "rust/anchor-runner-host/src/application/run_projection.rs",
+      "line": 71,
+      "symbol": "",
+      "decision": "身份、scope、assistant 当前性收窄 advisory actions；写入仍在用例校验。",
+      "source_line": "let identity = metadata.filter(|m| control::validate_control_identity(record, m).is_ok());"
+    },
+    {
+      "id": "session_call_control",
+      "path": "rust/anchor-runner-host/src/application/control.rs",
+      "line": 62,
+      "symbol": "",
+      "decision": "Session call 不通过普通 pause/resume，拥有协调生命周期。",
+      "source_line": "\"Session calls are coordinated through the Session host\".into(),"
+    },
+    {
+      "id": "session_call_resume",
+      "path": "rust/anchor-runner-host/src/application/session_calls.rs",
+      "line": 313,
+      "symbol": "",
+      "decision": "Session call 的 continuation 门禁，不能当成普通 Run resume 的统一规则。",
+      "source_line": "RunStatus::Failed | RunStatus::Aborted | RunStatus::BudgetStopped"
+    },
+    {
+      "id": "session_call_unknown",
+      "path": "rust/anchor-runner-host/src/application/session_calls.rs",
+      "line": 369,
+      "symbol": "",
+      "decision": "Session call 自己回填未知调用的核查观察；仍有独立编排写入，M3 需要核对事实所有者。",
+      "source_line": "for pending in std::mem::take(&mut record.recovery) {"
+    },
+    {
+      "id": "session_reply_suppression",
+      "path": "rust/anchor-runner-host/src/node_host/assistant.rs",
+      "line": 9,
+      "symbol": "",
+      "decision": "Turn 被替代/停止后抑制旧回复；不属于 Run 晚到节点提交门禁。",
+      "source_line": "fn stopped_input(input: &anchor_platform_session::ChannelInboundAdmission) -> bool {"
+    },
+    {
+      "id": "session_gateway_delivery",
+      "path": "rust/anchor-runner-host/src/api/wecom.rs",
+      "line": 692,
+      "symbol": "",
+      "decision": "网关是否停止等待及投递错误由 Session/通道解释 Run 事实。",
+      "source_line": "RunStatus::Failed | RunStatus::Aborted | RunStatus::Stopped"
+    },
+    {
+      "id": "session_turn_projection",
+      "path": "rust/anchor-runner-host/src/api/turns.rs",
+      "line": 35,
+      "symbol": "",
+      "decision": "Turn 流停止条件含 Stopped，因此不是 Run 终态谓词。",
+      "source_line": "anchor_runtime::graph::RunStatus::Completed"
+    },
+    {
+      "id": "historical_run_selection",
+      "path": "rust/anchor-runner-host/src/node_host/conversation.rs",
+      "line": 125,
+      "symbol": "",
+      "decision": "历史上下文选择允许停下的 Run；不是 Run 结算判断。",
+      "source_line": "RunStatus::Completed"
+    },
+    {
+      "id": "artifact_availability",
+      "path": "rust/anchor-runner-host/src/api/files.rs",
+      "line": 196,
+      "symbol": "",
+      "decision": "产物下载要求已完成或有冻结结果，属于产物可见性。",
+      "source_line": "if record.status != RunStatus::Completed"
+    },
+    {
+      "id": "kernel_attempt_recovery_gap",
+      "path": "rust/anchor-runner-host/src/application/recovery.rs",
+      "line": 14,
+      "symbol": "",
+      "decision": "原生 attempt 决定 API Unsupported；必须作为能力缺口保留。",
+      "source_line": "if self.kernel_owner(run_id)?.is_some() {"
+    }
+  ],
+  "source_snapshots": [
+    {
+      "revision": "1d1ba54",
+      "path": "rust/anchor-graph-host/src/graph_call.rs",
+      "sha256": "14817ffa8808b57f77a27950c5fff9080d9095b15545a54d56fa1a51c9bf6131"
+    },
+    {
+      "revision": "1d1ba54",
+      "path": "rust/anchor-runner-host/src/application/abandon.rs",
+      "sha256": "72854f170d01a482c09c96381b529253410bd34de350bfbfa5d4c861cf474f79"
+    },
+    {
+      "revision": "1d1ba54",
+      "path": "rust/anchor-runner-host/src/application/admission.rs",
+      "sha256": "e4940db7472bb0a780ef0baa1dc5db13b482b539f7ddcf063d7efc8f849052e1"
+    },
+    {
+      "revision": "1d1ba54",
+      "path": "rust/anchor-runner-host/src/application/control.rs",
+      "sha256": "2ead6934a92f9a4ae2fbce3aa0d345588ab5395ff1d6febf97dc5c3115aaebf9"
+    },
+    {
+      "revision": "1d1ba54",
+      "path": "rust/anchor-runner-host/src/application/dispatch.rs",
+      "sha256": "ae99bf257483cb6c035f852b85adfadd88cf709b1cfe0b8a3d64c775bd16d229"
+    },
+    {
+      "revision": "1d1ba54",
+      "path": "rust/anchor-runner-host/src/application/kernel_runs.rs",
+      "sha256": "9e7778c74682d7f9bbf3705ec9c4a9dd736cacc14990c66bf133ecb415a7393c"
+    },
+    {
+      "revision": "1d1ba54",
+      "path": "rust/anchor-runner-host/src/application/liveness.rs",
+      "sha256": "fa5d0f7ad00817afeab1199067ba60b1ef8f12c9432118eb63a059e597b23159"
+    },
+    {
+      "revision": "1d1ba54",
+      "path": "rust/anchor-runner-host/src/application/recovery.rs",
+      "sha256": "1c2dc86ec6412ba2ac9295cd02484a3f2763a0c26939ccbeabcb9f46573a4adf"
+    },
+    {
+      "revision": "1d1ba54",
+      "path": "rust/anchor-runner-host/src/application/run_projection.rs",
+      "sha256": "c4c03dba6d35bbb2c8ff16d1ede11358839258e33a042906dd52e65342392a02"
+    },
+    {
+      "revision": "1d1ba54",
+      "path": "rust/anchor-runner-host/src/execution.rs",
+      "sha256": "6422c0ed943f3467e8bf0b919bd96ee13728a49d9b8b0a723c1bf2fe34874080"
+    },
+    {
+      "revision": "1d1ba54",
+      "path": "rust/anchor-runner-host/src/goose_acp.rs",
+      "sha256": "31f67114a13f08f06e2f1f6cc54b3d3c4d95e0d7caf84a22e067e5aaa35103a4"
+    },
+    {
+      "revision": "1d1ba54",
+      "path": "rust/anchor-runner-host/src/node_host/execution.rs",
+      "sha256": "c8769327d62e68acdefb307a63d3711b8c5bd07d047eea9ef87213ff9da6d6e5"
+    },
+    {
+      "revision": "1d1ba54",
+      "path": "rust/anchor-runner-host/src/node_host/facts.rs",
+      "sha256": "e6eee73bfe9c027c4e552855e7b65893731a45b85b659697ec463d3b6aca5f68"
+    },
+    {
+      "revision": "WORKTREE",
+      "path": "apps/web/src/runPresentation.ts",
+      "sha256": "221a04f60ed8889e31fef307c83c7a1f1e42a9c0367a645d9e8236fadcd527ff"
+    },
+    {
+      "revision": "WORKTREE",
+      "path": "rust/anchor-graph-host/src/graph_call.rs",
+      "sha256": "14817ffa8808b57f77a27950c5fff9080d9095b15545a54d56fa1a51c9bf6131"
+    },
+    {
+      "revision": "WORKTREE",
+      "path": "rust/anchor-kernel/src/kernel.rs",
+      "sha256": "5148d6a1e7ee644e9573a11e19176d1efd4c6bdfa610b33a2e92add4a3779b9e"
+    },
+    {
+      "revision": "WORKTREE",
+      "path": "rust/anchor-runner-host/src/api/files.rs",
+      "sha256": "53676477b6b6b84998e6240af7c8ed4866f66f0796731b03fae60a3a9588b091"
+    },
+    {
+      "revision": "WORKTREE",
+      "path": "rust/anchor-runner-host/src/api/turns.rs",
+      "sha256": "8fd6dcaaf664f5133a026e078c23444cd13b29fdfe159e25ab7a5ea051fd5bf5"
+    },
+    {
+      "revision": "WORKTREE",
+      "path": "rust/anchor-runner-host/src/api/wecom.rs",
+      "sha256": "4a71e4c85f662d3c529c94840c67f467e7bcef84ac2f74abb3482cc40425630e"
+    },
+    {
+      "revision": "WORKTREE",
+      "path": "rust/anchor-runner-host/src/application/abandon.rs",
+      "sha256": "72854f170d01a482c09c96381b529253410bd34de350bfbfa5d4c861cf474f79"
+    },
+    {
+      "revision": "WORKTREE",
+      "path": "rust/anchor-runner-host/src/application/admission.rs",
+      "sha256": "e4940db7472bb0a780ef0baa1dc5db13b482b539f7ddcf063d7efc8f849052e1"
+    },
+    {
+      "revision": "WORKTREE",
+      "path": "rust/anchor-runner-host/src/application/assistants.rs",
+      "sha256": "07544d36f7c3906cfec9232fcbbcd34fd4a08b6bbb3a06c0eb2695d7d870dc5d"
+    },
+    {
+      "revision": "WORKTREE",
+      "path": "rust/anchor-runner-host/src/application/control.rs",
+      "sha256": "2ead6934a92f9a4ae2fbce3aa0d345588ab5395ff1d6febf97dc5c3115aaebf9"
+    },
+    {
+      "revision": "WORKTREE",
+      "path": "rust/anchor-runner-host/src/application/conversations.rs",
+      "sha256": "8278c3e6cb4d30102582307b63fa9f3dce5a5f6ccdb7bf5f28cac68cea42e6df"
+    },
+    {
+      "revision": "WORKTREE",
+      "path": "rust/anchor-runner-host/src/application/dispatch.rs",
+      "sha256": "ae99bf257483cb6c035f852b85adfadd88cf709b1cfe0b8a3d64c775bd16d229"
+    },
+    {
+      "revision": "WORKTREE",
+      "path": "rust/anchor-runner-host/src/application/kernel_runs.rs",
+      "sha256": "fc05c7a0dd9ec48bdc6d9f86426acf941cb61bd0e32ee71acb77b12371930b3e"
+    },
+    {
+      "revision": "WORKTREE",
+      "path": "rust/anchor-runner-host/src/application/kernel_runs/pause.rs",
+      "sha256": "f4b72d67c8efbe45f40d232ea67c656c93a887e133408e343385a61b69130467"
+    },
+    {
+      "revision": "WORKTREE",
+      "path": "rust/anchor-runner-host/src/application/legacy_run_view.rs",
+      "sha256": "72f4b8186dc0c918e0514cfa06534512a6dd667eeb6a842c25965d616ef22f53"
+    },
+    {
+      "revision": "WORKTREE",
+      "path": "rust/anchor-runner-host/src/application/liveness.rs",
+      "sha256": "2146530483a330239a08a519d5d86f01cccc2ff4fc0da858f28b3ba7a1dfc64a"
+    },
+    {
+      "revision": "WORKTREE",
+      "path": "rust/anchor-runner-host/src/application/recovery.rs",
+      "sha256": "1c2dc86ec6412ba2ac9295cd02484a3f2763a0c26939ccbeabcb9f46573a4adf"
+    },
+    {
+      "revision": "WORKTREE",
+      "path": "rust/anchor-runner-host/src/application/run_projection.rs",
+      "sha256": "9d836413da5f0c63902007ac54cbc1d1d1a7be253e92067459fce37099dc7487"
+    },
+    {
+      "revision": "WORKTREE",
+      "path": "rust/anchor-runner-host/src/application/run_view.rs",
+      "sha256": "e6d61f29cd1497fd339b00292071123a9f6ee1b5b2e3bfdeecdccf961f8a88ef"
+    },
+    {
+      "revision": "WORKTREE",
+      "path": "rust/anchor-runner-host/src/application/session_calls.rs",
+      "sha256": "a25f46dadf5c669d8e6d8309e04d5ab431149b6eb7eab777e069689e83857120"
+    },
+    {
+      "revision": "WORKTREE",
+      "path": "rust/anchor-runner-host/src/execution.rs",
+      "sha256": "6422c0ed943f3467e8bf0b919bd96ee13728a49d9b8b0a723c1bf2fe34874080"
+    },
+    {
+      "revision": "WORKTREE",
+      "path": "rust/anchor-runner-host/src/goose_acp.rs",
+      "sha256": "31f67114a13f08f06e2f1f6cc54b3d3c4d95e0d7caf84a22e067e5aaa35103a4"
+    },
+    {
+      "revision": "WORKTREE",
+      "path": "rust/anchor-runner-host/src/node_host/assistant.rs",
+      "sha256": "9c7b50df0020187e3861d2133a1a3eae9830f8cfa2b3f5d32e5a9d9f48291e64"
+    },
+    {
+      "revision": "WORKTREE",
+      "path": "rust/anchor-runner-host/src/node_host/conversation.rs",
+      "sha256": "92b01fd6896ff865ab83426fa14942db9ccb612793ab8245671f90baf8b62eff"
+    },
+    {
+      "revision": "WORKTREE",
+      "path": "rust/anchor-runner-host/src/node_host/execution.rs",
+      "sha256": "c8769327d62e68acdefb307a63d3711b8c5bd07d047eea9ef87213ff9da6d6e5"
+    },
+    {
+      "revision": "WORKTREE",
+      "path": "rust/anchor-runner-host/src/node_host/facts.rs",
+      "sha256": "e6eee73bfe9c027c4e552855e7b65893731a45b85b659697ec463d3b6aca5f68"
+    },
+    {
+      "revision": "WORKTREE",
+      "path": "rust/anchor-runtime/src/graph/parallel.rs",
+      "sha256": "e6744ebfd82363fd0e1df47bbf6d6b22093ddeac6afb2bcce6fcc46a8bf3eadf"
+    },
+    {
+      "revision": "WORKTREE",
+      "path": "rust/anchor-runtime/src/graph/runner.rs",
+      "sha256": "1aef18e3c285924026a3f88cec9b8b123963b9a20ca72134c4b1b120ab2448b5"
+    },
+    {
+      "revision": "WORKTREE",
+      "path": "rust/anchor-runtime/src/graph/scheduler.rs",
+      "sha256": "dae1c052aba3eb4f9c1ef427fd4715dee369be8972d2d39c0fe5511cdfa01d3d"
+    },
+    {
+      "revision": "WORKTREE",
+      "path": "rust/anchor-runtime/src/graph/state.rs",
+      "sha256": "c370a3251e83b5270fbbb35207b5559597ca75ebcff4ad24d6718ead9b3d04f2"
+    }
+  ]
+}

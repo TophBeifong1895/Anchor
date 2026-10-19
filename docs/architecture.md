@@ -46,11 +46,11 @@ Host 另提供显式串行概念探针：`POST /trigger` 的 `execution: "kernel
 
 Goose 拥有 Agent loop、Provider、原生会话与 compaction；Anchor 拥有 Graph/Run、宿主授权、Artifact 和平台 Session/Turn。工具记录、API 与 UI 都围绕相同身份，UI 缓存不能成为第二份运行事实。
 
-Web 管理与 Pilot 管理调用相同 Host 用例。插件密钥归 owner-bound 凭据存储，安装/卸载沿 Library 预检与发布；模型配置归 `ModelConfiguration`，运行环境归 `RuntimeConfiguration`，渠道由原 `ChannelManagementPort`/supervisor 托管，计划仍归 Scheduler。设置页只管理模型与环境，插件/渠道/计划留在各自入口，不保存第二份配置。
+Web 管理与 Pilot 管理调用相同 Host 用例。插件密钥归 owner-bound 凭据存储，安装/卸载沿 Library 预检与发布；模型配置归 `ModelConfiguration`，运行环境归 `RuntimeConfiguration`，渠道由原 `ChannelManagementPort`/supervisor 托管，计划仍归 Scheduler。设置页只管理模型与环境；图编排的「消息触发」配置渠道绑定与启停，运行看板的「消息会话」管理对话实例，凭据复用插件库的同一组件与存储。Web 不保存第二份配置，也不保留顶层渠道页。
 
 HTTP、Session、Pilot 的插件基础目录读取归 `InstalledPluginCatalog`，清单有效性、依赖就绪与上下文授权、连接验证分别表达；目录列表保持轻量，不生成执行绑定。Graph 的发现、bundle 读取与校验复用 Graph 应用用例，适配器保留身份、格式和私有诊断脱敏。Web 的插件设置、鉴权下载和行菜单复用完整交互，草稿、持久策略和历史绑定保持不同归属。具体边界见 [共同事实与实现收敛](shared-facts-convergence.md)。
 
-Host 托管的模型配置将公开字段、用于恢复的旧绑定和按槽/服务索引的密钥分别表示。执行直接读取保存的槽配置，旧部署字段仅用于未保存 default 时的兼容默认与原显式别名；Web 不改环境变量。新 Turn/invocation 通过 Goose 原生接口选择最新模型并延续历史，当前执行及同 invocation 恢复保留冻结绑定。运行环境初始化和插件安装的进度只描述管理操作，不成为 Agent loop 或通用恢复引擎。接口见 [Web 管理契约](rust-frontend-api-contract.md#web-管理入口)。
+Host 托管的模型配置将公开字段、用于恢复的旧绑定和按槽/服务索引的密钥分别表示。执行直接读取保存的槽配置，旧托管字段仅用于未保存 default 时的兼容默认与原显式别名；模型服务字段和凭据不读取环境变量，Web 与执行共用唯一私有存储。新 Turn/invocation 通过 Goose 原生接口选择最新模型并延续历史，当前执行及同 invocation 恢复保留冻结绑定。运行环境初始化和插件安装的进度只描述管理操作，不成为 Agent loop 或通用恢复引擎。接口见 [Web 管理契约](rust-frontend-api-contract.md#web-管理入口)。
 
 同一事实所有者内部按职责分模块，入口负责组合：
 
@@ -119,9 +119,9 @@ Library 审查、候选准备与导入共用代码暂存规则：选中 root 或
 
 ## Goose 与恢复
 
-Goose 固定为 v1.53.0；Anchor 在上游源码应用[已审查的本地 Responses 补丁](../scripts/patches/README.md)，再用 lean ACP-only 入口构建静态 x86_64 musl 二进制（recipe 见 [构建脚本](../scripts/build-goose-acp.sh)），SHA256 为 `dc2a4352279c16f3c665b280e4fc8fedbec3a67cce596bf460aa9fd416c27a15`。它与官方完整 CLI 共用 `goose::acp::server::run`。补丁在 Goose 原生 Thinking 的可选元数据中保存完整 reasoning item，并在后续 Responses 请求按原序单次回传，包括 opaque/encrypted 字段；同时忽略空 text delta 保活，非空畸形帧仍报错。Anchor Bridge 和产品事实不复制或重写 reasoning，旧历史已丢失的数据也不重建。
+Goose 固定为 v1.53.0；Anchor 在上游源码应用[已审查的本地兼容补丁](../scripts/patches/README.md)，再用 lean ACP-only 入口构建静态 x86_64 musl 二进制（recipe 见 [构建脚本](../scripts/build-goose-acp.sh)）。现有固定发行产物的 SHA256 为 `17e065a79cb0508413af714724aed51d6b76972dda9feebdda701330134fb640`；源码启动使用本机编译产物，由启动脚本自动提供实际摘要。它与官方完整 CLI 共用 `goose::acp::server::run`。补丁在 Goose 原生 Thinking 的可选元数据中保存完整 reasoning item，并在后续 Responses 请求按原序单次回传，包括 opaque/encrypted 字段；同时忽略空 text delta 保活，非空畸形帧仍报错。Anchor Bridge 和产品事实不复制或重写 reasoning，旧历史已丢失的数据也不重建。
 
-AgentNode 与 Pilot 共用 ACP/MCP 接入。当前执行及同 invocation 恢复严格绑定二进制、模型/endpoint 和原生 Session，不静默换模型或创建替代历史。新 invocation 可选择最新模型；跨 Goose 二进制版本的 Graph 原生历史接续，仅允许[已审查的旧固定摘要到当前摘要](../rust/anchor-runner-host/src/goose_acp/conversation/revision.rs)单向升级，核对前驱与 scope 事实后仍加载同一 Session，不授权逆向回滚或未审查二进制。Pilot 的新 Turn 通过公开 `session/load` 接续保留的 Session。跨不同 Provider、模型或账号的 opaque reasoning 兼容尚未验收；Goose 的 Provider 错误也仍可能以助手正文结束，不能仅凭 Turn `completed` 认定请求成功。
+AgentNode 与 Pilot 共用 ACP/MCP 接入。当前执行及同 invocation 恢复严格绑定二进制、模型/endpoint 和原生 Session，不静默换模型或创建替代历史。新 invocation 可选择最新模型；跨 Goose 二进制版本的 Graph 原生历史接续，仅允许[已审查的旧固定摘要到当前摘要](../rust/anchor-runner-host/src/goose_acp/conversation/revision.rs)单向升级，核对前驱与 scope 事实后仍加载同一 Session，不授权逆向回滚或未审查二进制。Pilot 的新 Turn 通过公开 `session/load` 接续保留的 Session。跨不同 Provider、模型或账号的 opaque reasoning 兼容尚未验收。固定 Goose 将请求、网络、拒答及终止的压缩错误保存为原生结构化 Error，并通过 ACP 错误结束；成功的压缩恢复继续原路径。Host 仅依据经协议校验的错误代码与原因区分模型请求失败和运行中断，Pilot 分别结算为 `failed` 与 `interrupted`，用户取消仍为 `stopped`；原始服务正文不进入 Web 错误信息。普通助手正文不参与分类，Turn `completed` 仍不替代业务成功验收。实际 Host/Goose 错误场景及真实 Provider 验收边界见[验证记录](../.local/closeout-20261018/README.md)。
 
 固定版 Goose 的 `enabledExtensions` 在新建时追加到默认扩展，加载时保留已存扩展，不能单独用作授权集合。共享 ACP 接入在新建/加载后、首次模型提示前，通过官方 `session/extensions/list`、`remove`、`add` 接口校准为 Anchor MCP 与部署显式允许的原生扩展；默认只保留提供边界指令的 `tom`，不启用 `developer` 的独立文件和 shell 工具。撤销旧扩展保留原生 Session 与历史，不直接修改其数据库；校准失败拒绝本次执行。
 
@@ -175,7 +175,7 @@ Pilot 清理保存 format 1 的不可变归属绑定 `state/platform/pilot-resou
 
 - 首条可信消息惰性创建该 Session 的 current assistant Run，后续输入复用它；Session 保存 Turn、幂等、历史 binding 和 retire 事实，RunStore/Runner 拥有冻结 Graph、cursor 与执行状态，Host 工作区适配层保存 Run 的稳定节点 workspace 绑定。
 - `wait_input` 从持久输入事实领取 Turn，按等待 invocation 幂等绑定，重试不取下一条；将本轮文本、可信身份与附件引用提交给 Agent。后续消息不覆写 `Run.input`，等待期间不调用模型。
-- WeCom dispatch 拒绝或等待失败时，Session 事务只将仍 Running、尚无 Run 关联且未被新输入取代的入站 Turn 结算为 Failed；已领取 Turn 的执行与投递沿原有事实收束。助手已停止返回具名 `409 assistant_stopped`，网关提示在渠道页恢复后再发消息，不把拒绝留下为永久 Running 或自动重放。
+- WeCom dispatch 拒绝或等待失败时，Session 事务只将仍 Running、尚无 Run 关联且未被新输入取代的入站 Turn 结算为 Failed；已领取 Turn 的执行与投递沿原有事实收束。助手已停止返回具名 `409 assistant_stopped`，网关提示在运行看板的消息会话中恢复后再发消息，不把拒绝留下为永久 Running 或自动重放。
 - 新输入打断旧轮而非停止整个 Run。Host 取消并等待 Goose 与工具执行者真正退出，保存未提交现场 checkpoint 和持久 `Yielded` 事实；Runner 冻结 `Interruption` 控制 Artifact 后沿普通 route 到 `reply`，旧回复记 `suppressed`，再回到等待节点。它不把旧 Agent/Turn 标成成功，不自动重放未知业务效果。
 - `reply` 读取本 Turn 绑定的确切 Agent commit；出站图片按 Turn 登记，不取长期 Run 的“最新回复”，不串到下一轮。Turn 结算不等待 Run `Completed`，平台发送 claim、ACK 与 unknown 仍复用既有账本。
 
@@ -201,7 +201,7 @@ Graph 是插件选择的唯一可编辑来源。Host 在 `wait_input` 领取消�
 
 Kernel 的 `NodeExecutionPort::invocation_plugin_authority` 默认关闭，普通 Graph 继续校验 Run 准入基线；Host 仅为可信常驻助手启用，由同一 Turn 快照约束挂载、MCP、沙箱和网络。当前 Turn 重试不重读 Graph；启动交接只沿该 Turn 的持久化 `runs` 关联验证前驱并继承权限，新 Turn 直接读取当前配置，不沿 `conversation.previous_run` 跨历史轮次追溯。启动清理仅保留已验证 current 助手中已认领、未被新消息替代的 Turn，Pilot 与孤立执行继续按原规则中断。插件卸载保护仍可执行的 Turn 引用，Run/Graph 删除清理各自拥有的快照与授权事实。
 
-正常插件切换保留 Run、Goose 原生会话和稳定 workspace。重启需要新 Run 接续时，Host 核对同一会话的交接链，并仅对插件/联网差异登记精确 workspace 来源与目标；连续重启产生的未准备实例不能成为空现场来源，普通跨 Graph 复制仍被拒绝。
+正常插件切换保留 Run、Goose 原生会话和稳定 workspace。重启需要新 Run 接续时，Host 核对同一会话的交接链，并仅对插件/联网差异登记精确 workspace 来源与目标；连续重启产生的未准备实例不能成为空现场来源，普通跨 Graph 复制仍被拒绝。显式退役后可以接纳节点改名的合法新版；每个交接 binding 先核对所属实例的元数据，再判断版本兼容，不要求旧 wait/reply 名称等于新版本。结构或指令变化不继承旧实例的未提交现场，仍可按既有会话规则从已提交产物初始化；连续未准备实例的回溯也止于该版本边界，身份事实不一致仍报错。
 
 ### 渠道适配与监听
 
@@ -217,9 +217,11 @@ Pilot 的 `channel_configure`/`channel_enable` 经原生确认管理 owner-bound
 
 WebUI 的 Anchor API key 只保存在当前标签页。输入框先检查请求头可接受的格式，再通过只读 `GET /graphs` 验证；成功才保存并关闭，错误 key、格式错误或服务异常保留输入框并分别提示。JSON 请求与 Pilot SSE 共用缓存恢复：含非 ASCII 字符、空格或控制字符的无效缓存不会进入请求头，401 后重新输入；较早请求的迟到 401 不丢弃其他请求刚验证成功的新 key。取消验证会中止请求，迟到结果不保存。
 
-模型设置由 Host 在同一个私有 `state/managed/model-config.json` 中维护。固定 `default/backup × flash/pro`，两槽凭据独立。Pilot 和未指定模型的节点默认使用 `models.default.flash`；其余三种引用由 Graph 明确选择，不自动降级。每个新 Turn/invocation 直接读取最新槽设置，当前执行持有独立快照；已有原生 Session 加载后通过 `session/set_config_option` 选定本轮模型。Chat/Responses 由固定 Goose 原生 Provider 按显式协议生成和解析，Host Bridge 只转发到本轮冻结的服务。
+平台安装启动器从自身位置解析只读 release、固定 Goose/relay 与 `data/` 私有根，清除调用进程配置，不读取环境文件。systemd 调用同一启动器；预检 `--launcher` 复用其命令配置，并通过安装器同一 validator 检查 format-2 平台。开发脚本和 Vite 也不加载 `.env`；源码启动先探测系统工具与 namespace，按 lock 准备前端依赖，增量构建 debug Host/relay，并更新缺少或变化的 Web 资产；Goose 通过既有固定版本/补丁配方构建到 `.local/bin/goose`（含固定工具链的 musl target 准备），输入未变且本机校验和相符则复用缓存，否则重新准备。源码启动自动把实际产物摘要传给 Host，不以跨机器固定摘要作为启动条件。默认平台源码启动按 [上手清单](../examples/starter.json) 首次安装官方 Plugin 及本地 Rust 工具，经现有 Library 安装器发布，再经 Host Graph API 导入示例；首次导入标记归开发启动器，用户 Graph 和 Plugin 事实仍归 catalog/Library，已有同名内容与后续修改/删除不覆盖。不会自动运行 Graph 或启用渠道。显式 entry bundle、自定义 Host 和外部服务不导入；完整平台发行清单不受影响。`setup` 准备插件与依赖，Graph 在 `start/restart` 接入 Host 后导入；`status`/`stop` 不构建。默认不自动使用旧 release 产物，显式 Host/relay 路径需已可执行；Host 仍独立核对启动器提供的摘要，既有发行校验和同 invocation 的执行器身份绑定保持原契约。旧文件保留原样；显式进程覆盖仍是开发/独立 Graph 宿主的部署接口，不是模型、Plugin 或渠道的产品配置源。
 
-旧 `current/history` 与环境变量保留兼容默认和显式别名，已保存槽缺字段或密钥时失败，不退回旧配置。更换服务保留槽的公共历史与独立旧服务凭据，供同 invocation 恢复核对原绑定；历史凭据仍可通过现有接口管理。命名槽绑定包含槽身份，避免与旧执行或另一账户混用。存储读取兼容 format 1/2，写入 format 3（增加 `providers.history`），复用原文件锁与原子发布；读取不迁移，回滚旧版本前需使用兼容备份。管理接口见 [API 契约](rust-frontend-api-contract.md#web-管理入口)。
+模型设置由 WebUI 经 Host 管理接口写入同一个私有 `state/managed/model-config.json`，执行只读该事实来源。`ANCHOR_MODEL_URL/API_KEY/NAME/WIRE_API/ALIASES` 已退出平台配置，旧安装 `config/model.env` 不再加载；不自动迁移或覆盖已有凭据。Goose 路径、网络和运行预算仍为部署控制。固定 `default/backup × flash/pro`，两槽凭据独立。Pilot 和未指定模型的节点默认使用 `models.default.flash`；其余三种引用由 Graph 明确选择，不自动降级。每个新 Turn/invocation 直接读取最新槽设置，当前执行持有独立快照；已有原生 Session 加载后通过 `session/set_config_option` 选定本轮模型。Chat/Responses 由固定 Goose 原生 Provider 按显式协议生成和解析，Host Bridge 只转发到本轮冻结的服务。
+
+旧托管 `current/history` 保留兼容默认和显式别名，已保存槽缺字段或密钥时失败，不退回旧配置。更换服务保留槽的公共历史与独立旧服务凭据，供同 invocation 恢复核对原绑定；历史凭据仍可通过现有接口管理。命名槽绑定包含槽身份，避免与旧执行或另一账户混用。存储读取兼容 format 1/2，写入 format 3（增加 `providers.history`），复用原文件锁与原子发布；读取不迁移，回滚旧版本前需使用兼容备份。管理接口见 [API 契约](rust-frontend-api-contract.md#web-管理入口)。
 
 ## 发行与验收边界
 

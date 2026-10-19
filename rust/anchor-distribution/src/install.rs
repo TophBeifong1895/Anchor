@@ -1,5 +1,5 @@
-//! A fresh private platform installation. Model input is parsed as data, never
-//! evaluated by a shell; release files and mutable platform facts are disjoint.
+//! A fresh private platform installation. Model settings belong to the Host
+//! management store; release files and mutable platform facts are disjoint.
 use crate::{
     GOOSE_SHA256, PackageError, PlatformPackageInventory, RUSTUP_INIT_SHA256, Result, UV_SHA256,
     archive, filesystem::absolute, filesystem::open_path, validation,
@@ -8,9 +8,9 @@ use flate2::read::GzDecoder;
 use rustix::fs::{RenameFlags, renameat_with};
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::BTreeSet,
     fs::{self, File, OpenOptions},
-    io::{Read, Seek, SeekFrom, Write},
+    io::{Read, Seek, SeekFrom},
     os::{
         fd::AsRawFd,
         unix::fs::{MetadataExt, PermissionsExt},
@@ -19,16 +19,6 @@ use std::{
     process::Command,
 };
 
-const MODEL_KEYS: &[&str] = &[
-    "ANCHOR_MODEL_URL",
-    "ANCHOR_MODEL_API_KEY",
-    "ANCHOR_MODEL_NAME",
-    "ANCHOR_MODEL_WIRE_API",
-    "ANCHOR_MODEL_ALIASES",
-    "ANCHOR_MODEL_CONTEXT_WINDOW",
-    "ANCHOR_MODEL_MAX_TOKENS",
-    "ANCHOR_MODEL_DIRECT",
-];
 const MAX_ARCHIVE_BYTES: u64 = 8 * 1024 * 1024 * 1024;
 const MAX_FILE_BYTES: u64 = 1024 * 1024 * 1024;
 
@@ -37,6 +27,7 @@ pub struct PlatformInstallRequest {
     pub archive: PathBuf,
     pub sha256: String,
     pub install_root: PathBuf,
+    /// Retained for API compatibility; supplying a model file is no longer supported.
     pub model_config: Option<PathBuf>,
 }
 
@@ -77,11 +68,11 @@ fn install(
     if fs::symlink_metadata(&install_root).is_ok() {
         return Err(PackageError::AlreadyExists);
     }
-    let model = request
-        .model_config
-        .as_deref()
-        .map(read_model)
-        .transpose()?;
+    if request.model_config.is_some() {
+        return Err(invalid(
+            "model configuration files are no longer supported; configure model services in WebUI Settings",
+        ));
+    }
     let pinned_parent = PathBuf::from(format!("/proc/self/fd/{}", parent_fd.as_raw_fd()));
     let staging = tempfile::Builder::new()
         .prefix(".anchor-install-")
@@ -111,13 +102,10 @@ fn install(
     fs::create_dir(&release)?;
     unpack_platform(snapshot, &release)?;
     let runtime = release.join("anchor-runtime");
-    validate_runtime(&runtime, goose_sha256, uv_sha256, rustup_sha256)?;
+    validate_runtime(&runtime, goose_sha256, uv_sha256, rustup_sha256, false)?;
     let config = staging.path().join("config");
     fs::create_dir(&config)?;
     fs::set_permissions(&config, fs::Permissions::from_mode(0o700))?;
-    if let Some(model) = model {
-        write_private(&config.join("model.env"), model.as_bytes())?;
-    }
     for path in [
         "data",
         "data/home",
@@ -166,10 +154,7 @@ fn install(
     Ok(PlatformInstallReport {
         launcher: release_root.join("bin/anchor-platform"),
         release_root,
-        model_config: request
-            .model_config
-            .as_ref()
-            .map(|_| install_root.join("config/model.env")),
+        model_config: None,
         install_root,
         archive_sha256: request.sha256.to_ascii_lowercase(),
     })
@@ -177,92 +162,6 @@ fn install(
 
 fn invalid(message: impl Into<String>) -> PackageError {
     PackageError::Invalid(message.into())
-}
-
-fn read_model(path: &Path) -> Result<String> {
-    let mut input = open_path(path)?;
-    if !input.metadata()?.is_file() || input.metadata()?.len() > 64 * 1024 {
-        return Err(invalid(
-            "model configuration must be an ordinary file no larger than 64 KiB",
-        ));
-    }
-    let mut content = String::new();
-    Read::by_ref(&mut input)
-        .take(64 * 1024 + 1)
-        .read_to_string(&mut content)?;
-    if content.len() > 64 * 1024 {
-        return Err(invalid("model configuration exceeds 64 KiB"));
-    }
-    parse_model(&content)?;
-    Ok(content)
-}
-
-// A deliberately small dotenv data syntax: KEY=value, with optional matching
-// outer quotes. No interpolation, export, escapes, shell or multiline values.
-fn parse_model(content: &str) -> Result<BTreeMap<String, String>> {
-    let mut values = BTreeMap::new();
-    for (line, raw) in content.lines().enumerate() {
-        let raw = raw.trim();
-        if raw.is_empty() || raw.starts_with('#') {
-            continue;
-        }
-        let (key, raw_value) = raw.split_once('=').ok_or_else(|| {
-            invalid(format!(
-                "model configuration line {} must be KEY=value",
-                line + 1
-            ))
-        })?;
-        let key = key.trim();
-        if !MODEL_KEYS.contains(&key) {
-            return Err(invalid(format!(
-                "unsupported model configuration key on line {}",
-                line + 1
-            )));
-        }
-        let raw_value = raw_value.trim();
-        let value = if raw_value.starts_with(['\'', '"']) {
-            let quote = raw_value.as_bytes()[0] as char;
-            raw_value
-                .strip_prefix(quote)
-                .and_then(|v| v.strip_suffix(quote))
-                .ok_or_else(|| invalid(format!("unmatched value quotes for {key}")))?
-        } else {
-            raw_value
-        };
-        if value.chars().any(char::is_control) || value.len() > 32 * 1024 {
-            return Err(invalid(format!(
-                "invalid model configuration value for {key}"
-            )));
-        }
-        if values.insert(key.into(), value.into()).is_some() {
-            return Err(invalid(format!("duplicate model configuration key {key}")));
-        }
-    }
-    for key in [
-        "ANCHOR_MODEL_URL",
-        "ANCHOR_MODEL_API_KEY",
-        "ANCHOR_MODEL_NAME",
-    ] {
-        if values
-            .get(key)
-            .is_none_or(|value: &String| value.trim().is_empty())
-        {
-            return Err(invalid(format!("model configuration requires {key}")));
-        }
-    }
-    Ok(values)
-}
-
-fn write_private(path: &Path, bytes: &[u8]) -> Result<()> {
-    use std::os::unix::fs::OpenOptionsExt;
-    let mut file = OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(0o600)
-        .open(path)?;
-    file.write_all(bytes)?;
-    file.sync_all()?;
-    Ok(())
 }
 
 fn unpack_platform(file: File, release: &Path) -> Result<()> {
@@ -325,14 +224,23 @@ fn unpack_platform(file: File, release: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Check an installed platform against the same fixed runtime contract used at installation.
+pub fn validate_platform_runtime(runtime: &Path) -> Result<()> {
+    open_path(runtime)?;
+    validate_runtime(runtime, GOOSE_SHA256, UV_SHA256, RUSTUP_INIT_SHA256, true)
+}
+
 fn validate_runtime(
     root: &Path,
     goose_sha256: &str,
     uv_sha256: &str,
     rustup_sha256: &str,
+    read_only: bool,
 ) -> Result<()> {
-    // These paths are inside our private extraction tree, pinned below an open
-    // parent FD; unpack_platform only created ordinary files/directories.
+    // Installed releases use this same validator. Reject links and special entries before reading files.
+    let mut actual_files = BTreeSet::new();
+    let mut actual_directories = BTreeSet::new();
+    enumerate(root, root, &mut actual_files, &mut actual_directories)?;
     let manifest_file = File::open(root.join("runtime-manifest.json"))?;
     if !manifest_file.metadata()?.is_file() || manifest_file.metadata()?.len() > 16 * 1024 * 1024 {
         return Err(invalid(
@@ -406,7 +314,12 @@ fn validate_runtime(
         let metadata = file.metadata()?;
         if !metadata.is_file()
             || metadata.len() != resource.size
-            || metadata.permissions().mode() & 0o7777 != resource.mode
+            || metadata.permissions().mode() & 0o7777
+                != if read_only {
+                    resource.mode & 0o555
+                } else {
+                    resource.mode
+                }
         {
             return Err(invalid(
                 "platform file type, mode or size differs from inventory",
@@ -509,9 +422,6 @@ fn validate_runtime(
             "platform network Plugin differs from admitted inventory",
         ));
     }
-    let mut actual_files = BTreeSet::new();
-    let mut actual_directories = BTreeSet::new();
-    enumerate(root, root, &mut actual_files, &mut actual_directories)?;
     if actual_files != declared || actual_directories != required_directories {
         return Err(invalid(
             "platform archive contains undeclared files or directories",
@@ -588,8 +498,8 @@ impl Drop for ReadonlyRelease<'_> {
     }
 }
 
-/// Build a Host command using only installation-owned roots and the private
-/// model file. It inherits no deployment, Python, Rust or credential env vars.
+/// Build a Host command from installation-owned roots. Model and runtime
+/// settings live in the Host store; no caller configuration is inherited.
 pub fn platform_command(launcher: &Path) -> Result<Command> {
     platform_command_with_listen(launcher, "127.0.0.1:8077")
 }
@@ -633,22 +543,8 @@ pub fn platform_command_with_listen(launcher: &Path, listen: &str) -> Result<Com
         ));
     }
     open_path(runtime)?;
-    let model_path = install_root.join("config/model.env");
-    // An omitted model file leaves model settings entirely Host-managed. Do
-    // not inject empty environment values: those would become read-only fields.
-    open_path(&install_root.join("config"))?;
-    let model = match fs::symlink_metadata(&model_path) {
-        Ok(metadata) => {
-            if !metadata.is_file() || metadata.permissions().mode() & 0o077 != 0 {
-                return Err(invalid(
-                    "installed model configuration must be an ordinary private file (0600)",
-                ));
-            }
-            parse_model(&read_model(&model_path)?)?
-        }
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => BTreeMap::new(),
-        Err(error) => return Err(error.into()),
-    };
+    // Old installations may retain config/model.env. Leave its bytes untouched;
+    // only the Host-managed model store supplies model services and credentials.
     let mut command = Command::new(runtime.join("bin/anchor-runner-host"));
     command
         .arg("serve")
@@ -665,8 +561,7 @@ pub fn platform_command_with_listen(launcher: &Path, listen: &str) -> Result<Com
         .env("ANCHOR_GOOSE_LOCAL_NETWORK", "1")
         .env("ANCHOR_RUNNER_LISTEN", address.to_string())
         .env("ANCHOR_RUNNER_ALLOWED_COMMANDS", "sh,git")
-        .env("ANCHOR_MODEL_DIRECT", "0")
-        .envs(model);
+        .env("ANCHOR_MODEL_DIRECT", "0");
     for (key, path) in [
         ("ANCHOR_RUNNER_STATE_ROOT", "data/state"),
         ("ANCHOR_RUNNER_CATALOG_ROOT", "data/catalog"),

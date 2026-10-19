@@ -24,7 +24,14 @@ pub(super) fn binary() -> Result<(std::path::PathBuf, String), String> {
         );
     }
     let digest = super::file_sha256(&binary)?;
-    if std::env::var("ANCHOR_GOOSE_BINARY_SHA256").ok().as_deref() != Some(&digest) {
+    let expected = match std::env::var("ANCHOR_GOOSE_BINARY_SHA256") {
+        Ok(value) => value,
+        Err(std::env::VarError::NotPresent) => {
+            "17e065a79cb0508413af714724aed51d6b76972dda9feebdda701330134fb640".into()
+        }
+        Err(_) => return Err("ANCHOR_GOOSE_BINARY_SHA256 must be valid UTF-8".into()),
+    };
+    if expected != digest {
         return Err("ANCHOR_GOOSE_BINARY_SHA256 must match the configured binary".into());
     }
     Ok((binary, digest))
