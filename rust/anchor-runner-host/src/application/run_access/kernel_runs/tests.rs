@@ -1,4 +1,6 @@
 use super::*;
+
+mod parallel;
 use anchor_kernel::{Evidence, Outcome, Reason, Waiter};
 use anchor_runtime::graph::test_support::{
     Artifacts, Scripted, ScriptedCalls, facts, random_graph, run_old,

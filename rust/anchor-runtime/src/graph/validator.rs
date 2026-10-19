@@ -953,7 +953,7 @@ fn judge_call(mut record: GraphRunRecord, dispatch: &Dispatch, s: &Submission) -
 }
 
 #[cfg(test)]
-mod differential;
+pub(crate) mod differential;
 
 #[cfg(test)]
 mod interruption_tests;

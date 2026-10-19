@@ -20,4 +20,5 @@ sha2.workspace = true
 chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
 
 [dev-dependencies]
+tokio = { workspace = true, features = ["sync"] }
 schemars = "1"

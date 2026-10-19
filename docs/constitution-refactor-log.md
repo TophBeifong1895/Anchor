@@ -1045,3 +1045,21 @@ M1.5 通过。合并提交为 `c6454c3`（master@2b3b7a2）和 `aae4bb3`（仅 F
 旧 Runner 模块上限用例已复制到内核，增加两次激活、异序与延迟进入、成员/嵌套计数重置、上限后迟到成功/失败覆盖。当前分支的原并行生成器会清空模块计数且生成无作用域分支，因此另增 5,000 个共享/独立模块样本，原种群、seed、注入概率、业务断言与覆盖阈值保持不变。模块样本为无失败注入且高模块上限的补充，模块上限/迟到失败由定向测试验收。
 
 Runtime 全部单元、集成和 doctest 分阶段通过，原三组差分、S17/S18 独立 seed 与新增模块组通过；fmt 与 runtime all-targets clippy 通过。新增单元测试 5，既有断言修改 0，既有测试删除 0，新增 ignore 0。命令、完整 Tally 与原始输出入口见 [M2 验证](../experiments/constitution-host-preflight/m2/verification.md)。这完成校验器前置切片，Host 并行调度与其余 M2 能力仍未完成；未新增 Goose 或真实模型 Provider 验收。
+
+
+### Host 多槽位调度切片与删除存储边界
+
+KernelScheduler 以开放槽位唯一标识管理并发执行，已完成的单个分支提交后补位；慢分支不形成波次屏障。立即就绪的执行事实先提交，未完成兄弟继续执行。等待、结算或端口错误后收集已派发任务，迟到结果/失败仍获得内核裁决，StaleVersion 重提成本为零。fanout/join 的纯控制产物构造抽为旧 Runner 与新调度器共用函数；NodeExecutionRequest 继续复用原授权构造函数。冻结使用 ArtifactFreezeContext 保留种类与输入来源。
+
+旧 Runner 的异序分支/join、分支失败及共享模块重入用例复制到实际调度器；另覆盖无波次后继、停止后迟到与恢复、端口错误/panic 的兄弟收集。Host FileStore 路径验证并行 pause 在当前结果提交后进入人的等待、兄弟迟到留史、不取消执行、draining 时拒绝 resume，以及恢复不重复执行。实际调度器另跑串行 10,000、并行失败 5,000、原无失败并行 5,000、模块 5,000；复用既有 S18 检查器，原断言与门槛未改。validator/differential 的可见性只在 cfg(test) 下扩大，裁决规则未改变。
+
+此时发现下一项必须停下的具体边界：Store/FileStore 没有公开删除操作；Host 不拥有其私有资源路径编码。仅改 phase/worker 前置条件无法完成 Run/Graph 删除。未复制私有布局、未加隐藏资源的持久标记、未改 Kernel。按任务书 §8 交回；最小建议为只给具体 FileStore 增加 remove(id)，无需扩充 Store trait 或生命周期。现场与授权范围见 [删除边界](../experiments/constitution-host-preflight/m2/deletion-boundary.md)。M2 未完成，Op.call 等后续切片与 M3 未开工。
+
+| 登记 | 数量与结论 |
+| --- | --- |
+| S 候选 | 0；沿已批准并行模块与 S6/S17/S18，新增 Code Write 仅提交既有 fanout/join 控制事实 |
+| 既有断言修改 | 0；S18 检查器按原样复用 |
+| 删除测试映射 | 0；既有测试均保留，无新增 ignore |
+| 新增测试 | Runtime 9（含 3 组实际调度器随机对照），Host 1 |
+
+本次只完成并行垂直切片并记录存储边界，不替代完整 M2 验收。实际命令与结果见 [M2 验证](../experiments/constitution-host-preflight/m2/verification.md)；未新增 workspace/Web/Goose/真实模型 Provider 验收。

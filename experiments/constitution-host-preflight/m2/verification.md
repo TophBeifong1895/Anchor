@@ -1,6 +1,31 @@
 # M2 验证与当前边界
 
-M2 进行中。用户已批准并行模块作用域的四点扩展，该 GraphValidator 切片已实现并通过本地确定性验证；原停止条件已解除。Host 的 KernelScheduler 仍为串行探针，M2 并行调度、Op.call、助手、结果补齐、恢复决定、删除与 Probe 尚待实现。此处不作为完整 M2 交回结论。
+M2 进行中。已批准的并行模块校验器与 Host 多槽位调度均已实现并通过本地确定性验证。下一项删除能力需要 FileStore 公开删除操作，已按任务书 §8 停下交回；见 [具体边界与最小授权建议](deletion-boundary.md)。Op.call、助手、结果补齐、恢复决定、删除与 Probe 尚未完成，不开始 M3。这不是完整 M2 交回。
+
+## Host 多槽位调度
+
+生产 KernelScheduler 使用 FuturesUnordered 管理开放槽位；每个已观察完成事实只提交一次，成功分支产生后继时可立即派发，不等待慢兄弟。fanout/join 由宿主 Code Write 提交，纯控制产物构造与旧 Runner 共用，Work 请求继续复用原授权构造函数。ArtifactFreezeContext 保留控制种类和固定输入来源，分支输入带既有 activation/branch 标识。
+
+等待、结算、取消、端口错误或 panic 之后收集已派发任务；迟到成功和失败交由内核拒绝留史，StaleVersion 重提成本为零。调度器不计模块激活、不写 Graph 状态，也不新增停止/暂停标志轮询。Host 并行 pause 验证结果先提交、随后 Human stop(reason=paused)、不取消兄弟、draining 时不允许 resume、恢复不重放已知完成事实。
+
+复制旧 Runner 的异序分支与 join、分支失败、共享模块重入用例到实际调度器；新增无屏障后继、迟到与停止恢复、端口错误/panic 收集用例。并行随机失败组直接复用原 S18 三条不变量检查器，原断言、seed、失败注入概率与阈值未改。新测试中的 fixture panic 是有意输入，捕获后仍提交兄弟事实，测试通过。
+
+实际调度器与旧 Runner 使用同一 Scripted/Artifacts fixture：串行 10,000（772 节点失败、1,310 激活模块）、并行失败 5,000（775 节点失败、10,224 过期重提）、原无失败并行 5,000、模块 5,000（4,588 激活模块、12,461 过期重提）通过。模块组仍为无节点失败注入的补充；模块上限与迟到失败由定向用例覆盖。这里只完成串行/并行对照，实际调度器调用组尚待 Op.call 切片。
+
+新切片实际命令在仓库根目录执行，完整命令、target 汇总与输出哈希见 checks.json，原始日志在 /tmp/anchor-m2/：
+
+| 检查 | 结果 |
+| --- | --- |
+| `cargo test --manifest-path rust/Cargo.toml -p anchor-runtime --lib graph::scheduler -- --nocapture` | 9 / 0 / 0，含 3 组实际调度器随机对照 |
+| `cargo test --manifest-path rust/Cargo.toml -p anchor-runtime -- --skip graph::scheduler::tests::differential` | 141 单元 + 7 集成 + 2 doctest 通过；含原校验器完整差分 |
+| `cargo test --manifest-path rust/Cargo.toml -p anchor-runner-host --bin anchor-runner-host application::run_access::kernel_runs::tests -- --nocapture` | 15 / 0 / 0，含原 FileStore 1,000 seed 串行对照 |
+| 同一 Host 命令仅过滤 `application::run_access::kernel_runs::tests::parallel` | 1 / 0 / 0，最终代码定向确认 |
+| Runtime 与 Host 各 `cargo clippy --manifest-path rust/Cargo.toml -p <crate> --all-targets -- -D warnings` | 均通过 |
+| `cargo test --manifest-path rust/Cargo.toml -p anchor-runner-host --test run_access_fence` | 1 / 0 / 0；围栏测试与 F0 字节一致，清单本切片未改 |
+
+fmt、git diff --check、工程措辞检查通过；Kernel 相对 6ee2b0e 零 diff。新增 Runtime 9 项、Host 1 项，既有业务断言修改 0、删除 0、新增 ignore 0。Runtime 分两条实际命令覆盖全部 target，不合成为一次测试输出。
+
+初次新 fixture 编译因 Runtime 未启用 tokio sync 失败，已补 dev feature；初次 Host 命令误用 --lib（该 crate 只有 bin），已改为 --bin。这两次临时日志被随后运行覆盖，原输出现不可获取，不计为通过证据。未新增完整 workspace、Web、Goose 或真实模型 Provider 验收；因 §8 边界交回，不宣称 M2 完成。
 
 ## 并行模块规则
 
@@ -10,9 +35,9 @@ M2 进行中。用户已批准并行模块作用域的四点扩展，该 GraphVa
 
 模块上限沿现有 conclude 结算，并调用既有 refuse_module_activation 写下阻断事实；先接受的终结事实保持唯一，迟到的成功/失败均以 TaskSettled 留在历史并计费。Kernel 零改动，旧 Runner 及既有测试断言不变。现有旧 Runner 模块用例已复制到内核，另覆盖两次激活、共享模块延迟进入、不同模块异序完成、成员/嵌套计数重置、上限后的迟到结果与失败。
 
-## 已执行验证
+## 先前校验器切片的已执行验证
 
-Rust 命令均在 `rust/` 下执行，原始输出保留在 `/tmp/anchor-m2/`，未提交日志。机器摘要与完整 Tally 见 [checks.json](checks.json)。
+下表校验器切片的 Rust 命令在 `rust/` 下执行，原始输出保留在 `/tmp/anchor-m2/`，未提交日志。机器摘要与完整 Tally 见 [checks.json](checks.json)。
 
 | 检查 | 结果 |
 | --- | --- |

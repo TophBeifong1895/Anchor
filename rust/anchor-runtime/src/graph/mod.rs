@@ -29,6 +29,7 @@ mod store;
 pub use store::*;
 mod ports;
 pub use ports::*;
+mod control_completion;
 mod runner;
 pub use runner::*;
 mod parallel;

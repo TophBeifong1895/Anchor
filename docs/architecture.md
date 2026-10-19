@@ -20,7 +20,7 @@ Artifact、节点历史、工作区、Run / Session / Turn 事实
 
 | 模块 | 职责与事实 |
 | --- | --- |
-| [anchor-kernel](../rust/anchor-kernel) | 独立提交/裁决/任务生命周期内核；成本从全部裁决历史派生，等待中只接受生命周期控制，Code 凭观察可停止但不能释放人的等待。K0.1 与 Graph 中断事实见[工作记录](constitution-refactor-log.md#k01内核修订与中断事实)；已通过显式串行探针接入 Host；默认执行仍走下列 Runner，探针边界见本节下文 |
+| [anchor-kernel](../rust/anchor-kernel) | 独立提交/裁决/任务生命周期内核；成本从全部裁决历史派生，等待中只接受生命周期控制，Code 凭观察可停止但不能释放人的等待。K0.1 与 Graph 中断事实见[工作记录](constitution-refactor-log.md#k01内核修订与中断事实)；已通过显式 Kernel 路径接入 Host；默认执行仍走下列 Runner，探针边界见本节下文 |
 | [anchor-runtime](../rust/anchor-runtime) | Graph 编译、IR、Runner、RunStore 和节点执行端口；不依赖 HTTP 或具体业务 |
 | [anchor-runner-host](../rust/anchor-runner-host) | API/应用接纳、共享 Runner、Goose 接入、Artifact、渠道协调、调度和控制 |
 | [anchor-graph-host](../rust/anchor-graph-host) | bundle 读取、资源绑定、独立 Graph Call 和恢复关联 |
@@ -36,9 +36,9 @@ Artifact、节点历史、工作区、Run / Session / Turn 事实
 | [anchor-devtools](../rust/anchor-devtools) | 确定性回归、候选构建、部署预检与切换盘点 |
 | [apps/web](../apps/web) | Graph 画布、Run 时间线、节点对话、Session 和产物投影 |
 
-GraphValidator 已支持并行分支内模块作用域：同一并行激活内共享模块首次从外部进入时计一次，后续激活重入递增，模块上限按首次终结事实结算。入口、成员 passes 与嵌套计数重置由纯校验逻辑决定；读取 frontier 不消费激活，也不增加持久化字段。该能力已通过内核用例与 5,000 个模块随机样本；Host 的并行调度仍在 M2 接入中。
+GraphValidator 已支持并行分支内模块作用域：同一并行激活内共享模块首次从外部进入时计一次，后续激活重入递增，模块上限按首次终结事实结算。入口、成员 passes 与嵌套计数重置由纯校验逻辑决定；读取 frontier 不消费激活，也不增加持久化字段。该能力已通过内核用例与 5,000 个模块随机样本；Host 的 KernelScheduler 已接通多槽位并发，单个结果提交后即可补位，慢分支不形成波次屏障；Op.call 等其余 M2 能力尚未完成。
 
-Host 另提供显式串行概念探针：`POST /trigger` 的 `execution: "kernel_probe"` 经同一准入与节点授权，调用共享 Runtime 的 `KernelScheduler<S: Store>`。它读取 Kernel 相位与 GraphValidator 开放空位，经原 NodeExecutionPort / ArtifactPort 执行并提交；旧 Runner 与新调度器共用请求构造和 Plugin 授权逻辑。探针 Run 只存于 `<state>/kernel-runs` 的 Kernel FileStore（资源 ID `run/{run_id}`），目录由单个 Host writer 持有文件锁；旧 Run 仍只由 FileRunStore 持有，同 ID 两份存储会拒绝读取和控制。
+Host 另提供显式 Kernel 执行路径：`POST /trigger` 的 `execution: "kernel_probe"` 经同一准入与节点授权，调用共享 Runtime 的 `KernelScheduler<S: Store>`。它读取 Kernel 相位与 GraphValidator 开放空位，经原 NodeExecutionPort / ArtifactPort 并发执行并提交；旧 Runner 与新调度器共用请求构造和 Plugin 授权逻辑。探针 Run 只存于 `<state>/kernel-runs` 的 Kernel FileStore（资源 ID `run/{run_id}`），目录由单个 Host writer 持有文件锁；旧 Run 仍只由 FileRunStore 持有，同 ID 两份存储会拒绝读取和控制。
 
 宿主Rust文件租约统一使用 `anchor-file-lease::FileLease`，保留各调用者的共享/独占、阻塞/非阻塞策略，Drop先显式解锁再关闭文件，提前返回与panic同样释放；避免fork继承的描述符延长父进程锁持有。
 

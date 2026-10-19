@@ -1,4 +1,4 @@
-//! Explicit serial probe. FileStore is the sole authority for these Runs;
+//! Explicit Kernel execution path. FileStore is the sole authority for these Runs;
 //! legacy status values are read-only projections for existing consumers.
 use super::{ApplicationError, RunApplication};
 use anchor_kernel::{
@@ -32,7 +32,9 @@ impl Authority for ProbeAuthority {
     fn permits(&self, p: &Principal, action: Action, _: &str) -> bool {
         match (p.id.as_str(), p.kind) {
             (EXECUTOR_ID, PrincipalKind::Agent) => action == Action::Write,
-            (HOST_ID, PrincipalKind::Code) => matches!(action, Action::Settle | Action::Request),
+            (HOST_ID, PrincipalKind::Code) => {
+                matches!(action, Action::Write | Action::Settle | Action::Request)
+            }
             (OPERATOR_ID, PrincipalKind::Human) => action == Action::Request,
             _ => false,
         }

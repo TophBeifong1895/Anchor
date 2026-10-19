@@ -121,7 +121,7 @@
       "/tmp/anchor-m2/old-module-test.log": "9e3f9cf458e485f070db36b9595fa60c76aed5afcc43cfb5300f402edb2b6556"
     }
   },
-  "status": "in_progress_parallel_module_validator_slice_verified",
+  "status": "stopped_at_required_storage_boundary_after_parallel_slice",
   "authorization": "User approved the four-point parallel-module extension on 2026-10-19; Kernel remains unchanged.",
   "parallel_module_slice": {
     "status": "implemented_and_locally_verified",
@@ -364,5 +364,201 @@
     },
     "note": "The existing random_parallel_graph clears module_rounds and uses unscoped branch ids. An additional shared/independent module population of 5000 seeds was added; original populations, assertions and thresholds remain unchanged. Supplemental module population has no injected node failures and uses a high module ceiling; deterministic tests cover module ceiling settlement and late success/failure.",
     "verification_correction": "The first directed run had 3 passes and 1 failure in a new test that incorrectly expected late refusal not to increase spent. The test now asserts unchanged phase/version/Graph state and spent +3, preserving D1. No existing assertion was changed."
+  },
+  "parallel_scheduler_slice": {
+    "parent_revision": "881c1dd",
+    "implemented": [
+      "concurrent open slots without wave barrier",
+      "Code fanout/join with canonical control artifacts shared with legacy",
+      "freeze provenance and parallel branch context",
+      "drain late success/failure including executor error or panic",
+      "stale resubmission cost zero",
+      "Host parallel pause/drain/resume without replay"
+    ],
+    "random_tally": {
+      "serial": {
+        "cases": 10000,
+        "node_failed": 772,
+        "module_activated": 1310
+      },
+      "parallel_failure": {
+        "cases": 5000,
+        "node_failed": 775,
+        "stale": 10224
+      },
+      "parallel_no_failure": {
+        "cases": 5000
+      },
+      "parallel_modules": {
+        "cases": 5000,
+        "module_activated": 4588,
+        "stale": 12461,
+        "node_failure_injection": false
+      }
+    },
+    "checks": [
+      {
+        "command": "cargo test --manifest-path rust/Cargo.toml -p anchor-runtime --lib graph::scheduler -- --nocapture",
+        "working_directory": ".",
+        "result": {
+          "targets": [
+            {
+              "passed": 9,
+              "failed": 0,
+              "ignored": 0,
+              "measured": 0,
+              "filtered": 135
+            }
+          ]
+        },
+        "raw_output": "/tmp/anchor-m2/scheduler-tests.log",
+        "sha256": "9b727dcc3f4b002bf50d7fd5ec2afa2430b61fcd0b5c81a7168044e0938e6de2"
+      },
+      {
+        "command": "cargo test --manifest-path rust/Cargo.toml -p anchor-runtime -- --skip graph::scheduler::tests::differential",
+        "working_directory": ".",
+        "result": {
+          "targets": [
+            {
+              "passed": 141,
+              "failed": 0,
+              "ignored": 0,
+              "measured": 0,
+              "filtered": 3
+            },
+            {
+              "passed": 7,
+              "failed": 0,
+              "ignored": 0,
+              "measured": 0,
+              "filtered": 0
+            },
+            {
+              "passed": 2,
+              "failed": 0,
+              "ignored": 0,
+              "measured": 0,
+              "filtered": 0
+            }
+          ]
+        },
+        "raw_output": "/tmp/anchor-m2/scheduler-runtime-regression.log",
+        "sha256": "6b9f727f892cd9f71463eb3fe3484ee507fd936bd95b21b6a5a682765d96d18a"
+      },
+      {
+        "command": "cargo test --manifest-path rust/Cargo.toml -p anchor-runner-host --bin anchor-runner-host application::run_access::kernel_runs::tests -- --nocapture",
+        "working_directory": ".",
+        "result": {
+          "targets": [
+            {
+              "passed": 15,
+              "failed": 0,
+              "ignored": 0,
+              "measured": 0,
+              "filtered": 931
+            }
+          ]
+        },
+        "raw_output": "/tmp/anchor-m2/scheduler-host-tests.log",
+        "sha256": "1ff7ef57ff66683c899295f37bb08e0aa3fab8b48d34ef75a61e60d07111d5cb"
+      },
+      {
+        "command": "cargo test --manifest-path rust/Cargo.toml -p anchor-runner-host --bin anchor-runner-host application::run_access::kernel_runs::tests::parallel -- --nocapture",
+        "working_directory": ".",
+        "result": {
+          "targets": [
+            {
+              "passed": 1,
+              "failed": 0,
+              "ignored": 0,
+              "measured": 0,
+              "filtered": 945
+            }
+          ]
+        },
+        "raw_output": "/tmp/anchor-m2/scheduler-host-parallel-final.log",
+        "sha256": "6a192c64d15d4d5b8a973c8852fbcdeb4e052a20000b9218f529f7a8976557a1"
+      },
+      {
+        "command": "cargo clippy --manifest-path rust/Cargo.toml -p anchor-runtime --all-targets -- -D warnings",
+        "working_directory": ".",
+        "result": {
+          "passed": true
+        },
+        "raw_output": "/tmp/anchor-m2/scheduler-clippy.log",
+        "sha256": "a09d52a6be591312eca6e91dc0794a866d8fd5fa864bee77b59825652db04703"
+      },
+      {
+        "command": "cargo clippy --manifest-path rust/Cargo.toml -p anchor-runner-host --all-targets -- -D warnings",
+        "working_directory": ".",
+        "result": {
+          "passed": true
+        },
+        "raw_output": "/tmp/anchor-m2/scheduler-host-clippy-all.log",
+        "sha256": "c835e720d3cf3e03d7b5627af569dccfdccf7de775a3a8f7c4a3b2e383264e11"
+      },
+      {
+        "command": "cargo test --manifest-path rust/Cargo.toml -p anchor-runner-host --test run_access_fence",
+        "working_directory": ".",
+        "result": {
+          "targets": [
+            {
+              "passed": 1,
+              "failed": 0,
+              "ignored": 0,
+              "measured": 0,
+              "filtered": 0
+            }
+          ]
+        },
+        "raw_output": "/tmp/anchor-m2/scheduler-fence.log",
+        "sha256": "453e256a19288973bcc5bfc96990bfe80c836ede30154cadc03c92453b2c3a66"
+      }
+    ],
+    "test_accounting": {
+      "runtime_added": 9,
+      "host_added": 1,
+      "existing_business_assertions_modified": 0,
+      "tests_deleted": 0,
+      "ignores_added": 0
+    },
+    "initial_corrected_errors": [
+      {
+        "command": "cargo test --manifest-path rust/Cargo.toml -p anchor-runtime --lib graph::scheduler -- --nocapture",
+        "error": "new fixture used tokio sync without dev sync feature",
+        "resolution": "enable tokio sync in runtime dev-dependencies",
+        "original_raw_output": "not retained; subsequent run reused the same temporary log path"
+      },
+      {
+        "command": "cargo test --manifest-path rust/Cargo.toml -p anchor-runner-host --lib application::run_access::kernel_runs::tests -- --nocapture",
+        "error": "no library targets in anchor-runner-host",
+        "resolution": "use --bin anchor-runner-host",
+        "original_raw_output": "not retained; subsequent run reused the same temporary log path"
+      }
+    ],
+    "structural_checks": {
+      "kernel_diff_vs_6ee2b0e": "empty",
+      "fence_test_bytes_vs_e3a5778": "identical",
+      "fence_manifest_modified_in_slice": false,
+      "fmt": "passed",
+      "diff_check": "passed",
+      "sensitive_wording": "passed"
+    },
+    "not_executed": [
+      "full workspace M2 gate",
+      "Web M2 gate",
+      "Goose M2 gate",
+      "real model Provider acceptance",
+      "production scheduler call differential"
+    ]
+  },
+  "storage_boundary": {
+    "stop_rule": "docs/constitution-migration-task.md section 8: anchor-kernel changes require handback",
+    "observed": "Store and FileStore expose no resource deletion operation; FileStore resource directory encoding is private",
+    "proposal": "Add FileStore::remove(id) only, without changing Store trait or Kernel lifecycle; host phase/worker guards remain under run_access",
+    "kernel_changed": false,
+    "evidence": "deletion-boundary.md",
+    "m2_complete": false,
+    "m3_started": false
   }
 }

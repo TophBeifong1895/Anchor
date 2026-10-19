@@ -1,11 +1,16 @@
-//! Serial Kernel path used by the Host concept probe. The Kernel owns all
+//! Kernel scheduling adapter used by the Host. The Kernel owns all
 //! progress and lifecycle facts; this adapter only executes and submits.
-use super::validator::{DispatchKind, GraphValidator, NodeSubmission, SettleSubmission, record_of};
+use super::validator::{Dispatch, GraphValidator, record_of};
 use super::*;
 use anchor_kernel::{
-    Action, Evidence, Kernel, Phase, Principal, PrincipalKind, Reason, Resource, Store, Submission,
-    Verdict,
+    Action, Kernel, Phase, Principal, PrincipalKind, Reason, Resource, Store, Submission, Verdict,
 };
+use futures::{FutureExt, StreamExt, stream::FuturesUnordered};
+use std::{collections::VecDeque, panic::AssertUnwindSafe};
+
+mod execution;
+#[cfg(test)]
+mod tests;
 
 pub const EXECUTOR_ID: &str = "kernel-probe/executor";
 pub const HOST_ID: &str = "kernel-probe/host";
@@ -13,11 +18,10 @@ pub const OPERATOR_ID: &str = "kernel-probe/operator";
 
 pub fn validate_probe(record: &GraphRunRecord) -> Result<(), GraphError> {
     for op in record.snapshot.ops.values() {
-        if ["fanout", "join", "call", "host"]
-            .iter()
-            .any(|kind| op.get(kind).is_some())
-        {
-            return Err(GraphError::Unsupported("P probe supports serial Work only; fanout/join, Op.call and assistant host operations require a later slice".into()));
+        if ["call", "host"].iter().any(|kind| op.get(kind).is_some()) {
+            return Err(GraphError::Unsupported(
+                "Op.call and assistant host operations require a later slice".into(),
+            ));
         }
     }
     Ok(())
@@ -85,177 +89,121 @@ pub struct KernelScheduler<'a, S: Store, A: ArtifactPort + ?Sized, N: NodeExecut
 impl<S: Store, A: ArtifactPort + ?Sized, N: NodeExecutionPort + ?Sized>
     KernelScheduler<'_, S, A, N>
 {
+    fn load(&self, id: &str) -> Result<Resource, GraphError> {
+        self.kernel
+            .load(id)
+            .map_err(kernel_error)?
+            .ok_or_else(|| GraphError::CorruptRun(format!("missing Kernel Run {id}")))
+    }
+
     pub async fn run(&self, id: &str) -> Result<Resource, GraphError> {
+        // These sets only own live futures. All progress, limits and lifecycle
+        // decisions are recomputed by the Graph validator, never by this loop.
+        let mut pending = FuturesUnordered::new();
+        let mut running = BTreeSet::new();
+        let mut ready = VecDeque::new();
+        let mut draining = false;
+        let mut failure = None;
         loop {
-            let resource = self
-                .kernel
-                .load(id)
-                .map_err(kernel_error)?
-                .ok_or_else(|| GraphError::CorruptRun(format!("missing Kernel Run {id}")))?;
-            if resource.phase() != Some(&Phase::Executing) {
+            // Commit completions already observed before dispatching new work.
+            // An unfinished sibling never holds up a newly open successor.
+            if !draining && ready.is_empty() {
+                let dispatches = self.load(id).and_then(|resource| {
+                    if resource.phase() != Some(&Phase::Executing) {
+                        return Ok((resource, Vec::new()));
+                    }
+                    validate_probe(&record_of(&resource)?)?;
+                    let frontier = GraphValidator::frontier(&resource)?;
+                    Ok((resource, frontier))
+                });
+                match dispatches {
+                    Ok((resource, frontier)) => {
+                        for dispatch in frontier {
+                            let slot = dispatch.slot();
+                            if running.insert(slot.clone()) {
+                                let resource = resource.clone();
+                                pending.push(async move {
+                                    let result =
+                                        AssertUnwindSafe(self.execute_slot(resource, dispatch))
+                                            .catch_unwind()
+                                            .await
+                                            .unwrap_or_else(|_| {
+                                                Err(GraphError::Io(io::Error::other(
+                                                    "node executor panicked",
+                                                )))
+                                            });
+                                    (slot, result)
+                                });
+                            }
+                        }
+                    }
+                    Err(error) => {
+                        failure.get_or_insert(error);
+                        draining = true;
+                    }
+                }
+            }
+            if ready.is_empty()
+                && let Some(result) = pending.next().await
+            {
+                ready.push_back(result);
+            }
+            // Give every admitted executor a chance to start before judging a
+            // ready result. Do not wait for slow siblings; refill open slots
+            // after each accepted completion.
+            while let Some(Some(result)) = pending.next().now_or_never() {
+                ready.push_back(result);
+            }
+            let Some((slot, result)) = ready.pop_front() else {
                 if let Some(boundary) = self.boundary {
                     boundary.before_dispatch(id)?;
                 }
-                return Ok(resource);
+                return match failure {
+                    Some(error) => Err(error),
+                    None => self.load(id),
+                };
+            };
+            running.remove(&slot);
+            let result = match result {
+                Ok(Some((principal, cost, submission))) => {
+                    submit_with_retry(self.kernel, &principal, cost, submission, self.observer)
+                        .and_then(|verdict| {
+                            if verdict.is_accepted()
+                                || matches!(
+                                    verdict.reason,
+                                    Reason::TaskWaiting | Reason::TaskSettled
+                                )
+                            {
+                                Ok(())
+                            } else {
+                                Err(GraphError::CorruptRun(format!(
+                                    "Kernel submission refused: {:?}",
+                                    verdict.reason
+                                )))
+                            }
+                        })
+                }
+                Ok(None) => {
+                    // Cancellation/suspension ends this worker; never redispatch
+                    // the same open slot in this drive. Durable facts allow resume.
+                    draining = true;
+                    Ok(())
+                }
+                Err(error) => Err(error),
+            };
+            if let Err(error) = result {
+                failure.get_or_insert(error);
+                draining = true;
             }
-            let record = record_of(&resource)?;
-            validate_probe(&record)?;
-            let frontier = GraphValidator::frontier(&resource)?;
-            if frontier.len() != 1 || frontier[0].kind != DispatchKind::Work {
-                return Err(GraphError::Unsupported(
-                    "P probe requires one open Work slot".into(),
-                ));
-            }
-            let dispatch = &frontier[0];
-            let key = InvocationKey {
-                run_id: record.run_id.clone(),
-                graph_digest: record.graph_digest.clone(),
-                node_id: dispatch.node.id.clone(),
-                invocation: dispatch.invocation,
-            };
-            let outcome = match self.nodes.completion_fact(&key).await? {
-                CompletionFact::Completed(c) => NodeExecutionOutcome::Completed(c),
-                CompletionFact::Failed(reason) => NodeExecutionOutcome::Failed { reason },
-                CompletionFact::Uncertain(reason) => {
-                    self.park(&resource, &key, reason, Value::Null)?;
-                    continue;
-                }
-                CompletionFact::NotStarted | CompletionFact::Resumable => {
-                    let mut resolved = Vec::new();
-                    for commit in &dispatch.inputs {
-                        resolved.push(self.artifacts.resolve(commit).await?);
-                    }
-                    let cursor = RunCursor {
-                        node_id: dispatch.node.id.clone(),
-                        key: key.clone(),
-                        input_commits: dispatch.inputs.clone(),
-                        prepared_input: serde_json::json!({"input":record.input,"committed_inputs":resolved}),
-                    };
-                    if let Some(boundary) = self.boundary {
-                        boundary.before_dispatch(id)?;
-                        let current =
-                            self.kernel.load(id).map_err(kernel_error)?.ok_or_else(|| {
-                                GraphError::CorruptRun("missing Kernel Run at dispatch".into())
-                            })?;
-                        if current.phase() != Some(&Phase::Executing) {
-                            return Ok(current);
-                        }
-                    }
-                    let request = authorized_execution_request(
-                        &record,
-                        &cursor,
-                        self.nodes,
-                        self.cancellation.clone(),
-                    )?;
-                    self.nodes.execute(request).await?
-                }
-                CompletionFact::Yielded { .. } => {
-                    return Err(GraphError::Unsupported(
-                        "P probe: Yielded completion requires the assistant slice".into(),
-                    ));
-                }
-            };
-            let (principal, cost, submission) = match outcome {
-                NodeExecutionOutcome::Completed(c) => {
-                    let commit = self.artifacts.freeze(&key, &c).await?;
-                    let evidence = Evidence::Resource {
-                        id: commit.id.clone(),
-                        version: 0,
-                    };
-                    let cost = c.model_requests;
-                    let content = NodeSubmission {
-                        summary: c.submission,
-                        route: c.route,
-                        output: c.output,
-                        model_requests: c.model_requests,
-                        commit,
-                        interruption: None,
-                        plugin_views: self.nodes.observed_plugin_views(&key),
-                        plugin_digests: self.nodes.observed_plugin_digests(&key),
-                    };
-                    (
-                        Principal::new(EXECUTOR_ID, PrincipalKind::Agent),
-                        cost,
-                        Submission::new(id, resource.version, Action::Write)
-                            .slot(dispatch.slot())
-                            .content(serde_json::to_value(content).map_err(GraphError::RunDecode)?)
-                            .evidence(evidence),
-                    )
-                }
-                NodeExecutionOutcome::Failed { reason } => (
-                    Principal::new(HOST_ID, PrincipalKind::Code),
-                    0,
-                    Submission::new(id, resource.version, Action::Settle)
-                        .slot(dispatch.slot())
-                        .content(
-                            serde_json::to_value(SettleSubmission { reason })
-                                .map_err(GraphError::RunDecode)?,
-                        ),
-                ),
-                NodeExecutionOutcome::WaitingRecovery { attempts } => {
-                    self.park(
-                        &resource,
-                        &key,
-                        "unknown external tool effects".into(),
-                        serde_json::to_value(attempts).map_err(GraphError::RunDecode)?,
-                    )?;
-                    continue;
-                }
-                NodeExecutionOutcome::Cancelled | NodeExecutionOutcome::Suspended => {
-                    return self
-                        .kernel
-                        .load(id)
-                        .map_err(kernel_error)?
-                        .ok_or_else(|| GraphError::CorruptRun("missing Kernel Run".into()));
-                }
-                unsupported => {
-                    return Err(GraphError::Unsupported(format!(
-                        "P probe: {unsupported:?} requires a later runtime slice"
-                    )));
-                }
-            };
-            let verdict =
-                submit_with_retry(self.kernel, &principal, cost, submission, self.observer)?;
-            if !verdict.is_accepted()
-                && !matches!(verdict.reason, Reason::TaskWaiting | Reason::TaskSettled)
+            if let Some(boundary) = self.boundary
+                && let Err(error) = boundary.before_dispatch(id)
             {
-                return Err(GraphError::Unsupported(format!(
-                    "P probe submission refused: {:?}",
-                    verdict.reason
-                )));
+                failure.get_or_insert(error);
+                draining = true;
             }
-            if let Some(boundary) = self.boundary {
-                boundary.before_dispatch(id)?;
-            }
-        }
-    }
-
-    fn park(
-        &self,
-        resource: &Resource,
-        key: &InvocationKey,
-        reason: String,
-        attempts: Value,
-    ) -> Result<(), GraphError> {
-        let submission = Submission::new(&resource.id, resource.version, Action::Request)
-            .content(serde_json::json!({"control":"stop","reason":reason,"invocation":key,"attempts":attempts}))
-            .evidence(Evidence::Observation { id: format!("node-completion/{}", key.durable_key()) });
-        let verdict = submit_with_retry(
-            self.kernel,
-            &Principal::new(HOST_ID, PrincipalKind::Code),
-            0,
-            submission,
-            self.observer,
-        )?;
-        if verdict.is_accepted()
-            || matches!(verdict.reason, Reason::TaskSettled | Reason::TaskWaiting)
-        {
-            Ok(())
-        } else {
-            Err(GraphError::Unsupported(format!(
-                "P observation stop refused: {:?}",
-                verdict.reason
-            )))
+            // Refill after each completion, without waiting for its siblings.
+            // Even after waiting/settlement, drain already running executors so
+            // their late facts and costs receive a durable Kernel verdict.
         }
     }
 }

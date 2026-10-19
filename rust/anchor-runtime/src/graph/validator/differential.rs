@@ -237,7 +237,7 @@ fn result_set(record: &GraphRunRecord) -> BTreeSet<(String, u64)> {
 /// S18: the first terminal fact wins; every executed fact occurs exactly
 /// once, either in state or in the TaskSettled history. Compare the remaining
 /// facts after accounting for the documented late wave and ceiling effects.
-fn check_failed_run(
+pub(crate) fn check_failed_run(
     seed: u64,
     old: &GraphRunRecord,
     new: &GraphRunRecord,

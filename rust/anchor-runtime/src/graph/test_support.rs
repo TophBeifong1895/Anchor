@@ -277,6 +277,52 @@ pub fn child_output(key: &str, seed: u64) -> Value {
     serde_json::json!({"answer": hash(&[key, "out"], seed) % 1000, "secret": "child business result"})
 }
 
+/// Small paired fanout/join fixture, matching the legacy Runner's parallel tests.
+pub fn parallel_fixture_graph() -> GraphSnapshot {
+    let mut snapshot = random_graph(0);
+    snapshot.entry = "start".into();
+    snapshot.module_rounds.clear();
+    snapshot.ops = BTreeMap::from([
+        (
+            "fanout".into(),
+            serde_json::json!({"fanout":{"join":"collect"}}),
+        ),
+        ("join".into(), serde_json::json!({"join":{}})),
+    ]);
+    snapshot.nodes = ["start", "left", "right", "collect", "after"]
+        .into_iter()
+        .map(|id| {
+            let op = match id {
+                "start" => Some("fanout".into()),
+                "collect" => Some("join".into()),
+                _ => None,
+            };
+            GraphNode {
+                id: id.into(),
+                agent: op.is_none().then(|| "worker".into()),
+                op,
+                input: None,
+                plugins: vec![],
+                max_rounds: None,
+            }
+        })
+        .collect();
+    snapshot.edges = [
+        ("start", "left"),
+        ("start", "right"),
+        ("left", "collect"),
+        ("right", "collect"),
+        ("collect", "after"),
+    ]
+    .into_iter()
+    .map(|(from, to)| GraphEdge {
+        from_node: from.into(),
+        to_node: to.into(),
+    })
+    .collect();
+    snapshot
+}
+
 /// Random serial Graphs with one or two nodes turned into Op.call (wait or
 /// detach), each keeping at most one exit.
 pub fn random_call_graph(seed: u64) -> GraphSnapshot {
