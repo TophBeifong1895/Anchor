@@ -53,6 +53,11 @@
 
 Runtime 以固定版本 Goose 作为 Agent loop、Provider、上下文、compaction 和原生会话基础，通过 ACP 交互、MCP 暴露授权工具；Anchor 负责 Graph、Run、Artifact、Sandbox、Plugin 和宿主权限事实。官方后端、工具和开发检查使用 Rust，WebUI 使用 React/TypeScript。优先复用成熟 crates，不复制另一套 Agent loop；第三方 Plugin 的语言由其作者决定，外部依赖须经宿主授权。
 
+## Run 访问边界
+
+- Host 业务代码只能通过 `application/run_access` 门面读写 Run；需要新能力时先扩展门面，不新增对内部类型的直接引用。
+- `run_access_fence` 测试按文件限制既有业务引用；迁移减少引用时同步降低 `rust/anchor-runner-host/run-access-fence.txt`，不得提高计数或新增业务例外。运行时允许范围由测试固定。
+
 ## 架构默认
 
 - 同一产品事实有唯一权威来源，同一业务规则有唯一权威实现。查询、校验、默认值、状态解释与操作前置条件也属于规则；共用存储、拆分文件或复用外壳组件，不代表规则已经收敛。

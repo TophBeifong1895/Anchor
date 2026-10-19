@@ -1,0 +1,146 @@
+# Run 访问门面任务书（master）
+
+编制：2026-10-19。适用分支：`master`（工作目录 `/home/mansteinl/Anchor`）。来源：用户批准的"先降耦合，再换实现"方案。
+
+## 为什么做
+
+Host 一共 156 个生产文件，其中 37 个直接引用 Run 的内部类型（`RunStatus`、`GraphRunRecord`、`RunStore`、`FileRunStore`、`GraphRunner`、`RunCursor`），合计约 370 处。业务代码（会话、投递、助手、API 投影等）直接读写 Run 的状态字段，并调用 `store.save`。
+
+另一条分支 `constitution-core` 正在用新内核重建 Run 的运行时，它的设计依据见 `docs/anchor-constitution.md`。只要业务代码还直接碰这些内部类型，两边每次合并都会产生**语义冲突**：文本能合上，但等于多了第二个写入者，或者合并后直接编译不过。
+
+本任务在 master 上建一个**门面**：业务代码只通过它读写 Run。master 上门面背后仍是现有实现，**行为零变化**；`constitution-core` 只需把门面背后的实现换成内核。
+
+## 硬性要求
+
+- **master 行为零变化**：现有测试全部通过，**不修改任何测试断言**。对外 HTTP JSON、Pilot 工具输出、Web 显示逐字节不变。这是一次纯重构。
+- 遵守 `AGENTS.md`：不用 reset/checkout/clean，只 stage 自己改的路径，每个 commit 编译通过、测试全绿。
+- 其他 agent 同时在 master 上做业务修改。按文件小步提交，每次提交前先合入最新 master，避免长时间占用同一批文件。
+
+## F0：围栏（先做，体量小，立刻起保护作用）
+
+1. 在 `anchor-runner-host` 中加一个测试，例如 `run_access_fence`。它扫描 `src/**/*.rs` 的生产代码，统计每个文件中出现的上述六个类型名。
+   - 跳过 `tests/` 目录、`*tests.rs` 文件，以及 `#[cfg(test)]` 之后的模块内容。
+   - 识别规则写在测试注释里。
+2. 文件分两类：
+   - **运行时侧（永久允许）**：门面模块本身、`execution.rs`、`main.rs`、`node_host/`、`run_data.rs`。不在名单上的文件，如果你认为也属于运行时侧，写明理由加进名单。`anchor-graph-host` 这个 crate 整体属于运行时侧，不在本围栏范围内。
+   - **业务侧（棘轮）**：其余所有文件。当前计数写进一个已提交的清单文件，例如 `rust/anchor-runner-host/run-access-fence.txt`。测试规则如下：
+     - 任一文件的计数超过清单值 → 失败；
+     - 清单之外的文件出现引用 → 失败；
+     - 计数下降时，提示同步降低清单值。
+3. 在 `AGENTS.md` 加一小节：业务代码只能通过门面读写 Run，围栏测试会拦截直接引用，确有需要时先扩展门面。
+4. 参考基线（2026-10-19 用 grep 粗算，包含测试模块；请用你的扫描规则重新计算）：业务侧较大的有 `application/conversations.rs` 27、`application/run_projection.rs` 21、`api/wecom.rs` 20、`application/session_calls.rs` 19、`application/control.rs` 19、`application/liveness.rs` 16、`application/abandon.rs` 15、`api.rs` 14、`application/plugins.rs` 14、`assistant.rs` 13、`application/recovery.rs` 13、`application/dispatch.rs` 13、`application/admission.rs` 11。
+
+提交：`test(host): fence Run internals behind a ratchet (F0)`
+
+## F1：读取门面
+
+新建模块，例如 `application/run_access/`。它对业务代码提供以下三样东西。
+
+**1. 只读视图 `RunView`。** 内容只有：
+
+| 部分 | 内容 |
+| --- | --- |
+| 相位 | `executing`；`waiting { for: human\|child\|effect, reason }`；`settled { outcome: done\|failed\|escalated\|unknown\|aborted, reason }` |
+| 宿主观察 | 是否有 worker 在跑（`active`）；更新时间 |
+| Graph 进度 | 只读访问：节点结果、产物引用、输出等，**不暴露** `status`、`error`、`cursor`、`recovery`、`recovery_submissions` |
+
+master 上，相位由现有 `RunStatus` 映射得到（Ready/Running → executing，Paused/Stopped/BudgetStopped → waiting human，WaitingRecovery → waiting effect，WaitingCall → waiting child，Completed/Failed/Aborted → settled）。这个映射**只存在门面内部一处**。
+
+**2. 规则谓词：每条规则一个函数。** 至少包括：
+
+- `is_settled`、`is_quiescent`、`needs_attention`
+- `can_stop`、`can_pause`、`can_resume`、`can_abandon`
+- 业务代码现在用 `RunStatus` 判断的其他规则，例如"能否投递回复""能否交接""能否删除"
+
+master 上，谓词**照搬现有判断**，旧状态的细分区别（例如 Paused 与 Stopped 的静止判定不同）都留在谓词内部。业务代码只调用谓词，**不再自己判断状态**。
+
+**3. 对外序列化。** HTTP 和 Pilot 用到的状态 JSON 由门面统一生成，master 上输出旧词汇且逐字节不变。
+
+然后迁移所有**只读**的业务消费者：`run_projection`、`liveness`、`queries`，以及 `conversations`、`api/*`、`assistant*`、`plugins`、`dispatch`、`admission`、`deletion`、`graphs` 等中的读取部分。每迁一个文件，围栏清单相应降低。
+
+**交付一张规则表**，写在 `docs/run-access-facade.md`。每条规则列出：
+
+- 谓词名；
+- master 上的现有语义（照搬自哪几处代码）；
+- 迁移前 Host 中独立判断这条规则的位置数，以及迁移后的位置数（应为 1）。
+
+这张表就是 `constitution-core` 实现同一组谓词时的对照依据。
+
+提交：`refactor(host): read Runs through one facade (F1)`。可以按文件拆成多个提交。
+
+## F2：写入门面
+
+业务代码中所有直接改 Run 的地方，都改为调用门面操作。门面在 master 上的实现，就是把现有代码**原样搬进去**。
+
+当前写入点（2026-10-19 粗查，测试模块除外，以你的核实为准）：
+
+- `store().save(...)`：`conversations.rs`（新 Run）、`session_calls.rs`（stop/yield/execute）、`assistants.rs`（新 Run）、`recovery.rs`（3 处）、`abandon.rs`、`control.rs`（3 处）、`admission.rs`
+- `record.status = …`：`session_calls`、`abandon`、`recovery`、`control`
+
+`constitution-core` 的工作记录里有一张完整清单（"H2/H3 直接写入棘轮起点"）。可以用 `git show constitution-core:docs/constitution-refactor-log.md` 查看，行号以 master 为准。
+
+门面操作按**意图**命名，而不是按字段命名。至少包括：
+
+- `admit`
+- `stop`、`pause`、`resume`、`abandon`
+- `record_recovery_decision`
+- 会话调用的 stop、yield、execute、settle
+- 子 Run 结算后释放父 Run
+
+完成标准：业务侧围栏清单中，所有文件的计数为 0，清单只剩运行时侧。
+
+提交：`refactor(host): change Runs only through the facade (F2)`。可以拆分。
+
+## 验收（每个 F 交回前执行）
+
+```bash
+cd /home/mansteinl/Anchor/rust
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace --no-fail-fast
+ANCHOR_GOOSE_BINARY=/var/tmp/anchor-goose-build/artifacts/goose-acp.first \
+  cargo test -p anchor-runner-host -- --ignored    # 先用 sha256sum 核对与锁定版本一致
+cd ../apps/web && npm test && npm run build
+```
+
+另外需要一个逐字节对比：选取现有覆盖 Run 状态 JSON 的 API 测试，证明重构前后输出完全相同。现有测试已经逐字节断言的，直接引用这些测试即可。
+
+## 停止条件
+
+**必须停下交回**：
+
+- 重构需要改变任何行为或测试断言；
+- 对外 JSON 无法保持逐字节不变；
+- 与并行进行的业务修改发生无法自行解决的冲突。
+
+**自行判断、登记后继续**：
+
+- 门面命名与文件组织；
+- 新增谓词；
+- 某个文件属于运行时侧还是业务侧（写明理由）。
+
+## 交回模板
+
+```
+阶段：F0 / F1 / F2
+commit：<hash 标题>（每个一行）
+围栏：业务侧引用 <改前> → <改后>；运行时侧名单 <列表>
+规则表：<规则数>，独立判断位置合计 <改前> → <改后>
+测试：workspace <通过/失败/忽略>；Goose 忽略测试 <结果或未执行及原因>；Web <…>
+JSON 逐字节：<证据>
+自行判断并登记的事项：<…>
+停止条件触发：<无 / 现场>
+```
+
+## 审查结论与补充（2026-10-19）
+
+**F0 通过。** 围栏、`AGENTS.md` 约定、`/runs` 十种状态的逐字节基线均已交付，生产代码未改。两项失败都不是 F0 引入的，现定性如下：
+
+- **wecom-gateway 的 3 个渠道时序用例**：同一时段本机另有一个 workspace 全量测试在跑（审查方在验收分支），属于负载导致的时序抖动；单独复跑均通过。其中 `slow_callback_does_not_block_control_and_older_reply_is_suppressed` 在分支 M1 也出现过一次，登记为已知时序脆弱用例，日后单独修复。
+- **Goose 忽略测试**：属于 master 现有的基线问题，锁定值在 `586916d` 中更换过，由 [G0 任务书](goose-baseline-task.md)单独处理。
+
+**下一步：**
+
+1. 立即提交 F0，同时提交 `docs/anchor-constitution.md`、本任务书和 `docs/goose-baseline-task.md`。围栏只有提交之后才能拦住并行的业务修改。
+2. 开始 F1。
+3. G0 修复之前，Goose 门槛改为"**相对基线没有新增失败**"：以 G0（或 F0 证据）记录的失败名单为基线，F1、F2 交回时对比两份失败名单，不再要求全绿。
