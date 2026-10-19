@@ -1175,7 +1175,7 @@ main.rs 与 goose_acp.rs 自动合并；恢复模块和助手接入均保留。�
 
 ## M3 §10.13：唯一 Kernel 路径与旧执行器退出
 
-先以 `0d029eb` 冻结旧侧 30,000 个 seed（串行 10,000、并行有失败/无失败各 5,000、模块 5,000、Call 5,000），两个命名空间分别完成旧执行与快照双对照后才删除旧 Runner。快照头、比较契约与尺寸见 [冻结基线](../experiments/constitution-host-preflight/m3/snapshots/README.md)。M3 的完整验收尚在进行，不把定向通过作为最终验收。
+先以 `0d029eb` 冻结旧侧 30,000 个 seed（串行 10,000、并行有失败/无失败各 5,000、模块 5,000、Call 5,000），两个命名空间分别完成旧执行与快照双对照后才删除旧 Runner。快照头、比较契约与尺寸见 [冻结基线](../experiments/constitution-host-preflight/m3/snapshots/README.md)。M3 固定 Goose 完整验收失败，恢复业务断言冲突触发任务书 §8；当前停止交回，未把定向通过作为最终验收。
 
 全部新 Run 默认 Kernel，HTTP 不再接收 execution 选择。旧存储仅具名拒绝；GraphRunRecord 格式 14 不再保存生命周期或 cursor。唯一生命周期来自 Kernel Phase，唯一 worker 表是 KernelRuns.active。Host、standalone、Graph/Session Call 与助手共用该执行路径，旧执行器、旧存储类型、兼容投影和控制轮询均退出。C2 的 [16 save / 36 mutation 去向](../experiments/constitution-host-preflight/m3/c2-destinations.md) 已逐项清零；[规则与 Session 所有权](../experiments/constitution-host-preflight/m3/rules-session-audit.md) 单独审计，不用消费者数量冒充规则计数。
 
@@ -1197,7 +1197,7 @@ main.rs 与 goose_acp.rs 自动合并；恢复模块和助手接入均保留。�
 | A6 未提交对话继承 | 前驱保留读取 Host 与 Goose 原生 started 事实；未 commit 的 workspace/native history 仍保护，未开始的开放槽位不延长保留。后继首轮证据与缺少 admission 的原业务断言保留。 |
 | A7 Session-call 核查 | 认证 Session 协调仍可持久化未知效果核查提示后继续同一 Run；通过既有 recover_attempt 与端口观察，不清空数组、不自动重放工具。普通控制/恢复仍不能越过 Session 协调。 |
 | A8 旧数据及入口 | execution 选择具名拒绝；旧 RunStore 与旧 Kernel record 格式具名拒绝。用户明确取消迁移工具，旧本地状态不自动删除。 |
-| A9 持久错误与路由 | 非法 route、Yielded、纯授权失败仍按原业务终态和一次成本断言验证；不放宽 S18，不修改 GraphValidator 裁决。record_of 保持纯 decode，结构校验在 load 边界。 |
+| A9 持久错误与路由 | 非法 route、Yielded、Op.run 纯授权失败仍按原业务终态和一次成本断言验证；不放宽 S18，不修改 GraphValidator 裁决。record_of 保持纯 decode，结构校验在 load 边界。 |
 | A10 ignored 重复 target | 删除 goose_kernel_persistent_assistant 对普通 assistant 模块的重复 include；原 12 个业务用例仍在默认 Kernel target，未新增 ignore。独立 Kernel 未知效果 recovery 用例保留。 |
 
 ### 删除测试映射
@@ -1224,3 +1224,14 @@ main.rs 与 goose_acp.rs 自动合并；恢复模块和助手接入均保留。�
 | `rust/anchor-runner-host/tests/writer_lease.rs`（上游断言词汇适配） | 新 stdio cleanup 成功断言从 status=completed 改为 projection.outcome=done；保留清理生效、status 只读不触发清理、deployment lease 不被创建的业务断言。 |
 
 其余自动合并采用上游 Web 凭据收起、异步生命周期保护、Pilot transcript 与启动临时文件回收；文档归档原样保留，不把历史证据当本次验收。上游新增 durable_write 测试首次合并编译因旧类型引用失败，已在定向修复后重跑，不能将该首轮写成通过。
+
+
+### M3 §8 停止交回（2026-10-20）
+
+合并后普通 workspace 为 2,153 / 0 / 125（129 targets），Web 39 文件 333 项及构建通过，严格 clippy/fmt、sandbox/Host/helper 构建通过。merge `b61c325` 的提交说明误写 2,154，实际日志为 2,153；不改写历史。固定 Goose 完整 Host ignored 为 **110 / 12 / 0**（41 targets），退出码 101；122 项全部实际执行，12 项失败逐项独立复跑全部再次失败，原样结果与最终确认见 [交回](../experiments/constitution-host-preflight/m3/verification.md) 和 [checks.json](../experiments/constitution-host-preflight/m3/checks.json)。Host、固定 Goose 与 helper 的运行前后身份一致，使用独立 target `/tmp/anchor-goose-regression-target-core`。
+
+业务断言冲突：旧普通 Run/渠道恢复要求一次显式 resume 后由 Agent 在同一原生 Session 核查并继续；M2 人工恢复用例要求这次 resume 只发现并停驻，直到显式决定。两者均禁止重放未知效果。按任务书 §8，本轮不修改这些业务断言或普通恢复语义，待用户裁定；[现场与选项](../experiments/constitution-host-preflight/m3/recovery-contract-decision.md)。这不是已批准的 S 变更，既有 S27 仍是本轮唯一 S 候选。
+
+其余未关闭项为 spike/会话身份已知失败映射、人工 recovery 重入锁、配置与 MCP 预检错误映射，以及三项仍读旧 runs 目录的夹具。只读定位与建议边界见 [完整回归清单](../experiments/constitution-host-preflight/m3/goose-regressions.md)；本轮未实施这些修复，不能把它们写成已通过。停止条件触发后的交回提交只更新证据与当前结论。
+
+C2 save 0、mutation 0；Kernel 相对 `0859373` 零 diff，GraphValidator 裁决未改；旧类型扫描零命中。业务断言放宽 0，既有测试新增 ignore 0。M3 未达到 Goose 零失败门槛，不合回 master，不自动开展 M4/M5。真实模型 Provider、外部渠道与部署未验，W4 未裁定；旧数据迁移工具按用户 §10.13 决定取消，开发状态处理见交回链接。

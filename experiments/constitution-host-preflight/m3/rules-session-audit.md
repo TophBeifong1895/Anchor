@@ -116,4 +116,4 @@
 - Session 读取与所有权的定向业务断言保存在 `run_access/conversations.rs`、`session_calls.rs`、`channels.rs`、`assistant_policy.rs`，API 原用例仍在对应 `api/tests` 模块；本审计未重复运行 Host 构建，最终结果由主流程给出，不能引用尚未完成的运行作通过证据。
 - 文档审计未执行真实模型 Provider、外部投递或部署；本地确定性 Provider、固定 Goose、真实模型验收是不同范围。
 
-未关闭的验收项包括最新 API 回归、Host/Goose 全量，以及任务书要求的里程碑结束合并后验证。本表不把静态所有权检查写成 M3 已通过。
+结束同步 master 后 API/Host 普通 workspace 已通过，固定 Goose 完整首轮 110 / 12 / 0。未知效果恢复存在业务契约冲突，人工 recovery 另有重入锁；配置、身份预检的已知失败适配与三项旧目录夹具也尚未修复。按任务书 §8 停止，M3 未通过，见 [交回](verification.md) 与 [未关闭回归](goose-regressions.md)。上表是当前代码的独立规则体与所有权计数，不将静态收敛等同为恢复行为验收。

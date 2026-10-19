@@ -1,0 +1,1958 @@
+{
+  "status": "stopped_section_8_business_recovery_contract_conflict",
+  "baseline": "4d3d19d",
+  "source_commit": "b61c325958c5ccb941e4dd3037b5c1d59d5eefdd",
+  "kernel_baseline": "0859373",
+  "build_directory": "/tmp/anchor-goose-regression-target-core",
+  "master_sync": {
+    "master": "0aa5197",
+    "merge": "b61c325",
+    "conflicts": [
+      "rust/anchor-runner-host/src/main.rs",
+      "rust/anchor-runner-host/src/application/run_access/reads.rs"
+    ],
+    "method": "merge; no rebase; one final sync"
+  },
+  "workspace": {
+    "log": "/tmp/anchor-m3/workspace-after-merge-2.log",
+    "sha256": "bfa927bfc2e0dd246dcfdd7b876b39ff9f5ae030cbafe9e9fb24a313757f58f8",
+    "targets": [
+      {
+        "target": "unittests src/lib.rs",
+        "status": "ok",
+        "passed": 84,
+        "failed": 0,
+        "ignored": 0,
+        "verbatim": "test result: ok. 84 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.73s"
+      },
+      {
+        "target": "unittests src/main.rs",
+        "status": "ok",
+        "passed": 0,
+        "failed": 0,
+        "ignored": 0,
+        "verbatim": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+      },
+      {
+        "target": "tests/cli.rs",
+        "status": "ok",
+        "passed": 6,
+        "failed": 0,
+        "ignored": 0,
+        "verbatim": "test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s"
+      },
+      {
+        "target": "tests/dev_launcher.rs",
+        "status": "ok",
+        "passed": 7,
+        "failed": 0,
+        "ignored": 0,
+        "verbatim": "test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.28s"
+      },
+      {
+        "target": "unittests src/lib.rs",
+        "status": "ok",
+        "passed": 39,
+        "failed": 0,
+        "ignored": 0,
+        "verbatim": "test result: ok. 39 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.75s"
+      },
+      {
+        "target": "unittests src/main.rs",
+        "status": "ok",
+        "passed": 0,
+        "failed": 0,
+        "ignored": 0,
+        "verbatim": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+      },
+      {
+        "target": "unittests src/bin/anchor-platform.rs",
+        "status": "ok",
+        "passed": 0,
+        "failed": 0,
+        "ignored": 0,
+        "verbatim": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+      },
+      {
+        "target": "tests/cli.rs",
+        "status": "ok",
+        "passed": 5,
+        "failed": 0,
+        "ignored": 1,
+        "verbatim": "test result: ok. 5 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+      },
+      {
+        "target": "tests/platform_cli.rs",
+        "status": "ok",
+        "passed": 4,
+        "failed": 0,
+        "ignored": 0,
+        "verbatim": "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+      },
+      {
+        "target": "unittests src/lib.rs",
+        "status": "ok",
+        "passed": 7,
+        "failed": 0,
+        "ignored": 0,
+        "verbatim": "test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.36s"
+      },
+      {
+        "target": "unittests src/main.rs",
+        "status": "ok",
+        "passed": 0,
+        "failed": 0,
+        "ignored": 0,
+        "verbatim": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+      },
+      {
+        "target": "tests/boundaries.rs",
+        "status": "ok",
+        "passed": 4,
+        "failed": 0,
+        "ignored": 0,
+        "verbatim": "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+      },
+      {
+        "target": "tests/package.rs",
+        "status": "ok",
+        "passed": 4,
+        "failed": 0,
+        "ignored": 0,
+        "verbatim": "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.49s"
+      },
+      {
+        "target": "tests/stdio.rs",
+        "status": "ok",
+        "passed": 4,
+        "failed": 0,
+        "ignored": 0,
+        "verbatim": "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s"
+      },
+      {
+        "target": "tests/upload.rs",
+        "status": "ok",
+        "passed": 4,
+        "failed": 0,
+        "ignored": 0,
+        "verbatim": "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.25s"
+      },
+      {
+        "target": "unittests src/lib.rs",
+        "status": "ok",
+        "passed": 3,
+        "failed": 0,
+        "ignored": 0,
+        "verbatim": "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+      },
+      {
+        "target": "unittests src/lib.rs",
+        "status": "ok",
+        "passed": 61,
+        "failed": 0,
+        "ignored": 0,
+        "verbatim": "test result: ok. 61 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.55s"
+      },
+      {
+        "target": "tests/child_lifecycle.rs",
+        "status": "ok",
+        "passed": 4,
+        "failed": 0,
+        "ignored": 0,
+        "verbatim": "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.14s"
+      },
+      {
+        "target": "tests/in_process.rs",
+        "status": "ok",
+        "passed": 0,
+        "failed": 0,
+        "ignored": 0,
+        "verbatim": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+      },
+      {
+        "target": "unittests src/lib.rs",
+        "status": "ok",
+        "passed": 0,
+        "failed": 0,
+        "ignored": 0,
+        "verbatim": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+      },
+      {
+        "target": "tests/accounting_lifecycle.rs",
+        "status": "ok",
+        "passed": 12,
+        "failed": 0,
+        "ignored": 0,
+        "verbatim": "test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+      },
+      {
+        "target": "tests/constitution.rs",
+        "status": "ok",
+        "passed": 17,
+        "failed": 0,
+        "ignored": 0,
+        "verbatim": "test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.13s"
+      },
+      {
+        "target": "tests/file_store_deletion.rs",
+        "status": "ok",
+        "passed": 7,
+        "failed": 0,
+        "ignored": 0,
+        "verbatim": "test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.77s"
+      },
+      {
+        "target": "tests/storage_regressions.rs",
+        "status": "ok",
+        "passed": 8,
+        "failed": 0,
+        "ignored": 0,
+        "verbatim": "test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.17s"
+      },
+      {
+        "target": "unittests src/lib.rs",
+        "status": "ok",
+        "passed": 21,
+        "failed": 0,
+        "ignored": 0,
+        "verbatim": "test result: ok. 21 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.20s"
+      },
+      {
+        "target": "unittests src/main.rs",
+        "status": "ok",
+        "passed": 0,
+        "failed": 0,
+        "ignored": 0,
+        "verbatim": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+      },
+      {
+        "target": "tests/cli.rs",
+        "status": "ok",
+        "passed": 2,
+        "failed": 0,
+        "ignored": 0,
+        "verbatim": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s"
+      },
+      {
+        "target": "tests/development.rs",
+        "status": "ok",
+        "passed": 10,
+        "failed": 0,
+        "ignored": 0,
+        "verbatim": "test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.11s"
+      },
+      {
+        "target": "tests/install.rs",
+        "status": "ok",
+        "passed": 21,
+        "failed": 0,
+        "ignored": 0,
+        "verbatim": "test result: ok. 21 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.01s"
+      },
+      {
+        "target": "tests/reclaim.rs",
+        "status": "ok",
+        "passed": 11,
+        "failed": 0,
+        "ignored": 0,
+        "verbatim": "test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.08s"
+      },
+      {
+        "target": "tests/review.rs",
+        "status": "ok",
+        "passed": 9,
+        "failed": 0,
+        "ignored": 0,
+        "verbatim": "test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.19s"
+      },
+      {
+        "target": "unittests src/lib.rs",
+        "status": "ok",
+        "passed": 25,
+        "failed": 0,
+        "ignored": 2,
+        "verbatim": "test result: ok. 25 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 0.50s"
+      },
+      {
+        "target": "unittests src/lib.rs",
+        "status": "ok",
+        "passed": 2,
+        "failed": 0,
+        "ignored": 0,
+        "verbatim": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s"
+      },
+      {
+        "target": "unittests src/main.rs",
+        "status": "ok",
+        "passed": 0,
+        "failed": 0,
+        "ignored": 0,
+        "verbatim": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+      },
+      {
+        "target": "unittests src/lib.rs",
+        "status": "ok",
+        "passed": 12,
+        "failed": 0,
+        "ignored": 0,
+        "verbatim": "test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.34s"
+      },
+      {
+        "target": "tests/channel_assistant.rs",
+        "status": "ok",
+        "passed": 10,
+        "failed": 0,
+        "ignored": 0,
+        "verbatim": "test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.57s"
+      },
+      {
+        "target": "tests/channel_assistant_retirement.rs",
+        "status": "ok",
+        "passed": 8,
+        "failed": 0,
+        "ignored": 0,
+        "verbatim": "test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.57s"
+      },
+      {
+        "target": "tests/channel_group.rs",
+        "status": "ok",
+        "passed": 3,
+        "failed": 0,
+        "ignored": 0,
+        "verbatim": "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.16s"
+      },
+      {
+        "target": "tests/channel_session.rs",
+        "status": "ok",
+        "passed": 13,
+        "failed": 0,
+        "ignored": 0,
+        "verbatim": "test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.49s"
+      },
+      {
+        "target": "tests/execution_links.rs",
+        "status": "ok",
+        "passed": 18,
+        "failed": 0,
+        "ignored": 0,
+        "verbatim": "test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.75s"
+      },
+      {
+        "target": "tests/goose_links.rs",
+        "status": "ok",
+        "passed": 14,
+        "failed": 0,
+        "ignored": 0,
+        "verbatim": "test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.95s"
+      },
+      {
+        "target": "tests/questions.rs",
+        "status": "ok",
+        "passed": 22,
+        "failed": 0,
+        "ignored": 0,
+        "verbatim": "test result: ok. 22 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.04s"
+      },
+      {
+        "target": "tests/schema_v3.rs",
+        "status": "ok",
+        "passed": 6,
+        "failed": 0,
+        "ignored": 0,
+        "verbatim": "test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 7.11s"
+      },
+      {
+        "target": "tests/schema_v5.rs",
+        "status": "ok",
+        "passed": 3,
+        "failed": 0,
+        "ignored": 0,
+        "verbatim": "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.84s"
+      },
+      {
+        "target": "tests/session_store.rs",
+        "status": "ok",
+        "passed": 27,
+        "failed": 0,
+        "ignored": 0,
+        "verbatim": "test result: ok. 27 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.76s"
+      },
+      {
+        "target": "tests/turn_store.rs",
+        "status": "ok",
+        "passed": 26,
+        "failed": 0,
+        "ignored": 0,
+        "verbatim": "test result: ok. 26 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.24s"
+      },
+      {
+        "target": "unittests src/lib.rs",
+        "status": "ok",
+        "passed": 11,
+        "failed": 0,
+        "ignored": 0,
+        "verbatim": "test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s"
+      },
+      {
+        "target": "unittests src/main.rs",
+        "status": "ok",
+        "passed": 0,
+        "failed": 0,
+        "ignored": 0,
+        "verbatim": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+      },
+      {
+        "target": "tests/business.rs",
+        "status": "ok",
+        "passed": 4,
+        "failed": 0,
+        "ignored": 0,
+        "verbatim": "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.10s"
+      },
+      {
+        "target": "tests/evidence.rs",
+        "status": "ok",
+        "passed": 10,
+        "failed": 0,
+        "ignored": 0,
+        "verbatim": "test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.11s"
+      },
+      {
+        "target": "tests/history_discovery.rs",
+        "status": "ok",
+        "passed": 2,
+        "failed": 0,
+        "ignored": 0,
+        "verbatim": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+      },
+      {
+        "target": "tests/weekly.rs",
+        "status": "ok",
+        "passed": 16,
+        "failed": 0,
+        "ignored": 0,
+        "verbatim": "test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s"
+      },
+      {
+        "target": "unittests src/bin/anchor-net-relay.rs",
+        "status": "ok",
+        "passed": 3,
+        "failed": 0,
+        "ignored": 0,
+        "verbatim": "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+      },
+      {
+        "target": "unittests src/main.rs",
+        "status": "ok",
+        "passed": 1028,
+        "failed": 0,
+        "ignored": 2,
+        "verbatim": "test result: ok. 1028 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 285.09s"
+      },
+      {
+        "target": "tests/channel_startup.rs",
+        "status": "ok",
+        "passed": 1,
+        "failed": 0,
+        "ignored": 0,
+        "verbatim": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.32s"
+      },
+      {
+        "target": "tests/goose_acp.rs",
+        "status": "ok",
+        "passed": 8,
+        "failed": 0,
+        "ignored": 15,
+        "verbatim": "test result: ok. 8 passed; 0 failed; 15 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+      },
+      {
+        "target": "tests/goose_channel.rs",
+        "status": "ok",
+        "passed": 6,
+        "failed": 0,
+        "ignored": 4,
+        "verbatim": "test result: ok. 6 passed; 0 failed; 4 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+      },
+      {
+        "target": "tests/goose_compaction.rs",
+        "status": "ok",
+        "passed": 6,
+        "failed": 0,
+        "ignored": 4,
+        "verbatim": "test result: ok. 6 passed; 0 failed; 4 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+      },
+      {
+        "target": "tests/goose_completion.rs",
+        "status": "ok",
+        "passed": 6,
+        "failed": 0,
+        "ignored": 9,
+        "verbatim": "test result: ok. 6 passed; 0 failed; 9 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+      },
+      {
+        "target": "tests/goose_conversation.rs",
+        "status": "ok",
+        "passed": 6,
+        "failed": 0,
+        "ignored": 13,
+        "verbatim": "test result: ok. 6 passed; 0 failed; 13 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+      },
+      {
+        "target": "tests/goose_development_environment.rs",
+        "status": "ok",
+        "passed": 6,
+        "failed": 0,
+        "ignored": 1,
+        "verbatim": "test result: ok. 6 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+      },
+      {
+        "target": "tests/goose_distribution.rs",
+        "status": "ok",
+        "passed": 6,
+        "failed": 0,
+        "ignored": 1,
+        "verbatim": "test result: ok. 6 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+      },
+      {
+        "target": "tests/goose_elicitation.rs",
+        "status": "ok",
+        "passed": 6,
+        "failed": 0,
+        "ignored": 10,
+        "verbatim": "test result: ok. 6 passed; 0 failed; 10 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+      },
+      {
+        "target": "tests/goose_kernel_recovery.rs",
+        "status": "ok",
+        "passed": 6,
+        "failed": 0,
+        "ignored": 1,
+        "verbatim": "test result: ok. 6 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+      },
+      {
+        "target": "tests/goose_library.rs",
+        "status": "ok",
+        "passed": 6,
+        "failed": 0,
+        "ignored": 1,
+        "verbatim": "test result: ok. 6 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+      },
+      {
+        "target": "tests/goose_media.rs",
+        "status": "ok",
+        "passed": 6,
+        "failed": 0,
+        "ignored": 6,
+        "verbatim": "test result: ok. 6 passed; 0 failed; 6 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+      },
+      {
+        "target": "tests/goose_model_settings.rs",
+        "status": "ok",
+        "passed": 6,
+        "failed": 0,
+        "ignored": 2,
+        "verbatim": "test result: ok. 6 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+      },
+      {
+        "target": "tests/goose_native_activation_spike.rs",
+        "status": "ok",
+        "passed": 6,
+        "failed": 0,
+        "ignored": 2,
+        "verbatim": "test result: ok. 6 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+      },
+      {
+        "target": "tests/goose_persistent_assistant.rs",
+        "status": "ok",
+        "passed": 6,
+        "failed": 0,
+        "ignored": 12,
+        "verbatim": "test result: ok. 6 passed; 0 failed; 12 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+      },
+      {
+        "target": "tests/goose_pilot.rs",
+        "status": "ok",
+        "passed": 6,
+        "failed": 0,
+        "ignored": 2,
+        "verbatim": "test result: ok. 6 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+      },
+      {
+        "target": "tests/goose_pilot_attachments.rs",
+        "status": "ok",
+        "passed": 6,
+        "failed": 0,
+        "ignored": 2,
+        "verbatim": "test result: ok. 6 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+      },
+      {
+        "target": "tests/goose_pilot_authoring.rs",
+        "status": "ok",
+        "passed": 6,
+        "failed": 0,
+        "ignored": 4,
+        "verbatim": "test result: ok. 6 passed; 0 failed; 4 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+      },
+      {
+        "target": "tests/goose_pilot_compaction.rs",
+        "status": "ok",
+        "passed": 6,
+        "failed": 0,
+        "ignored": 3,
+        "verbatim": "test result: ok. 6 passed; 0 failed; 3 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+      },
+      {
+        "target": "tests/goose_plugin_configuration.rs",
+        "status": "ok",
+        "passed": 6,
+        "failed": 0,
+        "ignored": 1,
+        "verbatim": "test result: ok. 6 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+      },
+      {
+        "target": "tests/goose_plugin_disclosure.rs",
+        "status": "ok",
+        "passed": 6,
+        "failed": 0,
+        "ignored": 1,
+        "verbatim": "test result: ok. 6 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+      },
+      {
+        "target": "tests/goose_plugin_mcp.rs",
+        "status": "ok",
+        "passed": 6,
+        "failed": 0,
+        "ignored": 2,
+        "verbatim": "test result: ok. 6 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+      },
+      {
+        "target": "tests/goose_plugin_summary.rs",
+        "status": "ok",
+        "passed": 6,
+        "failed": 0,
+        "ignored": 2,
+        "verbatim": "test result: ok. 6 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+      },
+      {
+        "target": "tests/goose_plugin_turns.rs",
+        "status": "ok",
+        "passed": 6,
+        "failed": 0,
+        "ignored": 7,
+        "verbatim": "test result: ok. 6 passed; 0 failed; 7 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+      },
+      {
+        "target": "tests/goose_provider_errors.rs",
+        "status": "ok",
+        "passed": 6,
+        "failed": 0,
+        "ignored": 4,
+        "verbatim": "test result: ok. 6 passed; 0 failed; 4 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+      },
+      {
+        "target": "tests/goose_responses.rs",
+        "status": "ok",
+        "passed": 6,
+        "failed": 0,
+        "ignored": 2,
+        "verbatim": "test result: ok. 6 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+      },
+      {
+        "target": "tests/goose_session_calls.rs",
+        "status": "ok",
+        "passed": 6,
+        "failed": 0,
+        "ignored": 5,
+        "verbatim": "test result: ok. 6 passed; 0 failed; 5 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+      },
+      {
+        "target": "tests/goose_trace.rs",
+        "status": "ok",
+        "passed": 6,
+        "failed": 0,
+        "ignored": 2,
+        "verbatim": "test result: ok. 6 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+      },
+      {
+        "target": "tests/local_inputs.rs",
+        "status": "ok",
+        "passed": 4,
+        "failed": 0,
+        "ignored": 0,
+        "verbatim": "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.66s"
+      },
+      {
+        "target": "tests/local_network.rs",
+        "status": "ok",
+        "passed": 1,
+        "failed": 0,
+        "ignored": 0,
+        "verbatim": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.14s"
+      },
+      {
+        "target": "tests/multinode.rs",
+        "status": "ok",
+        "passed": 3,
+        "failed": 0,
+        "ignored": 0,
+        "verbatim": "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.90s"
+      },
+      {
+        "target": "tests/native_plugins.rs",
+        "status": "ok",
+        "passed": 6,
+        "failed": 0,
+        "ignored": 2,
+        "verbatim": "test result: ok. 6 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+      },
+      {
+        "target": "tests/parallel.rs",
+        "status": "ok",
+        "passed": 3,
+        "failed": 0,
+        "ignored": 0,
+        "verbatim": "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.67s"
+      },
+      {
+        "target": "tests/routing.rs",
+        "status": "ok",
+        "passed": 5,
+        "failed": 0,
+        "ignored": 0,
+        "verbatim": "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.02s"
+      },
+      {
+        "target": "tests/run_access_fence.rs",
+        "status": "ok",
+        "passed": 1,
+        "failed": 0,
+        "ignored": 0,
+        "verbatim": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.12s"
+      },
+      {
+        "target": "tests/standalone_graph_call.rs",
+        "status": "ok",
+        "passed": 3,
+        "failed": 0,
+        "ignored": 0,
+        "verbatim": "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.88s"
+      },
+      {
+        "target": "tests/standalone_library.rs",
+        "status": "ok",
+        "passed": 1,
+        "failed": 0,
+        "ignored": 0,
+        "verbatim": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s"
+      },
+      {
+        "target": "tests/standard_host.rs",
+        "status": "ok",
+        "passed": 3,
+        "failed": 0,
+        "ignored": 0,
+        "verbatim": "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.59s"
+      },
+      {
+        "target": "tests/writer_lease.rs",
+        "status": "ok",
+        "passed": 5,
+        "failed": 0,
+        "ignored": 0,
+        "verbatim": "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.56s"
+      },
+      {
+        "target": "unittests src/lib.rs",
+        "status": "ok",
+        "passed": 155,
+        "failed": 0,
+        "ignored": 0,
+        "verbatim": "test result: ok. 155 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 179.13s"
+      },
+      {
+        "target": "tests/weekly_work_report_graphs.rs",
+        "status": "ok",
+        "passed": 7,
+        "failed": 0,
+        "ignored": 0,
+        "verbatim": "test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+      },
+      {
+        "target": "unittests src/lib.rs",
+        "status": "ok",
+        "passed": 19,
+        "failed": 0,
+        "ignored": 0,
+        "verbatim": "test result: ok. 19 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.67s"
+      },
+      {
+        "target": "unittests src/bin/anchor-sandbox-network.rs",
+        "status": "ok",
+        "passed": 1,
+        "failed": 0,
+        "ignored": 0,
+        "verbatim": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+      },
+      {
+        "target": "tests/network_boundary.rs",
+        "status": "ok",
+        "passed": 2,
+        "failed": 0,
+        "ignored": 0,
+        "verbatim": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.25s"
+      },
+      {
+        "target": "unittests src/lib.rs",
+        "status": "ok",
+        "passed": 18,
+        "failed": 0,
+        "ignored": 0,
+        "verbatim": "test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s"
+      },
+      {
+        "target": "unittests src/main.rs",
+        "status": "ok",
+        "passed": 0,
+        "failed": 0,
+        "ignored": 0,
+        "verbatim": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+      },
+      {
+        "target": "tests/batch.rs",
+        "status": "ok",
+        "passed": 7,
+        "failed": 0,
+        "ignored": 0,
+        "verbatim": "test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.01s"
+      },
+      {
+        "target": "tests/boundaries.rs",
+        "status": "ok",
+        "passed": 9,
+        "failed": 0,
+        "ignored": 0,
+        "verbatim": "test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.00s"
+      },
+      {
+        "target": "tests/mcp.rs",
+        "status": "ok",
+        "passed": 3,
+        "failed": 0,
+        "ignored": 0,
+        "verbatim": "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s"
+      },
+      {
+        "target": "tests/read.rs",
+        "status": "ok",
+        "passed": 9,
+        "failed": 0,
+        "ignored": 0,
+        "verbatim": "test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.01s"
+      },
+      {
+        "target": "tests/search.rs",
+        "status": "ok",
+        "passed": 5,
+        "failed": 0,
+        "ignored": 0,
+        "verbatim": "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.00s"
+      },
+      {
+        "target": "unittests src/lib.rs",
+        "status": "ok",
+        "passed": 26,
+        "failed": 0,
+        "ignored": 0,
+        "verbatim": "test result: ok. 26 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.67s"
+      },
+      {
+        "target": "unittests src/main.rs",
+        "status": "ok",
+        "passed": 0,
+        "failed": 0,
+        "ignored": 0,
+        "verbatim": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+      },
+      {
+        "target": "tests/cli.rs",
+        "status": "ok",
+        "passed": 2,
+        "failed": 0,
+        "ignored": 0,
+        "verbatim": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.27s"
+      },
+      {
+        "target": "tests/transport.rs",
+        "status": "ok",
+        "passed": 50,
+        "failed": 0,
+        "ignored": 0,
+        "verbatim": "test result: ok. 50 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 11.11s"
+      },
+      {
+        "target": "unittests src/lib.rs",
+        "status": "ok",
+        "passed": 4,
+        "failed": 0,
+        "ignored": 0,
+        "verbatim": "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s"
+      },
+      {
+        "target": "unittests src/main.rs",
+        "status": "ok",
+        "passed": 0,
+        "failed": 0,
+        "ignored": 0,
+        "verbatim": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+      },
+      {
+        "target": "tests/api.rs",
+        "status": "ok",
+        "passed": 11,
+        "failed": 0,
+        "ignored": 0,
+        "verbatim": "test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.10s"
+      },
+      {
+        "target": "tests/stdio_package.rs",
+        "status": "ok",
+        "passed": 6,
+        "failed": 0,
+        "ignored": 0,
+        "verbatim": "test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.65s"
+      },
+      {
+        "target": "Doc-tests anchor_devtools",
+        "status": "ok",
+        "passed": 0,
+        "failed": 0,
+        "ignored": 0,
+        "verbatim": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+      },
+      {
+        "target": "Doc-tests anchor_distribution",
+        "status": "ok",
+        "passed": 0,
+        "failed": 0,
+        "ignored": 0,
+        "verbatim": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+      },
+      {
+        "target": "Doc-tests anchor_docmost_tools",
+        "status": "ok",
+        "passed": 0,
+        "failed": 0,
+        "ignored": 0,
+        "verbatim": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+      },
+      {
+        "target": "Doc-tests anchor_file_lease",
+        "status": "ok",
+        "passed": 0,
+        "failed": 0,
+        "ignored": 0,
+        "verbatim": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+      },
+      {
+        "target": "Doc-tests anchor_graph_host",
+        "status": "ok",
+        "passed": 0,
+        "failed": 0,
+        "ignored": 0,
+        "verbatim": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+      },
+      {
+        "target": "Doc-tests anchor_kernel",
+        "status": "ok",
+        "passed": 0,
+        "failed": 0,
+        "ignored": 0,
+        "verbatim": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+      },
+      {
+        "target": "Doc-tests anchor_library",
+        "status": "ok",
+        "passed": 0,
+        "failed": 0,
+        "ignored": 0,
+        "verbatim": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+      },
+      {
+        "target": "Doc-tests anchor_mcp_host",
+        "status": "ok",
+        "passed": 0,
+        "failed": 0,
+        "ignored": 0,
+        "verbatim": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+      },
+      {
+        "target": "Doc-tests anchor_network_tools",
+        "status": "ok",
+        "passed": 0,
+        "failed": 0,
+        "ignored": 0,
+        "verbatim": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+      },
+      {
+        "target": "Doc-tests anchor_platform_session",
+        "status": "ok",
+        "passed": 0,
+        "failed": 0,
+        "ignored": 0,
+        "verbatim": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+      },
+      {
+        "target": "Doc-tests anchor_rsi",
+        "status": "ok",
+        "passed": 0,
+        "failed": 0,
+        "ignored": 0,
+        "verbatim": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+      },
+      {
+        "target": "Doc-tests anchor_runtime",
+        "status": "ok",
+        "passed": 2,
+        "failed": 0,
+        "ignored": 0,
+        "verbatim": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s"
+      },
+      {
+        "target": "Doc-tests anchor_sandbox_bwrap",
+        "status": "ok",
+        "passed": 0,
+        "failed": 0,
+        "ignored": 0,
+        "verbatim": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+      },
+      {
+        "target": "Doc-tests anchor_scholarly",
+        "status": "ok",
+        "passed": 0,
+        "failed": 0,
+        "ignored": 0,
+        "verbatim": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+      },
+      {
+        "target": "Doc-tests anchor_wecom_gateway",
+        "status": "ok",
+        "passed": 0,
+        "failed": 0,
+        "ignored": 0,
+        "verbatim": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+      },
+      {
+        "target": "Doc-tests anchor_wecom_tools",
+        "status": "ok",
+        "passed": 0,
+        "failed": 0,
+        "ignored": 0,
+        "verbatim": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+      }
+    ],
+    "totals": {
+      "passed": 2153,
+      "failed": 0,
+      "ignored": 125
+    },
+    "command": "cargo test --workspace --no-fail-fast --manifest-path rust/Cargo.toml",
+    "environment": {
+      "CARGO_TARGET_DIR": "/tmp/anchor-goose-regression-target-core",
+      "CARGO_BUILD_JOBS": "2",
+      "RUST_TEST_THREADS": "4"
+    }
+  },
+  "web": {
+    "test": {
+      "files": 39,
+      "passed": 333,
+      "failed": 0,
+      "log": "/tmp/anchor-m3/web-test-final.log"
+    },
+    "build": {
+      "status": "passed",
+      "log": "/tmp/anchor-m3/web-build-final-3.log",
+      "warning": "existing Vite large chunk warning"
+    }
+  },
+  "clippy": {
+    "status": "passed",
+    "log": "/tmp/anchor-m3/clippy-after-merge-2.log",
+    "arguments": "--workspace --all-targets -- -D warnings"
+  },
+  "fmt": {
+    "status": "passed",
+    "arguments": "--all -- --check"
+  },
+  "kernel_diff": {
+    "command": "git diff 0859373 -- rust/anchor-kernel",
+    "empty": true
+  },
+  "c2": {
+    "save_before": 16,
+    "save_after": 0,
+    "mutation_before": 36,
+    "mutation_after": 0,
+    "mapping": "c2-destinations.md"
+  },
+  "goose": {
+    "status": "failed",
+    "command": "cargo +stable test --manifest-path rust/Cargo.toml -p anchor-runner-host --locked --no-fail-fast -- --ignored --test-threads=1",
+    "environment": {
+      "CARGO_TARGET_DIR": "/tmp/anchor-goose-regression-target-core",
+      "CARGO_BUILD_JOBS": "2",
+      "ANCHOR_GOOSE_BINARY": "/var/tmp/anchor-goose-build/artifacts/goose-acp.first",
+      "ANCHOR_GOOSE_LOCAL_NETWORK": "1",
+      "ANCHOR_GOOSE_RELAY_BINARY": "/tmp/anchor-goose-regression-target-core/debug/anchor-net-relay",
+      "ANCHOR_TEST_RUST_TOOLCHAIN": "stable-x86_64-unknown-linux-gnu",
+      "ANCHOR_PILOT_RUSTUP": "/home/mansteinl/.cargo/bin/rustup",
+      "ANCHOR_PILOT_RUSTUP_HOME": "/home/mansteinl/.rustup",
+      "ANCHOR_TEST_EVIDENCE_ROOT": "/tmp/anchor-m3/goose-final-20261019"
+    },
+    "full_suite": {
+      "log": "/tmp/anchor-m3/goose-final.log",
+      "sha256": "57778ee242223146cdfbc1d22be9f7d6d5472d5736291c8791d9c4456a7afa84",
+      "exit_code": 101,
+      "targets": [
+        {
+          "target": "unittests src/bin/anchor-net-relay.rs",
+          "status": "ok",
+          "passed": 0,
+          "failed": 0,
+          "ignored": 0,
+          "verbatim": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.00s"
+        },
+        {
+          "target": "unittests src/main.rs",
+          "status": "ok",
+          "passed": 2,
+          "failed": 0,
+          "ignored": 0,
+          "verbatim": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 1028 filtered out; finished in 31.90s"
+        },
+        {
+          "target": "tests/channel_startup.rs",
+          "status": "ok",
+          "passed": 0,
+          "failed": 0,
+          "ignored": 0,
+          "verbatim": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s"
+        },
+        {
+          "target": "tests/goose_acp.rs",
+          "status": "FAILED",
+          "passed": 13,
+          "failed": 2,
+          "ignored": 0,
+          "verbatim": "test result: FAILED. 13 passed; 2 failed; 0 ignored; 0 measured; 8 filtered out; finished in 155.56s"
+        },
+        {
+          "target": "tests/goose_channel.rs",
+          "status": "FAILED",
+          "passed": 3,
+          "failed": 1,
+          "ignored": 0,
+          "verbatim": "test result: FAILED. 3 passed; 1 failed; 0 ignored; 0 measured; 6 filtered out; finished in 56.22s"
+        },
+        {
+          "target": "tests/goose_compaction.rs",
+          "status": "ok",
+          "passed": 4,
+          "failed": 0,
+          "ignored": 0,
+          "verbatim": "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 36.26s"
+        },
+        {
+          "target": "tests/goose_completion.rs",
+          "status": "ok",
+          "passed": 9,
+          "failed": 0,
+          "ignored": 0,
+          "verbatim": "test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 66.44s"
+        },
+        {
+          "target": "tests/goose_conversation.rs",
+          "status": "FAILED",
+          "passed": 10,
+          "failed": 3,
+          "ignored": 0,
+          "verbatim": "test result: FAILED. 10 passed; 3 failed; 0 ignored; 0 measured; 6 filtered out; finished in 185.98s"
+        },
+        {
+          "target": "tests/goose_development_environment.rs",
+          "status": "ok",
+          "passed": 1,
+          "failed": 0,
+          "ignored": 0,
+          "verbatim": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 19.69s"
+        },
+        {
+          "target": "tests/goose_distribution.rs",
+          "status": "ok",
+          "passed": 1,
+          "failed": 0,
+          "ignored": 0,
+          "verbatim": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 84.61s"
+        },
+        {
+          "target": "tests/goose_elicitation.rs",
+          "status": "ok",
+          "passed": 10,
+          "failed": 0,
+          "ignored": 0,
+          "verbatim": "test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 64.09s"
+        },
+        {
+          "target": "tests/goose_kernel_recovery.rs",
+          "status": "FAILED",
+          "passed": 0,
+          "failed": 1,
+          "ignored": 0,
+          "verbatim": "test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 6 filtered out; finished in 7.10s"
+        },
+        {
+          "target": "tests/goose_library.rs",
+          "status": "ok",
+          "passed": 1,
+          "failed": 0,
+          "ignored": 0,
+          "verbatim": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 8.04s"
+        },
+        {
+          "target": "tests/goose_media.rs",
+          "status": "ok",
+          "passed": 6,
+          "failed": 0,
+          "ignored": 0,
+          "verbatim": "test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 53.73s"
+        },
+        {
+          "target": "tests/goose_model_settings.rs",
+          "status": "ok",
+          "passed": 2,
+          "failed": 0,
+          "ignored": 0,
+          "verbatim": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 15.88s"
+        },
+        {
+          "target": "tests/goose_native_activation_spike.rs",
+          "status": "ok",
+          "passed": 2,
+          "failed": 0,
+          "ignored": 0,
+          "verbatim": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 2.62s"
+        },
+        {
+          "target": "tests/goose_persistent_assistant.rs",
+          "status": "ok",
+          "passed": 12,
+          "failed": 0,
+          "ignored": 0,
+          "verbatim": "test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 134.40s"
+        },
+        {
+          "target": "tests/goose_pilot.rs",
+          "status": "ok",
+          "passed": 2,
+          "failed": 0,
+          "ignored": 0,
+          "verbatim": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 14.99s"
+        },
+        {
+          "target": "tests/goose_pilot_attachments.rs",
+          "status": "ok",
+          "passed": 2,
+          "failed": 0,
+          "ignored": 0,
+          "verbatim": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 19.32s"
+        },
+        {
+          "target": "tests/goose_pilot_authoring.rs",
+          "status": "ok",
+          "passed": 4,
+          "failed": 0,
+          "ignored": 0,
+          "verbatim": "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 35.17s"
+        },
+        {
+          "target": "tests/goose_pilot_compaction.rs",
+          "status": "ok",
+          "passed": 3,
+          "failed": 0,
+          "ignored": 0,
+          "verbatim": "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 27.81s"
+        },
+        {
+          "target": "tests/goose_plugin_configuration.rs",
+          "status": "FAILED",
+          "passed": 0,
+          "failed": 1,
+          "ignored": 0,
+          "verbatim": "test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 6 filtered out; finished in 64.52s"
+        },
+        {
+          "target": "tests/goose_plugin_disclosure.rs",
+          "status": "ok",
+          "passed": 1,
+          "failed": 0,
+          "ignored": 0,
+          "verbatim": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 8.55s"
+        },
+        {
+          "target": "tests/goose_plugin_mcp.rs",
+          "status": "FAILED",
+          "passed": 1,
+          "failed": 1,
+          "ignored": 0,
+          "verbatim": "test result: FAILED. 1 passed; 1 failed; 0 ignored; 0 measured; 6 filtered out; finished in 23.20s"
+        },
+        {
+          "target": "tests/goose_plugin_summary.rs",
+          "status": "ok",
+          "passed": 2,
+          "failed": 0,
+          "ignored": 0,
+          "verbatim": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 17.30s"
+        },
+        {
+          "target": "tests/goose_plugin_turns.rs",
+          "status": "FAILED",
+          "passed": 4,
+          "failed": 3,
+          "ignored": 0,
+          "verbatim": "test result: FAILED. 4 passed; 3 failed; 0 ignored; 0 measured; 6 filtered out; finished in 112.86s"
+        },
+        {
+          "target": "tests/goose_provider_errors.rs",
+          "status": "ok",
+          "passed": 4,
+          "failed": 0,
+          "ignored": 0,
+          "verbatim": "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 37.43s"
+        },
+        {
+          "target": "tests/goose_responses.rs",
+          "status": "ok",
+          "passed": 2,
+          "failed": 0,
+          "ignored": 0,
+          "verbatim": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 16.05s"
+        },
+        {
+          "target": "tests/goose_session_calls.rs",
+          "status": "ok",
+          "passed": 5,
+          "failed": 0,
+          "ignored": 0,
+          "verbatim": "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 55.92s"
+        },
+        {
+          "target": "tests/goose_trace.rs",
+          "status": "ok",
+          "passed": 2,
+          "failed": 0,
+          "ignored": 0,
+          "verbatim": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 15.97s"
+        },
+        {
+          "target": "tests/local_inputs.rs",
+          "status": "ok",
+          "passed": 0,
+          "failed": 0,
+          "ignored": 0,
+          "verbatim": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 4 filtered out; finished in 0.00s"
+        },
+        {
+          "target": "tests/local_network.rs",
+          "status": "ok",
+          "passed": 0,
+          "failed": 0,
+          "ignored": 0,
+          "verbatim": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s"
+        },
+        {
+          "target": "tests/multinode.rs",
+          "status": "ok",
+          "passed": 0,
+          "failed": 0,
+          "ignored": 0,
+          "verbatim": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.00s"
+        },
+        {
+          "target": "tests/native_plugins.rs",
+          "status": "ok",
+          "passed": 2,
+          "failed": 0,
+          "ignored": 0,
+          "verbatim": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 43.51s"
+        },
+        {
+          "target": "tests/parallel.rs",
+          "status": "ok",
+          "passed": 0,
+          "failed": 0,
+          "ignored": 0,
+          "verbatim": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.00s"
+        },
+        {
+          "target": "tests/routing.rs",
+          "status": "ok",
+          "passed": 0,
+          "failed": 0,
+          "ignored": 0,
+          "verbatim": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 5 filtered out; finished in 0.00s"
+        },
+        {
+          "target": "tests/run_access_fence.rs",
+          "status": "ok",
+          "passed": 0,
+          "failed": 0,
+          "ignored": 0,
+          "verbatim": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s"
+        },
+        {
+          "target": "tests/standalone_graph_call.rs",
+          "status": "ok",
+          "passed": 0,
+          "failed": 0,
+          "ignored": 0,
+          "verbatim": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.00s"
+        },
+        {
+          "target": "tests/standalone_library.rs",
+          "status": "ok",
+          "passed": 0,
+          "failed": 0,
+          "ignored": 0,
+          "verbatim": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s"
+        },
+        {
+          "target": "tests/standard_host.rs",
+          "status": "ok",
+          "passed": 0,
+          "failed": 0,
+          "ignored": 0,
+          "verbatim": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.00s"
+        },
+        {
+          "target": "tests/writer_lease.rs",
+          "status": "ok",
+          "passed": 0,
+          "failed": 0,
+          "ignored": 0,
+          "verbatim": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 5 filtered out; finished in 0.00s"
+        }
+      ],
+      "totals": {
+        "passed": 110,
+        "failed": 12,
+        "ignored": 0
+      }
+    },
+    "binary_identities": "binary-identities.json",
+    "isolated_retries": {
+      "method": "Sequentially invoke the same first-round test binaries; one exact test per invocation. No rebuilds or implementation changes.",
+      "cwd": "rust/anchor-runner-host",
+      "environment": "Same as full suite; evidence root changed to /tmp/anchor-m3/goose-solo-before-fixes-20261020",
+      "totals": {
+        "passed": 0,
+        "failed": 12,
+        "ignored": 0
+      },
+      "tests": [
+        {
+          "target": "tests/goose_acp.rs",
+          "binary": "/tmp/anchor-goose-regression-target-core/debug/deps/goose_acp-e58b545a3b60cbf4",
+          "test": "native_goose_unknown_external_effect_reopens_same_session_and_checks_before_continuing",
+          "index": 1,
+          "command": [
+            "/tmp/anchor-goose-regression-target-core/debug/deps/goose_acp-e58b545a3b60cbf4",
+            "native_goose_unknown_external_effect_reopens_same_session_and_checks_before_continuing",
+            "--ignored",
+            "--exact",
+            "--test-threads=1"
+          ],
+          "log": "/tmp/anchor-m3/solo-before-fixes-01.log",
+          "exit_code": 101,
+          "elapsed_seconds": 32.117,
+          "verbatim": [
+            "test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 22 filtered out; finished in 32.12s"
+          ],
+          "log_sha256": "c06f10b017b44b1aabff9f8f8f3458c14e9e535f5010ef78e9ee3df56dd44dc5",
+          "retained_fixtures": [
+            "/tmp/.tmpKQ469k"
+          ],
+          "failure_location": [
+            "thread 'native_goose_unknown_external_effect_reopens_same_session_and_checks_before_continuing' (3213045) panicked at anchor-runner-host/tests/support/goose_fixture.rs:223:9:"
+          ],
+          "result": {
+            "passed": 0,
+            "failed": 1,
+            "ignored": 0
+          }
+        },
+        {
+          "target": "tests/goose_acp.rs",
+          "binary": "/tmp/anchor-goose-regression-target-core/debug/deps/goose_acp-e58b545a3b60cbf4",
+          "test": "real_goose_external_effect_then_host_kill_is_spike_failclosed_not_native_safe_recovery",
+          "index": 2,
+          "command": [
+            "/tmp/anchor-goose-regression-target-core/debug/deps/goose_acp-e58b545a3b60cbf4",
+            "real_goose_external_effect_then_host_kill_is_spike_failclosed_not_native_safe_recovery",
+            "--ignored",
+            "--exact",
+            "--test-threads=1"
+          ],
+          "log": "/tmp/anchor-m3/solo-before-fixes-02.log",
+          "exit_code": 101,
+          "elapsed_seconds": 32.187,
+          "verbatim": [
+            "test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 22 filtered out; finished in 32.19s"
+          ],
+          "log_sha256": "6c279f5f67e93da9d0c9f90dfd91973a47bb43878f5ec06618f3f1807eacd920",
+          "retained_fixtures": [
+            "/tmp/.tmpWQMD3q"
+          ],
+          "failure_location": [
+            "thread 'real_goose_external_effect_then_host_kill_is_spike_failclosed_not_native_safe_recovery' (3213383) panicked at anchor-runner-host/tests/support/goose_fixture.rs:223:9:"
+          ],
+          "result": {
+            "passed": 0,
+            "failed": 1,
+            "ignored": 0
+          }
+        },
+        {
+          "target": "tests/goose_channel.rs",
+          "binary": "/tmp/anchor-goose-regression-target-core/debug/deps/goose_channel-a81a59818bcc4d2e",
+          "test": "native_goose_unknown_channel_result_resumes_same_session_and_inspects_without_resending",
+          "index": 3,
+          "command": [
+            "/tmp/anchor-goose-regression-target-core/debug/deps/goose_channel-a81a59818bcc4d2e",
+            "native_goose_unknown_channel_result_resumes_same_session_and_inspects_without_resending",
+            "--ignored",
+            "--exact",
+            "--test-threads=1"
+          ],
+          "log": "/tmp/anchor-m3/solo-before-fixes-03.log",
+          "exit_code": 101,
+          "elapsed_seconds": 32.096,
+          "verbatim": [
+            "test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 9 filtered out; finished in 32.09s"
+          ],
+          "log_sha256": "2ba399959a5f8a4efa151b9806cd5924eb362ea43ea30c00cd9a64d7b9b94df5",
+          "retained_fixtures": [
+            "/tmp/.tmpFbcGpT"
+          ],
+          "failure_location": [
+            "thread 'native_goose_unknown_channel_result_resumes_same_session_and_inspects_without_resending' (3213705) panicked at anchor-runner-host/tests/support/goose_fixture.rs:223:9:"
+          ],
+          "result": {
+            "passed": 0,
+            "failed": 1,
+            "ignored": 0
+          }
+        },
+        {
+          "target": "tests/goose_conversation.rs",
+          "binary": "/tmp/anchor-goose-regression-target-core/debug/deps/goose_conversation-e20a9207d2a35697",
+          "test": "missing_predecessor_fact_fails_closed",
+          "index": 4,
+          "command": [
+            "/tmp/anchor-goose-regression-target-core/debug/deps/goose_conversation-e20a9207d2a35697",
+            "missing_predecessor_fact_fails_closed",
+            "--ignored",
+            "--exact",
+            "--test-threads=1"
+          ],
+          "log": "/tmp/anchor-m3/solo-before-fixes-04.log",
+          "exit_code": 101,
+          "elapsed_seconds": 32.626,
+          "verbatim": [
+            "test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 18 filtered out; finished in 32.62s"
+          ],
+          "log_sha256": "5d391850ce342a43cf3d968fa3e4f795c0e2f6e5f53e972a67a2a4969b8341c6",
+          "retained_fixtures": [
+            "/tmp/.tmpQE0zDP"
+          ],
+          "failure_location": [
+            "thread 'missing_predecessor_fact_fails_closed' (3214033) panicked at anchor-runner-host/tests/support/goose_fixture.rs:223:9:"
+          ],
+          "result": {
+            "passed": 0,
+            "failed": 1,
+            "ignored": 0
+          }
+        },
+        {
+          "target": "tests/goose_conversation.rs",
+          "binary": "/tmp/anchor-goose-regression-target-core/debug/deps/goose_conversation-e20a9207d2a35697",
+          "test": "missing_predecessor_model_binding_fails_closed",
+          "index": 5,
+          "command": [
+            "/tmp/anchor-goose-regression-target-core/debug/deps/goose_conversation-e20a9207d2a35697",
+            "missing_predecessor_model_binding_fails_closed",
+            "--ignored",
+            "--exact",
+            "--test-threads=1"
+          ],
+          "log": "/tmp/anchor-m3/solo-before-fixes-05.log",
+          "exit_code": 101,
+          "elapsed_seconds": 32.669,
+          "verbatim": [
+            "test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 18 filtered out; finished in 32.67s"
+          ],
+          "log_sha256": "b237ab09bb1a42a693b971bfb6208fdd8a3e377ab7b60a6ba2368247ccbfc94c",
+          "retained_fixtures": [
+            "/tmp/.tmpeFXEzY"
+          ],
+          "failure_location": [
+            "thread 'missing_predecessor_model_binding_fails_closed' (3214378) panicked at anchor-runner-host/tests/support/goose_fixture.rs:223:9:"
+          ],
+          "result": {
+            "passed": 0,
+            "failed": 1,
+            "ignored": 0
+          }
+        },
+        {
+          "target": "tests/goose_conversation.rs",
+          "binary": "/tmp/anchor-goose-regression-target-core/debug/deps/goose_conversation-e20a9207d2a35697",
+          "test": "missing_predecessor_scope_fails_closed",
+          "index": 6,
+          "command": [
+            "/tmp/anchor-goose-regression-target-core/debug/deps/goose_conversation-e20a9207d2a35697",
+            "missing_predecessor_scope_fails_closed",
+            "--ignored",
+            "--exact",
+            "--test-threads=1"
+          ],
+          "log": "/tmp/anchor-m3/solo-before-fixes-06.log",
+          "exit_code": 101,
+          "elapsed_seconds": 32.605,
+          "verbatim": [
+            "test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 18 filtered out; finished in 32.60s"
+          ],
+          "log_sha256": "6ffd2e92956aeb5e12ede57752253979af4ca7f276f6ba9b4ebcbbfa573b594d",
+          "retained_fixtures": [
+            "/tmp/.tmpclioK9"
+          ],
+          "failure_location": [
+            "thread 'missing_predecessor_scope_fails_closed' (3214719) panicked at anchor-runner-host/tests/support/goose_fixture.rs:223:9:"
+          ],
+          "result": {
+            "passed": 0,
+            "failed": 1,
+            "ignored": 0
+          }
+        },
+        {
+          "target": "tests/goose_kernel_recovery.rs",
+          "binary": "/tmp/anchor-goose-regression-target-core/debug/deps/goose_kernel_recovery-cd3bdbc75fb8a1ba",
+          "test": "kernel_unknown_native_effect_requires_a_durable_human_decision_before_continuing_or_abandoning",
+          "index": 7,
+          "command": [
+            "/tmp/anchor-goose-regression-target-core/debug/deps/goose_kernel_recovery-cd3bdbc75fb8a1ba",
+            "kernel_unknown_native_effect_requires_a_durable_human_decision_before_continuing_or_abandoning",
+            "--ignored",
+            "--exact",
+            "--test-threads=1"
+          ],
+          "log": "/tmp/anchor-m3/solo-before-fixes-07.log",
+          "exit_code": 101,
+          "elapsed_seconds": 7.064,
+          "verbatim": [
+            "test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 6 filtered out; finished in 7.06s"
+          ],
+          "log_sha256": "affa6db9ba77499212be70eab64c259b9138a2da1aa8b4447e9d73f08e84ff67",
+          "retained_fixtures": [
+            "/tmp/.tmpIAgbHA"
+          ],
+          "failure_location": [
+            "thread 'kernel_unknown_native_effect_requires_a_durable_human_decision_before_continuing_or_abandoning' (3215090) panicked at anchor-runner-host/tests/support/goose_fixture.rs:1398:46:"
+          ],
+          "result": {
+            "passed": 0,
+            "failed": 1,
+            "ignored": 0
+          }
+        },
+        {
+          "target": "tests/goose_plugin_configuration.rs",
+          "binary": "/tmp/anchor-goose-regression-target-core/debug/deps/goose_plugin_configuration-d81fcf333aabb1b8",
+          "test": "managed_configuration_rotates_atomically_without_restarting_or_changing_live_invocations",
+          "index": 8,
+          "command": [
+            "/tmp/anchor-goose-regression-target-core/debug/deps/goose_plugin_configuration-d81fcf333aabb1b8",
+            "managed_configuration_rotates_atomically_without_restarting_or_changing_live_invocations",
+            "--ignored",
+            "--exact",
+            "--test-threads=1"
+          ],
+          "log": "/tmp/anchor-m3/solo-before-fixes-08.log",
+          "exit_code": 101,
+          "elapsed_seconds": 64.772,
+          "verbatim": [
+            "test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 6 filtered out; finished in 64.77s"
+          ],
+          "log_sha256": "0b40f258c0711b41de8fcff64df3f2a95a3d523166e0276821adc5e5398f6cee",
+          "retained_fixtures": [
+            "/tmp/.tmpnVc6ll"
+          ],
+          "failure_location": [
+            "thread 'managed_configuration_rotates_atomically_without_restarting_or_changing_live_invocations' (3215298) panicked at anchor-runner-host/tests/support/goose_fixture.rs:223:9:"
+          ],
+          "result": {
+            "passed": 0,
+            "failed": 1,
+            "ignored": 0
+          }
+        },
+        {
+          "target": "tests/goose_plugin_mcp.rs",
+          "binary": "/tmp/anchor-goose-regression-target-core/debug/deps/goose_plugin_mcp-195a7008e44c8354",
+          "test": "graph_mcp_startup_errors_settle_without_repolling_completed_resolution",
+          "index": 9,
+          "command": [
+            "/tmp/anchor-goose-regression-target-core/debug/deps/goose_plugin_mcp-195a7008e44c8354",
+            "graph_mcp_startup_errors_settle_without_repolling_completed_resolution",
+            "--ignored",
+            "--exact",
+            "--test-threads=1"
+          ],
+          "log": "/tmp/anchor-m3/solo-before-fixes-09.log",
+          "exit_code": 101,
+          "elapsed_seconds": 5.418,
+          "verbatim": [
+            "test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 7 filtered out; finished in 5.42s"
+          ],
+          "log_sha256": "61f8335b4471be8f13a51a6565500c5874e2248613321ac0a336b073aef1b36a",
+          "retained_fixtures": [
+            "/tmp/.tmpkQcmQW"
+          ],
+          "failure_location": [
+            "thread 'graph_mcp_startup_errors_settle_without_repolling_completed_resolution' (3220750) panicked at anchor-runner-host/tests/goose_plugin_mcp.rs:106:9:"
+          ],
+          "result": {
+            "passed": 0,
+            "failed": 1,
+            "ignored": 0
+          }
+        },
+        {
+          "target": "tests/goose_plugin_turns.rs",
+          "binary": "/tmp/anchor-goose-regression-target-core/debug/deps/goose_plugin_turns-9d452769772451aa",
+          "test": "add_call_remove_preserves_run_native_history_workspace_and_frozen_run_snapshot",
+          "index": 10,
+          "command": [
+            "/tmp/anchor-goose-regression-target-core/debug/deps/goose_plugin_turns-9d452769772451aa",
+            "add_call_remove_preserves_run_native_history_workspace_and_frozen_run_snapshot",
+            "--ignored",
+            "--exact",
+            "--test-threads=1"
+          ],
+          "log": "/tmp/anchor-m3/solo-before-fixes-10.log",
+          "exit_code": 101,
+          "elapsed_seconds": 5.819,
+          "verbatim": [
+            "test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 12 filtered out; finished in 5.82s"
+          ],
+          "log_sha256": "7c0ecae17ae284106299c9652de9d28cc8a51a64044bb26e21fb3e62677b2e56",
+          "retained_fixtures": [
+            "/tmp/.tmpVyHP56"
+          ],
+          "failure_location": [
+            "thread 'add_call_remove_preserves_run_native_history_workspace_and_frozen_run_snapshot' (3220845) panicked at anchor-runner-host/tests/goose_plugin_turns.rs:196:10:"
+          ],
+          "result": {
+            "passed": 0,
+            "failed": 1,
+            "ignored": 0
+          }
+        },
+        {
+          "target": "tests/goose_plugin_turns.rs",
+          "binary": "/tmp/anchor-goose-regression-target-core/debug/deps/goose_plugin_turns-9d452769772451aa",
+          "test": "default_restart_handover_restores_same_turn_grants_then_next_turn_revokes",
+          "index": 11,
+          "command": [
+            "/tmp/anchor-goose-regression-target-core/debug/deps/goose_plugin_turns-9d452769772451aa",
+            "default_restart_handover_restores_same_turn_grants_then_next_turn_revokes",
+            "--ignored",
+            "--exact",
+            "--test-threads=1"
+          ],
+          "log": "/tmp/anchor-m3/solo-before-fixes-11.log",
+          "exit_code": 101,
+          "elapsed_seconds": 30.788,
+          "verbatim": [
+            "test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 12 filtered out; finished in 30.79s"
+          ],
+          "log_sha256": "d0445b382d39289df19cf9249e1b29547796fcbfad9b03b968abd125b2592b4e",
+          "retained_fixtures": [
+            "/tmp/.tmpGk6Np7"
+          ],
+          "failure_location": [
+            "thread 'default_restart_handover_restores_same_turn_grants_then_next_turn_revokes' (3221246) panicked at anchor-runner-host/tests/goose_plugin_turns.rs:196:10:"
+          ],
+          "result": {
+            "passed": 0,
+            "failed": 1,
+            "ignored": 0
+          }
+        },
+        {
+          "target": "tests/goose_plugin_turns.rs",
+          "binary": "/tmp/anchor-goose-regression-target-core/debug/deps/goose_plugin_turns-9d452769772451aa",
+          "test": "save_during_actual_tool_keeps_current_turn_and_other_users_adopt_independently",
+          "index": 12,
+          "command": [
+            "/tmp/anchor-goose-regression-target-core/debug/deps/goose_plugin_turns-9d452769772451aa",
+            "save_during_actual_tool_keeps_current_turn_and_other_users_adopt_independently",
+            "--ignored",
+            "--exact",
+            "--test-threads=1"
+          ],
+          "log": "/tmp/anchor-m3/solo-before-fixes-12.log",
+          "exit_code": 101,
+          "elapsed_seconds": 33.115,
+          "verbatim": [
+            "test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 12 filtered out; finished in 33.11s"
+          ],
+          "log_sha256": "c2d559ad05c64def1f3f2ccd796ede7cf0ca8af0a39dda2bee96a8617967fe67",
+          "retained_fixtures": [
+            "/tmp/.tmprMB8Wn"
+          ],
+          "failure_location": [
+            "thread 'save_during_actual_tool_keeps_current_turn_and_other_users_adopt_independently' (3221579) panicked at anchor-runner-host/tests/goose_plugin_turns.rs:196:10:",
+            "thread '<unnamed>' (3221753) panicked at anchor-runner-host/tests/support/goose_fixture.rs:1409:14:"
+          ],
+          "result": {
+            "passed": 0,
+            "failed": 1,
+            "ignored": 0
+          }
+        }
+      ],
+      "one_observed_process_snapshot": [
+        {
+          "pid": 3214377,
+          "program": "goose_conversation-e20a9207d2a35697",
+          "executable": "/tmp/anchor-goose-regression-target-core/debug/deps/goose_conversation-e20a9207d2a35697",
+          "cwd": "/home/mansteinl/code/anchor-constitution-core/rust/anchor-runner-host"
+        }
+      ],
+      "process_snapshot_note": "One observation during retries, not continuous monitoring."
+    },
+    "regressions": "goose-regressions.md"
+  },
+  "pending_decision": {
+    "requirement": "task section 8: do not weaken business assertions",
+    "conflict": [
+      "goose_acp::native_goose_unknown_external_effect_reopens_same_session_and_checks_before_continuing",
+      "goose_kernel_recovery::kernel_unknown_native_effect_requires_a_durable_human_decision_before_continuing_or_abandoning"
+    ],
+    "decision_received": false,
+    "detail": "recovery-contract-decision.md"
+  },
+  "unverified": [
+    "real model Provider",
+    "external live channels",
+    "deployment",
+    "W4"
+  ],
+  "merge_back_to_master": false,
+  "raw_logs_committed": false,
+  "completed_m3": false,
+  "static_checks": [
+    {
+      "command": "git diff 0859373 -- rust/anchor-kernel",
+      "result": "empty"
+    },
+    {
+      "command": "rg -n 'GraphRunner|RunStatus|FileRunStore|stop_requested|pause_requested' rust --glob '*.rs'",
+      "result": "zero matches",
+      "expected_exit_code": 1
+    },
+    {
+      "command": "git diff 0aa5197 -- rust/anchor-runner-host/run-access-fence.txt",
+      "result": "empty; identical to master"
+    },
+    {
+      "command": "bash scripts/check-sensitive-wording.sh",
+      "exit_code": 0
+    },
+    {
+      "command": "git diff --check",
+      "exit_code": 0
+    }
+  ],
+  "passed_commands": [
+    {
+      "command": "cargo clippy --manifest-path rust/Cargo.toml --workspace --all-targets -- -D warnings",
+      "log": "/tmp/anchor-m3/clippy-after-merge-2.log",
+      "sha256": "03519991a36b5d619e0d6b946fbc8e0ad3e4c80a7a5804eec5b36f4c08b79249",
+      "exit_code": 0
+    },
+    {
+      "command": "npm --prefix apps/web test",
+      "log": "/tmp/anchor-m3/web-test-final.log",
+      "sha256": "d913d205821ead87eb1c23223fcbe220306391eb6832064015f180610821c0ee",
+      "exit_code": 0
+    },
+    {
+      "command": "npm --prefix apps/web run build",
+      "log": "/tmp/anchor-m3/web-build-final-3.log",
+      "sha256": "38233e0d20e8d290a7611aeb555b1771878559f4bceb184cf5e803cff33819af",
+      "exit_code": 0
+    }
+  ],
+  "assertion_changes": {
+    "registered_classes": 10,
+    "business_assertions_weakened": 0,
+    "existing_tests_newly_ignored": 0,
+    "s_candidates": [
+      "S27 retired unsettled Run may be abandoned"
+    ]
+  },
+  "test_mapping": {
+    "runtime_original_names": 73,
+    "host_disappeared_function_names": 39,
+    "runtime": "runtime-test-mapping.md",
+    "host": "host-test-mapping.md"
+  },
+  "ignored_count_explanation": {
+    "m2_actual": 136,
+    "m2_literal_attributes": 124,
+    "duplicated_included_assistant_tests": 12,
+    "duplicate_target_removed": 12,
+    "new_session_call_recovery_test": 1,
+    "m3_workspace_actual": 125,
+    "m3_host_full_ignored_executed": 122,
+    "list": "verification.md"
+  },
+  "unimplemented_followups": "goose-regressions.md; no fixes applied after section 8 stop",
+  "passed_build_artifacts": [
+    {
+      "log": "/tmp/anchor-m3/goose-build-bins.log",
+      "sha256": "a4d8dfd4b38e4fbe534a3f35dec4025d5ef12bff1dc561a2123d65776734887f",
+      "exit_code": 0,
+      "scope": "Host, sandbox/network/relay, WeCom and Docmost binaries",
+      "command_note": "Build result retained; exact invocation not reproduced in this summary."
+    },
+    {
+      "log": "/tmp/anchor-m3/goose-build-mcp.log",
+      "sha256": "c2f44da914554b892b1f8db9ec45c558b3f215e4ee062dff6eb751ee14922a71",
+      "exit_code": 0,
+      "scope": "MCP HTTP fixture example",
+      "command_note": "Build result retained; exact invocation not reproduced in this summary."
+    },
+    {
+      "log": "/tmp/anchor-m3/goose-tests-no-run.log",
+      "sha256": "f698e0128b03c120de796c44590dc03154cb7f70a13680e1eb66a96f11bb417e",
+      "exit_code": 0,
+      "scope": "all Host tests compiled without running",
+      "command_note": "Build result retained; exact invocation not reproduced in this summary."
+    }
+  ]
+}

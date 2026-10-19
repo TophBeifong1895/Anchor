@@ -2,7 +2,7 @@
 
 编制日期：2026-10-16。当前迁移以 [M1–M5 任务书](constitution-migration-task.md) 为准；本计划的 H3–H6 划分已被取代，约束 C1–C6 与 §2 语义仍有效。
 
-M1、M1.5、M2 已验收。M3 已先冻结 30,000 例旧执行事实与轨迹，所有新 Run 统一走 KernelScheduler，旧执行器、旧存储与兼容状态桥已删除；C2 16 save / 36 mutation 归零。完整验收仍在收敛，见 [快照](../experiments/constitution-host-preflight/m3/snapshots/README.md)、[C2 去向](../experiments/constitution-host-preflight/m3/c2-destinations.md) 与 [规则及 Session 审计](../experiments/constitution-host-preflight/m3/rules-session-audit.md)。不自动推进 M4/M5；W4、真实模型 Provider 和部署未验。
+M1、M1.5、M2 已验收。M3 已先冻结 30,000 例旧执行事实与轨迹，所有新 Run 统一走 KernelScheduler，旧执行器、旧存储与兼容状态桥已删除；C2 16 save / 36 mutation 归零。固定 Goose 完整首轮 110 / 12 / 0，恢复业务断言冲突触发迁移任务书 §8，M3 尚未完成；见 [交回与未关闭回归](../experiments/constitution-host-preflight/m3/verification.md)、[快照](../experiments/constitution-host-preflight/m3/snapshots/README.md)、[C2 去向](../experiments/constitution-host-preflight/m3/c2-destinations.md) 与 [规则及 Session 审计](../experiments/constitution-host-preflight/m3/rules-session-audit.md)。不自动推进 M4/M5；W4、真实模型 Provider 和部署未验。
 
 K0.1 审查见 [结论](../experiments/constitution-host-preflight/k01/review.md)；已批准的 K0.2 FileStore 删除与资源租约见 [工作记录](constitution-refactor-log.md#k02filestore-删除与资源租约)。Kernel 自 `0859373` 零 diff。H2.1、P、R 的历史度量不代表当前实现；M3 逐规则审计按独立判断体计数。
 

@@ -83,6 +83,8 @@ cargo +stable test --manifest-path rust/Cargo.toml -p anchor-runner-host \
 保证一个套件失败后仍采集后续套件。真实模型与外部服务不由本地 Provider
 结果代验。
 
+M3 分支当前完整 Host ignored 实际为 110 passed / 12 failed / 0 ignored，尚未通过；普通恢复契约冲突触发任务书 §8，另有预检错误映射、recovery 重入锁和旧目录夹具待修。逐项独立复跑与身份摘要见 [M3 停止交回](../experiments/constitution-host-preflight/m3/verification.md)。以下 G0/F2 是各自提交的历史基线，不能作为 M3 已通过的证据。
+
 ## Goose 比较基线（G0，2026-10-19）
 
 基点 `e3a5778`，在独立 worktree `/var/tmp/anchor-g0` 的

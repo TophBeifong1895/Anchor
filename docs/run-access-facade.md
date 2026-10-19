@@ -123,4 +123,4 @@ master 的 [详情/abandon 字节回归](../rust/anchor-runner-host/src/applicat
 - F2 定向恢复/控制各 18 项、计划 22 项与删除 68 项通过，围栏为业务 0、运行时 197；workspace 实际 1,995/0/122，严格 workspace/all-target clippy、fmt、Web 306 及构建通过。该 workspace 命令在证据测试拆分前执行；拆分只增加 1 个默认忽略项，实际场景不变，后续编译、严格 clippy 与实际 Goose 回归均通过。Graph 级联删除归门面，计划投影委托同一终态权威，未知/控制中状态与非字符串字段保留旧行为。
 - 标准 Goose 入口 20 套、105/0/0，105 份场景证据全部通过严格校验；入口外补集另行串行执行 15/0/0，合计覆盖 120 项，没有残留失败，不声称一次完整 ignored 命令通过。原参数测试拆分使测试数比 G0 多 1，覆盖不变。最终命令、原始报告及此前中止/证据失败均保留在 [F2 证据](../.local/run-access-facade-20261019/f2/README.md)。未新增真实 Provider、生产数据、外部渠道或部署验收。
 
-M2 §10.12 的规则表以 `490c000` 为比较基线，见 [独立判断点清单](../experiments/constitution-host-preflight/m2/completion-measurement.md)。双路径并存会增加恢复门禁，不能用上游 36→13 的数字代表本轮收敛；M3 默认切换、删除旧实现与 Session 单写入者检验仍待用户决定。
+M2 §10.12 的规则表以 `490c000` 为比较基线，见 [独立判断点清单](../experiments/constitution-host-preflight/m2/completion-measurement.md)。双路径并存会增加恢复门禁，不能用上游 36→13 的数字代表本轮收敛；M3 已完成默认切换和旧实现删除，Session 单写入者审计见 [当前规则表](../experiments/constitution-host-preflight/m3/rules-session-audit.md)。固定 Goose 尚有失败且恢复契约触发 §8，M3 未验收，见 [交回](../experiments/constitution-host-preflight/m3/verification.md)。
