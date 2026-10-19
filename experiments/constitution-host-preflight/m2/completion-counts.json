@@ -1,0 +1,408 @@
+{
+  "baseline": "490c000",
+  "comparison": "M2 completion working tree; source digests fix exact files",
+  "scope": "Named independent rule bodies, excluding delegating consumers, test-only helpers, Session and authority narrowing; rows overlap and must not be summed.",
+  "rules": [
+    {
+      "id": "settled",
+      "rule": "是否终态：生命周期谓词",
+      "before_count": 1,
+      "after_count": 1,
+      "before": [
+        {
+          "path": "rust/anchor-runner-host/src/application/run_access/run_view.rs",
+          "line": 35,
+          "selector": "fn is_settled(",
+          "sha256": "6fd4547937eab466a0c861baefa86622517aa56c86efd9f57b34414fbec85367"
+        }
+      ],
+      "after": [
+        {
+          "path": "rust/anchor-runner-host/src/application/run_access/run_view.rs",
+          "line": 35,
+          "selector": "fn is_settled(",
+          "sha256": "6fd4547937eab466a0c861baefa86622517aa56c86efd9f57b34414fbec85367"
+        }
+      ]
+    },
+    {
+      "id": "wire_unfinished",
+      "rule": "是否终态：已序列化相位的未结束投影",
+      "before_count": 1,
+      "after_count": 1,
+      "before": [
+        {
+          "path": "rust/anchor-runner-host/src/application/run_access/projection.rs",
+          "line": 9,
+          "selector": "fn projected_run_is_unfinished(",
+          "sha256": "adfee508f82346519b219cc81802ae04bf959b47654ea2bfc87ef900f7fb5a59"
+        }
+      ],
+      "after": [
+        {
+          "path": "rust/anchor-runner-host/src/application/run_access/projection.rs",
+          "line": 9,
+          "selector": "fn projected_run_is_unfinished(",
+          "sha256": "244daf56fab9414502daa727e07b8e208adf70923674aa7b0d4dd50e2b8db309"
+        }
+      ]
+    },
+    {
+      "id": "stop",
+      "rule": "可否 stop：动作投影、旧路径非活动写门禁",
+      "before_count": 2,
+      "after_count": 2,
+      "before": [
+        {
+          "path": "rust/anchor-runner-host/src/application/run_access/run_view.rs",
+          "line": 20,
+          "selector": "fn actions(",
+          "sha256": "6fd4547937eab466a0c861baefa86622517aa56c86efd9f57b34414fbec85367"
+        },
+        {
+          "path": "rust/anchor-runner-host/src/application/run_access.rs",
+          "line": 384,
+          "selector": "fn validate_inactive_control(",
+          "sha256": "230b1934a5869af1aa0dd032be1bf740803799f691857b335e972bfa4fae1043"
+        }
+      ],
+      "after": [
+        {
+          "path": "rust/anchor-runner-host/src/application/run_access/run_view.rs",
+          "line": 20,
+          "selector": "fn actions(",
+          "sha256": "6fd4547937eab466a0c861baefa86622517aa56c86efd9f57b34414fbec85367"
+        },
+        {
+          "path": "rust/anchor-runner-host/src/application/run_access.rs",
+          "line": 420,
+          "selector": "fn validate_inactive_control(",
+          "sha256": "9a2c4544e4a84e68d7c6363c15e769d10f5bfccbb4be53cb50b63911137282aa"
+        }
+      ]
+    },
+    {
+      "id": "resume",
+      "rule": "可否 resume：动作投影与两处排空门禁",
+      "before_count": 3,
+      "after_count": 3,
+      "before": [
+        {
+          "path": "rust/anchor-runner-host/src/application/run_access/run_view.rs",
+          "line": 20,
+          "selector": "fn actions(",
+          "sha256": "6fd4547937eab466a0c861baefa86622517aa56c86efd9f57b34414fbec85367"
+        },
+        {
+          "path": "rust/anchor-runner-host/src/application/run_access/kernel_runs.rs",
+          "line": 210,
+          "selector": "pub(crate) fn control(",
+          "sha256": "a489405e5685a801ab80ec9568b3c741d72d6d58b91b4111d45948803fa5fe6f"
+        },
+        {
+          "path": "rust/anchor-runner-host/src/application/run_access/kernel_runs.rs",
+          "line": 413,
+          "selector": "async fn kernel_control(",
+          "sha256": "a489405e5685a801ab80ec9568b3c741d72d6d58b91b4111d45948803fa5fe6f"
+        }
+      ],
+      "after": [
+        {
+          "path": "rust/anchor-runner-host/src/application/run_access/run_view.rs",
+          "line": 20,
+          "selector": "fn actions(",
+          "sha256": "6fd4547937eab466a0c861baefa86622517aa56c86efd9f57b34414fbec85367"
+        },
+        {
+          "path": "rust/anchor-runner-host/src/application/run_access/kernel_runs.rs",
+          "line": 214,
+          "selector": "pub(crate) fn control(",
+          "sha256": "a046237d6eb703781e04dac423d855cc1fe71b73f2aa00a99dd6e4d2931b6ebe"
+        },
+        {
+          "path": "rust/anchor-runner-host/src/application/run_access/kernel_runs.rs",
+          "line": 438,
+          "selector": "async fn kernel_control(",
+          "sha256": "a046237d6eb703781e04dac423d855cc1fe71b73f2aa00a99dd6e4d2931b6ebe"
+        }
+      ]
+    },
+    {
+      "id": "abandon",
+      "rule": "可否 abandon：未结算",
+      "before_count": 1,
+      "after_count": 1,
+      "before": [
+        {
+          "path": "rust/anchor-runner-host/src/application/run_access/run_view.rs",
+          "line": 20,
+          "selector": "fn actions(",
+          "sha256": "6fd4547937eab466a0c861baefa86622517aa56c86efd9f57b34414fbec85367"
+        }
+      ],
+      "after": [
+        {
+          "path": "rust/anchor-runner-host/src/application/run_access/run_view.rs",
+          "line": 20,
+          "selector": "fn actions(",
+          "sha256": "6fd4547937eab466a0c861baefa86622517aa56c86efd9f57b34414fbec85367"
+        }
+      ]
+    },
+    {
+      "id": "pause",
+      "rule": "可否 pause：动作投影、非活动旧路径、Kernel 请求边界",
+      "before_count": 3,
+      "after_count": 3,
+      "before": [
+        {
+          "path": "rust/anchor-runner-host/src/application/run_access/run_view.rs",
+          "line": 20,
+          "selector": "fn actions(",
+          "sha256": "6fd4547937eab466a0c861baefa86622517aa56c86efd9f57b34414fbec85367"
+        },
+        {
+          "path": "rust/anchor-runner-host/src/application/run_access.rs",
+          "line": 384,
+          "selector": "fn validate_inactive_control(",
+          "sha256": "230b1934a5869af1aa0dd032be1bf740803799f691857b335e972bfa4fae1043"
+        },
+        {
+          "path": "rust/anchor-runner-host/src/application/run_access/kernel_runs/pause.rs",
+          "line": 90,
+          "selector": "fn request_pause(",
+          "sha256": "f4b72d67c8efbe45f40d232ea67c656c93a887e133408e343385a61b69130467"
+        }
+      ],
+      "after": [
+        {
+          "path": "rust/anchor-runner-host/src/application/run_access/run_view.rs",
+          "line": 20,
+          "selector": "fn actions(",
+          "sha256": "6fd4547937eab466a0c861baefa86622517aa56c86efd9f57b34414fbec85367"
+        },
+        {
+          "path": "rust/anchor-runner-host/src/application/run_access.rs",
+          "line": 420,
+          "selector": "fn validate_inactive_control(",
+          "sha256": "9a2c4544e4a84e68d7c6363c15e769d10f5bfccbb4be53cb50b63911137282aa"
+        },
+        {
+          "path": "rust/anchor-runner-host/src/application/run_access/kernel_runs/pause.rs",
+          "line": 90,
+          "selector": "fn request_pause(",
+          "sha256": "43c40ea325816978933c72321ceba7725a8df01700435f1e5ae8646a14b71805"
+        }
+      ]
+    },
+    {
+      "id": "quiescent",
+      "rule": "是否静止",
+      "before_count": 1,
+      "after_count": 1,
+      "before": [
+        {
+          "path": "rust/anchor-runner-host/src/application/run_access.rs",
+          "line": 205,
+          "selector": "pub(crate) fn is_quiescent(",
+          "sha256": "230b1934a5869af1aa0dd032be1bf740803799f691857b335e972bfa4fae1043"
+        }
+      ],
+      "after": [
+        {
+          "path": "rust/anchor-runner-host/src/application/run_access.rs",
+          "line": 237,
+          "selector": "pub(crate) fn is_quiescent(",
+          "sha256": "9a2c4544e4a84e68d7c6363c15e769d10f5bfccbb4be53cb50b63911137282aa"
+        }
+      ]
+    },
+    {
+      "id": "attention",
+      "rule": "是否需要关注",
+      "before_count": 1,
+      "after_count": 1,
+      "before": [
+        {
+          "path": "rust/anchor-runner-host/src/application/run_access.rs",
+          "line": 219,
+          "selector": "fn needs_attention(",
+          "sha256": "230b1934a5869af1aa0dd032be1bf740803799f691857b335e972bfa4fae1043"
+        }
+      ],
+      "after": [
+        {
+          "path": "rust/anchor-runner-host/src/application/run_access.rs",
+          "line": 251,
+          "selector": "fn needs_attention(",
+          "sha256": "9a2c4544e4a84e68d7c6363c15e769d10f5bfccbb4be53cb50b63911137282aa"
+        }
+      ]
+    },
+    {
+      "id": "late_result",
+      "rule": "迟到结果的写入许可",
+      "before_count": 0,
+      "after_count": 0,
+      "before": [],
+      "after": []
+    },
+    {
+      "id": "unknown_decision",
+      "rule": "未知效果：恢复决定门禁",
+      "before_count": 1,
+      "after_count": 2,
+      "before": [
+        {
+          "path": "rust/anchor-runner-host/src/application/run_access/recovery.rs",
+          "line": 120,
+          "selector": "async fn record_recovery_decision(",
+          "sha256": "1ee1a3d7b1acc73bd45df12c94a2074fb9d19f3712dabe6339adc84c30c157b1"
+        }
+      ],
+      "after": [
+        {
+          "path": "rust/anchor-runner-host/src/application/run_access/recovery.rs",
+          "line": 120,
+          "selector": "async fn record_recovery_decision(",
+          "sha256": "c1731dd0fb3672a9ec2bce06c36296a08f40b71a1d7e949260cefaa3abe0020c"
+        },
+        {
+          "path": "rust/anchor-runner-host/src/application/run_access/kernel_runs/recovery.rs",
+          "line": 75,
+          "selector": "fn recover_attempt(",
+          "sha256": "fc1550eace2f787ca38e307c80a8426d66f1084f7f08d24c99f3826fe8c0cf04"
+        }
+      ]
+    },
+    {
+      "id": "unknown_resume",
+      "rule": "未知效果：普通 resume 的额外阻挡",
+      "before_count": 1,
+      "after_count": 2,
+      "before": [
+        {
+          "path": "rust/anchor-runner-host/src/application/run_access.rs",
+          "line": 384,
+          "selector": "fn validate_inactive_control(",
+          "sha256": "230b1934a5869af1aa0dd032be1bf740803799f691857b335e972bfa4fae1043"
+        }
+      ],
+      "after": [
+        {
+          "path": "rust/anchor-runner-host/src/application/run_access.rs",
+          "line": 420,
+          "selector": "fn validate_inactive_control(",
+          "sha256": "9a2c4544e4a84e68d7c6363c15e769d10f5bfccbb4be53cb50b63911137282aa"
+        },
+        {
+          "path": "rust/anchor-runner-host/src/application/run_access/kernel_runs.rs",
+          "line": 438,
+          "selector": "async fn kernel_control(",
+          "sha256": "a046237d6eb703781e04dac423d855cc1fe71b73f2aa00a99dd6e4d2931b6ebe"
+        }
+      ]
+    },
+    {
+      "id": "unknown_projection",
+      "rule": "未知效果：隐藏普通 resume 动作",
+      "before_count": 0,
+      "after_count": 1,
+      "before": [],
+      "after": [
+        {
+          "path": "rust/anchor-runner-host/src/application/run_access.rs",
+          "line": 270,
+          "selector": "fn can_resume(",
+          "sha256": "9a2c4544e4a84e68d7c6363c15e769d10f5bfccbb4be53cb50b63911137282aa"
+        }
+      ]
+    },
+    {
+      "id": "unknown_native",
+      "rule": "未知效果：原生工具 result 缺失的事实识别",
+      "before_count": 0,
+      "after_count": 1,
+      "before": [],
+      "after": [
+        {
+          "path": "rust/anchor-runner-host/src/goose_acp/recovery.rs",
+          "line": 6,
+          "selector": "fn attempt(",
+          "sha256": "bfb19310d8daee63614295ce16836b609efd4356a7333a3328a1739d853ff1c0"
+        }
+      ]
+    },
+    {
+      "id": "unknown_dispatch",
+      "rule": "未知效果：派发前的原生观察核查",
+      "before_count": 0,
+      "after_count": 1,
+      "before": [],
+      "after": [
+        {
+          "path": "rust/anchor-runner-host/src/node_host/execution.rs",
+          "line": 232,
+          "selector": "fn execute<",
+          "sha256": "8a3d1a8a1cc6bd5ff63e2a2bd0677445056078f9c1572de6a6bf75e8ae0e5ce7"
+        }
+      ]
+    },
+    {
+      "id": "budget",
+      "rule": "预算耗尽：旧路径恢复策略门禁",
+      "before_count": 1,
+      "after_count": 1,
+      "before": [
+        {
+          "path": "rust/anchor-runner-host/src/application/run_access.rs",
+          "line": 400,
+          "selector": "fn validate_resume_budget(",
+          "sha256": "230b1934a5869af1aa0dd032be1bf740803799f691857b335e972bfa4fae1043"
+        }
+      ],
+      "after": [
+        {
+          "path": "rust/anchor-runner-host/src/application/run_access.rs",
+          "line": 436,
+          "selector": "fn validate_resume_budget(",
+          "sha256": "9a2c4544e4a84e68d7c6363c15e769d10f5bfccbb4be53cb50b63911137282aa"
+        }
+      ]
+    },
+    {
+      "id": "child_release",
+      "rule": "子 Run 结算后释放父 Run：旧路径与 Kernel 各自匹配持久绑定",
+      "before_count": 2,
+      "after_count": 2,
+      "before": [
+        {
+          "path": "rust/anchor-runner-host/src/application/run_access/dispatch.rs",
+          "line": 112,
+          "selector": "fn child_finished<",
+          "sha256": "39ed7bf8bbb0e01e0ca3757ab95209f2b1bf1a63d8967077787810fcfc8075c8"
+        },
+        {
+          "path": "rust/anchor-runner-host/src/application/run_access/kernel_calls.rs",
+          "line": 333,
+          "selector": "fn kernel_child_finished<",
+          "sha256": "de78eba5b67f9d14c05a7c16e80265f5fdeeb27d9b0dbe9f819fed7e0db894fa"
+        }
+      ],
+      "after": [
+        {
+          "path": "rust/anchor-runner-host/src/application/run_access/dispatch.rs",
+          "line": 112,
+          "selector": "fn child_finished<",
+          "sha256": "39ed7bf8bbb0e01e0ca3757ab95209f2b1bf1a63d8967077787810fcfc8075c8"
+        },
+        {
+          "path": "rust/anchor-runner-host/src/application/run_access/kernel_calls.rs",
+          "line": 333,
+          "selector": "fn kernel_child_finished<",
+          "sha256": "de78eba5b67f9d14c05a7c16e80265f5fdeeb27d9b0dbe9f819fed7e0db894fa"
+        }
+      ]
+    }
+  ]
+}

@@ -1128,3 +1128,35 @@ Host `.writer.lock` 暂不能删除。资源租约只保护一次文件操作；
 接口移动涉及的 `run_access/admission`、`abandon`、`conversations`、`dispatch`、`deletion`、`recovery`、`projection`、`reads` 等新路径属于以上冲突的归属调整，不另建第二套业务规则。K0.2 的依赖、资源租约与 C1 基线见前节，本次合并不扩大 Kernel 授权范围。
 
 本次合并回归通过：workspace 128 个 target，2,113 / 0 / 123；严格 workspace/all-targets clippy、fmt、Web 311 项及构建通过；固定 Goose 完整串行 ignored 为 120 / 0 / 0，满足 §10.11 的无失败门槛。C1 相对 `0859373` 零 diff，围栏测试与 master 字节一致，业务引用为 0。合并修复保留 Kernel 显式选择、operation 回执、当前 invocation、投递/删除与父 stop 子调用的原业务保护；另修复 trace evidence 原子发布竞态并补齐插件披露报告身份。原先失败和独立复跑均保留在[合并验证与断言登记](../experiments/constitution-host-preflight/m2/merge-verification.md)，不以定向通过抹去失败。本次不验收 M2 完成；并行 Call 裁决扩展仍按 §8 待批，助手、执行结果补齐、原生人工恢复决定、真实 Provider 和生产数据迁移仍未关闭。
+
+## M2 §10.12：门面后能力补齐与交回
+
+§10.12 已纠正先前并行 Call 的范围判断：Host 从 `82a726d` 起就由共用 reject_snapshot 拒绝该组合。默认与 Kernel 路径均复用该产品准入规则，HTTP 422 在任何 Run、metadata、Artifact 副作用前返回；不修改 parallel_frontier 或 Call 校验器。前文“待批扩展”已被本结论取代，见 [准入边界](../experiments/constitution-host-preflight/m2/parallel-call-boundary.md)。
+
+KernelScheduler 补齐 Yielded、预算、Interrupted、Suspended/Cancelled 和人放弃的端口结果；不再有“后续切片”能力拒绝。Yielded 在冻结前验证路由，冻结 Interruption 产物后由 Code Write 提交；预算以宿主实际 model_requests 成本及 Observation stop，等待人恢复，不裁定 W4。常驻助手经既有 admit_assistant_run 门面显式选择 Kernel，绑定与活动 invocation 由 frontier 派生，结算回调继续交给 Session；默认仍用旧 Runner。完整助手回归发现空闲 wait_input 未接收 pause 事件，保留原断言修复为每 worker Notify 唤醒、Suspended 后由原调度边界提交 stop；不取消工作、不新增轮询。两个删除测试构造器只补对应事件字段。
+
+未知效果 API 由门面内 Kernel history 投影和执行端口接通。先持久化人工核查事实，再提交 Human 控制；普通 resume 和可用动作均阻止未核查 attempt，多个 pending 全部核查后才释放。相同决定幂等，冲突或持久化失败不释放，排空/删除预留互斥；已结算不重启。原生 Goose 只追加现有 tool_observation.operator_decision，不制造工具结果、NodeCompletion 或 Goose history。新原生工具观察带开始时间；attempt ID 基于稳定工具身份，step=0 表示没有旧 Harness step，旧时间缺失显示 unknown。
+
+Trace 原子发布是 `490c000` 已有实现，本轮确认了截断/并发读取的机制根因。修复前同一回归连续 5 次断言失败，原子替换后通过；原首轮 500 的瞬时字节不可获取，不声称逐字还原。具体 fsync/rename 顺序见 [根因确认](../experiments/constitution-host-preflight/m2/trace-publication.md)。
+
+### S 候选
+
+| 候选 | 结论与依据 |
+| --- | --- |
+| 无新增 | 预算等待人恢复、人放弃、Interruption、未知效果核查沿既有任务书与已批准语义；并行 Call 是 §10.12 明确的产品准入裁定。W4 未裁定。 |
+
+### 断言修改
+
+| 范围 | 修改与等价覆盖 |
+| --- | --- |
+| 既有业务断言 | 放宽 0、删除 0。旧助手 12 项业务断言由新 goose_kernel_persistent_assistant target 原样 include；fixture 按 target 选择 Kernel，并增加只存在 Kernel 存储的断言。 |
+| 测试兼容投影 | runtime_fixture 的 record_for/runs 支持只读 Kernel 枚举，并由 frontier 派生旧夹具所需 cursor、当前 invocation/prepare passes；不写任一存储，不作为产品第二份状态。新恢复测试直接核对 Kernel 相位、历史与端口事实。 |
+| 新覆盖 | Runtime host_operations/kernel 6 项、Host 恢复 2 项、原生观察幂等 1 项、HTTP 共用准入 1 项；新增 Goose ignored target 复用助手 12 项，另加原生未知效果 Completed/Abort 端到端场景。 |
+
+### 删除测试映射
+
+| 删除范围 | 映射 |
+| --- | --- |
+| 无 | 既有测试删除 0，旧测试新增 ignore 0。新 Goose target 的 ignored 属性保留对真实 pinned Goose/Bubblewrap 的依赖。 |
+
+M2 的最终命令、原样 Goose target 结果、失败与复跑、规则清单及宪法检验统一见 [M2 交回](../experiments/constitution-host-preflight/m2/completion-verification.md)。C1 相对 `0859373` 零 diff，围栏与 master F2 字节一致；本轮没有 Kernel 修改。M3 未开始，默认切换与删除旧 Runner 由用户决定。真实模型 Provider、生产迁移与部署均未新增验收。

@@ -1,7 +1,6 @@
 # M2 验证与当前边界
 
-M2 未完成，当前按任务书 §8 交回并行 Call 裁决边界，不开始 M3。已完成并行模块、多槽位调度、获批 FileStore 删除、Host Run/Graph 删除和 Probe 投影；串行 Op.call 已接通并通过定向及 5,000 seed 对照。并行分支的 Call 仍被派发为 Work，需要单独批准校验器扩展，见 [可复现边界与建议](parallel-call-boundary.md)。助手、执行结果补齐与人工恢复决定仍待实现。这不是完整 M2 验收。串行 Call 切片已提交 `2582528`；§10.11 要求的 master F1/F2（`d968ba5`）已通过 merge 同步，workspace、Web、完整串行 Goose ignored 与严格 clippy/fmt 均通过，见[合并验证与当前边界](merge-verification.md)。
-
+M2 的本地实现与验收按任务书 §10.12 收尾，最终结果见 [M2 交回](completion-verification.md)。常驻助手、执行结果与未知效果人工决定均在 Run 门面后接通；默认仍是旧 Runner，M3 未开始。并行分支 Op.call 复用 Host 既有准入拒绝，属于产品规则，不扩展校验器，见 [准入边界](parallel-call-boundary.md)。Trace 的并发读取根因、修复前五次稳定失败和原子发布说明见 [根因确认](trace-publication.md)。本页以下保留各切片的验证范围；最终验收不拼接旧结果冒充一次命令。
 ## FileStore 删除存储切片
 
 Store trait 和 MemoryStore 未改；FileStore 提供获批 remove，rename/sync/remove/sync，load 幂等清理遗留目录，资源锁文件单独留存。定向 7 项、Kernel 全量 44 项及 clippy 通过，详见 [存储操作与证据](deletion-boundary.md)。存储切片提交为 `0859373`，依赖与资源租约已按 §10.11 追认为 K0.2；当前 C1 以该提交为基线，后续 Kernel 零 diff，见[锁序与边界](../../../docs/constitution-refactor-log.md#k02filestore-删除与资源租约)。
