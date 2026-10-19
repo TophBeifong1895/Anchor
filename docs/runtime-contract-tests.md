@@ -13,7 +13,7 @@ GraphRunner、Goose ACP、授权 MCP、Bubblewrap 和 Artifact，只替换模型
 export CARGO_TARGET_DIR=/tmp/anchor-goose-regression-target
 export CARGO_BUILD_JOBS=2
 cargo +stable build --manifest-path rust/Cargo.toml --locked \
-  -p anchor-runner-host -p anchor-wecom-tools -p anchor-docmost-tools --bins
+  -p anchor-runner-host -p anchor-sandbox-bwrap -p anchor-wecom-tools -p anchor-docmost-tools --bins
 
 ANCHOR_GOOSE_BINARY=/absolute/path/to/goose \
 ANCHOR_GOOSE_LOCAL_NETWORK=1 \
@@ -42,6 +42,10 @@ user/mount/network namespace。入口在测试前校验 Goose 可执行权限和
 | `CARGO_BUILD_JOBS` | 编译并发，可按机器资源设置；不是模型请求限制 |
 
 不同编译工作流使用独立 target，不同时覆盖正在采证的 Host binary。
+构建必须包含 `anchor-sandbox-bwrap --bins`，使 `anchor-sandbox-network`
+与 Host 位于同一目录；仅构建 Host 不会构建依赖 crate 的 binary。
+缺少该 helper 时，已授权任务仍不能联网，外部效果用例会在模型收到工具错误后超时；
+不能把已有 target 恰好保留的 helper 当作干净环境前提。
 每次执行创建新 `anchor-goose-regression-*` 根，不从旧证据目录推断本次通过。
 Goose 套件逐套串行运行，不与其他 Goose 回归进程并行。并发负载下出现的
 失败须单独重跑，首轮和复跑结果分别保留。
