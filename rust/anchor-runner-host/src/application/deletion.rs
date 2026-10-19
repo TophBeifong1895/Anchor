@@ -1,6 +1,7 @@
 use super::{ApplicationError, RunApplication, graphs, metadata, storage};
 use crate::run_data;
-use anchor_runtime::graph::{GraphSnapshot, RunLease, RunStatus, RunStore};
+use anchor_kernel::{Phase, Waiter};
+use anchor_runtime::graph::{GraphSnapshot, RunLease, RunStore};
 use serde_json::Value;
 use std::{collections::BTreeSet, path::Path, time::Duration};
 
@@ -74,7 +75,8 @@ impl RunApplication {
             }
         }
         for (run_id, record) in self.records()? {
-            if !record.status.is_terminal()
+            let view = self.read_view(&record, false)?;
+            if (!view.is_settled() || view.worker)
                 && self.snapshot_calls_graph(&record.snapshot, target_path)?
             {
                 let graph = self
@@ -143,12 +145,26 @@ impl RunApplication {
             )));
         }
         let active = self.active.lock().await;
-        let targets = self.runs_for_graph(&graph_path)?;
+        let mut targets = self.runs_for_graph(&graph_path)?;
+        let kernel = self.kernel_runs(false)?;
+        let mut kernel_ids = Vec::new();
         for (id, _) in &targets {
             if self.kernel_owner(id)?.is_some() {
-                return Err(ApplicationError::Conflict(
-                    "P probe: deleting a Graph with Kernel Runs is Unsupported".into(),
-                ));
+                kernel_ids.push(id.clone());
+            }
+        }
+        let kernel_deletion = kernel
+            .as_ref()
+            .map(|runs| runs.reserve_deletion(&kernel_ids))
+            .transpose()?;
+        for (id, record) in &mut targets {
+            if let Some(refreshed) = kernel_deletion
+                .as_ref()
+                .map(|deletion| deletion.record(id))
+                .transpose()?
+                .flatten()
+            {
+                *record = refreshed;
             }
         }
         // A durable hand-off may have metadata before its Run is admitted. It
@@ -165,18 +181,23 @@ impl RunApplication {
         }
         for (run_id, record) in &targets {
             self.reject_pending_session_delivery(run_id)?;
-            if active.contains_key(run_id) {
+            let view = self.read_view(record, active.contains_key(run_id))?;
+            if view.worker {
                 return Err(ApplicationError::Conflict(
                     "Graph still has active execution".into(),
                 ));
             }
-            if !record.status.is_terminal() {
+            if !view.is_settled() {
                 let conversation = self
                     .metadata(run_id)?
                     .is_some_and(|metadata| metadata.conversation.is_some());
                 if !conversation
-                    || (record.status != RunStatus::Stopped
-                        && !self.has_conversation_successor(run_id)?)
+                    || (!matches!(
+                        view.phase,
+                        Phase::Waiting {
+                            waiter: Waiter::Human { .. }
+                        }
+                    ) && !self.has_conversation_successor(run_id)?)
                 {
                     return Err(ApplicationError::Conflict(format!(
                         "Graph has unfinished Run `{run_id}`; resume it, or stop and delete its record before deleting the Graph"
@@ -235,6 +256,12 @@ impl RunApplication {
             }
             run_data::delete_run_data(record, &self.data_root, workspace_root)
                 .map_err(ApplicationError::Storage)?;
+            if kernel_ids.contains(id) {
+                kernel_deletion
+                    .as_ref()
+                    .expect("Kernel deletion reserved")
+                    .remove(id)?;
+            }
             run_data::remove_run_files(&self.data_root, id).map_err(ApplicationError::Storage)?;
         }
 
@@ -253,11 +280,7 @@ impl RunApplication {
         run_id: &str,
         workspace_root: &Path,
     ) -> Result<(), ApplicationError> {
-        if self.kernel_owner(run_id)?.is_some() {
-            return Err(ApplicationError::Conflict(
-                "P probe: Kernel Run deletion is Unsupported".into(),
-            ));
-        }
+        let kernel = self.kernel_owner(run_id)?;
         // Match admission's lock order. A saved hand-off may precede its Run,
         // so the Graph lease must cover reference inspection and cleanup.
         let _graph_lease = match self.metadata(run_id)? {
@@ -268,13 +291,21 @@ impl RunApplication {
             _ => None,
         };
         let active = self.active.lock().await;
+        let kernel_deletion = kernel
+            .as_ref()
+            .map(|runs| runs.reserve_deletion(&[run_id.to_owned()]))
+            .transpose()?;
         if active.contains_key(run_id) {
             return Err(ApplicationError::Conflict(
                 "that Run is still running".into(),
             ));
         }
         let store = self.store();
-        let record = store.load(run_id)?.ok_or(ApplicationError::Missing)?;
+        let record = match kernel_deletion.as_ref() {
+            Some(deletion) => deletion.record(run_id)?,
+            None => store.load(run_id)?,
+        }
+        .ok_or(ApplicationError::Missing)?;
         let metadata = self.metadata(run_id)?;
         self.reject_pending_session_delivery(run_id)?;
         if let Some(metadata) = metadata.as_ref() {
@@ -308,7 +339,11 @@ impl RunApplication {
                 ));
             }
         }
-        let _lease = store.acquire_lease(run_id)?;
+        let _lease = if kernel_deletion.is_none() {
+            Some(store.acquire_lease(run_id)?)
+        } else {
+            None
+        };
         let artifacts = crate::HostArtifacts::new(
             self.data_root.join("artifacts"),
             workspace_root.to_path_buf(),
@@ -361,6 +396,9 @@ impl RunApplication {
         }
         run_data::delete_run_data(&record, &self.data_root, workspace_root)
             .map_err(ApplicationError::Storage)?;
+        if let Some(deletion) = kernel_deletion.as_ref() {
+            deletion.remove(run_id)?;
+        }
         run_data::remove_run_files(&self.data_root, run_id).map_err(ApplicationError::Storage)
     }
 }

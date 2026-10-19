@@ -1070,3 +1070,7 @@ KernelScheduler 以开放槽位唯一标识管理并发执行，已完成的单�
 用户已批准具体 FileStore 的 remove(id)，原存储边界解除。删除通过 rename 到 `.deleting-<encode(id)>` 后 sync parent、remove_dir_all 后再次 sync parent 完成；读取幂等清理遗留目录，正常与删除目录并存时保留正常资源。单资源读写/删除复用 anchor-file-lease，锁文件位于独立 `.locks` 目录并留存，list 不暴露内部目录。Store trait、MemoryStore、Kernel 生命周期、Reason/Phase/Waiter 均不改。
 
 新增存储测试 7 项通过，包含两线程 100 轮并发 load/remove（同实例和独立实例）；Kernel 全量 44 通过、clippy 通过，无旧断言修改/删除。当前例外只涉及 FileStore 存储、锁依赖和测试，kernel.rs/model.rs/lib.rs 相对 6ee2b0e 零 diff。实际命令与证据见 [M2 存储操作](../experiments/constitution-host-preflight/m2/deletion-boundary.md)。Host 删除与其余 M2 切片继续，不将存储测试当作真实 Provider 或完整 M2 验收。
+
+### Host Run/Graph 删除
+
+Kernel 删除已接到 run_access 门面和获批 FileStore.remove。删除预留与 create/control/drive 注册互斥，排队 worker 重新读存储后才可执行；Run/Graph 清理保留旧 Session、引用、对话继任和 wait-child 保护。新增 10 项定向回归、Host bin/tests clippy 与围栏通过，旧业务断言无改动。删除业务内部类型围栏 3 → 1；测试围栏文件原样。证据与保留清理边界见 [Host 删除](../experiments/constitution-host-preflight/m2/host-deletion.md)。

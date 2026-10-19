@@ -33,6 +33,16 @@ impl RunObservations {
             .map(|v| Some(v.updated))
             .map_err(|e| ApplicationError::Storage(e.to_string()))
     }
+    pub(super) fn remove(&self, id: &str) -> Result<(), ApplicationError> {
+        let _writer = self.writer.lock().unwrap();
+        match std::fs::remove_file(self.root.join(format!("{id}.json"))) {
+            Ok(()) => std::fs::File::open(&self.root)
+                .and_then(|directory| directory.sync_all())
+                .map_err(storage),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(storage(error)),
+        }
+    }
 }
 impl SubmissionObserver for RunObservations {
     fn accepted(&self, resource_id: &str) -> Result<(), GraphError> {

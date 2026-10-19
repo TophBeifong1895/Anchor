@@ -14,12 +14,13 @@ use anchor_runtime::graph::{
     validator::{GRAPH_VALIDATOR, GraphValidator, record_of, run_resource, run_resource_id},
 };
 use std::{
-    collections::HashMap,
+    collections::{BTreeSet, HashMap},
     fs::OpenOptions,
     path::Path,
     sync::{Arc, Mutex, atomic::Ordering},
 };
 
+mod deletion;
 mod pause;
 
 struct KernelExecution {
@@ -45,6 +46,9 @@ pub(crate) struct KernelRuns {
     pub(crate) kernel: Kernel<FileStore>,
     observations: super::run_observations::RunObservations,
     active: Mutex<HashMap<String, KernelExecution>>,
+    // Deletion reserves inactive Runs across filesystem cleanup. Registration,
+    // creation and controls take active before this mutex.
+    deleting: Mutex<BTreeSet<String>>,
     pause_root: std::path::PathBuf,
     _lease: anchor_file_lease::FileLease,
 }
@@ -100,6 +104,7 @@ impl KernelRuns {
         Ok(Self {
             kernel,
             active: Mutex::default(),
+            deleting: Mutex::default(),
             pause_root: root
                 .parent()
                 .expect("state root")
@@ -126,6 +131,8 @@ impl KernelRuns {
         budget: u64,
     ) -> Result<(), ApplicationError> {
         validate_probe(record)?;
+        let _active = self.active.lock().unwrap();
+        self.ensure_not_deleting(&record.run_id)?;
         self.kernel
             .create(run_resource(record, budget)?)
             .map_err(kernel_error)?;
@@ -152,6 +159,19 @@ impl KernelRuns {
             let mut active = self.active.lock().unwrap();
             if active.contains_key(id) {
                 return Err(GraphError::RunBusy(id.to_owned()));
+            }
+            self.ensure_not_deleting(id)
+                .map_err(|_| GraphError::RunBusy(id.to_owned()))?;
+            // A worker may have been queued before deletion acquired its
+            // reservation. It must observe absence before executing any slot.
+            if self
+                .load(id)
+                .map_err(|error| {
+                    GraphError::CorruptRun(format!("cannot load Kernel Run: {error:?}"))
+                })?
+                .is_none()
+            {
+                return Err(GraphError::CorruptRun("missing Kernel Run".into()));
             }
             if self.pause_pending(id)? {
                 pause.send(()).expect("new pause receiver");
@@ -195,6 +215,7 @@ impl KernelRuns {
             ));
         }
         let active = self.active.lock().unwrap();
+        self.ensure_not_deleting(id)?;
         if operation == "resume" && active.contains_key(id) {
             return Err(ApplicationError::Conflict(
                 "Kernel probe execution is still draining".into(),

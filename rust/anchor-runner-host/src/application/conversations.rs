@@ -410,7 +410,7 @@ impl RunApplication {
                 },
             ));
             for id in children {
-                match self.store().load(&id)? {
+                match self.load_run(&id)? {
                     Some(child) => pending.push(child),
                     None if allow_deleted_children => {}
                     None => {
@@ -514,7 +514,7 @@ impl RunApplication {
             let Some(successor_metadata) = self.metadata(&successor_id)? else {
                 continue;
             };
-            let successor = self.store().load(&successor_id)?;
+            let successor = self.load_run(&successor_id)?;
             if self.successor_reads_predecessor(record, &successor_metadata, successor.as_ref())? {
                 return Err(ApplicationError::Conflict(format!(
                     "Run is retained as the previous turn of a conversation: the newer Run `{successor_id}` still inherits from it on its first execution"

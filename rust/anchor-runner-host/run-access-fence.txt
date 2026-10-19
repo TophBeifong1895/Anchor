@@ -13,7 +13,7 @@ application/admission.rs 11
 application/assistants.rs 2
 application/control.rs 19
 application/conversations.rs 15
-application/deletion.rs 3
+application/deletion.rs 1
 application/dispatch.rs 13
 application/graphs.rs 3
 application/liveness.rs 2

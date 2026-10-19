@@ -651,5 +651,48 @@
       "command": "cargo fmt --manifest-path rust/Cargo.toml -p anchor-kernel -- --check",
       "exit_code": 0
     }
+  },
+  "host_deletion_slice": {
+    "implemented": true,
+    "new_tests": 10,
+    "existing_assertions_changed": 0,
+    "fence_file_unchanged": true,
+    "cap_reduced": {
+      "application/deletion.rs": [
+        3,
+        1
+      ]
+    },
+    "checks": [
+      {
+        "command": "cargo test -p anchor-runner-host --bin anchor-runner-host kernel_runs::deletion::tests -- --nocapture",
+        "working_directory": "rust",
+        "raw_output": "/tmp/anchor-m2/host-deletion-directed.log",
+        "sha256": "53cee662ef8bac6965d8edb31b38c9a2e17bb4af0a9e6f815c8743646a4d07cd",
+        "result_lines": [
+          "test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 953 filtered out; finished in 0.71s"
+        ]
+      },
+      {
+        "command": "cargo clippy -p anchor-runner-host --bin anchor-runner-host --tests -- -D warnings",
+        "working_directory": "rust",
+        "raw_output": "/tmp/anchor-m2/host-deletion-clippy.log",
+        "sha256": "1d4962950984bb018c3a3c161118dff741c045a4a0510c4b8d83312f7e89ad17",
+        "result_lines": []
+      },
+      {
+        "command": "cargo test -p anchor-runner-host --bin anchor-runner-host kernel_graph_conversation_delete_rechecks_wait_child_phase_and_worker -- --nocapture",
+        "working_directory": "rust",
+        "raw_output": "/tmp/anchor-m2/host-deletion-wait-child.log",
+        "sha256": "d441155d5d121c7a248d2ca0b9859312a9bd05449cc6da2cd01e999fb481f11f",
+        "result_lines": [
+          "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 962 filtered out; finished in 0.32s"
+        ]
+      }
+    ],
+    "limits": [
+      "Preparation racing deletion can leave reclaimable directories; deleted worker performs no node dispatch.",
+      "Unrecorded frozen artifacts retain existing orphan cleanup boundary."
+    ]
   }
 }
