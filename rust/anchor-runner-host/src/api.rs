@@ -266,6 +266,7 @@ pub async fn serve() -> io::Result<()> {
     let configured_graph_ready =
         validate_service_configuration(&bundle_root, &data_root, &workspace_root, &catalog_root)?;
     let _writer = crate::acquire_deployment_writer().map_err(io::Error::other)?;
+    crate::durable_write::cleanup_at_startup(&data_root, &workspace_root);
     crate::runtime_configuration::install_release_network(&crate::library_root(&catalog_root))
         .map_err(io::Error::other)?;
     // Start-up reclamation is best effort: a Library that cannot be swept (a busy

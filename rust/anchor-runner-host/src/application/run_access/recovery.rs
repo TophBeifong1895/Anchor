@@ -234,16 +234,14 @@ mod tests {
         );
         assert!(fixtures::view(&application, &key.run_id).is_settled());
         assert!(
-            fixtures::record(&application, &key.run_id)
+            !fixtures::record(&application, &key.run_id)
                 .results
-                .get("left")
-                .is_none()
+                .contains_key("left")
         );
         assert!(
-            fixtures::record(&application, &key.run_id)
+            !fixtures::record(&application, &key.run_id)
                 .results
-                .get("right")
-                .is_none()
+                .contains_key("right")
         );
     }
 

@@ -46,6 +46,46 @@ pub(crate) fn load(data_root: &Path, run_id: &str) -> Result<Option<RunView<'sta
 }
 
 impl RunApplication {
+    pub(crate) fn durable_input_workspaces(
+        &self,
+        workspace_root: &Path,
+    ) -> Result<Vec<std::path::PathBuf>, ApplicationError> {
+        let artifacts =
+            crate::HostArtifacts::new(self.data_root.join("artifacts"), workspace_root.into());
+        let mut paths = std::collections::BTreeSet::new();
+        for (_, record) in self.raw_records()? {
+            for node in &record.snapshot.nodes {
+                let operation = node
+                    .op
+                    .as_ref()
+                    .and_then(|name| record.snapshot.ops.get(name))
+                    .and_then(|op| op.get("host"))
+                    .and_then(|host| host.get("operation"))
+                    .and_then(serde_json::Value::as_str);
+                if operation != Some(crate::assistant::WAIT_INPUT) {
+                    continue;
+                }
+                let key = anchor_runtime::graph::InvocationKey {
+                    run_id: record.run_id.clone(),
+                    graph_digest: record.graph_digest.clone(),
+                    node_id: node.id.clone(),
+                    invocation: 1,
+                };
+                if let Some(owner) = artifacts.initialized_workspace_owner(&key)? {
+                    paths.insert(artifacts.workspace_path(&owner)?);
+                } else {
+                    for key in crate::run_data::invocation_keys(&record)
+                        .into_iter()
+                        .filter(|key| key.node_id == node.id)
+                    {
+                        paths.insert(artifacts.workspace_path(&key)?);
+                    }
+                }
+            }
+        }
+        Ok(paths.into_iter().collect())
+    }
+
     pub(in crate::application::run_access) fn reject_legacy_run(
         &self,
         run_id: &str,

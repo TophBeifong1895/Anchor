@@ -762,6 +762,7 @@ mod tests {
                 },
             )
             .unwrap();
+        let mut turns = Vec::new();
         for index in 1..=3 {
             let (turn, _) = sessions
                 .create_turn(
@@ -782,16 +783,17 @@ mod tests {
             sessions
                 .finish_turn("local", "pilot", &turn.id, TurnStatus::Completed, None)
                 .unwrap();
+            turns.push(turn.id);
         }
         assert_eq!(
             messages(&sessions, "local", "pilot").unwrap(),
             vec![
-                json!({"role":"user","text":"question-1"}),
-                json!({"role":"assistant","text":"answer-1"}),
-                json!({"role":"user","text":"question-2"}),
-                json!({"role":"assistant","text":"answer-2"}),
-                json!({"role":"user","text":"question-3"}),
-                json!({"role":"assistant","text":"answer-3"}),
+                json!({"role":"user","text":"question-1","turn":turns[0]}),
+                json!({"role":"assistant","text":"answer-1","turn":turns[0]}),
+                json!({"role":"user","text":"question-2","turn":turns[1]}),
+                json!({"role":"assistant","text":"answer-2","turn":turns[1]}),
+                json!({"role":"user","text":"question-3","turn":turns[2]}),
+                json!({"role":"assistant","text":"answer-3","turn":turns[2]}),
             ]
         );
     }

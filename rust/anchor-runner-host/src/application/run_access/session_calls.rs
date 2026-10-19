@@ -211,7 +211,7 @@ impl RunApplication {
             metadata::save(&self.data_root, &metadata)?;
         }
         let control = new_control();
-        let execution = self.prepare_resume(&record, &metadata, control.clone())?;
+        let execution = self.prepare_resume(record, &metadata, control.clone())?;
         // The authenticated Session host releases its existing invocation for
         // inspection. Persist the native observation through the same recovery
         // authority as ordinary Runs; an unknown effect is never replayed here.

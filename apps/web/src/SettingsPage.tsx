@@ -23,17 +23,27 @@ export function SettingsPage() {
   const [pythonVersion, setPythonVersion] = useState('3.12');
   const [rustVersion, setRustVersion] = useState('stable');
   const alive = useRef(true);
+  const runtimeVersion = useRef(0);
   // Operation responses do not run version probes. Keep the last observation
   // until the next status read; a failed read explicitly returns null.
-  const acceptOperation = (status: RuntimeStatus) => setRuntime(previous => ({ ...status, runtime: { python_version: previous?.runtime.python_version, python_version_error: previous?.runtime.python_version_error, ...status.runtime } }));
-  const refresh = async (signal?: AbortSignal) => {
-    setRefreshing(true);
+  const acceptOperation = (status: RuntimeStatus) => {
+    runtimeVersion.current += 1;
+    setRefreshing(false);
+    setRuntime(previous => ({ ...status, runtime: { python_version: previous?.runtime.python_version, python_version_error: previous?.runtime.python_version_error, ...status.runtime } }));
+  };
+  const refresh = async (signal?: AbortSignal, polling = false) => {
+    const version = ++runtimeVersion.current;
+    const current = () => !signal?.aborted && alive.current && version === runtimeVersion.current;
+    if (!polling) setRefreshing(true);
     try {
       const status = await api<RuntimeStatus>('/settings/runtime', 'GET', undefined, signal);
-      if (!signal?.aborted && alive.current) { setRuntime(status); setLoadProblem(''); }
+      if (current()) { setRuntime(status); if (polling) setRuntimeNotice(null); else setLoadProblem(''); }
     } catch (error) {
-      if (!signal?.aborted && alive.current) setLoadProblem(`环境状态：${reason(error)}`);
-    } finally { if (!signal?.aborted && alive.current) setRefreshing(false); }
+      if (current()) {
+        if (polling) setRuntimeNotice({ kind: 'bad', text: `状态刷新失败：${reason(error)}。初始化仍由服务继续执行。` });
+        else setLoadProblem(`环境状态：${reason(error)}`);
+      }
+    } finally { if (current()) setRefreshing(false); }
   };
   useEffect(() => {
     alive.current = true;
@@ -43,18 +53,23 @@ export function SettingsPage() {
   useEffect(() => {
     if (!active(runtime?.operation)) return;
     const controller = new AbortController();
+    let polling = false;
     const timer = window.setInterval(() => {
-      void api<RuntimeStatus>('/settings/runtime', 'GET', undefined, controller.signal).then(status => { if (!controller.signal.aborted) { setRuntime(status); setRuntimeNotice(null); } }).catch(error => { if (!controller.signal.aborted) setRuntimeNotice({ kind: 'bad', text: `状态刷新失败：${reason(error)}。初始化仍由服务继续执行。` }); });
+      if (polling) return;
+      polling = true;
+      void refresh(controller.signal, true).finally(() => { polling = false; });
     }, 1500);
     return () => { window.clearInterval(timer); controller.abort(); };
   }, [runtime?.operation?.status]);
   const prepare = async (kind: 'python' | 'rust') => {
+    runtimeVersion.current += 1; setRefreshing(false);
     setBusy(kind); setRuntimeNotice(null);
     try { const status = await api<RuntimeStatus>('/settings/runtime/prepare', 'POST', { kind, version: kind === 'python' ? (runtime?.runtime.python_configuration_owner === 'deployment' ? null : pythonVersion) : rustVersion, allow_network: allowNetwork }); if (alive.current) acceptOperation(status); }
     catch (error) { if (alive.current) setRuntimeNotice({ kind: 'bad', text: `初始化失败：${runtimeMessage(reason(error))}` }); }
     finally { if (alive.current) setBusy(''); }
   };
   const cancel = async () => {
+    runtimeVersion.current += 1; setRefreshing(false);
     setBusy('cancel');
     try { const status = await api<RuntimeStatus>('/settings/runtime/cancel', 'POST'); if (alive.current) acceptOperation(status); }
     catch (error) { if (alive.current) setRuntimeNotice({ kind: 'bad', text: `停止失败：${reason(error)}` }); }

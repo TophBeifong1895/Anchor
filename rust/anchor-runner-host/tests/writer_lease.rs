@@ -114,6 +114,51 @@ fn wait_http(child: &mut Child, address: SocketAddr) {
 }
 
 #[test]
+fn stdio_writer_removes_stale_durable_writes_before_execution() {
+    let root = tempfile::tempdir().unwrap();
+    prepare(root.path(), "true");
+    fs::create_dir(root.path().join("state/facts")).unwrap();
+    let stale = root.path().join("state/facts/.anchor-write-Ab123x");
+    fs::write(&stale, b"partial").unwrap();
+    assert_eq!(
+        response(framed(root.path(), "start_bundle", "cleanup"))["projection"]["outcome"],
+        "done"
+    );
+    assert!(!stale.exists());
+}
+
+#[test]
+fn stdio_status_does_not_start_cleanup_or_create_a_writer_lease() {
+    let root = tempfile::tempdir().unwrap();
+    prepare(root.path(), "true");
+    fs::create_dir(root.path().join("state/facts")).unwrap();
+    let stale = root.path().join("state/facts/.anchor-write-Ab123x");
+    fs::write(&stale, b"partial").unwrap();
+    assert_eq!(
+        response(framed(root.path(), "status", "missing"))["kind"],
+        "missing"
+    );
+    assert!(stale.exists());
+    assert!(!root.path().join("state/deployment-locks").exists());
+}
+
+#[test]
+fn http_startup_removes_stale_durable_writes_before_serving() {
+    let root = tempfile::tempdir().unwrap();
+    prepare(root.path(), "true");
+    fs::create_dir(root.path().join("state/facts")).unwrap();
+    let stale = root.path().join("state/facts/.anchor-write-Ab123x");
+    fs::write(&stale, b"partial").unwrap();
+    let listen = address();
+    let mut child = http_host(root.path(), listen);
+    wait_http(&mut child, listen);
+    let retained = stale.exists();
+    child.kill().unwrap();
+    child.wait().unwrap();
+    assert!(!retained);
+}
+
+#[test]
 fn http_writer_blocks_other_writers_but_exit_releases_lease() {
     let root = tempfile::tempdir().unwrap();
     prepare(root.path(), "true");

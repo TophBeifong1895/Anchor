@@ -30,7 +30,7 @@
 
 该 aggregate 脚本随后在 Node 的终态采样/产物断言阶段退出 1。通过的 Pilot 单独摘录为 [pilot-real-provider.json](pilot-real-provider.json)，保留 aggregate 退出码和失败阶段，没有把完整脚本标为通过。
 
-**最终 AgentNode** 命令：`python3 research_plugin_disclosure_20261013/capability-context/real_provider.py --node-only`，exit 0；日志 `/tmp/anchor-plugin-capability-context-real-node-final.log`。原始根：`.local/plugin-capability-context-20261013/real-88a393df05d4dd6c/`，Host SHA256 `38fde27e85119cbbbe5a0cc1eb326bd13bb750768bf983abc084c7a851e0d8b9`。本次挂 999 个 Plugin，摘要显示 87、明确省略 912，16 KiB 预算仅约束 Plugin 部分，完整 Goose system 为 16,985 字节。目标位于省略部分，模型仍按任务关键词发现它，选读说明、正确 Skill、随机凭据资源与完整 schema；13 次真实模型请求均返回 HTTP 200。独立 MCP 日志只有一次报告业务调用，随机 marker/token 和 17+25 的结果、`proof.json`、原生完成工具及最新真实回执一致。没有读取无关 Skill 正文。概要为 [node-real-provider.json](node-real-provider.json)。
+**最终 AgentNode** 命令：`python3 real_provider.py --node-only`，exit 0；日志 `/tmp/anchor-plugin-capability-context-real-node-final.log`。原始根：`.local/plugin-capability-context-20261013/real-88a393df05d4dd6c/`，Host SHA256 `38fde27e85119cbbbe5a0cc1eb326bd13bb750768bf983abc084c7a851e0d8b9`。本次挂 999 个 Plugin，摘要显示 87、明确省略 912，16 KiB 预算仅约束 Plugin 部分，完整 Goose system 为 16,985 字节。目标位于省略部分，模型仍按任务关键词发现它，选读说明、正确 Skill、随机凭据资源与完整 schema；13 次真实模型请求均返回 HTTP 200。独立 MCP 日志只有一次报告业务调用，随机 marker/token 和 17+25 的结果、`proof.json`、原生完成工具及最新真实回执一致。没有读取无关 Skill 正文。概要为 [node-real-provider.json](node-real-provider.json)。
 
 Pilot 与最终 Node 绑定不同 Host 构建。最后生产变化是回执指导和错误文案：回执属于最近授权非完成工具，包含发现与只读工具；实际校验条件没有改变。该修正后只重复受影响的 Bridge/native completion 及 Node 真实路径，没有把旧 Pilot 或浏览器证据改署为最终 Host。
 

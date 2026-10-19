@@ -11,3 +11,5 @@
 .pilot-question-answer > div { display: grid; grid-template-columns: minmax(80px, 1fr) minmax(0, 3fr); gap: 12px; }
 .pilot-question-answer dt { color: var(--muted); }
 .pilot-question-answer dd { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.pilot-credential-history { margin: 12px 0; color: var(--muted); font-size: 12px; }
+.pilot-credential-history > summary { cursor: pointer; }

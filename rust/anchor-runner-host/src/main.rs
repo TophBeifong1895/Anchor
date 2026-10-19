@@ -9,6 +9,7 @@ mod channel_supervisor;
 mod channel_tools;
 mod dependency_provision;
 mod deployment;
+mod durable_write;
 mod execution;
 mod goose_acp;
 mod goose_tool_context;
@@ -42,6 +43,7 @@ mod run_deletions;
 mod tool_disclosure;
 mod tool_environment;
 mod tool_host;
+use durable_write::write_durable;
 use node_host::HostNodes;
 #[cfg(test)]
 use node_host::load_host_completion_fact;
@@ -71,32 +73,6 @@ fn create_durable_directory(path: &std::path::Path) -> io::Result<()> {
     if path.is_relative() {
         std::fs::File::open(".")?.sync_all()?;
     }
-    Ok(())
-}
-
-fn write_durable(path: &std::path::Path, bytes: &[u8]) -> Result<(), std::io::Error> {
-    use std::{io::Write, os::unix::fs::PermissionsExt};
-
-    let parent = path
-        .parent()
-        .filter(|parent| !parent.as_os_str().is_empty())
-        .unwrap_or_else(|| std::path::Path::new("."));
-    let permissions = match std::fs::metadata(path) {
-        Ok(metadata) => Some(metadata.permissions()),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => None,
-        Err(error) => return Err(error),
-    };
-    let mut temporary = tempfile::Builder::new()
-        .prefix(".anchor-write-")
-        .permissions(std::fs::Permissions::from_mode(0o666))
-        .tempfile_in(parent)?;
-    if let Some(permissions) = permissions {
-        temporary.as_file().set_permissions(permissions)?;
-    }
-    temporary.write_all(bytes)?;
-    temporary.as_file().sync_all()?;
-    temporary.persist(path).map_err(|error| error.error)?;
-    std::fs::File::open(parent)?.sync_all()?;
     Ok(())
 }
 
@@ -562,6 +538,12 @@ async fn execute_snapshot_with_control(
             };
         }
     };
+    if let (Ok(data_root), Ok(workspace_root)) = (
+        env_path("ANCHOR_RUNNER_STATE_ROOT"),
+        env_path("ANCHOR_RUNNER_WORKSPACE_ROOT"),
+    ) {
+        durable_write::cleanup_at_startup(&data_root, &workspace_root);
+    }
     let expected = match GraphRunRecord::create_with_id(snapshot, input, run_id.clone()) {
         Ok(record) => record,
         Err(error) => {

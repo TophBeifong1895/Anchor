@@ -10,6 +10,7 @@
 - [Plugin authoring 计划](development-2026-10-13/pilot-plugin-authoring-development-plan.md) 与 [初始化计划](development-2026-10-13/pilot-initialization-and-development-plan.md)：S1–S4/I1–I2 的实施背景，未关闭范围已转入当前待办。
 - [开发环境原方案](development-2026-10-13/development-environment-freedom-plan.md) 与 [修订方案](development-2026-10-13/development-environment-freedom-plan-revised.md)：原稿由修订稿替代，当前工具行为见 [Pilot 开发](../pilot-development.md)。
 - [渐进披露实施计划](development-2026-10-13/plugin-progressive-disclosure-plan.md)：A222/A224 的计划及分阶段验收；懒连接仍按 [活跃路线](../goose-native-capability-reuse-plan.md) 单独判断。
+- [2026-10-13 验收证据](development-2026-10-13/evidence/)：开发环境与 Plugin 披露的脚本、概要和研究材料归档于此，不属于运行时或发行包。
 - [Goose 迁移计划](development-2026-10-13/goose-runtime-migration.md) 与 [Graph 组合设计](development-2026-10-13/graph-composition-design.md)：迁移阶段、早期原型和执行器背景；有效决定与当前契约分别留在现行文档。
 
 ## Rust 与 Goose 收敛前的历史

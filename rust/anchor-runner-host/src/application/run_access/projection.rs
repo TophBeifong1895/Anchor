@@ -75,7 +75,7 @@ impl RunApplication {
             .ok_or(ApplicationError::Missing)?;
         let record = observed.record.as_ref();
         let view = &observed.lifecycle;
-        let mut projection = RunProjection::from_view(&view);
+        let mut projection = RunProjection::from_view(view);
         projection.actions.abandon = observed.can_abandon();
         projection.actions.pause = observed.can_pause();
         projection.actions.stop = observed.can_stop();

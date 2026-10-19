@@ -26,7 +26,7 @@ pub(super) fn messages(
         } else {
             crate::pilot_attachments::input_references(sessions, owner, session, &turn.id)?
         };
-        let mut has_attachments = !inputs.is_empty();
+        let has_attachments = !inputs.is_empty();
         if !turn.request_id.starts_with("continuation:")
             && (turn.prompt.is_some() || has_attachments)
         {
@@ -48,7 +48,6 @@ pub(super) fn messages(
                 ) && attachments.insert(attachment.id.clone())
                 {
                     flush_text(&mut messages, &mut text);
-                    has_attachments = true;
                     messages.push(json!({"role":"assistant","text":"","attachments":[attachment]}));
                 }
                 continue;
@@ -92,10 +91,8 @@ pub(super) fn messages(
             }
         }
         flush_text(&mut messages, &mut text);
-        if has_attachments {
-            for message in &mut messages[start..] {
-                message["turn"] = json!(turn.id);
-            }
+        for message in &mut messages[start..] {
+            message["turn"] = json!(turn.id);
         }
     }
     Ok(messages)
@@ -143,6 +140,49 @@ fn answer_text(question: &Question) -> Option<String> {
 mod tests {
     use super::*;
     use anchor_platform_session::{CreateSession, QuestionAnswer, TurnStatus};
+
+    #[test]
+    fn plain_messages_keep_their_turn_identity_across_repeated_prompts_and_reopen() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("sessions.sqlite");
+        let sessions = SessionStore::open(&path).unwrap();
+        sessions
+            .create(
+                "local",
+                CreateSession {
+                    id: Some("pilot".into()),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        let mut identities = Vec::new();
+        for request_id in ["first", "second"] {
+            let (turn, _) = sessions
+                .create_turn("local", "pilot", request_id, Some("same prompt"))
+                .unwrap();
+            sessions
+                .append_turn_event(
+                    "local",
+                    "pilot",
+                    &turn.id,
+                    json!({"type":"text-delta","delta":"same reply"}),
+                )
+                .unwrap();
+            sessions
+                .finish_turn("local", "pilot", &turn.id, TurnStatus::Completed, None)
+                .unwrap();
+            identities.extend([turn.id.clone(), turn.id]);
+        }
+        let history = messages(&sessions, "local", "pilot").unwrap();
+        assert_eq!(history.len(), identities.len());
+        for (message, identity) in history.iter().zip(identities) {
+            assert_eq!(message["turn"], identity);
+            assert!(message.get("attachments").is_none());
+        }
+        drop(sessions);
+        let reopened = SessionStore::open(path).unwrap();
+        assert_eq!(messages(&reopened, "local", "pilot").unwrap(), history);
+    }
 
     #[test]
     fn saved_questions_and_answers_stay_between_the_surrounding_replies() {

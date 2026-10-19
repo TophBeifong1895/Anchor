@@ -252,7 +252,7 @@ D2 之后，开发视图不再受保护，那么：
 
 ## 11. 接续与工作区保护
 
-编制时工作区存在多条未提交改动（`experiments/`、`research_plugin_disclosure_20261013/`、`docs/wecom-persistent-run-development-guide.tmp.md` 等）。
+编制时工作区存在多条未提交改动（`experiments/`、`归档研究资料/`、`docs/wecom-persistent-run-development-guide.tmp.md` 等）。
 
 - 不 `git reset`、不 `git checkout --`、不 `git clean`
 - 不把无关改动纳入提交

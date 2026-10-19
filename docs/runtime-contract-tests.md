@@ -203,6 +203,16 @@ Goose trace 的 `store_evidence` 使用共享 `write_durable`：在目标同目�
 
 本次 workspace 实际 1,999 通过、0 失败、123 忽略；文档完整 Host ignored 命令实际 120/0/0，未使用时序失败豁免。标准入口另行执行为 20 套、105/0/0，105 份场景报告全部通过严格校验，真实模型请求为 0；与完整 ignored 重复覆盖的场景不累计为新测试。严格 workspace/all-target Clippy 与格式检查通过。
 
+### 临时写入的崩溃回收
+
+共享 writer 位于 `durable_write`。HTTP 在取得 deployment writer lease 后、启动恢复前清理；framed/stdin 在写入请求取得同一 lease 后、开始执行前清理，`status` 不触发清理或新建 writer lease，保持只读。清理为 best effort：忙目录、无法检查或无法删除的目录只记统计，不使宿主启动失败；不按文件年龄推断写入是否结束。
+
+writer 从创建临时文件前到 rename、父目录 fsync 完成持有父目录共享锁，临时文件创建、目标权限读取、发布和失败析构均通过同一个 `/proc/self/fd/<dirfd>` 目录句柄路径操作，避免父目录路径被替换后锁与实际写入落点分离。cleaner 尝试同目录非阻塞排他锁，活动 writer 存在时跳过，进程退出后锁由内核释放。复用既有 `tempfile`、`rustix` 和 `anchor-file-lease`，不新增依赖或旁路锁文件，保留目标 JSON 字节、权限规则与原子发布语义。
+
+清理只删除保留命名 `.anchor-write-` 加六位 ASCII 字母数字的普通文件，并在删除后同步目录；逐级按目录 fd 打开且不跟随符号链接。范围是 state 下的 `facts`、`goose-acp`、`goose-acp-spike` 当层，以及 `.goose-process` 下 invocation/conversation 的 config 当层；wait-input 的 workspace 通过 Run 门面、既有 invocation 归属和已初始化的节点绑定确定，覆盖稳定与未绑定目录、合法的点开头 Run ID，不按目录外形扫描其他节点或外来目录。不递归用户工作文件，不清 Library、Artifact 或其他临时文件前缀。被占用或检查失败的残留留待下次启动，不增加定时回收线程。
+
+回归包含真实子进程持锁写入/fsync 后被强杀的残留、活动 writer 跳过、父目录在临时文件创建前/后被替换、同层/符号链接/用户子目录边界及 HTTP/framed 两个真实入口。执行命令、原始输出和未覆盖范围见[本机证据](../.local/durable-write-cleanup-20261019/README.md)；不是断电、真实 Provider 或部署验收。
+
 ## 套件与证据
 
 入口先构建官方 WeCom、Docmost 原生工具，再逐套运行以下既有 Host 测试，

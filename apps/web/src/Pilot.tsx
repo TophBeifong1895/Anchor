@@ -1,11 +1,11 @@
-import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
+import { Fragment, useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
 import { Anchor, ArrowDown, Check, Copy, LoaderCircle, MessageSquare, Paperclip, Plus, Search, Send, Square } from 'lucide-react';
 import { api, ApiError } from './api';
 import { Markdown } from './markdown';
 import { PilotTurn, type Turn } from './PilotTurn';
 import { SessionActions } from './SessionActions';
 import { SessionPlugins, type PluginContinuation } from './SessionPlugins';
-import { PilotCredentials } from './PilotCredentials';
+import { PilotCredentials, usePilotCredentials } from './PilotCredentials';
 import type { Question } from './pilotQuestions';
 import { PilotAttachments } from './PilotAttachments';
 import { addDraftAttachments, attachmentProblem, encodeAttachment, type Attachment, type DraftAttachment } from './pilotAttachments';
@@ -19,6 +19,7 @@ type Session = {
   approval: { action: string; key: string; status: string; target?: string; proposal?: unknown } | null;
 };
 type Message = { role: 'user' | 'assistant'; text: string; turn?: string; attachments?: Attachment[]; localAttachments?: DraftAttachment[]; question?: Question; question_answer?: Question };
+const messageTurn = (message: Message) => message.turn ?? message.question?.turn ?? message.question_answer?.turn;
 const labels: Record<string, string> = { active: '可以继续对话', interrupted: '回复已中断', waiting_user: '等待你的答复', archived: '已归档' };
 const starters = [
   { label: '工作流', text: '帮我把每周整理资料和生成周报做成工作流。' },
@@ -314,6 +315,16 @@ export function Pilot({ session = '', onSession, initialDraft = '', onDraftConsu
   }, []);
   const current = sessions.find(item => item.id === selected);
   const awaitingContinuation = continuation?.session === selected && continuation.state.status === 'scheduled';
+  const credentials = usePilotCredentials(selected, () => {
+    void refresh(selected).catch(error => { if (selectedRef.current === selected) setProblem((error as Error).message); });
+  }, turn?.status === 'running' || busy || awaitingContinuation);
+  const lastMessageByTurn = new Map(messages.flatMap((message, index) => {
+    const id = messageTurn(message);
+    return id ? [[id, index] as const] : [];
+  }));
+  const credentialRequests = (id: string) => credentials.requests.filter(request => request.turn === id);
+  const remainingCredentials = credentials.requests.filter(request => !lastMessageByTurn.has(request.turn)
+    || (turn?.status === 'running' && request.turn === turn.id));
   const pendingApproval = current?.approval?.status === 'requested';
   // An interrupted session accepts a new message: the next turn carries what the dead run recorded.
   const canSend = !selected || (current &&
@@ -525,18 +536,24 @@ export function Pilot({ session = '', onSession, initialDraft = '', onDraftConsu
       }}>
         <div className="pilot-message-list">
         {loading && <div className="pilot-thinking" role="status"><LoaderCircle size={16} />正在加载对话…</div>}
-        {messages.map((message, index) => <article key={`${selected}-${index}`} className={`pilot-message ${message.role}`}>
+        {messages.map((message, index) => {
+          const turnId = messageTurn(message);
+          const requests = turnId && lastMessageByTurn.get(turnId) === index
+            && !(turn?.status === 'running' && turnId === turn.id) ? credentialRequests(turnId) : [];
+          return <Fragment key={`${selected}-${index}`}><article className={`pilot-message ${message.role}`}>
           <div className="pilot-message-author">{message.role === 'assistant' && <Anchor size={16} />}<span>{message.role === 'user' ? '你' : 'Anchor Pilot'}</span></div>
           {message.role === 'assistant' ? <Markdown text={message.text} prefix={`pilot-${selected}-${index}`} /> : <p className="pilot-user-text">{message.text}</p>}
           <PilotAttachments attachments={message.attachments} drafts={message.localAttachments} session={selected} turn={message.turn} />
           {message.question?.status === 'interrupted' && <p className="pilot-muted">这条提问已中断。</p>}
           {message.text && <button className="pilot-copy" aria-label={`复制${message.role === 'assistant' ? '回复' : '消息'} ${index + 1}`}
             onClick={() => void copy(message, index)}>{copied === index ? <Check size={14} /> : <Copy size={14} />}{copied === index ? '已复制' : '复制'}</button>}
-        </article>)}
+        </article>
+          {requests.length > 0 && <div data-credential-turn={turnId}><PilotCredentials requests={requests} onConfigured={credentials.onConfigured} /></div>}
+        </Fragment>;
+        })}
         {turn && <PilotTurn key={`${turn.session}-${turn.id}`} turn={turn} saved={syncedTurn === turn.id} stopping={stopping} onComplete={complete} onQuestions={questionState} />}
-        {selected && <PilotCredentials key={`credentials-${selected}`} session={selected} onConfigured={() => {
-          void refresh(selected).catch(error => { if (selectedRef.current === selected) setProblem((error as Error).message); });
-        }} />}
+        {selected && <PilotCredentials key={`credentials-${selected}`} requests={remainingCredentials} onConfigured={credentials.onConfigured} />}
+        {credentials.problem && <p className="pilot-error" role="alert">无法读取凭据配置请求。<button type="button" onClick={credentials.retry}>重新加载配置状态</button></p>}
         {busy && !turn && <div className="pilot-thinking" role="status"><LoaderCircle size={16} />正在提交…</div>}
         {awaitingContinuation && turn?.status !== 'running' && <p className="pilot-muted" role="status">正在应用配置，Pilot 将继续当前任务…</p>}
         </div>

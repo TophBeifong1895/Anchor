@@ -1209,3 +1209,18 @@ main.rs 与 goose_acp.rs 自动合并；恢复模块和助手接入均保留。�
 | Goose 重复 12 项 | 同一模块曾被两个 target 编译，M2 的 136 比字面 124 多 12；只删除重复 target，12 个普通 assistant 场景保留，名单与实际最终计数在交回证据。 |
 
 按用户 §10.13 决定不做生产数据迁移，不修改现有开发状态；交回提供 [新开发状态根与保留范围](../experiments/constitution-host-preflight/m3/local-development-state.md)。W4、真实模型 Provider、外部渠道与部署不由固定 Goose/本地 Provider 验收代替。M4/M5 由用户后续授权；本分支不自行合回 master。
+
+
+### M3 结束同步 master
+
+以 `6e91e5c` 为本分支父提交、`0aa5197` 为 master 父提交执行一次 merge，不 rebase。两个实际冲突及上游旧夹具适配如下；完整合并后验收由 M3 交回证据记录。
+
+| 路径 | 处理依据 |
+| --- | --- |
+| `rust/anchor-runner-host/src/main.rs`（冲突） | 保留 master 抽出的 durable_write 模块和取得 deployment writer 后的 startup cleanup；保留本分支 Kernel standalone 用例及纯 create_with_plugins，不恢复 PreparedExecution 的旧入口或可变 record。共享 write_durable 仍为唯一实现。 |
+| `rust/anchor-runner-host/src/application/run_access/reads.rs`（冲突） | 接入 master 的 durable_input_workspaces，只返回已记录 wait_input 的工作目录供启动清理；保留本分支 Kernel 读取、旧格式拒绝与恢复 history 投影，不恢复旧 store/resume_interrupted_attempts。 |
+| `rust/anchor-runner-host/src/durable_write.rs`（上游夹具适配） | master 新测试使用已删旧存储并直接设 invocations，改为 fixtures::create 与真实 Code completion，所有清理/保留断言不变。测试释放 writer 后再模拟新 Host 启动清理。 |
+| `apps/web/src/App.races.test.tsx`（上游夹具适配） | 新导航竞态测试改用共用 settled/done 投影与 abandon 动作字段；删除旧 status 与只属于旧投影的布尔值，导航和删除反馈断言不变。 |
+| `rust/anchor-runner-host/tests/writer_lease.rs`（上游断言词汇适配） | 新 stdio cleanup 成功断言从 status=completed 改为 projection.outcome=done；保留清理生效、status 只读不触发清理、deployment lease 不被创建的业务断言。 |
+
+其余自动合并采用上游 Web 凭据收起、异步生命周期保护、Pilot transcript 与启动临时文件回收；文档归档原样保留，不把历史证据当本次验收。上游新增 durable_write 测试首次合并编译因旧类型引用失败，已在定向修复后重跑，不能将该首轮写成通过。

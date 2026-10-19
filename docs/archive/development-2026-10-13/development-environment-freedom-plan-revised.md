@@ -2,7 +2,7 @@
 
 > 历史快照（截至 2026-10-13）：保留当时的方案、执行记录与验收边界，不再追加，也不作为当前实现、授权或待办。当前行为见 [当前架构](../../architecture.md)，仍未关闭的事项见 [当前验收与待办](../../pilot-development-plan.md)。正文中的“当前”、PID、部署状态和读取顺序均以记录当时为背景。
 
-编制日期：2026-10-13。状态：**已实施并完成本专项小型闭环验收（A225），已按用户授权部署当前开发 Host 并清空对话历史（A226）**。主 Agent 负责架构设计、review 与验收，GPT-6.1 Sol / xhigh Agent 负责开发。具体证据与未覆盖边界见 [验收记录](../../../research_development_environment_20261013/README.md) 和开发台账。
+编制日期：2026-10-13。状态：**已实施并完成本专项小型闭环验收（A225），已按用户授权部署当前开发 Host 并清空对话历史（A226）**。主 Agent 负责架构设计、review 与验收，GPT-6.1 Sol / xhigh Agent 负责开发。具体证据与未覆盖边界见 [验收记录](evidence/development_environment_20261013/README.md) 和开发台账。
 
 本文是 [原计划](development-environment-freedom-plan.md) 的修订方案，保留原稿供对照。当前实现以 [architecture.md](../../architecture.md) 为准，目标与能力归属以 [product-architecture.md](../../product-architecture.md) 为准，现行规则以 [plugin-dependencies.md](../../plugin-dependencies.md) 为准。实现和实际验收仍只记 [开发台账](pilot-development-plan.md)。
 
