@@ -1,6 +1,7 @@
 # Local data and environments may contain user history; never package them.
 .venv/
 .local/
+/research_*/
 __pycache__/
 *.py[cod]
 .pytest_cache/

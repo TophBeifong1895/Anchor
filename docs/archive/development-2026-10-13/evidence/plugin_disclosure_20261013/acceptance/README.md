@@ -32,7 +32,7 @@ PATH=/home/mansteinl/.cargo/bin:$PATH cargo test --manifest-path rust/Cargo.toml
 PATH=/home/mansteinl/.cargo/bin:$PATH cargo build --manifest-path rust/Cargo.toml -p anchor-runner-host --bin anchor-runner-host --locked --offline
 PATH=/home/mansteinl/.cargo/bin:$PATH cargo clippy --manifest-path rust/Cargo.toml -p anchor-runner-host -p anchor-graph-host --all-targets --locked --offline -- -D warnings
 PATH=/home/mansteinl/.cargo/bin:$PATH cargo fmt --manifest-path rust/Cargo.toml --all -- --check
-python3 research_plugin_disclosure_20261013/acceptance/real_provider.py
+python3 real_provider.py
 ```
 
 all-targets：Host 28 targets，869 passed / 0 failed / 86 ignored；GraphHost 2 targets，41 passed / 0 failed。合计 **910 passed / 0 failed / 86 ignored**，包含不同 target 对共享 fixture 的重复运行。默认 ignored 不因此视为已执行。全量通过后 Clippy 首轮报告 `manual_strip`，仅把 frontmatter 的手动前缀切片改为等价 `strip_prefix`；收尾后 20 项 disclosure、build、最终 Clippy、fmt 和最终真实 Provider 通过。没有声称该等价收尾后又跑一次全量。

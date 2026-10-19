@@ -24,8 +24,8 @@
 | Rust Kernel、Host 与 Goose ACP | AgentNode/Pilot、原生历史、问答、恢复、取消和 compaction 有确定性及分片真实模型证据；旧执行器记录保持原身份 | 历史台账 A114–A140；[回归入口](runtime-contract-tests.md) |
 | Pilot 获取、开发与交付 Plugin | Python/Rust 开发、自测、确认安装、挂载、正式调用和删除开发 Session 后调用通过；受控 HTTP 获取另有阶段证据 | 历史台账 A207/A212；不代表公共市场兼容 |
 | 空业务安装初始化 | Python/Rust 冷初始化、私密凭据 fixture、Graph 运行和计划登记分别通过，绑定不同冻结包 | [A216 范围表](archive/development-2026-10-13/pilot-development-plan.md#pilot-初始化与开发依赖验收a216)；详细产物在原机器 `.local/pilot-bootstrap-acceptance/` |
-| 私有 Python 开发环境 | 安装/升级/卸载、editable、隔离、项目锁、取消与旧视图兼容有定向证据；真实模型完成独立正式交付及删除现场后调用 | [A225 范围表](archive/development-2026-10-13/pilot-development-plan.md#开发环境自由度验收a225)、[可复跑验收材料](../research_development_environment_20261013/README.md) |
-| Plugin 发现、读取与工具调用 | Pilot/Node 完整披露、授权调用和有界目录通过；持续摘要、挂载接续及压缩分别有真实/确定性证据 | [A222](../research_plugin_disclosure_20261013/acceptance/README.md)、[A224](../research_plugin_disclosure_20261013/capability-context/README.md) |
+| 私有 Python 开发环境 | 安装/升级/卸载、editable、隔离、项目锁、取消与旧视图兼容有定向证据；真实模型完成独立正式交付及删除现场后调用 | [A225 范围表](archive/development-2026-10-13/pilot-development-plan.md#开发环境自由度验收a225)、[可复跑验收材料](archive/development-2026-10-13/evidence/development_environment_20261013/README.md) |
+| Plugin 发现、读取与工具调用 | Pilot/Node 完整披露、授权调用和有界目录通过；持续摘要、挂载接续及压缩分别有真实/确定性证据 | [A222](archive/development-2026-10-13/evidence/plugin_disclosure_20261013/acceptance/README.md)、[A224](archive/development-2026-10-13/evidence/plugin_disclosure_20261013/capability-context/README.md) |
 | Pilot 默认联网 | 网页与 Responses 新会话默认挂载、用户禁止和旧会话边界通过；隔离 Host 实际安装 requests 并在断网后 import | 历史台账 A204/A206/A228；A228 原始产物在原机器 `.local/pilot-network-default-20261013/` |
 | Web 问答与 API key | 问答按对话顺序回看，错误 key/无效字符拒绝及正确 key 加载通过真实浏览器验收 | 历史台账 A221/A227 |
 | Pilot 文件与图片 | 上传、拖拽/粘贴、回复图片与下载、幂等/恢复引用、刷新/重启及删除清理通过；真实 `deepseek-flash` 完成 CSV 汇总、读图并发布文字与原图，MCP 工具图片由实际 Goose 确定性 fixture 验证；8077 已更新，既有会话与资源核对一致 | [浏览器验收](../apps/web/e2e/pilot-attachments-native.spec.ts)、[UI 回归](../apps/web/e2e/pilot-attachments.spec.ts)、[Goose fixture](../rust/anchor-runner-host/tests/goose_pilot_attachments.rs)；本机证据 `.local/pilot-attachments-20261014/acceptance.json` |

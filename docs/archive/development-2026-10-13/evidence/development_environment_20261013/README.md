@@ -1,6 +1,6 @@
 # 私有 Python 开发环境验收
 
-本目录保存主 Agent 的独立验收入口。Runtime 开发由 GPT-6.1 Sol / xhigh Agent 完成，主 Agent 负责架构边界、源码 review 和真实 Provider 验收。方案见 [归档修订稿](../docs/archive/development-2026-10-13/development-environment-freedom-plan-revised.md)，当时验收状态见 [历史台账](../docs/archive/development-2026-10-13/pilot-development-plan.md#开发环境自由度验收a225)。
+本目录保存主 Agent 的独立验收入口。Runtime 开发由 GPT-6.1 Sol / xhigh Agent 完成，主 Agent 负责架构边界、源码 review 和真实 Provider 验收。方案见 [归档修订稿](../../development-environment-freedom-plan-revised.md)，当时验收状态见 [历史台账](../../pilot-development-plan.md#开发环境自由度验收a225)。
 
 ## 真实 Provider 场景
 
@@ -11,7 +11,7 @@
 开发 fixture 复用 Rust 测试的源码，移除其第三方依赖。正式候选明确声明本地合成的 `formalprobe==1.0` wheel，由现有 Host 求解、来源校验和共享 store/view 接线准备；MCP 实际导入正式包，并断言私有 venv 和 editable 包不存在。它还加载复制到候选的修改后源码，因此随机参数、源码值、正式依赖值、原生结果与模型产物可以相互核对。
 
 ```sh
-python3 research_development_environment_20261013/real_provider_acceptance.py \
+python3 real_provider_acceptance.py \
   --host rust/target/debug/anchor-runner-host \
   --root .local/development-environment-acceptance-20261013/real-<新的唯一标记>
 ```
