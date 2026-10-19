@@ -154,12 +154,9 @@ impl RunControl for HostControl {
 
 fn reject_snapshot(snapshot: &GraphSnapshot) -> Result<(), String> {
     snapshot.validate().map_err(|error| error.to_string())?;
-    // The parallel coordinator currently dispatches branch nodes through the
-    // plain NodeExecutionPort. Graph calls require the host-owned GraphCallPort
-    // and their parent/child admission facts, so allowing one inside a
-    // fanout/join branch would turn a valid-looking graph into a runtime
-    // failure (or, worse, a partially admitted child). Reject the combination
-    // before a Run is created until the coordinator has an explicit call port.
+    // Product admission boundary shared by both execution paths (§10.12):
+    // Graph calls are supported outside fanout/join branches. Refuse this
+    // combination before creating a Run or admitting any child.
     let parallel_regions = snapshot
         .parallel_regions()
         .map_err(|error| error.to_string())?;

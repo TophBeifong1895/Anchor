@@ -109,6 +109,16 @@ impl RunApplication {
             }
         }
         let plugin_bindings = self.bundle_plugin_bindings(&bundle)?;
+        // M2 opt-in for deterministic assistant parity; the default switch is M3.
+        let kernel = match std::env::var("ANCHOR_ASSISTANT_EXECUTION").as_deref() {
+            Ok("kernel_probe") => true,
+            Err(std::env::VarError::NotPresent) => false,
+            _ => {
+                return Err(ApplicationError::Invalid(
+                    "ANCHOR_ASSISTANT_EXECUTION must be kernel_probe when configured".into(),
+                ));
+            }
+        };
         let mut record = GraphRunRecord::create_with_id(
             bundle.snapshot,
             serde_json::json!({"session":session}),
@@ -157,7 +167,13 @@ impl RunApplication {
         for node in &record.snapshot.nodes {
             artifacts.bind_node_workspace(&run, &record.graph_digest, &node.id)?;
         }
-        self.store().save(&record)?;
+        if kernel {
+            self.kernel_runs(true)?
+                .expect("enabled")
+                .create(&record, u64::MAX)?;
+        } else {
+            self.store().save(&record)?;
+        }
         SessionStore::open(self.data_root.join("platform/sessions.sqlite"))
             .map_err(storage)?
             .bind_channel_assistant(
@@ -169,11 +185,18 @@ impl RunApplication {
                 &plan.reply_node,
             )
             .map_err(storage)?;
-        active.insert(run.clone(), ActiveRun::new(graph_path, control));
+        if !kernel {
+            active.insert(run.clone(), ActiveRun::new(graph_path, control.clone()));
+        }
         drop(lease);
         drop(plugin_lease);
         drop(graph_lease);
-        self.spawn(record, execution)?;
+        if kernel {
+            drop(active);
+            self.spawn_kernel(record, execution, control)?;
+        } else {
+            self.spawn(record, execution)?;
+        }
         Ok(run)
     }
 }

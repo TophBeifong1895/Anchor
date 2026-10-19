@@ -205,6 +205,7 @@ async fn kernel_delete_rechecks_active_worker_even_with_a_settled_resource() {
         KernelExecution {
             cancellation: cancellation(),
             pause,
+            wait_pause: Arc::new(tokio::sync::Notify::new()),
         },
     );
     assert!(matches!(
@@ -401,6 +402,7 @@ async fn kernel_graph_conversation_delete_rechecks_wait_child_phase_and_worker()
         KernelExecution {
             cancellation: cancellation(),
             pause,
+            wait_pause: Arc::new(tokio::sync::Notify::new()),
         },
     );
     assert!(

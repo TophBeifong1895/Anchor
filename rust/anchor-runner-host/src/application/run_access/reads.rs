@@ -27,7 +27,9 @@ pub(crate) fn load(data_root: &Path, run_id: &str) -> Result<Option<RunView<'sta
             .flatten();
             let lifecycle = super::kernel_runs::KernelRuns::project(&resource, false, updated)
                 .map_err(|error| GraphError::CorruptRun(format!("Run view: {error:?}")))?;
-            return Ok(Some(RunView::from_kernel(record, lifecycle)));
+            return Ok(Some(
+                RunView::from_kernel(record, lifecycle).with_kernel_frontier(&resource)?,
+            ));
         }
     }
     Ok(legacy.map(RunView::owned))
@@ -133,8 +135,18 @@ impl RunApplication {
         if let Some(owner) = self.kernel_owner(run_id)? {
             let resource = owner.load(run_id)?.ok_or(ApplicationError::Missing)?;
             let lifecycle = owner.view(&resource)?;
-            let record = super::kernel_runs::KernelRuns::record(&resource)?;
-            return Ok(Some(RunView::from_kernel(record, lifecycle)));
+            let mut record = super::kernel_runs::KernelRuns::record(&resource)?;
+            if matches!(
+                resource.phase(),
+                Some(anchor_kernel::Phase::Waiting {
+                    waiter: anchor_kernel::Waiter::Human { .. }
+                })
+            ) {
+                (record.recovery, record.recovery_submissions) = owner.recovery_facts(run_id)?;
+            }
+            return Ok(Some(
+                RunView::from_kernel(record, lifecycle).with_kernel_frontier(&resource)?,
+            ));
         }
         Ok(self.store().load(run_id)?.map(RunView::owned))
     }
@@ -188,7 +200,7 @@ impl RunView<'_> {
         if !self.active || !matches!(self.phase(), super::RunPhase::Executing) {
             return active_nodes;
         }
-        if let Some(cursor) = &self.record.cursor {
+        if let Some(cursor) = self.cursor() {
             let waiting = self
                 .record
                 .snapshot

@@ -75,9 +75,6 @@ impl RunApplication {
         let mut record = GraphRunRecord::create_with_id(bundle.snapshot, input, run_id.clone())?;
         record.plugin_bindings = plugin_bindings;
         record.plugin_bindings_initialized = true;
-        if kernel_probe {
-            anchor_runtime::graph::scheduler::validate_probe(&record)?;
-        }
         // The admission observation and the durable reference are published
         // under one Library lease. Node dispatch resolves the current Plugin
         // again so an update can take effect at the next invocation.

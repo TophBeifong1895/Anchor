@@ -211,6 +211,9 @@ impl RunApplication {
         let Some(view) = self.read_channel_run(run)? else {
             return Ok(None);
         };
+        if let Some(cursor) = view.cursor().filter(|c| c.node_id == work_node) {
+            return Ok(Some(cursor.key.clone()));
+        }
         let progress = view.progress();
         let latest_result = progress
             .results

@@ -247,8 +247,7 @@ impl ServerHandler for McpBridge {
         {
             Err(error)
         } else {
-            let mut observation =
-                json!({"tool":tool_name,"arguments":tool_arguments,"result":null});
+            let mut observation = json!({"tool":tool_name,"arguments":tool_arguments,"result":null,"started_at":chrono::Utc::now().to_rfc3339()});
             if let Some(identity) = &identity {
                 observation["native_tool_call"] = json!({
                     "session": identity.session,

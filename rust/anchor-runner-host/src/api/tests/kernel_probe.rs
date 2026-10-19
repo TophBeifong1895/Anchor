@@ -5,6 +5,36 @@ use anchor_kernel::{Outcome, Phase};
 use anchor_runtime::graph::RunStore;
 
 #[tokio::test]
+async fn parallel_call_is_rejected_by_shared_admission_without_persisting_parent_or_child() {
+    let (root, state) = fixture();
+    let _env = PROCESS_ENV.lock().await;
+    set_host_env(root.path(), &state.data_root);
+    let definition = json!({"objective":"parallel call admission", "entry":"fan", "agents":{},
+        "ops":{"fan":{"fanout":{"join":"join"}},"call":{"call":{"graph":"child","mode":"wait"}},"work":{"run":"true"},"join":{"join":{}}},
+        "nodes":[{"id":"fan","op":"fan"},{"id":"nested-call","op":"call"},{"id":"work","op":"work"},{"id":"join","op":"join"}],
+        "edges":[{"from":"fan","to":"nested-call"},{"from":"fan","to":"work"},{"from":"nested-call","to":"join"},{"from":"work","to":"join"}]});
+    std::fs::write(state.bundle_root.join("graph.json"), definition.to_string()).unwrap();
+    let router = router(state.clone());
+    for body in [
+        json!({"graph":"fixture"}),
+        json!({"graph":"fixture","execution":"kernel_probe"}),
+    ] {
+        let (status, response) =
+            call(router.clone(), "POST", "/trigger", Some(&body.to_string())).await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{response}");
+        assert!(
+            response
+                .to_string()
+                .contains("Op.call node `nested-call` is unsupported inside a fanout/join region"),
+            "{response}"
+        );
+        assert!(state.application.records().unwrap().is_empty());
+        assert!(!state.data_root.join("run-metadata").exists());
+        assert!(!state.data_root.join("artifacts").exists());
+    }
+}
+
+#[tokio::test]
 async fn explicit_kernel_probe_runs_real_host_ops_and_projects_existing_queries() {
     let (root, state) = fixture();
     let _env = PROCESS_ENV.lock().await;

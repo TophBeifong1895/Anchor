@@ -18,17 +18,6 @@ pub const EXECUTOR_ID: &str = "kernel-probe/executor";
 pub const HOST_ID: &str = "kernel-probe/host";
 pub const OPERATOR_ID: &str = "kernel-probe/operator";
 
-pub fn validate_probe(record: &GraphRunRecord) -> Result<(), GraphError> {
-    for op in record.snapshot.ops.values() {
-        if op.get("host").is_some() {
-            return Err(GraphError::Unsupported(
-                "assistant host operations require a later slice".into(),
-            ));
-        }
-    }
-    Ok(())
-}
-
 pub fn kernel_error(error: anchor_kernel::KernelError) -> GraphError {
     GraphError::Io(io::Error::other(error.to_string()))
 }

@@ -25,7 +25,7 @@ impl RunView<'_> {
         let Some(source) = &metadata.assistant else {
             return Ok(None);
         };
-        let Some(cursor) = &self.record.cursor else {
+        let Some(cursor) = self.cursor() else {
             return Ok(None);
         };
         let mut binding = crate::assistant::binding(root, &cursor.key)?;
@@ -59,9 +59,7 @@ impl RunView<'_> {
             .flatten()
             .max_by_key(|result| result.sequence);
         let cursor_binding = self
-            .record
-            .cursor
-            .as_ref()
+            .cursor()
             .map(|cursor| crate::assistant::binding(root, &cursor.key))
             .transpose()?
             .flatten();

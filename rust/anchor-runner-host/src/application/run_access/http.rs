@@ -24,13 +24,14 @@ impl RunApplication {
         id: &str,
         workspace_root: &Path,
     ) -> Result<Value, RunHttpError> {
-        let record = self
-            .load_run(id)
+        let view = self
+            .read_run(id)
             .map_err(|error| match error {
                 ApplicationError::Storage(message) => RunHttpError::Internal(message),
                 error => RunHttpError::Application(error),
             })?
             .ok_or(RunHttpError::Missing)?;
+        let record = view.record.as_ref().clone();
         let updated = self.run_updated(id)?;
         let artifacts = HostArtifacts::new(
             self.data_root.join("artifacts"),
@@ -85,9 +86,8 @@ impl RunApplication {
             .iter()
             .map(|(key, decision)| (key.clone(), json!([decision.selected, decision.sequence])))
             .collect::<serde_json::Map<_, _>>();
-        let cursor = record
-            .cursor
-            .as_ref()
+        let cursor = view
+            .cursor()
             .map(|cursor| json!({"node":cursor.node_id,"pass":cursor.key.invocation,"dir":""}));
         let executed = record.executed_nodes();
         let mut traces = serde_json::Map::new();
@@ -97,7 +97,7 @@ impl RunApplication {
             .flatten()
             .map(|result| result.key.clone())
             .collect::<Vec<_>>();
-        if let Some(cursor) = &record.cursor {
+        if let Some(cursor) = view.cursor() {
             trace_keys.push(cursor.key.clone());
         }
         if let Some(parallel) = &record.parallel {
@@ -125,7 +125,7 @@ impl RunApplication {
         })?;
         if metadata.assistant.is_some()
             && let Some(policy) =
-                crate::assistant_plugins::latest_policy(&self.data_root, &record, &metadata)
+                crate::assistant_plugins::latest_policy(&self.data_root, &view, &metadata)
                     .map_err(RunHttpError::Internal)?
         {
             plugins.insert(
@@ -229,7 +229,7 @@ impl RunApplication {
                 .join(format!("{id}.json"))
                 .try_exists()
                 .map_err(|error| RunHttpError::Internal(error.to_string()))?;
-        let projection = self.project_run(&record, Some(&metadata)).await?;
+        let projection = self.project_run(&view, Some(&metadata)).await?;
         let definition = crate::application::run_projection::run_definition(&record.snapshot);
         Ok(
             json!({"session_call":metadata.session_call,"channel_reply":channel_reply,"graph":metadata.graph,"run":id,"attachments":metadata.attachments,"plugins":plugins,"definition":definition,"state":{"objective":record.snapshot.objective,"started":metadata.created,"updated":updated,"trigger":trigger,"input":record.input,"cursor":cursor,"passes":record.passes,"decided":decided,"nodes":nodes,"executed":executed,"skipped":[],"error":record.error.unwrap_or_default(),"parallel":record.parallel,"recovery":record.recovery},"calls":calls,"traces":traces,"nodes":record.snapshot.nodes.iter().map(|node|node.id.clone()).collect::<Vec<_>>(),"active":projection.active,"projection":projection}),

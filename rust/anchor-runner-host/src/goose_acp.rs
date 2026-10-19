@@ -13,6 +13,7 @@ mod trace;
 #[cfg(test)]
 pub(crate) use trace::LiveTrace;
 pub(crate) use trace::{live_notifications, trace_messages};
+mod recovery;
 mod session;
 mod transport;
 mod usage;

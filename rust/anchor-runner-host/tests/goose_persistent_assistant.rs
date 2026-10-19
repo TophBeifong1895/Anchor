@@ -74,13 +74,17 @@ fn host_for(definition: &Value) -> Host {
             node["plugins"] = json!(["wecom"]);
         }
     }
-    let host = Host::new(&definition)
+    let mut host = Host::new(&definition)
         .default_runtime()
         .with_extra_environment([
             ("ANCHOR_WECOM_GRAPH", "fixture".to_owned()),
             ("ANCHOR_WECOM_REPLY_NODE", "assistant".to_owned()),
             ("ANCHOR_WECOM_USERS", format!("{ALICE},{BOB}")),
         ]);
+    if module_path!().split("::").next() == Some("goose_kernel_persistent_assistant") {
+        host = host
+            .with_extra_environment([("ANCHOR_ASSISTANT_EXECUTION", "kernel_probe".to_owned())]);
+    }
     // Deployment routing settings do not enable a channel by themselves. Give
     // the real supervisor an isolated channel process; these tests submit HTTP
     // events directly and verify Run lifecycles, not external WeCom delivery.
@@ -235,6 +239,18 @@ fn snapshot_inventory(artifact: &Path) -> Value {
 }
 
 fn evidence(host: &Host, provider: &Provider, run: &str, checks: Value) {
+    if module_path!().split("::").next() == Some("goose_kernel_persistent_assistant") {
+        use anchor_kernel::Store;
+        let root = host.base.root.path().join("state");
+        let store = anchor_kernel::FileStore::new(root.join("kernel-runs")).unwrap();
+        assert!(
+            store
+                .load(&anchor_runtime::graph::validator::run_resource_id(run))
+                .unwrap()
+                .is_some()
+        );
+        assert!(!root.join("runs").join(format!("{run}.json")).exists());
+    }
     provider.assert_consumed();
     let saved = host.record(run);
     let results = saved["results"]["assistant"].as_array().unwrap();
@@ -350,6 +366,21 @@ fn stop(server: &HttpHost, provider: &Provider, run: &str) -> Value {
 }
 
 fn runs(host: &Host) -> Vec<Value> {
+    let kernel = host.base.root.path().join("state/kernel-runs");
+    if kernel.exists() {
+        use anchor_kernel::Store;
+        let store = anchor_kernel::FileStore::new(kernel).unwrap();
+        return store
+            .list("")
+            .unwrap()
+            .iter()
+            .filter_map(|id| {
+                let resource = store.load(id).unwrap()?;
+                let run = resource.state["run_id"].as_str()?;
+                Some(host.record(run))
+            })
+            .collect();
+    }
     fs::read_dir(host.base.root.path().join("state/runs"))
         .unwrap()
         .map(Result::unwrap)

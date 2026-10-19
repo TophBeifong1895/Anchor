@@ -212,13 +212,16 @@ impl NodeExecutionPort for HostNodes {
     }
     fn record_recovery_decision(
         &self,
-        _key: &InvocationKey,
-        _attempt_id: i64,
-        _decision: RecoveryDecision,
+        key: &InvocationKey,
+        attempt_id: i64,
+        decision: RecoveryDecision,
     ) -> Result<(), GraphError> {
-        Err(GraphError::Unsupported(
-            "legacy Agent recovery is disabled in the standard Goose Host".into(),
-        ))
+        self.goose_nodes
+            .as_ref()
+            .ok_or_else(|| {
+                GraphError::CorruptRun("native recovery backend is not configured".into())
+            })?
+            .record_recovery_decision(key, attempt_id, decision)
     }
     fn observed_plugin_views(&self, key: &InvocationKey) -> BTreeMap<String, String> {
         self.io_resolver.observed_plugin_views(key)
@@ -232,6 +235,33 @@ impl NodeExecutionPort for HostNodes {
     ) -> Pin<
         Box<dyn std::future::Future<Output = Result<NodeExecutionOutcome, GraphError>> + Send + 'a>,
     > {
+        let kernel_owned = match self
+            .io_resolver
+            .run_application
+            .get()
+            .map(|app| app.kernel_owner(&request.key.run_id))
+            .transpose()
+        {
+            Ok(owner) => owner.flatten().is_some(),
+            Err(error) => {
+                return Box::pin(async move {
+                    Err(GraphError::CorruptRun(format!(
+                        "Run ownership unavailable: {error:?}"
+                    )))
+                });
+            }
+        };
+        if kernel_owned && let Some(nodes) = &self.goose_nodes {
+            match nodes.pending_recovery(&request.key) {
+                Ok(attempts) if !attempts.is_empty() => {
+                    return Box::pin(async move {
+                        Ok(NodeExecutionOutcome::WaitingRecovery { attempts })
+                    });
+                }
+                Err(error) => return Box::pin(async move { Err(error) }),
+                _ => {}
+            }
+        }
         if request.kind == NodeKind::OpHost {
             return Box::pin(self.execute_host_operation(request));
         }

@@ -228,6 +228,14 @@ impl HostNodes {
         match operation {
             assistant::WAIT_INPUT if request.key.node_id == source.wait_node => {
                 let signal = assistant::signal(&source.session);
+                let kernel_pause = self
+                    .io_resolver
+                    .run_application
+                    .get()
+                    .map(|app| app.kernel_wait_pause(&request.key.run_id))
+                    .transpose()
+                    .map_err(|error| graph_error(format!("pause event unavailable: {error:?}")))?
+                    .flatten();
                 loop {
                     let notified = signal.notified();
                     tokio::pin!(notified);
@@ -342,6 +350,12 @@ impl HostNodes {
                         );
                     }
                     tokio::select! {
+                        _ = async {
+                            match &kernel_pause {
+                                Some(signal) => signal.notified().await,
+                                None => std::future::pending().await,
+                            }
+                        } => return Ok(NodeExecutionOutcome::Suspended),
                         _ = notified => {},
                         _ = tokio::time::sleep(Duration::from_millis(250)) => {},
                     }

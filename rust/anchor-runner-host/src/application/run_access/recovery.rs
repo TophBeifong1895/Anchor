@@ -125,11 +125,6 @@ impl RunApplication {
         attempt_id: i64,
         decision: RecoveryDecision,
     ) -> Result<(), ApplicationError> {
-        if self.kernel_owner(run_id)?.is_some() {
-            return Err(ApplicationError::Conflict(
-                "Kernel attempt recovery decisions are Unsupported; inspect the execution backend before resume, or abandon".into(),
-            ));
-        }
         if self
             .metadata(run_id)?
             .is_some_and(|metadata| metadata.session_call.is_some())
@@ -142,6 +137,32 @@ impl RunApplication {
             return Err(ApplicationError::Invalid(
                 "node_id, invocation, and positive attempt_id are required".into(),
             ));
+        }
+        if let Some(runs) = self.kernel_owner(run_id)? {
+            self.reject_superseded_conversation_execution(run_id)?;
+            let resource = runs.load(run_id)?.ok_or(ApplicationError::Missing)?;
+            let record = super::kernel_runs::KernelRuns::record(&resource)?;
+            let metadata = self.metadata(run_id)?.ok_or(ApplicationError::Missing)?;
+            super::validate_control_identity(&record, &metadata)?;
+            let active = self.active.lock().await;
+            self.check_execution_scope(&metadata, &active)?;
+            let key = InvocationKey {
+                run_id: run_id.into(),
+                graph_digest: record.graph_digest.clone(),
+                node_id: node_id.into(),
+                invocation,
+            };
+            let control = new_control();
+            let execution = self.prepare_resume(&record, &metadata, control.clone())?;
+            let drive = runs.recover_attempt(&key, attempt_id, decision.clone(), || {
+                execution
+                    .record_recovery_decision(&key, attempt_id, decision)
+                    .map_err(|e| anchor_runtime::graph::GraphError::CorruptRun(e.to_string()))
+            })?;
+            if drive {
+                self.spawn_kernel(record, execution, control)?;
+            }
+            return Ok(());
         }
         if self.abandon_intent(run_id)?.is_some() {
             // A recorded abandon request is one-way: a recovery decision must

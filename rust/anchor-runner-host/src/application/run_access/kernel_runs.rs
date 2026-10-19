@@ -9,7 +9,6 @@ use anchor_runtime::graph::{ArtifactPort, GraphError, GraphRunRecord, NodeExecut
 use anchor_runtime::graph::{
     scheduler::{
         EXECUTOR_ID, HOST_ID, KernelScheduler, OPERATOR_ID, kernel_error, submit_with_retry,
-        validate_probe,
     },
     validator::{GRAPH_VALIDATOR, GraphValidator, record_of, run_resource, run_resource_id},
 };
@@ -24,10 +23,12 @@ pub(super) mod deletion;
 mod pause;
 #[path = "kernel_probe.rs"]
 mod probe;
+mod recovery;
 
 struct KernelExecution {
     cancellation: anchor_runtime::Cancellation,
     pause: tokio::sync::mpsc::UnboundedSender<()>,
+    wait_pause: Arc<tokio::sync::Notify>,
 }
 
 struct ProbeAuthority;
@@ -137,7 +138,7 @@ impl KernelRuns {
         record: &GraphRunRecord,
         budget: u64,
     ) -> Result<(), ApplicationError> {
-        validate_probe(record)?;
+        crate::reject_snapshot(&record.snapshot).map_err(ApplicationError::Invalid)?;
         let _active = self.active.lock().unwrap();
         self.ensure_not_deleting(&record.run_id)?;
         self.kernel
@@ -162,6 +163,7 @@ impl KernelRuns {
         cancellation: anchor_runtime::Cancellation,
     ) -> Result<Resource, GraphError> {
         let (pause, requests) = tokio::sync::mpsc::unbounded_channel();
+        let wait_pause = Arc::new(tokio::sync::Notify::new());
         {
             let mut active = self.active.lock().unwrap();
             if active.contains_key(id) {
@@ -182,12 +184,14 @@ impl KernelRuns {
             }
             if self.pause_pending(id)? {
                 pause.send(()).expect("new pause receiver");
+                wait_pause.notify_one();
             }
             active.insert(
                 id.to_owned(),
                 KernelExecution {
                     cancellation: cancellation.clone(),
                     pause,
+                    wait_pause,
                 },
             );
         }
@@ -376,6 +380,19 @@ use anchor_runtime::graph::RunStore;
 mod tests;
 
 impl RunApplication {
+    /// An idle Session wait can suspend on a pause event without cancelling
+    /// work or polling a second Run state. The dispatch boundary owns stop.
+    pub(crate) fn kernel_wait_pause(
+        &self,
+        id: &str,
+    ) -> Result<Option<Arc<tokio::sync::Notify>>, ApplicationError> {
+        let Some(runs) = self.kernel_owner(id)? else {
+            return Ok(None);
+        };
+        let active = runs.active.lock().unwrap();
+        Ok(active.get(id).map(|execution| execution.wait_pause.clone()))
+    }
+
     pub(crate) fn spawn_kernel(
         &self,
         record: GraphRunRecord,
@@ -392,6 +409,14 @@ impl RunApplication {
                 .await
             {
                 eprintln!("Kernel probe {} suspended: {error}", record.run_id);
+            }
+            if let Err(error) = application
+                .settle_channel_run(&record.run_id, anchor_runtime::graph::RunStatus::Stopped)
+            {
+                eprintln!(
+                    "Kernel channel {} settlement failed: {error:?}",
+                    record.run_id
+                );
             }
             // A child can settle while its parent worker is releasing the
             // active slot. Recheck the durable wait once after that release.
@@ -427,15 +452,16 @@ impl RunApplication {
         let resource = runs.load(id)?.ok_or(ApplicationError::Missing)?;
         let record = KernelRuns::record(&resource)?;
         let metadata = self.metadata(id)?.ok_or(ApplicationError::Missing)?;
+        let active = self.active.lock().await;
+        self.check_execution_scope(&metadata, &active)?;
+        if !runs.recovery_facts(id)?.0.is_empty() {
+            return Err(ApplicationError::Conflict(
+                "record a recovery observation or abandon before resuming an unknown effect".into(),
+            ));
+        }
         let control = super::new_control();
-        let execution = crate::execution::PreparedExecution::prepare_with_catalog(
-            &record,
-            control.clone(),
-            record.plugin_bindings.clone(),
-            self.catalog_root.clone(),
-            self.clone(),
-        )
-        .map_err(ApplicationError::Invalid)?;
+        self.reject_superseded_conversation_execution(id)?;
+        let execution = self.prepare_resume(&record, &metadata, control.clone())?;
         execution
             .bind_local_inputs(&record, &metadata.graph)
             .map_err(ApplicationError::Invalid)?;

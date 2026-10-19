@@ -91,6 +91,8 @@ pub(crate) struct RunView<'record> {
     session_coordinated: bool,
     lifecycle: run_view::RunView,
     kernel_owned: bool,
+    // Read-only validator dispatch, never a saved execution cursor.
+    kernel_cursor: Option<anchor_runtime::graph::RunCursor>,
 }
 
 impl<'record> RunView<'record> {
@@ -107,6 +109,7 @@ impl<'record> RunView<'record> {
             session_coordinated,
             lifecycle: legacy_run_view::view(record, active),
             kernel_owned: false,
+            kernel_cursor: None,
         }
     }
 
@@ -161,6 +164,7 @@ impl<'record> RunView<'record> {
             session_coordinated: false,
             lifecycle,
             kernel_owned: true,
+            kernel_cursor: None,
         }
     }
     pub(super) fn owned(record: GraphRunRecord) -> RunView<'static> {
@@ -172,11 +176,39 @@ impl<'record> RunView<'record> {
             session_coordinated: false,
             lifecycle,
             kernel_owned: false,
+            kernel_cursor: None,
         }
     }
 
     pub(crate) fn active(&self) -> bool {
         self.active
+    }
+
+    fn cursor(&self) -> Option<&anchor_runtime::graph::RunCursor> {
+        self.kernel_cursor.as_ref().or(self.record.cursor.as_ref())
+    }
+
+    fn with_kernel_frontier(
+        mut self,
+        resource: &anchor_kernel::Resource,
+    ) -> Result<Self, anchor_runtime::graph::GraphError> {
+        if !resource.is_settled() && self.record.parallel.is_none() {
+            self.kernel_cursor =
+                anchor_runtime::graph::validator::GraphValidator::frontier(resource)?
+                    .first()
+                    .map(|dispatch| anchor_runtime::graph::RunCursor {
+                        node_id: dispatch.node.id.clone(),
+                        key: anchor_runtime::graph::InvocationKey {
+                            run_id: self.record.run_id.clone(),
+                            graph_digest: self.record.graph_digest.clone(),
+                            node_id: dispatch.node.id.clone(),
+                            invocation: dispatch.invocation,
+                        },
+                        input_commits: dispatch.inputs.clone(),
+                        prepared_input: serde_json::Value::Null,
+                    });
+        }
+        Ok(self)
     }
 
     #[allow(
@@ -236,7 +268,9 @@ impl<'record> RunView<'record> {
         self.lifecycle.actions().stop
     }
     pub(crate) fn can_resume(&self) -> bool {
-        self.lifecycle.actions().resume && !self.session_coordinated
+        self.lifecycle.actions().resume
+            && !self.session_coordinated
+            && !(self.kernel_owned && self.has_pending_recovery())
     }
     pub(crate) fn has_stopped_execution(&self) -> bool {
         if self.is_settled() {
@@ -305,7 +339,8 @@ impl<'record> RunView<'record> {
     }
 
     pub(crate) fn has_pending_recovery(&self) -> bool {
-        self.record.status == RunStatus::WaitingRecovery && !self.record.recovery.is_empty()
+        (self.kernel_owned || self.record.status == RunStatus::WaitingRecovery)
+            && !self.record.recovery.is_empty()
     }
 
     pub(crate) fn occupies_conversation_execution(&self) -> bool {
@@ -332,6 +367,7 @@ impl<'view> From<&'view RunView<'_>> for RunView<'view> {
             session_coordinated: view.session_coordinated,
             lifecycle: view.lifecycle.clone(),
             kernel_owned: view.kernel_owned,
+            kernel_cursor: view.kernel_cursor.clone(),
         }
     }
 }

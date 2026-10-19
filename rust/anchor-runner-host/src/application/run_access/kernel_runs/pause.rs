@@ -118,6 +118,7 @@ impl KernelRuns {
             .pause
             .send(())
             .map_err(|_| ApplicationError::Conflict("Kernel execution has ended".into()))?;
+        execution.wait_pause.notify_one();
         Ok(())
     }
 }

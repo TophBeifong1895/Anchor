@@ -72,6 +72,12 @@ impl RunApplication {
         metadata: Option<&RunMetadata>,
     ) -> Result<RunProjection, ApplicationError> {
         let supplied = record.into();
+        let supplied = if self.kernel_owner(&supplied.record.run_id)?.is_some() {
+            self.read_run(&supplied.record.run_id)?
+                .ok_or(ApplicationError::Missing)?
+        } else {
+            supplied
+        };
         let record = supplied.record.as_ref();
         let mut view = self.read_view(record, self.run_is_active(&record.run_id).await)?;
         view.updated = self.run_updated(&record.run_id)?;
@@ -82,6 +88,7 @@ impl RunApplication {
             session_coordinated: metadata.is_some_and(|m| m.session_call.is_some()),
             lifecycle: view.clone(),
             kernel_owned: supplied.kernel_owned,
+            kernel_cursor: supplied.kernel_cursor.clone(),
         };
         let mut projection = RunProjection::from_view(&view);
         projection.actions.pause = observed.can_pause();
