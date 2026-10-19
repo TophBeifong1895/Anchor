@@ -1170,4 +1170,4 @@ M2 的最终命令、原样 Goose target 结果、失败与复跑、规则清单
 | docs/pilot-development-plan.md | 保留 master 的原子发布、网关确定性回归与 F1/F2 审查结论；保留本分支 M2 当前验收入口，上游统计仍绑定各自证据。 |
 | rust/anchor-runner-host/src/goose_acp/trace.rs | 使用 master 的共享 write_durable 原子发布，移除重复 writer；保留 master 两项交错/连续读写回归及本分支单快照回归。旧单快照夹具先显式设置 0600 再替换，以验证权限保留；既有权限断言不变，首次创建权限遵循 master 的 umask 契约。 |
 
-main.rs 与 goose_acp.rs 自动合并；恢复模块和助手接入均保留。最终验证另见 M2 交回，不把合并前结果作为最终树通过。
+main.rs 与 goose_acp.rs 自动合并；恢复模块和助手接入均保留。最终合并树 workspace 130 个 target，2,139 / 0 / 136；固定 Goose 完整串行 ignored 133 / 0 / 0，含 Kernel 助手 12 项和人工恢复 1 项；严格 clippy/fmt、sandbox 构建通过。Web 311 项与 build 在合并前通过，合并未改 Web 源码。原样结果、失败与中止登记见 M2 交回。

@@ -2,7 +2,20 @@
 
 M2 完成 Host 准入范围内的 Kernel 路径能力补齐；默认仍用旧 Runner，M3 未开始。并行分支 Op.call 按 §10.12 复用共用产品准入拒绝，不扩展校验器。常驻助手、预算、未知效果人工决定及删除/Call/Probe 全部在现有 Run 门面后接通。Trace 并发读取机制已复现，原子发布修复前同一回归 5/5 失败，恢复修复后通过；原首轮 500 瞬时字节未保存，见 [根因确认](trace-publication.md)。
 
-里程碑：M2。比较基线为 §10.11 合并提交 `490c000`；前序切片 `0859373`（FileStore）、`da708cb`（Host 删除）、`5293e65`（Probe）、`2582528`（串行 Call）纳入本次验收。新增提交：`25b2990 feat(runtime): handle assistant yields and execution stops in Kernel scheduler`；其余见本报告所在提交及工作记录。
+里程碑：M2。比较基线为 §10.11 合并提交 490c000。前序切片一并验收：FileStore、Host 删除、Probe 与串行 Call；本轮新增 Runtime/Host 补齐，并同步 master cc919d1。
+
+commit 列表（实现与交回）：
+
+- 0859373 feat(kernel): add atomic recoverable FileStore removal（此前批准的 C1 基线）
+- da708cb feat(host): delete Kernel Runs through the Run access facade
+- 5293e65 feat(host): project Kernel measurement points as disposable JSONL
+- 2582528 feat(host): execute serial Graph calls through Kernel-owned Runs
+- 25b2990 feat(runtime): handle assistant yields and execution stops in Kernel scheduler
+- 7752d7c feat(host): complete Kernel assistant and human recovery operations
+- 4f1fc03 docs(runtime): record M2 evidence pending final master validation
+- 523dba4 Merge branch master into constitution-core（第二父提交 cc919d1，含 d042ebe、dc88484）
+
+最终证据提交为本报告所在提交；不重复计入上游 F1/F2 历史提交。
 
 ## 行为与证据
 
@@ -16,7 +29,44 @@ M2 完成 Host 准入范围内的 Kernel 路径能力补齐；默认仍用旧 Ru
 
 完整命令、每 target 原样结果和输出摘要 SHA256 见 [completion-checks.json](completion-checks.json)。原始日志与 Goose 场景产物位于 `/tmp/anchor-m2/section-10-12/`，不提交原始 `.log`。Goose 使用固定摘要 `17e065a79cb0508413af714724aed51d6b76972dda9feebdda701330134fb640`，配置 local network、同次构建 relay、rustup/toolchain 和冻结的 Host binary 摘要；实际经过真实 Goose ACP、Host 与授权工具，仅模型传输为本地确定性 Provider。
 
-合并前源码验证：workspace 2,135 / 0 / 136；Web 311 / 0，build 通过；严格 workspace/all-targets clippy 和 fmt 通过。合并前 Goose 完整运行在 master 新增修复后主动停止；不将部分结果算作完整通过。最终结果待同步 master 后补齐。
+最终合并树 workspace 为 2,139 / 0 / 136，严格 workspace/all-targets clippy、fmt、sandbox 构建通过；Web 311 / 0、build 通过（合并前执行，master 同步未改 Web 源码）。固定 Goose 完整串行 ignored 为 133 / 0 / 0，无失败豁免；其中 Kernel 助手 12 / 0 / 0，Kernel 人工恢复 1 / 0 / 0。相对 §10.11 的 2,113 / 0 / 123，普通通过数增加 26，忽略数增加 13；其中 master 原子 writer 4 项、本轮 Runtime 6 项/Host 4 项、两个新 target 各重复执行共用 helper 6 项；重复 helper 不算新增业务场景。
+
+123 份标准场景报告通过既有严格校验，8 份接口/补集证据独立登记，无校验失败。真实模型请求 0；两个助手 target 复用相同场景名，唯一性按实际测试进程核查，未删除或覆盖报告。证据路径与摘要见 completion-checks.json。
+
+完整 Goose 各实际选中 target 的原样汇总（0 选中 target 仍完整保留在 JSON）：
+
+| Target | 原样结果 |
+| --- | --- |
+| unittests src/main.rs | test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 1016 filtered out; finished in 31.88s |
+| tests/goose_acp.rs | test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 8 filtered out; finished in 177.04s |
+| tests/goose_channel.rs | test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 50.87s |
+| tests/goose_compaction.rs | test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 54.30s |
+| tests/goose_completion.rs | test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 107.30s |
+| tests/goose_conversation.rs | test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 171.13s |
+| tests/goose_development_environment.rs | test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 24.57s |
+| tests/goose_distribution.rs | test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 90.82s |
+| tests/goose_elicitation.rs | test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 110.38s |
+| tests/goose_kernel_persistent_assistant.rs | test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 191.71s |
+| tests/goose_kernel_recovery.rs | test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 27.33s |
+| tests/goose_library.rs | test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 12.59s |
+| tests/goose_media.rs | test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 81.62s |
+| tests/goose_model_settings.rs | test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 24.64s |
+| tests/goose_native_activation_spike.rs | test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 2.64s |
+| tests/goose_persistent_assistant.rs | test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 188.65s |
+| tests/goose_pilot.rs | test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 23.93s |
+| tests/goose_pilot_attachments.rs | test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 31.46s |
+| tests/goose_pilot_authoring.rs | test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 52.69s |
+| tests/goose_pilot_compaction.rs | test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 41.62s |
+| tests/goose_plugin_configuration.rs | test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 60.08s |
+| tests/goose_plugin_disclosure.rs | test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 13.06s |
+| tests/goose_plugin_mcp.rs | test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 45.58s |
+| tests/goose_plugin_summary.rs | test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 26.70s |
+| tests/goose_plugin_turns.rs | test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 108.87s |
+| tests/goose_provider_errors.rs | test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 58.66s |
+| tests/goose_responses.rs | test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 26.95s |
+| tests/goose_session_calls.rs | test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 67.96s |
+| tests/goose_trace.rs | test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 25.11s |
+| tests/native_plugins.rs | test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 61.37s |
 
 ## 对照与测量
 
@@ -32,6 +82,6 @@ Probe 的真实 Host/Kernel fixture 样本与按校验器、身份、动作、�
 
 S 候选 0；既有业务断言放宽 0、删除测试 0、旧测试新增 ignore 0，均在 [工作记录](../../../docs/constitution-refactor-log.md#m2-1012门面后能力补齐与交回) 登记。旧助手断言原样 include，新 fixture 的 cursor/prepare passes 仅为测试兼容投影，绝不写回持久事实。C2 棘轮和删除行数属于 M3 之后，本轮不报虚假清零。
 
-停止条件未触发。并行 Call 的先前疑点已由 §10.12 裁定，内核未再修改。收尾发现 master 已推进到 cc919d1（原子发布与网关确定性时序修复）；正同步该提交并执行最终回归，不 rebase。
+停止条件未触发。并行 Call 的先前疑点已由 §10.12 裁定，内核未再修改。收尾发现 master 已推进到 cc919d1（原子发布与网关确定性时序修复）；已通过合并提交 523dba4 同步该提交，不 rebase。两处冲突已逐文件登记在工作记录：验收文档保留双方结论，trace writer 使用 master 共享原子发布，双方回归均保留。
 
 需要审查方决定：是否继续 M3。默认切换与删除旧 Runner、§10.5 Session 单写入者检验、生产数据离线迁移、W4、真实模型 Provider、外部渠道与部署未实施或未新增验收。固定 Goose + 本地 Provider 的通过不等于真实模型业务验收。
