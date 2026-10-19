@@ -4,12 +4,12 @@
 
 ## 安装与本地启动
 
-需要 Linux x86_64、Git、Bubblewrap、Rust stable（通过 rustup 安装），以及 Node.js 20.19+ 或 22.12+。构建固定 Goose 还需要 C 编译工具、curl、patch、rsync、binutils、util-linux 和 coreutils。沙箱需要可用的 user/mount/network namespace；脚本会先实际探测，失败时停止并提示，不使用共享宿主网络绕过。模型调用和 Plugin 网络权限分别配置。
+需要 Linux x86_64、Git、Bubblewrap、slirp4netns、Rust stable（通过 rustup 安装），以及 Node.js 20.19+ 或 22.12+。构建固定 Goose 还需要 C 编译工具、curl、patch、rsync、binutils、util-linux 和 coreutils。沙箱需要可用的 user/mount/network namespace；脚本会先实际探测，失败时停止并提示，不使用共享宿主网络绕过。模型调用和 Plugin 网络权限分别配置。
 
 Debian/Ubuntu 可先安装系统工具：
 
 ```sh
-sudo apt-get install build-essential curl git bubblewrap patch rsync binutils util-linux
+sudo apt-get install build-essential curl git bubblewrap slirp4netns patch rsync binutils util-linux
 ```
 
 Rust/rustup 和符合上述版本的 Node.js/npm 需预先安装。启动脚本不会自动使用 sudo 或修改系统的 namespace 策略。
@@ -20,7 +20,7 @@ cd Anchor
 ./scripts/dev.sh start
 ```
 
-启动后打开 <http://127.0.0.1:5173>，先在「设置 → 模型服务」保存 default Flash，再回到 Pilot 对话。Vite 将 API 请求转发到 <http://127.0.0.1:8077> 的 Rust Host；Host 也提供已构建的 WebUI。脚本使用 `.local/rust`，分别保存 catalog、state、workspace 和 Library；默认从可编辑的空 catalog 启动，不创建占位 Graph、不调用模型。首次 `start` 自动执行锁定的 `npm ci`、增量构建 debug Host/relay、准备 `.local/bin/goose` 并构建缺少或已更新的 Web 资产。Goose 配方自动安装固定工具链的 musl target 和已校验的交叉编译器；首次需要联网，后续复用产物；Goose 版本、补丁或配方变动时才重新准备。`setup` 执行相同准备但不启动服务；`status`/`stop` 不下载或构建。缺少系统工具时提示具体缺项；源码构建成功后使用本机产物，不检查跨机器固定二进制摘要。
+启动后打开 <http://127.0.0.1:5173>，先在「设置 → 模型服务」保存 default Flash，再回到 Pilot 对话。Vite 将 API 请求转发到 <http://127.0.0.1:8077> 的 Rust Host；Host 也提供已构建的 WebUI。脚本使用 `.local/rust`，分别保存 catalog、state、workspace 和 Library；首次向可编辑 catalog 导入 8 张现有示例图，向 Library 安装 5 个官方 Plugin 及本地工具；不自动运行 Graph、调用模型或启用渠道。首次 `start` 自动执行锁定的 `npm ci`、增量构建 debug Host/relay、准备 `.local/bin/goose` 并构建缺少或已更新的 Web 资产。Goose 配方自动安装固定工具链的 musl target 和已校验的交叉编译器；首次需要联网，后续复用产物；Goose 版本、补丁或配方变动时才重新准备。`setup` 准备依赖和插件但不启动服务，示例 Graph 在 Host 启动后导入；`status`/`stop` 不下载或构建。缺少系统工具时提示具体缺项；源码构建成功后使用本机产物，不检查跨机器固定二进制摘要。
 
 默认使用 `rust/target/debug`（或 `CARGO_TARGET_DIR/debug`），不自动选取旧 release 产物；指定自定义 Host/relay 时要求路径已经可执行。拉取更新或修改代码后执行 `./scripts/dev.sh restart`，脚本完成增量构建和必要的 Web 资产更新。开发脚本和 Vite 均不加载 `.env`；旧文件存在也不会执行其中内容。可选的路径、端口等覆盖只取显式进程设置，见 [脚本](../scripts/dev.sh) 和下方部署参数。
 
@@ -30,6 +30,14 @@ cd Anchor
 ```
 
 只操作脚本持有的 PID；启动前检查端口与当前运行任务。重启会中断活动节点，之后应查看持久记录并继续。现有 `.local/demo`、旧环境和运行历史不会被自动迁移或清理。
+
+## 附带的 Graph 与 Plugin
+
+源码启动后，工作流列表中可直接打开 `call-report`、`call-worker`、`revise-loop`、`parallel-audit`、`plugin-research`、`deep-academic-research`、`wecom-assistant` 和 `wecom-persistent-assistant`。建议先运行 `call-report`，输入 `{"report_code":"DEMO-001"}`；它仅使用 Op 和子工作流，无需模型。保存 default Flash 后可尝试写作或调研图。
+
+插件库已安装联网、学术调研、Docmost、企微和 Anchor 管家。Docmost、企微的服务配置仍在网页按需填写；首次安装不会自动连接账号或启用监听。图与插件的用途、配置条件及其他示例见[上手示例](../examples/README.md)。
+
+导入只在首次执行：同名内容不覆盖，后续源码更新/重启也保留用户修改和删除。显式指定 entry bundle、自定义 Host 或外部服务不自动导入。这是源码启动行为，完整平台发行包仍按自己的清单交付。
 
 ## 模型与 Goose
 

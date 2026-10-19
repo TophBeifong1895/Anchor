@@ -90,7 +90,7 @@ Goose 拥有 Agent loop、Provider、原生会话和上下文压缩；Anchor 拥
 | Linux x86_64 | 需要 | 需要，并满足包内二进制的系统兼容要求 |
 | Rust stable、`rustup` | 构建 Rust 和固定 Goose 时需要 | 不需要 |
 | Node.js、npm | 构建 WebUI、运行 Vite 时需要；Node.js 20.19+ 或 22.12+ | 不需要；Rust Host 直接提供编译后的 WebUI |
-| Git、`sh`、Bubblewrap | 需要，沙箱须有可用的 user/mount/network namespace | 同样需要 |
+| Git、`sh`、Bubblewrap、slirp4netns | 需要，沙箱须有可用的 user/mount/network namespace | 同样需要 |
 | Goose ACP 二进制 | 首次启动自动构建固定版本与仓库补丁，使用本机产物 | 发行包已包含 `bin/goose` |
 | 系统动态库 | 满足所构建 ELF 的依赖 | 按 `runtime-manifest.json` 中 Host 和工具的 ELF 依赖准备 |
 | 模型与外部服务配置 | 运行相应 Agent/Plugin 时需要 | 同样需要；凭据和状态放在包外 |
@@ -114,6 +114,8 @@ cd Anchor
 首次启动自动下载依赖并编译 Host、WebUI 与 Goose，通常需要几分钟，耗时取决于机器和网络；后续启动复用 Goose/前端依赖并对 Host 做增量构建。系统依赖与故障提示见[使用指南](docs/usage.md#安装与本地启动)。只准备依赖而不启动服务可执行 `./scripts/dev.sh setup`。
 
 打开 <http://127.0.0.1:5173>，在「设置 → 模型服务」保存 default 的服务地址、协议、API key 和 Flash 模型名，再返回 Pilot 对话。无需 `.env`，不用手动安装 Goose 或填写二进制摘要。也可打开 <http://127.0.0.1:8077> 使用 Rust Host 提供的 WebUI/API。`scripts/dev.sh` 使用独立的 `.local/rust` 数据根，不会接管仓库里已有的 Graph、运行记录或环境。
+
+首次启动会在 WebUI 提供 **8 张示例 Graph 和 5 个官方 Plugin**，包括工作流调用、写作反馈、并行审查、学术调研和企微模板。建议先运行无需模型的 `call-report`，再配置模型尝试 `plugin-research`。Docmost 和企微按需在网页配置，默认不启用监听。已有同名内容、用户修改和删除会保留；完整清单见[上手示例](examples/README.md)。
 
 停止或重启服务：
 

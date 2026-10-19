@@ -63,9 +63,27 @@ impl SourceCheckout {
             include_bytes!("../../../scripts/dev.sh"),
         )
         .unwrap();
+        fs::write(
+            root.path().join("scripts/dev-examples.mjs"),
+            include_bytes!("../../../scripts/dev-examples.mjs"),
+        )
+        .unwrap();
+        fs::create_dir_all(root.path().join("examples")).unwrap();
+        fs::write(
+            root.path().join("examples/starter.json"),
+            r#"{"plugins":{"anchor-steward":[]},"graphs":[]}"#,
+        )
+        .unwrap();
+        fs::create_dir_all(root.path().join("plugins/anchor-steward")).unwrap();
+        fs::write(
+            root.path().join("plugins/anchor-steward/plugin.json"),
+            r#"{"name":"Starter fixture"}"#,
+        )
+        .unwrap();
         fs::write(root.path().join("apps/web/package.json"), "{}").unwrap();
         fs::write(root.path().join("apps/web/package-lock.json"), "{}").unwrap();
         executable(&tools.join("bwrap"), "#!/bin/sh\nexit 0\n");
+        executable(&tools.join("slirp4netns"), "#!/bin/sh\nexit 0\n");
         executable(
             &tools.join("cargo"),
             r#"#!/bin/sh
@@ -75,6 +93,12 @@ for tool in anchor-runner-host anchor-net-relay; do
   printf '#!/bin/sh\nexit 0\n' > "$CARGO_TARGET_DIR/debug/$tool"
   chmod +x "$CARGO_TARGET_DIR/debug/$tool"
 done
+cat > "$CARGO_TARGET_DIR/debug/anchor-library" <<'INSTALL'
+#!/bin/sh
+mkdir -p "$2/plugins/$7"
+cp -R "$5/." "$2/plugins/$7/"
+INSTALL
+chmod +x "$CARGO_TARGET_DIR/debug/anchor-library"
 "#,
         );
         executable(
@@ -144,7 +168,7 @@ fn fresh_source_setup_prepares_web_host_relay_and_goose_and_reuses_them() {
     let first = checkout.log();
     assert!(first.contains("npm --prefix"));
     assert!(first.contains(" ci\n"));
-    assert!(first.contains("-p anchor-runner-host --bins --locked"));
+    assert!(first.contains("-p anchor-runner-host -p anchor-sandbox-bwrap --bins --locked"));
     assert!(first.contains("goose build"));
     assert!(first.contains("run build"));
     assert!(checkout.root.path().join(".local/bin/goose").is_file());
@@ -171,7 +195,7 @@ fn fresh_source_setup_prepares_web_host_relay_and_goose_and_reuses_them() {
     );
     assert_eq!(
         second.matches("cargo ").count(),
-        2,
+        3,
         "Cargo checks source updates incrementally"
     );
     // A missing relay is repaired even when the Host already exists.
@@ -184,7 +208,7 @@ fn fresh_source_setup_prepares_web_host_relay_and_goose_and_reuses_them() {
     .unwrap();
     let output = checkout.run("setup", &[]);
     assert!(output.status.success(), "{output:?}");
-    assert_eq!(checkout.log().matches("cargo ").count(), 3);
+    assert_eq!(checkout.log().matches("cargo ").count(), 4);
     // Updating the dependency lock invalidates the install stamp.
     fs::write(
         checkout.root.path().join("apps/web/package-lock.json"),
@@ -194,6 +218,41 @@ fn fresh_source_setup_prepares_web_host_relay_and_goose_and_reuses_them() {
     let output = checkout.run("setup", &[]);
     assert!(output.status.success(), "{output:?}");
     assert_eq!(checkout.log().matches(" ci\n").count(), 2);
+}
+
+#[test]
+fn source_examples_preserve_plugin_edits_and_do_not_restore_deletions() {
+    let checkout = SourceCheckout::new();
+    let plugin = checkout
+        .root
+        .path()
+        .join(".local/rust/library/plugins/anchor-steward");
+    fs::create_dir_all(&plugin).unwrap();
+    fs::write(
+        plugin.join("plugin.json"),
+        r#"{"name":"Pre-existing plugin"}"#,
+    )
+    .unwrap();
+    let output = checkout.run("setup", &[]);
+    assert!(output.status.success(), "{output:?}");
+    assert!(
+        fs::read_to_string(plugin.join("plugin.json"))
+            .unwrap()
+            .contains("Pre-existing plugin")
+    );
+    fs::write(plugin.join("plugin.json"), r#"{"name":"User edit"}"#).unwrap();
+    assert!(checkout.run("setup", &[]).status.success());
+    assert!(
+        fs::read_to_string(plugin.join("plugin.json"))
+            .unwrap()
+            .contains("User edit")
+    );
+    fs::remove_dir_all(&plugin).unwrap();
+    assert!(checkout.run("setup", &[]).status.success());
+    assert!(
+        !plugin.exists(),
+        "startup must respect an operator's deletion"
+    );
 }
 
 #[test]

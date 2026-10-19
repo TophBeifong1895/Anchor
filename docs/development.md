@@ -6,7 +6,7 @@
 
 `rust/` 是唯一 Cargo workspace，官方 Host、Kernel、工具、发行和开发检查共享 [Cargo.lock](../rust/Cargo.lock)。`apps/web/` 使用 React/TypeScript；依赖见 [package.json](../apps/web/package.json) 和其 lock。官方 Plugin 清单/Skill 位于 `plugins/`，Graph 示例位于 `examples/`。
 
-运行与构建需要 Linux x86_64、Git、Bubblewrap、Rust/rustup、Node.js 和 C 构建工具；系统工具清单见[使用指南](usage.md#安装与本地启动)。执行 `./scripts/dev.sh start` 自动准备锁定的前端依赖，增量构建 debug Host/relay、准备固定版本及补丁的 Goose，并更新 Web 资产；`setup` 只准备不启动，Goose 配方自动安装所需 musl target。不需要 `.env`，开发脚本与 Web 构建忽略旧环境文件。`scripts/dev.sh` 管理独立 Rust 开发根和本次服务 PID；拉取更新或修改后端后执行 `./scripts/dev.sh restart` 自动增量构建并加载，不因文档变化或仅验证而重启用户服务。
+运行与构建需要 Linux x86_64、Git、Bubblewrap、slirp4netns、Rust/rustup、Node.js 和 C 构建工具；系统工具清单见[使用指南](usage.md#安装与本地启动)。执行 `./scripts/dev.sh start` 自动准备锁定的前端依赖，增量构建 debug Host/relay、准备固定版本及补丁的 Goose，并更新 Web 资产；`setup` 只准备不启动，Goose 配方自动安装所需 musl target。默认平台源码启动按 [上手清单](../examples/starter.json) 一次性准备官方 Plugin 及工具，并经 Host API 导入示例 Graph；内容成为用户可编辑副本，已有同名内容与后续修改/删除不覆盖。不需要 `.env`，开发脚本与 Web 构建忽略旧环境文件。`scripts/dev.sh` 管理独立 Rust 开发根和本次服务 PID；拉取更新或修改后端后执行 `./scripts/dev.sh restart` 自动增量构建并加载，不因文档变化或仅验证而重启用户服务。
 
 ## 工作节奏
 

@@ -1,7 +1,7 @@
 import { expect, test } from '@playwright/test';
 import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
+import { appendFile, mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { promisify } from 'node:util';
@@ -56,6 +56,44 @@ test('source launcher prepares its runtime and WebUI configures Pilot and AgentN
     expect((await request.get(`${base}/health`)).ok()).toBeTruthy();
     expect((await request.get(`${base}/ready`)).ok()).toBeTruthy();
     expect((await (await request.get(`${base}/settings/model`)).json()).execution.configured).toBe(false);
+    const starter = JSON.parse(await readFile(join(checkout, 'examples/starter.json'), 'utf8'));
+    const installed = (await (await request.get(`${base}/plugins`)).json()).plugins;
+    for (const id of Object.keys(starter.plugins)) {
+      expect(installed.find((plugin: { id: string }) => plugin.id === id)?.available).toBe(true);
+    }
+    for (const name of starter.graphs) {
+      const graph = await request.get(`${base}/graphs/${name}`);
+      expect(graph.ok(), await graph.text()).toBeTruthy();
+    }
+    // The bundled Op example runs before any model is configured.
+    const demo = await request.post(`${base}/trigger`, { data: { graph: 'call-report', input: { report_code: 'DEMO-001' } } });
+    expect(demo.ok(), await demo.text()).toBeTruthy();
+    const demoRun = (await demo.json()).run;
+    await expect.poll(async () => (await (await request.get(`${base}/runs/${demoRun}`)).json()).state.status,
+      { timeout: 30000 }).toBe('completed');
+    const demoArtifact = await request.get(`${base}/runs/${demoRun}/files/process/result/result.md?download=1`);
+    expect(demoArtifact.ok(), await demoArtifact.text()).toBeTruthy();
+    expect(await demoArtifact.text()).toContain('Processed by an independent Graph Run.');
+    const networkConfiguration = await (await request.get(`${base}/plugins/network/configuration`)).json();
+    const networkTest = await request.post(`${base}/plugins/network/configuration/test`, { data: {
+      authorization_digest: networkConfiguration.authorization_digest, revision: networkConfiguration.revision,
+    } });
+    expect(networkTest.ok(), await networkTest.text()).toBeTruthy();
+    const networkResult = await networkTest.json();
+    expect(networkResult.current, JSON.stringify(networkResult)).toBe(true);
+    expect(networkResult.results).toHaveLength(1);
+    expect(networkResult.results[0].status, JSON.stringify(networkResult)).toBe('verified');
+    // Startup imports copies; subsequent starts respect the user's edits and deletion.
+    const editable = await (await request.get(`${base}/graphs/revise-loop`)).json();
+    const edited = await request.put(`${base}/graphs/revise-loop`, { data: {
+      definition: { ...editable.definition, objective: 'User-owned starter edit' },
+    } });
+    expect(edited.ok(), await edited.text()).toBeTruthy();
+    const removed = await request.delete(`${base}/graphs/parallel-audit`);
+    expect(removed.ok(), await removed.text()).toBeTruthy();
+    const stewardSkill = join(root, 'data/library/plugins/anchor-steward/skills/plugin-authoring/SKILL.md');
+    await appendFile(stewardSkill, '\nUser-owned starter plugin edit.\n');
+
     await page.addInitScript(() => localStorage.setItem('anchor:view', 'pilot'));
     await page.goto(web);
     const composer = page.getByLabel('发送给 Anchor Pilot');
@@ -90,6 +128,9 @@ test('source launcher prepares its runtime and WebUI configures Pilot and AgentN
     expect(artifact.ok()).toBeTruthy(); expect(await artifact.text()).toBe('source-agent-artifact');
     await command('restart');
     expect(createHash('sha256').update(await readFile(goosePath)).digest('hex')).toBe(gooseDigest);
+    expect((await (await request.get(`${base}/graphs/revise-loop`)).json()).definition.objective).toBe('User-owned starter edit');
+    expect((await request.get(`${base}/graphs/parallel-audit`)).status()).toBe(404);
+    expect(await readFile(stewardSkill, 'utf8')).toContain('User-owned starter plugin edit.');
     await page.reload();
     await expect(page.locator('.pilot-message.assistant').last()).toContainText('source-pilot-tool-marker');
     await expect(composer).toBeEnabled();
@@ -102,6 +143,8 @@ test('source launcher prepares its runtime and WebUI configures Pilot and AgentN
     await writeFile(info.outputPath('evidence.json'), JSON.stringify({ status: 'passed', checkout, root,
       goose_binary_sha256: gooseDigest, restart_reused_local_build: true, actual_source_launcher: true, actual_host: true, actual_goose: true, real_model_calls: 0,
       runtime_path_overrides: false, model_configuration: 'WebUI', missing_model_hint: true,
+      starter_graphs: starter.graphs, starter_plugins: Object.keys(starter.plugins), starter_demo_without_model: demoRun,
+      starter_network_connection: networkResult, starter_edits_and_deletion_preserved: true,
       pilot_authorized_tool: true, agent_node_artifact: true, restart_history_preserved: true,
       provider_requests: provider.calls.length, run }, null, 2));
   } finally {

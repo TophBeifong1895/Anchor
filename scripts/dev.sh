@@ -38,6 +38,10 @@ elif [[ -n "${ANCHOR_RUNNER_GRAPH_NAME:-}" ]]; then
 else
   unset ANCHOR_RUNNER_GRAPH_NAME ANCHOR_RUNNER_BUNDLE_ROOT
 fi
+source_examples=0
+if [[ -z "${ANCHOR_RUNNER_BUNDLE_ROOT:-}" && -z "${ANCHOR_RUNNER_BINARY:-}" ]]; then
+  source_examples=1
+fi
 export ANCHOR_RUNNER_SCHEDULES_PATH="${ANCHOR_RUNNER_SCHEDULES_PATH:-$ANCHOR_RUNNER_STATE_ROOT/schedules.json}"
 export ANCHOR_RUNNER_WEB_ROOT="${ANCHOR_RUNNER_WEB_ROOT:-$repo/apps/web/dist}"
 export ANCHOR_RUNNER_LISTEN="${ANCHOR_RUNNER_LISTEN:-127.0.0.1:8077}"
@@ -140,6 +144,7 @@ check_start_prerequisites() {
   require_command curl "Install curl."
   require_command setsid "Install util-linux."
   require_command bwrap "Install Bubblewrap and enable user/mount/network namespaces."
+  require_command slirp4netns "Install slirp4netns for isolated plugin networking."
   if ! bwrap --die-with-parent --unshare-all --ro-bind / / -- /bin/true; then
     echo "Bubblewrap cannot create the required namespaces. Check the host's user namespace policy; sandbox isolation remains required." >&2
     return 1
@@ -181,10 +186,13 @@ prepare_api() {
   if [[ "$binary" == "$target_dir/debug/anchor-runner-host" && "$relay" == "$target_dir/debug/anchor-net-relay" ]]; then
     require_command cargo "Install Rust stable with rustup and the system C build tools."
     echo "Preparing Rust Host and network relay (incremental build)..."
-    CARGO_TARGET_DIR="$target_dir" cargo build --manifest-path "$repo/rust/Cargo.toml" -p anchor-runner-host --bins --locked
+    CARGO_TARGET_DIR="$target_dir" cargo build --manifest-path "$repo/rust/Cargo.toml" -p anchor-runner-host -p anchor-sandbox-bwrap --bins --locked
   elif [[ ! -x "$binary" || ! -x "$relay" ]]; then
     echo "Explicit Host/relay paths must both be executable: $binary ; $relay" >&2
     return 1
+  fi
+  if (( source_examples )); then
+    node "$repo/scripts/dev-examples.mjs" plugins "$target_dir/debug"
   fi
   [[ -x "$binary" && -x "$relay" ]] || { echo "Rust build did not produce Host and relay." >&2; return 1; }
   export ANCHOR_GOOSE_BINARY="$(realpath -m -- "${ANCHOR_GOOSE_BINARY:-$repo/.local/bin/goose}")"
@@ -219,6 +227,16 @@ start_api() {
     record_pid "$!" "$api_pid"
     ready api "$api_pid" "$state/native-host.log"
     echo "Rust Host ready at $ANCHOR_WEB_API_URL (managed pid $(cut -d ' ' -f 1 "$api_pid"))"
+  fi
+}
+
+prepare_example_graphs() {
+  # Only seed the source launcher's own platform Host, never an external service
+  # or a deployment-owned entry bundle. The helper leaves existing content intact.
+  if alive "$api_pid" && (( source_examples )); then
+    # Also handles `git pull` followed by `start` on an already managed Host.
+    node "$repo/scripts/dev-examples.mjs" plugins "$(realpath -m -- "${CARGO_TARGET_DIR:-$repo/rust/target}")/debug"
+    ANCHOR_STARTER_API_KEY="$api_key" node "$repo/scripts/dev-examples.mjs" graphs
   fi
 }
 
@@ -289,6 +307,7 @@ case "$action" in
     check_start_prerequisites
     prepare_web
     start_api
+    prepare_example_graphs
     start_web
     echo "Web UI: $web_url"
     echo 'Open Settings -> Model service, save the default Flash URL/key/model, then chat with Pilot.'
@@ -305,6 +324,7 @@ case "$action" in
     stop_one "Web UI" "$web_pid"
     stop_one "Anchor API" "$api_pid"
     start_api "$binary"
+    prepare_example_graphs
     start_web
     ;;
   status)
