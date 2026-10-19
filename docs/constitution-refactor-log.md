@@ -1160,3 +1160,14 @@ Trace 原子发布是 `490c000` 已有实现，本轮确认了截断/并发读�
 | 无 | 既有测试删除 0，旧测试新增 ignore 0。新 Goose target 的 ignored 属性保留对真实 pinned Goose/Bubblewrap 的依赖。 |
 
 M2 的最终命令、原样 Goose target 结果、失败与复跑、规则清单及宪法检验统一见 [M2 交回](../experiments/constitution-host-preflight/m2/completion-verification.md)。C1 相对 `0859373` 零 diff，围栏与 master F2 字节一致；本轮没有 Kernel 修改。M3 未开始，默认切换与删除旧 Runner 由用户决定。真实模型 Provider、生产迁移与部署均未新增验收。
+
+### §10.12 收尾同步 master
+
+同步 master cc919d1（包含 d042ebe 原子 durable writer 与 dc88484 网关通知闸门），使用 merge、不 rebase。冲突按文件登记：
+
+| 冲突路径 | 处理依据 |
+| --- | --- |
+| docs/pilot-development-plan.md | 保留 master 的原子发布、网关确定性回归与 F1/F2 审查结论；保留本分支 M2 当前验收入口，上游统计仍绑定各自证据。 |
+| rust/anchor-runner-host/src/goose_acp/trace.rs | 使用 master 的共享 write_durable 原子发布，移除重复 writer；保留 master 两项交错/连续读写回归及本分支单快照回归。旧单快照夹具先显式设置 0600 再替换，以验证权限保留；既有权限断言不变，首次创建权限遵循 master 的 umask 契约。 |
+
+main.rs 与 goose_acp.rs 自动合并；恢复模块和助手接入均保留。最终验证另见 M2 交回，不把合并前结果作为最终树通过。

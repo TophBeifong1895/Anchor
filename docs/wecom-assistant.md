@@ -122,6 +122,8 @@ Host 首次 wait binding 查询最近 9 条来检测截断，只授权最近 8 �
 cargo test --manifest-path rust/Cargo.toml -p anchor-wecom-gateway --all-targets --locked
 ```
 
+慢回调并发回归通过双向通知闸门建立顺序：旧回调进入等待后，控制发送和新回复必须在闸门关闭期间完成；随后释放旧回复，等待 ledger 确认旧事件完成，并核对没有额外投递。不以固定睡眠推断新旧消息顺序，也不放宽已有超时。复现、验证范围及其他用例的并发超时见[本机证据](../.local/wecom-callback-sync-20261019/README.md)；这项修正只涉及测试夹具，不改变网关产品行为。
+
 常驻路径的定向 integration 位于 `rust/anchor-runner-host/tests/goose_persistent_assistant.rs`，需要固定真实 Goose 二进制与本机 Bubblewrap，但模型传输为确定性本地 Provider。按 fixture 文档准备隔离环境后可运行：
 
 ```sh

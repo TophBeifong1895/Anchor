@@ -2,10 +2,7 @@ use super::{Fact, GooseNodePort};
 use crate::resource_read::open_resource;
 use anchor_runtime::graph::{GraphError, InvocationKey};
 use serde_json::{Value, json};
-use std::{
-    io::{Read, Write},
-    path::Path,
-};
+use std::{io::Read, path::Path};
 
 mod live;
 pub(crate) use live::LiveTrace;
@@ -13,15 +10,11 @@ pub(crate) use live::LiveTrace;
 const MAX_PROJECTION_BYTES: u64 = 160 * 1024 * 1024;
 
 pub(super) fn store_evidence(path: &Path, evidence: &Value) -> Result<(), GraphError> {
-    let parent = path.parent().expect("trace evidence directory");
-    let mut temporary = tempfile::NamedTempFile::new_in(parent)?;
-    temporary.write_all(
+    crate::write_durable(
+        path,
         &serde_json::to_vec_pretty(evidence)
             .map_err(|error| GraphError::CorruptRun(error.to_string()))?,
     )?;
-    temporary.as_file().sync_all()?;
-    temporary.persist(path).map_err(|error| error.error)?;
-    std::fs::File::open(parent)?.sync_all()?;
     Ok(())
 }
 
@@ -230,6 +223,7 @@ mod tests {
         let previous = json!({"notifications":["previous".repeat(8192)]});
         let current = json!({"notifications":["current".repeat(8192)]});
         store_evidence(&path, &previous).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
         let snapshot = std::fs::File::open(&path).unwrap();
         store_evidence(&path, &current).unwrap();
         // A reader can retain the old inode while publication replaces the
@@ -246,6 +240,102 @@ mod tests {
             std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
             0o600
         );
+    }
+
+    #[test]
+    fn trace_reader_retains_complete_snapshots_during_repeated_evidence_publication() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("goose-acp");
+        fact(&root, &key(), Value::Null);
+        let name = format!("{}.evidence.json", GooseNodePort::stem(&key()));
+        let path = root.join(&name);
+        let versions = ["previous".repeat(8192), "current".repeat(4096)].map(|text| {
+            json!({"version":1,"runtime":"goose","key":key(),"notifications":[
+                update(json!({"sessionUpdate":"agent_message_chunk","content":{"text":text}}))
+            ]})
+        });
+        store_evidence(&path, &versions[0]).unwrap();
+        std::thread::scope(|scope| {
+            let (opened, ready) = std::sync::mpsc::sync_channel(0);
+            let (published, committed) = std::sync::mpsc::sync_channel(0);
+            let published_path = &path;
+            let published_versions = &versions;
+            let writer = scope.spawn(move || {
+                for sequence in 1..=32 {
+                    if ready.recv().is_err() {
+                        return;
+                    }
+                    store_evidence(published_path, &published_versions[sequence % 2]).unwrap();
+                    published.send(()).unwrap();
+                }
+            });
+            for sequence in 1..=32 {
+                let mut snapshot = open_resource(&root, &name).unwrap();
+                let mut bytes = vec![0; 1024];
+                snapshot.read_exact(&mut bytes).unwrap();
+                opened.send(()).unwrap();
+                committed.recv().unwrap();
+                snapshot.read_to_end(&mut bytes).unwrap();
+                assert!(
+                    serde_json::from_slice::<Value>(&bytes).unwrap()
+                        == versions[(sequence - 1) % 2],
+                    "retained reader changed during publication {sequence}"
+                );
+                assert_eq!(
+                    read_json(&root, &name).unwrap(),
+                    Some(versions[sequence % 2].clone())
+                );
+                let messages = trace_messages(directory.path(), &key()).unwrap();
+                assert_eq!(messages.len(), 1);
+                assert_eq!(
+                    messages[0]["text"],
+                    versions[sequence % 2]["notifications"][0]["params"]["update"]["content"]["text"]
+                );
+            }
+            writer.join().unwrap();
+        });
+    }
+
+    #[test]
+    fn trace_reader_observes_only_complete_versions_while_evidence_is_rewritten() {
+        let directory = tempfile::tempdir().unwrap();
+        let name = "trace.evidence.json";
+        let path = directory.path().join(name);
+        let versions = [
+            json!({"notifications":["previous".repeat(8192)]}),
+            json!({"notifications":["current".repeat(16384)]}),
+        ];
+        store_evidence(&path, &versions[0]).unwrap();
+        std::thread::scope(|scope| {
+            let (ready, started) = std::sync::mpsc::sync_channel(0);
+            let (stop, stopped) = std::sync::mpsc::channel::<()>();
+            let root = directory.path();
+            let snapshots = &versions;
+            let reader = scope.spawn(move || {
+                let initial = read_json(root, name).unwrap().unwrap();
+                assert!(snapshots.contains(&initial));
+                let mut reads = 1;
+                ready.send(()).unwrap();
+                while matches!(
+                    stopped.try_recv(),
+                    Err(std::sync::mpsc::TryRecvError::Empty)
+                ) {
+                    let snapshot = read_json(root, name).unwrap().unwrap();
+                    assert!(
+                        snapshots.contains(&snapshot),
+                        "partial evidence was published"
+                    );
+                    reads += 1;
+                }
+                reads
+            });
+            started.recv().unwrap();
+            for sequence in 1..=64 {
+                store_evidence(&path, &versions[sequence % 2]).unwrap();
+            }
+            drop(stop);
+            assert!(reader.join().unwrap() > 0);
+        });
     }
 
     #[test]

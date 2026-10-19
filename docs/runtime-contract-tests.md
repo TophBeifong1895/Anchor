@@ -180,6 +180,27 @@ transcript 与删除后的现场清单，Plugin Turn 的 runtime 使用既有契
 两参数分支现显式列为两例，共用原实现、全部断言与固定 Goose 执行条件。因此测试数比
 G0 的 119 项增加 1，默认忽略数也增加 1，实际场景和覆盖不变；未放松校验器、断言、超时或权限。
 
+## Trace 证据与宿主持久文件的原子发布
+
+Goose trace 的 `store_evidence` 使用共享 `write_durable`：在目标同目录用唯一临时文件写完字节并 fsync，rename 覆盖后 fsync 父目录。既有文件保留权限位，新文件沿用普通创建的 `0666 & umask`；写入或发布失败由临时文件所有者清理，不增加依赖。序列化字节、文件名、调用先后、错误校验和已有断言/超时不变。
+
+该辅助函数的六处生产调用全部获得原子替换，不保留原地截断路径：
+
+| 调用点 | 文件 | 并发读取与处理依据 |
+| --- | --- | --- |
+| `goose_acp::trace::store_evidence`（原 `goose_acp.rs` 直接调用） | `{stem}.evidence.json` | `/runs/{id}` 的 trace 投影可与发布并发；必须只见完整旧/新版本 |
+| `goose_acp.rs` 启动配置 | `config/config.yaml` | 当前在 Goose 启动前、会话租约内写入，执行本身已顺序化；共享辅助函数统一改为原子替换，不另留原地写例外 |
+| `node_host/assistant.rs` 等待输入完成 | workspace 的 `input.json` | 节点交接虽然有顺序，workspace 仍可被现场核查与保留读取；统一原子发布，不让观察方读到半份 JSON |
+| `node_host/execution.rs` 的 Sandbox InvalidRequest 分支 | `{stem}.failed` | 完成事实查询可读取失败原因；避免首次发布时看到空/不完整文本 |
+| `node_host/execution.rs` 的非成功退出分支 | `{stem}.failed` | 同上，包括带 stdout/stderr 的多字节失败原因 |
+| `node_host/facts.rs::complete` | `{stem}.json` | `load_host_completion_fact` 的查询/恢复读取不与写文件共享锁；避免把半份完成 JSON 判成损坏 |
+
+未改的邻接协议：`*.started` 不经过该辅助函数，用 `create_new` 唯一认领；读取方只判存在即不确定，不解析写入中的内容，因此本任务不把认领改成可覆盖的 rename。Goose `store_fact` 原本已临时写入、fsync、rename、父目录 fsync，不另建第二套实现。
+
+新增回归通过通道强制“读一段旧文件 → 另一线程完整发布新文件 → 继续读原文件”的交错，反复验证旧文件描述符的完整快照与新打开后的 trace 投影；另有持续并发重写/读取，只接受两个完整版本。前者在原地重写实现的第一次发布就失败，不依赖压力碰撞或放宽时间。修复前后原始输出、权限/失败清理测试及最终验收见[本机证据](../.local/trace-evidence-atomic-20261019/README.md)。这不是跨文件事务、真实 Provider 或公网渠道验收。
+
+本次 workspace 实际 1,999 通过、0 失败、123 忽略；文档完整 Host ignored 命令实际 120/0/0，未使用时序失败豁免。标准入口另行执行为 20 套、105/0/0，105 份场景报告全部通过严格校验，真实模型请求为 0；与完整 ignored 重复覆盖的场景不累计为新测试。严格 workspace/all-target Clippy 与格式检查通过。
+
 ## 套件与证据
 
 入口先构建官方 WeCom、Docmost 原生工具，再逐套运行以下既有 Host 测试，

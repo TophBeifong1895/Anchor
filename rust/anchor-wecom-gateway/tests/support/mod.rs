@@ -28,7 +28,7 @@ use serde_json::{Value, json};
 use tokio::{
     io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader},
     net::{TcpListener, UnixStream},
-    sync::mpsc,
+    sync::{Notify, mpsc},
     task::JoinHandle,
 };
 use tokio_tungstenite::{accept_async, tungstenite::Message};
@@ -180,6 +180,30 @@ pub struct HttpReply {
     pub status: StatusCode,
     pub body: Value,
     pub delay: Duration,
+    pub gate: Option<ReplyGate>,
+}
+
+#[derive(Clone, Default)]
+pub struct ReplyGate {
+    entered: Arc<Notify>,
+    released: Arc<Notify>,
+}
+
+impl ReplyGate {
+    pub async fn wait_entered(&self) {
+        tokio::time::timeout(Duration::from_secs(3), self.entered.notified())
+            .await
+            .expect("webhook did not reach the reply gate");
+    }
+
+    pub fn release(&self) {
+        self.released.notify_one();
+    }
+
+    async fn wait(&self) {
+        self.entered.notify_one();
+        self.released.notified().await;
+    }
 }
 
 impl HttpReply {
@@ -188,7 +212,21 @@ impl HttpReply {
             status: StatusCode::OK,
             body,
             delay: Duration::ZERO,
+            gate: None,
         }
+    }
+
+    pub fn gated(mut self, gate: &ReplyGate) -> Self {
+        self.gate = Some(gate.clone());
+        self
+    }
+
+    async fn respond(self) -> Response {
+        if let Some(gate) = self.gate {
+            gate.wait().await;
+        }
+        tokio::time::sleep(self.delay).await;
+        (self.status, Json(self.body)).into_response()
     }
 }
 
@@ -285,14 +323,12 @@ async fn webhook(
     state.requests.lock().unwrap().push(body.clone());
     if body.get("settlement").is_some() {
         let reply = (state.settle)(&body);
-        tokio::time::sleep(reply.delay).await;
-        return (reply.status, Json(reply.body)).into_response();
+        return reply.respond().await;
     }
     let event = body["event"].clone();
     state.events.lock().unwrap().push(event.clone());
     let reply = (state.respond)(&event);
-    tokio::time::sleep(reply.delay).await;
-    (reply.status, Json(reply.body)).into_response()
+    reply.respond().await
 }
 
 /// One frame of a fixture progress stream.
