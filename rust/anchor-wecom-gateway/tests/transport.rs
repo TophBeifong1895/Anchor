@@ -14,9 +14,9 @@ use anchor_wecom_gateway::{
 };
 use serde_json::{Value, json};
 use support::{
-    HttpReply, MediaServer, Platform, ProgressFrame, ProgressServer, TOKEN, WebhookServer,
-    callback, config, config_with_progress, control, group_callback, media_callback, raw_control,
-    send_request,
+    HttpReply, MediaServer, Platform, ProgressFrame, ProgressServer, ReplyGate, TOKEN,
+    WebhookServer, callback, config, config_with_progress, control, group_callback, media_callback,
+    raw_control, send_request,
 };
 
 async fn wait_fact(gateway: &RunningGateway, request_id: &str, status: DeliveryStatus) {
@@ -565,24 +565,38 @@ async fn assert_lost_reply_ack_is_not_replayed(group: bool) {
 async fn slow_callback_does_not_block_control_and_older_reply_is_suppressed() {
     let root = tempfile::tempdir().unwrap();
     let mut platform = Platform::new(Some(0)).await;
-    let webhook = WebhookServer::new(|event| {
+    let old_reply = ReplyGate::default();
+    let response_gate = old_reply.clone();
+    let webhook = WebhookServer::new(move |event| {
         let text = event["text"].as_str().unwrap();
-        let mut reply = HttpReply::ok(json!({"text":text}));
+        let reply = HttpReply::ok(json!({"text":text}));
         if text == "old" {
-            reply.delay = Duration::from_millis(250);
+            reply.gated(&response_gate)
+        } else {
+            reply
         }
-        reply
     })
     .await;
     let settings = config(root.path(), &platform, Some(&webhook));
     let path = settings.socket_path();
+    let ledger_path = settings.state_dir.join("delivery.sqlite");
     let gateway = Gateway::start(settings).await.unwrap();
     gateway
         .wait_authenticated(Duration::from_secs(2))
         .await
         .unwrap();
+    let ledger = rusqlite::Connection::open(ledger_path).unwrap();
+    let old_state = || {
+        ledger
+            .query_row::<String, _, _>(
+                "SELECT state FROM inbound WHERE event_id='old'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap()
+    };
     platform.send(callback("old", "alice", "old")).await;
-    webhook.wait_events(1).await;
+    old_reply.wait_entered().await;
     let pending_path = path.clone();
     let pending = tokio::spawn(async move {
         control(
@@ -595,12 +609,21 @@ async fn slow_callback_does_not_block_control_and_older_reply_is_suppressed() {
     let send = platform.next("aibot_send_msg").await;
     platform.acknowledge(&send, 0).await;
     assert_eq!(pending.await.unwrap()["accepted"], true);
+    assert_eq!(old_state(), "processing");
     platform.send(callback("new", "alice", "new")).await;
     let reply = platform.next_final_response().await;
     assert_eq!(reply["body"]["stream"]["content"], "new");
     platform.acknowledge(&reply, 0).await;
     wait_fact(&gateway, "new", DeliveryStatus::Confirmed).await;
-    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(old_state(), "processing");
+    old_reply.release();
+    tokio::time::timeout(Duration::from_millis(300), async {
+        while old_state() != "completed" {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("released old callback was not suppressed");
     platform.no_command("aibot_respond_msg").await;
     assert_eq!(webhook.events.lock().unwrap().len(), 2);
     assert_eq!(gateway.delivery_facts().unwrap().len(), 2);
@@ -1907,6 +1930,7 @@ async fn assert_host_refusal(body: Value, expected_error: GatewayError, notice: 
         status: axum::http::StatusCode::CONFLICT,
         body: body.clone(),
         delay: Duration::ZERO,
+        gate: None,
     })
     .await;
     let gateway = Gateway::start(config(root.path(), &platform, Some(&webhook)))
@@ -1965,6 +1989,7 @@ async fn undelivered_events_outside_the_recovery_window_are_never_replayed() {
         status: axum::http::StatusCode::INTERNAL_SERVER_ERROR,
         body: json!({"error":"fixture failure"}),
         delay: Duration::ZERO,
+        gate: None,
     })
     .await;
     let gateway = Gateway::start(config(root.path(), &platform, Some(&webhook)))
