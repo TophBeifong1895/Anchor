@@ -83,6 +83,89 @@ fn fixture() -> (tempfile::TempDir, PilotTools) {
 }
 
 #[tokio::test]
+async fn run_pause_requests_the_node_boundary_without_cancelling_the_worker() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    let (_root, mut tools) = fixture();
+    let run = "pilot-pause";
+    let control = tools
+        .application
+        .begin_wait_child(run, "fixture", Arc::new(AtomicBool::new(false)))
+        .await
+        .unwrap();
+    assert!(
+        tools
+            .execute("run_pause", json!({"run":run}))
+            .await
+            .is_err()
+    );
+    assert!(!control.pause.load(Ordering::Acquire));
+    assert!(!control.cancellation.load(Ordering::Acquire));
+
+    let (turn, _) = tools
+        .sessions
+        .create_turn("local", "pilot", "pause-run", None)
+        .unwrap();
+    tools = tools.for_turn(&turn.id);
+    let receipt = tools
+        .execute("run_pause", json!({"run":run}))
+        .await
+        .unwrap();
+    assert_eq!(
+        receipt,
+        json!({"run":run,"operation":"pause","requested":true})
+    );
+    assert!(control.pause.load(Ordering::Acquire));
+    assert!(!control.cancellation.load(Ordering::Acquire));
+    assert!(tools.application.run_is_active(run).await);
+
+    tools
+        .sessions
+        .finish_turn(
+            "local",
+            "pilot",
+            &turn.id,
+            anchor_platform_session::TurnStatus::Completed,
+            None,
+        )
+        .unwrap();
+    assert!(tools.execute("run_stop", json!({"run":run})).await.is_err());
+    assert!(!control.cancellation.load(Ordering::Acquire));
+    tools.application.end_wait_child(run).await;
+}
+
+#[tokio::test]
+async fn run_stop_cancels_the_worker_without_requesting_a_boundary_pause() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    let (_root, mut tools) = fixture();
+    let run = "pilot-stop";
+    let control = tools
+        .application
+        .begin_wait_child(run, "fixture", Arc::new(AtomicBool::new(false)))
+        .await
+        .unwrap();
+    assert!(tools.execute("run_stop", json!({"run":run})).await.is_err());
+    assert!(!control.pause.load(Ordering::Acquire));
+    assert!(!control.cancellation.load(Ordering::Acquire));
+
+    let (turn, _) = tools
+        .sessions
+        .create_turn("local", "pilot", "stop-run", None)
+        .unwrap();
+    tools = tools.for_turn(&turn.id);
+    let receipt = tools.execute("run_stop", json!({"run":run})).await.unwrap();
+    assert_eq!(
+        receipt,
+        json!({"run":run,"operation":"stop","requested":true})
+    );
+    assert!(control.cancellation.load(Ordering::Acquire));
+    assert!(!control.pause.load(Ordering::Acquire));
+    assert!(tools.application.run_is_active(run).await);
+    tools.application.end_wait_child(run).await;
+}
+
+#[tokio::test]
 async fn platform_status_is_advertised_as_a_read_only_pilot_tool_and_fails_closed() {
     let (_root, tools) = fixture();
     let definition = tools

@@ -842,10 +842,87 @@ fixture 的间接断言变化与未覆盖边界：
 - `Timeline` 的finished类选择器迁为settled（原宽度、时间、几何断言未变）；AST清单只统计expect表达式，selector绑定在变量赋值中的变化需按此补记。
 
 
+## R2 审查结论（2026-10-19）
+
+审查方复现 API 失败（10+ 项，均与 pause 语义或旧状态字段相关），内核 diff 为空。R2 未验收。
+
+1. **pause→stop 是任务书的设计错误，不是实现问题。** 旧 pause 的含义是"当前节点做完后停在边界"，这是宿主调度意图，不是一个状态。收敛的对象是状态词汇，不是控制动作：pause 应保留为动作（Executing 且有 worker 时可用，由宿主在节点边界提交 stop），结果状态是 waiting / human / reason=paused。S25 作废。
+2. **测量的判定标准本身达不到。** conversations 一个消费者在基线就占 59/82 点，几乎全是 Session、授权、交接和投递，宪法从未打算消除它们；无论读模型如何设计，所选消费者都不可能减少 50%。P、R、R2 三次合起来的结论是：写入与生命周期一侧的定律成立；Host 读侧的复杂度主要在 Session/授权层，不随运行时收敛而消失。
+3. 因此不再继续读侧探针。是否全量迁移改为按"统一定律、崩溃与计费正确性、删除旧 Runner"的价值决定，而不是按"Host 变小"决定。
+
+**用户决定（2026-10-19）**：全量迁移，见[全量迁移任务书](constitution-migration-task.md)。
+
+## M1：完成 R2 对外词汇（2026-10-19）
+
+按 [全量迁移任务书](constitution-migration-task.md) 交回 M1。pause 恢复为独立宿主控制：旧 Run 保持原边界暂停；Kernel Run 持久保存意图，经事件在当前节点结果/成本提交后、下一派发前提交 Human stop，reason=paused。重启先恢复端口已有完成事实；最终节点已结算就保留 Done。stop 仍立即取消。控制与边界消费共用锁，旧意图清理不删除后来接受的意图。未修改 Kernel 或生产 Validator，未增加执行标志轮询。
+
+HTTP、Pilot、Web 共用四动作；Session call 通用 pause/resume 仍拒绝。物理静止不等于 Session 可交接：conversation 暂停或预算等待时保留当前轮占有，显式 stop 或结算后才允许交接/删除；原 409、产物、不重放与投递断言保持。已删除仅供旧调用点使用的 `observed_liveness` 包装，直接复用同一 RunView 与静止规则。
+
+本地验证：workspace 1922 通过、0 失败、115 既有忽略；Web 290 通过、build 通过，fmt/clippy/C1 通过。结果与命令见 [M1 验收](../experiments/constitution-host-preflight/m1/verification.md)。真实 Goose/Provider、native 浏览器端到端未执行，不作为已验收能力。M2–M5 尚未开始；不再以读侧判断点下降 50% 决定迁移，R/R2 历史测量保持原样。
+
+### S 候选
+
+S25 按任务书作废；无新增 S 编号。其余 **7 条待批**，未擅自记为批准。
+
+| 编号 | 当前结论 / 待审查边界 |
+| --- | --- |
+| S19 | 三相位、waiter/outcome/reason 取代旧 Run 状态与专用提示；旧客户端字段破坏，Ready 进入接续/注意展示 |
+| S20 | Executing 无 worker 可恢复驱动，旧 Ready 与孤立 Running 共用规则 |
+| S21 | Human 无 worker 统一物理静止；conversation 当前轮的占有/交接约束留在 Session 层，原暂停 409 保留；准入、退役与清理的其余影响仍待审查 |
+| S22 | stop 仅 Executing；未结算增加 abandon；M1 按已批准修正恢复 pause=(Executing && worker) |
+| S23 | Human 无 worker 可 resume，Child/Effect 不可；未迁旧预算写入守卫仍可能拒绝，展示与写入边界待审查 |
+| S24 | 无 pausing/stopping/control_requested 展示，请求未落相位前仍显示 Executing；实际暂停接受由 operation=pause 回执确认 |
+| S26 | 缺 Kernel 时间观察为 updated:null；旧 mtime 来源保留，时间不参与控制 |
+
+### 断言修改
+
+计数为既有期望表达式/目标位置，参数展开在逐项登记内列清：Rust **26 处**（20 处断言期望、6 处轮询目标），Web **4 处**；fixture 仅增补 actions.pause 的改动另列。新增 Rust 8 项、Web 5 项测试，无业务断言放宽。RSI HTTP MCP 测试仅显式初始化 workspace 既用的 ring crypto provider，原工具发现和冻结证据读取断言不变。
+
+| 登记 | 测试 / 旧 → 新 / 依据 |
+| --- | --- |
+| MR01 | api/tests.rs / paused_wait_child_resumes_independently_then_releases_parent / 轮询；child.status Stopped → Paused；M1 纠正 S25，恢复边界暂停 |
+| MR02 | 同上 / 结果断言；child.status Stopped → Paused；同上；恢复和父子释放断言保留 |
+| MR03 | api/tests.rs / start_and_pause_request / 响应 operation；stop → pause；M1 独立控制动作 |
+| MR04 | 同上 / 响应 alias；alias=true → 不含 alias；M1 取消别名协议 |
+| MR05 | 同上 / 存储状态；Stopped → Paused；M1；原 results.len()==1 不变 |
+| MR06 | api/tests.rs / waiting_parent_rejects_child_grant_drift_then_restores_same_child_without_replay；child_before.status Stopped → Paused；M1；授权拒绝、产物、首结果与不重放断言不变 |
+| MR07 | api/tests/conversations.rs / conversation_resume_is_not_blocked_by_another_session_on_the_same_graph / 轮询；Bob Stopped → Paused；M1；下一轮仍 409、原结果与调用次数不变 |
+| MR08 | 同文件 / superseded_conversation_cannot_resume_or_recover_its_wait_child / 轮询；暂停后 child Stopped → Paused；M1；随后显式 stop 仍 Stopped，旧轮恢复拒绝不变 |
+| MR09 | 同文件 / superseded_conversation_keeps_detached_child_independent / 轮询；暂停后 detached child Stopped → Paused；M1；随后显式 stop 及 detach 边界不变 |
+| MR10 | api/tests/kernel_probe.rs / kernel_read_view_http_tracks_running_human_wait_and_settlement_with_host_time / Executing actions；stop/resume/abandon 原值保留，增加 pause=true；M1；有 worker 的 Executing 可暂停 |
+| MR11 | 同上 / Waiting actions；原三动作保留，增加 pause=false；M1；等待时不可暂停 |
+| MR12 | 同上 / Settled actions；原三动作保留，增加 pause=false；M1；结算时不可暂停 |
+| MR13 | application/legacy_run_view.rs / every_legacy_status_maps_lossily_with_both_worker_observations；actions 无 pause → pause==(executing && worker)；M1；10 状态 × 2 worker，共 20 个参数实例 |
+| MR14 | application/run_projection.rs / legacy_projection_serialization_preserves_ready_paused_and_stopped_bytes / Ready；精确字节 JSON actions 增加 pause:false；M1；其余字段字节不变 |
+| MR15 | 同上 / Paused；精确字节 JSON actions 增加 pause:false；同上 |
+| MR16 | 同上 / Stopped；精确字节 JSON actions 增加 pause:false；同上 |
+| MR17 | application/run_view.rs / actions_cover_every_phase_waiter_and_outcome_with_and_without_worker；AvailableActions 增加 pause==(Executing && worker)；M1；9 相位/waiter/outcome × 2 worker，18 个参数实例 |
+| MR18 | api/runs/tests.rs / list_and_detail_share_status_control_and_attention_projection / phase 参数期望；ready/waiting_call/waiting_resume/waiting_recovery/budget_stopped/completed → executing/waiting/executing/waiting/waiting/settled；S19/S20；六实例见逐项登记 |
+| MR19 | 同上 / resume 参数期望；WaitingCall、WaitingRecovery true→false；BudgetStopped false→true，其余不变；S23；只改动作投影期望，旧写入守卫未动 |
+| MR20 | 同上 / stop 参数期望；WaitingCall、WaitingRecovery、BudgetStopped true→false，其余不变；S22；Executing 才可 stop |
+| MR21 | 同上 / attention 断言；projection.needs_attention → waiting 或 executing+inactive 的事实推导；Ready/WaitingCall false→true；S19/S20；同时断言旧字段不存在，六实例见逐项登记 |
+| MR22 | 同文件 / incomplete_run_identity_does_not_offer_inactive_controls / detail；三个动作 false → 四个动作 false，增加 abandon=false；S22；身份拒绝保持全部动作不可用 |
+| MR23 | 同上 / list；三个动作 false → 四个动作 false，增加 abandon=false；同上；不放宽授权拒绝 |
+| MR24 | tests/standard_host / standard_host_runs_op_without_goose_model_or_runtime_switch：失败断言 state.status!=failed → projection.outcome!=failed；S19，产物断言保留 |
+| MR25 | 同上 / 完成轮询 state.status=completed → projection settled/done；S19 |
+| MR26 | 同文件 / old_state_root_still_allows_op_without_becoming_goose_recovery：完成轮询 state.status=completed → projection settled/done；S19，旧事实断言保留 |
+| MW01 | platform-rust / native Rust Host…：Run pill 已暂停 → 等待你处理：paused；M1/S25 作废 |
+| MW02 | 同上 / scheduled Run：status=completed → projection settled/done；S19/S20 |
+| MW03 | pilot-rust / Goose Pilot controls…：control_requested=pause → projection executing+active；新增独立 operation=pause 工具回执检查；S24/M1 |
+| MW04 | 同上 / Run pill：已暂停 → 等待你处理：paused；M1/S25 作废 |
+
+逐项参数、原/新值与 fixture schema 清单：[Rust](../experiments/constitution-host-preflight/m1/rust-assertions.md)、[Web](../experiments/constitution-host-preflight/m1/web-assertions.md)。R2 登记仍代表当时现场，本节覆盖已作废的别名断言。
+
+### 删除测试映射
+
+| 删除数量 | 对应新路径或理由 |
+| --- | --- |
+| 0 | 未删除测试、未新增 ignore；暂停/恢复、stop 优先、重启两种完成事实、HTTP 双后端三阶段、Pilot 独立控制和 Web effect 控件为新增覆盖 |
+
 ## 尚未完成
 
 - 并行分支内的模块作用域。
-- 全量Host迁移：H1、H2.1、P及R0/R已验收；R2停止交回，测量结论为“需要重想”，H3–H6暂缓，先裁定暂停别名与原测试契约；P未覆盖的并行/Call/助手、Goose恢复与删除仍未迁。全局C2仍未验收，16 save / 36 mutation为旧路径棘轮起点。
+- 全量 Host 迁移按 M1–M5 执行，H3–H6 阶段划分已被取代；M1 本地实现与验证交回，S19–S24、S26 待审查。M2 的并行/Call/助手、结果与恢复决定/删除，M3 默认切换，M4 旧 Runner 删除，M5 测量仍未完成。全局 C2 尚未验收，16 save / 36 mutation 为旧路径棘轮起点。
 - 旧 Runner 的删除。
-- R2 新词汇切片未验收：pause 别名与旧完成产物/Session 仲裁断言冲突；同 HTTP 旧/Kernel 三阶段对照、六 crate 全量与真实 provider 待继续。当前实现缺观察为 null，不伪造历史时间。
+- M1 的本地验收不替代真实 Goose/Provider、部署与生产数据离线迁移；W4 未决定。当前实现缺时间观察为 null，不伪造历史时间。
 - 共享 conversation lease / Library 读锁 / `PROCESS_ENV_LOCK` 的既有多测试 flaky（见"待处理与观察"）。

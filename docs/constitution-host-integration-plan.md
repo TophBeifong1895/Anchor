@@ -1,6 +1,6 @@
 # 宪法内核接入 Host：临时开发计划
 
-编制日期：2026-10-16。状态：**H1 已验收；H2.1 与串行端到端探针 P 已验收（2026-10-17）；R0 与 R 已本地交付，读取侧测量结论为“需要重想”，见[R 测量](../experiments/constitution-host-preflight/r/measurement.md)与[验证](../experiments/constitution-host-preflight/r/verification.md)。R 已验收；用户决定对外状态收敛到内核相位，[R2](constitution-r2-task.md) 已停止交回、未验收：pause→stop 与原非状态断言冲突，见[R2 现场与测量](../experiments/constitution-host-preflight/r2/measurement.md)。H3–H6 继续暂缓。**H1 审查对象 `445d278`；`ddadb17` 的旧授权单一门被验收拒绝，修正提交见[工作记录](constitution-refactor-log.md)的“H1 补充：旧授权单一门”一节；K0.1 独立验收见[结论](../experiments/constitution-host-preflight/k01/review.md)。
+编制日期：2026-10-16。状态：**H1、H2.1、P、R 已验收；R2 的 pause 设计错误已由审查纠正；M1 本地实现与验证见 [M1 证据](../experiments/constitution-host-preflight/m1/verification.md)，S19–S24、S26 待统一审查。2026-10-19 用户决定全量迁移，后续按[全量迁移任务书](constitution-migration-task.md) M1–M5 执行，本文 H3–H6 的阶段划分由该任务书取代，约束 C1–C6 与 §2 语义仍有效。**H1 审查对象 `445d278`；`ddadb17` 的旧授权单一门被验收拒绝，修正提交见[工作记录](constitution-refactor-log.md)的“H1 补充：旧授权单一门”一节；K0.1 独立验收见[结论](../experiments/constitution-host-preflight/k01/review.md)。
 
 预检阻塞的修订范围已由[审查决定 D1–D5](constitution-preflight-decision.md)明确授权；实现与验收入口见[工作记录](constitution-refactor-log.md#k01内核修订与中断事实)。K0.1 与 H1 已验收；默认 Host 仍使用旧 Runner；显式 `execution=kernel_probe` 的 Run 已走 Kernel FileStore 与串行调度器。S18 已批准，H2.1 本地确定性验收完成；P 七类场景、1000 seed 对照、真实 Op.run Host 路径与量化测量已交付，真实 Goose/Provider 未执行。见[H2.1验收与完整Tally](../experiments/constitution-host-preflight/h2/h21-completion.md)、[P验收](../experiments/constitution-host-preflight/p/verification.md)、[测量与未决](../experiments/constitution-host-preflight/p/measurement.md)。
 

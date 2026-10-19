@@ -15,7 +15,7 @@ const state: OurRunState = {
   },
 };
 const observation: RunProjection = { phase: 'waiting', waiting_for: 'human', reason: 'paused', active: false, updated: null,
-  actions: { stop: false, resume: true, abandon: true } };
+  actions: { pause: false, stop: false, resume: true, abandon: true } };
 
 describe('persistent assistant Graph projections', () => {
   it('uses ordinary Op nodes for host operations and preserves the loop', () => {

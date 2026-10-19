@@ -1,0 +1,10 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s
+     Running tests/standard_host.rs (rust/target/debug/deps/standard_host-3306f77d9e129cfb)
+
+running 3 tests
+test unconfigured_standard_pilot_refuses_admission_without_creating_a_turn ... ok
+test standard_host_runs_op_without_goose_model_or_runtime_switch ... ok
+test old_state_root_still_allows_op_without_becoming_goose_recovery ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.56s
+

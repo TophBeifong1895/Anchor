@@ -2,7 +2,7 @@ import { label } from './execution';
 import type { OurRunState, RunProjection } from './model';
 import { activeNodes } from './parallel';
 
-export type RunControl = 'stop' | 'resume' | 'abandon';
+export type RunControl = 'pause' | 'stop' | 'resume' | 'abandon';
 export type ProjectedRun = { projection?: RunProjection | null };
 
 /** All entry points consume the Host's actions; a missing projection grants nothing. */
@@ -25,7 +25,7 @@ export function runPhaseLabel(value?: RunProjection | string | null): string {
   return ({ done: '已完成', failed: '失败', escalated: '已升级处理', unknown: '结果未知', aborted: '已放弃' }[value.outcome ?? 'unknown']);
 }
 
-export const runControlLabels: Record<RunControl, string> = { stop: '停止', resume: '继续', abandon: '放弃' };
+export const runControlLabels: Record<RunControl, string> = { pause: '暂停', stop: '停止', resume: '继续', abandon: '放弃' };
 
 /** A cursor locates retained progress; only an active executing observation is live. */
 export function runNodePresentation(state: OurRunState | null | undefined, node: string, projection?: RunProjection | null) {

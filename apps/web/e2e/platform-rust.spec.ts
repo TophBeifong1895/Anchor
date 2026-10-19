@@ -31,7 +31,7 @@ test('native Rust Host owns manual and scheduled Runs, restart recovery, files a
     await page.getByRole('button', { name: '暂停', exact: true }).click();
     const pause = await pauseResponse;
     expect(pause.status(), await pause.text()).toBe(202);
-    await expect(page.locator('.canvas-head .pill')).toHaveText('已暂停', { timeout: 15000 });
+    await expect(page.locator('.canvas-head .pill')).toHaveText('等待你处理：paused', { timeout: 15000 });
     const runId = (await (await request.get(`${base}/runs`)).json()).runs[0].run;
     const runFile = join(root, 'state/runs', `${runId}.json`);
     const paused = JSON.parse(await readFile(runFile, 'utf8'));
@@ -64,7 +64,7 @@ test('native Rust Host owns manual and scheduled Runs, restart recovery, files a
     await expect(async () => {
       const runs = (await (await request.get(`${base}/runs`)).json()).runs;
       scheduledRun = runs.find((run: { trigger?: { source: string } }) => run.trigger?.source === 'schedule');
-      expect(scheduledRun?.status).toBe('completed');
+      expect(scheduledRun?.projection).toMatchObject({ phase: 'settled', outcome: 'done' });
     }).toPass({ timeout: 15000 });
     expect(scheduledRun!.trigger).toMatchObject({ source: 'schedule', scheduled_at: at });
     expect((await (await request.get(`${base}/timeline`)).json()).capabilities.scheduling).toBe(true);

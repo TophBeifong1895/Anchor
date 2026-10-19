@@ -49,7 +49,7 @@ describe('channel and resident assistant management', () => {
         phase: execution.waiting ? 'waiting' : 'executing',
         ...(execution.waiting ? { waiting_for: 'human', reason: 'stopped' } : { reason: null }),
         active: execution.active, updated: null,
-        actions: { stop: !execution.waiting, resume: !execution.active, abandon: true },
+        actions: { pause: false, stop: !execution.waiting, resume: !execution.active, abandon: true },
       } });
       if (path === '/runs/current-run/stop') { execution = { ...execution, waiting: true }; return response(202, { asked: 'stop' }); }
       if (path.endsWith('/assistant/retire')) { instance = { assistant: null, needs_recovery: false }; return response(200, { retired: 'current-run' }); }
@@ -145,7 +145,7 @@ describe('channel and resident assistant management', () => {
     execution.active = false;
     execution.projection = {
       phase: 'executing', active: false, reason: null, updated: null,
-      actions: { stop: true, resume: true, abandon: true },
+      actions: { pause: false, stop: true, resume: true, abandon: true },
     };
     await render();
     expect(container.querySelector('.channels-instance-status')?.textContent).toBe('等待接续');
@@ -158,7 +158,7 @@ describe('channel and resident assistant management', () => {
     execution.active = false; execution.waiting = true;
     execution.projection = {
       phase: 'waiting', waiting_for: 'human', active: false, reason: 'stopped', updated: null,
-      actions: { stop: false, resume: false, abandon: false },
+      actions: { pause: false, stop: false, resume: false, abandon: false },
     };
     await render();
     expect(container.querySelector('.run-controls button')).toBeNull();

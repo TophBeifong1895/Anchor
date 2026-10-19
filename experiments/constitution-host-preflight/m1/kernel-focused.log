@@ -1,0 +1,21 @@
+   Compiling anchor-runner-host v0.1.0 (/home/mansteinl/code/anchor-constitution-core/rust/anchor-runner-host)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 13.56s
+     Running unittests src/main.rs (rust/target/debug/deps/anchor_runner_host-2cefc3c824f4cf45)
+
+running 13 tests
+test application::kernel_runs::tests::broken_host_observation_never_blocks_kernel_control_or_lifecycle_reads ... ok
+test application::kernel_runs::tests::pending_pause_survives_host_restart_without_dispatching_another_node ... ok
+test application::kernel_runs::tests::abandon_waiting_probe_is_terminal_and_refuses_late_submission ... ok
+test application::kernel_runs::tests::pending_pause_restart_commits_durable_completion_before_waiting ... ok
+test application::kernel_runs::tests::serial_probe_commits_artifacts_cost_and_phase_through_application ... ok
+test application::kernel_runs::tests::probe_guards_keep_one_writer_and_charge_stale_work_once ... ok
+test application::kernel_runs::tests::pause_on_final_node_preserves_settlement_and_all_committed_results ... ok
+test application::kernel_runs::tests::waiting_recovery_outcome_parks_and_known_failure_settles ... ok
+test application::kernel_runs::tests::stop_refuses_late_result_then_resume_uses_durable_completion ... ok
+test application::kernel_runs::tests::pause_commits_current_result_before_human_wait_and_resume_does_not_replay ... ok
+test application::kernel_runs::tests::stop_preempts_pending_pause_without_repausing_the_resumed_run ... ok
+test application::kernel_runs::tests::restart_recovers_same_invocation_from_completed_or_not_started_fact ... ok
+test application::kernel_runs::tests::uncertain_effect_parks_until_human_verification_then_resume_or_abandon ... ok
+
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 905 filtered out; finished in 0.74s
+

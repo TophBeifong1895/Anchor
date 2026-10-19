@@ -68,25 +68,53 @@ async fn frozen_topology_survives_live_graph_changes_and_missing_definition() {
 async fn list_and_detail_share_status_control_and_attention_projection() {
     let (_root, state) = super::super::tests::fixture();
     let mut record = frozen_record(&state, RunStatus::Ready);
-    for (status, phase, resume, stop, attention) in [
-        (RunStatus::Ready, "ready", true, true, false),
-        (RunStatus::WaitingCall, "waiting_call", true, true, false),
-        (RunStatus::Running, "waiting_resume", true, true, true),
+    for (status, phase, waiter, outcome, resume, stop, attention) in [
+        (RunStatus::Ready, "executing", None, None, true, true, true),
+        (
+            RunStatus::WaitingCall,
+            "waiting",
+            Some("child"),
+            None,
+            false,
+            false,
+            true,
+        ),
+        (
+            RunStatus::Running,
+            "executing",
+            None,
+            None,
+            true,
+            true,
+            true,
+        ),
         (
             RunStatus::WaitingRecovery,
-            "waiting_recovery",
-            true,
-            true,
+            "waiting",
+            Some("effect"),
+            None,
+            false,
+            false,
             true,
         ),
         (
             RunStatus::BudgetStopped,
-            "budget_stopped",
+            "waiting",
+            Some("human"),
+            None,
+            true,
             false,
             true,
-            true,
         ),
-        (RunStatus::Completed, "completed", false, false, false),
+        (
+            RunStatus::Completed,
+            "settled",
+            None,
+            Some("done"),
+            false,
+            false,
+            false,
+        ),
     ] {
         record.status = status;
         record.cursor = None;
@@ -115,7 +143,14 @@ async fn list_and_detail_share_status_control_and_attention_projection() {
         assert_eq!(detail["projection"]["phase"], phase);
         assert_eq!(detail["projection"]["actions"]["resume"], resume);
         assert_eq!(detail["projection"]["actions"]["stop"], stop);
-        assert_eq!(detail["projection"]["needs_attention"], attention);
+        assert_eq!(detail["projection"]["waiting_for"].as_str(), waiter);
+        assert_eq!(detail["projection"]["outcome"].as_str(), outcome);
+        assert_eq!(detail["projection"]["actions"]["pause"], false);
+        assert_eq!(
+            phase == "waiting" || (phase == "executing" && detail["projection"]["active"] == false),
+            attention
+        );
+        assert!(detail["projection"].get("needs_attention").is_none());
     }
 }
 
@@ -132,7 +167,7 @@ async fn incomplete_run_identity_does_not_offer_inactive_controls() {
         .0;
     assert_eq!(
         detail["projection"]["actions"],
-        json!({"pause":false,"stop":false,"resume":false})
+        json!({"pause":false,"stop":false,"resume":false,"abandon":false})
     );
     std::fs::remove_file(
         state
@@ -144,6 +179,6 @@ async fn incomplete_run_identity_does_not_offer_inactive_controls() {
     let runs = projected_runs(&state).await.unwrap();
     assert_eq!(
         runs[0]["projection"]["actions"],
-        json!({"pause":false,"stop":false,"resume":false})
+        json!({"pause":false,"stop":false,"resume":false,"abandon":false})
     );
 }

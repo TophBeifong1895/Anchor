@@ -158,14 +158,3 @@ impl RunApplication {
         Ok(super::legacy_run_view::view(record, worker))
     }
 }
-
-impl RunApplication {
-    pub(super) fn observed_liveness(
-        &self,
-        record: &GraphRunRecord,
-        active: &std::collections::HashMap<String, super::ActiveRun>,
-    ) -> Result<super::RunLiveness, ApplicationError> {
-        let view = self.read_view(record, active.contains_key(&record.run_id))?;
-        Ok(super::RunLiveness::from_view(&view))
-    }
-}

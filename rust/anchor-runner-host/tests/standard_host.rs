@@ -19,8 +19,8 @@ fn standard_host_runs_op_without_goose_model_or_runtime_switch() {
     let run = accepted["run"].as_str().unwrap();
     wait_until("standard Host Op completion", || {
         let (_, detail) = server.request("GET", &format!("/runs/{run}"), None);
-        assert_ne!(detail["state"]["status"], "failed", "{detail}");
-        detail["state"]["status"] == "completed"
+        assert_ne!(detail["projection"]["outcome"], "failed", "{detail}");
+        detail["projection"]["phase"] == "settled" && detail["projection"]["outcome"] == "done"
     });
     let record = host.record_for(run);
     assert_eq!(host.file(&record, "seed", "report.txt"), b"standard-host");
@@ -41,7 +41,7 @@ fn old_state_root_still_allows_op_without_becoming_goose_recovery() {
     let run = accepted["run"].as_str().unwrap();
     wait_until("Op alongside preserved legacy facts", || {
         let (_, detail) = server.request("GET", &format!("/runs/{run}"), None);
-        detail["state"]["status"] == "completed"
+        detail["projection"]["phase"] == "settled" && detail["projection"]["outcome"] == "done"
     });
     assert_eq!(std::fs::read(marker).unwrap(), b"preserve legacy facts");
     assert!(!host.root.path().join("state/goose-acp").exists());

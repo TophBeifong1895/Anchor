@@ -28,7 +28,10 @@ test('Goose Pilot controls one Rust Run and reads its artifact after the Host re
       expect(typeof observed).toBe('string'); acceptedRun = observed as string;
       return { tool: { name: 'run_pause', arguments: { run: acceptedRun } } };
     }
-    if (position === 6) return { text: `已发起并请求暂停 [本次运行](#anchor/run/${acceptedRun})。` };
+    if (position === 6) {
+      expect(toolResultField(body, 'operation')).toBe('pause');
+      return { text: `已发起并请求暂停 [本次运行](#anchor/run/${acceptedRun})。` };
+    }
     if (position === 7 || position === 10) return { tool: { name: 'session_wait', arguments: {} } };
     if (position === 8) return { tool: { name: 'run_resume', arguments: { run: acceptedRun } } };
     if (position === 9) return { text: `已继续 [本次运行](#anchor/run/${acceptedRun})。` };
@@ -62,7 +65,8 @@ test('Goose Pilot controls one Rust Run and reads its artifact after the Host re
     const runId = (await (await request.get(`${base}/runs`)).json()).runs[0].run;
     expect(runId).toBe(acceptedRun);
     const runFile = join(root, 'state/runs', `${runId}.json`);
-    await expect.poll(async () => (await request.get(`${base}/runs/${runId}`).then(response => response.json())).control_requested).toBe('pause');
+    await expect.poll(async () => (await request.get(`${base}/runs/${runId}`).then(response => response.json())).projection)
+      .toMatchObject({ phase: 'executing', active: true });
     let gate = '';
     await expect(async () => {
       const first = (await readdir(join(root, 'workspaces'), { recursive: true })).find(path => path.endsWith('/first.txt'));
@@ -73,7 +77,7 @@ test('Goose Pilot controls one Rust Run and reads its artifact after the Host re
     const paused = JSON.parse(await readFile(runFile, 'utf8'));
     expect(paused.results.first).toHaveLength(1); expect(paused.results.last).toBeUndefined();
     await page.getByRole('link', { name: '本次运行', exact: true }).click();
-    await expect(page.locator('.canvas-head .pill')).toHaveText('已暂停');
+    await expect(page.locator('.canvas-head .pill')).toHaveText('等待你处理：paused');
     await page.screenshot({ path: join(root, 'paused-run.png') });
     await page.getByRole('button', { name: 'Pilot', exact: true }).click();
     await send('继续运行');

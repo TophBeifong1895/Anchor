@@ -162,7 +162,7 @@ export function App() {
     setRun(targetRun); setNode(targetNode); setTargetPath(''); setView('runDetail');
   };
 
-  const controlRun = (what: 'stop' | 'resume' | 'abandon') => perform(what, async () => {
+  const controlRun = (what: 'pause' | 'stop' | 'resume' | 'abandon') => perform(what, async () => {
     await api(`/runs/${run}/${what}`, 'POST');
     await refresh();
   });

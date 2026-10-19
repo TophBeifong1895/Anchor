@@ -4,6 +4,8 @@
 
 当前交回（2026-10-19）：**R2 停止，未验收**。HTTP `pause → stop` 已按本任务接线，但原非状态断言要求当前节点完成并留下产物，实际立即取消后没有完成结果；另有 Session 原 `pause` 拒绝变为 `stop` 接受的冲突。未修改这些断言或控制写入语义。现场、测量和待决入口：[R2 交回](../experiments/constitution-host-preflight/r2/measurement.md)、[验证](../experiments/constitution-host-preflight/r2/verification.md)、[断言清单](constitution-refactor-log.md#r2停止交回2026-10-19)。本文件后面的原验收要求保持不变。
 
+后续以 [全量迁移任务书 M1](constitution-migration-task.md#1-m1完成-r2对外状态词汇) 为准：pause 保留为独立边界控制，S25 作废；不再用判断点减少 50% 决定是否迁移。本文保留 R2 当时要求，历史停止证据不改写。
+
 ## 为什么做这一刀
 
 R 的负结论（判断点 82→90）有前提：任务书要求"对外 JSON 不变"，于是旧产品的 10 种状态全部保留。相位表达不了其中几组区分，规则就只是搬进了适配层。

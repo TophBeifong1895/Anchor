@@ -1,0 +1,225 @@
+   Compiling anchor-runner-host v0.1.0 (/home/mansteinl/code/anchor-constitution-core/rust/anchor-runner-host)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 12.70s
+     Running unittests src/bin/anchor-net-relay.rs (rust/target/debug/deps/anchor_net_relay-72f4a746925f872f)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.00s
+
+     Running unittests src/main.rs (rust/target/debug/deps/anchor_runner_host-2cefc3c824f4cf45)
+
+running 1 test
+test api::tests::kernel_probe::legacy_and_kernel_http_share_executing_paused_and_settled_projections ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 917 filtered out; finished in 1.19s
+
+     Running tests/channel_startup.rs (rust/target/debug/deps/channel_startup-b5afdb12723f5d60)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+     Running tests/goose_acp.rs (rust/target/debug/deps/goose_acp-941599f8049add69)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 23 filtered out; finished in 0.00s
+
+     Running tests/goose_channel.rs (rust/target/debug/deps/goose_channel-409cbe138094bd1a)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 10 filtered out; finished in 0.00s
+
+     Running tests/goose_compaction.rs (rust/target/debug/deps/goose_compaction-66f2d7639acc7a6d)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 10 filtered out; finished in 0.00s
+
+     Running tests/goose_completion.rs (rust/target/debug/deps/goose_completion-c417d3ea719c607d)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 15 filtered out; finished in 0.00s
+
+     Running tests/goose_conversation.rs (rust/target/debug/deps/goose_conversation-31671a112d58fb18)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 19 filtered out; finished in 0.00s
+
+     Running tests/goose_development_environment.rs (rust/target/debug/deps/goose_development_environment-b3ae35abbdee5068)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 7 filtered out; finished in 0.00s
+
+     Running tests/goose_distribution.rs (rust/target/debug/deps/goose_distribution-8af45da6bda2e1e6)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 7 filtered out; finished in 0.00s
+
+     Running tests/goose_elicitation.rs (rust/target/debug/deps/goose_elicitation-b63c27071f541dc6)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 16 filtered out; finished in 0.00s
+
+     Running tests/goose_library.rs (rust/target/debug/deps/goose_library-a3d5a571bf0b94d3)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 7 filtered out; finished in 0.00s
+
+     Running tests/goose_media.rs (rust/target/debug/deps/goose_media-e5de563d18c6a39f)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 12 filtered out; finished in 0.00s
+
+     Running tests/goose_model_settings.rs (rust/target/debug/deps/goose_model_settings-d61bfc07a76136ca)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 8 filtered out; finished in 0.00s
+
+     Running tests/goose_native_activation_spike.rs (rust/target/debug/deps/goose_native_activation_spike-47490c9c600c0a12)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 8 filtered out; finished in 0.00s
+
+     Running tests/goose_persistent_assistant.rs (rust/target/debug/deps/goose_persistent_assistant-587d4f66780e1c30)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 18 filtered out; finished in 0.00s
+
+     Running tests/goose_pilot.rs (rust/target/debug/deps/goose_pilot-572232a4f17ed737)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 8 filtered out; finished in 0.00s
+
+     Running tests/goose_pilot_attachments.rs (rust/target/debug/deps/goose_pilot_attachments-b93aa7c9b40168fd)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 8 filtered out; finished in 0.00s
+
+     Running tests/goose_pilot_authoring.rs (rust/target/debug/deps/goose_pilot_authoring-be645e99b8b3b338)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 10 filtered out; finished in 0.00s
+
+     Running tests/goose_pilot_compaction.rs (rust/target/debug/deps/goose_pilot_compaction-7d276cd49510bbbf)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 9 filtered out; finished in 0.00s
+
+     Running tests/goose_plugin_disclosure.rs (rust/target/debug/deps/goose_plugin_disclosure-71bd6332cc90c4b9)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 7 filtered out; finished in 0.00s
+
+     Running tests/goose_plugin_mcp.rs (rust/target/debug/deps/goose_plugin_mcp-5d4b4bc58f522a4c)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 8 filtered out; finished in 0.00s
+
+     Running tests/goose_plugin_summary.rs (rust/target/debug/deps/goose_plugin_summary-13b4f96962c0c9aa)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 8 filtered out; finished in 0.00s
+
+     Running tests/goose_plugin_turns.rs (rust/target/debug/deps/goose_plugin_turns-211667342319386b)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 10 filtered out; finished in 0.00s
+
+     Running tests/goose_responses.rs (rust/target/debug/deps/goose_responses-10f8a85719bd4e1a)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 8 filtered out; finished in 0.00s
+
+     Running tests/goose_session_calls.rs (rust/target/debug/deps/goose_session_calls-e8f03f8ea763a180)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 10 filtered out; finished in 0.00s
+
+     Running tests/goose_trace.rs (rust/target/debug/deps/goose_trace-ab4b6d9ecf9df2ad)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 8 filtered out; finished in 0.00s
+
+     Running tests/local_inputs.rs (rust/target/debug/deps/local_inputs-4da8c640864f0240)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 4 filtered out; finished in 0.00s
+
+     Running tests/local_network.rs (rust/target/debug/deps/local_network-6c5e9aeaee9825e3)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+     Running tests/multinode.rs (rust/target/debug/deps/multinode-d7fc1033c5b5905b)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.00s
+
+     Running tests/native_plugins.rs (rust/target/debug/deps/native_plugins-599685bab9b0045c)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 8 filtered out; finished in 0.00s
+
+     Running tests/parallel.rs (rust/target/debug/deps/parallel-c50bd3d73a13cccc)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.00s
+
+     Running tests/routing.rs (rust/target/debug/deps/routing-e0ea5884ab70de6e)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 5 filtered out; finished in 0.00s
+
+     Running tests/standalone_graph_call.rs (rust/target/debug/deps/standalone_graph_call-d95c28224a82f0cf)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s
+
+     Running tests/standalone_library.rs (rust/target/debug/deps/standalone_library-eff07c53685bdab8)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+     Running tests/standard_host.rs (rust/target/debug/deps/standard_host-3306f77d9e129cfb)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.00s
+
+     Running tests/writer_lease.rs (rust/target/debug/deps/writer_lease-e929f9f918e036d0)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.00s
+

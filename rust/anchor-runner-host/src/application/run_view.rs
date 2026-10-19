@@ -16,6 +16,7 @@ impl From<&GraphRunRecord> for GraphProgress {
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 pub(crate) struct AvailableActions {
+    pub(crate) pause: bool,
     pub(crate) stop: bool,
     pub(crate) resume: bool,
     pub(crate) abandon: bool,
@@ -32,6 +33,7 @@ pub(crate) struct RunView {
 impl RunView {
     pub(crate) fn actions(&self) -> AvailableActions {
         AvailableActions {
+            pause: self.phase == Phase::Executing && self.worker,
             stop: self.phase == Phase::Executing,
             resume: (self.phase == Phase::Executing
                 || matches!(
@@ -110,6 +112,7 @@ mod tests {
                 assert_eq!(
                     view.actions(),
                     AvailableActions {
+                        pause: index == 0 && worker,
                         stop: index == 0,
                         resume: index < 2 && !worker,
                         abandon: index < 4

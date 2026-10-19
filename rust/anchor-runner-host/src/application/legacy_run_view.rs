@@ -139,6 +139,7 @@ mod tests {
                     (phase_name, waiter, outcome, reason, worker),
                     "{status:?}/{worker}"
                 );
+                assert_eq!(projected.actions.pause, phase_name == "executing" && worker);
                 assert_eq!(projected.actions.stop, phase_name == "executing");
                 assert_eq!(
                     projected.actions.resume,
@@ -149,7 +150,10 @@ mod tests {
                 assert_eq!(json.get("waiting_for").is_some(), waiter.is_some());
                 assert_eq!(json.get("outcome").is_some(), outcome.is_some());
                 assert!(json.get("status").is_none());
-                assert!(json["actions"].get("pause").is_none());
+                assert_eq!(
+                    json["actions"]["pause"],
+                    phase_name == "executing" && worker
+                );
             }
         }
         assert!(

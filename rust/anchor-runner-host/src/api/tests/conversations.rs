@@ -466,7 +466,7 @@ async fn conversation_resume_is_not_blocked_by_another_session_on_the_same_graph
         "release after pause request",
     )
     .unwrap();
-    wait_run_status(&state, bob_run, RunStatus::Stopped).await;
+    wait_run_status(&state, bob_run, RunStatus::Paused).await;
     let bob_next = request(8, "bob", Some(bob_run));
     assert_eq!(
         call(
@@ -561,7 +561,7 @@ async fn superseded_conversation_cannot_resume_or_recover_its_wait_child() {
         "release after child pause request",
     )
     .unwrap();
-    wait_run_status(&state, &child_run, RunStatus::Stopped).await;
+    wait_run_status(&state, &child_run, RunStatus::Paused).await;
     wait_run_status(&state, first_run, RunStatus::WaitingCall).await;
     stop_run(&app, &state, first_run).await;
     wait_run_status(&state, &child_run, RunStatus::Stopped).await;
@@ -707,7 +707,7 @@ async fn superseded_conversation_keeps_detached_child_independent() {
         "release after detached child pause request",
     )
     .unwrap();
-    wait_run_status(&state, &child_run, RunStatus::Stopped).await;
+    wait_run_status(&state, &child_run, RunStatus::Paused).await;
     stop_run(&app, &state, &child_run).await;
     write_graph_bundle(
         &state.bundle_root,

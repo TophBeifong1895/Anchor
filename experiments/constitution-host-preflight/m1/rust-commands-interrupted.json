@@ -1,0 +1,43 @@
+[
+  {
+    "name": "sandbox",
+    "command": [
+      "cargo",
+      "build",
+      "--manifest-path",
+      "rust/Cargo.toml",
+      "-p",
+      "anchor-sandbox-bwrap",
+      "--bins"
+    ],
+    "exit_code": 0
+  },
+  {
+    "name": "fmt",
+    "command": [
+      "cargo",
+      "fmt",
+      "--manifest-path",
+      "rust/Cargo.toml",
+      "--all",
+      "--",
+      "--check"
+    ],
+    "exit_code": 0
+  },
+  {
+    "name": "clippy",
+    "command": [
+      "cargo",
+      "clippy",
+      "--manifest-path",
+      "rust/Cargo.toml",
+      "--workspace",
+      "--all-targets",
+      "--",
+      "-D",
+      "warnings"
+    ],
+    "exit_code": 0
+  }
+]

@@ -1,0 +1,716 @@
+   Compiling ring v0.17.14
+   Compiling rustls-webpki v0.103.15
+   Compiling rcgen v0.14.10
+   Compiling rustls v0.23.45
+   Compiling tokio-rustls v0.26.6
+   Compiling rustls-platform-verifier v0.7.1
+   Compiling tungstenite v0.29.0
+   Compiling hyper-rustls v0.27.10
+   Compiling reqwest v0.12.28
+   Compiling reqwest v0.13.5
+   Compiling tokio-tungstenite v0.29.0
+   Compiling rmcp v2.2.0
+   Compiling anchor-wecom-gateway v0.1.0 (/home/mansteinl/code/anchor-constitution-core/rust/anchor-wecom-gateway)
+   Compiling anchor-scholarly v0.1.0 (/home/mansteinl/code/anchor-constitution-core/rust/anchor-scholarly)
+   Compiling anchor-mcp-host v0.1.0 (/home/mansteinl/code/anchor-constitution-core/rust/anchor-mcp-host)
+   Compiling anchor-docmost-tools v0.1.0 (/home/mansteinl/code/anchor-constitution-core/rust/anchor-docmost-tools)
+   Compiling anchor-rsi v0.1.0 (/home/mansteinl/code/anchor-constitution-core/rust/anchor-rsi)
+   Compiling anchor-wecom-tools v0.1.0 (/home/mansteinl/code/anchor-constitution-core/rust/anchor-wecom-tools)
+   Compiling anchor-network-tools v0.1.0 (/home/mansteinl/code/anchor-constitution-core/rust/anchor-network-tools)
+   Compiling anchor-runner-host v0.1.0 (/home/mansteinl/code/anchor-constitution-core/rust/anchor-runner-host)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 18.74s
+     Running unittests src/lib.rs (rust/target/debug/deps/anchor_devtools-23efed1957ac5c3d)
+
+running 86 tests
+test candidate::evidence::tests::source_and_escaping_archive_members_are_rejected ... ok
+test candidate::evidence::tests::only_one_executed_distribution_test_can_pass ... ok
+test candidate::evidence::tests::old_three_request_scenario_and_incomplete_provider_script_are_rejected ... ok
+test candidate::evidence::tests::partial_fixture_evidence_counts_actual_requests_without_approving_the_scenario ... ok
+test candidate::evidence::tests::absent_or_duplicate_scenario_evidence_is_not_a_pass ... ok
+test candidate::tests::build_environment_only_inherits_tool_locations_and_is_offline ... ok
+test candidate::tests::evidence_is_private_and_existing_evidence_is_never_overwritten ... ok
+test candidate::evidence::tests::missing_checks_changed_sessions_or_extra_effects_fail_closed ... ok
+test candidate::tests::candidate_selects_only_the_release_distribution_recovery_test ... ok
+test candidate::tests::spawn_failure_is_recorded_with_no_invented_exit_code ... ok
+test candidate::tests::failed_command_retains_argv_exit_logs_and_cannot_become_passed ... ok
+test candidate::tests::unreviewed_goose_is_rejected_before_any_build_or_evidence_creation ... ok
+test cutover::tests::a_changed_ancestor_is_not_a_replaced_ancestor ... ok
+test candidate::evidence::tests::missing_or_changed_official_binary_and_web_hashes_are_rejected ... ok
+test cutover::tests::all_known_terminal_run_statuses_are_quiescent ... ok
+test cutover::tests::output_dir_without_prepare_is_read_only ... ok
+test cutover::tests::inline_flag_values_preserve_paths_and_repeatable_credentials ... ok
+test cutover::tests::ready_inventory_retains_original_report_and_rollback_contract ... ok
+test cutover::tests::non_regular_roots_and_special_entries_fail_closed_without_blocking_reads ... ok
+test cutover::tests::pending_admissions_and_orphan_run_directories_block ... ok
+test cutover::tests::missing_malformed_and_symlink_config_fail_closed ... ok
+test goose::tests::accepts_native_pilot_and_explicit_pre_admission_rejection_shapes ... ok
+test goose::tests::commands_select_standard_ignored_goose_suites ... ok
+test cutover::tests::missing_legacy_root_blocks_even_with_prepare_and_attestations ... ok
+test goose::tests::rejects_non_fixture_unbound_incomplete_or_real_model_evidence ... ok
+test cutover::tests::default_inventory_is_read_only_and_requires_attestations ... ok
+test goose::tests::suite_accepts_filtered_helpers_but_not_missing_or_ignored_fixtures ... ok
+test preflight::tests::deployment_templates_use_concrete_release_paths_and_secret_placeholders ... ok
+test preflight::tests::explicit_isolation_requires_a_relay_that_exists ... ok
+test preflight::tests::isolation_defaults_to_a_relay_beside_the_goose_binary ... ok
+test preflight::tests::listener_rejects_invalid_hosts_brackets_and_ports ... ok
+test preflight::tests::model_endpoint_rejects_unsafe_urls_without_echoing_credentials_or_url_content ... ok
+test preflight::tests::non_loopback_listeners_require_valid_unique_private_api_keys ... ok
+test preflight::tests::optional_gateway_unit_uses_rust_binary_and_private_shared_contract ... ok
+test cutover::tests::referenced_run_ids_collide_with_rust_metadata_even_without_legacy_run ... ok
+test preflight::tests::refuses_held_writer_lease_without_modifying_lock_bytes_or_removing_inode ... ok
+test preflight::tests::rejects_a_context_window_that_is_not_a_positive_integer ... ok
+test preflight::tests::rejects_env_file_permissions_symlinks_and_non_regular_files ... ok
+test preflight::tests::public_check_cannot_override_the_fixed_goose_pin_from_environment_or_manifest ... ok
+test preflight::tests::checks_actual_elf_interpreter_availability_and_dynamic_library_inventory ... ok
+test goose::tests::nested_evidence_requires_actual_provider_files_and_current_host ... ok
+test preflight::tests::rejects_model_controls_invalid_wire_protocol_and_non_string_aliases ... ok
+test preflight::tests::rejects_mutable_root_permissions_nesting_and_overlap_with_runtime ... ok
+test preflight::tests::rejects_symlinked_bundle_and_other_release_host_but_accepts_selected_host_alias ... ok
+test preflight::tests::rejects_symlinked_or_untrusted_lock_directory_and_writer_lock ... ok
+test preflight::tests::rejects_unsafe_command_allowlist_and_missing_bubblewrap_without_execution ... ok
+test preflight::tests::rejects_web_root_from_another_release_and_missing_web_root ... ok
+test preflight::tests::rejects_false_elf_metadata_and_non_elf_binaries_even_with_consistent_digests ... ok
+test preflight::tests::rejects_wrong_pin_model_placeholder_and_missing_shared_network_authorization ... ok
+test preflight::tests::systemd_service_has_rust_only_lifecycle_and_no_preflight_start_hook ... ok
+test preflight::tests::valid_fixture_passes_with_non_sensitive_json_and_releases_writer_lease ... ok
+test tests::parses_multiple_suite_summaries ... ok
+test tests::records_ignored_and_filtered_tests_instead_of_hiding_them ... ok
+test tests::rejects_failed_or_malformed_test_summaries ... ok
+test tests::retains_actual_failed_suite_counts_for_diagnostics ... ok
+test preflight::tests::rejects_wrong_actual_elf_architecture_and_non_executable_entry_point ... ok
+test preflight::tests::rejects_runtime_platform_executable_inventory_and_mode_drift ... ok
+test cutover::tests::empty_legacy_root_is_only_a_migration_candidate ... ok
+test cutover::tests::configured_and_repeatable_explicit_credential_paths_are_resolved_without_values ... ok
+test cutover::tests::duplicate_legacy_run_ids_are_reported ... ok
+test cutover::tests::immutable_sqlite_handles_uri_characters_and_does_not_create_sidecars ... ok
+test cutover::tests::changed_inventory_blocks_preparation_before_creating_output ... ok
+test cutover::tests::root_overlaps_and_output_overlaps_block_preparation ... ok
+test cutover::tests::observed_readonly_mode_does_not_replace_service_stop_attestation ... ok
+test cutover::tests::blocked_credential_review_does_not_create_preparation_output ... ok
+test cutover::tests::held_output_directory_lock_blocks_without_writing_files ... ok
+test cutover::tests::credentials_are_only_listed_and_review_is_required ... ok
+test cutover::tests::argument_errors_are_clear_and_do_not_inventory_default_roots ... ok
+test preflight::tests::rejects_inventory_tampering_duplicate_unsafe_missing_and_symlinked_files ... ok
+test cutover::tests::prepare_rejects_symlink_output_and_ancestors_without_following_them ... ok
+test cutover::tests::malformed_session_identity_status_and_run_references_fail_closed ... ok
+test cutover::tests::explicit_credentials_are_never_read_even_when_named_as_records ... ok
+test cutover::tests::prepare_writes_only_private_atomic_manifest_and_index_and_is_idempotent ... ok
+test cutover::tests::changed_legacy_facts_do_not_overwrite_a_previous_preparation ... ok
+test cutover::tests::symlink_roots_ancestors_and_entries_fail_closed ... ok
+test cutover::tests::unread_sqlite_databases_with_sidecars_still_block_the_backup_index ... ok
+test cutover::tests::unfinished_or_unreadable_runs_block_and_leave_records_unchanged ... ok
+test cutover::tests::prepare_rejects_non_private_or_nonempty_output_without_chmod_or_overwrite ... ok
+test cutover::tests::prepare_accepts_private_empty_directory_and_nested_new_directory ... ok
+test cutover::tests::unsafe_rust_run_and_metadata_entries_fail_closed ... ok
+test cutover::tests::malformed_rust_fact_directories_fail_closed_instead_of_hiding_ids ... ok
+test cutover::tests::held_and_unknown_writer_locks_block_and_are_not_created ... ok
+test cutover::tests::running_turn_and_all_rust_id_collisions_are_detected ... ok
+test cutover::tests::prepare_refuses_changed_partial_linked_and_non_private_prior_outputs ... ok
+test cutover::tests::corrupt_sqlite_and_invalid_turn_ids_statuses_fail_closed ... ok
+test cutover::tests::sqlite_sidecars_fail_closed_for_legacy_and_rust_including_dangling_links ... ok
+
+test result: ok. 86 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.94s
+
+     Running unittests src/main.rs (rust/target/debug/deps/anchor_devtools-6885434962be51e2)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/cli.rs (rust/target/debug/deps/cli-c21688b1f7aad11a)
+
+running 6 tests
+test preflight_without_flags_calls_validation_and_fails_closed_when_unconfigured ... ok
+test cutover_forwards_paths_and_returns_blocked_json_with_exit_two ... ok
+test candidate_checks_explicit_and_environment_goose_before_running_build_tools ... ok
+test fixture_aliases_require_an_explicit_pinned_binary_before_launching_cargo ... ok
+test help_is_available_without_provider_or_fixture_execution ... ok
+test unsupported_live_mode_unknown_flags_and_missing_paths_are_errors ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+     Running unittests src/lib.rs (rust/target/debug/deps/anchor_distribution-76e7900e35ecd38f)
+
+running 33 tests
+test install::tests::model_input_is_literal_data_and_errors_do_not_contain_values ... ok
+test tests::partial_archive_read_failure_cleans_candidate_and_never_publishes ... ok
+test tests::public_api_requires_the_fixed_goose_identity ... ok
+test tests::rejects_parent_traversal_and_invalid_output_extensions ... ok
+test platform::tests::public_platform_api_cannot_override_fixed_goose_or_bootstrap_pins ... ok
+test tests::long_ustar_paths_fail_before_any_archive_is_published ... ok
+test platform::tests::bootstrap_must_be_static_even_when_private_test_pins_match ... ok
+test tests::rejects_unsafe_duplicate_reserved_and_source_tool_names ... ok
+test tests::academic_plugin_requires_scholarly_binary_and_nonacademic_bundle_rejects_it ... ok
+test platform::tests::platform_rejects_missing_web_sources_state_credentials_and_unsafe_inputs ... ok
+test tests::rejects_special_files_and_non_executable_or_non_elf_binaries ... ok
+test tests::rejects_undeclared_bundle_files_plugin_files_and_empty_directories ... ok
+test tests::replaced_output_parent_is_not_used_for_publication ... ok
+test tests::rejects_symlink_inputs_roots_ancestors_outputs_and_resources ... ok
+test tests::rejects_graph_plugin_digest_and_manifest_admission_errors ... ok
+test tests::input_mutation_replacement_permissions_and_tree_changes_never_publish ... ok
+test tests::structured_credentials_private_keys_and_url_userinfo_are_rejected_without_values_in_errors ... ok
+test tests::refuses_existing_outputs_and_preserves_a_concurrent_publish_winner ... ok
+test platform::tests::platform_rechecks_sources_and_refuses_archive_overwrite ... ok
+test install::tests::installer_refuses_links_duplicates_non_platform_payload_and_unlisted_paths ... ok
+test tests::compiled_javascript_is_only_allowed_in_explicit_web_assets ... ok
+test tests::rejects_source_credential_state_and_non_utf8_paths ... ok
+test tests::structured_environment_references_remain_deployment_inputs ... ok
+test tests::native_plugin_elf_keeps_execute_mode_and_environment_references_are_not_expanded ... ok
+test tests::first_party_binary_inputs_are_required_only_for_referenced_plugins ... ok
+test tests::binary_and_resource_hardlinks_require_independent_copies ... ok
+test platform::tests::platform_has_no_business_graph_and_exact_bootstrap_and_network_inventory ... ok
+test tests::academic_plugin_package_includes_scholarly_binary_and_refreshes_frozen_resource_summary ... ok
+test tests::referenced_first_party_plugins_include_exact_native_binaries_in_the_frozen_closure ... ok
+test tests::deterministic_archive_has_exact_layout_normalized_headers_and_verified_inventory ... ok
+test install::tests::wrong_archive_digest_invalid_model_and_symlink_inputs_leave_no_installation ... ok
+test install::tests::fresh_install_without_model_file_starts_with_web_managed_configuration ... ok
+test install::tests::fresh_install_separates_release_and_private_model_and_never_creates_a_business_graph ... ok
+
+test result: ok. 33 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.04s
+
+     Running unittests src/main.rs (rust/target/debug/deps/anchor_distribution-7f2f21aab758ac42)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/bin/anchor-platform.rs (rust/target/debug/deps/anchor_platform-79d7948162904ee0)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/cli.rs (rust/target/debug/deps/cli-8ca7ecb35588fbf1)
+
+running 6 tests
+test cli_packages_pinned_goose_and_reports_archive_hash_without_executing_inputs ... ignored, separate local pinned-binary packaging smoke; requires ANCHOR_DISTRIBUTION_GOOSE
+test cli_rejects_overwrite_before_reading_other_inputs ... ok
+test cli_exposes_the_agreed_inputs_without_a_pin_bypass ... ok
+test cli_rejects_missing_required_inputs_and_malformed_tool_mappings ... ok
+test cli_platform_requires_native_bootstrap_and_rejects_graph_mode_inputs ... ok
+test cli_rejects_an_unpinned_elf_without_creating_output ... ok
+
+test result: ok. 5 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/platform_cli.rs (rust/target/debug/deps/platform_cli-b5f4a066d01411e6)
+
+running 4 tests
+test native_launcher_rejects_start_outside_a_private_installation ... ok
+test native_platform_cli_accepts_install_without_model_config ... ok
+test native_platform_cli_does_not_evaluate_or_print_model_config ... ok
+test native_platform_cli_exposes_install_and_start_without_runtime_grant_flags ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (rust/target/debug/deps/anchor_docmost_tools-ddc4ae952b1b1eaa)
+
+running 7 tests
+test package::tests::nonregular_nonexecutables_and_running_identity_mismatch_are_rejected ... ok
+test package::tests::replaced_ancestor_and_symlinked_source_parent_fail_closed ... ok
+test package::tests::complete_fixture_copy_preserves_bytes_and_execute_mode ... ok
+test package::tests::changed_copy_bytes_or_length_fail_integrity_check ... ok
+test package::tests::late_destination_collision_preserves_other_writer_and_cleans_staging ... ok
+test package::tests::parent_replacement_before_creation_or_rename_never_redirects_writes ... ok
+test package::tests::source_replacement_mutation_and_permission_changes_never_publish ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.56s
+
+     Running unittests src/main.rs (rust/target/debug/deps/anchor_docmost_tools-7567c401198b7866)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/boundaries.rs (rust/target/debug/deps/boundaries-dce1f8c4ea80d440)
+
+running 4 tests
+test default_config_is_fixed_and_endpoint_rejects_credentials_and_invalid_urls ... ok
+test injected_root_must_be_an_absolute_existing_directory_without_symlinks ... ok
+test paths_reject_escape_all_symlinks_directories_fifo_and_socket_without_http ... ok
+test uuid_mime_size_and_missing_key_fail_before_transport ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/package.rs (rust/target/debug/deps/package-d8bc046d6b144353)
+
+running 4 tests
+test failed_package_leaves_no_partial_destination_or_success_output ... ok
+test package_refuses_existing_destinations_and_any_destination_symlink ... ok
+test concurrent_packages_publish_once_without_overwriting ... ok
+test native_package_has_only_manifest_original_skill_and_current_executable ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.44s
+
+     Running tests/stdio.rs (rust/target/debug/deps/stdio-4fada02be03934e1)
+
+running 4 tests
+test no_arguments_defaults_to_stdio_and_ignores_root_and_endpoint_environment ... ok
+test cli_rejects_endpoint_credentials_invalid_url_and_host_root_override ... ok
+test real_stdio_initializes_lists_original_schema_and_uploads_fixed_root ... ok
+test stdio_without_key_does_not_load_dotenv_or_send_http ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
+
+     Running tests/upload.rs (rust/target/debug/deps/upload-d1d35db94c603f1d)
+
+running 4 tests
+test multipart_preserves_original_fields_filename_bytes_and_json ... ok
+test http_redirect_json_and_metadata_failures_are_redacted_and_not_retried ... ok
+test maximum_size_is_inclusive_and_filename_url_is_percent_encoded ... ok
+test lost_upload_response_does_not_resend_the_request ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.25s
+
+     Running unittests src/lib.rs (rust/target/debug/deps/anchor_file_lease-4e3c49a0777b97b5)
+
+running 3 tests
+test tests::shared_and_exclusive_policies_and_failed_acquisition_preserve_ownership ... ok
+test tests::early_return_releases_even_with_an_inherited_descriptor ... ok
+test tests::unwinding_releases_a_lease_without_waiting_for_its_duplicate ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (rust/target/debug/deps/anchor_graph_host-b699a41cfbf2b99d)
+
+running 42 tests
+test dependencies::tests::a_manifest_mcp_declaration_cannot_be_inside_mutable_state ... ok
+test dependencies::tests::ordinary_mutable_state_remains_available_beside_mcp_declarations ... ok
+test dependencies::tests::a_declaration_is_read_only_from_its_own_section ... ok
+test dependencies::tests::the_default_mcp_declaration_cannot_be_mutable ... ok
+test dependencies::tests::mutable_resolution_keeps_missing_tails_and_refuses_unsafe_existing_components ... ok
+test dependencies::tests::the_declaration_digest_ignores_requirement_order ... ok
+test bundle::tests::loads_graph_through_shared_admission_and_returns_only_plugin_references ... ok
+test bundle::tests::retains_authoring_graph_and_layout_while_loading_flat_runtime_snapshot ... ok
+test bundle::tests::rejects_graph_symlinks_and_any_plugin_directory ... ok
+test bundle::tests::manifest_plugin_set_matches_references_after_module_expansion ... ok
+test bundle::tests::a_bundle_that_still_carries_plugin_bytes_is_refused_with_a_re_export_hint ... ok
+test bundle::tests::rejects_extra_top_level_files_and_the_old_manifest_shape ... ok
+test dependencies::tests::a_mistyped_manifest_field_is_refused_instead_of_ignored ... ok
+test graph_call::spec_tests::input_map_resolves_rfc6901_pointers_against_the_parent_input ... ok
+test graph_call::spec_tests::accepts_session_and_rejects_unknown_fields_and_wrong_types ... ok
+test mcp::tests::a_server_environment_is_refused_and_points_at_the_dependency_declaration ... ok
+test plugin_authorization::tests::authorization_tracks_host_grants_without_freezing_business_code ... ok
+test plugin_authorization::tests::remote_authority_keeps_credential_selectors_but_ignores_literal_rotation ... ok
+test mcp::tests::a_mistyped_manifest_field_is_refused_on_the_mcp_read_path_too ... ok
+test plugin_catalog::tests::unknown_plugin_is_rejected ... ok
+test mcp::tests::mcp_environment_and_paths_are_validated_before_resolution ... ok
+test bundle::tests::rejects_manifest_unknown_fields_graph_paths_and_plugin_set_drift ... ok
+test mcp::tests::host_scoped_mcp_credentials_do_not_change_the_declaration_or_process_environment ... ok
+test mcp::tests::the_view_token_is_kept_verbatim_and_requires_a_declaration ... ok
+test plugin_catalog::tests::a_mistyped_dependencies_field_is_refused_by_the_catalog ... ok
+test plugin_catalog::tests::bundle_mutation_changes_digest ... ok
+test plugin_catalog::tests::package_local_credentials_are_rejected ... ok
+test plugin_catalog::tests::symlink_escape_is_rejected ... ok
+test plugin_catalog::tests::plugin_root_symlink_is_accepted ... ok
+test plugin_catalog::tests::adopts_manifest_skills_description_channels_and_mcp_merge ... ok
+test plugin_catalog::tests::resolves_sorted_bundle_digest_resources_and_secret_free_mcp_names ... ok
+test plugin_catalog::tests::a_view_path_is_derived_from_the_declaration_both_halves_agree_on ... ok
+test plugin_catalog::tests::an_escaping_or_mistyped_mutable_declaration_is_refused ... ok
+test plugin_catalog::tests::writing_into_a_declared_mutable_path_does_not_change_the_digest ... ok
+test plugin_catalog::tests::a_network_requirement_is_strict_and_part_of_the_approved_plugin_code ... ok
+test plugin_catalog::tests::metadata_is_live_and_separate_from_the_execution_content_identity ... ok
+test graph_call::session_tests::session_delivery_confirmation_requires_completed_child ... ok
+test graph_call::session_tests::session_rejection_or_invalid_context_never_admits_child ... ok
+test graph_call::session_tests::session_detach_uses_session_host_dispatch ... ok
+test graph_call::session_tests::session_wait_reuses_admission_and_exports_completed_result ... ok
+test graph_call::session_tests::ordinary_host_rejects_session_but_keeps_ordinary_wait_behavior ... ok
+test graph_call::session_tests::an_existing_child_resolves_current_library_code_and_records_its_observations ... ok
+
+test result: ok. 42 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.19s
+
+     Running tests/child_lifecycle.rs (rust/target/debug/deps/child_lifecycle-3d720b9802a7bf29)
+
+running 4 tests
+test runner_acquire_error_releases_registration_and_preserves_error ... ok
+test runner_save_error_releases_registration_and_preserves_error ... ok
+test cooperative_cancellation_waits_for_node_exit_and_preserves_stopped_cursor ... ok
+test successful_wait_releases_registration_without_cancelling ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.13s
+
+     Running tests/in_process.rs (rust/target/debug/deps/in_process-682186ccc47ec44c)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (rust/target/debug/deps/anchor_kernel-27a9b5c9d1d973a4)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/accounting_lifecycle.rs (rust/target/debug/deps/accounting_lifecycle-672eb1b36c564f65)
+
+running 12 tests
+test agent_cannot_stop_even_with_observation_evidence ... ok
+test concurrent_branches_charge_stale_work_once_and_retry_at_zero_cost ... ok
+test every_recorded_verdict_including_unauthorized_and_pending_costs_resources ... ok
+test approval_observation_also_obeys_the_targets_history_budget ... ok
+test stopped_task_refuses_a_late_code_result_without_advancing_state ... ok
+test unauthorized_record_can_exhaust_budget_without_authorizing_the_change ... ok
+test host_observation_can_stop_but_only_a_human_can_release_the_wait ... ok
+test returned_work_exhausts_budget_on_the_second_submission_without_cost_versions ... ok
+test observed_unknown_effect_parks_the_task_without_a_human_impersonation ... ok
+test waiting_gate_refuses_even_unauthorized_or_stale_non_lifecycle_requests ... ok
+test waiting_work_that_exhausts_budget_settles_once_without_applying_work ... ok
+test waiting_rejects_non_lifecycle_work_for_every_identity_and_charges_it ... ok
+
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/constitution.rs (rust/target/debug/deps/constitution-fcd08c3522d578bc)
+
+running 17 tests
+test authority_comes_from_the_host_not_the_submission ... ok
+test accepted_is_not_correct ... ok
+test a_graph_opens_slots_and_judges_them_without_instructing_anyone ... ok
+test completion_is_a_typed_submission_not_a_claim ... ok
+test budget_settles_the_task_exactly_once ... ok
+test only_people_change_validators ... ok
+test every_verdict_is_recorded_and_measured_including_refusals ... ok
+test stale_views_are_returned_not_merged ... ok
+test the_task_lifecycle_needs_no_rule_per_verb ... ok
+test unknown_effects_block_until_observed_and_are_never_replayed ... ok
+test people_decide_pending_changes_bound_to_what_they_saw ... ok
+test waiting_is_one_rule_not_scattered_checks ... ok
+test whoever_a_task_waits_on_releases_it ... ok
+test ids_cannot_escape_the_store_root ... ok
+test a_torn_history_line_is_ignored ... ok
+test file_store_survives_restart_with_full_history ... ok
+test crash_between_record_and_state_recovers_by_reading_the_record ... ok
+
+test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.12s
+
+     Running tests/storage_regressions.rs (rust/target/debug/deps/storage_regressions-02ab140727669312)
+
+running 8 tests
+test memory_store_derives_spent_from_every_record_without_advancing_versions ... ok
+test valid_json_without_terminating_newline_is_not_a_record_and_is_trimmed_on_append ... ok
+test existing_complete_record_bytes_are_preserved_including_json_whitespace ... ok
+test store_cost_sum_saturates_instead_of_overflowing ... ok
+test torn_tail_is_removed_before_append_and_all_complete_records_remain_readable ... ok
+test file_store_derives_spent_from_every_record_including_after_restart ... ok
+test accepted_stop_after_torn_tail_recovers_on_restart_when_state_write_is_lost ... ok
+test malformed_complete_records_are_corrupt_in_middle_and_at_end ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.18s
+
+     Running unittests src/lib.rs (rust/target/debug/deps/anchor_library-e533218c0b133bfb)
+
+running 21 tests
+test oauth::tests::deserializing_invalid_binding_fails_before_storage_can_use_it ... ok
+test oauth::tests::authorization_transaction_rejects_unsafe_and_ambiguous_configuration ... ok
+test oauth::tests::authorization_transaction_builds_owner_bound_pkce_url_and_consumes_callback ... ok
+test oauth::tests::authorization_transaction_rejects_mismatched_expired_and_provider_error_callbacks ... ok
+test reclaim::tests::an_abandoned_package_pass_keeps_the_removals_that_happened ... ok
+test oauth::tests::pkce_s256_uses_the_rfc_7636_test_vector ... ok
+test source::tests::git_ignores_host_configuration_credentials_and_redirects ... ok
+test source::tests::parses_repository_tree_paths_and_preserves_revision ... ok
+test source::tests::rejects_hosts_credentials_queries_normalization_and_option_injection ... ok
+test filesystem::tests::rollback_durability_failure_is_explicitly_uncertain ... ok
+test filesystem::tests::failed_exchange_does_not_move_the_previous_install ... ok
+test filesystem::tests::publication_never_clobbers_a_concurrently_created_destination ... ok
+test filesystem::tests::replacement_exchange_keeps_previous_tree_until_publication_is_durable ... ok
+test oauth::tests::invalid_pending_callback_consumes_only_its_own_transaction ... ok
+test oauth::tests::pending_authorization_survives_restart_and_is_consumed_once ... ok
+test filesystem::tests::failed_publication_sync_rolls_back_both_new_and_replaced_installs ... ok
+test source::tests::subprocess_failure_is_sanitized_and_timeout_reaps_child ... ok
+test oauth::tests::invalid_endpoints_and_missing_refresh_fail_closed ... ok
+test oauth::tests::stores_isolated_private_records_without_secret_debug_output ... ok
+test oauth::tests::expired_refresh_is_single_winner_across_clients ... ok
+test oauth::tests::revoked_refresh_removes_authorization_but_transient_failure_preserves_it ... ok
+
+test result: ok. 21 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.13s
+
+     Running unittests src/main.rs (rust/target/debug/deps/anchor_library-94f1ba7fc2079bdf)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/cli.rs (rust/target/debug/deps/cli-80170db6b667b03e)
+
+running 2 tests
+test the_cli_refuses_to_install_a_plugin_that_declares_dependencies ... ok
+test the_cli_still_reviews_the_same_candidate ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+     Running tests/development.rs (rust/target/debug/deps/development-82cdf669f4c33470)
+
+running 10 tests
+test cancelling_before_registration_does_not_trap_session_cleanup ... ok
+test read_only_selection_does_not_create_an_unknown_scope_lease ... ok
+test a_removed_live_lease_is_never_recreated_while_an_old_command_holds_its_inode ... ok
+test cleanup_never_waits_for_the_dependency_writer_or_reverses_its_lock_order ... ok
+test active_scope_blocks_cleanup_and_persistent_references_survive_restart ... ok
+test missing_live_scope_survives_restart_until_the_host_explicitly_releases_it ... ok
+test releasing_a_session_keeps_formal_plugin_bytes_and_reclaims_only_its_private_dependencies ... ok
+test separate_session_incarnations_have_independent_bindings_and_cleanup ... ok
+test missing_or_corrupt_ownership_does_not_authorize_cleanup_of_existing_views ... ok
+test missing_or_corrupt_scope_or_view_reference_refuses_all_reclamation ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.00s
+
+     Running tests/install.rs (rust/target/debug/deps/install-3631be532a3ce22e)
+
+running 21 tests
+test lease_holder_child ... ok
+test invalid_ids_and_sources_are_rejected_before_any_checkout_or_filesystem_change ... ok
+test operator_cli_requires_an_explicit_id_and_exactly_one_source ... ok
+test rejects_local_source_containing_the_install_transaction ... ok
+test checkout_plugin_ancestor_symlink_is_rejected ... ok
+test rejects_ancestor_and_root_symlinks_for_sources_library_plugins_lock_and_destination ... ok
+test malformed_new_install_never_publishes_a_directory ... ok
+test checkout_failure_cleans_private_staging_and_preserves_existing_plugin ... ok
+test a_skill_only_plugin_installs_and_binds_into_a_graph_bundle ... ok
+test github_fixture_install_flattens_manifest_and_reuses_catalog_identity ... ok
+test existing_plugin_is_rejected_without_checkout_unless_replace_is_explicit ... ok
+test a_killed_lease_owner_does_not_require_manual_lock_file_removal ... ok
+test root_manifest_takes_precedence_over_codex_manifest ... ok
+test cross_process_lease_serializes_competing_installs_without_silent_replacement ... ok
+test local_operator_install_handles_both_manifests_and_preserves_executable_files ... ok
+test catalog_read_guard_coordinates_with_the_independent_installer_process ... ok
+test replacing_code_keeps_the_data_the_plugin_declared_and_the_bundle_reference ... ok
+test operator_cli_installs_replaces_and_reports_only_public_outcomes ... ok
+test rejects_internal_symlinks_and_special_files_including_ignored_metadata ... ok
+test malformed_replacements_never_change_existing_install ... ok
+test mutable_data_is_never_imported_by_review_preparation_install_or_upgrade ... ok
+
+test result: ok. 21 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.49s
+
+     Running tests/reclaim.rs (rust/target/debug/deps/reclaim-cf6d89aa8f95d9e8)
+
+running 11 tests
+test an_empty_library_reports_nothing_and_a_dry_run_creates_no_files ... ok
+test a_writer_holding_the_install_lock_defers_reclamation ... ok
+test a_kept_unknown_id_view_still_references_its_packages ... ok
+test an_empty_plugins_directory_never_clears_the_store ... ok
+test an_unreadable_manifest_keeps_everything ... ok
+test reclaiming_twice_removes_nothing_the_second_time ... ok
+test the_operator_command_reports_by_default_and_applies_with_a_flag ... ok
+test a_package_version_only_an_orphan_view_referenced_is_removed_whole ... ok
+test a_shared_package_version_survives_one_view_becoming_an_orphan ... ok
+test installing_a_new_declaration_reclaims_the_previous_view_automatically ... ok
+test a_host_holding_the_install_lease_defers_reclamation ... ok
+
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.13s
+
+     Running tests/review.rs (rust/target/debug/deps/review-480e3da7255b622b)
+
+running 9 tests
+test review_rejects_a_candidate_without_a_manifest_and_explains_why ... ok
+test review_reports_the_catalog_reason_for_an_invalid_manifest ... ok
+test review_flags_literal_values_that_would_ship_inside_the_plugin ... ok
+test review_reports_the_github_source_without_installing_it ... ok
+test review_describes_declarations_and_never_touches_the_library ... ok
+test cli_review_prints_the_review_and_installs_nothing ... ok
+test review_separates_readable_sources_from_unreadable_compiled_output ... ok
+test review_ignores_git_history_and_flattens_a_hidden_manifest ... ok
+test review_digest_is_the_digest_the_installation_publishes ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.25s
+
+     Running unittests src/lib.rs (rust/target/debug/deps/anchor_mcp_host-583504d593662b42)
+
+running 27 tests
+test contents::tests::empty_results_match_original_sendable_text_normalization ... ok
+test contents::tests::literal_text_is_not_reparsed_as_json ... ok
+test contents::tests::structured_constructor_and_nonobject_values_keep_their_types ... ok
+test contents::tests::structured_results_prepend_typed_value_without_replacing_genuine_text ... ok
+test contents::tests::invalid_typed_images_and_image_resources_fail_without_partial_output ... ok
+test contents::tests::structured_results_replace_only_first_canonical_compatibility_text_in_place ... ok
+test contents::tests::audio_resources_and_links_preserve_complete_blocks ... ok
+test images::tests::malformed_mime_base64_and_truncated_images_are_rejected ... ok
+test contents::tests::native_images_and_blob_resources_remain_typed_in_mixed_order ... ok
+test tests::credentials_are_redacted_and_not_in_returnable_state ... ok
+test images::tests::static_images_validate_without_reencoding_the_original_bytes ... ok
+test tls_tests::https_client_subprocess ... ignored, helper invoked by the HTTPS fixture with an isolated CA environment
+test tls_tests::https_mcp_readonly_probe ... ignored, requires an explicitly supplied HTTPS MCP endpoint and credentials
+test tests::legacy_sse_is_reported_as_unsupported_by_rmcp_2 ... ok
+test tests::stdio_connect_fails_closed_without_a_sandbox_launcher ... ok
+test images::tests::count_and_aggregate_limits_are_enforced_before_accepting_another_image ... ok
+test tests::call_contents_keeps_remote_failure_inventory_and_argument_guards ... ok
+test tests::inventory_binding_does_not_require_a_tool_allowlist ... ok
+test tests::call_contents_uses_bound_rmcp_service_and_preserves_structured_results ... ok
+test tests::invalid_native_image_is_rejected_and_raw_call_keeps_complete_content ... ok
+test tests::valid_native_image_remains_typed_through_the_bound_mcp_service ... ok
+test tests::manifest_inventory_is_bound_and_tool_call_runs ... ok
+test tests::streamable_http_transport_binds_manifest_tools_and_calls_over_http ... ok
+test process_tests::shutdown_after_a_call_timeout_reaps_the_actual_child ... ok
+test tls_tests::https_mcp_uses_trusted_tls_and_rejects_untrusted_ca_and_hostname ... ok
+test images::tests::pixel_limits_are_checked_before_decoding_the_full_raster ... ok
+test process_tests::startup_timeout_reaps_the_actual_child ... ok
+
+test result: ok. 25 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 0.50s
+
+     Running unittests src/lib.rs (rust/target/debug/deps/anchor_network_tools-9b93b7a54c011ad2)
+
+running 2 tests
+test tests::requests_preserve_method_body_and_non_success_status_and_limit_response_bytes ... ok
+test tests::downloads_are_complete_confined_and_never_overwrite_existing_files ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+
+     Running unittests src/main.rs (rust/target/debug/deps/anchor_network_tools-9d83bf226c34b6ed)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (rust/target/debug/deps/anchor_platform_session-5b76609336cb3b72)
+
+running 12 tests
+test database::tests::v4_migration_rolls_back_questions_when_the_pending_index_cannot_be_created ... ok
+test database::tests::v2_migration_rolls_back_every_ddl_when_the_second_relation_cannot_be_created ... ok
+test database::tests::v3_migration_rolls_back_the_goose_table_when_the_index_cannot_be_created ... ok
+test database::tests::v1_migration_rolls_back_every_ddl_when_the_second_relation_cannot_be_created ... ok
+test database::tests::v5_migration_rolls_back_channel_tables_when_an_index_cannot_be_created ... ok
+test channel::assistant::tests::handover_moves_the_instance_and_its_in_flight_round ... ok
+test channel::assistant::tests::handover_successors_are_listed_and_distinguishable_from_retired_history ... ok
+test database::tests::channel_assistants::v6_failed_rebuild_rolls_back_schema_version_data_and_indexes ... ok
+test database::tests::channel_assistants::concurrent_v6_migrations_preserve_all_old_facts ... ok
+test database::tests::channel_assistants::v6_migration_preserves_every_old_table_index_and_legacy_run_rejection ... ok
+test database::tests::channel_assistants::v7_group_scope_migration_preserves_legacy_sessions_native_links_assistants_inputs_and_delivery ... ok
+test database::tests::channel_assistants::altered_v6_current_and_future_schemas_are_rejected_before_any_mutation ... ok
+
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.58s
+
+     Running tests/channel_assistant.rs (rust/target/debug/deps/channel_assistant-0f7e3ef2d08ccaa6)
+
+running 10 tests
+test binding_is_durable_idempotent_and_keeps_work_and_reply_nodes_distinct ... ok
+test opaque_wait_keys_are_validated_without_runtime_parsing_or_normalization ... ok
+test legacy_admission_and_association_keep_one_turn_per_run_without_an_assistant ... ok
+test two_turns_share_one_run_only_through_first_input_claims ... ok
+test prior_run_facts_in_other_sessions_and_incompatible_input_runs_are_rejected ... ok
+test binding_and_input_claim_failures_roll_back_all_facts_and_events ... ok
+test replacement_skips_unclaimed_superseded_turns_but_restores_claimed_turns ... ok
+test independent_connections_serialize_duplicate_and_competing_wait_keys ... ok
+test assistants_and_inputs_cannot_cross_owners_sessions_or_untrusted_projections ... ok
+test startup_preserves_only_verified_current_claimed_assistant_turns_for_handover ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.45s
+
+     Running tests/channel_assistant_retirement.rs (rust/target/debug/deps/channel_assistant_retirement-fdedb19303c202de)
+
+running 8 tests
+test pending_requires_an_existing_excluded_admission_in_the_exact_owned_session ... ok
+test current_binding_blocks_session_deletion_until_retired_then_history_cascades ... ok
+test retirement_failure_rolls_back_the_current_pointer_snapshot_and_events ... ok
+test independent_connections_retire_once_and_allow_only_one_current_replacement ... ok
+test retirement_requires_no_running_turn_or_unsettled_delivery_in_the_whole_session ... ok
+test explicit_retirement_allows_a_new_run_without_losing_history_or_pending_attachments ... ok
+test pending_inputs_preserve_full_attachments_and_filter_status_cutoff_limit_and_scope ... ok
+test pending_selects_the_most_recent_eight_before_the_fixed_admission_in_forward_order ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.67s
+
+     Running tests/channel_group.rs (rust/target/debug/deps/channel_group-a02ef533669b5930)
+
+running 3 tests
+test absent_kind_keeps_legacy_private_identity_json_unchanged ... ok
+test group_scope_isolates_private_conversations_groups_sources_accounts_and_owners ... ok
+test group_members_share_current_assistant_and_preserve_real_actor_per_turn ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.23s
+
+     Running tests/channel_session.rs (rust/target/debug/deps/channel_session-a26cefd9b13b0413)
+
+running 13 tests
+test run_binding_populates_channel_turn_and_session_relations ... ok
+test attachment_manifest_is_frozen_and_changes_are_rejected ... ok
+test inbound_lookup_resolves_the_run_inside_its_owner_scope ... ok
+test same_channel_identity_is_isolated_by_owner_and_duplicate_inbound_is_read_only ... ok
+test malformed_channel_inputs_fail_closed_and_pilot_turns_stay_separate ... ok
+test previous_run_lookup_skips_inbounds_without_a_run_binding ... ok
+test rejected_unclaimed_input_is_terminal_and_cannot_be_claimed_later ... ok
+test running_turns_are_serial_and_replacement_tracks_delivery_state ... ok
+test completed_reply_delivery_is_idempotent_and_requires_a_current_completed_turn ... ok
+test dispatch_rejection_preserves_claimed_and_superseded_inputs ... ok
+test turn_windows_report_only_the_turns_this_run_executed ... ok
+test sending_delivery_becomes_unknown_after_restart_and_blocks_delete_until_settled ... ok
+test gateway_suppression_is_receipt_scoped_and_preserves_generic_guard ... ok
+
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.44s
+
+     Running tests/execution_links.rs (rust/target/debug/deps/execution_links-5977a643163ebb6f)
+
+running 18 tests
+test old_turn_json_defaults_links_and_native_execution_round_trips ... ok
+test invalid_native_facts_and_unsafe_run_ids_leave_every_fact_unchanged ... ok
+test exhausted_association_sequence_rolls_back_the_new_session_attachment ... ok
+test two_connections_bind_a_repeated_execution_once ... ok
+test binding_is_durable_idempotent_and_visible_in_every_turn_projection ... ok
+test startup_reconciliation_of_old_turn_does_not_touch_the_next_running_turn ... ok
+test concurrent_native_claims_from_different_owners_have_exactly_one_winner ... ok
+test both_link_apis_require_the_owner_and_exact_session_turn_identity ... ok
+test relation_cascade_failure_rolls_back_the_entire_business_delete ... ok
+test exhausted_activity_sequence_rolls_back_native_and_run_links_but_keeps_retries_safe ... ok
+test native_bindings_conflict_on_any_changed_field_and_cannot_be_stolen ... ok
+test serial_turn_associations_preserve_insertion_order_and_the_session_union ... ok
+test business_delete_cascades_relations_but_retained_graph_runs_still_block_delete ... ok
+test concurrent_associations_deduplicate_and_preserve_atomic_ordered_links ... ok
+test binding_failures_roll_back_relations_session_snapshots_and_activity ... ok
+test association_failures_roll_back_both_links_and_all_session_events ... ok
+test every_terminal_status_rejects_first_bind_but_preserves_existing_idempotent_bind ... ok
+test terminal_reconciliation_preserves_lifecycle_and_rejects_late_delivery ... ok
+
+test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.34s
+
+     Running tests/goose_links.rs (rust/target/debug/deps/goose_links-a6643917e79567db)
+
+running 14 tests
+test opaque_goose_json_round_trips_and_old_turns_default_to_no_goose ... ok
+test goose_table_rejects_invalid_scope_and_session_control_characters ... ok
+test concurrent_native_and_goose_bindings_cannot_mix_execution_facts ... ok
+test goose_binding_is_owner_scoped_and_cannot_access_a_turn_in_another_session ... ok
+test projection_rejects_dual_runtime_facts_instead_of_guessing_a_runtime ... ok
+test independent_connections_cannot_race_to_claim_the_same_goose_scope ... ok
+test changed_scope_or_session_conflicts_and_invalid_ids_leave_no_fact ... ok
+test event_failure_rolls_back_goose_binding_and_identical_retry_needs_no_new_event ... ok
+test goose_binding_is_durable_idempotent_and_projected_on_all_read_paths ... ok
+test goose_scope_cannot_be_claimed_by_another_platform_session_or_owner ... ok
+test deleting_a_terminal_session_cascades_goose_facts_without_touching_another_owner ... ok
+test a_goose_session_is_reused_by_later_turns_in_the_same_platform_session ... ok
+test native_and_goose_bindings_are_mutually_exclusive_in_both_orders ... ok
+test first_binding_requires_running_and_terminal_retries_are_idempotent ... ok
+
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.26s
+
+     Running tests/questions.rs (rust/target/debug/deps/questions-9090a2a9b8e76f83)
+
+running 22 tests
+test schema_subset_rejects_refs_nested_objects_unknown_keywords_and_malformed_constraints ... ok
+test question_contract_serializes_exact_fields_and_rejects_unknown_answer_fields ... ok
+test all_question_operations_check_owner_before_payload_status_or_answer ... ok
+test question_creation_rolls_back_snapshot_and_fact_when_turn_sse_write_fails ... ok
+test schema_string_formats_and_numeric_constraints_are_checked_by_the_validator ... ok
+test invalid_answers_leave_question_session_and_delivery_unchanged ... ok
+test pending_question_is_durable_keeps_the_turn_running_and_allows_sse_to_continue ... ok
+test turn_finish_rolls_back_all_facts_when_question_interruption_sse_write_fails ... ok
+test competing_question_creation_preserves_single_pending_invariant ... ok
+test accept_is_cas_idempotent_without_new_turn_or_duplicate_events ... ok
+test answer_racing_stop_commits_an_answer_or_interruption_never_revives_the_turn ... ok
+test competing_answers_on_independent_connections_commit_exactly_one_answer_event ... ok
+test question_lookup_is_scoped_to_both_session_and_turn ... ok
+test identical_competing_answers_are_both_successful_without_duplicate_events ... ok
+test only_one_pending_question_per_turn_but_sequential_questions_remain_in_order ... ok
+test answering_rolls_back_question_snapshot_and_sse_when_session_event_write_fails ... ok
+test messages_schemas_and_serialized_answers_are_bounded_in_utf8_bytes ... ok
+test answered_question_survives_normal_completion_and_session_delete_cascades_questions ... ok
+test restart_interruption_preserves_answered_facts_and_allows_identical_history_retries ... ok
+test decline_and_cancel_resolve_only_the_question_not_the_running_turn ... ok
+test every_terminal_turn_interrupts_pending_before_terminal_sse_and_rejects_answers ... ok
+test identical_answer_retry_on_terminal_turn_is_read_only_even_with_a_new_pending_question ... ok
+
+test result: ok. 22 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.19s
+
+     Running tests/schema_v3.rs (rust/target/debug/deps/schema_v3-6fb914da1d5163a7)
+
+running 6 tests
+test exact_v3_upgrade_keeps_native_facts_and_delivery_without_manufacturing_goose ... ok
+test exact_v1_upgrade_adds_empty_links_without_guessing_from_session_run_ids ... ok
+test concurrent_v2_migration_runs_once_and_retains_the_terminal_turn ... ok
+test exact_v2_upgrades_without_rewriting_turns_sessions_or_legacy_delivery ... ok
+test tampering_with_relation_definitions_is_rejected_and_not_repaired ... ok

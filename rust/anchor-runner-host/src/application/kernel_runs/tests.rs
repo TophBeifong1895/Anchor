@@ -13,6 +13,8 @@ enum Mode {
     Complete,
     Fail,
     Gate,
+    PauseGate,
+    PauseLastGate,
     Crash(bool),
     Recovery,
 }
@@ -100,6 +102,16 @@ impl NodeExecutionPort for Nodes {
                     self.release.acquire().await.unwrap().forget();
                     assert!(request.cancellation.load(Ordering::Acquire));
                 }
+                Mode::PauseGate if first => {
+                    self.started.notify_one();
+                    self.release.acquire().await.unwrap().forget();
+                    assert!(!request.cancellation.load(Ordering::Acquire));
+                }
+                Mode::PauseLastGate if request.key.node_id == "c" => {
+                    self.started.notify_one();
+                    self.release.acquire().await.unwrap().forget();
+                    assert!(!request.cancellation.load(Ordering::Acquire));
+                }
                 Mode::Crash(completed) if request.key.node_id == "b" => {
                     if completed {
                         self.save(&request.key);
@@ -174,6 +186,210 @@ async fn serial_probe_commits_artifacts_cost_and_phase_through_application() {
     );
     assert!(!root.path().join("runs").exists());
     assert_eq!(application.records().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn pause_commits_current_result_before_human_wait_and_resume_does_not_replay() {
+    let root = tempfile::tempdir().unwrap();
+    let application = app(root.path());
+    let runs = application.kernel_runs(true).unwrap().unwrap();
+    let record = record("m1-pause");
+    runs.create(&record, 50).unwrap();
+    assert!(application.control(&record.run_id, "pause").await.is_err());
+    let nodes = Arc::new(Nodes::new(&root.path().join("facts"), Mode::PauseGate));
+    let worker_runs = runs.clone();
+    let worker_nodes = nodes.clone();
+    let worker = tokio::spawn(async move {
+        worker_runs
+            .drive("m1-pause", &Artifacts, worker_nodes.as_ref(), cancel())
+            .await
+    });
+    nodes.started.notified().await;
+    application.control(&record.run_id, "pause").await.unwrap();
+    assert_eq!(
+        runs.load(&record.run_id).unwrap().unwrap().phase(),
+        Some(&Phase::Executing)
+    );
+    assert!(runs.pause_pending(&record.run_id).unwrap());
+    assert!(application.control(&record.run_id, "resume").await.is_err());
+    nodes.release.add_permits(1);
+    let resource = worker.await.unwrap().unwrap();
+    assert_eq!(
+        resource.phase(),
+        Some(&Phase::Waiting {
+            waiter: Waiter::Human {
+                reason: "paused".into()
+            }
+        })
+    );
+    assert_eq!(resource.task.as_ref().unwrap().budget.spent, 3);
+    let paused = KernelRuns::record(&resource).unwrap();
+    assert_eq!(paused.results.len(), 1);
+    assert!(paused.results.contains_key("a"));
+    assert_eq!(nodes.trace.lock().unwrap().len(), 1);
+    assert!(!runs.pause_pending(&record.run_id).unwrap());
+    let history = runs
+        .kernel
+        .history(&run_resource_id(&record.run_id))
+        .unwrap();
+    assert_eq!(history.len(), 2);
+    assert_eq!(history[0].submission.slot.as_deref(), Some("a#1"));
+    assert_eq!(history[1].stamp.principal().kind, PrincipalKind::Human);
+    assert_eq!(history[1].submission.content["reason"], "paused");
+    assert!(application.control(&record.run_id, "pause").await.is_err());
+    runs.control(&record.run_id, "resume", None).unwrap();
+    let finished = runs
+        .drive(&record.run_id, &Artifacts, nodes.as_ref(), cancel())
+        .await
+        .unwrap();
+    assert!(finished.is_settled());
+    assert_eq!(KernelRuns::record(&finished).unwrap().results.len(), 3);
+    assert_eq!(nodes.trace.lock().unwrap().len(), 3);
+}
+
+#[tokio::test]
+async fn pause_on_final_node_preserves_settlement_and_all_committed_results() {
+    let root = tempfile::tempdir().unwrap();
+    let application = app(root.path());
+    let runs = application.kernel_runs(true).unwrap().unwrap();
+    let record = record("m1-pause-final");
+    runs.create(&record, 50).unwrap();
+    let nodes = Arc::new(Nodes::new(&root.path().join("facts"), Mode::PauseLastGate));
+    let worker_runs = runs.clone();
+    let worker_nodes = nodes.clone();
+    let worker = tokio::spawn(async move {
+        worker_runs
+            .drive(
+                "m1-pause-final",
+                &Artifacts,
+                worker_nodes.as_ref(),
+                cancel(),
+            )
+            .await
+    });
+    nodes.started.notified().await;
+    application.control(&record.run_id, "pause").await.unwrap();
+    nodes.release.add_permits(1);
+    let resource = worker.await.unwrap().unwrap();
+    assert_eq!(
+        resource.phase(),
+        Some(&Phase::Settled {
+            result: Outcome::Done
+        })
+    );
+    assert_eq!(resource.task.as_ref().unwrap().budget.spent, 9);
+    assert_eq!(KernelRuns::record(&resource).unwrap().results.len(), 3);
+    assert_eq!(nodes.trace.lock().unwrap().len(), 3);
+    assert!(!runs.pause_pending(&record.run_id).unwrap());
+}
+
+#[tokio::test]
+async fn stop_preempts_pending_pause_without_repausing_the_resumed_run() {
+    let root = tempfile::tempdir().unwrap();
+    let application = app(root.path());
+    let runs = application.kernel_runs(true).unwrap().unwrap();
+    let record = record("m1-pause-stop");
+    runs.create(&record, 50).unwrap();
+    let nodes = Arc::new(Nodes::new(&root.path().join("facts"), Mode::Gate));
+    let worker_runs = runs.clone();
+    let worker_nodes = nodes.clone();
+    let worker = tokio::spawn(async move {
+        worker_runs
+            .drive("m1-pause-stop", &Artifacts, worker_nodes.as_ref(), cancel())
+            .await
+    });
+    nodes.started.notified().await;
+    application.control(&record.run_id, "pause").await.unwrap();
+    application.control(&record.run_id, "stop").await.unwrap();
+    assert!(!runs.pause_pending(&record.run_id).unwrap());
+    nodes.release.add_permits(1);
+    let resource = worker.await.unwrap().unwrap();
+    assert_eq!(
+        resource.phase(),
+        Some(&Phase::Waiting {
+            waiter: Waiter::Human {
+                reason: "stop".into()
+            }
+        })
+    );
+    assert!(KernelRuns::record(&resource).unwrap().results.is_empty());
+    runs.control(&record.run_id, "resume", None).unwrap();
+    let resource = runs
+        .drive(&record.run_id, &Artifacts, nodes.as_ref(), cancel())
+        .await
+        .unwrap();
+    assert_eq!(
+        resource.phase(),
+        Some(&Phase::Settled {
+            result: Outcome::Done
+        })
+    );
+    assert_eq!(KernelRuns::record(&resource).unwrap().results.len(), 3);
+    assert_eq!(nodes.trace.lock().unwrap().len(), 3);
+}
+
+#[tokio::test]
+async fn pending_pause_survives_host_restart_without_dispatching_another_node() {
+    pending_pause_restart(false).await;
+}
+
+#[tokio::test]
+async fn pending_pause_restart_commits_durable_completion_before_waiting() {
+    pending_pause_restart(true).await;
+}
+
+async fn pending_pause_restart(completed: bool) {
+    let root = tempfile::tempdir().unwrap();
+    let application = app(root.path());
+    let runs = application.kernel_runs(true).unwrap().unwrap();
+    let record = record("m1-pause-restart");
+    runs.create(&record, 50).unwrap();
+    let nodes = Arc::new(Nodes::new(&root.path().join("facts"), Mode::PauseGate));
+    let worker_runs = runs.clone();
+    let worker_nodes = nodes.clone();
+    let worker = tokio::spawn(async move {
+        worker_runs
+            .drive(
+                "m1-pause-restart",
+                &Artifacts,
+                worker_nodes.as_ref(),
+                cancel(),
+            )
+            .await
+    });
+    nodes.started.notified().await;
+    runs.control(&record.run_id, "pause", None).unwrap();
+    worker.abort();
+    assert!(worker.await.unwrap_err().is_cancelled());
+    if completed {
+        nodes.save(&nodes.trace.lock().unwrap()[0]);
+    }
+    drop(runs);
+    drop(application);
+    let restarted = app(root.path());
+    let runs = restarted.kernel_runs(false).unwrap().unwrap();
+    let resource = runs
+        .drive(&record.run_id, &Artifacts, nodes.as_ref(), cancel())
+        .await
+        .unwrap();
+    assert_eq!(
+        resource.phase(),
+        Some(&Phase::Waiting {
+            waiter: Waiter::Human {
+                reason: "paused".into()
+            }
+        })
+    );
+    assert_eq!(nodes.trace.lock().unwrap().len(), 1);
+    assert_eq!(
+        KernelRuns::record(&resource).unwrap().results.len(),
+        usize::from(completed)
+    );
+    assert_eq!(
+        resource.task.as_ref().unwrap().budget.spent,
+        if completed { 3 } else { 0 }
+    );
+    assert!(!runs.pause_pending(&record.run_id).unwrap());
 }
 
 #[tokio::test]

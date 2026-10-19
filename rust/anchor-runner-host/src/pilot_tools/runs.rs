@@ -17,16 +17,11 @@ impl PilotTools {
             return Err(failed());
         }
         let operation = name.strip_prefix("run_").expect("matched Run control");
-        let effective = if operation == "pause" {
-            "stop"
-        } else {
-            operation
-        };
         self.application
-            .control(&run, effective)
+            .control(&run, operation)
             .await
             .map_err(|failure| ToolError::Failed(format!("Run control rejected: {failure:?}")))?;
-        Ok(json!({"run":run,"operation":effective,"alias":operation == "pause","requested":true}))
+        Ok(json!({"run":run,"operation":operation,"requested":true}))
     }
 
     pub(super) async fn run_list(&self, _arguments: &Value) -> Result<Value, ToolError> {

@@ -33,6 +33,12 @@ pub trait SubmissionObserver: Send + Sync {
     fn accepted(&self, resource_id: &str) -> Result<(), GraphError>;
 }
 
+/// Host control events are handled between committed node results and the next
+/// dispatch. This does not inspect the executor's cancellation or pause flags.
+pub trait DispatchBoundary: Send + Sync {
+    fn before_dispatch(&self, resource_id: &str) -> Result<(), GraphError>;
+}
+
 /// Charge a unit of work once, including stale/late refusals. Repeated stale
 /// submissions carry zero additional cost (K0.1/D1).
 pub fn submit_with_retry<S: Store>(
@@ -70,6 +76,7 @@ pub fn submit_with_retry<S: Store>(
 pub struct KernelScheduler<'a, S: Store, A: ArtifactPort + ?Sized, N: NodeExecutionPort + ?Sized> {
     pub kernel: &'a Kernel<S>,
     pub observer: Option<&'a dyn SubmissionObserver>,
+    pub boundary: Option<&'a dyn DispatchBoundary>,
     pub artifacts: &'a A,
     pub nodes: &'a N,
     pub cancellation: crate::Cancellation,
@@ -86,6 +93,9 @@ impl<S: Store, A: ArtifactPort + ?Sized, N: NodeExecutionPort + ?Sized>
                 .map_err(kernel_error)?
                 .ok_or_else(|| GraphError::CorruptRun(format!("missing Kernel Run {id}")))?;
             if resource.phase() != Some(&Phase::Executing) {
+                if let Some(boundary) = self.boundary {
+                    boundary.before_dispatch(id)?;
+                }
                 return Ok(resource);
             }
             let record = record_of(&resource)?;
@@ -121,6 +131,16 @@ impl<S: Store, A: ArtifactPort + ?Sized, N: NodeExecutionPort + ?Sized>
                         input_commits: dispatch.inputs.clone(),
                         prepared_input: serde_json::json!({"input":record.input,"committed_inputs":resolved}),
                     };
+                    if let Some(boundary) = self.boundary {
+                        boundary.before_dispatch(id)?;
+                        let current =
+                            self.kernel.load(id).map_err(kernel_error)?.ok_or_else(|| {
+                                GraphError::CorruptRun("missing Kernel Run at dispatch".into())
+                            })?;
+                        if current.phase() != Some(&Phase::Executing) {
+                            return Ok(current);
+                        }
+                    }
                     let request = authorized_execution_request(
                         &record,
                         &cursor,
@@ -203,6 +223,9 @@ impl<S: Store, A: ArtifactPort + ?Sized, N: NodeExecutionPort + ?Sized>
                     "P probe submission refused: {:?}",
                     verdict.reason
                 )));
+            }
+            if let Some(boundary) = self.boundary {
+                boundary.before_dispatch(id)?;
             }
         }
     }

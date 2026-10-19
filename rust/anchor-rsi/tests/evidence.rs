@@ -286,6 +286,9 @@ fn long_lines_cannot_bypass_read_pagination() {
 
 #[tokio::test]
 async fn real_http_mcp_service_lists_and_reads_frozen_evidence() {
+    // Workspace rmcp uses rustls without an implicit provider; choose the same
+    // provider as the Host before constructing the real HTTP test client.
+    let _ = rustls::crypto::ring::default_provider().install_default();
     use rmcp::{
         ServiceExt,
         model::{CallToolRequestParams, ClientInfo},

@@ -12,7 +12,7 @@ vi.mock('./RunInspector', () => ({ RunInspector: () => null }));
 const frozen: OurGraph = { entry: 'module/original', nodes: [{ id: 'module/original', agent: 'role' }], edges: [] };
 const projection = (phase: RunProjection['phase'], extra: Partial<RunProjection> = {}): RunProjection => ({
   phase, active: false, reason: null, updated: null,
-  actions: { stop: true, resume: true, abandon: true }, ...extra,
+  actions: { pause: false, stop: true, resume: true, abandon: true }, ...extra,
 });
 const detailFor = (view: RunProjection): OurRunDetail => ({
   run: 'original-run', graph: 'original-graph', definition: frozen, projection: view, nodes: ['module/original'], traces: {},
@@ -67,7 +67,7 @@ describe('Run-owned canvas and shared operation projection', () => {
 
   it('obeys denied actions without deriving resume from durable status', async () => {
     const detail = detailFor(projection('waiting', { waiting_for: 'human', reason: 'paused' }));
-    detail.projection!.actions = { stop: false, resume: false, abandon: false };
+    detail.projection!.actions = { pause: false, stop: false, resume: false, abandon: false };
     await render(detail);
     expect(element.querySelectorAll('.run-controls button')).toHaveLength(0);
     await render({ ...detail, projection: undefined });
@@ -97,5 +97,15 @@ describe('Run-owned canvas and shared operation projection', () => {
     detail.projection = projection('waiting', { waiting_for: 'effect', reason: 'Agent 上次工具调用的结果未记录' });
     await render(detail);
     expect(element.textContent).toContain('Agent 上次工具调用的结果未记录');
+  });
+
+  it('keeps an unknown effect waiting for review without offering automatic replay', async () => {
+    await render(detailFor(projection('waiting', { waiting_for: 'effect', reason: '工具结果未记录',
+      actions: { pause: false, stop: false, resume: false, abandon: true } })));
+    expect(element.querySelector('.canvas-head .pill')?.textContent).toBe('等待核查效果：工具结果未记录');
+    const buttons = [...element.querySelectorAll<HTMLButtonElement>('.run-controls button')];
+    expect(buttons.map(button => button.textContent)).toEqual(['放弃']);
+    await act(async () => buttons[0].click());
+    expect(control.mock.calls).toEqual([['abandon']]);
   });
 });

@@ -232,7 +232,7 @@ export type RunProjection = {
   outcome?: 'done' | 'failed' | 'escalated' | 'unknown' | 'aborted';
   reason: string | null;
   active: boolean;
-  actions: { stop: boolean; resume: boolean; abandon: boolean };
+  actions: { pause: boolean; stop: boolean; resume: boolean; abandon: boolean };
   updated: string | null;
 };
 

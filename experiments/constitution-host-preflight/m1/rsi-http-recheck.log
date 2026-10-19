@@ -1,0 +1,36 @@
+   Compiling getrandom v0.2.17
+   Compiling tokio v1.53.1
+   Compiling getrandom v0.4.3
+   Compiling rmcp v2.2.0
+   Compiling regex-automata v0.4.18
+   Compiling chrono v0.4.45
+   Compiling toml_edit v0.22.27
+   Compiling ring v0.17.14
+   Compiling uuid v1.26.1
+   Compiling rand v0.10.3
+   Compiling tempfile v3.27.0
+   Compiling schemars v1.2.2
+   Compiling rustls-webpki v0.103.15
+   Compiling toml v0.8.23
+   Compiling rustls v0.23.45
+   Compiling regex v1.13.1
+   Compiling hyper v1.11.1
+   Compiling tower v0.5.3
+   Compiling tokio-util v0.7.19
+   Compiling tokio-stream v0.1.19
+   Compiling tower-http v0.6.11
+   Compiling tokio-rustls v0.26.6
+   Compiling hyper-util v0.1.21
+   Compiling hyper-rustls v0.27.10
+   Compiling reqwest v0.13.5
+   Compiling axum v0.8.9
+   Compiling reqwest v0.12.28
+   Compiling anchor-rsi v0.1.0 (/home/mansteinl/code/anchor-constitution-core/rust/anchor-rsi)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 9.33s
+     Running tests/evidence.rs (rust/target/debug/deps/evidence-df4eb46eab06bb4c)
+
+running 1 test
+test real_http_mcp_service_lists_and_reads_frozen_evidence ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 9 filtered out; finished in 0.02s
+

@@ -731,7 +731,7 @@ pub(crate) const PILOT_TOOLS: &[PilotToolSpec] = &[
     },
     PilotToolSpec {
         name: "run_pause",
-        description: "Alias for run_stop: request stopping this Run; response marks the alias; inspect run_status afterwards",
+        description: "Pause this Run after the current node result is committed, before another node starts; inspect run_status afterwards",
         parameters: || single("run"),
         authority: ToolAuthority::Mutate,
         effect: ToolEffect::Control,

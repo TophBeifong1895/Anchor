@@ -71,10 +71,12 @@ impl RunApplication {
         let identity = metadata.filter(|m| control::validate_control_identity(record, m).is_ok());
         let coordinated = metadata.is_some_and(|m| m.session_call.is_some());
         if !view.worker && !coordinated && identity.is_none() {
+            projection.actions.pause = false;
             projection.actions.stop = false;
             projection.actions.resume = false;
             projection.actions.abandon = false;
         }
+        projection.actions.pause &= !coordinated;
         projection.actions.resume = projection.actions.resume
             && !coordinated
             && identity.is_some_and(|m| self.ensure_current_assistant(m).is_ok())
@@ -94,6 +96,7 @@ fn observed(
     session_coordinated: bool,
 ) -> RunProjection {
     let mut projection = RunProjection::from_view(&super::legacy_run_view::view(record, active));
+    projection.actions.pause &= !session_coordinated;
     projection.actions.resume = projection.actions.resume && !session_coordinated;
     projection
 }
@@ -173,6 +176,7 @@ mod tests {
         ] {
             record.status = status;
             let projection = observed(&record, false, None, false);
+            assert!(!projection.actions.pause, "{status:?}");
             assert_eq!(projection.actions.resume, resume, "{status:?}");
             assert_eq!(projection.actions.stop, stop, "{status:?}");
             assert_eq!(
@@ -204,11 +208,14 @@ mod tests {
         let projection = observed(&record, true, Some("pause"), false);
         assert_eq!(projection.phase, "executing");
         assert!(projection.actions.abandon);
+        assert!(projection.actions.pause);
         assert!(projection.actions.stop);
         assert!(!projection.actions.resume);
         let projection = observed(&record, true, Some("stop"), false);
         assert_eq!(projection.phase, "executing");
         assert!(projection.actions.stop);
+        let projection = observed(&record, true, None, true);
+        assert!(!projection.actions.pause);
         let projection = observed(&record, false, None, true);
         assert!(!projection.actions.resume);
         assert!(projection.actions.stop);
@@ -221,15 +228,15 @@ mod tests {
         for (status, expected) in [
             (
                 RunStatus::Ready,
-                r#"{"phase":"executing","reason":null,"active":false,"actions":{"stop":true,"resume":true,"abandon":true},"updated":null}"#,
+                r#"{"phase":"executing","reason":null,"active":false,"actions":{"pause":false,"stop":true,"resume":true,"abandon":true},"updated":null}"#,
             ),
             (
                 RunStatus::Paused,
-                r#"{"phase":"waiting","waiting_for":"human","reason":"paused","active":false,"actions":{"stop":false,"resume":true,"abandon":true},"updated":null}"#,
+                r#"{"phase":"waiting","waiting_for":"human","reason":"paused","active":false,"actions":{"pause":false,"stop":false,"resume":true,"abandon":true},"updated":null}"#,
             ),
             (
                 RunStatus::Stopped,
-                r#"{"phase":"waiting","waiting_for":"human","reason":"stopped","active":false,"actions":{"stop":false,"resume":true,"abandon":true},"updated":null}"#,
+                r#"{"phase":"waiting","waiting_for":"human","reason":"stopped","active":false,"actions":{"pause":false,"stop":false,"resume":true,"abandon":true},"updated":null}"#,
             ),
         ] {
             record.status = status;

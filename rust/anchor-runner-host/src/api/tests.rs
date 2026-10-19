@@ -1226,14 +1226,14 @@ async fn paused_wait_child_resumes_independently_then_releases_parent() {
     .await;
     assert_eq!(status, StatusCode::ACCEPTED, "{pause_response:?}");
     for _ in 0..200 {
-        if store.load(&child_id).unwrap().unwrap().status == RunStatus::Stopped {
+        if store.load(&child_id).unwrap().unwrap().status == RunStatus::Paused {
             break;
         }
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
     }
     assert_eq!(
         store.load(&child_id).unwrap().unwrap().status,
-        RunStatus::Stopped
+        RunStatus::Paused
     );
     assert_eq!(
         store.load(&parent_id).unwrap().unwrap().status,
@@ -1679,16 +1679,16 @@ async fn start_and_pause_request(state: &ApiState, app: &Router, body: &str) -> 
         }
         tokio::time::sleep(std::time::Duration::from_millis(2)).await;
     }
-    let (status, alias) = call(app.clone(), "POST", &format!("/runs/{run}/pause"), None).await;
+    let (status, paused) = call(app.clone(), "POST", &format!("/runs/{run}/pause"), None).await;
     assert_eq!(status, StatusCode::ACCEPTED);
-    assert_eq!(alias["operation"], "stop");
-    assert_eq!(alias["alias"], true);
+    assert_eq!(paused["operation"], "pause");
+    assert!(paused.get("alias").is_none());
     wait_idle(state).await;
     let record = FileRunStore::new(state.data_root.join("runs"))
         .load(&run)
         .unwrap()
         .unwrap();
-    assert_eq!(record.status, RunStatus::Stopped);
+    assert_eq!(record.status, RunStatus::Paused);
     assert_eq!(record.results.len(), 1);
     run
 }
@@ -2669,7 +2669,7 @@ async fn waiting_parent_rejects_child_grant_drift_then_restores_same_child_witho
     let parent_before = store.load(&parent_id).unwrap().unwrap();
     let child_before = store.load(&child_id).unwrap().unwrap();
     assert_eq!(parent_before.status, RunStatus::WaitingCall);
-    assert_eq!(child_before.status, RunStatus::Stopped);
+    assert_eq!(child_before.status, RunStatus::Paused);
     assert_eq!(child_before.results["slow"].len(), 1);
     let first_commit = child_before.results["slow"][0].commit.clone();
     let first_key = child_before.results["slow"][0].key.clone();

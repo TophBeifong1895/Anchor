@@ -1,0 +1,9 @@
+   Compiling anchor-runner-host v0.1.0 (/home/mansteinl/code/anchor-constitution-core/rust/anchor-runner-host)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 6.93s
+     Running unittests src/main.rs (rust/target/debug/deps/anchor_runner_host-2cefc3c824f4cf45)
+
+running 1 test
+test api::tests::stopping_wait_parent_stops_only_its_wait_child ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 917 filtered out; finished in 0.38s
+

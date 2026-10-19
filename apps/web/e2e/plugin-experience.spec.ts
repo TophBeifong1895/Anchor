@@ -18,7 +18,7 @@ async function fixture(page: Page, current = plugin) {
   const session = { id: 'experience', title: '研究资料整理', status: 'active', updated_at: '2026-10-14T01:00:00Z', approval: null };
   const run = { run: 'experience-run', graph: 'experience', status: 'completed', running: false,
     started: '2026-10-14T01:00:00Z', updated: '2026-10-14T01:01:00Z', executed: ['worker'], objective: '整理研究证据',
-    projection: { phase: 'settled', outcome: 'done', active: false, reason: null, updated: null, actions: { stop: false, resume: false, abandon: false } } };
+    projection: { phase: 'settled', outcome: 'done', active: false, reason: null, updated: null, actions: { pause: false, stop: false, resume: false, abandon: false } } };
   await page.addInitScript(() => {
     localStorage.setItem('anchor:view', 'graph');
     localStorage.setItem('pilot:selected', 'experience');

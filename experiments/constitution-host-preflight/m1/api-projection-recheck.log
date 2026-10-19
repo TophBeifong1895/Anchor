@@ -1,0 +1,11 @@
+   Compiling anchor-runner-host v0.1.0 (/home/mansteinl/code/anchor-constitution-core/rust/anchor-runner-host)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 10.04s
+     Running unittests src/main.rs (rust/target/debug/deps/anchor_runner_host-2cefc3c824f4cf45)
+
+running 3 tests
+test api::runs::tests::frozen_topology_survives_live_graph_changes_and_missing_definition ... ok
+test api::runs::tests::incomplete_run_identity_does_not_offer_inactive_controls ... ok
+test api::runs::tests::list_and_detail_share_status_control_and_attention_projection ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 915 filtered out; finished in 0.22s
+

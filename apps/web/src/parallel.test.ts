@@ -10,7 +10,7 @@ const state: OurRunState = { objective: '', started: '', updated: '', cursor: nu
   parallel: { fanout: 'fanout', join: 'join', invocation: 2 }, passes: { 'branch-a': 2, 'branch-b': 2 },
   decided: { 'fanout|branch-a': [true, 2], 'fanout|branch-b': [true, 2] }, nodes: {}, executed: ['fanout'], skipped: [], error: '' };
 const observation: RunProjection = { phase: 'executing', active: true, reason: null, updated: null,
-  actions: { stop: true, resume: false, abandon: true } };
+  actions: { pause: false, stop: true, resume: false, abandon: true } };
 
 describe('same-run parallel authoring and observation', () => {
   it('separates full node identities and invocation numbers in persisted trace keys', () => {

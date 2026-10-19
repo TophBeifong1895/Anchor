@@ -147,7 +147,7 @@ async fn kernel_read_view_http_tracks_running_human_wait_and_settlement_with_hos
     assert_eq!(running["projection"]["phase"], "executing");
     assert_eq!(
         running["projection"]["actions"],
-        json!({"stop":true,"resume":false,"abandon":true})
+        json!({"pause":true,"stop":true,"resume":false,"abandon":true})
     );
     assert_eq!(running["state"]["updated"], sentinel);
     let (status, body) = call(router.clone(), "POST", &format!("/runs/{id}/stop"), None).await;
@@ -156,7 +156,7 @@ async fn kernel_read_view_http_tracks_running_human_wait_and_settlement_with_hos
     assert_eq!(waiting["projection"]["phase"], "waiting");
     assert_eq!(
         waiting["projection"]["actions"],
-        json!({"stop":false,"resume":false,"abandon":true})
+        json!({"pause":false,"stop":false,"resume":false,"abandon":true})
     );
     let updated: Value = serde_json::from_slice(&std::fs::read(&observation).unwrap()).unwrap();
     assert_ne!(updated["updated"], sentinel);
@@ -182,10 +182,141 @@ async fn kernel_read_view_http_tracks_running_human_wait_and_settlement_with_hos
     assert_eq!(settled["projection"]["outcome"], "aborted");
     assert_eq!(
         settled["projection"]["actions"],
-        json!({"stop":false,"resume":false,"abandon":false})
+        json!({"pause":false,"stop":false,"resume":false,"abandon":false})
     );
     let before = std::fs::read(&observation).unwrap();
     let (status, _) = call(router, "POST", &format!("/runs/{id}/stop"), None).await;
     assert_eq!(status, StatusCode::CONFLICT);
     assert_eq!(std::fs::read(&observation).unwrap(), before);
+}
+
+#[tokio::test]
+async fn legacy_and_kernel_http_share_executing_paused_and_settled_projections() {
+    use anchor_runtime::graph::InvocationKey;
+    use std::time::Duration;
+
+    let (root, state) = fixture();
+    let _env = PROCESS_ENV.lock().await;
+    set_host_env(root.path(), &state.data_root);
+    unsafe {
+        env::set_var("ANCHOR_RUNNER_ALLOWED_COMMANDS", "true,sh,cat,sleep,printf");
+    }
+    write_graph_bundle(&state.bundle_root, &json!({
+        "objective":"HTTP lifecycle comparison","entry":"work","agents":{},
+        "ops":{
+            "work":{"run":"printf ready > gate.ready; while [ ! -f gate.release ]; do sleep 0.02; done; printf once > report.txt","wall_time_limit_seconds":15},
+            "finish":{"run":"true"}
+        },
+        "nodes":[{"id":"work","op":"work"},{"id":"finish","op":"finish"}],
+        "edges":[{"from":"work","to":"finish"}]
+    })).unwrap();
+    let app = router(state.clone());
+    let mut projections = Vec::new();
+    for kernel in [false, true] {
+        let mut request = json!({"graph":"fixture","input":{}});
+        if kernel {
+            request["execution"] = json!("kernel_probe");
+        }
+        let (status, accepted) =
+            call(app.clone(), "POST", "/trigger", Some(&request.to_string())).await;
+        assert_eq!(status, StatusCode::ACCEPTED, "{accepted}");
+        let id = accepted["run"].as_str().unwrap();
+        let record = state.application.load_run(id).unwrap().unwrap();
+        let artifacts = HostArtifacts::new(
+            state.data_root.join("artifacts"),
+            state.workspace_root.clone(),
+        );
+        let workspace = artifacts
+            .workspace_path(&InvocationKey {
+                run_id: id.into(),
+                graph_digest: record.graph_digest,
+                node_id: "work".into(),
+                invocation: 1,
+            })
+            .unwrap();
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while !workspace.join("gate.ready").is_file() {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("real Op must reach the same gate on both backends");
+        let (status, executing) = call(app.clone(), "GET", &format!("/runs/{id}"), None).await;
+        assert_eq!(status, StatusCode::OK, "{executing}");
+        let (status, receipt) = call(app.clone(), "POST", &format!("/runs/{id}/pause"), None).await;
+        assert_eq!(status, StatusCode::ACCEPTED, "{receipt}");
+        assert_eq!(receipt["operation"], "pause");
+        assert!(receipt.get("alias").is_none());
+        let (_, pending) = call(app.clone(), "GET", &format!("/runs/{id}"), None).await;
+        assert_eq!(pending["projection"]["phase"], "executing");
+        assert_eq!(pending["projection"]["active"], true);
+        std::fs::write(workspace.join("gate.release"), "complete current node").unwrap();
+        let paused = tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                let (status, detail) = call(app.clone(), "GET", &format!("/runs/{id}"), None).await;
+                assert_eq!(status, StatusCode::OK, "{detail}");
+                if detail["projection"]["phase"] == "waiting"
+                    && detail["projection"]["active"] == false
+                {
+                    break detail;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("pause must drain the current node before waiting");
+        let paused_record = state.application.load_run(id).unwrap().unwrap();
+        assert_eq!(paused_record.results.len(), 1);
+        assert_eq!(paused_record.results["work"].len(), 1);
+        let first = &paused_record.results["work"][0];
+        assert_eq!(
+            std::fs::read(
+                artifacts
+                    .files_path(&first.commit)
+                    .unwrap()
+                    .join("report.txt")
+            )
+            .unwrap(),
+            b"once"
+        );
+        let (status, receipt) =
+            call(app.clone(), "POST", &format!("/runs/{id}/resume"), None).await;
+        assert_eq!(status, StatusCode::ACCEPTED, "{receipt}");
+        let settled = tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                let (status, detail) = call(app.clone(), "GET", &format!("/runs/{id}"), None).await;
+                assert_eq!(status, StatusCode::OK, "{detail}");
+                if detail["projection"]["phase"] == "settled"
+                    && detail["projection"]["active"] == false
+                {
+                    break detail;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("resume must finish the same Run");
+        let finished = state.application.load_run(id).unwrap().unwrap();
+        assert_eq!(finished.results.len(), 2);
+        assert_eq!(finished.results["work"].len(), 1);
+        assert_eq!(finished.results["work"][0].commit, first.commit);
+        let mut stages = Vec::new();
+        for detail in [executing, paused, settled] {
+            assert!(detail["state"].get("status").is_none());
+            let mut projection = detail["projection"].clone();
+            assert!(projection["updated"].is_string());
+            projection.as_object_mut().unwrap().remove("updated");
+            stages.push(projection);
+        }
+        assert_eq!(
+            stages,
+            vec![
+                json!({"phase":"executing","reason":null,"active":true,"actions":{"pause":true,"stop":true,"resume":false,"abandon":true}}),
+                json!({"phase":"waiting","waiting_for":"human","reason":"paused","active":false,"actions":{"pause":false,"stop":false,"resume":true,"abandon":true}}),
+                json!({"phase":"settled","outcome":"done","reason":null,"active":false,"actions":{"pause":false,"stop":false,"resume":false,"abandon":false}}),
+            ]
+        );
+        projections.push(stages);
+    }
+    assert_eq!(projections[0], projections[1]);
 }

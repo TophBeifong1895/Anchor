@@ -379,7 +379,17 @@ impl RunApplication {
             if !seen.insert(record.run_id.clone()) {
                 continue;
             }
-            if !self.observed_liveness(&record, active)?.is_quiescent() {
+            let view = self.read_view(&record, active.contains_key(&record.run_id))?;
+            // A paused/budget-held conversation still owns its turn, even
+            // after its worker drains. Only an explicit stop or settlement
+            // releases that Session lineage for handoff or deletion.
+            let turn_held = matches!(
+                &view.phase,
+                anchor_kernel::Phase::Waiting {
+                    waiter: anchor_kernel::Waiter::Human { reason }
+                } if matches!(reason.as_str(), "paused" | "budget")
+            );
+            if turn_held || !RunLiveness::from_view(&view).is_quiescent() {
                 return Err(ApplicationError::Conflict(
                     "previous conversation execution has not stopped; wait for it to become inactive".into(),
                 ));

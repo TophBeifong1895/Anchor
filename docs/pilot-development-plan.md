@@ -35,7 +35,7 @@
 
 | 事项 | 当前状态 | 关闭条件 |
 | --- | --- | --- |
-| 宪法内核接入 Host | R0/R 已验收；R2 对外词汇切片停止交回，未验收；H3–H6 暂缓 | [R2 测量与停止现场](../experiments/constitution-host-preflight/r2/measurement.md)、[验证](../experiments/constitution-host-preflight/r2/verification.md)。pause→stop 即时取消与旧完成产物/Session 仲裁测试冲突，需决定测试范围及兼容行为。真实 Goose/Provider、部署、旧 Runner 删除仍未验收 |
+| 宪法内核接入 Host | R0/R 已验收；M1 本地完成（workspace 1922 通过、115 既有忽略；Web 290 通过），恢复独立边界 pause，按 [M1–M5 任务书](constitution-migration-task.md) 分里程碑交回 | [M1 验证与断言登记](../experiments/constitution-host-preflight/m1/verification.md)。S25 作废；S19–S24、S26 待审查。M2–M5 能力补齐、默认切换、旧 Runner 删除、生产数据离线迁移、W4 与真实 Goose/Provider 仍未关闭 |
 | Docmost 凭据与业务验收 | 已确认 `.env` 与运行 Host 的 `DOCMOST_API_KEY` 完全一致，Bearer 传递链路正常；绕过 Anchor 直接请求身份接口和 MCP 初始化仍均为 401，服务端拒绝原因未定。详见 [凭据核对](../.local/docmost-auth-check-20261016/README.md) | 核对目标 Docmost 实例的 Key 状态与服务端鉴权日志，必要时轮换部署凭据，再验证初始化、工具清单与实际业务；当前凭据由部署管理，网页只读 |
 | 常驻助手节点改名后的重建 | 对照旧候选时，显式退役后修改 wait 节点 ID 的新实例触发交接身份拒绝；与本次新 Turn 权限误继承分开，最终候选未覆盖这一改名场景 | 单独验证节点改名的实例边界与工作区来源；保持节点身份的指令调整/重建后续聊已有本轮回归 |
 | 当前开发部署的依赖业务验证 | 配置缺失与初始化失败已修复，目标网页初始化成功；本次未执行新增第三方依赖的安装与 Pilot 调用 | 按实际开发任务，在目标部署安装并调用所需依赖；初始化成功不替代业务验证 |

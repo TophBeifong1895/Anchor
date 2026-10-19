@@ -9,11 +9,11 @@ const target: OurGraph = { entry: 'reply', nodes: [{ id: 'reply', op: 'reply' }]
 const started = new Date().toISOString();
 const parent: OurRun = { run: 'parent-run', graph: 'report', running: false, started, updated: started, executed: ['prepare', 'notify'], objective: '发布周报', projection: runProjectionFixture('settled', { outcome: 'done' }) };
 const child: OurRun = { ...parent, run: 'child-run', graph: 'assistant', running: true,
-  projection: runProjectionFixture('executing', { active: true, actions: { stop: true, resume: false, abandon: true } }),
+  projection: runProjectionFixture('executing', { active: true, actions: { pause: false, stop: true, resume: false, abandon: true } }),
   trigger: { source: 'graph_call', graph: 'report', run: 'parent-run', node: 'notify', invocation: 2, mode: 'detach', root_run: 'parent-run' } };
 const waitChild: OurRun = { ...child, run: 'wait-child', trigger: { ...child.trigger!, mode: 'wait' } };
 const other: OurRun = { ...child, run: 'other-child', running: false,
-  projection: runProjectionFixture('executing', { actions: { stop: true, resume: true, abandon: true } }),
+  projection: runProjectionFixture('executing', { actions: { pause: false, stop: true, resume: true, abandon: true } }),
   trigger: { ...child.trigger!, root_run: 'other-parent', run: 'other-parent' } };
 const detail = (run: OurRun): OurRunDetail => ({ run: run.run, graph: run.graph, nodes: run.graph === 'report' ? ['prepare', 'notify'] : ['reply'], traces: {},
   definition: run.graph === 'report' ? source : target, projection: run.projection,

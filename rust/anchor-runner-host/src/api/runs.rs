@@ -681,21 +681,14 @@ pub(super) async fn control(
     if !matches!(operation.as_str(), "pause" | "resume" | "stop") {
         return Err(error(StatusCode::BAD_REQUEST, "unknown Run control"));
     }
-    let effective = if operation == "pause" {
-        "stop"
-    } else {
-        operation.as_str()
-    };
     state
         .application
-        .control(&id, effective)
+        .control(&id, &operation)
         .await
         .map_err(application_error)?;
     Ok((
         StatusCode::ACCEPTED,
-        Json(
-            json!({"run":id,"asked":operation,"operation":effective,"alias":operation == "pause"}),
-        ),
+        Json(json!({"run":id,"operation":operation})),
     ))
 }
 

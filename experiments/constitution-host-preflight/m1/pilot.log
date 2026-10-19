@@ -1,0 +1,9 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s
+     Running unittests src/main.rs (rust/target/debug/deps/anchor_runner_host-2cefc3c824f4cf45)
+
+running 2 tests
+test pilot_tools::tests::run_stop_cancels_the_worker_without_requesting_a_boundary_pause ... ok
+test pilot_tools::tests::run_pause_requests_the_node_boundary_without_cancelling_the_worker ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 912 filtered out; finished in 0.13s
+

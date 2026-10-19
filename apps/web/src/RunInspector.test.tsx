@@ -30,7 +30,7 @@ describe('Run Inspector status projection', () => {
     [{ phase: 'waiting', waiting_for: 'effect', reason: '工具结果未记录' }, '等待核查效果：工具结果未记录'],
     [{ phase: 'waiting', waiting_for: 'human', reason: 'paused' }, '等待你处理：paused'],
   ] as const)('uses %s for a retained cursor instead of claiming it is executing', async (view, label) => {
-    const detail = fixture({ active: false, reason: null, updated: null, actions: { stop: false, resume: false, abandon: false }, ...view });
+    const detail = fixture({ active: false, reason: null, updated: null, actions: { pause: false, stop: false, resume: false, abandon: false }, ...view });
     detail.calls = [{ node: 'worker', invocation: 1, graph: 'target', run: 'child', mode: 'wait' }];
     await render(detail);
     expect(element.querySelector('.node-summary .pill')?.textContent).toBe(label);

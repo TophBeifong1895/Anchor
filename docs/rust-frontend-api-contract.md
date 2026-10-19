@@ -14,7 +14,7 @@ React/TypeScript WebUI 调用 Rust Host 的资源 API。Host 可直接托管编�
 | `DELETE /graphs/{graph}` | Web/Pilot 确认使用捕获的版本；HTTP 发送 `If-Match: "{precondition}"`，资源变化或重建返回 409。省略头保留显式无条件兼容语义；活动/可继续 Run、定义或未结算调用引用仍阻止删除，只清本 Graph 数据 |
 | `POST /trigger` | `{graph,input?,execution?}` 接纳为 `{run,graph}`，busy 冲突；execution 缺省或 `legacy` 使用旧路径，`kernel_probe` 显式选择串行探针，其他值/类型返回400；不接受调用方绝对路径 |
 | `GET /runs`、`GET /runs/{run}` | 状态、路径/轮次、trace、节点、调用、Plugin 与触发来源 |
-| `POST /runs/{run}/pause|stop|resume` | pause 是 stop 的别名，返回 operation=stop、alias=true；保留 snapshot/input/身份；R2 未验收 |
+| `POST /runs/{run}/pause\|stop\|resume` | pause 等当前节点提交后在下一派发边界等待人；stop 立即提交停止并取消 worker；返回实际 operation，保留 snapshot/input/身份 |
 | `GET /runs/{run}/files/{node}`、`.../{path}` | 不可变 Artifact 文件、预览/下载；拒绝 host-path 越权 |
 | `GET /graph-relations`、`GET /channel-sessions` | 真实定义、调用与可信来源投影 |
 | `GET /timeline`、`/schedules` | Run 与计划事实；时间戳未知如实披露，不编造历史 |
@@ -23,13 +23,13 @@ React/TypeScript WebUI 调用 Rust Host 的资源 API。Host 可直接托管编�
 
 HTTP DTO 是产品投影，不直接输出执行器私有记录。未知结束时间、exit status 或来源必须保持未知；下游失败不能改变上游已提交事实。文件复制/迁移可能改变基于 mtime 的历史时间精度。
 
-本分支 R2 的 Run 列表、详情、时间线、子调用及 Pilot Run 查询共用 `projection: {phase,waiting_for?,outcome?,reason,active,actions:{stop,resume,abandon},updated}`。phase 为 executing / waiting / settled；waiting 才含 human / child / effect，settled 才含 done / failed / escalated / unknown / aborted。旧顶层 status、state.status 和 control_requested、投影 terminal/quiescent/needs_attention/pause 均退出对外 Run 契约；Session Turn、投递、监听与节点结果的状态仍属各自事实。
+本分支 M1 的 Run 列表、详情、时间线、子调用及 Pilot Run 查询共用 `projection: {phase,waiting_for?,outcome?,reason,active,actions:{pause,stop,resume,abandon},updated}`。phase 为 executing / waiting / settled；waiting 才含 human / child / effect，settled 才含 done / failed / escalated / unknown / aborted。旧顶层 status、state.status 和 control_requested、投影 terminal/quiescent/needs_attention 均退出对外 Run 契约；Session Turn、投递、监听与节点结果的状态仍属各自事实。
 
-基础动作只由 Phase 和 worker 派生：执行中可 stop，未结算可 abandon，无 worker 的 Executing 或 Waiting(Human) 可 resume。Session/身份/当前助手/被取代会话条件在边界收窄；写入仍执行现有授权、scope、lease 和控制守卫。旧 BudgetStopped 等实际写入拒绝仍存在，不能把新读取动作当成写入已迁移。Web 直接使用服务端 actions；缺少投影时显示不可用。
+基础动作只由 Phase 和 worker 派生：Executing 且有 worker 可 pause，执行中可 stop，未结算可 abandon，无 worker 的 Executing 或 Waiting(Human) 可 resume。Session/身份/当前助手/被取代会话条件在边界收窄；写入仍执行现有授权、scope、lease 和控制守卫。旧 BudgetStopped 等实际写入拒绝仍存在，不能把新读取动作当成写入已迁移。Web 直接使用服务端 actions；缺少投影时显示不可用。
 
-`kernel_probe` 持久权威为 Kernel FileStore；内部兼容 GraphRunRecord 不回写。updated 来自 Host 的独立观察文件，无观察为 null；旧 Run 仍读取 FileRunStore mtime。时间不参与控制。stop 接受后进入等待并取消 worker，排空前不能 resume；无 worker 的 Executing 以 active=false 表示可接续。HTTP pause 和 Pilot run_pause 均调用 stop，返回 alias=true；这会即时取消当前节点，并使 Session 上原来拒绝的 pause 按 stop 处理。旧 attempt recovery decision 和 Kernel Run/所属 Graph 删除仍具名拒绝，未扩展非串行支持。
+`kernel_probe` 持久权威为 Kernel FileStore；内部兼容 GraphRunRecord 不回写。updated 来自 Host 的独立观察文件，无观察为 null；旧 Run 仍读取 FileRunStore mtime。时间不参与控制。stop 接受后进入等待并取消 worker，排空前不能 resume；无 worker 的 Executing 以 active=false 表示可接续。HTTP pause 和 Pilot run_pause 独立传入 pause，返回 operation=pause；旧 Run 保持旧 Runner 边界暂停。Kernel Run 将持久宿主意图交给调度边界：先提交当前节点结果与成本，再以 Human stop、reason=paused 进入 waiting/human；当前节点不取消，最终节点已结算时保留结算。重启先核对执行端口已有完成事实，再消费暂停意图，不重放未知效果。Session call 仍拒绝通用 pause/resume；暂停或预算保留中的 conversation 即使 worker 已排空，也仍占有当前轮，须显式 stop 或结算后才能交接或删除。旧 attempt recovery decision 和 Kernel Run/所属 Graph 删除仍具名拒绝，未扩展非串行支持。
 
-**R2 停止、未验收**：新别名与现有完成产物、恢复和 Session 仲裁断言冲突，未更改控制写入规则或弱化非状态断言。这里记录分支实现，不能作为发布验收；见 [R2 现场与测量](../experiments/constitution-host-preflight/r2/measurement.md) 与 [验证](../experiments/constitution-host-preflight/r2/verification.md)。真实 Goose/Provider 与部署未新增验收。
+R2 的暂停别名决定已由 [M1 任务书](constitution-migration-task.md#1-m1完成-r2对外状态词汇) 纠正，S25 作废；其余 S19–S24、S26 保持待批。M1 的本地验证见 [验收证据](../experiments/constitution-host-preflight/m1/verification.md)。真实 Goose/Provider 与部署未新增验收。
 
 Run 详情另返回 `definition: {entry,nodes,edges,ops}`，仅来自该 Run 的冻结 snapshot，包含已展开的 inline 模块。它是只读展示拓扑，不含作者 layout、脚本、指令、输入及 host 参数，不能当作完整可重运行的作者定义；当前 Graph 的修改、损坏、移除或未保存草稿均不改变它。Run 文件与 Pilot 附件统一通过鉴权 Blob 下载并显示失败反馈。
 

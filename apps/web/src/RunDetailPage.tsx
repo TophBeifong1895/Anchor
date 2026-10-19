@@ -4,7 +4,7 @@ import { Workspace } from './Workspace';
 import { WorkflowCanvas } from './WorkflowCanvas';
 import { RunInspector } from './RunInspector';
 import { RunControls } from './RunControls';
-import { runPhase, runPhaseLabel } from './runPresentation';
+import { runPhase, runPhaseLabel, type RunControl } from './runPresentation';
 import { activeNodes } from './parallel';
 import type { GraphSummary, OurRunDetail } from './model';
 import type { WorkbenchNotice } from './useGraphEditor';
@@ -14,7 +14,7 @@ type Props = {
   run: string; node: string; targetPath: string; detail: OurRunDetail | null;
   onPilot: () => void; selectGraph: (graph: string) => boolean; trigger: () => Promise<void>; onTimeline: () => void;
   navigateRun: (run: string, graph: string, node?: string) => Promise<void>;
-  controlRun: (what: 'stop' | 'resume' | 'abandon') => Promise<void>; deleteRun: () => Promise<void>; onNode: (node: string) => void;
+  controlRun: (what: RunControl) => Promise<void>; deleteRun: () => Promise<void>; onNode: (node: string) => void;
 };
 export function RunDetailPage({ name, graphs, dirty, busy, notice, run, node, targetPath, detail,
   selectGraph, trigger, onTimeline, navigateRun, controlRun, deleteRun, onNode, onPilot }: Props) {

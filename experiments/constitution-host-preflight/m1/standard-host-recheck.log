@@ -1,0 +1,33 @@
+   Compiling tokio-rustls v0.26.6
+   Compiling hyper-rustls v0.27.10
+   Compiling tokio-tungstenite v0.29.0
+   Compiling reqwest v0.13.5
+   Compiling reqwest v0.12.28
+   Compiling rmcp v2.2.0
+   Compiling anchor-wecom-gateway v0.1.0 (/home/mansteinl/code/anchor-constitution-core/rust/anchor-wecom-gateway)
+   Compiling anchor-mcp-host v0.1.0 (/home/mansteinl/code/anchor-constitution-core/rust/anchor-mcp-host)
+   Compiling anchor-runner-host v0.1.0 (/home/mansteinl/code/anchor-constitution-core/rust/anchor-runner-host)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 11.88s
+     Running tests/standard_host.rs (rust/target/debug/deps/standard_host-3306f77d9e129cfb)
+
+running 3 tests
+test old_state_root_still_allows_op_without_becoming_goose_recovery ... FAILED
+test unconfigured_standard_pilot_refuses_admission_without_creating_a_turn ... ok
+test standard_host_runs_op_without_goose_model_or_runtime_switch ... ok
+
+failures:
+
+---- old_state_root_still_allows_op_without_becoming_goose_recovery stdout ----
+
+thread 'old_state_root_still_allows_op_without_becoming_goose_recovery' (1074651) panicked at anchor-runner-host/tests/support/runtime_fixture.rs:145:14:
+called `Result::unwrap()` on an `Err` value: Os { code: 26, kind: ExecutableFileBusy, message: "Text file busy" }
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+failed Runtime fixture retained: /tmp/.tmpclyAiQ
+
+
+failures:
+    old_state_root_still_allows_op_without_becoming_goose_recovery
+
+test result: FAILED. 2 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.60s
+
+error: test failed, to rerun pass `-p anchor-runner-host --test standard_host`

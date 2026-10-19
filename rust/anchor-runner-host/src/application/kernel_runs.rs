@@ -20,6 +20,13 @@ use std::{
     sync::{Arc, Mutex, atomic::Ordering},
 };
 
+mod pause;
+
+struct KernelExecution {
+    cancellation: anchor_runtime::Cancellation,
+    pause: tokio::sync::mpsc::UnboundedSender<()>,
+}
+
 struct ProbeAuthority;
 impl Authority for ProbeAuthority {
     fn permits(&self, p: &Principal, action: Action, _: &str) -> bool {
@@ -35,7 +42,8 @@ impl Authority for ProbeAuthority {
 pub(crate) struct KernelRuns {
     pub(crate) kernel: Kernel<FileStore>,
     observations: super::run_observations::RunObservations,
-    active: Mutex<HashMap<String, anchor_runtime::Cancellation>>,
+    active: Mutex<HashMap<String, KernelExecution>>,
+    pause_root: std::path::PathBuf,
     _lease: anchor_file_lease::FileLease,
 }
 
@@ -77,6 +85,10 @@ impl KernelRuns {
         Ok(Self {
             kernel,
             active: Mutex::default(),
+            pause_root: root
+                .parent()
+                .expect("state root")
+                .join("kernel-pause-intents"),
             observations: super::run_observations::RunObservations::new(
                 &root
                     .parent()
@@ -120,20 +132,32 @@ impl KernelRuns {
         nodes: &N,
         cancellation: anchor_runtime::Cancellation,
     ) -> Result<Resource, GraphError> {
+        let (pause, requests) = tokio::sync::mpsc::unbounded_channel();
         {
             let mut active = self.active.lock().unwrap();
             if active.contains_key(id) {
                 return Err(GraphError::RunBusy(id.to_owned()));
             }
-            active.insert(id.to_owned(), cancellation.clone());
+            if self.pause_pending(id)? {
+                pause.send(()).expect("new pause receiver");
+            }
+            active.insert(
+                id.to_owned(),
+                KernelExecution {
+                    cancellation: cancellation.clone(),
+                    pause,
+                },
+            );
         }
         let _guard = ExecutionGuard {
             owner: self,
             id: id.to_owned(),
         };
+        let boundary = pause::PauseBoundary::new(self, requests);
         KernelScheduler {
             kernel: &self.kernel,
             observer: Some(&self.observations),
+            boundary: Some(&boundary),
             artifacts,
             nodes,
             cancellation,
@@ -147,12 +171,16 @@ impl KernelRuns {
         operation: &str,
         reason: Option<&str>,
     ) -> Result<(), ApplicationError> {
+        if operation == "pause" {
+            return self.request_pause(id);
+        }
         if !matches!(operation, "stop" | "resume" | "abandon") {
             return Err(ApplicationError::Invalid(
-                "P probe: pause is Unsupported; use stop/resume".into(),
+                "unknown Kernel Run control".into(),
             ));
         }
-        if operation == "resume" && self.active(id) {
+        let active = self.active.lock().unwrap();
+        if operation == "resume" && active.contains_key(id) {
             return Err(ApplicationError::Conflict(
                 "Kernel probe execution is still draining".into(),
             ));
@@ -174,10 +202,11 @@ impl KernelRuns {
             )));
         }
         if operation != "resume"
-            && let Some(cancellation) = self.active.lock().unwrap().get(id)
+            && let Some(execution) = active.get(id)
         {
-            cancellation.store(true, Ordering::Release);
+            execution.cancellation.store(true, Ordering::Release);
         }
+        self.clear_pause(id)?;
         Ok(())
     }
     pub(crate) fn record(resource: &Resource) -> Result<GraphRunRecord, ApplicationError> {
