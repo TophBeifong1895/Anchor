@@ -76,11 +76,28 @@ fn create_durable_directory(path: &std::path::Path) -> io::Result<()> {
 }
 
 fn write_durable(path: &std::path::Path, bytes: &[u8]) -> Result<(), std::io::Error> {
-    std::fs::write(path, bytes)?;
-    std::fs::File::open(path)?.sync_all()?;
-    if let Some(parent) = path.parent() {
-        std::fs::File::open(parent)?.sync_all()?;
+    use std::{io::Write, os::unix::fs::PermissionsExt};
+
+    let parent = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| std::path::Path::new("."));
+    let permissions = match std::fs::metadata(path) {
+        Ok(metadata) => Some(metadata.permissions()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => None,
+        Err(error) => return Err(error),
+    };
+    let mut temporary = tempfile::Builder::new()
+        .prefix(".anchor-write-")
+        .permissions(std::fs::Permissions::from_mode(0o666))
+        .tempfile_in(parent)?;
+    if let Some(permissions) = permissions {
+        temporary.as_file().set_permissions(permissions)?;
     }
+    temporary.write_all(bytes)?;
+    temporary.as_file().sync_all()?;
+    temporary.persist(path).map_err(|error| error.error)?;
+    std::fs::File::open(parent)?.sync_all()?;
     Ok(())
 }
 
@@ -823,6 +840,40 @@ async fn main() -> io::Result<()> {
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    #[test]
+    fn write_durable_preserves_creation_and_existing_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let directory = tempdir().unwrap();
+        let ordinary = directory.path().join("ordinary");
+        let atomic = directory.path().join("atomic");
+        std::fs::write(&ordinary, b"ordinary").unwrap();
+        write_durable(&atomic, b"original").unwrap();
+        assert_eq!(
+            std::fs::metadata(&ordinary).unwrap().permissions().mode(),
+            std::fs::metadata(&atomic).unwrap().permissions().mode()
+        );
+        std::fs::set_permissions(&atomic, std::fs::Permissions::from_mode(0o640)).unwrap();
+        write_durable(&atomic, b"replacement").unwrap();
+        assert_eq!(std::fs::read(&atomic).unwrap(), b"replacement");
+        assert_eq!(
+            std::fs::metadata(&atomic).unwrap().permissions().mode() & 0o777,
+            0o640
+        );
+        assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 2);
+    }
+
+    #[test]
+    fn write_durable_failed_publication_cleans_temporary_file() {
+        let directory = tempdir().unwrap();
+        let target = directory.path().join("occupied");
+        std::fs::create_dir(&target).unwrap();
+        std::fs::write(target.join("retained"), b"original").unwrap();
+        assert!(write_durable(&target, b"replacement").is_err());
+        assert_eq!(std::fs::read(target.join("retained")).unwrap(), b"original");
+        assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 1);
+    }
 
     fn snapshot() -> GraphSnapshot {
         serde_json::from_value(serde_json::json!({

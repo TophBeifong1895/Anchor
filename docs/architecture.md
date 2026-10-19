@@ -128,6 +128,8 @@ Run 的暂停/停止请求与节点已收束是不同事实。恢复保留 Graph
 
 Host 对外 trace 投影 ACP 消息、工具观察和媒体，支持增量读取与重开节点。该投影用于观察，不代替 Goose 原生历史。真实模型、vision 与长会话效果必须分别验收。
 
+Host 的 trace 证据与 `write_durable` 文件通过同目录临时文件写入、文件 fsync、原子替换及父目录 fsync 发布；已打开的读取保持完整旧版本，重新打开只见完整已发布版本，不因并发写读到空文件或半份 JSON。该保证针对单文件，不将 invocation fact 与 trace 证据包装成跨文件事务；字段格式、发布顺序和恢复校验不变。[调用点与回归](runtime-contract-tests.md#trace-证据与宿主持久文件的原子发布)。
+
 ## Session、渠道与入口
 
 Pilot Session 保存业务关联、Turn、问题/回答和 UI 事件；Goose 保存模型历史。Turn 提交按 `request_id` 幂等，SSE 按事件游标回放。原生 MCP elicitation 经过 ACP；必要删除确认绑定确切 Graph 与资源前置条件，重启中断未完成的问题，不重放旧确认。

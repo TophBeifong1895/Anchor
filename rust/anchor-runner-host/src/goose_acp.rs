@@ -650,11 +650,7 @@ impl GooseNodePort {
         } else if let Some(error) = close.err().or_else(|| tool_close.err()) {
             result = Err(format!("Goose cleanup failed: {error}").into());
         }
-        write_durable(
-            &self.facts.join(format!("{stem}.evidence.json")),
-            &serde_json::to_vec_pretty(&evidence)
-                .map_err(|error| GraphError::CorruptRun(error.to_string()))?,
-        )?;
+        trace::store_evidence(&self.facts.join(format!("{stem}.evidence.json")), &evidence)?;
         if !self.fixture {
             fact = serde_json::from_slice(&fs::read(&fact_path)?)
                 .map_err(|error| GraphError::CorruptRun(error.to_string()))?;
