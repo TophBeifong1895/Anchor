@@ -226,10 +226,8 @@ impl RunApplication {
                 )
                 .map_err(ApplicationError::Storage)?;
             }
-            record
-                .delete_owned_run_data(&self.data_root, workspace_root)
+            self.delete_cascaded_run(id, record, workspace_root)
                 .map_err(ApplicationError::Storage)?;
-            run_data::remove_run_files(&self.data_root, id).map_err(ApplicationError::Storage)?;
         }
 
         // Remove the bundle itself while still holding the Graph lease, so no

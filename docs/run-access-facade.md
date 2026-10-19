@@ -2,9 +2,9 @@
 
 ## 当前实现
 
-F0 为 `e3a5778`，首个/第二个 F1 切片为 `06f7b8a`、`c21b382`，G0 `250435d` 经 `3b7d1d9` 合入。`application/run_access` 统一 Run 读取、状态规则及 HTTP/Pilot/通道兼容序列化。Graph/会话用例只消费安全视图、谓词及意图操作；不可拆开的执行/保存协议留在门面内部，避免暴露原始 record 作为中间产物。持久格式、对外词汇、权限、锁顺序及写入顺序不变；F1 没有修改既有测试断言。
+F0 为 `e3a5778`，F1 切片为 `06f7b8a`、`c21b382`、`0116074`，G0 `250435d` 经 `3b7d1d9` 合入。`application/run_access` 统一 Run 读取、状态规则、意图写入及 HTTP/Pilot/通道兼容序列化。Graph/会话用例只消费安全视图、谓词及意图操作；不可拆开的执行/保存协议留在门面内部，避免暴露原始 record 作为中间产物。持久格式、对外词汇、权限、锁顺序及写入顺序不变；F1/F2 没有修改既有测试断言。F1 后另交 `cc99091` 修正用户指定的三项 G0 fixture/断言，与门面重构分开。
 
-最终读取切片补齐 Graph/会话/恢复/删除规则和 Pilot Session 兼容输出；业务围栏从 224 经 193、99 降为 5，仅 `application/recovery.rs` 的写入协议仍待 F2 收口。`RunView` 只提供新相位、活动观察、持久更新时间、只读 Graph 进度及谓词；record 为私有 Cow，既不 Deref 也没有原始 record getter，不公开 status/error/cursor/recovery/recovery_submissions。`read_run`、`run_views`、`runs_for_graph` 返回拥有数据的安全视图；原始枚举仅在门面内部可用，旧 `records()` 只在测试编译保留。outcome 保留 escalated/unknown 契约，master 现有状态仍仅映射为 done/failed/aborted。读取完整验收与剩余边界见文末，围栏数不是规则度量。
+读取切片补齐 Graph/会话/恢复/删除规则和 Pilot Session 兼容输出；F2 迁入最后恢复决定写入协议后，业务围栏从 224 经 193、99、5 降为 0，无新增运行时豁免。`RunView` 只提供新相位、活动观察、持久更新时间、只读 Graph 进度及谓词；record 为私有 Cow，既不 Deref 也没有原始 record getter，不公开 status/error/cursor/recovery/recovery_submissions。`read_run`、`run_views`、`runs_for_graph` 返回拥有数据的安全视图；原始枚举仅在门面内部可用，旧 `records()` 只在测试编译保留。outcome 保留 escalated/unknown 契约，master 现有状态仍仅映射为 done/failed/aborted。验收与未覆盖边界见文末，围栏数不是规则度量。
 
 [围栏测试](../rust/anchor-runner-host/tests/run_access_fence.rs) 扫描 `anchor-runner-host/src/**/*.rs`，对 `RunStatus`、`GraphRunRecord`、`RunStore`、`FileRunStore`、`GraphRunner`、`RunCursor` 六种内部类型的精确标识符逐次计数。[业务基线](../rust/anchor-runner-host/run-access-fence.txt) 是逐文件上限：超过上限或清单外业务文件出现引用会失败；下降或删除文件时提示同步降低清单，不自动改写它。
 
@@ -23,6 +23,23 @@ F0 为 `e3a5778`，首个/第二个 F1 切片为 `06f7b8a`、`c21b382`，G0 `250
 | `run_data.rs` | Runtime 产物及历史数据访问 |
 
 `anchor-graph-host` 整个 crate 属于运行时侧，不在本围栏范围内。其余 Host 文件默认为业务侧，包括当前没有类型标识符、但仍通过推断类型读写 Run 的文件。
+
+## 意图写入与存储边界
+
+生产 `store()` 仅 `application/run_access` 可见，`prepare_resume`、`spawn` 与原始状态校验也限定在门面；没有可从业务调用的通用 save 或 status setter。测试编译单独保留 application 范围的 store 入口及旧 records 入口，供原有 fixture 构造，不扩大生产权限。
+
+| 意图操作 | 权威实现（`application/run_access/`） | 保留的不变量 |
+| --- | --- | --- |
+| `admit` | `admission.rs` | 原准入校验、冻结 Graph/权限、元数据、保存与启动顺序 |
+| `admit_conversation`、`admit_assistant_run` | `conversations.rs`、`graph_policy.rs` | 原会话去重、前驱与助手范围、Graph/Run 租约与执行登记 |
+| `stop`、`pause`、`resume` | `control.rs` | 旧 `control` 仅兼容分发；身份、Session 协调、恢复、控制原子量及保存顺序不变 |
+| `finish_abandon` | `abandon.rs` | 用例先持久 abandon intent、取消并等待；门面核验后终结，不新增 touch |
+| `record_recovery_decision` | `recovery.rs` | 先写 Harness 意图、再写 Graph；租约内复核、幂等 replay、Abort/剩余 attempt/恢复执行顺序不变 |
+| `stop_session_call`、`yield_session_call`、`execute_session_call`、`settle_session_call` | `session_calls.rs` | Session 仲裁、交付、执行登记与写入先后不变 |
+| `release_parent_after_recorded_delivery`、`child_finished` | `dispatch.rs` | 先持久交付再释放父 Run，保留等待匹配及取消传播 |
+| `delete_cascaded_run`、`delete_inactive_run` | `graph_policy.rs` | 各自保留原前置条件；清理 owned data 后再删除 Run/元数据，Graph 级联继续持有 Graph 租约 |
+
+业务 `recover` 只把决策交给 `record_recovery_decision`，不再持有原始 record。Graph/单 Run 删除也通过门面的原有按意图清理协议，不用通用可变访问器替代。
 
 ## HTTP 字节基线
 
@@ -77,7 +94,7 @@ F0 为 `e3a5778`，首个/第二个 F1 切片为 `06f7b8a`、`c21b382`，G0 `250
 
 | 当前权威实现 | 迁移前来源/保留语义 | 迁移前 → 当前独立实现数 |
 | --- | --- | --- |
-| `is_settled` | Runtime 既有终态权威 + `application/admission.rs:44` 的七状态补集；所有既有 is_terminal 调用现在委托同一谓词 | 2 → 1 |
+| `is_settled` | Runtime 既有终态权威 + `application/admission.rs:44` 的七状态补集 + `api/schedules.rs:319` 的七状态投影枚举；`projected_run_is_unfinished` 解码已知 wire 状态后委托同一终态权威，未知/控制中词汇保持原 false | 3 → 1 |
 | `channel_progress_is_settled` | `api/wecom_progress.rs:373`；T/Stopped/BudgetStopped，missing 为 true；无 run 仍为 false | 1 → 1 |
 | `ChannelReplyRun::from_record` 的 unsuccessful 投影 | `api/wecom.rs:692`、`api/wecom.rs:744`；Failed/Aborted/Stopped，两类 reply 共用 | 2 → 1 |
 | `can_continue_session_call` | `application/session_calls.rs:308`；Completed 先短路，Failed/Aborted/BudgetStopped 阻止，其余继续 | 1 → 1 |
@@ -96,5 +113,6 @@ F0 为 `e3a5778`，首个/第二个 F1 切片为 `06f7b8a`、`c21b382`，G0 `250
 ## 验证与剩余边界
 
 - 最终读取切片：38 个门面定向回归通过；Rust workspace 1,993 通过、0 失败、122 忽略，严格 workspace/all-target clippy、fmt、Web 306 测试及构建通过。原始日志见[最终读取证据](../.local/run-access-facade-20261019/f1-final/README.md)。未新增真实 Provider 或生产业务验收。
-- G0 三项残留见[Runtime 标准回归](runtime-contract-tests.md)。干净 target 首轮暴露标准构建遗漏联网 helper 与 MCP example，补全标准命令另交 `76f77ef`、`cff7001`；ACP 15 项及受影响四套 MCP 的 10 项串行复跑均通过。完整 ignored 首轮为 107/12/0，其中 9 项明确缺 example；结合补齐后的定向复跑，119 项的最终分类为 116 通过、仅 G0 三项失败、0 忽略，没有新增产品失败。这不是一次全绿命令，也不隐去环境失败。标准入口自身 fail-fast 于 G0 模型切换项（64/1/0），后续覆盖来自完整 ignored 命令。
-- F2 尚需迁入 `application/recovery.rs` 最后一段按意图记录决定的写入协议，随后将 store 访问限定在门面内部；不得借类型重命名、扩大豁免或暴露原始 record 降低围栏数。Goose 三项 fixture/断言在 F1 `0116074` 完成后独立修正，三项串行定向回归各 1/0/0，[理由与验证](runtime-contract-tests.md#f1-后的-g0-fixture-修正2026-10-19)不作为 F1 行为重构的一部分。
+- Goose 三项 fixture/断言在 F1 `0116074` 完成后由 `cc99091` 独立修正，三项串行定向回归各 1/0/0；严格场景证据修正另交 `7a23d30`，未放宽校验器或更改既有断言。[理由与验证](runtime-contract-tests.md#f1-后的-g0-fixture-修正2026-10-19)不作为 F1/F2 行为重构的一部分。
+- F2 定向恢复/控制各 18 项、计划 22 项与删除 68 项通过，围栏为业务 0、运行时 197；workspace 实际 1,995/0/122，严格 workspace/all-target clippy、fmt、Web 306 及构建通过。该 workspace 命令在证据测试拆分前执行；拆分只增加 1 个默认忽略项，实际场景不变，后续编译、严格 clippy 与实际 Goose 回归均通过。Graph 级联删除归门面，计划投影委托同一终态权威，未知/控制中状态与非字符串字段保留旧行为。
+- 标准 Goose 入口 20 套、105/0/0，105 份场景证据全部通过严格校验；入口外补集另行串行执行 15/0/0，合计覆盖 120 项，没有残留失败，不声称一次完整 ignored 命令通过。原参数测试拆分使测试数比 G0 多 1，覆盖不变。最终命令、原始报告及此前中止/证据失败均保留在 [F2 证据](../.local/run-access-facade-20261019/f2/README.md)。未新增真实 Provider、生产数据、外部渠道或部署验收。

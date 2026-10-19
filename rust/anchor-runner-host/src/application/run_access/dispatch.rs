@@ -169,7 +169,7 @@ impl RunApplication {
         })
     }
 
-    pub(in crate::application) fn spawn(
+    pub(in crate::application::run_access) fn spawn(
         &self,
         record: GraphRunRecord,
         execution: PreparedExecution,

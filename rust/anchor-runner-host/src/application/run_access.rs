@@ -18,8 +18,9 @@ pub(crate) use assistant_policy::{graph_lease, graph_read_lease};
 pub(crate) use liveness::RunLiveness;
 #[cfg(test)]
 pub(super) use projection::observed;
+pub(crate) use projection::projected_run_is_unfinished;
 pub(crate) use reads::load;
-pub(in crate::application) use store::wait_child_ids;
+use store::wait_child_ids;
 
 use super::{ApplicationError, RunMetadata};
 use anchor_runtime::graph::{GraphRunRecord, GraphSnapshot, PluginBinding, RunResult, RunStatus};
@@ -286,11 +287,11 @@ fn is_stopped(status: RunStatus) -> bool {
     status == RunStatus::Stopped
 }
 
-pub(super) fn succeeded(status: RunStatus) -> bool {
+fn succeeded(status: RunStatus) -> bool {
     status == RunStatus::Completed
 }
 
-pub(crate) fn legacy_status(status: RunStatus) -> &'static str {
+fn legacy_status(status: RunStatus) -> &'static str {
     match status {
         RunStatus::Ready => "ready",
         RunStatus::Running => "running",
@@ -305,7 +306,7 @@ pub(crate) fn legacy_status(status: RunStatus) -> &'static str {
     }
 }
 
-pub(super) fn validate_control_identity(
+fn validate_control_identity(
     record: &GraphRunRecord,
     metadata: &RunMetadata,
 ) -> Result<(), ApplicationError> {
@@ -317,7 +318,7 @@ pub(super) fn validate_control_identity(
     Ok(())
 }
 
-pub(super) fn reject_terminal_control(record: &GraphRunRecord) -> Result<(), ApplicationError> {
+fn reject_terminal_control(record: &GraphRunRecord) -> Result<(), ApplicationError> {
     if is_settled(record.status) {
         return Err(ApplicationError::Conflict(
             "terminal Run cannot be controlled".into(),
@@ -326,7 +327,7 @@ pub(super) fn reject_terminal_control(record: &GraphRunRecord) -> Result<(), App
     Ok(())
 }
 
-pub(super) fn validate_inactive_control(
+fn validate_inactive_control(
     record: &GraphRunRecord,
     operation: &str,
 ) -> Result<(), ApplicationError> {
@@ -342,7 +343,7 @@ pub(super) fn validate_inactive_control(
     Ok(())
 }
 
-pub(super) fn validate_resume_budget(record: &GraphRunRecord) -> Result<(), ApplicationError> {
+fn validate_resume_budget(record: &GraphRunRecord) -> Result<(), ApplicationError> {
     if record.status == RunStatus::BudgetStopped {
         return Err(ApplicationError::Conflict(
             "budget-stopped Run requires an explicit budget policy".into(),

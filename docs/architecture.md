@@ -60,7 +60,7 @@ Graph Call 的 `wait` 子执行在 Runner 返回成功、错误或合作取消�
 
 [RunProjection](../rust/anchor-runner-host/src/application/run_access/projection.rs) 在查询时组合既有持久状态、执行登记和控制前置条件，供 HTTP/Pilot 列表、详情、时间线及子调用共用；Web 只展示该操作投影，最终控制仍核验现场。运行画布从该 Run 的冻结 snapshot 投影只读拓扑，包含展开后的模块，不读取当前 Graph 或编辑草稿，也不暴露执行脚本、输入和 host 参数。投影不新增持久格式或恢复游标。
 
-Host 的 [Run 访问边界](run-access-facade.md) 按业务文件限制内部类型引用上限，新增能力不得扩大直接耦合。`application/run_access` 接管相位、只读视图、规则与 HTTP/Pilot/渠道兼容序列化，Graph/会话/助手读取使用安全视图或按意图操作；不可拆开的执行与保存协议保留在门面内部，锁与持久化顺序不变。业务侧仅剩恢复决定写入协议待 F2 收口；规则表按原独立判断体计数，不以文件搬迁或围栏通过代替规则验收。
+Host 的 [Run 访问边界](run-access-facade.md) 对业务内部类型引用实行零上限，新增能力先扩展门面。`application/run_access` 接管相位、只读视图、规则与 HTTP/Pilot/渠道兼容序列化，Graph/会话/助手只消费安全视图或按意图操作；准入、控制、恢复决定、放弃、Session 调用及子 Run 释放的执行与保存协议归门面，生产 `store()`、原始枚举与执行准备/派发仅在门面内部可用。锁与持久化顺序不变，规则表按原独立判断体计数，不以围栏通过代替规则验收。
 
 ## Graph 与节点
 

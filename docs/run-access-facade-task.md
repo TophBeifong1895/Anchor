@@ -1,5 +1,7 @@
 # Run 访问门面任务书（master）
 
+F0 已交 `e3a5778`，F1 已交 `06f7b8a`、`c21b382`、`0116074`；F2 已完成，业务围栏为 0，标准 Goose 门槛及入口外补集均通过。G0 合入、原工作树/分支清理及三项独立修正已完成。当前边界、规则度量与验证范围以 [Run 访问边界](run-access-facade.md) 为准，下文保留原任务要求，不作为当前待办。
+
 编制：2026-10-19。适用分支：`master`（工作目录 `/home/mansteinl/Anchor`）。来源：用户批准的"先降耦合，再换实现"方案。
 
 ## 为什么做
@@ -139,7 +141,7 @@ JSON 逐字节：<证据>
 - **wecom-gateway 的 3 个渠道时序用例**：同一时段本机另有一个 workspace 全量测试在跑（审查方在验收分支），属于负载导致的时序抖动；单独复跑均通过。其中 `slow_callback_does_not_block_control_and_older_reply_is_suppressed` 在分支 M1 也出现过一次，登记为已知时序脆弱用例，日后单独修复。
 - **Goose 忽略测试**：属于 master 现有的基线问题，锁定值在 `586916d` 中更换过，由 [G0 任务书](goose-baseline-task.md)单独处理。
 
-**下一步：**
+**F0 当时的审查要求（已执行）：**
 
 1. 立即提交 F0，同时提交 `docs/anchor-constitution.md`、本任务书和 `docs/goose-baseline-task.md`。围栏只有提交之后才能拦住并行的业务修改。
 2. 开始 F1。

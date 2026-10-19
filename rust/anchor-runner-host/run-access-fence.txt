@@ -1,3 +1,2 @@
 # Business-side maximum occurrences per src-relative file; lower after migration.
 # Runtime exemptions are fixed in tests/run_access_fence.rs, not in this baseline.
-application/recovery.rs 5

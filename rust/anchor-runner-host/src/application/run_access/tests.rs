@@ -1,6 +1,65 @@
 use super::*;
 use serde_json::json;
 
+#[test]
+fn projected_schedule_rule_preserves_known_and_unrecognized_legacy_states() {
+    for (status, unfinished) in [
+        ("ready", true),
+        ("running", true),
+        ("paused", true),
+        ("budget_stopped", true),
+        ("waiting_call", true),
+        ("waiting_recovery", true),
+        ("stopped", true),
+        ("completed", false),
+        ("failed", false),
+        ("aborted", false),
+        ("stopping", false),
+        ("pausing", false),
+        ("waiting_resume", false),
+        ("", false),
+        ("future", false),
+    ] {
+        assert_eq!(
+            projected_run_is_unfinished(&json!({"status":status})),
+            unfinished,
+            "{status}"
+        );
+    }
+    for run in [
+        json!({}),
+        json!({"status":null}),
+        json!({"status":5}),
+        json!({"status":[]}),
+        json!({"status":{"ready":null}}),
+    ] {
+        assert!(!projected_run_is_unfinished(&run));
+    }
+}
+
+#[tokio::test]
+async fn intent_controls_preserve_missing_and_unknown_operation_errors() {
+    use crate::application::RunApplication;
+    let root = tempfile::TempDir::new().unwrap();
+    let application = RunApplication::new(root.path().into(), root.path().join("catalog"));
+    assert!(matches!(
+        application.stop("missing").await,
+        Err(ApplicationError::Missing)
+    ));
+    assert!(matches!(
+        application.pause("missing").await,
+        Err(ApplicationError::Missing)
+    ));
+    assert!(matches!(
+        application.resume("missing").await,
+        Err(ApplicationError::Missing)
+    ));
+    assert!(matches!(
+        application.control("missing", "unknown").await,
+        Err(ApplicationError::Invalid(message)) if message == "unknown Run control"
+    ));
+}
+
 pub(super) fn set_valid_state(record: &mut GraphRunRecord, status: RunStatus) {
     use anchor_runtime::graph::{InvocationKey, PendingRecovery, RecoveryAttempt, RunCursor};
     record.status = status;

@@ -11,13 +11,15 @@ use anchor_platform_session::SessionStore;
 use anchor_runtime::graph::{GraphRunRecord, RunLease, RunStore};
 use std::{collections::HashMap, path::Path};
 
-impl RunView<'_> {
-    pub(in crate::application) fn delete_owned_run_data(
+impl RunApplication {
+    pub(in crate::application) fn delete_cascaded_run(
         &self,
-        data_root: &Path,
+        run_id: &str,
+        record: &RunView<'_>,
         workspace_root: &Path,
     ) -> Result<(), String> {
-        crate::run_data::delete_run_data(&self.record, data_root, workspace_root)
+        crate::run_data::delete_run_data(&record.record, &self.data_root, workspace_root)?;
+        crate::run_data::remove_run_files(&self.data_root, run_id)
     }
 }
 

@@ -1,9 +1,16 @@
 use super::{RunView, legacy_status, validate_control_identity};
 use crate::application::{ApplicationError, RunApplication, RunMetadata};
-use anchor_runtime::graph::GraphRunRecord;
+use anchor_runtime::graph::{GraphRunRecord, RunStatus};
 use serde::Serialize;
 use serde_json::{Value, json};
 use std::sync::atomic::Ordering;
+
+pub(crate) fn projected_run_is_unfinished(run: &Value) -> bool {
+    run.get("status")
+        .filter(|status| status.is_string())
+        .and_then(|status| serde_json::from_value::<RunStatus>(status.clone()).ok())
+        .is_some_and(|status| !super::is_settled(status))
+}
 
 #[derive(Debug, Serialize)]
 pub(crate) struct RunActions {

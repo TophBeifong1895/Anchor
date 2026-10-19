@@ -8,6 +8,31 @@ use anchor_runtime::graph::{GraphRunRecord, RunStatus, RunStore};
 use std::sync::atomic::Ordering;
 
 impl RunApplication {
+    pub(crate) async fn control(
+        &self,
+        run_id: &str,
+        operation: &str,
+    ) -> Result<(), ApplicationError> {
+        match operation {
+            "stop" => self.stop(run_id).await,
+            "pause" => self.pause(run_id).await,
+            "resume" => self.resume(run_id).await,
+            _ => Err(ApplicationError::Invalid("unknown Run control".into())),
+        }
+    }
+
+    pub(crate) async fn stop(&self, run_id: &str) -> Result<(), ApplicationError> {
+        self.control_expected(run_id, "stop", None).await
+    }
+
+    pub(crate) async fn pause(&self, run_id: &str) -> Result<(), ApplicationError> {
+        self.control_expected(run_id, "pause", None).await
+    }
+
+    pub(crate) async fn resume(&self, run_id: &str) -> Result<(), ApplicationError> {
+        self.control_expected(run_id, "resume", None).await
+    }
+
     /// Stop every child Run a parked parent still waits on, plus their pending
     /// Session deliveries, exactly as an explicit `stop` does.
     pub(in crate::application) async fn stop_wait_children(
@@ -27,15 +52,12 @@ impl RunApplication {
         Ok(())
     }
 
-    pub(in crate::application) async fn control_expected(
+    pub(in crate::application::run_access) async fn control_expected(
         &self,
         run_id: &str,
         operation: &str,
         waiting: Option<(&str, u64)>,
     ) -> Result<(), ApplicationError> {
-        if !matches!(operation, "pause" | "resume" | "stop") {
-            return Err(ApplicationError::Invalid("unknown Run control".into()));
-        }
         if operation == "resume" && self.abandon_intent(run_id)?.is_some() {
             // Abandonment is one-way: a resumed Run would continue the round the
             // operator gave up. The intent is durable, so this holds across a

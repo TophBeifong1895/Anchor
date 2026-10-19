@@ -2,7 +2,6 @@
 pub(crate) mod abandon;
 mod admission;
 mod assistants;
-mod control;
 mod deletion;
 mod dispatch;
 #[cfg(test)]
