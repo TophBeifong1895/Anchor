@@ -18,6 +18,7 @@ use super::{
     SettleSubmission, call_identity, record_of, run_resource,
 };
 
+use super::super::test_support::snapshots::{FrozenOutcome, Population, Snapshots};
 use super::super::test_support::*;
 
 // ---------------------------------------------------------------------------
@@ -609,7 +610,7 @@ pub(crate) fn check_failed_run(
     (phantoms, ceiling.is_some() && !failures.is_empty())
 }
 
-#[derive(Default, Debug)]
+#[derive(Default, Debug, Clone, PartialEq, Eq)]
 struct Tally {
     cases: u64,
     rejected_graphs: u64,
@@ -634,8 +635,8 @@ struct Tally {
     call_unknown: u64,
 }
 
-async fn check(snapshot: GraphSnapshot, seed: u64, tally: &mut Tally) {
-    check_with_failures(snapshot, seed, tally, true).await;
+async fn check(snapshot: GraphSnapshot, seed: u64, tally: &mut Tally, frozen: &FrozenOutcome) {
+    check_with_failures(snapshot, seed, tally, true, frozen).await;
 }
 
 async fn check_with_failures(
@@ -643,14 +644,58 @@ async fn check_with_failures(
     seed: u64,
     tally: &mut Tally,
     inject_failures: bool,
+    frozen: &FrozenOutcome,
 ) {
-    let Ok(record) =
-        GraphRunRecord::create_with_id(snapshot.clone(), serde_json::json!({}), format!("r{seed}"))
-    else {
-        tally.rejected_graphs += 1;
-        return;
+    let record = match GraphRunRecord::create_with_id(
+        snapshot.clone(),
+        serde_json::json!({}),
+        format!("r{seed}"),
+    ) {
+        Ok(record) => record,
+        Err(error) => {
+            frozen.assert_rejection(&error);
+            tally.rejected_graphs += 1;
+            return;
+        }
     };
     let (old_trace, old) = run_old(record.clone(), seed, inject_failures).await;
+    frozen.assert_old(&old_trace, &old);
+    let new = run_new(record, seed, inject_failures);
+    let mut frozen_tally = tally.clone();
+    compare_new(
+        &snapshot,
+        seed,
+        inject_failures,
+        &old_trace,
+        &old,
+        &new,
+        tally,
+    );
+    let (frozen_trace, frozen_record) = frozen.accepted();
+    compare_new(
+        &snapshot,
+        seed,
+        inject_failures,
+        frozen_trace,
+        &frozen_record,
+        &new,
+        &mut frozen_tally,
+    );
+    assert_eq!(
+        *tally, frozen_tally,
+        "live/frozen comparison coverage, seed {seed}"
+    );
+}
+
+fn compare_new(
+    snapshot: &GraphSnapshot,
+    seed: u64,
+    inject_failures: bool,
+    old_trace: &Trace,
+    old: &GraphRunRecord,
+    new_run: &NewRun,
+    tally: &mut Tally,
+) {
     let NewRun {
         trace: new_trace,
         record: new,
@@ -658,7 +703,7 @@ async fn check_with_failures(
         resubmissions,
         late,
         history,
-    } = run_new(record, seed, inject_failures);
+    } = new_run;
     assert_eq!(
         old_trace, new_trace,
         "dispatch trace differs, seed {seed}, graph {snapshot:#?}"
@@ -688,15 +733,15 @@ async fn check_with_failures(
         tally.multi_failure_waves += u64::from(failures.len() > 1);
     }
     if old.status == RunStatus::Failed && !call_ended_it {
-        let (phantoms, ceiling_preempted) = check_failed_run(seed, &old, &new, &failures, &history);
+        let (phantoms, ceiling_preempted) = check_failed_run(seed, old, new, &failures, history);
         tally.phantom_invocations += phantoms;
         tally.ceiling_preempted_failures += u64::from(ceiling_preempted);
         tally.failed += u64::from(!node_failed);
         tally.late_refusals += late.len() as u64;
     } else {
         assert!(late.is_empty(), "seed {seed}");
-        assert_eq!(facts(&old), facts(&new), "Graph facts differ, seed {seed}");
-        match (old.status, &phase) {
+        assert_eq!(facts(old), facts(new), "Graph facts differ, seed {seed}");
+        match (old.status, phase) {
             (
                 RunStatus::Completed,
                 Phase::Settled {
@@ -732,7 +777,7 @@ async fn check_with_failures(
         }
     }
     tally.cases += 1;
-    tally.resubmissions += resubmissions;
+    tally.resubmissions += *resubmissions;
     for call in new.graph_calls.values() {
         match call.status {
             GraphCallStatus::Completed => tally.calls_waited += 1,
@@ -764,8 +809,15 @@ async fn check_with_failures(
 #[tokio::test]
 async fn kernel_with_graph_validator_matches_the_runner_on_random_graphs() {
     let mut tally = Tally::default();
+    let mut frozen = Snapshots::open(Population::Serial);
     for seed in 0..10_000 {
-        check(random_graph(seed), seed, &mut tally).await;
+        check(
+            random_graph(seed),
+            seed,
+            &mut tally,
+            &frozen.next(seed).validator,
+        )
+        .await;
     }
     eprintln!("differential: {tally:?}");
     assert!(tally.node_failed > 100, "{tally:?}");
@@ -784,11 +836,26 @@ async fn kernel_with_graph_validator_matches_the_runner_on_random_graphs() {
 async fn parallel_regions_match_the_runner_on_random_graphs() {
     let mut tally = Tally::default();
     let mut coverage = Tally::default();
+    let mut frozen = Snapshots::open(Population::ParallelFailures);
+    let mut frozen_coverage = Snapshots::open(Population::ParallelNoFailures);
     for seed in 0..5_000 {
-        check(random_parallel_graph(seed), seed, &mut tally).await;
+        check(
+            random_parallel_graph(seed),
+            seed,
+            &mut tally,
+            &frozen.next(seed).validator,
+        )
+        .await;
         // Keep the original no-failure coverage population and its thresholds.
         // Injected failures intentionally terminate some later activations.
-        check_with_failures(random_parallel_graph(seed), seed, &mut coverage, false).await;
+        check_with_failures(
+            random_parallel_graph(seed),
+            seed,
+            &mut coverage,
+            false,
+            &frozen_coverage.next(seed).validator,
+        )
+        .await;
     }
     eprintln!("differential parallel: {tally:?}");
     eprintln!("differential parallel original coverage: {coverage:?}");
@@ -818,8 +885,16 @@ async fn parallel_regions_match_the_runner_on_random_graphs() {
 #[tokio::test]
 async fn parallel_modules_match_the_runner_on_five_thousand_random_graphs() {
     let mut tally = Tally::default();
+    let mut frozen = Snapshots::open(Population::ParallelModules);
     for seed in 0..5_000 {
-        check_with_failures(random_parallel_module_graph(seed), seed, &mut tally, false).await;
+        check_with_failures(
+            random_parallel_module_graph(seed),
+            seed,
+            &mut tally,
+            false,
+            &frozen.next(seed).validator,
+        )
+        .await;
     }
     eprintln!("differential parallel modules: {tally:?}");
     assert_eq!(tally.cases, 5_000);
@@ -837,8 +912,15 @@ async fn parallel_modules_match_the_runner_on_five_thousand_random_graphs() {
 #[tokio::test]
 async fn graph_calls_match_the_runner_on_random_graphs() {
     let mut tally = Tally::default();
+    let mut frozen = Snapshots::open(Population::Calls);
     for seed in 0..5_000 {
-        check(random_call_graph(seed), seed, &mut tally).await;
+        check(
+            random_call_graph(seed),
+            seed,
+            &mut tally,
+            &frozen.next(seed).validator,
+        )
+        .await;
     }
     eprintln!("differential calls: {tally:?}");
     assert!(tally.cases > 4_500, "{tally:?}");
@@ -855,7 +937,13 @@ async fn graph_calls_match_the_runner_on_random_graphs() {
 async fn same_wave_node_failures_keep_first_reason_and_record_late_failure() {
     let seed = 495;
     let mut tally = Tally::default();
-    check(random_parallel_graph(seed), seed, &mut tally).await;
+    check(
+        random_parallel_graph(seed),
+        seed,
+        &mut tally,
+        &Snapshots::at(Population::ParallelFailures, seed).validator,
+    )
+    .await;
     assert_eq!(tally.node_failed, 1);
     assert_eq!(tally.multi_failure_waves, 1);
     eprintln!("S17 seed 495: {tally:?}");
@@ -865,7 +953,13 @@ async fn same_wave_node_failures_keep_first_reason_and_record_late_failure() {
 async fn ceiling_can_settle_before_a_late_node_failure_without_losing_facts() {
     let seed = 2122;
     let mut tally = Tally::default();
-    check(random_parallel_graph(seed), seed, &mut tally).await;
+    check(
+        random_parallel_graph(seed),
+        seed,
+        &mut tally,
+        &Snapshots::at(Population::ParallelFailures, seed).validator,
+    )
+    .await;
     assert_eq!(tally.node_failed, 1);
     assert_eq!(tally.ceiling_preempted_failures, 1);
     eprintln!("S18 seed 2122: {tally:?}");

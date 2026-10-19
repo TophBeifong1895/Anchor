@@ -293,6 +293,7 @@ dependencies = [
  "anchor-file-lease",
  "anchor-kernel",
  "chrono",
+ "flate2",
  "futures",
  "schemars 1.2.2",
  "serde",

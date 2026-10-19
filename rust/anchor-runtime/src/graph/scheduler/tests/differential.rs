@@ -1,17 +1,28 @@
 //! Exercise the production scheduler with exactly the legacy fixture ports.
 //! The existing failure checker keeps all three S18 invariants unchanged.
 use super::*;
+use crate::graph::test_support::snapshots::{FrozenOutcome, Population, Snapshots};
 use crate::graph::{test_support::*, validator::differential::check_failed_run};
 
 async fn compare(
     snapshot: GraphSnapshot,
     seed: u64,
     inject_failures: bool,
+    frozen: &FrozenOutcome,
 ) -> Option<(bool, bool, usize)> {
-    let record =
-        GraphRunRecord::create_with_id(snapshot, Value::Null, format!("scheduler-diff-{seed}"))
-            .ok()?;
-    let (mut old_trace, old) = run_old(record.clone(), seed, inject_failures).await;
+    let record = match GraphRunRecord::create_with_id(
+        snapshot,
+        Value::Null,
+        format!("scheduler-diff-{seed}"),
+    ) {
+        Ok(record) => record,
+        Err(error) => {
+            frozen.assert_rejection(&error);
+            return None;
+        }
+    };
+    let (old_trace, old) = run_old(record.clone(), seed, inject_failures).await;
+    frozen.assert_old(&old_trace, &old);
     let mut kernel = Kernel::new(MemoryStore::default(), Box::new(AuthorityFixture)).unwrap();
     kernel
         .install(validator::GRAPH_VALIDATOR, Arc::new(GraphValidator))
@@ -40,12 +51,6 @@ async fn compare(
     let new = record_of(&resource).unwrap();
     let history = kernel.history(&id).unwrap();
     let mut new_trace = nodes.trace.lock().unwrap().clone();
-    old_trace.sort();
-    new_trace.sort();
-    assert_eq!(
-        old_trace, new_trace,
-        "dispatch multiset seed {seed}, failures {inject_failures}"
-    );
     let failures = if inject_failures {
         old_trace
             .iter()
@@ -57,35 +62,44 @@ async fn compare(
     } else {
         BTreeMap::new()
     };
-    if old.status == RunStatus::Failed {
-        check_failed_run(seed, &old, &new, &failures, &history);
-    } else {
-        assert_eq!(facts(&old), facts(&new), "Graph facts seed {seed}");
-        assert!(
-            matches!(
-                (old.status, resource.phase()),
-                (
-                    RunStatus::Completed,
-                    Some(Phase::Settled {
-                        result: Outcome::Done
-                    })
-                ) | (
-                    RunStatus::Stopped,
-                    Some(Phase::Settled {
-                        result: Outcome::Escalated { .. }
-                    })
-                )
-            ),
-            "phase seed {seed}"
+    let (frozen_trace, frozen_record) = frozen.accepted();
+    for (mut old_trace, old) in [(old_trace, &old), (frozen_trace.clone(), &frozen_record)] {
+        old_trace.sort();
+        new_trace.sort();
+        assert_eq!(
+            old_trace, new_trace,
+            "dispatch multiset seed {seed}, failures {inject_failures}"
+        );
+        if old.status == RunStatus::Failed {
+            check_failed_run(seed, old, &new, &failures, &history);
+        } else {
+            assert_eq!(facts(old), facts(&new), "Graph facts seed {seed}");
+            assert!(
+                matches!(
+                    (old.status, resource.phase()),
+                    (
+                        RunStatus::Completed,
+                        Some(Phase::Settled {
+                            result: Outcome::Done
+                        })
+                    ) | (
+                        RunStatus::Stopped,
+                        Some(Phase::Settled {
+                            result: Outcome::Escalated { .. }
+                        })
+                    )
+                ),
+                "phase seed {seed}"
+            );
+        }
+        // Every real request is charged once; stale retries carry no extra cost.
+        let completed = old_trace.len() - failures.len();
+        assert_eq!(
+            resource.task.as_ref().unwrap().budget.spent,
+            completed as u64,
+            "cost seed {seed}"
         );
     }
-    // Every real request is charged once; stale retries carry no extra cost.
-    let completed = old_trace.len() - failures.len();
-    assert_eq!(
-        resource.task.as_ref().unwrap().budget.spent,
-        completed as u64,
-        "cost seed {seed}"
-    );
     Some((
         !failures.is_empty(),
         !new.module_activations.is_empty(),
@@ -101,8 +115,11 @@ async fn production_scheduler_matches_old_runner_on_ten_thousand_serial_seeds() 
     let mut cases = 0;
     let mut failures = 0;
     let mut modules = 0;
+    let mut frozen = Snapshots::open(Population::Serial);
     for seed in 0..10_000 {
-        if let Some((failed, module, _)) = compare(random_graph(seed), seed, true).await {
+        if let Some((failed, module, _)) =
+            compare(random_graph(seed), seed, true, &frozen.next(seed).scheduler).await
+        {
             cases += 1;
             failures += usize::from(failed);
             modules += usize::from(module);
@@ -119,16 +136,28 @@ async fn production_scheduler_matches_old_runner_on_five_thousand_parallel_seeds
     let mut cases = 0;
     let mut failures = 0;
     let mut stale = 0;
+    let mut frozen = Snapshots::open(Population::ParallelFailures);
+    let mut frozen_coverage = Snapshots::open(Population::ParallelNoFailures);
     for seed in 0..5_000 {
-        let (failed, _, retries) = compare(random_parallel_graph(seed), seed, true)
-            .await
-            .unwrap();
+        let (failed, _, retries) = compare(
+            random_parallel_graph(seed),
+            seed,
+            true,
+            &frozen.next(seed).scheduler,
+        )
+        .await
+        .unwrap();
         cases += 1;
         failures += usize::from(failed);
         stale += retries;
-        compare(random_parallel_graph(seed), seed, false)
-            .await
-            .unwrap();
+        compare(
+            random_parallel_graph(seed),
+            seed,
+            false,
+            &frozen_coverage.next(seed).scheduler,
+        )
+        .await
+        .unwrap();
     }
     eprintln!(
         "production scheduler parallel: cases={cases}, failures={failures}, stale={stale}; no-failure cases={cases}"
@@ -142,10 +171,16 @@ async fn production_scheduler_matches_old_runner_on_five_thousand_parallel_seeds
 async fn production_scheduler_matches_old_runner_on_five_thousand_parallel_module_seeds() {
     let mut modules = 0;
     let mut stale = 0;
+    let mut frozen = Snapshots::open(Population::ParallelModules);
     for seed in 0..5_000 {
-        let (failed, module, retries) = compare(random_parallel_module_graph(seed), seed, false)
-            .await
-            .unwrap();
+        let (failed, module, retries) = compare(
+            random_parallel_module_graph(seed),
+            seed,
+            false,
+            &frozen.next(seed).scheduler,
+        )
+        .await
+        .unwrap();
         assert!(!failed);
         modules += usize::from(module);
         stale += retries;
@@ -163,6 +198,7 @@ async fn production_scheduler_matches_old_runner_on_five_thousand_call_seeds() {
     let mut detached = 0;
     let mut failed = 0;
     let mut unknown = 0;
+    let mut frozen = Snapshots::open(Population::Calls);
     for seed in 0..5_000 {
         let record = GraphRunRecord::create_with_id(
             random_call_graph(seed),
@@ -170,7 +206,9 @@ async fn production_scheduler_matches_old_runner_on_five_thousand_call_seeds() {
             format!("scheduler-calls-{seed}"),
         )
         .unwrap();
-        let (mut old_trace, old) = run_old(record.clone(), seed, false).await;
+        let (old_trace, old) = run_old(record.clone(), seed, false).await;
+        let frozen_case = frozen.next(seed);
+        frozen_case.scheduler.assert_old(&old_trace, &old);
         let mut kernel = Kernel::new(MemoryStore::default(), Box::new(AuthorityFixture)).unwrap();
         kernel
             .install(validator::GRAPH_VALIDATOR, Arc::new(GraphValidator))
@@ -198,36 +236,39 @@ async fn production_scheduler_matches_old_runner_on_five_thousand_call_seeds() {
         let resource = scheduler.run(&id).await.unwrap();
         let new = record_of(&resource).unwrap();
         let mut new_trace = nodes.trace.lock().unwrap().clone();
-        old_trace.sort();
-        new_trace.sort();
-        assert_eq!(old_trace, new_trace, "call dispatch multiset seed {seed}");
-        assert_eq!(facts(&old), facts(&new), "call Graph facts seed {seed}");
-        assert!(
-            matches!(
-                (old.status, resource.phase()),
-                (
-                    RunStatus::Completed,
-                    Some(Phase::Settled {
-                        result: Outcome::Done
-                    })
-                ) | (
-                    RunStatus::Stopped,
-                    Some(Phase::Settled {
-                        result: Outcome::Escalated { .. }
-                    })
-                ) | (
-                    RunStatus::Failed,
-                    Some(Phase::Settled {
-                        result: Outcome::Failed { .. } | Outcome::Unknown { .. }
-                    })
-                )
-            ),
-            "call phase seed {seed}"
-        );
-        assert_eq!(
-            resource.task.as_ref().unwrap().budget.spent,
-            old_trace.len() as u64
-        );
+        let (frozen_trace, frozen_record) = frozen_case.scheduler.accepted();
+        for (mut old_trace, old) in [(old_trace, &old), (frozen_trace.clone(), &frozen_record)] {
+            old_trace.sort();
+            new_trace.sort();
+            assert_eq!(old_trace, new_trace, "call dispatch multiset seed {seed}");
+            assert_eq!(facts(old), facts(&new), "call Graph facts seed {seed}");
+            assert!(
+                matches!(
+                    (old.status, resource.phase()),
+                    (
+                        RunStatus::Completed,
+                        Some(Phase::Settled {
+                            result: Outcome::Done
+                        })
+                    ) | (
+                        RunStatus::Stopped,
+                        Some(Phase::Settled {
+                            result: Outcome::Escalated { .. }
+                        })
+                    ) | (
+                        RunStatus::Failed,
+                        Some(Phase::Settled {
+                            result: Outcome::Failed { .. } | Outcome::Unknown { .. }
+                        })
+                    )
+                ),
+                "call phase seed {seed}"
+            );
+            assert_eq!(
+                resource.task.as_ref().unwrap().budget.spent,
+                old_trace.len() as u64
+            );
+        }
         waited += usize::from(!nodes.calls.waiting.lock().unwrap().is_empty());
         detached += usize::from(
             new.graph_calls

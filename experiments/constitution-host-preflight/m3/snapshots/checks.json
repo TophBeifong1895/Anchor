@@ -1,0 +1,108 @@
+{
+  "build_directory": "/tmp/anchor-goose-regression-target-core",
+  "model_provider": "none; deterministic local fixture ports only",
+  "raw_output_retention": "Raw .log files remain outside Git under /tmp; only hashes, actual summaries and coverage lines are committed.",
+  "checks": [
+    {
+      "name": "generate",
+      "command": "CARGO_TARGET_DIR=/tmp/anchor-goose-regression-target-core ANCHOR_UPDATE_LEGACY_SNAPSHOTS=1 cargo test --manifest-path rust/Cargo.toml -p anchor-runtime --locked old_runner_snapshots -- --nocapture",
+      "exit_code": 0,
+      "raw_output": "/tmp/anchor-m3-snapshots-generate.log",
+      "raw_output_sha256": "c78e747dc32cc6e8b97ad9153c0946f57b7b660c9e032fef7005271e8c0b5427",
+      "test_results": [
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 154 filtered out; finished in 95.97s",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 7 filtered out; finished in 0.00s"
+      ],
+      "coverage": [
+        "frozen Serial: 10000 seeds, validator + scheduler namespaces",
+        "frozen ParallelFailures: 5000 seeds, validator + scheduler namespaces",
+        "frozen ParallelNoFailures: 5000 seeds, validator + scheduler namespaces",
+        "frozen ParallelModules: 5000 seeds, validator + scheduler namespaces",
+        "frozen Calls: 5000 seeds, validator + scheduler namespaces"
+      ]
+    },
+    {
+      "name": "live_and_frozen_differential",
+      "command": "CARGO_TARGET_DIR=/tmp/anchor-goose-regression-target-core cargo test --manifest-path rust/Cargo.toml -p anchor-runtime --locked differential -- --nocapture --test-threads=2",
+      "exit_code": 0,
+      "raw_output": "/tmp/anchor-m3-snapshots-differential.log",
+      "raw_output_sha256": "9acdfdd5b9bbd845b33580a643cafe475cea04221fda9acfe557b83da32c52bf",
+      "test_results": [
+        "test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 145 filtered out; finished in 216.85s",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 7 filtered out; finished in 0.00s"
+      ],
+      "coverage": [
+        "production scheduler calls: cases=5000, waited=957, detached=1140, failed=514, unknown=392",
+        "production scheduler parallel modules: cases=5000, modules=4588, stale=12461",
+        "production scheduler serial: cases=10000, failures=772, modules=1310",
+        "S18 seed 2122: Tally { cases: 1, rejected_graphs: 0, completed: 0, round_limited: 0, dispatches: 12, longest: 12, module_activated: 0, module_limited: 0, skipped_paths: 0, failed: 0, node_failed: 1, multi_failure_waves: 0, ceiling_preempted_failures: 1, parallel_activations: 2, resubmissions: 3, phantom_invocations: 0, late_refusals: 2, calls_waited: 0, calls_detached: 0, call_failed: 0, call_unknown: 0 }",
+        "differential calls: Tally { cases: 5000, rejected_graphs: 0, completed: 2902, round_limited: 1218, dispatches: 9733, longest: 13, module_activated: 721, module_limited: 156, skipped_paths: 4576, failed: 0, node_failed: 0, multi_failure_waves: 0, ceiling_preempted_failures: 0, parallel_activations: 0, resubmissions: 0, phantom_invocations: 0, late_refusals: 0, calls_waited: 1704, calls_detached: 1485, call_failed: 497, call_unknown: 383 }",
+        "production scheduler parallel: cases=5000, failures=775, stale=10224; no-failure cases=5000",
+        "differential: Tally { cases: 10000, rejected_graphs: 0, completed: 6968, round_limited: 2260, dispatches: 26981, longest: 21, module_activated: 1310, module_limited: 293, skipped_paths: 9046, failed: 0, node_failed: 772, multi_failure_waves: 0, ceiling_preempted_failures: 0, parallel_activations: 0, resubmissions: 0, phantom_invocations: 0, late_refusals: 0, calls_waited: 0, calls_detached: 0, call_failed: 0, call_unknown: 0 }",
+        "differential parallel modules: Tally { cases: 5000, rejected_graphs: 0, completed: 3635, round_limited: 1365, dispatches: 38225, longest: 34, module_activated: 4588, module_limited: 0, skipped_paths: 1293, failed: 0, node_failed: 0, multi_failure_waves: 0, ceiling_preempted_failures: 0, parallel_activations: 5084, resubmissions: 12461, phantom_invocations: 0, late_refusals: 0, calls_waited: 0, calls_detached: 0, call_failed: 0, call_unknown: 0 }",
+        "S17 seed 495: Tally { cases: 1, rejected_graphs: 0, completed: 0, round_limited: 0, dispatches: 4, longest: 4, module_activated: 0, module_limited: 0, skipped_paths: 1, failed: 0, node_failed: 1, multi_failure_waves: 1, ceiling_preempted_failures: 0, parallel_activations: 1, resubmissions: 1, phantom_invocations: 0, late_refusals: 1, calls_waited: 0, calls_detached: 0, call_failed: 0, call_unknown: 0 }",
+        "differential parallel: Tally { cases: 5000, rejected_graphs: 0, completed: 3087, round_limited: 808, dispatches: 33107, longest: 20, module_activated: 0, module_limited: 0, skipped_paths: 1865, failed: 330, node_failed: 775, multi_failure_waves: 6, ceiling_preempted_failures: 2, parallel_activations: 4775, resubmissions: 10224, phantom_invocations: 182, late_refusals: 357, calls_waited: 0, calls_detached: 0, call_failed: 0, call_unknown: 0 }",
+        "differential parallel original coverage: Tally { cases: 5000, rejected_graphs: 0, completed: 3633, round_limited: 971, dispatches: 35958, longest: 20, module_activated: 0, module_limited: 0, skipped_paths: 1299, failed: 396, node_failed: 0, multi_failure_waves: 0, ceiling_preempted_failures: 0, parallel_activations: 5048, resubmissions: 11444, phantom_invocations: 220, late_refusals: 68, calls_waited: 0, calls_detached: 0, call_failed: 0, call_unknown: 0 }"
+      ]
+    },
+    {
+      "name": "runtime_fmt",
+      "command": "CARGO_TARGET_DIR=/tmp/anchor-goose-regression-target-core cargo fmt --manifest-path rust/Cargo.toml --package anchor-runtime -- --check",
+      "exit_code": 0,
+      "raw_output": "/tmp/anchor-m3-snapshots-fmt.log",
+      "raw_output_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "test_results": [],
+      "coverage": []
+    },
+    {
+      "name": "diff_check",
+      "command": "git diff --check -- rust/anchor-runtime rust/Cargo.lock experiments/constitution-host-preflight/m3/snapshots",
+      "exit_code": 0,
+      "raw_output": "/tmp/anchor-m3-snapshots-diff-check.log",
+      "raw_output_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "test_results": [],
+      "coverage": []
+    },
+    {
+      "name": "clippy_not_started_due_to_parallel_manifest_change",
+      "command": "CARGO_TARGET_DIR=/tmp/anchor-goose-regression-target-core cargo clippy --manifest-path rust/Cargo.toml -p anchor-runtime --locked --all-targets -- -D warnings",
+      "exit_code": 101,
+      "raw_output": "/tmp/anchor-m3-snapshots-clippy.log",
+      "raw_output_sha256": "0c184e0417b5647f4fcbd864f21db844bbbf476fe2a207415c067d71c2a89959",
+      "test_results": [],
+      "coverage": [],
+      "note": "Cargo refused --locked before compiling: another independent GraphHost slice added anchor-graph-host -> anchor-kernel without its lock association yet. No clippy pass is claimed here; root agent will verify the isolated first-commit tree."
+    }
+  ],
+  "sensitive_wording_check": {
+    "command": "scripts/check-sensitive-wording.sh",
+    "exit_code": 0,
+    "output": "工程文本不含被网关拦截的分类词连写"
+  },
+  "kernel_diff": "No anchor-kernel edits in this slice.",
+  "workspace_verification": {
+    "initial": {
+      "command": "CARGO_TARGET_DIR=/tmp/anchor-goose-regression-target-core cargo test --workspace --no-fail-fast",
+      "cwd": "/tmp/anchor-m3-snapshot-check/rust",
+      "log": "/tmp/anchor-m3/snapshot-workspace.log",
+      "result": "Only seven new frozen-record comparisons failed because feature unification changed object-key ordering in generated control-node JSON summaries; every other target passed."
+    },
+    "correction": "Compare the full parsed JSON of generated join/call summaries structurally; keep executor-authored text exact. All other legacy facts and dispatch traces retain their original comparisons.",
+    "recheck": {
+      "command": "CARGO_TARGET_DIR=/tmp/anchor-goose-regression-target-core cargo test --workspace -p anchor-runtime --lib",
+      "log": "/tmp/anchor-m3/snapshot-runtime-recheck.log",
+      "result": "All selected workspace library targets passed, including all 155 Runtime tests and both live/frozen comparisons."
+    },
+    "clippy": {
+      "command": "CARGO_TARGET_DIR=/tmp/anchor-goose-regression-target-core cargo clippy -p anchor-runtime --all-targets -- -D warnings",
+      "log": "/tmp/anchor-m3/snapshot-clippy.log",
+      "result": "passed"
+    },
+    "fmt": {
+      "command": "CARGO_TARGET_DIR=/tmp/anchor-goose-regression-target-core cargo fmt --all -- --check",
+      "log": "/tmp/anchor-m3/snapshot-fmt.log",
+      "result": "passed"
+    },
+    "isolated_checkout": "4d3d19d plus only this snapshot slice; concurrent M3 edits excluded"
+  }
+}

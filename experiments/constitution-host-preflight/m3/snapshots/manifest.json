@@ -1,0 +1,332 @@
+{
+  "format": 1,
+  "baseline": "4d3d19d4ba120a85526c7d5a8abc00ef0c777eec",
+  "total_seeds": 30000,
+  "legacy_executions": 60000,
+  "comparison": "Fresh legacy versus complete frozen legacy ignores started/updated only. Kernel versus both sources uses the existing differential and S18 rules, not byte equality.",
+  "s18_checker": {
+    "path": "rust/anchor-runtime/src/graph/validator/differential.rs",
+    "sha256": "2c38af897fe412ae5f77553a249a13aa84f9bd96a117e092f907754737936563",
+    "unchanged_from_baseline": true
+  },
+  "populations": [
+    {
+      "file": "calls.jsonl.gz",
+      "sha256": "542ed6b405ac332e715b96bf3c7cb797990d96ad9dba0c6c976ddd9589d73076",
+      "compressed_bytes": 2252138,
+      "uncompressed_bytes": 38470801,
+      "cases": 5000,
+      "status_counts": {
+        "validator": {
+          "stopped": 1218,
+          "completed": 2902,
+          "failed": 880
+        },
+        "scheduler": {
+          "failed": 906,
+          "completed": 2887,
+          "stopped": 1207
+        }
+      },
+      "dispatches": {
+        "validator": 9733,
+        "scheduler": 9826
+      },
+      "header": {
+        "format": 1,
+        "generator_version": "anchor-runtime-random-graphs-v1",
+        "generator_sources": [
+          {
+            "path": "rust/anchor-runtime/src/graph/test_support.rs",
+            "sha256": "40230c6fc0047ab055d786cb648fbea0b6001fc4d8e13d96e15e5151844e0696"
+          },
+          {
+            "path": "rust/anchor-runtime/src/graph/runner.rs",
+            "sha256": "2164ac31374be890e5a6164946509f0a50394d7278e43ed86bb5c418d639edfe"
+          },
+          {
+            "path": "rust/anchor-runtime/src/graph/parallel.rs",
+            "sha256": "e6744ebfd82363fd0e1df47bbf6d6b22093ddeac6afb2bcce6fcc46a8bf3eadf"
+          },
+          {
+            "path": "rust/anchor-runtime/src/graph/logic.rs",
+            "sha256": "942035206e01cf1581b170c55c645c47ca264d94cc0aa9beedf5f62b58e7d18d"
+          },
+          {
+            "path": "rust/anchor-runtime/src/graph/state.rs",
+            "sha256": "c370a3251e83b5270fbbb35207b5559597ca75ebcff4ad24d6718ead9b3d04f2"
+          },
+          {
+            "path": "rust/anchor-runtime/src/graph/test_support/snapshots.rs",
+            "sha256": "98b24f803474dceb2ca0e2903acec104bed89bd870a446b1fad04f84841775bc"
+          }
+        ],
+        "legacy_runner_baseline": "4d3d19d4ba120a85526c7d5a8abc00ef0c777eec",
+        "population": "calls",
+        "seed_start": 0,
+        "seed_end_exclusive": 5000,
+        "cases": 5000,
+        "inject_failures": false,
+        "namespaces": {
+          "scheduler": "run_id=scheduler-calls-{seed}; input={}",
+          "validator": "run_id=r{seed}; input={}"
+        },
+        "comparison": "Preserve full legacy records; omit only started/updated wall-clock fields when comparing fresh legacy execution. Kernel comparisons retain the existing differential rules and S18 invariants; no byte-equality requirement between legacy and Kernel."
+      }
+    },
+    {
+      "file": "parallel-failures.jsonl.gz",
+      "sha256": "b3d22ba3d7fd70ea3d3faceea88508df37ff0dd271614d9895baffb9cfbf0cf0",
+      "compressed_bytes": 3891054,
+      "uncompressed_bytes": 94852032,
+      "cases": 5000,
+      "status_counts": {
+        "validator": {
+          "failed": 1105,
+          "completed": 3087,
+          "stopped": 808
+        },
+        "scheduler": {
+          "failed": 1105,
+          "completed": 3087,
+          "stopped": 808
+        }
+      },
+      "dispatches": {
+        "validator": 33107,
+        "scheduler": 33107
+      },
+      "header": {
+        "format": 1,
+        "generator_version": "anchor-runtime-random-graphs-v1",
+        "generator_sources": [
+          {
+            "path": "rust/anchor-runtime/src/graph/test_support.rs",
+            "sha256": "40230c6fc0047ab055d786cb648fbea0b6001fc4d8e13d96e15e5151844e0696"
+          },
+          {
+            "path": "rust/anchor-runtime/src/graph/runner.rs",
+            "sha256": "2164ac31374be890e5a6164946509f0a50394d7278e43ed86bb5c418d639edfe"
+          },
+          {
+            "path": "rust/anchor-runtime/src/graph/parallel.rs",
+            "sha256": "e6744ebfd82363fd0e1df47bbf6d6b22093ddeac6afb2bcce6fcc46a8bf3eadf"
+          },
+          {
+            "path": "rust/anchor-runtime/src/graph/logic.rs",
+            "sha256": "942035206e01cf1581b170c55c645c47ca264d94cc0aa9beedf5f62b58e7d18d"
+          },
+          {
+            "path": "rust/anchor-runtime/src/graph/state.rs",
+            "sha256": "c370a3251e83b5270fbbb35207b5559597ca75ebcff4ad24d6718ead9b3d04f2"
+          },
+          {
+            "path": "rust/anchor-runtime/src/graph/test_support/snapshots.rs",
+            "sha256": "98b24f803474dceb2ca0e2903acec104bed89bd870a446b1fad04f84841775bc"
+          }
+        ],
+        "legacy_runner_baseline": "4d3d19d4ba120a85526c7d5a8abc00ef0c777eec",
+        "population": "parallel_failures",
+        "seed_start": 0,
+        "seed_end_exclusive": 5000,
+        "cases": 5000,
+        "inject_failures": true,
+        "namespaces": {
+          "scheduler": "run_id=scheduler-diff-{seed}; input=null",
+          "validator": "run_id=r{seed}; input={}"
+        },
+        "comparison": "Preserve full legacy records; omit only started/updated wall-clock fields when comparing fresh legacy execution. Kernel comparisons retain the existing differential rules and S18 invariants; no byte-equality requirement between legacy and Kernel."
+      }
+    },
+    {
+      "file": "parallel-modules.jsonl.gz",
+      "sha256": "2549df05523ff27b8cd55a73a51539fc47e55b82559ccb75ddf771cade67402d",
+      "compressed_bytes": 5174002,
+      "uncompressed_bytes": 112295930,
+      "cases": 5000,
+      "status_counts": {
+        "validator": {
+          "stopped": 1365,
+          "completed": 3635
+        },
+        "scheduler": {
+          "stopped": 1365,
+          "completed": 3635
+        }
+      },
+      "dispatches": {
+        "validator": 38225,
+        "scheduler": 38225
+      },
+      "header": {
+        "format": 1,
+        "generator_version": "anchor-runtime-random-graphs-v1",
+        "generator_sources": [
+          {
+            "path": "rust/anchor-runtime/src/graph/test_support.rs",
+            "sha256": "40230c6fc0047ab055d786cb648fbea0b6001fc4d8e13d96e15e5151844e0696"
+          },
+          {
+            "path": "rust/anchor-runtime/src/graph/runner.rs",
+            "sha256": "2164ac31374be890e5a6164946509f0a50394d7278e43ed86bb5c418d639edfe"
+          },
+          {
+            "path": "rust/anchor-runtime/src/graph/parallel.rs",
+            "sha256": "e6744ebfd82363fd0e1df47bbf6d6b22093ddeac6afb2bcce6fcc46a8bf3eadf"
+          },
+          {
+            "path": "rust/anchor-runtime/src/graph/logic.rs",
+            "sha256": "942035206e01cf1581b170c55c645c47ca264d94cc0aa9beedf5f62b58e7d18d"
+          },
+          {
+            "path": "rust/anchor-runtime/src/graph/state.rs",
+            "sha256": "c370a3251e83b5270fbbb35207b5559597ca75ebcff4ad24d6718ead9b3d04f2"
+          },
+          {
+            "path": "rust/anchor-runtime/src/graph/test_support/snapshots.rs",
+            "sha256": "98b24f803474dceb2ca0e2903acec104bed89bd870a446b1fad04f84841775bc"
+          }
+        ],
+        "legacy_runner_baseline": "4d3d19d4ba120a85526c7d5a8abc00ef0c777eec",
+        "population": "parallel_modules",
+        "seed_start": 0,
+        "seed_end_exclusive": 5000,
+        "cases": 5000,
+        "inject_failures": false,
+        "namespaces": {
+          "scheduler": "run_id=scheduler-diff-{seed}; input=null",
+          "validator": "run_id=r{seed}; input={}"
+        },
+        "comparison": "Preserve full legacy records; omit only started/updated wall-clock fields when comparing fresh legacy execution. Kernel comparisons retain the existing differential rules and S18 invariants; no byte-equality requirement between legacy and Kernel."
+      }
+    },
+    {
+      "file": "parallel-no-failures.jsonl.gz",
+      "sha256": "f546c8c1ec32944c7824473f09a781b4b00739c7ebcc4dac3450451f8450accc",
+      "compressed_bytes": 4176132,
+      "uncompressed_bytes": 103825970,
+      "cases": 5000,
+      "status_counts": {
+        "validator": {
+          "failed": 396,
+          "completed": 3633,
+          "stopped": 971
+        },
+        "scheduler": {
+          "failed": 396,
+          "completed": 3633,
+          "stopped": 971
+        }
+      },
+      "dispatches": {
+        "validator": 35958,
+        "scheduler": 35958
+      },
+      "header": {
+        "format": 1,
+        "generator_version": "anchor-runtime-random-graphs-v1",
+        "generator_sources": [
+          {
+            "path": "rust/anchor-runtime/src/graph/test_support.rs",
+            "sha256": "40230c6fc0047ab055d786cb648fbea0b6001fc4d8e13d96e15e5151844e0696"
+          },
+          {
+            "path": "rust/anchor-runtime/src/graph/runner.rs",
+            "sha256": "2164ac31374be890e5a6164946509f0a50394d7278e43ed86bb5c418d639edfe"
+          },
+          {
+            "path": "rust/anchor-runtime/src/graph/parallel.rs",
+            "sha256": "e6744ebfd82363fd0e1df47bbf6d6b22093ddeac6afb2bcce6fcc46a8bf3eadf"
+          },
+          {
+            "path": "rust/anchor-runtime/src/graph/logic.rs",
+            "sha256": "942035206e01cf1581b170c55c645c47ca264d94cc0aa9beedf5f62b58e7d18d"
+          },
+          {
+            "path": "rust/anchor-runtime/src/graph/state.rs",
+            "sha256": "c370a3251e83b5270fbbb35207b5559597ca75ebcff4ad24d6718ead9b3d04f2"
+          },
+          {
+            "path": "rust/anchor-runtime/src/graph/test_support/snapshots.rs",
+            "sha256": "98b24f803474dceb2ca0e2903acec104bed89bd870a446b1fad04f84841775bc"
+          }
+        ],
+        "legacy_runner_baseline": "4d3d19d4ba120a85526c7d5a8abc00ef0c777eec",
+        "population": "parallel_no_failures",
+        "seed_start": 0,
+        "seed_end_exclusive": 5000,
+        "cases": 5000,
+        "inject_failures": false,
+        "namespaces": {
+          "scheduler": "run_id=scheduler-diff-{seed}; input=null",
+          "validator": "run_id=r{seed}; input={}"
+        },
+        "comparison": "Preserve full legacy records; omit only started/updated wall-clock fields when comparing fresh legacy execution. Kernel comparisons retain the existing differential rules and S18 invariants; no byte-equality requirement between legacy and Kernel."
+      }
+    },
+    {
+      "file": "serial.jsonl.gz",
+      "sha256": "bc60394ace7116a451888824194f3d1546c010eb94d024c393647a5285b5dc3c",
+      "compressed_bytes": 2926612,
+      "uncompressed_bytes": 67450867,
+      "cases": 10000,
+      "status_counts": {
+        "validator": {
+          "completed": 6968,
+          "stopped": 2260,
+          "failed": 772
+        },
+        "scheduler": {
+          "completed": 6968,
+          "stopped": 2260,
+          "failed": 772
+        }
+      },
+      "dispatches": {
+        "validator": 26981,
+        "scheduler": 26981
+      },
+      "header": {
+        "format": 1,
+        "generator_version": "anchor-runtime-random-graphs-v1",
+        "generator_sources": [
+          {
+            "path": "rust/anchor-runtime/src/graph/test_support.rs",
+            "sha256": "40230c6fc0047ab055d786cb648fbea0b6001fc4d8e13d96e15e5151844e0696"
+          },
+          {
+            "path": "rust/anchor-runtime/src/graph/runner.rs",
+            "sha256": "2164ac31374be890e5a6164946509f0a50394d7278e43ed86bb5c418d639edfe"
+          },
+          {
+            "path": "rust/anchor-runtime/src/graph/parallel.rs",
+            "sha256": "e6744ebfd82363fd0e1df47bbf6d6b22093ddeac6afb2bcce6fcc46a8bf3eadf"
+          },
+          {
+            "path": "rust/anchor-runtime/src/graph/logic.rs",
+            "sha256": "942035206e01cf1581b170c55c645c47ca264d94cc0aa9beedf5f62b58e7d18d"
+          },
+          {
+            "path": "rust/anchor-runtime/src/graph/state.rs",
+            "sha256": "c370a3251e83b5270fbbb35207b5559597ca75ebcff4ad24d6718ead9b3d04f2"
+          },
+          {
+            "path": "rust/anchor-runtime/src/graph/test_support/snapshots.rs",
+            "sha256": "98b24f803474dceb2ca0e2903acec104bed89bd870a446b1fad04f84841775bc"
+          }
+        ],
+        "legacy_runner_baseline": "4d3d19d4ba120a85526c7d5a8abc00ef0c777eec",
+        "population": "serial",
+        "seed_start": 0,
+        "seed_end_exclusive": 10000,
+        "cases": 10000,
+        "inject_failures": true,
+        "namespaces": {
+          "scheduler": "run_id=scheduler-diff-{seed}; input=null",
+          "validator": "run_id=r{seed}; input={}"
+        },
+        "comparison": "Preserve full legacy records; omit only started/updated wall-clock fields when comparing fresh legacy execution. Kernel comparisons retain the existing differential rules and S18 invariants; no byte-equality requirement between legacy and Kernel."
+      }
+    }
+  ]
+}
