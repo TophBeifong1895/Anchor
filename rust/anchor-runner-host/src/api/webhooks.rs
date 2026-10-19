@@ -12,10 +12,10 @@ async fn busy_run(state: &ApiState, graph: &str) -> Result<Option<String>, HttpR
     }
     let mut candidates = state
         .application
-        .records()
+        .run_views()
         .map_err(application_error)?
         .into_iter()
-        .filter(|(_, record)| !record.status.is_terminal())
+        .filter(|(_, record)| !record.is_settled())
         .filter_map(|(run, _)| match state.application.metadata(&run) {
             Ok(Some(metadata)) if metadata.graph == graph => Some(Ok(run)),
             Ok(_) => None,

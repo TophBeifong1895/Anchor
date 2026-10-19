@@ -1,9 +1,11 @@
 //! Operator-owned per-node grants, frozen separately from distributable Graphs.
 
-use crate::create_durable_directory;
+use crate::{application::run_access::RunView, create_durable_directory};
+#[cfg(test)]
+use anchor_runtime::graph::GraphRunRecord;
 use anchor_runtime::{
     ReadOnlyInput,
-    graph::{GraphRunRecord, GraphSnapshot, InvocationKey},
+    graph::{GraphSnapshot, InvocationKey},
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -98,24 +100,31 @@ impl LocalInputs {
         self.compare(&frozen, &expected)
     }
 
-    pub(crate) fn verify(&self, record: &GraphRunRecord) -> Result<(), String> {
+    pub(crate) fn verify<'record>(
+        &self,
+        record: impl Into<RunView<'record>>,
+    ) -> Result<(), String> {
+        let view = record.into();
+        let record = view.progress();
         let frozen = self
-            .load(&record.run_id)?
+            .load(record.run_id)?
             .ok_or("Run has no frozen local input authorization")?;
         let current = self.current(
-            &record.run_id,
-            &record.graph_digest,
-            &record.snapshot,
+            record.run_id,
+            record.graph_digest,
+            record.snapshot,
             frozen.graph.as_deref(),
         )?;
         self.compare(&frozen, &current)
     }
 
-    pub(crate) fn mounts(
+    pub(crate) fn mounts<'record>(
         &self,
-        record: &GraphRunRecord,
+        record: impl Into<RunView<'record>>,
         key: &InvocationKey,
     ) -> Result<Vec<ReadOnlyInput>, String> {
+        let view = record.into();
+        let record = view.progress();
         if key.run_id != record.run_id
             || key.graph_digest != record.graph_digest
             || !record
@@ -126,9 +135,9 @@ impl LocalInputs {
         {
             return Err("local input request does not match the admitted Run/node".into());
         }
-        self.verify(record)?;
+        self.verify(&view)?;
         let frozen = self
-            .load(&record.run_id)?
+            .load(record.run_id)?
             .ok_or("Run has no frozen local input authorization")?;
         Ok(frozen
             .grants

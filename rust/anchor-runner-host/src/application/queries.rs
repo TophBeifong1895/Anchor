@@ -1,6 +1,4 @@
 use super::{ApplicationError, RunApplication, RunMetadata, metadata, storage};
-use anchor_runtime::graph::{GraphRunRecord, RunStore};
-use std::path::Path;
 
 impl RunApplication {
     pub(crate) async fn active_runs(&self, graph: Option<&str>) -> Vec<String> {
@@ -25,24 +23,6 @@ impl RunApplication {
 
     pub(crate) fn metadata(&self, run_id: &str) -> Result<Option<RunMetadata>, ApplicationError> {
         metadata::load(&self.data_root, run_id)
-    }
-
-    /// FileRunStore's persisted modification time, not an independent audit clock.
-    pub(crate) fn run_updated(&self, run_id: &str) -> Result<String, ApplicationError> {
-        if run_id.is_empty()
-            || run_id == "."
-            || run_id == ".."
-            || !run_id
-                .chars()
-                .all(|c| c.is_ascii_alphanumeric() || "-_.".contains(c))
-        {
-            return Err(ApplicationError::Invalid("invalid Run id".into()));
-        }
-        let modified =
-            std::fs::metadata(self.data_root.join("runs").join(format!("{run_id}.json")))
-                .and_then(|metadata| metadata.modified())
-                .map_err(storage)?;
-        Ok(chrono::DateTime::<chrono::Utc>::from(modified).to_rfc3339())
     }
 
     pub(crate) fn child_metadata(
@@ -75,42 +55,5 @@ impl RunApplication {
         }
         children.sort_by(|a, b| a.run_id.cmp(&b.run_id));
         Ok(children)
-    }
-
-    pub(crate) fn records(&self) -> Result<Vec<(String, GraphRunRecord)>, ApplicationError> {
-        let root = self.data_root.join("runs");
-        if !root.exists() {
-            return Ok(Vec::new());
-        }
-        let mut records = Vec::new();
-        for entry in std::fs::read_dir(root).map_err(storage)? {
-            let entry = entry.map_err(storage)?;
-            let name = entry.file_name().to_string_lossy().into_owned();
-            if let Some(id) = name.strip_suffix(".json")
-                && let Some(record) = self.store().load(id)?
-            {
-                records.push((id.to_owned(), record));
-            }
-        }
-        records.sort_by(|a, b| a.0.cmp(&b.0));
-        Ok(records)
-    }
-
-    /// Runs whose immutable Graph identity resolves to this exact bundle path.
-    /// Runs without metadata cannot be attributed and are left untouched.
-    pub(crate) fn runs_for_graph(
-        &self,
-        graph_path: &Path,
-    ) -> Result<Vec<(String, GraphRunRecord)>, ApplicationError> {
-        let mut runs = Vec::new();
-        for (id, record) in self.records()? {
-            let Some(metadata) = self.metadata(&id)? else {
-                continue;
-            };
-            if Self::graph_identity(&metadata.bundle_source)? == graph_path {
-                runs.push((id, record));
-            }
-        }
-        Ok(runs)
     }
 }

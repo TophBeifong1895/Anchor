@@ -4,7 +4,7 @@
 
 F0 已提交为 `e3a5778`，同时包含宪法文件与 F0–F2、G0 两份任务书。F1 首个读取切片已落在 `application/run_access`：新相位映射、观察谓词、静止判定及控制状态校验收至门面，HTTP 列表与 Pilot Run 读取由门面生成既有 JSON。持久格式、对外词汇、权限、锁顺序及写入顺序不变；没有修改既有测试断言。
 
-这不是 F1 完成结论。业务围栏计数从 224 降为 193，仍有 23 个业务文件保留内部类型引用；HTTP 详情、通道、会话、Plugin 等读取仍待迁移。当前 `RunView` 只提供相位、活动观察、Graph 拓扑与执行进度及状态谓词，不公开原始 record、status、error、cursor 或 recovery 字段；更新时间、其余 Graph 进度与不依赖原始 record 的通用读取入口仍需补齐。当前 outcome 映射仅生成 done/failed/aborted，后续需补齐 escalated/unknown 契约。不能把首个切片或围栏通过视为全部读取、规则与写入已收敛。
+这不是 F1 完成结论。第二个读取切片迁入 HTTP 详情/abandon 序列化、渠道启动/回复/进度读取、助手上下文与 Plugin binding 读取；业务围栏计数从 224 经 193 降为 99，仍有 9 个业务文件保留内部类型引用。`RunView` 提供相位、活动观察、Graph 拓扑与执行进度及状态谓词，不公开原始 record、status、error、cursor 或 recovery 字段；新增拥有数据的只读加载入口，Graph/会话的重型读写用例仍待迁移。outcome 契约保留 escalated/unknown，master 现有状态仅映射为 done/failed/aborted。更新时间与完整读取契约仍需补齐，不能把切片或围栏通过视为全部读取、规则与写入已收敛。
 
 [围栏测试](../rust/anchor-runner-host/tests/run_access_fence.rs) 扫描 `anchor-runner-host/src/**/*.rs`，对 `RunStatus`、`GraphRunRecord`、`RunStore`、`FileRunStore`、`GraphRunner`、`RunCursor` 六种内部类型的精确标识符逐次计数。[业务基线](../rust/anchor-runner-host/run-access-fence.txt) 是逐文件上限：超过上限或清单外业务文件出现引用会失败；下降或删除文件时提示同步降低清单，不自动改写它。
 
@@ -57,10 +57,10 @@ F0 已提交为 `e3a5778`，同时包含宪法文件与 F0–F2、G0 两份任�
 
 | 待提取规则 | 原位置 | 迁移前 → 当前独立实现数 |
 | --- | --- | --- |
-| 状态为 `T ∪ {Stopped}` 或其补集，不含执行登记 | `application/control.rs:19`、`application/session_calls.rs:103`、`api/wecom.rs:858`、`api/turns.rs:33`、`api/turns.rs:51` | 5 → 5 |
-| detached Run 仅 Ready 可派遣/恢复 | `application/dispatch.rs:51`、`application/dispatch.rs:78` | 2 → 2 |
+| `has_stopped_execution`：状态为 `T ∪ {Stopped}` 或其补集，不含执行登记 | `application/control.rs:19`、`application/session_calls.rs:103`、`api/wecom.rs:858`、`api/turns.rs:33`、`api/turns.rs:51` | 5 → 2（剩 Session 判断） |
+| `can_dispatch`：detached Run 仅 Ready 可派遣/恢复 | `application/dispatch.rs:51`、`application/dispatch.rs:78` | 2 → 1 |
 | wait 父 Run 的 WaitingCall 与 cursor node/invocation 共同匹配 | `application/control.rs:71`、`application/dispatch.rs:172` | 2 → 2 |
-| stop/abandon 时是否清理等待子 Run | `application/control.rs:123`、`application/control.rs:132`、`application/abandon.rs:281` | 3 → 3 |
+| `waits_for_children`：stop/abandon 时是否清理等待子 Run | `application/control.rs:123`、`application/control.rs:132`、`application/abandon.rs:281` | 3 → 2（剩 abandon 判断） |
 | 成功状态必须 Completed，不等于完整投递许可 | `application/conversations.rs:171`、`application/dispatch.rs:149`、`application/session_calls.rs:425`、`api/files.rs:196` | 4 → 4 |
 | 恢复目标的 cursor、attempt 与 WaitingRecovery 共同条件 | `application/recovery.rs:104`、`application/recovery.rs:206` | 2 → 2 |
 
@@ -70,5 +70,5 @@ F0 已提交为 `e3a5778`，同时包含宪法文件与 F0–F2、G0 两份任�
 
 - F1 首个切片的定向回归、Rust workspace（1,959 通过、122 忽略）、fmt/clippy、Web 306 测试及构建通过；本轮没有执行 Goose 忽略套件，不宣称完整 F1 验收或相对 Goose 基线无新增失败。
 - F0 已按任务书审查通过；固定 Goose 的 ACP 扩展初始化失败由 G0 独立处理。G0 关闭前按任务书以失败名单为基线，不将本轮未执行的套件写成通过。F0 原始验证与 F1 首个切片的定向证据见[本机验证](../.local/run-access-facade-20261019/README.md)，原始日志仅在本机保有。
-- F1 仍需补齐 `RunView` 契约和通用读取入口，迁完所有只读消费者与兼容序列化，并将逐规则表扩展到全 Host；本页当前表明确保留未收敛数，不以围栏标识符数替代该度量。
+- 第二个切片新增 HTTP 详情十状态与 abandon 原始 JSON 字节回归，以及渠道和助手 binding 的边界回归；验证结果见[第二切片证据](../.local/run-access-facade-20261019/f1-readers/README.md)。F1 仍需补齐 `RunView` 契约，迁完所有只读消费者与兼容序列化，并将逐规则表扩展到全 Host；本页当前表明确保留未收敛数，不以围栏标识符数替代该度量。
 - F2 仍需按意图封装 Run 写入；不得用类型重命名、放宽运行时豁免或直接暴露原始 record 来降低围栏数。迁移前继续沿用现有事实所有者、租约、执行登记及持久化顺序。

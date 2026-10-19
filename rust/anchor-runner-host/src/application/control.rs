@@ -1,12 +1,12 @@
 use super::run_access::{
-    reject_terminal_control, validate_control_identity, validate_inactive_control,
+    RunView, reject_terminal_control, validate_control_identity, validate_inactive_control,
     validate_resume_budget,
 };
 use super::{
     ActiveRun, ApplicationError, RunApplication, RunMetadata, new_control, wait_child_ids,
 };
 use crate::execution::PreparedExecution;
-use anchor_runtime::graph::{GraphRunRecord, RecoveryDecision, RunStatus, RunStore};
+use anchor_runtime::graph::{GraphRunRecord, RunStatus, RunStore};
 use std::sync::atomic::Ordering;
 
 impl RunApplication {
@@ -19,9 +19,10 @@ impl RunApplication {
     ) -> Result<(), ApplicationError> {
         self.stop_wait_session_children(run_id).await?;
         for child_id in wait_children {
-            if self.store().load(&child_id)?.is_some_and(|child| {
-                !child.status.is_terminal() && child.status != RunStatus::Stopped
-            }) {
+            if self
+                .read_run(&child_id)?
+                .is_some_and(|child| !child.has_stopped_execution())
+            {
                 let _ = Box::pin(self.control(&child_id, "stop")).await;
             }
         }
@@ -72,12 +73,9 @@ impl RunApplication {
         }
         let mut active = self.active.lock().await;
         if let Some((node, invocation)) = waiting {
-            let expected = self.store().load(run_id)?.is_some_and(|parent| {
-                parent.status == RunStatus::WaitingCall
-                    && parent.cursor.as_ref().is_some_and(|cursor| {
-                        cursor.node_id == node && cursor.key.invocation == invocation
-                    })
-            });
+            let expected = self
+                .read_run(run_id)?
+                .is_some_and(|parent| parent.waits_for_invocation(node, invocation));
             if !expected || active.contains_key(run_id) {
                 return Ok(());
             }
@@ -124,7 +122,7 @@ impl RunApplication {
             .load(run_id)?
             .ok_or(ApplicationError::Missing)?;
         reject_terminal_control(&record)?;
-        if operation == "stop" && record.status == RunStatus::WaitingCall {
+        if operation == "stop" && RunView::inactive(&record).waits_for_children() {
             record.status = RunStatus::Stopped;
             record.touch();
             self.store().save(&record)?;
@@ -134,7 +132,7 @@ impl RunApplication {
             self.stop_wait_children(run_id, wait_children).await?;
             let lease = self.store().acquire_lease(run_id)?;
             if let Some(mut current) = self.store().load(run_id)?
-                && current.status == RunStatus::WaitingCall
+                && RunView::inactive(&current).waits_for_children()
             {
                 current.status = RunStatus::Stopped;
                 current.touch();
@@ -170,32 +168,6 @@ impl RunApplication {
         drop(graph_lease);
         self.spawn(record, execution)?;
         Ok(())
-    }
-
-    /// Ordinary resume turns uncertain effects into durable context for the
-    /// same Agent, before acquiring the active execution registration.
-    async fn resume_interrupted_attempts(&self, run_id: &str) -> Result<bool, ApplicationError> {
-        let Some(record) = self.store().load(run_id)? else {
-            return Ok(false);
-        };
-        if record.status != RunStatus::WaitingRecovery || record.recovery.is_empty() {
-            return Ok(false);
-        }
-        for pending in record.recovery {
-            let observation = format!(
-                "The previous `{}` tool call (step {}) was interrupted before its result was recorded. Its external effect is unknown. Inspect the workspace, artifacts, and any available external state before deciding what to do; do not blindly repeat the call.",
-                pending.attempt.tool, pending.attempt.step
-            );
-            self.recover(
-                run_id,
-                &pending.key.node_id,
-                pending.key.invocation,
-                pending.attempt.attempt_id,
-                RecoveryDecision::Completed { observation },
-            )
-            .await?;
-        }
-        Ok(true)
     }
 
     fn control_metadata(&self, record: &GraphRunRecord) -> Result<RunMetadata, ApplicationError> {

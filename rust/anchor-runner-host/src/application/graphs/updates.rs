@@ -28,9 +28,7 @@ impl RunApplication {
         let _lease =
             crate::assistant_plugins::graph_read_lease(&self.data_root, &metadata.bundle_source)
                 .map_err(ApplicationError::from)?;
-        let record = self
-            .store()
-            .load(run)
+        let record = crate::application::run_access::load(&self.data_root, run)
             .map_err(invalid)?
             .ok_or_else(|| GraphManagementError::Missing("助手运行记录不可用".into()))?;
         let (_, bundle) = self.load_graph(&metadata.graph)?;

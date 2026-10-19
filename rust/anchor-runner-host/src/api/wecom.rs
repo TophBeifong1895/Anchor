@@ -1,5 +1,5 @@
 use super::*;
-use crate::application::{RunLiveness, WECOM_REPLY_KEY_PREFIX, WECOM_REPLY_KIND};
+use crate::application::{WECOM_REPLY_KEY_PREFIX, WECOM_REPLY_KIND, run_access};
 use anchor_platform_session::{
     AttachmentManifest, AttachmentManifestEntry, ChannelConversationKind, ChannelDeliveryRequest,
     ChannelDeliveryStatus, ChannelIdentity, ChannelInboundRequest, TurnStatus,
@@ -602,9 +602,10 @@ async fn wait_for_channel_reply(
         {
             return Ok(None);
         }
-        let record = FileRunStore::new(state.data_root.join("runs"))
-            .load(run_id)
-            .map_err(|failure| error(StatusCode::INTERNAL_SERVER_ERROR, failure.to_string()))?;
+        let record = state
+            .application
+            .channel_reply_run(run_id)
+            .map_err(|message| error(StatusCode::INTERNAL_SERVER_ERROR, message))?;
         if let Some(record) = record.as_ref() {
             let metadata = crate::application::metadata::load(&state.data_root, run_id)
                 .map_err(application_error)?;
@@ -618,7 +619,7 @@ async fn wait_for_channel_reply(
                         "assistant reply belongs to another Session",
                     ));
                 }
-                if let Some(results) = record.results.get(&source.reply_node) {
+                if let Some(results) = record.replies_for(&source.reply_node) {
                     for result in results.iter().rev() {
                         let Some(binding) =
                             crate::assistant::binding(&state.data_root, &result.key)
@@ -630,28 +631,21 @@ async fn wait_for_channel_reply(
                         {
                             continue;
                         }
-                        if result.completion.output.get("suppressed") == Some(&json!(true)) {
+                        if result.suppressed {
                             return Ok(None);
                         }
-                        if result
-                            .completion
-                            .output
-                            .get("reply_for")
-                            .and_then(Value::as_str)
-                            != Some(binding.turn.as_str())
-                            || result.completion.submission.trim().is_empty()
+                        if result.reply_for.as_deref() != Some(binding.turn.as_str())
+                            || result.text.trim().is_empty()
                         {
                             return Err(error(
                                 StatusCode::CONFLICT,
                                 "assistant reply identity changed",
                             ));
                         }
-                        let commit: anchor_runtime::graph::CommitRef = serde_json::from_value(
-                            result.completion.output["source_commit"].clone(),
-                        )
-                        .map_err(|_| {
-                            error(StatusCode::CONFLICT, "assistant reply source is missing")
-                        })?;
+                        let commit: anchor_runtime::graph::CommitRef =
+                            serde_json::from_value(result.source_commit.clone()).map_err(|_| {
+                                error(StatusCode::CONFLICT, "assistant reply source is missing")
+                            })?;
                         let work_key = anchor_runtime::graph::InvocationKey {
                             node_id: commit.node_id,
                             invocation: commit.invocation,
@@ -662,7 +656,7 @@ async fn wait_for_channel_reply(
                             &work_key,
                         )
                         .map_err(|message| error(StatusCode::UNPROCESSABLE_ENTITY, message))?;
-                        if json!(items) != result.completion.output["items"] {
+                        if json!(items) != result.items {
                             return Err(error(
                                 StatusCode::CONFLICT,
                                 "assistant reply image set changed",
@@ -682,16 +676,14 @@ async fn wait_for_channel_reply(
                         return Ok(Some(ChannelReply {
                             session: session.to_owned(),
                             turn: binding.turn,
-                            text: result.completion.submission.clone(),
+                            text: result.text.clone(),
                             items,
                         }));
                     }
                 }
-                if matches!(
-                    record.status,
-                    RunStatus::Failed | RunStatus::Aborted | RunStatus::Stopped
-                ) || (matches!(record.status, RunStatus::Ready | RunStatus::Running)
-                    && !state.application.run_is_active(run_id).await)
+                if record.unsuccessful
+                    || (record.assistant_expects_executor
+                        && !state.application.run_is_active(run_id).await)
                 {
                     return Err(assistant_stopped());
                 }
@@ -706,53 +698,40 @@ async fn wait_for_channel_reply(
                 .await
                 .contains(&run_id.to_owned())
         {
-            match record.status {
-                RunStatus::Completed => {
-                    if inbound.turn.status != TurnStatus::Completed {
-                        tokio::time::sleep(RUN_POLL).await;
-                        continue;
-                    }
-                    let Some(result) = record
-                        .results
-                        .get(reply_node)
-                        .and_then(|results| results.last())
-                    else {
-                        return Err(error(
-                            StatusCode::BAD_GATEWAY,
-                            "WeCom reply node produced no result",
-                        ));
-                    };
-                    if result.completion.submission.trim().is_empty() {
-                        return Err(error(
-                            StatusCode::BAD_GATEWAY,
-                            "WeCom reply node produced an empty reply",
-                        ));
-                    }
-                    // The configured Gateway delivers text plus validated reply
-                    // images. Anything else in the file is refused here rather
-                    // than silently dropped by the transport.
-                    let items =
-                        crate::channel_tools::read_reply_images(&state.data_root, run_id)
-                            .map_err(|failure| error(StatusCode::UNPROCESSABLE_ENTITY, failure))?;
-                    return Ok(Some(ChannelReply {
-                        session: session.to_owned(),
-                        turn: inbound.relation.turn_id,
-                        text: result.completion.submission.clone(),
-                        items,
-                    }));
+            if record.completed {
+                if inbound.turn.status != TurnStatus::Completed {
+                    tokio::time::sleep(RUN_POLL).await;
+                    continue;
                 }
-                RunStatus::Failed | RunStatus::Aborted | RunStatus::Stopped => {
+                let Some(text) = record.latest_reply(reply_node) else {
                     return Err(error(
                         StatusCode::BAD_GATEWAY,
-                        "WeCom Graph Run did not complete successfully",
+                        "WeCom reply node produced no result",
+                    ));
+                };
+                if text.trim().is_empty() {
+                    return Err(error(
+                        StatusCode::BAD_GATEWAY,
+                        "WeCom reply node produced an empty reply",
                     ));
                 }
-                RunStatus::Ready
-                | RunStatus::Running
-                | RunStatus::Paused
-                | RunStatus::BudgetStopped
-                | RunStatus::WaitingCall
-                | RunStatus::WaitingRecovery => {}
+                // The configured Gateway delivers text plus validated reply
+                // images. Anything else in the file is refused here rather
+                // than silently dropped by the transport.
+                let items = crate::channel_tools::read_reply_images(&state.data_root, run_id)
+                    .map_err(|failure| error(StatusCode::UNPROCESSABLE_ENTITY, failure))?;
+                return Ok(Some(ChannelReply {
+                    session: session.to_owned(),
+                    turn: inbound.relation.turn_id,
+                    text: text.to_owned(),
+                    items,
+                }));
+            }
+            if record.unsuccessful {
+                return Err(error(
+                    StatusCode::BAD_GATEWAY,
+                    "WeCom Graph Run did not complete successfully",
+                ));
             }
         }
         tokio::time::sleep(RUN_POLL).await;
@@ -836,8 +815,7 @@ pub(super) async fn stop_previous_run(
     run_id: &str,
 ) -> Result<bool, HttpResponse> {
     let active = state.application.active_runs(None).await;
-    let record = FileRunStore::new(state.data_root.join("runs"))
-        .load(run_id)
+    let record = run_access::load(&state.data_root, run_id)
         .map_err(|failure| error(StatusCode::INTERNAL_SERVER_ERROR, failure.to_string()))?;
     let Some(record) = record else {
         if active.contains(&run_id.to_owned()) {
@@ -848,22 +826,23 @@ pub(super) async fn stop_previous_run(
         }
         return Ok(false);
     };
-    if !RunLiveness::observed(record.status, active.contains(&run_id.to_owned())).is_quiescent()
+    if !record
+        .with_active(active.contains(&run_id.to_owned()))
+        .is_quiescent()
         && let Err(failure) = state.application.control(run_id, "stop").await
     {
-        let current = FileRunStore::new(state.data_root.join("runs"))
-            .load(run_id)
+        let current = run_access::load(&state.data_root, run_id)
             .map_err(|failure| error(StatusCode::INTERNAL_SERVER_ERROR, failure.to_string()))?;
-        if current.as_ref().is_none_or(|record| {
-            !record.status.is_terminal() && record.status != RunStatus::Stopped
-        }) {
+        if current
+            .as_ref()
+            .is_none_or(|record| !record.has_stopped_execution())
+        {
             return Err(application_error(failure));
         }
     }
     loop {
         let active = state.application.active_runs(None).await;
-        let record = FileRunStore::new(state.data_root.join("runs"))
-            .load(run_id)
+        let record = run_access::load(&state.data_root, run_id)
             .map_err(|failure| error(StatusCode::INTERNAL_SERVER_ERROR, failure.to_string()))?;
         let Some(record) = record else {
             if active.contains(&run_id.to_owned()) {
@@ -874,7 +853,9 @@ pub(super) async fn stop_previous_run(
             }
             return Ok(false);
         };
-        if RunLiveness::observed(record.status, active.contains(&run_id.to_owned())).is_quiescent()
+        if record
+            .with_active(active.contains(&run_id.to_owned()))
+            .is_quiescent()
         {
             return Ok(true);
         }

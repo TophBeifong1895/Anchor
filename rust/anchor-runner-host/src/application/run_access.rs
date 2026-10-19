@@ -1,12 +1,19 @@
+mod assistant_policy;
+mod channels;
+pub(crate) mod http;
 mod liveness;
 mod projection;
+mod reads;
 
+pub(crate) use assistant_policy::{graph_lease, graph_read_lease};
 pub(crate) use liveness::RunLiveness;
 #[cfg(test)]
 pub(super) use projection::observed;
+pub(crate) use reads::load;
 
 use super::{ApplicationError, RunMetadata};
-use anchor_runtime::graph::{GraphRunRecord, GraphSnapshot, RunStatus};
+use anchor_runtime::graph::{GraphRunRecord, GraphSnapshot, PluginBinding, RunStatus};
+use std::{borrow::Cow, collections::BTreeMap};
 
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum RunPhase<'record> {
@@ -28,15 +35,22 @@ pub(crate) enum RunWait {
     Effect,
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub(crate) enum RunOutcome {
     Done,
     Failed,
+    Escalated,
+    Unknown,
     Aborted,
 }
 
 pub(crate) struct RunProgress<'record> {
+    pub(crate) run_id: &'record str,
+    pub(crate) graph_digest: &'record str,
     pub(crate) snapshot: &'record GraphSnapshot,
+    pub(crate) plugin_bindings: &'record BTreeMap<String, PluginBinding>,
+    pub(crate) invocations: &'record BTreeMap<String, u64>,
     executed: Vec<String>,
 }
 
@@ -46,8 +60,9 @@ impl RunProgress<'_> {
     }
 }
 
+#[derive(Debug, Clone)]
 pub(crate) struct RunView<'record> {
-    record: &'record GraphRunRecord,
+    record: Cow<'record, GraphRunRecord>,
     active: bool,
     requested: Option<&'static str>,
     session_coordinated: bool,
@@ -61,7 +76,7 @@ impl<'record> RunView<'record> {
         session_coordinated: bool,
     ) -> Self {
         Self {
-            record,
+            record: Cow::Borrowed(record),
             active,
             requested,
             session_coordinated,
@@ -72,7 +87,12 @@ impl<'record> RunView<'record> {
         Self::observed(record, false, None, false)
     }
 
-    pub(crate) fn phase(&self) -> RunPhase<'record> {
+    pub(crate) fn with_active(mut self, active: bool) -> Self {
+        self.active = active;
+        self
+    }
+
+    pub(crate) fn phase(&self) -> RunPhase<'_> {
         phase(self.record.status, self.record.error.as_deref())
     }
 
@@ -80,9 +100,13 @@ impl<'record> RunView<'record> {
         self.active
     }
 
-    pub(crate) fn progress(&self) -> RunProgress<'record> {
+    pub(crate) fn progress(&self) -> RunProgress<'_> {
         RunProgress {
+            run_id: &self.record.run_id,
+            graph_digest: &self.record.graph_digest,
             snapshot: &self.record.snapshot,
+            plugin_bindings: &self.record.plugin_bindings,
+            invocations: &self.record.invocations,
             executed: self.record.executed_nodes(),
         }
     }
@@ -110,17 +134,49 @@ impl<'record> RunView<'record> {
         if self.active {
             self.requested != Some("stop")
         } else {
-            validate_inactive_control(self.record, "stop").is_ok()
+            validate_inactive_control(&self.record, "stop").is_ok()
         }
     }
 
     pub(crate) fn can_resume(&self) -> bool {
         !self.active
             && !self.session_coordinated
-            && validate_resume_budget(self.record).is_ok()
-            && (validate_inactive_control(self.record, "resume").is_ok()
-                || (self.record.status == RunStatus::WaitingRecovery
-                    && !self.record.recovery.is_empty()))
+            && validate_resume_budget(&self.record).is_ok()
+            && (validate_inactive_control(&self.record, "resume").is_ok()
+                || self.has_pending_recovery())
+    }
+
+    pub(crate) fn has_stopped_execution(&self) -> bool {
+        has_stopped_execution(self.record.status)
+    }
+
+    pub(crate) fn can_dispatch(&self) -> bool {
+        self.record.status == RunStatus::Ready
+    }
+
+    pub(crate) fn waits_for_children(&self) -> bool {
+        self.record.status == RunStatus::WaitingCall
+    }
+
+    pub(crate) fn waits_for_invocation(&self, node: &str, invocation: u64) -> bool {
+        self.waits_for_children()
+            && self
+                .record
+                .cursor
+                .as_ref()
+                .is_some_and(|cursor| cursor.node_id == node && cursor.key.invocation == invocation)
+    }
+
+    pub(crate) fn has_succeeded(&self) -> bool {
+        succeeded(self.record.status)
+    }
+
+    pub(crate) fn has_pending_recovery(&self) -> bool {
+        self.record.status == RunStatus::WaitingRecovery && !self.record.recovery.is_empty()
+    }
+
+    pub(crate) fn occupies_conversation_execution(&self) -> bool {
+        self.active || matches!(self.record.status, RunStatus::Ready | RunStatus::Running)
     }
 
     pub(crate) fn can_abandon(&self) -> bool {
@@ -140,6 +196,23 @@ impl<'record> RunView<'record> {
             (false, _, RunStatus::Running) => "waiting_resume",
             _ => legacy_status(self.record.status),
         }
+    }
+}
+
+impl<'record> From<&'record GraphRunRecord> for RunView<'record> {
+    fn from(record: &'record GraphRunRecord) -> Self {
+        Self::inactive(record)
+    }
+}
+
+impl<'view> From<&'view RunView<'_>> for RunView<'view> {
+    fn from(view: &'view RunView<'_>) -> Self {
+        Self::observed(
+            &view.record,
+            view.active,
+            view.requested,
+            view.session_coordinated,
+        )
     }
 }
 
@@ -178,7 +251,19 @@ fn is_settled(status: RunStatus) -> bool {
 }
 
 fn is_quiescent(status: RunStatus, executor_registered: bool) -> bool {
-    !executor_registered && (is_settled(status) || status == RunStatus::Stopped)
+    !executor_registered && has_stopped_execution(status)
+}
+
+fn has_stopped_execution(status: RunStatus) -> bool {
+    is_settled(status) || is_stopped(status)
+}
+
+fn is_stopped(status: RunStatus) -> bool {
+    status == RunStatus::Stopped
+}
+
+pub(super) fn succeeded(status: RunStatus) -> bool {
+    status == RunStatus::Completed
 }
 
 pub(crate) fn legacy_status(status: RunStatus) -> &'static str {

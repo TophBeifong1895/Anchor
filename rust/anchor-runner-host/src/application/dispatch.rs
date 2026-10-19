@@ -48,7 +48,7 @@ impl RunApplication {
             .store()
             .load(run_id)?
             .ok_or(ApplicationError::Missing)?;
-        if record.status != RunStatus::Ready {
+        if !super::run_access::RunView::inactive(&record).can_dispatch() {
             // Running means an execution may have escaped before a crash. Never
             // infer that it is safe to replay.
             return Ok(());
@@ -73,9 +73,9 @@ impl RunApplication {
 
     pub(crate) async fn recover_detached(&self) -> Result<(), ApplicationError> {
         let candidates = self
-            .records()?
+            .run_views()?
             .into_iter()
-            .filter_map(|(id, record)| (record.status == RunStatus::Ready).then_some(id))
+            .filter_map(|(id, record)| record.can_dispatch().then_some(id))
             .collect::<Vec<_>>();
         for run_id in candidates {
             if self

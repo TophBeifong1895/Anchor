@@ -4,7 +4,7 @@ use super::{
 };
 use crate::{create_durable_directory, execution::PreparedExecution};
 use anchor_graph_host::LoadedGraphBundle;
-use anchor_runtime::graph::{GraphRunRecord, RunLease, RunStatus, RunStore};
+use anchor_runtime::graph::{GraphRunRecord, RunLease, RunStore};
 use serde_json::Value;
 use std::path::Path;
 
@@ -38,17 +38,8 @@ impl RunApplication {
             ));
         }
         // A service restart does not silently launch another Run over an orphan.
-        for (id, record) in self.records()? {
-            if matches!(
-                record.status,
-                RunStatus::Ready
-                    | RunStatus::Running
-                    | RunStatus::Paused
-                    | RunStatus::WaitingCall
-                    | RunStatus::WaitingRecovery
-                    | RunStatus::BudgetStopped
-                    | RunStatus::Stopped
-            ) {
+        for (id, record) in self.run_views()? {
+            if !record.is_settled() {
                 match self.metadata(&id)? {
                     Some(meta)
                         if Self::graph_identity(&meta.bundle_source)? == graph_path =>
@@ -119,8 +110,8 @@ impl RunApplication {
         let lease = self.graph_lease(&graph_path)?;
         // An unfinished Run with no immutable Graph identity cannot be attributed
         // to any Graph, so refuse to admit or create Runs until it is resolved.
-        for (id, record) in self.records()? {
-            if !record.status.is_terminal() && self.metadata(&id)?.is_none() {
+        for (id, record) in self.run_views()? {
+            if !record.is_settled() && self.metadata(&id)?.is_none() {
                 return Err(ApplicationError::Conflict(
                     "an unfinished Run has no immutable Graph identity; admission is quarantined"
                         .into(),

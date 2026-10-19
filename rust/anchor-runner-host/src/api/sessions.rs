@@ -103,7 +103,7 @@ pub(super) fn owned_session(
 }
 
 fn has_retained_session_run(state: &ApiState, identifier: &str) -> Result<bool, HttpResponse> {
-    for (run, _) in state.application.records().map_err(application_error)? {
+    for (run, _) in state.application.run_views().map_err(application_error)? {
         let Some(metadata) = state
             .application
             .metadata(&run)
