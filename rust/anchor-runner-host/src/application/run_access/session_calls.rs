@@ -2,7 +2,7 @@ use super::RunView;
 use crate::application::{
     ApplicationError, ConversationSource, RunApplication, RunMetadata, metadata, new_control,
 };
-use anchor_runtime::graph::{GraphRunRecord, RecoveryDecision};
+use anchor_runtime::graph::GraphRunRecord;
 
 impl RunView<'_> {
     fn can_continue_session_call(&self) -> bool {
@@ -212,31 +212,7 @@ impl RunApplication {
         }
         let control = new_control();
         let execution = self.prepare_resume(record, &metadata, control.clone())?;
-        // The authenticated Session host releases its existing invocation for
-        // inspection. Persist the native observation through the same recovery
-        // authority as ordinary Runs; an unknown effect is never replayed here.
-        for pending in runs.recovery_facts(run_id)?.0 {
-            let decision = RecoveryDecision::Completed {
-                observation: format!(
-                    "The previous {} tool call was interrupted before its result was recorded. Its effect is unknown. Inspect the actual state before continuing; do not blindly repeat it.",
-                    pending.attempt.tool
-                ),
-            };
-            runs.recover_attempt(
-                &pending.key,
-                pending.attempt.attempt_id,
-                decision.clone(),
-                || {
-                    execution
-                        .record_recovery_decision(
-                            &pending.key,
-                            pending.attempt.attempt_id,
-                            decision,
-                        )
-                        .map_err(anchor_runtime::graph::GraphError::CorruptRun)
-                },
-            )?;
-        }
+        self.inspect_interrupted_attempts(&runs, run_id, &execution)?;
         let resumed = self.read_run(run_id)?.ok_or(ApplicationError::Missing)?;
         if !matches!(resumed.phase(), super::RunPhase::Executing) {
             runs.control(run_id, "resume", None)?;

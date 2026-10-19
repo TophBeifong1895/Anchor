@@ -34,12 +34,7 @@ impl<S: Store, A: ArtifactPort + ?Sized, N: NodeExecutionPort + ?Sized>
                 CompletionFact::Completed(c) => NodeExecutionOutcome::Completed(c),
                 CompletionFact::Failed(reason) => NodeExecutionOutcome::Failed { reason },
                 CompletionFact::Uncertain(reason) => {
-                    return Ok(Some(self.observation_stop(
-                        &resource,
-                        &key,
-                        reason,
-                        Value::Null,
-                    )));
+                    return Ok(Some(observation_stop(&resource, &key, reason, Value::Null)));
                 }
                 CompletionFact::NotStarted | CompletionFact::Resumable => {
                     let input = self.input(&record, &dispatch, key.clone()).await?;
@@ -158,19 +153,19 @@ impl<S: Store, A: ArtifactPort + ?Sized, N: NodeExecutionPort + ?Sized>
             NodeExecutionOutcome::Failed { reason } => self
                 .known_failure(&resource, &dispatch, reason, 0)
                 .map(Some),
-            NodeExecutionOutcome::WaitingRecovery { attempts } => Ok(Some(self.observation_stop(
+            NodeExecutionOutcome::WaitingRecovery { attempts } => Ok(Some(observation_stop(
                 &resource,
                 &key,
                 "unknown external tool effects".into(),
                 serde_json::to_value(attempts).map_err(GraphError::RunDecode)?,
             ))),
             NodeExecutionOutcome::BudgetExhausted { model_requests } => {
-                let (principal, _, submission) = self.observation_stop(
+                let (principal, _, submission) = observation_stop(
                     &resource, &key, "budget".into(), Value::Null,
                 );
                 Ok(Some((principal, model_requests, submission)))
             }
-            NodeExecutionOutcome::Interrupted { reason } => Ok(Some(self.observation_stop(
+            NodeExecutionOutcome::Interrupted { reason } => Ok(Some(observation_stop(
                 &resource, &key, reason, Value::Null,
             ))),
             NodeExecutionOutcome::Aborted => Ok(Some((
@@ -214,19 +209,20 @@ impl<S: Store, A: ArtifactPort + ?Sized, N: NodeExecutionPort + ?Sized>
     ) -> Result<DispatchInput, GraphError> {
         dispatch_input(self.artifacts, record, dispatch, key).await
     }
+}
 
-    fn observation_stop(
-        &self,
-        resource: &Resource,
-        key: &InvocationKey,
-        reason: String,
-        attempts: Value,
-    ) -> StampedSubmission {
-        (Principal::new(HOST_ID, PrincipalKind::Code), 0,
-            Submission::new(&resource.id, resource.version, Action::Request)
-                .content(serde_json::json!({"control":"stop","reason":reason,"invocation":key,"attempts":attempts}))
-                .evidence(Evidence::Observation { id: format!("node-completion/{}", key.durable_key()) }))
-    }
+/// Describe an execution observation without changing Run facts or releasing a
+/// wait. Explicit recovery and the scheduler persist the same Code evidence.
+pub fn observation_stop(
+    resource: &Resource,
+    key: &InvocationKey,
+    reason: String,
+    attempts: Value,
+) -> (Principal, u64, Submission) {
+    (Principal::new(HOST_ID, PrincipalKind::Code), 0,
+        Submission::new(&resource.id, resource.version, Action::Request)
+            .content(serde_json::json!({"control":"stop","reason":reason,"invocation":key,"attempts":attempts}))
+            .evidence(Evidence::Observation { id: format!("node-completion/{}", key.durable_key()) }))
 }
 
 /// Resolve one validator dispatch through the same provenance/input adapter

@@ -191,17 +191,14 @@ fn workspace(host: &Host, run: &str) -> PathBuf {
         .join(format!("{:x}", Sha256::digest(b"assistant")))
 }
 
-fn records(host: &Host) -> Vec<Value> {
-    fs::read_dir(host.base.state_root().join("runs"))
-        .unwrap()
-        .map(Result::unwrap)
-        .filter(|entry| {
-            entry
-                .path()
-                .extension()
-                .is_some_and(|extension| extension == "json")
-        })
-        .map(|entry| fixture::read_json(entry.path()))
+fn records(host: &Host, server: &HttpHost) -> Vec<Value> {
+    let (status, listed) = server.request("GET", "/runs", None);
+    assert_eq!(status, 200, "{listed}");
+    listed["runs"]
+        .as_array()
+        .expect("Host Run list")
+        .iter()
+        .map(|row| host.record(row["run"].as_str().expect("Host Run identity")))
         .collect()
 }
 
@@ -261,7 +258,7 @@ fn add_call_remove_preserves_run_native_history_workspace_and_frozen_run_snapsho
     assert_eq!(second["run"], first["run"]);
     assert_eq!(third["run"], first["run"]);
     assert_eq!(third["session"], first["session"]);
-    assert_eq!(records(&host).len(), 1);
+    assert_eq!(records(&host, &server).len(), 1);
     assert_eq!(final_record["snapshot"], initial["snapshot"]);
     assert_eq!(final_record["plugin_bindings"], initial["plugin_bindings"]);
     for round in [2, 3] {
@@ -400,7 +397,7 @@ fn save_during_actual_tool_keeps_current_turn_and_other_users_adopt_independentl
             scope.spawn(|| submit(&server, ALICE, "alice-current-input", "alice-current-reply"));
         let mut alice_run = String::new();
         wait_until("actual anchor_run tool waiting in Alice workspace", || {
-            for record in records(&host) {
+            for record in records(&host, &server) {
                 let candidate = record["run_id"].as_str().unwrap();
                 if candidate != bob_run && workspace(&host, candidate).join("blocked").is_file() {
                     alice_run = candidate.to_owned();
@@ -473,7 +470,7 @@ fn default_restart_handover_restores_same_turn_grants_then_next_turn_revokes() {
         let pending = scope
             .spawn(|| goose::interrupted_event(&server, &event(ALICE, "restart-frozen-input")));
         gate.wait_entered();
-        let saved = records(&host);
+        let saved = records(&host, &server);
         assert_eq!(saved.len(), 1);
         let run = saved[0]["run_id"].as_str().unwrap().to_owned();
         let native = host.native_fact(&run, "assistant", 1);

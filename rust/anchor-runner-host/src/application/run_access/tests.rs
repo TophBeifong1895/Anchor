@@ -214,11 +214,7 @@ fn predicates_follow_public_phase_waiter_and_outcome_distinctions() {
             "{id}"
         );
         assert_eq!(view.needs_attention(), id != "done", "{id}");
-        assert_eq!(
-            view.can_resume(),
-            !settled && !matches!(id, "child" | "recovery"),
-            "{id}"
-        );
+        assert_eq!(view.can_resume(), !settled && id != "child", "{id}");
         assert_eq!(view.can_stop(), id == "executing", "{id}");
         assert_eq!(view.can_abandon(), !settled, "{id}");
         assert!(!view.can_pause(), "{id}");
@@ -250,7 +246,7 @@ fn active_and_session_observations_do_not_reinterpret_durable_state() {
 }
 
 #[test]
-fn inactive_controls_are_decided_by_kernel_and_recovery_remains_held() {
+fn inactive_controls_are_decided_by_kernel_and_recovery_can_request_inspection() {
     let root = tempfile::tempdir().unwrap();
     let application = RunApplication::new(root.path().into(), root.path().join("catalog"));
     scenarios(&application);
@@ -266,7 +262,7 @@ fn inactive_controls_are_decided_by_kernel_and_recovery_remains_held() {
         ));
     }
     assert!(fixtures::view(&application, "recovery").has_pending_recovery());
-    assert!(!fixtures::view(&application, "recovery").can_resume());
+    assert!(fixtures::view(&application, "recovery").can_resume());
     assert!(
         application
             .kernel_owner("budget")

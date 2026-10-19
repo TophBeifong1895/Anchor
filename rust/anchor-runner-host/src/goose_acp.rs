@@ -20,7 +20,9 @@ mod usage;
 
 use crate::{
     create_durable_directory,
-    node_host::{HostIoResolver, NodeHostResolver, ResolvedNodeTools, ToolResolution},
+    node_host::{
+        HostIoResolver, NodeHostResolver, ResolutionError, ResolvedNodeTools, ToolResolution,
+    },
     write_durable,
 };
 use anchor_runtime::{
@@ -274,7 +276,7 @@ async fn resolve_node_tools(
     cancellation: &Cancellation,
     tool_cancellation: &Cancellation,
     deadline: Option<tokio::time::Instant>,
-) -> Result<Option<ResolvedNodeTools>, GraphError> {
+) -> Result<Option<ResolvedNodeTools>, ResolutionError> {
     // Keep the resolver's completed result separate from interruption of its
     // wait. A completed error must never cause this future to be polled again.
     let result = transport::bounded(
@@ -284,7 +286,7 @@ async fn resolve_node_tools(
     )
     .await;
     match result {
-        Ok(resolved) => resolved.map(Some).map_err(|error| error.into_graph_error()),
+        Ok(resolved) => resolved.map(Some),
         Err(error) => {
             // Only an interrupted, unfinished resolver needs draining. It owns
             // any MCP child and must receive cancellation before reaping it.
@@ -293,7 +295,7 @@ async fn resolve_node_tools(
             if cancellation.load(Ordering::Acquire) {
                 Ok(None)
             } else {
-                Err(GraphError::Unsupported(error))
+                Err(ResolutionError::Host(error))
             }
         }
     }
@@ -394,7 +396,7 @@ impl GooseNodePort {
         Ok(match fact.completion {
             Some(completion) => CompletionFact::Completed(completion),
             None if !self.fixture && fact.version == 2 => CompletionFact::Resumable,
-            None => CompletionFact::Uncertain(
+            None => CompletionFact::Failed(
                 fact.reason.unwrap_or_else(|| {
                     "Goose invocation started without a durable node completion; automatic load/replay is refused in this spike".into()
                 }),
@@ -481,19 +483,29 @@ impl GooseNodePort {
             .map_err(GraphError::Unsupported)?;
         let resumed = retained.is_some();
         let mut conversation = match conversation_hint {
-            Some(hint) => Some(conversation::ConversationScope::open(
-                &self.process_root,
-                &hint.key,
-                &request.key,
-                &self.facts,
-                &self.binary_sha256,
-                &binding.identity,
-                retained.as_ref(),
-                &self
-                    .resolver
-                    .conversation_predecessors(&request.key)
-                    .map_err(GraphError::Unsupported)?,
-            )?),
+            Some(hint) => {
+                match conversation::ConversationScope::open(
+                    &self.process_root,
+                    &hint.key,
+                    &request.key,
+                    &self.facts,
+                    &self.binary_sha256,
+                    &binding.identity,
+                    retained.as_ref(),
+                    &self
+                        .resolver
+                        .conversation_predecessors(&request.key)
+                        .map_err(GraphError::Unsupported)?,
+                ) {
+                    Ok(scope) => Some(scope),
+                    // Identity rejection precedes this invocation's model and
+                    // tools. It is a known node failure, not an unknown effect.
+                    Err(GraphError::CorruptRun(reason)) => {
+                        return Ok(NodeExecutionOutcome::Failed { reason });
+                    }
+                    Err(error) => return Err(error),
+                }
+            }
             None if retained
                 .as_ref()
                 .is_some_and(|fact| fact.conversation_scope.is_some()) =>
@@ -517,15 +529,20 @@ impl GooseNodePort {
         let mut tool_request = request.clone();
         tool_request.cancellation = Arc::new(AtomicBool::new(false));
         let _stop_tools = CancelTools(tool_request.cancellation.clone());
-        let Some(resolved) = resolve_node_tools(
+        let resolved = match resolve_node_tools(
             self.resolver.tools(&tool_request),
             &request.cancellation,
             &tool_request.cancellation,
             deadline,
         )
-        .await?
-        else {
-            return Ok(NodeExecutionOutcome::Cancelled);
+        .await
+        {
+            Ok(Some(resolved)) => resolved,
+            Ok(None) => return Ok(NodeExecutionOutcome::Cancelled),
+            Err(ResolutionError::KnownFailure(reason)) => {
+                return Ok(NodeExecutionOutcome::Failed { reason });
+            }
+            Err(error) => return Err(error.into_graph_error()),
         };
         // Tools, Plugin identities and persistent summary come from one Host preparation.
         // This includes Session mounts and Library updates since dispatch.
@@ -861,25 +878,33 @@ impl GooseNodePort {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::node_host::ResolutionError;
 
     #[tokio::test]
     async fn completed_tool_resolution_errors_are_returned_without_repolling() {
         for cause in [
             ResolutionError::Host("MCP command is not authorized".into()),
             ResolutionError::Graph(GraphError::CorruptRun("frozen Plugin changed".into())),
+            ResolutionError::KnownFailure("MCP startup rejected".into()),
         ] {
             let cancellation = Cancellation::default();
             let tool_cancellation = Cancellation::default();
             let expected = cause.to_string();
             let graph_error = matches!(cause, ResolutionError::Graph(_));
+            let known_failure = matches!(cause, ResolutionError::KnownFailure(_));
             let resolving = Box::pin(async move { Err(cause) });
             let error = resolve_node_tools(resolving, &cancellation, &tool_cancellation, None)
                 .await
                 .err()
                 .expect("resolver failure must be returned");
             assert!(error.to_string().contains(&expected));
-            assert_eq!(matches!(error, GraphError::CorruptRun(_)), graph_error);
+            assert_eq!(
+                matches!(error, ResolutionError::Graph(GraphError::CorruptRun(_))),
+                graph_error
+            );
+            assert_eq!(
+                matches!(error, ResolutionError::KnownFailure(_)),
+                known_failure
+            );
             assert!(!tool_cancellation.load(Ordering::Acquire));
         }
     }

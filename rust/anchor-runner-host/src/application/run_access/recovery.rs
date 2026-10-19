@@ -44,29 +44,60 @@ impl RunApplication {
             invocation,
         };
         let control = new_control();
-        let mut prepared = None;
+        // Preparation queries Run views, so it must precede the worker-registry
+        // lock held by recover_attempt. Preserve validation/error priority by
+        // propagating a preparation failure only when its port is required.
+        let prepared = self.prepare_resume(&record, &metadata, control.clone());
         let drive = runs.recover_attempt(&key, attempt_id, decision.clone(), || {
-            let execution = self
-                .prepare_resume(&record, &metadata, control.clone())
-                .map_err(|error| {
-                    anchor_runtime::graph::GraphError::CorruptRun(format!(
-                        "recovery port: {error:?}"
-                    ))
-                })?;
+            let execution = prepared.as_ref().map_err(|error| {
+                anchor_runtime::graph::GraphError::CorruptRun(format!("recovery port: {error:?}"))
+            })?;
             execution
                 .record_recovery_decision(&key, attempt_id, decision)
                 .map_err(|error| {
                     anchor_runtime::graph::GraphError::CorruptRun(error.to_string())
                 })?;
-            prepared = Some(execution);
             Ok(())
         })?;
         if drive {
-            let execution = match prepared {
-                Some(execution) => execution,
-                None => self.prepare_resume(&record, &metadata, control.clone())?,
+            self.spawn_kernel(record, prepared?, control)?;
+        }
+        Ok(())
+    }
+
+    /// An explicit human resume authorizes the Agent to inspect its existing
+    /// native Session. It never asserts tool success or replays a pending tool.
+    pub(in crate::application::run_access) fn inspect_interrupted_attempts(
+        &self,
+        runs: &super::kernel_runs::KernelRuns,
+        run_id: &str,
+        execution: &PreparedExecution,
+    ) -> Result<(), ApplicationError> {
+        let native = execution.pending_recovery(run_id)?;
+        for pending in native {
+            runs.observe_recovery_attempts(&pending.key, vec![pending.attempt])?;
+        }
+        for pending in runs.recovery_facts(run_id)?.0 {
+            let decision = RecoveryDecision::Completed {
+                observation: format!(
+                    "The previous `{}` tool call (step {}) was interrupted before its result was recorded. Its external effect is unknown. Inspect the workspace, artifacts, and any available external state before deciding what to do; do not blindly repeat the call.",
+                    pending.attempt.tool, pending.attempt.step
+                ),
             };
-            self.spawn_kernel(record, execution, control)?;
+            runs.recover_attempt(
+                &pending.key,
+                pending.attempt.attempt_id,
+                decision.clone(),
+                || {
+                    execution
+                        .record_recovery_decision(
+                            &pending.key,
+                            pending.attempt.attempt_id,
+                            decision,
+                        )
+                        .map_err(anchor_runtime::graph::GraphError::CorruptRun)
+                },
+            )?;
         }
         Ok(())
     }

@@ -155,6 +155,8 @@ pub enum McpHostError {
     InvalidBinding,
     #[error("MCP transport connection failed: {0}")]
     Connect(String),
+    #[error("MCP initialization failed: {0}")]
+    Initialize(String),
     #[error("MCP transport is unsupported by the pinned RMCP client: {0}")]
     UnsupportedTransport(String),
     #[error(
@@ -274,20 +276,40 @@ impl McpHost {
             .stdin
             .take()
             .ok_or_else(|| McpHostError::Connect("child stdin unavailable".into()))?;
+        enum StartupError {
+            Host(McpHostError),
+            Closed(String),
+        }
         let initialize = async {
             let service = ClientInfo::default()
                 .serve((stdout, stdin))
                 .await
-                .map_err(|error| McpHostError::Connect(error.to_string()))?;
-            Self::bind_service(server_id, service).await
+                .map_err(|error| {
+                    use rmcp::service::ClientInitializeError;
+                    match error {
+                        ClientInitializeError::ExpectedInitResponse(_)
+                        | ClientInitializeError::ExpectedInitResult(_)
+                        | ClientInitializeError::ConflictInitResponseId(_, _)
+                        | ClientInitializeError::JsonRpcError(_) => {
+                            StartupError::Host(McpHostError::Initialize(error.to_string()))
+                        }
+                        ClientInitializeError::ConnectionClosed(_) => {
+                            StartupError::Closed(error.to_string())
+                        }
+                        _ => StartupError::Host(McpHostError::Connect(error.to_string())),
+                    }
+                })?;
+            Self::bind_service(server_id, service)
+                .await
+                .map_err(StartupError::Host)
         };
         let result = tokio::select! {
-            result = tokio::time::timeout(timeout, initialize) => result.unwrap_or_else(|_| Err(McpHostError::Connect("MCP startup timed out".into()))),
+            result = tokio::time::timeout(timeout, initialize) => result.unwrap_or_else(|_| Err(StartupError::Host(McpHostError::Connect("MCP startup timed out".into())))),
             _ = async {
                 while !cancellation.load(std::sync::atomic::Ordering::Acquire) {
                     tokio::time::sleep(std::time::Duration::from_millis(20)).await;
                 }
-            } => Err(McpHostError::Connect("MCP startup was cancelled".into())),
+            } => Err(StartupError::Host(McpHostError::Connect("MCP startup was cancelled".into()))),
         };
         match result {
             Ok(mut host) => {
@@ -295,8 +317,33 @@ impl McpHost {
                 Ok(host)
             }
             Err(error) => {
-                let _ = child.kill().await;
-                let _ = child.wait().await;
+                let exited = child.try_wait();
+                let observed_exit = exited.as_ref().is_ok_and(|status| status.is_some());
+                let cleanup = match exited {
+                    Ok(Some(_)) => None,
+                    Ok(None) => child.kill().await.err(),
+                    Err(error) => {
+                        let _ = child.kill().await;
+                        Some(error)
+                    }
+                };
+                let wait = child.wait().await;
+                // EOF alone may hide unavailable transport. A completed child
+                // exit establishes that this initialization attempt ended.
+                let observed_exit =
+                    observed_exit || wait.as_ref().is_ok_and(|status| status.code().is_some());
+                let error = match error {
+                    StartupError::Host(error) => error,
+                    StartupError::Closed(reason) if observed_exit => {
+                        McpHostError::Initialize(reason)
+                    }
+                    StartupError::Closed(reason) => McpHostError::Connect(reason),
+                };
+                if let Some(cleanup) = cleanup.or_else(|| wait.err()) {
+                    return Err(McpHostError::Connect(format!(
+                        "{error}; MCP startup cleanup failed: {cleanup}"
+                    )));
+                }
                 Err(error)
             }
         }

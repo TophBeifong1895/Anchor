@@ -79,11 +79,22 @@ cargo +stable test --manifest-path rust/Cargo.toml -p anchor-runner-host \
   --locked --no-fail-fast -- --ignored --test-threads=1
 ```
 
+需要记录采证前后 binary 身份时，先按最终执行范围预编译，再计算 SHA256：
+
+```sh
+cargo +stable test --manifest-path rust/Cargo.toml -p anchor-runner-host \
+  --locked --no-fail-fast --no-run -- --ignored --test-threads=1
+```
+
+workspace 与单包命令可能聚合不同的依赖特性，从而重新生成 Host 和 relay；
+上述预编译要放在 workspace 检查之后、冻结身份之前。采证期间不再执行会覆盖
+这些 binary 的构建；独跑与完整套件都复用冻结后的产物。
+
 普通 fixture helper 的 filtered 数不是忽略测试数；完整命令的 `--no-fail-fast`
 保证一个套件失败后仍采集后续套件。真实模型与外部服务不由本地 Provider
 结果代验。
 
-M3 分支当前完整 Host ignored 实际为 110 passed / 12 failed / 0 ignored，尚未通过；普通恢复契约冲突触发任务书 §8，另有预检错误映射、recovery 重入锁和旧目录夹具待修。逐项独立复跑与身份摘要见 [M3 停止交回](../experiments/constitution-host-preflight/m3/verification.md)。以下 G0/F2 是各自提交的历史基线，不能作为 M3 已通过的证据。
+M3 按 §10.15 完成恢复契约更正和回归修复：完整 Host ignored **122 / 0 / 0**，原 12 项失败逐项单独复跑各 **1 / 0 / 0**；workspace 2,153 / 0 / 125、Web 333 与构建、严格 Clippy/fmt 均通过。固定 Host/Goose/helper 前后身份一致，原 110 / 12 / 0 停止现场保留；见 [M3 最终交回](../experiments/constitution-host-preflight/m3/completion-verification.md)。真实模型 Provider 与外部实网未新增验收；S27 和是否合回 master 待用户审查。以下 G0/F2 是各自提交的历史基线。
 
 ## Goose 比较基线（G0，2026-10-19）
 

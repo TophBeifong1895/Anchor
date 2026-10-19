@@ -843,7 +843,44 @@ async fn session_recovery_native_persistence_failure_keeps_attempt_pending_witho
     );
     assert_eq!(record_bytes(&state, run), original_record);
     assert_eq!(metadata_bytes(&state, run), original_metadata);
-    assert_eq!(std::fs::read(fact_path).unwrap(), fact);
+    assert_eq!(std::fs::read(&fact_path).unwrap(), fact);
+    assert!(
+        state
+            .application
+            .read_run(run)
+            .unwrap()
+            .unwrap()
+            .has_pending_recovery()
+    );
+    assert!(state.application.active_runs(None).await.is_empty());
+
+    // The ordinary human API shares the same persistence ordering. Preparing
+    // its native port must query Run facts before recover_attempt takes the
+    // worker lock, so this failure returns rather than blocking on that lock.
+    let mut ordinary = state.application.metadata(run).unwrap().unwrap();
+    ordinary.session_call = None;
+    ordinary.conversation = None;
+    metadata::save(&state.data_root, &ordinary).unwrap();
+    let ordinary_metadata = metadata_bytes(&state, run);
+    let (status, failed) = call(
+        app.clone(),
+        "POST",
+        &format!("/runs/{run}/recovery"),
+        Some(
+            &json!({"node_id":"work","invocation":1,"attempt_id":attempt_id,
+            "decision":"completed","observation":"Inspect the existing effect"})
+            .to_string(),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{failed}");
+    assert!(
+        failed["error"].as_str().unwrap().contains("Is a directory"),
+        "{failed}"
+    );
+    assert_eq!(record_bytes(&state, run), original_record);
+    assert_eq!(metadata_bytes(&state, run), ordinary_metadata);
+    assert_eq!(std::fs::read(&fact_path).unwrap(), fact);
     assert!(
         state
             .application

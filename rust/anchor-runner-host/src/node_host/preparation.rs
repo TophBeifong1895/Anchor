@@ -91,7 +91,7 @@ impl HostIoResolver {
                 );
                 let plugins = self
                     .tools
-                    .assemble_with_sandbox(
+                    .assemble_with_sandbox_for_execution(
                         &mcp,
                         &mounted.bindings,
                         mounted.network,
@@ -264,7 +264,7 @@ impl HostIoResolver {
             )),
         )
         .await
-        .map_err(|error| ResolutionError::Graph(error.into_graph_error()))?;
+        .map_err(ResolutionError::from)?;
         self.validate_invocation_plugins(&admitted, request, &prepared.bindings)?;
         Ok((mounted, prepared))
     }

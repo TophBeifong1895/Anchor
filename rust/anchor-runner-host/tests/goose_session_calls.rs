@@ -955,11 +955,9 @@ fn native_goose_session_call_recovers_unknown_effect_by_inspection_without_repla
     server.kill();
     drop(server);
 
+    host.observe_native_recovery(&child, "worker", 1);
     let server = host.serve(&provider);
     assert_eq!(provider.requests().len(), 1);
-    // The first drive observes the interrupted native attempt and persists
-    // the Kernel stop, without starting a model request or repeating the tool.
-    execute(&server, &child, None);
     let mut pending = Value::Null;
     wait_until("Session call records its unresolved native attempt", || {
         let (status, detail) = server.request("GET", &format!("/runs/{child}"), None);
@@ -1001,7 +999,7 @@ fn native_goose_session_call_recovers_unknown_effect_by_inspection_without_repla
 
     let gate = Gate::new();
     provider.append(vec![
-        complete("verify").expect_request_contains("Its effect is unknown").gated(&gate),
+        complete("verify").expect_request_contains("Its external effect is unknown").gated(&gate),
         command(&format!("set -eu; test \"$(cat effects.txt)\" = once; test \"$(cat evidence.txt)\" = '{marker}'; printf inspected-once; cat evidence.txt"))
             .after("final_result.observed_receipt must match"),
         complete("verify").after("inspected-once"),
@@ -1021,7 +1019,7 @@ fn native_goose_session_call_recovers_unknown_effect_by_inspection_without_repla
         inspected["tool_observation"]["operator_decision"]["observation"]
             .as_str()
             .unwrap()
-            .contains("do not blindly repeat it")
+            .contains("do not blindly repeat the call")
     );
     gate.open();
     let completed = server.wait_status(&child, "completed");

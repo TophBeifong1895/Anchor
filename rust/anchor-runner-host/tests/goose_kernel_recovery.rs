@@ -10,8 +10,7 @@ use serde_json::json;
 
 #[test]
 #[ignore = "requires pinned real Goose binary and local Bubblewrap"]
-fn kernel_unknown_native_effect_requires_a_durable_human_decision_before_continuing_or_abandoning()
-{
+fn kernel_observed_native_effect_accepts_durable_completed_or_abort_without_replay() {
     for abort in [false, true] {
         let graph = json!({"objective":"Inspect an interrupted native tool effect", "entry":"worker",
             "agents":{"worker":{"model":"models.worker","instructions":"Inspect existing workspace facts before continuing. Never repeat an unknown effect. Finish with final_result route verify after a fresh tool observation."}},
@@ -42,9 +41,11 @@ fn kernel_unknown_native_effect_requires_a_durable_human_decision_before_continu
         assert!(before["tool_observation"]["result"].is_null());
         server.kill();
         drop(server);
+        // The scheduler may already have observed this attempt before the
+        // operator arrives. Prepare exactly that Code observation, rather than
+        // using an explicit resume (which authorizes Agent inspection).
+        host.observe_native_recovery(run, "worker", 1);
         let restarted = host.serve(&provider);
-        let (status, response) = restarted.request("POST", &format!("/runs/{run}/resume"), None);
-        assert_eq!(status, 202, "{response}");
         let mut waiting = serde_json::Value::Null;
         wait_until(
             "Kernel observes unresolved native effect without contacting the model",
@@ -60,12 +61,7 @@ fn kernel_unknown_native_effect_requires_a_durable_human_decision_before_continu
             },
         );
         assert_eq!(provider.requests().len(), 1);
-        assert_eq!(waiting["projection"]["actions"]["resume"], false);
-        let (status, _) = restarted.request("POST", &format!("/runs/{run}/resume"), None);
-        assert_eq!(
-            status, 409,
-            "ordinary resume must not release an unresolved attempt"
-        );
+        assert_eq!(waiting["projection"]["actions"]["resume"], true);
         let attempt = waiting["state"]["recovery"][0]["attempt"]["attempt_id"]
             .as_i64()
             .unwrap();

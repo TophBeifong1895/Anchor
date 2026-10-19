@@ -73,7 +73,10 @@ mod tests {
             assert!(!projection.actions.pause, "{id}");
             assert_eq!(
                 projection.actions.resume,
-                matches!(id, "executing" | "paused" | "stopped" | "budget"),
+                matches!(
+                    id,
+                    "executing" | "paused" | "stopped" | "budget" | "recovery"
+                ),
                 "{id}"
             );
             assert_eq!(projection.actions.stop, id == "executing", "{id}");

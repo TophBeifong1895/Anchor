@@ -74,7 +74,7 @@ async fn list_and_detail_share_status_control_and_attention_projection() {
             "waiting",
             Some("human"),
             None,
-            false,
+            true,
             false,
             true,
         ),

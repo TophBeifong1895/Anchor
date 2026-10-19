@@ -6,7 +6,7 @@
 
 业务围栏从 F0 的 224 降为 0，无新增运行时豁免。`RunView` 提供 Phase、worker、Host 更新时间、只读 Graph 进度与 frontier；私有 record 既不 Deref 也无 getter。生命周期仅来自 Kernel，GraphRunRecord 不再持有 status/cursor。历史 error/recovery 等残余字段留待 M4 清理，不能作为生命周期权威。原 16 save / 36 mutation 的逐项去向见 [C2 审计](../experiments/constitution-host-preflight/m3/c2-destinations.md)。
 
-所有新 Run 默认走 Kernel，`execution` 选择字段被拒绝。frontier 决定当前 invocation；未知效果 attempts/人工决定从已接受 Kernel history 投影，执行端口先追加核查说明，再 Human resume/abandon，不制造工具成功或模型完成。未结算时普通 resume 不释放 pending；显式 abandon 后保留观察而允许 Session 交接。并行分支 Op.call 仍由 Host 共用 `reject_snapshot` 准入拒绝，不改 GraphValidator。
+所有新 Run 默认走 Kernel，`execution` 选择字段被拒绝。frontier 决定当前 invocation；未知效果 attempts/决定从已接受 Kernel history 投影。普通显式 resume 与认证 Session-call 共用 `inspect_interrupted_attempts`：先发现原生 pending，由 `observe_recovery_attempts` 复用 Runtime 的 `observation_stop` 登记 Code + Observation stop，再逐项持久保存“先核查，不盲目重放”的提示，最后 Human release，Agent 在同一原生 Session 中核查后继续。pending 不隐藏普通 resume；后台自动恢复不调用该释放 helper，不自动重放。人工 Completed/Abort API 仍可供已知结果的直接裁定，不制造工具成功或模型完成；显式 abandon 后保留观察而允许 Session 交接。并行分支 Op.call 仍由 Host 共用 `reject_snapshot` 准入拒绝，不改 GraphValidator。
 
 唯一 worker 表属于 KernelRuns：同步登记后才返回触发结果，guard 在退出、abort 或未 poll future 丢弃时释放。abandon 同步结算并等待 worker 排空；stop 先提交停止再取消；pause 通过持久意图与事件在结果后的派发边界消费，无停止标志轮询。逐条规则和 Session 单写入者审计见 [M3 规则表](../experiments/constitution-host-preflight/m3/rules-session-audit.md)。
 
@@ -36,9 +36,11 @@
 | --- | --- | --- |
 | `admit` | `admission.rs` | 原准入校验、冻结 Graph/权限、元数据、保存与启动顺序 |
 | `admit_conversation`、`admit_assistant_run` | `conversations.rs`、`graph_policy.rs` | 原会话去重、前驱与助手范围、Graph/Run 租约与执行登记 |
-| `stop`、`pause`、`resume` | `control.rs`、`kernel_runs.rs` | 身份/Session 协调与宿主执行约束保留；生命周期由 Kernel 控制裁决 |
+| `stop`、`pause`、`resume` | `control.rs`、`kernel_runs.rs` | 身份/Session 协调与宿主执行约束保留；显式 resume 共用未知效果核查接续；生命周期由 Kernel 控制裁决 |
 | `finish_kernel_abandon` | `abandon.rs` | 先保存 abandon intent，再 Human abandon、取消并等待 worker；重启幂等收尾 |
-| `record_recovery_decision` | `recovery.rs`、`kernel_runs/recovery.rs` | 先持久化端口核查事实，再提交 Human 控制；多 pending、幂等、冲突与排空检查在门面内 |
+| `record_recovery_decision` | `recovery.rs`、`kernel_runs/recovery.rs` | 保留人工 Completed/Abort；`prepare_resume` 在 worker registry 锁外，保持验证与错误优先序；先持久化端口说明，再 Human 控制；多 pending、幂等、冲突与排空检查在门面内 |
+| `inspect_interrupted_attempts` | `recovery.rs` | 普通显式 resume 与认证 Session-call 的唯一核查接续；先发现/登记 native pending，逐项保存提示，再 Human release，继续同一原生 Session；后台不调用 |
+| `observe_recovery_attempts` | `kernel_runs/recovery.rs` | native pending 唯一登记；锁内校验当前 Agent InvocationKey、idle、去重与决定冲突；复用 Runtime `observation_stop`，不重写内核生命周期 |
 | `stop_session_call`、`yield_session_call`、`execute_session_call`、`settle_session_call` | `session_calls.rs` | Session 仲裁、交付、执行登记与写入先后不变 |
 | `release_parent_after_recorded_delivery`、`kernel_child_finished` | `dispatch.rs` | 先持久交付再释放父 Run，保留等待匹配及取消传播 |
 | `delete_cascaded_run`、`delete_inactive_run` | `graph_policy.rs` | 各自保留原前置条件；清理 owned data 后再删除 Run/元数据，Graph 级联继续持有 Graph 租约 |
@@ -123,4 +125,4 @@ master 的 [详情/abandon 字节回归](../rust/anchor-runner-host/src/applicat
 - F2 定向恢复/控制各 18 项、计划 22 项与删除 68 项通过，围栏为业务 0、运行时 197；workspace 实际 1,995/0/122，严格 workspace/all-target clippy、fmt、Web 306 及构建通过。该 workspace 命令在证据测试拆分前执行；拆分只增加 1 个默认忽略项，实际场景不变，后续编译、严格 clippy 与实际 Goose 回归均通过。Graph 级联删除归门面，计划投影委托同一终态权威，未知/控制中状态与非字符串字段保留旧行为。
 - 标准 Goose 入口 20 套、105/0/0，105 份场景证据全部通过严格校验；入口外补集另行串行执行 15/0/0，合计覆盖 120 项，没有残留失败，不声称一次完整 ignored 命令通过。原参数测试拆分使测试数比 G0 多 1，覆盖不变。最终命令、原始报告及此前中止/证据失败均保留在 [F2 证据](../.local/run-access-facade-20261019/f2/README.md)。未新增真实 Provider、生产数据、外部渠道或部署验收。
 
-M2 §10.12 的规则表以 `490c000` 为比较基线，见 [独立判断点清单](../experiments/constitution-host-preflight/m2/completion-measurement.md)。双路径并存会增加恢复门禁，不能用上游 36→13 的数字代表本轮收敛；M3 已完成默认切换和旧实现删除，Session 单写入者审计见 [当前规则表](../experiments/constitution-host-preflight/m3/rules-session-audit.md)。固定 Goose 尚有失败且恢复契约触发 §8，M3 未验收，见 [交回](../experiments/constitution-host-preflight/m3/verification.md)。
+M2 §10.12 的规则表以 `490c000` 为比较基线，见 [独立判断点清单](../experiments/constitution-host-preflight/m2/completion-measurement.md)。双路径并存会增加恢复门禁，不能用上游 36→13 的数字代表本轮收敛；M3 已完成默认切换和旧实现删除，Session 单写入者审计见 [当前规则表](../experiments/constitution-host-preflight/m3/rules-session-audit.md)。任务书 §10.15 的恢复契约更正与回归已完成，完整固定 Goose 122 / 0 / 0、原 12 项逐项独跑均通过；S27 与是否合回 master 待用户审查，见 [M3 交回](../experiments/constitution-host-preflight/m3/completion-verification.md)。

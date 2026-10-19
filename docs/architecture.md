@@ -36,19 +36,21 @@ Artifact、节点历史、工作区、Run / Session / Turn 事实
 | [anchor-devtools](../rust/anchor-devtools) | 确定性回归、候选构建、部署预检与切换盘点 |
 | [apps/web](../apps/web) | Graph 画布、Run 时间线、节点对话、Session 和产物投影 |
 
-GraphValidator 已支持并行分支内模块作用域：同一并行激活内共享模块首次从外部进入时计一次，后续激活重入递增，模块上限按首次终结事实结算。入口、成员 passes 与嵌套计数重置由纯校验逻辑决定；读取 frontier 不消费激活，也不增加持久化字段。该能力已通过内核用例与 5,000 个模块随机样本；Host 的 KernelScheduler 已接通多槽位并发，单个结果提交后即可补位，慢分支不形成波次屏障。串行 Op.call 复用共享调用准入、输入暂存与结果导出，父子 Run 都走 Kernel；宿主提交 Bound 后等待子 Run，观察结算后提交 resume 及 Completed/Failed/Uncertain。并行分支中的 Call 由两条路径共用的 Host 准入 `reject_snapshot` 具名拒绝，不扩展校验器，见 [M2 产品准入边界](../experiments/constitution-host-preflight/m2/parallel-call-boundary.md)。
+GraphValidator 已支持并行分支内模块作用域：同一并行激活内共享模块首次从外部进入时计一次，后续激活重入递增，模块上限按首次终结事实结算。入口、成员 passes 与嵌套计数重置由纯校验逻辑决定；读取 frontier 不消费激活，也不增加持久化字段。该能力已通过内核用例与 5,000 个模块随机样本；Host 的 KernelScheduler 已接通多槽位并发，单个结果提交后即可补位，慢分支不形成波次屏障。串行 Op.call 复用共享调用准入、输入暂存与结果导出，父子 Run 都走 Kernel；宿主提交 Bound 后等待子 Run，观察结算后提交 resume 及 Completed/Failed/Uncertain。并行分支中的 Call 由共用的 Host 准入 `reject_snapshot` 具名拒绝，不扩展校验器，见 [M2 产品准入边界](../experiments/constitution-host-preflight/m2/parallel-call-boundary.md)。
 
 所有新 Run（HTTP、渠道、助手、子调用与独立宿主）都通过 `application/run_access` 接入共享 `KernelScheduler<S: Store>`，不再按存储分派。`POST /trigger` 不接受 `execution` 选择字段。调度器读取 Kernel 相位与 GraphValidator 开放空位，经 NodeExecutionPort / ArtifactPort 并发执行并提交。Run 只存于 `<state>/kernel-runs` 的 Kernel FileStore（资源 ID `run/{run_id}`），由单个 Host writer 持有文件锁；旧 `<state>/runs/*.json` 只检查存在性并以 `legacy_run_record` 具名拒绝，不读取内容。GraphRunRecord format 14；旧格式（含 M2 format 13）不兼容，开发状态清理见 M3 交回。
 
 宿主Rust文件租约统一使用 `anchor-file-lease::FileLease`，保留各调用者的共享/独占、阻塞/非阻塞策略，Drop先显式解锁再关闭文件，提前返回与panic同样释放；避免fork继承的描述符延长父进程锁持有。
 
-Run 的 stop/resume/abandon 是 Human Request；内核接受 stop/abandon 后才取消执行，在跑结果可被 TaskWaiting / TaskSettled 拒绝并留在历史。节点失败由 Code Settle，成功 Work 由 Agent Write，成本只从宿主观察经 submit 参数盖章，StaleVersion 重试不重复收费。Uncertain / WaitingRecovery 以 Code + Observation stop 等待人核查，不自动重放。重启读取相位、开放空位和端口 completion_fact，以同 invocation 恢复；没有第二份恢复游标。执行错误保留 Kernel 事实；孤立执行显示为 Executing、active=false。唯一 worker 表在 KernelRuns 中，派发前同步登记，退出或未启动任务被丢弃时释放。Host 的只读 RunView 包含 Phase、Graph 进度、frontier、worker 和 updated 观察，动作由共享相位派生，Session/身份与未知效果条件进一步收窄，不再保留旧状态映射。pause 是 Executing 且有 worker 才可用的宿主调度意图：持久保存后通过事件交给派发边界，当前节点结果与成本先提交，再以 Human stop、reason=paused 等待；不取消当前节点。重启先恢复端口已有完成事实，再消费意图；最后节点已结算时保留结算。意图消费、控制接受和清理共用宿主锁，不新增 Kernel 状态或执行标志轮询。空闲 wait_input 使用每 worker 的 Notify 接收同一 pause 事件并返回 Suspended，再由调度边界提交 stop；模型或工具工作不被该事件取消。更新时间来自独立的`<state>/kernel-run-observations/{run_id}.json`：创建及接受提交后由宿主记录，不读取Kernel文件布局或mtime，不用于控制、权限或恢复；观察故障不撤销接受事实或阻断控制，无观察时对外 updated 为 null。
+Run 的 stop/resume/abandon 是 Human Request；内核接受 stop/abandon 后才取消执行，在跑结果可被 TaskWaiting / TaskSettled 拒绝并留在历史。节点失败由 Code Settle，成功 Work 由 Agent Write，成本只从宿主观察经 submit 参数盖章，StaleVersion 重试不重复收费。Uncertain / WaitingRecovery 以 Code + Observation stop 保存未知效果；后台自动恢复不释放等待、不自动重放，人的显式 resume 允许 Agent 核查后继续。重启读取相位、开放空位和端口 completion_fact，以同 invocation 恢复；没有第二份恢复游标。执行错误保留 Kernel 事实；孤立执行显示为 Executing、active=false。唯一 worker 表在 KernelRuns 中，派发前同步登记，退出或未启动任务被丢弃时释放。Host 的只读 RunView 包含 Phase、Graph 进度、frontier、worker 和 updated 观察，动作由共享相位派生，Session/身份条件进一步收窄；pending 未知效果不隐藏普通 resume，不再保留旧状态映射。pause 是 Executing 且有 worker 才可用的宿主调度意图：持久保存后通过事件交给派发边界，当前节点结果与成本先提交，再以 Human stop、reason=paused 等待；不取消当前节点。重启先恢复端口已有完成事实，再消费意图；最后节点已结算时保留结算。意图消费、控制接受和清理共用宿主锁，不新增 Kernel 状态或执行标志轮询。空闲 wait_input 使用每 worker 的 Notify 接收同一 pause 事件并返回 Suspended，再由调度边界提交 stop；模型或工具工作不被该事件取消。更新时间来自独立的`<state>/kernel-run-observations/{run_id}.json`：创建及接受提交后由宿主记录，不读取Kernel文件布局或mtime，不用于控制、权限或恢复；观察故障不撤销接受事实或阻断控制，无观察时对外 updated 为 null。
 
 Kernel Run/Graph 删除经 run_access 门面，在宿主锁内复查相位、worker 与原有 Session/引用约束，再调用 FileStore::remove；存储通过 rename 到 `.deleting-<encode(id)>`、同步父目录、递归删除、再次同步完成删除，读取幂等清理中断现场。Store trait 和 MemoryStore 不增加删除，独立资源锁文件保留。Kernel Probe 接口的测量点投影到 `<state>/kernel-probe/points.jsonl`，启动从保留的 Graph history 重建；投影故障只诊断，不影响裁决和控制，也不提供新的对外 API。
 
 唯一执行路径支持 Work、fanout/join、并行模块、串行 Op.call、宿主操作、常驻助手与 Run/Graph 删除。助手绑定、活动节点和 HTTP trace 的 invocation 从 GraphValidator frontier 只读派生，不另存游标。Yielded 冻结 Interruption 产物后由 Code Write 提交，预算耗尽由 Code + Observation stop 等待人恢复，Interrupted 保留原因，Aborted 对应人放弃，Cancelled/Suspended 排空退出。HTTP 准入预算仍用 `u64::MAX`；有限预算与端口结果由 fixture 验证，W4 未裁定。旧执行器已删除，30,000 例旧侧事实与轨迹的冻结对照见 [快照基线](../experiments/constitution-host-preflight/m3/snapshots/README.md)。
 
-Kernel 的未知效果恢复决定经 `record_recovery_decision` 门面实现。pending attempts 与人的决定从已接受 Kernel history 投影；原生 Goose 使用现有 invocation fact 的 `tool_observation`，未完成且 result 为 null 时，在重新派发前停下等待核查，不联系模型或重放工具。attempt ID 取 invocation、工具、参数和原生 tool call 身份的 SHA256 前 63 bit（最小 1）；step=0 表示没有旧 Harness step 序号，旧观察无时间时显示 unknown。人工说明先持久追加到原观察的 `operator_decision`，再 Human resume 或 abandon；不把未知工具结果写成成功，不制造模型 NodeCompletion，不修改 Goose history。相同决定幂等、冲突拒绝；有多个 pending 时逐项核查后才释放，普通 resume 不释放未核查效果。
+Kernel 的未知效果 attempts 与决定从已接受 Kernel history 投影；原生 Goose 使用现有 invocation fact 的 `tool_observation`，未完成且 result 为 null 时形成待核查事实。attempt ID 取 invocation、工具、参数和原生 tool call 身份的 SHA256 前 63 bit（最小 1）；step=0 表示没有旧 Harness step 序号，旧观察无时间时显示 unknown。人的显式 resume 与认证 Session-call 共用 `inspect_interrupted_attempts`：先发现原生 pending，经唯一 `observe_recovery_attempts` 复用 Runtime 的 `observation_stop` 提交 Code + Observation stop，再逐项将“先核查现场，不盲目重放”的提示持久追加到原观察的 `operator_decision`，最后提交 Human release，让 Agent 在同一原生 Session 中核查后继续。提示不代表未知工具已经成功，不伪造既有工具结果或模型 NodeCompletion；后台自动恢复不调用该释放 helper。
+
+人工 Completed/Abort 决定 API 经 `record_recovery_decision` 保留，供人已知结果时直接裁定；先持久保存人工说明，再 Human resume 或 abandon。`prepare_resume` 在 worker registry 锁外执行，保留原验证与错误优先序；相同决定幂等、不同决定冲突，多 pending 逐项保存决定后才释放，Abort 保留原观察并结算放弃。
 
 Goose 拥有 Agent loop、Provider、原生会话与 compaction；Anchor 拥有 Graph/Run、宿主授权、Artifact 和平台 Session/Turn。工具记录、API 与 UI 都围绕相同身份，UI 缓存不能成为第二份运行事实。
 
@@ -63,7 +65,7 @@ Host 托管的模型配置将公开字段、用于恢复的旧绑定和按槽/�
 | 实现入口 | 内部边界 |
 | --- | --- |
 | [Graph Host](../rust/anchor-graph-host/src/lib.rs) | bundle、Graph/Plugin catalog、资源校验、MCP 声明、授权摘要和 Graph Call；公共契约仍由 crate 根导出 |
-| [RunApplication](../rust/anchor-runner-host/src/application.rs) | 接纳、查询、删除、控制、恢复和执行登记；共用同一个 active registry、RunStore 与原有锁顺序 |
+| [RunApplication](../rust/anchor-runner-host/src/application.rs) | 接纳、查询、删除、控制、恢复和执行登记；共用同一个 active registry、Kernel 存储与宿主锁顺序 |
 | [Node Host](../rust/anchor-runner-host/src/node_host.rs) | 输入、挂载选择、工具准备、现场事实和节点执行；部署注入 Pilot 身份，执行授权不依赖 HTTP 入口 |
 | [Web App](../apps/web/src/App.tsx) | 根组件负责导航；编辑 hook 拥有草稿与撤销，工作台 hook 拥有可丢弃的 Host 投影，Run 详情按页面订阅；Pilot 草稿 hook 只拥有未发送文本和附件 |
 
@@ -139,7 +141,7 @@ AgentNode 通过授权完成工具提交 `summary` 和可选 `route`；普通回
 
 完成校验通过后冻结候选：相同提交幂等，冲突提交和后续业务调用被拒绝，不撤销候选。仅 AgentNode 启用固定 Goose 的外部完成工具边界：成功后先保存完整原生请求/结果，再结束本轮，不再请求模型。Host 仍须取得正常结束、完成清理并核验取消，之后才保存完成事实并交给 Runner 提交产物；内存候选不等于持久完成。用户取消、断连或原生历史保存失败不转成成功。该边界由 [固定补丁](../scripts/patches/README.md) 实现，Pilot 保持原生文本结束行为。工具效果发生但结果缺失时保存观察，由 Agent 在原生会话中核查 workspace、Artifact 和业务状态；工具不会自动重放，外部副作用不承诺 exactly-once。
 
-Run 的暂停/停止请求与节点已收束是不同事实。恢复保留 Graph cursor、invocation、原生 Session 和中断记录；重启不会自动执行未结算业务或确认。旧执行器记录保留旧身份，可识别和拒绝冒充 Goose 游标；清理源码不迁移旧数据。
+Run 的暂停/停止请求与节点已收束是不同事实。恢复保留 Graph 进度、invocation、原生 Session 和中断记录；重启不会自动执行未结算业务或确认。旧执行器记录保留旧身份，可识别和拒绝冒充 Goose 游标；清理源码不迁移旧数据。
 
 Host 对外 trace 投影 ACP 消息、工具观察和媒体，支持增量读取与重开节点。该投影用于观察，不代替 Goose 原生历史。真实模型、vision 与长会话效果必须分别验收。
 

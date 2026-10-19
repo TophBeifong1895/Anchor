@@ -5,7 +5,7 @@ use anchor_graph_host::{GraphCatalog, LoadedGraphBundle};
 use anchor_runtime::graph::{CallIdentity, PluginBinding};
 use anchor_runtime::graph::{
     FileRunLeaseProvider, GraphError, GraphRunRecord, GraphSnapshot, InvocationKey,
-    NodeExecutionPort, RecoveryDecision,
+    NodeExecutionPort, PendingRecovery, RecoveryDecision,
 };
 use sha2::Digest;
 use std::collections::BTreeMap;
@@ -277,6 +277,34 @@ impl PreparedExecution {
         self.nodes
             .record_recovery_decision(key, attempt_id, decision)
             .map_err(|error| error.to_string())
+    }
+
+    /// Read native pending effects only. This never loads a Session or starts
+    /// an executor; spike completion facts retain their own failure boundary.
+    pub(crate) fn pending_recovery(
+        &self,
+        run_id: &str,
+    ) -> Result<Vec<PendingRecovery>, GraphError> {
+        if crate::goose_acp::runtime_mode() != "goose" {
+            return Ok(Vec::new());
+        }
+        let Some(nodes) = &self.nodes.goose_nodes else {
+            return Ok(Vec::new());
+        };
+        let mut pending = Vec::new();
+        for key in self
+            .run_application()
+            .dispatch_keys(run_id)
+            .map_err(|error| GraphError::CorruptRun(format!("recovery frontier: {error:?}")))?
+        {
+            for attempt in nodes.pending_recovery(&key)? {
+                pending.push(PendingRecovery {
+                    key: key.clone(),
+                    attempt,
+                });
+            }
+        }
+        Ok(pending)
     }
 }
 

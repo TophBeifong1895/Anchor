@@ -7,7 +7,7 @@
 ## 当前事实入口
 
 - `application/run_access/kernel_runs.rs:131` 的 `KernelRuns::create` 是准入入口，调用 `Kernel::create(run_resource(...))`；准入后的相位只由 `Kernel::submit` 接受的提交改变。
-- 同文件 `KernelRuns::control` 提交 Human Request；`kernel_runs/recovery.rs:75` 的 `recover_attempt` 先经执行端口持久化人工观察，再提交 Human Request，不回写整份 Graph 记录。
+- 同文件 `KernelRuns::control` 提交 Human Request；`kernel_runs/recovery.rs` 的 `recover_attempt` 先经执行端口持久化人工说明或核查提示，再提交 Human Request，不回写整份 Graph 记录。
 - `anchor-runtime/src/graph/scheduler/execution.rs` 把执行观察映射为 Work、Code Settle 或 Code Request；故障不能由 Host 直接制造第二份 Run phase。
 - `run_access/reads.rs:74` 的 `read_run` 可以在临时返回值中填充 `recovery/recovery_submissions`，来源是已接受 Kernel history；该值没有保存路径。它不是恢复事实的第二个持久写入者。
 - `run_access/run_observations.rs:48` 只保存 Host 的 `updated` 观察。它不参与生命周期、授权、恢复判定；历史 `touch()` 不再改写 GraphRunRecord。
@@ -23,8 +23,8 @@
 | S03 | `application/conversations.rs:855` | `application/run_access/conversations.rs:466`，`admit_conversation → KernelRuns::create`；附件与对话身份 metadata 保持各自所有权。 |
 | S04 | `application/session_calls.rs:184` | `application/run_access/session_calls.rs:65`，`stop_session_call → KernelRuns::control("stop")`；Session delivery 的 failed 单独写 metadata，不写 Run phase。 |
 | S05 | `application/session_calls.rs:211` | 同文件 `yield_session_call:80 → control("stop")`；保留协调等待，不保存 Stopped 字段。 |
-| S06 | `application/session_calls.rs:392` | 同文件 `execute_session_call:92`；读取权威视图并验证 Session 身份，需要时提交 resume，然后 `spawn_kernel`；不清空或伪造完成未知工具观察。 |
-| S07 | `application/recovery.rs:139` | `application/run_access/kernel_runs/recovery.rs:75`，`recover_attempt` 的 Abort → Human abandon；Kernel 结算，执行端口保管工具观察。 |
+| S06 | `application/session_calls.rs:392` | 同文件 `execute_session_call`；读取权威视图并验证 Session 身份，复用 `inspect_interrupted_attempts` 登记原生 pending、持久化核查提示并提交 Human release，然后 `spawn_kernel`；不清空或伪造完成未知工具观察。 |
+| S07 | `application/recovery.rs:139` | `application/run_access/kernel_runs/recovery.rs`，`recover_attempt` 的 Abort → Human abandon；Kernel 结算，执行端口保管工具观察。 |
 | S08 | `application/recovery.rs:145` | 同一 `recover_attempt`，尚有其他 pending → Human stop；未解决项由 history 派生，不保存 WaitingRecovery 副本。 |
 | S09 | `application/recovery.rs:150` | 同一 `recover_attempt`，最后一项观察持久化后 → Human resume；`application/run_access/recovery.rs:5` 根据返回值启动同一 Run。 |
 | S10 | `application/control.rs:126` | `application/run_access/control.rs:48` 的 `control_expected`，先提交父 stop，再处理 wait 子闭包。 |
@@ -48,8 +48,8 @@
 | M07 | 同文件 `:813`，`plugin_bindings_initialized = true` | 同一纯构造器；附件身份与授权仍先冻结。 |
 | M08 | `application/session_calls.rs:183`，`status = Stopped` | `run_access/session_calls.rs:65`，Human stop 提交。 |
 | M09 | 同文件 `:210`，`status = Stopped` | 同文件 `yield_session_call:80`，Human stop 提交。 |
-| M10 | 同文件 `:369`，`mem::take(recovery)` | 删除 mem::take；Session continuation 经既有 recover_attempt 逐项持久化核查观察并提交，history 投影只读，不靠取空集合表示解决。 |
-| M11 | 同文件 `:385`，`recovery_submissions.push` | 删除直接 push。认证 Session 协调保留原未知效果核查提示，由执行端口与 recover_attempt 依次持久化、提交；提示不冒充工具成功，不自动重放。 |
+| M10 | 同文件 `:369`，`mem::take(recovery)` | 删除 mem::take；Session continuation 与普通显式 resume 共用 inspect_interrupted_attempts，经既有 recover_attempt 逐项持久化核查提示并提交，history 投影只读，不靠取空集合表示解决。 |
+| M11 | 同文件 `:385`，`recovery_submissions.push` | 删除直接 push。认证 Session 协调与普通显式 resume 共用核查提示，由执行端口与 recover_attempt 依次持久化、提交；提示不冒充工具成功，不自动重放。 |
 | M12 | 同文件 `:391`，`status = Running` | `execute_session_call` 在 Session 门禁后提交 resume，驱动注册不写 phase。 |
 | M13 | `application/recovery.rs:123`，`recovery_submissions.push` | `kernel_runs/recovery.rs:141` 的 Human Request content 保存 `RecoverySubmission`，已接受 history 为权威来源。 |
 | M14 | 同文件 `:130`，`recovery.retain` | 同文件 `recovery_facts:11` 从 pending observations 减去已接受 decisions；只读派生。 |

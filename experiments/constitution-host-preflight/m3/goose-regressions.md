@@ -1,5 +1,7 @@
 # M3 固定 Goose：未关闭回归
 
+> 历史现场：本文保留 §8 停止时的 110 / 12 / 0 与原独跑失败。§10.15 已裁定并完成修复，当前 M3 结果为完整固定 Goose 122 / 0 / 0、原 12 项各自独跑通过，见 [§10.15 交回](completion-verification.md)。下文不是当前未关闭待办。
+
 当前源提交 `b61c325`，完整 Host ignored 首轮 **110 passed / 12 failed / 0 ignored**，41 targets、7 个失败 target，退出码 101。完整命令逐套串行，每套单线程；原样结果与日志摘要见 [checks.json](checks.json)。全部 122 项实际执行，不把普通测试的 ignored 数当作已通过。
 
 按任务书 §10.14，12 项随后使用首轮的原测试二进制逐项 `--ignored --exact --test-threads=1` 独立复跑。12 项逐项独立复跑全部再次失败，各为 0 passed / 1 failed / 0 ignored，均退出 101；与首轮相同失败点，确认不是仅由并发负载触发。完整逐项结果见 checks.json。未重建或替换 Host/Goose/helper，身份见 [binary-identities.json](binary-identities.json)。原始日志和失败 fixture 留在本机 `/tmp/anchor-m3/` 及各测试输出的位置，不入库。

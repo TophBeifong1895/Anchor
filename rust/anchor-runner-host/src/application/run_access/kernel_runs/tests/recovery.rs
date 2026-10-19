@@ -36,7 +36,7 @@ async fn recovery_persists_effect_fact_before_human_release_and_never_dispatches
     };
     let view = application.read_run(&record.run_id).unwrap().unwrap();
     assert!(view.has_pending_recovery());
-    assert!(!view.can_resume());
+    assert!(view.can_resume());
     assert!(!view.is_settled());
     assert_eq!(
         application

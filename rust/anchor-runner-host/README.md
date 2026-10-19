@@ -1,7 +1,7 @@
 # Anchor Rust Host
 
 The platform and standalone entry points use the same `anchor-runtime`
-GraphRunner. AgentNode and Pilot execute through pinned Goose ACP; OpNode uses
+KernelScheduler. AgentNode and Pilot execute through pinned Goose ACP; OpNode uses
 the authorized Bubblewrap sandbox. The Host owns admission, Graph/Run control,
 Library bindings, Artifacts, platform Sessions/Turns, scheduling and channels.
 

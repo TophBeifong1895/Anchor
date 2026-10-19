@@ -2,7 +2,7 @@
 
 编制：2026-10-19。决定：用户选择全量迁移（见工作记录"R2 审查结论"）。目标是**统一定律、崩溃与计费正确、删除旧 Runner**，不是让 Host 变小。起点：`d915314`（R2 停止现场）。
 
-**当前状态（2026-10-20）**：M1、M1.5、M2 已验收。M3 已先提交 30,000 例旧侧快照及双对照，再切换全部入口到 Kernel 并删除旧执行器与旧类型；C2 16 save / 36 mutation 已逐项清零。结束同步 master 后 workspace 2,153 / 0 / 125、Web 333 及构建通过；固定 Goose 完整首轮 110 / 12 / 0，未达零失败。普通 Run 恢复业务断言冲突触发 §8，M3 未完成，见 [交回与未关闭门槛](../experiments/constitution-host-preflight/m3/verification.md)。M4/M5 不自动推进。以下 M1.5 要求作为历史审查口径保留，后续覆盖以 §10.10–§10.12 为准：
+**当前状态（2026-10-20）**：M1、M1.5、M2 已验收。M3 实现与回归完成：30,000 例旧侧快照先提交，再统一 Kernel 并删除旧执行器；C2 save 16→0、mutation 36→0。§10.15 恢复回到 master 契约，workspace 2,153 / 0 / 125、Web 333 及构建、完整固定 Goose 122 / 0 / 0、原 12 项逐项独跑均通过；见 [M3 交回](../experiments/constitution-host-preflight/m3/completion-verification.md)。S27（承接 S4）待用户审查，是否合回 master 由用户决定；M4/M5 不自动推进。以下 M1.5 要求作为历史审查口径保留，后续覆盖以 §10.10–§10.15 为准：
 
 1. 按 §10.2 合并 `master`，冲突逐文件登记；合并后 workspace 与 Web 全绿。
 2. 按 §10.3 用 master 的 Goose 锁定版本跑全部 Goose 忽略测试，原样贴出结果。**注意**：master 目前的 Goose 基线本身就是坏的（extensions/add 返回 -32603，由 master 的 G0 任务处理，见 `/home/mansteinl/Anchor/docs/goose-baseline-task.md`）。G0 修复之前，门槛改为"相对 master 基线没有新增失败"。master 侧基线**优先使用 G0 交回的失败名单**；如果 G0 还没交回，就用临时干净 worktree 在本次合并的那个 master 提交上跑，例如 `git worktree add /tmp/master-base <提交>`，用完删除。**不得**在 `/home/mansteinl/Anchor` 上跑基线，因为那里有其他 agent 正在修改。Goose 套件不要和 G0 同时跑：G0 正在跑时，先完成合并和规则表，Goose 对照放到最后。M1 时分支锁定的是旧摘要，本机没有对应二进制，所以不能执行；合并后不再适用这个理由。
@@ -13,7 +13,7 @@ S19–S24、S26 已由用户批准（2026-10-19）。M3 的前置条件见 §10.
 
 本文取代上位计划 H3–H6 的阶段划分；上位计划的约束 C1–C6、§2.1 调度器、§2.2 执行者语义仍然有效。
 
-当前进度（2026-10-20）：M3 主体已提交，完整固定 Goose 验收失败，恢复契约待用户裁定；按 §8 停止交回。S19–S24、S26 已批准，S25 作废；W4、真实模型 Provider 和部署未验。按 §10.13 不提供旧 Run 迁移工具，交回提供本地开发状态清理范围。
+当前进度（2026-10-20）：M3 实现与固定 Goose 零失败门槛已完成，待用户审查 S27 并决定合回 master。S19–S24、S26 已批准，S25 作废；W4、真实模型 Provider 和部署未验。按 §10.13 不提供旧 Run 迁移工具，交回提供本地开发状态清理范围。
 
 ## 0. 工作方式（先读）
 
@@ -383,3 +383,36 @@ master 上另有 agent 在改 Web、`api.rs`、`main.rs`、`goose_acp/pilot.rs`�
 1. **使用独立的构建目录。** 两份 `runtime-contract-tests.md` 的标准命令都把 `CARGO_TARGET_DIR` 设成了 `/tmp/anchor-goose-regression-target`。两个 worktree 共用这个目录时，一方的构建会覆盖另一方正在使用的 Host 二进制、测试二进制和 relay，导致 Goose 结果不可信。本分支一律改用 `CARGO_TARGET_DIR=/tmp/anchor-goose-regression-target-core`，`ANCHOR_GOOSE_RELAY_BINARY` 也指向这个目录下的 relay。交回报告中写明实际使用的目录。
 2. **M3 期间不合并 master**，到 M3 结束时再按 §10.2 合并一次。预计冲突集中在 `run_access/reads.rs` 和 `main.rs`。解决原则：业务行为以 master 为准，运行时实现以本分支为准。master 新写的代码如果用到了被删除的旧类型，在合并时改为调用门面，并逐条登记。
 3. **负载抖动**：在并发负载下出现的失败，必须单独复跑确认后才能定性。只有单独复跑也失败的，才算真失败。
+
+### 10.15 M3 停止交回的裁定（2026-10-20，与前文冲突时以本节为准）
+
+**结构核对通过（审查方只做了 git 层面的检查，没有重跑测试）：**
+
+- 内核从 `0859373` 起零改动；
+- 旧类型 `GraphRunner|RunStatus|FileRunStore|stop_requested|pause_requested` 在 `rust/` 下零命中；
+- 快照提交 `0d029eb` 在删除提交 `6e91e5c` 之前。
+
+**1. 普通 resume 的恢复契约：选项 1，由 Agent 核查后继续。**
+
+- 理由：
+  - 这是 master 现行的产品行为，也是 `AGENTS.md` 的长期原则：先保存事实，再由 Agent 核查现场后继续，不把内部 attempt 包装成用户审批。
+  - 宪法第二条禁止的是**自动重放**，不禁止 Agent 核查。人的显式 resume 本身就是人的决定。Agent 在同一个原生 Session 中核查现场，而不是重新执行，这符合"未知不重放"。
+  - "第一次 resume 只停驻"这个行为从来没有在 master 上出现过。它是 M2 时把任务书里"未知效果的人工决定"理解成了"普通 resume 必须先停驻"造成的，属于审查方任务书措辞的问题，不是产品决定。
+- 做法：
+  - 人工 Completed/Abort 决定 API 保留，作为另一条路径：人已经知道结果时直接裁定。它的不重放、幂等、冲突、Abort 断言全部保留。
+  - M2 的 `kernel_unknown_native_effect_requires_a_durable_human_decision_before_continuing_or_abandoning` 改为按选项 1 的准备方式进入已登记的 pending 状态。原有的人工 API 断言不得删减。测试名如果不再符合实际行为，就改名。
+  - 在工作记录中登记为"M2 行为更正：恢复回到 master 契约"，并逐条列出测试的准备方式改了什么、断言保留了哪些。这一项不算新的 S 候选，因为结果是对齐 master，用户看不到语义变化。
+
+**2. 其余 Goose 失败：按 `m3/goose-regressions.md` 中各组的"建议边界"修复。** 约束如下：
+
+- 不全局改变 `Uncertain` 的映射；
+- spike 只在它自己的 `completion_fact` 边缘映射到已有的 Failed，保持 fail-closed，不能写成可以安全恢复；
+- 不重放未知效果，不放宽业务断言，不改内核。
+
+如果某一组只有改业务断言或改内核才能修好，就停下交回，只交那一组，其余各组继续修。
+
+**3. 门槛**：固定 Goose 的完整忽略测试必须 0 失败。本轮失败过的 12 项，每一项都要单独复跑一次并贴出结果。
+
+**4. S27** 在 M3 交回时一并审查。它实际上回答了待决的 S4（退役之后还能不能 abandon），需要用户同时裁定。
+
+**5.** M3 通过之后，由用户决定是否把分支合入 master。

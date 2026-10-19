@@ -309,18 +309,21 @@ pub(crate) fn snapshot_locked(
     data: &Path,
     owner: &str,
     definition: &PluginDefinition,
-) -> Result<ConfigurationSnapshot, String> {
+) -> Result<ConfigurationSnapshot, crate::tool_host::PreparationError> {
+    use crate::tool_host::PreparationError;
     let fact = read(data, owner, definition)?;
     let fields = resolve_fields(definition, &fact)?;
     for (id, field) in &fields {
         if field.state == "stale" {
-            return Err("Plugin configuration authorization changed; configure it again".into());
+            return Err(PreparationError::KnownFailure(
+                "Plugin configuration authorization changed; configure it again".into(),
+            ));
         }
         if definition.configuration.fields[id].required && field.value.is_none() {
-            return Err(
+            return Err(PreparationError::KnownFailure(
                 "required Plugin configuration is missing; configure the Plugin in the Web UI"
                     .into(),
-            );
+            ));
         }
     }
     let environments = definition
@@ -395,7 +398,7 @@ pub(crate) fn snapshot(
     definition: &PluginDefinition,
 ) -> Result<ConfigurationSnapshot, String> {
     let _lease = crate::credential_store::lease(data)?;
-    snapshot_locked(data, owner, definition)
+    snapshot_locked(data, owner, definition).map_err(|error| error.to_string())
 }
 
 fn write_locked(

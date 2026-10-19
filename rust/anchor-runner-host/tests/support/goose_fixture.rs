@@ -1243,6 +1243,74 @@ impl Host {
         crate::fixture::read_json(fact.with_extension("json"))
     }
 
+    /// Prepare an already observed pending attempt while the Host is down.
+    /// This submits only the scheduler's actual Code observation; it does not
+    /// grant a human resume or manufacture a tool/completion fact.
+    pub fn observe_native_recovery(&self, run: &str, node: &str, invocation: u64) {
+        use anchor_kernel::{Action, Authority, FileStore, Kernel, Principal, PrincipalKind};
+        use anchor_runtime::graph::{
+            InvocationKey, RecoveryAttempt,
+            scheduler::{HOST_ID, observation_stop},
+            validator::{GRAPH_VALIDATOR, GraphValidator, run_resource_id},
+        };
+        struct ObservationAuthority;
+        impl Authority for ObservationAuthority {
+            fn permits(&self, principal: &Principal, action: Action, _: &str) -> bool {
+                principal.id == HOST_ID
+                    && principal.kind == PrincipalKind::Code
+                    && action == Action::Request
+            }
+        }
+        let fact = self.native_fact(run, node, invocation);
+        assert!(fact["completion"].is_null());
+        let observation = &fact["tool_observation"];
+        assert!(observation["result"].is_null());
+        assert!(observation.get("operator_decision").is_none());
+        let key: InvocationKey = serde_json::from_value(fact["key"].clone()).unwrap();
+        let tool = observation["tool"].as_str().unwrap();
+        let identity = serde_json::to_vec(&(
+            &key,
+            tool,
+            &observation["arguments"],
+            &observation["native_tool_call"],
+        ))
+        .unwrap();
+        let digest = Sha256::digest(identity);
+        let attempt_id =
+            (u64::from_be_bytes(digest[..8].try_into().unwrap()) & i64::MAX as u64).max(1) as i64;
+        let attempts = vec![RecoveryAttempt {
+            attempt_id,
+            step: 0,
+            tool: tool.into(),
+            started_at: observation["started_at"]
+                .as_str()
+                .unwrap_or("unknown")
+                .into(),
+        }];
+        let mut kernel = Kernel::new(
+            FileStore::new(self.base.state_root().join("kernel-runs")).unwrap(),
+            Box::new(ObservationAuthority),
+        )
+        .unwrap();
+        kernel
+            .install(GRAPH_VALIDATOR, Arc::new(GraphValidator))
+            .unwrap();
+        let resource = kernel.load(&run_resource_id(run)).unwrap().unwrap();
+        let (principal, cost, submission) = observation_stop(
+            &resource,
+            &key,
+            "unknown external tool effects".into(),
+            serde_json::to_value(attempts).unwrap(),
+        );
+        assert!(
+            kernel
+                .submit(&principal, cost, submission)
+                .unwrap()
+                .is_accepted()
+        );
+        assert_eq!(self.native_fact(run, node, invocation), fact);
+    }
+
     pub fn native_conversation(&self, run: &str, node: &str, invocation: u64) -> Value {
         let (fact, process) = self.invocation_paths(run, node, invocation);
         let fact = crate::fixture::read_json(fact.with_extension("json"));

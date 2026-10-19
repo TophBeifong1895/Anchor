@@ -1,0 +1,116 @@
+{
+  "build_directory": "/tmp/anchor-goose-regression-target-core",
+  "before": [
+    {
+      "path": "/tmp/anchor-goose-regression-target-core/debug/anchor-runner-host",
+      "bytes": 400915224,
+      "sha256": "fba2f31930d4b2bb98350b485d06c2c459edb1993435e423ffc359796ba7ecec"
+    },
+    {
+      "path": "/tmp/anchor-goose-regression-target-core/debug/anchor-net-relay",
+      "bytes": 17074064,
+      "sha256": "a1d153a836af54decf15d1d9575539dc22e43024abf09a73cc11a002c64c00b0"
+    },
+    {
+      "path": "/tmp/anchor-goose-regression-target-core/debug/anchor-sandbox-network",
+      "bytes": 18157664,
+      "sha256": "3bca12462e6d29ea339574cfb0dccd8c4b51bab930c4eff8159a4d1fdc822376"
+    },
+    {
+      "path": "/tmp/anchor-goose-regression-target-core/debug/anchor-wecom-tools",
+      "bytes": 107281952,
+      "sha256": "b5b86e8e743eaf6f1f67cc2c0a94faa8922170cde4c51fd2cdc3517929f50d74"
+    },
+    {
+      "path": "/tmp/anchor-goose-regression-target-core/debug/anchor-docmost-tools",
+      "bytes": 107820208,
+      "sha256": "f18c5d5f78a720d950dffba430b71e8c170bbad7ad29675af2e881d7402dccd4"
+    },
+    {
+      "path": "/tmp/anchor-goose-regression-target-core/debug/examples/http_fixture",
+      "bytes": 102625824,
+      "sha256": "4d70e47d4061c81cb5d6b8bdaef0511da0ec320992406d7e108150a8284e39ad"
+    },
+    {
+      "path": "/var/tmp/anchor-goose-build/artifacts/goose-acp.first",
+      "bytes": 23860728,
+      "sha256": "17e065a79cb0508413af714724aed51d6b76972dda9feebdda701330134fb640"
+    }
+  ],
+  "after_solo": [
+    {
+      "path": "/tmp/anchor-goose-regression-target-core/debug/anchor-runner-host",
+      "bytes": 400915224,
+      "sha256": "fba2f31930d4b2bb98350b485d06c2c459edb1993435e423ffc359796ba7ecec"
+    },
+    {
+      "path": "/tmp/anchor-goose-regression-target-core/debug/anchor-net-relay",
+      "bytes": 17074064,
+      "sha256": "a1d153a836af54decf15d1d9575539dc22e43024abf09a73cc11a002c64c00b0"
+    },
+    {
+      "path": "/tmp/anchor-goose-regression-target-core/debug/anchor-sandbox-network",
+      "bytes": 18157664,
+      "sha256": "3bca12462e6d29ea339574cfb0dccd8c4b51bab930c4eff8159a4d1fdc822376"
+    },
+    {
+      "path": "/tmp/anchor-goose-regression-target-core/debug/anchor-wecom-tools",
+      "bytes": 107281952,
+      "sha256": "b5b86e8e743eaf6f1f67cc2c0a94faa8922170cde4c51fd2cdc3517929f50d74"
+    },
+    {
+      "path": "/tmp/anchor-goose-regression-target-core/debug/anchor-docmost-tools",
+      "bytes": 107820208,
+      "sha256": "f18c5d5f78a720d950dffba430b71e8c170bbad7ad29675af2e881d7402dccd4"
+    },
+    {
+      "path": "/tmp/anchor-goose-regression-target-core/debug/examples/http_fixture",
+      "bytes": 102625824,
+      "sha256": "4d70e47d4061c81cb5d6b8bdaef0511da0ec320992406d7e108150a8284e39ad"
+    },
+    {
+      "path": "/var/tmp/anchor-goose-build/artifacts/goose-acp.first",
+      "bytes": 23860728,
+      "sha256": "17e065a79cb0508413af714724aed51d6b76972dda9feebdda701330134fb640"
+    }
+  ],
+  "after_solo_unchanged": true,
+  "after_full": [
+    {
+      "path": "/tmp/anchor-goose-regression-target-core/debug/anchor-runner-host",
+      "bytes": 400915224,
+      "sha256": "fba2f31930d4b2bb98350b485d06c2c459edb1993435e423ffc359796ba7ecec"
+    },
+    {
+      "path": "/tmp/anchor-goose-regression-target-core/debug/anchor-net-relay",
+      "bytes": 17074064,
+      "sha256": "a1d153a836af54decf15d1d9575539dc22e43024abf09a73cc11a002c64c00b0"
+    },
+    {
+      "path": "/tmp/anchor-goose-regression-target-core/debug/anchor-sandbox-network",
+      "bytes": 18157664,
+      "sha256": "3bca12462e6d29ea339574cfb0dccd8c4b51bab930c4eff8159a4d1fdc822376"
+    },
+    {
+      "path": "/tmp/anchor-goose-regression-target-core/debug/anchor-wecom-tools",
+      "bytes": 107281952,
+      "sha256": "b5b86e8e743eaf6f1f67cc2c0a94faa8922170cde4c51fd2cdc3517929f50d74"
+    },
+    {
+      "path": "/tmp/anchor-goose-regression-target-core/debug/anchor-docmost-tools",
+      "bytes": 107820208,
+      "sha256": "f18c5d5f78a720d950dffba430b71e8c170bbad7ad29675af2e881d7402dccd4"
+    },
+    {
+      "path": "/tmp/anchor-goose-regression-target-core/debug/examples/http_fixture",
+      "bytes": 102625824,
+      "sha256": "4d70e47d4061c81cb5d6b8bdaef0511da0ec320992406d7e108150a8284e39ad"
+    },
+    {
+      "path": "/var/tmp/anchor-goose-build/artifacts/goose-acp.first",
+      "bytes": 23860728,
+      "sha256": "17e065a79cb0508413af714724aed51d6b76972dda9feebdda701330134fb640"
+    }
+  ],
+  "after_full_unchanged": true
+}

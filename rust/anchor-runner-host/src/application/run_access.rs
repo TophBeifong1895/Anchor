@@ -254,7 +254,7 @@ impl<'record> RunView<'record> {
         self.lifecycle.actions().stop
     }
     pub(crate) fn can_resume(&self) -> bool {
-        self.lifecycle.actions().resume && !self.session_coordinated && !self.has_pending_recovery()
+        self.lifecycle.actions().resume && !self.session_coordinated
     }
     pub(crate) fn has_stopped_execution(&self) -> bool {
         self.is_settled()

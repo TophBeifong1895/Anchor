@@ -287,7 +287,7 @@ mod tests {
                 "recovery",
                 r#""phase":"waiting","waiting_for":"human""#,
                 r#""unknown external tool effects""#,
-                false,
+                true,
                 false,
                 true,
             ),

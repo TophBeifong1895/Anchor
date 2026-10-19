@@ -10,7 +10,7 @@ use std::{collections::VecDeque, panic::AssertUnwindSafe};
 
 mod calls;
 mod execution;
-pub use execution::dispatch_input;
+pub use execution::{dispatch_input, observation_stop};
 #[cfg(test)]
 mod tests;
 

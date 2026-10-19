@@ -511,17 +511,14 @@ impl RunApplication {
         let active = self.admission.lock().await;
         self.check_execution_scope(&metadata, &active)?;
         super::validate_control_identity(&record, &metadata)?;
-        if !runs.recovery_facts(id)?.0.is_empty() {
-            return Err(ApplicationError::Conflict(
-                "record a recovery observation or abandon before resuming an unknown effect".into(),
-            ));
-        }
         let control = super::new_control();
         self.reject_superseded_conversation_execution(id)?;
         let execution = self.prepare_resume(&record, &metadata, control.clone())?;
         execution
             .bind_local_inputs(&record, &metadata.graph)
             .map_err(ApplicationError::Invalid)?;
+        self.inspect_interrupted_attempts(&runs, id, &execution)?;
+        let resource = runs.load(id)?.ok_or(ApplicationError::Missing)?;
         if matches!(
             resource.phase(),
             Some(Phase::Waiting {

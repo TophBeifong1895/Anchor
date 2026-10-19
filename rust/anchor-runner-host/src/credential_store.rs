@@ -576,6 +576,16 @@ pub(crate) fn environment_snapshot(
     owner: &str,
     definition: &PluginDefinition,
 ) -> Result<crate::plugin_configuration::ConfigurationSnapshot, String> {
+    environment_snapshot_for_execution(data, owner, definition).map_err(|error| error.to_string())
+}
+
+/// Keep a completed configuration refusal distinct from unavailable storage.
+pub(crate) fn environment_snapshot_for_execution(
+    data: &Path,
+    owner: &str,
+    definition: &PluginDefinition,
+) -> Result<crate::plugin_configuration::ConfigurationSnapshot, crate::tool_host::PreparationError>
+{
     let _lease = lease(data)?;
     let mut snapshot = crate::plugin_configuration::snapshot_locked(data, owner, definition)?;
     for target in definition

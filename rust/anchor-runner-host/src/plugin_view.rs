@@ -31,6 +31,8 @@ use anchor_sandbox_bwrap::BubblewrapSandbox;
 /// relabel the first as the second.
 #[derive(Debug)]
 pub(crate) enum Unusable {
+    /// A configuration or authorization check completed with a known refusal.
+    KnownFailure(String),
     /// The recorded fact cannot be honored: the content is missing, changed, or
     /// writable again.
     Recorded(String),
@@ -41,7 +43,9 @@ pub(crate) enum Unusable {
 impl std::fmt::Display for Unusable {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Recorded(reason) | Self::Unconfigured(reason) => formatter.write_str(reason),
+            Self::KnownFailure(reason) | Self::Recorded(reason) | Self::Unconfigured(reason) => {
+                formatter.write_str(reason)
+            }
         }
     }
 }
@@ -52,7 +56,9 @@ impl Unusable {
         use anchor_runtime::graph::GraphError;
         match self {
             Self::Recorded(reason) => GraphError::CorruptRun(reason),
-            Self::Unconfigured(reason) => GraphError::Unsupported(reason),
+            Self::KnownFailure(reason) | Self::Unconfigured(reason) => {
+                GraphError::Unsupported(reason)
+            }
         }
     }
 
@@ -62,6 +68,15 @@ impl Unusable {
 
     pub(crate) fn unconfigured(message: impl Into<String>) -> Self {
         Self::Unconfigured(message.into())
+    }
+}
+
+impl From<crate::tool_host::PreparationError> for Unusable {
+    fn from(error: crate::tool_host::PreparationError) -> Self {
+        match error {
+            crate::tool_host::PreparationError::KnownFailure(reason) => Self::KnownFailure(reason),
+            crate::tool_host::PreparationError::Unavailable(reason) => Self::Unconfigured(reason),
+        }
     }
 }
 
@@ -559,7 +574,7 @@ pub(crate) async fn prepare_plugins_for_owner_async(
             disclosure.insert(definition.clone());
             definitions.insert(binding.id.clone(), definition);
         }
-        let mcp = crate::tool_host::McpToolConfig::from_definitions_for_owner(
+        let mcp = crate::tool_host::McpToolConfig::from_definitions_for_owner_execution(
             &root,
             &current,
             &definitions,
@@ -567,7 +582,7 @@ pub(crate) async fn prepare_plugins_for_owner_async(
                 .as_ref()
                 .map(|(data, owner)| (data.as_path(), owner.as_str())),
         )
-        .map_err(Unusable::unconfigured)?;
+        .map_err(Unusable::from)?;
         Ok(PreparedPlugins {
             bindings: current,
             mcp,

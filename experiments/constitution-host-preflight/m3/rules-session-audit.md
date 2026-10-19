@@ -1,6 +1,6 @@
 # M3：规则与 Session 事实审计
 
-本表核对 M2 已验收提交 `4d3d19d4ba120a85526c7d5a8abc00ef0c777eec` 与 M3 当前实现，落实任务书 §10.1、§10.5、§10.13。它记录源码中实际的判断与所有权，不宣布 M3 验收通过；workspace、Goose、master 合并和真实 Provider 的执行结果必须由最终交回证据分别说明。
+本表核对 M2 已验收提交 `4d3d19d4ba120a85526c7d5a8abc00ef0c777eec` 与 M3 当前实现，落实任务书 §10.1、§10.5、§10.13、§10.15。§10.15 的恢复修复属于“M2 行为更正：恢复回到 master 契约”，不计新的 S 候选。它记录源码中实际的判断与所有权，执行验收见 [§10.15 交回](completion-verification.md)，不将本表的静态计数替代为真实 Provider 证据。
 
 ## 计数方法
 
@@ -23,11 +23,13 @@
 | 4. 是否需要关注 | 1 → 1 | 同文件 `needs_attention:222`：等待、非 Done 结算、Executing 且无 worker。当前保留为读取门面契约，未保存第二个 attention 字段。 |
 | 5. 迟到 Work 结果的写入许可 | 0 → 0 | Host 不决定；Kernel 的 waiting/settled/version 门禁决定。scheduler 排空任务并保留拒绝历史、实际成本，StaleVersion 重提成本归零。 |
 | 5. 迟到子回调的绑定保护 | 1 → 1 | `application/run_access/kernel_calls.rs:269`，`kernel_child_finished`；要求子已结算、父无 worker、父仍等该 child，node/invocation/child id 与持久绑定一致。此规则同时服务第 8 类，不加总。 |
-| 6. 未知效果：人工决定目标门禁 | 2 → 1 | `application/run_access/kernel_runs/recovery.rs:75`，`recover_attempt`；匹配完整 InvocationKey + attempt、inactive Human wait、AgentNode，持久化观察后才提控制提交。旧 recovery target/cursor 门禁已删。 |
-| 6. 未知效果：普通 resume 的写前阻挡 | 2 → 1 | `application/run_access/kernel_runs.rs:504`，`kernel_control` 读取 `recovery_facts`，仍有 pending 不续跑；旧状态分支已删。 |
-| 6. 未知效果：隐藏普通 resume 动作 | 1 → 1 | `application/run_access.rs:241`，`can_resume` 复用 `has_pending_recovery`。这是建议层收窄，不拥有恢复事实。 |
+| 6. 未知效果：人工决定目标门禁 | 2 → 1 | `application/run_access/kernel_runs/recovery.rs`，`recover_attempt`；匹配完整 InvocationKey + attempt、inactive Human wait、AgentNode，持久化说明后才提控制提交。`record_recovery_decision` 的 `prepare_resume` 在 registry 锁外，保留验证/错误优先序、幂等与冲突；旧 recovery target/cursor 门禁已删。 |
+| 6. 未知效果：普通 resume 的写前阻挡 | 2 → 0 | 旧状态分支与 `kernel_control` 的 pending 拦截均删除；人的显式 resume 走下述唯一核查接续，不把内部 attempt 变成审批流程。 |
+| 6. 未知效果：隐藏普通 resume 动作 | 1 → 0 | `application/run_access.rs` 的 `can_resume` 不再以 pending 收窄；保留共享生命周期建议与 Session 协调约束。 |
+| 6. 未知效果：显式核查接续 | 0 → 1 | `application/run_access/recovery.rs` 的 `inspect_interrupted_attempts`；普通显式 resume 与认证 Session-call 共用。先发现/登记 native pending，逐项持久保存“先核查，不盲目重放”的提示，再 Human release，让 Agent 在同一原生 Session 核查后继续；后台自动恢复不调用。 |
+| 6. 未知效果：原生 pending 观察登记 | 0 → 1 | `application/run_access/kernel_runs/recovery.rs` 的 `observe_recovery_attempts`；锁内检查当前 Agent InvocationKey、idle、去重与已有决定冲突，复用 Runtime `observation_stop` 提交 Code + Observation stop，不复制 Kernel 生命周期规则。 |
 | 6. 原生工具 result 缺失的事实识别 | 1 → 1 | `goose_acp/recovery.rs:6` 的 `attempt`；工具观察存在而 result/模型 completion 未完成时形成待核查事实，属于执行边缘。 |
-| 6. 派发前原生观察核查 | 1 → 1 | `node_host/execution.rs:239` 的 `NodeExecutionPort::execute`；发现 pending 时返回 WaitingRecovery，不派发工具。 |
+| 6. 派发前原生观察核查 | 1 → 1 | `node_host/execution.rs` 的 `NodeExecutionPort::execute`；发现未裁定 pending 时返回 WaitingRecovery，不派发工具。显式接续先持久化核查提示，再由同一原生 Session 的 Agent 核查；不宣称恢复全程没有模型请求。 |
 | 7. 预算耗尽：旧路径额外恢复策略门禁 | 1 → 0 | 旧 `validate_resume_budget` 删除。端口预算观察映射为 Human wait(reason=budget)，由已有 Kernel Human resume 裁决，不在 Host 保存 BudgetStopped。Session 的 Turn 占用与 continuation 策略见下表。 |
 | 8. 子 Run 结算后释放父 Run：Host 匹配持久绑定 | 2 → 1 | 旧 `dispatch::child_finished` 和 cursor 重入删除；只留 `kernel_calls.rs:269` 的 `kernel_child_finished`。`release_parent_after_recorded_delivery`、驱动退出的 recheck 和 detached callback 都调用这一入口。 |
 
@@ -42,7 +44,7 @@
 | Kernel | `rust/anchor-kernel/src/kernel.rs` 的 waiting、settled、version、控制身份和成本预算门禁不变。Host 的动作建议不能授权提交，更不能覆盖已结算事实。 |
 | Runtime 迟到 | `rust/anchor-runtime/src/graph/scheduler.rs:48` 的 `submit_with_retry` 只处理新版本重提与一次计费；已等待/结算的结果交 Kernel 留史。没有第二个生命周期 writer。 |
 | Runtime 预算 | 端口 BudgetExhausted 映射从旧 runner、旧 parallel、新 scheduler 三处变为 `scheduler/execution.rs:167` 一处 Code + Observation stop；Kernel 账本硬上限 Escalated 是另一层，未改。W4 的默认有限预算不在本轮擅自补齐。 |
-| Runtime 未知效果 | `scheduler/execution.rs:36`、`:161`、`:174` 分别把未知 completion、WaitingRecovery、Interrupted 转为观察与控制提交；没有把未知当成功。Cancelled/Suspended 只排空 worker，Kernel Executing 与同一 frontier 保留。 |
+| Runtime 未知效果 | `scheduler/execution.rs` 把未知 completion、WaitingRecovery、Interrupted 转为观察与控制提交；Host 的 native pending 登记复用同一 `observation_stop`，没有把未知当成功。Cancelled/Suspended 只排空 worker，Kernel Executing 与同一 frontier 保留。 |
 | Runtime 子等待 | `scheduler/calls.rs:145` 的 `observe_child` 观察同一个 child，先以 Code Request 释放该 Child wait，再提交 Call 结果；身份和绑定仍由 Kernel/GraphValidator 验证。Host 回调只安排 drive。 |
 | Graph Host | `rust/anchor-graph-host/src/graph_call.rs:535` 的 `project_child_outcome` 把 Kernel Done/Waiting/Unknown/其他结算映射为端口观察并导出产物，不写 Run。该文件 `:319` 的可重新 drive 相位集合、Host `kernel_calls.rs:184` 的 Human wait 保持停放、`:245` 的 detached Executing 门禁、`kernel_runs.rs:551` 的 standalone drive 选择是执行适配约束，全部列明，不冒充普通 Human resume 许可。 |
 | 执行边缘 | `node_host/facts.rs:16`、`node_host/execution.rs:170`、`goose_acp.rs:235`、`:361`、`:387` 继续识别缺失终结、Host/Goose 冲突和传输中断；这些是不同来源的观察边界，不回写 Run 状态。Goose 原生 Session 与 ACP 仍负责执行与压缩。 |
@@ -71,7 +73,7 @@
 | 同文件 `check_execution_scope:375` | 同 Graph/Session 不允许并行占用当前执行，独立非对话 Run 与对话 Run 互斥。 | A+B。`is_settled`、`occupies_conversation_execution` 来自门面；作用域与 current head 是 Session/准入规则。 |
 | `application/assistants.rs:16`、`:40` | 静止后可 retire；旧实例不能继续作为当前助手。 | A+B。Run 静止只读；SessionStore 是 current assistant 指针唯一权威。retire 不结算 Run。 |
 | `application/run_access/graph_policy.rs:14` | 重试 assistant 准入需身份一致；未停止的旧实例保留，不能另开新实例绕过。 | A+B。Run settlement/stop 从视图读取；SessionStore 绑定 current assistant；新 Run 只走 Kernel create。 |
-| `application/run_access/session_calls.rs:9`、`:92` | Session continuation 需要尚可继续、无 budget hold，身份/链头/Graph 作用域一致；pending recovery 经认证 Session 协调逐项保存核查提示后继续。 | A+B。协调权归认证 Session host，普通 pause/resume 不得替代。执行阶段复用 recover_attempt 和端口观察后提交 Kernel；不清空恢复数组，不重放旧工具。 |
+| `application/run_access/session_calls.rs` 的 continuation 与 `execute_session_call` | Session continuation 需要尚可继续、无 budget hold，身份/链头/Graph 作用域一致；未知效果共用显式核查接续。 | A+B。协调权归认证 Session host，普通 pause/resume 不得替代。执行阶段共用 `inspect_interrupted_attempts`：登记原生观察、逐项持久保存核查提示后 Human release，同一原生 Session 继续；不清空恢复数组，不伪造工具成功，不重放旧工具。 |
 | 同文件 `settled_session_call_successors:17` | 只有已停止执行的后继可作为 Session-call 的对话继承链。 | A+B。Run 的 stopped/settled 派生只读；Session 链仍归 metadata。 |
 | 同文件 `stop_session_call:65`、`yield_session_call:80` | stop/yield 通过 Kernel 控制；stop 另结束 pending delivery。 | A+B。Run phase 归 Kernel；metadata 的 delivery failed 表示 Session 协调结果，和 Run settled 是不同事实。yield 不制造 delivery 完成。 |
 | 同文件 `settle_session_call:193` | worker 已退出、Done 才能 delivered；相同决定幂等，不同决定冲突。 | A+B。Session delivery outcome 由此协调用例写 metadata；停止路径在相同 admission 串行域内写同一 delivery，非独立事实副本。然后调用共用 child callback。 |
@@ -106,7 +108,7 @@
 | --- | --- | --- |
 | 智能无限 | Agent 只能提议结果，不拥有 Human/Code 身份、成本盖章、phase 或批准投递的权力；更强模型仍走同一 Kernel 裁决和 Host 授权。 | 这是所有权检查，没有执行更强模型或真实 Provider 的业务验收；模型质量与有目的的人工选择不能由本表证明。 |
 | 规模无限 | 每个 Run 的事实由 FileStore/Kernel 持有；Graph 裁决是纯函数，兄弟并发结果独立提交；一个 Host registry 同步预留 worker，跨进程 writer lease 保持单写入者。 | 当前 Host 单 writer、全量 Run/metadata 扫描、恢复 history 扫描仍有线性成本；30,000 seed 冻结对照与有限线程回归不是无限负载、分布式吞吐或多年历史性能证明。未为此新增平台机制。 |
-| 时间无限 | Kernel history 只追加，settled 不反转；迟到结果计费留史；确定性 child id 与完整 InvocationKey 防止旧回调释放新等待。人工观察先持久化再释放，同一决定可幂等重提，未知效果不自动重放。 | 旧开发 Run 具名不接受，按 §10.13 不维护旧读取/生产迁移。Goose 原生会话长期版本兼容、外部工具的长期幂等与 W4 默认有限结算均未由本轮解决。 |
+| 时间无限 | Kernel history 只追加，settled 不反转；迟到结果计费留史；确定性 child id 与完整 InvocationKey 防止旧回调释放新等待。人工说明或显式接续的核查提示先持久化再释放，同一决定可幂等重提，未知效果不自动重放；后台自动恢复不释放。 | 旧开发 Run 具名不接受，按 §10.13 不维护旧读取/生产迁移。Goose 原生会话长期版本兼容、外部工具的长期幂等与 W4 默认有限结算均未由本轮解决。 |
 | 存在对手 | 提交身份、权限、版本、路由、绑定 child 与产物 provenance 在既有边界重新校验；会话投递须匹配当前 Turn/inbound，Plugin 显式授权不能绕过准入基线。未知结果不冒充成功。 | 有限单元、差分与本地 fixture 回归不构成完整对抗证明；外部渠道实网与真实 Provider 没有被本审计新增验收。 |
 
 ## 证据与交回界限
@@ -116,4 +118,4 @@
 - Session 读取与所有权的定向业务断言保存在 `run_access/conversations.rs`、`session_calls.rs`、`channels.rs`、`assistant_policy.rs`，API 原用例仍在对应 `api/tests` 模块；本审计未重复运行 Host 构建，最终结果由主流程给出，不能引用尚未完成的运行作通过证据。
 - 文档审计未执行真实模型 Provider、外部投递或部署；本地确定性 Provider、固定 Goose、真实模型验收是不同范围。
 
-结束同步 master 后 API/Host 普通 workspace 已通过，固定 Goose 完整首轮 110 / 12 / 0。未知效果恢复存在业务契约冲突，人工 recovery 另有重入锁；配置、身份预检的已知失败适配与三项旧目录夹具也尚未修复。按任务书 §8 停止，M3 未通过，见 [交回](verification.md) 与 [未关闭回归](goose-regressions.md)。上表是当前代码的独立规则体与所有权计数，不将静态收敛等同为恢复行为验收。
+§10.15 恢复修复验证已完成：workspace 2,153 / 0 / 125、完整固定 Goose 122 / 0 / 0、原 12 项逐项独跑各 1 / 0 / 0；Host、Goose 与 helper 身份在采证前后相同。原 110 / 12 / 0 仍保留在 [停止现场](verification.md)，当前结果、命令与未覆盖范围见 [交回](completion-verification.md)。S27 与合回 master 待用户审查；真实模型 Provider、外部实网和部署未验。本表不将静态收敛等同为这些范围已通过。

@@ -9,10 +9,10 @@ use anchor_library::{
     FileOAuthTokenStore, OAuthBinding, OAuthClient, OAuthRefreshRequest, OAuthRefreshTransport,
     OAuthTokenResponse, OAuthTransportError,
 };
-use anchor_mcp_host::{McpHost, McpServerConfig, McpTransportConfig, Secret};
+use anchor_mcp_host::{McpHost, McpHostError, McpServerConfig, McpTransportConfig, Secret};
 use anchor_runtime::{
-    NetworkPolicy, ReadOnlyInput, SandboxEnvironment, SandboxRequest, ToolDefinition, ToolError,
-    ToolName, ToolPort, ToolResultContent, graph::PluginBinding,
+    NetworkPolicy, ReadOnlyInput, SandboxEnvironment, SandboxError, SandboxRequest, ToolDefinition,
+    ToolError, ToolName, ToolPort, ToolResultContent, graph::PluginBinding,
 };
 use anchor_sandbox_bwrap::BubblewrapSandbox;
 use serde::Deserialize;
@@ -26,6 +26,9 @@ use std::{
     pin::Pin,
     sync::Arc,
 };
+
+mod preparation_error;
+pub(crate) use preparation_error::PreparationError;
 
 pub const FAKE_SERVER_ID: &str = "anchor.fake";
 pub const FAKE_ECHO_TOOL: &str = "anchor_fake__echo";
@@ -181,6 +184,16 @@ impl McpToolConfig {
         definitions: &BTreeMap<String, PluginDefinition>,
         credentials: Option<(&Path, &str)>,
     ) -> Result<Self, String> {
+        Self::from_definitions_for_owner_execution(root, bindings, definitions, credentials)
+            .map_err(|error| error.to_string())
+    }
+
+    pub(crate) fn from_definitions_for_owner_execution(
+        root: &Path,
+        bindings: &[PluginBinding],
+        definitions: &BTreeMap<String, PluginDefinition>,
+        credentials: Option<(&Path, &str)>,
+    ) -> Result<Self, PreparationError> {
         let catalog = FilePluginCatalog::new(root);
         let mut servers: BTreeMap<String, ResolvedMcpServer> = BTreeMap::new();
         let mut disabled = BTreeSet::new();
@@ -195,16 +208,19 @@ impl McpToolConfig {
                 .ok_or_else(|| format!("Plugin `{}` MCP definition is unavailable", binding.id))?;
             let current = declaration.binding();
             if !binding.same_authorization(&current) {
-                return Err(format!(
+                return Err(PreparationError::KnownFailure(format!(
                     "Plugin `{}` Host authorization changed before MCP assembly",
                     binding.id
-                ));
+                )));
             }
             let definitions = if let Some((state, owner)) = credentials {
                 // Resolve all of one Plugin's consumers under the same lease so
                 // a rotation cannot split its remote and local MCP identities.
-                let snapshot =
-                    crate::credential_store::environment_snapshot(state, owner, declaration)?;
+                let snapshot = crate::credential_store::environment_snapshot_for_execution(
+                    state,
+                    owner,
+                    declaration,
+                )?;
                 configuration_revisions.insert(binding.id.clone(), snapshot.revision);
                 configuration_bindings.insert(binding.id.clone(), snapshot.binding_digest);
                 let mut resolved = Vec::new();
@@ -250,7 +266,8 @@ impl McpToolConfig {
                     return Err(format!(
                         "Plugin `{}` MCP server `{server_name}` is not present in the catalog",
                         binding.id
-                    ));
+                    )
+                    .into());
                 };
                 // Two different servers may share the key; that would launch one
                 // of them twice and hide the other, so it is refused by naming
@@ -259,7 +276,7 @@ impl McpToolConfig {
                     return Err(format!(
                         "Plugin servers `{}/{}` and `{}/{}` share the launcher key `{key}`; rename one",
                         existing.plugin_id, existing.name, binding.id, server_name
-                    ));
+                    ).into());
                 }
                 servers.insert(
                     key.clone(),
@@ -367,7 +384,9 @@ impl McpToolConfig {
         bindings: &[PluginBinding],
         network: bool,
     ) -> Result<LiveMcpTools, String> {
-        self.bind_inner(bindings, network, None).await
+        self.bind_inner(bindings, network, None)
+            .await
+            .map_err(|error| error.to_string())
     }
 
     /// Bind the same manifest MCP servers while giving stdio servers a
@@ -400,7 +419,9 @@ impl McpToolConfig {
         network: bool,
         launch: SandboxLaunch<'_>,
     ) -> Result<LiveMcpTools, String> {
-        self.bind_inner(bindings, network, Some(launch)).await
+        self.bind_inner(bindings, network, Some(launch))
+            .await
+            .map_err(|error| error.to_string())
     }
 
     /// Probe through exactly the same transport and sandbox adapter as a node.
@@ -466,7 +487,7 @@ impl McpToolConfig {
         bindings: &[PluginBinding],
         network: bool,
         launch: Option<SandboxLaunch<'_>>,
-    ) -> Result<LiveMcpTools, String> {
+    ) -> Result<LiveMcpTools, PreparationError> {
         let sandbox = launch.as_ref().map(|launch| launch.sandbox);
         self.validate_bindings(bindings, network)?;
         let mut hosts = BTreeMap::new();
@@ -535,9 +556,7 @@ impl McpToolConfig {
                         .shutdown()
                         .await
                         .err();
-                        return Err(cleanup.map_or(reason.clone(), |cleanup| {
-                            format!("{reason}; cleanup failed: {cleanup}")
-                        }));
+                        return Err(reason.cleanup(cleanup));
                     }
                 };
                 let declaration = self
@@ -569,15 +588,11 @@ impl McpToolConfig {
         {
             let reason = "MCP tool startup was cancelled".to_owned();
             let cleanup = live.shutdown().await.err();
-            return Err(cleanup.map_or(reason.clone(), |cleanup| {
-                format!("{reason}; cleanup failed: {cleanup}")
-            }));
+            return Err(PreparationError::Unavailable(reason).cleanup(cleanup));
         }
         if let Err(reason) = live.validate_exposed_names() {
             let cleanup = live.shutdown().await.err();
-            return Err(cleanup.map_or(reason.clone(), |cleanup| {
-                format!("{reason}; cleanup failed: {cleanup}")
-            }));
+            return Err(PreparationError::Unavailable(reason).cleanup(cleanup));
         }
         Ok(live)
     }
@@ -626,7 +641,7 @@ impl McpToolConfig {
         network: bool,
         sandbox: Option<SandboxLaunch<'_>>,
         grant: Option<ServerGrant<'_>>,
-    ) -> Result<McpHost, String> {
+    ) -> Result<McpHost, PreparationError> {
         let timeout = self
             .startup_timeout
             .unwrap_or(std::time::Duration::from_secs(120));
@@ -650,18 +665,23 @@ impl McpToolConfig {
                             while !cancellation.load(std::sync::atomic::Ordering::Acquire) {
                                 tokio::time::sleep(std::time::Duration::from_millis(20)).await;
                             }
-                        } => return Err(format!("MCP server `{key}` startup was cancelled")),
+                        } => return Err(format!("MCP server `{key}` startup was cancelled").into()),
                     }
                 } else {
                     tokio::time::timeout(timeout, connect)
                         .await
                         .map_err(|_| format!("MCP server `{key}` startup timed out"))?
                 };
-                result.map_err(|error| format!("MCP server `{key}` failed to bind: {error}"))
+                result.map_err(|error| {
+                    PreparationError::Unavailable(format!(
+                        "MCP server `{key}` failed to bind: {error}"
+                    ))
+                })
             }
             "sse" => Err(format!(
                 "MCP server `{key}` uses legacy SSE, which RMCP 2.2 does not provide"
-            )),
+            )
+            .into()),
             "stdio" => {
                 let SandboxLaunch {
                     sandbox,
@@ -739,7 +759,11 @@ impl McpToolConfig {
                     sandbox.clone()
                 };
                 let command = sandbox.isolated_command(request).map_err(|error| {
-                    format!("MCP server `{key}` sandbox launch rejected: {error}")
+                    let reason = format!("MCP server `{key}` sandbox launch rejected: {error}");
+                    match error {
+                        SandboxError::InvalidRequest(_) => PreparationError::KnownFailure(reason),
+                        _ => PreparationError::Unavailable(reason),
+                    }
                 })?;
                 McpHost::connect_sandboxed_stdio_controlled(
                     key.into(),
@@ -750,12 +774,21 @@ impl McpToolConfig {
                     timeout,
                 )
                 .await
-                .map_err(|error| format!("MCP server `{key}` failed to bind: {error}"))
+                .map_err(|error| {
+                    let error = match error {
+                        McpHostError::Initialize(reason) => PreparationError::KnownFailure(
+                            format!("MCP initialization failed: {reason}"),
+                        ),
+                        error => PreparationError::Unavailable(error.to_string()),
+                    };
+                    error.context(&format!("MCP server `{key}` failed to bind"))
+                })
             }
             other => Err(format!(
                 "Plugin `{}` server `{}` has unsupported transport `{other}`",
                 definition.plugin_id, definition.name
-            )),
+            )
+            .into()),
         }
     }
 }
@@ -1436,10 +1469,22 @@ impl PluginToolHost {
         network: bool,
         launch: SandboxLaunch<'_>,
     ) -> Result<Arc<CombinedPluginTools>, String> {
+        self.assemble_with_sandbox_for_execution(mcp, bindings, network, launch)
+            .await
+            .map_err(|error| error.to_string())
+    }
+
+    pub(crate) async fn assemble_with_sandbox_for_execution(
+        &self,
+        mcp: &McpToolConfig,
+        bindings: &[PluginBinding],
+        network: bool,
+        launch: SandboxLaunch<'_>,
+    ) -> Result<Arc<CombinedPluginTools>, PreparationError> {
         let fake = self
             .for_bindings(bindings)
             .map_err(|error| error.to_string())?;
-        let live = mcp.bind_with_node_inputs(bindings, network, launch).await?;
+        let live = mcp.bind_inner(bindings, network, Some(launch)).await?;
         Ok(Arc::new(CombinedPluginTools::new(fake, live)))
     }
 }

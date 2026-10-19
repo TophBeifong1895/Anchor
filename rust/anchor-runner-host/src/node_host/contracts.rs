@@ -23,6 +23,8 @@ pub(crate) struct NodeConversationHint {
 /// flattening every cause into a string that the caller then relabels.
 #[derive(Debug)]
 pub(crate) enum ResolutionError {
+    /// An explicit preparation check failed before any Agent tool execution.
+    KnownFailure(String),
     /// The Run's own frozen fact cannot be honored.
     Graph(GraphError),
     /// This host cannot assemble the tools for another reason.
@@ -33,7 +35,7 @@ impl std::fmt::Display for ResolutionError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Graph(error) => write!(formatter, "{error}"),
-            Self::Host(reason) => formatter.write_str(reason),
+            Self::KnownFailure(reason) | Self::Host(reason) => formatter.write_str(reason),
         }
     }
 }
@@ -44,11 +46,29 @@ impl From<String> for ResolutionError {
     }
 }
 
+impl From<crate::tool_host::PreparationError> for ResolutionError {
+    fn from(error: crate::tool_host::PreparationError) -> Self {
+        match error {
+            crate::tool_host::PreparationError::KnownFailure(reason) => Self::KnownFailure(reason),
+            crate::tool_host::PreparationError::Unavailable(reason) => Self::Host(reason),
+        }
+    }
+}
+
+impl From<crate::plugin_view::Unusable> for ResolutionError {
+    fn from(error: crate::plugin_view::Unusable) -> Self {
+        match error {
+            crate::plugin_view::Unusable::KnownFailure(reason) => Self::KnownFailure(reason),
+            error => Self::Graph(error.into_graph_error()),
+        }
+    }
+}
+
 impl ResolutionError {
     pub(crate) fn into_graph_error(self) -> GraphError {
         match self {
             Self::Graph(error) => error,
-            Self::Host(reason) => GraphError::Unsupported(reason),
+            Self::KnownFailure(reason) | Self::Host(reason) => GraphError::Unsupported(reason),
         }
     }
 }

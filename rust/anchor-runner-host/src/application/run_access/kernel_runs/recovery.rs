@@ -8,6 +8,73 @@ use anchor_runtime::graph::{
 };
 
 impl KernelRuns {
+    /// Persist a native effect observation discovered by an explicit resume.
+    /// This only parks the Run; the separate human recovery decision releases it.
+    pub(crate) fn observe_recovery_attempts(
+        &self,
+        key: &InvocationKey,
+        attempts: Vec<RecoveryAttempt>,
+    ) -> Result<(), ApplicationError> {
+        let active = self.active.lock().unwrap();
+        self.ensure_not_deleting(&key.run_id)?;
+        Self::ensure_idle(active.contains_key(&key.run_id))?;
+        let resource = self.load(&key.run_id)?.ok_or(ApplicationError::Missing)?;
+        let record = record_of(&resource)?;
+        if resource.is_settled()
+            || key.graph_digest != record.graph_digest
+            || !GraphValidator::frontier(&resource)?.iter().any(|dispatch| {
+                dispatch.node.id == key.node_id
+                    && dispatch.invocation == key.invocation
+                    && dispatch.node.agent.is_some()
+            })
+        {
+            return Err(ApplicationError::Conflict(
+                "native recovery observation does not identify a current Agent invocation".into(),
+            ));
+        }
+        let (pending, decisions) = self.recovery_facts(&key.run_id)?;
+        if attempts.iter().any(|attempt| {
+            decisions
+                .iter()
+                .any(|decision| decision.key == *key && decision.attempt_id == attempt.attempt_id)
+        }) {
+            return Err(ApplicationError::Conflict(
+                "native recovery observation conflicts with a recorded decision".into(),
+            ));
+        }
+        let attempts: Vec<_> = attempts
+            .into_iter()
+            .filter(|attempt| {
+                !pending
+                    .iter()
+                    .any(|existing| existing.key == *key && existing.attempt == *attempt)
+            })
+            .collect();
+        if attempts.is_empty() {
+            return Ok(());
+        }
+        let (principal, cost, submission) = anchor_runtime::graph::scheduler::observation_stop(
+            &resource,
+            key,
+            "unknown external tool effects".into(),
+            serde_json::to_value(attempts).map_err(GraphError::RunDecode)?,
+        );
+        let verdict = submit_with_retry(
+            &self.kernel,
+            &principal,
+            cost,
+            submission,
+            Some(&self.observations),
+        )?;
+        if !verdict.is_accepted() {
+            return Err(ApplicationError::Conflict(format!(
+                "Kernel recovery observation refused: {:?}",
+                verdict.reason
+            )));
+        }
+        Ok(())
+    }
+
     pub(crate) fn recovery_facts(
         &self,
         id: &str,
