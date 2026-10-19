@@ -1,0 +1,8 @@
+
+running 1 test
+anchor environment fetch: directory:/tmp/.tmpnCGaWK/build/artifacts failed 1 package(s): idna==3.6 (no distribution with the approved digest)
+anchor environment fetch: directory:/tmp/.tmpnCGaWK/wheels served 1 package(s): idna==3.6
+test application::plugin_candidates::tests::candidate_startup_and_call_cancellation_reap_the_actual_processes ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 909 filtered out; finished in 6.31s
+

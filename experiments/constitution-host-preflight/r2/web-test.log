@@ -1,0 +1,13 @@
+
+> @anchor/web@0.1.0 test
+> vitest run src
+
+
+ RUN  v4.1.0 /home/mansteinl/code/anchor-constitution-core/apps/web
+
+
+ Test Files  33 passed (33)
+      Tests  285 passed (285)
+   Start at  10:43:49
+   Duration  1.30s (transform 4.04s, setup 0ms, import 9.27s, tests 2.73s, environment 11.28s)
+

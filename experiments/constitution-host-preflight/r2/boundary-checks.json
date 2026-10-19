@@ -1,0 +1,19 @@
+[
+  {
+    "command": "git diff 6ee2b0e 74a4dec --stat -- rust/anchor-kernel",
+    "exit_code": 0,
+    "stdout": "",
+    "stderr": ""
+  },
+  {
+    "command": "git diff b1e9bc1 74a4dec --stat -- rust/anchor-runtime/src/graph/validator.rs",
+    "exit_code": 0,
+    "stdout": "",
+    "stderr": ""
+  },
+  {
+    "check": "new Rust ignore attributes",
+    "command": "git diff b1e9bc1 74a4dec --unified=0 -- rust",
+    "added": []
+  }
+]

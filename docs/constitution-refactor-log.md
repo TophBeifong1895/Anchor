@@ -378,10 +378,474 @@ R `54e664e` 引入只读RunView（Phase、Graph passes、worker、宿主updated�
 
 最终Kernel37、Runtime127+2 doctest、runner-host1087/112原有忽略、graph-host46、Library74、FileLease3通过，0失败；比四crate基线新增4项，另R0新增3项锁测试。fmt、Clippy和sandbox构建通过；Kernel相对6ee2b0e、生产GraphValidator相对P均零diff。真实Goose/Provider、Web与部署未新增验收。原始命令、输出、HTTP/动作/字节兼容测试及未覆盖边界见[R验证](../experiments/constitution-host-preflight/r/verification.md)。
 
+## R 审查结论与 R2 决定（2026-10-17）
+
+审查方重跑六 crate（含 file-lease、library）：58 个 target，1376 通过 / 0 失败 / 112 忽略；内核、生产校验器、Web diff 为空。R0 通过：22 个调用站点统一经共享租约，Drop 显式释放；已同步 master 本地提交 `6394e28`（未推送）。R 的负结论（82→90）成立，但前提是任务书要求对外 JSON 不变：旧 10 状态中 Ready/Running/waiting_resume、Paused/Stopped/BudgetStopped 的区分不在相位里，规则只能搬进适配。读侧复杂度来自产品状态契约，不来自运行时。
+
+**用户决定**：对外状态收敛到内核相位（executing / waiting(human|child|effect) / settled(outcome) + reason + active + actions），允许改 API 与 Web，pause 改为 stop 的别名。R2 在新词汇下以同一口径重测，见 [R2 任务书](constitution-r2-task.md)。
+
+
+## R2停止交回（2026-10-19）
+
+源码 `74a4dec`：Run 对外收敛为 executing / waiting / settled + waiter/outcome/reason/active/actions/updated；旧状态只经一个有损映射函数进入读视图，HTTP/Pilot pause 接为 stop 别名，Web 使用新事实。**R2 已停止、未验收**：pause 即时取消后，原“当前节点完成并留下 1 条结果”的非状态断言实得 0；Session 原 pause 拒绝也变为有效 stop。未修改实际 stop/resume/abandon 规则、未改这些非状态断言，按任务书 §7 交回。审查需决定是否授权调整原暂停测试场景，或保留对外暂停能力；不以探针提交代表验收通过。
+
+同口径测量 **82→90→92**，Web 状态分支 **81→79**，需要重想；H3–H6 继续暂缓。保留 Session 写回和内部 record 桥均计回，没有通过搬移制造收益。当前证据：[测量](../experiments/constitution-host-preflight/r2/measurement.md)、[92 点逐项](../experiments/constitution-host-preflight/r2/decisions.md)、[实际验证与停止现场](../experiments/constitution-host-preflight/r2/verification.md)。
+
+Rust API 定向 188 过/11 失败，最终针对 11 例复跑仍失败；映射/动作/静止 3 例、投影 4 例、pending 1 例通过。application 最终子集 113 过/1 候选进程回收时序失败，该例独立复跑通过；1000 seed 已在初轮通过。fmt/clippy/sandbox 构建通过，Kernel 零 diff。六 crate 全量未执行；Web 33 文件/285 测试与 build 通过，定向 e2e 9 过/1 选择器失败，修复后该例独立通过。真实 Goose/Provider、部署、同一 HTTP 的旧/Kernel 三阶段对照仍未验收。
+
+S 候选 8 条，全部待批：
+
+| 编号 | 旧行为 → 新行为 / 影响 |
+| --- | --- |
+| S19 | 旧十状态/专门提示 → Phase+waiter/outcome/reason，客户端字段破坏；Ready/孤立 Running 同为等待接续和注意项 |
+| S20 | 共享 RunView 的无 worker Executing 可以 resume；原 Kernel JSON 已有独立 driver 接续规则，现统一 |
+| S21 | Paused/BudgetStopped 无 worker 统一静止，影响 Session 交接、准入、退役与清理 |
+| S22 | stop 仅 Executing 为 true、不读 pending flag，未结算增加 abandon；控件按服务端事实显示 |
+| S23 | Human 无 worker 可 resume、Child/Effect 不可；旧预算/recovery 写守卫仍在，可能与展示不一致 |
+| S24 | 移除 pausing/stopping/control_requested 与请求优先级展示，接受请求但未落状态时仍显示 Executing |
+| S25 | pause→stop 即时取消，影响当前节点结果、恢复、Session 取消许可；已触发停止条件 |
+| S26 | 缺少 Kernel 时间观察返回 updated:null，旧 Run mtime 来源保留，时间不参与控制 |
+
+自行判断并登记：Session 原结算 callback 原样搬回 conversations 属于写边界；Phase 序列化和旧内部桥都保留测量成本；PilotTurn/listener/投递/节点结果保持各自事实；不新增旧状态替身。未迁能力没有记作已完成。
+
+### R2 断言修改附录
+
+以下逐项列出测试名、旧/新断言及 S 候选。Rust **84 条展开断言修改 + 6 条轮询目标**，另加别名检查 2 条；Web **30 处直接表达式修改**，参数实例/fixture 间接变化单列。两侧统计单位不同，不相加冒充 assert 宏数量。原非状态结果、返回码、权限、时间和产物断言均保留；pending token 被删除后的替换不再检验原展示优先级，已明确登记 S24。完整机读附表：[Rust](../experiments/constitution-host-preflight/r2/rust-assertions.json)；审计副本：[Rust](../experiments/constitution-host-preflight/r2/rust-assertions.md)、[Web](../experiments/constitution-host-preflight/r2/web-assertions.md)。
+
+#### 逐项既有断言、轮询与新增别名检查
+
+##### `rust/anchor-runner-host/src/api/tests.rs`
+
+测试 / fixture：`graph_crud_round_trips_authoring_modules_and_layout`。
+
+| ID / 类型 | 情形 | 旧断言或目标 | 新断言或目标 | S 候选分组 |
+| --- | --- | --- | --- | --- |
+| RA001 / 修改轮询 | 等待执行结束的轮询条件 | `HTTP OK && state.status != running && state.status != ready` | `HTTP OK && projection.phase != executing` | S19：新 phase/outcome 词汇 |
+| RA002 / 修改断言 | 完成结局 | `detail[state][status] == completed` | `detail[projection][outcome] == done` | S19：新 phase/outcome 词汇 |
+
+##### `rust/anchor-runner-host/src/api/tests.rs`
+
+测试 / fixture：`trigger_persists_run_and_projects_list_detail_and_control`。
+
+| ID / 类型 | 情形 | 旧断言或目标 | 新断言或目标 | S 候选分组 |
+| --- | --- | --- | --- | --- |
+| RA003 / 修改轮询 | 等待执行结束的轮询条件 | `HTTP OK && state.status != running && state.status != ready` | `HTTP OK && projection.phase != executing` | S19：新 phase/outcome 词汇 |
+| RA004 / 修改断言 | 完成结局 | `detail[state][status] == completed` | `detail[projection][outcome] == done` | S19：新 phase/outcome 词汇 |
+
+##### `rust/anchor-runner-host/src/api/tests.rs`
+
+测试 / fixture：`paused_wait_child_resumes_independently_then_releases_parent`。
+
+| ID / 类型 | 情形 | 旧断言或目标 | 新断言或目标 | S 候选分组 |
+| --- | --- | --- | --- | --- |
+| RA005 / 修改轮询 | 子 Run 停下的轮询条件 | `store child.status == RunStatus::Paused` | `store child.status == RunStatus::Stopped` | S25：pause 别名即时 stop |
+| RA006 / 修改断言 | 子 Run 的存储状态 | `store child.status == RunStatus::Paused` | `store child.status == RunStatus::Stopped` | S25：pause 别名即时 stop |
+
+##### `rust/anchor-runner-host/src/api/tests.rs`
+
+测试 / fixture：`start_and_pause_request (fixture)`。
+
+| ID / 类型 | 情形 | 旧断言或目标 | 新断言或目标 | S 候选分组 |
+| --- | --- | --- | --- | --- |
+| RA007 / 修改断言 | fixture 最终存储状态 | `record.status == RunStatus::Paused` | `record.status == RunStatus::Stopped` | S25：pause 别名即时 stop |
+| RA008 / 新增断言 | 新增：别名的有效操作 | `无该断言` | `alias[operation] == stop` | S25：pause 别名即时 stop |
+| RA009 / 新增断言 | 新增：响应说明别名 | `无该断言` | `alias[alias] == true` | S25：pause 别名即时 stop |
+
+##### `rust/anchor-runner-host/src/api/tests.rs`
+
+测试 / fixture：`downstream_failure_does_not_reclassify_committed_upstream_result`。
+
+| ID / 类型 | 情形 | 旧断言或目标 | 新断言或目标 | S 候选分组 |
+| --- | --- | --- | --- | --- |
+| RA010 / 修改断言 | 失败结局 | `detail[state][status] == failed` | `detail[projection][outcome] == failed` | S19：新 phase/outcome 词汇 |
+
+##### `rust/anchor-runner-host/src/api/tests.rs`
+
+测试 / fixture：`waiting_parent_rejects_child_grant_drift_then_restores_same_child_without_replay`。
+
+| ID / 类型 | 情形 | 旧断言或目标 | 新断言或目标 | S 候选分组 |
+| --- | --- | --- | --- | --- |
+| RA011 / 修改断言 | 停下后的子 Run 存储状态 | `child_before.status == RunStatus::Paused` | `child_before.status == RunStatus::Stopped` | S25：pause 别名即时 stop |
+
+##### `rust/anchor-runner-host/src/api/tests/conversations.rs`
+
+测试 / fixture：`conversation_resume_is_not_blocked_by_another_session_on_the_same_graph`。
+
+| ID / 类型 | 情形 | 旧断言或目标 | 新断言或目标 | S 候选分组 |
+| --- | --- | --- | --- | --- |
+| RA012 / 修改轮询 | bob_run 的 wait_run_status 目标 | `RunStatus::Paused` | `RunStatus::Stopped` | S25：pause 别名即时 stop |
+
+##### `rust/anchor-runner-host/src/api/tests/conversations.rs`
+
+测试 / fixture：`superseded_conversation_cannot_resume_or_recover_its_wait_child`。
+
+| ID / 类型 | 情形 | 旧断言或目标 | 新断言或目标 | S 候选分组 |
+| --- | --- | --- | --- | --- |
+| RA013 / 修改轮询 | child_run 的 wait_run_status 目标 | `RunStatus::Paused` | `RunStatus::Stopped` | S25：pause 别名即时 stop |
+
+##### `rust/anchor-runner-host/src/api/tests/conversations.rs`
+
+测试 / fixture：`superseded_conversation_keeps_detached_child_independent`。
+
+| ID / 类型 | 情形 | 旧断言或目标 | 新断言或目标 | S 候选分组 |
+| --- | --- | --- | --- | --- |
+| RA014 / 修改轮询 | detached child_run 的 wait_run_status 目标 | `RunStatus::Paused` | `RunStatus::Stopped` | S25：pause 别名即时 stop |
+
+##### `rust/anchor-runner-host/src/api/tests/conversations.rs`
+
+测试 / fixture：`superseded_conversation_cannot_resume_or_recover_its_wait_child`。
+
+| ID / 类型 | 情形 | 旧断言或目标 | 新断言或目标 | S 候选分组 |
+| --- | --- | --- | --- | --- |
+| RA015 / 修改断言 | 子 Run 对外相位 | `detail[state][status] == stopped` | `detail[projection][phase] == waiting` | S19：新 phase/outcome 词汇 |
+
+##### `rust/anchor-runner-host/src/api/tests/conversations.rs`
+
+测试 / fixture：`conversation_orphan_running_requires_explicit_stop_before_a_new_turn`。
+
+| ID / 类型 | 情形 | 旧断言或目标 | 新断言或目标 | S 候选分组 |
+| --- | --- | --- | --- | --- |
+| RA016 / 修改断言 | 无 worker 的 Running 对外相位 | `detail[state][status] == running` | `detail[projection][phase] == executing` | S19：新 phase/outcome 词汇 |
+
+##### `rust/anchor-runner-host/src/api/tests/kernel_probe.rs`
+
+测试 / fixture：`explicit_kernel_probe_runs_real_host_ops_and_projects_existing_queries`。
+
+| ID / 类型 | 情形 | 旧断言或目标 | 新断言或目标 | S 候选分组 |
+| --- | --- | --- | --- | --- |
+| RA017 / 修改断言 | 详情相位 | `detail[state][status] == completed` | `detail[projection][phase] == settled` | S19：新 phase/outcome 词汇 |
+| RA018 / 修改断言 | 详情结局 | `detail[projection][terminal] == true` | `detail[projection][outcome] == done` | S19：新 phase/outcome 词汇 |
+| RA019 / 修改断言 | 列表结局 | `list[runs][0][status] == completed` | `list[runs][0][projection][outcome] == done` | S19：新 phase/outcome 词汇 |
+
+##### `rust/anchor-runner-host/src/api/tests/kernel_probe.rs`
+
+测试 / fixture：`kernel_read_view_http_tracks_running_human_wait_and_settlement_with_host_time`。
+
+| ID / 类型 | 情形 | 旧断言或目标 | 新断言或目标 | S 候选分组 |
+| --- | --- | --- | --- | --- |
+| RA020 / 修改断言 | 运行中相位 | `running[projection][phase] == running` | `running[projection][phase] == executing` | S19：新 phase/outcome 词汇 |
+| RA021 / 修改断言 | 运行中动作精确 JSON | `{pause:false,stop:true,resume:false}` | `{stop:true,resume:false,abandon:true}` | S22/S24：动作按相位推导、移除 pending-control 展示 |
+| RA022 / 修改断言 | 等待人相位 | `waiting[projection][phase] == stopped` | `waiting[projection][phase] == waiting` | S19：新 phase/outcome 词汇 |
+| RA023 / 修改断言 | 等待人仍有 worker 的动作精确 JSON | `{pause:false,stop:false,resume:false}` | `{stop:false,resume:false,abandon:true}` | S22/S24：动作按相位推导、移除 pending-control 展示 |
+| RA024 / 修改断言 | 已放弃相位 | `settled[projection][phase] == aborted` | `settled[projection][phase] == settled` | S19：新 phase/outcome 词汇 |
+| RA025 / 修改断言 | 已放弃结局 | `settled[projection][terminal] == true` | `settled[projection][outcome] == aborted` | S19：新 phase/outcome 词汇 |
+| RA026 / 修改断言 | 已结算动作精确 JSON | `{pause:false,stop:false,resume:false}` | `{stop:false,resume:false,abandon:false}` | S22/S24：动作按相位推导、移除 pending-control 展示 |
+
+##### `rust/anchor-runner-host/src/api/tests/platform_contract.rs`
+
+测试 / fixture：`trigger_freezes_objective_and_manual_or_schedule_source`。
+
+| ID / 类型 | 情形 | 旧断言或目标 | 新断言或目标 | S 候选分组 |
+| --- | --- | --- | --- | --- |
+| RA027 / 修改断言 | 去掉旧 pending-control 字段后的状态断言 | `detail[control_requested] == null` | `detail[projection][phase] == settled` | S22/S24：动作按相位推导、移除 pending-control 展示 |
+
+##### `rust/anchor-runner-host/src/api/tests/platform_contract.rs`
+
+测试 / fixture：`updated_tracks_persisted_pause_stop_and_resume_after_restart`。
+
+| ID / 类型 | 情形 | 旧断言或目标 | 新断言或目标 | S 候选分组 |
+| --- | --- | --- | --- | --- |
+| RA028 / 修改断言 | pause 别名后的相位 | `paused[state][status] == paused` | `paused[projection][phase] == waiting` | S19：新 phase/outcome 词汇；S25：pause 别名即时 stop |
+| RA029 / 修改断言 | 重启后状态（原查 pending-control） | `reopened[control_requested] == null` | `reopened[projection][phase] == waiting` | S22/S24：动作按相位推导、移除 pending-control 展示 |
+| RA030 / 修改断言 | stop 后相位 | `stopped[state][status] == stopped` | `stopped[projection][phase] == waiting` | S19：新 phase/outcome 词汇 |
+| RA031 / 修改断言 | resume 完成后相位 | `completed[state][status] == completed` | `completed[projection][phase] == settled` | S19：新 phase/outcome 词汇 |
+
+##### `rust/anchor-runner-host/src/api/tests/run_abandon.rs`
+
+测试 / fixture：`abandon_cancels_the_running_node_and_makes_the_run_terminal_aborted`。
+
+| ID / 类型 | 情形 | 旧断言或目标 | 新断言或目标 | S 候选分组 |
+| --- | --- | --- | --- | --- |
+| RA032 / 修改断言 | abandon 响应结局 | `body[status] == aborted` | `body[projection][outcome] == aborted` | S19：新 phase/outcome 词汇 |
+
+##### `rust/anchor-runner-host/src/api/tests/run_abandon.rs`
+
+测试 / fixture：`abandon_is_idempotent_and_rejects_terminal_unknown_or_invalid_requests`。
+
+| ID / 类型 | 情形 | 旧断言或目标 | 新断言或目标 | S 候选分组 |
+| --- | --- | --- | --- | --- |
+| RA033 / 修改断言 | 默认 reason 的响应结局 | `defaulted[status] == aborted` | `defaulted[projection][outcome] == aborted` | S19：新 phase/outcome 词汇 |
+| RA034 / 修改断言 | 已 aborted 的响应结局 | `existing[status] == aborted` | `existing[projection][outcome] == aborted` | S19：新 phase/outcome 词汇 |
+
+##### `rust/anchor-runner-host/src/api/tests/run_abandon.rs`
+
+测试 / fixture：`abandon_keeps_the_assistant_binding_workspace_and_history_for_handover`。
+
+| ID / 类型 | 情形 | 旧断言或目标 | 新断言或目标 | S 候选分组 |
+| --- | --- | --- | --- | --- |
+| RA035 / 修改断言 | 交接前 abandon 响应结局 | `abandoned[status] == aborted` | `abandoned[projection][outcome] == aborted` | S19：新 phase/outcome 词汇 |
+
+##### `rust/anchor-runner-host/src/api/tests/session_calls.rs`
+
+测试 / fixture：`completed_session_execution_stays_waiting_until_delivery_settlement`。
+
+| ID / 类型 | 情形 | 旧断言或目标 | 新断言或目标 | S 候选分组 |
+| --- | --- | --- | --- | --- |
+| RA036 / 修改断言 | 执行完成且 delivery pending 的相位 | `detail[state][status] == completed` | `detail[projection][phase] == settled` | S19：新 phase/outcome 词汇 |
+
+##### `rust/anchor-runner-host/src/api/tests/session_calls.rs`
+
+测试 / fixture：`completed_pending_wait_child_recovers_delivery_and_parent_after_restart`。
+
+| ID / 类型 | 情形 | 旧断言或目标 | 新断言或目标 | S 候选分组 |
+| --- | --- | --- | --- | --- |
+| RA037 / 修改断言 | 子 Run 列表结局 | `child_projection[status] == completed` | `child_projection[projection][outcome] == done` | S19：新 phase/outcome 词汇 |
+
+##### `rust/anchor-runner-host/src/application/kernel_runs/tests.rs`
+
+测试 / fixture：`serial_probe_commits_artifacts_cost_and_phase_through_application`。
+
+| ID / 类型 | 情形 | 旧断言或目标 | 新断言或目标 | S 候选分组 |
+| --- | --- | --- | --- | --- |
+| RA038 / 修改断言 | 串行 probe 完成 | `assert!(project_run(...).terminal)` | `assert!(project_run(...).phase == settled)` | S19：新 phase/outcome 词汇 |
+
+##### `rust/anchor-runner-host/src/application/kernel_runs/tests.rs`
+
+测试 / fixture：`abandon_waiting_probe_is_terminal_and_refuses_late_submission`。
+
+| ID / 类型 | 情形 | 旧断言或目标 | 新断言或目标 | S 候选分组 |
+| --- | --- | --- | --- | --- |
+| RA039 / 修改断言 | 等待 probe 被放弃 | `assert!(project_run(...).terminal)` | `assert!(project_run(...).phase == settled)` | S19：新 phase/outcome 词汇 |
+
+##### `rust/anchor-runner-host/src/application/liveness.rs`
+
+测试 / fixture：`parked_or_unregistered_ready_runs_are_not_quiescent`。
+
+| ID / 类型 | 情形 | 旧断言或目标 | 新断言或目标 | S 候选分组 |
+| --- | --- | --- | --- | --- |
+| RA040 / 修改断言 | RunStatus::Paused、worker=false | `RunLiveness::observed(status,false).is_quiescent() == false` | `RunLiveness::observed(status,false).is_quiescent() == true` | S21：Paused/BudgetStopped 统一为静止 |
+| RA041 / 修改断言 | RunStatus::BudgetStopped、worker=false | `RunLiveness::observed(status,false).is_quiescent() == false` | `RunLiveness::observed(status,false).is_quiescent() == true` | S21：Paused/BudgetStopped 统一为静止 |
+
+##### `rust/anchor-runner-host/src/application/run_view.rs`
+
+测试 / fixture：`actions_cover_every_phase_waiter_and_outcome_with_and_without_worker`。
+
+| ID / 类型 | 情形 | 旧断言或目标 | 新断言或目标 | S 候选分组 |
+| --- | --- | --- | --- | --- |
+| RA042 / 修改断言 | Phase::Executing、worker=false；AvailableActions.resume 分量 | `AvailableActions {stop:true,resume:false,abandon:true}` | `AvailableActions {stop:true,resume:true,abandon:true}` | S20：无 worker 的 Executing 可以 resume |
+
+##### `rust/anchor-runner-host/src/application/run_projection.rs`
+
+测试 / fixture：`inactive_states_reuse_control_guards_and_liveness`。
+
+| ID / 类型 | 情形 | 旧断言或目标 | 新断言或目标 | S 候选分组 |
+| --- | --- | --- | --- | --- |
+| RA043 / 修改断言 | Ready、worker=false：pause 检查替换为 abandon | `assert!(!projection.actions.pause)` | `projection.actions.abandon == true` | S22/S24：动作按相位推导、移除 pending-control 展示 |
+| RA044 / 修改断言 | Ready、worker=false：注意项投影检查 | `projection.needs_attention == false` | `(phase==waiting \|\| outcome∈{failed,aborted} \|\| (phase==executing && !active)) == true` | S22/S24：动作按相位推导、移除 pending-control 展示 |
+| RA045 / 修改断言 | Ready、worker=false：静止检查读取来源 | `projection.quiescent == false` | `RunLiveness::observed(status,false).is_quiescent() == false` | S22/S24：动作按相位推导、移除 pending-control 展示 |
+| RA046 / 修改断言 | Running、worker=false：pause 检查替换为 abandon | `assert!(!projection.actions.pause)` | `projection.actions.abandon == true` | S22/S24：动作按相位推导、移除 pending-control 展示 |
+| RA047 / 修改断言 | Running、worker=false：注意项投影检查 | `projection.needs_attention == true` | `(phase==waiting \|\| outcome∈{failed,aborted} \|\| (phase==executing && !active)) == true` | S22/S24：动作按相位推导、移除 pending-control 展示 |
+| RA048 / 修改断言 | Running、worker=false：静止检查读取来源 | `projection.quiescent == false` | `RunLiveness::observed(status,false).is_quiescent() == false` | S22/S24：动作按相位推导、移除 pending-control 展示 |
+| RA049 / 修改断言 | Paused、worker=false：stop 表项 | `projection.actions.stop == true` | `projection.actions.stop == false` | S22/S24：动作按相位推导、移除 pending-control 展示 |
+| RA050 / 修改断言 | Paused、worker=false：pause 检查替换为 abandon | `assert!(!projection.actions.pause)` | `projection.actions.abandon == true` | S22/S24：动作按相位推导、移除 pending-control 展示 |
+| RA051 / 修改断言 | Paused、worker=false：注意项投影检查 | `projection.needs_attention == false` | `(phase==waiting \|\| outcome∈{failed,aborted} \|\| (phase==executing && !active)) == true` | S22/S24：动作按相位推导、移除 pending-control 展示 |
+| RA052 / 修改断言 | Paused、worker=false：静止检查读取来源 | `projection.quiescent == false` | `RunLiveness::observed(status,false).is_quiescent() == true` | S21：Paused/BudgetStopped 统一为静止 |
+| RA053 / 修改断言 | WaitingCall、worker=false：resume 表项 | `projection.actions.resume == true` | `projection.actions.resume == false` | S22/S24：动作按相位推导、移除 pending-control 展示 |
+| RA054 / 修改断言 | WaitingCall、worker=false：stop 表项 | `projection.actions.stop == true` | `projection.actions.stop == false` | S22/S24：动作按相位推导、移除 pending-control 展示 |
+| RA055 / 修改断言 | WaitingCall、worker=false：pause 检查替换为 abandon | `assert!(!projection.actions.pause)` | `projection.actions.abandon == true` | S22/S24：动作按相位推导、移除 pending-control 展示 |
+| RA056 / 修改断言 | WaitingCall、worker=false：注意项投影检查 | `projection.needs_attention == false` | `(phase==waiting \|\| outcome∈{failed,aborted} \|\| (phase==executing && !active)) == true` | S22/S24：动作按相位推导、移除 pending-control 展示 |
+| RA057 / 修改断言 | WaitingCall、worker=false：静止检查读取来源 | `projection.quiescent == false` | `RunLiveness::observed(status,false).is_quiescent() == false` | S22/S24：动作按相位推导、移除 pending-control 展示 |
+| RA058 / 修改断言 | WaitingRecovery、worker=false：stop 表项 | `projection.actions.stop == true` | `projection.actions.stop == false` | S22/S24：动作按相位推导、移除 pending-control 展示 |
+| RA059 / 修改断言 | WaitingRecovery、worker=false：pause 检查替换为 abandon | `assert!(!projection.actions.pause)` | `projection.actions.abandon == true` | S22/S24：动作按相位推导、移除 pending-control 展示 |
+| RA060 / 修改断言 | WaitingRecovery、worker=false：注意项投影检查 | `projection.needs_attention == true` | `(phase==waiting \|\| outcome∈{failed,aborted} \|\| (phase==executing && !active)) == true` | S22/S24：动作按相位推导、移除 pending-control 展示 |
+| RA061 / 修改断言 | WaitingRecovery、worker=false：静止检查读取来源 | `projection.quiescent == false` | `RunLiveness::observed(status,false).is_quiescent() == false` | S22/S24：动作按相位推导、移除 pending-control 展示 |
+| RA062 / 修改断言 | BudgetStopped、worker=false：resume 表项 | `projection.actions.resume == false` | `projection.actions.resume == true` | S23：取消旧恢复/预算 resume 展示限制 |
+| RA063 / 修改断言 | BudgetStopped、worker=false：stop 表项 | `projection.actions.stop == true` | `projection.actions.stop == false` | S22/S24：动作按相位推导、移除 pending-control 展示 |
+| RA064 / 修改断言 | BudgetStopped、worker=false：pause 检查替换为 abandon | `assert!(!projection.actions.pause)` | `projection.actions.abandon == true` | S22/S24：动作按相位推导、移除 pending-control 展示 |
+| RA065 / 修改断言 | BudgetStopped、worker=false：注意项投影检查 | `projection.needs_attention == true` | `(phase==waiting \|\| outcome∈{failed,aborted} \|\| (phase==executing && !active)) == true` | S22/S24：动作按相位推导、移除 pending-control 展示 |
+| RA066 / 修改断言 | BudgetStopped、worker=false：静止检查读取来源 | `projection.quiescent == false` | `RunLiveness::observed(status,false).is_quiescent() == true` | S21：Paused/BudgetStopped 统一为静止 |
+| RA067 / 修改断言 | Stopped、worker=false：stop 表项 | `projection.actions.stop == true` | `projection.actions.stop == false` | S22/S24：动作按相位推导、移除 pending-control 展示 |
+| RA068 / 修改断言 | Stopped、worker=false：pause 检查替换为 abandon | `assert!(!projection.actions.pause)` | `projection.actions.abandon == true` | S22/S24：动作按相位推导、移除 pending-control 展示 |
+| RA069 / 修改断言 | Stopped、worker=false：注意项投影检查 | `projection.needs_attention == false` | `(phase==waiting \|\| outcome∈{failed,aborted} \|\| (phase==executing && !active)) == true` | S22/S24：动作按相位推导、移除 pending-control 展示 |
+| RA070 / 修改断言 | Stopped、worker=false：静止检查读取来源 | `projection.quiescent == true` | `RunLiveness::observed(status,false).is_quiescent() == true` | S22/S24：动作按相位推导、移除 pending-control 展示 |
+| RA071 / 修改断言 | Completed、worker=false：pause 检查替换为 abandon | `assert!(!projection.actions.pause)` | `projection.actions.abandon == false` | S22/S24：动作按相位推导、移除 pending-control 展示 |
+| RA072 / 修改断言 | Completed、worker=false：注意项投影检查 | `projection.needs_attention == false` | `(phase==waiting \|\| outcome∈{failed,aborted} \|\| (phase==executing && !active)) == false` | S22/S24：动作按相位推导、移除 pending-control 展示 |
+| RA073 / 修改断言 | Completed、worker=false：静止检查读取来源 | `projection.quiescent == true` | `RunLiveness::observed(status,false).is_quiescent() == true` | S22/S24：动作按相位推导、移除 pending-control 展示 |
+| RA074 / 修改断言 | Failed、worker=false：pause 检查替换为 abandon | `assert!(!projection.actions.pause)` | `projection.actions.abandon == false` | S22/S24：动作按相位推导、移除 pending-control 展示 |
+| RA075 / 修改断言 | Failed、worker=false：注意项投影检查 | `projection.needs_attention == true` | `(phase==waiting \|\| outcome∈{failed,aborted} \|\| (phase==executing && !active)) == true` | S22/S24：动作按相位推导、移除 pending-control 展示 |
+| RA076 / 修改断言 | Failed、worker=false：静止检查读取来源 | `projection.quiescent == true` | `RunLiveness::observed(status,false).is_quiescent() == true` | S22/S24：动作按相位推导、移除 pending-control 展示 |
+| RA077 / 修改断言 | Aborted、worker=false：pause 检查替换为 abandon | `assert!(!projection.actions.pause)` | `projection.actions.abandon == false` | S22/S24：动作按相位推导、移除 pending-control 展示 |
+| RA078 / 修改断言 | Aborted、worker=false：注意项投影检查 | `projection.needs_attention == true` | `(phase==waiting \|\| outcome∈{failed,aborted} \|\| (phase==executing && !active)) == true` | S22/S24：动作按相位推导、移除 pending-control 展示 |
+| RA079 / 修改断言 | Aborted、worker=false：静止检查读取来源 | `projection.quiescent == true` | `RunLiveness::observed(status,false).is_quiescent() == true` | S22/S24：动作按相位推导、移除 pending-control 展示 |
+
+##### `rust/anchor-runner-host/src/application/run_projection.rs`
+
+测试 / fixture：`pending_control_and_session_coordination_are_observed_once`。
+
+| ID / 类型 | 情形 | 旧断言或目标 | 新断言或目标 | S 候选分组 |
+| --- | --- | --- | --- | --- |
+| RA080 / 修改断言 | active=true、requested=pause 的相位 | `projection.phase == pausing` | `projection.phase == executing` | S22/S24：动作按相位推导、移除 pending-control 展示 |
+| RA081 / 修改断言 | active=true、requested=pause 的动作字段 | `assert!(!projection.actions.pause)` | `assert!(projection.actions.abandon)` | S22/S24：动作按相位推导、移除 pending-control 展示 |
+| RA082 / 修改断言 | active=true、requested=stop 的相位 | `projection.phase == stopping` | `projection.phase == executing` | S22/S24：动作按相位推导、移除 pending-control 展示 |
+| RA083 / 修改断言 | active=true、requested=stop 的动作可见性 | `assert!(!projection.actions.stop)` | `assert!(projection.actions.stop)` | S22/S24：动作按相位推导、移除 pending-control 展示 |
+
+##### `rust/anchor-runner-host/src/application/run_projection.rs`
+
+测试 / fixture：`legacy_projection_serialization_preserves_ready_paused_and_stopped_bytes`。
+
+| ID / 类型 | 情形 | 旧断言或目标 | 新断言或目标 | S 候选分组 |
+| --- | --- | --- | --- | --- |
+| RA084 / 修改断言 | RunStatus::Ready：serde_json::to_vec(...) == expected.as_bytes() | `{"phase":"ready","active":false,"control_requested":null,"terminal":false,"quiescent":false,"needs_attention":false,"actions":{"pause":false,"stop":true,"resume":true}}` | `{"phase":"executing","reason":null,"active":false,"actions":{"stop":true,"resume":true,"abandon":true},"updated":null}` | S19：新 phase/outcome 词汇；S22/S24：动作按相位推导、移除 pending-control 展示；S26：updated 可空 |
+| RA085 / 修改断言 | RunStatus::Paused：serde_json::to_vec(...) == expected.as_bytes() | `{"phase":"paused","active":false,"control_requested":null,"terminal":false,"quiescent":false,"needs_attention":false,"actions":{"pause":false,"stop":true,"resume":true}}` | `{"phase":"waiting","waiting_for":"human","reason":"paused","active":false,"actions":{"stop":false,"resume":true,"abandon":true},"updated":null}` | S19：新 phase/outcome 词汇；S22/S24：动作按相位推导、移除 pending-control 展示；S26：updated 可空 |
+| RA086 / 修改断言 | RunStatus::Stopped：serde_json::to_vec(...) == expected.as_bytes() | `{"phase":"stopped","active":false,"control_requested":null,"terminal":false,"quiescent":true,"needs_attention":false,"actions":{"pause":false,"stop":true,"resume":true}}` | `{"phase":"waiting","waiting_for":"human","reason":"stopped","active":false,"actions":{"stop":false,"resume":true,"abandon":true},"updated":null}` | S19：新 phase/outcome 词汇；S22/S24：动作按相位推导、移除 pending-control 展示；S26：updated 可空 |
+
+##### `rust/anchor-runner-host/src/application/tests.rs`
+
+测试 / fixture：`pending_control_projects_active_tokens_with_stop_priority`。
+
+| ID / 类型 | 情形 | 旧断言或目标 | 新断言或目标 | S 候选分组 |
+| --- | --- | --- | --- | --- |
+| RA087 / 修改断言 | 缺少 worker 的 missing record | `project_run(...).control_requested == None` | `project_run(...).phase == executing` | S22/S24：动作按相位推导、移除 pending-control 展示 |
+| RA088 / 修改断言 | 已登记 worker、未请求控制 | `project_run(...).control_requested == None` | `project_run(...).phase == executing` | S22/S24：动作按相位推导、移除 pending-control 展示 |
+| RA089 / 修改断言 | pause flag=true | `project_run(...).control_requested == Some(pause)` | `project_run(...).phase == executing` | S22/S24：动作按相位推导、移除 pending-control 展示 |
+| RA090 / 修改断言 | pause+cancellation flags=true；原 stop 优先 | `project_run(...).control_requested == Some(stop)` | `project_run(...).phase == executing` | S22/S24：动作按相位推导、移除 pending-control 展示 |
+| RA091 / 修改断言 | 移除 worker 后 | `project_run(...).control_requested == None` | `project_run(...).phase == executing` | S22/S24：动作按相位推导、移除 pending-control 展示 |
+
+##### `rust/anchor-runner-host/src/application/session_calls.rs`
+
+测试 / fixture：`stopped_parent_cancels_wait_delivery (fixture) → active_parent_stop_cancels_wait_session_delivery_but_not_detach`。
+
+| ID / 类型 | 情形 | 旧断言或目标 | 新断言或目标 | S 候选分组 |
+| --- | --- | --- | --- | --- |
+| RA092 / 修改断言 | active_parent=true，stop 后仍排空的父 Run | `project_run(parent,...).control_requested == Some(stop)` | `project_run(parent,...).phase == executing` | S22/S24：动作按相位推导、移除 pending-control 展示 |
+
+#### fixture 关联测试
+
+`start_and_pause_request` 直接或经 `start_and_pause` 影响以下既有测试；本表中的 fixture 断言只计一次，未重复算到每个调用者：
+
+- `api/tests.rs::pause_resume_uses_same_frozen_run_after_graph_edit_and_service_object_restart`
+- `api/tests/platform_contract.rs::busy_schedule_creates_no_run_or_source_metadata`
+- `api/tests/platform_contract.rs::updated_tracks_persisted_pause_stop_and_resume_after_restart`
+- `api/tests/schedules.rs::busy_due_schedule_skips_existing_admission_without_creating_a_run`
+- `api/tests/run_abandon.rs::abandon_leaves_other_runs_and_their_recovery_entry_points_unchanged`
+
+`application/session_calls.rs::stopped_parent_cancels_wait_delivery(true)` 的改动断言由 `active_parent_stop_cancels_wait_session_delivery_but_not_detach` 执行；false 分支的存储状态断言未改，关联测试为 `waiting_parent_stop_cancels_completed_pending_session_child_without_waking_parent`。
+
+#### 动态表完整行变化核对
+
+`application/run_projection.rs::inactive_states_reuse_control_guards_and_liveness` 的表元组列为 `(resume, stop, attention, quiescent)`；这里保留所有 10 行，避免把没修改的分量误报为修改。上文逐项 attention 新值使用实际表达式：Ready 还会经 `attention || status==Ready` 得到 true。
+
+| RunStatus | 旧表元组 | 新表元组 | 实际新 attention |
+| --- | --- | --- | --- |
+| Ready | `(true, true, false, false)` | `(true, true, false, false)` | true |
+| Running | `(true, true, true, false)` | `(true, true, true, false)` | true |
+| Paused | `(true, true, false, false)` | `(true, false, true, true)` | true |
+| WaitingCall | `(true, true, false, false)` | `(false, false, true, false)` | true |
+| WaitingRecovery | `(false, true, true, false)` | `(false, false, true, false)` | true |
+| BudgetStopped | `(false, true, true, false)` | `(true, false, true, true)` | true |
+| Stopped | `(true, true, false, true)` | `(true, false, true, true)` | true |
+| Completed | `(false, false, false, true)` | `(false, false, false, true)` | false |
+| Failed | `(false, false, true, true)` | `(false, false, true, true)` | true |
+| Aborted | `(false, false, true, true)` | `(false, false, true, true)` | true |
+
+`application/run_view.rs::actions_cover_every_phase_waiter_and_outcome_with_and_without_worker` 保留 9 相位/等待者/结局 × 2 worker 的 18 组合。仅 Executing / worker=false 的 resume 从 false 改 true；其余 17 组合以及全部 stop/abandon 预期未改。
+
+`application/liveness.rs::parked_or_unregistered_ready_runs_are_not_quiescent` 保留 10 旧状态 × 2 worker 的 20 组合。仅 Paused、BudgetStopped 的无 worker 静止预期从 false 改 true；所有有 worker 的非静止断言未改。
+
+#### 新增测试（不混计既有断言修改）
+
+文件：`rust/anchor-runner-host/src/application/legacy_run_view.rs`。测试：`every_legacy_status_maps_lossily_with_both_worker_observations`。
+
+对下表每一旧状态分别执行 worker=false / true，精确断言 `(phase,waiting_for,outcome,reason,active)`；active 必须等于 worker。
+
+| 旧 RunStatus | phase | waiting_for | outcome | reason | worker 覆盖 |
+| --- | --- | --- | --- | --- | --- |
+| Ready | executing | None | None | None | false、true |
+| Running | executing | None | None | None | false、true |
+| Paused | waiting | human | None | paused | false、true |
+| Stopped | waiting | human | None | explanation | false、true |
+| BudgetStopped | waiting | human | None | budget | false、true |
+| WaitingRecovery | waiting | effect | None | explanation | false、true |
+| WaitingCall | waiting | child | None | explanation | false、true |
+| Completed | settled | None | done | None | false、true |
+| Failed | settled | None | failed | explanation | false、true |
+| Aborted | settled | None | aborted | explanation | false、true |
+
+每组合另有七个独立断言：
+
+1. `actions.stop == (phase==executing)`。
+2. `actions.resume == (!worker && (phase==executing || waiting_for==human))`。
+3. `actions.abandon == (phase!=settled)`。
+4. `waiting_for` 字段是否存在与 waiter 是否存在一致。
+5. `outcome` 字段是否存在与 outcome 是否存在一致。
+6. 不存在旧 `status` 字段。
+7. 不存在旧 `actions.pause` 字段。
+
+此外单独断言 `Stopped` 无 error 时映射为 `Waiting::Human {reason:"stopped"}`。新增测试共 9 个源码 assert 宏（循环内 8 个，循环外 1 个），展开后 161 次断言。归属：新词汇、动作按相位推导、无 worker Executing resume、S23：取消旧恢复/预算 resume 展示限制。
+
+
+#### Web 逐项断言
+
+| 编号 | 文件 | 测试名 | 原断言 | 新断言 | 行为分组 |
+| --- | --- | --- | --- | --- | --- |
+| W1 | `apps/web/e2e/goose-native-trace.spec.ts` | real Rust Host and Goose retain active trace, canonical completion and recorded Plugin metadata after refresh | `expect(during.state.status).toBe('running')` | `expect(during.projection?.phase).toBe('executing')` | S19/S20：Run 新词汇/worker 观察 |
+| W2 | `apps/web/e2e/goose-native-trace.spec.ts` | real Rust Host and Goose retain active trace, canonical completion and recorded Plugin metadata after refresh | `expect.poll(async () => (await (await request.get(\`${base}/runs/${run}\`)).json()).state.status).toBe('completed')` | `expect.poll(async () => (await (await request.get(\`${base}/runs/${run}\`)).json()).projection.outcome).toBe('done')` | S19/S20：Run 新词汇/worker 观察 |
+| W3 | `apps/web/e2e/graph-calls-real.spec.ts` | real backend: author wait and detach calls, follow results and concurrent run chains | `expect(detail.state.status).toBe('running')` | `expect(detail.projection?.phase).toBe('executing')` | S19/S22/S23/S24：子 Run phase/outcome 与三动作 |
+| W4 | `apps/web/e2e/graph-calls-real.spec.ts` | real backend: author wait and detach calls, follow results and concurrent run chains | `expect(detail.calls[0].status).toBe('running')` | `expect(detail.calls[0].projection.phase).toBe('executing')` | S19/S22/S23/S24：子 Run phase/outcome 与三动作 |
+| W5 | `apps/web/e2e/graph-calls-real.spec.ts` | real backend: author wait and detach calls, follow results and concurrent run chains | `expect(waitDetail.state.status).toBe('completed')` | `expect(waitDetail.projection?.outcome).toBe('done')` | S19/S22/S23/S24：子 Run phase/outcome 与三动作 |
+| W6 | `apps/web/e2e/graph-calls-real.spec.ts` | real backend: author wait and detach calls, follow results and concurrent run chains | `expect(detail.state.status).toBe('completed')` | `expect(detail.projection?.outcome).toBe('done')` | S19/S22/S23/S24：子 Run phase/outcome 与三动作 |
+| W7 | `apps/web/e2e/graph-calls-real.spec.ts` | real backend: author wait and detach calls, follow results and concurrent run chains | `expect(detail.calls[0].status).toBe('running')` | `expect(detail.calls[0].projection.phase).toBe('executing')` | S19/S22/S23/S24：子 Run phase/outcome 与三动作 |
+| W8 | `apps/web/e2e/graph-calls-real.spec.ts` | real backend: author wait and detach calls, follow results and concurrent run chains | `expect((await json(request, \`${base}/runs/${detail.calls![0].run}\`)).state.status).toBe('completed')` | `expect((await json(request, \`${base}/runs/${detail.calls![0].run}\`)).projection.outcome).toBe('done')` | S19/S22/S23/S24：子 Run phase/outcome 与三动作 |
+| W9 | `apps/web/e2e/graph-calls.spec.ts` | mocked: show wait/detach child Runs, source links and active controls | `expect(page.getByRole('button', { name: '暂停' })).toBeVisible()` | `expect(page.getByRole('button', { name: '放弃', exact: true })).toBeVisible()` | S19/S22/S23/S24：子 Run phase/outcome 与三动作 |
+| W10 | `apps/web/e2e/parallel-real.spec.ts` | real backend: paired authoring, simultaneous native nodes, joined artifacts and invalid-pair rejection | `expect(detail.state.status).toBe('completed')` | `expect(detail.projection?.outcome).toBe('done')` | S19/S20：Run 新词汇/worker 观察 |
+| W11 | `apps/web/e2e/parallel.spec.ts` | mocked: show simultaneous branch execution and pending join in one Run | `expect(page.locator('.execution-node.state-running')).toHaveCount(2)` | `expect(page.locator('.execution-node.state-executing.is-live')).toHaveCount(2)` | S19/S20：Run 新词汇/worker 观察 |
+| W12 | `apps/web/e2e/recovery.spec.ts` | unknown tool result resumes through the normal Agent context path | `expect(page.getByText('Agent 上次工具调用的结果未记录')).toBeVisible()` | `expect(page.locator('.canvas-head .pill', { hasText: '等待你处理：Agent 上次工具调用的结果未记录' })).toBeVisible()` | S19/S20：Run 新词汇/worker 观察 |
+| W13 | `apps/web/e2e/recovery.spec.ts` | inactive running Run can be resumed from its existing detail page | `expect(page.locator('.execution-node.state-running')).toHaveCount(0)` | `expect(page.locator('.execution-node.is-live')).toHaveCount(0)` | S19/S20：Run 新词汇/worker 观察 |
+| W14 | `apps/web/e2e/recovery.spec.ts` | inactive running Run can be resumed from its existing detail page | `expect(page.locator('.execution-node.state-waiting_resume')).toHaveCount(1)` | `expect(page.locator('.execution-node.state-executing')).toHaveCount(1)` | S19/S20：Run 新词汇/worker 观察 |
+| W15 | `apps/web/e2e/recovery.spec.ts` | inactive running Run can be resumed from its existing detail page | `expect(page.getByText('宿主重启后尚未接续')).toBeVisible()` | `expect(page.locator('[aria-label="活动节点"]')).toContainText('等待接续')` | S19/S20：Run 新词汇/worker 观察 |
+| W16 | `apps/web/src/ChannelsPage.test.tsx` | waits for the executor to exit before allowing retirement and binds it to the current Run | `expect(container.textContent).toContain('正在停止…')` | `expect(container.textContent).toContain('等待你处理：stopped')` | S19/S21：等待人/worker 排空/静止语义 |
+| W17 | `apps/web/src/ChannelsPage.test.tsx` | does not infer resumability when controls are denied and uses human quiescence for retirement | `expect(button('退役实例').disabled).toBe(true)` | `expect(button('退役实例').disabled).toBe(false)` | S19/S21：等待人/worker 排空/静止语义 |
+| W18 | `apps/web/src/RunDetailPage.test.tsx` | exposes the server-projected actions for %s | `expect(buttons.map(button => button.textContent)).toEqual(['停止', '继续'])` | `expect(buttons.map(button => button.textContent)).toEqual(['停止', '继续', '放弃'])` | S19/S22/S23/S24：统一等待文案/三动作 |
+| W19 | `apps/web/src/RunDetailPage.test.tsx` | exposes the server-projected actions for %s | `expect(control.mock.calls).toEqual([['stop'], ['resume']])` | `expect(control.mock.calls).toEqual([['stop'], ['resume'], ['abandon']])` | S19/S22/S23/S24：统一等待文案/三动作 |
+| W20 | `apps/web/src/RunDetailPage.test.tsx` | exposes the server-projected actions for %s | `expect(element.textContent).toContain(status === 'waiting_call' ? '等待调用结果' : status === 'ready' ? '等待执行' : '等待恢复上下文')` | `expect(element.textContent).toContain(label)` | S19/S22/S23/S24：统一等待文案/三动作 |
+| W21 | `apps/web/src/RunDetailPage.test.tsx` | uses the projection for cursor and control hints despite conflicting legacy fields | `expect(element.querySelector('[aria-label="活动节点"]')?.textContent).toContain('宿主重启后尚未接续')` | `expect(element.querySelector('[aria-label="活动节点"]')?.textContent).toContain('等待接续')` | S19/S22/S23/S24：统一等待文案/三动作 |
+| W22 | `apps/web/src/Timeline.test.ts` | keeps the restart message for a Run the host no longer owns | `expect(factsFor({ running: false, status: 'running', updated: '2026-09-29T10:30:00', projection: { phase: 'waiting_resume', active: false, control_requested: null, terminal: false, quiescent: false, needs_attention: true, actions: { pause: false, stop: true, resume: true }, } })).toEqual({ label: '运行状态', value: '宿主重启后等待接续', })` | `expect(factsFor({ running: false, updated: '2026-09-29T10:30:00', projection: { phase: 'executing', active: false, reason: null, updated: null, actions: { stop: true, resume: true, abandon: true }, } })).toEqual({ label: '运行状态', value: '宿主重启后等待接续', })` | S19/S20：Timeline phase/attention |
+| W23 | `apps/web/src/Timeline.test.ts` | reports a resident segment by its own window, not the Run lifetime | `expect(factsFor({ running: false, status: 'stopped', activity: [] }, { resident: true, end: +new Date('2026-09-28T09:00:00') })).toEqual({ label: '这段时长', value: '暂无记录', end: '暂无记录', })` | `expect(factsFor({ running: false, activity: [], projection: { phase: 'waiting', waiting_for: 'human', active: false, reason: 'stopped', updated: null, actions: { stop: false, resume: true, abandon: true } } }, { resident: true, end: +new Date('2026-09-28T09:00:00') })).toEqual({ label: '这段时长', value: '暂无记录', end: '暂无记录', })` | S19/S20：Timeline phase/attention |
+| W24 | `apps/web/src/Timeline.test.ts` | includes waiting recovery in the same attention filter used by the Timeline | `expect(entry.status).toBe('waiting_recovery')` | `expect(entry.status).toBe('waiting')` | S19/S20：Timeline phase/attention |
+| W25 | `apps/web/src/parallel.test.ts` | shows both active branches, animates both selected inputs, and leaves join pending | `expect(nodes.filter(node => node.data.state === 'running').map(node => node.id)).toEqual(['branch-a', 'branch-b'])` | `expect(nodes.filter(node => node.data.state === 'executing' && node.data.live).map(node => node.id)).toEqual(['branch-a', 'branch-b'])` | S19/S20：Run 新词汇/worker 观察 |
+| W26 | `apps/web/src/parallel.test.ts` | shows both active branches, animates both selected inputs, and leaves join pending | `expect(toFlowNodes(region, 'parallel', { ...state, active: {} }, observation).filter(node => node.data.state === 'running')).toEqual([])` | `expect(toFlowNodes(region, 'parallel', { ...state, active: {} }, observation).filter(node => node.data.live)).toEqual([])` | S19/S20：Run 新词汇/worker 观察 |
+| W27 | `apps/web/src/parallel.test.ts` | projects native Rust branch cursors while leaving completed branches and join inactive | `expect(toFlowNodes(region, 'parallel', native, observation).filter(node => node.data.state === 'running').map(node => node.id)) .toEqual(['branch-a', 'branch-b'])` | `expect(toFlowNodes(region, 'parallel', native, observation).filter(node => node.data.state === 'executing' && node.data.live).map(node => node.id)) .toEqual(['branch-a', 'branch-b'])` | S19/S20：Run 新词汇/worker 观察 |
+| W28 | `apps/web/src/parallel.test.ts` | keeps retained %s branch cursors quiet instead of rendering execution | `expect(nodes.filter(node => node.data.state === phase).map(node => node.id)).toEqual(['branch-a', 'branch-b'])` | `expect(nodes.filter(node => node.data.state === view.phase).map(node => node.id)).toEqual(['branch-a', 'branch-b'])` | S19/S20：Run 新词汇/worker 观察 |
+| W29 | `apps/web/src/parallel.test.ts` | keeps retained %s branch cursors quiet instead of rendering execution | `expect(nodes.filter(node => node.data.state === 'running')).toEqual([])` | `expect(nodes.filter(node => node.data.live)).toEqual([])` | S19/S20：Run 新词汇/worker 观察 |
+| W30 | `apps/web/src/parallel.test.ts` | keeps unknown Run observations quiet while retaining definition-only editor nodes | `expect(unknown.filter(node => node.data.state === 'running')).toEqual([])` | `expect(unknown.filter(node => node.data.live)).toEqual([])` | S19/S20：Run 新词汇/worker 观察 |
+
+参数化断言的具体取值（同一表达式的每个实例）：
+
+| 文件/测试 | 原预期 | 新预期 | 行为分组 |
+| --- | --- | --- | --- |
+| RunDetailPage / exposes… / waiting_call | 按钮停止、继续；调用stop/resume；等待调用结果 | 按钮停止、继续、放弃；调用stop/resume/abandon；waiting/child 显示等待子任务 | S19/S22/S23/S24：三动作/等待词汇 |
+| RunDetailPage / exposes… / ready | 按钮停止、继续；调用stop/resume；等待执行 | 按钮停止、继续、放弃；调用stop/resume/abandon；executing+inactive 显示等待接续 | S19/S20/S22：三动作/Ready合并 |
+| RunDetailPage / exposes… / waiting_recovery | 按钮停止、继续；调用stop/resume；等待恢复上下文 | 按钮停止、继续、放弃；调用stop/resume/abandon；waiting/effect+reason 显示等待核查效果：工具结果未记录 | S19/S22/S23/S24：三动作/等待词汇；此fixture故意独立给动作事实以检查UI不自行授权 |
+| RunInspector / uses… / waiting_resume / node-summary | 等待接续 | executing+inactive 仍显示等待接续 | S20：worker观察 |
+| RunInspector / uses… / waiting_resume / call-records | 本节点：等待接续 | 本节点：等待接续 | S20：worker观察 |
+| RunInspector / uses… / waiting_recovery / node-summary | 等待恢复上下文 | 等待核查效果：工具结果未记录 | S19：统一reason |
+| RunInspector / uses… / waiting_recovery / call-records | 本节点：等待恢复上下文 | 本节点：等待核查效果：工具结果未记录 | S19：统一reason |
+| RunInspector / uses… / paused / node-summary | 已暂停 | 等待你处理：paused | S19/S21：Human统一 |
+| RunInspector / uses… / paused / call-records | 本节点：已暂停 | 本节点：等待你处理：paused | S19/S21：Human统一 |
+| parallel / keeps retained… / waiting_resume / branch identities | 两分支state=waiting_resume | 两分支state=executing，inactive | S20：worker观察 |
+| parallel / keeps retained… / waiting_resume / live identities | state=running的节点为空 | live=true的节点为空 | S20：worker观察 |
+| parallel / keeps retained… / waiting_recovery / branch identities | 两分支state=waiting_recovery | 两分支state=waiting，waiting_for=effect | S19：等待词汇 |
+| parallel / keeps retained… / waiting_recovery / live identities | state=running的节点为空 | live=true的节点为空 | S20：worker观察 |
+| parallel / keeps retained… / paused / branch identities | 两分支state=paused | 两分支state=waiting，waiting_for=human，reason=paused | S19/S21：Human统一 |
+| parallel / keeps retained… / paused / live identities | state=running的节点为空 | live=true的节点为空 | S20：worker观察 |
+| parallel / keeps retained… / stopped / branch identities | 两分支state=stopped | 两分支state=waiting，waiting_for=human，reason=stopped | S19/S21：Human统一 |
+| parallel / keeps retained… / stopped / live identities | state=running的节点为空 | live=true的节点为空 | S20：worker观察 |
+
+fixture 的间接断言变化与未覆盖边界：
+
+- `Timeline.test.ts / includes waiting recovery…`：原通过手工切换 needs_attention=false 检查attention；新将 waiting/effect 切换为 settled/done 后仍断言false，禁止隐藏的attention旗标。原true/false断言均保留。
+- `RunDetailPage.test.ts / shows recovery guidance…`：原恢复专用文案来自waiting_recovery分支；现只来自projection.reason。通过state.error带旧文案但projection无该reason验证不泄露旧字段；原正反文案断言保留。
+- `ChannelsPage.test.ts / does not infer resumability…`：旧stopped但quiescent=false的fixture现在映射waiting/human+inactive，按新语义允许退役（disabled=true→false）；Run controls仍全部拒绝。属于Human静止统一的可见行为变化。
+- `e2e/recovery.spec.ts / unknown tool result resumes…`：旧waiting_recovery fixture允许resume；为保留原resume成功操作验收，新fixture显式waiting/human并携同一恢复说明。它只验证人等待后的接续，不证明effect等待可以resume；effect按新动作规则不允许resume，停止条件后未新增独立effect组件测试。恢复副作用、产物、实际provider未由这个mock验证。
+- `RunDetailPage / exposes…` 的三个fixture都故意提供stop/resume/abandon=true，验证UI只读Host动作；不代表这些phase真实Host都会授权这三项。
+- 其余typed Run/CallRecord、mocked e2e的projection只将旧Run词汇与flags迁为新字段；Session Turn、native branch status、listener、节点完成/中断事实不迁移。原非状态断言全部保留。
+- `Timeline` 的finished类选择器迁为settled（原宽度、时间、几何断言未变）；AST清单只统计expect表达式，selector绑定在变量赋值中的变化需按此补记。
+
+
 ## 尚未完成
 
 - 并行分支内的模块作用域。
-- 全量Host迁移：H1、H2.1与P已验收；R本地交付的测量结论为“需要重想”，H3–H6暂缓，先审查旧读契约；P未覆盖的并行/Call/助手、Goose恢复与删除仍未迁。全局C2仍未验收，16 save / 36 mutation为旧路径棘轮起点。
+- 全量Host迁移：H1、H2.1、P及R0/R已验收；R2停止交回，测量结论为“需要重想”，H3–H6暂缓，先裁定暂停别名与原测试契约；P未覆盖的并行/Call/助手、Goose恢复与删除仍未迁。全局C2仍未验收，16 save / 36 mutation为旧路径棘轮起点。
 - 旧 Runner 的删除。
-- 生产级统一Run读契约仍待确定；R已将原生更新时间改为宿主观察，旧展示/静止/动作差异和未分类原因仍需兼容。缺失观察文件的旧探针Run不伪造历史时间，HTTP迁移恢复未验。
+- R2 新词汇切片未验收：pause 别名与旧完成产物/Session 仲裁断言冲突；同 HTTP 旧/Kernel 三阶段对照、六 crate 全量与真实 provider 待继续。当前实现缺观察为 null，不伪造历史时间。
 - 共享 conversation lease / Library 读锁 / `PROCESS_ENV_LOCK` 的既有多测试 flaky（见"待处理与观察"）。

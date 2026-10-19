@@ -1,0 +1,106 @@
+
+running 11 tests
+test api::tests::conversations::superseded_conversation_cannot_resume_or_recover_its_wait_child ... FAILED
+test api::tests::pause_resume_uses_same_frozen_run_after_graph_edit_and_service_object_restart ... FAILED
+test api::tests::conversations::conversation_resume_is_not_blocked_by_another_session_on_the_same_graph ... FAILED
+test api::tests::conversations::superseded_conversation_keeps_detached_child_independent ... FAILED
+test api::tests::paused_wait_child_resumes_independently_then_releases_parent ... FAILED
+test api::tests::platform_contract::busy_schedule_creates_no_run_or_source_metadata ... FAILED
+test api::tests::session_calls::generic_session_resume_pause_and_recovery_cannot_bypass_host_arbitration ... FAILED
+test api::tests::platform_contract::updated_tracks_persisted_pause_stop_and_resume_after_restart ... FAILED
+test api::tests::run_abandon::abandon_leaves_other_runs_and_their_recovery_entry_points_unchanged ... FAILED
+test api::tests::schedules::busy_due_schedule_skips_existing_admission_without_creating_a_run ... FAILED
+test api::tests::waiting_parent_rejects_child_grant_drift_then_restores_same_child_without_replay ... FAILED
+
+failures:
+
+---- api::tests::conversations::superseded_conversation_cannot_resume_or_recover_its_wait_child stdout ----
+
+thread 'api::tests::conversations::superseded_conversation_cannot_resume_or_recover_its_wait_child' (958907) panicked at anchor-runner-host/src/api/tests/conversations.rs:644:57:
+no entry found for key
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- api::tests::pause_resume_uses_same_frozen_run_after_graph_edit_and_service_object_restart stdout ----
+
+thread 'api::tests::pause_resume_uses_same_frozen_run_after_graph_edit_and_service_object_restart' (958909) panicked at anchor-runner-host/src/api/tests.rs:1692:5:
+assertion `left == right` failed
+  left: 0
+ right: 1
+
+---- api::tests::conversations::conversation_resume_is_not_blocked_by_another_session_on_the_same_graph stdout ----
+
+thread 'api::tests::conversations::conversation_resume_is_not_blocked_by_another_session_on_the_same_graph' (958906) panicked at anchor-runner-host/src/api/tests/conversations.rs:471:5:
+assertion `left == right` failed
+  left: 202
+ right: 409
+
+---- api::tests::conversations::superseded_conversation_keeps_detached_child_independent stdout ----
+
+thread 'api::tests::conversations::superseded_conversation_keeps_detached_child_independent' (958908) panicked at anchor-runner-host/src/api/tests/conversations.rs:85:13:
+assertion `left != right` failed: GraphRunRecord { format: RunRecordFormat, started: Some("2026-10-19T02:43:15.958Z"), updated: Some("2026-10-19T02:43:16.447Z"), run_id: "call-87d2f9df54de0d910fa983d29feeda19291f0da91923e212c82d4fe91abb5253", graph_digest: "4a5013ba1d5785ddb3cc0c5db4990fc6114fd241106446f32ba6eec3f5273418", snapshot: GraphSnapshot { objective: "conversation admission fixture", input: Object {"default_input": String("frozen")}, entry: "work", agents: {}, ops: {"finish": Object {"run": String("true"), "network": Bool(false), "wall_time_limit_seconds": Number(3600)}, "work": Object {"run": String("printf ready > gate.ready; while [ ! -f gate.release ]; do sleep 0.02; done; printf once > reply.txt"), "writes": Array [String("reply.txt")], "wall_time_limit_seconds": Number(10), "network": Bool(false)}}, nodes: [GraphNode { id: "work", agent: None, op: Some("work"), input: None, plugins: [], max_rounds: None }, GraphNode { id: "finish", agent: None, op: Some("finish"), input: None, plugins: [], max_rounds: None }], edges: [GraphEdge { from_node: "work", to_node: "finish" }], module_rounds: {} }, input: Object {"default_input": String("frozen")}, status: Failed, cursor: Some(RunCursor { node_id: "work", key: InvocationKey { run_id: "call-87d2f9df54de0d910fa983d29feeda19291f0da91923e212c82d4fe91abb5253", graph_digest: "4a5013ba1d5785ddb3cc0c5db4990fc6114fd241106446f32ba6eec3f5273418", node_id: "work", invocation: 1 }, input_commits: [], prepared_input: Object {"input": Object {"default_input": String("frozen")}, "committed_inputs": Array []} }), parallel: None, recovery: [], recovery_submissions: [], graph_calls: {}, plugin_bindings: {}, plugin_bindings_initialized: true, invocations: {"work": 1}, passes: {"work": 1}, module_activations: {}, ceased: {}, results: {}, decided: {}, sequence: 0, error: Some("uncertain node result for work: node was durably started but has no terminal result; automatic replay is refused") }
+  left: Failed
+ right: Failed
+
+---- api::tests::paused_wait_child_resumes_independently_then_releases_parent stdout ----
+
+thread 'api::tests::paused_wait_child_resumes_independently_then_releases_parent' (959231) panicked at anchor-runner-host/src/api/tests.rs:1256:5:
+assertion `left == right` failed
+  left: Failed
+ right: Completed
+
+---- api::tests::platform_contract::busy_schedule_creates_no_run_or_source_metadata stdout ----
+
+thread 'api::tests::platform_contract::busy_schedule_creates_no_run_or_source_metadata' (959362) panicked at anchor-runner-host/src/api/tests.rs:1692:5:
+assertion `left == right` failed
+  left: 0
+ right: 1
+
+---- api::tests::session_calls::generic_session_resume_pause_and_recovery_cannot_bypass_host_arbitration stdout ----
+
+thread 'api::tests::session_calls::generic_session_resume_pause_and_recovery_cannot_bypass_host_arbitration' (960015) panicked at anchor-runner-host/src/api/tests/session_calls.rs:691:9:
+assertion `left == right` failed: {"run":"session-controls","asked":"pause","operation":"stop","alias":true}
+  left: 202
+ right: 409
+
+---- api::tests::platform_contract::updated_tracks_persisted_pause_stop_and_resume_after_restart stdout ----
+
+thread 'api::tests::platform_contract::updated_tracks_persisted_pause_stop_and_resume_after_restart' (959475) panicked at anchor-runner-host/src/api/tests.rs:1692:5:
+assertion `left == right` failed
+  left: 0
+ right: 1
+
+---- api::tests::run_abandon::abandon_leaves_other_runs_and_their_recovery_entry_points_unchanged stdout ----
+
+thread 'api::tests::run_abandon::abandon_leaves_other_runs_and_their_recovery_entry_points_unchanged' (959526) panicked at anchor-runner-host/src/api/tests.rs:1692:5:
+assertion `left == right` failed
+  left: 0
+ right: 1
+
+---- api::tests::schedules::busy_due_schedule_skips_existing_admission_without_creating_a_run stdout ----
+
+thread 'api::tests::schedules::busy_due_schedule_skips_existing_admission_without_creating_a_run' (960006) panicked at anchor-runner-host/src/api/tests.rs:1692:5:
+assertion `left == right` failed
+  left: 0
+ right: 1
+
+---- api::tests::waiting_parent_rejects_child_grant_drift_then_restores_same_child_without_replay stdout ----
+
+thread 'api::tests::waiting_parent_rejects_child_grant_drift_then_restores_same_child_without_replay' (960023) panicked at anchor-runner-host/src/api/tests.rs:2673:36:
+no entry found for key
+
+
+failures:
+    api::tests::conversations::conversation_resume_is_not_blocked_by_another_session_on_the_same_graph
+    api::tests::conversations::superseded_conversation_cannot_resume_or_recover_its_wait_child
+    api::tests::conversations::superseded_conversation_keeps_detached_child_independent
+    api::tests::pause_resume_uses_same_frozen_run_after_graph_edit_and_service_object_restart
+    api::tests::paused_wait_child_resumes_independently_then_releases_parent
+    api::tests::platform_contract::busy_schedule_creates_no_run_or_source_metadata
+    api::tests::platform_contract::updated_tracks_persisted_pause_stop_and_resume_after_restart
+    api::tests::run_abandon::abandon_leaves_other_runs_and_their_recovery_entry_points_unchanged
+    api::tests::schedules::busy_due_schedule_skips_existing_admission_without_creating_a_run
+    api::tests::session_calls::generic_session_resume_pause_and_recovery_cannot_bypass_host_arbitration
+    api::tests::waiting_parent_rejects_child_grant_drift_then_restores_same_child_without_replay
+
+test result: FAILED. 0 passed; 11 failed; 0 ignored; 0 measured; 899 filtered out; finished in 6.96s
+

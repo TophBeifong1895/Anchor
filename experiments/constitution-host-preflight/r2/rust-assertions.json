@@ -1,0 +1,942 @@
+{
+  "baseline": "b1e9bc1503766c33a2ee0c87ece0ec93beae4716",
+  "comparison": "git diff HEAD -- rust",
+  "rust_diff_sha256": "bad1ab66a881999d9afb138a638b39ea255550df73538d6d52a0df15c09b57a3",
+  "counts": {
+    "modified_assertion": 84,
+    "modified_poll": 6,
+    "new_assertion_existing_test": 2
+  },
+  "counting_note": "动态表按受修改的状态/worker/断言分量展开；不计未改变的表分量；新增测试不混计。source assert 宏数不是此计数。",
+  "groups": [
+    "新 phase/outcome 词汇",
+    "无 worker 的 Executing 可以 resume",
+    "Paused/BudgetStopped 统一为静止",
+    "动作按相位推导、移除 pending-control 展示",
+    "pause 别名即时 stop",
+    "取消旧恢复/预算 resume 展示限制",
+    "updated 可空"
+  ],
+  "entries": [
+    {
+      "id": "RA001",
+      "kind": "modified_poll",
+      "file": "rust/anchor-runner-host/src/api/tests.rs",
+      "test": "graph_crud_round_trips_authoring_modules_and_layout",
+      "scenario": "等待执行结束的轮询条件",
+      "old": "HTTP OK && state.status != running && state.status != ready",
+      "new": "HTTP OK && projection.phase != executing",
+      "s_candidate_group": "新 phase/outcome 词汇"
+    },
+    {
+      "id": "RA002",
+      "kind": "modified_assertion",
+      "file": "rust/anchor-runner-host/src/api/tests.rs",
+      "test": "graph_crud_round_trips_authoring_modules_and_layout",
+      "scenario": "完成结局",
+      "old": "detail[state][status] == completed",
+      "new": "detail[projection][outcome] == done",
+      "s_candidate_group": "新 phase/outcome 词汇"
+    },
+    {
+      "id": "RA003",
+      "kind": "modified_poll",
+      "file": "rust/anchor-runner-host/src/api/tests.rs",
+      "test": "trigger_persists_run_and_projects_list_detail_and_control",
+      "scenario": "等待执行结束的轮询条件",
+      "old": "HTTP OK && state.status != running && state.status != ready",
+      "new": "HTTP OK && projection.phase != executing",
+      "s_candidate_group": "新 phase/outcome 词汇"
+    },
+    {
+      "id": "RA004",
+      "kind": "modified_assertion",
+      "file": "rust/anchor-runner-host/src/api/tests.rs",
+      "test": "trigger_persists_run_and_projects_list_detail_and_control",
+      "scenario": "完成结局",
+      "old": "detail[state][status] == completed",
+      "new": "detail[projection][outcome] == done",
+      "s_candidate_group": "新 phase/outcome 词汇"
+    },
+    {
+      "id": "RA005",
+      "kind": "modified_poll",
+      "file": "rust/anchor-runner-host/src/api/tests.rs",
+      "test": "paused_wait_child_resumes_independently_then_releases_parent",
+      "scenario": "子 Run 停下的轮询条件",
+      "old": "store child.status == RunStatus::Paused",
+      "new": "store child.status == RunStatus::Stopped",
+      "s_candidate_group": "pause 别名即时 stop"
+    },
+    {
+      "id": "RA006",
+      "kind": "modified_assertion",
+      "file": "rust/anchor-runner-host/src/api/tests.rs",
+      "test": "paused_wait_child_resumes_independently_then_releases_parent",
+      "scenario": "子 Run 的存储状态",
+      "old": "store child.status == RunStatus::Paused",
+      "new": "store child.status == RunStatus::Stopped",
+      "s_candidate_group": "pause 别名即时 stop"
+    },
+    {
+      "id": "RA007",
+      "kind": "modified_assertion",
+      "file": "rust/anchor-runner-host/src/api/tests.rs",
+      "test": "start_and_pause_request (fixture)",
+      "scenario": "fixture 最终存储状态",
+      "old": "record.status == RunStatus::Paused",
+      "new": "record.status == RunStatus::Stopped",
+      "s_candidate_group": "pause 别名即时 stop"
+    },
+    {
+      "id": "RA008",
+      "kind": "new_assertion_existing_test",
+      "file": "rust/anchor-runner-host/src/api/tests.rs",
+      "test": "start_and_pause_request (fixture)",
+      "scenario": "新增：别名的有效操作",
+      "old": "无该断言",
+      "new": "alias[operation] == stop",
+      "s_candidate_group": "pause 别名即时 stop"
+    },
+    {
+      "id": "RA009",
+      "kind": "new_assertion_existing_test",
+      "file": "rust/anchor-runner-host/src/api/tests.rs",
+      "test": "start_and_pause_request (fixture)",
+      "scenario": "新增：响应说明别名",
+      "old": "无该断言",
+      "new": "alias[alias] == true",
+      "s_candidate_group": "pause 别名即时 stop"
+    },
+    {
+      "id": "RA010",
+      "kind": "modified_assertion",
+      "file": "rust/anchor-runner-host/src/api/tests.rs",
+      "test": "downstream_failure_does_not_reclassify_committed_upstream_result",
+      "scenario": "失败结局",
+      "old": "detail[state][status] == failed",
+      "new": "detail[projection][outcome] == failed",
+      "s_candidate_group": "新 phase/outcome 词汇"
+    },
+    {
+      "id": "RA011",
+      "kind": "modified_assertion",
+      "file": "rust/anchor-runner-host/src/api/tests.rs",
+      "test": "waiting_parent_rejects_child_grant_drift_then_restores_same_child_without_replay",
+      "scenario": "停下后的子 Run 存储状态",
+      "old": "child_before.status == RunStatus::Paused",
+      "new": "child_before.status == RunStatus::Stopped",
+      "s_candidate_group": "pause 别名即时 stop"
+    },
+    {
+      "id": "RA012",
+      "kind": "modified_poll",
+      "file": "rust/anchor-runner-host/src/api/tests/conversations.rs",
+      "test": "conversation_resume_is_not_blocked_by_another_session_on_the_same_graph",
+      "scenario": "bob_run 的 wait_run_status 目标",
+      "old": "RunStatus::Paused",
+      "new": "RunStatus::Stopped",
+      "s_candidate_group": "pause 别名即时 stop"
+    },
+    {
+      "id": "RA013",
+      "kind": "modified_poll",
+      "file": "rust/anchor-runner-host/src/api/tests/conversations.rs",
+      "test": "superseded_conversation_cannot_resume_or_recover_its_wait_child",
+      "scenario": "child_run 的 wait_run_status 目标",
+      "old": "RunStatus::Paused",
+      "new": "RunStatus::Stopped",
+      "s_candidate_group": "pause 别名即时 stop"
+    },
+    {
+      "id": "RA014",
+      "kind": "modified_poll",
+      "file": "rust/anchor-runner-host/src/api/tests/conversations.rs",
+      "test": "superseded_conversation_keeps_detached_child_independent",
+      "scenario": "detached child_run 的 wait_run_status 目标",
+      "old": "RunStatus::Paused",
+      "new": "RunStatus::Stopped",
+      "s_candidate_group": "pause 别名即时 stop"
+    },
+    {
+      "id": "RA015",
+      "kind": "modified_assertion",
+      "file": "rust/anchor-runner-host/src/api/tests/conversations.rs",
+      "test": "superseded_conversation_cannot_resume_or_recover_its_wait_child",
+      "scenario": "子 Run 对外相位",
+      "old": "detail[state][status] == stopped",
+      "new": "detail[projection][phase] == waiting",
+      "s_candidate_group": "新 phase/outcome 词汇"
+    },
+    {
+      "id": "RA016",
+      "kind": "modified_assertion",
+      "file": "rust/anchor-runner-host/src/api/tests/conversations.rs",
+      "test": "conversation_orphan_running_requires_explicit_stop_before_a_new_turn",
+      "scenario": "无 worker 的 Running 对外相位",
+      "old": "detail[state][status] == running",
+      "new": "detail[projection][phase] == executing",
+      "s_candidate_group": "新 phase/outcome 词汇"
+    },
+    {
+      "id": "RA017",
+      "kind": "modified_assertion",
+      "file": "rust/anchor-runner-host/src/api/tests/kernel_probe.rs",
+      "test": "explicit_kernel_probe_runs_real_host_ops_and_projects_existing_queries",
+      "scenario": "详情相位",
+      "old": "detail[state][status] == completed",
+      "new": "detail[projection][phase] == settled",
+      "s_candidate_group": "新 phase/outcome 词汇"
+    },
+    {
+      "id": "RA018",
+      "kind": "modified_assertion",
+      "file": "rust/anchor-runner-host/src/api/tests/kernel_probe.rs",
+      "test": "explicit_kernel_probe_runs_real_host_ops_and_projects_existing_queries",
+      "scenario": "详情结局",
+      "old": "detail[projection][terminal] == true",
+      "new": "detail[projection][outcome] == done",
+      "s_candidate_group": "新 phase/outcome 词汇"
+    },
+    {
+      "id": "RA019",
+      "kind": "modified_assertion",
+      "file": "rust/anchor-runner-host/src/api/tests/kernel_probe.rs",
+      "test": "explicit_kernel_probe_runs_real_host_ops_and_projects_existing_queries",
+      "scenario": "列表结局",
+      "old": "list[runs][0][status] == completed",
+      "new": "list[runs][0][projection][outcome] == done",
+      "s_candidate_group": "新 phase/outcome 词汇"
+    },
+    {
+      "id": "RA020",
+      "kind": "modified_assertion",
+      "file": "rust/anchor-runner-host/src/api/tests/kernel_probe.rs",
+      "test": "kernel_read_view_http_tracks_running_human_wait_and_settlement_with_host_time",
+      "scenario": "运行中相位",
+      "old": "running[projection][phase] == running",
+      "new": "running[projection][phase] == executing",
+      "s_candidate_group": "新 phase/outcome 词汇"
+    },
+    {
+      "id": "RA021",
+      "kind": "modified_assertion",
+      "file": "rust/anchor-runner-host/src/api/tests/kernel_probe.rs",
+      "test": "kernel_read_view_http_tracks_running_human_wait_and_settlement_with_host_time",
+      "scenario": "运行中动作精确 JSON",
+      "old": "{pause:false,stop:true,resume:false}",
+      "new": "{stop:true,resume:false,abandon:true}",
+      "s_candidate_group": "动作按相位推导、移除 pending-control 展示"
+    },
+    {
+      "id": "RA022",
+      "kind": "modified_assertion",
+      "file": "rust/anchor-runner-host/src/api/tests/kernel_probe.rs",
+      "test": "kernel_read_view_http_tracks_running_human_wait_and_settlement_with_host_time",
+      "scenario": "等待人相位",
+      "old": "waiting[projection][phase] == stopped",
+      "new": "waiting[projection][phase] == waiting",
+      "s_candidate_group": "新 phase/outcome 词汇"
+    },
+    {
+      "id": "RA023",
+      "kind": "modified_assertion",
+      "file": "rust/anchor-runner-host/src/api/tests/kernel_probe.rs",
+      "test": "kernel_read_view_http_tracks_running_human_wait_and_settlement_with_host_time",
+      "scenario": "等待人仍有 worker 的动作精确 JSON",
+      "old": "{pause:false,stop:false,resume:false}",
+      "new": "{stop:false,resume:false,abandon:true}",
+      "s_candidate_group": "动作按相位推导、移除 pending-control 展示"
+    },
+    {
+      "id": "RA024",
+      "kind": "modified_assertion",
+      "file": "rust/anchor-runner-host/src/api/tests/kernel_probe.rs",
+      "test": "kernel_read_view_http_tracks_running_human_wait_and_settlement_with_host_time",
+      "scenario": "已放弃相位",
+      "old": "settled[projection][phase] == aborted",
+      "new": "settled[projection][phase] == settled",
+      "s_candidate_group": "新 phase/outcome 词汇"
+    },
+    {
+      "id": "RA025",
+      "kind": "modified_assertion",
+      "file": "rust/anchor-runner-host/src/api/tests/kernel_probe.rs",
+      "test": "kernel_read_view_http_tracks_running_human_wait_and_settlement_with_host_time",
+      "scenario": "已放弃结局",
+      "old": "settled[projection][terminal] == true",
+      "new": "settled[projection][outcome] == aborted",
+      "s_candidate_group": "新 phase/outcome 词汇"
+    },
+    {
+      "id": "RA026",
+      "kind": "modified_assertion",
+      "file": "rust/anchor-runner-host/src/api/tests/kernel_probe.rs",
+      "test": "kernel_read_view_http_tracks_running_human_wait_and_settlement_with_host_time",
+      "scenario": "已结算动作精确 JSON",
+      "old": "{pause:false,stop:false,resume:false}",
+      "new": "{stop:false,resume:false,abandon:false}",
+      "s_candidate_group": "动作按相位推导、移除 pending-control 展示"
+    },
+    {
+      "id": "RA027",
+      "kind": "modified_assertion",
+      "file": "rust/anchor-runner-host/src/api/tests/platform_contract.rs",
+      "test": "trigger_freezes_objective_and_manual_or_schedule_source",
+      "scenario": "去掉旧 pending-control 字段后的状态断言",
+      "old": "detail[control_requested] == null",
+      "new": "detail[projection][phase] == settled",
+      "s_candidate_group": "动作按相位推导、移除 pending-control 展示"
+    },
+    {
+      "id": "RA028",
+      "kind": "modified_assertion",
+      "file": "rust/anchor-runner-host/src/api/tests/platform_contract.rs",
+      "test": "updated_tracks_persisted_pause_stop_and_resume_after_restart",
+      "scenario": "pause 别名后的相位",
+      "old": "paused[state][status] == paused",
+      "new": "paused[projection][phase] == waiting",
+      "s_candidate_group": "新 phase/outcome 词汇；pause 别名即时 stop"
+    },
+    {
+      "id": "RA029",
+      "kind": "modified_assertion",
+      "file": "rust/anchor-runner-host/src/api/tests/platform_contract.rs",
+      "test": "updated_tracks_persisted_pause_stop_and_resume_after_restart",
+      "scenario": "重启后状态（原查 pending-control）",
+      "old": "reopened[control_requested] == null",
+      "new": "reopened[projection][phase] == waiting",
+      "s_candidate_group": "动作按相位推导、移除 pending-control 展示"
+    },
+    {
+      "id": "RA030",
+      "kind": "modified_assertion",
+      "file": "rust/anchor-runner-host/src/api/tests/platform_contract.rs",
+      "test": "updated_tracks_persisted_pause_stop_and_resume_after_restart",
+      "scenario": "stop 后相位",
+      "old": "stopped[state][status] == stopped",
+      "new": "stopped[projection][phase] == waiting",
+      "s_candidate_group": "新 phase/outcome 词汇"
+    },
+    {
+      "id": "RA031",
+      "kind": "modified_assertion",
+      "file": "rust/anchor-runner-host/src/api/tests/platform_contract.rs",
+      "test": "updated_tracks_persisted_pause_stop_and_resume_after_restart",
+      "scenario": "resume 完成后相位",
+      "old": "completed[state][status] == completed",
+      "new": "completed[projection][phase] == settled",
+      "s_candidate_group": "新 phase/outcome 词汇"
+    },
+    {
+      "id": "RA032",
+      "kind": "modified_assertion",
+      "file": "rust/anchor-runner-host/src/api/tests/run_abandon.rs",
+      "test": "abandon_cancels_the_running_node_and_makes_the_run_terminal_aborted",
+      "scenario": "abandon 响应结局",
+      "old": "body[status] == aborted",
+      "new": "body[projection][outcome] == aborted",
+      "s_candidate_group": "新 phase/outcome 词汇"
+    },
+    {
+      "id": "RA033",
+      "kind": "modified_assertion",
+      "file": "rust/anchor-runner-host/src/api/tests/run_abandon.rs",
+      "test": "abandon_is_idempotent_and_rejects_terminal_unknown_or_invalid_requests",
+      "scenario": "默认 reason 的响应结局",
+      "old": "defaulted[status] == aborted",
+      "new": "defaulted[projection][outcome] == aborted",
+      "s_candidate_group": "新 phase/outcome 词汇"
+    },
+    {
+      "id": "RA034",
+      "kind": "modified_assertion",
+      "file": "rust/anchor-runner-host/src/api/tests/run_abandon.rs",
+      "test": "abandon_is_idempotent_and_rejects_terminal_unknown_or_invalid_requests",
+      "scenario": "已 aborted 的响应结局",
+      "old": "existing[status] == aborted",
+      "new": "existing[projection][outcome] == aborted",
+      "s_candidate_group": "新 phase/outcome 词汇"
+    },
+    {
+      "id": "RA035",
+      "kind": "modified_assertion",
+      "file": "rust/anchor-runner-host/src/api/tests/run_abandon.rs",
+      "test": "abandon_keeps_the_assistant_binding_workspace_and_history_for_handover",
+      "scenario": "交接前 abandon 响应结局",
+      "old": "abandoned[status] == aborted",
+      "new": "abandoned[projection][outcome] == aborted",
+      "s_candidate_group": "新 phase/outcome 词汇"
+    },
+    {
+      "id": "RA036",
+      "kind": "modified_assertion",
+      "file": "rust/anchor-runner-host/src/api/tests/session_calls.rs",
+      "test": "completed_session_execution_stays_waiting_until_delivery_settlement",
+      "scenario": "执行完成且 delivery pending 的相位",
+      "old": "detail[state][status] == completed",
+      "new": "detail[projection][phase] == settled",
+      "s_candidate_group": "新 phase/outcome 词汇"
+    },
+    {
+      "id": "RA037",
+      "kind": "modified_assertion",
+      "file": "rust/anchor-runner-host/src/api/tests/session_calls.rs",
+      "test": "completed_pending_wait_child_recovers_delivery_and_parent_after_restart",
+      "scenario": "子 Run 列表结局",
+      "old": "child_projection[status] == completed",
+      "new": "child_projection[projection][outcome] == done",
+      "s_candidate_group": "新 phase/outcome 词汇"
+    },
+    {
+      "id": "RA038",
+      "kind": "modified_assertion",
+      "file": "rust/anchor-runner-host/src/application/kernel_runs/tests.rs",
+      "test": "serial_probe_commits_artifacts_cost_and_phase_through_application",
+      "scenario": "串行 probe 完成",
+      "old": "assert!(project_run(...).terminal)",
+      "new": "assert!(project_run(...).phase == settled)",
+      "s_candidate_group": "新 phase/outcome 词汇"
+    },
+    {
+      "id": "RA039",
+      "kind": "modified_assertion",
+      "file": "rust/anchor-runner-host/src/application/kernel_runs/tests.rs",
+      "test": "abandon_waiting_probe_is_terminal_and_refuses_late_submission",
+      "scenario": "等待 probe 被放弃",
+      "old": "assert!(project_run(...).terminal)",
+      "new": "assert!(project_run(...).phase == settled)",
+      "s_candidate_group": "新 phase/outcome 词汇"
+    },
+    {
+      "id": "RA040",
+      "kind": "modified_assertion",
+      "file": "rust/anchor-runner-host/src/application/liveness.rs",
+      "test": "parked_or_unregistered_ready_runs_are_not_quiescent",
+      "scenario": "RunStatus::Paused、worker=false",
+      "old": "RunLiveness::observed(status,false).is_quiescent() == false",
+      "new": "RunLiveness::observed(status,false).is_quiescent() == true",
+      "s_candidate_group": "Paused/BudgetStopped 统一为静止"
+    },
+    {
+      "id": "RA041",
+      "kind": "modified_assertion",
+      "file": "rust/anchor-runner-host/src/application/liveness.rs",
+      "test": "parked_or_unregistered_ready_runs_are_not_quiescent",
+      "scenario": "RunStatus::BudgetStopped、worker=false",
+      "old": "RunLiveness::observed(status,false).is_quiescent() == false",
+      "new": "RunLiveness::observed(status,false).is_quiescent() == true",
+      "s_candidate_group": "Paused/BudgetStopped 统一为静止"
+    },
+    {
+      "id": "RA042",
+      "kind": "modified_assertion",
+      "file": "rust/anchor-runner-host/src/application/run_view.rs",
+      "test": "actions_cover_every_phase_waiter_and_outcome_with_and_without_worker",
+      "scenario": "Phase::Executing、worker=false；AvailableActions.resume 分量",
+      "old": "AvailableActions {stop:true,resume:false,abandon:true}",
+      "new": "AvailableActions {stop:true,resume:true,abandon:true}",
+      "s_candidate_group": "无 worker 的 Executing 可以 resume"
+    },
+    {
+      "id": "RA043",
+      "kind": "modified_assertion",
+      "file": "rust/anchor-runner-host/src/application/run_projection.rs",
+      "test": "inactive_states_reuse_control_guards_and_liveness",
+      "scenario": "Ready、worker=false：pause 检查替换为 abandon",
+      "old": "assert!(!projection.actions.pause)",
+      "new": "projection.actions.abandon == true",
+      "s_candidate_group": "动作按相位推导、移除 pending-control 展示"
+    },
+    {
+      "id": "RA044",
+      "kind": "modified_assertion",
+      "file": "rust/anchor-runner-host/src/application/run_projection.rs",
+      "test": "inactive_states_reuse_control_guards_and_liveness",
+      "scenario": "Ready、worker=false：注意项投影检查",
+      "old": "projection.needs_attention == false",
+      "new": "(phase==waiting || outcome∈{failed,aborted} || (phase==executing && !active)) == true",
+      "s_candidate_group": "动作按相位推导、移除 pending-control 展示"
+    },
+    {
+      "id": "RA045",
+      "kind": "modified_assertion",
+      "file": "rust/anchor-runner-host/src/application/run_projection.rs",
+      "test": "inactive_states_reuse_control_guards_and_liveness",
+      "scenario": "Ready、worker=false：静止检查读取来源",
+      "old": "projection.quiescent == false",
+      "new": "RunLiveness::observed(status,false).is_quiescent() == false",
+      "s_candidate_group": "动作按相位推导、移除 pending-control 展示"
+    },
+    {
+      "id": "RA046",
+      "kind": "modified_assertion",
+      "file": "rust/anchor-runner-host/src/application/run_projection.rs",
+      "test": "inactive_states_reuse_control_guards_and_liveness",
+      "scenario": "Running、worker=false：pause 检查替换为 abandon",
+      "old": "assert!(!projection.actions.pause)",
+      "new": "projection.actions.abandon == true",
+      "s_candidate_group": "动作按相位推导、移除 pending-control 展示"
+    },
+    {
+      "id": "RA047",
+      "kind": "modified_assertion",
+      "file": "rust/anchor-runner-host/src/application/run_projection.rs",
+      "test": "inactive_states_reuse_control_guards_and_liveness",
+      "scenario": "Running、worker=false：注意项投影检查",
+      "old": "projection.needs_attention == true",
+      "new": "(phase==waiting || outcome∈{failed,aborted} || (phase==executing && !active)) == true",
+      "s_candidate_group": "动作按相位推导、移除 pending-control 展示"
+    },
+    {
+      "id": "RA048",
+      "kind": "modified_assertion",
+      "file": "rust/anchor-runner-host/src/application/run_projection.rs",
+      "test": "inactive_states_reuse_control_guards_and_liveness",
+      "scenario": "Running、worker=false：静止检查读取来源",
+      "old": "projection.quiescent == false",
+      "new": "RunLiveness::observed(status,false).is_quiescent() == false",
+      "s_candidate_group": "动作按相位推导、移除 pending-control 展示"
+    },
+    {
+      "id": "RA049",
+      "kind": "modified_assertion",
+      "file": "rust/anchor-runner-host/src/application/run_projection.rs",
+      "test": "inactive_states_reuse_control_guards_and_liveness",
+      "scenario": "Paused、worker=false：stop 表项",
+      "old": "projection.actions.stop == true",
+      "new": "projection.actions.stop == false",
+      "s_candidate_group": "动作按相位推导、移除 pending-control 展示"
+    },
+    {
+      "id": "RA050",
+      "kind": "modified_assertion",
+      "file": "rust/anchor-runner-host/src/application/run_projection.rs",
+      "test": "inactive_states_reuse_control_guards_and_liveness",
+      "scenario": "Paused、worker=false：pause 检查替换为 abandon",
+      "old": "assert!(!projection.actions.pause)",
+      "new": "projection.actions.abandon == true",
+      "s_candidate_group": "动作按相位推导、移除 pending-control 展示"
+    },
+    {
+      "id": "RA051",
+      "kind": "modified_assertion",
+      "file": "rust/anchor-runner-host/src/application/run_projection.rs",
+      "test": "inactive_states_reuse_control_guards_and_liveness",
+      "scenario": "Paused、worker=false：注意项投影检查",
+      "old": "projection.needs_attention == false",
+      "new": "(phase==waiting || outcome∈{failed,aborted} || (phase==executing && !active)) == true",
+      "s_candidate_group": "动作按相位推导、移除 pending-control 展示"
+    },
+    {
+      "id": "RA052",
+      "kind": "modified_assertion",
+      "file": "rust/anchor-runner-host/src/application/run_projection.rs",
+      "test": "inactive_states_reuse_control_guards_and_liveness",
+      "scenario": "Paused、worker=false：静止检查读取来源",
+      "old": "projection.quiescent == false",
+      "new": "RunLiveness::observed(status,false).is_quiescent() == true",
+      "s_candidate_group": "Paused/BudgetStopped 统一为静止"
+    },
+    {
+      "id": "RA053",
+      "kind": "modified_assertion",
+      "file": "rust/anchor-runner-host/src/application/run_projection.rs",
+      "test": "inactive_states_reuse_control_guards_and_liveness",
+      "scenario": "WaitingCall、worker=false：resume 表项",
+      "old": "projection.actions.resume == true",
+      "new": "projection.actions.resume == false",
+      "s_candidate_group": "动作按相位推导、移除 pending-control 展示"
+    },
+    {
+      "id": "RA054",
+      "kind": "modified_assertion",
+      "file": "rust/anchor-runner-host/src/application/run_projection.rs",
+      "test": "inactive_states_reuse_control_guards_and_liveness",
+      "scenario": "WaitingCall、worker=false：stop 表项",
+      "old": "projection.actions.stop == true",
+      "new": "projection.actions.stop == false",
+      "s_candidate_group": "动作按相位推导、移除 pending-control 展示"
+    },
+    {
+      "id": "RA055",
+      "kind": "modified_assertion",
+      "file": "rust/anchor-runner-host/src/application/run_projection.rs",
+      "test": "inactive_states_reuse_control_guards_and_liveness",
+      "scenario": "WaitingCall、worker=false：pause 检查替换为 abandon",
+      "old": "assert!(!projection.actions.pause)",
+      "new": "projection.actions.abandon == true",
+      "s_candidate_group": "动作按相位推导、移除 pending-control 展示"
+    },
+    {
+      "id": "RA056",
+      "kind": "modified_assertion",
+      "file": "rust/anchor-runner-host/src/application/run_projection.rs",
+      "test": "inactive_states_reuse_control_guards_and_liveness",
+      "scenario": "WaitingCall、worker=false：注意项投影检查",
+      "old": "projection.needs_attention == false",
+      "new": "(phase==waiting || outcome∈{failed,aborted} || (phase==executing && !active)) == true",
+      "s_candidate_group": "动作按相位推导、移除 pending-control 展示"
+    },
+    {
+      "id": "RA057",
+      "kind": "modified_assertion",
+      "file": "rust/anchor-runner-host/src/application/run_projection.rs",
+      "test": "inactive_states_reuse_control_guards_and_liveness",
+      "scenario": "WaitingCall、worker=false：静止检查读取来源",
+      "old": "projection.quiescent == false",
+      "new": "RunLiveness::observed(status,false).is_quiescent() == false",
+      "s_candidate_group": "动作按相位推导、移除 pending-control 展示"
+    },
+    {
+      "id": "RA058",
+      "kind": "modified_assertion",
+      "file": "rust/anchor-runner-host/src/application/run_projection.rs",
+      "test": "inactive_states_reuse_control_guards_and_liveness",
+      "scenario": "WaitingRecovery、worker=false：stop 表项",
+      "old": "projection.actions.stop == true",
+      "new": "projection.actions.stop == false",
+      "s_candidate_group": "动作按相位推导、移除 pending-control 展示"
+    },
+    {
+      "id": "RA059",
+      "kind": "modified_assertion",
+      "file": "rust/anchor-runner-host/src/application/run_projection.rs",
+      "test": "inactive_states_reuse_control_guards_and_liveness",
+      "scenario": "WaitingRecovery、worker=false：pause 检查替换为 abandon",
+      "old": "assert!(!projection.actions.pause)",
+      "new": "projection.actions.abandon == true",
+      "s_candidate_group": "动作按相位推导、移除 pending-control 展示"
+    },
+    {
+      "id": "RA060",
+      "kind": "modified_assertion",
+      "file": "rust/anchor-runner-host/src/application/run_projection.rs",
+      "test": "inactive_states_reuse_control_guards_and_liveness",
+      "scenario": "WaitingRecovery、worker=false：注意项投影检查",
+      "old": "projection.needs_attention == true",
+      "new": "(phase==waiting || outcome∈{failed,aborted} || (phase==executing && !active)) == true",
+      "s_candidate_group": "动作按相位推导、移除 pending-control 展示"
+    },
+    {
+      "id": "RA061",
+      "kind": "modified_assertion",
+      "file": "rust/anchor-runner-host/src/application/run_projection.rs",
+      "test": "inactive_states_reuse_control_guards_and_liveness",
+      "scenario": "WaitingRecovery、worker=false：静止检查读取来源",
+      "old": "projection.quiescent == false",
+      "new": "RunLiveness::observed(status,false).is_quiescent() == false",
+      "s_candidate_group": "动作按相位推导、移除 pending-control 展示"
+    },
+    {
+      "id": "RA062",
+      "kind": "modified_assertion",
+      "file": "rust/anchor-runner-host/src/application/run_projection.rs",
+      "test": "inactive_states_reuse_control_guards_and_liveness",
+      "scenario": "BudgetStopped、worker=false：resume 表项",
+      "old": "projection.actions.resume == false",
+      "new": "projection.actions.resume == true",
+      "s_candidate_group": "取消旧恢复/预算 resume 展示限制"
+    },
+    {
+      "id": "RA063",
+      "kind": "modified_assertion",
+      "file": "rust/anchor-runner-host/src/application/run_projection.rs",
+      "test": "inactive_states_reuse_control_guards_and_liveness",
+      "scenario": "BudgetStopped、worker=false：stop 表项",
+      "old": "projection.actions.stop == true",
+      "new": "projection.actions.stop == false",
+      "s_candidate_group": "动作按相位推导、移除 pending-control 展示"
+    },
+    {
+      "id": "RA064",
+      "kind": "modified_assertion",
+      "file": "rust/anchor-runner-host/src/application/run_projection.rs",
+      "test": "inactive_states_reuse_control_guards_and_liveness",
+      "scenario": "BudgetStopped、worker=false：pause 检查替换为 abandon",
+      "old": "assert!(!projection.actions.pause)",
+      "new": "projection.actions.abandon == true",
+      "s_candidate_group": "动作按相位推导、移除 pending-control 展示"
+    },
+    {
+      "id": "RA065",
+      "kind": "modified_assertion",
+      "file": "rust/anchor-runner-host/src/application/run_projection.rs",
+      "test": "inactive_states_reuse_control_guards_and_liveness",
+      "scenario": "BudgetStopped、worker=false：注意项投影检查",
+      "old": "projection.needs_attention == true",
+      "new": "(phase==waiting || outcome∈{failed,aborted} || (phase==executing && !active)) == true",
+      "s_candidate_group": "动作按相位推导、移除 pending-control 展示"
+    },
+    {
+      "id": "RA066",
+      "kind": "modified_assertion",
+      "file": "rust/anchor-runner-host/src/application/run_projection.rs",
+      "test": "inactive_states_reuse_control_guards_and_liveness",
+      "scenario": "BudgetStopped、worker=false：静止检查读取来源",
+      "old": "projection.quiescent == false",
+      "new": "RunLiveness::observed(status,false).is_quiescent() == true",
+      "s_candidate_group": "Paused/BudgetStopped 统一为静止"
+    },
+    {
+      "id": "RA067",
+      "kind": "modified_assertion",
+      "file": "rust/anchor-runner-host/src/application/run_projection.rs",
+      "test": "inactive_states_reuse_control_guards_and_liveness",
+      "scenario": "Stopped、worker=false：stop 表项",
+      "old": "projection.actions.stop == true",
+      "new": "projection.actions.stop == false",
+      "s_candidate_group": "动作按相位推导、移除 pending-control 展示"
+    },
+    {
+      "id": "RA068",
+      "kind": "modified_assertion",
+      "file": "rust/anchor-runner-host/src/application/run_projection.rs",
+      "test": "inactive_states_reuse_control_guards_and_liveness",
+      "scenario": "Stopped、worker=false：pause 检查替换为 abandon",
+      "old": "assert!(!projection.actions.pause)",
+      "new": "projection.actions.abandon == true",
+      "s_candidate_group": "动作按相位推导、移除 pending-control 展示"
+    },
+    {
+      "id": "RA069",
+      "kind": "modified_assertion",
+      "file": "rust/anchor-runner-host/src/application/run_projection.rs",
+      "test": "inactive_states_reuse_control_guards_and_liveness",
+      "scenario": "Stopped、worker=false：注意项投影检查",
+      "old": "projection.needs_attention == false",
+      "new": "(phase==waiting || outcome∈{failed,aborted} || (phase==executing && !active)) == true",
+      "s_candidate_group": "动作按相位推导、移除 pending-control 展示"
+    },
+    {
+      "id": "RA070",
+      "kind": "modified_assertion",
+      "file": "rust/anchor-runner-host/src/application/run_projection.rs",
+      "test": "inactive_states_reuse_control_guards_and_liveness",
+      "scenario": "Stopped、worker=false：静止检查读取来源",
+      "old": "projection.quiescent == true",
+      "new": "RunLiveness::observed(status,false).is_quiescent() == true",
+      "s_candidate_group": "动作按相位推导、移除 pending-control 展示"
+    },
+    {
+      "id": "RA071",
+      "kind": "modified_assertion",
+      "file": "rust/anchor-runner-host/src/application/run_projection.rs",
+      "test": "inactive_states_reuse_control_guards_and_liveness",
+      "scenario": "Completed、worker=false：pause 检查替换为 abandon",
+      "old": "assert!(!projection.actions.pause)",
+      "new": "projection.actions.abandon == false",
+      "s_candidate_group": "动作按相位推导、移除 pending-control 展示"
+    },
+    {
+      "id": "RA072",
+      "kind": "modified_assertion",
+      "file": "rust/anchor-runner-host/src/application/run_projection.rs",
+      "test": "inactive_states_reuse_control_guards_and_liveness",
+      "scenario": "Completed、worker=false：注意项投影检查",
+      "old": "projection.needs_attention == false",
+      "new": "(phase==waiting || outcome∈{failed,aborted} || (phase==executing && !active)) == false",
+      "s_candidate_group": "动作按相位推导、移除 pending-control 展示"
+    },
+    {
+      "id": "RA073",
+      "kind": "modified_assertion",
+      "file": "rust/anchor-runner-host/src/application/run_projection.rs",
+      "test": "inactive_states_reuse_control_guards_and_liveness",
+      "scenario": "Completed、worker=false：静止检查读取来源",
+      "old": "projection.quiescent == true",
+      "new": "RunLiveness::observed(status,false).is_quiescent() == true",
+      "s_candidate_group": "动作按相位推导、移除 pending-control 展示"
+    },
+    {
+      "id": "RA074",
+      "kind": "modified_assertion",
+      "file": "rust/anchor-runner-host/src/application/run_projection.rs",
+      "test": "inactive_states_reuse_control_guards_and_liveness",
+      "scenario": "Failed、worker=false：pause 检查替换为 abandon",
+      "old": "assert!(!projection.actions.pause)",
+      "new": "projection.actions.abandon == false",
+      "s_candidate_group": "动作按相位推导、移除 pending-control 展示"
+    },
+    {
+      "id": "RA075",
+      "kind": "modified_assertion",
+      "file": "rust/anchor-runner-host/src/application/run_projection.rs",
+      "test": "inactive_states_reuse_control_guards_and_liveness",
+      "scenario": "Failed、worker=false：注意项投影检查",
+      "old": "projection.needs_attention == true",
+      "new": "(phase==waiting || outcome∈{failed,aborted} || (phase==executing && !active)) == true",
+      "s_candidate_group": "动作按相位推导、移除 pending-control 展示"
+    },
+    {
+      "id": "RA076",
+      "kind": "modified_assertion",
+      "file": "rust/anchor-runner-host/src/application/run_projection.rs",
+      "test": "inactive_states_reuse_control_guards_and_liveness",
+      "scenario": "Failed、worker=false：静止检查读取来源",
+      "old": "projection.quiescent == true",
+      "new": "RunLiveness::observed(status,false).is_quiescent() == true",
+      "s_candidate_group": "动作按相位推导、移除 pending-control 展示"
+    },
+    {
+      "id": "RA077",
+      "kind": "modified_assertion",
+      "file": "rust/anchor-runner-host/src/application/run_projection.rs",
+      "test": "inactive_states_reuse_control_guards_and_liveness",
+      "scenario": "Aborted、worker=false：pause 检查替换为 abandon",
+      "old": "assert!(!projection.actions.pause)",
+      "new": "projection.actions.abandon == false",
+      "s_candidate_group": "动作按相位推导、移除 pending-control 展示"
+    },
+    {
+      "id": "RA078",
+      "kind": "modified_assertion",
+      "file": "rust/anchor-runner-host/src/application/run_projection.rs",
+      "test": "inactive_states_reuse_control_guards_and_liveness",
+      "scenario": "Aborted、worker=false：注意项投影检查",
+      "old": "projection.needs_attention == true",
+      "new": "(phase==waiting || outcome∈{failed,aborted} || (phase==executing && !active)) == true",
+      "s_candidate_group": "动作按相位推导、移除 pending-control 展示"
+    },
+    {
+      "id": "RA079",
+      "kind": "modified_assertion",
+      "file": "rust/anchor-runner-host/src/application/run_projection.rs",
+      "test": "inactive_states_reuse_control_guards_and_liveness",
+      "scenario": "Aborted、worker=false：静止检查读取来源",
+      "old": "projection.quiescent == true",
+      "new": "RunLiveness::observed(status,false).is_quiescent() == true",
+      "s_candidate_group": "动作按相位推导、移除 pending-control 展示"
+    },
+    {
+      "id": "RA080",
+      "kind": "modified_assertion",
+      "file": "rust/anchor-runner-host/src/application/run_projection.rs",
+      "test": "pending_control_and_session_coordination_are_observed_once",
+      "scenario": "active=true、requested=pause 的相位",
+      "old": "projection.phase == pausing",
+      "new": "projection.phase == executing",
+      "s_candidate_group": "动作按相位推导、移除 pending-control 展示"
+    },
+    {
+      "id": "RA081",
+      "kind": "modified_assertion",
+      "file": "rust/anchor-runner-host/src/application/run_projection.rs",
+      "test": "pending_control_and_session_coordination_are_observed_once",
+      "scenario": "active=true、requested=pause 的动作字段",
+      "old": "assert!(!projection.actions.pause)",
+      "new": "assert!(projection.actions.abandon)",
+      "s_candidate_group": "动作按相位推导、移除 pending-control 展示"
+    },
+    {
+      "id": "RA082",
+      "kind": "modified_assertion",
+      "file": "rust/anchor-runner-host/src/application/run_projection.rs",
+      "test": "pending_control_and_session_coordination_are_observed_once",
+      "scenario": "active=true、requested=stop 的相位",
+      "old": "projection.phase == stopping",
+      "new": "projection.phase == executing",
+      "s_candidate_group": "动作按相位推导、移除 pending-control 展示"
+    },
+    {
+      "id": "RA083",
+      "kind": "modified_assertion",
+      "file": "rust/anchor-runner-host/src/application/run_projection.rs",
+      "test": "pending_control_and_session_coordination_are_observed_once",
+      "scenario": "active=true、requested=stop 的动作可见性",
+      "old": "assert!(!projection.actions.stop)",
+      "new": "assert!(projection.actions.stop)",
+      "s_candidate_group": "动作按相位推导、移除 pending-control 展示"
+    },
+    {
+      "id": "RA084",
+      "kind": "modified_assertion",
+      "file": "rust/anchor-runner-host/src/application/run_projection.rs",
+      "test": "legacy_projection_serialization_preserves_ready_paused_and_stopped_bytes",
+      "scenario": "RunStatus::Ready：serde_json::to_vec(...) == expected.as_bytes()",
+      "old": "{\"phase\":\"ready\",\"active\":false,\"control_requested\":null,\"terminal\":false,\"quiescent\":false,\"needs_attention\":false,\"actions\":{\"pause\":false,\"stop\":true,\"resume\":true}}",
+      "new": "{\"phase\":\"executing\",\"reason\":null,\"active\":false,\"actions\":{\"stop\":true,\"resume\":true,\"abandon\":true},\"updated\":null}",
+      "s_candidate_group": "新 phase/outcome 词汇；动作按相位推导、移除 pending-control 展示；updated 可空"
+    },
+    {
+      "id": "RA085",
+      "kind": "modified_assertion",
+      "file": "rust/anchor-runner-host/src/application/run_projection.rs",
+      "test": "legacy_projection_serialization_preserves_ready_paused_and_stopped_bytes",
+      "scenario": "RunStatus::Paused：serde_json::to_vec(...) == expected.as_bytes()",
+      "old": "{\"phase\":\"paused\",\"active\":false,\"control_requested\":null,\"terminal\":false,\"quiescent\":false,\"needs_attention\":false,\"actions\":{\"pause\":false,\"stop\":true,\"resume\":true}}",
+      "new": "{\"phase\":\"waiting\",\"waiting_for\":\"human\",\"reason\":\"paused\",\"active\":false,\"actions\":{\"stop\":false,\"resume\":true,\"abandon\":true},\"updated\":null}",
+      "s_candidate_group": "新 phase/outcome 词汇；动作按相位推导、移除 pending-control 展示；updated 可空"
+    },
+    {
+      "id": "RA086",
+      "kind": "modified_assertion",
+      "file": "rust/anchor-runner-host/src/application/run_projection.rs",
+      "test": "legacy_projection_serialization_preserves_ready_paused_and_stopped_bytes",
+      "scenario": "RunStatus::Stopped：serde_json::to_vec(...) == expected.as_bytes()",
+      "old": "{\"phase\":\"stopped\",\"active\":false,\"control_requested\":null,\"terminal\":false,\"quiescent\":true,\"needs_attention\":false,\"actions\":{\"pause\":false,\"stop\":true,\"resume\":true}}",
+      "new": "{\"phase\":\"waiting\",\"waiting_for\":\"human\",\"reason\":\"stopped\",\"active\":false,\"actions\":{\"stop\":false,\"resume\":true,\"abandon\":true},\"updated\":null}",
+      "s_candidate_group": "新 phase/outcome 词汇；动作按相位推导、移除 pending-control 展示；updated 可空"
+    },
+    {
+      "id": "RA087",
+      "kind": "modified_assertion",
+      "file": "rust/anchor-runner-host/src/application/tests.rs",
+      "test": "pending_control_projects_active_tokens_with_stop_priority",
+      "scenario": "缺少 worker 的 missing record",
+      "old": "project_run(...).control_requested == None",
+      "new": "project_run(...).phase == executing",
+      "s_candidate_group": "动作按相位推导、移除 pending-control 展示"
+    },
+    {
+      "id": "RA088",
+      "kind": "modified_assertion",
+      "file": "rust/anchor-runner-host/src/application/tests.rs",
+      "test": "pending_control_projects_active_tokens_with_stop_priority",
+      "scenario": "已登记 worker、未请求控制",
+      "old": "project_run(...).control_requested == None",
+      "new": "project_run(...).phase == executing",
+      "s_candidate_group": "动作按相位推导、移除 pending-control 展示"
+    },
+    {
+      "id": "RA089",
+      "kind": "modified_assertion",
+      "file": "rust/anchor-runner-host/src/application/tests.rs",
+      "test": "pending_control_projects_active_tokens_with_stop_priority",
+      "scenario": "pause flag=true",
+      "old": "project_run(...).control_requested == Some(pause)",
+      "new": "project_run(...).phase == executing",
+      "s_candidate_group": "动作按相位推导、移除 pending-control 展示"
+    },
+    {
+      "id": "RA090",
+      "kind": "modified_assertion",
+      "file": "rust/anchor-runner-host/src/application/tests.rs",
+      "test": "pending_control_projects_active_tokens_with_stop_priority",
+      "scenario": "pause+cancellation flags=true；原 stop 优先",
+      "old": "project_run(...).control_requested == Some(stop)",
+      "new": "project_run(...).phase == executing",
+      "s_candidate_group": "动作按相位推导、移除 pending-control 展示"
+    },
+    {
+      "id": "RA091",
+      "kind": "modified_assertion",
+      "file": "rust/anchor-runner-host/src/application/tests.rs",
+      "test": "pending_control_projects_active_tokens_with_stop_priority",
+      "scenario": "移除 worker 后",
+      "old": "project_run(...).control_requested == None",
+      "new": "project_run(...).phase == executing",
+      "s_candidate_group": "动作按相位推导、移除 pending-control 展示"
+    },
+    {
+      "id": "RA092",
+      "kind": "modified_assertion",
+      "file": "rust/anchor-runner-host/src/application/session_calls.rs",
+      "test": "stopped_parent_cancels_wait_delivery (fixture) → active_parent_stop_cancels_wait_session_delivery_but_not_detach",
+      "scenario": "active_parent=true，stop 后仍排空的父 Run",
+      "old": "project_run(parent,...).control_requested == Some(stop)",
+      "new": "project_run(parent,...).phase == executing",
+      "s_candidate_group": "动作按相位推导、移除 pending-control 展示"
+    }
+  ]
+}

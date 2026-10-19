@@ -1,0 +1,8 @@
+
+running 3 tests
+test application::liveness::tests::parked_or_unregistered_ready_runs_are_not_quiescent ... ok
+test application::legacy_run_view::tests::every_legacy_status_maps_lossily_with_both_worker_observations ... ok
+test application::run_view::tests::actions_cover_every_phase_waiter_and_outcome_with_and_without_worker ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 907 filtered out; finished in 0.00s
+

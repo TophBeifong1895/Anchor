@@ -1,0 +1,82 @@
+
+> @anchor/web@0.1.0 test
+> vitest run src RunDetailPage RunInspector Timeline parallel persistentAssistant ChannelsPage
+
+
+ RUN  v4.1.0 /home/mansteinl/code/anchor-constitution-core/apps/web
+
+ ❯ e2e/timeline.spec.ts (0 test)
+ ❯ e2e/parallel.spec.ts (0 test)
+ ❯ e2e/parallel-real.spec.ts (0 test)
+
+⎯⎯⎯⎯⎯⎯ Failed Suites 3 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  e2e/parallel-real.spec.ts [ e2e/parallel-real.spec.ts ]
+Error: Playwright Test did not expect test() to be called here.
+Most common reasons include:
+- You are calling test() in a configuration file.
+- You are calling test() in a file that is imported by the configuration file.
+- You have two different versions of @playwright/test. This usually happens
+  when one of the dependencies in your package.json depends on @playwright/test.
+- You are calling test() from an async test.describe() block. Only sync ones are supported.
+ ❯ _TestTypeImpl._currentSuite node_modules/playwright/lib/common/index.js:2224:13
+ ❯ _TestTypeImpl._createTest node_modules/playwright/lib/common/index.js:2238:24
+ ❯ node_modules/playwright/lib/common/index.js:1154:12
+ ❯ e2e/parallel-real.spec.ts:10:1
+      8| import { freePort, nativeHost, repo, stop } from './fixtures/native-ho…
+      9|
+     10| test('real backend: paired authoring, simultaneous native nodes, joine…
+       | ^
+     11|   test.setTimeout(90000);
+     12|   const root = await mkdtemp(join(tmpdir(), 'anchor-parallel-browser-'…
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/3]⎯
+
+ FAIL  e2e/parallel.spec.ts [ e2e/parallel.spec.ts ]
+Error: Playwright Test did not expect test() to be called here.
+Most common reasons include:
+- You are calling test() in a configuration file.
+- You are calling test() in a file that is imported by the configuration file.
+- You have two different versions of @playwright/test. This usually happens
+  when one of the dependencies in your package.json depends on @playwright/test.
+- You are calling test() from an async test.describe() block. Only sync ones are supported.
+ ❯ _TestTypeImpl._currentSuite node_modules/playwright/lib/common/index.js:2224:13
+ ❯ _TestTypeImpl._createTest node_modules/playwright/lib/common/index.js:2238:24
+ ❯ node_modules/playwright/lib/common/index.js:1154:12
+ ❯ e2e/parallel.spec.ts:32:1
+     30| }
+     31|
+     32| test('mocked: add paired parallel region, edit only fanout pairing, re…
+       | ^
+     33|   const saved = await fixture(page);
+     34|   await page.getByRole('button', { name: '添加节点', exact: true }).click(…
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/3]⎯
+
+ FAIL  e2e/timeline.spec.ts [ e2e/timeline.spec.ts ]
+Error: Playwright Test did not expect test() to be called here.
+Most common reasons include:
+- You are calling test() in a configuration file.
+- You are calling test() in a file that is imported by the configuration file.
+- You have two different versions of @playwright/test. This usually happens
+  when one of the dependencies in your package.json depends on @playwright/test.
+- You are calling test() from an async test.describe() block. Only sync ones are supported.
+ ❯ _TestTypeImpl._currentSuite node_modules/playwright/lib/common/index.js:2224:13
+ ❯ _TestTypeImpl._createTest node_modules/playwright/lib/common/index.js:2238:24
+ ❯ node_modules/playwright/lib/common/index.js:1154:12
+ ❯ e2e/timeline.spec.ts:5:1
+      3| import { runProjectionFixture } from './fixtures/runProjection';
+      4|
+      5| test('timeline fills the workspace and renders runs and plans on the s…
+       | ^
+      6|   await page.clock.setFixedTime(new Date('2026-09-28T12:00:00'));
+      7|   const graph = JSON.parse(readFileSync('../../examples/graphs/academi…
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[3/3]⎯
+
+
+ Test Files  3 failed | 33 passed (36)
+      Tests  285 passed (285)
+   Start at  10:39:43
+   Duration  1.36s (transform 4.19s, setup 0ms, import 9.22s, tests 2.76s, environment 11.39s)
+

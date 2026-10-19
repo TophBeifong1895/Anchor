@@ -1,0 +1,12 @@
+   Compiling anchor-runner-host v0.1.0 (/home/mansteinl/code/anchor-constitution-core/rust/anchor-runner-host)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 15.26s
+     Running unittests src/main.rs (rust/target/debug/deps/anchor_runner_host-2cefc3c824f4cf45)
+
+running 4 tests
+test application::run_projection::tests::pending_control_and_session_coordination_are_observed_once ... ok
+test application::run_projection::tests::inactive_states_reuse_control_guards_and_liveness ... ok
+test application::run_projection::tests::frozen_canvas_projects_expanded_modules_and_hides_execution_input ... ok
+test application::run_projection::tests::legacy_projection_serialization_preserves_ready_paused_and_stopped_bytes ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 906 filtered out; finished in 0.00s
+

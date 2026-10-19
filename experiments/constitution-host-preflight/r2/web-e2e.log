@@ -1,0 +1,57 @@
+
+> @anchor/web@0.1.0 test:e2e
+> playwright test e2e/recovery.spec.ts e2e/graph-calls.spec.ts e2e/parallel.spec.ts e2e/timeline.spec.ts --workers=2
+
+[WebServer] (node:955423) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+[WebServer] (Use `node --trace-warnings ...` to show where the warning was created)
+
+Running 10 tests using 2 workers
+
+(node:955478) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:955479) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+  ✓   1 e2e/parallel.spec.ts:32:1 › mocked: add paired parallel region, edit only fanout pairing, rename join and save (1.0s)
+  ✓   2 e2e/graph-calls.spec.ts:50:1 › mocked: author structured calls and navigate definition relations (1.6s)
+  ✓   3 e2e/parallel.spec.ts:54:1 › mocked: show simultaneous branch execution and pending join in one Run (630ms)
+  ✘   5 e2e/recovery.spec.ts:5:1 › unknown tool result resumes through the normal Agent context path (533ms)
+(node:955979) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+  ✓   4 e2e/graph-calls.spec.ts:97:1 › mocked: show wait/detach child Runs, source links and active controls (1.3s)
+  ✓   6 e2e/recovery.spec.ts:48:1 › inactive running Run can be resumed from its existing detail page (609ms)
+  ✓   8 e2e/recovery.spec.ts:90:1 › timeline marks an inactive running Run as waiting to resume (587ms)
+  ✓   7 e2e/timeline.spec.ts:5:1 › timeline fills the workspace and renders runs and plans on the same time scale (2.8s)
+  ✓   9 e2e/timeline.spec.ts:135:1 › timeline hints fit the viewport at both edges and dismiss without blocking runs (2.8s)
+  ✓  10 e2e/timeline.spec.ts:210:1 › a resident Run draws only the windows it executed, not its idle lifetime (689ms)
+
+
+  1) e2e/recovery.spec.ts:5:1 › unknown tool result resumes through the normal Agent context path ──
+
+    Error: expect(locator).toBeVisible() failed
+
+    Locator: getByText('Agent 上次工具调用的结果未记录')
+    Expected: visible
+    Error: strict mode violation: getByText('Agent 上次工具调用的结果未记录') resolved to 3 elements:
+        1) <span class="pill waiting">等待你处理：Agent 上次工具调用的结果未记录</span> aka getByText('等待你处理：Agent 上次工具调用的结果未记录').first()
+        2) <span class="hint" aria-label="活动节点">等待你处理：Agent 上次工具调用的结果未记录 work（第 1 轮）</span> aka getByLabel('活动节点')
+        3) <span>等待你处理：Agent 上次工具调用的结果未记录</span> aka getByTestId('rf__node-work').getByText('等待你处理：Agent 上次工具调用的结果未记录')
+
+    Call log:
+      - Expect "toBeVisible" getByText('Agent 上次工具调用的结果未记录') with timeout 5000ms
+      - waiting for getByText('Agent 上次工具调用的结果未记录')
+
+
+      37 |   await page.locator('[data-id="work"]').waitFor();
+      38 |   await page.getByRole('button', { name: '查看最近运行' }).click();
+    > 39 |   await expect(page.getByText('Agent 上次工具调用的结果未记录')).toBeVisible();
+         |                                                      ^
+      40 |   await expect(page.getByRole('button', { name: 'Retry' })).toHaveCount(0);
+      41 |   await expect(page.getByRole('button', { name: 'Completed' })).toHaveCount(0);
+      42 |   await expect(page.getByRole('button', { name: 'Abort' })).toHaveCount(0);
+        at /home/mansteinl/code/anchor-constitution-core/apps/web/e2e/recovery.spec.ts:39:54
+
+    Error Context: test-results/recovery-unknown-tool-resu-f08e8-e-normal-Agent-context-path/error-context.md
+
+  1 failed
+    e2e/recovery.spec.ts:5:1 › unknown tool result resumes through the normal Agent context path ───
+  9 passed (10.6s)

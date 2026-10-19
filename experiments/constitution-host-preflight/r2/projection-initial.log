@@ -1,0 +1,24 @@
+   Compiling anchor-runner-host v0.1.0 (/home/mansteinl/code/anchor-constitution-core/rust/anchor-runner-host)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 15.30s
+     Running unittests src/main.rs (rust/target/debug/deps/anchor_runner_host-2cefc3c824f4cf45)
+
+running 4 tests
+test application::run_projection::tests::pending_control_and_session_coordination_are_observed_once ... ok
+test application::run_projection::tests::inactive_states_reuse_control_guards_and_liveness ... ok
+test application::run_projection::tests::frozen_canvas_projects_expanded_modules_and_hides_execution_input ... ok
+
+thread 'application::run_projection::tests::legacy_projection_serialization_preserves_ready_paused_and_stopped_bytes' (948069) panicked at anchor-runner-host/src/application/run_projection.rs:234:13:
+assertion `left == right` failed: Ready
+  left: [123, 34, 112, 104, 97, 115, 101, 34, 58, 34, 101, 120, 101, 99, 117, 116, 105, 110, 103, 34, 44, 34, 114, 101, 97, 115, 111, 110, 34, 58, 110, 117, 108, 108, 44, 34, 97, 99, 116, 105, 118, 101, 34, 58, 102, 97, 108, 115, 101, 44, 34, 97, 99, 116, 105, 111, 110, 115, 34, 58, 123, 34, 115, 116, 111, 112, 34, 58, 116, 114, 117, 101, 44, 34, 114, 101, 115, 117, 109, 101, 34, 58, 116, 114, 117, 101, 44, 34, 97, 98, 97, 110, 100, 111, 110, 34, 58, 116, 114, 117, 101, 125, 44, 34, 117, 112, 100, 97, 116, 101, 100, 34, 58, 34, 50, 48, 50, 54, 45, 49, 48, 45, 49, 57, 84, 48, 50, 58, 51, 52, 58, 48, 57, 46, 54, 53, 48, 90, 34, 125]
+ right: [123, 34, 112, 104, 97, 115, 101, 34, 58, 34, 101, 120, 101, 99, 117, 116, 105, 110, 103, 34, 44, 34, 114, 101, 97, 115, 111, 110, 34, 58, 110, 117, 108, 108, 44, 34, 97, 99, 116, 105, 118, 101, 34, 58, 102, 97, 108, 115, 101, 44, 34, 97, 99, 116, 105, 111, 110, 115, 34, 58, 123, 34, 115, 116, 111, 112, 34, 58, 116, 114, 117, 101, 44, 34, 114, 101, 115, 117, 109, 101, 34, 58, 116, 114, 117, 101, 44, 34, 97, 98, 97, 110, 100, 111, 110, 34, 58, 116, 114, 117, 101, 125, 44, 34, 117, 112, 100, 97, 116, 101, 100, 34, 58, 110, 117, 108, 108, 125]
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test application::run_projection::tests::legacy_projection_serialization_preserves_ready_paused_and_stopped_bytes ... FAILED
+
+failures:
+
+failures:
+    application::run_projection::tests::legacy_projection_serialization_preserves_ready_paused_and_stopped_bytes
+
+test result: FAILED. 3 passed; 1 failed; 0 ignored; 0 measured; 906 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p anchor-runner-host --bin anchor-runner-host`

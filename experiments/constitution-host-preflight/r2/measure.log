@@ -1,0 +1,10 @@
+run_projection baseline=13 {'if': 6, 'arm': 4, 'field_write': 3} / r=13 {'if': 6, 'arm': 4, 'field_write': 3} / r2=15 {'if': 1, 'arm': 9, 'field_write': 5}
+liveness baseline=0 {'if': 0, 'arm': 0, 'field_write': 0} / r=0 {'if': 0, 'arm': 0, 'field_write': 0} / r2=0 {'if': 0, 'arm': 0, 'field_write': 0}
+conversations baseline=59 {'if': 31, 'arm': 21, 'field_write': 7} / r=58 {'if': 33, 'arm': 18, 'field_write': 7} / r2=58 {'if': 33, 'arm': 18, 'field_write': 7}
+kernel_runs_projection baseline=10 {'if': 1, 'arm': 7, 'field_write': 2} / r=10 {'if': 1, 'arm': 7, 'field_write': 2} / r2=9 {'if': 0, 'arm': 7, 'field_write': 2}
+shared_support {'baseline': 0, 'r': 9, 'r2': 10}
+total {'baseline': (82, 545, None), 'r': (90, 726, None), 'r2': (92, 663, 278)}
+RunStatus baseline 154 in 22 files
+RunStatus r 151 in 20 files
+RunStatus r2 137 in 22 files
+output experiments/constitution-host-preflight/r2/counts.json

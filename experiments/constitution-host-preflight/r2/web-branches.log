@@ -1,0 +1,5 @@
+baseline {"points":81,"by_owner":{"channel/UI observation":12,"channel listener":9,"Run projection":19,"channel delivery":3,"schedule observation":5,"Graph node display":5,"shared execution label table (Run/node/Turn)":26,"historical node result":2},"by_kind":{"if":2,"ternary":24,"switch_case":0,"object_key":55},"boolean_comparisons":34}
+r {"points":81,"by_owner":{"channel/UI observation":12,"channel listener":9,"Run projection":19,"channel delivery":3,"schedule observation":5,"Graph node display":5,"shared execution label table (Run/node/Turn)":26,"historical node result":2},"by_kind":{"if":2,"ternary":24,"switch_case":0,"object_key":55},"boolean_comparisons":34}
+r2 {"points":79,"by_owner":{"channel/UI observation":12,"channel listener":9,"Run projection":19,"channel delivery":3,"schedule observation":5,"Graph node display":5,"shared execution label table (Run/node/Turn)":24,"historical node result":2},"by_kind":{"if":4,"ternary":22,"switch_case":0,"object_key":53},"boolean_comparisons":40}
+supplementary (excluded from changed-file total) {"baseline":9,"r":9,"r2":9}
+output experiments/constitution-host-preflight/r2/web-branches.json

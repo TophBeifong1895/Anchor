@@ -1,0 +1,14 @@
+
+> @anchor/web@0.1.0 test:e2e
+> playwright test e2e/recovery.spec.ts --grep unknown tool result --workers=1
+
+[WebServer] (node:957427) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+[WebServer] (Use `node --trace-warnings ...` to show where the warning was created)
+
+Running 1 test using 1 worker
+
+(node:957460) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+  ✓  1 e2e/recovery.spec.ts:5:1 › unknown tool result resumes through the normal Agent context path (721ms)
+
+  1 passed (2.1s)
