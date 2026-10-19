@@ -79,14 +79,15 @@ cargo +stable test --manifest-path rust/Cargo.toml -p anchor-runner-host \
 保证一个套件失败后仍采集后续套件。真实模型与外部服务不由本地 Provider
 结果代验。
 
-## 当前 Goose 基线（G0，2026-10-19）
+## Goose 比较基线（G0，2026-10-19）
 
 基点 `e3a5778`，在独立 worktree `/var/tmp/anchor-g0` 的
 `fix/goose-baseline` 分支验证。固定 Goose 摘要保持 `17e065a7…`。
 共同的 `extensions/add -32603` 来自回归启动缺少 relay：原始 ACP 响应为
 MCP discover 的 loopback 连接失败；stderr 的 39 字节实际是 slirp 初始化
 信息。旧 `dc2a4352…` 与固定二进制在相同网络条件下结果一致，不需要更换
-Goose。完整原文、对照、命令与身份见[本机证据](../.local/goose-baseline-20261019/README.md)。
+Goose。原本机证据位于该 worktree 的 `.local/goose-baseline-20261019/`，
+已随用户要求清理 worktree，不再作为当前可访问证据；此处保留提交中的基线结论。
 
 以上完整忽略测试命令实际退出 `101`：**116 passed、3 failed、0 ignored**。
 其中 Goose 套件为 112/3/0，`native_plugins` 为 2/0/0，Host 忽略单测为
@@ -137,7 +138,7 @@ Goose。完整原文、对照、命令与身份见[本机证据](../.local/goose
 | `standard_host` | 0 | 0 | 0 |
 | `writer_lease` | 0 | 0 | 0 |
 
-仍失败的测试及原因：
+G0 留下的三项失败及原因：
 
 - `goose_conversation::next_conversation_invocation_changes_model_and_endpoint_without_losing_history`：fixture 重启只切换 Provider 启动参数，没有更新已保存的模型配置；第二个 Provider 收到 0 次请求，旧 Provider 的脚本耗尽，Run 停止而测试等待 completed 超时。后续应通过现有模型设置 API 更新该 fixture 的配置。
 - `goose_distribution::extracted_goose_runtime_resumes_without_sources_or_replaying_workspace_effects`：fixture 将 `anchor-sandbox-network` 以硬链接暂存，发行 builder 在 Goose 执行前按原契约返回 `only regular, non-hardlinked files are supported`。后续应为打包输入准备独立的普通文件，保留发行检查。
@@ -148,6 +149,23 @@ Goose。完整原文、对照、命令与身份见[本机证据](../.local/goose
 不作为独立确认；最终逐例日志和并发监测在本机证据内。没有新增真实模型、
 外部渠道、部署或 source-free 成功验收。后续任务应与这份名单比较，新增
 失败须独立确认，不能把残留项悄然计为通过。
+
+## F1 后的 G0 fixture 修正（2026-10-19）
+
+F1 完成提交 `0116074` 保留旧断言，并以 G0 三项为失败上限；随后按用户要求
+单独修正以下测试，不改变生产实现、权限、持久格式或恢复规则：
+
+- 模型切换通过现有 `PUT /settings/model` 更新保存的配置及 `models.worker` alias。
+  仅替换启动参数不会覆盖持久配置；原有切换 endpoint、模型和保留原生历史的断言不变。
+- 发行输入将暂存的 `anchor-sandbox-network` 硬链接替换为独立普通文件。
+  builder 的普通文件与链接检查保持不变，不通过放松发行约束来修正 fixture。
+- Pilot 最终断言改为插件数量恰为 1 且 id 为 `network`，不是允许任意非空列表。
+  理由是新 Pilot 默认挂载 network，原空列表断言已不符合当前契约；候选自报联网声明
+  不能授予权限、宿主凭据不授权、真实命令取消后回收及继续核查的检查全部保留。
+
+三项按标准环境、逐项 `--ignored --exact --test-threads=1` 复跑，各为 1/0/0；
+证据见[修正验证](../.local/run-access-facade-20261019/g0-fixes/README.md)。
+这不是另一次完整回归或真实 Provider 验收；G0 表保留为迁移比较基线。
 
 ## 套件与证据
 

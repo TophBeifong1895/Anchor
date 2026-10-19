@@ -131,6 +131,12 @@ fn extracted_goose_runtime_resumes_without_sources_or_replaying_workspace_effect
     let selected_host = std::env::var_os("ANCHOR_TEST_HOST_BINARY")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from(env!("CARGO_BIN_EXE_anchor-runner-host")));
+    fs::remove_file(root.join("anchor-sandbox-network")).unwrap();
+    fs::copy(
+        selected_host.with_file_name("anchor-sandbox-network"),
+        root.join("anchor-sandbox-network"),
+    )
+    .unwrap();
     fs::copy(
         selected_host.with_file_name("anchor-net-relay"),
         root.join("anchor-net-relay"),

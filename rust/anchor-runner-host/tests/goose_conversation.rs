@@ -732,6 +732,17 @@ fn next_conversation_invocation_changes_model_and_endpoint_without_losing_histor
     server.kill();
     drop(server);
     let server = host.serve(&second_provider);
+    let (status, configured) = server.request(
+        "PUT",
+        "/settings/model",
+        Some(&json!({
+            "endpoint":format!("{}/v1", second_provider.url),
+            "wire_api":"chat", "model":second_provider.model,
+            "aliases":{"models.worker":second_provider.model},
+            "api_key":{"action":"set","value":"fixture-only-model-update"}
+        })),
+    );
+    assert_eq!(status, 200, "{configured}");
     let second = submit(&server, &turn("model-user", &second_nonce, Some(&first)));
     server.wait_status(&second, "completed");
     let (second_fact, _) = assert_scope(&host, &second, "worker");

@@ -47,7 +47,7 @@
 
 | 事项 | 当前状态 | 关闭条件 |
 | --- | --- | --- |
-| Run 访问门面 | F0 `e3a5778`；F1 已完成安全视图、兼容输出与逐规则表，围栏 224→5，仅恢复写入协议留 F2。旧断言未改，workspace 1,993/Web 306 全过；Goose 完整 ignored 首轮 107/12/0，补齐 example 后受影响四套 10/0/0，最终仅 G0 三项残留（116/3/0），不是单次全绿 | 另一个小提交修正 G0 三项 fixture/断言并写理由，再将 F2 最后写入入口收口至零。见[当前边界](run-access-facade.md)、[标准命令](runtime-contract-tests.md)与[本机验证](../.local/run-access-facade-20261019/f1-final/README.md) |
+| Run 访问门面 | F0 `e3a5778`；F1 `0116074` 完成安全视图、兼容输出与逐规则表，围栏 224→5，仅恢复写入协议留 F2。F1 旧断言未改，workspace 1,993/Web 306 全过，Goose 最终仅 G0 三项残留（116/3/0，含环境复跑，非单次全绿）。之后三项 fixture/断言另行修正、逐项各 1/0/0，理由见[标准回归](runtime-contract-tests.md#f1-后的-g0-fixture-修正2026-10-19) | 将 F2 最后写入入口收口至零，按标准命令完成最终回归。见[当前边界](run-access-facade.md)、[F1 证据](../.local/run-access-facade-20261019/f1-final/README.md)与[三项修正证据](../.local/run-access-facade-20261019/g0-fixes/README.md) |
 | 真实默认模型对话复核 | 无环境文件的隔离安装通过网页保存现有 Host default 后，最小 Pilot 请求仍返回 `provider_error`（保存分类为 `other`，没有可确认的上游 HTTP 状态），未据此判断凭据有效性；原配置未改动 | 核实默认服务连通及凭据后复验；[本机记录](../.local/no-env-20261019/real-evidence.json) |
 | 可移植周报完整业务验收 | 新隔离 Run 已用当前采集工具完成三来源采集，理解节点因真实 Provider HTTP 502 停止；核查原生记录后接续一次仍为 502，完整理解/写作/评审与本地报告未完成。没有外部发布或通知 | 上游恢复后沿保留事实继续核查，验收完整核心周报；Docmost/通知按明确目标与授权独立验证。见[本轮证据](../.local/closeout-20261018/README.md)与[周报边界](weekly-work-report.md#验证边界) |
 | Docmost 进一步业务验收 | 默认连接已迁为指定 owner 的网页托管配置，双 MCP 初始化/发现、只读身份调用及真实模型单节点完成均已通过；真实新旧双 Key、目标知识库内容读取、页面写入、附件上传与企微业务尚未验收 | 后续按明确授权的业务场景验证所需读取、写入或上传，再验企微链路；当前只读身份验收不扩大为这些业务通过 |

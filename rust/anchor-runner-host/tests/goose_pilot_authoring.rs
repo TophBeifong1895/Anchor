@@ -574,9 +574,15 @@ fn candidate_declaration_cannot_enable_network_or_credentials_and_command_cancel
     assert_eq!(first["goose"], recovered["goose"]);
     let (status, session) = server.request("GET", "/sessions/cancel-authoring/plugins", None);
     assert_eq!(status, 200, "{session}");
-    assert!(
-        session["plugins"].as_array().unwrap().is_empty(),
+    let plugins = session["plugins"].as_array().unwrap();
+    assert_eq!(
+        plugins.len(),
+        1,
         "candidate changed installed/mounted plugins: {session}"
+    );
+    assert_eq!(
+        plugins[0]["id"], "network",
+        "candidate changed the default plugin: {session}"
     );
     evidence(
         &host,

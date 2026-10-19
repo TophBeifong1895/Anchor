@@ -97,4 +97,4 @@ F0 为 `e3a5778`，首个/第二个 F1 切片为 `06f7b8a`、`c21b382`，G0 `250
 
 - 最终读取切片：38 个门面定向回归通过；Rust workspace 1,993 通过、0 失败、122 忽略，严格 workspace/all-target clippy、fmt、Web 306 测试及构建通过。原始日志见[最终读取证据](../.local/run-access-facade-20261019/f1-final/README.md)。未新增真实 Provider 或生产业务验收。
 - G0 三项残留见[Runtime 标准回归](runtime-contract-tests.md)。干净 target 首轮暴露标准构建遗漏联网 helper 与 MCP example，补全标准命令另交 `76f77ef`、`cff7001`；ACP 15 项及受影响四套 MCP 的 10 项串行复跑均通过。完整 ignored 首轮为 107/12/0，其中 9 项明确缺 example；结合补齐后的定向复跑，119 项的最终分类为 116 通过、仅 G0 三项失败、0 忽略，没有新增产品失败。这不是一次全绿命令，也不隐去环境失败。标准入口自身 fail-fast 于 G0 模型切换项（64/1/0），后续覆盖来自完整 ignored 命令。
-- F2 尚需迁入 `application/recovery.rs` 最后一段按意图记录决定的写入协议，随后将 store 访问限定在门面内部；不得借类型重命名、扩大豁免或暴露原始 record 降低围栏数。Goose 三项 fixture/断言修正必须在 F1 完成后单独提交，并说明理由。
+- F2 尚需迁入 `application/recovery.rs` 最后一段按意图记录决定的写入协议，随后将 store 访问限定在门面内部；不得借类型重命名、扩大豁免或暴露原始 record 降低围栏数。Goose 三项 fixture/断言在 F1 `0116074` 完成后独立修正，三项串行定向回归各 1/0/0，[理由与验证](runtime-contract-tests.md#f1-后的-g0-fixture-修正2026-10-19)不作为 F1 行为重构的一部分。
