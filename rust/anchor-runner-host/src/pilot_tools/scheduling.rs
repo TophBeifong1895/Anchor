@@ -20,12 +20,17 @@ impl PilotTools {
         if arguments.as_object().is_none_or(|object| {
             object
                 .keys()
-                .any(|key| !["graph", "rule", "input"].contains(&key.as_str()))
+                .any(|key| !["graph", "rule", "input", "request_id"].contains(&key.as_str()))
         }) {
             return Err(rejected("unsupported schedule fields"));
         }
+        let request_id = match arguments.get("request_id") {
+            None => None,
+            Some(Value::String(key)) => Some(key.as_str()),
+            Some(_) => return Err(rejected("request_id must be a string")),
+        };
         self.application
-            .create_schedule(&graph, rule, &input)
+            .create_schedule_with_request(&graph, rule, &input, &self.owner, request_id)
             .await
             .map_err(schedule_error)
     }

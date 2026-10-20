@@ -69,4 +69,77 @@ describe('workbench page subscriptions', () => {
     await act(async () => release({ graphs: [{ graph: 'late' }] }));
     expect(state.graphs.map(item => item.graph)).toEqual(['g']);
   });
+
+  it('does not cancel or duplicate a slow projection on polling ticks', async () => {
+    let release!: (value: unknown) => void;
+    vi.mocked(api).mockImplementation(path => path === '/graphs' ? new Promise(resolve => { release = resolve; })
+      : Promise.resolve({ runs: [] }));
+    await render('graph');
+    const signal = vi.mocked(api).mock.calls[0][3]!;
+    await act(async () => vi.advanceTimersByTimeAsync(12000));
+    expect(api).toHaveBeenCalledTimes(2);
+    expect(signal.aborted).toBe(false);
+    await act(async () => release({ graphs: [{ graph: 'loaded' }] }));
+    expect(state.graphs.map(item => item.graph)).toEqual(['loaded']);
+    await act(async () => vi.advanceTimersByTimeAsync(3000));
+    expect(api).toHaveBeenCalledTimes(4);
+  });
+
+  it('retries on the next tick after an in-flight request fails', async () => {
+    vi.mocked(api).mockRejectedValueOnce(new Error('unavailable'));
+    await render('graph');
+    expect(state.problem).toContain('unavailable');
+    await act(async () => vi.advanceTimersByTimeAsync(3000));
+    expect(state.graphs.map(item => item.graph)).toEqual(['g']);
+    expect(state.problem).toBe('');
+  });
+
+  it('aborts sibling reads after a projection fails before allowing the next poll', async () => {
+    vi.mocked(api).mockImplementation(path => path === '/graphs'
+      ? Promise.reject(new Error('unavailable')) : new Promise(() => undefined));
+    await render('graph');
+    const signal = vi.mocked(api).mock.calls[1][3]!;
+    expect(state.problem).toContain('unavailable');
+    expect(signal.aborted).toBe(true);
+    vi.mocked(api).mockImplementation(async path => path === '/graphs'
+      ? { graphs: [{ graph: 'recovered' }] } : { runs: [] });
+    await act(async () => vi.advanceTimersByTimeAsync(3000));
+    expect(api).toHaveBeenCalledTimes(4);
+    expect(state.graphs.map(item => item.graph)).toEqual(['recovered']);
+    expect(state.problem).toBe('');
+  });
+
+  it('keeps a slow timeline read in flight without restarting its projection', async () => {
+    let release!: (value: unknown) => void;
+    vi.mocked(api).mockImplementation(async path => path === '/graphs' ? { graphs: [{ graph: 'g' }] }
+      : path === '/runs' ? { runs: [] } : new Promise(resolve => { release = resolve; }));
+    await render('runs');
+    const signal = vi.mocked(api).mock.calls[2][3]!;
+    await act(async () => vi.advanceTimersByTimeAsync(9000));
+    expect(api).toHaveBeenCalledTimes(3);
+    expect(signal.aborted).toBe(false);
+    const timeline = { runs: [], scheduled: [], schedules: [] };
+    await act(async () => release(timeline));
+    expect(state.timeline).toEqual(timeline);
+    await act(async () => vi.advanceTimersByTimeAsync(3000));
+    expect(api).toHaveBeenCalledTimes(6);
+  });
+
+  it('keeps the new page request in flight when an aborted response settles late', async () => {
+    const releases: ((value: unknown) => void)[] = [];
+    vi.mocked(api).mockImplementation(path => path === '/graphs'
+      ? new Promise(resolve => { releases.push(resolve); }) : Promise.resolve({ runs: [] }));
+    await render('graph');
+    const oldSignal = vi.mocked(api).mock.calls[0][3]!;
+    await render('runs');
+    const nextSignal = vi.mocked(api).mock.calls[2][3]!;
+    expect(oldSignal.aborted).toBe(true);
+    await act(async () => releases[0]({ graphs: [{ graph: 'stale' }] }));
+    await act(async () => vi.advanceTimersByTimeAsync(9000));
+    expect(api).toHaveBeenCalledTimes(4);
+    expect(nextSignal.aborted).toBe(false);
+    expect(state.graphs).toEqual([]);
+    await act(async () => releases[1]({ graphs: [{ graph: 'current' }] }));
+    expect(state.graphs.map(item => item.graph)).toEqual(['current']);
+  });
 });

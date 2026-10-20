@@ -13,6 +13,7 @@ describe('message session management', () => {
   let root: Root;
   let fetchMock: ReturnType<typeof vi.fn>;
   let instance: { assistant: { run_id: string; wait_node: string; work_node: string; reply_node: string } | null; needs_recovery: boolean;
+    recovery_blocked?: string | null;
     plugin_update?: { state: 'current' | 'pending' | 'restart_required' | 'unavailable'; message?: string } };
   let execution: { run: string; active: boolean; control_requested: string | null; projection?: RunProjection; state: { status: string; cursor: { node: string } } };
   let sessions: { id: string; title: string; graph: string; platform: string }[];
@@ -60,6 +61,17 @@ describe('message session management', () => {
     await click('current-run');
     expect(opened).toEqual([['current-run', binding.graph]]);
     expect(closed).toBe(1);
+  });
+
+  it('shows why an obsolete instance cannot recover without hiding its history', async () => {
+    instance.recovery_blocked = 'account Session superseded';
+    execution.active = false;
+    execution.state.status = 'stopped';
+    await render();
+    expect(container.textContent).toContain('恢复已阻止');
+    expect(container.textContent).toContain('account Session superseded');
+    expect(container.textContent).toContain('历史记录仍保留');
+    expect(button('current-run')).toBeTruthy();
   });
 
   it.each([

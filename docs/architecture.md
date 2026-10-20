@@ -37,6 +37,8 @@ Artifact、节点历史、工作区、Run / Session / Turn 事实
 
 Goose 拥有 Agent loop、Provider、原生会话与 compaction；Anchor 拥有 Graph/Run、宿主授权、Artifact 和平台 Session/Turn。工具记录、API 与 UI 都围绕相同身份，UI 缓存不能成为第二份运行事实。
 
+渠道的逻辑账号由配置入口统一生成，兼容别名由 SessionStore 按 owner/source 持久登记；Session 接纳、消息去重与恢复使用同一解析结果。配置表示改变不另建逻辑会话，已有重复历史不自动合并。Host 在渠道配置加载后恢复助手，只有当前部署匹配且未被规范身份会话取代的绑定具备恢复资格；交接的新来源必须仍为 current。详细兼容和暂停边界见[渠道契约](wecom-assistant.md#渠道身份与历史兼容)。
+
 Web 管理与 Pilot 管理调用相同 Host 用例。插件密钥归 owner-bound 凭据存储，安装/卸载沿 Library 预检与发布；模型配置归 `ModelConfiguration`，运行环境归 `RuntimeConfiguration`，渠道由原 `ChannelManagementPort`/supervisor 托管，计划仍归 Scheduler。设置页只管理模型与环境；图编排的「消息触发」配置渠道绑定与启停，运行看板的「消息会话」管理对话实例，凭据复用插件库的同一组件与存储。Web 不保存第二份配置，也不保留顶层渠道页。
 
 HTTP、Session、Pilot 的插件基础目录读取归 `InstalledPluginCatalog`，清单有效性、依赖就绪与上下文授权、连接验证分别表达；目录列表保持轻量，不生成执行绑定。Graph 的发现、bundle 读取与校验复用 Graph 应用用例，适配器保留身份、格式和私有诊断脱敏。Web 的插件设置、鉴权下载和行菜单复用完整交互，草稿、持久策略和历史绑定保持不同归属。具体边界见 [共同事实与实现收敛](shared-facts-convergence.md)。
@@ -61,6 +63,8 @@ Web 的图编排与 Pilot 仅在首次访问后保留页面 DOM 和本地阅读�
 `RunStatus::is_terminal()` 统一 Kernel 与 Host 的终态定义：`Completed`、`Failed`、`Aborted`；`Stopped` 和各类等待状态仍非终态。Host 的 [RunLiveness](../rust/anchor-runner-host/src/application/liveness.rs) 将持久状态与执行者登记观察结合，只有未登记且为终态或 `Stopped` 才算已静止，供助手退役、前驱交接和渠道停止等待复用。登记涵盖启动、清理与等待输入，不等于模型忙碌。查询不加锁、不保存事实，调用方沿用原有 active 锁、Run lease 和读取顺序；active 锁不冻结 Runner 写入，未登记的 `Ready` 也不自动获得恢复或删除许可。
 
 [RunProjection](../rust/anchor-runner-host/src/application/run_access/projection.rs) 在查询时组合既有持久状态、执行登记和控制前置条件，供 HTTP/Pilot 列表、详情、时间线及子调用共用；Web 只展示该操作投影，最终控制仍核验现场。运行画布从该 Run 的冻结 snapshot 投影只读拓扑，包含展开后的模块，不读取当前 Graph 或编辑草稿，也不暴露执行脚本、输入和 host 参数。投影不新增持久格式或恢复游标。
+
+查询投影只在读取执行登记和控制标记时持有 active registry 锁，释放后再读取 Session、渠道与部署资格；历史助手先核对 current binding，已被交接或退役的 Run 不再触发当前部署的资源检查。当前实例的资格检查与实际控制校验保留，不以查询优化放宽恢复权限。
 
 Host 的 [Run 访问边界](run-access-facade.md) 对业务内部类型引用实行零上限，新增能力先扩展门面。`application/run_access` 接管相位、只读视图、规则与 HTTP/Pilot/渠道兼容序列化，Graph/会话/助手只消费安全视图或按意图操作；准入、控制、恢复决定、放弃、Session 调用及子 Run 释放的执行与保存协议归门面，生产 `store()`、原始枚举与执行准备/派发仅在门面内部可用。锁与持久化顺序不变，规则表按原独立判断体计数，不以围栏通过代替规则验收。
 
@@ -104,6 +108,8 @@ Run format 13 将准入授权与执行观察分开：`plugin_bindings.authorizat
 AgentNode 和 Pilot 的正式工具准备在同一短 Library lease 内读取一份 `PluginDefinition`，由它生成绑定、MCP 配置、挂载、依赖视图及只读披露目录；释放后才做 OAuth/MCP 网络启动。目录再与实际工具装配的 Plugin/server/remote-tool 归属关联，不解析工具名前缀猜所属资产。提示词只提供固定的发现入口，不平铺全部 Plugin/Skill 路径，不另存提示词事实。此锁保证准备期间的读取一致性，不是历史代码快照；释放之后的更新仍可替换当前代码或回收旧视图，不能据此承诺旧进程可复现。Plugin 的 `mutable` 授权独立于 Python 依赖：无 Python 包的插件也可使用声明的数据目录；`plugin.json`、`.mcp.json` 与外置 MCP 声明文件必须属于不可变代码。升级逐项替换代码、保留数据；多条目更新中途失败如实报告。依赖规则见 [依赖标准](plugin-dependencies.md)，验证范围见 [验收摘要](pilot-development-plan.md)。
 
 Library 的 `PluginMetadata` 是列表使用的实时目录投影，与携带资源内容摘要和执行绑定的 `PluginDefinition` 分型；两者共用清单、资源路径和配置校验，只有完整定义读取代码字节并计算身份。Web 插件库与会话列表复用目录投影，不创建另一个持久目录或授权事实；目录读取放在阻塞工作线程，列表显示按批次渲染，搜索覆盖全部结果。
+
+渠道状态与部署资格观察同样读取实时 `PluginMetadata`，不为 Graph 列表或 Run 操作投影重新读取整份插件正文。渠道授权摘要及 owner-bound 凭据校验由完整定义与元数据入口共用，声明、账号或资源路径变化仍立即影响资格；配置、启用和启动继续读取完整定义，不缓存或跳过执行校验。
 
 AgentNode 的 Goose 接入区分工具解析已经返回的结果与外层等待被取消/超时：解析错误保留原错误类型并沿既有 Run 错误路径结算，不再次轮询已经完成的 future；只有外层中断才通知仍未结束的解析过程，并等待它回收所拥有的 MCP 子进程。
 
@@ -213,6 +219,8 @@ Pilot 的 `channel_configure`/`channel_enable` 经原生确认管理 owner-bound
 手动触发、计划、Webhook 与 Responses 子集共用接纳。Pilot 的 schedule 创建、列出、修改和删除复用同一 ScheduleStore 与 Dispatcher，按 owner 校验 Graph 和触发规则，不另建调度器。Responses 只实现文档中的子集；健康 `/health` 与就绪 `/ready` 不发送模型请求。API-key 和 Graph/工具授权由 Host 强制执行，Plugin 说明和提示词不授予权限。
 
 WebUI 的 Anchor API key 只保存在当前标签页。输入框先检查请求头可接受的格式，再通过只读 `GET /graphs` 验证；成功才保存并关闭，错误 key、格式错误或服务异常保留输入框并分别提示。JSON 请求与 Pilot SSE 共用缓存恢复：含非 ASCII 字符、空格或控制字符的无效缓存不会进入请求头，401 后重新输入；较早请求的迟到 401 不丢弃其他请求刚验证成功的新 key。取消验证会中止请求，迟到结果不保存。
+
+工作台定时刷新在上一轮请求尚未结束时跳过本次 tick，不取消并重发首屏或验证中的请求；一项投影失败时取消同批其他读取，释放在途标记后下一轮仍可重试，慢 timeline 读取同样受保护。手动刷新、导航及删除继续使旧投影失效，旧请求迟到结束不能释放新请求的在途标记。轮询周期与请求超时保持原值。
 
 平台安装启动器从自身位置解析只读 release、固定 Goose/relay 与 `data/` 私有根，清除调用进程配置，不读取环境文件。systemd 调用同一启动器；预检 `--launcher` 复用其命令配置，并通过安装器同一 validator 检查 format-2 平台。开发脚本和 Vite 也不加载 `.env`；源码启动先探测系统工具与 namespace，按 lock 准备前端依赖，增量构建 debug Host/relay，并更新缺少或变化的 Web 资产；Goose 通过既有固定版本/补丁配方构建到 `.local/bin/goose`（含固定工具链的 musl target 准备），输入未变且本机校验和相符则复用缓存，否则重新准备。源码启动自动把实际产物摘要传给 Host，不以跨机器固定摘要作为启动条件。默认平台源码启动按 [上手清单](../examples/starter.json) 首次安装官方 Plugin 及本地 Rust 工具，经现有 Library 安装器发布，再经 Host Graph API 导入示例；首次导入标记归开发启动器，用户 Graph 和 Plugin 事实仍归 catalog/Library，已有同名内容与后续修改/删除不覆盖。不会自动运行 Graph 或启用渠道。显式 entry bundle、自定义 Host 和外部服务不导入；完整平台发行清单不受影响。`setup` 准备插件与依赖，Graph 在 `start/restart` 接入 Host 后导入；`status`/`stop` 不构建。默认不自动使用旧 release 产物，显式 Host/relay 路径需已可执行；Host 仍独立核对启动器提供的摘要，既有发行校验和同 invocation 的执行器身份绑定保持原契约。旧文件保留原样；显式进程覆盖仍是开发/独立 Graph 宿主的部署接口，不是模型、Plugin 或渠道的产品配置源。
 

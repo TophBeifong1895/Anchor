@@ -15,6 +15,7 @@ use crate::{
     SessionStatus, SessionStore, Turn, TurnStatus, associations, store, turns,
 };
 
+mod accounts;
 mod assistant;
 
 pub(crate) use assistant::ensure_assistant_run_scope;
@@ -36,24 +37,26 @@ impl SessionStore {
     pub fn admit_channel_inbound(
         &self,
         owner: &str,
-        request: ChannelInboundRequest,
+        mut request: ChannelInboundRequest,
     ) -> Result<ChannelAdmission, SessionError> {
         store::validate_identity(owner, "owner")?;
         validate_channel_request(&request)?;
-        let identity = identity_parts(&request.identity)?;
         let mut connection = self.lock()?;
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        normalize_account(&transaction, owner, &mut request)?;
+        let identity = identity_parts(&request.identity)?;
         let mut session = match find_channel_session(&transaction, owner, &identity)? {
             Some(session_id) => {
                 let session = store::read_session(&transaction, owner, &session_id)?;
-                verify_channel_session(&session, &request, &identity)?;
+                verify_channel_session(&transaction, owner, &session, &request, &identity)?;
                 session
             }
             None => create_channel_session(&transaction, owner, &request, &identity)?,
         };
 
         if let Some(existing) = read_inbound(&transaction, &session.id, &request.inbound_id)? {
-            let saved: ChannelInboundRequest = serde_json::from_str(&existing.request)?;
+            let mut saved: ChannelInboundRequest = serde_json::from_str(&existing.request)?;
+            normalize_account(&transaction, owner, &mut saved)?;
             if immutable_request(&saved) != immutable_request(&request) {
                 return Err(SessionError::Conflict(
                     "inbound_id was already used for different channel input".into(),
@@ -72,6 +75,37 @@ impl SessionStore {
                 turn,
                 relation,
             });
+        }
+
+        let accepted_elsewhere: bool = transaction.query_row(
+            "SELECT EXISTS(
+                SELECT 1 FROM channel_inbounds inbound
+                JOIN channel_sessions session ON session.session_id = inbound.session_id
+                LEFT JOIN channel_account_aliases alias
+                  ON alias.owner = session.owner AND alias.source = session.source
+                 AND alias.alias = session.account
+                WHERE session.owner = ?1 AND session.source = ?2
+                  AND COALESCE(alias.canonical, session.account) = ?3
+                  AND session.conversation_kind = ?4 AND session.conversation_id = ?5
+                  AND session.participant_id = ?6 AND inbound.inbound_id = ?7
+                  AND session.session_id != ?8
+            )",
+            params![
+                owner,
+                identity.0,
+                identity.1,
+                identity.2,
+                identity.3,
+                identity.4,
+                request.inbound_id,
+                session.id
+            ],
+            |row| row.get(0),
+        )?;
+        if accepted_elsewhere {
+            return Err(SessionError::Conflict(
+                "channel input was already accepted in an equivalent historical Session; inspect its saved outcome".into(),
+            ));
         }
 
         let previous = running_channel_turn(&transaction, &session.id)?;
@@ -1017,21 +1051,41 @@ fn find_channel_session(
     owner: &str,
     identity: &IdentityParts,
 ) -> Result<Option<String>, SessionError> {
-    connection
-        .query_row(
-            "SELECT session_id FROM channel_sessions
-             WHERE owner = ?1 AND source = ?2 AND account = ?3
-               AND conversation_kind = ?4 AND conversation_id = ?5 AND participant_id = ?6",
+    let canonical = accounts::canonical_account(connection, owner, &identity.0, &identity.1)?;
+    let mut statement = connection.prepare(
+        "SELECT session.session_id, session.account FROM channel_sessions session
+         LEFT JOIN channel_account_aliases alias
+           ON alias.owner = session.owner AND alias.source = session.source
+          AND alias.alias = session.account
+         WHERE session.owner = ?1 AND session.source = ?2
+           AND COALESCE(alias.canonical, session.account) = ?3
+           AND session.conversation_kind = ?4 AND session.conversation_id = ?5
+           AND session.participant_id = ?6
+         ORDER BY session.session_id",
+    )?;
+    let matches = statement
+        .query_map(
             params![
-                owner, identity.0, identity.1, identity.2, identity.3, identity.4
+                owner, identity.0, canonical, identity.2, identity.3, identity.4
             ],
-            |row| row.get(0),
-        )
-        .optional()
-        .map_err(Into::into)
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+        )?
+        .collect::<Result<Vec<_>, _>>()?;
+    if let Some((session, _)) = matches.iter().find(|(_, account)| account == &canonical) {
+        return Ok(Some(session.clone()));
+    }
+    match matches.as_slice() {
+        [] => Ok(None),
+        [(session, _)] => Ok(Some(session.clone())),
+        _ => Err(SessionError::Conflict(
+            "channel account aliases resolve to multiple legacy Sessions".into(),
+        )),
+    }
 }
 
 fn verify_channel_session(
+    connection: &Connection,
+    owner: &str,
     session: &Session,
     request: &ChannelInboundRequest,
     identity: &IdentityParts,
@@ -1041,7 +1095,11 @@ fn verify_channel_session(
             "channel identity is already bound to a different Graph or reply node".into(),
         ));
     }
-    if session.channel != channel_map(&request.identity) {
+    let mut channel = session.channel.clone();
+    if let Some(account) = channel.get_mut("account") {
+        *account = accounts::canonical_account(connection, owner, &identity.0, account)?;
+    }
+    if channel != channel_map(&request.identity) {
         return Err(SessionError::Storage(
             "channel Session identity projection is inconsistent".into(),
         ));
@@ -1056,6 +1114,57 @@ fn verify_channel_session(
         ));
     }
     Ok(())
+}
+
+fn normalize_account(
+    connection: &Connection,
+    owner: &str,
+    request: &mut ChannelInboundRequest,
+) -> Result<(), SessionError> {
+    if let Some(account) = request.identity.account.as_mut() {
+        *account =
+            accounts::canonical_account(connection, owner, &request.identity.source, account)?;
+    }
+    Ok(())
+}
+
+impl SessionStore {
+    pub(super) fn selected_channel_session(
+        connection: &Connection,
+        owner: &str,
+        session: &str,
+    ) -> Result<bool, SessionError> {
+        let identity = connection
+            .query_row(
+                "SELECT source, account, conversation_kind, conversation_id, participant_id
+                 FROM channel_sessions WHERE owner = ?1 AND session_id = ?2",
+                params![owner, session],
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                    ))
+                },
+            )
+            .optional()?
+            .ok_or(SessionError::Missing)?;
+        Ok(find_channel_session(connection, owner, &identity)?.as_deref() == Some(session))
+    }
+
+    pub fn channel_session_is_selected(
+        &self,
+        owner: &str,
+        session: &str,
+    ) -> Result<bool, SessionError> {
+        let mut connection = self.lock()?;
+        let transaction = connection.transaction()?;
+        let selected = Self::selected_channel_session(&transaction, owner, session)?;
+        transaction.commit()?;
+        Ok(selected)
+    }
 }
 
 fn ensure_channel_session(

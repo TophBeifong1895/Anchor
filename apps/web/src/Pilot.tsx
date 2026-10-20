@@ -1,6 +1,7 @@
 import { Fragment, useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
 import { Anchor, ArrowDown, Check, Copy, LoaderCircle, MessageSquare, Paperclip, Plus, Search, Send, Square } from 'lucide-react';
 import { api, ApiError } from './api';
+import { createPilotSession } from './pilotSessionCreation';
 import { Markdown } from './markdown';
 import { PilotTurn, type Turn } from './PilotTurn';
 import { SessionActions } from './SessionActions';
@@ -370,7 +371,7 @@ export function Pilot({ session = '', onSession, initialDraft = '', onDraftConsu
     let version = navigation.current;
     setLoading(true); setProblem('');
     try {
-      const { session } = await api<{ session: Session }>('/sessions', 'POST');
+      const { session } = await createPilotSession<Session>();
       if (!mounted.current || version !== navigation.current) return;
       activate(session.id); version = navigation.current; await refresh(session.id);
     } catch (error) { if (mounted.current && version === navigation.current) setProblem((error as Error).message); }
@@ -407,7 +408,7 @@ export function Pilot({ session = '', onSession, initialDraft = '', onDraftConsu
     try {
       if (attachments.length) await saveAttachmentDraft(draftScope(id), attachments);
       if (!id) {
-        const { session } = await api<{ session: Session }>('/sessions', 'POST');
+        const { session } = await createPilotSession<Session>();
         submissions.current.delete('');
         id = session.id; submissions.current.add(id);
         cached(`draft:${id}`, prompt);

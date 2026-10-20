@@ -1090,6 +1090,266 @@ fn host_restart_requires_explicit_resume_when_automatic_recovery_is_disabled() {
     );
 }
 
+#[test]
+#[ignore = "requires pinned real Goose binary and local Bubblewrap"]
+fn host_restart_recovers_only_the_canonical_account_and_preserves_legacy_history() {
+    let provider = Provider::new(
+        "goose-persistent-assistant-canonical-account-recovery",
+        vec![
+            command("set -eu; printf canonical-account-seed > account.txt; printf canonical-account-seed-written")
+                .expect_request_contains("persistent-account-first-input"),
+            finish("persistent-account-first-reply").after("canonical-account-seed-written"),
+            command("set -eu; test \"$(cat account.txt)\" = canonical-account-seed; printf continued > continued.txt; printf canonical-account-workspace-inherited")
+                .expect_request_contains("persistent-account-second-input"),
+            finish("persistent-account-second-reply").after("canonical-account-workspace-inherited"),
+        ],
+    );
+    let bot_id = "persistent-fixture-account-bot";
+    let canonical_account = format!("wecom:{:x}", Sha256::digest(bot_id.as_bytes()));
+    let legacy_account = format!(" {bot_id} ");
+    let host = host().with_extra_environment([("WECOM_BOT_ID", bot_id.to_owned())]);
+    let mut server = host.serve(&provider);
+    let first_event = event(
+        ALICE,
+        "persistent-account-first",
+        "persistent-account-first-input",
+    );
+    let first = submit(&server, &first_event, "persistent-account-first-reply");
+    let run = first["run"].as_str().unwrap().to_owned();
+    let session = first["session"].as_str().unwrap().to_owned();
+    let before = waiting(&host, &run, 1);
+    let native = native_round(&host, &provider, &run, 1);
+    let first_artifact = artifact(&host, &before, 1);
+    let first_snapshot = snapshot_inventory(&first_artifact);
+    assert_eq!(provider.requests().len(), 2);
+    assert_eq!(runs(&host).len(), 1);
+
+    server.kill();
+    drop(server);
+    fs::copy(
+        provider.root.join("host-http.log"),
+        provider.root.join("host-before-account-recovery.log"),
+    )
+    .unwrap();
+    let sessions =
+        SessionStore::open(host.base.state_root().join("platform/sessions.sqlite")).unwrap();
+    let canonical_binding = sessions
+        .get_channel_assistant("local", &session)
+        .unwrap()
+        .unwrap();
+    let original = sessions
+        .get_channel_inbound("local", &session, &inbound_identity(&first_event))
+        .unwrap();
+    assert_eq!(
+        original.request.identity.account.as_deref(),
+        Some(canonical_account.as_str())
+    );
+    assert_eq!(
+        sessions
+            .canonical_channel_account("local", "wecom", &legacy_account)
+            .unwrap(),
+        legacy_account
+    );
+
+    let legacy_event = event(
+        ALICE,
+        "persistent-account-legacy",
+        "persistent-account-legacy-history",
+    );
+    let legacy_inbound = inbound_identity(&legacy_event);
+    let legacy_run = "assistant-legacy-account-history";
+    let mut legacy_request = original.request.clone();
+    legacy_request.inbound_id = legacy_inbound.clone();
+    legacy_request.identity.account = Some(legacy_account.clone());
+    legacy_request.text = Some("persistent-account-legacy-history".into());
+    legacy_request.run_id = Some(legacy_run.into());
+    let legacy = sessions
+        .admit_channel_inbound("local", legacy_request)
+        .unwrap();
+    let legacy_session = legacy.session.id;
+    assert_ne!(legacy_session, session);
+    let legacy_binding = sessions
+        .bind_channel_assistant(
+            "local",
+            &legacy_session,
+            legacy_run,
+            &canonical_binding.wait_node,
+            &canonical_binding.work_node,
+            &canonical_binding.reply_node,
+        )
+        .unwrap();
+    sessions
+        .append_turn_event(
+            "local",
+            &legacy_session,
+            &legacy.turn.id,
+            json!({"type":"text","text":"persistent-account-legacy-reply-history"}),
+        )
+        .unwrap();
+    sessions
+        .finish_turn(
+            "local",
+            &legacy_session,
+            &legacy.turn.id,
+            TurnStatus::Completed,
+            None,
+        )
+        .unwrap();
+    let legacy_history = |store: &SessionStore| {
+        json!({
+            "session":store.get("local", &legacy_session).unwrap(),
+            "events":store.events("local", &legacy_session, 0).unwrap(),
+            "turns":store.list_turns("local", &legacy_session).unwrap(),
+            "turn_events":store.turn_events("local", &legacy_session, &legacy.turn.id, 0).unwrap(),
+            "inbound":store.get_channel_inbound("local", &legacy_session, &legacy_inbound).unwrap(),
+            "binding":store.get_channel_assistant("local", &legacy_session).unwrap(),
+        })
+    };
+    let retained = legacy_history(&sessions);
+    assert_eq!(sessions.list_channel_assistants().unwrap().len(), 2);
+    sessions
+        .register_channel_account(
+            "local",
+            "wecom",
+            &canonical_account,
+            &[bot_id.to_owned(), legacy_account.clone()],
+        )
+        .unwrap();
+    assert!(
+        sessions
+            .channel_session_is_selected("local", &session)
+            .unwrap()
+    );
+    assert!(
+        !sessions
+            .channel_session_is_selected("local", &legacy_session)
+            .unwrap()
+    );
+    assert_eq!(legacy_history(&sessions), retained);
+    drop(sessions);
+
+    let mut restarted = host.serve(&provider);
+    let (status, binding) = restarted.request(
+        "GET",
+        &format!("/channel-sessions/{session}/assistant"),
+        None,
+    );
+    assert_eq!(status, 200, "{binding}");
+    let resumed = binding["assistant"]["run_id"].as_str().unwrap().to_owned();
+    assert_ne!(resumed, run);
+    assert!(resumed.starts_with("assistant-resume-"), "{binding}");
+    assert_eq!(binding["needs_recovery"], false, "{binding}");
+    wait_until(
+        "canonical account assistant recovered and waiting for input",
+        || {
+            let saved = host.record(&resumed);
+            saved["status"] == "running"
+                && saved["cursor"]["node_id"] == "wait_input"
+                && saved["cursor"]["key"]["invocation"] == 1
+                && saved["results"].get("reply").is_none()
+        },
+    );
+    assert_eq!(provider.requests().len(), 2);
+    assert_eq!(host.record(&run)["status"], "stopped");
+    let (status, listed) = restarted.request("GET", "/runs", None);
+    assert_eq!(status, 200, "{listed}");
+    let active = listed["runs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|candidate| candidate["projection"]["active"] == true)
+        .map(|candidate| candidate["run"].as_str().unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(active, vec![resumed.as_str()], "{listed}");
+    assert_eq!(runs(&host).len(), 2);
+
+    let sessions =
+        SessionStore::open(host.base.state_root().join("platform/sessions.sqlite")).unwrap();
+    assert_eq!(sessions.list_channel_assistants().unwrap().len(), 2);
+    assert_eq!(legacy_history(&sessions), retained);
+    assert_eq!(
+        sessions
+            .get_channel_assistant("local", &legacy_session)
+            .unwrap(),
+        Some(legacy_binding.clone())
+    );
+    let automatic = sessions
+        .events("local", &session, 0)
+        .unwrap()
+        .into_iter()
+        .filter(|entry| entry.kind == "channel.assistant_auto_resume")
+        .collect::<Vec<_>>();
+    assert_eq!(automatic.len(), 1, "{automatic:?}");
+    assert_eq!(automatic[0].data["from"], json!(run));
+    assert_eq!(automatic[0].data["to"], json!(resumed));
+    let (status, blocked) = restarted.request(
+        "GET",
+        &format!("/channel-sessions/{legacy_session}/assistant"),
+        None,
+    );
+    assert_eq!(status, 200, "{blocked}");
+    assert_eq!(blocked["assistant"]["run_id"], legacy_run, "{blocked}");
+    assert_eq!(blocked["needs_recovery"], false, "{blocked}");
+    assert!(
+        blocked["recovery_blocked"]
+            .as_str()
+            .is_some_and(|reason| reason.contains("canonical")),
+        "{blocked}"
+    );
+    drop(sessions);
+
+    let second_event = event(
+        ALICE,
+        "persistent-account-second",
+        "persistent-account-second-input",
+    );
+    let second = submit_any(&restarted, &second_event, "persistent-account-second-reply");
+    assert_eq!(second["run"], json!(resumed));
+    assert_eq!(second["session"], json!(session));
+    waiting(&host, &resumed, 1);
+    let continued = native_round(&host, &provider, &resumed, 1);
+    assert_eq!(continued["session_id"], native["session_id"]);
+    assert_eq!(
+        continued["conversation_scope"],
+        native["conversation_scope"]
+    );
+    assert!(
+        provider.requests()[2]["messages"]
+            .to_string()
+            .contains("persistent-account-first-input")
+    );
+    assert_eq!(
+        fs::read(workspace(&host, &resumed).join("continued.txt")).unwrap(),
+        b"continued"
+    );
+    assert_eq!(snapshot_inventory(&first_artifact), first_snapshot);
+    assert_eq!(runs(&host).len(), 2);
+    assert_eq!(provider.requests().len(), 4);
+    let stopped = stop(&restarted, &provider, &resumed);
+    let sessions =
+        SessionStore::open(host.base.state_root().join("platform/sessions.sqlite")).unwrap();
+    assert_eq!(legacy_history(&sessions), retained);
+    assert_eq!(sessions.list("local").unwrap().len(), 2);
+    assert_eq!(sessions.list_turns("local", &session).unwrap().len(), 2);
+    drop(sessions);
+    evidence(
+        &host,
+        &provider,
+        &resumed,
+        json!({
+            "case_source":CASE_SOURCE,"first_response":first,"second_response":second,
+            "canonical_account":canonical_account,"legacy_account":legacy_account,
+            "canonical_session":session,"legacy_session":legacy_session,
+            "legacy_binding":legacy_binding,"legacy_history_unchanged":retained,
+            "automatic_event":automatic[0].data,"active_after_restart":active,
+            "previous_run":run,"resumed_run":resumed,
+            "same_native_session":native["session_id"],"model_requests_during_recovery":0,
+            "old_fs2_snapshot_unchanged":true,"stopped":stopped
+        }),
+    );
+    restarted.kill();
+}
+
 /// A Host restart resumes the bound assistant instance on its own: the same
 /// Goose conversation continues in a new Run that inherited the old workspace
 /// scene, while the old Run and its committed Artifact stay byte-identical.

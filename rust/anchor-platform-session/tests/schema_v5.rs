@@ -52,7 +52,8 @@ fn v4_fixture() -> (TempDir, PathBuf, Session, Turn, Vec<TurnEvent>) {
     let connection = Connection::open(&path).unwrap();
     connection
         .execute_batch(
-            "DROP TABLE channel_assistant_inputs;
+            "DROP TABLE channel_account_aliases;
+             DROP TABLE channel_assistant_inputs;
              DROP TABLE channel_assistants;
              DROP INDEX channel_deliveries_unfinished;
              DROP TABLE channel_deliveries;
@@ -135,7 +136,7 @@ fn exact_v4_migrates_to_v5_without_rewriting_session_turn_goose_or_delivery_fact
         connection
             .pragma_query_value(None, "user_version", |row| row.get::<_, i32>(0))
             .unwrap(),
-        8
+        9
     );
     assert_eq!(old_facts(&connection), before);
     let after = connection

@@ -50,19 +50,22 @@ impl RunApplication {
     ) -> Result<RunProjection, ApplicationError> {
         let view = record.into();
         let record = view.record.as_ref();
-        let active = self.active.lock().await;
-        let executor = active.get(&record.run_id);
-        let requested = executor.and_then(|run| {
-            if run.control.cancellation.load(Ordering::Relaxed) {
-                Some("stop")
-            } else if run.control.pause.load(Ordering::Relaxed) {
-                Some("pause")
-            } else {
-                None
-            }
-        });
+        let (is_active, requested) = {
+            let active = self.active.lock().await;
+            let executor = active.get(&record.run_id);
+            let requested = executor.and_then(|run| {
+                if run.control.cancellation.load(Ordering::Relaxed) {
+                    Some("stop")
+                } else if run.control.pause.load(Ordering::Relaxed) {
+                    Some("pause")
+                } else {
+                    None
+                }
+            });
+            (executor.is_some(), requested)
+        };
         let session_coordinated = metadata.is_some_and(|value| value.session_call.is_some());
-        let mut projection = observed(record, executor.is_some(), requested, session_coordinated);
+        let mut projection = observed(record, is_active, requested, session_coordinated);
         let identity =
             metadata.filter(|metadata| validate_control_identity(record, metadata).is_ok());
         if !projection.active && !session_coordinated && identity.is_none() {

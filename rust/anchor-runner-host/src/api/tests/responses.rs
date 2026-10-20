@@ -1,5 +1,160 @@
 use super::*;
 
+async fn operation_call(
+    app: Router,
+    uri: &str,
+    owner: &str,
+    key: &str,
+    body: Value,
+) -> (StatusCode, Value) {
+    let request = Request::builder()
+        .method("POST")
+        .uri(uri)
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(header::AUTHORIZATION, format!("Bearer {owner}"))
+        .header("idempotency-key", key)
+        .body(Body::from(body.to_string()))
+        .unwrap();
+    let response = app.oneshot(request).await.unwrap();
+    let status = response.status();
+    let bytes = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
+    (status, serde_json::from_slice(&bytes).unwrap())
+}
+
+#[tokio::test]
+async fn keyed_responses_reuse_session_turn_and_output_across_reopen_and_continuation() {
+    let (root, mut state) = fixture();
+    let first_owner = "a".repeat(32);
+    let second_owner = "b".repeat(32);
+    state.api_keys = vec![first_owner.clone(), second_owner.clone()];
+    let app = router(state.clone());
+    let body = json!({"input":"hello"});
+    let (status, first) = operation_call(
+        app.clone(),
+        "/v1/responses",
+        &first_owner,
+        "first",
+        body.clone(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{first}");
+    state.response_fixture = Some("must not run again".into());
+    let reloaded = router(state.clone());
+    let (status, replay) = operation_call(
+        reloaded.clone(),
+        "/v1/responses",
+        &first_owner,
+        "first",
+        body.clone(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{replay}");
+    assert_eq!(first["id"], replay["id"]);
+    assert_eq!(first["output"], replay["output"]);
+    let (status, _) = operation_call(
+        reloaded.clone(),
+        "/v1/responses",
+        &first_owner,
+        "first",
+        json!({"input":"changed"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    let follow_up = json!({"input":"next", "previous_response_id":first["id"]});
+    let (status, second) = operation_call(
+        reloaded.clone(),
+        "/v1/responses",
+        &first_owner,
+        "next",
+        follow_up.clone(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{second}");
+    let (_, retried_second) = operation_call(
+        reloaded.clone(),
+        "/v1/responses",
+        &first_owner,
+        "next",
+        follow_up,
+    )
+    .await;
+    assert_eq!(second["id"], retried_second["id"]);
+    let (status, _) = operation_call(
+        reloaded.clone(),
+        "/v1/responses",
+        &first_owner,
+        "first",
+        json!({"input":"hello", "previous_response_id":first["id"]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    let (status, other) = operation_call(
+        reloaded.clone(),
+        "/v1/responses",
+        &second_owner,
+        "first",
+        body.clone(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_ne!(other["id"], first["id"]);
+    let (_, distinct) = operation_call(
+        reloaded.clone(),
+        "/v1/responses",
+        &first_owner,
+        "distinct",
+        body,
+    )
+    .await;
+    assert_ne!(distinct["id"], first["id"]);
+    let owner = format!("api:{:x}", Sha256::digest(first_owner.as_bytes()));
+    let sessions = store(&state).unwrap();
+    let own = sessions.list(&owner).unwrap();
+    assert_eq!(own.len(), 2);
+    let first_session = own
+        .iter()
+        .find(|session| {
+            sessions
+                .list_turns(&owner, &session.id)
+                .unwrap()
+                .iter()
+                .any(|turn| json!(format!("resp_{}", turn.id)) == first["id"])
+        })
+        .unwrap();
+    let turns = sessions.list_turns(&owner, &first_session.id).unwrap();
+    assert_eq!(turns.len(), 2);
+    for turn in turns {
+        assert_eq!(
+            sessions
+                .turn_events(&owner, &first_session.id, &turn.id, 0)
+                .unwrap()
+                .iter()
+                .filter(|event| event.data["type"] == "text-delta")
+                .count(),
+            1
+        );
+    }
+    assert!(!root.path().join("provider").exists());
+}
+
+#[tokio::test]
+async fn keyed_response_concurrent_retries_commit_one_turn() {
+    let (root, state) = fixture();
+    let app = router_with_web_root(state.clone(), root.path().join("web"));
+    let body = json!({"input":"same"});
+    let (first, second) = tokio::join!(
+        operation_call(app.clone(), "/v1/responses", "", "concurrent", body.clone()),
+        operation_call(app, "/v1/responses", "", "concurrent", body),
+    );
+    assert_eq!(first.0, StatusCode::OK, "{:?}", first.1);
+    assert_eq!(second.0, StatusCode::OK, "{:?}", second.1);
+    assert_eq!(first.1["id"], second.1["id"]);
+    let sessions = store(&state).unwrap();
+    let own = sessions.list("local").unwrap();
+    assert_eq!(own.len(), 1);
+    assert_eq!(sessions.list_turns("local", &own[0].id).unwrap().len(), 1);
+}
+
 async fn keyed_call(
     app: Router,
     method: &str,

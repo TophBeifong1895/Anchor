@@ -1,4 +1,88 @@
 use super::*;
+
+#[tokio::test]
+async fn keyed_pilot_creation_replays_without_overwriting_and_isolates_owners() {
+    let (_root, mut state) = fixture();
+    let first_owner = "a".repeat(32);
+    let second_owner = "b".repeat(32);
+    state.api_keys = vec![first_owner.clone(), second_owner.clone()];
+    async fn create(app: Router, owner: &str, key: &str, body: Value) -> (StatusCode, Value) {
+        let request = Request::builder()
+            .method("POST")
+            .uri("/sessions")
+            .header(header::CONTENT_TYPE, "application/json")
+            .header(header::AUTHORIZATION, format!("Bearer {owner}"))
+            .header("idempotency-key", key)
+            .body(Body::from(body.to_string()))
+            .unwrap();
+        let response = app.oneshot(request).await.unwrap();
+        let status = response.status();
+        let bytes = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
+        (status, serde_json::from_slice(&bytes).unwrap())
+    }
+    let app = router(state.clone());
+    let (status, first) = create(
+        app.clone(),
+        &first_owner,
+        "create",
+        json!({"title":"original"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{first}");
+    let id = first["session"]["id"].as_str().unwrap();
+    let owner = format!("api:{:x}", Sha256::digest(first_owner.as_bytes()));
+    store(&state).unwrap().rename(&owner, id, "edited").unwrap();
+    let (status, replay) = create(
+        router(state.clone()),
+        &first_owner,
+        "create",
+        json!({"title":"original"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    assert_eq!(replay["session"]["id"], id);
+    assert_eq!(replay["session"]["title"], "edited");
+    let (status, _) = create(
+        app.clone(),
+        &first_owner,
+        "create",
+        json!({"title":"different"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    let (status, other) = create(
+        app.clone(),
+        &second_owner,
+        "create",
+        json!({"title":"original"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    assert_ne!(other["session"]["id"], id);
+    let (_, other_operation) = create(
+        app.clone(),
+        &first_owner,
+        "distinct",
+        json!({"title":"original"}),
+    )
+    .await;
+    assert_ne!(other_operation["session"]["id"], id);
+    let (status, _) = authorized_call(
+        app.clone(),
+        "GET",
+        &format!("/sessions/{id}"),
+        &second_owner,
+        json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    for key in ["", "has space"] {
+        assert_eq!(
+            create(app.clone(), &first_owner, key, json!({})).await.0,
+            StatusCode::BAD_REQUEST
+        );
+    }
+}
 use crate::application::{
     ConversationSource,
     session_calls::{SessionCall, SessionContext},

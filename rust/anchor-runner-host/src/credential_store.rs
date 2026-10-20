@@ -3,7 +3,7 @@
 mod management;
 pub(crate) use management::{configure, credentials, resolve_pending_locked};
 
-use anchor_graph_host::{FilePluginCatalog, PluginDefinition};
+use anchor_graph_host::{FilePluginCatalog, PluginDefinition, PluginMetadata};
 use anchor_platform_session::{Session, SessionStore, TurnStatus};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -244,39 +244,7 @@ pub(crate) fn target_authorization(
     server: &str,
 ) -> Result<(BTreeSet<String>, String), String> {
     if let Some(platform) = server.strip_prefix("channel_") {
-        if definition
-            .mcp_servers
-            .iter()
-            .any(|declaration| declaration.name == server)
-        {
-            return Err("credential channel target conflicts with an MCP server name".into());
-        }
-        let channel = definition
-            .channels
-            .iter()
-            .find(|channel| channel.platform == platform)
-            .ok_or("credential target channel is not declared")?;
-        let fields = channel
-            .required_environment
-            .iter()
-            .cloned()
-            .collect::<BTreeSet<_>>();
-        if fields.iter().any(|field| !valid_field(field)) {
-            return Err("channel credential field is invalid".into());
-        }
-        let digest = hash(
-            &serde_json::to_vec(&(
-                &channel.plugin,
-                &channel.platform,
-                &channel.transport,
-                &channel.entrypoint,
-                &channel.required_environment,
-                &channel.description,
-                &channel.sdk,
-            ))
-            .expect("channel authorization identity"),
-        );
-        Ok((fields, digest))
+        channel_authorization(&definition.metadata(), platform)
     } else {
         let declaration = definition
             .mcp_servers
@@ -288,6 +256,46 @@ pub(crate) fn target_authorization(
             definition.binding().authorization_digest,
         ))
     }
+}
+
+pub(crate) fn channel_authorization(
+    definition: &PluginMetadata,
+    platform: &str,
+) -> Result<(BTreeSet<String>, String), String> {
+    let server = format!("channel_{platform}");
+    if definition
+        .mcp_servers
+        .iter()
+        .any(|declaration| declaration.name == server)
+    {
+        return Err("credential channel target conflicts with an MCP server name".into());
+    }
+    let channel = definition
+        .channels
+        .iter()
+        .find(|channel| channel.platform == platform)
+        .ok_or("credential target channel is not declared")?;
+    let fields = channel
+        .required_environment
+        .iter()
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    if fields.iter().any(|field| !valid_field(field)) {
+        return Err("channel credential field is invalid".into());
+    }
+    let digest = hash(
+        &serde_json::to_vec(&(
+            &channel.plugin,
+            &channel.platform,
+            &channel.transport,
+            &channel.entrypoint,
+            &channel.required_environment,
+            &channel.description,
+            &channel.sdk,
+        ))
+        .expect("channel authorization identity"),
+    );
+    Ok((fields, digest))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -598,6 +606,7 @@ pub(crate) fn environment_snapshot(
     }
     Ok(snapshot)
 }
+#[cfg(test)]
 pub(crate) fn environment_values(
     data: &Path,
     owner: &str,
@@ -605,8 +614,7 @@ pub(crate) fn environment_values(
     server: &str,
 ) -> Result<BTreeMap<String, String>, String> {
     if server.starts_with("channel_") {
-        let _lease = lease(data)?;
-        return legacy_environment_values(data, owner, definition, server);
+        return channel_environment_values(data, owner, &definition.metadata(), server);
     }
     Ok(environment_snapshot(data, owner, definition)?
         .environments
@@ -643,44 +651,102 @@ fn legacy_environment_values(
     definition: &PluginDefinition,
     server: &str,
 ) -> Result<BTreeMap<String, String>, String> {
+    if server.starts_with("channel_") {
+        return channel_environment_values_locked(data, owner, &definition.metadata(), server);
+    }
     let (fields, authorization_digest) = target_authorization(definition, server)?;
     let mut values = BTreeMap::new();
     for field in fields {
         if crate::plugin_configuration::logical_field(definition, server, &field).is_some() {
             continue;
         }
-        if server.starts_with("channel_") && std::env::var_os(&field).is_some() {
-            continue;
-        }
-        if !server.starts_with("channel_")
-            && let Some(environment) = crate::plugin_configuration::legacy_external_environment(
-                definition, server, &field,
-            )?
+        if let Some(environment) =
+            crate::plugin_configuration::legacy_external_environment(definition, server, &field)?
         {
             if let Ok(value) = std::env::var(environment) {
                 values.insert(field, value);
             }
             continue;
         }
-        let Some(secret) =
-            load::<Secret>(&secret_path(data, owner, &definition.id, server, &field))?
-        else {
-            continue;
-        };
-        if secret.format != 1
-            || secret.owner != owner
-            || secret.plugin != definition.id
-            || secret.server != server
-            || secret.field != field
-            || secret.authorization_digest != authorization_digest
-        {
-            return Err(
-                "stored credential authorization no longer matches this Plugin target".into(),
-            );
+        if let Some(value) = authorized_value(
+            data,
+            owner,
+            &definition.id,
+            server,
+            &field,
+            &authorization_digest,
+        )? {
+            values.insert(field, value);
         }
-        values.insert(field, secret.value);
     }
     Ok(values)
+}
+
+pub(crate) fn channel_environment_values(
+    data: &Path,
+    owner: &str,
+    definition: &PluginMetadata,
+    server: &str,
+) -> Result<BTreeMap<String, String>, String> {
+    let _lease = lease(data)?;
+    channel_environment_values_locked(data, owner, definition, server)
+}
+
+fn channel_environment_values_locked(
+    data: &Path,
+    owner: &str,
+    definition: &PluginMetadata,
+    server: &str,
+) -> Result<BTreeMap<String, String>, String> {
+    let platform = server
+        .strip_prefix("channel_")
+        .ok_or("credential target is not a channel")?;
+    let (fields, authorization_digest) = channel_authorization(definition, platform)?;
+    let mut values = BTreeMap::new();
+    for field in fields {
+        if definition
+            .configuration
+            .environment_for(server)
+            .is_some_and(|mapping| mapping.contains_key(&field))
+            || std::env::var_os(&field).is_some()
+        {
+            continue;
+        }
+        if let Some(value) = authorized_value(
+            data,
+            owner,
+            &definition.id,
+            server,
+            &field,
+            &authorization_digest,
+        )? {
+            values.insert(field, value);
+        }
+    }
+    Ok(values)
+}
+
+fn authorized_value(
+    data: &Path,
+    owner: &str,
+    plugin: &str,
+    server: &str,
+    field: &str,
+    authorization_digest: &str,
+) -> Result<Option<String>, String> {
+    let Some(secret) = load::<Secret>(&secret_path(data, owner, plugin, server, field))? else {
+        return Ok(None);
+    };
+    if secret.format != 1
+        || secret.owner != owner
+        || secret.plugin != plugin
+        || secret.server != server
+        || secret.field != field
+        || secret.authorization_digest != authorization_digest
+    {
+        return Err("stored credential authorization no longer matches this Plugin target".into());
+    }
+    Ok(Some(secret.value))
 }
 pub(crate) fn delete_requests(data: &Path, owner: &str, session: &Session) -> Result<(), String> {
     let _lease = lease(data)?;

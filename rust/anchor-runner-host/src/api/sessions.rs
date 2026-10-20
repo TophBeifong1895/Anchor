@@ -79,6 +79,29 @@ pub(super) fn private_owner(state: &ApiState, headers: &HeaderMap) -> String {
     format!("api:{:x}", Sha256::digest(key.as_bytes()))
 }
 
+pub(super) fn idempotency_key(headers: &HeaderMap) -> Result<Option<String>, HttpResponse> {
+    let values = headers
+        .get_all("idempotency-key")
+        .iter()
+        .collect::<Vec<_>>();
+    if values.len() > 1 {
+        return Err(error(
+            StatusCode::BAD_REQUEST,
+            "provide one Idempotency-Key",
+        ));
+    }
+    values
+        .first()
+        .map(|value| {
+            let key = value
+                .to_str()
+                .map_err(|_| error(StatusCode::BAD_REQUEST, "invalid Idempotency-Key"))?;
+            crate::application::pilot_sessions::validate_request_id(key).map_err(session_error)?;
+            Ok(key.to_owned())
+        })
+        .transpose()
+}
+
 fn private_session_id(identifier: &str) -> bool {
     identifier.starts_with("responses-") || identifier.starts_with("pilot-private-")
 }
@@ -166,6 +189,7 @@ pub(super) async fn create_session(
             .map_err(|_| error(StatusCode::BAD_REQUEST, "invalid Session creation request"))?
     };
     blocking(move || {
+        let key = idempotency_key(&headers)?;
         let fields = body
             .as_object()
             .filter(|fields| {
@@ -181,6 +205,41 @@ pub(super) async fn create_session(
             })?;
         let mut request: CreateSession = serde_json::from_value(Value::Object(fields.clone()))
             .map_err(|_| error(StatusCode::BAD_REQUEST, "invalid Session creation request"))?;
+        let content = json!({"id":request.id,"title":request.title});
+        if let Some(key) = key.as_deref() {
+            let owner = private_owner(&state, &headers);
+            if request
+                .id
+                .as_ref()
+                .is_some_and(|id| !id.starts_with("pilot-private-"))
+            {
+                return Err(error(
+                    StatusCode::BAD_REQUEST,
+                    "keyed Session id must start with pilot-private-",
+                ));
+            }
+            request.id.get_or_insert_with(|| {
+                format!(
+                    "pilot-private-{}",
+                    crate::application::pilot_sessions::request_identity(&owner, "pilot", key)
+                )
+            });
+            let sessions = store(&state)?;
+            if let Some(identifier) = request.id.as_deref()
+                && matches!(sessions.get(&owner, identifier), Err(SessionError::Missing))
+                && has_retained_session_run(&state, identifier)?
+            {
+                return Err(error(
+                    StatusCode::CONFLICT,
+                    "Session identity is retained by runtime history",
+                ));
+            }
+            let session = crate::application::pilot_sessions::create_with_request(
+                &sessions, &owner, request, key, &content, "pilot", None,
+            )
+            .map_err(session_error)?;
+            return Ok((StatusCode::CREATED, Json(json!({"session":session}))));
+        }
         if request.id.is_none() {
             static NEXT_PRIVATE_SESSION: std::sync::atomic::AtomicU64 =
                 std::sync::atomic::AtomicU64::new(0);

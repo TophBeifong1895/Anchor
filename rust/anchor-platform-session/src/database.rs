@@ -12,7 +12,7 @@ use crate::SessionError;
 mod tests;
 
 const APPLICATION_ID: i32 = 0x414e5353;
-const SCHEMA_VERSION: i32 = 8;
+const SCHEMA_VERSION: i32 = 9;
 const SCHEMA_V1: [(&str, &str, &str); 3] = [
     (
         "table",
@@ -283,6 +283,18 @@ const CHANNEL_ASSISTANT_SCHEMA: [(&str, &str, &str); 4] = [
     ),
 ];
 
+const CHANNEL_ACCOUNT_SCHEMA: [(&str, &str, &str); 1] = [(
+    "table",
+    "channel_account_aliases",
+    "CREATE TABLE channel_account_aliases (
+            owner TEXT NOT NULL CHECK(length(CAST(owner AS BLOB)) BETWEEN 1 AND 256),
+            source TEXT NOT NULL CHECK(length(CAST(source AS BLOB)) BETWEEN 1 AND 256),
+            alias TEXT NOT NULL CHECK(length(CAST(alias AS BLOB)) BETWEEN 1 AND 256),
+            canonical TEXT NOT NULL CHECK(length(CAST(canonical AS BLOB)) BETWEEN 1 AND 256),
+            PRIMARY KEY(owner, source, alias)
+        )",
+)];
+
 pub(crate) fn open(path: &Path) -> Result<Connection, SessionError> {
     let path = validate_path(path)?;
     let flags = OpenFlags::SQLITE_OPEN_READ_WRITE
@@ -337,7 +349,7 @@ fn migrate(connection: &mut Connection) -> Result<(), SessionError> {
         && existing == expected_schema(version);
     if !empty && !compatible {
         return Err(SessionError::Storage(
-            "incompatible database: expected exact Anchor platform Session schema version 1, 2, 3, 4, 5, 6, 7 or 8"
+            "incompatible database: expected exact Anchor platform Session schema version 1, 2, 3, 4, 5, 6, 7, 8 or 9"
                 .into(),
         ));
     }
@@ -357,6 +369,11 @@ fn migrate(connection: &mut Connection) -> Result<(), SessionError> {
     }
     if version < 8 {
         migrate_channel_conversations(&transaction)?;
+    }
+    if version < 9 {
+        for (_, _, statement) in CHANNEL_ACCOUNT_SCHEMA {
+            transaction.execute(statement, [])?;
+        }
     }
     if version < SCHEMA_VERSION {
         transaction.pragma_update(None, "application_id", APPLICATION_ID)?;
@@ -448,6 +465,7 @@ fn expected_schema(version: i32) -> Vec<(String, String, String)> {
         .chain(QUESTION_SCHEMA.iter().filter(|_| version >= 5))
         .chain(CHANNEL_SCHEMA.iter().filter(|_| version >= 6))
         .chain(CHANNEL_ASSISTANT_SCHEMA.iter().filter(|_| version >= 7))
+        .chain(CHANNEL_ACCOUNT_SCHEMA.iter().filter(|_| version >= 9))
         .map(|definition| {
             if version >= 8 && definition.1 == "channel_sessions" {
                 &CHANNEL_SESSION_SCHEMA_V8

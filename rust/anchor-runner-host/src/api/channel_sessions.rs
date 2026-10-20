@@ -50,6 +50,11 @@ pub(super) async fn get_channel_assistant(
     AxumPath(session): AxumPath<String>,
 ) -> Result<Json<Value>, HttpResponse> {
     let owner = private_owner(&state, &headers);
+    let recovery_blocked = state
+        .application
+        .ensure_channel_session_eligible(&owner, &session)
+        .err()
+        .map(|error| format!("{error:?}"));
     let lookup_state = state.clone();
     let (assistant, run_id, plugin_update) = blocking(move || {
         let assistant = store(&lookup_state)?
@@ -72,11 +77,13 @@ pub(super) async fn get_channel_assistant(
     // admission never ran) or terminal is not active either, so both read as
     // "needs recovery" — which is exactly the window a crash leaves behind.
     let needs_recovery = match run_id {
-        Some(run) => !state.application.active_runs(None).await.contains(&run),
+        Some(run) => {
+            recovery_blocked.is_none() && !state.application.active_runs(None).await.contains(&run)
+        }
         None => false,
     };
     Ok(Json(
-        json!({"assistant": assistant, "needs_recovery": needs_recovery, "plugin_update":plugin_update}),
+        json!({"assistant": assistant, "needs_recovery": needs_recovery, "recovery_blocked": recovery_blocked, "plugin_update":plugin_update}),
     ))
 }
 

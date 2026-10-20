@@ -560,7 +560,7 @@ pub(crate) const PILOT_TOOLS: &[PilotToolSpec] = &[
     PilotToolSpec {
         name: "schedule_create",
         description: "Create the Graph schedule the user requested. Uses the same Host Scheduler and supported once/interval/daily/weekly/monthly rules as the platform. The Graph must already exist; acceptance is not proof of a future execution.",
-        parameters: || json!({"type":"object","properties":{"graph":{"type":"string"},"rule":{"type":"object"},"input":{"type":"object"}},"required":["graph","rule"],"additionalProperties":false}),
+        parameters: || json!({"type":"object","properties":{"graph":{"type":"string"},"rule":{"type":"object"},"input":{"type":"object"},"request_id":{"type":"string","minLength":1,"maxLength":128}},"required":["graph","rule"],"additionalProperties":false}),
         authority: ToolAuthority::Mutate,
         effect: ToolEffect::HostFact,
     },

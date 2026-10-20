@@ -10,9 +10,9 @@ use serde_json::json;
 use tempfile::TempDir;
 
 use super::super::{
-    APPLICATION_ID, CHANNEL_ASSISTANT_SCHEMA, CHANNEL_SCHEMA, GOOSE_SCHEMA, QUESTION_SCHEMA,
-    RELATION_SCHEMA, SCHEMA_V1, SCHEMA_VERSION, TURN_SCHEMA, expected_schema, migrate,
-    migrate_channel_assistants, migrate_channel_conversations, schema,
+    APPLICATION_ID, CHANNEL_ACCOUNT_SCHEMA, CHANNEL_ASSISTANT_SCHEMA, CHANNEL_SCHEMA, GOOSE_SCHEMA,
+    QUESTION_SCHEMA, RELATION_SCHEMA, SCHEMA_V1, SCHEMA_VERSION, TURN_SCHEMA, expected_schema,
+    migrate, migrate_channel_assistants, migrate_channel_conversations, schema,
 };
 use crate::{
     AttachmentManifest, ChannelDeliveryRequest, ChannelIdentity, ChannelInboundRequest,
@@ -164,6 +164,9 @@ fn v7_fixture() -> (TempDir, PathBuf, String, String) {
             .execute(&format!("DROP TABLE temp.preserved_{table}"), [])
             .unwrap();
     }
+    transaction
+        .execute("DROP TABLE channel_account_aliases", [])
+        .unwrap();
     transaction.pragma_update(None, "user_version", 7).unwrap();
     transaction.commit().unwrap();
     assert_eq!(schema(&connection).unwrap(), expected_schema(7));
@@ -367,6 +370,9 @@ fn v6_fixture() -> (TempDir, PathBuf, String) {
         .execute("DROP TABLE temp.preserved_inbounds", [])
         .unwrap();
     downgrade_channel_sessions(&transaction);
+    transaction
+        .execute("DROP TABLE channel_account_aliases", [])
+        .unwrap();
     transaction.pragma_update(None, "user_version", 6).unwrap();
     transaction.commit().unwrap();
     connection.execute_batch("VACUUM").unwrap();
@@ -507,6 +513,9 @@ fn v6_failed_rebuild_rolls_back_schema_version_data_and_indexes() {
     let transaction = connection.transaction().unwrap();
     migrate_channel_assistants(&transaction).unwrap();
     migrate_channel_conversations(&transaction).unwrap();
+    for (_, _, statement) in CHANNEL_ACCOUNT_SCHEMA {
+        transaction.execute(statement, []).unwrap();
+    }
     let required: i64 = transaction
         .pragma_query_value(None, "page_count", |row| row.get(0))
         .unwrap();
@@ -578,7 +587,7 @@ fn altered_v6_current_and_future_schemas_are_rejected_before_any_mutation() {
     for (version, alteration) in [
         (6, "DROP INDEX channel_inbounds_session_created"),
         (8, "DROP INDEX channel_inbounds_run"),
-        (8, "PRAGMA user_version = 9"),
+        (8, "PRAGMA user_version = 10"),
         (8, "PRAGMA application_id = 0"),
     ] {
         let (_directory, path, _session) = v6_fixture();

@@ -58,7 +58,7 @@ impl RunApplication {
                 "this assistant instance is retired; start a new instance explicitly".into(),
             ));
         }
-        Ok(())
+        self.ensure_channel_session_eligible(&source.owner, &source.session)
     }
 
     pub(super) fn retire_assistant_for_deletion(&self, run: &str) -> Result<(), ApplicationError> {
@@ -82,6 +82,7 @@ impl RunApplication {
         graph_lease: Box<dyn RunLease>,
         plan: AssistantPlan,
     ) -> Result<String, ApplicationError> {
+        self.ensure_channel_session_eligible(&request.owner, &request.session)?;
         self.admit_assistant_run(request, source, bundle, graph_lease, plan)
             .await
     }

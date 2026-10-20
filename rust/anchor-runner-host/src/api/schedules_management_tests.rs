@@ -8,6 +8,161 @@ use axum::{
 };
 use tower::ServiceExt;
 
+#[test]
+fn keyed_schedule_file_has_version_and_keeps_legacy_compatibility() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("schedules.json");
+    let store = ScheduleStore::open(path.clone()).unwrap();
+    let adapter = ScheduleManagementAdapter::new(store.clone());
+    adapter
+        .create("task", &json!({"type":"daily","time":"09:00"}), &json!({}))
+        .unwrap();
+    let legacy: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    assert!(legacy.is_array());
+    adapter
+        .create_with_request(
+            "task",
+            &json!({"type":"daily","time":"09:00"}),
+            &json!({}),
+            "local",
+            Some("plan"),
+        )
+        .unwrap();
+    let mut keyed: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    assert_eq!(keyed["version"], 1);
+    assert_eq!(keyed["schedules"].as_array().unwrap().len(), 2);
+    assert_eq!(keyed["creation_requests"].as_array().unwrap().len(), 1);
+    assert!(adapter.list().unwrap().get("creation_requests").is_none());
+    drop(adapter);
+    drop(store);
+    let reopened = ScheduleStore::open(path.clone()).unwrap();
+    assert_eq!(reopened.lock().unwrap().items.len(), 2);
+    drop(reopened);
+    keyed["version"] = json!(99);
+    std::fs::write(&path, serde_json::to_vec(&keyed).unwrap()).unwrap();
+    assert!(ScheduleStore::open(path.clone()).is_err());
+    assert_eq!(
+        serde_json::from_slice::<Value>(&std::fs::read(path).unwrap()).unwrap(),
+        keyed
+    );
+}
+
+#[tokio::test]
+async fn keyed_schedule_http_and_pilot_share_owner_scoped_creation_and_durable_replay() {
+    let (root, state, tools) = fixture();
+    let body =
+        json!({"graph":"task","rule":{"type":"daily","time":"09:00"},"input":{"task":"later"}});
+    let first = pilot(&tools, "schedule_create", {
+        let mut value = body.clone();
+        value["request_id"] = json!("stable-plan");
+        value
+    })
+    .await;
+    let request = Request::builder()
+        .method("POST")
+        .uri("/schedules")
+        .header("content-type", "application/json")
+        .header("idempotency-key", "stable-plan")
+        .body(Body::from(body.to_string()))
+        .unwrap();
+    let response = super::super::router(state.clone())
+        .oneshot(request)
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let replay: Value =
+        serde_json::from_slice(&to_bytes(response.into_body(), 1024 * 1024).await.unwrap())
+            .unwrap();
+    assert_eq!(first, replay);
+    assert_eq!(state.schedules.lock().unwrap().items.len(), 1);
+    let changed =
+        json!({"graph":"task","rule":{"type":"daily","time":"10:00"},"request_id":"stable-plan"});
+    assert!(tools.call("schedule_create", changed).await.is_err());
+    let distinct = pilot(&tools, "schedule_create", {
+        let mut value = body.clone();
+        value["request_id"] = json!("different-plan");
+        value
+    })
+    .await;
+    assert_ne!(first["schedule"]["id"], distinct["schedule"]["id"]);
+    let other = state
+        .application
+        .create_schedule_with_request(
+            "task",
+            &body["rule"],
+            &body["input"],
+            "other-owner",
+            Some("stable-plan"),
+        )
+        .await
+        .unwrap();
+    assert_ne!(first["schedule"]["id"], other["schedule"]["id"]);
+    assert!(state.application.records().unwrap().is_empty());
+    drop(tools);
+    drop(state);
+    let reopened = ScheduleStore::open(root.path().join("schedules.json")).unwrap();
+    let adapter = ScheduleManagementAdapter::new(reopened.clone());
+    assert_eq!(
+        adapter
+            .create_with_request(
+                "task",
+                &body["rule"],
+                &body["input"],
+                "local",
+                Some("stable-plan")
+            )
+            .unwrap(),
+        first
+    );
+    adapter
+        .delete(first["schedule"]["id"].as_str().unwrap())
+        .unwrap();
+    assert!(matches!(
+        adapter.create_with_request(
+            "task",
+            &body["rule"],
+            &body["input"],
+            "local",
+            Some("stable-plan")
+        ),
+        Err(ApplicationError::Conflict(_))
+    ));
+    assert_eq!(reopened.lock().unwrap().items.len(), 2);
+}
+
+#[tokio::test]
+async fn keyed_schedule_replay_survives_past_due_rule_and_missing_graph() {
+    let (root, state, tools) = fixture();
+    let at = format_local_datetime(Local::now().naive_local() + Duration::days(1));
+    let rule = json!({"type":"once","at":at});
+    let first = state
+        .application
+        .create_schedule_with_request("task", &rule, &json!({}), "local", Some("one-shot"))
+        .await
+        .unwrap();
+    std::fs::remove_file(root.path().join("catalog/task/graph.json")).unwrap();
+    let replay = state
+        .application
+        .create_schedule_with_request("task", &rule, &json!({}), "local", Some("one-shot"))
+        .await
+        .unwrap();
+    assert_eq!(first, replay);
+    drop(tools);
+    drop(state);
+    let reopened = ScheduleStore::open(root.path().join("schedules.json")).unwrap();
+    let adapter = ScheduleManagementAdapter::new(reopened);
+    assert_eq!(
+        adapter
+            .replay_creation(
+                "local",
+                "one-shot",
+                &json!({"graph":"task","rule":rule,"input":{}})
+            )
+            .unwrap(),
+        Some(first)
+    );
+}
+
 fn fixture() -> (tempfile::TempDir, ApiState, PilotTools) {
     let root = tempfile::tempdir().unwrap();
     let graph = root.path().join("catalog/task");
@@ -192,6 +347,18 @@ fn schedule_store_persistence_failure_rolls_back_create_and_delete() {
         adapter.create("task", &json!({"type":"daily","time":"12:00"}), &json!({})),
         Err(ApplicationError::Storage(_))
     ));
+    assert_eq!(adapter.list().unwrap(), before);
+    assert!(matches!(
+        adapter.create_with_request(
+            "task",
+            &json!({"type":"daily","time":"12:00"}),
+            &json!({}),
+            "local",
+            Some("retry-after-failure")
+        ),
+        Err(ApplicationError::Storage(_))
+    ));
+    assert!(store.lock().unwrap().creation_requests.is_empty());
     assert_eq!(adapter.list().unwrap(), before);
     assert!(matches!(
         adapter.delete(created["schedule"]["id"].as_str().unwrap()),

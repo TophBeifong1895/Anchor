@@ -5,6 +5,7 @@ use anchor_platform_session::{
 };
 use anchor_runtime::graph::{FileRunStore, GraphRunRecord, GraphSnapshot, RunStore};
 
+mod identity;
 mod plugin_updates;
 
 #[tokio::test]
