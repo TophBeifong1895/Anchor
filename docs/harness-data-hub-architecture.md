@@ -57,26 +57,35 @@ anchor-kernel  ◄──  anchor-facts  ◄──  anchor-runner-host   （写�
 
 ## 5. 写侧组件
 
-### 5.1 内核变更（P1 已实现，待独立审查）
+### 5.1 内核变更（P1 已实现，第一轮审查后已修正，待复审）
 
-内核只多记录、不多裁决。实际落地（行号以 P1 提交为准，都在 `rust/anchor-kernel/src/` 下）：
+内核只多记录、不多裁决。实际落地（都在 `rust/anchor-kernel/src/` 下）：
 
-1. **Clock 端口**：`Clock` trait（`kernel.rs:29`），默认 `SystemClock`，通过 `with_clock`（`kernel.rs:94`）注入，和 `with_probe` 一样，现有的构造调用不用改。`submit` 在持有写锁时取一次时间，写进 `Stamp.at`（`model.rs:153`，单位为 Unix 纪元毫秒）。内核不保证时间单调，顺序以 `seq` 为准。
-2. **因果引用**：`Submission.cause: Option<Cause>`（`model.rs:97`、`:102`），形式为"资源 id + seq"，内核原样记录，不校验。内核自己生成的记录也会填写：人工批准后写入目标资源的那条记录，引用 pending 资源上的决定记录（`kernel.rs:429`）。
-3. **配置摘要随 Principal 走**：删除了全局的 `knobs` 和 `set_knobs`，改为 `Principal.config: Option<String>`（`model.rs:32`），用 `with_config` 设置；通过 `Stamp.config()` 读取。
+1. **Clock 端口**：`Clock` trait（`kernel.rs:30`），默认 `SystemClock`。
+   - 注入方式是构造函数 `Kernel::with_clock(store, authority, clock)`（`kernel.rs:83`），`Kernel::new` 等价于传入系统时钟。之所以在构造时注入，是为了让三个宪法 Validator 资源的创建时间也来自同一个时钟。
+   - `submit` 在持有写锁时取一次时间，写进 `Stamp.at`（`model.rs:158`，单位为 Unix 纪元毫秒）。
+   - 内核不保证时间单调，顺序以 `seq` 为准。
+2. **`seq` 跨重启唯一**：构造时从存储里恢复所有历史中最大的 `seq`，作为写入计数器的起点（`kernel.rs:500`、`:95`）。在同一个数据根下，`seq` 跨重启也只对应一次提交，所以"资源 id + seq"不会有歧义，内核生成的 `effect/…/{seq}`、`pending/…/{seq}` 资源名也不会撞名。记录格式不变。
+   - 代价：启动时线性读一遍所有历史。和 Host 启动时重建探针是同一个量级。
+3. **因果引用**：`Submission.cause: Option<Cause>`（`model.rs:99`、`:107`），形式为"资源 id + seq"，内核原样记录，不校验。
+   - 内核自己生成的记录也会填写：人工批准后写入目标资源的那条记录，引用 pending 资源上的决定记录（`kernel.rs:438`）。
+   - **引用可能悬空**：被引用的记录可能晚于引用它的记录写入，比如上面这条批准记录。如果两次写入之间写入者停止，被引用的记录就永远不会出现。读取方必须能容忍。
+4. **配置摘要随 Principal 走**：删除了全局的 `knobs` 和 `set_knobs`，改为 `Principal.config: Option<String>`（`model.rs:34`），用 `with_config` 设置；通过 `Stamp.config()` 读取。
    - 理由：配置是宿主为某个提议者冻结的身份的一部分，"哪个配置下的 Agent 在提议"，和 principal 一样由宿主盖章。这样 `submit` 的签名不变，仍然只有一个入口，没有新增参数。
+   - **约束**：`Principal` 的相等比较也会比较 `config`。授权和 Validator 只能按 `id` 和 `kind` 判断，不能拿整个 `Principal` 做比较或者当作键。这条规则写在 `Authority` trait 和 `Principal.config` 的文档里。
    - 宿主在 P2 之前一律不填。
-4. **创建事实**：`Resource.created: Option<Creation { at, config }>`（`model.rs:312`、`:316`）。
-   - `Kernel::create` 和 `install` 由内核盖时间；创建者只能通过 `Resource::configured` 提供配置摘要，自带的时间会被覆盖（`kernel.rs:122`）。
+5. **创建事实**：`Resource.created: Option<Creation { at, config }>`（`model.rs:317`、`:321`）。
+   - `Kernel::create` 和 `install` 由内核盖时间；创建者只能通过 `Resource::configured` 提供配置摘要，自带的时间会被覆盖（`kernel.rs:131`）。
    - 内核为提交生成的 effect、pending 资源，沿用该提交的时间和配置。
    - 选择"资源上的字段"而不是"在历史里写一条创建记录"：所有修改都是在内核加载的资源上进行的，Validator 只返回状态和阶段，所以这个字段在每次修改、崩溃恢复和结算之后都会保留；而且历史的条数、探针的重建、恢复投影都不受影响。
-5. **测量点**：`Point` 用 `at` 和 `config` 替代了 `knobs`（`model.rs:490`、`:492`）；Host 的探针重建同步修改。
-6. **只读历史读取**：`HistoryReader`（`store.rs:370`）提供 `open`、`list`、`load`、`history`。
+6. **测量点**：`Point` 用 `at` 和 `config` 替代了 `knobs`（`model.rs:495`、`:497`）；Host 的探针重建同步修改。
+7. **只读历史读取**：`HistoryReader`（`store.rs:370`）提供 `open`、`list`、`load`、`history`。
    - 不加锁，不创建任何文件或目录；
    - 只返回以换行结尾的完整记录；
-   - 被删除的资源读出来就是不存在。
+   - 被删除的资源读出来是不存在：组装完成后会再检查一次状态文件（`store.rs:403`）；
+   - 文件名超长、不可能存在于文件系统上的资源，和 `FileStore` 一样读出来是不存在（`store.rs:425`）。
 
-新字段一律可选，旧记录读出来是"未记录"，不迁移，也不拒绝。测试见 `rust/anchor-kernel/tests/recorded_facts.rs`，其中一项专门验证：不同时钟、不同配置、不同因果引用下，同一组提交序列得到的裁决完全相同。
+新字段一律可选，旧记录读出来是"未记录"，不迁移，也不拒绝。测试见 `rust/anchor-kernel/tests/recorded_facts.rs`。其中的差分测试让两次运行的时钟、配置和因果引用都不同，并且覆盖了普通工作、外部效果及其生命周期、人工批准、过期提交和预算耗尽。两次运行的裁决和所有资源完全相同。
 
 ### 5.2 `anchor-facts`：事实词汇表（新 crate）
 

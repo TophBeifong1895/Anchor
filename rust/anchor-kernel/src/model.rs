@@ -27,7 +27,9 @@ pub struct Principal {
     pub kind: PrincipalKind,
     /// Digest of the configuration the host froze for this principal: Graph,
     /// node, Plugins, model and prompts. Part of who proposes, recorded on
-    /// every stamp; the kernel never judges by it.
+    /// every stamp; the kernel never judges by it. Authorities and validators
+    /// must decide by `id` and `kind` only, never by comparing or keying on a
+    /// whole `Principal`, whose equality includes this field.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub config: Option<String>,
 }
@@ -98,6 +100,9 @@ pub struct Submission {
 }
 
 /// A record in some resource's history: its resource and stamp sequence.
+/// `seq` is unique per state root across restarts. A reference may dangle:
+/// the referenced record can be written later than the referring one, and
+/// never if the writer stops in between. Readers must tolerate that.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Cause {
     pub resource: ResourceId,

@@ -44,9 +44,9 @@ impl Validator for Ledger {
 }
 
 fn kernel<S: Store>(store: S, start: u64) -> Kernel<S> {
-    let mut k = Kernel::new(store, Box::new(AllowAll)).unwrap();
+    let mut k = Kernel::with_clock(store, Box::new(AllowAll), stepping(start)).unwrap();
     k.install("validator/ledger", Arc::new(Ledger)).unwrap();
-    k.with_clock(stepping(start))
+    k
 }
 
 fn host() -> Principal {
@@ -87,8 +87,58 @@ fn the_kernel_clock_stamps_every_record_and_seq_keeps_the_order() {
         .iter()
         .map(|r| (r.stamp.seq(), r.stamp.at()))
         .collect();
-    assert_eq!(stamps, vec![(1, Some(1_001)), (2, Some(1_002))]);
+    // Four validator creations and the Run's creation read the clock first.
+    assert_eq!(stamps, vec![(1, Some(1_005)), (2, Some(1_006))]);
     assert_eq!(history[1].verdict.reason, Reason::StaleVersion);
+}
+
+#[test]
+fn the_clock_given_at_construction_stamps_the_constitutional_validators_too() {
+    let k = kernel(MemoryStore::default(), 42);
+    let stamped: Vec<_> = [
+        "validator/constitution",
+        "validator/human-decision",
+        "validator/effect",
+        "validator/ledger",
+    ]
+    .iter()
+    .map(|id| k.load(id).unwrap().unwrap().created.unwrap().at)
+    .collect();
+    assert_eq!(stamped, vec![Some(42), Some(43), Some(44), Some(45)]);
+}
+
+#[test]
+fn seq_continues_across_a_restart_so_names_and_causes_stay_unique() {
+    let root = tempfile::tempdir().unwrap();
+    let execute = |k: &Kernel<FileStore>| {
+        let seen = k.load("run/1").unwrap().unwrap().version;
+        k.submit(&host(), 0, Submission::new("run/1", seen, Action::Execute))
+            .unwrap()
+    };
+    let k = kernel(FileStore::new(root.path()).unwrap(), 0);
+    k.create(Resource::new("run/1", "validator/ledger", json!({})).task(100))
+        .unwrap();
+    assert!(execute(&k).is_accepted());
+    // The effect resource has a history of its own.
+    let effect = k.store().list("effect/run/1/").unwrap().remove(0);
+    let started = Submission::new(&effect, 0, Action::Write).content(json!({"status": "started"}));
+    assert!(k.submit(&host(), 0, started).unwrap().is_accepted());
+    drop(k);
+
+    let k = kernel(FileStore::new(root.path()).unwrap(), 0);
+    k.submit(&agent(), 1, write(&k, "run/1", json!({"n": 1})))
+        .unwrap();
+    // A second effect on the same endpoint gets a new name instead of
+    // colliding with the first one after its record was already committed.
+    assert!(execute(&k).is_accepted());
+    let seqs: Vec<_> = k
+        .history("run/1")
+        .unwrap()
+        .iter()
+        .map(|r| r.stamp.seq())
+        .collect();
+    assert_eq!(seqs, vec![1, 3, 4]);
+    assert_eq!(k.store().list("effect/run/1/").unwrap().len(), 2);
 }
 
 #[test]
@@ -140,8 +190,9 @@ fn creation_is_stamped_by_the_kernel_and_survives_every_change() {
         config: Some("cfg-run".into()),
     });
     k.create(proposed).unwrap();
+    // The four validator creations read the clock first.
     let expected = Some(Creation {
-        at: Some(5_000),
+        at: Some(5_004),
         config: Some("cfg-run".into()),
     });
     assert_eq!(k.load("run/1").unwrap().unwrap().created, expected);
@@ -244,54 +295,103 @@ fn records_and_resources_written_before_these_facts_read_as_not_recorded() {
     assert_eq!(store.load("run/old").unwrap().unwrap().created, None);
 }
 
-/// One scripted sequence of proposals; returns every verdict and the final
-/// resource without its creation stamp.
-fn script(k: &Kernel<MemoryStore>, config: Option<&str>) -> (Vec<Verdict>, Resource) {
-    let as_configured = |p: Principal| match config {
+/// One scripted sequence of proposals through every path that records these
+/// facts: ordinary work, an external effect and its lifecycle, a pending
+/// proposal approved by a person, a stale proposal and budget exhaustion.
+/// Returns every verdict and every resource without its creation stamp.
+fn script(
+    k: &Kernel<MemoryStore>,
+    config: Option<&str>,
+    origin: &str,
+) -> (Vec<Verdict>, Vec<Resource>) {
+    let configured = |p: Principal| match config {
         Some(c) => p.with_config(c),
         None => p,
     };
+    let version = |id: &str| k.load(id).unwrap().unwrap().version;
     k.create(Resource::new("run/1", "validator/ledger", json!({})).task(3))
         .unwrap();
     let mut verdicts = Vec::new();
-    for n in 0..3 {
-        verdicts.push(
-            k.submit(
-                &as_configured(agent()),
-                1,
-                write(k, "run/1", json!({"n": n})).cause("x", n),
-            )
-            .unwrap(),
+    let mut submit = |principal: Principal, cost: u64, submission: Submission| {
+        verdicts.push(k.submit(&configured(principal), cost, submission).unwrap());
+    };
+    submit(
+        agent(),
+        1,
+        write(k, "run/1", json!({"n": 0})).cause(origin, 1),
+    );
+    submit(
+        host(),
+        0,
+        Submission::new("run/1", version("run/1"), Action::Execute).cause(origin, 2),
+    );
+    let effect = k.store().list("effect/run/1/").unwrap().remove(0);
+    for (seen, status) in [(0, "started"), (1, "succeeded")] {
+        submit(
+            host(),
+            0,
+            Submission::new(&effect, seen, Action::Write)
+                .content(json!({"status": status}))
+                .cause(origin, 3),
         );
     }
-    verdicts.push(
-        k.submit(
-            &as_configured(agent()),
-            0,
-            Submission::new("run/1", 0, Action::Write),
-        )
-        .unwrap(),
+    submit(
+        agent(),
+        1,
+        write(k, "run/1", json!({"ask": true})).cause(origin, 4),
+    );
+    let pending = k.store().list("pending/run/1/").unwrap().remove(0);
+    submit(
+        owner(),
+        0,
+        Submission::new(&pending, 0, Action::Write)
+            .content(json!({"decision": "approve"}))
+            .cause(origin, 5),
+    );
+    submit(
+        agent(),
+        0,
+        Submission::new("run/1", 0, Action::Write).cause(origin, 6),
     );
     // The budget of 3 is crossed here: the kernel settles the task.
-    verdicts.push(
-        k.submit(
-            &as_configured(agent()),
-            1,
-            write(k, "run/1", json!({"n": 9})),
-        )
-        .unwrap(),
-    );
-    let mut last = k.load("run/1").unwrap().unwrap();
-    last.created = None;
-    (verdicts, last)
+    submit(agent(), 2, write(k, "run/1", json!({"n": 9})));
+    let resources = k
+        .store()
+        .list("")
+        .unwrap()
+        .iter()
+        .map(|id| {
+            let mut resource = k.load(id).unwrap().unwrap();
+            resource.created = None;
+            resource
+        })
+        .collect();
+    (verdicts, resources)
 }
 
 #[test]
 fn verdicts_do_not_depend_on_time_cause_or_configuration() {
-    let early = script(&kernel(MemoryStore::default(), 0), None);
-    let late = script(&kernel(MemoryStore::default(), u64::MAX / 2), Some("cfg-z"));
+    let early = script(&kernel(MemoryStore::default(), 0), None, "origin/a");
+    let late = script(
+        &kernel(MemoryStore::default(), u64::MAX / 2),
+        Some("cfg-z"),
+        "origin/b",
+    );
     assert_eq!(early, late);
-    assert_eq!(early.0.last().unwrap().reason, Reason::BudgetExhausted);
+    let reasons: Vec<_> = early.0.iter().map(|v| v.reason).collect();
+    assert_eq!(
+        reasons,
+        vec![
+            Reason::Ok,
+            Reason::Ok,
+            Reason::Ok,
+            Reason::Ok,
+            Reason::AwaitingHuman,
+            Reason::Ok,
+            Reason::StaleVersion,
+            Reason::BudgetExhausted,
+        ]
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -371,4 +471,16 @@ fn the_reader_never_creates_its_root() {
     let missing = root.path().join("absent");
     assert!(HistoryReader::open(&missing).is_err());
     assert!(!missing.exists());
+}
+
+#[test]
+fn an_id_too_long_for_the_filesystem_reads_as_absent_in_both_views() {
+    let root = tempfile::tempdir().unwrap();
+    let store = FileStore::new(root.path()).unwrap();
+    // A valid id whose encoded directory name exceeds a filename's limit.
+    let id = format!("run/{}", ".".repeat(200));
+    assert_eq!(store.load(&id).unwrap(), None);
+    let reader = HistoryReader::open(root.path()).unwrap();
+    assert_eq!(reader.load(&id).unwrap(), None);
+    assert!(reader.history(&id).unwrap().is_empty());
 }

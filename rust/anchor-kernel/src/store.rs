@@ -390,14 +390,19 @@ impl HistoryReader {
 
     /// The current resource as [`Store::load`] would return it.
     pub fn load(&self, id: &str) -> Result<Option<Resource>, StoreError> {
-        let dir = self.root.join(encode(id)?);
-        let mut resource = match fs::read(dir.join("resource.json")) {
+        let state = self.root.join(encode(id)?).join("resource.json");
+        let mut resource = match fs::read(&state) {
             Ok(bytes) => serde_json::from_slice::<Resource>(&bytes)
                 .map_err(|e| StoreError::Corrupt(e.to_string()))?,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(error) if absent(&error) => return Ok(None),
             Err(error) => return Err(error.into()),
         };
         let history = self.history(id)?;
+        // Removal renames the directory. If that happened after the state was
+        // read, the history read above may be empty: the resource is gone.
+        if !state.exists() {
+            return Ok(None);
+        }
         if let Some(after) = history.iter().rev().find_map(|r| r.after.as_ref())
             && after.version > resource.version
         {
@@ -409,12 +414,19 @@ impl HistoryReader {
 
     pub fn history(&self, id: &str) -> Result<Vec<Record>, StoreError> {
         match history_at(&self.root.join(encode(id)?).join("history.jsonl")) {
-            Err(StoreError::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => {
-                Ok(Vec::new())
-            }
+            Err(StoreError::Io(error)) if absent(&error) => Ok(Vec::new()),
             result => result,
         }
     }
+}
+
+/// A missing path, or a name too long to exist on this filesystem: either
+/// way there is no such resource, as [`FileStore`] reads it.
+fn absent(error: &std::io::Error) -> bool {
+    matches!(
+        error.kind(),
+        std::io::ErrorKind::NotFound | std::io::ErrorKind::InvalidFilename
+    )
 }
 
 /// Read a history while the caller already holds the resource lease.

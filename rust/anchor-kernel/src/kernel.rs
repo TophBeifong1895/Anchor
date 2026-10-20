@@ -16,7 +16,8 @@ pub const HUMAN_DECISION: &str = "validator/human-decision";
 pub const EFFECT: &str = "validator/effect";
 
 /// Host authority, frozen per turn or Run. Nothing in a submission can create
-/// authority; the kernel only asks.
+/// authority; the kernel only asks. Judge by `principal.id` and `kind` only:
+/// `config` is recorded identity, never a grant.
 pub trait Authority: Send + Sync {
     fn permits(&self, principal: &Principal, action: Action, target: &str) -> bool;
 }
@@ -67,18 +68,31 @@ pub struct Kernel<S: Store> {
     probe: Option<Box<dyn Probe>>,
     clock: Box<dyn Clock>,
     /// One writer per state root. Adjudication is short; executors run outside.
+    /// The last stamped `seq`, recovered from the store on start so that a
+    /// sequence number names one submission per root across restarts.
     writer: Mutex<u64>,
 }
 
 impl<S: Store> Kernel<S> {
     pub fn new(store: S, authority: Box<dyn Authority>) -> Result<Self, KernelError> {
+        Self::with_clock(store, authority, Box::new(SystemClock))
+    }
+
+    /// The clock is fixed at construction, so every creation and stamp,
+    /// including the constitutional validators', reads the same time source.
+    pub fn with_clock(
+        store: S,
+        authority: Box<dyn Authority>,
+        clock: Box<dyn Clock>,
+    ) -> Result<Self, KernelError> {
+        let last = last_seq(&store)?;
         let mut kernel = Self {
             store,
             authority,
             validators: Validators::default(),
             probe: None,
-            clock: Box::new(SystemClock),
-            writer: Mutex::new(0),
+            clock,
+            writer: Mutex::new(last),
         };
         kernel.install(CONSTITUTION, Arc::new(HumanOnly))?;
         kernel.install(HUMAN_DECISION, Arc::new(HumanDecision))?;
@@ -88,11 +102,6 @@ impl<S: Store> Kernel<S> {
 
     pub fn with_probe(mut self, probe: Box<dyn Probe>) -> Self {
         self.probe = Some(probe);
-        self
-    }
-
-    pub fn with_clock(mut self, clock: Box<dyn Clock>) -> Self {
-        self.clock = clock;
         self
     }
 
@@ -485,6 +494,18 @@ impl<S: Store> Kernel<S> {
 // ---------------------------------------------------------------------------
 // Task lifecycle: the whole of it
 // ---------------------------------------------------------------------------
+
+/// The highest `seq` any history in the store holds. Every stamp is appended
+/// before its submission returns, so a restarted writer continues after it.
+fn last_seq(store: &impl Store) -> Result<u64, KernelError> {
+    let mut last = 0;
+    for id in store.list("")? {
+        if let Some(seq) = store.history(&id)?.iter().map(|r| r.stamp.seq()).max() {
+            last = last.max(seq);
+        }
+    }
+    Ok(last)
+}
 
 /// Cost is a projection of history. Only crossing the budget settles a live
 /// task and advances its accepted-state version; charging alone never does.
