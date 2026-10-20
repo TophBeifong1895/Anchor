@@ -481,3 +481,48 @@ master 已提交，工作区干净，tip 是 `dfd3427`。比本分支多 3 个�
 3. **重跑 §10.17 第 3 步的全部门槛**，交回格式同那一步。另外两项要求：
    - 交回中附上 merge 提交的冲突登记；
    - 写明最终提交包含 `dfd3427`，确保 master 能快进。
+
+### 10.19 M4：在 master 上收尾（2026-10-20，与前文冲突时以本节为准）
+
+**现状**：master 已快进到 `204d126`，HEAD 是 `ceac4ae`。从现在起只在 `/home/mansteinl/Anchor` 上工作，分支 worktree 只读保留。原 §4 中这两项已在 M3 完成，本节不再要求：删除旧类型，以及冻结快照（30,000 例）。
+
+**由谁做**：由原分支 agent 在 master 工作目录里做。master agent 如果同时做业务开发，不得修改以下路径：
+
+- `application/run_access/`
+- `anchor-runtime/src/graph/`
+- `node_host/`
+- `goose_acp.rs`
+- Web 的 `Timeline.tsx` 和 `RunDetailPage*`
+
+两边都只 stage 自己改的路径。
+
+**范围一：`GraphRunRecord` 逐字段处置。** 每个字段登记一行：删除，或保留并写明所有者和理由。审查方粗查到的线索如下，数字是全仓 / 生产代码的命中数，以你核实的为准：
+
+| 字段 | 线索 | 预期方向 |
+| --- | --- | --- |
+| `recovery`、`recovery_submissions` | `reads.rs:151` 读出后立刻用 `recovery_facts` 的结果覆盖，记录里的这两个字段只是个搬运容器。生产代码中读取它们的只有 `run_access.rs:309`（`has_pending_recovery`）和 `state.rs:497`。 | 移到 RunView，或者由 Kernel history 投影出来，然后从记录中删除。 |
+| `error` | Web `Timeline.tsx:315` 会显示 `state.error`。Kernel 世界里，失败原因保存在 Settle 的 reason 中。 | 失败原因改由 Kernel 投影提供，记录中的字段删除。**Web 仍然必须显示失败原因**。HTTP 键名可以保留，也可以改用 `projection.reason`，选哪种都要登记。 |
+| `updated`、`touch()` | 生产代码 0 处。更新时间已经由宿主在提交时记录。 | 删除。 |
+| `sequence` | 全仓 72 处，校验器和 `logic.rs` 会递增它。 | 能由 Kernel 的 version 或 history 推出来就删除；推不出来就保留，并写明它承载的是哪条图事实。 |
+| `format`、`RunRecordFormat`、`GraphRunRecordWire` | 当前用来对旧格式做具名拒绝（C6）。 | 记录现在存放在 Kernel resource 里。由你判断格式版本该放在记录上还是 resource 上，具名拒绝必须保留。 |
+| `plugin_bindings_initialized`、`plugin_bindings`、`graph_calls` 等 | 都是业务事实，生产代码在用。 | 保留，只登记。 |
+
+**范围二：`CompletionFact`。** 四个变体 `NotStarted`、`Resumable`、`Uncertain`、`Yielded` 在生产代码中都有使用。逐个说明它是否只为旧 Runner 存在，并给出证据。如果都不是，就写"无可删"。不要为了删而删。
+
+**范围三：旧机制残留测试。** 检查 `anchor-runtime/src/graph/tests/migrated_*.rs`，例如 `completion_fact_closes_run_store_crash_window…`，看测试名或断言里是否还在描述已经删除的 RunStore 机制。按 §0 规则处理：要么改名指向新的等价机制，要么在映射表中登记后删除。
+
+**会受影响的测试**（审查方的规格检查，请补全）：
+
+- `run_access/http.rs` 中的 `/runs` 详情字节基线，它直接拼了 `"error"` 和 `"recovery"`；
+- Web 的 `RunDetailPage.test.tsx`；
+- Web 的 `ChannelSessions.test.tsx`。
+
+改动对外 JSON 时，按"状态词汇类断言"登记。显示失败原因、待恢复提示属于业务断言，不得放宽。
+
+**门槛**（一次交回，用 §9 模板）：
+
+- workspace；Web test 和 build；clippy、fmt；围栏。
+- **完整固定 Goose 套件，使用 master 的标准命令和 `/tmp/anchor-goose-regression-target`**。这一轮同时覆盖合并时审查方没有重跑的 40 个 target。
+- C1：`rust/anchor-kernel` 相对 `0859373` 的 diff 为空。
+- 交回中附上字段处置表、`CompletionFact` 结论和删除测试映射。
+- §8 的停止条件照旧有效。M5 不自动开工。不推送。
