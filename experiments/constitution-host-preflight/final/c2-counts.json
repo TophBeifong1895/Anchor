@@ -1,0 +1,42 @@
+{
+  "revision": "e60374fd06eda07de8df9c41e64a5e03f6e3246d",
+  "h1": {
+    "save": 16,
+    "mutation": 36
+  },
+  "after": {
+    "save": 0,
+    "mutation": 0
+  },
+  "mapped_rows": {
+    "save": 16,
+    "mutation": 36
+  },
+  "mapping": "../m3/c2-destinations.md",
+  "save_candidates": [
+    {
+      "location": "rust/anchor-runner-host/src/api/settings.rs:43",
+      "source": ".save(body)",
+      "classification": "RuntimeConfiguration settings owner, not Run"
+    },
+    {
+      "location": "rust/anchor-runner-host/src/goose_acp/conversation.rs:246",
+      "source": "state.save().map_err(GraphError::Unsupported)?;",
+      "classification": "Native conversation branch owner"
+    },
+    {
+      "location": "rust/anchor-runner-host/src/goose_acp/conversation.rs:268",
+      "source": "self.save()",
+      "classification": "Native conversation branch owner"
+    }
+  ],
+  "field_mutation_candidates": [],
+  "mutable_record_arguments": [],
+  "retired_types": [],
+  "review": "M3's 52 destinations checked against fixed tree; M4 removed recovery/error/updated fields and moved history-derived recovery to RunView only; no persistent Run save API remains",
+  "limitations": [
+    "Lexical scan is supporting evidence, not Rust type resolution",
+    "Mutation candidate variables and Graph fields are reviewable in script; constructors and immutable metadata are outside C2",
+    "M3 line numbers are historical; use named functions, not the old numeric offsets"
+  ]
+}

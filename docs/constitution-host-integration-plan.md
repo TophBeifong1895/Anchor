@@ -2,7 +2,7 @@
 
 编制日期：2026-10-16。当前迁移以 [M1–M5 任务书](constitution-migration-task.md) 为准；本计划的 H3–H6 划分已被取代，约束 C1–C6 与 §2 语义仍有效。
 
-M1、M1.5、M2 已验收，M3 通过独立审查与 §10.18 合并回归，master 已快进。30,000 例旧侧快照保持不变，全部新 Run 共用 KernelScheduler；C2 save 0、mutation 0，Kernel 自 0859373 零 diff。§10.19 M4 已在 master 实现 Graph 字段清理、history 恢复投影及失败原因展示，全部门槛通过，交回审查：workspace 2,200 / 0 / 126、Web 359 及构建、完整固定 Goose 123 / 0 / 0、Clippy/fmt 与围栏；[最终交回](../experiments/constitution-host-preflight/m4/verification.md)、[字段归属](../experiments/constitution-host-preflight/m4/field-disposition.md)、[断言及测试映射](../experiments/constitution-host-preflight/m4/assertion-mapping.md)。S27 已批准并结清 S4；M5 未开始，W4、真实模型 Provider、外部渠道与部署未验。
+M1–M4 已验收，§10.20 M5 的测量、探针复核与文档收尾完成，迁移任务结束并交回。最终测量基点为 master `e60374f`；全部新 Run 共用 KernelScheduler，C2 save 0 / mutation 0，Kernel 相对 `0859373` 零 diff，30,000 例快照不变。本轮 workspace 2,200 / 0 / 126、fmt/围栏通过；Web 359 及构建和完整固定 Goose 123 / 0 / 0 引用已验 M4，M5 未重跑完整 Goose。最终逐 crate/规则/测试统计、探针重建和宪法复核见 [M5 最终测量](../experiments/constitution-host-preflight/final/measurement.md)；W4、真实模型完整业务、渠道实网、部署、时间与保留政策等见其“迁移后待决清单”。旧 worktree/分支保留，不推送。
 
 K0.1 审查见 [结论](../experiments/constitution-host-preflight/k01/review.md)；已批准的 K0.2 FileStore 删除与资源租约见 [工作记录](constitution-refactor-log.md#k02filestore-删除与资源租约)。Kernel 自 `0859373` 零 diff。H2.1、P、R 的历史度量不代表当前实现；M3 逐规则审计按独立判断体计数。
 

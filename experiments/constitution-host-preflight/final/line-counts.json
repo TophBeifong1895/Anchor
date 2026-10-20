@@ -1,0 +1,2461 @@
+{
+  "baseline": "fc558e279eea9aaa68f4f26730285c3ee6f18515",
+  "after": "e60374fd06eda07de8df9c41e64a5e03f6e3246d",
+  "method": "Count physical Rust diff lines by crate at immutable Git revisions.\n\nNo rename detection: moving code between files counts as removal + addition.\nInline cfg(test) items and files reached through test-only modules are tests.\nCargo manifests/lockfiles, docs, generated fixtures and Web are not Rust lines.\n",
+  "crates": {
+    "anchor-devtools": {
+      "production_added": 129,
+      "production_deleted": 117,
+      "test_added": 417,
+      "test_deleted": 140
+    },
+    "anchor-distribution": {
+      "production_added": 108,
+      "production_deleted": 160,
+      "test_added": 278,
+      "test_deleted": 43
+    },
+    "anchor-docmost-tools": {
+      "production_added": 0,
+      "production_deleted": 1,
+      "test_added": 0,
+      "test_deleted": 1
+    },
+    "anchor-file-lease": {
+      "production_added": 53,
+      "production_deleted": 0,
+      "test_added": 66,
+      "test_deleted": 0
+    },
+    "anchor-graph-host": {
+      "production_added": 631,
+      "production_deleted": 270,
+      "test_added": 1158,
+      "test_deleted": 225
+    },
+    "anchor-kernel": {
+      "production_added": 1482,
+      "production_deleted": 0,
+      "test_added": 1524,
+      "test_deleted": 0
+    },
+    "anchor-library": {
+      "production_added": 24,
+      "production_deleted": 16,
+      "test_added": 0,
+      "test_deleted": 0
+    },
+    "anchor-mcp-host": {
+      "production_added": 53,
+      "production_deleted": 6,
+      "test_added": 0,
+      "test_deleted": 0
+    },
+    "anchor-network-tools": {
+      "production_added": 0,
+      "production_deleted": 0,
+      "test_added": 0,
+      "test_deleted": 0
+    },
+    "anchor-platform-session": {
+      "production_added": 422,
+      "production_deleted": 84,
+      "test_added": 1579,
+      "test_deleted": 14
+    },
+    "anchor-rsi": {
+      "production_added": 441,
+      "production_deleted": 60,
+      "test_added": 1014,
+      "test_deleted": 1
+    },
+    "anchor-runner-host": {
+      "production_added": 7621,
+      "production_deleted": 3646,
+      "test_added": 14392,
+      "test_deleted": 2199
+    },
+    "anchor-runtime": {
+      "production_added": 1960,
+      "production_deleted": 2094,
+      "test_added": 8964,
+      "test_deleted": 4405
+    },
+    "anchor-sandbox-bwrap": {
+      "production_added": 0,
+      "production_deleted": 0,
+      "test_added": 0,
+      "test_deleted": 0
+    },
+    "anchor-scholarly": {
+      "production_added": 0,
+      "production_deleted": 0,
+      "test_added": 0,
+      "test_deleted": 0
+    },
+    "anchor-wecom-gateway": {
+      "production_added": 6,
+      "production_deleted": 5,
+      "test_added": 76,
+      "test_deleted": 15
+    },
+    "anchor-wecom-tools": {
+      "production_added": 0,
+      "production_deleted": 0,
+      "test_added": 0,
+      "test_deleted": 0
+    }
+  },
+  "files": {
+    "rust/anchor-devtools/src/candidate.rs": {
+      "production_added": 1,
+      "production_deleted": 13,
+      "test_added": 0,
+      "test_deleted": 0
+    },
+    "rust/anchor-devtools/src/cutover/filesystem.rs": {
+      "production_added": 6,
+      "production_deleted": 4,
+      "test_added": 0,
+      "test_deleted": 0
+    },
+    "rust/anchor-devtools/src/cutover/prepare.rs": {
+      "production_added": 5,
+      "production_deleted": 4,
+      "test_added": 0,
+      "test_deleted": 0
+    },
+    "rust/anchor-devtools/src/goose.rs": {
+      "production_added": 3,
+      "production_deleted": 1,
+      "test_added": 0,
+      "test_deleted": 0
+    },
+    "rust/anchor-devtools/src/main.rs": {
+      "production_added": 18,
+      "production_deleted": 6,
+      "test_added": 0,
+      "test_deleted": 0
+    },
+    "rust/anchor-devtools/src/preflight.rs": {
+      "production_added": 60,
+      "production_deleted": 84,
+      "test_added": 0,
+      "test_deleted": 0
+    },
+    "rust/anchor-devtools/src/preflight/runtime.rs": {
+      "production_added": 36,
+      "production_deleted": 5,
+      "test_added": 0,
+      "test_deleted": 0
+    },
+    "rust/anchor-devtools/src/preflight/tests.rs": {
+      "production_added": 0,
+      "production_deleted": 0,
+      "test_added": 47,
+      "test_deleted": 139
+    },
+    "rust/anchor-devtools/tests/cli.rs": {
+      "production_added": 0,
+      "production_deleted": 0,
+      "test_added": 6,
+      "test_deleted": 1
+    },
+    "rust/anchor-devtools/tests/dev_launcher.rs": {
+      "production_added": 0,
+      "production_deleted": 0,
+      "test_added": 364,
+      "test_deleted": 0
+    },
+    "rust/anchor-distribution/src/bin/anchor-platform.rs": {
+      "production_added": 3,
+      "production_deleted": 3,
+      "test_added": 0,
+      "test_deleted": 0
+    },
+    "rust/anchor-distribution/src/install.rs": {
+      "production_added": 34,
+      "production_deleted": 139,
+      "test_added": 0,
+      "test_deleted": 0
+    },
+    "rust/anchor-distribution/src/install/tests.rs": {
+      "production_added": 0,
+      "production_deleted": 0,
+      "test_added": 66,
+      "test_deleted": 41
+    },
+    "rust/anchor-distribution/src/lib.rs": {
+      "production_added": 9,
+      "production_deleted": 6,
+      "test_added": 0,
+      "test_deleted": 0
+    },
+    "rust/anchor-distribution/src/tests.rs": {
+      "production_added": 0,
+      "production_deleted": 0,
+      "test_added": 204,
+      "test_deleted": 0
+    },
+    "rust/anchor-distribution/src/validation.rs": {
+      "production_added": 62,
+      "production_deleted": 12,
+      "test_added": 0,
+      "test_deleted": 0
+    },
+    "rust/anchor-distribution/tests/platform_cli.rs": {
+      "production_added": 0,
+      "production_deleted": 0,
+      "test_added": 8,
+      "test_deleted": 2
+    },
+    "rust/anchor-docmost-tools/src/package.rs": {
+      "production_added": 0,
+      "production_deleted": 1,
+      "test_added": 0,
+      "test_deleted": 0
+    },
+    "rust/anchor-docmost-tools/tests/package.rs": {
+      "production_added": 0,
+      "production_deleted": 0,
+      "test_added": 0,
+      "test_deleted": 1
+    },
+    "rust/anchor-file-lease/src/lib.rs": {
+      "production_added": 53,
+      "production_deleted": 0,
+      "test_added": 66,
+      "test_deleted": 0
+    },
+    "rust/anchor-graph-host/src/dependencies.rs": {
+      "production_added": 1,
+      "production_deleted": 0,
+      "test_added": 0,
+      "test_deleted": 0
+    },
+    "rust/anchor-graph-host/src/graph_call.rs": {
+      "production_added": 162,
+      "production_deleted": 218,
+      "test_added": 0,
+      "test_deleted": 0
+    },
+    "rust/anchor-graph-host/src/graph_call_session_tests.rs": {
+      "production_added": 0,
+      "production_deleted": 0,
+      "test_added": 213,
+      "test_deleted": 76
+    },
+    "rust/anchor-graph-host/src/graph_catalog.rs": {
+      "production_added": 4,
+      "production_deleted": 9,
+      "test_added": 0,
+      "test_deleted": 0
+    },
+    "rust/anchor-graph-host/src/lib.rs": {
+      "production_added": 11,
+      "production_deleted": 5,
+      "test_added": 0,
+      "test_deleted": 0
+    },
+    "rust/anchor-graph-host/src/mcp.rs": {
+      "production_added": 178,
+      "production_deleted": 31,
+      "test_added": 0,
+      "test_deleted": 0
+    },
+    "rust/anchor-graph-host/src/mcp_tests.rs": {
+      "production_added": 0,
+      "production_deleted": 0,
+      "test_added": 36,
+      "test_deleted": 0
+    },
+    "rust/anchor-graph-host/src/plugin_catalog.rs": {
+      "production_added": 19,
+      "production_deleted": 7,
+      "test_added": 0,
+      "test_deleted": 0
+    },
+    "rust/anchor-graph-host/src/plugin_configuration.rs": {
+      "production_added": 256,
+      "production_deleted": 0,
+      "test_added": 3,
+      "test_deleted": 0
+    },
+    "rust/anchor-graph-host/src/plugin_configuration_tests.rs": {
+      "production_added": 0,
+      "production_deleted": 0,
+      "test_added": 486,
+      "test_deleted": 0
+    },
+    "rust/anchor-graph-host/tests/child_lifecycle.rs": {
+      "production_added": 0,
+      "production_deleted": 0,
+      "test_added": 100,
+      "test_deleted": 149
+    },
+    "rust/anchor-graph-host/tests/support/kernel.rs": {
+      "production_added": 0,
+      "production_deleted": 0,
+      "test_added": 320,
+      "test_deleted": 0
+    },
+    "rust/anchor-kernel/src/kernel.rs": {
+      "production_added": 626,
+      "production_deleted": 0,
+      "test_added": 0,
+      "test_deleted": 0
+    },
+    "rust/anchor-kernel/src/lib.rs": {
+      "production_added": 26,
+      "production_deleted": 0,
+      "test_added": 0,
+      "test_deleted": 0
+    },
+    "rust/anchor-kernel/src/model.rs": {
+      "production_added": 429,
+      "production_deleted": 0,
+      "test_added": 0,
+      "test_deleted": 0
+    },
+    "rust/anchor-kernel/src/store.rs": {
+      "production_added": 401,
+      "production_deleted": 0,
+      "test_added": 0,
+      "test_deleted": 0
+    },
+    "rust/anchor-kernel/tests/accounting_lifecycle.rs": {
+      "production_added": 0,
+      "production_deleted": 0,
+      "test_added": 451,
+      "test_deleted": 0
+    },
+    "rust/anchor-kernel/tests/constitution.rs": {
+      "production_added": 0,
+      "production_deleted": 0,
+      "test_added": 642,
+      "test_deleted": 0
+    },
+    "rust/anchor-kernel/tests/file_store_deletion.rs": {
+      "production_added": 0,
+      "production_deleted": 0,
+      "test_added": 183,
+      "test_deleted": 0
+    },
+    "rust/anchor-kernel/tests/storage_regressions.rs": {
+      "production_added": 0,
+      "production_deleted": 0,
+      "test_added": 248,
+      "test_deleted": 0
+    },
+    "rust/anchor-library/src/development.rs": {
+      "production_added": 3,
+      "production_deleted": 3,
+      "test_added": 0,
+      "test_deleted": 0
+    },
+    "rust/anchor-library/src/filesystem.rs": {
+      "production_added": 6,
+      "production_deleted": 3,
+      "test_added": 0,
+      "test_deleted": 0
+    },
+    "rust/anchor-library/src/lib.rs": {
+      "production_added": 2,
+      "production_deleted": 2,
+      "test_added": 0,
+      "test_deleted": 0
+    },
+    "rust/anchor-library/src/oauth.rs": {
+      "production_added": 7,
+      "production_deleted": 5,
+      "test_added": 0,
+      "test_deleted": 0
+    },
+    "rust/anchor-library/src/reclaim.rs": {
+      "production_added": 6,
+      "production_deleted": 3,
+      "test_added": 0,
+      "test_deleted": 0
+    },
+    "rust/anchor-mcp-host/src/lib.rs": {
+      "production_added": 53,
+      "production_deleted": 6,
+      "test_added": 0,
+      "test_deleted": 0
+    },
+    "rust/anchor-platform-session/src/channel.rs": {
+      "production_added": 124,
+      "production_deleted": 15,
+      "test_added": 0,
+      "test_deleted": 0
+    },
+    "rust/anchor-platform-session/src/channel/accounts.rs": {
+      "production_added": 86,
+      "production_deleted": 0,
+      "test_added": 86,
+      "test_deleted": 0
+    },
+    "rust/anchor-platform-session/src/channel/assistant.rs": {
+      "production_added": 76,
+      "production_deleted": 21,
+      "test_added": 285,
+      "test_deleted": 1
+    },
+    "rust/anchor-platform-session/src/database.rs": {
+      "production_added": 20,
+      "production_deleted": 2,
+      "test_added": 0,
+      "test_deleted": 0
+    },
+    "rust/anchor-platform-session/src/database/tests.rs": {
+      "production_added": 0,
+      "production_deleted": 0,
+      "test_added": 6,
+      "test_deleted": 2
+    },
+    "rust/anchor-platform-session/src/database/tests/channel_accounts.rs": {
+      "production_added": 0,
+      "production_deleted": 0,
+      "test_added": 196,
+      "test_deleted": 0
+    },
+    "rust/anchor-platform-session/src/database/tests/channel_assistants.rs": {
+      "production_added": 0,
+      "production_deleted": 0,
+      "test_added": 13,
+      "test_deleted": 4
+    },
+    "rust/anchor-platform-session/src/store.rs": {
+      "production_added": 116,
+      "production_deleted": 46,
+      "test_added": 0,
+      "test_deleted": 0
+    },
+    "rust/anchor-platform-session/tests/channel_account_routing.rs": {
+      "production_added": 0,
+      "production_deleted": 0,
+      "test_added": 214,
+      "test_deleted": 0
+    },
+    "rust/anchor-platform-session/tests/channel_accounts.rs": {
+      "production_added": 0,
+      "production_deleted": 0,
+      "test_added": 421,
+      "test_deleted": 0
+    },
+    "rust/anchor-platform-session/tests/channel_handover.rs": {
+      "production_added": 0,
+      "production_deleted": 0,
+      "test_added": 348,
+      "test_deleted": 0
+    },
+    "rust/anchor-platform-session/tests/schema_v3.rs": {
+      "production_added": 0,
+      "production_deleted": 0,
+      "test_added": 4,
+      "test_deleted": 3
+    },
+    "rust/anchor-platform-session/tests/schema_v5.rs": {
+      "production_added": 0,
+      "production_deleted": 0,
+      "test_added": 3,
+      "test_deleted": 2
+    },
+    "rust/anchor-platform-session/tests/session_store.rs": {
+      "production_added": 0,
+      "production_deleted": 0,
+      "test_added": 1,
+      "test_deleted": 1
+    },
+    "rust/anchor-platform-session/tests/turn_store.rs": {
+      "production_added": 0,
+      "production_deleted": 0,
+      "test_added": 2,
+      "test_deleted": 1
+    },
+    "rust/anchor-rsi/src/business/weekly.rs": {
+      "production_added": 203,
+      "production_deleted": 53,
+      "test_added": 0,
+      "test_deleted": 0
+    },
+    "rust/anchor-rsi/src/cli.rs": {
+      "production_added": 24,
+      "production_deleted": 6,
+      "test_added": 0,
+      "test_deleted": 0
+    },
+    "rust/anchor-rsi/src/history_discovery.rs": {
+      "production_added": 168,
+      "production_deleted": 0,
+      "test_added": 180,
+      "test_deleted": 0
+    },
+    "rust/anchor-rsi/src/lib.rs": {
+      "production_added": 1,
+      "production_deleted": 0,
+      "test_added": 0,
+      "test_deleted": 0
+    },
+    "rust/anchor-rsi/src/redact.rs": {
+      "production_added": 45,
+      "production_deleted": 1,
+      "test_added": 58,
+      "test_deleted": 0
+    },
+    "rust/anchor-rsi/tests/evidence.rs": {
+      "production_added": 0,
+      "production_deleted": 0,
+      "test_added": 3,
+      "test_deleted": 0
+    },
+    "rust/anchor-rsi/tests/history_discovery.rs": {
+      "production_added": 0,
+      "production_deleted": 0,
+      "test_added": 78,
+      "test_deleted": 0
+    },
+    "rust/anchor-rsi/tests/weekly.rs": {
+      "production_added": 0,
+      "production_deleted": 0,
+      "test_added": 695,
+      "test_deleted": 1
+    },
+    "rust/anchor-runner-host/src/api.rs": {
+      "production_added": 8,
+      "production_deleted": 24,
+      "test_added": 0,
+      "test_deleted": 0
+    },
+    "rust/anchor-runner-host/src/api/assistant_recovery.rs": {
+      "production_added": 12,
+      "production_deleted": 8,
+      "test_added": 0,
+      "test_deleted": 0
+    },
+    "rust/anchor-runner-host/src/api/channel_sessions.rs": {
+      "production_added": 0,
+      "production_deleted": 0,
+      "test_added": 9,
+      "test_deleted": 2
+    },
+    "rust/anchor-runner-host/src/api/files.rs": {
+      "production_added": 12,
+      "production_deleted": 14,
+      "test_added": 0,
+      "test_deleted": 0
+    },
+    "rust/anchor-runner-host/src/api/oauth.rs": {
+      "production_added": 0,
+      "production_deleted": 0,
+      "test_added": 1,
+      "test_deleted": 1
+    },
+    "rust/anchor-runner-host/src/api/plugin_management.rs": {
+      "production_added": 3,
+      "production_deleted": 0,
+      "test_added": 0,
+      "test_deleted": 0
+    },
+    "rust/anchor-runner-host/src/api/plugin_management/configuration.rs": {
+      "production_added": 80,
+      "production_deleted": 0,
+      "test_added": 2,
+      "test_deleted": 0
+    },
+    "rust/anchor-runner-host/src/api/plugin_management/configuration/tests.rs": {
+      "production_added": 0,
+      "production_deleted": 0,
+      "test_added": 166,
+      "test_deleted": 0
+    },
+    "rust/anchor-runner-host/src/api/responses.rs": {
+      "production_added": 0,
+      "production_deleted": 0,
+      "test_added": 65,
+      "test_deleted": 26
+    },
+    "rust/anchor-runner-host/src/api/runs.rs": {
+      "production_added": 42,
+      "production_deleted": 313,
+      "test_added": 46,
+      "test_deleted": 0
+    },
+    "rust/anchor-runner-host/src/api/runs/tests.rs": {
+      "production_added": 0,
+      "production_deleted": 0,
+      "test_added": 48,
+      "test_deleted": 51
+    },
+    "rust/anchor-runner-host/src/api/schedules.rs": {
+      "production_added": 0,
+      "production_deleted": 0,
+      "test_added": 55,
+      "test_deleted": 19
+    },
+    "rust/anchor-runner-host/src/api/schedules/management.rs": {
+      "production_added": 0,
+      "production_deleted": 0,
+      "test_added": 80,
+      "test_deleted": 5
+    },
+    "rust/anchor-runner-host/src/api/schedules_management_tests.rs": {
+      "production_added": 0,
+      "production_deleted": 0,
+      "test_added": 167,
+      "test_deleted": 0
+    },
+    "rust/anchor-runner-host/src/api/sessions.rs": {
+      "production_added": 0,
+      "production_deleted": 0,
+      "test_added": 60,
+      "test_deleted": 1
+    },
+    "rust/anchor-runner-host/src/api/tests.rs": {
+      "production_added": 0,
+      "production_deleted": 0,
+      "test_added": 306,
+      "test_deleted": 213
+    },
+    "rust/anchor-runner-host/src/api/tests/channel_attachments.rs": {
+      "production_added": 0,
+      "production_deleted": 0,
+      "test_added": 9,
+      "test_deleted": 9
+    },
+    "rust/anchor-runner-host/src/api/tests/channel_media.rs": {
+      "production_added": 0,
+      "production_deleted": 0,
+      "test_added": 2,
+      "test_deleted": 2
+    },
+    "rust/anchor-runner-host/src/api/tests/conversations.rs": {
+      "production_added": 0,
+      "production_deleted": 0,
+      "test_added": 216,
+      "test_deleted": 201
+    },
+    "rust/anchor-runner-host/src/api/tests/graph_validation.rs": {
+      "production_added": 0,
+      "production_deleted": 0,
+      "test_added": 8,
+      "test_deleted": 6
+    },
+    "rust/anchor-runner-host/src/api/tests/kernel_probe.rs": {
+      "production_added": 0,
+      "production_deleted": 0,
+      "test_added": 356,
+      "test_deleted": 0
+    },
+    "rust/anchor-runner-host/src/api/tests/kernel_probe/calls.rs": {
+      "production_added": 0,
+      "production_deleted": 0,
+      "test_added": 588,
+      "test_deleted": 0
+    },
+    "rust/anchor-runner-host/src/api/tests/kernel_probe/calls/recovery.rs": {
+      "production_added": 0,
+      "production_deleted": 0,
+      "test_added": 256,
+      "test_deleted": 0
+    },
+    "rust/anchor-runner-host/src/api/tests/persistent_assistants.rs": {
+      "production_added": 0,
+      "production_deleted": 0,
+      "test_added": 84,
+      "test_deleted": 61
+    },
+    "rust/anchor-runner-host/src/api/tests/persistent_assistants/identity.rs": {
+      "production_added": 0,
+      "production_deleted": 0,
+      "test_added": 160,
+      "test_deleted": 0
+    },
+    "rust/anchor-runner-host/src/api/tests/persistent_assistants/plugin_updates.rs": {
+      "production_added": 0,
+      "production_deleted": 0,
+      "test_added": 106,
+      "test_deleted": 2
+    },
+    "rust/anchor-runner-host/src/api/tests/platform_contract.rs": {
+      "production_added": 0,
+      "production_deleted": 0,
+      "test_added": 15,
+      "test_deleted": 21
+    },
+    "rust/anchor-runner-host/src/api/tests/responses.rs": {
+      "production_added": 0,
+      "production_deleted": 0,
+      "test_added": 155,
+      "test_deleted": 0
+    },
+    "rust/anchor-runner-host/src/api/tests/run_abandon.rs": {
+      "production_added": 0,
+      "production_deleted": 0,
+      "test_added": 81,
+      "test_deleted": 97
+    },
+    "rust/anchor-runner-host/src/api/tests/run_access_json.rs": {
+      "production_added": 0,
+      "production_deleted": 0,
+      "test_added": 121,
+      "test_deleted": 0
+    },
+    "rust/anchor-runner-host/src/api/tests/run_plugins.rs": {
+      "production_added": 0,
+      "production_deleted": 0,
+      "test_added": 9,
+      "test_deleted": 6
+    },
+    "rust/anchor-runner-host/src/api/tests/schedules.rs": {
+      "production_added": 0,
+      "production_deleted": 0,
+      "test_added": 1,
+      "test_deleted": 1
+    },
+    "rust/anchor-runner-host/src/api/tests/session_calls.rs": {
+      "production_added": 0,
+      "production_deleted": 0,
+      "test_added": 255,
+      "test_deleted": 58
+    },
+    "rust/anchor-runner-host/src/api/tests/session_plugins.rs": {
+      "production_added": 0,
+      "production_deleted": 0,
+      "test_added": 1,
+      "test_deleted": 3
+    },
+    "rust/anchor-runner-host/src/api/tests/sessions.rs": {
+      "production_added": 0,
+      "production_deleted": 0,
+      "test_added": 96,
+      "test_deleted": 15
+    },
+    "rust/anchor-runner-host/src/api/tests/webhooks.rs": {
+      "production_added": 0,
+      "production_deleted": 0,
+      "test_added": 1,
+      "test_deleted": 1
+    },
+    "rust/anchor-runner-host/src/api/tests/wecom.rs": {
+      "production_added": 0,
+      "production_deleted": 0,
+      "test_added": 52,
+      "test_deleted": 95
+    },
+    "rust/anchor-runner-host/src/api/turns.rs": {
+      "production_added": 12,
+      "production_deleted": 21,
+      "test_added": 0,
+      "test_deleted": 0
+    },
+    "rust/anchor-runner-host/src/api/webhooks.rs": {
+      "production_added": 0,
+      "production_deleted": 0,
+      "test_added": 2,
+      "test_deleted": 2
+    },
+    "rust/anchor-runner-host/src/api/wecom.rs": {
+      "production_added": 0,
+      "production_deleted": 0,
+      "test_added": 61,
+      "test_deleted": 89
+    },
+    "rust/anchor-runner-host/src/api/wecom_progress.rs": {
+      "production_added": 5,
+      "production_deleted": 55,
+      "test_added": 0,
+      "test_deleted": 0
+    },
+    "rust/anchor-runner-host/src/application.rs": {
+      "production_added": 10,
+      "production_deleted": 66,
+      "test_added": 3,
+      "test_deleted": 0
+    },
+    "rust/anchor-runner-host/src/application/abandon.rs": {
+      "production_added": 25,
+      "production_deleted": 201,
+      "test_added": 0,
+      "test_deleted": 0
+    },
+    "rust/anchor-runner-host/src/application/admission.rs": {
+      "production_added": 4,
+      "production_deleted": 112,
+      "test_added": 0,
+      "test_deleted": 0
+    },
+    "rust/anchor-runner-host/src/application/assistants.rs": {
+      "production_added": 9,
+      "production_deleted": 166,
+      "test_added": 0,
+      "test_deleted": 0
+    },
+    "rust/anchor-runner-host/src/application/channel_management.rs": {
+      "production_added": 50,
+      "production_deleted": 0,
+      "test_added": 2,
+      "test_deleted": 0
+    },
+    "rust/anchor-runner-host/src/application/channel_management/tests.rs": {
+      "production_added": 0,
+      "production_deleted": 0,
+      "test_added": 240,
+      "test_deleted": 0
+    },
+    "rust/anchor-runner-host/src/application/control.rs": {
+      "production_added": 0,
+      "production_deleted": 252,
+      "test_added": 0,
+      "test_deleted": 0
+    },
+    "rust/anchor-runner-host/src/application/conversations.rs": {
+      "production_added": 22,
+      "production_deleted": 449,
+      "test_added": 0,
+      "test_deleted": 0
+    },
+    "rust/anchor-runner-host/src/application/deletion.rs": {
+      "production_added": 21,
+      "production_deleted": 104,
+      "test_added": 0,
+      "test_deleted": 0
+    },
+    "rust/anchor-runner-host/src/application/development_environment.rs": {
+      "production_added": 1,
+      "production_deleted": 1,
+      "test_added": 0,
+      "test_deleted": 0
+    },
+    "rust/anchor-runner-host/src/application/dispatch.rs": {
+      "production_added": 5,
+      "production_deleted": 233,
+      "test_added": 0,
+      "test_deleted": 0
+    },
+    "rust/anchor-runner-host/src/application/graphs.rs": {
+      "production_added": 3,
+      "production_deleted": 31,
+      "test_added": 0,
+      "test_deleted": 0
+    },
+    "rust/anchor-runner-host/src/application/graphs/tests.rs": {
+      "production_added": 0,
+      "production_deleted": 0,
+      "test_added": 24,
+      "test_deleted": 36
+    },
+    "rust/anchor-runner-host/src/application/graphs/tests/deletion.rs": {
+      "production_added": 0,
+      "production_deleted": 0,
+      "test_added": 38,
+      "test_deleted": 54
+    },
+    "rust/anchor-runner-host/src/application/graphs/tests/publication.rs": {
+      "production_added": 0,
+      "production_deleted": 0,
+      "test_added": 8,
+      "test_deleted": 12
+    },
+    "rust/anchor-runner-host/src/application/graphs/updates.rs": {
+      "production_added": 5,
+      "production_deleted": 5,
+      "test_added": 0,
+      "test_deleted": 0
+    },
+    "rust/anchor-runner-host/src/application/liveness.rs": {
+      "production_added": 0,
+      "production_deleted": 37,
+      "test_added": 11,
+      "test_deleted": 21
+    },
+    "rust/anchor-runner-host/src/application/pilot_sessions.rs": {
+      "production_added": 41,
+      "production_deleted": 0,
+      "test_added": 161,
+      "test_deleted": 0
+    },
+    "rust/anchor-runner-host/src/application/plugin_candidates.rs": {
+      "production_added": 6,
+      "production_deleted": 4,
+      "test_added": 0,
+      "test_deleted": 0
+    },
+    "rust/anchor-runner-host/src/application/plugins.rs": {
+      "production_added": 5,
+      "production_deleted": 4,
+      "test_added": 17,
+      "test_deleted": 16
+    },
+    "rust/anchor-runner-host/src/application/plugins/catalog.rs": {
+      "production_added": 2,
+      "production_deleted": 5,
+      "test_added": 0,
+      "test_deleted": 0
+    },
+    "rust/anchor-runner-host/src/application/plugins/reference_tests.rs": {
+      "production_added": 0,
+      "production_deleted": 0,
+      "test_added": 14,
+      "test_deleted": 21
+    },
+    "rust/anchor-runner-host/src/application/queries.rs": {
+      "production_added": 18,
+      "production_deleted": 69,
+      "test_added": 0,
+      "test_deleted": 0
+    },
+    "rust/anchor-runner-host/src/application/recovery.rs": {
+      "production_added": 4,
+      "production_deleted": 220,
+      "test_added": 0,
+      "test_deleted": 0
+    },
+    "rust/anchor-runner-host/src/application/run_access.rs": {
+      "production_added": 350,
+      "production_deleted": 0,
+      "test_added": 4,
+      "test_deleted": 0
+    },
+    "rust/anchor-runner-host/src/application/run_access/abandon.rs": {
+      "production_added": 78,
+      "production_deleted": 0,
+      "test_added": 436,
+      "test_deleted": 0
+    },
+    "rust/anchor-runner-host/src/application/run_access/admission.rs": {
+      "production_added": 94,
+      "production_deleted": 0,
+      "test_added": 0,
+      "test_deleted": 0
+    },
+    "rust/anchor-runner-host/src/application/run_access/assistant_policy.rs": {
+      "production_added": 75,
+      "production_deleted": 0,
+      "test_added": 278,
+      "test_deleted": 0
+    },
+    "rust/anchor-runner-host/src/application/run_access/channels.rs": {
+      "production_added": 292,
+      "production_deleted": 0,
+      "test_added": 215,
+      "test_deleted": 0
+    },
+    "rust/anchor-runner-host/src/application/run_access/control.rs": {
+      "production_added": 92,
+      "production_deleted": 0,
+      "test_added": 0,
+      "test_deleted": 0
+    },
+    "rust/anchor-runner-host/src/application/run_access/conversations.rs": {
+      "production_added": 490,
+      "production_deleted": 0,
+      "test_added": 323,
+      "test_deleted": 0
+    },
+    "rust/anchor-runner-host/src/application/run_access/deletion.rs": {
+      "production_added": 178,
+      "production_deleted": 0,
+      "test_added": 0,
+      "test_deleted": 0
+    },
+    "rust/anchor-runner-host/src/application/run_access/dispatch.rs": {
+      "production_added": 36,
+      "production_deleted": 0,
+      "test_added": 0,
+      "test_deleted": 0
+    },
+    "rust/anchor-runner-host/src/application/run_access/fixtures.rs": {
+      "production_added": 0,
+      "production_deleted": 0,
+      "test_added": 499,
+      "test_deleted": 0
+    },
+    "rust/anchor-runner-host/src/application/run_access/graph_policy.rs": {
+      "production_added": 181,
+      "production_deleted": 0,
+      "test_added": 140,
+      "test_deleted": 0
+    },
+    "rust/anchor-runner-host/src/application/run_access/http.rs": {
+      "production_added": 248,
+      "production_deleted": 0,
+      "test_added": 210,
+      "test_deleted": 0
+    },
+    "rust/anchor-runner-host/src/application/run_access/kernel_calls.rs": {
+      "production_added": 399,
+      "production_deleted": 0,
+      "test_added": 0,
+      "test_deleted": 0
+    },
+    "rust/anchor-runner-host/src/application/run_access/kernel_probe.rs": {
+      "production_added": 98,
+      "production_deleted": 0,
+      "test_added": 3,
+      "test_deleted": 0
+    },
+    "rust/anchor-runner-host/src/application/run_access/kernel_probe/tests.rs": {
+      "production_added": 0,
+      "production_deleted": 0,
+      "test_added": 191,
+      "test_deleted": 0
+    },
+    "rust/anchor-runner-host/src/application/run_access/kernel_runs.rs": {
+      "production_added": 629,
+      "production_deleted": 0,
+      "test_added": 10,
+      "test_deleted": 0
+    },
+    "rust/anchor-runner-host/src/application/run_access/kernel_runs/deletion.rs": {
+      "production_added": 75,
+      "production_deleted": 0,
+      "test_added": 2,
+      "test_deleted": 0
+    },
+    "rust/anchor-runner-host/src/application/run_access/kernel_runs/deletion/tests.rs": {
+      "production_added": 0,
+      "production_deleted": 0,
+      "test_added": 488,
+      "test_deleted": 0
+    },
+    "rust/anchor-runner-host/src/application/run_access/kernel_runs/pause.rs": {
+      "production_added": 126,
+      "production_deleted": 0,
+      "test_added": 0,
+      "test_deleted": 0
+    },
+    "rust/anchor-runner-host/src/application/run_access/kernel_runs/recovery.rs": {
+      "production_added": 0,
+      "production_deleted": 0,
+      "test_added": 248,
+      "test_deleted": 0
+    },
+    "rust/anchor-runner-host/src/application/run_access/kernel_runs/tests.rs": {
+      "production_added": 0,
+      "production_deleted": 0,
+      "test_added": 876,
+      "test_deleted": 0
+    },
+    "rust/anchor-runner-host/src/application/run_access/kernel_runs/tests/parallel.rs": {
+      "production_added": 0,
+      "production_deleted": 0,
+      "test_added": 158,
+      "test_deleted": 0
+    },
+    "rust/anchor-runner-host/src/application/run_access/kernel_runs/tests/recovery.rs": {
+      "production_added": 0,
+      "production_deleted": 0,
+      "test_added": 186,
+      "test_deleted": 0
+    },
+    "rust/anchor-runner-host/src/application/run_access/projection.rs": {
+      "production_added": 222,
+      "production_deleted": 0,
+      "test_added": 0,
+      "test_deleted": 0
+    },
+    "rust/anchor-runner-host/src/application/run_access/reads.rs": {
+      "production_added": 214,
+      "production_deleted": 0,
+      "test_added": 4,
+      "test_deleted": 0
+    },
+    "rust/anchor-runner-host/src/application/run_access/recovery.rs": {
+      "production_added": 124,
+      "production_deleted": 0,
+      "test_added": 200,
+      "test_deleted": 0
+    },
+    "rust/anchor-runner-host/src/application/run_access/run_observations.rs": {
+      "production_added": 67,
+      "production_deleted": 0,
+      "test_added": 0,
+      "test_deleted": 0
+    },
+    "rust/anchor-runner-host/src/application/run_access/run_view.rs": {
+      "production_added": 39,
+      "production_deleted": 0,
+      "test_added": 70,
+      "test_deleted": 0
+    },
+    "rust/anchor-runner-host/src/application/run_access/session_calls.rs": {
+      "production_added": 270,
+      "production_deleted": 0,
+      "test_added": 18,
+      "test_deleted": 0
+    },
+    "rust/anchor-runner-host/src/application/run_access/store.rs": {
+      "production_added": 17,
+      "production_deleted": 0,
+      "test_added": 0,
+      "test_deleted": 0
+    },
+    "rust/anchor-runner-host/src/application/run_access/tests.rs": {
+      "production_added": 0,
+      "production_deleted": 0,
+      "test_added": 303,
+      "test_deleted": 0
+    },
+    "rust/anchor-runner-host/src/application/run_projection.rs": {
+      "production_added": 1,
+      "production_deleted": 105,
+      "test_added": 122,
+      "test_deleted": 44
+    },
+    "rust/anchor-runner-host/src/application/scheduling.rs": {
+      "production_added": 45,
+      "production_deleted": 1,
+      "test_added": 5,
+      "test_deleted": 0
+    },
+    "rust/anchor-runner-host/src/application/session_calls.rs": {
+      "production_added": 2,
+      "production_deleted": 293,
+      "test_added": 38,
+      "test_deleted": 63
+    },
+    "rust/anchor-runner-host/src/application/tests.rs": {
+      "production_added": 0,
+      "production_deleted": 0,
+      "test_added": 125,
+      "test_deleted": 292
+    },
+    "rust/anchor-runner-host/src/artifacts/coordinator_tests.rs": {
+      "production_added": 0,
+      "production_deleted": 0,
+      "test_added": 43,
+      "test_deleted": 23
+    },
+    "rust/anchor-runner-host/src/artifacts/workspace.rs": {
+      "production_added": 5,
+      "production_deleted": 4,
+      "test_added": 0,
+      "test_deleted": 0
+    },
+    "rust/anchor-runner-host/src/assistant.rs": {
+      "production_added": 49,
+      "production_deleted": 36,
+      "test_added": 131,
+      "test_deleted": 18
+    },
+    "rust/anchor-runner-host/src/assistant_plugins.rs": {
+      "production_added": 97,
+      "production_deleted": 100,
+      "test_added": 2,
+      "test_deleted": 0
+    },
+    "rust/anchor-runner-host/src/assistant_plugins/tests.rs": {
+      "production_added": 0,
+      "production_deleted": 0,
+      "test_added": 11,
+      "test_deleted": 2
+    },
+    "rust/anchor-runner-host/src/channel_supervisor/management.rs": {
+      "production_added": 94,
+      "production_deleted": 17,
+      "test_added": 0,
+      "test_deleted": 0
+    },
+    "rust/anchor-runner-host/src/channel_supervisor/management/tests.rs": {
+      "production_added": 0,
+      "production_deleted": 0,
+      "test_added": 138,
+      "test_deleted": 0
+    },
+    "rust/anchor-runner-host/src/conversation_resources.rs": {
+      "production_added": 9,
+      "production_deleted": 9,
+      "test_added": 0,
+      "test_deleted": 0
+    },
+    "rust/anchor-runner-host/src/credential_store.rs": {
+      "production_added": 286,
+      "production_deleted": 146,
+      "test_added": 9,
+      "test_deleted": 0
+    },
+    "rust/anchor-runner-host/src/credential_store/management.rs": {
+      "production_added": 62,
+      "production_deleted": 3,
+      "test_added": 20,
+      "test_deleted": 6
+    },
+    "rust/anchor-runner-host/src/durable_write.rs": {
+      "production_added": 249,
+      "production_deleted": 0,
+      "test_added": 345,
+      "test_deleted": 0
+    },
+    "rust/anchor-runner-host/src/execution.rs": {
+      "production_added": 111,
+      "production_deleted": 131,
+      "test_added": 2,
+      "test_deleted": 2
+    },
+    "rust/anchor-runner-host/src/execution/legacy_plugin_tests.rs": {
+      "production_added": 0,
+      "production_deleted": 0,
+      "test_added": 133,
+      "test_deleted": 107
+    },
+    "rust/anchor-runner-host/src/goose_acp.rs": {
+      "production_added": 59,
+      "production_deleted": 27,
+      "test_added": 10,
+      "test_deleted": 2
+    },
+    "rust/anchor-runner-host/src/goose_acp/bridge.rs": {
+      "production_added": 1,
+      "production_deleted": 2,
+      "test_added": 0,
+      "test_deleted": 0
+    },
+    "rust/anchor-runner-host/src/goose_acp/configuration.rs": {
+      "production_added": 8,
+      "production_deleted": 1,
+      "test_added": 0,
+      "test_deleted": 0
+    },
+    "rust/anchor-runner-host/src/goose_acp/conversation.rs": {
+      "production_added": 7,
+      "production_deleted": 4,
+      "test_added": 0,
+      "test_deleted": 0
+    },
+    "rust/anchor-runner-host/src/goose_acp/conversation/revision.rs": {
+      "production_added": 9,
+      "production_deleted": 1,
+      "test_added": 0,
+      "test_deleted": 0
+    },
+    "rust/anchor-runner-host/src/goose_acp/conversation/tests.rs": {
+      "production_added": 0,
+      "production_deleted": 0,
+      "test_added": 16,
+      "test_deleted": 0
+    },
+    "rust/anchor-runner-host/src/goose_acp/pilot.rs": {
+      "production_added": 43,
+      "production_deleted": 6,
+      "test_added": 8,
+      "test_deleted": 6
+    },
+    "rust/anchor-runner-host/src/goose_acp/pilot/transcript.rs": {
+      "production_added": 3,
+      "production_deleted": 6,
+      "test_added": 43,
+      "test_deleted": 0
+    },
+    "rust/anchor-runner-host/src/goose_acp/recovery.rs": {
+      "production_added": 108,
+      "production_deleted": 0,
+      "test_added": 46,
+      "test_deleted": 0
+    },
+    "rust/anchor-runner-host/src/goose_acp/trace.rs": {
+      "production_added": 10,
+      "production_deleted": 1,
+      "test_added": 123,
+      "test_deleted": 0
+    },
+    "rust/anchor-runner-host/src/goose_acp/transport.rs": {
+      "production_added": 17,
+      "production_deleted": 1,
+      "test_added": 35,
+      "test_deleted": 0
+    },
+    "rust/anchor-runner-host/src/local_inputs.rs": {
+      "production_added": 16,
+      "production_deleted": 10,
+      "test_added": 2,
+      "test_deleted": 0
+    },
+    "rust/anchor-runner-host/src/main.rs": {
+      "production_added": 111,
+      "production_deleted": 102,
+      "test_added": 34,
+      "test_deleted": 0
+    },
+    "rust/anchor-runner-host/src/model_configuration.rs": {
+      "production_added": 18,
+      "production_deleted": 40,
+      "test_added": 0,
+      "test_deleted": 0
+    },
+    "rust/anchor-runner-host/src/model_configuration/providers/tests.rs": {
+      "production_added": 0,
+      "production_deleted": 0,
+      "test_added": 4,
+      "test_deleted": 7
+    },
+    "rust/anchor-runner-host/src/model_configuration/tests.rs": {
+      "production_added": 0,
+      "production_deleted": 0,
+      "test_added": 83,
+      "test_deleted": 23
+    },
+    "rust/anchor-runner-host/src/node_host.rs": {
+      "production_added": 34,
+      "production_deleted": 7,
+      "test_added": 2,
+      "test_deleted": 0
+    },
+    "rust/anchor-runner-host/src/node_host/assistant.rs": {
+      "production_added": 21,
+      "production_deleted": 13,
+      "test_added": 0,
+      "test_deleted": 0
+    },
+    "rust/anchor-runner-host/src/node_host/configuration.rs": {
+      "production_added": 65,
+      "production_deleted": 0,
+      "test_added": 28,
+      "test_deleted": 0
+    },
+    "rust/anchor-runner-host/src/node_host/contracts.rs": {
+      "production_added": 23,
+      "production_deleted": 3,
+      "test_added": 0,
+      "test_deleted": 0
+    },
+    "rust/anchor-runner-host/src/node_host/conversation.rs": {
+      "production_added": 51,
+      "production_deleted": 14,
+      "test_added": 29,
+      "test_deleted": 28
+    },
+    "rust/anchor-runner-host/src/node_host/execution.rs": {
+      "production_added": 21,
+      "production_deleted": 7,
+      "test_added": 0,
+      "test_deleted": 0
+    },
+    "rust/anchor-runner-host/src/node_host/inputs.rs": {
+      "production_added": 4,
+      "production_deleted": 8,
+      "test_added": 0,
+      "test_deleted": 0
+    },
+    "rust/anchor-runner-host/src/node_host/media.rs": {
+      "production_added": 1,
+      "production_deleted": 2,
+      "test_added": 0,
+      "test_deleted": 0
+    },
+    "rust/anchor-runner-host/src/node_host/mounts.rs": {
+      "production_added": 0,
+      "production_deleted": 0,
+      "test_added": 8,
+      "test_deleted": 15
+    },
+    "rust/anchor-runner-host/src/node_host/preparation.rs": {
+      "production_added": 29,
+      "production_deleted": 8,
+      "test_added": 0,
+      "test_deleted": 0
+    },
+    "rust/anchor-runner-host/src/node_host/resolver_tests.rs": {
+      "production_added": 0,
+      "production_deleted": 0,
+      "test_added": 25,
+      "test_deleted": 18
+    },
+    "rust/anchor-runner-host/src/node_host/resolver_tests/runtime.rs": {
+      "production_added": 0,
+      "production_deleted": 0,
+      "test_added": 0,
+      "test_deleted": 4
+    },
+    "rust/anchor-runner-host/src/node_host/resolver_tests/tool_grants.rs": {
+      "production_added": 0,
+      "production_deleted": 0,
+      "test_added": 21,
+      "test_deleted": 22
+    },
+    "rust/anchor-runner-host/src/node_host/resolver_tests/turn_plugins.rs": {
+      "production_added": 0,
+      "production_deleted": 0,
+      "test_added": 19,
+      "test_deleted": 49
+    },
+    "rust/anchor-runner-host/src/node_host/test_runs.rs": {
+      "production_added": 0,
+      "production_deleted": 0,
+      "test_added": 21,
+      "test_deleted": 0
+    },
+    "rust/anchor-runner-host/src/node_host/turn_plugins.rs": {
+      "production_added": 0,
+      "production_deleted": 0,
+      "test_added": 6,
+      "test_deleted": 9
+    },
+    "rust/anchor-runner-host/src/pilot_host.rs": {
+      "production_added": 6,
+      "production_deleted": 6,
+      "test_added": 0,
+      "test_deleted": 0
+    },
+    "rust/anchor-runner-host/src/pilot_host/tests.rs": {
+      "production_added": 0,
+      "production_deleted": 0,
+      "test_added": 4,
+      "test_deleted": 4
+    },
+    "rust/anchor-runner-host/src/pilot_tools.rs": {
+      "production_added": 2,
+      "production_deleted": 2,
+      "test_added": 0,
+      "test_deleted": 0
+    },
+    "rust/anchor-runner-host/src/pilot_tools/runs.rs": {
+      "production_added": 7,
+      "production_deleted": 25,
+      "test_added": 0,
+      "test_deleted": 0
+    },
+    "rust/anchor-runner-host/src/pilot_tools/scheduling.rs": {
+      "production_added": 7,
+      "production_deleted": 2,
+      "test_added": 0,
+      "test_deleted": 0
+    },
+    "rust/anchor-runner-host/src/pilot_tools/sessions.rs": {
+      "production_added": 5,
+      "production_deleted": 8,
+      "test_added": 0,
+      "test_deleted": 0
+    },
+    "rust/anchor-runner-host/src/pilot_tools/tests.rs": {
+      "production_added": 0,
+      "production_deleted": 0,
+      "test_added": 75,
+      "test_deleted": 0
+    },
+    "rust/anchor-runner-host/src/plugin_configuration.rs": {
+      "production_added": 603,
+      "production_deleted": 0,
+      "test_added": 11,
+      "test_deleted": 0
+    },
+    "rust/anchor-runner-host/src/plugin_configuration/tests.rs": {
+      "production_added": 0,
+      "production_deleted": 0,
+      "test_added": 1157,
+      "test_deleted": 0
+    },
+    "rust/anchor-runner-host/src/plugin_configuration_test.rs": {
+      "production_added": 143,
+      "production_deleted": 0,
+      "test_added": 0,
+      "test_deleted": 0
+    },
+    "rust/anchor-runner-host/src/plugin_dependencies.rs": {
+      "production_added": 3,
+      "production_deleted": 2,
+      "test_added": 1,
+      "test_deleted": 1
+    },
+    "rust/anchor-runner-host/src/plugin_view.rs": {
+      "production_added": 20,
+      "production_deleted": 5,
+      "test_added": 0,
+      "test_deleted": 0
+    },
+    "rust/anchor-runner-host/src/run_data.rs": {
+      "production_added": 37,
+      "production_deleted": 17,
+      "test_added": 9,
+      "test_deleted": 3
+    },
+    "rust/anchor-runner-host/src/run_data/assistant_tests.rs": {
+      "production_added": 0,
+      "production_deleted": 0,
+      "test_added": 45,
+      "test_deleted": 43
+    },
+    "rust/anchor-runner-host/src/runtime_configuration.rs": {
+      "production_added": 6,
+      "production_deleted": 2,
+      "test_added": 0,
+      "test_deleted": 0
+    },
+    "rust/anchor-runner-host/src/runtime_management.rs": {
+      "production_added": 0,
+      "production_deleted": 0,
+      "test_added": 41,
+      "test_deleted": 3
+    },
+    "rust/anchor-runner-host/src/tool_host.rs": {
+      "production_added": 274,
+      "production_deleted": 75,
+      "test_added": 11,
+      "test_deleted": 10
+    },
+    "rust/anchor-runner-host/src/tool_host/http_tests.rs": {
+      "production_added": 0,
+      "production_deleted": 0,
+      "test_added": 7,
+      "test_deleted": 1
+    },
+    "rust/anchor-runner-host/src/tool_host/path_template_tests.rs": {
+      "production_added": 0,
+      "production_deleted": 0,
+      "test_added": 175,
+      "test_deleted": 0
+    },
+    "rust/anchor-runner-host/src/tool_host/preparation_error.rs": {
+      "production_added": 40,
+      "production_deleted": 0,
+      "test_added": 0,
+      "test_deleted": 0
+    },
+    "rust/anchor-runner-host/src/tool_host/preparation_tests.rs": {
+      "production_added": 0,
+      "production_deleted": 0,
+      "test_added": 21,
+      "test_deleted": 12
+    },
+    "rust/anchor-runner-host/tests/goose_acp.rs": {
+      "production_added": 0,
+      "production_deleted": 0,
+      "test_added": 19,
+      "test_deleted": 14
+    },
+    "rust/anchor-runner-host/tests/goose_compaction.rs": {
+      "production_added": 0,
+      "production_deleted": 0,
+      "test_added": 11,
+      "test_deleted": 4
+    },
+    "rust/anchor-runner-host/tests/goose_completion.rs": {
+      "production_added": 0,
+      "production_deleted": 0,
+      "test_added": 1,
+      "test_deleted": 1
+    },
+    "rust/anchor-runner-host/tests/goose_conversation.rs": {
+      "production_added": 0,
+      "production_deleted": 0,
+      "test_added": 53,
+      "test_deleted": 31
+    },
+    "rust/anchor-runner-host/tests/goose_distribution.rs": {
+      "production_added": 0,
+      "production_deleted": 0,
+      "test_added": 6,
+      "test_deleted": 0
+    },
+    "rust/anchor-runner-host/tests/goose_kernel_recovery.rs": {
+      "production_added": 0,
+      "production_deleted": 0,
+      "test_added": 120,
+      "test_deleted": 0
+    },
+    "rust/anchor-runner-host/tests/goose_media.rs": {
+      "production_added": 0,
+      "production_deleted": 0,
+      "test_added": 10,
+      "test_deleted": 3
+    },
+    "rust/anchor-runner-host/tests/goose_model_settings.rs": {
+      "production_added": 0,
+      "production_deleted": 0,
+      "test_added": 16,
+      "test_deleted": 4
+    },
+    "rust/anchor-runner-host/tests/goose_persistent_assistant.rs": {
+      "production_added": 0,
+      "production_deleted": 0,
+      "test_added": 309,
+      "test_deleted": 27
+    },
+    "rust/anchor-runner-host/tests/goose_pilot_authoring.rs": {
+      "production_added": 0,
+      "production_deleted": 0,
+      "test_added": 8,
+      "test_deleted": 2
+    },
+    "rust/anchor-runner-host/tests/goose_pilot_compaction.rs": {
+      "production_added": 0,
+      "production_deleted": 0,
+      "test_added": 9,
+      "test_deleted": 8
+    },
+    "rust/anchor-runner-host/tests/goose_plugin_configuration.rs": {
+      "production_added": 0,
+      "production_deleted": 0,
+      "test_added": 158,
+      "test_deleted": 0
+    },
+    "rust/anchor-runner-host/tests/goose_plugin_disclosure.rs": {
+      "production_added": 0,
+      "production_deleted": 0,
+      "test_added": 4,
+      "test_deleted": 1
+    },
+    "rust/anchor-runner-host/tests/goose_plugin_mcp.rs": {
+      "production_added": 0,
+      "production_deleted": 0,
+      "test_added": 3,
+      "test_deleted": 3
+    },
+    "rust/anchor-runner-host/tests/goose_plugin_turns.rs": {
+      "production_added": 0,
+      "production_deleted": 0,
+      "test_added": 127,
+      "test_deleted": 24
+    },
+    "rust/anchor-runner-host/tests/goose_provider_errors.rs": {
+      "production_added": 0,
+      "production_deleted": 0,
+      "test_added": 234,
+      "test_deleted": 0
+    },
+    "rust/anchor-runner-host/tests/goose_session_calls.rs": {
+      "production_added": 0,
+      "production_deleted": 0,
+      "test_added": 147,
+      "test_deleted": 15
+    },
+    "rust/anchor-runner-host/tests/goose_trace.rs": {
+      "production_added": 0,
+      "production_deleted": 0,
+      "test_added": 1,
+      "test_deleted": 1
+    },
+    "rust/anchor-runner-host/tests/local_inputs.rs": {
+      "production_added": 0,
+      "production_deleted": 0,
+      "test_added": 20,
+      "test_deleted": 9
+    },
+    "rust/anchor-runner-host/tests/multinode.rs": {
+      "production_added": 0,
+      "production_deleted": 0,
+      "test_added": 30,
+      "test_deleted": 13
+    },
+    "rust/anchor-runner-host/tests/native_plugins.rs": {
+      "production_added": 0,
+      "production_deleted": 0,
+      "test_added": 2,
+      "test_deleted": 2
+    },
+    "rust/anchor-runner-host/tests/parallel.rs": {
+      "production_added": 0,
+      "production_deleted": 0,
+      "test_added": 44,
+      "test_deleted": 19
+    },
+    "rust/anchor-runner-host/tests/routing.rs": {
+      "production_added": 0,
+      "production_deleted": 0,
+      "test_added": 21,
+      "test_deleted": 13
+    },
+    "rust/anchor-runner-host/tests/run_access_fence.rs": {
+      "production_added": 0,
+      "production_deleted": 0,
+      "test_added": 431,
+      "test_deleted": 0
+    },
+    "rust/anchor-runner-host/tests/standalone_graph_call.rs": {
+      "production_added": 0,
+      "production_deleted": 0,
+      "test_added": 65,
+      "test_deleted": 11
+    },
+    "rust/anchor-runner-host/tests/standalone_library.rs": {
+      "production_added": 0,
+      "production_deleted": 0,
+      "test_added": 1,
+      "test_deleted": 1
+    },
+    "rust/anchor-runner-host/tests/standard_host.rs": {
+      "production_added": 0,
+      "production_deleted": 0,
+      "test_added": 3,
+      "test_deleted": 3
+    },
+    "rust/anchor-runner-host/tests/support/goose_fixture.rs": {
+      "production_added": 0,
+      "production_deleted": 0,
+      "test_added": 156,
+      "test_deleted": 13
+    },
+    "rust/anchor-runner-host/tests/support/goose_fixture/responses.rs": {
+      "production_added": 0,
+      "production_deleted": 0,
+      "test_added": 11,
+      "test_deleted": 0
+    },
+    "rust/anchor-runner-host/tests/support/runtime_fixture.rs": {
+      "production_added": 0,
+      "production_deleted": 0,
+      "test_added": 56,
+      "test_deleted": 10
+    },
+    "rust/anchor-runner-host/tests/writer_lease.rs": {
+      "production_added": 0,
+      "production_deleted": 0,
+      "test_added": 52,
+      "test_deleted": 3
+    },
+    "rust/anchor-runtime/src/graph/control_completion.rs": {
+      "production_added": 60,
+      "production_deleted": 0,
+      "test_added": 0,
+      "test_deleted": 0
+    },
+    "rust/anchor-runtime/src/graph/error.rs": {
+      "production_added": 4,
+      "production_deleted": 0,
+      "test_added": 0,
+      "test_deleted": 0
+    },
+    "rust/anchor-runtime/src/graph/logic.rs": {
+      "production_added": 107,
+      "production_deleted": 68,
+      "test_added": 0,
+      "test_deleted": 0
+    },
+    "rust/anchor-runtime/src/graph/mod.rs": {
+      "production_added": 8,
+      "production_deleted": 4,
+      "test_added": 2,
+      "test_deleted": 0
+    },
+    "rust/anchor-runtime/src/graph/parallel.rs": {
+      "production_added": 0,
+      "production_deleted": 481,
+      "test_added": 0,
+      "test_deleted": 0
+    },
+    "rust/anchor-runtime/src/graph/ports.rs": {
+      "production_added": 100,
+      "production_deleted": 27,
+      "test_added": 0,
+      "test_deleted": 0
+    },
+    "rust/anchor-runtime/src/graph/runner.rs": {
+      "production_added": 0,
+      "production_deleted": 1034,
+      "test_added": 0,
+      "test_deleted": 0
+    },
+    "rust/anchor-runtime/src/graph/scheduler.rs": {
+      "production_added": 231,
+      "production_deleted": 0,
+      "test_added": 2,
+      "test_deleted": 0
+    },
+    "rust/anchor-runtime/src/graph/scheduler/calls.rs": {
+      "production_added": 0,
+      "production_deleted": 0,
+      "test_added": 201,
+      "test_deleted": 0
+    },
+    "rust/anchor-runtime/src/graph/scheduler/execution.rs": {
+      "production_added": 252,
+      "production_deleted": 0,
+      "test_added": 0,
+      "test_deleted": 0
+    },
+    "rust/anchor-runtime/src/graph/scheduler/tests.rs": {
+      "production_added": 0,
+      "production_deleted": 0,
+      "test_added": 562,
+      "test_deleted": 0
+    },
+    "rust/anchor-runtime/src/graph/scheduler/tests/calls.rs": {
+      "production_added": 0,
+      "production_deleted": 0,
+      "test_added": 294,
+      "test_deleted": 0
+    },
+    "rust/anchor-runtime/src/graph/scheduler/tests/differential.rs": {
+      "production_added": 0,
+      "production_deleted": 0,
+      "test_added": 299,
+      "test_deleted": 0
+    },
+    "rust/anchor-runtime/src/graph/state.rs": {
+      "production_added": 192,
+      "production_deleted": 409,
+      "test_added": 0,
+      "test_deleted": 0
+    },
+    "rust/anchor-runtime/src/graph/store.rs": {
+      "production_added": 31,
+      "production_deleted": 71,
+      "test_added": 0,
+      "test_deleted": 0
+    },
+    "rust/anchor-runtime/src/graph/test_support.rs": {
+      "production_added": 0,
+      "production_deleted": 0,
+      "test_added": 536,
+      "test_deleted": 0
+    },
+    "rust/anchor-runtime/src/graph/test_support/snapshots.rs": {
+      "production_added": 0,
+      "production_deleted": 0,
+      "test_added": 393,
+      "test_deleted": 0
+    },
+    "rust/anchor-runtime/src/graph/tests.rs": {
+      "production_added": 0,
+      "production_deleted": 0,
+      "test_added": 365,
+      "test_deleted": 4246
+    },
+    "rust/anchor-runtime/src/graph/tests/fixtures.rs": {
+      "production_added": 0,
+      "production_deleted": 0,
+      "test_added": 636,
+      "test_deleted": 0
+    },
+    "rust/anchor-runtime/src/graph/tests/harness.rs": {
+      "production_added": 0,
+      "production_deleted": 0,
+      "test_added": 154,
+      "test_deleted": 0
+    },
+    "rust/anchor-runtime/src/graph/tests/host_operations.rs": {
+      "production_added": 0,
+      "production_deleted": 0,
+      "test_added": 141,
+      "test_deleted": 132
+    },
+    "rust/anchor-runtime/src/graph/tests/host_operations/kernel.rs": {
+      "production_added": 0,
+      "production_deleted": 0,
+      "test_added": 320,
+      "test_deleted": 0
+    },
+    "rust/anchor-runtime/src/graph/tests/invocation_authority.rs": {
+      "production_added": 0,
+      "production_deleted": 0,
+      "test_added": 41,
+      "test_deleted": 27
+    },
+    "rust/anchor-runtime/src/graph/tests/migrated_behavior.rs": {
+      "production_added": 0,
+      "production_deleted": 0,
+      "test_added": 467,
+      "test_deleted": 0
+    },
+    "rust/anchor-runtime/src/graph/tests/migrated_calls.rs": {
+      "production_added": 0,
+      "production_deleted": 0,
+      "test_added": 167,
+      "test_deleted": 0
+    },
+    "rust/anchor-runtime/src/graph/tests/migrated_crash.rs": {
+      "production_added": 0,
+      "production_deleted": 0,
+      "test_added": 392,
+      "test_deleted": 0
+    },
+    "rust/anchor-runtime/src/graph/tests/migrated_leases.rs": {
+      "production_added": 0,
+      "production_deleted": 0,
+      "test_added": 315,
+      "test_deleted": 0
+    },
+    "rust/anchor-runtime/src/graph/tests/migrated_lifecycle.rs": {
+      "production_added": 0,
+      "production_deleted": 0,
+      "test_added": 342,
+      "test_deleted": 0
+    },
+    "rust/anchor-runtime/src/graph/tests/migrated_plugins.rs": {
+      "production_added": 0,
+      "production_deleted": 0,
+      "test_added": 417,
+      "test_deleted": 0
+    },
+    "rust/anchor-runtime/src/graph/tests/migrated_reload.rs": {
+      "production_added": 0,
+      "production_deleted": 0,
+      "test_added": 308,
+      "test_deleted": 0
+    },
+    "rust/anchor-runtime/src/graph/tests/migrated_scenarios.rs": {
+      "production_added": 0,
+      "production_deleted": 0,
+      "test_added": 211,
+      "test_deleted": 0
+    },
+    "rust/anchor-runtime/src/graph/tests/migrated_storage.rs": {
+      "production_added": 0,
+      "production_deleted": 0,
+      "test_added": 284,
+      "test_deleted": 0
+    },
+    "rust/anchor-runtime/src/graph/tests/migrated_validation.rs": {
+      "production_added": 0,
+      "production_deleted": 0,
+      "test_added": 238,
+      "test_deleted": 0
+    },
+    "rust/anchor-runtime/src/graph/validator.rs": {
+      "production_added": 975,
+      "production_deleted": 0,
+      "test_added": 8,
+      "test_deleted": 0
+    },
+    "rust/anchor-runtime/src/graph/validator/differential.rs": {
+      "production_added": 0,
+      "production_deleted": 0,
+      "test_added": 958,
+      "test_deleted": 0
+    },
+    "rust/anchor-runtime/src/graph/validator/interruption_tests.rs": {
+      "production_added": 0,
+      "production_deleted": 0,
+      "test_added": 220,
+      "test_deleted": 0
+    },
+    "rust/anchor-runtime/src/graph/validator/parallel_module_tests.rs": {
+      "production_added": 0,
+      "production_deleted": 0,
+      "test_added": 263,
+      "test_deleted": 0
+    },
+    "rust/anchor-runtime/src/graph/validator/settle_tests.rs": {
+      "production_added": 0,
+      "production_deleted": 0,
+      "test_added": 236,
+      "test_deleted": 0
+    },
+    "rust/anchor-runtime/tests/weekly_work_report_graphs.rs": {
+      "production_added": 0,
+      "production_deleted": 0,
+      "test_added": 192,
+      "test_deleted": 0
+    },
+    "rust/anchor-wecom-gateway/src/gateway/feedback.rs": {
+      "production_added": 1,
+      "production_deleted": 1,
+      "test_added": 0,
+      "test_deleted": 0
+    },
+    "rust/anchor-wecom-gateway/src/private_state.rs": {
+      "production_added": 5,
+      "production_deleted": 4,
+      "test_added": 0,
+      "test_deleted": 0
+    },
+    "rust/anchor-wecom-gateway/tests/support/mod.rs": {
+      "production_added": 0,
+      "production_deleted": 0,
+      "test_added": 41,
+      "test_deleted": 5
+    },
+    "rust/anchor-wecom-gateway/tests/transport.rs": {
+      "production_added": 0,
+      "production_deleted": 0,
+      "test_added": 35,
+      "test_deleted": 10
+    }
+  },
+  "totals": {
+    "production_added": 12930,
+    "production_deleted": 6459,
+    "test_added": 29468,
+    "test_deleted": 7043
+  },
+  "unclassified_test_attributes": [],
+  "test_only_files": {
+    "fc558e279eea9aaa68f4f26730285c3ee6f18515": [
+      "rust/anchor-devtools/src/candidate/evidence/tests.rs",
+      "rust/anchor-devtools/src/candidate/tests.rs",
+      "rust/anchor-devtools/src/cutover/tests.rs",
+      "rust/anchor-devtools/src/goose/tests.rs",
+      "rust/anchor-devtools/src/preflight/tests.rs",
+      "rust/anchor-devtools/src/tests.rs",
+      "rust/anchor-devtools/tests/cli.rs",
+      "rust/anchor-distribution/src/install/tests.rs",
+      "rust/anchor-distribution/src/platform/tests.rs",
+      "rust/anchor-distribution/src/tests.rs",
+      "rust/anchor-distribution/tests/cli.rs",
+      "rust/anchor-distribution/tests/platform_cli.rs",
+      "rust/anchor-docmost-tools/src/package/tests.rs",
+      "rust/anchor-docmost-tools/tests/boundaries.rs",
+      "rust/anchor-docmost-tools/tests/package.rs",
+      "rust/anchor-docmost-tools/tests/stdio.rs",
+      "rust/anchor-docmost-tools/tests/support/mod.rs",
+      "rust/anchor-docmost-tools/tests/upload.rs",
+      "rust/anchor-graph-host/src/bundle_tests.rs",
+      "rust/anchor-graph-host/src/graph_call_session_tests.rs",
+      "rust/anchor-graph-host/src/graph_call_spec_tests.rs",
+      "rust/anchor-graph-host/src/mcp_tests.rs",
+      "rust/anchor-graph-host/src/plugin_authorization_tests.rs",
+      "rust/anchor-graph-host/src/plugin_catalog_tests.rs",
+      "rust/anchor-graph-host/src/plugin_test_support.rs",
+      "rust/anchor-graph-host/tests/child_lifecycle.rs",
+      "rust/anchor-graph-host/tests/in_process.rs",
+      "rust/anchor-library/src/filesystem/tests.rs",
+      "rust/anchor-library/tests/cli.rs",
+      "rust/anchor-library/tests/development.rs",
+      "rust/anchor-library/tests/install.rs",
+      "rust/anchor-library/tests/reclaim.rs",
+      "rust/anchor-library/tests/review.rs",
+      "rust/anchor-library/tests/support/mod.rs",
+      "rust/anchor-mcp-host/src/contents/tests.rs",
+      "rust/anchor-mcp-host/src/images/tests.rs",
+      "rust/anchor-mcp-host/src/process_tests.rs",
+      "rust/anchor-mcp-host/src/tls_tests.rs",
+      "rust/anchor-network-tools/src/tests.rs",
+      "rust/anchor-platform-session/src/database/tests.rs",
+      "rust/anchor-platform-session/src/database/tests/channel_assistants.rs",
+      "rust/anchor-platform-session/tests/channel_assistant.rs",
+      "rust/anchor-platform-session/tests/channel_assistant_retirement.rs",
+      "rust/anchor-platform-session/tests/channel_group.rs",
+      "rust/anchor-platform-session/tests/channel_session.rs",
+      "rust/anchor-platform-session/tests/execution_links.rs",
+      "rust/anchor-platform-session/tests/goose_links.rs",
+      "rust/anchor-platform-session/tests/questions.rs",
+      "rust/anchor-platform-session/tests/schema_v3.rs",
+      "rust/anchor-platform-session/tests/schema_v5.rs",
+      "rust/anchor-platform-session/tests/session_store.rs",
+      "rust/anchor-platform-session/tests/turn_store.rs",
+      "rust/anchor-rsi/tests/business.rs",
+      "rust/anchor-rsi/tests/evidence.rs",
+      "rust/anchor-rsi/tests/weekly.rs",
+      "rust/anchor-runner-host/src/api/channel_management/tests.rs",
+      "rust/anchor-runner-host/src/api/channel_sessions.rs",
+      "rust/anchor-runner-host/src/api/oauth.rs",
+      "rust/anchor-runner-host/src/api/oauth/pilot.rs",
+      "rust/anchor-runner-host/src/api/plugin_management/tests.rs",
+      "rust/anchor-runner-host/src/api/responses.rs",
+      "rust/anchor-runner-host/src/api/runs/tests.rs",
+      "rust/anchor-runner-host/src/api/schedules.rs",
+      "rust/anchor-runner-host/src/api/schedules/management.rs",
+      "rust/anchor-runner-host/src/api/schedules_management_tests.rs",
+      "rust/anchor-runner-host/src/api/schedules_tests.rs",
+      "rust/anchor-runner-host/src/api/sessions.rs",
+      "rust/anchor-runner-host/src/api/settings/tests.rs",
+      "rust/anchor-runner-host/src/api/tests.rs",
+      "rust/anchor-runner-host/src/api/tests/channel_attachments.rs",
+      "rust/anchor-runner-host/src/api/tests/channel_media.rs",
+      "rust/anchor-runner-host/src/api/tests/channel_sessions.rs",
+      "rust/anchor-runner-host/src/api/tests/conversations.rs",
+      "rust/anchor-runner-host/src/api/tests/graph_deletion.rs",
+      "rust/anchor-runner-host/src/api/tests/graph_listeners.rs",
+      "rust/anchor-runner-host/src/api/tests/graph_validation.rs",
+      "rust/anchor-runner-host/src/api/tests/oauth.rs",
+      "rust/anchor-runner-host/src/api/tests/persistent_assistants.rs",
+      "rust/anchor-runner-host/src/api/tests/persistent_assistants/plugin_updates.rs",
+      "rust/anchor-runner-host/src/api/tests/pilot_attachments.rs",
+      "rust/anchor-runner-host/src/api/tests/pilot_credentials.rs",
+      "rust/anchor-runner-host/src/api/tests/pilot_graph.rs",
+      "rust/anchor-runner-host/src/api/tests/pilot_network_defaults.rs",
+      "rust/anchor-runner-host/src/api/tests/pilot_oauth.rs",
+      "rust/anchor-runner-host/src/api/tests/platform_contract.rs",
+      "rust/anchor-runner-host/src/api/tests/plugin_library.rs",
+      "rust/anchor-runner-host/src/api/tests/production_readiness.rs",
+      "rust/anchor-runner-host/src/api/tests/questions.rs",
+      "rust/anchor-runner-host/src/api/tests/responses.rs",
+      "rust/anchor-runner-host/src/api/tests/run_abandon.rs",
+      "rust/anchor-runner-host/src/api/tests/run_plugins.rs",
+      "rust/anchor-runner-host/src/api/tests/schedules.rs",
+      "rust/anchor-runner-host/src/api/tests/session_calls.rs",
+      "rust/anchor-runner-host/src/api/tests/session_plugins.rs",
+      "rust/anchor-runner-host/src/api/tests/sessions.rs",
+      "rust/anchor-runner-host/src/api/tests/webhooks.rs",
+      "rust/anchor-runner-host/src/api/tests/wecom.rs",
+      "rust/anchor-runner-host/src/api/webhooks.rs",
+      "rust/anchor-runner-host/src/api/wecom.rs",
+      "rust/anchor-runner-host/src/api/wecom_channel_management_tests.rs",
+      "rust/anchor-runner-host/src/application/development_dependencies/tests.rs",
+      "rust/anchor-runner-host/src/application/development_environment/tests.rs",
+      "rust/anchor-runner-host/src/application/graphs/deletion.rs",
+      "rust/anchor-runner-host/src/application/graphs/tests.rs",
+      "rust/anchor-runner-host/src/application/graphs/tests/deletion.rs",
+      "rust/anchor-runner-host/src/application/graphs/tests/publication.rs",
+      "rust/anchor-runner-host/src/application/plugin_candidates/tests.rs",
+      "rust/anchor-runner-host/src/application/plugins/reference_tests.rs",
+      "rust/anchor-runner-host/src/application/tests.rs",
+      "rust/anchor-runner-host/src/artifacts/coordinator_tests.rs",
+      "rust/anchor-runner-host/src/artifacts/parity_tests.rs",
+      "rust/anchor-runner-host/src/artifacts/provenance_tests.rs",
+      "rust/anchor-runner-host/src/artifacts/tests.rs",
+      "rust/anchor-runner-host/src/artifacts/workspace_binding_tests.rs",
+      "rust/anchor-runner-host/src/assistant_plugins/tests.rs",
+      "rust/anchor-runner-host/src/channel_inputs/tests.rs",
+      "rust/anchor-runner-host/src/channel_supervisor/management/tests.rs",
+      "rust/anchor-runner-host/src/dependency_provision/resolve/command_tests.rs",
+      "rust/anchor-runner-host/src/dependency_provision/test_support.rs",
+      "rust/anchor-runner-host/src/dependency_provision/tests.rs",
+      "rust/anchor-runner-host/src/execution/legacy_plugin_tests.rs",
+      "rust/anchor-runner-host/src/goose_acp/conversation/tests.rs",
+      "rust/anchor-runner-host/src/goose_acp/media/tests.rs",
+      "rust/anchor-runner-host/src/local_inputs/tests.rs",
+      "rust/anchor-runner-host/src/model_configuration/execution/tests.rs",
+      "rust/anchor-runner-host/src/model_configuration/providers/tests.rs",
+      "rust/anchor-runner-host/src/model_configuration/tests.rs",
+      "rust/anchor-runner-host/src/node_host/mounts.rs",
+      "rust/anchor-runner-host/src/node_host/resolver_tests.rs",
+      "rust/anchor-runner-host/src/node_host/resolver_tests/mounts.rs",
+      "rust/anchor-runner-host/src/node_host/resolver_tests/runtime.rs",
+      "rust/anchor-runner-host/src/node_host/resolver_tests/tool_grants.rs",
+      "rust/anchor-runner-host/src/node_host/resolver_tests/turn_plugins.rs",
+      "rust/anchor-runner-host/src/node_host/turn_plugins.rs",
+      "rust/anchor-runner-host/src/node_tools/tests.rs",
+      "rust/anchor-runner-host/src/pilot_attachments/tests.rs",
+      "rust/anchor-runner-host/src/pilot_host/tests.rs",
+      "rust/anchor-runner-host/src/pilot_resources/tests.rs",
+      "rust/anchor-runner-host/src/pilot_tools/channel_management/tests.rs",
+      "rust/anchor-runner-host/src/pilot_tools/graphs/convergence_tests.rs",
+      "rust/anchor-runner-host/src/pilot_tools/scheduling/tests.rs",
+      "rust/anchor-runner-host/src/pilot_tools/tests.rs",
+      "rust/anchor-runner-host/src/plugin_disclosure/tests.rs",
+      "rust/anchor-runner-host/src/run_data/assistant_tests.rs",
+      "rust/anchor-runner-host/src/tool_disclosure/tests.rs",
+      "rust/anchor-runner-host/src/tool_environment/tests.rs",
+      "rust/anchor-runner-host/src/tool_host/http_tests.rs",
+      "rust/anchor-runner-host/src/tool_host/oauth_tests.rs",
+      "rust/anchor-runner-host/src/tool_host/preparation_tests.rs",
+      "rust/anchor-runner-host/src/tool_host/python_runtime_tests.rs",
+      "rust/anchor-runner-host/tests/channel_startup.rs",
+      "rust/anchor-runner-host/tests/goose_acp.rs",
+      "rust/anchor-runner-host/tests/goose_channel.rs",
+      "rust/anchor-runner-host/tests/goose_compaction.rs",
+      "rust/anchor-runner-host/tests/goose_completion.rs",
+      "rust/anchor-runner-host/tests/goose_conversation.rs",
+      "rust/anchor-runner-host/tests/goose_development_environment.rs",
+      "rust/anchor-runner-host/tests/goose_distribution.rs",
+      "rust/anchor-runner-host/tests/goose_elicitation.rs",
+      "rust/anchor-runner-host/tests/goose_library.rs",
+      "rust/anchor-runner-host/tests/goose_media.rs",
+      "rust/anchor-runner-host/tests/goose_model_settings.rs",
+      "rust/anchor-runner-host/tests/goose_native_activation_spike.rs",
+      "rust/anchor-runner-host/tests/goose_persistent_assistant.rs",
+      "rust/anchor-runner-host/tests/goose_pilot.rs",
+      "rust/anchor-runner-host/tests/goose_pilot_attachments.rs",
+      "rust/anchor-runner-host/tests/goose_pilot_authoring.rs",
+      "rust/anchor-runner-host/tests/goose_pilot_compaction.rs",
+      "rust/anchor-runner-host/tests/goose_plugin_disclosure.rs",
+      "rust/anchor-runner-host/tests/goose_plugin_mcp.rs",
+      "rust/anchor-runner-host/tests/goose_plugin_summary.rs",
+      "rust/anchor-runner-host/tests/goose_plugin_turns.rs",
+      "rust/anchor-runner-host/tests/goose_responses.rs",
+      "rust/anchor-runner-host/tests/goose_session_calls.rs",
+      "rust/anchor-runner-host/tests/goose_trace.rs",
+      "rust/anchor-runner-host/tests/local_inputs.rs",
+      "rust/anchor-runner-host/tests/local_network.rs",
+      "rust/anchor-runner-host/tests/multinode.rs",
+      "rust/anchor-runner-host/tests/native_plugins.rs",
+      "rust/anchor-runner-host/tests/parallel.rs",
+      "rust/anchor-runner-host/tests/routing.rs",
+      "rust/anchor-runner-host/tests/standalone_graph_call.rs",
+      "rust/anchor-runner-host/tests/standalone_library.rs",
+      "rust/anchor-runner-host/tests/standard_host.rs",
+      "rust/anchor-runner-host/tests/support/goose_fixture.rs",
+      "rust/anchor-runner-host/tests/support/goose_fixture/effects.rs",
+      "rust/anchor-runner-host/tests/support/goose_fixture/responses.rs",
+      "rust/anchor-runner-host/tests/support/goose_native_gateway.rs",
+      "rust/anchor-runner-host/tests/support/runtime_fixture.rs",
+      "rust/anchor-runner-host/tests/writer_lease.rs",
+      "rust/anchor-runtime/src/graph/tests.rs",
+      "rust/anchor-runtime/src/graph/tests/host_operations.rs",
+      "rust/anchor-runtime/src/graph/tests/invocation_authority.rs",
+      "rust/anchor-runtime/src/tools/tests.rs",
+      "rust/anchor-sandbox-bwrap/tests/network_boundary.rs",
+      "rust/anchor-scholarly/src/fetch/tests.rs",
+      "rust/anchor-scholarly/tests/batch.rs",
+      "rust/anchor-scholarly/tests/boundaries.rs",
+      "rust/anchor-scholarly/tests/mcp.rs",
+      "rust/anchor-scholarly/tests/read.rs",
+      "rust/anchor-scholarly/tests/search.rs",
+      "rust/anchor-scholarly/tests/support/mod.rs",
+      "rust/anchor-wecom-gateway/src/tests.rs",
+      "rust/anchor-wecom-gateway/tests/cli.rs",
+      "rust/anchor-wecom-gateway/tests/support/mod.rs",
+      "rust/anchor-wecom-gateway/tests/transport.rs",
+      "rust/anchor-wecom-tools/tests/api.rs",
+      "rust/anchor-wecom-tools/tests/stdio_package.rs",
+      "rust/anchor-wecom-tools/tests/support/mod.rs"
+    ],
+    "e60374fd06eda07de8df9c41e64a5e03f6e3246d": [
+      "rust/anchor-devtools/src/candidate/evidence/tests.rs",
+      "rust/anchor-devtools/src/candidate/tests.rs",
+      "rust/anchor-devtools/src/cutover/tests.rs",
+      "rust/anchor-devtools/src/goose/tests.rs",
+      "rust/anchor-devtools/src/preflight/tests.rs",
+      "rust/anchor-devtools/src/tests.rs",
+      "rust/anchor-devtools/tests/cli.rs",
+      "rust/anchor-devtools/tests/dev_launcher.rs",
+      "rust/anchor-distribution/src/install/tests.rs",
+      "rust/anchor-distribution/src/platform/tests.rs",
+      "rust/anchor-distribution/src/tests.rs",
+      "rust/anchor-distribution/tests/cli.rs",
+      "rust/anchor-distribution/tests/platform_cli.rs",
+      "rust/anchor-docmost-tools/src/package/tests.rs",
+      "rust/anchor-docmost-tools/tests/boundaries.rs",
+      "rust/anchor-docmost-tools/tests/package.rs",
+      "rust/anchor-docmost-tools/tests/stdio.rs",
+      "rust/anchor-docmost-tools/tests/support/mod.rs",
+      "rust/anchor-docmost-tools/tests/upload.rs",
+      "rust/anchor-graph-host/src/bundle_tests.rs",
+      "rust/anchor-graph-host/src/graph_call_session_tests.rs",
+      "rust/anchor-graph-host/src/graph_call_spec_tests.rs",
+      "rust/anchor-graph-host/src/mcp_tests.rs",
+      "rust/anchor-graph-host/src/plugin_authorization_tests.rs",
+      "rust/anchor-graph-host/src/plugin_catalog_tests.rs",
+      "rust/anchor-graph-host/src/plugin_configuration_tests.rs",
+      "rust/anchor-graph-host/src/plugin_test_support.rs",
+      "rust/anchor-graph-host/tests/child_lifecycle.rs",
+      "rust/anchor-graph-host/tests/in_process.rs",
+      "rust/anchor-graph-host/tests/support/kernel.rs",
+      "rust/anchor-kernel/tests/accounting_lifecycle.rs",
+      "rust/anchor-kernel/tests/constitution.rs",
+      "rust/anchor-kernel/tests/file_store_deletion.rs",
+      "rust/anchor-kernel/tests/storage_regressions.rs",
+      "rust/anchor-library/src/filesystem/tests.rs",
+      "rust/anchor-library/tests/cli.rs",
+      "rust/anchor-library/tests/development.rs",
+      "rust/anchor-library/tests/install.rs",
+      "rust/anchor-library/tests/reclaim.rs",
+      "rust/anchor-library/tests/review.rs",
+      "rust/anchor-library/tests/support/mod.rs",
+      "rust/anchor-mcp-host/src/contents/tests.rs",
+      "rust/anchor-mcp-host/src/images/tests.rs",
+      "rust/anchor-mcp-host/src/process_tests.rs",
+      "rust/anchor-mcp-host/src/tls_tests.rs",
+      "rust/anchor-network-tools/src/tests.rs",
+      "rust/anchor-platform-session/src/database/tests.rs",
+      "rust/anchor-platform-session/src/database/tests/channel_accounts.rs",
+      "rust/anchor-platform-session/src/database/tests/channel_assistants.rs",
+      "rust/anchor-platform-session/tests/channel_account_routing.rs",
+      "rust/anchor-platform-session/tests/channel_accounts.rs",
+      "rust/anchor-platform-session/tests/channel_assistant.rs",
+      "rust/anchor-platform-session/tests/channel_assistant_retirement.rs",
+      "rust/anchor-platform-session/tests/channel_group.rs",
+      "rust/anchor-platform-session/tests/channel_handover.rs",
+      "rust/anchor-platform-session/tests/channel_session.rs",
+      "rust/anchor-platform-session/tests/execution_links.rs",
+      "rust/anchor-platform-session/tests/goose_links.rs",
+      "rust/anchor-platform-session/tests/questions.rs",
+      "rust/anchor-platform-session/tests/schema_v3.rs",
+      "rust/anchor-platform-session/tests/schema_v5.rs",
+      "rust/anchor-platform-session/tests/session_store.rs",
+      "rust/anchor-platform-session/tests/turn_store.rs",
+      "rust/anchor-rsi/tests/business.rs",
+      "rust/anchor-rsi/tests/evidence.rs",
+      "rust/anchor-rsi/tests/history_discovery.rs",
+      "rust/anchor-rsi/tests/weekly.rs",
+      "rust/anchor-runner-host/src/api/channel_management/tests.rs",
+      "rust/anchor-runner-host/src/api/channel_sessions.rs",
+      "rust/anchor-runner-host/src/api/oauth.rs",
+      "rust/anchor-runner-host/src/api/oauth/pilot.rs",
+      "rust/anchor-runner-host/src/api/plugin_management/configuration/tests.rs",
+      "rust/anchor-runner-host/src/api/plugin_management/tests.rs",
+      "rust/anchor-runner-host/src/api/responses.rs",
+      "rust/anchor-runner-host/src/api/runs/tests.rs",
+      "rust/anchor-runner-host/src/api/schedules.rs",
+      "rust/anchor-runner-host/src/api/schedules/management.rs",
+      "rust/anchor-runner-host/src/api/schedules_management_tests.rs",
+      "rust/anchor-runner-host/src/api/schedules_tests.rs",
+      "rust/anchor-runner-host/src/api/sessions.rs",
+      "rust/anchor-runner-host/src/api/settings/tests.rs",
+      "rust/anchor-runner-host/src/api/tests.rs",
+      "rust/anchor-runner-host/src/api/tests/channel_attachments.rs",
+      "rust/anchor-runner-host/src/api/tests/channel_media.rs",
+      "rust/anchor-runner-host/src/api/tests/channel_sessions.rs",
+      "rust/anchor-runner-host/src/api/tests/conversations.rs",
+      "rust/anchor-runner-host/src/api/tests/graph_deletion.rs",
+      "rust/anchor-runner-host/src/api/tests/graph_listeners.rs",
+      "rust/anchor-runner-host/src/api/tests/graph_validation.rs",
+      "rust/anchor-runner-host/src/api/tests/kernel_probe.rs",
+      "rust/anchor-runner-host/src/api/tests/kernel_probe/calls.rs",
+      "rust/anchor-runner-host/src/api/tests/kernel_probe/calls/recovery.rs",
+      "rust/anchor-runner-host/src/api/tests/oauth.rs",
+      "rust/anchor-runner-host/src/api/tests/persistent_assistants.rs",
+      "rust/anchor-runner-host/src/api/tests/persistent_assistants/identity.rs",
+      "rust/anchor-runner-host/src/api/tests/persistent_assistants/plugin_updates.rs",
+      "rust/anchor-runner-host/src/api/tests/pilot_attachments.rs",
+      "rust/anchor-runner-host/src/api/tests/pilot_credentials.rs",
+      "rust/anchor-runner-host/src/api/tests/pilot_graph.rs",
+      "rust/anchor-runner-host/src/api/tests/pilot_network_defaults.rs",
+      "rust/anchor-runner-host/src/api/tests/pilot_oauth.rs",
+      "rust/anchor-runner-host/src/api/tests/platform_contract.rs",
+      "rust/anchor-runner-host/src/api/tests/plugin_library.rs",
+      "rust/anchor-runner-host/src/api/tests/production_readiness.rs",
+      "rust/anchor-runner-host/src/api/tests/questions.rs",
+      "rust/anchor-runner-host/src/api/tests/responses.rs",
+      "rust/anchor-runner-host/src/api/tests/run_abandon.rs",
+      "rust/anchor-runner-host/src/api/tests/run_access_json.rs",
+      "rust/anchor-runner-host/src/api/tests/run_plugins.rs",
+      "rust/anchor-runner-host/src/api/tests/schedules.rs",
+      "rust/anchor-runner-host/src/api/tests/session_calls.rs",
+      "rust/anchor-runner-host/src/api/tests/session_plugins.rs",
+      "rust/anchor-runner-host/src/api/tests/sessions.rs",
+      "rust/anchor-runner-host/src/api/tests/webhooks.rs",
+      "rust/anchor-runner-host/src/api/tests/wecom.rs",
+      "rust/anchor-runner-host/src/api/webhooks.rs",
+      "rust/anchor-runner-host/src/api/wecom.rs",
+      "rust/anchor-runner-host/src/api/wecom_channel_management_tests.rs",
+      "rust/anchor-runner-host/src/application/channel_management/tests.rs",
+      "rust/anchor-runner-host/src/application/development_dependencies/tests.rs",
+      "rust/anchor-runner-host/src/application/development_environment/tests.rs",
+      "rust/anchor-runner-host/src/application/graphs/deletion.rs",
+      "rust/anchor-runner-host/src/application/graphs/tests.rs",
+      "rust/anchor-runner-host/src/application/graphs/tests/deletion.rs",
+      "rust/anchor-runner-host/src/application/graphs/tests/publication.rs",
+      "rust/anchor-runner-host/src/application/liveness.rs",
+      "rust/anchor-runner-host/src/application/plugin_candidates/tests.rs",
+      "rust/anchor-runner-host/src/application/plugins/reference_tests.rs",
+      "rust/anchor-runner-host/src/application/run_access/fixtures.rs",
+      "rust/anchor-runner-host/src/application/run_access/kernel_probe/tests.rs",
+      "rust/anchor-runner-host/src/application/run_access/kernel_runs/deletion/tests.rs",
+      "rust/anchor-runner-host/src/application/run_access/kernel_runs/recovery.rs",
+      "rust/anchor-runner-host/src/application/run_access/kernel_runs/tests.rs",
+      "rust/anchor-runner-host/src/application/run_access/kernel_runs/tests/parallel.rs",
+      "rust/anchor-runner-host/src/application/run_access/kernel_runs/tests/recovery.rs",
+      "rust/anchor-runner-host/src/application/run_access/tests.rs",
+      "rust/anchor-runner-host/src/application/tests.rs",
+      "rust/anchor-runner-host/src/artifacts/coordinator_tests.rs",
+      "rust/anchor-runner-host/src/artifacts/parity_tests.rs",
+      "rust/anchor-runner-host/src/artifacts/provenance_tests.rs",
+      "rust/anchor-runner-host/src/artifacts/tests.rs",
+      "rust/anchor-runner-host/src/artifacts/workspace_binding_tests.rs",
+      "rust/anchor-runner-host/src/assistant_plugins/tests.rs",
+      "rust/anchor-runner-host/src/channel_inputs/tests.rs",
+      "rust/anchor-runner-host/src/channel_supervisor/management/tests.rs",
+      "rust/anchor-runner-host/src/dependency_provision/resolve/command_tests.rs",
+      "rust/anchor-runner-host/src/dependency_provision/test_support.rs",
+      "rust/anchor-runner-host/src/dependency_provision/tests.rs",
+      "rust/anchor-runner-host/src/execution/legacy_plugin_tests.rs",
+      "rust/anchor-runner-host/src/goose_acp/conversation/tests.rs",
+      "rust/anchor-runner-host/src/goose_acp/media/tests.rs",
+      "rust/anchor-runner-host/src/local_inputs/tests.rs",
+      "rust/anchor-runner-host/src/model_configuration/execution/tests.rs",
+      "rust/anchor-runner-host/src/model_configuration/providers/tests.rs",
+      "rust/anchor-runner-host/src/model_configuration/tests.rs",
+      "rust/anchor-runner-host/src/node_host/mounts.rs",
+      "rust/anchor-runner-host/src/node_host/resolver_tests.rs",
+      "rust/anchor-runner-host/src/node_host/resolver_tests/mounts.rs",
+      "rust/anchor-runner-host/src/node_host/resolver_tests/runtime.rs",
+      "rust/anchor-runner-host/src/node_host/resolver_tests/tool_grants.rs",
+      "rust/anchor-runner-host/src/node_host/resolver_tests/turn_plugins.rs",
+      "rust/anchor-runner-host/src/node_host/test_runs.rs",
+      "rust/anchor-runner-host/src/node_host/turn_plugins.rs",
+      "rust/anchor-runner-host/src/node_tools/tests.rs",
+      "rust/anchor-runner-host/src/pilot_attachments/tests.rs",
+      "rust/anchor-runner-host/src/pilot_host/tests.rs",
+      "rust/anchor-runner-host/src/pilot_resources/tests.rs",
+      "rust/anchor-runner-host/src/pilot_tools/channel_management/tests.rs",
+      "rust/anchor-runner-host/src/pilot_tools/graphs/convergence_tests.rs",
+      "rust/anchor-runner-host/src/pilot_tools/scheduling/tests.rs",
+      "rust/anchor-runner-host/src/pilot_tools/tests.rs",
+      "rust/anchor-runner-host/src/plugin_configuration/tests.rs",
+      "rust/anchor-runner-host/src/plugin_disclosure/tests.rs",
+      "rust/anchor-runner-host/src/run_data/assistant_tests.rs",
+      "rust/anchor-runner-host/src/tool_disclosure/tests.rs",
+      "rust/anchor-runner-host/src/tool_environment/tests.rs",
+      "rust/anchor-runner-host/src/tool_host/http_tests.rs",
+      "rust/anchor-runner-host/src/tool_host/oauth_tests.rs",
+      "rust/anchor-runner-host/src/tool_host/path_template_tests.rs",
+      "rust/anchor-runner-host/src/tool_host/preparation_tests.rs",
+      "rust/anchor-runner-host/src/tool_host/python_runtime_tests.rs",
+      "rust/anchor-runner-host/tests/channel_startup.rs",
+      "rust/anchor-runner-host/tests/goose_acp.rs",
+      "rust/anchor-runner-host/tests/goose_channel.rs",
+      "rust/anchor-runner-host/tests/goose_compaction.rs",
+      "rust/anchor-runner-host/tests/goose_completion.rs",
+      "rust/anchor-runner-host/tests/goose_conversation.rs",
+      "rust/anchor-runner-host/tests/goose_development_environment.rs",
+      "rust/anchor-runner-host/tests/goose_distribution.rs",
+      "rust/anchor-runner-host/tests/goose_elicitation.rs",
+      "rust/anchor-runner-host/tests/goose_kernel_recovery.rs",
+      "rust/anchor-runner-host/tests/goose_library.rs",
+      "rust/anchor-runner-host/tests/goose_media.rs",
+      "rust/anchor-runner-host/tests/goose_model_settings.rs",
+      "rust/anchor-runner-host/tests/goose_native_activation_spike.rs",
+      "rust/anchor-runner-host/tests/goose_persistent_assistant.rs",
+      "rust/anchor-runner-host/tests/goose_pilot.rs",
+      "rust/anchor-runner-host/tests/goose_pilot_attachments.rs",
+      "rust/anchor-runner-host/tests/goose_pilot_authoring.rs",
+      "rust/anchor-runner-host/tests/goose_pilot_compaction.rs",
+      "rust/anchor-runner-host/tests/goose_plugin_configuration.rs",
+      "rust/anchor-runner-host/tests/goose_plugin_disclosure.rs",
+      "rust/anchor-runner-host/tests/goose_plugin_mcp.rs",
+      "rust/anchor-runner-host/tests/goose_plugin_summary.rs",
+      "rust/anchor-runner-host/tests/goose_plugin_turns.rs",
+      "rust/anchor-runner-host/tests/goose_provider_errors.rs",
+      "rust/anchor-runner-host/tests/goose_responses.rs",
+      "rust/anchor-runner-host/tests/goose_session_calls.rs",
+      "rust/anchor-runner-host/tests/goose_trace.rs",
+      "rust/anchor-runner-host/tests/local_inputs.rs",
+      "rust/anchor-runner-host/tests/local_network.rs",
+      "rust/anchor-runner-host/tests/multinode.rs",
+      "rust/anchor-runner-host/tests/native_plugins.rs",
+      "rust/anchor-runner-host/tests/parallel.rs",
+      "rust/anchor-runner-host/tests/routing.rs",
+      "rust/anchor-runner-host/tests/run_access_fence.rs",
+      "rust/anchor-runner-host/tests/standalone_graph_call.rs",
+      "rust/anchor-runner-host/tests/standalone_library.rs",
+      "rust/anchor-runner-host/tests/standard_host.rs",
+      "rust/anchor-runner-host/tests/support/goose_fixture.rs",
+      "rust/anchor-runner-host/tests/support/goose_fixture/effects.rs",
+      "rust/anchor-runner-host/tests/support/goose_fixture/responses.rs",
+      "rust/anchor-runner-host/tests/support/goose_native_gateway.rs",
+      "rust/anchor-runner-host/tests/support/runtime_fixture.rs",
+      "rust/anchor-runner-host/tests/writer_lease.rs",
+      "rust/anchor-runtime/src/graph/scheduler/calls.rs",
+      "rust/anchor-runtime/src/graph/scheduler/tests.rs",
+      "rust/anchor-runtime/src/graph/scheduler/tests/calls.rs",
+      "rust/anchor-runtime/src/graph/scheduler/tests/differential.rs",
+      "rust/anchor-runtime/src/graph/test_support.rs",
+      "rust/anchor-runtime/src/graph/test_support/snapshots.rs",
+      "rust/anchor-runtime/src/graph/tests.rs",
+      "rust/anchor-runtime/src/graph/tests/fixtures.rs",
+      "rust/anchor-runtime/src/graph/tests/harness.rs",
+      "rust/anchor-runtime/src/graph/tests/host_operations.rs",
+      "rust/anchor-runtime/src/graph/tests/host_operations/kernel.rs",
+      "rust/anchor-runtime/src/graph/tests/invocation_authority.rs",
+      "rust/anchor-runtime/src/graph/tests/migrated_behavior.rs",
+      "rust/anchor-runtime/src/graph/tests/migrated_calls.rs",
+      "rust/anchor-runtime/src/graph/tests/migrated_crash.rs",
+      "rust/anchor-runtime/src/graph/tests/migrated_leases.rs",
+      "rust/anchor-runtime/src/graph/tests/migrated_lifecycle.rs",
+      "rust/anchor-runtime/src/graph/tests/migrated_plugins.rs",
+      "rust/anchor-runtime/src/graph/tests/migrated_reload.rs",
+      "rust/anchor-runtime/src/graph/tests/migrated_scenarios.rs",
+      "rust/anchor-runtime/src/graph/tests/migrated_storage.rs",
+      "rust/anchor-runtime/src/graph/tests/migrated_validation.rs",
+      "rust/anchor-runtime/src/graph/validator/differential.rs",
+      "rust/anchor-runtime/src/graph/validator/interruption_tests.rs",
+      "rust/anchor-runtime/src/graph/validator/parallel_module_tests.rs",
+      "rust/anchor-runtime/src/graph/validator/settle_tests.rs",
+      "rust/anchor-runtime/src/tools/tests.rs",
+      "rust/anchor-runtime/tests/weekly_work_report_graphs.rs",
+      "rust/anchor-sandbox-bwrap/tests/network_boundary.rs",
+      "rust/anchor-scholarly/src/fetch/tests.rs",
+      "rust/anchor-scholarly/tests/batch.rs",
+      "rust/anchor-scholarly/tests/boundaries.rs",
+      "rust/anchor-scholarly/tests/mcp.rs",
+      "rust/anchor-scholarly/tests/read.rs",
+      "rust/anchor-scholarly/tests/search.rs",
+      "rust/anchor-scholarly/tests/support/mod.rs",
+      "rust/anchor-wecom-gateway/src/tests.rs",
+      "rust/anchor-wecom-gateway/tests/cli.rs",
+      "rust/anchor-wecom-gateway/tests/support/mod.rs",
+      "rust/anchor-wecom-gateway/tests/transport.rs",
+      "rust/anchor-wecom-tools/tests/api.rs",
+      "rust/anchor-wecom-tools/tests/stdio_package.rs",
+      "rust/anchor-wecom-tools/tests/support/mod.rs"
+    ]
+  },
+  "limitations": [
+    "Physical lines include whitespace and comments in their owning section; not SLOC",
+    "Mixed production/test files are split at cfg(test) item boundaries; benches and test_support are test infrastructure",
+    "Rust examples and build.rs count as production; Cargo metadata is excluded",
+    "No feature execution is implied; module reachability is a source classification"
+  ]
+}

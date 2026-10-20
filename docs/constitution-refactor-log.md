@@ -1303,3 +1303,18 @@ M4 全部门槛通过：workspace 2,200 / 0 / 126、Web 359 及构建、完整�
 | 旧机制测试及 helper | 34 个函数改名或等价替换；删除测试 0、新增既有 ignore 0、冻结快照修改 0；[机器清单](../experiments/constitution-host-preflight/m4/test-mapping.json)。 |
 
 M5 未开始，不推送；W4、真实模型 Provider、外部渠道实网与部署未验。
+
+
+### M5 §10.20：最终测量与迁移交回
+
+M1–M4 已验收。任务书先单独提交为 e60374f，M5 以该 master 提交冻结全部度量；完成后迁移任务结束。C2 仍为 save 0 / mutation 0，Kernel 相对 0859373 零 diff。逐 crate 生产/测试行数、八类规则两版位点、手写 Session/授权/执行端口判断、测试函数与历史登记汇总统一见 [最终测量](../experiments/constitution-host-preflight/final/measurement.md)，不再沿用 P/R 的包络数字作为当前结论。
+
+探针没有新增实现：schema 15 保留数据目录的在线点与 history 重建全等，截断/缺失原生重建不改变 resource/history；现有 Probe 三测试通过并保留 12 点样本。M5 仅改文档与测量脚本；因基点相对 M4 有独立 RSI 源码更新，重跑 workspace 2,200 / 0 / 126、fmt/围栏通过。Web 359 与构建、完整固定 Goose 123 / 0 / 0 引用 M4，未重跑完整 Goose；原始日志未入库。
+
+| 登记 | M5 结论 |
+| --- | --- |
+| S 候选 | 0，无语义/Kernel/Graph 裁决修改；历史有效 S 8 条及去向见最终测试汇总。 |
+| 断言修改 | 0，业务断言无放宽。 |
+| 删除测试映射 | 删除 0、新 ignore 0，无需新增等价替换映射；M1–M4 各阶段条数与链接见 [登记汇总](../experiments/constitution-host-preflight/final/test-mapping-summary.md)。 |
+
+W4、完整真实模型 Provider 业务、渠道实网、部署、时间事实与保留政策不由本次测量裁定；生产离线迁移用户已决定不提供，旧 worktree/分支何时删除由用户决定。统一登记在 [迁移后待决清单](../experiments/constitution-host-preflight/final/measurement.md#迁移后待决清单)。本轮未推送、未清理开发数据、未删除旧 worktree/分支；长期、规模与对抗压力未验。

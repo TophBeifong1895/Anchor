@@ -1,0 +1,9 @@
+{
+  "line_baseline": "fc558e279eea9aaa68f4f26730285c3ee6f18515",
+  "rule_baseline": "1d1ba54035b2f25a45fd52c2536f5dc19cbd85e2",
+  "after": "e60374fd06eda07de8df9c41e64a5e03f6e3246d",
+  "kernel_baseline": "085937332c6784e183abd5e6ee9522bbaf310730",
+  "m4": "ce90b5bcbb612de2138c2cc4a8ebec0caa0eed04",
+  "selected_at": "2026-10-20",
+  "reason": "Master task-book commit; includes independent RSI update 3282134; later commits excluded"
+}

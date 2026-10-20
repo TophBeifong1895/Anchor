@@ -1,0 +1,14 @@
+{
+  "data_root": "/tmp/anchor-m5/probe-retained-ov2buh6q/state",
+  "raw_output": "/tmp/anchor-m5/probe-retained-ov2buh6q",
+  "binary": "/tmp/anchor-goose-regression-target/debug/anchor-runner-host",
+  "binary_sha256": "ff6591a98a7f66c8feb4876c725c4b099293714ea1ca2845b7a033086d1416f1",
+  "graph_schema": 15,
+  "point_count": 1,
+  "online_sha256": "899746713e817cabd78146477267a58bcfaef6eab2e3e978998e9366f5ce1d2d",
+  "history_sha256": "ca7b1084a3b965c2aaa31b4e59d2e8a9eeefdeb3a98921cd7707a3708216334e",
+  "partial_rebuilt_identically": true,
+  "missing_rebuilt_identically": true,
+  "resource_and_history_unchanged": true,
+  "scope": "Existing deterministic routing.rs fixture pattern; actual framed Host/KernelScheduler/Op/Sandbox; no Goose or model Provider"
+}

@@ -1,0 +1,136 @@
+{
+  "baseline": "e60374fd06eda07de8df9c41e64a5e03f6e3246d",
+  "native_projection_source_sha256": "339541b890fb22c83fb2d347e1f6b74d67186e37f18e82d6b2d49790a6a1cddb",
+  "retained_fixture": "/tmp/anchor-m5/probe-retained-ov2buh6q/state",
+  "raw_snapshot": "/tmp/anchor-m5/probe-snapshot",
+  "files": {
+    "kernel-probe/points.jsonl": "899746713e817cabd78146477267a58bcfaef6eab2e3e978998e9366f5ce1d2d",
+    "kernel-runs/run%2Fm5-probe-retained/resource.json": "2567e10feeb8c92eedf50bf5aed94cf43acc9f7755996a9cdf83f4d3cb3d02d1",
+    "kernel-runs/run%2Fm5-probe-retained/history.jsonl": "ca7b1084a3b965c2aaa31b4e59d2e8a9eeefdeb3a98921cd7707a3708216334e"
+  },
+  "reconstruction": {
+    "online_points": 1,
+    "rebuilt_points": 1,
+    "ordered_equal": true,
+    "multiset_equal": true,
+    "missing_in_rebuild": [],
+    "extra_in_rebuild": [],
+    "differences": [],
+    "comparison": "All nine Point fields; record order per resource, multiset across resources"
+  },
+  "sample": {
+    "source": "host_probe_records_create_submit_and_scheduler_verdicts; actual KernelRuns parallel local fixture; no Goose or model Provider",
+    "path": "probe-sample.jsonl",
+    "sha256": "e95e44adeda87c6dafa12f992da2e6d0f88dc702268b5eeed8c571cb7436a8c8",
+    "total_points": 12,
+    "total_cost": 4,
+    "by_validator": {
+      "validator/graph": 12
+    },
+    "by_principal": {
+      "agent": 5,
+      "code": 2,
+      "human": 5
+    },
+    "by_action": {
+      "request": 5,
+      "write": 7
+    },
+    "by_effect": {
+      "accepted": 7,
+      "refused": 3,
+      "returned": 2
+    },
+    "by_verification": {
+      "evidenced": 5,
+      "not_applicable": 7
+    },
+    "by_reason": {
+      "ok": 7,
+      "stale_version": 2,
+      "task_settled": 1,
+      "task_waiting": 1,
+      "unauthorized": 1
+    },
+    "joint": [
+      {
+        "validator": "validator/graph",
+        "principal": "agent",
+        "action": "write",
+        "effect": "accepted",
+        "verification": "evidenced",
+        "reason": "ok",
+        "count": 3
+      },
+      {
+        "validator": "validator/graph",
+        "principal": "agent",
+        "action": "write",
+        "effect": "refused",
+        "verification": "not_applicable",
+        "reason": "task_waiting",
+        "count": 1
+      },
+      {
+        "validator": "validator/graph",
+        "principal": "agent",
+        "action": "write",
+        "effect": "returned",
+        "verification": "not_applicable",
+        "reason": "stale_version",
+        "count": 1
+      },
+      {
+        "validator": "validator/graph",
+        "principal": "code",
+        "action": "write",
+        "effect": "accepted",
+        "verification": "evidenced",
+        "reason": "ok",
+        "count": 2
+      },
+      {
+        "validator": "validator/graph",
+        "principal": "human",
+        "action": "request",
+        "effect": "accepted",
+        "verification": "not_applicable",
+        "reason": "ok",
+        "count": 2
+      },
+      {
+        "validator": "validator/graph",
+        "principal": "human",
+        "action": "request",
+        "effect": "refused",
+        "verification": "not_applicable",
+        "reason": "task_settled",
+        "count": 1
+      },
+      {
+        "validator": "validator/graph",
+        "principal": "human",
+        "action": "request",
+        "effect": "refused",
+        "verification": "not_applicable",
+        "reason": "unauthorized",
+        "count": 1
+      },
+      {
+        "validator": "validator/graph",
+        "principal": "human",
+        "action": "request",
+        "effect": "returned",
+        "verification": "not_applicable",
+        "reason": "stale_version",
+        "count": 1
+      }
+    ]
+  },
+  "limitations": [
+    "Point omits Run id/seq/time, so no cross-Run chronological order can be reconstructed",
+    "Deleted owners have no retained history; rebuild only covers retained Run owners",
+    "Best-effort append can lose projection writes; native reopen rebuilds from retained history",
+    "No concurrent-writer or crash stress test claimed; retained fixture verified byte-stable during read"
+  ]
+}

@@ -1,0 +1,347 @@
+{
+  "before": "1d1ba54035b2f25a45fd52c2536f5dc19cbd85e2",
+  "after": "e60374fd06eda07de8df9c41e64a5e03f6e3246d",
+  "unit": "reviewed independent rule body; consumers excluded; do not sum unlike subrules",
+  "baseline_original_counts": {
+    "terminal": 1,
+    "can_stop": 4,
+    "can_resume": 12,
+    "can_abandon": 3,
+    "can_pause": 5,
+    "quiescent": 2,
+    "needs_attention": 2,
+    "late_result": 1,
+    "unknown_effect": 13,
+    "budget_exhaustion": 3,
+    "release_parent": 3
+  },
+  "comparable_subrules": {
+    "terminal_lifecycle": [
+      1,
+      1
+    ],
+    "unfinished_json_boundary": [
+      1,
+      1
+    ],
+    "stop": [
+      4,
+      1
+    ],
+    "resume_action_advice": [
+      2,
+      1
+    ],
+    "resume_worker_gate": [
+      3,
+      1
+    ],
+    "resume_terminal_write_gate": [
+      1,
+      0
+    ],
+    "resume_pending_write_gate": [
+      1,
+      0
+    ],
+    "resume_budget_write_gate": [
+      1,
+      0
+    ],
+    "resume_explicit_inspection": [
+      1,
+      1
+    ],
+    "resume_child_callback": [
+      1,
+      1
+    ],
+    "retained_dormant_child_binding_source": [
+      0,
+      1
+    ],
+    "resume_child_drive_selection": [
+      1,
+      1
+    ],
+    "resume_kernel_control_or_drive": [
+      1,
+      1
+    ],
+    "abandon_advice": [
+      0,
+      1
+    ],
+    "abandon_command_gate": [
+      2,
+      1
+    ],
+    "abandon_final_write_gate": [
+      1,
+      0
+    ],
+    "pause": [
+      5,
+      1
+    ],
+    "quiescent": [
+      2,
+      1
+    ],
+    "attention": [
+      2,
+      1
+    ],
+    "late_work_host_permission": [
+      0,
+      0
+    ],
+    "late_child_callback": [
+      1,
+      1
+    ],
+    "unknown_started_without_completion": [
+      1,
+      1
+    ],
+    "unknown_host_goose_conflict": [
+      1,
+      1
+    ],
+    "unknown_fixture_missing_completion": [
+      1,
+      1
+    ],
+    "unknown_goose_no_replay": [
+      1,
+      1
+    ],
+    "unknown_transport_failure_classification": [
+      1,
+      1
+    ],
+    "unknown_graph_child_drive_selection": [
+      1,
+      1
+    ],
+    "unknown_child_executor_human_wait_park": [
+      0,
+      1
+    ],
+    "unknown_graph_child_outcome_projection": [
+      1,
+      1
+    ],
+    "unknown_detached_dispatch_and_startup_scan": [
+      2,
+      2
+    ],
+    "unknown_old_runner_exception_write": [
+      1,
+      0
+    ],
+    "unknown_explicit_inspection": [
+      1,
+      1
+    ],
+    "unknown_recovery_target": [
+      2,
+      1
+    ],
+    "unknown_recovery_decision_control_selection": [
+      1,
+      1
+    ],
+    "unknown_legacy_agent_fact": [
+      1,
+      1
+    ],
+    "unknown_native_attempt_identification": [
+      0,
+      1
+    ],
+    "unknown_native_decision_validation": [
+      0,
+      1
+    ],
+    "unknown_native_pre_dispatch_gate": [
+      0,
+      1
+    ],
+    "unknown_native_observation_registration": [
+      0,
+      1
+    ],
+    "unknown_accepted_history_projection": [
+      0,
+      1
+    ],
+    "budget_resume_extra_gate": [
+      1,
+      0
+    ],
+    "budget_child_drive_filter": [
+      1,
+      0
+    ],
+    "budget_child_wait_projection": [
+      1,
+      1
+    ],
+    "release_child_projection": [
+      1,
+      1
+    ],
+    "release_parent_callback": [
+      2,
+      1
+    ]
+  },
+  "checked_anchor_count": 107,
+  "source_sha256": {
+    "1d1ba54035b2f25a45fd52c2536f5dc19cbd85e2:rust/anchor-runner-host/src/application/admission.rs": "e4940db7472bb0a780ef0baa1dc5db13b482b539f7ddcf063d7efc8f849052e1",
+    "1d1ba54035b2f25a45fd52c2536f5dc19cbd85e2:rust/anchor-runner-host/src/application/control.rs": "2ead6934a92f9a4ae2fbce3aa0d345588ab5395ff1d6febf97dc5c3115aaebf9",
+    "1d1ba54035b2f25a45fd52c2536f5dc19cbd85e2:rust/anchor-runner-host/src/application/run_projection.rs": "c4c03dba6d35bbb2c8ff16d1ede11358839258e33a042906dd52e65342392a02",
+    "1d1ba54035b2f25a45fd52c2536f5dc19cbd85e2:rust/anchor-runner-host/src/application/kernel_runs.rs": "9e7778c74682d7f9bbf3705ec9c4a9dd736cacc14990c66bf133ecb415a7393c",
+    "1d1ba54035b2f25a45fd52c2536f5dc19cbd85e2:rust/anchor-graph-host/src/graph_call.rs": "14817ffa8808b57f77a27950c5fff9080d9095b15545a54d56fa1a51c9bf6131",
+    "1d1ba54035b2f25a45fd52c2536f5dc19cbd85e2:rust/anchor-runner-host/src/application/abandon.rs": "72854f170d01a482c09c96381b529253410bd34de350bfbfa5d4c861cf474f79",
+    "1d1ba54035b2f25a45fd52c2536f5dc19cbd85e2:rust/anchor-runner-host/src/application/liveness.rs": "fa5d0f7ad00817afeab1199067ba60b1ef8f12c9432118eb63a059e597b23159",
+    "1d1ba54035b2f25a45fd52c2536f5dc19cbd85e2:rust/anchor-runner-host/src/node_host/facts.rs": "e6eee73bfe9c027c4e552855e7b65893731a45b85b659697ec463d3b6aca5f68",
+    "1d1ba54035b2f25a45fd52c2536f5dc19cbd85e2:rust/anchor-runner-host/src/node_host/execution.rs": "c8769327d62e68acdefb307a63d3711b8c5bd07d047eea9ef87213ff9da6d6e5",
+    "1d1ba54035b2f25a45fd52c2536f5dc19cbd85e2:rust/anchor-runner-host/src/goose_acp.rs": "31f67114a13f08f06e2f1f6cc54b3d3c4d95e0d7caf84a22e067e5aaa35103a4",
+    "1d1ba54035b2f25a45fd52c2536f5dc19cbd85e2:rust/anchor-runner-host/src/application/dispatch.rs": "ae99bf257483cb6c035f852b85adfadd88cf709b1cfe0b8a3d64c775bd16d229",
+    "1d1ba54035b2f25a45fd52c2536f5dc19cbd85e2:rust/anchor-runner-host/src/execution.rs": "6422c0ed943f3467e8bf0b919bd96ee13728a49d9b8b0a723c1bf2fe34874080",
+    "1d1ba54035b2f25a45fd52c2536f5dc19cbd85e2:rust/anchor-runner-host/src/application/recovery.rs": "1c2dc86ec6412ba2ac9295cd02484a3f2763a0c26939ccbeabcb9f46573a4adf",
+    "1d1ba54035b2f25a45fd52c2536f5dc19cbd85e2:rust/anchor-runner-host/src/api/schedules.rs": "57b3fc625abbed334d43265b294de715ea1892ce2ee31be43bac238eba01e129",
+    "e60374fd06eda07de8df9c41e64a5e03f6e3246d:rust/anchor-runner-host/src/application/run_access/run_view.rs": "440de88b060308fa152b12509274ce8fb6013bac27e19f170651baa669e350c9",
+    "e60374fd06eda07de8df9c41e64a5e03f6e3246d:rust/anchor-runner-host/src/application/run_access/projection.rs": "43f25935f7ea8f5590cd7641beb51b75b44f62ba356e47801dd7654cbb8f4e6e",
+    "e60374fd06eda07de8df9c41e64a5e03f6e3246d:rust/anchor-runner-host/src/application/run_access/kernel_runs.rs": "b74af2ed6b01ca88268425ec837b0a8ce1d396af5012b6d353ad13f6975d9eb7",
+    "e60374fd06eda07de8df9c41e64a5e03f6e3246d:rust/anchor-runner-host/src/application/run_access/kernel_runs/pause.rs": "bdaa0163f885cae3f6113ede9aa6198b7e46a43eab523c33c4bf0d687ccaf657",
+    "e60374fd06eda07de8df9c41e64a5e03f6e3246d:rust/anchor-runner-host/src/application/run_access.rs": "44135b69ebe76980eb6e02d7e7ac652b48c7e5c8dbaee7cd060e9aaa18ed2f23",
+    "e60374fd06eda07de8df9c41e64a5e03f6e3246d:rust/anchor-runner-host/src/application/abandon.rs": "749f90487e39ae4d7a3ab5417f3daeaa023afb77dc96dc1c712363db4fc574a7",
+    "e60374fd06eda07de8df9c41e64a5e03f6e3246d:rust/anchor-runner-host/src/application/run_access/control.rs": "62facce6bc24f7c9362328825000ab7e4926a9e12917c79d23f1a8365cbedbba",
+    "e60374fd06eda07de8df9c41e64a5e03f6e3246d:rust/anchor-runner-host/src/application/run_access/kernel_calls.rs": "984c5a935b17f97ed9cf36af043409c1be4caf767def16f2ac4205147faf2d8a",
+    "e60374fd06eda07de8df9c41e64a5e03f6e3246d:rust/anchor-runner-host/src/application/run_access/kernel_runs/recovery.rs": "d20d0f98b1401be8f5678d8159e8dc1d62a22adb89f0c7abc10cc32f76f72009",
+    "e60374fd06eda07de8df9c41e64a5e03f6e3246d:rust/anchor-runner-host/src/application/run_access/recovery.rs": "9f8902cf8aefb6ed98697a9b6a90ec3e2fda6bdb3dfef55718da84e421aa8391",
+    "e60374fd06eda07de8df9c41e64a5e03f6e3246d:rust/anchor-runner-host/src/node_host/facts.rs": "e6eee73bfe9c027c4e552855e7b65893731a45b85b659697ec463d3b6aca5f68",
+    "e60374fd06eda07de8df9c41e64a5e03f6e3246d:rust/anchor-runner-host/src/node_host/execution.rs": "ec791387a64cbfad82879657504de65a786589819e886c9f83584b8dd4aca3c7",
+    "e60374fd06eda07de8df9c41e64a5e03f6e3246d:rust/anchor-runner-host/src/goose_acp.rs": "6e4d9dd83997a2e5f3ab579b3ed54e18e3aafc6942135be5f57bced6738862aa",
+    "e60374fd06eda07de8df9c41e64a5e03f6e3246d:rust/anchor-runner-host/src/goose_acp/recovery.rs": "bfb19310d8daee63614295ce16836b609efd4356a7333a3328a1739d853ff1c0",
+    "e60374fd06eda07de8df9c41e64a5e03f6e3246d:rust/anchor-graph-host/src/graph_call.rs": "98133e7ab989e4fd8153492f2144a44fcf595c36d11e1524526038706bfa0d5f",
+    "e60374fd06eda07de8df9c41e64a5e03f6e3246d:rust/anchor-runtime/src/graph/scheduler.rs": "9f17f6e63d1c0975bf9d09c27263aa8e7f81c39e8d7eb317edd092d7c47e42b5",
+    "e60374fd06eda07de8df9c41e64a5e03f6e3246d:rust/anchor-runtime/src/graph/scheduler/execution.rs": "5038bf50837ba2b70da980f0e1fc5e3c1cf33df68fcc26ab12001926f5b438f5",
+    "e60374fd06eda07de8df9c41e64a5e03f6e3246d:rust/anchor-runtime/src/graph/scheduler/calls.rs": "7f40c11bbf493f9122639770afb83f9c65a213537e6db1de73e4649b0ccdfad5",
+    "e60374fd06eda07de8df9c41e64a5e03f6e3246d:rust/anchor-kernel/src/model.rs": "85a0f0c0378fba8f515df657f624afdc11e352b0683b76799232bd981120c04b",
+    "e60374fd06eda07de8df9c41e64a5e03f6e3246d:rust/anchor-kernel/src/kernel.rs": "5148d6a1e7ee644e9573a11e19176d1efd4c6bdfa610b33a2e92add4a3779b9e",
+    "e60374fd06eda07de8df9c41e64a5e03f6e3246d:apps/web/src/runPresentation.ts": "221a04f60ed8889e31fef307c83c7a1f1e42a9c0367a645d9e8236fadcd527ff"
+  },
+  "checked_anchors": [
+    "1d1ba54035b2f25a45fd52c2536f5dc19cbd85e2:rust/anchor-runner-host/src/application/admission.rs:64",
+    "1d1ba54035b2f25a45fd52c2536f5dc19cbd85e2:rust/anchor-runner-host/src/application/control.rs:87",
+    "1d1ba54035b2f25a45fd52c2536f5dc19cbd85e2:rust/anchor-runner-host/src/application/control.rs:224",
+    "1d1ba54035b2f25a45fd52c2536f5dc19cbd85e2:rust/anchor-runner-host/src/application/run_projection.rs:108",
+    "1d1ba54035b2f25a45fd52c2536f5dc19cbd85e2:rust/anchor-runner-host/src/application/kernel_runs.rs:226",
+    "1d1ba54035b2f25a45fd52c2536f5dc19cbd85e2:rust/anchor-runner-host/src/application/control.rs:87",
+    "1d1ba54035b2f25a45fd52c2536f5dc19cbd85e2:rust/anchor-runner-host/src/application/control.rs:224",
+    "1d1ba54035b2f25a45fd52c2536f5dc19cbd85e2:rust/anchor-runner-host/src/application/control.rs:236",
+    "1d1ba54035b2f25a45fd52c2536f5dc19cbd85e2:rust/anchor-runner-host/src/application/control.rs:249",
+    "1d1ba54035b2f25a45fd52c2536f5dc19cbd85e2:rust/anchor-runner-host/src/application/control.rs:180",
+    "1d1ba54035b2f25a45fd52c2536f5dc19cbd85e2:rust/anchor-runner-host/src/application/control.rs:74",
+    "1d1ba54035b2f25a45fd52c2536f5dc19cbd85e2:rust/anchor-graph-host/src/graph_call.rs:342",
+    "1d1ba54035b2f25a45fd52c2536f5dc19cbd85e2:rust/anchor-runner-host/src/application/run_projection.rs:90",
+    "1d1ba54035b2f25a45fd52c2536f5dc19cbd85e2:rust/anchor-runner-host/src/application/kernel_runs.rs:227",
+    "1d1ba54035b2f25a45fd52c2536f5dc19cbd85e2:rust/anchor-runner-host/src/application/kernel_runs.rs:146",
+    "1d1ba54035b2f25a45fd52c2536f5dc19cbd85e2:rust/anchor-runner-host/src/application/kernel_runs.rs:330",
+    "1d1ba54035b2f25a45fd52c2536f5dc19cbd85e2:rust/anchor-runner-host/src/application/kernel_runs.rs:350",
+    "1d1ba54035b2f25a45fd52c2536f5dc19cbd85e2:rust/anchor-runner-host/src/application/abandon.rs:159",
+    "1d1ba54035b2f25a45fd52c2536f5dc19cbd85e2:rust/anchor-runner-host/src/application/abandon.rs:213",
+    "1d1ba54035b2f25a45fd52c2536f5dc19cbd85e2:rust/anchor-runner-host/src/application/abandon.rs:299",
+    "1d1ba54035b2f25a45fd52c2536f5dc19cbd85e2:rust/anchor-runner-host/src/application/control.rs:87",
+    "1d1ba54035b2f25a45fd52c2536f5dc19cbd85e2:rust/anchor-runner-host/src/application/control.rs:242",
+    "1d1ba54035b2f25a45fd52c2536f5dc19cbd85e2:rust/anchor-runner-host/src/application/run_projection.rs:106",
+    "1d1ba54035b2f25a45fd52c2536f5dc19cbd85e2:rust/anchor-runner-host/src/application/kernel_runs.rs:225",
+    "1d1ba54035b2f25a45fd52c2536f5dc19cbd85e2:rust/anchor-runner-host/src/application/kernel_runs.rs:141",
+    "1d1ba54035b2f25a45fd52c2536f5dc19cbd85e2:rust/anchor-runner-host/src/application/liveness.rs:33",
+    "1d1ba54035b2f25a45fd52c2536f5dc19cbd85e2:rust/anchor-runner-host/src/application/kernel_runs.rs:220",
+    "1d1ba54035b2f25a45fd52c2536f5dc19cbd85e2:rust/anchor-runner-host/src/application/run_projection.rs:96",
+    "1d1ba54035b2f25a45fd52c2536f5dc19cbd85e2:rust/anchor-runner-host/src/application/kernel_runs.rs:221",
+    "1d1ba54035b2f25a45fd52c2536f5dc19cbd85e2:rust/anchor-runner-host/src/application/control.rs:74",
+    "1d1ba54035b2f25a45fd52c2536f5dc19cbd85e2:rust/anchor-runner-host/src/node_host/facts.rs:45",
+    "1d1ba54035b2f25a45fd52c2536f5dc19cbd85e2:rust/anchor-runner-host/src/node_host/execution.rs:207",
+    "1d1ba54035b2f25a45fd52c2536f5dc19cbd85e2:rust/anchor-runner-host/src/goose_acp.rs:378",
+    "1d1ba54035b2f25a45fd52c2536f5dc19cbd85e2:rust/anchor-runner-host/src/goose_acp.rs:398",
+    "1d1ba54035b2f25a45fd52c2536f5dc19cbd85e2:rust/anchor-runner-host/src/goose_acp.rs:249",
+    "1d1ba54035b2f25a45fd52c2536f5dc19cbd85e2:rust/anchor-graph-host/src/graph_call.rs:342",
+    "1d1ba54035b2f25a45fd52c2536f5dc19cbd85e2:rust/anchor-graph-host/src/graph_call.rs:643",
+    "1d1ba54035b2f25a45fd52c2536f5dc19cbd85e2:rust/anchor-runner-host/src/application/dispatch.rs:51",
+    "1d1ba54035b2f25a45fd52c2536f5dc19cbd85e2:rust/anchor-runner-host/src/execution.rs:307",
+    "1d1ba54035b2f25a45fd52c2536f5dc19cbd85e2:rust/anchor-runner-host/src/application/control.rs:180",
+    "1d1ba54035b2f25a45fd52c2536f5dc19cbd85e2:rust/anchor-runner-host/src/application/recovery.rs:219",
+    "1d1ba54035b2f25a45fd52c2536f5dc19cbd85e2:rust/anchor-runner-host/src/application/recovery.rs:107",
+    "1d1ba54035b2f25a45fd52c2536f5dc19cbd85e2:rust/anchor-runner-host/src/application/recovery.rs:134",
+    "1d1ba54035b2f25a45fd52c2536f5dc19cbd85e2:rust/anchor-runner-host/src/application/control.rs:249",
+    "1d1ba54035b2f25a45fd52c2536f5dc19cbd85e2:rust/anchor-graph-host/src/graph_call.rs:342",
+    "1d1ba54035b2f25a45fd52c2536f5dc19cbd85e2:rust/anchor-graph-host/src/graph_call.rs:629",
+    "1d1ba54035b2f25a45fd52c2536f5dc19cbd85e2:rust/anchor-graph-host/src/graph_call.rs:577",
+    "1d1ba54035b2f25a45fd52c2536f5dc19cbd85e2:rust/anchor-runner-host/src/application/dispatch.rs:149",
+    "1d1ba54035b2f25a45fd52c2536f5dc19cbd85e2:rust/anchor-runner-host/src/application/control.rs:74",
+    "1d1ba54035b2f25a45fd52c2536f5dc19cbd85e2:rust/anchor-runner-host/src/api/schedules.rs:316",
+    "1d1ba54035b2f25a45fd52c2536f5dc19cbd85e2:rust/anchor-runner-host/src/application/dispatch.rs:78",
+    "1d1ba54035b2f25a45fd52c2536f5dc19cbd85e2:rust/anchor-runner-host/src/node_host/execution.rs:191",
+    "e60374fd06eda07de8df9c41e64a5e03f6e3246d:rust/anchor-runner-host/src/application/run_access/run_view.rs:22",
+    "e60374fd06eda07de8df9c41e64a5e03f6e3246d:rust/anchor-runner-host/src/application/run_access/run_view.rs:23",
+    "e60374fd06eda07de8df9c41e64a5e03f6e3246d:rust/anchor-runner-host/src/application/run_access/run_view.rs:24",
+    "e60374fd06eda07de8df9c41e64a5e03f6e3246d:rust/anchor-runner-host/src/application/run_access/run_view.rs:32",
+    "e60374fd06eda07de8df9c41e64a5e03f6e3246d:rust/anchor-runner-host/src/application/run_access/run_view.rs:35",
+    "e60374fd06eda07de8df9c41e64a5e03f6e3246d:rust/anchor-runner-host/src/application/run_access/projection.rs:7",
+    "e60374fd06eda07de8df9c41e64a5e03f6e3246d:rust/anchor-runner-host/src/application/run_access/projection.rs:67",
+    "e60374fd06eda07de8df9c41e64a5e03f6e3246d:rust/anchor-runner-host/src/application/run_access/kernel_runs.rs:184",
+    "e60374fd06eda07de8df9c41e64a5e03f6e3246d:rust/anchor-runner-host/src/application/run_access/kernel_runs.rs:202",
+    "e60374fd06eda07de8df9c41e64a5e03f6e3246d:rust/anchor-runner-host/src/application/run_access/kernel_runs.rs:497",
+    "e60374fd06eda07de8df9c41e64a5e03f6e3246d:rust/anchor-runner-host/src/application/run_access/kernel_runs.rs:544",
+    "e60374fd06eda07de8df9c41e64a5e03f6e3246d:rust/anchor-runner-host/src/application/run_access/kernel_runs.rs:615",
+    "e60374fd06eda07de8df9c41e64a5e03f6e3246d:rust/anchor-runner-host/src/application/run_access/kernel_runs/pause.rs:43",
+    "e60374fd06eda07de8df9c41e64a5e03f6e3246d:rust/anchor-runner-host/src/application/run_access/kernel_runs/pause.rs:90",
+    "e60374fd06eda07de8df9c41e64a5e03f6e3246d:rust/anchor-runner-host/src/application/run_access.rs:225",
+    "e60374fd06eda07de8df9c41e64a5e03f6e3246d:rust/anchor-runner-host/src/application/run_access.rs:240",
+    "e60374fd06eda07de8df9c41e64a5e03f6e3246d:rust/anchor-runner-host/src/application/run_access.rs:262",
+    "e60374fd06eda07de8df9c41e64a5e03f6e3246d:rust/anchor-runner-host/src/application/run_access.rs:268",
+    "e60374fd06eda07de8df9c41e64a5e03f6e3246d:rust/anchor-runner-host/src/application/run_access.rs:281",
+    "e60374fd06eda07de8df9c41e64a5e03f6e3246d:rust/anchor-runner-host/src/application/run_access.rs:315",
+    "e60374fd06eda07de8df9c41e64a5e03f6e3246d:rust/anchor-runner-host/src/application/run_access.rs:338",
+    "e60374fd06eda07de8df9c41e64a5e03f6e3246d:rust/anchor-runner-host/src/application/abandon.rs:130",
+    "e60374fd06eda07de8df9c41e64a5e03f6e3246d:rust/anchor-runner-host/src/application/run_access/control.rs:57",
+    "e60374fd06eda07de8df9c41e64a5e03f6e3246d:rust/anchor-runner-host/src/application/run_access/kernel_calls.rs:241",
+    "e60374fd06eda07de8df9c41e64a5e03f6e3246d:rust/anchor-runner-host/src/application/run_access/kernel_calls.rs:310",
+    "e60374fd06eda07de8df9c41e64a5e03f6e3246d:rust/anchor-runner-host/src/application/run_access/kernel_calls.rs:333",
+    "e60374fd06eda07de8df9c41e64a5e03f6e3246d:rust/anchor-runner-host/src/application/run_access/kernel_runs/recovery.rs:13",
+    "e60374fd06eda07de8df9c41e64a5e03f6e3246d:rust/anchor-runner-host/src/application/run_access/kernel_runs/recovery.rs:90",
+    "e60374fd06eda07de8df9c41e64a5e03f6e3246d:rust/anchor-runner-host/src/application/run_access/kernel_runs/recovery.rs:153",
+    "e60374fd06eda07de8df9c41e64a5e03f6e3246d:rust/anchor-runner-host/src/application/run_access/kernel_runs/recovery.rs:223",
+    "e60374fd06eda07de8df9c41e64a5e03f6e3246d:rust/anchor-runner-host/src/application/run_access/recovery.rs:70",
+    "e60374fd06eda07de8df9c41e64a5e03f6e3246d:rust/anchor-runner-host/src/node_host/facts.rs:45",
+    "e60374fd06eda07de8df9c41e64a5e03f6e3246d:rust/anchor-runner-host/src/node_host/execution.rs:191",
+    "e60374fd06eda07de8df9c41e64a5e03f6e3246d:rust/anchor-runner-host/src/node_host/execution.rs:207",
+    "e60374fd06eda07de8df9c41e64a5e03f6e3246d:rust/anchor-runner-host/src/node_host/execution.rs:239",
+    "e60374fd06eda07de8df9c41e64a5e03f6e3246d:rust/anchor-runner-host/src/goose_acp.rs:270",
+    "e60374fd06eda07de8df9c41e64a5e03f6e3246d:rust/anchor-runner-host/src/goose_acp.rs:399",
+    "e60374fd06eda07de8df9c41e64a5e03f6e3246d:rust/anchor-runner-host/src/goose_acp.rs:411",
+    "e60374fd06eda07de8df9c41e64a5e03f6e3246d:rust/anchor-runner-host/src/goose_acp/recovery.rs:6",
+    "e60374fd06eda07de8df9c41e64a5e03f6e3246d:rust/anchor-runner-host/src/goose_acp/recovery.rs:34",
+    "e60374fd06eda07de8df9c41e64a5e03f6e3246d:rust/anchor-graph-host/src/graph_call.rs:319",
+    "e60374fd06eda07de8df9c41e64a5e03f6e3246d:rust/anchor-graph-host/src/graph_call.rs:535",
+    "e60374fd06eda07de8df9c41e64a5e03f6e3246d:rust/anchor-runtime/src/graph/scheduler.rs:49",
+    "e60374fd06eda07de8df9c41e64a5e03f6e3246d:rust/anchor-runtime/src/graph/scheduler.rs:198",
+    "e60374fd06eda07de8df9c41e64a5e03f6e3246d:rust/anchor-runtime/src/graph/scheduler/execution.rs:162",
+    "e60374fd06eda07de8df9c41e64a5e03f6e3246d:rust/anchor-runtime/src/graph/scheduler/calls.rs:145",
+    "e60374fd06eda07de8df9c41e64a5e03f6e3246d:rust/anchor-kernel/src/model.rs:305",
+    "e60374fd06eda07de8df9c41e64a5e03f6e3246d:rust/anchor-kernel/src/kernel.rs:213",
+    "e60374fd06eda07de8df9c41e64a5e03f6e3246d:rust/anchor-kernel/src/kernel.rs:227",
+    "e60374fd06eda07de8df9c41e64a5e03f6e3246d:rust/anchor-kernel/src/kernel.rs:234",
+    "e60374fd06eda07de8df9c41e64a5e03f6e3246d:rust/anchor-kernel/src/kernel.rs:504",
+    "e60374fd06eda07de8df9c41e64a5e03f6e3246d:rust/anchor-kernel/src/kernel.rs:521",
+    "e60374fd06eda07de8df9c41e64a5e03f6e3246d:rust/anchor-kernel/src/kernel.rs:538",
+    "e60374fd06eda07de8df9c41e64a5e03f6e3246d:apps/web/src/runPresentation.ts:10",
+    "e60374fd06eda07de8df9c41e64a5e03f6e3246d:apps/web/src/runPresentation.ts:12"
+  ]
+}

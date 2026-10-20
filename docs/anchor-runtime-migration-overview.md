@@ -1,6 +1,6 @@
 # Anchor 运行时重建：设计、过程与现状
 
-版本：2026-10-20。M3 已合入 master，M4 已按任务书 §10.19 完成并交回审查。本文用于通读和理解整件事，不是任务书；具体的执行要求以各任务书为准，文末附有索引。
+版本：2026-10-20。M1–M4 已验收，M5 按任务书 §10.20 完成最终测量与收尾并交回，迁移任务结束。本文是迁移的最终说明；逐项数据和未验范围见 [M5 最终测量](../experiments/constitution-host-preflight/final/measurement.md)，历史执行要求见文末任务书索引。
 
 ---
 
@@ -24,7 +24,7 @@
 
 **做了什么。** 把 Anchor 中负责"运行一个 Graph"的那部分（Run 的运行时）从头重建。旧实现是一个推模型的 `GraphRunner`：它自己选节点、调用执行、等结果、决定下一步，Run 的状态由多处代码直接改写。新实现以一部"宪法"为依据：所有改变都是**提交**，由一个很小的**内核**统一裁决、记录、结算、测量；Graph 的规则写成纯函数的**校验器**；调度器只负责派活和把结果交回去。
 
-**现在在哪里。** M3 已合入 master，所有新 Run 统一走 Kernel。M4 在 /home/mansteinl/Anchor 实现字段归属清理：Graph 记录删除 error/recovery/recovery_submissions/updated，失败及恢复展示由 Kernel 结算与 history 投影提供。常规门槛通过：workspace 2,200 / 0 / 126、Web 359 及构建、Clippy/fmt、围栏；完整固定 Goose 123 / 0 / 0 且七个二进制摘要前后一致。字段归属与当前验证见 [M4 交回](../experiments/constitution-host-preflight/m4/verification.md)；M5 未开始。
+**现在在哪里。** 所有新 Run 统一走 Kernel，旧 Runner 已删除；Graph schema 15 不再保存 error/recovery/recovery_submissions/updated，失败和恢复展示来自 Kernel 结算/history。M4 已验收。M5 在固定 master `e60374f` 复核探针可重建，完成逐 crate、规则、C2 和测试函数度量：C2 0/0，Kernel 对 `0859373` 零 diff；本轮 workspace 2,200 / 0 / 126、fmt/围栏通过，Web 359 及构建、完整固定 Goose 123 / 0 / 0 引用 M4。迁移工作已交回，最终数据与后续决定见 [M5 测量](../experiments/constitution-host-preflight/final/measurement.md)；真实模型完整业务、渠道实网、部署及长期/规模压力未验。
 
 **得到了什么。**
 
@@ -296,7 +296,7 @@ R2 曾把 pause 当成 stop 的别名，导致十多个 API 测试失败，原�
 
 ### 8.2 没达到预期的
 
-- **代码量**：生产代码净增约 5,600 行，这是按文件路径粗算的，内联测试也包含在内。M4 按 §10.19 登记字段归属及本轮增删；相对迁移起点的最终逐 crate 度量留待 M5。
+- **代码量**：固定区间 fc558e2→e60374f，Rust 生产删除 6,459、新增 12,930，净增 6,471 行；测试删除 7,043、新增 29,468，净增 22,425 行。内联测试已分开；区间包含独立 master 工作，不能全部归因于迁移。行数未达到 Host 变小的预期，也不代替规则收敛验收。口径与逐 crate 表见 [M5 最终测量](../experiments/constitution-host-preflight/final/measurement.md#按-crate-的-rust-行数)。
 - **Host 复杂度**：Session、授权、投递层的复杂度没有变化，这是 §5.2 的结论。
 - **测量**：探针已经在产出数据，但还缺时间、任务类别、模型这几个坐标。
 
@@ -311,22 +311,14 @@ R2 曾把 pause 当成 stop 的别名，导致十多个 API 测试失败，原�
 
 ## 9. 剩余工作与待决问题
 
-### 9.1 接下来的步骤
+### 9.1 迁移已交回
 
-master 已快进；M4 在 master 完成，完整门槛通过，见 [M4 交回](../experiments/constitution-host-preflight/m4/verification.md)。
+M1–M4 已验收；M5 按 §10.20 完成测量、探针复核及宪法复核，迁移任务结束。最终交回见 [measurement.md](../experiments/constitution-host-preflight/final/measurement.md)。未推送、未删除旧 worktree/分支；这些操作仍由用户决定。
 
-1. M4 待审查；字段表、CompletionFact 结论和测试映射均已随交回提供。
-2. M5 不自动开始；待授权后做最终测量及宪法逐条复核。
+### 9.2 迁移后待决问题
 
-### 9.2 待决问题
+当前事实与决定者统一维护在 [M5 迁移后待决清单](../experiments/constitution-host-preflight/final/measurement.md#迁移后待决清单)：旧数据离线迁移已由用户决定不提供；W4、时间事实、history/points 保留政策、完整真实模型业务/渠道实网/部署验收，以及旧 worktree/分支的删除时机仍由对应决定者处理。M5 不替用户裁定，也不把固定 Goose 或单个真实模型小图扩大为这些验收。
 
-| 问题 | 说明 |
-| --- | --- |
-| W4：预算耗尽怎么处理 | 现在是"等待人"；宪法的默认是结算为失败 |
-| 时间是否作为内核事实 | 内核的记录里没有时间。以后要分析耗时，最直接的办法是由宿主给每次提交盖时间戳 |
-| 是否推送 master | master 领先 origin 多个提交，合并后差距会更大 |
-| 真实 Provider 验收 | 目前只用本地 Provider 验收过。真实模型的对话卡在上游错误，需要先确认凭据和服务可用 |
-| 保留策略 | 删除 Run 会物理删除它的历史，删除后无法再分析 |
 
 ---
 
@@ -382,5 +374,5 @@ master 已快进；M4 在 master 完成，完整门槛通过，见 [M4 交回](.
 | `docs/constitution-host-integration-plan.md` | 早期 Host 接入计划，其中的约束 C1–C6 仍然有效 |
 | `docs/run-access-facade.md` | 门面的规则表与边界 |
 | `docs/runtime-contract-tests.md` | Goose 回归的标准命令与环境要求 |
-| `experiments/constitution-host-preflight/` | 各阶段的验证报告与原始证据 |
+| `experiments/constitution-host-preflight/final/` | 固定基点最终测量、脚本、测试登记、规则清单及后续决定 |
 | master `docs/constitution-merge-task.md` | 合并步骤（master 侧） |
