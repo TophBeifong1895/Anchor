@@ -5,9 +5,9 @@ use std::sync::LazyLock;
 /// Escaped so this source file never carries the rejected sequences themselves:
 /// the deployment gateway matches them as raw substrings, and Anchor freezes
 /// source text into model-readable projections. Each head is the first character
-/// of a classification term that ordinary words can produce by accident (a verb
-/// or noun ending in that character followed by 密钥/密码/…).
-const CLASSIFICATION_HEADS: [&str; 2] = ["\u{7edd}", "\u{673a}"];
+/// of a filtered term, whether used literally or produced by adjacent words
+/// (a verb or noun ending in that character followed by 密钥/密码/…).
+const CLASSIFICATION_HEADS: [&str; 3] = ["\u{7edd}", "\u{673a}", "\u{79d8}"];
 const CLASSIFICATION_TAIL: &str = "\u{5bc6}";
 /// Preceding character that forms the common accidental collocation; the match
 /// itself supplies the second half of the stem.

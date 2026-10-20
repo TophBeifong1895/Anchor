@@ -328,8 +328,8 @@ fn collected_evidence_never_keeps_the_gateway_sensitive_adjacency() {
     let claude_root = temp.path().join("claude");
     let deepseek_root = temp.path().join("deepseek");
     let time = "2026-10-02T09:00:00+08:00";
-    let message = "继续\u{62d2}\u{7edd}\u{5bc6}钥默认值";
-    let tool_text = "工具记录：\u{7edd}\u{5bc6}资料";
+    let message = "继续\u{62d2}\u{7edd}\u{5bc6}钥默认值；随机\u{5bc6}钥；\u{79d8}\u{5bc6}字段";
+    let tool_text = "工具记录：\u{7edd}\u{5bc6}资料、\u{673a}\u{5bc6}资料、\u{79d8}\u{5bc6}字段";
     write_records(
         &codex_root,
         "session.jsonl",
@@ -390,10 +390,18 @@ fn collected_evidence_never_keeps_the_gateway_sensitive_adjacency() {
         ] {
             let evidence = fs::read_to_string(output.join(name)).unwrap();
             assert_eq!(evidence.lines().count(), expected_entries);
-            assert!(!evidence.contains("\u{7edd}\u{5bc6}"));
+            for head in ['\u{7edd}', '\u{673a}', '\u{79d8}'] {
+                assert!(!evidence.contains(&format!("{head}\u{5bc6}")));
+            }
             assert!(evidence.contains("继续拒绝该密钥默认值"));
+            assert!(evidence.contains("随机·密钥；秘·密字段"));
             if expected_entries == 3 {
-                assert_eq!(evidence.matches("工具记录：绝·密资料").count(), 2);
+                assert_eq!(
+                    evidence
+                        .matches("工具记录：绝·密资料、机·密资料、秘·密字段")
+                        .count(),
+                    2
+                );
             }
         }
     }

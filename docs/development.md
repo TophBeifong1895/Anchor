@@ -50,7 +50,7 @@ ANCHOR_GOOSE_BINARY=/absolute/path/to/goose \
 处理方式分两类：跨词拼接改写措辞（「拒绝该密钥」「不接受密钥」「至少32字节、随机生成的密钥」「开机口令」「手机解锁码」），真词用同义说法（「保密的字段」「凭据字段」）；通用做法是在首字和「密」之间插入一个字或分隔符。规则见 [开发约定](../AGENTS.md)。
 
 ```sh
-scripts/check-sensitive-wording.sh          # 受版本控制的工程文本（当前覆盖「拒」「绝」+「密」和「机」「密」）
+scripts/check-sensitive-wording.sh          # 受版本控制的工程文本，覆盖上述三类连写
 scripts/check-sensitive-wording.sh --all    # 另含未跟踪的工程文件，仍跳过 .local/ 等运行状态
 ```
 

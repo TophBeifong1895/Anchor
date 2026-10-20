@@ -290,4 +290,4 @@ Host 启动恢复先把遗留 channel delivery 的 `sending` 收敛为 `unknown`
 
 `anchor-distribution` 是操作员 Rust builder，调用同一 FileGraphBundleLoader，不执行输入 binary 或新增 Runner。包只带给定 ELF Host、固定 Goose v1.53.0、精确声明的 Graph/Plugin 资源和显式工具/Web；资源原子私有快照与发布前身份/内容复查，归档顺序、uid/gid、mtime、mode 和 gzip header 确定。逐文件 SHA256、平台、Plugin pins 和环境变量引用记录在 runtime-manifest；它不是签名，也不能从任意 ELF 证明 Host 无 legacy feature。标准 Host 的 normal/build/dev 依赖闭包另行验证。
 
-源码/凭据/状态路径、symlink/hardlink/special、未知 bundle 文件或空目录均拒绝；JSON/TOML/YAML 的已知凭据字段结构化检查，保留未展开的环境引用。该过滤不是任意文本/二进制秘密发现，输入需要操作员审查；ELF 共享库、系统 Git/Bubblewrap 与外部服务不自动打包，工具放入 bin 不自动扩大授权。输出用 NOREPLACE 原子发布，不覆盖并发赢家；发布后 durability 不确定明确返回 uncertain。实际解包 Host/Goose 的小图停止、重启、同 Session 核查续行和只读 Artifact 已验收；这不是无 Python OS、release candidate、真实模型或生产切换验收。
+源码/凭据/状态路径、symlink/hardlink/special、未知 bundle 文件或空目录均拒绝；JSON/TOML/YAML 的已知凭据字段结构化检查，保留未展开的环境引用。该过滤不是任意文本/二进制凭据发现，输入需要操作员审查；ELF 共享库、系统 Git/Bubblewrap 与外部服务不自动打包，工具放入 bin 不自动扩大授权。输出用 NOREPLACE 原子发布，不覆盖并发赢家；发布后 durability 不确定明确返回 uncertain。实际解包 Host/Goose 的小图停止、重启、同 Session 核查续行和只读 Artifact 已验收；这不是无 Python OS、release candidate、真实模型或生产切换验收。

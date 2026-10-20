@@ -102,7 +102,7 @@ Runtime 状态的 `python_prepare_available` 表示当前配置满足 Python 准
 
 插件预检依次投影 `preparing/ready/running/succeeded/failed`，确认携带具体替换与数据删除选项，重复确认观察同一操作。文件导入最多 2,048 项、解码后 32 MiB，请求上限 48 MiB；拒绝绝对路径、路径穿越、重复项及链接/特殊文件。预检和操作句柄驻留当前 Host，重启后客户端核对实际 Library 状态再决定是否重新预检，不把句柄丢失当作安装失败。独立保存凭据只完成同 owner、同连接身份且仍有效的待处理请求；若保存成功但通知同步失败，响应保留成功事实并附带提示，不让用户误认为密钥未保存。MCP 旧表单提交仍由后端比较创建时配置版本，配置变化后需重新申请，不能依赖通知成功来阻止旧请求覆盖。
 
-插件默认连接配置为 owner-bound Host 事实：`GET/PUT /plugins/{plugin}/configuration`，显式协议测试为 `POST /plugins/{plugin}/configuration/test`。读取返回 `authorization_digest`、`revision`、逻辑字段和 MCP targets；只有非秘密字段可带 `value`。PUT 发送 `{authorization_digest, revision, fields: {field_id: {action: "set", value: "..."} | {action: "clear"}}}`，一次提交原子更新共享消费者。冲突返回 409；清除不回退旧环境/default，更换 URL 不携带未重新提交的旧秘密。测试请求带摘要与 revision，结果提供各 target 的 `verified/failed/unsupported`、工具数及 `current`；不执行业务工具，不把 stdio 初始化解释为上游认证。所有配置响应和错误使用私有 no-store 策略。旧 credentials API 与 Pilot 请求继续复用配置用例，显式映射的逻辑字段不再重复展示。
+插件默认连接配置为 owner-bound Host 事实：`GET/PUT /plugins/{plugin}/configuration`，显式协议测试为 `POST /plugins/{plugin}/configuration/test`。读取返回 `authorization_digest`、`revision`、逻辑字段和 MCP targets；只有普通字段可带 `value`。PUT 发送 `{authorization_digest, revision, fields: {field_id: {action: "set", value: "..."} | {action: "clear"}}}`，一次提交原子更新共享消费者。冲突返回 409；清除不回退旧环境/default，更换 URL 不携带未重新提交的旧凭据。测试请求带摘要与 revision，结果提供各 target 的 `verified/failed/unsupported`、工具数及 `current`；不执行业务工具，不把 stdio 初始化解释为上游认证。所有配置响应和错误使用私有 no-store 策略。旧 credentials API 与 Pilot 请求继续复用配置用例，显式映射的逻辑字段不再重复展示。
 
 新建工作流与运行输入使用正式表单；运行输入草稿保存在当前浏览器。Graph/Run 的 Pilot 协助入口只带入对象引用到未发送草稿，不自动执行任务。插件、渠道、设置页面按各自需要读取状态，不恢复全工作台后台轮询。
 

@@ -116,24 +116,27 @@ mkdir -p "$ANCHOR_RUNNER_LOCAL_INPUTS_ROOT/weekly-work-report"
 
 ## 验证边界
 
-新增的 [Graph 定向测试](../rust/anchor-runtime/tests/weekly_work_report_graphs.rs) 使用公开 `GraphSnapshot::from_authoring` 与 `admit` 检查两张示例图、核心终点与权限、包装图输入映射和返回文件约定：
+当前验证覆盖采集投影与 Graph 契约，尚未完成完整周报的真实模型端到端验收。
+
+| 范围 | 已验证结论 | 未覆盖边界 |
+| --- | --- | --- |
+| Graph 契约 | [定向测试](../rust/anchor-runtime/tests/weekly_work_report_graphs.rs) 校验核心终点与权限、包装图输入映射和返回文件约定 | 不执行 Goose、真实模型或外部发布 |
+| 采集与投影 | `anchor-rsi` 43 项测试、严格 Clippy 和格式检查通过；覆盖三来源正文、工具调用/结果及详细/概览投影的三类措辞改写。已安装工具重放原始失败的两条公开记录通过 | 不代表全部历史格式、凭据脱敏场景或网关词表均已覆盖；既有 Run 的冻结证据与原生历史不改写 |
+| Host 与沙箱 | 本机三来源齐全、仅 Codex、无来源 fixture 完成；验证节点隔离、冻结授权及授权改变后不能沿用旧 Run | 不证明操作员机器的全部历史均可用，也不等于报告内容质量验收 |
+| 真实模型小图 | 2026-10-20 使用与运行中 Host 相同的二进制和保存模型设置，经沙箱采集、Goose ACP、真实 `deepseek-flash` 和授权工具读取六份合成投影，写入并回读验证文件，以 `final_result` 完成，Kernel 为 `settled/done` | 不包含完整理解、写作、独立评审、跨 Graph 返回、Docmost 上传或企业微信投递 |
+
+可复跑的 Graph 契约检查：
 
 ```sh
 cargo test --manifest-path rust/Cargo.toml -p anchor-runtime --locked --test weekly_work_report_graphs
 ```
 
-这类测试只验证 Graph 契约和包装约束，不执行 Goose、真实 provider、操作员机器的全部历史、Docmost 上传或企业微信投递。
+本机原始日志、二进制身份与复现入口见 [2026-10-20 诊断与验证](../.local/weekly-gateway-wording-20261020/README.md)；三种 Host fixture 与发现/压缩/归档验证见 [采集可移植性摘要](../.local/weekly-history-portability-20261016/validation-summary.json)。这些私有验收产物仅保存在验收机器的 `.local/`，不随仓库分发，其他 checkout 中缺失时不能视为可访问证据。原始记录重放与真实模型小图是分开的检查，模型小图只读取合成历史。
 
-2026-10-16 的本机确定性采集 fixture 实际经过 Host → GraphRunner → Bubblewrap → 新采集 CLI，三来源齐全、仅 Codex、无来源三种情况均完成，并核对节点隔离挂载、按 Run 冻结的 grants，以及授权变更后拒绝沿用旧 Run。它使用既有 debug Host，未因本任务重建；[原始摘要](../.local/weekly-history-portability-20261016/host-summary.json) 记录 Host 与采集 CLI 的 SHA-256，[复现脚本](../.local/weekly-history-portability-20261016/check-host.py) 保留 fixture 与断言。本机 [发现结果](../.local/weekly-history-portability-20261016/discovery.json) 另确认实际 HOME 下三种历史目录可用；定位只检查目录，不读取来源内容，不能据此证明记录完整或窗口内有活动。这些证据仅保存在验收机器的 `.local/`，不随仓库共享；其他 checkout 中缺失时不能视为可访问的验收产物。
+## 失败诊断与重跑
 
-`anchor-rsi` 加入措辞改写后的全 crate 回归 42 项、严格 Clippy 和格式检查通过；采集边界测试覆盖三种来源的正文、工具调用、工具结果以及详细/概览投影。已安装的修复二进制通过上述三种 Host fixture，并重放真实失败源文件中的公开记录，确认详细和概览均不再携带被拦截连写。命令、原始输出、二进制身份与重放入口记录在本机 [修复验证](../.local/weekly-gateway-wording-20261016/README.md)。两张示例的 Graph 定向测试 7 项及发现、压缩历史和归档等原有验证见[可移植性摘要](../.local/weekly-history-portability-20261016/validation-summary.json)。
+界面的 ACP `session/prompt` 错误码 `-32603` 是脱敏后的协议摘要；stderr 为空不能判断模型服务或采集是否成功，应核对对应 Goose 原生 Session 的公开 Error 记录。
 
-真实模型小图另行通过 Host → GraphRunner → Bubblewrap 采集 → Goose ACP AgentNode → 本地验证：`deepseek-flash` 实际读取三来源的索引和全部六份详细/概览 JSONL，写入并回读验证文件，以带观察凭据的 `final_result` 完成。Host 记录 5 次模型请求，Run 为 `completed`；见本机 [provider 摘要](../.local/weekly-gateway-wording-20261016/provider-summary.json)。该图使用与运行中 Host 一致的已保存模型设置，不包含发布 Plugin 或通知。
+2026-10-20 的 Run `rust-18e0286a83504b82` 完成三来源采集后，在 `understand` 读取历史中的旧网关报错文本时被上游以 HTTP 400 拦截。实际工具目录中的旧采集二进制未覆盖触发规则，源码还遗漏另一类已知连写；当前源码与实际工具均已补齐三类改写。旧 Run 仍保留原始冻结证据和模型上下文，应新建 Run 重新采集，直接恢复不能清除旧文本。该错误与 2026-10-18 隔离验收中的上游 HTTP 502 不同，后者记录见 [当时验收](../.local/closeout-20261018/README.md)。
 
-验收机器已更新原生采集工具，并按运行中 Host 的环境核对和补齐三类历史授权；为保留已有个人 Docmost/通知流程及其授权，没有覆盖已安装 Graph 或计划，旧图原有的工具目录 grant 仍保留。共享使用本页链接的新核心与可选包装图，不应直接导出个人安装版本作为通用模板；新生成配置对 `rsi` 只授权单个二进制文件。
-
-2026-10-16 的失败 Run `rust-18deefb96961559e` 已完成三来源采集，随后理解节点因历史措辞触发网关 HTTP 400；`Goose ended without a validated final_result` 是后续症状，不是目录缺失。该 Run 的冻结证据和原生历史仍保留旧文本，未被改写；应新建 Run 重新采集，不能仅恢复旧理解节点期待新采集工具自动清除已有上下文。旧失败 Run 也不复用新增权限。定位证据见本机 [失败摘要](../.local/weekly-gateway-wording-20261016/failure-diagnosis.json)。
-
-2026-10-18 使用本轮候选 Host、固定 Goose 与当前采集 CLI 新建隔离 Run，按发现结果显式授权三个历史子目录，实际完成核心图的 collect。understand 的原生结构化错误记录为上游 HTTP 502；核查没有模型工具调用后按现有路径接续一次，仍返回 502。冻结证据、原生记录与失败状态均保留，未发布报告或调用外部业务 Plugin，详见本机[收尾验收](../.local/closeout-20261018/README.md)。此结果不证明完整周报通过，也不能推断所有模型服务均不可用。
-
-上述证据不覆盖完整周报的理解、写作、评审流水线、空来源报告内容质量、全部真实历史格式、跨 Graph 产物实际传递、Docmost 图片更新幂等性、恢复后的远端效果核查或企业微信投递。真实模型小图只证明安全采集证据可被当前模型读取并完成节点，不等于完整周报真实 provider 端到端通过；本页不宣称完整报告或外部发布已完成。本轮修复的原始证据仍只保存在验收机器的 `.local/`，不随仓库共享。
+本次未重跑完整周报、重启 Host、替换已安装 Graph/计划或执行外部发布。验收机器上的个人安装图及工具目录 grant 保留；共享部署使用本页的新核心与可选包装图，新授权对 `rsi` 仅指定单个二进制文件。完整周报、空来源报告质量、Docmost 图片更新与未知远端效果核查、企业微信投递仍需独立验收。

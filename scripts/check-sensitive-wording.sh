@@ -1,7 +1,7 @@
 #!/bin/sh
 # Fail when project text carries a two-character classification term that the
 # deployment model gateway matches as a sensitive word and rejects the whole
-# request for. Both terms are assembled here from octal escapes so this script is
+# request for. All terms are assembled here from octal escapes so this script is
 # not a carrier itself.
 #
 # Default scope is the tracked working tree. `--all` additionally walks untracked
@@ -20,6 +20,8 @@ set -eu
 term_classified=$(printf '\347\273\235\345\257\206')
 # 「机」「密」
 term_confidential=$(printf '\346\234\272\345\257\206')
+# 「秘」「密」
+term_secret=$(printf '\347\247\230\345\257\206')
 
 root=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
 cd "$root"
@@ -44,7 +46,7 @@ fi
 status=0
 while IFS= read -r file; do
     [ -f "$file" ] || continue
-    for term in "$term_classified" "$term_confidential"; do
+    for term in "$term_classified" "$term_confidential" "$term_secret"; do
         matches=$(grep -n -F --binary-files=without-match -- "$term" "$file" 2>/dev/null || true)
         [ -n "$matches" ] || continue
         printf '%s\n' "$matches" | while IFS= read -r line; do

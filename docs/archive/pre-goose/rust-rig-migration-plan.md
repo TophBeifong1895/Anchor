@@ -175,7 +175,7 @@ E3/D3a 文件附件与原生图片输入已在主树 release 完成。Python 入
 
 | 切片 | 单一编辑边界与事实所有者 | 可复用契约和缺口 | 并行条件与验收出口 |
 | --- | --- | --- | --- |
-| D2a Plugin 管理 | Python `library.py`、serve Plugin handlers；Rust Graph/Plugin 接入由主集成者处理。Library 持有资源与凭证，Rust Run 持有冻结 PluginBinding | 复用 catalog/detail/file/install；Rust Graph 保存从操作员 Library 取资源。Rust 尚无 Plugin 管理 API，也未消费 OAuth 缓存，授权页面成功不能代替执行授权 | 可与 D1 并行，但 serve.py 的 shared wiring 只由主集成者编辑。原 UI 安装/浏览 Skill/挂载后 Rust Run 执行原 Plugin；已有 Run 资源不静默变更、秘密不进 bundle |
+| D2a Plugin 管理 | Python `library.py`、serve Plugin handlers；Rust Graph/Plugin 接入由主集成者处理。Library 持有资源与凭证，Rust Run 持有冻结 PluginBinding | 复用 catalog/detail/file/install；Rust Graph 保存从操作员 Library 取资源。Rust 尚无 Plugin 管理 API，也未消费 OAuth 缓存，授权页面成功不能代替执行授权 | 可与 D1 并行，但 serve.py 的 shared wiring 只由主集成者编辑。原 UI 安装/浏览 Skill/挂载后 Rust Run 执行原 Plugin；已有 Run 资源不静默变更、凭据不进 bundle |
 | D2b Pilot/Session | `pilot.py`、`session.py`、`pilot_turns.py`；Session/Turn 保留宿主所有权，Rust 唯一写 Graph Run | 工具接 D1 Graph CRUD/trigger/control/Run/Artifact；移除对本地 graph.json、scheduler.running、run_dir 的依赖。补无副作用 Graph/Plugin 校验入口，删除确认前态通过公共定义读取核验 | 可按 D1 固定契约并行开发，组合验收依赖 D1。原 Pilot 发起 Rust Run、关联 Session、读文件、控制、重开仍查看同一 Run；提问与历史恢复继续用已有框架 |
 | D3a 会话渠道，D3b call.session | `channel/assistant.py`、tools/background/supervisor 与 Rust application/Node resolver；网关/EventLedger/Session/Turn 归宿主，Run/产物归 Rust | 普通 trigger 同图互斥不能承载多用户会话；需可信会话接纳、按会话并发/替换取消、跨轮历史及未完成文件、附件/图片、回复和宿主 ToolPort。先接普通会话，再接 call.session 授权/让位/同 Run 恢复与完成投递 | 等 D1 稳定及 E 图片输入契约。重复事件不重跑、两用户隔离、打断留历史且仅最新回复、附件只读/发送权限正确；后台让位不重放、跨用户调用拒绝。真实发消息另按用户明确授权，不能为验收擅自发送 |
 

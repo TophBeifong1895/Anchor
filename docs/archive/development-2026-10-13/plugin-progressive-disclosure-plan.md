@@ -18,7 +18,7 @@
 - 执行目录从同一次准备的 PluginDefinition、绑定和正式工具定义派生。索引/摘要是可重建投影，不新增资产、存储、授权状态或历史代码快照。
 - Pilot 管理目录可查询已安装 Library；执行发现只提供本 Turn 已挂载并授权的能力。Node 只提供本 invocation 的合法能力。搜索/读取不安装、不挂载、不改变权限。
 - 保留现有 Turn 挂载冻结、Run 权限与代码观察分离、共享 Python/Rust、后续调用合法热更新语义。
-- Skill/资源读取复用严格 confinement；拒绝越界、符号链接逃逸与秘密清单读取。披露凭据需求/可用性，不泄露值或私有配置。
+- Skill/资源读取复用严格 confinement；拒绝越界、符号链接逃逸与凭据清单读取。披露凭据需求/可用性，不泄露值或私有配置。
 - 完整选中指令/schema 不静默截断为“完整”；超限给明确诊断或可继续读取的入口。搜索/目录同时限制条数和字节，标记省略及续页。
 - 必须有始终可见的发现入口及其使用说明，不依赖 tom 出现；tom 仅有界提醒。普通提示中的 Plugin/Skill 路径列表也受预算控制。
 - 检索支持多词、中文及精确 ID/分页兜底，不承诺百分之百语义召回；不先引入向量服务或自有 Agent 框架。
@@ -46,7 +46,7 @@
 - 10/100/1,000 项合成目录；名称、长描述和多工具 Plugin；初始定义/提示、单页输出有界，末页/冷门条目仍可精确读取。
 - 中文、多词检索，同名/相似工具及稳定 Plugin 归属；搜索与详情提供完整复杂 schema。
 - Plugin 无 Skill、只有工具/资源时可发现和使用；多个 Skill 时只读取所选项；读资源不附全部说明。
-- Node 授权集合与 Pilot 管理集合分离；未挂载/越界/秘密清单/撤销权限不能经元工具绕过。
+- Node 授权集合与 Pilot 管理集合分离；未挂载/越界/凭据清单/撤销权限不能经元工具绕过。
 - 本 Turn/后续 Turn、代码热更新与依赖视图沿现有契约；元工具不能改变执行授权。
 - 普通结果、多媒体、业务错误、原生确认、取消和 Node 完成回执保持真实目标语义。
 
@@ -82,7 +82,7 @@
 
 | 层次 | 已执行结果 | 证据与边界 |
 | --- | --- | --- |
-| 定向契约 | 披露、管理发布 guard 与冻结挂载合计 28 passed；Bridge 11 passed | 覆盖大目录、中文/长描述尾部搜索、UTF-8 分页、复杂 schema、权限、秘密配置及热更新读取 |
+| 定向契约 | 披露、管理发布 guard 与冻结挂载合计 28 passed；Bridge 11 passed | 覆盖大目录、中文/长描述尾部搜索、UTF-8 分页、复杂 schema、权限、凭据配置及热更新读取 |
 | 固定 Goose + 确定性 Provider | 7 次 Cargo 调用、10 个实际 Goose 场景全部通过 | Pilot/Node 披露、混合媒体、ask_user、删除确认 true/false/decline/cancel、compaction 后重读和本地 WeCom mock；不是实际企业微信发送 |
 | Host 与 GraphHost all-targets | 30 targets，910 passed / 0 failed / 86 ignored，退出 0 | 分别为 Host 869 和 GraphHost 41；含 target 间共享 fixture 的重复运行，不作为 unique test count；默认 ignored 不因此视为已执行 |
 | 等价 lint 收尾后的最终检查 | 20 disclosure passed，Host build、all-targets Clippy `-D warnings`、workspace fmt check 均退出 0 | 全量检查后只将 frontmatter 的手动切片改为等价 `strip_prefix`；最终真实 Provider 使用该收尾后的二进制，没有冒充又跑一遍全量 |
