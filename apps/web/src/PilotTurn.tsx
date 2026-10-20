@@ -35,6 +35,7 @@ export function PilotTurn({ turn, saved = false, stopping = false, onComplete, o
   const callbacks = useRef({ onComplete, onQuestions });
   const [now, setNow] = useState(Date.now);
   const lastEvent = useRef(Date.now());
+  const replay = useRef({ key: '', last: 0, text: '', terminal: false });
   useEffect(() => { callbacks.current = { onComplete, onQuestions }; }, [onComplete, onQuestions]);
   const updateQuestions = useCallback((incoming: Question[]) => {
     const next = mergeQuestions(questionsRef.current, incoming, turn.session, turn.id);
@@ -61,14 +62,21 @@ export function PilotTurn({ turn, saved = false, stopping = false, onComplete, o
   }, [status]);
   useEffect(() => {
     const controller = new AbortController();
-    let last = 0;
+    const key = `${turn.session}/${turn.id}`;
+    const initial = replay.current.key !== key;
+    if (initial) replay.current = { key, last: 0, text: '', terminal: false };
+    const projection = replay.current;
+    if (projection.terminal) return;
+    let last = projection.last;
     let ended = false;
-    let resultText = '';
-    setText(''); setAttachments([]); setTools([]); setProblem('');
-    questionsRef.current = []; setQuestions([]); setQuestionProblem('');
-    lastEvent.current = Date.now(); setNow(lastEvent.current);
-    statusRef.current = turn.status;
-    setStatus(turn.status); setConnection('连接执行记录…'); setPhase('等待模型响应');
+    let resultText = projection.text;
+    if (initial) {
+      setText(''); setAttachments([]); setTools([]); setProblem('');
+      questionsRef.current = []; setQuestions([]); setQuestionProblem('');
+      lastEvent.current = Date.now(); setNow(lastEvent.current);
+      statusRef.current = turn.status;
+      setStatus(turn.status); setConnection('连接执行记录…'); setPhase('等待模型响应');
+    }
     const consume = (chunk: Chunk) => {
       lastEvent.current = Date.now();
       if (chunk.type === 'attachment' && chunk.attachment) setAttachments(previous => previous.some(item => item.id === chunk.attachment!.id) ? previous : [...previous, chunk.attachment!]);
@@ -103,6 +111,7 @@ export function PilotTurn({ turn, saved = false, stopping = false, onComplete, o
       if (chunk.type === 'error') setProblem(chunk.errorText ?? '执行失败');
     };
     const complete = (final: Turn) => {
+      projection.terminal = true;
       ended = true; setStatus(final.status); setConnection('');
       statusRef.current = final.status;
       callbacks.current.onQuestions(turn.session, turn.id, false);
@@ -168,7 +177,10 @@ export function PilotTurn({ turn, saved = false, stopping = false, onComplete, o
       const data = event.filter(line => line.startsWith('data:')).map(line => line.slice(5).trim()).join('\n');
       if (!data) return false;
       const type = event.find(line => line.startsWith('event:'))?.slice(6).trim();
-      if (id && Number(id) > last) { const chunk = JSON.parse(data); consume(chunk); last = Number(id); }
+      if (id && Number(id) > last) {
+        const chunk = JSON.parse(data); consume(chunk); last = Number(id);
+        projection.last = last; projection.text = resultText;
+      }
       else if (type === 'turn') { complete(JSON.parse(data) as Turn); return true; }
       else if (type === 'error') consume(JSON.parse(data) as Chunk);
       return false;

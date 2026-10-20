@@ -57,7 +57,8 @@ fn fixture(version: i32) -> (TempDir, PathBuf, Session, Turn) {
     let connection = Connection::open(&path).unwrap();
     connection
         .execute_batch(
-            "DROP TABLE channel_assistant_inputs;
+            "DROP TABLE channel_account_aliases;
+             DROP TABLE channel_assistant_inputs;
              DROP TABLE channel_assistants;
              DROP INDEX channel_deliveries_unfinished;
              DROP TABLE channel_deliveries;
@@ -165,7 +166,7 @@ fn exact_v2_upgrades_without_rewriting_turns_sessions_or_legacy_delivery() {
         connection
             .pragma_query_value(None, "user_version", |row| row.get::<_, i32>(0))
             .unwrap(),
-        8
+        9
     );
     assert_eq!(
         connection
@@ -293,7 +294,7 @@ fn exact_v3_upgrade_keeps_native_facts_and_delivery_without_manufacturing_goose(
         connection
             .pragma_query_value(None, "user_version", |row| row.get::<_, i32>(0))
             .unwrap(),
-        8
+        9
     );
     let after = schema(&connection);
     for definition in before {

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import research from '../../../examples/graphs/deep-academic-research.json';
 import { asDefinition, toFlowEdges, type OurRunState } from './model';
-import { feedbackEdges, layoutWorkflow, NODE_WIDTH, NODE_HEIGHT, type Definition, type Layout } from './graph';
+import { cachedWorkflowLayout, feedbackEdges, layoutWorkflow, NODE_WIDTH, NODE_HEIGHT, type Definition, type Layout } from './graph';
 
 function checkRoutes(layout: Layout, definition: Definition) {
   const segments: { edge: number; x1: number; y1: number; x2: number; y2: number }[] = [];
@@ -47,6 +47,37 @@ function checkRoutes(layout: Layout, definition: Definition) {
 
 describe('shared workflow geometry', () => {
   const definition = asDefinition(research, 'research');
+  it('deduplicates pending work and exposes completed geometry synchronously with exact invalidation', async () => {
+    const unique = { ...definition, graph_id: 'cache-synchronous' };
+    expect(cachedWorkflowLayout(unique)).toBeUndefined();
+    const pending = layoutWorkflow(unique);
+    expect(layoutWorkflow(unique)).toBe(pending);
+    const layout = await pending;
+    expect(cachedWorkflowLayout(structuredClone(unique))).toBe(layout);
+    expect(cachedWorkflowLayout({ ...unique, name: 'changed label' })).toBeUndefined();
+    expect(cachedWorkflowLayout(unique, { frame: { x: 10, y: 20 } })).toBeUndefined();
+  });
+  it('evicts the least recently used geometry without discarding hot layouts together', async () => {
+    const small = { ...definition, nodes: [], edges: [] };
+    const cold = { ...small, graph_id: 'cache-cold' };
+    const hot = { ...small, graph_id: 'cache-hot' };
+    await layoutWorkflow(cold);
+    const layout = await layoutWorkflow(hot);
+    for (let index = 0; index < 28; index++) await layoutWorkflow({ ...small, graph_id: `cache-fill-${index}` });
+    expect(cachedWorkflowLayout(hot)).toBe(layout);
+    await layoutWorkflow({ ...small, graph_id: 'cache-overflow' });
+    expect(cachedWorkflowLayout(cold)).toBeUndefined();
+    expect(cachedWorkflowLayout(hot)).toBe(layout);
+  });
+  it('does not retain failed layout promises', async () => {
+    const broken = { ...definition, graph_id: 'cache-failure', nodes: [] };
+    const first = layoutWorkflow(broken);
+    await expect(first).rejects.toThrow('连线引用了不存在的节点');
+    const retry = layoutWorkflow(broken);
+    expect(retry).not.toBe(first);
+    await expect(retry).rejects.toThrow('连线引用了不存在的节点');
+    expect(cachedWorkflowLayout(broken)).toBeUndefined();
+  });
   it('routes all 12 research edges without crossing nodes or sharing segments', async () => {
     expect([...feedbackEdges(definition)]).toEqual([3, 4, 8, 9, 10]);
     const layout = await layoutWorkflow(definition);

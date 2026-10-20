@@ -5,6 +5,7 @@ use anchor_platform_session::{
 };
 use anchor_runtime::graph::{GraphRunRecord, GraphSnapshot};
 
+mod identity;
 mod plugin_updates;
 
 fn kernel_resource(state: &ApiState, id: &str) -> anchor_kernel::Resource {

@@ -83,6 +83,16 @@ pub(super) async fn resume_channel_assistants(state: &ApiState) -> Result<(), St
                 // Retired (or deleted) while recovering; it stays down.
                 break;
             };
+            if let Err(error) = state
+                .application
+                .ensure_channel_session_eligible(&owner, &assistant.session_id)
+            {
+                eprintln!(
+                    "anchor-runner-host: assistant {}/{} is not eligible for recovery: {error:?}",
+                    owner, assistant.session_id
+                );
+                break;
+            }
             match resume_instance(state, &owner, &current).await {
                 Ok(()) => break,
                 Err(error) if attempt < MAX_RESUME_ATTEMPTS => {

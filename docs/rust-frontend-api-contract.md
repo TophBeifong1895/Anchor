@@ -39,6 +39,12 @@ Run 详情另返回 `definition: {entry,nodes,edges,ops}`，仅来自该 Run 的
 
 Session API 包括创建/重命名/删除、消息、Turn、SSE、停止、问题与回答。Turn 按 `request_id` 去重，SSE 支持游标回放和重连；同一请求不得再次执行。问题/回答归 Session/Turn，模型历史归 Goose。
 
+`POST /sessions`、`POST /v1/responses`、`POST /schedules` 可带单个 `Idempotency-Key`（1–128 个可见 ASCII 字节）；不带时保留原创建行为。同一既有 owner、同一操作种类、同一 key 重试复用已提交对象，输入内容变化返回 409；不同 key 即使内容相同也独立创建。owner 的认证及归属规则不变，不跨 owner 查询或复用。重放返回对象当前事实，不保证 HTTP 响应字节与首次完全一致。Session 及 Responses 的请求身份复用 Session 存储的原子事务与既有事件，保留期为所属 Session 生命周期；删除 Session 不承诺继续保留该 key。
+
+带 key 的 Pilot 创建使用私有 Session 身份；显式提供 `id` 时须沿用 `pilot-private-` 前缀，无 key 的显式 ID 契约不变。Web 新建和首次发送共用创建操作，浏览器按当前凭据摘要保存未确认 key；创建失败或响应没有非空字符串 Session ID 时保留重试身份，成功才清除，不存储凭据原文。持久存储不可用时在当前页面内保留 key，迟到响应不能清除较新创建的 key。Responses 的请求身份包含输入、固定模型、stream 和 previous_response_id；首轮 Session 与每轮 Turn 都稳定复用，已有在跑或终态 Turn 不再次接纳模型执行，SSE 重试回放已有事件。不同续接关系不能复用同一 key。
+
+Pilot `schedule_create` 接受可选 `request_id`，与 HTTP key 使用同一 owner 范围及创建用例。Scheduler 的创建 key 与原始 graph/rule/input 同原子快照持久化；重试先查已提交事实，不因原 once 时间已过或 Graph 后来移除而重新创建。编辑计划后返回当前计划但不重写原创建内容；计划删除后原 key 返回 409，不复活。旧 `schedules.json` 数组继续可读写；首次有 key 的创建写为 `{version:1,schedules:[...],creation_requests:[...]}`，未知版本不加载，请求记录不进入 API 投影。
+
 Pilot `POST /sessions/{session}/turns` 接受 `{request_id,message?,attachments?}`，文字与附件至少有一项；附件项为 `{name,data_base64,media_type?}`。同一 `request_id` 必须保持原文字与附件内容，`resume:true` 不能同时提交新文字或附件。输入限制为 16 个文件、单个 20 MiB、合计 50 MiB；其中图片只接受 PNG/JPEG/WebP，最多 8 张、单张 10 MiB、图片合计 20 MiB。只有该上传路由放宽至 72 MiB 请求体。
 
 Turn 的 `attachments` 列出输入；每条消息投影均附加所属 `turn`，有附件时另带 `attachments`，普通文字与重复输入也可准确归属。继承输入保留原上传 Turn 的 URL，不重复生成用户上传消息。文件引用包含 `{id,name,size,sha256,media_type,url,download_url}`，不含宿主路径或密钥。`GET /sessions/{session}/turns/{turn}/attachments/{id}` 核验既有 Session 归属后读取原件；只有校验后的支持图片可内联显示，其他文件强制下载，`?download=1` 对图片也强制下载。预览和下载均沿用 Bearer 鉴权。

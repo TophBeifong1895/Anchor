@@ -277,7 +277,7 @@ test('edit a graph, inspect a run and read its files across screen sizes', async
   await expect(page.locator('.graph-node.kind-op')).toHaveCount(2);
   await page.getByRole('button', { name: '运行看板', exact: true }).click();
   await page.locator('.timeline-run').first().click();
-  await expect(page.getByLabel('当前工作流')).toHaveCount(0);
+  await expect(page.getByLabel('当前工作流')).toBeHidden();
   const durations = await page.getByRole('button', { name: new RegExp(`^${run.graph}，`), includeHidden: true }).evaluateAll(entries => entries.map(entry => ({
     bar: entry.querySelector<HTMLElement>('.timeline-duration')?.getBoundingClientRect().width ?? 0,
     track: entry.parentElement?.getBoundingClientRect().width ?? 0,
@@ -285,17 +285,17 @@ test('edit a graph, inspect a run and read its files across screen sizes', async
   expect(durations.some(item => item.bar < item.track - 1)).toBeTruthy();
   await page.getByRole('button', { name: '查看节点与产物', exact: true }).click();
   await expect(page.getByTestId('execution-canvas').locator('.execution-node')).toHaveCount(5);
-  await page.getByTestId('edge-e0-plan-gather').locator('path').first().hover({ force: true });
+  await page.getByTestId('execution-canvas').getByTestId('edge-e0-plan-gather').locator('path').first().hover({ force: true });
   await page.mouse.move(10, 10);
   await page.locator('.execution-node').filter({ has: page.locator('strong', { hasText: /^write$/ }) }).click();
   await expect(page.getByText('12 篇论文')).toBeVisible();
   await page.screenshot({ path: 'test-results/run-desktop.png' });
   await page.getByRole('button', { name: '文件', exact: true }).click();
   const detailHandle = page.getByRole('separator', { name: '调整详情面板宽度' });
-  const detailWidth = (await page.locator('.inspector').boundingBox())!.width;
+  const detailWidth = (await page.locator('.inspector:visible').boundingBox())!.width;
   await detailHandle.focus();
   await page.keyboard.press('ArrowLeft');
-  await expect.poll(async () => (await page.locator('.inspector').boundingBox())!.width).toBe(detailWidth + 16);
+  await expect.poll(async () => (await page.locator('.inspector:visible').boundingBox())!.width).toBe(detailWidth + 16);
   await page.getByRole('button', { name: /^paper\.md/ }).click();
   await expect(page.getByText('这是本次运行生成的研究报告。')).toBeVisible();
   const paper = page.locator('.file-item').filter({ has: page.getByRole('button', { name: /^paper\.md/ }) });

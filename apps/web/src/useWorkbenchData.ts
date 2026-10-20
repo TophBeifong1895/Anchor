@@ -55,23 +55,28 @@ export function useWorkbenchData(view: WorkbenchView) {
         : { ...(await read<{ graphs: GraphSummary[] }>('/graphs')) };
       if (controller.signal.aborted || current !== version.current) return;
       authenticated.current = true;
-      setGraphs(data.graphs);
-      if ('runs' in data) setRuns(data.runs);
+      setGraphs(previous => JSON.stringify(previous) === JSON.stringify(data.graphs) ? previous : data.graphs);
+      if ('runs' in data) setRuns(previous => JSON.stringify(previous) === JSON.stringify(data.runs) ? previous : data.runs);
       if ('timeline' in data) { setTimeline(data.timeline ?? null); setTimelineProblem(data.timelineProblem ?? ''); }
       setProblem('');
     } catch (error) {
       if (controller.signal.aborted || current !== version.current) return;
+      controller.abort();
       setGraphs(previous => previous.map(item => item.listener
         ? { ...item, listener: { ...item.listener, status: 'unavailable' } } : item));
       const message = (error as Error).message;
       setProblem(error instanceof TypeError || /fetch|network|ECONNREFUSED|proxy error/i.test(message)
         ? '后端 API 暂不可达，请检查 8077 服务及前端代理。' : `后端请求失败：${message}`);
+    } finally {
+      if (request.current === controller) request.current = null;
     }
   }, [subscribed, page]);
 
   useEffect(() => {
     if (subscribed || !authenticated.current) void refresh();
-    const timer = subscribed ? window.setInterval(() => void refresh(), 3000) : undefined;
+    const timer = subscribed ? window.setInterval(() => {
+      if (!request.current) void refresh();
+    }, 3000) : undefined;
     return () => { window.clearInterval(timer); version.current += 1; request.current?.abort(); };
   }, [refresh, subscribed]);
 

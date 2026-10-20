@@ -23,6 +23,42 @@ impl crate::application::scheduling::ScheduleManagementPort for ScheduleManageme
     }
 
     fn create(&self, graph: &str, rule: &Value, input: &Value) -> Result<Value, ApplicationError> {
+        self.create_with_request(graph, rule, input, "local", None)
+    }
+
+    fn replay_creation(
+        &self,
+        owner: &str,
+        key: &str,
+        content: &Value,
+    ) -> Result<Option<Value>, ApplicationError> {
+        let store = self
+            .store
+            .lock()
+            .map_err(|_| schedule_store_unavailable())?;
+        replay_creation(&store, owner, key, content)
+    }
+
+    fn create_with_request(
+        &self,
+        graph: &str,
+        rule: &Value,
+        input: &Value,
+        owner: &str,
+        key: Option<&str>,
+    ) -> Result<Value, ApplicationError> {
+        let mut store = self
+            .store
+            .lock()
+            .map_err(|_| schedule_store_unavailable())?;
+        let content = json!({"graph":graph,"rule":rule,"input":input});
+        if let Some(key) = key {
+            crate::application::pilot_sessions::validate_request_id(key)
+                .map_err(|failure| ApplicationError::Invalid(failure.to_string()))?;
+            if let Some(retained) = replay_creation(&store, owner, key, &content)? {
+                return Ok(retained);
+            }
+        }
         if graph.trim().is_empty() {
             return Err(ApplicationError::Invalid("graph is required".into()));
         }
@@ -46,14 +82,20 @@ impl crate::application::scheduling::ScheduleManagementPort for ScheduleManageme
             next_at: format_local_datetime(next_at),
             enabled: true,
         };
-        let mut store = self
-            .store
-            .lock()
-            .map_err(|_| schedule_store_unavailable())?;
         let previous = store.items.clone();
+        let previous_requests = store.creation_requests.clone();
         store.items.push(item.clone());
+        if let Some(key) = key {
+            store.creation_requests.push(ScheduleCreationRequest {
+                owner: owner.into(),
+                key: key.into(),
+                content,
+                schedule: item.id.clone(),
+            });
+        }
         if let Err(message) = store.persist() {
             store.items = previous;
+            store.creation_requests = previous_requests;
             return Err(ApplicationError::Storage(message));
         }
         Ok(json!({"schedule": item}))
@@ -124,6 +166,32 @@ impl crate::application::scheduling::ScheduleManagementPort for ScheduleManageme
     }
 }
 
+fn replay_creation(
+    store: &ScheduleStore,
+    owner: &str,
+    key: &str,
+    content: &Value,
+) -> Result<Option<Value>, ApplicationError> {
+    let Some(request) = store
+        .creation_requests
+        .iter()
+        .find(|request| request.owner == owner && request.key == key)
+    else {
+        return Ok(None);
+    };
+    if &request.content != content {
+        return Err(ApplicationError::Conflict(
+            "operation key was already used for different content".into(),
+        ));
+    }
+    let item = store
+        .items
+        .iter()
+        .find(|item| item.id == request.schedule)
+        .ok_or_else(|| ApplicationError::Conflict("created schedule has been deleted".into()))?;
+    Ok(Some(json!({"schedule":item})))
+}
+
 fn schedule_store_unavailable() -> ApplicationError {
     ApplicationError::Storage("schedule store unavailable".into())
 }
@@ -149,6 +217,7 @@ pub(in crate::api) async fn list_schedules(
 
 pub(in crate::api) async fn create_schedule(
     State(state): State<ApiState>,
+    headers: HeaderMap,
     Json(body): Json<Value>,
 ) -> Result<(StatusCode, Json<Value>), HttpResponse> {
     let Some(object) = body.as_object() else {
@@ -182,7 +251,13 @@ pub(in crate::api) async fn create_schedule(
 
     let created = state
         .application
-        .create_schedule(graph, rule, &input)
+        .create_schedule_with_request(
+            graph,
+            rule,
+            &input,
+            &private_owner(&state, &headers),
+            idempotency_key(&headers)?.as_deref(),
+        )
         .await
         .map_err(|failure| management_error(failure, &format!("no such graph: {graph}")))?;
     Ok((StatusCode::CREATED, Json(created)))

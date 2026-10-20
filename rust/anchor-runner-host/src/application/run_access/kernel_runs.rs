@@ -147,6 +147,10 @@ impl KernelRuns {
         }
         Ok(())
     }
+    #[cfg(test)]
+    pub(crate) fn registry_is_unlocked(&self) -> bool {
+        self.active.try_lock().is_ok()
+    }
     pub(crate) fn active(&self, id: &str) -> bool {
         self.active.lock().unwrap().contains_key(id)
     }

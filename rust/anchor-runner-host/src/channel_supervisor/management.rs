@@ -6,7 +6,7 @@ use crate::application::{
     channel_management::{ChannelBinding, ChannelManagementPort, ChannelRuntimeState},
 };
 use anchor_graph_host::{
-    ChannelDefinition, FileGraphBundleLoader, FilePluginCatalog, PluginDefinition,
+    ChannelDefinition, FileGraphBundleLoader, FilePluginCatalog, PluginMetadata,
 };
 use futures_util::future::BoxFuture;
 use serde::{Deserialize, Serialize};
@@ -190,6 +190,11 @@ impl ChannelManagementAdapter {
                 }
             }
         }
+        if let Some(identity) = configuration.deployment_account.as_deref() {
+            let account =
+                register_account(&configuration, &configuration.deployment_owner, identity)?;
+            configuration.deployment_account = Some(account);
+        }
         Ok(Self {
             configuration,
             root,
@@ -214,7 +219,7 @@ impl ChannelManagementAdapter {
             if let Ok((definition, channel)) = self.definition(&fact.binding)
                 && let Ok(credentials) = self.credentials(&fact, &definition, &channel)
             {
-                let account = account_identity(&credentials);
+                let account = self.register_account(&fact.owner, &credentials)?;
                 if fact.account != account {
                     fact.account = account;
                     self.publish(fact.clone())?;
@@ -242,6 +247,17 @@ impl ChannelManagementAdapter {
             .read()
             .map(|fact| fact.clone())
             .map_err(|_| storage("channel configuration unavailable"))
+    }
+
+    fn register_account(
+        &self,
+        owner: &str,
+        credentials: &BTreeMap<String, String>,
+    ) -> Result<Option<String>, ApplicationError> {
+        credentials
+            .get("WECOM_BOT_ID")
+            .map(|identity| register_account(&self.configuration, owner, identity).map_err(storage))
+            .transpose()
     }
 
     fn assert_managed_owner(&self, owner: &str) -> Result<(), ApplicationError> {
@@ -295,10 +311,26 @@ impl ChannelManagementAdapter {
     fn definition(
         &self,
         binding: &ChannelBinding,
-    ) -> Result<(PluginDefinition, ChannelDefinition), ApplicationError> {
+    ) -> Result<(PluginMetadata, ChannelDefinition), ApplicationError> {
         let definition = FilePluginCatalog::new(&self.configuration.library_root)
             .definition(&binding.plugin)
             .map_err(|_| ApplicationError::Missing)?;
+        Self::channel(definition.metadata())
+    }
+
+    fn metadata(
+        &self,
+        binding: &ChannelBinding,
+    ) -> Result<(PluginMetadata, ChannelDefinition), ApplicationError> {
+        let definition = FilePluginCatalog::new(&self.configuration.library_root)
+            .metadata(&binding.plugin)
+            .map_err(|_| ApplicationError::Missing)?;
+        Self::channel(definition)
+    }
+
+    fn channel(
+        definition: PluginMetadata,
+    ) -> Result<(PluginMetadata, ChannelDefinition), ApplicationError> {
         let channel = definition
             .channels
             .iter()
@@ -315,10 +347,10 @@ impl ChannelManagementAdapter {
     fn credentials(
         &self,
         fact: &ChannelFact,
-        definition: &PluginDefinition,
+        definition: &PluginMetadata,
         channel: &ChannelDefinition,
     ) -> Result<BTreeMap<String, String>, ApplicationError> {
-        if crate::credential_store::target_authorization(definition, "channel_wecom")
+        if crate::credential_store::channel_authorization(definition, "wecom")
             .map_err(storage)?
             .1
             != fact.authorization_digest
@@ -327,7 +359,7 @@ impl ChannelManagementAdapter {
                 "channel declarations changed; disable and configure the binding again".into(),
             ));
         }
-        let mut values = crate::credential_store::environment_values(
+        let mut values = crate::credential_store::channel_environment_values(
             &self.configuration.data_root,
             &crate::credential_store::binding_owner(&fact.owner),
             definition,
@@ -431,7 +463,7 @@ impl ChannelManagementAdapter {
             );
         }
         let admitted = self.admission(&fact).is_ok();
-        let (available, credentials, account) = match self.definition(&fact.binding) {
+        let (available, credentials, account) = match self.metadata(&fact.binding) {
             Ok((definition, channel)) => {
                 let values = self.credentials(&fact, &definition, &channel);
                 let fields = channel.required_environment.iter().map(|field| json!({"field":field,"configured":values.as_ref().is_ok_and(|values|values.get(field).is_some_and(|value|!value.trim().is_empty())),"configuration_owner":if env::var_os(field).is_some(){"deployment"}else{"host"}})).collect::<Vec<_>>();
@@ -494,10 +526,9 @@ impl ChannelManagementPort for ChannelManagementAdapter {
             }
             let (definition, _) = self.definition(&binding)?;
             let previous = self.fact()?;
-            let digest =
-                crate::credential_store::target_authorization(&definition, "channel_wecom")
-                    .map_err(storage)?
-                    .1;
+            let digest = crate::credential_store::channel_authorization(&definition, "wecom")
+                .map_err(storage)?
+                .1;
             let changed = previous
                 .as_ref()
                 .is_none_or(|fact| fact.binding != binding || fact.authorization_digest != digest);
@@ -551,7 +582,7 @@ impl ChannelManagementPort for ChannelManagementAdapter {
                     fact.enabled = true;
                     fact.callback_key = random_token("anchor-channel-api")
                         .map_err(|_| storage("channel callback identity unavailable"))?;
-                    fact.account = account_identity(&credentials);
+                    fact.account = self.register_account(&fact.owner, &credentials)?;
                     self.publish(fact.clone())?;
                 }
                 if supervisor.is_none() {
@@ -589,10 +620,26 @@ impl ChannelManagementPort for ChannelManagementAdapter {
         }
         self.fact()?
             .map(|fact| {
+                let enabled = fact.enabled
+                    && self.admission(&fact).is_ok()
+                    && self
+                        .metadata(&fact.binding)
+                        .is_ok_and(|(definition, channel)| {
+                            self.credentials(&fact, &definition, &channel)
+                                .is_ok_and(|values| {
+                                    account_identity(&values) == fact.account
+                                        && channel.required_environment.iter().all(|field| {
+                                            values.get(field).is_some_and(|value| {
+                                                !value.trim().is_empty()
+                                                    && !value.chars().any(char::is_control)
+                                            })
+                                        })
+                                })
+                        });
                 Ok(ChannelRuntimeState {
                     owner: fact.owner,
                     binding: fact.binding,
-                    enabled: fact.enabled,
+                    enabled,
                     account: fact.account,
                     descriptor: fact.enabled.then(|| {
                         self.configuration
@@ -641,7 +688,37 @@ fn storage(reason: impl Into<String>) -> ApplicationError {
 fn account_identity(credentials: &BTreeMap<String, String>) -> Option<String> {
     credentials
         .get("WECOM_BOT_ID")
-        .map(|identity| format!("wecom:{:x}", Sha256::digest(identity.as_bytes())))
+        .map(|identity| wecom_account_identity(identity))
+}
+
+pub(crate) fn wecom_account_identity(identity: &str) -> String {
+    format!("wecom:{:x}", Sha256::digest(identity.trim().as_bytes()))
+}
+
+fn register_account(
+    configuration: &ChannelHostConfiguration,
+    owner: &str,
+    identity: &str,
+) -> Result<String, String> {
+    let account = wecom_account_identity(identity);
+    crate::goose_acp::pilot::directory(&configuration.data_root.join("platform"))?;
+    anchor_platform_session::SessionStore::open(
+        configuration.data_root.join("platform/sessions.sqlite"),
+    )
+    .and_then(|sessions| {
+        sessions.register_channel_account(
+            owner,
+            "wecom",
+            &account,
+            &[
+                identity.to_owned(),
+                identity.trim().to_owned(),
+                format!("wecom:{:x}", Sha256::digest(identity.as_bytes())),
+            ],
+        )
+    })
+    .map_err(|_| "channel account identity registration failed".to_owned())?;
+    Ok(account)
 }
 
 fn token_matches(expected: &str, key: &str) -> bool {

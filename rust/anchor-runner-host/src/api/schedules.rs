@@ -45,7 +45,27 @@ fn default_enabled() -> bool {
 pub(super) struct ScheduleStore {
     pub(super) path: PathBuf,
     pub(super) items: Vec<ScheduleItem>,
+    creation_requests: Vec<ScheduleCreationRequest>,
     _owner_lease: anchor_file_lease::FileLease,
+}
+
+#[derive(Clone, Deserialize, Serialize)]
+struct ScheduleCreationRequest {
+    owner: String,
+    key: String,
+    content: Value,
+    schedule: String,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(untagged, deny_unknown_fields)]
+enum ScheduleFile {
+    Legacy(Vec<ScheduleItem>),
+    Keyed {
+        version: u32,
+        schedules: Vec<ScheduleItem>,
+        creation_requests: Vec<ScheduleCreationRequest>,
+    },
 }
 
 impl ScheduleStore {
@@ -76,12 +96,25 @@ impl ScheduleStore {
         )
         .map_err(|error| format!("schedules file already has a Host owner: {error}"))?;
         let create_empty = !path.exists();
-        let items = if !create_empty {
+        let (items, creation_requests) = if !create_empty {
             let bytes = fs::read(&path).map_err(|error| format!("read schedules: {error}"))?;
-            serde_json::from_slice::<Vec<ScheduleItem>>(&bytes)
+            match serde_json::from_slice::<ScheduleFile>(&bytes)
                 .map_err(|error| format!("invalid schedules JSON: {error}"))?
+            {
+                ScheduleFile::Legacy(items) => (items, Vec::new()),
+                ScheduleFile::Keyed {
+                    version,
+                    schedules,
+                    creation_requests,
+                } => {
+                    if version != 1 {
+                        return Err(format!("unsupported schedules file version: {version}"));
+                    }
+                    (schedules, creation_requests)
+                }
+            }
         } else {
-            Vec::new()
+            (Vec::new(), Vec::new())
         };
         for item in &items {
             if item.id.is_empty() || item.graph.is_empty() || !item.input.is_object() {
@@ -99,6 +132,7 @@ impl ScheduleStore {
         let store = Arc::new(Mutex::new(Self {
             path,
             items,
+            creation_requests,
             _owner_lease: owner_lease,
         }));
         if create_empty {
@@ -118,7 +152,16 @@ impl ScheduleStore {
             .unwrap_or_else(|| Path::new("."));
         fs::create_dir_all(parent)
             .map_err(|error| format!("create schedules directory: {error}"))?;
-        let bytes = serde_json::to_vec_pretty(&self.items)
+        let file = if self.creation_requests.is_empty() {
+            ScheduleFile::Legacy(self.items.clone())
+        } else {
+            ScheduleFile::Keyed {
+                version: 1,
+                schedules: self.items.clone(),
+                creation_requests: self.creation_requests.clone(),
+            }
+        };
+        let bytes = serde_json::to_vec_pretty(&file)
             .map_err(|error| format!("serialize schedules: {error}"))?;
         let sequence = TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed);
         let file_name = self.path.file_name().unwrap_or_default().to_string_lossy();

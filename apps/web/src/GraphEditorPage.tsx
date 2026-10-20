@@ -1,17 +1,18 @@
 import { Activity, CheckCheck, ChevronDown, Copy, Download, FolderOpen, GitBranch, Plus, Redo2, Save, Search, SlidersHorizontal, Trash2, Undo2, Upload } from 'lucide-react';
-import { useEffect, useRef, useState, type CSSProperties } from 'react';
+import { lazy, Suspense, useEffect, useRef, useState, type CSSProperties } from 'react';
 import { WorkflowCanvas } from './WorkflowCanvas';
 import { GraphActions } from './GraphActions';
 import { GraphRunButton } from './GraphRunButton';
 import { CallEditor } from './CallEditor';
 import { ParallelEditor } from './ParallelEditor';
-import { Plugins } from './Plugins';
 import { Workspace } from './Workspace';
 import { EmptyState, JsonDialog, Modal, ToolButton } from './ui';
 import { runPhase, runPhaseLabel } from './runPresentation';
 import { parallelControl, renameGraphNode } from './parallel';
 import { listenerLabel, type GraphSummary, type OurAgent, type OurGraph, type OurRun } from './model';
 import type { GraphEditor, WorkbenchNotice } from './useGraphEditor';
+
+const Plugins = lazy(() => import('./Plugins').then(module => ({ default: module.Plugins })));
 
 const runTime = (value: string) => {
   const date = new Date(value);
@@ -207,9 +208,9 @@ export function GraphEditorPage({ name, editor, graphs, runs, graphColors, busy,
 
           <aside className="inspector">
             <div className="section-heading"><h3><SlidersHorizontal size={15} />{pick ? '选中项属性' : '工作流设置'}</h3></div>
-            {selectedNode && !selectedNode.op && !selectedNode.graph && <Plugins
+            {selectedNode && !selectedNode.op && !selectedNode.graph && <Suspense fallback={<p role="status">正在打开插件设置…</p>}><Plugins
               key={`${name}/${selectedNode.id}`} selected={selectedPlugins} disabled={!editable}
-              activationMode={editor.pluginActivation?.mode} onChange={setPlugins} />}
+              activationMode={editor.pluginActivation?.mode} onChange={setPlugins} /></Suspense>}
             <fieldset disabled={!editable}>
               {selectedNode && doc && <>
                 <div className="inspector-kind">

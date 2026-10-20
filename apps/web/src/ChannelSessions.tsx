@@ -10,6 +10,7 @@ import './Channels.css';
 type ChannelSession = { id: string; title: string; graph: string; platform: string };
 type Assistant = { run_id: string; wait_node: string; work_node: string; reply_node: string };
 type AssistantStatus = { assistant: Assistant | null; needs_recovery: boolean;
+  recovery_blocked?: string | null;
   plugin_update?: { state: 'current' | 'pending' | 'restart_required' | 'unavailable'; message?: string } };
 type RunStatus = { run: string; active: boolean; projection?: RunProjection; state: { cursor?: { node: string } | null } };
 type Delivery = { key: string; status: string; error?: string | null };
@@ -108,8 +109,9 @@ function AssistantRow({ session, revision, onChanged, onOpenRun }: { session: Ch
   const settled = runQuiescent(run?.projection);
   const canRetire = Boolean(bound && settled && deliveries?.length === 0);
   const status = !assistant ? '正在读取…' : !bound ? '无当前实例' : !run ? '运行状态不可用'
-    : runPhase(run) === 'executing' && run.projection?.active && run.state.cursor?.node === bound.wait_node ? '等待消息'
-      : runPhaseLabel(run.projection);
+    : assistant.recovery_blocked && !run.active ? '恢复已阻止'
+      : runPhase(run) === 'executing' && run.projection?.active && run.state.cursor?.node === bound.wait_node ? '等待消息'
+        : runPhaseLabel(run.projection);
   const cleanup = async () => {
     const path = `/channel-sessions/${enc(session.id)}`;
     // Re-read the exact deletion scope; a new trusted message may have arrived.
@@ -126,6 +128,7 @@ function AssistantRow({ session, revision, onChanged, onOpenRun }: { session: Ch
     <div className="channels-assistant-top"><div><strong>{session.title || session.id}</strong><span>{session.platform || '渠道'} · {session.graph}</span></div><div className="channels-assistant-status"><span className={`channels-instance-status ${run?.active ? 'active' : ''}`}>{status}</span>
       {pluginUpdateLabel && <small className={`channels-plugin-state ${pluginUpdate?.state}`} title={pluginUpdate?.message} role={pluginUpdate?.state === 'unavailable' ? 'alert' : 'status'}>{pluginUpdateLabel}</small>}</div></div>
     {bound && <button type="button" className="channels-run-link" disabled={!onOpenRun} onClick={() => onOpenRun?.(bound.run_id, session.graph)}><code>{bound.run_id}</code><ArrowUpRight size={13} /></button>}
+    {bound && assistant?.recovery_blocked && <p role="status">此历史实例不再匹配当前渠道身份或绑定，不会自动恢复。历史记录仍保留；请核查后退役。<small>{assistant.recovery_blocked}</small></p>}
     <div className="channels-row-actions">{bound && <>
       <RunControls projection={run?.projection} busy={pending} onControl={operation => void perform(
         () => api(`/runs/${enc(bound.run_id)}/${operation}`, 'POST'),

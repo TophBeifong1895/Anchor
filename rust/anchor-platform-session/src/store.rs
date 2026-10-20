@@ -26,58 +26,68 @@ impl SessionStore {
     }
 
     pub fn create(&self, owner: &str, request: CreateSession) -> Result<Session, SessionError> {
-        validate_identity(owner, "owner")?;
-        let id = request.id.unwrap_or_else(|| Uuid::new_v4().to_string());
-        validate_identity(&id, "session id")?;
-        let title = if request.title.trim().is_empty() {
-            String::new()
-        } else {
-            validate_title(&request.title)?
-        };
-        for plugin in request.plugin_mounts.keys() {
-            validate_identity(plugin, "plugin")?;
-        }
         let mut connection = self.lock()?;
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let exists: bool = transaction.query_row(
-            "SELECT EXISTS(SELECT 1 FROM sessions WHERE id = ?1)",
-            [&id],
-            |row| row.get(0),
-        )?;
-        if exists {
-            return Err(SessionError::Conflict("session id already exists".into()));
+        let session = create_session(&transaction, owner, request)?;
+        transaction.commit()?;
+        Ok(session)
+    }
+
+    pub fn resolve_creation_request(
+        &self,
+        owner: &str,
+        request: CreateSession,
+        operation: (&str, &str),
+        content: &Value,
+        existing: Option<&str>,
+    ) -> Result<Session, SessionError> {
+        validate_identity(owner, "owner")?;
+        let (namespace, key) = operation;
+        validate_identity(namespace, "creation namespace")?;
+        crate::turns::validate_input(key, None)?;
+        let mut connection = self.lock()?;
+        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let retained: Option<(String, String)> = transaction
+            .query_row(
+                "SELECT sessions.id, session_events.data FROM session_events
+             JOIN sessions ON sessions.id = session_events.session_id
+             WHERE sessions.owner = ?1 AND session_events.kind = 'session.creation_request'
+             AND json_extract(session_events.data, '$.namespace') = ?2
+             AND json_extract(session_events.data, '$.key') = ?3 LIMIT 1",
+                params![owner, namespace, key],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?;
+        if let Some((id, raw)) = retained {
+            let data: Value = serde_json::from_str(&raw)?;
+            if &data["content"] != content {
+                return Err(SessionError::Conflict(
+                    "operation key was already used for different content".into(),
+                ));
+            }
+            let session = read_session(&transaction, owner, &id)?;
+            transaction.commit()?;
+            return Ok(session);
         }
-        let now = Utc::now();
-        let session = Session {
-            conversation_id: id.clone(),
-            id,
-            title,
-            status: SessionStatus::Active,
-            waiting_reason: String::new(),
-            run_ids: Vec::new(),
-            graph: request.graph,
-            reply_node: request.reply_node,
-            channel: request.channel,
-            approval: None,
-            approvals: Vec::new(),
-            questions: Vec::new(),
-            operation: None,
-            operations: BTreeMap::new(),
-            plugin_mounts: request.plugin_mounts,
-            network_allowed: true,
-            created_at: now,
-            updated_at: now,
+        let session = match existing {
+            Some(id) => read_session(&transaction, owner, id)?,
+            None => create_session(&transaction, owner, request)?,
         };
-        transaction.execute(
-            "INSERT INTO sessions(id, owner, data, updated_at) VALUES (?1, ?2, ?3, ?4)",
-            params![
-                session.id,
-                owner,
-                serde_json::to_string(&session)?,
-                timestamp(&session)
-            ],
+        if !session.graph.is_empty() || !session.channel.is_empty() {
+            return Err(SessionError::Invalid(
+                "creation requests only support Pilot Sessions".into(),
+            ));
+        }
+        append_event(
+            &transaction,
+            &session,
+            "session.creation_request",
+            BTreeMap::from([
+                ("namespace".into(), json!(namespace)),
+                ("key".into(), json!(key)),
+                ("content".into(), content.clone()),
+            ]),
         )?;
-        append_event(&transaction, &session, "session.created", BTreeMap::new())?;
         transaction.commit()?;
         Ok(session)
     }
@@ -87,7 +97,67 @@ impl SessionStore {
         let connection = self.lock()?;
         read_session(&connection, owner, id)
     }
+}
 
+fn create_session(
+    connection: &Connection,
+    owner: &str,
+    request: CreateSession,
+) -> Result<Session, SessionError> {
+    validate_identity(owner, "owner")?;
+    let id = request.id.unwrap_or_else(|| Uuid::new_v4().to_string());
+    validate_identity(&id, "session id")?;
+    let title = if request.title.trim().is_empty() {
+        String::new()
+    } else {
+        validate_title(&request.title)?
+    };
+    for plugin in request.plugin_mounts.keys() {
+        validate_identity(plugin, "plugin")?;
+    }
+    let exists: bool = connection.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sessions WHERE id = ?1)",
+        [&id],
+        |row| row.get(0),
+    )?;
+    if exists {
+        return Err(SessionError::Conflict("session id already exists".into()));
+    }
+    let now = Utc::now();
+    let session = Session {
+        conversation_id: id.clone(),
+        id,
+        title,
+        status: SessionStatus::Active,
+        waiting_reason: String::new(),
+        run_ids: Vec::new(),
+        graph: request.graph,
+        reply_node: request.reply_node,
+        channel: request.channel,
+        approval: None,
+        approvals: Vec::new(),
+        questions: Vec::new(),
+        operation: None,
+        operations: BTreeMap::new(),
+        plugin_mounts: request.plugin_mounts,
+        network_allowed: true,
+        created_at: now,
+        updated_at: now,
+    };
+    connection.execute(
+        "INSERT INTO sessions(id, owner, data, updated_at) VALUES (?1, ?2, ?3, ?4)",
+        params![
+            session.id,
+            owner,
+            serde_json::to_string(&session)?,
+            timestamp(&session)
+        ],
+    )?;
+    append_event(connection, &session, "session.created", BTreeMap::new())?;
+    Ok(session)
+}
+
+impl SessionStore {
     pub fn list(&self, owner: &str) -> Result<Vec<Session>, SessionError> {
         validate_identity(owner, "owner")?;
         let connection = self.lock()?;

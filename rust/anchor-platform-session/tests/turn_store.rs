@@ -1019,7 +1019,7 @@ fn exact_v1_migrates_transactionally_and_preserves_sessions_events_and_ownership
         connection
             .pragma_query_value(None, "user_version", |row| row.get::<_, i32>(0))
             .unwrap(),
-        8
+        9
     );
     assert_eq!(
         connection
@@ -1037,6 +1037,7 @@ fn exact_v1_migrates_transactionally_and_preserves_sessions_events_and_ownership
     assert_eq!(
         tables,
         vec![
+            "channel_account_aliases",
             "channel_assistant_inputs",
             "channel_assistants",
             "channel_deliveries",

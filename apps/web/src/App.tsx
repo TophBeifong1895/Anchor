@@ -1,16 +1,13 @@
 /** Application navigation and cross-page references. Page owners retain drafts and subscribe to Host projections. */
 import { Anchor, Activity, GitBranch, MessageSquare, PanelLeftClose, PanelRightClose, Plug, Settings2 } from 'lucide-react';
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent } from 'react';
+import { lazy, Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent } from 'react';
 import type { OurRun, OurRunDetail } from './model';
 import { GraphRelations } from './GraphRelations';
 import { Workspace } from './Workspace';
-import { Pilot } from './Pilot';
 import { GraphEditorPage } from './GraphEditorPage';
-import { RunDetailPage } from './RunDetailPage';
+import { PageActivity } from './PageActivity';
 import { graphRunAction } from './GraphRunButton';
 import { ApiKeyDialog } from './ApiKeyDialog';
-import { PluginManagement } from './PluginManagement';
-import { SettingsPage } from './SettingsPage';
 import { ChannelSessions } from './ChannelSessions';
 import { MessageTrigger } from './MessageTrigger';
 import { CreateGraphDialog, RunInputDialog } from './WorkbenchDialogs';
@@ -22,6 +19,12 @@ import { assignGraphColors } from './graphColors';
 import { graphSaveNotice, useGraphEditor, type WorkbenchNotice } from './useGraphEditor';
 import { useWorkbenchData, type WorkbenchView } from './useWorkbenchData';
 import { useRunDetail } from './useRunDetail';
+
+const Pilot = lazy(() => import('./Pilot').then(module => ({ default: module.Pilot })));
+const RunDetailPage = lazy(() => import('./RunDetailPage').then(module => ({ default: module.RunDetailPage })));
+const PluginManagement = lazy(() => import('./PluginManagement').then(module => ({ default: module.PluginManagement })));
+const SettingsPage = lazy(() => import('./SettingsPage').then(module => ({ default: module.SettingsPage })));
+const openingPage = <main className="main"><p role="status">正在打开页面…</p></main>;
 
 const recentRuns = (runs: OurRun[], graph: string) => runs
   .filter(item => item.graph === graph)
@@ -228,8 +231,8 @@ export function App() {
       {problem && <div className="connection-error" role="alert">{problem}</div>}
       {view === 'runs' && notice && <p className={`notice ${notice.kind}`} role="status">{notice.text}</p>}
 
-      {view === 'plugins' ? <PluginManagement /> : view === 'settings' ? <SettingsPage />
-        : view === 'pilot' ? <Pilot session={chat} onSession={setChat} initialDraft={assistance} onDraftConsumed={() => setAssistance('')} onSettings={() => setView('settings')} /> : view === 'runs' ? (
+      <PageActivity active={view === 'pilot'}><Suspense fallback={openingPage}><Pilot session={chat} onSession={setChat} initialDraft={assistance} onDraftConsumed={() => setAssistance('')} onSettings={() => setView('settings')} /></Suspense></PageActivity>
+      <Suspense fallback={openingPage}>{view === 'plugins' ? <PluginManagement /> : view === 'settings' ? <SettingsPage /> : view === 'runs' ? (
         <Workspace running>
           {timelineProblem ? <main className="main"><p className="timeline-error" role="alert">
             运行时间线无法加载：{timelineProblem} <button onClick={() => void refresh()}>重新连接</button>
@@ -241,12 +244,13 @@ export function App() {
         notice={notice} run={run} node={node} targetPath={targetPath} detail={detail} selectGraph={selectGraph}
         onPilot={() => askPilot('run')} trigger={trigger} onTimeline={() => setView('runs')} navigateRun={navigateRun} controlRun={controlRun}
         deleteRun={deleteRun} onNode={id => { setNode(id); setInspectorOpen(true); }} />
-        : <GraphEditorPage name={name} editor={editor} graphs={graphs} runs={runs} graphColors={graphColors}
+        : null}</Suspense>
+      <PageActivity active={view === 'graph'}><GraphEditorPage name={name} editor={editor} graphs={graphs} runs={runs} graphColors={graphColors}
           busy={busy} notice={notice} setNotice={setNotice} selectGraph={selectGraph} create={create}
           onTriggerConfig={() => setTriggerConfig(true)}
           onPilot={() => askPilot('graph')} deleteGraph={deleteGraph} save={save} check={check} trigger={trigger} openRun={openRun} navigateGraph={navigateGraph}
           onInspect={() => setInspectorOpen(true)} onRelations={() => setRelations(true)} graphReturn={graphReturn}
-          onReturn={() => { if (graphReturn) navigateGraph(graphReturn.graph, graphReturn.node); setGraphReturn(null); }} />}
+          onReturn={() => { if (graphReturn) navigateGraph(graphReturn.graph, graphReturn.node); setGraphReturn(null); }} /></PageActivity>
       {sessions && <ChannelSessions onOpenRun={(id, graph) => void navigateRun(id, graph)} close={() => setSessions(false)} />}
       {triggerConfig && name && <MessageTrigger graph={name} close={() => setTriggerConfig(false)} />}
       {relations && <GraphRelations graph={name} close={() => setRelations(false)} onOpen={navigateGraph} />}

@@ -108,7 +108,8 @@ impl WecomSettings {
             account: env::var("WECOM_BOT_ID")
                 .ok()
                 .map(|value| value.trim().to_owned())
-                .filter(|value| !value.is_empty()),
+                .filter(|value| !value.is_empty())
+                .map(|value| crate::channel_supervisor::management::wecom_account_identity(&value)),
             users: env::var("ANCHOR_WECOM_USERS")
                 .unwrap_or_default()
                 .split(',')
@@ -360,11 +361,6 @@ pub async fn serve() -> io::Result<()> {
         .recover_detached_at_startup()
         .await
         .map_err(|_| io::Error::other("startup Run recovery failed"))?;
-    // A restart gives every Session back the assistant instance its binding
-    // still owns; a failure is reported per Session and never stops the Host.
-    if let Err(error) = assistant_recovery::resume_channel_assistants(&state).await {
-        eprintln!("anchor-runner-host: assistant recovery is incomplete: {error}");
-    }
     if let Err(error) = skip_missed_schedules(&state, chrono::Local::now().naive_local()) {
         return Err(io::Error::other(error));
     }
@@ -455,6 +451,9 @@ pub async fn serve() -> io::Result<()> {
         .application
         .clone()
         .with_channel_management(channel_manager.clone());
+    if let Err(error) = assistant_recovery::resume_channel_assistants(&state).await {
+        eprintln!("anchor-runner-host: assistant recovery is incomplete: {error}");
+    }
     let ready = Arc::new(AtomicBool::new(
         configured_bundle.is_none() || configured_graph_ready,
     ));

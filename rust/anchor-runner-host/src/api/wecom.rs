@@ -280,15 +280,6 @@ pub(super) async fn receive_event(
         run_id: None,
         replace_running: true,
     };
-    let lock_key = format!(
-        "{}\0{}\0{}\0{}\0{}\0{}",
-        owner,
-        request.identity.source,
-        request.identity.account.as_deref().unwrap_or(""),
-        request.identity.conversation_kind.as_str(),
-        request.identity.conversation_id,
-        request.identity.participant_id()
-    );
     let admission = {
         let state_for_admission = state.clone();
         let owner_for_admission = owner.clone();
@@ -303,7 +294,7 @@ pub(super) async fn receive_event(
         let mut locks = state.channel_event_locks.lock().await;
         locks.retain(|_, lock| std::sync::Arc::strong_count(lock) > 1);
         locks
-            .entry(lock_key)
+            .entry(format!("{}\0{}", owner, admission.session.id))
             .or_insert_with(|| std::sync::Arc::new(tokio::sync::Mutex::new(())))
             .clone()
     };

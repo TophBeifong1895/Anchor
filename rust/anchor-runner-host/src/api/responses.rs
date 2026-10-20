@@ -228,6 +228,7 @@ pub(super) async fn create_response(
     };
     let prompt = input_text(body.get("input").unwrap_or(&Value::Null))?;
     let owner = private_owner(&state, &headers);
+    let key = idempotency_key(&headers)?;
     let previous = match body.get("previous_response_id") {
         None | Some(Value::Null) => None,
         Some(Value::String(value)) if !value.is_empty() => Some(value.clone()),
@@ -243,11 +244,42 @@ pub(super) async fn create_response(
         move || store(&state)
     })
     .await?;
+    let content = json!({"input":body["input"],"model":RESPONSE_MODEL,"stream":stream,"previous_response_id":previous});
     let previous_reference = match previous {
         Some(previous) => Some(reference_for(&sessions, &owner, &previous)?),
         None => None,
     };
-    let session = if let Some(reference) = &previous_reference {
+    let session = if let Some(key) = key.clone() {
+        let sessions = sessions.clone();
+        let owner = owner.clone();
+        let existing = previous_reference
+            .as_ref()
+            .map(|reference| reference.session.clone());
+        blocking(move || {
+            crate::application::pilot_sessions::create_with_request(
+                &sessions,
+                &owner,
+                CreateSession {
+                    id: Some(format!(
+                        "responses-{}",
+                        crate::application::pilot_sessions::request_identity(
+                            &owner,
+                            "responses",
+                            &key
+                        )
+                    )),
+                    title: "Responses".into(),
+                    ..Default::default()
+                },
+                &key,
+                &content,
+                "responses",
+                existing.as_deref(),
+            )
+            .map_err(session_error)
+        })
+        .await?
+    } else if let Some(reference) = &previous_reference {
         blocking({
             let sessions = sessions.clone();
             let owner = owner.clone();
@@ -281,43 +313,50 @@ pub(super) async fn create_response(
     let fixture_reply = state.response_fixture.clone();
     #[cfg(not(test))]
     let fixture_reply: Option<String> = None;
+    let request_id = key
+        .as_deref()
+        .map(|key| {
+            crate::application::pilot_sessions::request_identity(&owner, "responses-turn", key)
+        })
+        .unwrap_or_else(|| format!("responses-{}", crate::application::metadata::now_nanos()));
     let turn = if let Some(reply_prefix) = fixture_reply {
         let sessions_for_turn = sessions.clone();
-        let turn = blocking({
+        let (turn, created) = blocking({
             let owner = owner.clone();
             let session_id = session.id.clone();
-            let request_id = format!("fixture-{}", crate::application::metadata::now_nanos());
+            let request_id = request_id.clone();
             let prompt = prompt.clone();
             move || {
                 sessions_for_turn
                     .create_turn(&owner, &session_id, &request_id, Some(&prompt))
-                    .map(|(turn, _)| turn)
                     .map_err(session_error)
             }
         })
         .await?;
         let fixture_reply = format!("{reply_prefix}: {prompt}");
-        blocking({
-            let sessions = sessions.clone();
-            let owner = owner.clone();
-            let session_id = session.id.clone();
-            let turn_id = turn.id.clone();
-            move || {
-                sessions
-                    .append_turn_event(
-                        &owner,
-                        &session_id,
-                        &turn_id,
-                        json!({"type":"text-delta","delta":fixture_reply}),
-                    )
-                    .map_err(session_error)?;
-                sessions
-                    .finish_turn(&owner, &session_id, &turn_id, TurnStatus::Completed, None)
-                    .map_err(session_error)?;
-                Ok(())
-            }
-        })
-        .await?;
+        if created {
+            blocking({
+                let sessions = sessions.clone();
+                let owner = owner.clone();
+                let session_id = session.id.clone();
+                let turn_id = turn.id.clone();
+                move || {
+                    sessions
+                        .append_turn_event(
+                            &owner,
+                            &session_id,
+                            &turn_id,
+                            json!({"type":"text-delta","delta":fixture_reply}),
+                        )
+                        .map_err(session_error)?;
+                    sessions
+                        .finish_turn(&owner, &session_id, &turn_id, TurnStatus::Completed, None)
+                        .map_err(session_error)?;
+                    Ok(())
+                }
+            })
+            .await?;
+        }
         turn
     } else {
         let tools = crate::pilot_tools::PilotTools {
@@ -338,7 +377,7 @@ pub(super) async fn create_response(
                 sessions: sessions.clone(),
                 owner: owner.clone(),
                 session: session.clone(),
-                request_id: format!("responses-{}", crate::application::metadata::now_nanos()),
+                request_id,
                 prompt: Some(prompt),
                 attachments: Default::default(),
                 input_source: None,

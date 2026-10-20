@@ -6,7 +6,7 @@ import {
 } from '@xyflow/react';
 import { Bot, GitFork, GitMerge, Layers, Terminal, Workflow } from 'lucide-react';
 import { asDefinition, listenerLabel, toFlowEdges, toFlowNodes, type GraphCall, type GraphSummary, type NodePluginRef, type OurGraph, type OurRunState, type RunProjection } from './model';
-import { layoutWorkflow, NODE_HEIGHT, NODE_WIDTH, type Layout, type Port } from './graph';
+import { cachedWorkflowLayout, layoutWorkflow, NODE_HEIGHT, NODE_WIDTH, type Layout, type Port } from './graph';
 import { RoutedEdge } from './RoutedEdge';
 
 type WorkflowNode = Node<{
@@ -72,11 +72,13 @@ function Canvas({ graph, name, mode, state = null, projection, editable = false,
   const [problem, setProblem] = useState('');
   const [arranging, setArranging] = useState(false);
   const [dragging, setDragging] = useState(false);
+  const [viewport, setViewport] = useState({ x: 0, y: 0, zoom: 1 });
   const key = definitionKey + positionsKey;
   const currentKey = useRef(key); currentKey.current = key;
-  const layout = geometry?.key === key ? geometry.layout : null;
+  const layout = geometry?.key === key ? geometry.layout : cachedWorkflowLayout(JSON.parse(definitionKey), JSON.parse(positionsKey));
   const container = useRef<HTMLDivElement>(null);
   const flow = useReactFlow<WorkflowNode>();
+  const fitted = useRef<{ layout: Layout; width: number; height: number } | null>(null);
   useEffect(() => {
     let active = true;
     setProblem('');
@@ -116,12 +118,22 @@ function Canvas({ graph, name, mode, state = null, projection, editable = false,
     const element = container.current;
     if (!element) return;
     let frame = 0;
-    const resized = () => { cancelAnimationFrame(frame); frame = requestAnimationFrame(fit); };
+    const resized = () => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(() => {
+        if (!layout) return;
+        const { width, height } = element.getBoundingClientRect();
+        const previous = fitted.current;
+        if (!width || !height || (previous?.layout === layout && previous.width === width && previous.height === height)) return;
+        fitted.current = { layout, width, height };
+        fit();
+      });
+    };
     const observer = new ResizeObserver(resized);
     observer.observe(element);
     resized();
     return () => { observer.disconnect(); cancelAnimationFrame(frame); };
-  }, [fit]);
+  }, [fit, layout]);
   const arrange = async () => {
     setArranging(true); setProblem('');
     try {
@@ -134,6 +146,7 @@ function Canvas({ graph, name, mode, state = null, projection, editable = false,
   return <div className={`workflow-canvas ${editing ? 'canvas' : 'execution-canvas'}`} ref={container}
     data-testid={editing ? 'graph-canvas' : 'execution-canvas'} aria-busy={!layout && !problem}>
     <ReactFlow<WorkflowNode> nodes={canvasNodes} edges={edges} nodeTypes={nodeTypes} edgeTypes={edgeTypes}
+      viewport={viewport} onViewportChange={setViewport}
       onNodesChange={onNodesChange} nodesDraggable={editing && editable && !!layout}
       nodesConnectable={editing && editable} edgesReconnectable={false} deleteKeyCode={null}
       minZoom={0.02} maxZoom={2} proOptions={{ hideAttribution: true }}

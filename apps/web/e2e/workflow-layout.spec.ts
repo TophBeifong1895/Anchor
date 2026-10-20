@@ -3,14 +3,14 @@ import { readFileSync } from 'node:fs';
 import { runProjectionFixture } from './fixtures/runProjection';
 
 async function geometry(page: Page) {
-  await expect(page.locator('.workflow-canvas')).toHaveAttribute('aria-busy', 'false');
-  await expect(page.locator('.react-flow__edge-path')).toHaveCount(12);
-  return page.evaluate(() => ({
-    nodes: Array.from(document.querySelectorAll<HTMLElement>('.react-flow__node')).map(n => ({
+  await expect(page.locator('.workflow-canvas:visible')).toHaveAttribute('aria-busy', 'false');
+  await expect(page.locator('.workflow-canvas:visible .react-flow__edge-path')).toHaveCount(12);
+  return page.locator('.workflow-canvas:visible').evaluate(area => ({
+    nodes: Array.from(area.querySelectorAll<HTMLElement>('.react-flow__node')).map(n => ({
       id: n.dataset.id, transform: n.style.transform, width: n.style.width, height: n.style.height,
     })),
-    paths: Array.from(document.querySelectorAll('.react-flow__edge-path')).map(e => e.getAttribute('d')),
-    ports: Array.from(document.querySelectorAll<HTMLElement>('.route-port')).map(p => [p.dataset.handleid, p.style.left, p.style.top]),
+    paths: Array.from(area.querySelectorAll('.react-flow__edge-path')).map(e => e.getAttribute('d')),
+    ports: Array.from(area.querySelectorAll<HTMLElement>('.route-port')).map(p => [p.dataset.handleid, p.style.left, p.style.top]),
   }));
 }
 
@@ -47,18 +47,18 @@ test('editor geometry survives edits while Run geometry stays frozen across view
   await expect(page.getByTestId('execution-canvas')).toBeVisible();
   const runGeometry = await geometry(page);
   expect(runGeometry.nodes.map(node => node.id)).toEqual(initial.nodes.map(node => node.id));
-  const feedback = page.getByTestId('edge-e3-feedback-frame').locator('.react-flow__edge-path');
+  const feedback = page.getByTestId('execution-canvas').getByTestId('edge-e3-feedback-frame').locator('.react-flow__edge-path');
   await expect(feedback).toHaveCSS('stroke-dasharray', 'none');
   await expect(feedback).toHaveCSS('stroke-width', '3.5px');
-  await expect(page.getByTestId('edge-e4-feedback-investigate').locator('.react-flow__edge-path')).not.toHaveCSS('stroke-dasharray', 'none');
+  await expect(page.getByTestId('execution-canvas').getByTestId('edge-e4-feedback-investigate').locator('.react-flow__edge-path')).not.toHaveCSS('stroke-dasharray', 'none');
   await page.screenshot({ path: 'test-results/layout-run.png' });
-  await page.locator('.react-flow__controls-zoomin').click();
+  await page.locator('.workflow-canvas:visible .react-flow__controls-zoomin').click();
   await page.waitForTimeout(250);
-  const viewport = await page.locator('.react-flow__viewport').getAttribute('style');
+  const viewport = await page.locator('.workflow-canvas:visible .react-flow__viewport').getAttribute('style');
   const before = polls;
   await expect.poll(() => polls).toBeGreaterThan(before);
   expect(await geometry(page)).toEqual(runGeometry);
-  expect(await page.locator('.react-flow__viewport').getAttribute('style')).toBe(viewport);
+  expect(await page.locator('.workflow-canvas:visible .react-flow__viewport').getAttribute('style')).toBe(viewport);
   await page.getByRole('button', { name: '图编排', exact: true }).click();
   const node = page.locator('.react-flow__node[data-id="investigate"]');
   const box = (await node.boundingBox())!;
@@ -85,11 +85,43 @@ test('editor geometry survives edits while Run geometry stays frozen across view
   expect(await geometry(page)).toEqual(dragged);
   await page.setViewportSize({ width: 390, height: 844 });
   await expect(page.getByTestId('graph-canvas')).toBeInViewport();
-  await expect.poll(async () => page.locator('.react-flow__edge-path').evaluateAll(paths => {
-    const area = document.querySelector('.workflow-canvas')!.getBoundingClientRect();
+  await expect.poll(async () => page.locator('.workflow-canvas:visible .react-flow__edge-path').evaluateAll(paths => {
+    const area = paths[0].closest('.workflow-canvas')!.getBoundingClientRect();
     return paths.every(p => { const b = p.getBoundingClientRect();
       return b.left >= area.left && b.right <= area.right && b.top >= area.top && b.bottom <= area.bottom;
     });
   })).toBe(true);
   expect(errors).toEqual([]);
+});
+
+test('returning to the editor reuses its canvas, viewport and search without a loading frame', async ({ page }) => {
+  const graph = JSON.parse(readFileSync('../../examples/graphs/deep-academic-research.json', 'utf8'));
+  await page.route('**/graphs', route => route.fulfill({ json: { graphs: [{ graph: 'research' }] } }));
+  await page.route('**/graphs/research', route => route.fulfill({ json: { definition: graph } }));
+  await page.route('**/runs', route => route.fulfill({ json: { runs: [] } }));
+  await page.route('**/timeline*', route => route.fulfill({ json: { runs: [], scheduled: [], schedules: [] } }));
+  await page.goto('/');
+  const canvas = page.getByTestId('graph-canvas');
+  await expect(canvas).toHaveAttribute('aria-busy', 'false');
+  await expect(canvas.locator('.react-flow__node')).toHaveCount(8);
+  const original = await canvas.elementHandle();
+  const search = page.getByRole('textbox', { name: '搜索工作流' });
+  await search.fill('research');
+  const initialViewport = await canvas.locator('.react-flow__viewport').getAttribute('style');
+  await canvas.locator('.react-flow__controls-zoomin').click();
+  await expect(canvas.locator('.react-flow__viewport')).not.toHaveAttribute('style', initialViewport!);
+  await expect.poll(() => canvas.locator('.react-flow__viewport').getAttribute('style')).toMatch(/scale\([^)]*\)/);
+  const viewport = await canvas.locator('.react-flow__viewport').getAttribute('style');
+  for (let index = 0; index < 3; index++) {
+    await page.getByRole('button', { name: '运行看板', exact: true }).click();
+    await expect(canvas).toBeHidden();
+    await page.getByRole('button', { name: '图编排', exact: true }).click();
+    await expect(canvas).toBeVisible();
+    expect(await canvas.evaluate((element, previous) => element === previous, original)).toBe(true);
+    await expect(canvas).toHaveAttribute('aria-busy', 'false');
+    await expect(canvas.locator('.react-flow__node')).toHaveCount(8);
+    await expect(canvas.locator('.react-flow__viewport')).toHaveAttribute('style', viewport!);
+    await expect(search).toHaveValue('research');
+    await expect(canvas.getByText('正在整理布局…')).toHaveCount(0);
+  }
 });

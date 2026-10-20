@@ -45,6 +45,86 @@ struct Fixture {
     turn: String,
 }
 
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn channel_observation_skips_code_reads_but_revalidates_live_authorization_and_resources() {
+    use rustix::{fs::inotify, io::Errno};
+    use std::mem::MaybeUninit;
+
+    let _guard = crate::PROCESS_ENV_LOCK.lock().await;
+    let _environment = Environment::clear();
+    let fixture = Fixture::new();
+    fixture.prepare().await;
+    let (metadata, channel) = fixture.adapter.metadata(&Fixture::binding()).unwrap();
+    let definition = FilePluginCatalog::new(fixture.root.path().join("library"))
+        .definition("gateway")
+        .unwrap();
+    assert_eq!(
+        crate::credential_store::channel_authorization(&metadata, "wecom").unwrap(),
+        crate::credential_store::target_authorization(&definition, "channel_wecom").unwrap()
+    );
+    let mut fact = fixture.adapter.fact().unwrap().unwrap();
+    let values = fixture
+        .adapter
+        .credentials(&fact, &metadata, &channel)
+        .unwrap();
+    assert_eq!(
+        values,
+        crate::credential_store::environment_values(
+            &fixture.root.path().join("state"),
+            &crate::credential_store::binding_owner("local"),
+            &definition,
+            "channel_wecom",
+        )
+        .unwrap()
+    );
+    fact.enabled = true;
+    fact.account = fixture
+        .adapter
+        .register_account(&fact.owner, &values)
+        .unwrap();
+    fixture.adapter.publish(fact).unwrap();
+
+    let plugin = fixture.root.path().join("library/plugins/gateway");
+    let watcher =
+        inotify::init(inotify::CreateFlags::NONBLOCK | inotify::CreateFlags::CLOEXEC).unwrap();
+    inotify::add_watch(
+        &watcher,
+        plugin.join("bin/gateway"),
+        inotify::WatchFlags::OPEN,
+    )
+    .unwrap();
+    for _ in 0..3 {
+        assert!(fixture.adapter.snapshot("wecom").unwrap().unwrap().enabled);
+        assert_eq!(
+            fixture.adapter.status("local", "wecom").await.unwrap()["available"],
+            true
+        );
+    }
+    let mut buffer = [MaybeUninit::uninit(); 512];
+    assert!(matches!(
+        inotify::Reader::new(&watcher, &mut buffer).next(),
+        Err(Errno::WOULDBLOCK)
+    ));
+    fixture.adapter.definition(&Fixture::binding()).unwrap();
+    assert!(inotify::Reader::new(&watcher, &mut buffer).next().is_ok());
+
+    let declaration = fs::read(plugin.join("channel.json")).unwrap();
+    let mut changed: Value = serde_json::from_slice(&declaration).unwrap();
+    changed["description"] = json!("changed authorization");
+    fs::write(plugin.join("channel.json"), changed.to_string()).unwrap();
+    assert!(!fixture.adapter.snapshot("wecom").unwrap().unwrap().enabled);
+    assert_eq!(
+        fixture.adapter.status("local", "wecom").await.unwrap()["available"],
+        false
+    );
+    fs::write(plugin.join("channel.json"), declaration).unwrap();
+    assert!(fixture.adapter.snapshot("wecom").unwrap().unwrap().enabled);
+    fs::remove_file(plugin.join("bin/gateway")).unwrap();
+    assert!(!fixture.adapter.snapshot("wecom").unwrap().unwrap().enabled);
+    assert!(fixture.adapter.definition(&Fixture::binding()).is_err());
+}
+
 impl Fixture {
     fn new() -> Self {
         let root = tempfile::tempdir().unwrap();
@@ -415,6 +495,7 @@ async fn removing_graph_or_plugin_stops_the_gateway_and_preserves_inspectable_in
         assert_eq!(status["enabled"], true);
         assert_eq!(status["available"], false);
         assert_eq!(status["listener"], "unavailable");
+        assert!(!fixture.adapter.snapshot("wecom").unwrap().unwrap().enabled);
         assert!(
             fixture
                 .adapter
@@ -486,6 +567,63 @@ async fn deployment_binding_is_read_only_and_missing_credentials_do_not_enable()
         root.path()
             .join("state/platform/channels/wecom.json")
             .is_file()
+    );
+}
+
+#[tokio::test]
+async fn deployment_and_managed_configuration_share_one_persisted_account_identity() {
+    let _guard = crate::PROCESS_ENV_LOCK.lock().await;
+    let _environment = Environment::clear();
+    let fixture = Fixture::new();
+    fixture.prepare().await;
+    fixture
+        .adapter
+        .set_enabled("local", "wecom", true)
+        .await
+        .unwrap();
+    let managed_account = fixture
+        .adapter
+        .snapshot("wecom")
+        .unwrap()
+        .unwrap()
+        .account
+        .unwrap();
+    fixture
+        .adapter
+        .set_enabled("local", "wecom", false)
+        .await
+        .unwrap();
+    let Fixture {
+        root,
+        adapter,
+        sessions,
+        ..
+    } = fixture;
+    drop(adapter);
+    unsafe {
+        env::set_var("WECOM_BOT_ID", "private-fixture-bot");
+        env::set_var("ANCHOR_WECOM_GRAPH", "task");
+    }
+    let configuration = Fixture::configuration(root.path());
+    let external = ChannelManagementAdapter::open(configuration, None).unwrap();
+    assert_eq!(
+        external
+            .snapshot("wecom")
+            .unwrap()
+            .unwrap()
+            .account
+            .as_deref(),
+        Some(managed_account.as_str())
+    );
+    assert_eq!(
+        sessions
+            .canonical_channel_account("local", "wecom", "private-fixture-bot")
+            .unwrap(),
+        managed_account
+    );
+    assert_eq!(
+        wecom_account_identity(" private-fixture-bot "),
+        managed_account
     );
 }
 

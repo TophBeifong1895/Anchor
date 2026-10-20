@@ -47,6 +47,11 @@ impl SessionStore {
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let mut snapshot = store::read_session(&transaction, owner, session)?;
         ensure_channel_session(&transaction, owner, session)?;
+        if !Self::selected_channel_session(&transaction, owner, session)? {
+            return Err(SessionError::Conflict(
+                "channel Session is superseded by its canonical account Session".into(),
+            ));
+        }
         if snapshot.reply_node != work_node {
             return Err(SessionError::Conflict(
                 "assistant work node does not match the channel Session result node".into(),
@@ -167,7 +172,8 @@ impl SessionStore {
     /// transaction: the old binding is retired, the new one becomes current, and
     /// a Turn that was claimed but never committed is handed to the new Run — so
     /// the message is neither lost nor replaced by the next one. Repeating the
-    /// same handover is a no-op.
+    /// same committed from/to handover is a no-op while its target stays
+    /// current; an explicitly retired source cannot initiate a new handover.
     pub fn handover_channel_assistant(
         &self,
         owner: &str,
@@ -181,6 +187,11 @@ impl SessionStore {
         validate_channel_value(to_wait_key, "assistant wait key", MAX_WAIT_KEY_BYTES)?;
         let mut connection = self.lock()?;
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        if !Self::selected_channel_session(&transaction, owner, session)? {
+            return Err(SessionError::Conflict(
+                "channel Session is superseded by its canonical account Session".into(),
+            ));
+        }
         let mut snapshot = require_assistant(
             &transaction,
             owner,
@@ -188,26 +199,48 @@ impl SessionStore {
             from_run,
             BindingScope::Retained,
         )?;
-        let (source, _) =
-            read_assistant_for_run(&transaction, session, from_run)?.ok_or_else(|| {
+        let (source, source_retired) = read_assistant_for_run(&transaction, session, from_run)?
+            .ok_or_else(|| {
                 SessionError::Conflict("channel Session has no bound assistant".into())
             })?;
         if let Some((current, retired)) = read_assistant_for_run(&transaction, session, to_run)? {
             if !retired {
-                // The handover already happened; the same target stays current.
-                transaction.commit()?;
-                return Ok(current);
+                let committed: bool = transaction.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM session_events
+                      WHERE session_id = ?1 AND kind = 'channel.assistant_handover'
+                        AND json_extract(data, '$.from') = ?2
+                        AND json_extract(data, '$.to') = ?3)",
+                    params![session, from_run, to_run],
+                    |row| row.get(0),
+                )?;
+                if source_retired && committed {
+                    transaction.commit()?;
+                    return Ok(current);
+                }
+                return Err(SessionError::Conflict(
+                    "current assistant is not the target of this handover".into(),
+                ));
             }
             return Err(SessionError::Conflict(
                 "a retired assistant Run cannot take the instance over".into(),
             ));
         }
+        if source_retired {
+            return Err(SessionError::Conflict(
+                "only the current assistant can hand over the instance".into(),
+            ));
+        }
         ensure_run_session(&transaction, session, to_run)?;
-        transaction.execute(
+        let retired = transaction.execute(
             "UPDATE channel_assistants SET retired = 1
               WHERE session_id = ?1 AND run_id = ?2 AND retired = 0",
             params![session, from_run],
         )?;
+        if retired != 1 {
+            return Err(SessionError::Conflict(
+                "only the current assistant can hand over the instance".into(),
+            ));
+        }
         transaction.execute(
             "INSERT INTO channel_assistants(session_id, run_id, wait_node, work_node, reply_node)
              VALUES (?1, ?2, ?3, ?4, ?5)",
@@ -737,7 +770,11 @@ fn read_input(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{ChannelIdentity, ChannelInboundRequest};
+    use crate::{ChannelIdentity, ChannelInboundRequest, TurnStatus};
+    use std::{
+        sync::{Arc, Barrier},
+        thread,
+    };
 
     fn inbound(conversation: &str, id: &str, text: &str) -> ChannelInboundRequest {
         ChannelInboundRequest {
@@ -756,6 +793,113 @@ mod tests {
             run_id: None,
             replace_running: true,
         }
+    }
+
+    fn retire_and_handover_in_order(retire_first: bool) {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("sessions.sqlite");
+        let first_store = SessionStore::open(&path).unwrap();
+        let second_store = SessionStore::open(&path).unwrap();
+        let first = first_store
+            .admit_channel_inbound("owner", inbound("a", "one", "input"))
+            .unwrap();
+        let session = first.session.id;
+        first_store
+            .bind_channel_assistant("owner", &session, "run-a", "wait", "assistant", "reply")
+            .unwrap();
+        first_store
+            .finish_turn("owner", &session, &first.turn.id, TurnStatus::Stopped, None)
+            .unwrap();
+        let gate = second_store.lock().unwrap();
+        let barrier = Arc::new(Barrier::new(2));
+        let worker_barrier = barrier.clone();
+        let worker_store = second_store.clone();
+        let worker_session = session.clone();
+        let worker = thread::spawn(move || {
+            worker_barrier.wait();
+            if retire_first {
+                worker_store
+                    .handover_channel_assistant(
+                        "owner",
+                        &worker_session,
+                        "run-a",
+                        "run-b",
+                        "wait/b",
+                    )
+                    .map(|_| ())
+            } else {
+                worker_store.retire_channel_assistant("owner", &worker_session, "run-a")
+            }
+        });
+        barrier.wait();
+        let first_result = if retire_first {
+            first_store.retire_channel_assistant("owner", &session, "run-a")
+        } else {
+            first_store
+                .handover_channel_assistant("owner", &session, "run-a", "run-b", "wait/b")
+                .map(|_| ())
+        };
+        drop(gate);
+        let second_result = worker.join().unwrap();
+        first_result.unwrap();
+        if retire_first {
+            assert!(matches!(second_result, Err(SessionError::Conflict(_))));
+            assert_eq!(
+                first_store
+                    .get_channel_assistant("owner", &session)
+                    .unwrap(),
+                None
+            );
+        } else {
+            second_result.unwrap();
+            assert_eq!(
+                first_store
+                    .get_channel_assistant("owner", &session)
+                    .unwrap()
+                    .unwrap()
+                    .run_id,
+                "run-b"
+            );
+            assert_eq!(
+                first_store
+                    .handover_channel_assistant("owner", &session, "run-a", "run-b", "wait/b")
+                    .unwrap()
+                    .run_id,
+                "run-b"
+            );
+        }
+        let events = first_store.events("owner", &session, 0).unwrap();
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| event.kind == "channel.assistant_handover")
+                .count(),
+            usize::from(!retire_first)
+        );
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| event.kind == "channel.assistant_retired")
+                .count(),
+            usize::from(retire_first)
+        );
+        let connection = first_store.lock().unwrap();
+        let count: i64 = connection
+            .query_row("SELECT COUNT(*) FROM channel_assistants", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(count, if retire_first { 1 } else { 2 });
+    }
+
+    #[test]
+    fn retirement_commits_before_a_concurrent_handover() {
+        retire_and_handover_in_order(true);
+    }
+
+    #[test]
+    fn handover_commits_before_a_concurrent_retirement() {
+        retire_and_handover_in_order(false);
     }
 
     #[test]

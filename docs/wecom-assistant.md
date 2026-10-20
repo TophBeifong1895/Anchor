@@ -10,6 +10,12 @@
 
 使用实际私聊事件中的 `body.from.userid` 配置成员名单。它不是显示姓名、手机号或个人微信号，也不能未经核对当成自建应用通讯录账号。接入不会读取或代答本人已有的个人私聊。
 
+## 渠道身份与历史兼容
+
+渠道账号使用独立于配置入口的稳定身份。部署环境与 WebUI 对同一 Bot ID 使用同一 `wecom:SHA256` 标识；Host 在接纳和恢复前将已验证的旧原始 ID 注册为该身份的别名。映射由 SessionStore 按 owner/source 原子保存，已登记的别名不得改指另一个账号，不推断缺省账号与有值账号等价。
+
+新消息先解析账号再定位 Session，串行锁使用解析得到的 Session ID。同一事件在等价历史 Session 已接纳时不会重新执行。只有旧 Session 时复用其历史；已经存在新旧两套时选择规范身份对应的 Session，旧历史和 binding 原样保留，但禁止旧副本自动恢复或手动 resume，并在消息会话显示阻止原因。多个旧别名各有历史而没有唯一规范 Session 时返回冲突，不任意选择、拼接历史或结算未知投递。
+
 ## WebUI 配置
 
 安装带有 WeCom 通道声明的插件及助手 Graph 后，在图编排中打开该工作流的「消息触发」，填写回复节点和插件，以及接收与主动发送的成员名单。每个 Host 只有一个企业微信入口，绑定当前工作流会替换原绑定。机器人凭据可在此保存，也可在同一插件详情中轮换或清除；两处使用同一份凭据。确认配置后启用监听，对话框显示 Supervisor 的实际状态，已启用不等于已经连接。各对话的实例在运行看板的「消息会话」中停止、恢复、退役或清理。
@@ -66,14 +72,15 @@ Goose 负责 Agent loop、Provider、原生历史和 compaction；Anchor 保存 
 ### 停止、恢复与退役
 
 - stop/resume 作用于当前实例，保留 current binding；收到停止请求不等于执行者已退出。
-- **Host 进程启动时默认自动恢复**。恢复的判定只看绑定与活执行：`channel_assistants` 中仍有未 retired 的 current 绑定，且该 Run 在本进程没有活执行（记录缺失、仍停在 `running`/`ready`，或已终态都算），就自动恢复；用户已显式 retire 的实例保持关闭，下一条可信消息才接纳新实例。开关 `ANCHOR_ASSISTANT_AUTO_RESUME=0`（也接受 `false`/`off`/`no`）关闭该默认行为，**由 Host 进程在启动时读取**，不需要 supervisor 透传。
+- **Host 进程启动时默认自动恢复符合当前部署的实例**。先加载渠道配置及账号映射，再检查未 retired 的 current binding、逻辑会话唯一性、owner、账号、Graph、结果节点与启用状态；符合条件且本进程没有活执行时才恢复。禁用或更换渠道不会删掉历史，也不会使旧绑定继续获得自动恢复资格；重新启用同一绑定后可继续恢复。用户显式 retire 的实例保持关闭，下一条可信消息才接纳新实例。开关 `ANCHOR_ASSISTANT_AUTO_RESUME=0`（也接受 `false`/`off`/`no`）关闭默认行为，由 Host 进程在启动时读取。
 - 自动恢复复用与手动恢复相同的原子交接：先把 current 绑定退休、把新 Run 置为 current，并把「已领取但未提交」的在途 Turn 改判给新 Run、换成新 Run 的 wait key；再把仍停在 `running` 等非终态的陈旧 Run 对账为 `stopped`（此时它已不是 current，不会顺带把刚交接的 Turn 结算掉）；最后以 `previous_run = 旧 Run` 接纳新 Run。顺序保证交接已提交而接纳未执行时，重试仍接纳同一个目标 Run id，不产生第二个 current 实例。
 - 自动路径写入独立会话事件 `channel.assistant_auto_resume{from,to}`；底层交接本身仍写 `channel.assistant_handover`，所以一次自动恢复会同时留下「发生了交接」和「由重启自动触发」两条事实。若接纳未完成（例如目标 Run 只有不可变 metadata 而没有 Run 记录），恢复**不移动任何绑定**，只按有界次数与退避重试并如实记录错误，不制造每启动一次就换一个目标 id 的链。
 - 新 Run 的首个 work 节点准备在其 `.prepare.lock` 内一次性继承旧 Run 的稳定现场：只复制 Agent 文件本身，不带锁、owner fact、`previous-inputs/` 或旧 Artifact；失败不留半成品。来源由同一会话的可信交接链确认，连续重启时跳过尚未准备现场的中间实例。只改变插件/联网的 Graph 版本允许精确核验后交接，结构或指令改变不继承；旧现场与旧 Artifact 字节不变。
 - 进程重启后若不自动恢复（开关关闭）或尚未恢复，须通过现有 Run 控制入口显式继续，并核查保存的 cursor、Goose 历史和现场，不自动重放未知效果。
-- `GET /channel-sessions/{session}/assistant` 返回 `{ "assistant": ..., "needs_recovery": bool }`；`assistant` 含 `session_id`、`run_id`、`wait_node`、`work_node`、`reply_node`，无 current 时为 `null`。`needs_recovery` 是派生值而非存储字段：绑定存在且其 Run 在当前进程没有活执行（含 Run 记录缺失）即为 `true`。请求遵循管理 API 的鉴权与 owner 范围，不能读取别人的实例。
+- `GET /channel-sessions/{session}/assistant` 返回 `{ "assistant": ..., "needs_recovery": bool, "recovery_blocked": string | null }`；`assistant` 含 `session_id`、`run_id`、`wait_node`、`work_node`、`reply_node`，无 current 时为 `null`。`needs_recovery` 是派生值而非存储字段：绑定符合恢复资格且其 Run 在当前进程没有活执行（含 Run 记录缺失）时为 `true`。旧重复会话、已禁用或已变更的绑定返回阻止原因，页面保留历史并说明不能恢复，不显示为可恢复实例。请求遵循管理 API 的鉴权与 owner 范围，不能读取别人的实例。
 - `POST /channel-sessions/{session}/assistant/retire` 接收 `{ "run_id": "当前实例ID" }`。先显式 stop 并等真实 `Stopped`，或确认 Run 已 `Completed`/`Failed`/`Aborted`；宿主 active 执行者、Session 的 Running Turn 和 pending/sending/unknown delivery 均阻断退役，冲突返回 409，不能用 retire 隐式取消/结算未知投递。
 - explicit retire 保留旧 Run/历史 binding 与退役事实、解除 current，幂等重试不创建实例；retired Run 禁止 resume 或重新绑定。下一条可信消息才惰性接纳新实例。合法保存新版 Graph 不热更新旧 Run 的 Graph 快照或准入授权；新版通过退役后的新实例生效。
+- 新交接必须由仍为 current 的来源发起；显式退役后不能通过 handover 重新激活。已提交交接只有同一 Session、精确 from/to 的重试才幂等成功，不允许其他历史来源冒认。配置资格检查只决定新接纳与恢复，不撤销当前 Turn 已冻结的权限或擅自重放外部效果。
 - 退休实例和历史轮次可以经 `DELETE /runs/{run}` 单独删除，但 Host 按血缘判定，不按“看起来没在用”判定：不能删 Session 仍指向的 current assistant binding（先 retire），不能删投递未结算（pending/sending/unknown）的渠道轮次，且每个更新的 Run 要么已经不可能再执行（终态，或已有自己的后继因而被拒绝 resume/recover），要么已经完成会读取它的首轮执行——继承稳定现场、只读 `/previous` 挂载和 Goose 原生前驱身份都发生在更新的那一轮的第一个 invocation 里。删除顺序不限：删除前宿主先落不可变墓碑 `state/run-deletions/<run>.json`（记 Run、Graph bundle 身份、Session、回复节点与被删 Run 自己当时的上一个 Run），血缘遍历遇到缺失前驱时用同一会话的墓碑继续往后走，所以删中间某一环不会孤立更早的历史，幸存血缘仍是一条链、只有一个头；若幸存环节都已是被删环节的前驱，则该会话没有活动链，下一条消息重新开链。没有墓碑的缺失前驱仍然 fail-closed。删过的 Run 不能恢复，墓碑不随删除移除。要一次清掉整条会话历史可以删除整张 Graph，但会连 Graph bundle 一起删除。
 
 ### 插件/图更新的操作顺序

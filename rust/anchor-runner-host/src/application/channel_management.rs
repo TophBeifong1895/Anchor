@@ -120,6 +120,55 @@ fn platform_supported(platform: &str) -> Result<(), ApplicationError> {
 }
 
 impl RunApplication {
+    pub(crate) fn ensure_channel_session_eligible(
+        &self,
+        owner: &str,
+        session: &str,
+    ) -> Result<(), ApplicationError> {
+        let sessions = anchor_platform_session::SessionStore::open(
+            self.data_root.join("platform/sessions.sqlite"),
+        )
+        .map_err(super::assistants::assistant_session_error)?;
+        if !sessions
+            .channel_session_is_selected(owner, session)
+            .map_err(super::assistants::assistant_session_error)?
+        {
+            return Err(ApplicationError::Conflict(
+                "this channel Session is superseded by its canonical account Session".into(),
+            ));
+        }
+        let Some(port) = self.channels.as_deref() else {
+            return Ok(());
+        };
+        let saved = sessions
+            .get(owner, session)
+            .map_err(super::assistants::assistant_session_error)?;
+        let source = saved.channel.get("source").ok_or_else(|| {
+            ApplicationError::Conflict("channel Session has no platform identity".into())
+        })?;
+        let current = port.snapshot(source)?.ok_or_else(|| {
+            ApplicationError::Conflict("channel Session no longer has a deployment binding".into())
+        })?;
+        let canonical = |account: &str| {
+            sessions
+                .canonical_channel_account(owner, source, account)
+                .map_err(super::assistants::assistant_session_error)
+        };
+        let saved_account = canonical(saved.channel.get("account").map_or("", String::as_str))?;
+        let current_account = canonical(current.account.as_deref().unwrap_or(""))?;
+        if current.owner != owner
+            || !current.enabled
+            || saved.graph != current.binding.graph
+            || saved.reply_node != current.binding.reply_node
+            || saved_account != current_account
+        {
+            return Err(ApplicationError::Conflict(
+                "channel Session does not match an enabled deployment binding".into(),
+            ));
+        }
+        Ok(())
+    }
+
     pub(crate) fn channel_management(
         &self,
     ) -> Result<&dyn ChannelManagementPort, ApplicationError> {
@@ -240,3 +289,6 @@ impl RunApplication {
         self.channels.as_deref()?.callback_owner(platform, key)
     }
 }
+
+#[cfg(test)]
+mod tests;
