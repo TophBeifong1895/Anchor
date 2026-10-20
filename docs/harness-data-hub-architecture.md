@@ -57,7 +57,7 @@ anchor-kernel  ◄──  anchor-facts  ◄──  anchor-runner-host   （写�
 
 ## 5. 写侧组件
 
-### 5.1 内核变更（P1：已实现，并按第一性原理简化，待审查后冻结）
+### 5.1 内核变更（P1 已完成，冻结基点 C1 = `9a5fa57`）
 
 内核只记录宿主盖章、提议方无法伪造的事实，不新增裁决。实际落地（都在 `rust/anchor-kernel/src/` 下）：
 
@@ -84,6 +84,11 @@ anchor-kernel  ◄──  anchor-facts  ◄──  anchor-runner-host   （写�
    - 内核生成的资源改用"这条记录在目标资源历史里的位置"命名：`effect/{target}/{位置}`、`pending/{target}/{位置}`（`kernel.rs:468`）。历史只追加，位置天然唯一，不需要任何跨资源的协调。只有 Execute 和 Pending 两条路径需要多读一次目标资源的历史长度，普通提交不受影响。
    - 旧记录里的 `seq` 字段读取时被忽略。
 7. **因果关系不进内核**：P1 第一版加过 `Submission.cause`，"原样记录，不校验，不解读"。这样的字段按定义就是内容，所以删掉了。因果用天然标识写进提交的 `content`，比如 Goose 的 `messageId`、`toolCallId`；人工批准记录的内容里本来就有 `{"approved": pending.id}`。
+
+**已知边界**（审查登记，Host 用上 Execute 或 Pending 之前必须处理）：
+
+- **同一个 id 删除后重建**：如果旧的 `effect/…`、`pending/…` 资源还在，新 effect 会撞名；更重要的是，旧 effect 处在 `unknown` 状态时，按前缀查找未知 effect 的判断（`has_unknown_effect`）会把它算到新资源头上，新资源的 Execute 会被拒绝。现在走不到，是因为生产 Host 不创建 effect 和 pending 资源。规则：删除资源时连同它的 effect、pending 资源一起删除，或者禁止复用资源 id。
+- **嵌套 id 的前缀匹配**：`effect/run/1/` 也会匹配 `run/1/x` 的 effect，所以子资源的未知 effect 会阻断上层资源的 Execute。这是原内核就有的问题，和上一条一起处理。
 
 新字段一律可选，旧记录读出来是"未记录"，不迁移，也不拒绝。测试见 `rust/anchor-kernel/tests/recorded_facts.rs`。其中的差分测试让两次运行的时钟和配置都不同，并且覆盖了普通工作、外部效果及其生命周期、人工批准、过期提交和预算耗尽，两次运行的裁决和所有资源完全相同。
 

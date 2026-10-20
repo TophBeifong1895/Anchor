@@ -220,3 +220,46 @@ P1 改动了内核。按宪法"提议和裁决分离"的原则，应由另一个
 标准 Goose 套件完全包含在完整回归里，按新规则不再另跑。
 
 请审查方审查这一版。通过后，以这一版的提交作为新的 C1，替换 `e172e05`。
+
+## 审查"按第一性原理简化"（2026-10-20，审查 9a5fa57）
+
+结论：**通过，可以用 9a5fa57 替换 `e172e05` 作为 C1。**
+
+### 1. 按位置命名：成立
+
+- `place` 的值是目标资源的历史长度加 1，在持有写锁时计算。从计算到 `submit` 提交目标记录之间，目标历史不会再增加任何记录。
+  - 进入 `resolve_pending` 的 HumanDecision 路径会提前返回，不会调用 `place`；
+  - `submit` 对已存在的目标一定会提交。
+  
+  所以名字就是这条记录实际所在的位置。
+- 同一个目标下，名字唯一：历史只追加，`trim_incomplete_tail` 只截掉从来没成为记录的末尾，重启后历史长度不变。
+- 不同目标之间也不会撞名：后缀固定是 12 位数字，`effect/T/N` 只能对应同一个 T。
+- 旧数据：本机找不到任何 `effect%2F*`、`pending%2F*` 目录，生产 Host 也不走这两条路径，所以新的 12 位位置编号不会和旧的 seq 编号撞名。
+
+### 2. 删除 seq 和 cause 不影响裁决：确认
+
+- 内核里 seq 只有两个用途：给 effect、pending 资源起名，以及写进 Stamp。
+  - 裁决只通过 `has_unknown_effect` 用到 effect 的名字，而它只看前缀 `effect/{endpoint}/`，不看后缀，所以命名方式变化不影响结果。
+  - pending 资源的名字不参与任何判断。
+- cause 从来没有被读取过。
+- 全工作区 `cargo check --all-targets` 通过，说明内核之外没有任何地方读取 `seq()` 或 `cause`。仓库里其余的 `"seq"` 都是 Session 和事件流自己的字段，和内核无关。
+- 旧记录里的 `seq`、`cause`、`knobs` 字段读取时被忽略，没有任何类型设置 `deny_unknown_fields`。
+- 本地复跑内核测试，全部通过，其中 `recorded_facts` 12 项。
+
+### 3. 新边界：可以接受，但需要把表述写全
+
+- 影响不止撞名。同一个 id 重建之后，旧的 `effect/{id}/…` 只要还在，就会被 `has_unknown_effect` 按前缀算到新资源头上：旧 effect 是 `unknown` 状态时，新资源的 Execute 会被拒绝，原因是 `EffectUnknown`。也就是说，残留的 effect 会影响裁决。这个问题在按 seq 命名时就已经存在，不是这次引入的。
+- 现在确实走不到，但原因应该写成"生产 Host 不创建 effect 和 pending 资源"。"Run id 带时间戳"并不完全准确：`admission.rs:52` 用的是 `rust-{纳秒}`，但还有 `turn-{turn_id}` 形式的 id。
+- 建议登记的规则：**删除资源时，必须连同它的 `effect/{id}/` 和 `pending/{id}/` 一起删除；或者不允许复用资源 id。** 等 Host 真正用上这两条路径时实现。
+- 另一个已有问题，不在本次范围内：前缀匹配会把嵌套 id 的 effect 也算进来。例如目标 `run/1/x` 的 `unknown` effect，也会阻断 `run/1` 的 Execute。也等 Host 用上 Execute 时一并处理。
+
+## 冻结为 C1（2026-10-20）
+
+接受审查结论：**`9a5fa57` 替换 `e172e05`，成为新的冻结基点 C1。** 从此 `git diff 9a5fa57 -- rust/anchor-kernel` 必须为空，除非另有经过审查的内核变更。
+
+已知边界按审查意见补全，登记在 [总体架构 5.1](../../../docs/harness-data-hub-architecture.md) 的"已知边界"中：
+
+1. **同一个 id 删除后重建**：如果它旧的 effect 资源还在，后果不只是新 effect 撞名（记录已经提交、创建时返回 `Exists`）。旧 effect 处在 `unknown` 状态时，按前缀查找未知 effect 的判断会把它算到新资源头上，新资源的 Execute 会被拒绝，这会影响裁决。这个问题按 seq 命名时就已存在，不是本次引入的。
+   - 现在走不到的原因：**生产 Host 不创建 effect 和 pending 资源**。原文"Run id 带时间戳"不准确，Run id 还有 `turn-{turn_id}` 这样的形式。
+   - 规则：Host 用上这两条路径之前，必须二选一：删除资源时连同它的 effect、pending 资源一起删除，或者禁止复用资源 id。
+2. **嵌套 id 的前缀匹配（已有问题，不在本次范围）**：`effect/run/1/` 这个前缀也会匹配到 `run/1/x` 的 effect，所以 `run/1/x` 下的未知 effect 会阻断 `run/1` 的 Execute。等 Host 用上 Execute 时一起处理。
