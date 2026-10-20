@@ -35,3 +35,31 @@
    - `tests/goose_persistent_assistant.rs` 新增的场景照常提交。合并后它们会走 Kernel 路径，由分支的门槛覆盖。
 2. **如果不是你的：** 不要动这些文件，告诉用户。
 3. 提交完成后，确认 `git status --porcelain --untracked-files=no` 输出为空，然后告诉用户："master 已提交，工作区干净，HEAD = <hash>"。从这时起冻结提交。
+
+## 补充（10-20 13:40）：快进被未跟踪文件挡住的处理
+
+第一次快进失败，原因是 `experiments/constitution-poc/` 下有 14 个未跟踪文件，分支在 `9e9ef98` 已经提交了同名文件。审查方已逐个比对，14 个文件全部和 `constitution-core` 上的版本**字节一致**；其他未跟踪文件都不冲突。`target/` 目录不受影响，分支的 `.gitignore` 会忽略它。
+
+处理方法：先把这 14 个文件移到备份目录，不删除，然后快进，最后比对内容。按下面的命令原样执行：
+
+```bash
+cd /home/mansteinl/Anchor
+B=/tmp/constitution-poc-untracked-backup
+mkdir -p "$B"
+git ls-tree -r --name-only constitution-core experiments/constitution-poc | while read -r f; do
+  mkdir -p "$B/$(dirname "$f")" && mv "$f" "$B/$f"
+done
+git merge --ff-only constitution-core
+diff -r --exclude=target "$B/experiments/constitution-poc" experiments/constitution-poc && echo IDENTICAL
+git log -1 --oneline                          # 应为 204d126
+git status --porcelain --untracked-files=no   # 应只有 " M docs/constitution-merge-task.md"
+```
+
+- **本文件本身的未提交改动是预期的**：这一节是审查方在冻结期间写进来的，分支上没有改过这个文件，所以不影响快进。**不要在快进前提交它**，因为那样 master 就不再是 `204d126` 的祖先，快进会失败。
+- 三项都符合（输出 `IDENTICAL`、HEAD 是 `204d126`、已跟踪改动只有本文件）时：
+  1. 删除 `$B`；
+  2. 只提交本文件，提交说明写 `docs: record constitution-core fast-forward procedure`；
+  3. 告诉用户"已快进到 204d126，并提交了本文件，HEAD = <hash>"。
+- 如果 `merge` 再次失败，原样贴出输出并停下。备份保留，不要删。要恢复的话，把 `$B/experiments/constitution-poc/` 下的文件移回原位即可。
+- 如果 `diff` 有输出，同样停下，贴出输出，备份保留。
+- 不推送。
