@@ -4,6 +4,8 @@
 
 本文说明当前契约与配置方法。本机已部署群共享会话及可编辑的业务图，网关已认证；隔离真实模型验证了跨成员上下文、联网升级和旧原生历史接续。未代发真实企微测试消息，群聊与媒体的实际客户端收发仍待用户验收；证据见 [本轮验收](../.local/wecom-network-group-20261015/README.md)。
 
+2026-10-20 本机常驻实例因 `database is locked` 退出：等待输入的空闲查询和已领取输入的重读误用 SQLite 写事务，放大跨连接写锁竞争。现改为只读事务；确有待领取输入时先结束读事务，再取得写事务，重新检查 current binding、领取 key 和最新输入。未延长 busy timeout，也未自动重放失败输入；当时实际持锁者未确认。Session 194 项、兼容部署的 Host 常驻助手 23 项及固定 Goose 重启定向 3 项通过。8077 使用 `87c46a3` 加该修复的兼容版本，3 个规范会话已恢复等待输入，网关已认证，103 条 Turn 与 58 条投递记录摘要不变；旧重复会话仍不恢复。该部署不是已合入 master 的 Kernel 版本，不能直接用当前 master 重启并读取旧 Run；未新增真实模型或企微消息验收。命令、部署边界与本机证据见 [锁竞争修复](../.local/assistant-lock-20261020/README.md)。
+
 ## 机器人和成员身份
 
 在企业微信智能机器人管理入口选择 API 模式、长连接，取得 Bot ID 和 Secret。默认平台端点为 `wss://openws.work.weixin.qq.com`；群 Webhook 地址不能替代这组凭证。无需向公网开放本机 HTTP 回调，网关与 Host 通过本机端点交互。
@@ -54,6 +56,8 @@ Host 的 ChannelSupervisor 按渠道选择的 Graph 查找 Plugin 声明的原�
 处理较慢时，网关在同一条流式消息中显示“⏳ 正在准备”或当前工具步骤，仅在实际显示内容变化时更新（最多每秒一次、每轮 15 次），最终由回答替换。不再周期重发省略号动画，相同状态会去重。加载蓝圈及其位置由企微客户端控制，接口不提供位置参数；不能提前结束流式消息来隐藏蓝圈，否则最终回答无法更新该消息。
 
 常驻助手是普通三节点循环：`wait_input (Op.host session.wait_input) → assistant (Agent) → reply (Op.host session.reply) → wait_input`，不在 Kernel 中加入 Session/WeCom 依赖或专用 Runner。首条可信消息惰性创建该 Session 的 current assistant Run；后续每条输入仍有独立 Turn，但复用 Run、cursor、同节点稳定 workspace 与逐节点 Goose 原生历史。等待节点把本轮输入作为不可变产物交给 Agent，不覆写 `Run.input`，空闲等待不调用模型。Session 保存 Turn/幂等、current 与历史 binding、retire 事实；Run 拥有执行进度，逐轮 invocation/fs2 Artifact 不可变，不因工作目录复用而合并。
+
+等待输入时，无待领输入和同一 key 的幂等重读仅需一致的只读事务，不争用 SQLite 写锁。观察到待领输入不代表已获得领取权：必须结束读事务后获取写事务，再核验当前绑定、同一 key 是否已被领取及此刻最新的候选输入；并发替换、完成、领取或交接均以写事务中的事实为准，不把旧读快照升级成写事务。
 
 私聊按成员隔离；群内 @ 机器人时，同群不同成员共享 Session、current Run 和对话上下文，私聊、不同群及不同机器人账号彼此隔离。每条输入及中断输入保留真实发言者，允许名单仍检查该成员。群必须有平台 `chatid`，回复沿原回调 `req_id` 返回；不新增主动群发能力。
 

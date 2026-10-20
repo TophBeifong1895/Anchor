@@ -516,6 +516,20 @@ impl SessionStore {
     ) -> Result<Option<ChannelInboundAdmission>, SessionError> {
         validate_input_lookup(owner, session, run, key)?;
         let mut connection = self.lock()?;
+        {
+            let transaction = connection.transaction()?;
+            require_assistant(&transaction, owner, session, run, BindingScope::Current)?;
+            if let Some(inbound) = read_input(&transaction, session, run, key)? {
+                let admission = inbound_admission(&transaction, &inbound)?;
+                transaction.commit()?;
+                return Ok(Some(admission));
+            }
+            let pending = read_pending_input(&transaction, session)?.is_some();
+            transaction.commit()?;
+            if !pending {
+                return Ok(None);
+            }
+        }
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let mut snapshot =
             require_assistant(&transaction, owner, session, run, BindingScope::Current)?;
@@ -524,20 +538,7 @@ impl SessionStore {
             transaction.commit()?;
             return Ok(Some(admission));
         }
-        let inbound = transaction
-            .query_row(
-                "SELECT inbound.inbound_id, inbound.session_id, inbound.turn_id, inbound.run_id,
-                        inbound.request, inbound.superseded_by_turn_id
-                 FROM channel_inbounds inbound
-                 JOIN turns turn ON turn.id = inbound.turn_id AND turn.session_id = inbound.session_id
-                 WHERE inbound.session_id = ?1 AND turn.status = 'running'
-                   AND inbound.superseded_by_turn_id IS NULL
-                   AND NOT EXISTS(SELECT 1 FROM channel_assistant_inputs input WHERE input.turn_id = inbound.turn_id)
-                 ORDER BY inbound.created_at DESC, inbound.inbound_id DESC LIMIT 1",
-                [session],
-                read_inbound_row,
-            )
-            .optional()?;
+        let inbound = read_pending_input(&transaction, session)?;
         let Some(inbound) = inbound else {
             transaction.commit()?;
             return Ok(None);
@@ -740,6 +741,27 @@ fn ensure_run_session(
     Ok(())
 }
 
+fn read_pending_input(
+    connection: &Connection,
+    session: &str,
+) -> Result<Option<StoredInbound>, SessionError> {
+    connection
+        .query_row(
+            "SELECT inbound.inbound_id, inbound.session_id, inbound.turn_id, inbound.run_id,
+                    inbound.request, inbound.superseded_by_turn_id
+             FROM channel_inbounds inbound
+             JOIN turns turn ON turn.id = inbound.turn_id AND turn.session_id = inbound.session_id
+             WHERE inbound.session_id = ?1 AND turn.status = 'running'
+               AND inbound.superseded_by_turn_id IS NULL
+               AND NOT EXISTS(SELECT 1 FROM channel_assistant_inputs input WHERE input.turn_id = inbound.turn_id)
+             ORDER BY inbound.created_at DESC, inbound.inbound_id DESC LIMIT 1",
+            [session],
+            read_inbound_row,
+        )
+        .optional()
+        .map_err(Into::into)
+}
+
 fn read_input(
     connection: &Connection,
     session: &str,
@@ -792,6 +814,179 @@ mod tests {
             attachments: Default::default(),
             run_id: None,
             replace_running: true,
+        }
+    }
+
+    #[test]
+    fn idle_assistant_input_checks_do_not_request_a_database_writer() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("sessions.sqlite");
+        let store = SessionStore::open(&path).unwrap();
+        let admitted = store
+            .admit_channel_inbound("owner", inbound("a", "one", "input"))
+            .unwrap();
+        let session = admitted.session.id;
+        store
+            .bind_channel_assistant("owner", &session, "run-a", "wait", "assistant", "reply")
+            .unwrap();
+        store
+            .finish_turn(
+                "owner",
+                &session,
+                &admitted.turn.id,
+                TurnStatus::Completed,
+                None,
+            )
+            .unwrap();
+        store
+            .lock()
+            .unwrap()
+            .busy_timeout(std::time::Duration::ZERO)
+            .unwrap();
+        let writer = Connection::open(&path).unwrap();
+        writer.execute_batch("BEGIN IMMEDIATE").unwrap();
+        let input = store.claim_channel_assistant_input("owner", &session, "run-a", "wait/2");
+        writer.execute_batch("ROLLBACK").unwrap();
+        assert!(matches!(input, Ok(None)), "{input:?}");
+    }
+
+    #[test]
+    fn replaying_a_claimed_assistant_input_does_not_request_a_database_writer() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("sessions.sqlite");
+        let store = SessionStore::open(&path).unwrap();
+        let admitted = store
+            .admit_channel_inbound("owner", inbound("a", "one", "input"))
+            .unwrap();
+        let session = admitted.session.id;
+        store
+            .bind_channel_assistant("owner", &session, "run-a", "wait", "assistant", "reply")
+            .unwrap();
+        let claimed = store
+            .claim_channel_assistant_input("owner", &session, "run-a", "wait/1")
+            .unwrap()
+            .unwrap();
+        store
+            .lock()
+            .unwrap()
+            .busy_timeout(std::time::Duration::ZERO)
+            .unwrap();
+        let writer = Connection::open(&path).unwrap();
+        writer.execute_batch("BEGIN IMMEDIATE").unwrap();
+        let replay = store.claim_channel_assistant_input("owner", &session, "run-a", "wait/1");
+        writer.execute_batch("ROLLBACK").unwrap();
+        let replay = replay.unwrap();
+        assert_eq!(replay.unwrap().turn.id, claimed.turn.id);
+    }
+
+    #[test]
+    fn assistant_claim_rechecks_input_key_and_binding_after_waiting_for_a_writer() {
+        use std::{cell::RefCell, sync::mpsc, time::Duration};
+
+        thread_local! {
+            static WRITER_GATE: RefCell<Option<(mpsc::Sender<()>, mpsc::Receiver<()>)>> = const { RefCell::new(None) };
+        }
+
+        fn wait_for_writer(attempt: i32) -> bool {
+            assert_eq!(attempt, 0);
+            WRITER_GATE.with(|gate| {
+                let (blocked, release) = gate.borrow_mut().take().unwrap();
+                blocked.send(()).unwrap();
+                release.recv_timeout(Duration::from_secs(5)).unwrap();
+            });
+            true
+        }
+
+        for change in ["completed", "replaced", "same-key", "other-key", "handover"] {
+            let root = tempfile::tempdir().unwrap();
+            let path = root.path().join("sessions.sqlite");
+            let store = SessionStore::open(&path).unwrap();
+            let other = SessionStore::open(&path).unwrap();
+            let admitted = store
+                .admit_channel_inbound("owner", inbound("a", "one", "input"))
+                .unwrap();
+            let session = admitted.session.id;
+            store
+                .bind_channel_assistant("owner", &session, "run-a", "wait", "assistant", "reply")
+                .unwrap();
+            let writer = Connection::open(&path).unwrap();
+            writer.execute_batch("BEGIN IMMEDIATE").unwrap();
+            let (blocked, observed) = mpsc::channel();
+            let (release, released) = mpsc::channel();
+            let worker_session = session.clone();
+            let worker = thread::spawn(move || {
+                WRITER_GATE.with(|gate| *gate.borrow_mut() = Some((blocked, released)));
+                store
+                    .lock()
+                    .unwrap()
+                    .busy_handler(Some(wait_for_writer))
+                    .unwrap();
+                store.claim_channel_assistant_input("owner", &worker_session, "run-a", "wait/1")
+            });
+            observed.recv_timeout(Duration::from_secs(5)).unwrap();
+            writer.execute_batch("ROLLBACK").unwrap();
+            let expected = match change {
+                "completed" => {
+                    other
+                        .finish_turn(
+                            "owner",
+                            &session,
+                            &admitted.turn.id,
+                            TurnStatus::Completed,
+                            None,
+                        )
+                        .unwrap();
+                    None
+                }
+                "replaced" => Some(
+                    other
+                        .admit_channel_inbound("owner", inbound("a", "two", "replacement"))
+                        .unwrap()
+                        .turn
+                        .id,
+                ),
+                "same-key" | "other-key" => {
+                    let key = if change == "same-key" {
+                        "wait/1"
+                    } else {
+                        "wait/other"
+                    };
+                    other
+                        .claim_channel_assistant_input("owner", &session, "run-a", key)
+                        .unwrap()
+                        .unwrap();
+                    (change == "same-key").then_some(admitted.turn.id.clone())
+                }
+                "handover" => {
+                    other
+                        .handover_channel_assistant("owner", &session, "run-a", "run-b", "wait/new")
+                        .unwrap();
+                    None
+                }
+                _ => unreachable!(),
+            };
+            let events = other.events("owner", &session, 0).unwrap().len();
+            release.send(()).unwrap();
+            let result = worker.join().unwrap();
+            if change == "handover" {
+                assert!(
+                    matches!(result, Err(SessionError::Conflict(_))),
+                    "{result:?}"
+                );
+            } else {
+                assert_eq!(
+                    result.unwrap().map(|input| input.turn.id),
+                    expected,
+                    "{change}"
+                );
+            }
+            if change != "replaced" {
+                assert_eq!(
+                    other.events("owner", &session, 0).unwrap().len(),
+                    events,
+                    "{change}"
+                );
+            }
         }
     }
 
