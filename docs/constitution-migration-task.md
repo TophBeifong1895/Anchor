@@ -416,3 +416,68 @@ master 上另有 agent 在改 Web、`api.rs`、`main.rs`、`goose_acp/pilot.rs`�
 **4. S27** 在 M3 交回时一并审查。它实际上回答了待决的 S4（退役之后还能不能 abandon），需要用户同时裁定。
 
 **5.** M3 通过之后，由用户决定是否把分支合入 master。
+
+### 10.16 M3 审查结论（2026-10-20）
+
+**M3 通过。** 审查方在机器空闲时独立复验了 `41e320d`：
+
+- workspace：129 个 target，2153 通过、0 失败、125 忽略，与交回数字一致；
+- 固定 Goose 完整忽略套件，按标准命令执行，target 用 `-core` 目录：122 通过、0 失败、0 忽略，与交回数字一致；
+- 内核从 `0859373` 起零改动；旧类型 `GraphRunner|RunStatus|FileRunStore|stop_requested|pause_requested` 在 `rust/` 下零命中；
+- 快照提交 `0d029eb` 在删除提交 `6e91e5c` 之前；
+- 本分支已包含 master 最新提交 `0aa5197`，master 没有未提交的已跟踪改动。
+
+**待用户决定：**
+
+1. S27（承接 S4）：退役只移动 Session 的 current 指针，未结算的 Run 仍然可以被 Human abandon，退役记录和 Run 的进度都保留。
+2. 是否把 `constitution-core` 合入 master。合入之后，M4、M5 在 master 上继续。
+
+用户决定之前，不要开始 M4。
+
+### 10.17 用户决定与合并步骤（2026-10-20，与前文冲突时以本节为准）
+
+**用户决定：**
+
+- **S27 批准。** 退役只移动 Session 的 current 指针，未结算的 Run 仍可由 Human abandon，退役记录与 Run 的进度都保留。这一条同时结清 S4。请在工作记录中把 S27 标为已批准，S4 标为由 S27 结清。
+- **批准把 `constitution-core` 合入 master**，之后 M4、M5 在 master 上继续。
+
+**合并步骤：**
+
+master 目前有 debug 工作在进行，工作区里有 28 个已跟踪文件尚未提交。其中 4 个本分支也改过：`api.rs`、`api/tests/sessions.rs`、`application/assistants.rs`、`pilot_tools.rs`。所以不能马上快进合并。
+
+1. **现在要做的**：提交本任务书和工作记录的更新，然后等待。不开始 M4。
+2. **master 的 debug 提交之后**，由用户通知你。届时把 master 最新提交合入本分支：
+   - 冲突按 §10.14 的原则处理：业务行为以 master 为准，运行时实现以本分支为准；
+   - master 新写的代码如果用到了已删除的旧类型，改为调用门面；
+   - 每个冲突逐条登记。
+3. **合并后重跑全部门槛**：
+   - workspace；
+   - 固定 Goose 完整套件，使用 `-core` 目录；
+   - Web；
+   - clippy、fmt；
+   - 围栏。
+
+   用 §9 模板交回，交回中写明最终提交，并确认这个提交包含 master 最新提交。
+4. **审查通过后**，由 master 一侧执行 `git -C /home/mansteinl/Anchor merge --ff-only constitution-core`，本分支不要去动 master 的工作区。
+5. **合并完成后**：
+   - M4、M5 改在 master 上进行；
+   - `-core` 构建目录不再需要；
+   - 本 worktree 和分支保留到 M5 结束，何时删除由用户决定；
+   - 是否推送另行决定。
+
+### 10.18 执行合并（2026-10-20，与 §10.17 冲突时以本节为准）
+
+master 已提交，工作区干净，tip 是 `dfd3427`。比本分支多 3 个提交：`08db12f`（Web 页面状态）、`87c46a3`（助手身份规范化、创建重试幂等、Session v9 迁移）、`dfd3427`（文档）。和本分支重叠的文件有 18 个。
+
+1. **先提交待提交的文档**：本任务书 §10.16–§10.18、工作记录里的 S27/S4 状态，以及 `docs/anchor-runtime-migration-overview.md`（如果还没入库）。只提交这些路径。
+2. **合并 `dfd3427`**：用 merge，不用 rebase。冲突原则同 §10.17 第 2 步。下面几项要专门处理：
+   - **`run_access/projection.rs`**：保留本分支的实现，**不要**移植 master 的 pause/cancellation 执行器表。`87c46a3` 修的现象是：旧 `project_run` 读 Session/渠道部署资格时一直持有全局 active 锁，并发的 `/graphs`、`/runs` 只能排队等重复的整份插件哈希，用户看到的是好几秒的登录失败。需要确认两点，并逐条登记结论：
+     - (a) 本分支没有任何路径在持有 `KernelRuns.active` 时做 Session、部署或插件读取，也不跨 `.await` 持有它；
+     - (b) 本分支的 projection 是否也在读取时做整份插件哈希。如果是，按 master 的方式改：先拒绝历史绑定，再查部署；观测改用 live `PluginMetadata`；执行前的完整检查保留。
+   - **`87c46a3` 为这个现象加的测试**：如果有，保留它，让它在 Kernel 路径上跑并且通过。
+   - **`tests/goose_persistent_assistant.rs`**：master 新增的 canonical-account 重启等场景要全部保留，走 Kernel 路径。所以固定 Goose 的总数会超过 122，交回时列出新增了哪几项。
+   - **Session v9 迁移、渠道账号别名、创建幂等键**：这些是业务层，以 master 为准。本分支不改 Session schema。
+   - master 新代码如果用到了已删除的旧类型，改为调用门面。C1 照旧：`rust/anchor-kernel` 相对 `0859373` 的 diff 必须为空。
+3. **重跑 §10.17 第 3 步的全部门槛**，交回格式同那一步。另外两项要求：
+   - 交回中附上 merge 提交的冲突登记；
+   - 写明最终提交包含 `dfd3427`，确保 master 能快进。

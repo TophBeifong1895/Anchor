@@ -201,7 +201,7 @@
 | S1 | 节点提交了非法路由 | 整个 Run 失败 | 打回给提议者修正（`RouteInvalid`） | 宪法：可修正的问题返回提议者，不终止任务 |
 | S2 | 所有节点都因轮数上限而停止 | Run 状态为 `Stopped`，可以 resume，但 resume 后立即再次停止 | 结算为 `Escalated`，附停止原因 | 旧状态名义上可恢复，实际上无事可做；新状态如实表达"需要人决定" |
 | S3 | 对已 `Aborted` 的 Run 再次 abandon | 幂等成功，返回同一结果 | 拒绝（`TaskSettled`） | 已结算不可逆，不需要为幂等单独设规则；调用方可通过读取状态得到同样信息 |
-| S4 | 退役之后再 abandon（PoC E2 发现） | 允许 | 待定：退役属于 Session 指针，尚未迁移 | 需要用户决定 |
+| S4 | 退役之后再 abandon（PoC E2 发现） | 允许 | 退役只移动 Session current，未结算 Run 仍可 Human abandon | 由已批准的 S27 结清（任务书 §10.17） |
 | S5 | 并行波次中某个分支触发轮数上限 | 先准备好的兄弟分支被记为"已开始"，但从未执行（幽灵调用） | 不把任何未派发的调用记为已开始 | 宪法第二条：没有发生的事不能记为发生 |
 | S7 | 子 Run 的接纳结果未知 | Run 失败 | 结算为"未知" | 宪法第二条：未知是正当的终点，不应伪装为失败 |
 | S8 | 有多条出边的调用节点 | 运行到该节点时 Run 失败 | 创建 Run 时拒绝 | 宿主代码无法替调用节点选择路由，这是作者错误，应尽早发现 |
@@ -1183,7 +1183,7 @@ main.rs 与 goose_acp.rs 自动合并；恢复模块和助手接入均保留。�
 
 | 候选 | 结论与现场 |
 | --- | --- |
-| S27（承接 S4） | 退役只移动 Session current 指针；未结算 Run 仍可 Human abandon。按任务书 §3.4 对齐 Kernel，不把 retired 解释成结算。`application::run_access::abandon::tests::retired_assistant_can_be_abandoned_without_restoring_its_session_binding` 验证真实 Session 退役后放弃，保留原退役指针和 Run 进度。 |
+| S27（承接 S4） | **已批准，S4 同时结清（任务书 §10.17）。** 退役只移动 Session current 指针；未结算 Run 仍可 Human abandon。按任务书 §3.4 对齐 Kernel，不把 retired 解释成结算。`application::run_access::abandon::tests::retired_assistant_can_be_abandoned_without_restoring_its_session_binding` 验证真实 Session 退役后放弃，保留原退役指针和 Run 进度。 |
 
 ### 断言修改
 
@@ -1241,7 +1241,7 @@ C2 save 0、mutation 0；Kernel 相对 `0859373` 零 diff，GraphValidator 裁�
 
 用户已裁定普通人的显式 resume 授权 Agent 在同一个 Goose 原生 Session 核查后继续。普通 Run 控制与认证 Session-call 共用 `inspect_interrupted_attempts`：先把尚未登记的真实 native pending 经 Code + Observation 保存，再持久化核查提示，经既有 `recover_attempt` 提交 Human release；不补造工具成功或模型完成事实。后台自动恢复不调用这条释放路径。人工 Completed/Abort 继续作为另一条路径；其执行准备移到 worker registry 锁外，校验与持久写入顺序不变。
 
-这是对齐 master 的 M2 行为更正，不新增 S 候选。S27（承接 S4）仍待用户在 M3 交回时审查。
+这是对齐 master 的 M2 行为更正，不新增 S 候选。S27（承接 S4）已在任务书 §10.17 批准。
 
 | 人工恢复用例准备与断言 | §10.15 更正 |
 | --- | --- |
@@ -1267,4 +1267,4 @@ C2 save 0、mutation 0；Kernel 相对 `0859373` 零 diff，GraphValidator 裁�
 原 A1–A10 与 Runtime 73 项、Host 39 项逐项映射继续有效；本轮只增加上表人工恢复测试改名映射，没有删除业务测试或新增既有 ignore。最终命令、原样结果和未覆盖范围统一见 [§10.15 交回](../experiments/constitution-host-preflight/m3/completion-verification.md)。
 
 
-§10.15 最终结果：workspace **2,153 / 0 / 125**，Web **333 / 0** 及构建通过，完整固定 Goose **122 / 0 / 0**，原 12 项失败逐项独跑各 **1 / 0 / 0**，严格 Clippy/fmt 通过；Host/Goose/helper 采证前后身份相同。首个 workspace 有一项旧动作期待失败，单独修正/复测后最终全量通过，首轮日志如实保留。[最终证据](../experiments/constitution-host-preflight/m3/completion-verification.md) 与 [逐 target 原样结果](../experiments/constitution-host-preflight/m3/completion-checks.json)。C1 零 diff、C2 save 0/mutation 0、旧类型扫描零、围栏不变。M3 实现与规定回归完成；S27（承接 S4）待用户审查，不合回 master，不自动开展 M4/M5。
+§10.15 最终结果：workspace **2,153 / 0 / 125**，Web **333 / 0** 及构建通过，完整固定 Goose **122 / 0 / 0**，原 12 项失败逐项独跑各 **1 / 0 / 0**，严格 Clippy/fmt 通过；Host/Goose/helper 采证前后身份相同。首个 workspace 有一项旧动作期待失败，单独修正/复测后最终全量通过，首轮日志如实保留。[最终证据](../experiments/constitution-host-preflight/m3/completion-verification.md) 与 [逐 target 原样结果](../experiments/constitution-host-preflight/m3/completion-checks.json)。C1 零 diff、C2 save 0/mutation 0、旧类型扫描零、围栏不变。M3 已通过 §10.16 独立复验；§10.17 批准 S27、结清 S4 并授权合并。§10.18 要求先合入 `dfd3427` 并重跑门槛，交回审查后由 master 一侧快进；本分支不自动开展 M4/M5。
