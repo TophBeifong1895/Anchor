@@ -14,6 +14,10 @@ use crate::query::{
 
 /// Evidence cited per finding, at most.
 const CITED: usize = 50;
+/// A check failing in at least this share of a task's graded Runs, over at
+/// least [`FAILING_RUNS`] of them, is reported.
+const FAILING_SHARE: f64 = 0.5;
+const FAILING_RUNS: usize = 3;
 /// A configuration whose invocations spend this share of their time before
 /// the first model request is reported.
 const STARTUP_SHARE: f64 = 0.1;
@@ -30,7 +34,7 @@ impl Analyzer for Health {
     /// Without these, the sections that use them are left out; the kernel
     /// sections never need them.
     fn needs(&self) -> &'static [Need] {
-        &[Need::Time, Need::Observations]
+        &[Need::Time, Need::Observations, Need::Grades]
     }
 
     fn analyze(&self, query: &Query) -> Report {
@@ -52,6 +56,9 @@ impl Analyzer for Health {
                 steps(query, &invocations, &mut report);
             }
             configurations(query, &invocations, &mut report);
+        }
+        if !report.not_applicable.contains(&Need::Grades) {
+            quality(query, &invocations, &mut report);
         }
         report
     }
@@ -539,4 +546,86 @@ fn configurations(query: &Query, invocations: &[Invocation], report: &mut Report
         }
     }
     report.summary.insert("configurations", json!(summary));
+}
+
+/// Task quality from grades, beside what the graded Runs cost: the signal a
+/// comparison of configurations weighs efficiency against.
+fn quality(query: &Query, invocations: &[Invocation], report: &mut Report) {
+    let grades = query.grades();
+    let by_run = group_by(invocations, |i| i.run_id.as_str());
+    let by_task = group_by(grades.values(), |g| {
+        (g.grade.task.clone(), g.grade.task_version)
+    });
+    let mut summary = BTreeMap::new();
+    for ((task, version), graded) in by_task {
+        let runs: BTreeSet<&str> = graded.iter().map(|g| g.grade.run_id.as_str()).collect();
+        let of_run = |run: &str| {
+            by_run
+                .get(run)
+                .map(Vec::as_slice)
+                .unwrap_or_default()
+                .iter()
+                .copied()
+        };
+        let tokens = runs.iter().map(|run| {
+            of_run(run)
+                .flat_map(|i| i.turns())
+                .map(|t| t.total_tokens)
+                .sum::<u64>()
+        });
+        let agent_ms = runs.iter().map(|run| {
+            of_run(run)
+                .flat_map(|i| i.lifecycles())
+                .map(|l| l.ended_at_ms.saturating_sub(l.started_at_ms))
+                .sum::<u64>()
+        });
+        let tool_calls = runs
+            .iter()
+            .map(|run| of_run(run).map(|i| i.calls().len() as u64).sum::<u64>());
+        let configs: BTreeSet<&str> = runs
+            .iter()
+            .flat_map(|run| of_run(run).filter_map(|i| i.config()))
+            .collect();
+        let mut checks: BTreeMap<&str, (usize, Vec<Key>)> = BTreeMap::new();
+        for g in &graded {
+            for check in &g.grade.checks {
+                let entry = checks.entry(check.name.as_str()).or_default();
+                if check.passed {
+                    entry.0 += 1;
+                } else {
+                    entry.1.push(g.row.key.clone());
+                }
+            }
+        }
+        let scores: Vec<f64> = graded.iter().map(|g| g.grade.score()).collect();
+        summary.insert(
+            format!("{task} v{version}"),
+            json!({
+                "runs": graded.len(),
+                "mean_score": (scores.iter().sum::<f64>() / scores.len() as f64 * 1000.0).round() / 1000.0,
+                "pass_rate": share(graded.iter().filter(|g| g.grade.passed()).count(), graded.len()),
+                "checks": checks.iter().map(|(name, (passed, _))| (*name, share(*passed, graded.len()))).collect::<BTreeMap<_, _>>(),
+                "configurations": configs.len(),
+                "tokens": summarize(tokens),
+                "agent_ms": summarize(agent_ms),
+                "tool_calls": summarize(tool_calls),
+            }),
+        );
+        for (name, (passed, failed)) in checks {
+            let failing = 1.0 - passed as f64 / graded.len() as f64;
+            if graded.len() >= FAILING_RUNS && failing >= FAILING_SHARE {
+                report.findings.push(Finding {
+                    code: "check_failing",
+                    subject: format!("task {task} v{version}"),
+                    detail: format!(
+                        "check {name} failed in {} of {} graded Run(s)",
+                        failed.len(),
+                        graded.len()
+                    ),
+                    evidence: cite(failed),
+                });
+            }
+        }
+    }
+    report.summary.insert("quality", json!(summary));
 }

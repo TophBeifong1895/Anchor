@@ -1,13 +1,14 @@
 //! L1: projection. Records become fact rows, one per submission, keyed by
 //! data root, resource and place. Only harness facts are kept: who submitted,
 //! when, under which configuration, how it was judged, and for observation
-//! records the observed facts. Submission content of any other kind, outcome
+//! records the observed facts, for grade records the named checks. Submission
+//! content of any other kind, outcome
 //! details and evidence are never projected, so a table holds no business
 //! content. A table can be dropped and rebuilt from its sources at any time.
 
 use std::collections::BTreeMap;
 
-use anchor_facts::{AgentConfiguration, Observation};
+use anchor_facts::{AgentConfiguration, Grade, Observation};
 use anchor_kernel::{Action, Outcome, Phase, PrincipalKind, Record, Resource, Verdict, Waiter};
 use serde::Serialize;
 
@@ -72,7 +73,9 @@ pub enum Body {
     Kernel,
     /// An execution port's observations of one invocation.
     Observation(Observation),
-    /// An observation record this hub's vocabulary cannot read.
+    /// A grade of one Run.
+    Grade(Grade),
+    /// An observation or grade record this hub's vocabulary cannot read.
     Unreadable,
 }
 
@@ -195,12 +198,14 @@ impl Projector {
 }
 
 fn row(root: &str, id: &str, place: usize, validator: &str, record: Record) -> Row {
-    let body = if validator == anchor_facts::OBSERVATION {
-        serde_json::from_value::<Observation>(record.submission.content)
+    let body = match validator {
+        anchor_facts::OBSERVATION => serde_json::from_value(record.submission.content)
             .map(Body::Observation)
-            .unwrap_or(Body::Unreadable)
-    } else {
-        Body::Kernel
+            .unwrap_or(Body::Unreadable),
+        anchor_facts::GRADE => serde_json::from_value(record.submission.content)
+            .map(Body::Grade)
+            .unwrap_or(Body::Unreadable),
+        _ => Body::Kernel,
     };
     let principal = record.stamp.principal();
     Row {

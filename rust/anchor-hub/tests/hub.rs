@@ -234,7 +234,7 @@ fn health_reports_each_irregularity_with_its_records() {
     support::r2(&world);
     let (table, _) = project(&world);
     let report = Health.analyze(&Query::new(table.facts(), Some(0)));
-    assert!(report.not_applicable.is_empty());
+    assert_eq!(report.not_applicable, vec![Need::Grades]);
     assert_eq!(
         codes(&report),
         BTreeSet::from([
@@ -356,7 +356,10 @@ fn records_without_time_or_observations_are_reported_not_applicable() {
         .unwrap();
     let query = Query::new(table.facts(), Some(u64::MAX));
     let health = Health.analyze(&query);
-    assert_eq!(health.not_applicable, vec![Need::Time, Need::Observations]);
+    assert_eq!(
+        health.not_applicable,
+        vec![Need::Time, Need::Observations, Need::Grades]
+    );
     assert_eq!(health.summary["records"]["rows"], json!(1));
     assert!(!health.summary.contains_key("tools"));
     let stall = Stall::default().analyze(&query);
@@ -371,11 +374,15 @@ fn the_cli_hub_discovers_roots_and_follows_appends() {
     std::fs::create_dir_all(world.path().join("host/state/goose-acp")).unwrap();
     assert_eq!(
         discover(world.path()),
-        vec![world.root("kernel-facts"), world.root("kernel-runs")]
+        vec![
+            world.root("kernel-facts"),
+            world.root("kernel-grades"),
+            world.root("kernel-runs")
+        ]
     );
     let mut hub = Hub::new(vec![world.path().to_path_buf()]);
     let first = hub.refresh().unwrap();
-    assert_eq!((hub.roots(), first), (2, 7));
+    assert_eq!((hub.roots(), first), (3, 7));
     assert_eq!(hub.refresh().unwrap(), 0);
     support::r2(&world);
     assert_eq!(hub.refresh().unwrap(), 2);
@@ -390,6 +397,77 @@ fn operators() {
     assert_eq!(repeats::<u8, u8>(&[], 1, |x| *x), vec![]);
     let s = summarize([5, 1, 3, 2, 4, 10, 6, 7, 9, 8]).unwrap();
     assert_eq!((s.n, s.min, s.median, s.p90, s.max), (10, 1, 5, 9, 10));
+    assert!((s.sd - 3.0277).abs() < 1e-3, "{}", s.sd);
+    assert_eq!(summarize([7]).unwrap().sd, 0.0);
     assert_eq!(summarize(Vec::<u64>::new()), None);
     assert_eq!(covered([0..10, 5..15, 20..25, 21..22]), 20);
+}
+
+#[test]
+fn grades_join_their_runs_and_failing_checks_are_reported() {
+    let world = World::new();
+    support::r1(&world);
+    support::r2(&world);
+    world.run("r3", 300_000);
+    world.result("r3", "worker#1", 300_100, 1, true);
+    world.grade(
+        "r1",
+        "ledger",
+        &[("unpaid", true), ("total", false)],
+        400_000,
+    );
+    world.grade(
+        "r2",
+        "ledger",
+        &[("unpaid", false), ("total", false)],
+        400_001,
+    );
+    // Regraded: only the latest grade of a Run counts.
+    world.grade(
+        "r3",
+        "ledger",
+        &[("unpaid", false), ("total", false)],
+        400_002,
+    );
+    world.grade(
+        "r3",
+        "ledger",
+        &[("unpaid", true), ("total", true)],
+        400_003,
+    );
+    let (mut table, mut projector) = project(&world);
+    let grades = DataRoot::open(&world.root("kernel-grades"), "kernel-grades").unwrap();
+    projector.pull(&grades, &mut table).unwrap();
+
+    let query = Query::new(table.facts(), None);
+    let grades = query.grades();
+    assert_eq!(grades.len(), 3);
+    assert!(grades["r3"].grade.passed());
+    assert_eq!(grades["r3"].row.key.place, 2);
+
+    let report = Health.analyze(&query);
+    assert!(report.not_applicable.is_empty());
+    let quality = &report.summary["quality"]["ledger v1"];
+    assert_eq!(quality["runs"], json!(3));
+    assert_eq!(quality["pass_rate"], json!(0.333));
+    assert_eq!(quality["mean_score"], json!(0.5));
+    assert_eq!(quality["checks"]["total"], json!(0.333));
+    assert_eq!(quality["checks"]["unpaid"], json!(0.667));
+    assert_eq!(quality["tokens"]["n"], json!(3));
+    // r1 also observed its ghost invocation, under its own configuration.
+    assert_eq!(quality["configurations"], json!(2));
+    // Only `total` fails in at least half the Runs, once r3's regrade counts.
+    let failing: Vec<_> = report
+        .findings
+        .iter()
+        .filter(|f| f.code == "check_failing")
+        .collect();
+    assert_eq!(failing.len(), 1, "{failing:#?}");
+    assert_eq!(failing[0].subject, "task ledger v1");
+    assert!(
+        failing[0].detail.contains("check total failed in 2 of 3"),
+        "{}",
+        failing[0].detail
+    );
+    assert_eq!(failing[0].evidence.len(), 2);
 }

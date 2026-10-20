@@ -119,6 +119,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "anchor-eval"
+version = "0.1.0"
+dependencies = [
+ "anchor-facts",
+ "anchor-file-lease",
+ "anchor-kernel",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "anchor-facts"
 version = "0.1.0"
 dependencies = [

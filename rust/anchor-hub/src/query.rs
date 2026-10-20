@@ -6,7 +6,7 @@
 use std::collections::BTreeMap;
 use std::ops::Range;
 
-pub use anchor_facts::{AgentConfiguration, Failure, Outcome};
+pub use anchor_facts::{AgentConfiguration, Failure, Grade, Outcome};
 pub use anchor_kernel::{Action, Effect, PrincipalKind, Reason};
 use serde::Serialize;
 
@@ -97,6 +97,29 @@ impl<'a> Query<'a> {
         }
         found.into_values().collect()
     }
+}
+
+impl<'a> Query<'a> {
+    /// The latest accepted grade of each graded Run, by Run id.
+    pub fn grades(&self) -> BTreeMap<&'a str, Graded<'a>> {
+        let mut grades = BTreeMap::new();
+        for row in self.facts.rows {
+            if let Body::Grade(grade) = &row.body
+                && row.verdict.effect == Effect::Accepted
+            {
+                // Rows of one history come in place order: later wins.
+                grades.insert(grade.run_id.as_str(), Graded { row, grade });
+            }
+        }
+        grades
+    }
+}
+
+/// A grade and the record it came from.
+#[derive(Clone, Copy)]
+pub struct Graded<'a> {
+    pub row: &'a Row,
+    pub grade: &'a Grade,
 }
 
 /// Runs name their task `run/{run_id}`, and each node result fills the slot
@@ -536,6 +559,8 @@ pub struct Summary {
     pub p90: u64,
     pub max: u64,
     pub mean: f64,
+    /// Sample standard deviation; 0 for a single value.
+    pub sd: f64,
 }
 
 pub fn summarize(values: impl IntoIterator<Item = u64>) -> Option<Summary> {
@@ -544,6 +569,7 @@ pub fn summarize(values: impl IntoIterator<Item = u64>) -> Option<Summary> {
         return None;
     }
     values.sort_unstable();
+    let mean = values.iter().map(|&v| v as f64).sum::<f64>() / values.len() as f64;
     let rank =
         |q: f64| values[((q * values.len() as f64).ceil() as usize).clamp(1, values.len()) - 1];
     Some(Summary {
@@ -552,6 +578,16 @@ pub fn summarize(values: impl IntoIterator<Item = u64>) -> Option<Summary> {
         median: rank(0.5),
         p90: rank(0.9),
         max: values[values.len() - 1],
-        mean: values.iter().map(|&v| v as f64).sum::<f64>() / values.len() as f64,
+        mean,
+        sd: if values.len() < 2 {
+            0.0
+        } else {
+            (values
+                .iter()
+                .map(|&v| (v as f64 - mean).powi(2))
+                .sum::<f64>()
+                / (values.len() - 1) as f64)
+                .sqrt()
+        },
     })
 }

@@ -278,3 +278,89 @@ fn every_fact_kind_round_trips_with_its_tag() {
         observation
     );
 }
+
+fn grade(run: &str) -> Grade {
+    Grade {
+        version: VERSION,
+        run_id: run.into(),
+        task: "ledger".into(),
+        task_version: 1,
+        checks: vec![
+            Check {
+                name: "unpaid".into(),
+                passed: true,
+            },
+            Check {
+                name: "total".into(),
+                passed: false,
+            },
+        ],
+    }
+}
+
+#[test]
+fn the_grader_records_named_checks_of_the_run_it_names() {
+    let mut kernel = Kernel::new(MemoryStore::default(), Box::new(GraderOnly)).unwrap();
+    install_grades(&mut kernel).unwrap();
+    kernel
+        .create(Resource::new(grade_id("r1"), GRADE, Value::Null))
+        .unwrap();
+    let submit = |principal: &Principal, content: Value| {
+        let seen = kernel.load(&grade_id("r1")).unwrap().unwrap().version;
+        kernel
+            .submit(
+                principal,
+                0,
+                Submission::new(grade_id("r1"), seen, Action::Write).content(content),
+            )
+            .unwrap()
+            .reason
+    };
+    let ok = serde_json::to_value(grade("r1")).unwrap();
+    assert_eq!(submit(&grader("g1"), ok.clone()), Reason::Ok);
+    // Graded again by a changed grader: another record, same history.
+    assert_eq!(submit(&grader("g2"), ok.clone()), Reason::Ok);
+    let history = kernel.history(&grade_id("r1")).unwrap();
+    assert_eq!(
+        history.iter().map(|r| r.stamp.config()).collect::<Vec<_>>(),
+        vec![Some("g1"), Some("g2")]
+    );
+    assert_eq!(history[0].verdict.verification, Verification::Mechanical);
+
+    let model = Principal::new(GRADER_ID, PrincipalKind::Agent);
+    assert_eq!(submit(&model, ok.clone()), Reason::Unauthorized);
+    let elsewhere = serde_json::to_value(grade("r2")).unwrap();
+    assert_eq!(submit(&grader("g1"), elsewhere), Reason::ContentInvalid);
+    let mut twice = grade("r1");
+    twice.checks[1].name = "unpaid".into();
+    assert_eq!(
+        submit(&grader("g1"), serde_json::to_value(twice).unwrap()),
+        Reason::ContentInvalid
+    );
+    let mut none = grade("r1");
+    none.checks.clear();
+    assert_eq!(
+        submit(&grader("g1"), serde_json::to_value(none).unwrap()),
+        Reason::ContentInvalid
+    );
+}
+
+#[test]
+fn a_person_may_grade_where_the_authority_lets_them() {
+    let mut kernel = Kernel::new(MemoryStore::default(), Box::new(AllowAll)).unwrap();
+    install_grades(&mut kernel).unwrap();
+    kernel
+        .create(Resource::new(grade_id("r1"), GRADE, Value::Null))
+        .unwrap();
+    let verdict = kernel
+        .submit(
+            &Principal::new("owner", PrincipalKind::Human),
+            0,
+            Submission::new(grade_id("r1"), 0, Action::Write)
+                .content(serde_json::to_value(grade("r1")).unwrap()),
+        )
+        .unwrap();
+    assert!(verdict.is_accepted());
+    assert_eq!(grade("r1").score(), 0.5);
+    assert!(!grade("r1").passed());
+}

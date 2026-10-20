@@ -299,5 +299,105 @@ impl Validator for Immutable {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Grades
+// ---------------------------------------------------------------------------
+
+/// Judges grades: a person or deterministic host code judging a Run's
+/// result against a task's checks.
+pub const GRADE: &str = "validator/grade";
+/// The host principal that records deterministic grades.
+pub const GRADER_ID: &str = "anchor/grader";
+
+/// The grader, as the grader configuration (task definition and checks) it
+/// ran. Authority is judged by id and kind only.
+pub fn grader(configuration: &str) -> Principal {
+    Principal::new(GRADER_ID, PrincipalKind::Code).with_config(configuration)
+}
+
+/// The resource holding the grades of one Run.
+pub fn grade_id(run_id: &str) -> String {
+    format!("grade/{run_id}")
+}
+
+/// Install the grade validator into a kernel. Grades live in a root of their
+/// own, owned by whoever grades.
+pub fn install_grades<S: Store>(kernel: &mut Kernel<S>) -> Result<(), KernelError> {
+    kernel.install(GRADE, Arc::new(Grades))
+}
+
+/// The authority of a grade root written by the deterministic grader.
+pub struct GraderOnly;
+
+impl Authority for GraderOnly {
+    fn permits(&self, principal: &Principal, action: Action, target: &str) -> bool {
+        principal.id == GRADER_ID
+            && principal.kind == PrincipalKind::Code
+            && action == Action::Write
+            && target.starts_with("grade/")
+    }
+}
+
+/// How one Run's result fared against a task's checks. Checks are named; a
+/// grade carries no business values. A Run graded again, by a changed
+/// grader for example, gets another record in the same history.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Grade {
+    pub version: u32,
+    pub run_id: String,
+    /// The task the Run attempted, with the version of its definition.
+    pub task: String,
+    pub task_version: u32,
+    pub checks: Vec<Check>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Check {
+    pub name: String,
+    pub passed: bool,
+}
+
+impl Grade {
+    /// The share of checks passed.
+    pub fn score(&self) -> f64 {
+        if self.checks.is_empty() {
+            return 0.0;
+        }
+        self.checks.iter().filter(|c| c.passed).count() as f64 / self.checks.len() as f64
+    }
+
+    pub fn passed(&self) -> bool {
+        self.checks.iter().all(|c| c.passed)
+    }
+}
+
+struct Grades;
+
+impl Validator for Grades {
+    fn judge(&self, ctx: &JudgeCtx, submission: &Submission) -> Judgement {
+        // A model may not grade work, its own or another's.
+        if ctx.principal.kind == PrincipalKind::Agent || submission.action != Action::Write {
+            return Judgement::refused(Reason::Unauthorized);
+        }
+        match serde_json::from_value::<Grade>(submission.content.clone()) {
+            Ok(grade)
+                if grade.version == VERSION
+                    && !grade.checks.is_empty()
+                    && grade_id(&grade.run_id) == ctx.resource.id
+                    && distinct(&grade.checks) =>
+            {
+                Judgement::accept(ctx.resource.state.clone(), Verification::Mechanical)
+            }
+            _ => Judgement::returned(Reason::ContentInvalid),
+        }
+    }
+}
+
+fn distinct(checks: &[Check]) -> bool {
+    let mut names: Vec<&str> = checks.iter().map(|c| c.name.as_str()).collect();
+    names.sort_unstable();
+    names.windows(2).all(|pair| pair[0] != pair[1])
+}
+
 #[cfg(test)]
 mod tests;

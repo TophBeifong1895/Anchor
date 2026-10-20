@@ -1,0 +1,15 @@
+[package]
+name = "anchor-eval"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "The evaluation harness's recorder: deterministic grades of Runs, submitted through the kernel into a grade root of their own."
+
+[dependencies]
+anchor-kernel = { path = "../anchor-kernel" }
+anchor-facts = { path = "../anchor-facts" }
+anchor-file-lease = { path = "../anchor-file-lease" }
+serde_json.workspace = true
+
+[dev-dependencies]
+tempfile = "3"

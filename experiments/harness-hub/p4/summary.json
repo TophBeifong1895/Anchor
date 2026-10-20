@@ -1,0 +1,354 @@
+{
+  "runs": 63,
+  "graded": 62,
+  "stopped_by_watchdog": 1,
+  "tasks": {
+    "ledger": {
+      "tier": "exact",
+      "version": 1,
+      "runs": 5,
+      "stopped_by_watchdog": 0,
+      "mean_score": 1.0,
+      "pass_rate": 1.0,
+      "failing_checks": {},
+      "wall_seconds": {
+        "median": 12.0,
+        "max": 15.3
+      },
+      "tokens": {
+        "mean": 49084,
+        "sd": 12622,
+        "per_arm_20pct": 26,
+        "per_arm_10pct": 104
+      },
+      "agent_ms": {
+        "mean": 11687,
+        "sd": 1675,
+        "per_arm_20pct": 9,
+        "per_arm_10pct": 33
+      },
+      "tool_calls_median": 9
+    },
+    "logs": {
+      "tier": "exact",
+      "version": 1,
+      "runs": 5,
+      "stopped_by_watchdog": 0,
+      "mean_score": 1.0,
+      "pass_rate": 1.0,
+      "failing_checks": {},
+      "wall_seconds": {
+        "median": 16.9,
+        "max": 22.6
+      },
+      "tokens": {
+        "mean": 70132,
+        "sd": 12234,
+        "per_arm_20pct": 12,
+        "per_arm_10pct": 48
+      },
+      "agent_ms": {
+        "mean": 16854,
+        "sd": 2847,
+        "per_arm_20pct": 12,
+        "per_arm_10pct": 45
+      },
+      "tool_calls_median": 11
+    },
+    "contacts": {
+      "tier": "exact",
+      "version": 1,
+      "runs": 5,
+      "stopped_by_watchdog": 0,
+      "mean_score": 0.92,
+      "pass_rate": 0.6,
+      "failing_checks": {
+        "phones": 0.6
+      },
+      "wall_seconds": {
+        "median": 18.3,
+        "max": 24.7
+      },
+      "tokens": {
+        "mean": 69865,
+        "sd": 12617,
+        "per_arm_20pct": 13,
+        "per_arm_10pct": 52
+      },
+      "agent_ms": {
+        "mean": 18995,
+        "sd": 4331,
+        "per_arm_20pct": 21,
+        "per_arm_10pct": 82
+      },
+      "tool_calls_median": 9
+    },
+    "repair": {
+      "tier": "exact",
+      "version": 1,
+      "runs": 5,
+      "stopped_by_watchdog": 0,
+      "mean_score": 1.0,
+      "pass_rate": 1.0,
+      "failing_checks": {},
+      "wall_seconds": {
+        "median": 34.4,
+        "max": 36.6
+      },
+      "tokens": {
+        "mean": 111972,
+        "sd": 25432,
+        "per_arm_20pct": 21,
+        "per_arm_10pct": 81
+      },
+      "agent_ms": {
+        "mean": 29668,
+        "sd": 6272,
+        "per_arm_20pct": 18,
+        "per_arm_10pct": 71
+      },
+      "tool_calls_median": 14
+    },
+    "schedule": {
+      "tier": "exact",
+      "version": 1,
+      "runs": 5,
+      "stopped_by_watchdog": 0,
+      "mean_score": 1.0,
+      "pass_rate": 1.0,
+      "failing_checks": {},
+      "wall_seconds": {
+        "median": 18.7,
+        "max": 20.4
+      },
+      "tokens": {
+        "mean": 47710,
+        "sd": 19787,
+        "per_arm_20pct": 68,
+        "per_arm_10pct": 270
+      },
+      "agent_ms": {
+        "mean": 15238,
+        "sd": 4403,
+        "per_arm_20pct": 33,
+        "per_arm_10pct": 131
+      },
+      "tool_calls_median": 7
+    },
+    "audit": {
+      "tier": "exact",
+      "version": 1,
+      "runs": 6,
+      "stopped_by_watchdog": 0,
+      "mean_score": 1.0,
+      "pass_rate": 1.0,
+      "failing_checks": {},
+      "wall_seconds": {
+        "median": 36.1,
+        "max": 47.3
+      },
+      "tokens": {
+        "mean": 259212,
+        "sd": 101475,
+        "per_arm_20pct": 61,
+        "per_arm_10pct": 241
+      },
+      "agent_ms": {
+        "mean": 35698,
+        "sd": 6710,
+        "per_arm_20pct": 14,
+        "per_arm_10pct": 56
+      },
+      "tool_calls_median": 16
+    },
+    "incident": {
+      "tier": "exact",
+      "version": 1,
+      "runs": 6,
+      "stopped_by_watchdog": 0,
+      "mean_score": 1.0,
+      "pass_rate": 1.0,
+      "failing_checks": {},
+      "wall_seconds": {
+        "median": 41.6,
+        "max": 51.7
+      },
+      "tokens": {
+        "mean": 243129,
+        "sd": 93695,
+        "per_arm_20pct": 59,
+        "per_arm_10pct": 233
+      },
+      "agent_ms": {
+        "mean": 39552,
+        "sd": 7405,
+        "per_arm_20pct": 14,
+        "per_arm_10pct": 55
+      },
+      "tool_calls_median": 19
+    },
+    "refactor": {
+      "tier": "exact",
+      "version": 1,
+      "runs": 6,
+      "stopped_by_watchdog": 0,
+      "mean_score": 1.0,
+      "pass_rate": 1.0,
+      "failing_checks": {},
+      "wall_seconds": {
+        "median": 41.6,
+        "max": 74.9
+      },
+      "tokens": {
+        "mean": 251351,
+        "sd": 198917,
+        "per_arm_20pct": 246,
+        "per_arm_10pct": 983
+      },
+      "agent_ms": {
+        "mean": 43954,
+        "sd": 14927,
+        "per_arm_20pct": 46,
+        "per_arm_10pct": 181
+      },
+      "tool_calls_median": 20
+    },
+    "routing": {
+      "tier": "exact",
+      "version": 1,
+      "runs": 6,
+      "stopped_by_watchdog": 0,
+      "mean_score": 1.0,
+      "pass_rate": 1.0,
+      "failing_checks": {},
+      "wall_seconds": {
+        "median": 18.0,
+        "max": 21.6
+      },
+      "tokens": {
+        "mean": 59449,
+        "sd": 18062,
+        "per_arm_20pct": 37,
+        "per_arm_10pct": 145
+      },
+      "agent_ms": {
+        "mean": 17298,
+        "sd": 2878,
+        "per_arm_20pct": 11,
+        "per_arm_10pct": 44
+      },
+      "tool_calls_median": 8
+    },
+    "fleet": {
+      "tier": "graded",
+      "version": 2,
+      "runs": 6,
+      "stopped_by_watchdog": 1,
+      "mean_score": 1.0,
+      "pass_rate": 1.0,
+      "failing_checks": {},
+      "wall_seconds": {
+        "median": 409.6,
+        "max": 584.4
+      },
+      "tokens": {
+        "mean": 1320313,
+        "sd": 728816,
+        "per_arm_20pct": 120,
+        "per_arm_10pct": 478
+      },
+      "agent_ms": {
+        "mean": 403534,
+        "sd": 125762,
+        "per_arm_20pct": 39,
+        "per_arm_10pct": 153
+      },
+      "tool_calls_median": 39
+    },
+    "triage": {
+      "tier": "graded",
+      "version": 1,
+      "runs": 7,
+      "stopped_by_watchdog": 0,
+      "mean_score": 1.0,
+      "pass_rate": 1.0,
+      "failing_checks": {},
+      "wall_seconds": {
+        "median": 21.6,
+        "max": 24.3
+      },
+      "tokens": {
+        "mean": 100885,
+        "sd": 15894,
+        "per_arm_20pct": 10,
+        "per_arm_10pct": 39
+      },
+      "agent_ms": {
+        "mean": 20174,
+        "sd": 1941,
+        "per_arm_20pct": 4,
+        "per_arm_10pct": 15
+      },
+      "tool_calls_median": 11
+    }
+  },
+  "hub_findings": [
+    [
+      "call_corrected",
+      "tool anchor_edit"
+    ],
+    [
+      "call_corrected",
+      "tool anchor_run"
+    ],
+    [
+      "tool_failures",
+      "tool anchor_edit"
+    ],
+    [
+      "tool_failures",
+      "tool anchor_read"
+    ],
+    [
+      "tool_failures",
+      "tool anchor_run"
+    ]
+  ],
+  "tools": {
+    "anchor_edit": {
+      "calls": 171,
+      "success_rate": 0.877,
+      "failures": {
+        "invalid_arguments": 19,
+        "not_executed": 1,
+        "tool_error": 1
+      }
+    },
+    "anchor_plugins": {
+      "calls": 1,
+      "success_rate": 1.0,
+      "failures": {}
+    },
+    "anchor_read": {
+      "calls": 103,
+      "success_rate": 0.913,
+      "failures": {
+        "not_authorized": 9
+      }
+    },
+    "anchor_run": {
+      "calls": 659,
+      "success_rate": 0.973,
+      "failures": {
+        "invalid_arguments": 4,
+        "not_authorized": 1,
+        "not_executed": 13
+      }
+    },
+    "final_result": {
+      "calls": 62,
+      "success_rate": 1.0,
+      "failures": {}
+    }
+  }
+}

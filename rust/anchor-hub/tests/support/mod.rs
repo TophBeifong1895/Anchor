@@ -60,6 +60,7 @@ pub struct World {
     pub clock: TestClock,
     pub runs: Kernel<FileStore>,
     pub facts: Kernel<FileStore>,
+    pub grades: Kernel<FileStore>,
 }
 
 pub fn executor() -> Principal {
@@ -136,6 +137,7 @@ impl World {
         let state = dir.path().join("host/state");
         std::fs::create_dir_all(state.join("kernel-runs")).unwrap();
         std::fs::create_dir_all(state.join("kernel-facts")).unwrap();
+        std::fs::create_dir_all(state.join("kernel-grades")).unwrap();
         let mut runs = Kernel::with_clock(
             FileStore::new(state.join("kernel-runs")).unwrap(),
             Box::new(Anyone),
@@ -150,11 +152,19 @@ impl World {
         )
         .unwrap();
         anchor_facts::install(&mut facts).unwrap();
+        let mut grades = Kernel::with_clock(
+            FileStore::new(state.join("kernel-grades")).unwrap(),
+            Box::new(anchor_facts::GraderOnly),
+            Box::new(clock.clone()),
+        )
+        .unwrap();
+        anchor_facts::install_grades(&mut grades).unwrap();
         Self {
             dir,
             clock,
             runs,
             facts,
+            grades,
         }
     }
 
@@ -193,6 +203,39 @@ impl World {
                     .content(json!({"summary": SECRET, "settle": settle})),
             )
             .unwrap();
+    }
+
+    /// Grade `run` of `task` with `(check, passed)` pairs.
+    pub fn grade(&self, run: &str, task: &str, checks: &[(&str, bool)], at: u64) {
+        self.clock.set(at);
+        let id = anchor_facts::grade_id(run);
+        let _ = self
+            .grades
+            .create(Resource::new(&id, anchor_facts::GRADE, Value::Null));
+        let seen = self.grades.load(&id).unwrap().unwrap().version;
+        let grade = anchor_facts::Grade {
+            version: anchor_facts::VERSION,
+            run_id: run.into(),
+            task: task.into(),
+            task_version: 1,
+            checks: checks
+                .iter()
+                .map(|(name, passed)| anchor_facts::Check {
+                    name: (*name).into(),
+                    passed: *passed,
+                })
+                .collect(),
+        };
+        let verdict = self
+            .grades
+            .submit(
+                &anchor_facts::grader("grader-1"),
+                0,
+                Submission::new(id, seen, Action::Write)
+                    .content(serde_json::to_value(grade).unwrap()),
+            )
+            .unwrap();
+        assert!(verdict.is_accepted());
     }
 
     pub fn observe(

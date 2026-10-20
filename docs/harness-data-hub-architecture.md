@@ -110,7 +110,13 @@ anchor-kernel  ◄──  anchor-facts  ◄──  anchor-runner-host   （写�
 - **配置清单** `AgentConfiguration`：Graph 摘要、节点、模型及绑定、Goose 二进制、提示词摘要、Plugin 说明摘要、Plugin 身份、路由。摘要与 Plugin 和路由的顺序无关。
 - **不带业务内容**：工具参数只记形状摘要，错误只记类别，提示词只记摘要。
 
-评分和实验分配这两种资源，等 P4、P6 用到时再加。
+- **评分**（P4 已实现）：
+  - 资源 `grade/{run}`，Validator `validator/grade`：只接受人或宿主代码以 Write 提交，模型不能评分，无论评自己还是评别人；内容必须是名字唯一的检查项列表，并且属于该 Run；
+  - 授权 `GraderOnly`：只允许 `anchor/grader` 以宿主代码身份写 `grade/…`。以后人工评分走同一种资源，提交者是人；
+  - 内容 `Grade { version, run_id, task, task_version, checks: [{name, passed}] }`，只有检查项名字和是否通过，不带业务值；
+  - 提交者的配置摘要是评分器配置的摘要，即任务定义、期望值和评分代码。同一个 Run 重新评分时，在同一段历史里追加一条记录。
+
+实验分配等 P6 用到时再加。
 
 ### 5.3 Host 记录器（P2 已实现）
 
@@ -128,6 +134,17 @@ anchor-kernel  ◄──  anchor-facts  ◄──  anchor-runner-host   （写�
 - **边界**：
   - 调用中途崩溃会丢失这次调用的事实；
   - Op 节点、Pilot 会话、Run 历史中的节点结果提交，都还没有记录或盖配置摘要。Op 节点的耗时可以由同一 Run 相邻记录的内核时间差得出（串行时准确，并行时是上界），P3 的中枢已经这样计算，不必为此改 Runtime。
+
+### 5.4 评分记录与评测任务集（P4 已实现）
+
+- `rust/anchor-eval`：对外只有 `GradeRecorder::record` 和命令行 `anchor-eval record --state DIR --config DIGEST < grade.json`。评分存在评分方自己的数据根 `kernel-grades`，有独立写入租约，用的是同一个 `Kernel::submit`。围栏测试保证 workspace 里只有这个 crate 会记录评分。
+- 评测任务集在 `experiments/harness-hub/eval/`。每个任务是一个 Graph，由评测运行器组装：
+  1. 固定的 `prepare` Op 写入合成输入；
+  2. 待测的 AgentNode，以后的变体只改这一段；
+  3. 固定的 `grade` Op 用 `graders.py` 检查输出，打印检查项，总是正常退出。
+
+  评分器不在任何变体能改到的范围内。运行结束后，运行器从 Run 自己的历史里读出 `grade` Op 打印的检查项，经 `anchor-eval` 记成评分。
+- 详见 [P4 报告](../experiments/harness-hub/p4/report.md)。
 
 ## 6. 读侧组件：`anchor-hub`（P3 已实现 L0–L4）
 
@@ -157,6 +174,7 @@ anchor-kernel  ◄──  anchor-facts  ◄──  anchor-runner-host   （写�
 - L2：Run 的节点结果按 `run/{run_id}` 和槽位 `{node}#{invocation}` 与观察记录的 invocation 关联；时间线、空档及其位置（启动、工具到下一轮、收尾）、任务步骤（相邻记录的时间差）、分组、连续重复、分布。
 - L4：`anchor-hub health|stall|rows [--json] PATH...`，自动发现路径下的所有内核数据根；`stall --follow` 持续跟读。
 - 围栏测试在 `rust/anchor-hub/tests/fences.rs`，覆盖第 9 节第 1 到 3 项。
+- P4 加入评分：L1 把 `validator/grade` 的记录投影成评分行；L2 的 `Query::grades` 给出每个 Run 最新被接受的评分；体检报告新增质量部分，按任务和任务版本列出平均分、全对比例、各检查项通过率，以及这些 Run 的 token、Agent 耗时和工具调用分布。某个检查项在至少 3 个 Run 里有一半以上失败时，报告 `check_failing`。
 - `run_access/reads.rs` 不改用 `HistoryReader`：它的调用方都在作为写入者的 Host 进程内，读时拿租约正好和提交串行；中枢不经过它。
 
 ## 7. 插件契约
@@ -193,6 +211,7 @@ anchor-kernel  ◄──  anchor-facts  ◄──  anchor-runner-host   （写�
 3. **层次围栏**：L2、L3 不做 IO；L3 只经过 L2 访问数据。
 4. **记录门面围栏**：Host 里只有记录适配器调用内核提交观察，其他模块只能调用 `FactRecorder`。
 5. **内核围栏**：内核变更审完后重新冻结 C1，内核不出现基于时间、token 的判断。
+6. **评分写入围栏**：workspace 里只有 `anchor-eval` 记录评分（`rust/anchor-eval/tests/fences.rs`）。
 
 ## 10. 和 `anchor-rsi` 的关系（用户已决定：不合并）
 
@@ -213,7 +232,7 @@ anchor-kernel  ◄──  anchor-facts  ◄──  anchor-runner-host   （写�
 | P1 | 内核变更（5.1） | 单独审查通过；C1 重新冻结 |
 | P2 | `anchor-facts`（5.2）和 Host 记录器（5.3）作为同一个垂直切片，实测写盘开销。**已完成**，见 [P2 报告](../experiments/harness-hub/p2/report.md) | 开销在可接受范围内；记录失败不影响执行 |
 | P3 | `anchor-hub` 的 L0–L2，体检报告、停滞检测两个分析器，CLI。**已完成**，见 [P3 报告](../experiments/harness-hub/p3/report.md) | G1：用真实 Run 的数据发现至少一个以前不知道的问题。**通过** |
-| P4 | 评测任务集：一组结果可以自动判断对错的任务，作为便宜、客观的质量信号 | 任务集能稳定复跑，判分可信 |
+| P4 | 评测任务集：一组结果可以自动判断对错的任务，作为便宜、客观的质量信号。**已完成**，见 [P4 报告](../experiments/harness-hub/p4/report.md)：基线下质量几乎总在上限，受控实验以效率为目标、以质量为约束 | 任务集能稳定复跑，判分可信。**通过** |
 | P5 | 只读 MCP 接口，流程挖掘、对比挖掘；按第 10 节调整 `anchor-rsi` | 分析结论能落到具体的配置和节点上 |
 | P6 | 受控实验和 `Policy` 插件 | G2：在能承受的样本量内检测出效率差异；G3：优化结果在没参与优化的任务上同样成立 |
 

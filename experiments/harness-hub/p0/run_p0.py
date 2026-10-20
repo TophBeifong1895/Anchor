@@ -60,10 +60,12 @@ def save(path, value):
     path.write_text(json.dumps(value, ensure_ascii=False, indent=2) + '\n')
 
 
-def run_once(task, index, host, live_env):
-    graph = graphs()[task]
-    run = f'p0-{task.lower()}-{index:02d}-{time.time_ns()}'
-    root = LOCAL / 'runs' / run
+def run_once(task, index, host, live_env, graph=None, commands=None, local=None, prefix='p0'):
+    """One isolated Run. The evaluation runner passes its own Graph, allowed
+    commands and output directory."""
+    graph = graph or graphs()[task]
+    run = f'{prefix}-{task.lower()}-{index:02d}-{time.time_ns()}'
+    root = (local or LOCAL) / 'runs' / run
     for name in ('home', 'library', 'operator', 'catalog'):
         (root / name).mkdir(parents=True)
     env = {k: v for k, v in live_env.items() if k in FORWARD or k.startswith(('ANCHOR_GOOSE_', 'ANCHOR_MODEL_'))}
@@ -75,8 +77,8 @@ def run_once(task, index, host, live_env):
         'ANCHOR_RUNNER_CATALOG_ROOT': str(root / 'catalog'),
         'ANCHOR_RUNNER_LIBRARY_ROOT': str(root / 'library'),
         'ANCHOR_RUNNER_LOCAL_INPUTS_ROOT': str(root / 'operator'),
-        'ANCHOR_RUNNER_GRAPH_NAME': f'p0-{task.lower()}',
-        'ANCHOR_RUNNER_ALLOWED_COMMANDS': 'sh,cat,printf,grep,test,true,ls,mkdir',
+        'ANCHOR_RUNNER_GRAPH_NAME': f'{prefix}-{task.lower()}',
+        'ANCHOR_RUNNER_ALLOWED_COMMANDS': commands or 'sh,cat,printf,grep,test,true,ls,mkdir',
         'ANCHOR_GOOSE_RELAY_BINARY': str(host.parent / 'anchor-net-relay'),
     })
     model = root / 'state/managed/model-config.json'

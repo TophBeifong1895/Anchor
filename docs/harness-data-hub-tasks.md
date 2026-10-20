@@ -235,4 +235,32 @@
   - 不改 Runtime，就能用内核时间差得到 Op 节点耗时和编排开销。
 - 没有改 Host、Runtime 和内核代码，C1（`9a5fa57`）不变。
 
-下一步是 P4：评测任务集，即一组结果可以自动判断对错、并且比 T1、T2 更难的任务，作为便宜、客观的质量信号。候选的 Harness 优化实验是第 2 条发现里的调用启动开销。
+---
+
+## §P4 评测任务集
+
+**状态（2026-10-21）：已完成，由主 Agent 直接实现。** 见 [P4 报告](../experiments/harness-hub/p4/report.md)；代码在 `experiments/harness-hub/eval/`。
+
+- **评分成为事实**：
+  - `anchor-facts` 增加资源 `grade/{run}`、`validator/grade` 和 `GraderOnly`，模型不能评分；
+  - 新 crate `anchor-eval` 是唯一的评分写入方，评分存在数据根 `kernel-grades`；
+  - 中枢的体检报告新增质量部分。
+- **11 个任务**：精确档 9 个，分级档 2 个，即 fleet 车辆路径和 triage 工单判断。
+  - 每个任务的 Graph 由运行器组装：固定的 `prepare` Op、待测的 AgentNode、固定的 `grade` Op。评分器不在变体能改的范围内。
+  - 评分可信：
+    - 21 项评分器测试；
+    - 用独立实现复核期望值；
+    - 真实 Host 下参考解全部满分；
+    - 62 次重新评分和沙箱内评分完全一致。
+- **基线结论**：63 次真实 Flash 运行，除 contacts 有 2/5 误读电话格式外全部满分；fleet 的 6 次完成运行全部到达已知最好解。
+  - 对这个模型和这套 Harness，质量是约束，可测的是效率。检测 20% 的 Agent 时间差异，多数任务每边需要 4 到 21 次。
+  - 要得到质量梯度，需要限制资源的变体。
+- **新发现的 Harness 缺陷**，合计约占工具调用的 4%：
+  1. `anchor_read`、`anchor_edit` 不接受 `/workspace/...` 路径；
+  2. 这两个工具的错误信息写成了 `anchor_run`；
+  3. AgentNode 里公开了只在 Pilot Session 可用的 `project` 参数。
+
+  另外，沙箱里没有 `python3`，只有 `python3.12`。
+- 内核没有改动，C1（`9a5fa57`）不变。
+
+下一步建议从 P6 的第一个受控实验开始：修复上面三处 Harness 缺陷作为变体，用这个任务集比较工具失败率、时间和 token，并确认质量不下降。P5 的只读 MCP 接口和流程挖掘可以并行。

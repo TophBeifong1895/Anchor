@@ -20,6 +20,8 @@ pub enum Need {
     Time,
     /// Observation records of invocations.
     Observations,
+    /// Grades of Runs.
+    Grades,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -71,6 +73,7 @@ pub fn unmet(query: &Query, needs: &[Need]) -> Vec<Need> {
         .filter(|need| match need {
             Need::Time => !query.rows().iter().any(|row| row.at.is_some()),
             Need::Observations => !query.invocations().iter().any(|i| !i.traces.is_empty()),
+            Need::Grades => query.grades().is_empty(),
         })
         .collect()
 }
