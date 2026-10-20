@@ -1,0 +1,557 @@
+//! L2: trajectory algebra. Pure functions over projected facts, no IO: tasks
+//! and their steps, invocations joined across roots by their natural ids,
+//! timelines and the gaps in them, grouping, repetition and distributions.
+//! Analyzers see the data only through this module.
+
+use std::collections::BTreeMap;
+use std::ops::Range;
+
+pub use anchor_facts::{AgentConfiguration, Failure, Outcome};
+pub use anchor_kernel::{Action, Effect, PrincipalKind, Reason};
+use serde::Serialize;
+
+use crate::table::Body;
+pub use crate::table::{Entry, Facts, Key, Row, Status};
+
+/// Projected facts, and the time the caller considers now.
+#[derive(Clone, Copy)]
+pub struct Query<'a> {
+    facts: Facts<'a>,
+    now: Option<u64>,
+}
+
+impl<'a> Query<'a> {
+    pub fn new(facts: Facts<'a>, now: Option<u64>) -> Self {
+        Self { facts, now }
+    }
+
+    pub fn now(&self) -> Option<u64> {
+        self.now
+    }
+
+    pub fn rows(&self) -> &'a [Row] {
+        self.facts.rows
+    }
+
+    pub fn resources(&self) -> impl Iterator<Item = &'a Entry> {
+        self.facts.resources.values()
+    }
+
+    pub fn configuration(&self, digest: &str) -> Option<&'a AgentConfiguration> {
+        self.facts.configurations.get(digest)
+    }
+
+    /// Task resources, each with its records in place order.
+    pub fn tasks(&self) -> Vec<Task<'a>> {
+        let mut rows: BTreeMap<(&str, &str), Vec<&'a Row>> = BTreeMap::new();
+        for row in self.facts.rows {
+            rows.entry((&row.key.root, &row.key.resource))
+                .or_default()
+                .push(row);
+        }
+        self.facts
+            .resources
+            .values()
+            .filter(|entry| entry.status.is_some())
+            .map(|entry| Task {
+                entry,
+                rows: rows
+                    .remove(&(entry.root.as_str(), entry.id.as_str()))
+                    .unwrap_or_default(),
+            })
+            .collect()
+    }
+
+    /// Every invocation either side knows of: a node result in a Run's
+    /// history, observations of it, or both. One side alone is a dangling
+    /// edge, kept so that it can be counted.
+    pub fn invocations(&self) -> Vec<Invocation<'a>> {
+        let mut found: BTreeMap<(String, String, u64), Invocation<'a>> = BTreeMap::new();
+        for row in self.facts.rows {
+            let (run, node, invocation) = match &row.body {
+                Body::Observation(observation) => {
+                    let id = &observation.invocation;
+                    (id.run_id.as_str(), id.node_id.as_str(), id.invocation)
+                }
+                _ if row.verdict.effect == Effect::Accepted => match node_result(row) {
+                    Some(id) => id,
+                    None => continue,
+                },
+                _ => continue,
+            };
+            let entry = found
+                .entry((run.to_owned(), node.to_owned(), invocation))
+                .or_insert_with(|| Invocation {
+                    run_id: run.to_owned(),
+                    node_id: node.to_owned(),
+                    invocation,
+                    result: None,
+                    traces: Vec::new(),
+                });
+            match &row.body {
+                Body::Observation(observation) => entry.traces.push(Trace { row, observation }),
+                _ => {
+                    entry.result.get_or_insert(row);
+                }
+            }
+        }
+        found.into_values().collect()
+    }
+}
+
+/// Runs name their task `run/{run_id}`, and each node result fills the slot
+/// `{node}#{invocation}`: the Runtime's naming. A record that does not follow
+/// it still belongs to its task; it just joins no observation.
+pub fn node_result(row: &Row) -> Option<(&str, &str, u64)> {
+    let run = row.key.resource.strip_prefix("run/")?;
+    let (node, invocation) = row.slot.as_deref()?.rsplit_once('#')?;
+    Some((run, node, invocation.parse().ok()?))
+}
+
+// ---------------------------------------------------------------------------
+// Tasks
+// ---------------------------------------------------------------------------
+
+pub struct Task<'a> {
+    pub entry: &'a Entry,
+    pub rows: Vec<&'a Row>,
+}
+
+impl Task<'_> {
+    /// The last recorded moment of the task: its last stamped record, or its
+    /// creation.
+    pub fn last_at(&self) -> Option<u64> {
+        self.rows
+            .iter()
+            .filter_map(|row| row.at)
+            .max()
+            .or(self.entry.created_at)
+    }
+
+    /// From creation to the last stamped record.
+    pub fn span_ms(&self) -> Option<u64> {
+        Some(self.last_at()?.saturating_sub(self.entry.created_at?))
+    }
+
+    /// Each record with the time since the task's previous record, or since
+    /// its creation for the first. When steps run one after another this is
+    /// how long the recorded step took, scheduling included; with parallel
+    /// steps it is only an upper bound.
+    pub fn steps(&self) -> Vec<(&Row, Option<u64>)> {
+        let mut previous = self.entry.created_at;
+        self.rows
+            .iter()
+            .map(|&row| {
+                let since = row.at.zip(previous).map(|(at, p)| at.saturating_sub(p));
+                previous = row.at.or(previous);
+                (row, since)
+            })
+            .collect()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Invocations
+// ---------------------------------------------------------------------------
+
+pub struct Trace<'a> {
+    pub row: &'a Row,
+    pub observation: &'a anchor_facts::Observation,
+}
+
+pub struct Invocation<'a> {
+    pub run_id: String,
+    pub node_id: String,
+    pub invocation: u64,
+    /// The accepted node result in the Run's history.
+    pub result: Option<&'a Row>,
+    /// Observation records; more than one when the invocation was resumed.
+    pub traces: Vec<Trace<'a>>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+pub struct Lifecycle {
+    pub started_at_ms: u64,
+    pub ended_at_ms: u64,
+    pub outcome: Outcome,
+    pub model_turns: u64,
+    pub tool_calls: u64,
+    pub tool_calls_dropped: u64,
+    pub resumed: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+pub struct Turn<'a> {
+    pub index: u64,
+    pub message_id: Option<&'a str>,
+    pub observed_at_ms: Option<u64>,
+    pub elapsed_ms: Option<u64>,
+    pub time_to_first_token_ms: Option<u64>,
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    pub total_tokens: u64,
+    pub cache_read_tokens: Option<u64>,
+    pub compaction: bool,
+}
+
+impl Turn<'_> {
+    /// When the model was working on this turn, as far as the usage report
+    /// alone tells: its elapsed time reaching back from when it was observed.
+    /// The report can arrive late; see [`Invocation::turn_spans`].
+    pub fn reported_span(&self) -> Option<Range<u64>> {
+        let end = self.observed_at_ms?;
+        Some(end.saturating_sub(self.elapsed_ms?)..end)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+pub struct Call<'a> {
+    pub tool: &'a str,
+    pub tool_call_id: Option<&'a str>,
+    pub model_request: u64,
+    pub arguments_shape: &'a str,
+    pub started_at_ms: Option<u64>,
+    pub ended_at_ms: Option<u64>,
+    pub ok: bool,
+    pub failure: Option<Failure>,
+}
+
+impl Call<'_> {
+    pub fn span(&self) -> Option<Range<u64>> {
+        Some(self.started_at_ms?..self.ended_at_ms?.max(self.started_at_ms?))
+    }
+
+    pub fn duration_ms(&self) -> Option<u64> {
+        self.span().map(|span| span.end - span.start)
+    }
+}
+
+/// What occupied a stretch of an invocation's time.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(tag = "activity", rename_all = "snake_case")]
+pub enum Activity {
+    /// Waiting for model turn `index`.
+    Turn { index: u64 },
+    /// Tool call number `index` (0-based, in recorded order).
+    Tool { index: usize },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Span {
+    pub start: u64,
+    pub end: u64,
+    pub activity: Activity,
+}
+
+/// A stretch of an invocation in which neither a model turn nor a tool call
+/// was observed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Gap {
+    pub start: u64,
+    pub end: u64,
+    /// The activity that ended just before the gap, if any.
+    pub after: Option<Activity>,
+    /// The activity that started right after it, if any.
+    pub before: Option<Activity>,
+}
+
+impl Gap {
+    pub fn ms(&self) -> u64 {
+        self.end - self.start
+    }
+
+    /// Where in the invocation the gap lies.
+    pub fn place(&self) -> GapPlace {
+        match (self.after, self.before) {
+            (None, _) => GapPlace::Startup,
+            (_, None) => GapPlace::Teardown,
+            (Some(Activity::Tool { .. }), Some(Activity::Turn { .. })) => GapPlace::ToolToTurn,
+            (Some(Activity::Turn { .. }), Some(Activity::Tool { .. })) => GapPlace::TurnToTool,
+            _ => GapPlace::Other,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GapPlace {
+    /// From the invocation's start to its first observed activity.
+    Startup,
+    /// From a tool result to the next model request.
+    ToolToTurn,
+    /// From a model response to the tool call it asked for.
+    TurnToTool,
+    /// From the last observed activity to the invocation's end.
+    Teardown,
+    Other,
+}
+
+/// The total length covered by `spans`, counting overlaps once.
+pub fn covered(spans: impl IntoIterator<Item = Range<u64>>) -> u64 {
+    let mut spans: Vec<Range<u64>> = spans.into_iter().collect();
+    spans.sort_by_key(|s| s.start);
+    let (mut total, mut cursor) = (0, 0);
+    for span in spans {
+        let start = span.start.max(cursor);
+        if span.end > start {
+            total += span.end - start;
+            cursor = span.end;
+        }
+    }
+    total
+}
+
+impl<'a> Invocation<'a> {
+    pub fn key(&self) -> String {
+        format!("{}/{}#{}", self.run_id, self.node_id, self.invocation)
+    }
+
+    fn facts(&self) -> impl Iterator<Item = &'a anchor_facts::Fact> + '_ {
+        self.traces.iter().flat_map(|t| t.observation.facts.iter())
+    }
+
+    /// The configuration the observations were recorded under.
+    pub fn config(&self) -> Option<&'a str> {
+        self.traces.iter().find_map(|t| t.row.config.as_deref())
+    }
+
+    /// Every record this invocation is known by.
+    pub fn evidence(&self) -> Vec<Key> {
+        self.result
+            .into_iter()
+            .chain(self.traces.iter().map(|t| t.row))
+            .map(|row| row.key.clone())
+            .collect()
+    }
+
+    pub fn lifecycles(&self) -> Vec<Lifecycle> {
+        self.facts()
+            .filter_map(|fact| match *fact {
+                anchor_facts::Fact::Lifecycle {
+                    started_at_ms,
+                    ended_at_ms,
+                    outcome,
+                    model_turns,
+                    tool_calls,
+                    tool_calls_dropped,
+                    resumed,
+                } => Some(Lifecycle {
+                    started_at_ms,
+                    ended_at_ms,
+                    outcome,
+                    model_turns,
+                    tool_calls,
+                    tool_calls_dropped,
+                    resumed,
+                }),
+                _ => None,
+            })
+            .collect()
+    }
+
+    pub fn turns(&self) -> Vec<Turn<'a>> {
+        self.facts()
+            .filter_map(|fact| match fact {
+                anchor_facts::Fact::ModelTurn {
+                    index,
+                    message_id,
+                    observed_at_ms,
+                    elapsed_ms,
+                    time_to_first_token_ms,
+                    input_tokens,
+                    output_tokens,
+                    total_tokens,
+                    cache_read_tokens,
+                    compaction,
+                    ..
+                } => Some(Turn {
+                    index: *index,
+                    message_id: message_id.as_deref(),
+                    observed_at_ms: *observed_at_ms,
+                    elapsed_ms: *elapsed_ms,
+                    time_to_first_token_ms: *time_to_first_token_ms,
+                    input_tokens: *input_tokens,
+                    output_tokens: *output_tokens,
+                    total_tokens: *total_tokens,
+                    cache_read_tokens: *cache_read_tokens,
+                    compaction: *compaction,
+                }),
+                _ => None,
+            })
+            .collect()
+    }
+
+    pub fn calls(&self) -> Vec<Call<'a>> {
+        self.facts()
+            .filter_map(|fact| match fact {
+                anchor_facts::Fact::ToolCall {
+                    tool,
+                    tool_call_id,
+                    model_request,
+                    arguments_shape,
+                    started_at_ms,
+                    ended_at_ms,
+                    ok,
+                    failure,
+                } => Some(Call {
+                    tool,
+                    tool_call_id: tool_call_id.as_deref(),
+                    model_request: *model_request,
+                    arguments_shape,
+                    started_at_ms: *started_at_ms,
+                    ended_at_ms: *ended_at_ms,
+                    ok: *ok,
+                    failure: *failure,
+                }),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// When the model worked on each turn, by turn index. A turn's usage
+    /// report may only be observed after the tool calls it asked for have
+    /// run (Goose reports usage once the turn is processed), so a turn ends
+    /// no later than the first call answering it starts, and its elapsed
+    /// time reaches back from there.
+    pub fn turn_spans(&self) -> Vec<(u64, Range<u64>)> {
+        let calls = self.calls();
+        self.turns()
+            .iter()
+            .filter_map(|turn| {
+                let reported = turn.reported_span()?;
+                let first_call = calls
+                    .iter()
+                    .filter(|c| c.model_request == turn.index)
+                    .filter_map(|c| c.started_at_ms)
+                    .min();
+                let end = first_call.map_or(reported.end, |start| start.min(reported.end));
+                let start = end.saturating_sub(turn.elapsed_ms?);
+                Some((turn.index, start..end))
+            })
+            .collect()
+    }
+
+    /// Model turns and tool calls with known times, by start.
+    pub fn timeline(&self) -> Vec<Span> {
+        let mut spans: Vec<Span> = self
+            .turn_spans()
+            .into_iter()
+            .map(|(index, span)| Span {
+                start: span.start,
+                end: span.end,
+                activity: Activity::Turn { index },
+            })
+            .chain(self.calls().iter().enumerate().filter_map(|(index, call)| {
+                let span = call.span()?;
+                Some(Span {
+                    start: span.start,
+                    end: span.end,
+                    activity: Activity::Tool { index },
+                })
+            }))
+            .collect();
+        spans.sort_by_key(|span| (span.start, span.end));
+        spans
+    }
+
+    /// The stretches between lifecycle start and end that no observed turn
+    /// or call covers. Each lifecycle (a resume starts a new one) is its own
+    /// window; activity outside every window is ignored.
+    pub fn gaps(&self) -> Vec<Gap> {
+        let timeline = self.timeline();
+        let mut gaps = Vec::new();
+        for life in self.lifecycles() {
+            let mut cursor = life.started_at_ms;
+            let mut after = None;
+            for span in timeline
+                .iter()
+                .filter(|s| s.end > life.started_at_ms && s.start < life.ended_at_ms)
+            {
+                if span.start > cursor {
+                    gaps.push(Gap {
+                        start: cursor,
+                        end: span.start,
+                        after,
+                        before: Some(span.activity),
+                    });
+                }
+                if span.end >= cursor {
+                    cursor = span.end;
+                    after = Some(span.activity);
+                }
+            }
+            if life.ended_at_ms > cursor {
+                gaps.push(Gap {
+                    start: cursor,
+                    end: life.ended_at_ms,
+                    after,
+                    before: None,
+                });
+            }
+        }
+        gaps
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Generic operators
+// ---------------------------------------------------------------------------
+
+pub fn group_by<T, K: Ord>(
+    items: impl IntoIterator<Item = T>,
+    key: impl Fn(&T) -> K,
+) -> BTreeMap<K, Vec<T>> {
+    let mut groups: BTreeMap<K, Vec<T>> = BTreeMap::new();
+    for item in items {
+        groups.entry(key(&item)).or_default().push(item);
+    }
+    groups
+}
+
+/// Maximal stretches of at least `min` consecutive items with equal keys.
+pub fn repeats<T, K: PartialEq>(
+    items: &[T],
+    min: usize,
+    key: impl Fn(&T) -> K,
+) -> Vec<Range<usize>> {
+    let mut found = Vec::new();
+    let mut start = 0;
+    for end in 1..=items.len() {
+        if end == items.len() || key(&items[end]) != key(&items[start]) {
+            if end - start >= min.max(1) {
+                found.push(start..end);
+            }
+            start = end;
+        }
+    }
+    found
+}
+
+/// A distribution, by nearest rank.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+pub struct Summary {
+    pub n: usize,
+    pub min: u64,
+    pub median: u64,
+    pub p90: u64,
+    pub max: u64,
+    pub mean: f64,
+}
+
+pub fn summarize(values: impl IntoIterator<Item = u64>) -> Option<Summary> {
+    let mut values: Vec<u64> = values.into_iter().collect();
+    if values.is_empty() {
+        return None;
+    }
+    values.sort_unstable();
+    let rank =
+        |q: f64| values[((q * values.len() as f64).ceil() as usize).clamp(1, values.len()) - 1];
+    Some(Summary {
+        n: values.len(),
+        min: values[0],
+        median: rank(0.5),
+        p90: rank(0.9),
+        max: values[values.len() - 1],
+        mean: values.iter().map(|&v| v as f64).sum::<f64>() / values.len() as f64,
+    })
+}

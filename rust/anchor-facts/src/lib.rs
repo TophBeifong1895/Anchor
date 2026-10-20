@@ -159,6 +159,10 @@ pub enum Fact {
         /// 1-based order within the invocation.
         index: u64,
         message_id: Option<String>,
+        /// When the host saw the usage report. Goose reports a turn's usage
+        /// once the turn is processed, which is after the tool calls it asked
+        /// for have run: this is not when the response ended. A turn ends no
+        /// later than its first tool call starts.
         observed_at_ms: Option<u64>,
         elapsed_ms: Option<u64>,
         time_to_first_token_ms: Option<u64>,

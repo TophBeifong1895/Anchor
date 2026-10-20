@@ -1,0 +1,444 @@
+{
+    "analyzer": "health",
+    "version": 1,
+    "not_applicable": [],
+    "summary": {
+        "configurations": {
+            "b3fa26fa7bcf4a299cb221a0419bb865ff03e0b1533e7f08c624687bc451b244": {
+                "duration_ms": {
+                    "max": 19401,
+                    "mean": 10554.5,
+                    "median": 8991,
+                    "min": 6393,
+                    "n": 20,
+                    "p90": 14618
+                },
+                "invocations": 20,
+                "known": true,
+                "model": "deepseek-flash",
+                "node": "worker",
+                "plugins": 0,
+                "startup_ms": {
+                    "max": 599,
+                    "mean": 578.9,
+                    "median": 578,
+                    "min": 565,
+                    "n": 20,
+                    "p90": 585
+                },
+                "startup_share": 0.055,
+                "tokens": {
+                    "max": 87888,
+                    "mean": 37126.4,
+                    "median": 32229,
+                    "min": 18427,
+                    "n": 20,
+                    "p90": 52044
+                },
+                "tool_calls": {
+                    "max": 18,
+                    "mean": 7.4,
+                    "median": 7,
+                    "min": 4,
+                    "n": 20,
+                    "p90": 10
+                },
+                "turns": {
+                    "max": 13,
+                    "mean": 6.6,
+                    "median": 6,
+                    "min": 4,
+                    "n": 20,
+                    "p90": 9
+                }
+            },
+            "c20b5bf100dff280054b3249af92d7a7a1ce1934bde0b090552cdcee407d9054": {
+                "duration_ms": {
+                    "max": 2395,
+                    "mean": 2114.0,
+                    "median": 2054,
+                    "min": 1907,
+                    "n": 10,
+                    "p90": 2334
+                },
+                "invocations": 10,
+                "known": true,
+                "model": "deepseek-flash",
+                "node": "answer",
+                "plugins": 0,
+                "startup_ms": {
+                    "max": 376,
+                    "mean": 368.2,
+                    "median": 366,
+                    "min": 361,
+                    "n": 10,
+                    "p90": 376
+                },
+                "startup_share": 0.174,
+                "tokens": {
+                    "max": 3760,
+                    "mean": 3662.7,
+                    "median": 3666,
+                    "min": 3566,
+                    "n": 10,
+                    "p90": 3747
+                },
+                "tool_calls": {
+                    "max": 1,
+                    "mean": 1.0,
+                    "median": 1,
+                    "min": 1,
+                    "n": 10,
+                    "p90": 1
+                },
+                "turns": {
+                    "max": 1,
+                    "mean": 1.0,
+                    "median": 1,
+                    "min": 1,
+                    "n": 10,
+                    "p90": 1
+                }
+            }
+        },
+        "invocations": {
+            "count": 70,
+            "observed": 30,
+            "observed_without_result": 0,
+            "resumed": 0,
+            "runs_known": 30,
+            "runs_observed": 30,
+            "unobserved_with_model_requests": 0,
+            "with_result": 70
+        },
+        "records": {
+            "roots": 60,
+            "rows": 100,
+            "stamped_config": 0.3,
+            "stamped_time": 1.0
+        },
+        "steps": {
+            "observed_overhead_ms": {
+                "max": 114,
+                "mean": 108.7,
+                "median": 112,
+                "min": 100,
+                "n": 30,
+                "p90": 113
+            },
+            "unobserved_step_ms": {
+                "prepare": {
+                    "max": 208,
+                    "mean": 168.55,
+                    "median": 168,
+                    "min": 151,
+                    "n": 20,
+                    "p90": 191
+                },
+                "verify": {
+                    "max": 225,
+                    "mean": 201.05,
+                    "median": 199,
+                    "min": 176,
+                    "n": 20,
+                    "p90": 215
+                }
+            }
+        },
+        "tasks": {
+            "count": 30,
+            "settled_span_ms": {
+                "max": 19921,
+                "mean": 8096.1,
+                "median": 8371,
+                "min": 2009,
+                "n": 30,
+                "p90": 13912
+            },
+            "status": {
+                "done": 30
+            }
+        },
+        "time": {
+            "invocation_ms": 232230,
+            "model_share": 0.879,
+            "tool_share": 0.033,
+            "unobserved": {
+                "startup": {
+                    "ms": {
+                        "max": 599,
+                        "mean": 508.6666666666667,
+                        "median": 573,
+                        "min": 361,
+                        "n": 30,
+                        "p90": 584
+                    },
+                    "share": 0.066
+                },
+                "teardown": {
+                    "ms": {
+                        "max": 55,
+                        "mean": 42.96666666666667,
+                        "median": 44,
+                        "min": 32,
+                        "n": 30,
+                        "p90": 49
+                    },
+                    "share": 0.006
+                },
+                "tool_to_turn": {
+                    "ms": {
+                        "max": 85,
+                        "mean": 33.61607142857143,
+                        "median": 32,
+                        "min": 22,
+                        "n": 112,
+                        "p90": 41
+                    },
+                    "share": 0.016
+                }
+            },
+            "unobserved_share": 0.087
+        },
+        "tools": {
+            "anchor_read": {
+                "calls": 15,
+                "duration_ms": {
+                    "max": 23,
+                    "mean": 22.466666666666665,
+                    "median": 22,
+                    "min": 22,
+                    "n": 15,
+                    "p90": 23
+                },
+                "failures": {},
+                "ok": 15,
+                "shapes": 1,
+                "success_rate": 1.0
+            },
+            "anchor_run": {
+                "calls": 113,
+                "duration_ms": {
+                    "max": 334,
+                    "mean": 81.26548672566372,
+                    "median": 67,
+                    "min": 23,
+                    "n": 113,
+                    "p90": 126
+                },
+                "failures": {
+                    "not_authorized": 2
+                },
+                "ok": 111,
+                "shapes": 1,
+                "success_rate": 0.982
+            },
+            "final_result": {
+                "calls": 30,
+                "duration_ms": {
+                    "max": 1,
+                    "mean": 0.13333333333333333,
+                    "median": 0,
+                    "min": 0,
+                    "n": 30,
+                    "p90": 1
+                },
+                "failures": {},
+                "ok": 30,
+                "shapes": 6,
+                "success_rate": 1.0
+            }
+        },
+        "turns": {
+            "cache_read_share": 0.924,
+            "compactions": 0,
+            "elapsed_ms": {
+                "max": 5801,
+                "mean": 1438.3098591549297,
+                "median": 1171,
+                "min": 571,
+                "n": 142,
+                "p90": 2357
+            },
+            "input_tokens": {
+                "max": 9774,
+                "mean": 5249.732394366197,
+                "median": 5259,
+                "min": 3288,
+                "n": 142,
+                "p90": 7021
+            },
+            "output_tokens": {
+                "max": 1615,
+                "mean": 237.27464788732394,
+                "median": 164,
+                "min": 41,
+                "n": 142,
+                "p90": 515
+            },
+            "per_invocation": {
+                "max": 13,
+                "mean": 4.733333333333333,
+                "median": 5,
+                "min": 1,
+                "n": 30,
+                "p90": 8
+            },
+            "time_to_first_token_ms": {
+                "max": 5601,
+                "mean": 1347.8098591549297,
+                "median": 1073,
+                "min": 571,
+                "n": 142,
+                "p90": 2138
+            },
+            "total_tokens": {
+                "max": 10034,
+                "mean": 5487.007042253521,
+                "median": 5629,
+                "min": 3367,
+                "n": 142,
+                "p90": 7209
+            }
+        },
+        "verdicts": {
+            "write/accepted/ok": 100
+        }
+    },
+    "findings": [
+        {
+            "code": "tool_failures",
+            "subject": "tool anchor_run",
+            "detail": "2 of 113 call(s) failed: not_authorized",
+            "evidence": [
+                {
+                    "root": ".local/harness-hub-p2/runs/p0-t2-06-1792511837654307684/state/kernel-runs",
+                    "resource": "run/p0-t2-06-1792511837654307684",
+                    "place": 2
+                },
+                {
+                    "root": ".local/harness-hub-p2/runs/p0-t2-06-1792511837654307684/state/kernel-facts",
+                    "resource": "trace/p0-t2-06-1792511837654307684/worker/1",
+                    "place": 1
+                },
+                {
+                    "root": ".local/harness-hub-p2/runs/p0-t2-07-1792511856808021134/state/kernel-runs",
+                    "resource": "run/p0-t2-07-1792511856808021134",
+                    "place": 2
+                },
+                {
+                    "root": ".local/harness-hub-p2/runs/p0-t2-07-1792511856808021134/state/kernel-facts",
+                    "resource": "trace/p0-t2-07-1792511856808021134/worker/1",
+                    "place": 1
+                }
+            ]
+        },
+        {
+            "code": "startup_heavy",
+            "subject": "config c20b5bf100dff280054b3249af92d7a7a1ce1934bde0b090552cdcee407d9054 (node answer)",
+            "detail": "17% of invocation time passes before the first model request (median 366 ms)",
+            "evidence": [
+                {
+                    "root": ".local/harness-hub-p2/runs/p0-t1-01-1792511766867731196/state/kernel-runs",
+                    "resource": "run/p0-t1-01-1792511766867731196",
+                    "place": 1
+                },
+                {
+                    "root": ".local/harness-hub-p2/runs/p0-t1-01-1792511766867731196/state/kernel-facts",
+                    "resource": "trace/p0-t1-01-1792511766867731196/answer/1",
+                    "place": 1
+                },
+                {
+                    "root": ".local/harness-hub-p3/runs/p0-t1-01-1792516823269949893/state/kernel-runs",
+                    "resource": "run/p0-t1-01-1792516823269949893",
+                    "place": 1
+                },
+                {
+                    "root": ".local/harness-hub-p3/runs/p0-t1-01-1792516823269949893/state/kernel-facts",
+                    "resource": "trace/p0-t1-01-1792516823269949893/answer/1",
+                    "place": 1
+                },
+                {
+                    "root": ".local/harness-hub-p2/runs/p0-t1-02-1792511769552474707/state/kernel-runs",
+                    "resource": "run/p0-t1-02-1792511769552474707",
+                    "place": 1
+                },
+                {
+                    "root": ".local/harness-hub-p2/runs/p0-t1-02-1792511769552474707/state/kernel-facts",
+                    "resource": "trace/p0-t1-02-1792511769552474707/answer/1",
+                    "place": 1
+                },
+                {
+                    "root": ".local/harness-hub-p3/runs/p0-t1-02-1792516826209081456/state/kernel-runs",
+                    "resource": "run/p0-t1-02-1792516826209081456",
+                    "place": 1
+                },
+                {
+                    "root": ".local/harness-hub-p3/runs/p0-t1-02-1792516826209081456/state/kernel-facts",
+                    "resource": "trace/p0-t1-02-1792516826209081456/answer/1",
+                    "place": 1
+                },
+                {
+                    "root": ".local/harness-hub-p2/runs/p0-t1-03-1792511772222547067/state/kernel-runs",
+                    "resource": "run/p0-t1-03-1792511772222547067",
+                    "place": 1
+                },
+                {
+                    "root": ".local/harness-hub-p2/runs/p0-t1-03-1792511772222547067/state/kernel-facts",
+                    "resource": "trace/p0-t1-03-1792511772222547067/answer/1",
+                    "place": 1
+                },
+                {
+                    "root": ".local/harness-hub-p3/runs/p0-t1-03-1792516828724001272/state/kernel-runs",
+                    "resource": "run/p0-t1-03-1792516828724001272",
+                    "place": 1
+                },
+                {
+                    "root": ".local/harness-hub-p3/runs/p0-t1-03-1792516828724001272/state/kernel-facts",
+                    "resource": "trace/p0-t1-03-1792516828724001272/answer/1",
+                    "place": 1
+                },
+                {
+                    "root": ".local/harness-hub-p2/runs/p0-t1-04-1792511774931757252/state/kernel-runs",
+                    "resource": "run/p0-t1-04-1792511774931757252",
+                    "place": 1
+                },
+                {
+                    "root": ".local/harness-hub-p2/runs/p0-t1-04-1792511774931757252/state/kernel-facts",
+                    "resource": "trace/p0-t1-04-1792511774931757252/answer/1",
+                    "place": 1
+                },
+                {
+                    "root": ".local/harness-hub-p3/runs/p0-t1-04-1792516831550933488/state/kernel-runs",
+                    "resource": "run/p0-t1-04-1792516831550933488",
+                    "place": 1
+                },
+                {
+                    "root": ".local/harness-hub-p3/runs/p0-t1-04-1792516831550933488/state/kernel-facts",
+                    "resource": "trace/p0-t1-04-1792516831550933488/answer/1",
+                    "place": 1
+                },
+                {
+                    "root": ".local/harness-hub-p2/runs/p0-t1-05-1792511777544563144/state/kernel-runs",
+                    "resource": "run/p0-t1-05-1792511777544563144",
+                    "place": 1
+                },
+                {
+                    "root": ".local/harness-hub-p2/runs/p0-t1-05-1792511777544563144/state/kernel-facts",
+                    "resource": "trace/p0-t1-05-1792511777544563144/answer/1",
+                    "place": 1
+                },
+                {
+                    "root": ".local/harness-hub-p3/runs/p0-t1-05-1792516834212029427/state/kernel-runs",
+                    "resource": "run/p0-t1-05-1792516834212029427",
+                    "place": 1
+                },
+                {
+                    "root": ".local/harness-hub-p3/runs/p0-t1-05-1792516834212029427/state/kernel-facts",
+                    "resource": "trace/p0-t1-05-1792516834212029427/answer/1",
+                    "place": 1
+                }
+            ]
+        }
+    ]
+}

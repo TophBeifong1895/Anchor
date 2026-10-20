@@ -1,0 +1,15 @@
+[package]
+name = "anchor-hub"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "The harness data hub: reads recorded kernel histories, projects them into fact rows and runs analyzers over them. Read-only; nothing depends on it."
+
+[dependencies]
+anchor-kernel = { path = "../anchor-kernel" }
+anchor-facts = { path = "../anchor-facts" }
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+tempfile = "3"

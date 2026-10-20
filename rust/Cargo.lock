@@ -152,6 +152,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "anchor-hub"
+version = "0.1.0"
+dependencies = [
+ "anchor-facts",
+ "anchor-kernel",
+ "serde",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "anchor-kernel"
 version = "0.1.0"
 dependencies = [

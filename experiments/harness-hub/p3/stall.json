@@ -1,0 +1,27 @@
+{
+    "analyzer": "stall",
+    "version": 1,
+    "not_applicable": [],
+    "summary": {
+        "gap_ms": {
+            "bar": 30000,
+            "distribution": {
+                "max": 599,
+                "mean": 118.1046511627907,
+                "median": 32,
+                "min": 22,
+                "n": 172,
+                "p90": 571
+            }
+        },
+        "idle_tasks": 0,
+        "thresholds": {
+            "factor": 5,
+            "floor_ms": 30000,
+            "idle_ms": 900000,
+            "now": 1792516891424,
+            "repeats": 3
+        }
+    },
+    "findings": []
+}

@@ -105,7 +105,7 @@ anchor-kernel  ◄──  anchor-facts  ◄──  anchor-runner-host   （写�
 - **授权**：`RecorderOnly`，只允许 `anchor/recorder` 以宿主代码身份写 `trace/…`，并且只按 id 和 kind 判断。
 - **内容格式**（版本 1）：`Observation { version, invocation, facts }`。事实分三种：
   - `lifecycle`：开始、结束、结局、轮数、工具次数、是否恢复；
-  - `model_turn`：token、费用、耗时、首 token 时间、`messageId`、观察时间；
+  - `model_turn`：token、费用、耗时、首 token 时间、`messageId`、观察时间。注意观察时间是 Host 收到用量报告的时间，Goose 要等这一轮请求的工具调用跑完才报告，所以它不是模型响应结束的时间；一轮最晚在它的第一个工具调用开始时结束（P3 用真实数据发现，见 [P3 报告](../experiments/harness-hub/p3/report.md)）；
   - `tool_call`：工具名、参数形状摘要、开始和结束时间、Goose 的 `toolCallId`、它回应的是第几次模型请求、是否成功、失败类别。
 - **配置清单** `AgentConfiguration`：Graph 摘要、节点、模型及绑定、Goose 二进制、提示词摘要、Plugin 说明摘要、Plugin 身份、路由。摘要与 Plugin 和路由的顺序无关。
 - **不带业务内容**：工具参数只记形状摘要，错误只记类别，提示词只记摘要。
@@ -127,9 +127,9 @@ anchor-kernel  ◄──  anchor-facts  ◄──  anchor-runner-host   （写�
 - **记录失败不影响执行**：失败写进 invocation evidence 的 `fact_recording`；数据根不可用时不记录，执行照常进行。
 - **边界**：
   - 调用中途崩溃会丢失这次调用的事实；
-  - Op 节点、Pilot 会话、Run 历史中的节点结果提交，都还没有记录或盖配置摘要。
+  - Op 节点、Pilot 会话、Run 历史中的节点结果提交，都还没有记录或盖配置摘要。Op 节点的耗时可以由同一 Run 相邻记录的内核时间差得出（串行时准确，并行时是上界），P3 的中枢已经这样计算，不必为此改 Runtime。
 
-## 6. 读侧组件：`anchor-hub`
+## 6. 读侧组件：`anchor-hub`（P3 已实现 L0–L4）
 
 先做成**一个 crate**，内部按层分模块，用围栏测试守住层次依赖；等某个分析器需要很重的外部依赖时，再把它拆成单独的 crate，实现同一个 trait。这符合开发约定"不为追求目录数量而拆分"。
 
@@ -150,6 +150,15 @@ anchor-kernel  ◄──  anchor-facts  ◄──  anchor-runner-host   （写�
 - 同一个资源内部按位置排序；跨资源的顺序用 `Stamp.at`，时间相同或缺失时不推断先后；
 - 内容里的因果标识可能悬空（被引用的一方没有记下来），悬空的边保留并标记，不丢弃，也不报错。
 
+**P3 的实现**（`rust/anchor-hub`，详见 [P3 报告](../experiments/harness-hub/p3/report.md)）：
+
+- L0：`DataRoot` 经 `HistoryReader` 只读；`Stored` 把任何内核 `Store` 当来源，测试用。
+- L1：`Projector` 按资源记住读到的位置，增量投影；`MemoryTable` 是第一个 `FactTable`。只投影 Harness 事实（主体、时间、配置、动作、槽位、裁决、任务状态，以及观察记录里的事实），其他提交内容、结局说明和证据不投影，所以投影里没有业务内容。配置清单只在摘要和名字一致时收录。
+- L2：Run 的节点结果按 `run/{run_id}` 和槽位 `{node}#{invocation}` 与观察记录的 invocation 关联；时间线、空档及其位置（启动、工具到下一轮、收尾）、任务步骤（相邻记录的时间差）、分组、连续重复、分布。
+- L4：`anchor-hub health|stall|rows [--json] PATH...`，自动发现路径下的所有内核数据根；`stall --follow` 持续跟读。
+- 围栏测试在 `rust/anchor-hub/tests/fences.rs`，覆盖第 9 节第 1 到 3 项。
+- `run_access/reads.rs` 不改用 `HistoryReader`：它的调用方都在作为写入者的 Host 进程内，读时拿租约正好和提交串行；中枢不经过它。
+
 ## 7. 插件契约
 
 ### 7.1 分析器
@@ -165,7 +174,7 @@ anchor-kernel  ◄──  anchor-facts  ◄──  anchor-runner-host   （写�
 
 分析器只能拿到 L2 的查询接口，拿不到文件和网络，所以天然是只读、可测试、可以随意增删的。
 
-第一批内置分析器：Harness 体检报告、停滞检测、工具效率、内核规则触发统计。之后加流程挖掘、对比挖掘、新颖性检测。
+第一批内置分析器：Harness 体检报告、停滞检测、工具效率、内核规则触发统计。之后加流程挖掘、对比挖掘、新颖性检测。P3 实现了前两个；工具效率和内核规则触发统计读的是同一批事实，先作为体检报告的组成部分（工具统计、裁决统计和 `not_accepted` 发现），需要单独演进时再拆出来。
 
 ### 7.2 选择策略（以后再做）
 
@@ -203,7 +212,7 @@ anchor-kernel  ◄──  anchor-facts  ◄──  anchor-runner-host   （写�
 | P0 | 噪声测量：用真实 Provider 把小任务重复跑 N 次，用现有的 usage 和 trace 数据统计方差。不改代码 | G0：确认效率指标的方差小到能检测出差异，并得出每次对比需要的样本量 |
 | P1 | 内核变更（5.1） | 单独审查通过；C1 重新冻结 |
 | P2 | `anchor-facts`（5.2）和 Host 记录器（5.3）作为同一个垂直切片，实测写盘开销。**已完成**，见 [P2 报告](../experiments/harness-hub/p2/report.md) | 开销在可接受范围内；记录失败不影响执行 |
-| P3 | `anchor-hub` 的 L0–L2，体检报告、停滞检测两个分析器，CLI | G1：用真实 Run 的数据发现至少一个以前不知道的问题 |
+| P3 | `anchor-hub` 的 L0–L2，体检报告、停滞检测两个分析器，CLI。**已完成**，见 [P3 报告](../experiments/harness-hub/p3/report.md) | G1：用真实 Run 的数据发现至少一个以前不知道的问题。**通过** |
 | P4 | 评测任务集：一组结果可以自动判断对错的任务，作为便宜、客观的质量信号 | 任务集能稳定复跑，判分可信 |
 | P5 | 只读 MCP 接口，流程挖掘、对比挖掘；按第 10 节调整 `anchor-rsi` | 分析结论能落到具体的配置和节点上 |
 | P6 | 受控实验和 `Policy` 插件 | G2：在能承受的样本量内检测出效率差异；G3：优化结果在没参与优化的任务上同样成立 |
