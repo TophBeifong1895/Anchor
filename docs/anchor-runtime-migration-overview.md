@@ -24,7 +24,7 @@
 
 **做了什么。** 把 Anchor 中负责"运行一个 Graph"的那部分（Run 的运行时）从头重建。旧实现是一个推模型的 `GraphRunner`：它自己选节点、调用执行、等结果、决定下一步，Run 的状态由多处代码直接改写。新实现以一部"宪法"为依据：所有改变都是**提交**，由一个很小的**内核**统一裁决、记录、结算、测量；Graph 的规则写成纯函数的**校验器**；调度器只负责派活和把结果交回去。
 
-**现在在哪里。** 迁移在分支 `constitution-core` 上完成到 M3：所有 Run 默认走新内核，旧的 `GraphRunner`、`RunStore`、`RunStatus` 已删除。独立复验结果：workspace 2153 通过、0 失败；固定版本的 Goose 回归套件 122 通过、0 失败。用户已批准合入 master，等 master 上的 debug 提交后执行。
+**现在在哪里。** 迁移在分支 `constitution-core` 上完成到 M3：所有 Run 默认走新内核，旧的 `GraphRunner`、`RunStore`、`RunStatus` 已删除。独立复验后的 §10.18 合并回归结果：workspace 2197 通过、0 失败；固定版本的 Goose 回归套件 123 通过、0 失败。用户已批准合入 master，分支已合入 master `dfd3427` 并通过全部门槛，待审查后由 master 一侧快进。
 
 **得到了什么。**
 
@@ -313,11 +313,11 @@ R2 曾把 pause 当成 stop 的别名，导致十多个 API 测试失败，原�
 
 ### 9.1 接下来的步骤
 
-1. master 完成当前 debug 并提交，然后冻结。
-2. 分支合并 master 最新提交，重跑全部门槛。
-3. 审查方验收后，master 执行 `git merge --ff-only constitution-core`。
-4. 在 master 上做 M4：清理 `GraphRunRecord` 中不再使用的字段和残余类型，并精确统计代码量。
-5. 在 master 上做 M5：补全测量探针，做最终度量，逐条对照宪法"完美"的三个条件和四个极限。
+分支已以 `cf23ea8` 合入 master `dfd3427`，重跑全部门槛并通过；[合并交回与冲突审计](../experiments/constitution-host-preflight/m3/merge-verification.md)。接下来：
+
+1. 审查方验收后，由 master 一侧执行 `git merge --ff-only constitution-core`。
+2. 在 master 上做 M4：清理 `GraphRunRecord` 中不再使用的字段和残余类型，并精确统计代码量。
+3. 在 master 上做 M5：补全测量探针，做最终度量，逐条对照宪法"完美"的三个条件和四个极限。
 
 ### 9.2 待决问题
 

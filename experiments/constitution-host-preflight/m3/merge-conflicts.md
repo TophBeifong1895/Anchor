@@ -35,10 +35,10 @@
 
 ## (b) 查询插件正文哈希
 
-原 master 的耗时路径是 `project_run` → `ensure_current_assistant` → 渠道资格 → snapshot → 完整 Plugin definition。本分支合并前同样通过共享渠道适配器触发该完整检查。本次采用 master 的修复：
+master 提交说明将耗时归因于投影持有执行登记锁时读取资格，以及渠道观察对完整 Plugin definition 的重复哈希。复核本分支合并前 `376b256`：`project_run` → `ensure_current_assistant` 只读取 Session current binding，成功即返回，不查询部署，也不哈希插件正文；渠道 `status` 当时仍使用完整 definition。master 新增当前部署资格后，投影会进入渠道 snapshot，因此本次同时保留其轻量观测修复：
 
 1. `ensure_current_assistant` 先核对 Session current binding；已退役或交接的历史 Run 在读取部署之前返回冲突。
-2. 当前实例的资格仍调用 `ensure_channel_session_eligible`，账号选择与部署前置条件保持。`ChannelManagementAdapter::snapshot/status` 使用 live `PluginMetadata` 和凭据授权/资源存在性检查，不哈希插件正文。
+2. 当前实例的资格采用 master 新增的 `ensure_channel_session_eligible`，账号选择与部署前置条件保持。`ChannelManagementAdapter::snapshot/status` 使用 live `PluginMetadata` 和凭据授权/资源存在性检查，不哈希插件正文。
 3. `definition` 的完整检查保留在配置、启用、启动等执行前路径；没有借查询优化放宽写前校验。
 
 保留 master 的 `channel_observation_skips_code_reads_but_revalidates_live_authorization_and_resources`：inotify 证明 snapshot/status 不打开 gateway 正文、完整 definition 会打开正文；修改授权声明或删除资源立即令资格不可用。与锁回归均在 Kernel Host 测试二进制中执行。

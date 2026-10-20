@@ -1,0 +1,138 @@
+{
+  "baseline": "0aa5197",
+  "master": "dfd3427",
+  "source_commit": "cf23ea8408931707fa87e84ce9857de9fd859abd",
+  "method": "按 test/tokio::test 属性与函数名比较 master 新增测试；改名或目录迁移需人工映射，本轮均为原名保留。",
+  "new_master_test_count": 45,
+  "paths": [
+    {
+      "path": "rust/anchor-platform-session/src/channel/accounts.rs",
+      "new_master_tests": [
+        "canonical_lookup_preserves_unregistered_values_and_namespace_boundaries",
+        "failed_insert_rolls_back_all_new_aliases_and_preserves_existing_mapping"
+      ],
+      "missing_after_merge": []
+    },
+    {
+      "path": "rust/anchor-platform-session/src/channel/assistant.rs",
+      "new_master_tests": [
+        "handover_commits_before_a_concurrent_retirement",
+        "retirement_commits_before_a_concurrent_handover"
+      ],
+      "missing_after_merge": []
+    },
+    {
+      "path": "rust/anchor-platform-session/src/database/tests/channel_accounts.rs",
+      "new_master_tests": [
+        "altered_v8_schema_is_rejected_before_any_mutation",
+        "altered_v9_schema_is_rejected_without_repairing_or_erasing_aliases",
+        "v8_upgrade_adds_only_alias_schema_and_preserves_all_facts",
+        "v8_upgrade_failure_preserves_schema_version_and_history"
+      ],
+      "missing_after_merge": []
+    },
+    {
+      "path": "rust/anchor-platform-session/tests/channel_account_routing.rs",
+      "new_master_tests": [
+        "absent_account_and_different_accounts_remain_isolated",
+        "aliases_reuse_legacy_history_and_deduplicate_the_same_event_after_restart",
+        "competing_legacy_sessions_fail_closed_instead_of_choosing_a_history",
+        "concurrent_alias_admission_creates_one_session_and_one_turn",
+        "preexisting_duplicate_sessions_keep_history_but_select_only_the_canonical_session"
+      ],
+      "missing_after_merge": []
+    },
+    {
+      "path": "rust/anchor-platform-session/tests/channel_accounts.rs",
+      "new_master_tests": [
+        "aliases_are_scoped_to_owner_and_source",
+        "canonical_lookup_uses_one_hop_and_preserves_empty_and_unregistered_accounts",
+        "competing_canonicals_cannot_claim_the_same_alias",
+        "conflicting_registration_leaves_no_partial_mapping",
+        "independent_connections_register_the_same_account_atomically",
+        "invalid_identity_rejects_the_entire_registration",
+        "registration_deduplicates_aliases_and_survives_reopen",
+        "v8_migration_and_registration_preserve_existing_session_and_input_history"
+      ],
+      "missing_after_merge": []
+    },
+    {
+      "path": "rust/anchor-platform-session/tests/channel_handover.rs",
+      "new_master_tests": [
+        "a_current_binding_is_not_a_committed_self_handover",
+        "committed_handover_cannot_be_replayed_after_its_target_is_explicitly_retired",
+        "committed_handover_retry_after_reopen_preserves_the_in_flight_turn_and_events",
+        "explicit_retirement_cannot_handover_to_a_new_run_even_after_reopen",
+        "handover_event_failure_rolls_back_bindings_input_and_run_associations",
+        "independent_connections_commit_the_same_handover_only_once",
+        "independently_bound_target_does_not_prove_a_handover",
+        "only_the_exact_committed_handover_can_retry_against_the_current_target"
+      ],
+      "missing_after_merge": []
+    },
+    {
+      "path": "rust/anchor-runner-host/src/api/schedules_management_tests.rs",
+      "new_master_tests": [
+        "keyed_schedule_file_has_version_and_keeps_legacy_compatibility",
+        "keyed_schedule_http_and_pilot_share_owner_scoped_creation_and_durable_replay",
+        "keyed_schedule_replay_survives_past_due_rule_and_missing_graph"
+      ],
+      "missing_after_merge": []
+    },
+    {
+      "path": "rust/anchor-runner-host/src/api/tests/persistent_assistants/identity.rs",
+      "new_master_tests": [
+        "account_alias_collision_recovers_only_the_canonical_session_without_erasing_legacy_history",
+        "disabled_or_replaced_deployments_do_not_handover_and_explain_blocked_recovery"
+      ],
+      "missing_after_merge": []
+    },
+    {
+      "path": "rust/anchor-runner-host/src/api/tests/responses.rs",
+      "new_master_tests": [
+        "keyed_response_concurrent_retries_commit_one_turn",
+        "keyed_responses_reuse_session_turn_and_output_across_reopen_and_continuation"
+      ],
+      "missing_after_merge": []
+    },
+    {
+      "path": "rust/anchor-runner-host/src/api/tests/sessions.rs",
+      "new_master_tests": [
+        "keyed_pilot_creation_replays_without_overwriting_and_isolates_owners"
+      ],
+      "missing_after_merge": []
+    },
+    {
+      "path": "rust/anchor-runner-host/src/application/channel_management/tests.rs",
+      "new_master_tests": [
+        "assistant_projection_releases_liveness_lock_and_skips_retired_deployment_checks",
+        "duplicate_account_sessions_have_one_recovery_target_but_keep_both_histories",
+        "recovery_and_control_share_deployment_eligibility_without_rewriting_history"
+      ],
+      "missing_after_merge": []
+    },
+    {
+      "path": "rust/anchor-runner-host/src/application/pilot_sessions.rs",
+      "new_master_tests": [
+        "keyed_creation_reuses_original_fact_after_edit_and_reopen_and_isolates_owners",
+        "native_admission_replays_running_and_terminal_turns_without_provider_or_execution"
+      ],
+      "missing_after_merge": []
+    },
+    {
+      "path": "rust/anchor-runner-host/src/channel_supervisor/management/tests.rs",
+      "new_master_tests": [
+        "channel_observation_skips_code_reads_but_revalidates_live_authorization_and_resources",
+        "deployment_and_managed_configuration_share_one_persisted_account_identity"
+      ],
+      "missing_after_merge": []
+    },
+    {
+      "path": "rust/anchor-runner-host/tests/goose_persistent_assistant.rs",
+      "new_master_tests": [
+        "host_restart_recovers_only_the_canonical_account_and_preserves_legacy_history"
+      ],
+      "missing_after_merge": []
+    }
+  ]
+}

@@ -1268,3 +1268,12 @@ C2 save 0、mutation 0；Kernel 相对 `0859373` 零 diff，GraphValidator 裁�
 
 
 §10.15 最终结果：workspace **2,153 / 0 / 125**，Web **333 / 0** 及构建通过，完整固定 Goose **122 / 0 / 0**，原 12 项失败逐项独跑各 **1 / 0 / 0**，严格 Clippy/fmt 通过；Host/Goose/helper 采证前后身份相同。首个 workspace 有一项旧动作期待失败，单独修正/复测后最终全量通过，首轮日志如实保留。[最终证据](../experiments/constitution-host-preflight/m3/completion-verification.md) 与 [逐 target 原样结果](../experiments/constitution-host-preflight/m3/completion-checks.json)。C1 零 diff、C2 save 0/mutation 0、旧类型扫描零、围栏不变。M3 已通过 §10.16 独立复验；§10.17 批准 S27、结清 S4 并授权合并。§10.18 要求先合入 `dfd3427` 并重跑门槛，交回审查后由 master 一侧快进；本分支不自动开展 M4/M5。
+
+
+### M3 §10.18：同步 master 与合并验收
+
+`376b256` 提交用户审查与 S27/S4 裁定；merge `cf23ea8` 的另一父提交为 master `dfd3427`。三处内容冲突按业务采用 master、执行保留 Kernel 处理，Session crate 与 master 字节一致。每个 Kernel worker 锁点及查询正文哈希的结论见 [冲突与专项审计](../experiments/constitution-host-preflight/m3/merge-conflicts.md)；保留 master 查询锁、live metadata 和 canonical-account 重启回归，未移植旧执行器表。
+
+全部门槛通过：workspace **2,197 / 0 / 126**（132 targets）、Web **356** 及构建、浏览器 **10 / 0**、完整固定 Goose **123 / 0 / 0**（41 targets）；新增 canonical-account 用例独跑亦通过，七个二进制身份前后一致。C1 零 diff、C2 save 0/mutation 0、围栏不变，master 新增 45 个 Rust 测试全部保留。3 类机械夹具/词汇适配，删除测试 0、既有测试新增 ignore 0、业务断言放宽 0、新增 S 0；S27 已批准并结清 S4。[最终交回及逐 target 证据](../experiments/constitution-host-preflight/m3/merge-verification.md)。
+
+本分支包含 `dfd3427`，待审查后由 master 一侧快进；未修改 master 工作区，M4/M5 未开始。W4、真实模型 Provider、外部渠道实网与部署仍未验。
