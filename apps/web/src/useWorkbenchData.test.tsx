@@ -42,6 +42,22 @@ describe('workbench page subscriptions', () => {
     expect(api).toHaveBeenCalledTimes(1);
   });
 
+  it('keeps unchanged projection identities but immediately publishes changed Host facts', async () => {
+    await render('graph');
+    const graphs = state.graphs, runs = state.runs;
+    await act(async () => vi.advanceTimersByTimeAsync(3000));
+    expect(state.graphs).toBe(graphs);
+    expect(state.runs).toBe(runs);
+    vi.mocked(api).mockImplementation(async path => path === '/graphs'
+      ? { graphs: [{ graph: 'g', listener: { status: 'unavailable' } }] }
+      : { runs: [{ run: 'new', running: true }] });
+    await act(async () => vi.advanceTimersByTimeAsync(3000));
+    expect(state.graphs).not.toBe(graphs);
+    expect(state.graphs[0].listener?.status).toBe('unavailable');
+    expect(state.runs).not.toBe(runs);
+    expect(state.runs[0].run).toBe('new');
+  });
+
   it('ignores a projection received after its page was left', async () => {
     await render('graph');
     let release!: (value: unknown) => void;

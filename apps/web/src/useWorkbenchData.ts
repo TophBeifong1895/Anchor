@@ -55,8 +55,8 @@ export function useWorkbenchData(view: WorkbenchView) {
         : { ...(await read<{ graphs: GraphSummary[] }>('/graphs')) };
       if (controller.signal.aborted || current !== version.current) return;
       authenticated.current = true;
-      setGraphs(data.graphs);
-      if ('runs' in data) setRuns(data.runs);
+      setGraphs(previous => JSON.stringify(previous) === JSON.stringify(data.graphs) ? previous : data.graphs);
+      if ('runs' in data) setRuns(previous => JSON.stringify(previous) === JSON.stringify(data.runs) ? previous : data.runs);
       if ('timeline' in data) { setTimeline(data.timeline ?? null); setTimelineProblem(data.timelineProblem ?? ''); }
       setProblem('');
     } catch (error) {

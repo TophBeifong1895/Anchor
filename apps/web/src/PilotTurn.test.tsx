@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { PilotTurn, type Turn } from './PilotTurn';
 import { api } from './api';
 import type { Question } from './pilotQuestions';
+import { PageActivity } from './PageActivity';
 
 vi.mock('./api', async original => ({ ...await original<object>(), api: vi.fn(), bearerKey: () => '' }));
 vi.mock('./markdown', () => ({ Markdown: ({ text }: { text: string }) => <div data-testid="reply">{text}</div> }));
@@ -84,6 +85,31 @@ describe('PilotTurn stream and history lifecycle', () => {
     expect(streams[1].cancel).toHaveBeenCalledTimes(1);
     await act(async () => { await vi.advanceTimersByTimeAsync(60000); });
     expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('suspends hidden streams and resumes their cursor without clearing or duplicating visible output', async () => {
+    const visit = async (active: boolean) => act(async () => root.render(
+      <PageActivity active={active}><PilotTurn turn={turn} onComplete={onComplete} onQuestions={onQuestions} /></PageActivity>,
+    ));
+    await visit(true);
+    await act(async () => streams[0].send(chunk(1, { type: 'text-delta', delta: 'before' })
+      + chunk(2, { type: 'tool-input-start', toolCallId: 'inspect', toolName: 'inspect' })));
+    const reply = container.querySelector('[data-testid="reply"]');
+    await visit(false);
+    expect(fetchMock.mock.calls[0][1]?.signal?.aborted).toBe(true);
+    await visit(true);
+    expect(fetchMock).toHaveBeenLastCalledWith('/sessions/session-1/turns/turn-1/events?after=2', expect.anything());
+    expect(container.querySelector('[data-testid="reply"]')).toBe(reply);
+    expect(reply?.textContent).toBe('before');
+    await act(async () => streams[1].send(chunk(2, { type: 'text-delta', delta: 'duplicate' })
+      + chunk(3, { type: 'text-delta', delta: ' after' }) + terminal({ ...turn, status: 'completed' })));
+    expect(reply?.textContent).toBe('before after');
+    expect(container.querySelectorAll('.pilot-tool')).toHaveLength(1);
+    expect(onComplete).toHaveBeenCalledTimes(1);
+    const calls = fetchMock.mock.calls.length;
+    await visit(false); await visit(true);
+    expect(fetchMock).toHaveBeenCalledTimes(calls);
+    expect(onComplete).toHaveBeenCalledTimes(1);
   });
 
   it('preserves UTF-8 and CRLF event boundaries split across network reads', async () => {

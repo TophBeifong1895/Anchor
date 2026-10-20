@@ -1,4 +1,4 @@
-import { Children, isValidElement, type ReactElement } from 'react';
+import { Children, isValidElement, memo, type ReactElement } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import remarkMath from 'remark-math';
@@ -27,7 +27,7 @@ export function saferHref(url: string | undefined): string | undefined {
 }
 
 /** CommonMark + GFM, with sanitized HTML and explicit renderers for executable-looking content. */
-export function Markdown({ text, prefix = 'm', fileBase }:
+export const Markdown = memo(function Markdown({ text, prefix = 'm', fileBase }:
   { text: string; prefix?: string; fileBase?: string }) {
   const resolve = (url: string) => {
     const safe = saferHref(url);
@@ -64,4 +64,4 @@ export function Markdown({ text, prefix = 'm', fileBase }:
         },
       }}>{text}</ReactMarkdown>
   </div>;
-}
+});

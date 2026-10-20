@@ -1,5 +1,5 @@
-import ELK from 'elkjs/lib/elk.bundled.js';
 import type { XYPosition, Rect } from '@xyflow/react';
+import type ELK from 'elkjs/lib/elk.bundled.js';
 
 export interface Definition {
   graph_id: string;
@@ -69,17 +69,28 @@ export function layoutBounds(positions: Layout['positions'], routes: Route[]): R
 }
 
 function labelWidth(text: string) { return Array.from(text).reduce((n, c) => n + (c.charCodeAt(0) > 255 ? 12 : 7), 16); }
-const elk = new ELK();
-const cache = new Map<string, Promise<Layout>>();
+let elk: Promise<InstanceType<typeof ELK>> | undefined;
+type CachedLayout = { pending: Promise<Layout>; layout?: Layout };
+const cache = new Map<string, CachedLayout>();
+
+export function cachedWorkflowLayout(definition: Definition, saved: Layout['positions'] = {}): Layout | undefined {
+  const key = JSON.stringify([definition, saved]);
+  const entry = cache.get(key);
+  if (entry) { cache.delete(key); cache.set(key, entry); }
+  return entry?.layout;
+}
 
 export function layoutWorkflow(definition: Definition, saved: Layout['positions'] = {}): Promise<Layout> {
   const key = JSON.stringify([definition, saved]);
   const previous = cache.get(key);
-  if (previous) return previous;
-  const pending = calculateLayout(definition, saved).catch(error => { cache.delete(key); throw error; });
-  if (cache.size > 30) cache.clear();
-  cache.set(key, pending);
-  return pending;
+  if (previous) { cache.delete(key); cache.set(key, previous); return previous.pending; }
+  const entry: CachedLayout = { pending: calculateLayout(definition, saved).then(layout => {
+    entry.layout = layout;
+    return layout;
+  }).catch(error => { if (cache.get(key) === entry) cache.delete(key); throw error; }) };
+  cache.set(key, entry);
+  if (cache.size > 30) cache.delete(cache.keys().next().value!);
+  return entry.pending;
 }
 
 async function calculateLayout(definition: Definition, saved: Layout['positions']): Promise<Layout> {
@@ -90,7 +101,9 @@ async function calculateLayout(definition: Definition, saved: Layout['positions'
     ports[edge.source].push({ id: `e${index}-out`, type: 'source', side: back.has(index) ? 'EAST' : 'SOUTH', x: 0, y: 0 });
     ports[edge.target].push({ id: `e${index}-in`, type: 'target', side: back.has(index) ? 'EAST' : 'NORTH', x: 0, y: 0 });
   });
-  const result = await elk.layout({
+  const engine = await (elk ??= import('elkjs/lib/elk.bundled.js').then(module => new module.default())
+    .catch(error => { elk = undefined; throw error; }));
+  const result = await engine.layout({
     id: 'workflow',
     layoutOptions: {
       'elk.algorithm': 'layered', 'elk.direction': 'DOWN', 'elk.edgeRouting': 'ORTHOGONAL',

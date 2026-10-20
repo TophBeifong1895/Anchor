@@ -289,6 +289,7 @@ export function Pilot({ session = '', onSession, initialDraft = '', onDraftConsu
     let live = true;
     mounted.current = true;
     if (initialDraft) {
+      if (selectedRef.current) activate('');
       const previous = cached('draft:new');
       editDraft(previous.includes(initialDraft) ? previous : previous ? `${previous}\n\n${initialDraft}` : initialDraft);
       onDraftConsumed?.();
@@ -304,9 +305,12 @@ export function Pilot({ session = '', onSession, initialDraft = '', onDraftConsu
         setSessions(result.sessions);
         const saved = initialDraft ? '' : session || cached('selected');
         if (result.sessions.some(item => item.id === saved)) {
-          activate(saved);
+          if (selectedRef.current !== saved) activate(saved);
           expectedNavigation = navigation.current;
           await refresh(saved);
+        } else if (selectedRef.current) {
+          activate('');
+          expectedNavigation = navigation.current;
         }
       } catch (error) { if (live && navigation.current === expectedNavigation) setProblem((error as Error).message); }
       finally { if (live && navigation.current === expectedNavigation) setLoading(false); }

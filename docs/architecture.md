@@ -56,6 +56,8 @@ Web 工作台的颜色、字体、控件、面板标题和默认栏宽由 [共�
 
 Graph Call 的 `wait` 子执行在 Runner 返回成功、错误或合作取消后都注销登记。取消转发任务由该登记持有，退出时在 active 锁外中止并等待回收；正常结束不写入停止请求。Web 只在 Graph/Run 消费页面轮询工作台数据，其他页面拥有各自请求；首次直达仍核验 API key，返回消费页面立即刷新，离开页面后丢弃迟到响应。
 
+Web 的图编排与 Pilot 仅在首次访问后保留页面 DOM 和本地阅读状态；隐藏时通过 React Activity 清理 effects、请求和流订阅，返回后重新读取 Host 事实，不以页面保留替代授权或有效性检查。相同工作台投影保持对象身份，未变的 Markdown 不重复解析；Pilot 同一会话返回不先清空消息，已删除会话仍在列表校验后清理。运行过程只保留可重建的文本、工具投影和已消费 SSE 游标，返回从该游标接续，终态不重复回放，不改变服务端执行。图布局使用至多 30 项的 LRU，缓存命中在首 render 即可读取；拓扑、标签或保存位置变化仍失效，画布保留视口，仅几何或可见尺寸变化时自动适配。ELK 和非首屏页面按需加载，不删除 StrictMode，不修改轮询周期或超时；浏览器刷新仍需重新核验和构建当前页面。
+
 `RunStatus::is_terminal()` 统一 Kernel 与 Host 的终态定义：`Completed`、`Failed`、`Aborted`；`Stopped` 和各类等待状态仍非终态。Host 的 [RunLiveness](../rust/anchor-runner-host/src/application/liveness.rs) 将持久状态与执行者登记观察结合，只有未登记且为终态或 `Stopped` 才算已静止，供助手退役、前驱交接和渠道停止等待复用。登记涵盖启动、清理与等待输入，不等于模型忙碌。查询不加锁、不保存事实，调用方沿用原有 active 锁、Run lease 和读取顺序；active 锁不冻结 Runner 写入，未登记的 `Ready` 也不自动获得恢复或删除许可。
 
 [RunProjection](../rust/anchor-runner-host/src/application/run_access/projection.rs) 在查询时组合既有持久状态、执行登记和控制前置条件，供 HTTP/Pilot 列表、详情、时间线及子调用共用；Web 只展示该操作投影，最终控制仍核验现场。运行画布从该 Run 的冻结 snapshot 投影只读拓扑，包含展开后的模块，不读取当前 Graph 或编辑草稿，也不暴露执行脚本、输入和 host 参数。投影不新增持久格式或恢复游标。
