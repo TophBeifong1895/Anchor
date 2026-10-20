@@ -100,7 +100,8 @@ pub struct Submission {
 }
 
 /// A record in some resource's history: its resource and stamp sequence.
-/// `seq` is unique per state root across restarts. A reference may dangle:
+/// Only the pair is a key: `seq` increases within a resource, but a removed
+/// resource's numbers may be stamped again elsewhere. A reference may dangle:
 /// the referenced record can be written later than the referring one, and
 /// never if the writer stops in between. Readers must tolerate that.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

@@ -68,8 +68,12 @@ pub struct Kernel<S: Store> {
     probe: Option<Box<dyn Probe>>,
     clock: Box<dyn Clock>,
     /// One writer per state root. Adjudication is short; executors run outside.
-    /// The last stamped `seq`, recovered from the store on start so that a
-    /// sequence number names one submission per root across restarts.
+    /// The last stamped `seq`, recovered on start from every retained history:
+    /// no retained record shares a resource and `seq` with a new one, and a
+    /// resource's own `seq` keeps increasing. Removed histories are not
+    /// remembered, so `seq` alone is not a key across resources. A history
+    /// that cannot be read stops the kernel from starting rather than risk
+    /// reusing a number it holds.
     writer: Mutex<u64>,
 }
 

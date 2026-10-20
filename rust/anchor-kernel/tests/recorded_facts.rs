@@ -484,3 +484,53 @@ fn an_id_too_long_for_the_filesystem_reads_as_absent_in_both_views() {
     assert_eq!(reader.load(&id).unwrap(), None);
     assert!(reader.history(&id).unwrap().is_empty());
 }
+
+#[test]
+fn an_unreadable_history_stops_the_kernel_from_starting_and_names_the_file() {
+    let root = tempfile::tempdir().unwrap();
+    let k = kernel(FileStore::new(root.path()).unwrap(), 0);
+    k.create(Resource::new("run/1", "validator/ledger", json!({})).task(10))
+        .unwrap();
+    k.submit(&agent(), 1, write(&k, "run/1", json!({"n": 1})))
+        .unwrap();
+    drop(k);
+    let history = root.path().join("run%2F1").join("history.jsonl");
+    let mut bytes = std::fs::read(&history).unwrap();
+    bytes.extend_from_slice(b"{broken}\n");
+    std::fs::write(&history, bytes).unwrap();
+    // The highest seq is unknown, so no new number can be stamped safely.
+    let Err(KernelError::Store(StoreError::Corrupt(detail))) =
+        Kernel::new(FileStore::new(root.path()).unwrap(), Box::new(AllowAll))
+    else {
+        panic!("a corrupt history must stop the kernel from starting");
+    };
+    assert!(detail.contains("history.jsonl: line 2"), "{detail}");
+}
+
+#[test]
+fn after_a_removal_seq_still_increases_within_each_retained_resource() {
+    let root = tempfile::tempdir().unwrap();
+    let k = kernel(FileStore::new(root.path()).unwrap(), 0);
+    for id in ["run/a", "run/b"] {
+        k.create(Resource::new(id, "validator/ledger", json!({})).task(10))
+            .unwrap();
+        k.submit(&agent(), 1, write(&k, id, json!({"n": 1})))
+            .unwrap();
+    }
+    drop(k);
+    FileStore::new(root.path())
+        .unwrap()
+        .remove("run/b")
+        .unwrap();
+    let k = kernel(FileStore::new(root.path()).unwrap(), 0);
+    k.submit(&agent(), 1, write(&k, "run/a", json!({"n": 2})))
+        .unwrap();
+    let seqs: Vec<_> = k
+        .history("run/a")
+        .unwrap()
+        .iter()
+        .map(|r| r.stamp.seq())
+        .collect();
+    // run/b's number 2 is not remembered: only (resource, seq) is a key.
+    assert_eq!(seqs, vec![1, 2]);
+}
