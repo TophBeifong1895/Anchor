@@ -26,7 +26,7 @@
 
 **现在在哪里。** 所有新 Run 统一走 Kernel，旧 Runner 已删除；Graph schema 15 不再保存 error/recovery/recovery_submissions/updated，失败和恢复展示来自 Kernel 结算/history。M4 已验收。M5 在固定 master `e60374f` 复核探针可重建，完成逐 crate、规则、C2 和测试函数度量：C2 0/0，Kernel 对 `0859373` 零 diff；本轮 workspace 2,200 / 0 / 126、fmt/围栏通过，Web 359 及构建、完整固定 Goose 123 / 0 / 0 引用 M4。迁移工作已交回，最终数据与后续决定见 [M5 测量](../experiments/constitution-host-preflight/final/measurement.md)；真实模型完整业务、渠道实网、部署及长期/规模压力未验。
 
-**内核冻结基点（2026-10-20 更新）。** 数据中枢 P1 给内核加了只记录、不参与裁决的事实：时间、因果引用、Principal 携带的配置摘要、资源创建戳，以及只读的 `HistoryReader`；同时让 `seq` 跨重启继续递增。经过两轮独立审查，新的冻结基点 C1 为 **`e172e05`**，原基点是 `0859373`。此后 `git diff e172e05 -- rust/anchor-kernel` 必须为空，除非另有经过审查的内核变更。详见 [P1 验证与审查](../experiments/harness-hub/p1/verification.md)。
+**内核冻结基点（2026-10-20 更新）。** 数据中枢 P1 给内核加了只记录、不参与裁决的事实：时间、因果引用、Principal 携带的配置摘要、资源创建戳，以及只读的 `HistoryReader`；经过两轮独立审查后曾冻结为 `e172e05`，随后按第一性原理删除了全局序号和内核层的因果引用，简化版待审查，通过后重新冻结 C1。原基点是 `0859373`。详见 [P1 验证与审查](../experiments/harness-hub/p1/verification.md)。
 
 **得到了什么。**
 

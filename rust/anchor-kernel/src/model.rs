@@ -93,21 +93,6 @@ pub struct Submission {
     pub content: Value,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub evidence: Vec<Evidence>,
-    /// The record that led to this submission. Recorded as given, never
-    /// checked or interpreted by the kernel.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub cause: Option<Cause>,
-}
-
-/// A record in some resource's history: its resource and stamp sequence.
-/// Only the pair is a key: `seq` increases within a resource, but a removed
-/// resource's numbers may be stamped again elsewhere. A reference may dangle:
-/// the referenced record can be written later than the referring one, and
-/// never if the writer stops in between. Readers must tolerate that.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Cause {
-    pub resource: ResourceId,
-    pub seq: u64,
 }
 
 impl Submission {
@@ -119,16 +104,7 @@ impl Submission {
             slot: None,
             content: Value::Null,
             evidence: Vec::new(),
-            cause: None,
         }
-    }
-
-    pub fn cause(mut self, resource: impl Into<ResourceId>, seq: u64) -> Self {
-        self.cause = Some(Cause {
-            resource: resource.into(),
-            seq,
-        });
-        self
     }
 
     pub fn slot(mut self, slot: impl Into<String>) -> Self {
@@ -148,13 +124,14 @@ impl Submission {
 }
 
 /// Host-observed facts about one submission. Only the kernel constructs one.
+/// A record needs no number: its history is append-only, so its place in
+/// that history orders it, and time orders records across resources.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Stamp {
     pub(crate) principal: Principal,
     pub(crate) cost: u64,
-    pub(crate) seq: u64,
-    /// Milliseconds since the Unix epoch, from the kernel's clock. Order is
-    /// `seq`; time is only recorded. Absent on records made before it was.
+    /// Milliseconds since the Unix epoch, from the kernel's clock. Recorded,
+    /// never judged by. Absent on records made before it was.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) at: Option<u64>,
 }
@@ -165,9 +142,6 @@ impl Stamp {
     }
     pub fn cost(&self) -> u64 {
         self.cost
-    }
-    pub fn seq(&self) -> u64 {
-        self.seq
     }
     pub fn at(&self) -> Option<u64> {
         self.at

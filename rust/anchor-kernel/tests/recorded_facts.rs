@@ -1,5 +1,5 @@
-//! Facts the kernel records but never judges by: time, cause, configuration
-//! and creation, plus the read-only history view for observers.
+//! Facts the kernel records but never judges by: time, configuration and
+//! creation, plus the read-only history view for observers.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -64,6 +64,12 @@ fn write(k: &Kernel<impl Store>, id: &str, content: Value) -> Submission {
     Submission::new(id, seen, Action::Write).content(content)
 }
 
+fn execute(k: &Kernel<impl Store>, id: &str) -> Verdict {
+    let seen = k.load(id).unwrap().unwrap().version;
+    k.submit(&host(), 0, Submission::new(id, seen, Action::Execute))
+        .unwrap()
+}
+
 #[derive(Default, Clone)]
 struct Points(Arc<Mutex<Vec<Point>>>);
 impl Probe for Points {
@@ -73,22 +79,18 @@ impl Probe for Points {
 }
 
 #[test]
-fn the_kernel_clock_stamps_every_record_and_seq_keeps_the_order() {
+fn the_kernel_clock_stamps_every_record_including_refusals() {
     let k = kernel(MemoryStore::default(), 1_000);
     k.create(Resource::new("run/1", "validator/ledger", json!({})).task(100))
         .unwrap();
     k.submit(&agent(), 1, write(&k, "run/1", json!({"n": 1})))
         .unwrap();
-    // Refusals are stamped too.
     k.submit(&agent(), 0, Submission::new("run/1", 0, Action::Write))
         .unwrap();
     let history = k.history("run/1").unwrap();
-    let stamps: Vec<_> = history
-        .iter()
-        .map(|r| (r.stamp.seq(), r.stamp.at()))
-        .collect();
+    let times: Vec<_> = history.iter().map(|r| r.stamp.at()).collect();
     // Four validator creations and the Run's creation read the clock first.
-    assert_eq!(stamps, vec![(1, Some(1_005)), (2, Some(1_006))]);
+    assert_eq!(times, vec![Some(1_005), Some(1_006)]);
     assert_eq!(history[1].verdict.reason, Reason::StaleVersion);
 }
 
@@ -108,50 +110,15 @@ fn the_clock_given_at_construction_stamps_the_constitutional_validators_too() {
 }
 
 #[test]
-fn seq_continues_across_a_restart_so_names_and_causes_stay_unique() {
-    let root = tempfile::tempdir().unwrap();
-    let execute = |k: &Kernel<FileStore>| {
-        let seen = k.load("run/1").unwrap().unwrap().version;
-        k.submit(&host(), 0, Submission::new("run/1", seen, Action::Execute))
-            .unwrap()
-    };
-    let k = kernel(FileStore::new(root.path()).unwrap(), 0);
-    k.create(Resource::new("run/1", "validator/ledger", json!({})).task(100))
-        .unwrap();
-    assert!(execute(&k).is_accepted());
-    // The effect resource has a history of its own.
-    let effect = k.store().list("effect/run/1/").unwrap().remove(0);
-    let started = Submission::new(&effect, 0, Action::Write).content(json!({"status": "started"}));
-    assert!(k.submit(&host(), 0, started).unwrap().is_accepted());
-    drop(k);
-
-    let k = kernel(FileStore::new(root.path()).unwrap(), 0);
-    k.submit(&agent(), 1, write(&k, "run/1", json!({"n": 1})))
-        .unwrap();
-    // A second effect on the same endpoint gets a new name instead of
-    // colliding with the first one after its record was already committed.
-    assert!(execute(&k).is_accepted());
-    let seqs: Vec<_> = k
-        .history("run/1")
-        .unwrap()
-        .iter()
-        .map(|r| r.stamp.seq())
-        .collect();
-    assert_eq!(seqs, vec![1, 3, 4]);
-    assert_eq!(k.store().list("effect/run/1/").unwrap().len(), 2);
-}
-
-#[test]
-fn cause_and_configuration_are_recorded_as_given_including_refusals() {
+fn configuration_is_recorded_on_every_record_including_refusals() {
     let points = Points::default();
     let k = kernel(MemoryStore::default(), 0).with_probe(Box::new(points.clone()));
     k.create(Resource::new("run/1", "validator/ledger", json!({})).task(100))
         .unwrap();
-    let configured = agent().with_config("cfg-a");
     k.submit(
-        &configured,
+        &agent().with_config("cfg-a"),
         1,
-        write(&k, "run/1", json!({"n": 1})).cause("tool/run/1", 7),
+        write(&k, "run/1", json!({"n": 1})),
     )
     .unwrap();
     let outsider = Principal::new("outsider", PrincipalKind::Agent).with_config("cfg-b");
@@ -160,17 +127,13 @@ fn cause_and_configuration_are_recorded_as_given_including_refusals() {
         .unwrap();
     assert_eq!(refused.reason, Reason::Unauthorized);
 
-    let history = k.history("run/1").unwrap();
-    assert_eq!(
-        history[0].submission.cause,
-        Some(Cause {
-            resource: "tool/run/1".into(),
-            seq: 7
-        })
-    );
-    assert_eq!(history[0].stamp.config(), Some("cfg-a"));
-    assert_eq!(history[1].submission.cause, None);
-    assert_eq!(history[1].stamp.config(), Some("cfg-b"));
+    let configs: Vec<_> = k
+        .history("run/1")
+        .unwrap()
+        .iter()
+        .map(|r| r.stamp.config().map(str::to_owned))
+        .collect();
+    assert_eq!(configs, vec![Some("cfg-a".into()), Some("cfg-b".into())]);
     let points = points.0.lock().unwrap();
     let recorded: Vec<_> = points
         .iter()
@@ -236,7 +199,7 @@ fn resources_the_kernel_creates_share_the_stamp_of_their_submission() {
     .unwrap();
     let stamp = k.history("run/1").unwrap()[0].stamp.clone();
     let effect = k.store().list("effect/run/1/").unwrap();
-    assert_eq!(effect.len(), 1);
+    assert_eq!(effect, vec!["effect/run/1/000000000001"]);
     assert_eq!(
         k.load(&effect[0]).unwrap().unwrap().created,
         Some(Creation {
@@ -247,25 +210,57 @@ fn resources_the_kernel_creates_share_the_stamp_of_their_submission() {
 }
 
 #[test]
-fn an_approval_applied_by_the_kernel_records_its_cause() {
-    let k = kernel(MemoryStore::default(), 0);
+fn kernel_created_names_are_places_in_the_target_history_and_survive_restarts() {
+    let root = tempfile::tempdir().unwrap();
+    let k = kernel(FileStore::new(root.path()).unwrap(), 0);
     k.create(Resource::new("run/1", "validator/ledger", json!({})).task(100))
         .unwrap();
-    let pending = k
-        .submit(&agent(), 0, write(&k, "run/1", json!({"ask": true})))
+    assert!(execute(&k, "run/1").is_accepted());
+    // The effect has a history of its own; it does not move the Run's place.
+    let first = k.store().list("effect/run/1/").unwrap().remove(0);
+    let started = Submission::new(&first, 0, Action::Write).content(json!({"status": "started"}));
+    assert!(k.submit(&host(), 0, started).unwrap().is_accepted());
+    drop(k);
+
+    let k = kernel(FileStore::new(root.path()).unwrap(), 0);
+    k.submit(&agent(), 1, write(&k, "run/1", json!({"ask": true})))
         .unwrap();
-    assert_eq!(pending.effect, Effect::Pending);
-    let id = k.store().list("pending/run/1/").unwrap().remove(0);
-    let decision = Submission::new(&id, 0, Action::Write).content(json!({"decision": "approve"}));
-    assert!(k.submit(&owner(), 0, decision).unwrap().is_accepted());
-    let decided = k.history(&id).unwrap();
-    let applied = k.history("run/1").unwrap().pop().unwrap();
+    assert!(execute(&k, "run/1").is_accepted());
     assert_eq!(
-        applied.submission.cause,
-        Some(Cause {
-            resource: id,
-            seq: decided[0].stamp.seq()
-        })
+        k.store().list("effect/run/1/").unwrap(),
+        vec!["effect/run/1/000000000001", "effect/run/1/000000000003"]
+    );
+    assert_eq!(
+        k.store().list("pending/run/1/").unwrap(),
+        vec!["pending/run/1/000000000002"]
+    );
+}
+
+#[test]
+fn an_unreadable_history_affects_only_its_own_resource() {
+    let root = tempfile::tempdir().unwrap();
+    let k = kernel(FileStore::new(root.path()).unwrap(), 0);
+    for id in ["run/1", "run/2"] {
+        k.create(Resource::new(id, "validator/ledger", json!({})).task(10))
+            .unwrap();
+        k.submit(&agent(), 1, write(&k, id, json!({"n": 1})))
+            .unwrap();
+    }
+    drop(k);
+    let history = root.path().join("run%2F1").join("history.jsonl");
+    let mut bytes = std::fs::read(&history).unwrap();
+    bytes.extend_from_slice(b"{broken}\n");
+    std::fs::write(&history, bytes).unwrap();
+
+    let k = kernel(FileStore::new(root.path()).unwrap(), 0);
+    assert!(matches!(
+        k.load("run/1"),
+        Err(KernelError::Store(StoreError::Corrupt(_)))
+    ));
+    assert!(
+        k.submit(&agent(), 1, write(&k, "run/2", json!({"n": 2})))
+            .unwrap()
+            .is_accepted()
     );
 }
 
@@ -280,6 +275,7 @@ fn records_and_resources_written_before_these_facts_read_as_not_recorded() {
             .to_string(),
     )
     .unwrap();
+    // Older stamps carried a global `seq` and `knobs`; both are now ignored.
     let old = json!({
         "stamp": {"principal": {"id": "host", "kind": "code"}, "cost": 1, "seq": 1, "knobs": "default"},
         "submission": {"target": "run/old", "seen": 0, "action": "write"},
@@ -291,7 +287,7 @@ fn records_and_resources_written_before_these_facts_read_as_not_recorded() {
     let record = store.history("run/old").unwrap().remove(0);
     assert_eq!(record.stamp.at(), None);
     assert_eq!(record.stamp.config(), None);
-    assert_eq!(record.submission.cause, None);
+    assert_eq!(record.stamp.cost(), 1);
     assert_eq!(store.load("run/old").unwrap().unwrap().created, None);
 }
 
@@ -299,11 +295,7 @@ fn records_and_resources_written_before_these_facts_read_as_not_recorded() {
 /// facts: ordinary work, an external effect and its lifecycle, a pending
 /// proposal approved by a person, a stale proposal and budget exhaustion.
 /// Returns every verdict and every resource without its creation stamp.
-fn script(
-    k: &Kernel<MemoryStore>,
-    config: Option<&str>,
-    origin: &str,
-) -> (Vec<Verdict>, Vec<Resource>) {
+fn script(k: &Kernel<MemoryStore>, config: Option<&str>) -> (Vec<Verdict>, Vec<Resource>) {
     let configured = |p: Principal| match config {
         Some(c) => p.with_config(c),
         None => p,
@@ -315,44 +307,28 @@ fn script(
     let mut submit = |principal: Principal, cost: u64, submission: Submission| {
         verdicts.push(k.submit(&configured(principal), cost, submission).unwrap());
     };
-    submit(
-        agent(),
-        1,
-        write(k, "run/1", json!({"n": 0})).cause(origin, 1),
-    );
+    submit(agent(), 1, write(k, "run/1", json!({"n": 0})));
     submit(
         host(),
         0,
-        Submission::new("run/1", version("run/1"), Action::Execute).cause(origin, 2),
+        Submission::new("run/1", version("run/1"), Action::Execute),
     );
     let effect = k.store().list("effect/run/1/").unwrap().remove(0);
     for (seen, status) in [(0, "started"), (1, "succeeded")] {
         submit(
             host(),
             0,
-            Submission::new(&effect, seen, Action::Write)
-                .content(json!({"status": status}))
-                .cause(origin, 3),
+            Submission::new(&effect, seen, Action::Write).content(json!({"status": status})),
         );
     }
-    submit(
-        agent(),
-        1,
-        write(k, "run/1", json!({"ask": true})).cause(origin, 4),
-    );
+    submit(agent(), 1, write(k, "run/1", json!({"ask": true})));
     let pending = k.store().list("pending/run/1/").unwrap().remove(0);
     submit(
         owner(),
         0,
-        Submission::new(&pending, 0, Action::Write)
-            .content(json!({"decision": "approve"}))
-            .cause(origin, 5),
+        Submission::new(&pending, 0, Action::Write).content(json!({"decision": "approve"})),
     );
-    submit(
-        agent(),
-        0,
-        Submission::new("run/1", 0, Action::Write).cause(origin, 6),
-    );
+    submit(agent(), 0, Submission::new("run/1", 0, Action::Write));
     // The budget of 3 is crossed here: the kernel settles the task.
     submit(agent(), 2, write(k, "run/1", json!({"n": 9})));
     let resources = k
@@ -370,13 +346,9 @@ fn script(
 }
 
 #[test]
-fn verdicts_do_not_depend_on_time_cause_or_configuration() {
-    let early = script(&kernel(MemoryStore::default(), 0), None, "origin/a");
-    let late = script(
-        &kernel(MemoryStore::default(), u64::MAX / 2),
-        Some("cfg-z"),
-        "origin/b",
-    );
+fn verdicts_do_not_depend_on_time_or_configuration() {
+    let early = script(&kernel(MemoryStore::default(), 0), None);
+    let late = script(&kernel(MemoryStore::default(), u64::MAX / 2), Some("cfg-z"));
     assert_eq!(early, late);
     let reasons: Vec<_> = early.0.iter().map(|v| v.reason).collect();
     assert_eq!(
@@ -444,7 +416,7 @@ fn the_reader_matches_the_store_and_creates_or_changes_nothing() {
     assert_eq!(reader.list("run/").unwrap(), vec!["run/a", "run/b"]);
     let records = reader.history("run/a").unwrap();
     assert_eq!(records.len(), 1);
-    assert_eq!(records[0].stamp.seq(), 1);
+    assert_eq!(records[0].submission.content, json!({"n": 1}));
     assert_eq!(reader.load("run/b").unwrap(), k.load("run/b").unwrap());
     assert_eq!(
         reader.history("run/b").unwrap(),
@@ -483,54 +455,4 @@ fn an_id_too_long_for_the_filesystem_reads_as_absent_in_both_views() {
     let reader = HistoryReader::open(root.path()).unwrap();
     assert_eq!(reader.load(&id).unwrap(), None);
     assert!(reader.history(&id).unwrap().is_empty());
-}
-
-#[test]
-fn an_unreadable_history_stops_the_kernel_from_starting_and_names_the_file() {
-    let root = tempfile::tempdir().unwrap();
-    let k = kernel(FileStore::new(root.path()).unwrap(), 0);
-    k.create(Resource::new("run/1", "validator/ledger", json!({})).task(10))
-        .unwrap();
-    k.submit(&agent(), 1, write(&k, "run/1", json!({"n": 1})))
-        .unwrap();
-    drop(k);
-    let history = root.path().join("run%2F1").join("history.jsonl");
-    let mut bytes = std::fs::read(&history).unwrap();
-    bytes.extend_from_slice(b"{broken}\n");
-    std::fs::write(&history, bytes).unwrap();
-    // The highest seq is unknown, so no new number can be stamped safely.
-    let Err(KernelError::Store(StoreError::Corrupt(detail))) =
-        Kernel::new(FileStore::new(root.path()).unwrap(), Box::new(AllowAll))
-    else {
-        panic!("a corrupt history must stop the kernel from starting");
-    };
-    assert!(detail.contains("history.jsonl: line 2"), "{detail}");
-}
-
-#[test]
-fn after_a_removal_seq_still_increases_within_each_retained_resource() {
-    let root = tempfile::tempdir().unwrap();
-    let k = kernel(FileStore::new(root.path()).unwrap(), 0);
-    for id in ["run/a", "run/b"] {
-        k.create(Resource::new(id, "validator/ledger", json!({})).task(10))
-            .unwrap();
-        k.submit(&agent(), 1, write(&k, id, json!({"n": 1})))
-            .unwrap();
-    }
-    drop(k);
-    FileStore::new(root.path())
-        .unwrap()
-        .remove("run/b")
-        .unwrap();
-    let k = kernel(FileStore::new(root.path()).unwrap(), 0);
-    k.submit(&agent(), 1, write(&k, "run/a", json!({"n": 2})))
-        .unwrap();
-    let seqs: Vec<_> = k
-        .history("run/a")
-        .unwrap()
-        .iter()
-        .map(|r| r.stamp.seq())
-        .collect();
-    // run/b's number 2 is not remembered: only (resource, seq) is a key.
-    assert_eq!(seqs, vec![1, 2]);
 }

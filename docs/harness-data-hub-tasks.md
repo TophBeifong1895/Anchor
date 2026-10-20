@@ -19,6 +19,17 @@
   - 需要用户或审查方决定的问题。
 
   不追加执行流水。
+- **测试分级**（2026-10-20 起）。按改动范围决定跑什么，避免重复：
+
+  | 改动 | 开发过程中 | 切片完成时（只跑一次） |
+  | --- | --- | --- |
+  | 只改注释、文档、测试 | 受影响 crate 的测试 | 不再加跑 |
+  | Host 或 Runtime 代码 | 受影响 crate 的测试，加上相关的一两个 Goose 套件（例如 `--test goose_acp`） | workspace，加上完整 Goose 回归 |
+  | 内核代码 | `anchor-kernel` 测试 | workspace，加上完整 Goose 回归 |
+
+  - "完整 Goose 回归"指 `cargo +stable test -p anchor-runner-host --locked --no-fail-fast -- --ignored --test-threads=1`，环境同 M4 的 `goose_full`，耗时约 21 分钟；workspace 约 9 分钟。
+  - 标准套件 `anchor-devtools regression goose-fixture`（107 项）完全包含在完整回归（123 项）里，两者不要一起跑。
+  - 只有审查要求、或者修复改到了代码时，才重跑切片门槛。
 
 ---
 
@@ -126,7 +137,7 @@
 
 ## §P1 内核变更：时间、因果、配置、只读读取
 
-**状态（2026-10-20）：已完成，两轮独立审查通过，新的冻结基点 C1 为 `e172e05`。** 见 [P1 验证与审查](../experiments/harness-hub/p1/verification.md)。
+**状态（2026-10-20）：已实现，两轮独立审查通过后（`e172e05`），又按第一性原理做了简化：删除全局序号和内核层的因果引用。简化版待审查，审查通过后重新冻结 C1。** 下面是原任务书，第 2、3 项已被简化取代，见 [P1 验证与审查](../experiments/harness-hub/p1/verification.md)。
 
 ### 目的
 

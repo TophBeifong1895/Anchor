@@ -68,13 +68,7 @@ pub struct Kernel<S: Store> {
     probe: Option<Box<dyn Probe>>,
     clock: Box<dyn Clock>,
     /// One writer per state root. Adjudication is short; executors run outside.
-    /// The last stamped `seq`, recovered on start from every retained history:
-    /// no retained record shares a resource and `seq` with a new one, and a
-    /// resource's own `seq` keeps increasing. Removed histories are not
-    /// remembered, so `seq` alone is not a key across resources. A history
-    /// that cannot be read stops the kernel from starting rather than risk
-    /// reusing a number it holds.
-    writer: Mutex<u64>,
+    writer: Mutex<()>,
 }
 
 impl<S: Store> Kernel<S> {
@@ -89,14 +83,13 @@ impl<S: Store> Kernel<S> {
         authority: Box<dyn Authority>,
         clock: Box<dyn Clock>,
     ) -> Result<Self, KernelError> {
-        let last = last_seq(&store)?;
         let mut kernel = Self {
             store,
             authority,
             validators: Validators::default(),
             probe: None,
             clock,
-            writer: Mutex::new(last),
+            writer: Mutex::new(()),
         };
         kernel.install(CONSTITUTION, Arc::new(HumanOnly))?;
         kernel.install(HUMAN_DECISION, Arc::new(HumanDecision))?;
@@ -177,12 +170,10 @@ impl<S: Store> Kernel<S> {
         cost: u64,
         submission: Submission,
     ) -> Result<Verdict, KernelError> {
-        let mut seq = self.writer.lock().expect("kernel writer");
-        *seq += 1;
+        let _writer = self.writer.lock().expect("kernel writer");
         let stamp = Stamp {
             principal: principal.clone(),
             cost,
-            seq: *seq,
             at: Some(self.clock.now_ms()),
         };
         let (verdict, validator, after, effects) = self.adjudicate(&stamp, &submission)?;
@@ -339,7 +330,7 @@ impl<S: Store> Kernel<S> {
                 let mut created = Vec::new();
                 if submission.action == Action::Execute {
                     created.push(Resource::new(
-                        format!("effect/{}/{:012}", submission.target, stamp.seq),
+                        format!("effect/{}/{}", submission.target, self.place(submission)?),
                         EFFECT,
                         json!({"endpoint": submission.target, "status": "authorized"}),
                     ));
@@ -361,7 +352,7 @@ impl<S: Store> Kernel<S> {
             }
             Effect::Pending => {
                 let pending = Resource::new(
-                    format!("pending/{}/{:012}", submission.target, stamp.seq),
+                    format!("pending/{}/{}", submission.target, self.place(submission)?),
                     HUMAN_DECISION,
                     json!({
                         "target": submission.target,
@@ -438,8 +429,7 @@ impl<S: Store> Kernel<S> {
                 &Record {
                     stamp: stamp.clone(),
                     submission: Submission::new(&target_id, target.version - 1, Action::Write)
-                        .content(json!({"approved": pending.id}))
-                        .cause(&pending.id, stamp.seq),
+                        .content(json!({"approved": pending.id})),
                     verdict: target_verdict,
                     after: Some(target),
                 },
@@ -472,6 +462,16 @@ impl<S: Store> Kernel<S> {
         Ok(false)
     }
 
+    /// Where this submission's record will stand in its target's history.
+    /// Histories only grow, so the place names what the kernel creates for
+    /// the record without any counter shared between resources.
+    fn place(&self, submission: &Submission) -> Result<String, KernelError> {
+        Ok(format!(
+            "{:012}",
+            self.store.history(&submission.target)?.len() + 1
+        ))
+    }
+
     fn measure(&self, stamp: &Stamp, submission: &Submission, validator: &str, verdict: Verdict) {
         if let Some(probe) = &self.probe {
             probe.observe(&Point {
@@ -498,18 +498,6 @@ impl<S: Store> Kernel<S> {
 // ---------------------------------------------------------------------------
 // Task lifecycle: the whole of it
 // ---------------------------------------------------------------------------
-
-/// The highest `seq` any history in the store holds. Every stamp is appended
-/// before its submission returns, so a restarted writer continues after it.
-fn last_seq(store: &impl Store) -> Result<u64, KernelError> {
-    let mut last = 0;
-    for id in store.list("")? {
-        if let Some(seq) = store.history(&id)?.iter().map(|r| r.stamp.seq()).max() {
-            last = last.max(seq);
-        }
-    }
-    Ok(last)
-}
 
 /// Cost is a projection of history. Only crossing the budget settles a live
 /// task and advances its accepted-state version; charging alone never does.
