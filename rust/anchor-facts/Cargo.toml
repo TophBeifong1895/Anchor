@@ -1,0 +1,12 @@
+[package]
+name = "anchor-facts"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "The shared vocabulary of harness facts: resource kinds, their validators and content schemas. Writers record with it; the data hub reads with it."
+
+[dependencies]
+anchor-kernel = { path = "../anchor-kernel" }
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true

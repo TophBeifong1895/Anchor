@@ -168,6 +168,7 @@ impl ServerHandler for McpBridge {
         request: CallToolRequestParams,
         context: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, ErrorData> {
+        let started_at_ms = crate::fact_recorder::now_ms();
         self.state.active_calls.fetch_add(1, Ordering::SeqCst);
         let _active = ActiveCall(self.state.clone());
         if !self.state.accepting.load(Ordering::SeqCst) {
@@ -188,6 +189,7 @@ impl ServerHandler for McpBridge {
         let identity = fact
             .as_ref()
             .and_then(|fact| native_tool_identity(fact, request.meta.as_ref(), &context.meta));
+        let tool_call_id = identity.as_ref().map(|identity| identity.tool_call.clone());
         let batch = ToolBatch::from_meta(request.meta.as_ref(), &context.meta);
         let native_node = self.state.node_completion && !self.state.fixture;
         let mut media = None;
@@ -324,7 +326,9 @@ impl ServerHandler for McpBridge {
         };
         self.state
             .record_call(json!({
-                "provider_request":epoch,"tool":tool_name,"arguments":tool_arguments,"result":evidence
+                "provider_request":epoch,"tool":tool_name,"arguments":tool_arguments,"result":evidence,
+                "tool_call_id":tool_call_id,
+                "started_at_ms":started_at_ms,"ended_at_ms":crate::fact_recorder::now_ms()
             }))
             .await?;
         Ok(match result {

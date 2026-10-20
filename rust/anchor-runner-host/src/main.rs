@@ -11,6 +11,7 @@ mod dependency_provision;
 mod deployment;
 mod durable_write;
 mod execution;
+mod fact_recorder;
 mod goose_acp;
 mod goose_tool_context;
 mod local_inputs;

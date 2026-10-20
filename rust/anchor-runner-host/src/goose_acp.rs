@@ -4,6 +4,7 @@ pub(crate) mod configuration;
 mod conversation;
 pub(crate) use conversation::remove as remove_conversation;
 mod elicitation;
+mod facts;
 mod media;
 pub(crate) mod pilot;
 pub(crate) mod pilot_interaction;
@@ -61,6 +62,8 @@ pub(crate) struct GooseNodePort {
     process_root: PathBuf,
     resolver: Arc<HostIoResolver>,
     sandbox: Arc<BubblewrapSandbox>,
+    /// Harness facts about each invocation; absent if its store is unavailable.
+    recorder: Option<Arc<crate::fact_recorder::FactRecorder>>,
 }
 
 enum ExecutionModels {
@@ -360,6 +363,14 @@ impl GooseNodePort {
         let process_root = work_root.join(".goose-process");
         create_durable_directory(&facts).map_err(|error| error.to_string())?;
         create_durable_directory(&process_root).map_err(|error| error.to_string())?;
+        // Recording is best effort and never a reason to refuse execution.
+        let recorder = match crate::fact_recorder::FactRecorder::open(state) {
+            Ok(recorder) => Some(Arc::new(recorder)),
+            Err(error) => {
+                eprintln!("Harness fact recording unavailable: {error}");
+                None
+            }
+        };
         Ok(Some(Self {
             binary,
             binary_sha256,
@@ -371,6 +382,7 @@ impl GooseNodePort {
             process_root,
             resolver,
             sandbox,
+            recorder,
         }))
     }
 
@@ -423,6 +435,7 @@ impl GooseNodePort {
         if request.cancellation.load(Ordering::Relaxed) {
             return Ok(NodeExecutionOutcome::Cancelled);
         }
+        let started_at_ms = crate::fact_recorder::now_ms();
         if self.fixture
             && request
                 .model
@@ -547,6 +560,7 @@ impl GooseNodePort {
         // Tools, Plugin identities and persistent summary come from one Host preparation.
         // This includes Session mounts and Library updates since dispatch.
         request.plugins = resolved.plugins;
+        let plugin_instructions_sha256 = anchor_facts::text_digest(&resolved.plugin_instructions);
         let mut random = [0u8; 32];
         fs::File::open("/dev/urandom")?.read_exact(&mut random)?;
         let token = format!("{:x}", Sha256::digest(random));
@@ -686,6 +700,26 @@ impl GooseNodePort {
         } else if let Some(error) = close.err().or_else(|| tool_close.err()) {
             result = Err(format!("Goose cleanup failed: {error}").into());
         }
+        let outcome = match &result {
+            Ok(_) => anchor_facts::Outcome::Completed,
+            Err(_) if request.cancellation.load(Ordering::Relaxed) => {
+                anchor_facts::Outcome::Cancelled
+            }
+            Err(InvocationFailure::Uncertain(_)) if !self.fixture => {
+                anchor_facts::Outcome::Interrupted
+            }
+            Err(_) => anchor_facts::Outcome::Failed,
+        };
+        evidence["fact_recording"] = self
+            .record_facts(
+                &request,
+                &binding,
+                plugin_instructions_sha256,
+                &evidence,
+                started_at_ms,
+                outcome,
+            )
+            .await;
         trace::store_evidence(&self.facts.join(format!("{stem}.evidence.json")), &evidence)?;
         if !self.fixture {
             fact = serde_json::from_slice(&fs::read(&fact_path)?)
@@ -715,6 +749,65 @@ impl GooseNodePort {
                     failure,
                 ))
             }
+        }
+    }
+
+    /// Record this invocation's harness facts under the configuration the
+    /// host froze for it. Never fails the invocation.
+    async fn record_facts(
+        &self,
+        request: &NodeExecutionRequest,
+        binding: &configuration::ModelBinding,
+        plugin_instructions_sha256: String,
+        evidence: &Value,
+        started_at_ms: u64,
+        outcome: anchor_facts::Outcome,
+    ) -> Value {
+        let Some(recorder) = self.recorder.clone() else {
+            return json!({"unavailable": true});
+        };
+        let configuration = anchor_facts::AgentConfiguration {
+            version: anchor_facts::VERSION,
+            graph_digest: request.key.graph_digest.clone(),
+            node_id: request.key.node_id.clone(),
+            model: binding.model.clone(),
+            model_binding: binding.identity.clone(),
+            runtime_sha256: self.binary_sha256.clone(),
+            instructions_sha256: anchor_facts::text_digest(&format!(
+                "{}\n{}",
+                request.instructions, request.task
+            )),
+            plugin_instructions_sha256,
+            plugins: request
+                .plugins
+                .iter()
+                .map(|plugin| anchor_facts::PluginIdentity {
+                    id: plugin.id.clone(),
+                    digest: plugin.digest.clone(),
+                    authorization: plugin.authorization_digest.to_string(),
+                })
+                .collect(),
+            routes: request.routes.clone(),
+        };
+        let invocation = anchor_facts::Invocation {
+            run_id: request.key.run_id.clone(),
+            graph_digest: request.key.graph_digest.clone(),
+            node_id: request.key.node_id.clone(),
+            invocation: request.key.invocation,
+        };
+        let facts = facts::observations(
+            evidence,
+            started_at_ms,
+            crate::fact_recorder::now_ms(),
+            outcome,
+        );
+        match tokio::task::spawn_blocking(move || {
+            recorder.record(&configuration, &invocation, facts)
+        })
+        .await
+        {
+            Ok(recording) => json!(recording),
+            Err(error) => json!({"error": error.to_string()}),
         }
     }
 

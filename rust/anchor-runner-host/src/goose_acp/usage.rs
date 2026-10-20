@@ -164,6 +164,10 @@ impl Usage {
                 "output_tokens": output,
                 "total_tokens": total,
                 "is_compaction": is_compaction,
+                "cache_read_tokens": number(usage, "cacheReadTokens"),
+                "cache_write_tokens": number(usage, "cacheWriteTokens"),
+                // When the host saw the report: the turn's place in time.
+                "observed_at_ms": crate::fact_recorder::now_ms(),
             });
             if let Some(id) = body["messageId"].as_str() {
                 sample["message_id"] = json!(id);

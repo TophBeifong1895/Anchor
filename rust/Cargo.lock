@@ -119,6 +119,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "anchor-facts"
+version = "0.1.0"
+dependencies = [
+ "anchor-kernel",
+ "serde",
+ "serde_json",
+ "sha2",
+]
+
+[[package]]
 name = "anchor-file-lease"
 version = "0.1.0"
 dependencies = [
@@ -251,6 +261,7 @@ version = "0.1.0"
 dependencies = [
  "agent-client-protocol-schema",
  "anchor-distribution",
+ "anchor-facts",
  "anchor-file-lease",
  "anchor-graph-host",
  "anchor-kernel",

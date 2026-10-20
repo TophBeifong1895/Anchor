@@ -92,23 +92,42 @@ anchor-kernel  ◄──  anchor-facts  ◄──  anchor-runner-host   （写�
 
 新字段一律可选，旧记录读出来是"未记录"，不迁移，也不拒绝。测试见 `rust/anchor-kernel/tests/recorded_facts.rs`。其中的差分测试让两次运行的时钟和配置都不同，并且覆盖了普通工作、外部效果及其生命周期、人工批准、过期提交和预算耗尽，两次运行的裁决和所有资源完全相同。
 
-### 5.2 `anchor-facts`：事实词汇表（新 crate）
+### 5.2 `anchor-facts`：事实词汇表（P2 已实现）
 
-只放写侧和读侧都需要的契约：
+`rust/anchor-facts`，只放写侧和读侧都需要的契约，依赖只有 `anchor-kernel`、serde 和 sha2：
 
-- **资源种类和命名**：工具调用、模型对话、评分、实验分配、配置清单。
-- **对应的 Validator**：只接受宿主（`PrincipalKind::Code`）提交的观察，Agent 不能提交关于自己的观察；人工评分只接受人提交。内核已有 `validator/effect`（`kernel.rs:16`），工具调用属于真实外部效果的部分，在设计阶段核对能否复用它。
-- **内容 schema**：每种事实的 `content` 结构，带版本号。
-- **配置清单和摘要**：配置清单包括 Graph 摘要、节点、Plugin 版本、模型和参数、提示词和工具集的摘要。清单按内容寻址存一次，每次提交只带摘要。
+- **资源命名**：
+  - `trace/{run}/{node}/{invocation}`：一次 AgentNode 调用的观察；
+  - `config/{digest}`：配置清单，按内容寻址。
+- **Validator**：
+  - `validator/observation`：只接受宿主代码以 Write 提交、内容合法、并且属于该 trace 的观察。Agent 不能提交关于自己的观察；
+  - `validator/configuration`：配置清单创建后不可修改。
+- **授权**：`RecorderOnly`，只允许 `anchor/recorder` 以宿主代码身份写 `trace/…`，并且只按 id 和 kind 判断。
+- **内容格式**（版本 1）：`Observation { version, invocation, facts }`。事实分三种：
+  - `lifecycle`：开始、结束、结局、轮数、工具次数、是否恢复；
+  - `model_turn`：token、费用、耗时、首 token 时间、`messageId`、观察时间；
+  - `tool_call`：工具名、参数形状摘要、开始和结束时间、Goose 的 `toolCallId`、它回应的是第几次模型请求、是否成功、失败类别。
+- **配置清单** `AgentConfiguration`：Graph 摘要、节点、模型及绑定、Goose 二进制、提示词摘要、Plugin 说明摘要、Plugin 身份、路由。摘要与 Plugin 和路由的顺序无关。
+- **不带业务内容**：工具参数只记形状摘要，错误只记类别，提示词只记摘要。
 
-依赖只有 `anchor-kernel` 和 serde、sha2。
+评分和实验分配这两种资源，等 P4、P6 用到时再加。
 
-### 5.3 Host 记录适配器
+### 5.3 Host 记录器（P2 已实现）
 
-- 放在 Host 内一个独立模块里，对外只暴露一个小门面 `FactRecorder`。`goose_acp`、调度器这些观察来源只调用门面，不直接接触内核，和现有的 `run_access` 围栏同一个思路。
-- 数据来源都已经存在：`goose_acp/usage.rs` 的 token、费用和耗时，`goose_acp/trace` 的工具调用，Run 开始时组装的配置清单。
-- 粒度：一次独立的效果或一轮对话记一次提交，不按 token 记；观察记录不提交到 Run 资源上，以免和 Run 抢版本号。
-- **记录失败不影响任务执行**，处理方式和现在的探针一样：执行照常继续，失败本身作为诊断记下来。
+- `rust/anchor-runner-host/src/fact_recorder.rs`：对外只有 `FactRecorder::record`。由围栏测试保证，Host 里只有这个模块会提交观察、或者打开 `kernel-facts` 数据根。
+- **观察事实存在执行端口自己的数据根 `state/kernel-facts/`**，有独立的写入租约，不放进 Run 的数据根。用的是同一个 `Kernel::submit`、同一种 Record 格式。这样做：
+  - 记录时的写盘不会和 Run 的裁决争用写锁；
+  - 执行端口不需要去拿 Run 的内核；
+  - 符合"每个所有者存自己的历史"。
+- **记录点**：
+  - `goose_acp/bridge.rs` 在 Host 侧观察每次工具调用的开始和结束；
+  - `goose_acp/usage.rs` 给每轮模型对话记下观察时间；
+  - `GooseNodePort::execute` 在调用结束时组装配置清单和事实（`goose_acp/facts.rs`），提交**一条**记录。
+- **粒度**：每次调用一条记录，内容里是这次调用的全部事实，每个事实自带发生的时间。实测每次提交要同步写盘 3 次，约 20 毫秒；事实都是在调用结束时一起上报的，逐条提交不会多带信息，开销却按事实数成倍增长。真实模型下，每次调用的记录开销固定约 39 毫秒，平均占 Run 时间的 0.7%，见 [P2 报告](../experiments/harness-hub/p2/report.md)。
+- **记录失败不影响执行**：失败写进 invocation evidence 的 `fact_recording`；数据根不可用时不记录，执行照常进行。
+- **边界**：
+  - 调用中途崩溃会丢失这次调用的事实；
+  - Op 节点、Pilot 会话、Run 历史中的节点结果提交，都还没有记录或盖配置摘要。
 
 ## 6. 读侧组件：`anchor-hub`
 
@@ -183,7 +202,7 @@ anchor-kernel  ◄──  anchor-facts  ◄──  anchor-runner-host   （写�
 | --- | --- | --- |
 | P0 | 噪声测量：用真实 Provider 把小任务重复跑 N 次，用现有的 usage 和 trace 数据统计方差。不改代码 | G0：确认效率指标的方差小到能检测出差异，并得出每次对比需要的样本量 |
 | P1 | 内核变更（5.1） | 单独审查通过；C1 重新冻结 |
-| P2 | `anchor-facts`（5.2）和 Host 记录适配器（5.3）作为同一个垂直切片，实测写盘开销 | 开销在可接受范围内；记录失败不影响执行 |
+| P2 | `anchor-facts`（5.2）和 Host 记录器（5.3）作为同一个垂直切片，实测写盘开销。**已完成**，见 [P2 报告](../experiments/harness-hub/p2/report.md) | 开销在可接受范围内；记录失败不影响执行 |
 | P3 | `anchor-hub` 的 L0–L2，体检报告、停滞检测两个分析器，CLI | G1：用真实 Run 的数据发现至少一个以前不知道的问题 |
 | P4 | 评测任务集：一组结果可以自动判断对错的任务，作为便宜、客观的质量信号 | 任务集能稳定复跑，判分可信 |
 | P5 | 只读 MCP 接口，流程挖掘、对比挖掘；按第 10 节调整 `anchor-rsi` | 分析结论能落到具体的配置和节点上 |

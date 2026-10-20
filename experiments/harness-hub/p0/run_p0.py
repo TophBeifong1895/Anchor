@@ -22,7 +22,8 @@ import time
 os.umask(0o077)
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parents[2]
-LOCAL = REPO / '.local/harness-hub-p0'
+# P2 reuses this runner against a freshly built Host; P0 used the live one.
+LOCAL = Path(os.environ.get('ANCHOR_P0_LOCAL', REPO / '.local/harness-hub-p0'))
 GUARD_SECONDS = 900
 FORWARD = ('PATH', 'LANG', 'LC_ALL', 'HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'NO_PROXY',
            'http_proxy', 'https_proxy', 'all_proxy', 'no_proxy', 'SSL_CERT_FILE', 'SSL_CERT_DIR')
@@ -118,6 +119,8 @@ def main():
     task, count = sys.argv[1], int(sys.argv[2])
     start = int(sys.argv[3]) if len(sys.argv) > 3 else 1
     pid, host, live_env = live_host()
+    if os.environ.get('ANCHOR_P0_HOST'):
+        host = Path(os.environ['ANCHOR_P0_HOST'])
     identity = {'live_pid': pid, 'host': str(host), 'host_sha256': sha(host),
                 'goose_sha256': sha(live_env['ANCHOR_GOOSE_BINARY']) if 'ANCHOR_GOOSE_BINARY' in live_env else None}
     save(LOCAL / f'identity-{task}.json', identity)

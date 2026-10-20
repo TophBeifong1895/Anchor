@@ -210,3 +210,16 @@
 
 - `git diff 0859373 <P1提交> -- rust/anchor-kernel` 的统计；
 - 所有新字段的定义位置（文件:行）。
+
+---
+
+## §P2 事实词汇表与记录适配器
+
+**状态（2026-10-21）：已完成，由主 Agent 直接实现。** 见 [P2 报告](../experiments/harness-hub/p2/report.md)；实现形状见 [总体架构 5.2、5.3](harness-data-hub-architecture.md#52-anchor-facts事实词汇表p2-已实现)。
+
+- 新 crate `anchor-facts`：资源命名、Validator、内容格式、配置清单和摘要、参数形状摘要、失败分类。
+- Host 记录器 `fact_recorder.rs`：观察事实存在执行端口自己的数据根 `state/kernel-facts/`，每次 AgentNode 调用提交一条记录。
+- 用真实 Flash 模型跑了 15 次，P0 列出的缺口除 Op 节点耗时外都已补上；事实里没有业务内容；记录开销约占 Run 时间的 0.7%。
+- 内核没有改动，C1（`9a5fa57`）不变。
+
+下一步是 P3：在 `anchor-hub` 里实现 L0 到 L2（数据来源、投影、轨迹代数），以及体检报告和停滞检测两个分析器，外加 CLI。门槛 G1 是：用真实 Run 的数据，发现至少一个以前不知道的问题。

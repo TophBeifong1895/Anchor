@@ -1,0 +1,36 @@
+{
+  "runs": 15,
+  "by_task": {
+    "T1": 5,
+    "T2": 10
+  },
+  "checks": {
+    "all_accepted": true,
+    "stamped_time": true,
+    "stamped_config": true,
+    "tool_durations": true,
+    "tool_call_ids": true,
+    "turn_ids_and_times": true
+  },
+  "facts_match_evidence": true,
+  "one_record_and_one_config_per_invocation": true,
+  "recording_ms": {
+    "n": 15,
+    "median": 39,
+    "max": 40,
+    "mean": 39.0
+  },
+  "recording_share_of_wall": 0.007141697182647285,
+  "tool_ms": {
+    "n": 90,
+    "median": 66.0
+  },
+  "failures": {
+    "not_authorized": 2
+  },
+  "outcomes": {
+    "completed": 15
+  },
+  "recording_errors": [],
+  "forbidden_hits": []
+}

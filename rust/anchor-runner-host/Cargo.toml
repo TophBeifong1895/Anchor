@@ -22,6 +22,7 @@ shlex = "1"
 axum = { version = "0.8", features = ["json"] }
 anchor-runtime = { path = "../anchor-runtime" }
 anchor-kernel = { path = "../anchor-kernel" }
+anchor-facts = { path = "../anchor-facts" }
 anchor-graph-host = { path = "../anchor-graph-host" }
 anchor-library = { path = "../anchor-library" }
 anchor-mcp-host = { path = "../anchor-mcp-host" }
