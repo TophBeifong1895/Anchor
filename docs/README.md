@@ -29,7 +29,7 @@
 | 理解 Goose 接入取舍 | [接入决定](goose-runtime-migration.md) |
 | 宪法迁移最终说明与后续决定 | [最终说明](anchor-runtime-migration-overview.md)、[M5 最终测量与待决清单](../experiments/constitution-host-preflight/final/measurement.md)、[规则审计](../experiments/constitution-host-preflight/final/rules-audit.md)、[测试登记](../experiments/constitution-host-preflight/final/test-mapping-summary.md)；历史实施与门槛见 [任务书](constitution-migration-task.md)、[工作记录](constitution-refactor-log.md)、[M4 交回](../experiments/constitution-host-preflight/m4/verification.md)、[Run 门面](run-access-facade.md) |
 | 后续 MCP 按需连接 | [未实施路线](goose-native-capability-reuse-plan.md) |
-| Harness 自身的分析与优化（后续主方向） | [数据中枢方向](harness-data-hub.md) |
+| Harness 自身的分析与优化（后续主方向） | [数据中枢方向](harness-data-hub.md)、[总体架构](harness-data-hub-architecture.md)、[任务书](harness-data-hub-tasks.md) |
 
 依赖版本以 [Cargo workspace](../rust/Cargo.toml)、[Cargo.lock](../rust/Cargo.lock) 和 [前端配置](../apps/web/package.json) 为准。当前文档直接更新，完成计划退出活跃入口；结论链接到相应提交或验收产物，记录方法见开发指南。
 
