@@ -56,7 +56,7 @@
 
 | 事项 | 当前状态 | 关闭条件 |
 | --- | --- | --- |
-| 迁移后待决与实证验收 | 迁移实现已交回。W4、时间事实、history/points 保留政策、旧 worktree/分支删除时机待决定；完整真实模型业务、外部渠道实网及最终部署未验，独立真实模型小图只证明各自场景。旧数据迁移工具用户已决定不提供 | 决定者与现状见 [迁移后待决清单](../experiments/constitution-host-preflight/final/measurement.md#迁移后待决清单)，按独立后续范围验收 |
+| 迁移后待决与实证验收 | 迁移实现已交回。2026-10-20 用户决定：W4 不设默认预算，模型正常工作就继续；时间必须作为事实记录，设计见 [数据中枢方向](harness-data-hub.md)；真实 Provider、外部渠道实网与部署验收由用户负责。history/points 保留政策、旧 worktree/分支删除时机待决定；完整真实模型业务、外部渠道实网及最终部署未验，独立真实模型小图只证明各自场景。旧数据迁移工具用户已决定不提供 | 决定者与现状见 [迁移后待决清单](../experiments/constitution-host-preflight/final/measurement.md#迁移后待决清单)，按独立后续范围验收 |
 | 真实默认模型对话复核 | 2026-10-19 无环境文件的隔离安装中，最小 Pilot 请求返回 `provider_error`，未确认上游 HTTP 状态。2026-10-20 使用运行中 Host 相同二进制和保存配置的周报 AgentNode 小图已通过真实 default Flash；两者场景不同，不能把旧 Pilot 失败解释为当前默认服务整体不可用 | 独立复验原 Pilot 场景；[旧 Pilot 记录](../.local/no-env-20261019/real-evidence.json)、[当前 AgentNode 验证](../.local/weekly-gateway-wording-20261020/README.md) |
 | 可移植周报完整业务验收 | 完整理解/写作/评审与本地报告未完成；2026-10-18 隔离 Run 在理解节点两次返回 HTTP 502，2026-10-20 实际 Run 则因旧采集工具遗留的措辞返回 HTTP 400。当前采集工具已更新且真实模型小图通过，没有新增外部发布或通知 | 新建 Run 重新采集并验收完整核心周报；不要直接恢复含旧文本的 2026-10-20 Run。Docmost/通知按明确目标与授权独立验证。见[当前诊断](../.local/weekly-gateway-wording-20261020/README.md)、[先前 502 证据](../.local/closeout-20261018/README.md)与[周报边界](weekly-work-report.md#验证边界) |
 | Docmost 进一步业务验收 | 默认连接已迁为指定 owner 的网页托管配置，双 MCP 初始化/发现、只读身份调用及真实模型单节点完成均已通过；真实新旧双 Key、目标知识库内容读取、页面写入、附件上传与企微业务尚未验收 | 后续按明确授权的业务场景验证所需读取、写入或上传，再验企微链路；当前只读身份验收不扩大为这些业务通过 |
