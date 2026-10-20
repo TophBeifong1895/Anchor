@@ -66,7 +66,7 @@ fn only_completed_failed_and_aborted_runs_are_terminal() {
 }
 
 #[tokio::test]
-async fn waiting_recovery_preserves_cursor_and_direct_graph_resume_cannot_bypass_it() {
+async fn waiting_recovery_preserves_dispatch_identity_and_scheduler_reentry_cannot_bypass_it() {
     let artifacts = MemoryArtifacts::default();
     let nodes = FakeNodes {
         recovery_once: Mutex::new(true),
@@ -98,26 +98,39 @@ async fn waiting_recovery_preserves_cursor_and_direct_graph_resume_cannot_bypass
 }
 
 #[test]
-fn stopped_conversation_run_can_retain_unknown_recovery_attempts() {
-    let mut record = GraphRunRecord::create(graph(&["work"], &[], "work"), Value::Null).unwrap();
-    record.recovery.push(PendingRecovery {
-        key: InvocationKey {
-            run_id: record.run_id.clone(),
-            graph_digest: record.graph_digest.clone(),
-            node_id: "work".into(),
-            invocation: 1,
-        },
-        attempt: RecoveryAttempt {
-            attempt_id: 77,
-            step: 2,
-            tool: "external_effect".into(),
-            started_at: "2026-10-05T00:00:00Z".into(),
-        },
-    });
-    record.validate().unwrap();
+fn human_stop_retains_unknown_recovery_observation_in_kernel_history() {
+    let record = GraphRunRecord::create(graph(&["work"], &[], "work"), Value::Null).unwrap();
+    let key = InvocationKey {
+        run_id: record.run_id.clone(),
+        graph_digest: record.graph_digest.clone(),
+        node_id: "work".into(),
+        invocation: 1,
+    };
+    let attempts = serde_json::json!([{
+        "attempt_id":77,"step":2,"tool":"external_effect","started_at":"2026-10-05T00:00:00Z"
+    }]);
     let harness = Harness::memory(record.clone());
+    let (principal, cost, submission) = scheduler::observation_stop(
+        &harness.resource(),
+        &key,
+        "unknown external tool effects".into(),
+        attempts.clone(),
+    );
+    assert!(
+        harness
+            .kernel
+            .submit(&principal, cost, submission)
+            .unwrap()
+            .is_accepted()
+    );
     assert!(harness.request("stop").is_accepted());
-    assert_eq!(harness.record().recovery, record.recovery);
+    let history = harness.kernel.history(&harness.id).unwrap();
+    assert_eq!(
+        history[0].submission.content["invocation"],
+        serde_json::to_value(key).unwrap()
+    );
+    assert_eq!(history[0].submission.content["attempts"], attempts);
+    assert_eq!(harness.record(), record);
     assert!(matches!(
         harness.phase(),
         Phase::Waiting {
@@ -127,7 +140,7 @@ fn stopped_conversation_run_can_retain_unknown_recovery_attempts() {
 }
 
 #[tokio::test]
-async fn budget_stop_keeps_cursor_and_resume_uses_same_invocation() {
+async fn budget_stop_preserves_dispatch_identity_and_resume_uses_same_invocation() {
     let mut g = graph(&["one"], &[], "one");
     g.agents.get_mut("worker").unwrap().max_steps = Some(0);
     let artifacts = MemoryArtifacts::default();
@@ -173,7 +186,7 @@ async fn budget_stop_keeps_cursor_and_resume_uses_same_invocation() {
 }
 
 #[tokio::test]
-async fn graph_runner_dispatches_durable_resumable_node_with_same_invocation() {
+async fn kernel_scheduler_dispatches_durable_resumable_node_with_same_invocation() {
     let nodes = FakeNodes::default();
     let artifacts = MemoryArtifacts::default();
     let record = GraphRunRecord::create(graph(&["one"], &[], "one"), Value::Null).unwrap();
@@ -244,7 +257,7 @@ async fn uncertain_and_pause_fail_closed_at_invocation_boundary() {
 }
 
 #[tokio::test]
-async fn stop_before_dispatch_and_executor_cancel_preserve_safe_cursor() {
+async fn stop_before_dispatch_and_executor_cancel_preserve_pending_dispatch() {
     let artifacts = MemoryArtifacts::default();
     let nodes = FakeNodes::default();
     let harness =
@@ -277,7 +290,7 @@ async fn stop_before_dispatch_and_executor_cancel_preserve_safe_cursor() {
 }
 
 #[tokio::test]
-async fn run_rejects_cursor_identity_mismatch_before_dispatch() {
+async fn legacy_cursor_payload_is_refused_while_frontier_identity_remains_authoritative() {
     let record = GraphRunRecord::create(graph(&["one"], &[], "one"), Value::Null).unwrap();
     let harness = Harness::memory(record);
     let mut resource = harness.resource();
@@ -290,7 +303,7 @@ async fn run_rejects_cursor_identity_mismatch_before_dispatch() {
 }
 
 #[tokio::test]
-async fn reentering_a_terminal_run_does_not_advance_the_write_stamp() {
+async fn reentering_a_terminal_run_does_not_advance_kernel_version_or_history() {
     let artifacts = MemoryArtifacts::default();
     let nodes = FakeNodes::default();
     let root = test_root("reentry");
@@ -308,19 +321,22 @@ async fn reentering_a_terminal_run_does_not_advance_the_write_stamp() {
     fs::remove_dir_all(root).unwrap();
 }
 
-#[tokio::test]
-async fn persist_stamps_updated_and_keeps_memory_in_step_with_disk() {
-    let root = test_root("stamp");
-    let mut record = GraphRunRecord::create(graph(&["one"], &[], "one"), Value::Null).unwrap();
-    let started = record.started.clone();
-    record.updated = Some("1970-01-01T00:00:00.000Z".into());
-    // Timestamp is an observation; the Kernel commit carries the authoritative version.
-    record.touch();
-    assert!(record.updated.as_deref().unwrap() > "1970-01-01T00:00:00.000Z");
-    assert!(record.updated.as_deref().unwrap().ends_with('Z'));
+#[test]
+fn kernel_history_commit_preserves_graph_admission_across_file_reload() {
+    let root = test_root("commit-observation");
+    let record = GraphRunRecord::create(graph(&["one"], &[], "one"), Value::Null).unwrap();
     let harness = Harness::with_store(FileStore::new(&root).unwrap(), record.clone());
-    assert_eq!(harness.record(), record);
-    assert_eq!(harness.record().started, started);
-    assert_eq!(harness.record().format, RUN_RECORD_FORMAT);
+    let version = harness.resource().version;
+    assert!(harness.request("stop").is_accepted());
+    assert!(harness.resource().version > version);
+    let loaded = Harness::reload(FileStore::new(&root).unwrap(), &record.run_id);
+    assert_eq!(loaded.resource(), harness.resource());
+    assert_eq!(
+        loaded.kernel.history(&loaded.id).unwrap(),
+        harness.kernel.history(&harness.id).unwrap()
+    );
+    assert_eq!(loaded.record(), record);
+    assert_eq!(loaded.record().started, record.started);
+    assert_eq!(loaded.record().format, RUN_RECORD_FORMAT);
     fs::remove_dir_all(root).unwrap();
 }

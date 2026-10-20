@@ -38,12 +38,24 @@ async fn recovery_persists_effect_fact_before_human_release_and_never_dispatches
     assert!(view.has_pending_recovery());
     assert!(view.can_resume());
     assert!(!view.is_settled());
+    let disk_view = crate::application::run_access::reads::load(root.path(), &record.run_id)
+        .unwrap()
+        .unwrap();
+    assert!(disk_view.has_pending_recovery());
+    assert_eq!(disk_view.recovery, view.recovery);
+    let graph_facts = &runs.load(&record.run_id).unwrap().unwrap().state;
+    for field in ["error", "updated", "recovery", "recovery_submissions"] {
+        assert!(
+            graph_facts.get(field).is_none(),
+            "{field} is not a Graph fact"
+        );
+    }
+
     assert_eq!(
         application
             .read_run(&record.run_id)
             .unwrap()
             .unwrap()
-            .record
             .recovery
             .len(),
         2

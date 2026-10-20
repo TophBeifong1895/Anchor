@@ -1,0 +1,170 @@
+{
+  "baseline": "2cef07b",
+  "scope": "M4 Rust and Web source files, including tests; documents and generated evidence excluded",
+  "excluded_external_commit": "a98757a",
+  "by_crate_or_app": {
+    "apps/web": {
+      "added": 65,
+      "deleted": 0
+    },
+    "rust/anchor-runner-host": {
+      "added": 77,
+      "deleted": 33
+    },
+    "rust/anchor-runtime": {
+      "added": 199,
+      "deleted": 222
+    }
+  },
+  "totals": {
+    "added": 341,
+    "deleted": 255
+  },
+  "files": [
+    {
+      "path": "apps/web/src/ChannelSessions.test.tsx",
+      "added": 15,
+      "deleted": 0
+    },
+    {
+      "path": "apps/web/src/RunDetailPage.test.tsx",
+      "added": 9,
+      "deleted": 0
+    },
+    {
+      "path": "rust/anchor-runner-host/src/api/tests.rs",
+      "added": 5,
+      "deleted": 5
+    },
+    {
+      "path": "rust/anchor-runner-host/src/api/tests/conversations.rs",
+      "added": 1,
+      "deleted": 1
+    },
+    {
+      "path": "rust/anchor-runner-host/src/api/tests/kernel_probe/calls.rs",
+      "added": 2,
+      "deleted": 2
+    },
+    {
+      "path": "rust/anchor-runner-host/src/api/tests/kernel_probe/calls/recovery.rs",
+      "added": 1,
+      "deleted": 1
+    },
+    {
+      "path": "rust/anchor-runner-host/src/api/tests/run_abandon.rs",
+      "added": 4,
+      "deleted": 4
+    },
+    {
+      "path": "rust/anchor-runner-host/src/application/run_access.rs",
+      "added": 5,
+      "deleted": 1
+    },
+    {
+      "path": "rust/anchor-runner-host/src/application/run_access/fixtures.rs",
+      "added": 4,
+      "deleted": 3
+    },
+    {
+      "path": "rust/anchor-runner-host/src/application/run_access/http.rs",
+      "added": 15,
+      "deleted": 4
+    },
+    {
+      "path": "rust/anchor-runner-host/src/application/run_access/kernel_runs/recovery.rs",
+      "added": 14,
+      "deleted": 3
+    },
+    {
+      "path": "rust/anchor-runner-host/src/application/run_access/kernel_runs/tests/recovery.rs",
+      "added": 13,
+      "deleted": 1
+    },
+    {
+      "path": "rust/anchor-runner-host/src/application/run_access/reads.rs",
+      "added": 11,
+      "deleted": 5
+    },
+    {
+      "path": "rust/anchor-runner-host/src/application/run_access/recovery.rs",
+      "added": 1,
+      "deleted": 2
+    },
+    {
+      "path": "rust/anchor-runner-host/src/application/run_access/run_view.rs",
+      "added": 1,
+      "deleted": 1
+    },
+    {
+      "path": "rust/anchor-runtime/src/graph/ports.rs",
+      "added": 2,
+      "deleted": 2
+    },
+    {
+      "path": "rust/anchor-runtime/src/graph/state.rs",
+      "added": 17,
+      "deleted": 74
+    },
+    {
+      "path": "rust/anchor-runtime/src/graph/test_support/snapshots.rs",
+      "added": 4,
+      "deleted": 8
+    },
+    {
+      "path": "rust/anchor-runtime/src/graph/tests.rs",
+      "added": 14,
+      "deleted": 6
+    },
+    {
+      "path": "rust/anchor-runtime/src/graph/tests/host_operations.rs",
+      "added": 0,
+      "deleted": 1
+    },
+    {
+      "path": "rust/anchor-runtime/src/graph/tests/migrated_crash.rs",
+      "added": 27,
+      "deleted": 24
+    },
+    {
+      "path": "rust/anchor-runtime/src/graph/tests/migrated_leases.rs",
+      "added": 12,
+      "deleted": 12
+    },
+    {
+      "path": "rust/anchor-runtime/src/graph/tests/migrated_lifecycle.rs",
+      "added": 53,
+      "deleted": 37
+    },
+    {
+      "path": "rust/anchor-runtime/src/graph/tests/migrated_plugins.rs",
+      "added": 7,
+      "deleted": 7
+    },
+    {
+      "path": "rust/anchor-runtime/src/graph/tests/migrated_reload.rs",
+      "added": 35,
+      "deleted": 35
+    },
+    {
+      "path": "rust/anchor-runtime/src/graph/tests/migrated_scenarios.rs",
+      "added": 11,
+      "deleted": 7
+    },
+    {
+      "path": "rust/anchor-runtime/src/graph/tests/migrated_storage.rs",
+      "added": 14,
+      "deleted": 6
+    },
+    {
+      "path": "rust/anchor-runtime/src/graph/tests/migrated_validation.rs",
+      "added": 3,
+      "deleted": 3
+    },
+    {
+      "path": "apps/web/src/TimelinePreview.test.tsx",
+      "added": 41,
+      "deleted": 0
+    }
+  ]
+}

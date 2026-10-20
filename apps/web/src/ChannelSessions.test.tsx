@@ -146,6 +146,21 @@ describe('message session management', () => {
     expect(button('退役实例').disabled).toBe(false);
   });
 
+  it('keeps a pending effect visible without offering replay or retirement', async () => {
+    instance.needs_recovery = true;
+    execution.active = false;
+    execution.projection = {
+      phase: 'waiting', waiting_for: 'effect', active: false, reason: 'Agent 上次工具调用的结果未记录', updated: null,
+      actions: { pause: false, stop: false, resume: false, abandon: true },
+    };
+    await render();
+    expect(container.querySelector('.channels-instance-status')?.textContent).toBe('等待核查效果：Agent 上次工具调用的结果未记录');
+    expect([...container.querySelectorAll('.run-controls button')].map(item => item.textContent)).toEqual(['放弃']);
+    expect(button('退役实例').disabled).toBe(true);
+    expect(button('清理历史').disabled).toBe(true);
+    expect(requests().every(item => item.method === 'GET')).toBe(true);
+  });
+
   it('shows unknown deliveries and prevents retirement and cleanup without silently settling them', async () => {
     execution.active = false; execution.waiting = true;
     deliveries = [{ key: 'reply-unknown', status: 'unknown' }];

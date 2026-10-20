@@ -284,8 +284,7 @@ mod tests {
         let runs = application.kernel_owner(&key.run_id).unwrap().unwrap();
         runs.recover_attempt(&key, 17, RecoveryDecision::Abort, || Ok(()))
             .unwrap();
-        let view = fixtures::view(&application, &key.run_id);
-        let decisions = &view.record.recovery_submissions;
+        let (_, decisions) = runs.recovery_facts(&key.run_id).unwrap();
         let lookup = |target: &InvocationKey, attempt| {
             decisions
                 .iter()

@@ -2,9 +2,9 @@
 
 ## 当前实现
 
-`application/run_access` 是 Host 读取与改变 Run 的唯一门面。HTTP、Pilot、Graph、会话、助手与渠道只消费安全视图、谓词或意图操作；平台和独立宿主统一调用 KernelScheduler，不再按存储分派。原执行器、整体记录存储、旧状态枚举与兼容序列化桥已删除。旧 Run 文件只检查存在性并具名拒绝，不读取内容；当前 GraphRunRecord format 为 14。
+`application/run_access` 是 Host 读取与改变 Run 的唯一门面。HTTP、Pilot、Graph、会话、助手与渠道只消费安全视图、谓词或意图操作；平台和独立宿主统一调用 KernelScheduler，不再按存储分派。原执行器、整体记录存储、旧状态枚举与兼容序列化桥已删除。旧 Run 文件只检查存在性并具名拒绝，不读取内容；当前 GraphRunRecord format 为 15；1–14 及旧字段具名拒绝，不原地升级。
 
-业务围栏从 F0 的 224 降为 0，无新增运行时豁免。`RunView` 提供 Phase、worker、Host 更新时间、只读 Graph 进度与 frontier；私有 record 既不 Deref 也无 getter。生命周期仅来自 Kernel，GraphRunRecord 不再持有 status/cursor。历史 error/recovery 等残余字段留待 M4 清理，不能作为生命周期权威。原 16 save / 36 mutation 的逐项去向见 [C2 审计](../experiments/constitution-host-preflight/m3/c2-destinations.md)。
+业务围栏从 F0 的 224 降为 0，无新增运行时豁免。`RunView` 提供 Phase、worker、Host 更新时间、只读 Graph 进度与 frontier；私有 record 既不 Deref 也无 getter。生命周期仅来自 Kernel，GraphRunRecord 不持有 status/cursor/error/recovery/recovery_submissions/updated。失败原因来自 Kernel 结算，未知效果及人工决定从已接受 history 投影；在线与只读磁盘读取共用同一纯函数。HTTP 保留 state.error 与 state.recovery 展示键，不再把这些投影塞回 Graph 记录。Graph sequence 保留结果/边决定的局部因果顺序，不等同于 Kernel version；[逐字段归属](../experiments/constitution-host-preflight/m4/field-disposition.md)列明全部字段。原 16 save / 36 mutation 的逐项去向见 [C2 审计](../experiments/constitution-host-preflight/m3/c2-destinations.md)。
 
 所有新 Run 默认走 Kernel，`execution` 选择字段被拒绝。frontier 决定当前 invocation；未知效果 attempts/决定从已接受 Kernel history 投影。普通显式 resume 与认证 Session-call 共用 `inspect_interrupted_attempts`：先发现原生 pending，由 `observe_recovery_attempts` 复用 Runtime 的 `observation_stop` 登记 Code + Observation stop，再逐项持久保存“先核查，不盲目重放”的提示，最后 Human release，Agent 在同一原生 Session 中核查后继续。pending 不隐藏普通 resume；后台自动恢复不调用该释放 helper，不自动重放。人工 Completed/Abort API 仍可供已知结果的直接裁定，不制造工具成功或模型完成；显式 abandon 后保留观察而允许 Session 交接。并行分支 Op.call 仍由 Host 共用 `reject_snapshot` 准入拒绝，不改 GraphValidator。
 
@@ -125,4 +125,4 @@ master 的 [详情/abandon 字节回归](../rust/anchor-runner-host/src/applicat
 - F2 定向恢复/控制各 18 项、计划 22 项与删除 68 项通过，围栏为业务 0、运行时 197；workspace 实际 1,995/0/122，严格 workspace/all-target clippy、fmt、Web 306 及构建通过。该 workspace 命令在证据测试拆分前执行；拆分只增加 1 个默认忽略项，实际场景不变，后续编译、严格 clippy 与实际 Goose 回归均通过。Graph 级联删除归门面，计划投影委托同一终态权威，未知/控制中状态与非字符串字段保留旧行为。
 - 标准 Goose 入口 20 套、105/0/0，105 份场景证据全部通过严格校验；入口外补集另行串行执行 15/0/0，合计覆盖 120 项，没有残留失败，不声称一次完整 ignored 命令通过。原参数测试拆分使测试数比 G0 多 1，覆盖不变。最终命令、原始报告及此前中止/证据失败均保留在 [F2 证据](../.local/run-access-facade-20261019/f2/README.md)。未新增真实 Provider、生产数据、外部渠道或部署验收。
 
-M2 §10.12 的规则表以 `490c000` 为比较基线，见 [独立判断点清单](../experiments/constitution-host-preflight/m2/completion-measurement.md)。双路径并存会增加恢复门禁，不能用上游 36→13 的数字代表本轮收敛；M3 已完成默认切换和旧实现删除，Session 单写入者审计见 [当前规则表](../experiments/constitution-host-preflight/m3/rules-session-audit.md)。任务书 §10.15 的恢复契约更正与回归已完成，完整固定 Goose 122 / 0 / 0、原 12 项逐项独跑均通过；S27 与是否合回 master 待用户审查，见 [M3 交回](../experiments/constitution-host-preflight/m3/completion-verification.md)。
+M2 §10.12 的规则表以 `490c000` 为比较基线，见 [独立判断点清单](../experiments/constitution-host-preflight/m2/completion-measurement.md)。双路径并存会增加恢复门禁，不能用上游 36→13 的数字代表本轮收敛；M3 已完成默认切换和旧实现删除，Session 单写入者审计见 [当前规则表](../experiments/constitution-host-preflight/m3/rules-session-audit.md)。任务书 §10.15 的恢复契约更正与回归已完成，完整固定 Goose 122 / 0 / 0、原 12 项逐项独跑均通过；S27 已批准并结清 S4，M3 已快进 master；当前 M4 证据见 [交回](../experiments/constitution-host-preflight/m4/verification.md)，M3 历史结果见 [§10.15 交回](../experiments/constitution-host-preflight/m3/completion-verification.md)。

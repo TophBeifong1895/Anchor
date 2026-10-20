@@ -1,0 +1,2223 @@
+{
+  "status": "passed",
+  "source_parent": "7b7fa5948c7a5957a6d09f85094acc526b1f99f8",
+  "task_book_commit": "2cef07b463fba1f5a5bd46e3fc6bd5650ecec175",
+  "kernel_baseline": "0859373",
+  "source_identities": "source-identities.json",
+  "external_commits_excluded_from_m4": [
+    "a98757a74e4458bcf0c6dbe82b378b09e968be5d",
+    "7b7fa5948c7a5957a6d09f85094acc526b1f99f8"
+  ],
+  "working_directory": "/home/mansteinl/Anchor",
+  "build_directory": "/tmp/anchor-goose-regression-target",
+  "environment": {
+    "CARGO_TARGET_DIR": "/tmp/anchor-goose-regression-target",
+    "CARGO_BUILD_JOBS": "2"
+  },
+  "captured_at": "2026-10-20T06:46:59.232704+00:00",
+  "workspace": {
+    "command": [
+      "cargo",
+      "+stable",
+      "test",
+      "--manifest-path",
+      "rust/Cargo.toml",
+      "--workspace",
+      "--locked",
+      "--no-fail-fast"
+    ],
+    "exit_code": 0,
+    "log": "/tmp/anchor-m4/workspace.log",
+    "log_sha256": "7108b802bcf0e312f817c8d003bac5b3540c047fe6257ae9a1e92c393b709235",
+    "targets": [
+      {
+        "target": "Running unittests src/lib.rs (/tmp/anchor-goose-regression-target/debug/deps/anchor_devtools-03e19604a6129514)",
+        "result": "test result: ok. 84 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.15s",
+        "counts": [
+          84,
+          0,
+          0
+        ]
+      },
+      {
+        "target": "Running unittests src/main.rs (/tmp/anchor-goose-regression-target/debug/deps/anchor_devtools-dd7b93164e1632c9)",
+        "result": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "counts": [
+          0,
+          0,
+          0
+        ]
+      },
+      {
+        "target": "Running tests/cli.rs (/tmp/anchor-goose-regression-target/debug/deps/cli-d067a06758697633)",
+        "result": "test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s",
+        "counts": [
+          6,
+          0,
+          0
+        ]
+      },
+      {
+        "target": "Running tests/dev_launcher.rs (/tmp/anchor-goose-regression-target/debug/deps/dev_launcher-78e0696eb3f1f161)",
+        "result": "test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.22s",
+        "counts": [
+          7,
+          0,
+          0
+        ]
+      },
+      {
+        "target": "Running unittests src/lib.rs (/tmp/anchor-goose-regression-target/debug/deps/anchor_distribution-bd391bc3c3985261)",
+        "result": "test result: ok. 39 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.13s",
+        "counts": [
+          39,
+          0,
+          0
+        ]
+      },
+      {
+        "target": "Running unittests src/main.rs (/tmp/anchor-goose-regression-target/debug/deps/anchor_distribution-58b78063ca7556db)",
+        "result": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "counts": [
+          0,
+          0,
+          0
+        ]
+      },
+      {
+        "target": "Running unittests src/bin/anchor-platform.rs (/tmp/anchor-goose-regression-target/debug/deps/anchor_platform-e5ea0083756a1d93)",
+        "result": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "counts": [
+          0,
+          0,
+          0
+        ]
+      },
+      {
+        "target": "Running tests/cli.rs (/tmp/anchor-goose-regression-target/debug/deps/cli-547ea03d671f28d3)",
+        "result": "test result: ok. 5 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "counts": [
+          5,
+          0,
+          1
+        ]
+      },
+      {
+        "target": "Running tests/platform_cli.rs (/tmp/anchor-goose-regression-target/debug/deps/platform_cli-918944221c82a4df)",
+        "result": "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "counts": [
+          4,
+          0,
+          0
+        ]
+      },
+      {
+        "target": "Running unittests src/lib.rs (/tmp/anchor-goose-regression-target/debug/deps/anchor_docmost_tools-176d1d1c8dd7ad3d)",
+        "result": "test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.48s",
+        "counts": [
+          7,
+          0,
+          0
+        ]
+      },
+      {
+        "target": "Running unittests src/main.rs (/tmp/anchor-goose-regression-target/debug/deps/anchor_docmost_tools-a6a291d034105d8a)",
+        "result": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "counts": [
+          0,
+          0,
+          0
+        ]
+      },
+      {
+        "target": "Running tests/boundaries.rs (/tmp/anchor-goose-regression-target/debug/deps/boundaries-8b467327be89e768)",
+        "result": "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "counts": [
+          4,
+          0,
+          0
+        ]
+      },
+      {
+        "target": "Running tests/package.rs (/tmp/anchor-goose-regression-target/debug/deps/package-92023d0aab132ec0)",
+        "result": "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.57s",
+        "counts": [
+          4,
+          0,
+          0
+        ]
+      },
+      {
+        "target": "Running tests/stdio.rs (/tmp/anchor-goose-regression-target/debug/deps/stdio-7c98ab4ef2136480)",
+        "result": "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s",
+        "counts": [
+          4,
+          0,
+          0
+        ]
+      },
+      {
+        "target": "Running tests/upload.rs (/tmp/anchor-goose-regression-target/debug/deps/upload-a2276d96aeabe558)",
+        "result": "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.25s",
+        "counts": [
+          4,
+          0,
+          0
+        ]
+      },
+      {
+        "target": "Running unittests src/lib.rs (/tmp/anchor-goose-regression-target/debug/deps/anchor_file_lease-4e3c49a0777b97b5)",
+        "result": "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "counts": [
+          3,
+          0,
+          0
+        ]
+      },
+      {
+        "target": "Running unittests src/lib.rs (/tmp/anchor-goose-regression-target/debug/deps/anchor_graph_host-09f5225cc171feb1)",
+        "result": "test result: ok. 61 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.55s",
+        "counts": [
+          61,
+          0,
+          0
+        ]
+      },
+      {
+        "target": "Running tests/child_lifecycle.rs (/tmp/anchor-goose-regression-target/debug/deps/child_lifecycle-229c98e36424269a)",
+        "result": "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.21s",
+        "counts": [
+          4,
+          0,
+          0
+        ]
+      },
+      {
+        "target": "Running tests/in_process.rs (/tmp/anchor-goose-regression-target/debug/deps/in_process-8483a30c2b384163)",
+        "result": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "counts": [
+          0,
+          0,
+          0
+        ]
+      },
+      {
+        "target": "Running unittests src/lib.rs (/tmp/anchor-goose-regression-target/debug/deps/anchor_kernel-3150523c8efc98b4)",
+        "result": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "counts": [
+          0,
+          0,
+          0
+        ]
+      },
+      {
+        "target": "Running tests/accounting_lifecycle.rs (/tmp/anchor-goose-regression-target/debug/deps/accounting_lifecycle-c011a12aea317321)",
+        "result": "test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "counts": [
+          12,
+          0,
+          0
+        ]
+      },
+      {
+        "target": "Running tests/constitution.rs (/tmp/anchor-goose-regression-target/debug/deps/constitution-81e94e2cacc5c08a)",
+        "result": "test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.20s",
+        "counts": [
+          17,
+          0,
+          0
+        ]
+      },
+      {
+        "target": "Running tests/file_store_deletion.rs (/tmp/anchor-goose-regression-target/debug/deps/file_store_deletion-5de5ad08fc7e0eb6)",
+        "result": "test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.34s",
+        "counts": [
+          7,
+          0,
+          0
+        ]
+      },
+      {
+        "target": "Running tests/storage_regressions.rs (/tmp/anchor-goose-regression-target/debug/deps/storage_regressions-8b0df3f757905dde)",
+        "result": "test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.15s",
+        "counts": [
+          8,
+          0,
+          0
+        ]
+      },
+      {
+        "target": "Running unittests src/lib.rs (/tmp/anchor-goose-regression-target/debug/deps/anchor_library-b29f1b72eb9e71c7)",
+        "result": "test result: ok. 21 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.12s",
+        "counts": [
+          21,
+          0,
+          0
+        ]
+      },
+      {
+        "target": "Running unittests src/main.rs (/tmp/anchor-goose-regression-target/debug/deps/anchor_library-01d00042b1dd1c60)",
+        "result": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "counts": [
+          0,
+          0,
+          0
+        ]
+      },
+      {
+        "target": "Running tests/cli.rs (/tmp/anchor-goose-regression-target/debug/deps/cli-175766befbabdcd2)",
+        "result": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s",
+        "counts": [
+          2,
+          0,
+          0
+        ]
+      },
+      {
+        "target": "Running tests/development.rs (/tmp/anchor-goose-regression-target/debug/deps/development-ea67afaa9975ff70)",
+        "result": "test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.98s",
+        "counts": [
+          10,
+          0,
+          0
+        ]
+      },
+      {
+        "target": "Running tests/install.rs (/tmp/anchor-goose-regression-target/debug/deps/install-7b8f78568c0c9128)",
+        "result": "test result: ok. 21 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.85s",
+        "counts": [
+          21,
+          0,
+          0
+        ]
+      },
+      {
+        "target": "Running tests/reclaim.rs (/tmp/anchor-goose-regression-target/debug/deps/reclaim-4748af397bedf4e9)",
+        "result": "test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.10s",
+        "counts": [
+          11,
+          0,
+          0
+        ]
+      },
+      {
+        "target": "Running tests/review.rs (/tmp/anchor-goose-regression-target/debug/deps/review-c0bfcc5152a985a6)",
+        "result": "test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.17s",
+        "counts": [
+          9,
+          0,
+          0
+        ]
+      },
+      {
+        "target": "Running unittests src/lib.rs (/tmp/anchor-goose-regression-target/debug/deps/anchor_mcp_host-c9f3cf8215ae712b)",
+        "result": "test result: ok. 25 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 0.50s",
+        "counts": [
+          25,
+          0,
+          2
+        ]
+      },
+      {
+        "target": "Running unittests src/lib.rs (/tmp/anchor-goose-regression-target/debug/deps/anchor_network_tools-706affa7e9d55165)",
+        "result": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s",
+        "counts": [
+          2,
+          0,
+          0
+        ]
+      },
+      {
+        "target": "Running unittests src/main.rs (/tmp/anchor-goose-regression-target/debug/deps/anchor_network_tools-f286324a29a5f0bc)",
+        "result": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "counts": [
+          0,
+          0,
+          0
+        ]
+      },
+      {
+        "target": "Running unittests src/lib.rs (/tmp/anchor-goose-regression-target/debug/deps/anchor_platform_session-8130049f7a2e6099)",
+        "result": "test result: ok. 23 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.72s",
+        "counts": [
+          23,
+          0,
+          0
+        ]
+      },
+      {
+        "target": "Running tests/channel_account_routing.rs (/tmp/anchor-goose-regression-target/debug/deps/channel_account_routing-488351e0d966fcc8)",
+        "result": "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.15s",
+        "counts": [
+          5,
+          0,
+          0
+        ]
+      },
+      {
+        "target": "Running tests/channel_accounts.rs (/tmp/anchor-goose-regression-target/debug/deps/channel_accounts-2dd9044070eb5b90)",
+        "result": "test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.29s",
+        "counts": [
+          8,
+          0,
+          0
+        ]
+      },
+      {
+        "target": "Running tests/channel_assistant.rs (/tmp/anchor-goose-regression-target/debug/deps/channel_assistant-d0747e9e88248a3f)",
+        "result": "test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.29s",
+        "counts": [
+          10,
+          0,
+          0
+        ]
+      },
+      {
+        "target": "Running tests/channel_assistant_retirement.rs (/tmp/anchor-goose-regression-target/debug/deps/channel_assistant_retirement-4cc9d6a5fc692ae6)",
+        "result": "test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.45s",
+        "counts": [
+          8,
+          0,
+          0
+        ]
+      },
+      {
+        "target": "Running tests/channel_group.rs (/tmp/anchor-goose-regression-target/debug/deps/channel_group-01a0f2eb21da40a6)",
+        "result": "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.16s",
+        "counts": [
+          3,
+          0,
+          0
+        ]
+      },
+      {
+        "target": "Running tests/channel_handover.rs (/tmp/anchor-goose-regression-target/debug/deps/channel_handover-f26483361839dc23)",
+        "result": "test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.22s",
+        "counts": [
+          8,
+          0,
+          0
+        ]
+      },
+      {
+        "target": "Running tests/channel_session.rs (/tmp/anchor-goose-regression-target/debug/deps/channel_session-434ec42c03744c8f)",
+        "result": "test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.28s",
+        "counts": [
+          13,
+          0,
+          0
+        ]
+      },
+      {
+        "target": "Running tests/execution_links.rs (/tmp/anchor-goose-regression-target/debug/deps/execution_links-2dfd1ae5d8c66af6)",
+        "result": "test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.27s",
+        "counts": [
+          18,
+          0,
+          0
+        ]
+      },
+      {
+        "target": "Running tests/goose_links.rs (/tmp/anchor-goose-regression-target/debug/deps/goose_links-46267a836c56fbc7)",
+        "result": "test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.83s",
+        "counts": [
+          14,
+          0,
+          0
+        ]
+      },
+      {
+        "target": "Running tests/questions.rs (/tmp/anchor-goose-regression-target/debug/deps/questions-b2e1166be05d9cd3)",
+        "result": "test result: ok. 22 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.79s",
+        "counts": [
+          22,
+          0,
+          0
+        ]
+      },
+      {
+        "target": "Running tests/schema_v3.rs (/tmp/anchor-goose-regression-target/debug/deps/schema_v3-4848f6b49a958b89)",
+        "result": "test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 7.16s",
+        "counts": [
+          6,
+          0,
+          0
+        ]
+      },
+      {
+        "target": "Running tests/schema_v5.rs (/tmp/anchor-goose-regression-target/debug/deps/schema_v5-ad356628c8fbc613)",
+        "result": "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.04s",
+        "counts": [
+          3,
+          0,
+          0
+        ]
+      },
+      {
+        "target": "Running tests/session_store.rs (/tmp/anchor-goose-regression-target/debug/deps/session_store-24973e80ab847bb5)",
+        "result": "test result: ok. 27 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.40s",
+        "counts": [
+          27,
+          0,
+          0
+        ]
+      },
+      {
+        "target": "Running tests/turn_store.rs (/tmp/anchor-goose-regression-target/debug/deps/turn_store-e82808e9004a455f)",
+        "result": "test result: ok. 26 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.51s",
+        "counts": [
+          26,
+          0,
+          0
+        ]
+      },
+      {
+        "target": "Running unittests src/lib.rs (/tmp/anchor-goose-regression-target/debug/deps/anchor_rsi-1a141dfc48af57d9)",
+        "result": "test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s",
+        "counts": [
+          11,
+          0,
+          0
+        ]
+      },
+      {
+        "target": "Running unittests src/main.rs (/tmp/anchor-goose-regression-target/debug/deps/anchor_rsi-7350fc83fa04bdf3)",
+        "result": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "counts": [
+          0,
+          0,
+          0
+        ]
+      },
+      {
+        "target": "Running tests/business.rs (/tmp/anchor-goose-regression-target/debug/deps/business-5cb3d978c2619b65)",
+        "result": "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.09s",
+        "counts": [
+          4,
+          0,
+          0
+        ]
+      },
+      {
+        "target": "Running tests/evidence.rs (/tmp/anchor-goose-regression-target/debug/deps/evidence-ef282f169e6c7f6d)",
+        "result": "test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.07s",
+        "counts": [
+          10,
+          0,
+          0
+        ]
+      },
+      {
+        "target": "Running tests/history_discovery.rs (/tmp/anchor-goose-regression-target/debug/deps/history_discovery-96e1a407d0b8be66)",
+        "result": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "counts": [
+          2,
+          0,
+          0
+        ]
+      },
+      {
+        "target": "Running tests/weekly.rs (/tmp/anchor-goose-regression-target/debug/deps/weekly-1e4adf393a0e3878)",
+        "result": "test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s",
+        "counts": [
+          16,
+          0,
+          0
+        ]
+      },
+      {
+        "target": "Running unittests src/bin/anchor-net-relay.rs (/tmp/anchor-goose-regression-target/debug/deps/anchor_net_relay-9119bdd6d265b11a)",
+        "result": "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "counts": [
+          3,
+          0,
+          0
+        ]
+      },
+      {
+        "target": "Running unittests src/main.rs (/tmp/anchor-goose-regression-target/debug/deps/anchor_runner_host-2f70363a593aeab8)",
+        "result": "test result: ok. 1043 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 219.08s",
+        "counts": [
+          1043,
+          0,
+          2
+        ]
+      },
+      {
+        "target": "Running tests/channel_startup.rs (/tmp/anchor-goose-regression-target/debug/deps/channel_startup-10917b5e3cd09209)",
+        "result": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.31s",
+        "counts": [
+          1,
+          0,
+          0
+        ]
+      },
+      {
+        "target": "Running tests/goose_acp.rs (/tmp/anchor-goose-regression-target/debug/deps/goose_acp-850f2643a5517324)",
+        "result": "test result: ok. 8 passed; 0 failed; 15 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "counts": [
+          8,
+          0,
+          15
+        ]
+      },
+      {
+        "target": "Running tests/goose_channel.rs (/tmp/anchor-goose-regression-target/debug/deps/goose_channel-edef7778075adc47)",
+        "result": "test result: ok. 6 passed; 0 failed; 4 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "counts": [
+          6,
+          0,
+          4
+        ]
+      },
+      {
+        "target": "Running tests/goose_compaction.rs (/tmp/anchor-goose-regression-target/debug/deps/goose_compaction-be10c7776875e5b3)",
+        "result": "test result: ok. 6 passed; 0 failed; 4 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "counts": [
+          6,
+          0,
+          4
+        ]
+      },
+      {
+        "target": "Running tests/goose_completion.rs (/tmp/anchor-goose-regression-target/debug/deps/goose_completion-be3ace75c331b577)",
+        "result": "test result: ok. 6 passed; 0 failed; 9 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "counts": [
+          6,
+          0,
+          9
+        ]
+      },
+      {
+        "target": "Running tests/goose_conversation.rs (/tmp/anchor-goose-regression-target/debug/deps/goose_conversation-139a6facb6d2c684)",
+        "result": "test result: ok. 6 passed; 0 failed; 13 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "counts": [
+          6,
+          0,
+          13
+        ]
+      },
+      {
+        "target": "Running tests/goose_development_environment.rs (/tmp/anchor-goose-regression-target/debug/deps/goose_development_environment-5853b667d894a31a)",
+        "result": "test result: ok. 6 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "counts": [
+          6,
+          0,
+          1
+        ]
+      },
+      {
+        "target": "Running tests/goose_distribution.rs (/tmp/anchor-goose-regression-target/debug/deps/goose_distribution-e908acbd42ef55eb)",
+        "result": "test result: ok. 6 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "counts": [
+          6,
+          0,
+          1
+        ]
+      },
+      {
+        "target": "Running tests/goose_elicitation.rs (/tmp/anchor-goose-regression-target/debug/deps/goose_elicitation-092182c27a2fa655)",
+        "result": "test result: ok. 6 passed; 0 failed; 10 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "counts": [
+          6,
+          0,
+          10
+        ]
+      },
+      {
+        "target": "Running tests/goose_kernel_recovery.rs (/tmp/anchor-goose-regression-target/debug/deps/goose_kernel_recovery-0cd2b15c966960a3)",
+        "result": "test result: ok. 6 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "counts": [
+          6,
+          0,
+          1
+        ]
+      },
+      {
+        "target": "Running tests/goose_library.rs (/tmp/anchor-goose-regression-target/debug/deps/goose_library-75cc4c43ca8e54de)",
+        "result": "test result: ok. 6 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "counts": [
+          6,
+          0,
+          1
+        ]
+      },
+      {
+        "target": "Running tests/goose_media.rs (/tmp/anchor-goose-regression-target/debug/deps/goose_media-55e8b8e5d7ba1667)",
+        "result": "test result: ok. 6 passed; 0 failed; 6 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "counts": [
+          6,
+          0,
+          6
+        ]
+      },
+      {
+        "target": "Running tests/goose_model_settings.rs (/tmp/anchor-goose-regression-target/debug/deps/goose_model_settings-67e4958f753f6df2)",
+        "result": "test result: ok. 6 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "counts": [
+          6,
+          0,
+          2
+        ]
+      },
+      {
+        "target": "Running tests/goose_native_activation_spike.rs (/tmp/anchor-goose-regression-target/debug/deps/goose_native_activation_spike-e055c3fc5b1f102e)",
+        "result": "test result: ok. 6 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "counts": [
+          6,
+          0,
+          2
+        ]
+      },
+      {
+        "target": "Running tests/goose_persistent_assistant.rs (/tmp/anchor-goose-regression-target/debug/deps/goose_persistent_assistant-79cafc71a2e9fd3b)",
+        "result": "test result: ok. 6 passed; 0 failed; 13 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "counts": [
+          6,
+          0,
+          13
+        ]
+      },
+      {
+        "target": "Running tests/goose_pilot.rs (/tmp/anchor-goose-regression-target/debug/deps/goose_pilot-1091514ecca8aaf1)",
+        "result": "test result: ok. 6 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "counts": [
+          6,
+          0,
+          2
+        ]
+      },
+      {
+        "target": "Running tests/goose_pilot_attachments.rs (/tmp/anchor-goose-regression-target/debug/deps/goose_pilot_attachments-a7e4119d623e9056)",
+        "result": "test result: ok. 6 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "counts": [
+          6,
+          0,
+          2
+        ]
+      },
+      {
+        "target": "Running tests/goose_pilot_authoring.rs (/tmp/anchor-goose-regression-target/debug/deps/goose_pilot_authoring-a0c1ca163e34c123)",
+        "result": "test result: ok. 6 passed; 0 failed; 4 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "counts": [
+          6,
+          0,
+          4
+        ]
+      },
+      {
+        "target": "Running tests/goose_pilot_compaction.rs (/tmp/anchor-goose-regression-target/debug/deps/goose_pilot_compaction-521e0b526fe704e3)",
+        "result": "test result: ok. 6 passed; 0 failed; 3 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "counts": [
+          6,
+          0,
+          3
+        ]
+      },
+      {
+        "target": "Running tests/goose_plugin_configuration.rs (/tmp/anchor-goose-regression-target/debug/deps/goose_plugin_configuration-a79f31690bbdee3e)",
+        "result": "test result: ok. 6 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "counts": [
+          6,
+          0,
+          1
+        ]
+      },
+      {
+        "target": "Running tests/goose_plugin_disclosure.rs (/tmp/anchor-goose-regression-target/debug/deps/goose_plugin_disclosure-d84507f37708572e)",
+        "result": "test result: ok. 6 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "counts": [
+          6,
+          0,
+          1
+        ]
+      },
+      {
+        "target": "Running tests/goose_plugin_mcp.rs (/tmp/anchor-goose-regression-target/debug/deps/goose_plugin_mcp-bf5356028dfc7e28)",
+        "result": "test result: ok. 6 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "counts": [
+          6,
+          0,
+          2
+        ]
+      },
+      {
+        "target": "Running tests/goose_plugin_summary.rs (/tmp/anchor-goose-regression-target/debug/deps/goose_plugin_summary-6f72857184241d5f)",
+        "result": "test result: ok. 6 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "counts": [
+          6,
+          0,
+          2
+        ]
+      },
+      {
+        "target": "Running tests/goose_plugin_turns.rs (/tmp/anchor-goose-regression-target/debug/deps/goose_plugin_turns-1e3eea9e12654ab9)",
+        "result": "test result: ok. 6 passed; 0 failed; 7 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "counts": [
+          6,
+          0,
+          7
+        ]
+      },
+      {
+        "target": "Running tests/goose_provider_errors.rs (/tmp/anchor-goose-regression-target/debug/deps/goose_provider_errors-3414629de833d742)",
+        "result": "test result: ok. 6 passed; 0 failed; 4 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "counts": [
+          6,
+          0,
+          4
+        ]
+      },
+      {
+        "target": "Running tests/goose_responses.rs (/tmp/anchor-goose-regression-target/debug/deps/goose_responses-4f64e9a3996003fc)",
+        "result": "test result: ok. 6 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "counts": [
+          6,
+          0,
+          2
+        ]
+      },
+      {
+        "target": "Running tests/goose_session_calls.rs (/tmp/anchor-goose-regression-target/debug/deps/goose_session_calls-ac8ad7abced7836f)",
+        "result": "test result: ok. 6 passed; 0 failed; 5 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "counts": [
+          6,
+          0,
+          5
+        ]
+      },
+      {
+        "target": "Running tests/goose_trace.rs (/tmp/anchor-goose-regression-target/debug/deps/goose_trace-cde69f796c442f79)",
+        "result": "test result: ok. 6 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "counts": [
+          6,
+          0,
+          2
+        ]
+      },
+      {
+        "target": "Running tests/local_inputs.rs (/tmp/anchor-goose-regression-target/debug/deps/local_inputs-7f92643d5c6fe6aa)",
+        "result": "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.67s",
+        "counts": [
+          4,
+          0,
+          0
+        ]
+      },
+      {
+        "target": "Running tests/local_network.rs (/tmp/anchor-goose-regression-target/debug/deps/local_network-db497e50ae85c279)",
+        "result": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.16s",
+        "counts": [
+          1,
+          0,
+          0
+        ]
+      },
+      {
+        "target": "Running tests/multinode.rs (/tmp/anchor-goose-regression-target/debug/deps/multinode-270c1c7485cca0bc)",
+        "result": "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.89s",
+        "counts": [
+          3,
+          0,
+          0
+        ]
+      },
+      {
+        "target": "Running tests/native_plugins.rs (/tmp/anchor-goose-regression-target/debug/deps/native_plugins-6e65d5d8c71ccac7)",
+        "result": "test result: ok. 6 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "counts": [
+          6,
+          0,
+          2
+        ]
+      },
+      {
+        "target": "Running tests/parallel.rs (/tmp/anchor-goose-regression-target/debug/deps/parallel-4f491668460d24a6)",
+        "result": "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.75s",
+        "counts": [
+          3,
+          0,
+          0
+        ]
+      },
+      {
+        "target": "Running tests/routing.rs (/tmp/anchor-goose-regression-target/debug/deps/routing-b6e9f2af303c567e)",
+        "result": "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.11s",
+        "counts": [
+          5,
+          0,
+          0
+        ]
+      },
+      {
+        "target": "Running tests/run_access_fence.rs (/tmp/anchor-goose-regression-target/debug/deps/run_access_fence-7de6e17d0e2f833d)",
+        "result": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.11s",
+        "counts": [
+          1,
+          0,
+          0
+        ]
+      },
+      {
+        "target": "Running tests/standalone_graph_call.rs (/tmp/anchor-goose-regression-target/debug/deps/standalone_graph_call-485efc7deaeed56f)",
+        "result": "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.88s",
+        "counts": [
+          3,
+          0,
+          0
+        ]
+      },
+      {
+        "target": "Running tests/standalone_library.rs (/tmp/anchor-goose-regression-target/debug/deps/standalone_library-80ab7cf958aca062)",
+        "result": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s",
+        "counts": [
+          1,
+          0,
+          0
+        ]
+      },
+      {
+        "target": "Running tests/standard_host.rs (/tmp/anchor-goose-regression-target/debug/deps/standard_host-9e0585f93b0d38f0)",
+        "result": "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.58s",
+        "counts": [
+          3,
+          0,
+          0
+        ]
+      },
+      {
+        "target": "Running tests/writer_lease.rs (/tmp/anchor-goose-regression-target/debug/deps/writer_lease-7b0c87f75e1eed76)",
+        "result": "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.54s",
+        "counts": [
+          5,
+          0,
+          0
+        ]
+      },
+      {
+        "target": "Running unittests src/lib.rs (/tmp/anchor-goose-regression-target/debug/deps/anchor_runtime-bb7397ead00c4224)",
+        "result": "test result: ok. 155 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 175.72s",
+        "counts": [
+          155,
+          0,
+          0
+        ]
+      },
+      {
+        "target": "Running tests/weekly_work_report_graphs.rs (/tmp/anchor-goose-regression-target/debug/deps/weekly_work_report_graphs-43780cf3744c3a94)",
+        "result": "test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "counts": [
+          7,
+          0,
+          0
+        ]
+      },
+      {
+        "target": "Running unittests src/lib.rs (/tmp/anchor-goose-regression-target/debug/deps/anchor_sandbox_bwrap-9b9b9bad0cd55a79)",
+        "result": "test result: ok. 19 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.58s",
+        "counts": [
+          19,
+          0,
+          0
+        ]
+      },
+      {
+        "target": "Running unittests src/bin/anchor-sandbox-network.rs (/tmp/anchor-goose-regression-target/debug/deps/anchor_sandbox_network-71dae8f2284f8dae)",
+        "result": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "counts": [
+          1,
+          0,
+          0
+        ]
+      },
+      {
+        "target": "Running tests/network_boundary.rs (/tmp/anchor-goose-regression-target/debug/deps/network_boundary-e8d062c160a4b969)",
+        "result": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.26s",
+        "counts": [
+          2,
+          0,
+          0
+        ]
+      },
+      {
+        "target": "Running unittests src/lib.rs (/tmp/anchor-goose-regression-target/debug/deps/anchor_scholarly-ee2cbcdb0339ca47)",
+        "result": "test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s",
+        "counts": [
+          18,
+          0,
+          0
+        ]
+      },
+      {
+        "target": "Running unittests src/main.rs (/tmp/anchor-goose-regression-target/debug/deps/anchor_scholarly-7dad492d961d5536)",
+        "result": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "counts": [
+          0,
+          0,
+          0
+        ]
+      },
+      {
+        "target": "Running tests/batch.rs (/tmp/anchor-goose-regression-target/debug/deps/batch-ef00f8d0dadfd8ca)",
+        "result": "test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.01s",
+        "counts": [
+          7,
+          0,
+          0
+        ]
+      },
+      {
+        "target": "Running tests/boundaries.rs (/tmp/anchor-goose-regression-target/debug/deps/boundaries-4c2d1b1f041759b2)",
+        "result": "test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.00s",
+        "counts": [
+          9,
+          0,
+          0
+        ]
+      },
+      {
+        "target": "Running tests/mcp.rs (/tmp/anchor-goose-regression-target/debug/deps/mcp-05ca9edac438c6f5)",
+        "result": "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "counts": [
+          3,
+          0,
+          0
+        ]
+      },
+      {
+        "target": "Running tests/read.rs (/tmp/anchor-goose-regression-target/debug/deps/read-846dee6c94c1543a)",
+        "result": "test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.01s",
+        "counts": [
+          9,
+          0,
+          0
+        ]
+      },
+      {
+        "target": "Running tests/search.rs (/tmp/anchor-goose-regression-target/debug/deps/search-19ff9d07c8eac253)",
+        "result": "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.00s",
+        "counts": [
+          5,
+          0,
+          0
+        ]
+      },
+      {
+        "target": "Running unittests src/lib.rs (/tmp/anchor-goose-regression-target/debug/deps/anchor_wecom_gateway-1e26d125864e28f3)",
+        "result": "test result: ok. 26 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.46s",
+        "counts": [
+          26,
+          0,
+          0
+        ]
+      },
+      {
+        "target": "Running unittests src/main.rs (/tmp/anchor-goose-regression-target/debug/deps/anchor_wecom_gateway-3f7dc9877900599f)",
+        "result": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "counts": [
+          0,
+          0,
+          0
+        ]
+      },
+      {
+        "target": "Running tests/cli.rs (/tmp/anchor-goose-regression-target/debug/deps/cli-653f4d30c3f23955)",
+        "result": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.27s",
+        "counts": [
+          2,
+          0,
+          0
+        ]
+      },
+      {
+        "target": "Running tests/transport.rs (/tmp/anchor-goose-regression-target/debug/deps/transport-b8a03cd300b11384)",
+        "result": "test result: ok. 50 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.15s",
+        "counts": [
+          50,
+          0,
+          0
+        ]
+      },
+      {
+        "target": "Running unittests src/lib.rs (/tmp/anchor-goose-regression-target/debug/deps/anchor_wecom_tools-6ce454fb5c6066d9)",
+        "result": "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s",
+        "counts": [
+          4,
+          0,
+          0
+        ]
+      },
+      {
+        "target": "Running unittests src/main.rs (/tmp/anchor-goose-regression-target/debug/deps/anchor_wecom_tools-db547ec35fed9df5)",
+        "result": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "counts": [
+          0,
+          0,
+          0
+        ]
+      },
+      {
+        "target": "Running tests/api.rs (/tmp/anchor-goose-regression-target/debug/deps/api-c8c093eeff5d8d41)",
+        "result": "test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.10s",
+        "counts": [
+          11,
+          0,
+          0
+        ]
+      },
+      {
+        "target": "Running tests/stdio_package.rs (/tmp/anchor-goose-regression-target/debug/deps/stdio_package-10f0eee43e6f222f)",
+        "result": "test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.69s",
+        "counts": [
+          6,
+          0,
+          0
+        ]
+      },
+      {
+        "target": "Doc-tests anchor_devtools",
+        "result": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "counts": [
+          0,
+          0,
+          0
+        ]
+      },
+      {
+        "target": "Doc-tests anchor_distribution",
+        "result": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "counts": [
+          0,
+          0,
+          0
+        ]
+      },
+      {
+        "target": "Doc-tests anchor_docmost_tools",
+        "result": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "counts": [
+          0,
+          0,
+          0
+        ]
+      },
+      {
+        "target": "Doc-tests anchor_file_lease",
+        "result": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "counts": [
+          0,
+          0,
+          0
+        ]
+      },
+      {
+        "target": "Doc-tests anchor_graph_host",
+        "result": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "counts": [
+          0,
+          0,
+          0
+        ]
+      },
+      {
+        "target": "Doc-tests anchor_kernel",
+        "result": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "counts": [
+          0,
+          0,
+          0
+        ]
+      },
+      {
+        "target": "Doc-tests anchor_library",
+        "result": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "counts": [
+          0,
+          0,
+          0
+        ]
+      },
+      {
+        "target": "Doc-tests anchor_mcp_host",
+        "result": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "counts": [
+          0,
+          0,
+          0
+        ]
+      },
+      {
+        "target": "Doc-tests anchor_network_tools",
+        "result": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "counts": [
+          0,
+          0,
+          0
+        ]
+      },
+      {
+        "target": "Doc-tests anchor_platform_session",
+        "result": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "counts": [
+          0,
+          0,
+          0
+        ]
+      },
+      {
+        "target": "Doc-tests anchor_rsi",
+        "result": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "counts": [
+          0,
+          0,
+          0
+        ]
+      },
+      {
+        "target": "Doc-tests anchor_runtime",
+        "result": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s",
+        "counts": [
+          2,
+          0,
+          0
+        ]
+      },
+      {
+        "target": "Doc-tests anchor_sandbox_bwrap",
+        "result": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "counts": [
+          0,
+          0,
+          0
+        ]
+      },
+      {
+        "target": "Doc-tests anchor_scholarly",
+        "result": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "counts": [
+          0,
+          0,
+          0
+        ]
+      },
+      {
+        "target": "Doc-tests anchor_wecom_gateway",
+        "result": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "counts": [
+          0,
+          0,
+          0
+        ]
+      },
+      {
+        "target": "Doc-tests anchor_wecom_tools",
+        "result": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "counts": [
+          0,
+          0,
+          0
+        ]
+      }
+    ],
+    "counts": [
+      2200,
+      0,
+      126
+    ],
+    "target_count": 132
+  },
+  "web_test": {
+    "command": [
+      "npm",
+      "--prefix",
+      "apps/web",
+      "test"
+    ],
+    "exit_code": 0,
+    "log": "/tmp/anchor-m4/web-test.log",
+    "log_sha256": "de43d84824c33caf52a7238e1a032ab2cdc9a79fd0aae101ed810c3c5192107c",
+    "files": 43,
+    "passed": 359
+  },
+  "web_build": {
+    "command": [
+      "npm",
+      "--prefix",
+      "apps/web",
+      "run",
+      "build"
+    ],
+    "exit_code": 0,
+    "log": "/tmp/anchor-m4/web-build.log",
+    "log_sha256": "55a58b22388066a0a38eefc58b81a302099b08aa5ea27569dbcb8c07ce42c73a"
+  },
+  "clippy": {
+    "command": [
+      "cargo",
+      "+stable",
+      "clippy",
+      "--manifest-path",
+      "rust/Cargo.toml",
+      "--workspace",
+      "--all-targets",
+      "--locked",
+      "--",
+      "-D",
+      "warnings"
+    ],
+    "exit_code": 0,
+    "log": "/tmp/anchor-m4/clippy.log",
+    "log_sha256": "2d2986add328da90808e4ec6f7c37b0e2a4e2034d6bca141e66302a1bbee823a"
+  },
+  "fmt": {
+    "command": [
+      "cargo",
+      "+stable",
+      "fmt",
+      "--manifest-path",
+      "rust/Cargo.toml",
+      "--all",
+      "--",
+      "--check"
+    ],
+    "exit_code": 0,
+    "log": "/tmp/anchor-m4/fmt.log",
+    "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "fence": {
+    "command": [
+      "cargo",
+      "+stable",
+      "test",
+      "--manifest-path",
+      "rust/Cargo.toml",
+      "-p",
+      "anchor-runner-host",
+      "--locked",
+      "--test",
+      "run_access_fence"
+    ],
+    "exit_code": 0,
+    "log": "/tmp/anchor-m4/fence.log",
+    "log_sha256": "084997b0dcbec7931f77c0ea0c0ec784544a74ef51a40540c9cf1f6390b931f5",
+    "targets": [
+      {
+        "target": "Running tests/run_access_fence.rs (/tmp/anchor-goose-regression-target/debug/deps/run_access_fence-f8aeeca760180e31)",
+        "result": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.11s",
+        "counts": [
+          1,
+          0,
+          0
+        ]
+      }
+    ],
+    "counts": [
+      1,
+      0,
+      0
+    ],
+    "target_count": 1
+  },
+  "included_fmt": {
+    "command": {
+      "tool": "/home/mansteinl/.cargo/bin/rustup run stable rustfmt",
+      "arguments": [
+        "--check",
+        "--edition",
+        "2024"
+      ],
+      "scope": "rust/anchor-runtime/src/graph/tests/migrated_*.rs"
+    },
+    "exit_code": 0,
+    "log": "/tmp/anchor-m4/included-fmt.log",
+    "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "targeted": {
+    "runtime-targeted": {
+      "command": {
+        "command_and_filter": "cargo +stable test --manifest-path rust/Cargo.toml -p anchor-runtime --locked graph::",
+        "note": "Focused result; full workspace is the final gate. Thread flags were not separately preserved in the log."
+      },
+      "exit_code": 0,
+      "log": "/tmp/anchor-m4/runtime-targeted.log",
+      "log_sha256": "e4c3e9590cbb5bdbe643221f41cab70694588a8370c50c27929b776f47b3fdf1",
+      "targets": [
+        {
+          "target": "Running unittests src/lib.rs (/tmp/anchor-goose-regression-target/debug/deps/anchor_runtime-f2e1507fa6bd3abb)",
+          "result": "test result: ok. 140 passed; 0 failed; 0 ignored; 0 measured; 15 filtered out; finished in 132.79s",
+          "counts": [
+            140,
+            0,
+            0
+          ]
+        }
+      ],
+      "counts": [
+        140,
+        0,
+        0
+      ],
+      "target_count": 1,
+      "exit_evidence": "Completed tool execution returned exit_code 0; no separate exit file retained."
+    },
+    "host-targeted": {
+      "command": {
+        "command_and_filter": "cargo +stable test --manifest-path rust/Cargo.toml -p anchor-runner-host --bin anchor-runner-host --locked application::run_access",
+        "note": "Focused result; full workspace is the final gate. Thread flags were not separately preserved in the log."
+      },
+      "exit_code": 0,
+      "log": "/tmp/anchor-m4/host-targeted.log",
+      "log_sha256": "86f49102a25aed793491eaf85867d8fbeab657902fb5adb72e106f9a2ce41ebe",
+      "targets": [
+        {
+          "target": "Running unittests src/main.rs (/tmp/anchor-goose-regression-target/debug/deps/anchor_runner_host-4c550752e4cfc861)",
+          "result": "test result: ok. 80 passed; 0 failed; 0 ignored; 0 measured; 965 filtered out; finished in 158.62s",
+          "counts": [
+            80,
+            0,
+            0
+          ]
+        }
+      ],
+      "counts": [
+        80,
+        0,
+        0
+      ],
+      "target_count": 1,
+      "exit_evidence": "Completed tool execution returned exit_code 0; no separate exit file retained."
+    }
+  },
+  "goose_full": {
+    "command": [
+      "cargo",
+      "+stable",
+      "test",
+      "--manifest-path",
+      "rust/Cargo.toml",
+      "-p",
+      "anchor-runner-host",
+      "--locked",
+      "--no-fail-fast",
+      "--",
+      "--ignored",
+      "--test-threads=1"
+    ],
+    "exit_code": 0,
+    "log": "/tmp/anchor-m4/goose-final.log",
+    "log_sha256": "8128512f1650266b56679a5b00d83bfdeae8bbe642aaa4062cc24fc1234ad810",
+    "targets": [
+      {
+        "target": "Running unittests src/bin/anchor-net-relay.rs (/tmp/anchor-goose-regression-target/debug/deps/anchor_net_relay-9f68a036ddfb9996)",
+        "result": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.00s",
+        "counts": [
+          0,
+          0,
+          0
+        ]
+      },
+      {
+        "target": "Running unittests src/main.rs (/tmp/anchor-goose-regression-target/debug/deps/anchor_runner_host-4c550752e4cfc861)",
+        "result": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 1043 filtered out; finished in 31.74s",
+        "counts": [
+          2,
+          0,
+          0
+        ]
+      },
+      {
+        "target": "Running tests/channel_startup.rs (/tmp/anchor-goose-regression-target/debug/deps/channel_startup-190ee1c998450a16)",
+        "result": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s",
+        "counts": [
+          0,
+          0,
+          0
+        ]
+      },
+      {
+        "target": "Running tests/goose_acp.rs (/tmp/anchor-goose-regression-target/debug/deps/goose_acp-e58b545a3b60cbf4)",
+        "result": "test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 8 filtered out; finished in 108.71s",
+        "counts": [
+          15,
+          0,
+          0
+        ]
+      },
+      {
+        "target": "Running tests/goose_channel.rs (/tmp/anchor-goose-regression-target/debug/deps/goose_channel-a81a59818bcc4d2e)",
+        "result": "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 33.61s",
+        "counts": [
+          4,
+          0,
+          0
+        ]
+      },
+      {
+        "target": "Running tests/goose_compaction.rs (/tmp/anchor-goose-regression-target/debug/deps/goose_compaction-7d92ac1168bd375e)",
+        "result": "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 37.20s",
+        "counts": [
+          4,
+          0,
+          0
+        ]
+      },
+      {
+        "target": "Running tests/goose_completion.rs (/tmp/anchor-goose-regression-target/debug/deps/goose_completion-beeec06910d9a5a7)",
+        "result": "test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 68.08s",
+        "counts": [
+          9,
+          0,
+          0
+        ]
+      },
+      {
+        "target": "Running tests/goose_conversation.rs (/tmp/anchor-goose-regression-target/debug/deps/goose_conversation-e20a9207d2a35697)",
+        "result": "test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 115.00s",
+        "counts": [
+          13,
+          0,
+          0
+        ]
+      },
+      {
+        "target": "Running tests/goose_development_environment.rs (/tmp/anchor-goose-regression-target/debug/deps/goose_development_environment-f6a68290329ad9a4)",
+        "result": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 19.88s",
+        "counts": [
+          1,
+          0,
+          0
+        ]
+      },
+      {
+        "target": "Running tests/goose_distribution.rs (/tmp/anchor-goose-regression-target/debug/deps/goose_distribution-004bbf8b0b920d70)",
+        "result": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 84.85s",
+        "counts": [
+          1,
+          0,
+          0
+        ]
+      },
+      {
+        "target": "Running tests/goose_elicitation.rs (/tmp/anchor-goose-regression-target/debug/deps/goose_elicitation-272ed12f6ed8002f)",
+        "result": "test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 65.20s",
+        "counts": [
+          10,
+          0,
+          0
+        ]
+      },
+      {
+        "target": "Running tests/goose_kernel_recovery.rs (/tmp/anchor-goose-regression-target/debug/deps/goose_kernel_recovery-cd3bdbc75fb8a1ba)",
+        "result": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 17.39s",
+        "counts": [
+          1,
+          0,
+          0
+        ]
+      },
+      {
+        "target": "Running tests/goose_library.rs (/tmp/anchor-goose-regression-target/debug/deps/goose_library-5b5bd82b812dd05c)",
+        "result": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 8.13s",
+        "counts": [
+          1,
+          0,
+          0
+        ]
+      },
+      {
+        "target": "Running tests/goose_media.rs (/tmp/anchor-goose-regression-target/debug/deps/goose_media-94a94a7604f956e3)",
+        "result": "test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 54.27s",
+        "counts": [
+          6,
+          0,
+          0
+        ]
+      },
+      {
+        "target": "Running tests/goose_model_settings.rs (/tmp/anchor-goose-regression-target/debug/deps/goose_model_settings-368bb3e492c012cb)",
+        "result": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 15.89s",
+        "counts": [
+          2,
+          0,
+          0
+        ]
+      },
+      {
+        "target": "Running tests/goose_native_activation_spike.rs (/tmp/anchor-goose-regression-target/debug/deps/goose_native_activation_spike-1102fd7f18771319)",
+        "result": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 2.64s",
+        "counts": [
+          2,
+          0,
+          0
+        ]
+      },
+      {
+        "target": "Running tests/goose_persistent_assistant.rs (/tmp/anchor-goose-regression-target/debug/deps/goose_persistent_assistant-45d45adbcabcd0ff)",
+        "result": "test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 145.72s",
+        "counts": [
+          13,
+          0,
+          0
+        ]
+      },
+      {
+        "target": "Running tests/goose_pilot.rs (/tmp/anchor-goose-regression-target/debug/deps/goose_pilot-efe5de2e381b4436)",
+        "result": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 15.16s",
+        "counts": [
+          2,
+          0,
+          0
+        ]
+      },
+      {
+        "target": "Running tests/goose_pilot_attachments.rs (/tmp/anchor-goose-regression-target/debug/deps/goose_pilot_attachments-8a004bd1e0e6c8f2)",
+        "result": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 19.62s",
+        "counts": [
+          2,
+          0,
+          0
+        ]
+      },
+      {
+        "target": "Running tests/goose_pilot_authoring.rs (/tmp/anchor-goose-regression-target/debug/deps/goose_pilot_authoring-75e743f0dacc9ceb)",
+        "result": "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 35.41s",
+        "counts": [
+          4,
+          0,
+          0
+        ]
+      },
+      {
+        "target": "Running tests/goose_pilot_compaction.rs (/tmp/anchor-goose-regression-target/debug/deps/goose_pilot_compaction-0fc6827180187b82)",
+        "result": "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 28.24s",
+        "counts": [
+          3,
+          0,
+          0
+        ]
+      },
+      {
+        "target": "Running tests/goose_plugin_configuration.rs (/tmp/anchor-goose-regression-target/debug/deps/goose_plugin_configuration-d81fcf333aabb1b8)",
+        "result": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 45.36s",
+        "counts": [
+          1,
+          0,
+          0
+        ]
+      },
+      {
+        "target": "Running tests/goose_plugin_disclosure.rs (/tmp/anchor-goose-regression-target/debug/deps/goose_plugin_disclosure-13f3a526199a6bc1)",
+        "result": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 8.62s",
+        "counts": [
+          1,
+          0,
+          0
+        ]
+      },
+      {
+        "target": "Running tests/goose_plugin_mcp.rs (/tmp/anchor-goose-regression-target/debug/deps/goose_plugin_mcp-195a7008e44c8354)",
+        "result": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 28.90s",
+        "counts": [
+          2,
+          0,
+          0
+        ]
+      },
+      {
+        "target": "Running tests/goose_plugin_summary.rs (/tmp/anchor-goose-regression-target/debug/deps/goose_plugin_summary-12eacfbe56276a3b)",
+        "result": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 17.28s",
+        "counts": [
+          2,
+          0,
+          0
+        ]
+      },
+      {
+        "target": "Running tests/goose_plugin_turns.rs (/tmp/anchor-goose-regression-target/debug/deps/goose_plugin_turns-9d452769772451aa)",
+        "result": "test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 77.00s",
+        "counts": [
+          7,
+          0,
+          0
+        ]
+      },
+      {
+        "target": "Running tests/goose_provider_errors.rs (/tmp/anchor-goose-regression-target/debug/deps/goose_provider_errors-ae4e25da5c1a3d90)",
+        "result": "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 38.26s",
+        "counts": [
+          4,
+          0,
+          0
+        ]
+      },
+      {
+        "target": "Running tests/goose_responses.rs (/tmp/anchor-goose-regression-target/debug/deps/goose_responses-eee6f98c2e0139da)",
+        "result": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 16.25s",
+        "counts": [
+          2,
+          0,
+          0
+        ]
+      },
+      {
+        "target": "Running tests/goose_session_calls.rs (/tmp/anchor-goose-regression-target/debug/deps/goose_session_calls-a4d643977bba740a)",
+        "result": "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 57.19s",
+        "counts": [
+          5,
+          0,
+          0
+        ]
+      },
+      {
+        "target": "Running tests/goose_trace.rs (/tmp/anchor-goose-regression-target/debug/deps/goose_trace-9d538d8e298fde7e)",
+        "result": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 16.22s",
+        "counts": [
+          2,
+          0,
+          0
+        ]
+      },
+      {
+        "target": "Running tests/local_inputs.rs (/tmp/anchor-goose-regression-target/debug/deps/local_inputs-1e3b5f64ac574455)",
+        "result": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 4 filtered out; finished in 0.00s",
+        "counts": [
+          0,
+          0,
+          0
+        ]
+      },
+      {
+        "target": "Running tests/local_network.rs (/tmp/anchor-goose-regression-target/debug/deps/local_network-4ac6108322e16b02)",
+        "result": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s",
+        "counts": [
+          0,
+          0,
+          0
+        ]
+      },
+      {
+        "target": "Running tests/multinode.rs (/tmp/anchor-goose-regression-target/debug/deps/multinode-a74f6062c7d06f5e)",
+        "result": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.00s",
+        "counts": [
+          0,
+          0,
+          0
+        ]
+      },
+      {
+        "target": "Running tests/native_plugins.rs (/tmp/anchor-goose-regression-target/debug/deps/native_plugins-8e4305b1800582d6)",
+        "result": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 44.80s",
+        "counts": [
+          2,
+          0,
+          0
+        ]
+      },
+      {
+        "target": "Running tests/parallel.rs (/tmp/anchor-goose-regression-target/debug/deps/parallel-1b33dc42a2196fe7)",
+        "result": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.00s",
+        "counts": [
+          0,
+          0,
+          0
+        ]
+      },
+      {
+        "target": "Running tests/routing.rs (/tmp/anchor-goose-regression-target/debug/deps/routing-4ac304eb4c62f968)",
+        "result": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 5 filtered out; finished in 0.00s",
+        "counts": [
+          0,
+          0,
+          0
+        ]
+      },
+      {
+        "target": "Running tests/run_access_fence.rs (/tmp/anchor-goose-regression-target/debug/deps/run_access_fence-f8aeeca760180e31)",
+        "result": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s",
+        "counts": [
+          0,
+          0,
+          0
+        ]
+      },
+      {
+        "target": "Running tests/standalone_graph_call.rs (/tmp/anchor-goose-regression-target/debug/deps/standalone_graph_call-42e474ef692eb459)",
+        "result": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.00s",
+        "counts": [
+          0,
+          0,
+          0
+        ]
+      },
+      {
+        "target": "Running tests/standalone_library.rs (/tmp/anchor-goose-regression-target/debug/deps/standalone_library-1f84c036e685b4d5)",
+        "result": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s",
+        "counts": [
+          0,
+          0,
+          0
+        ]
+      },
+      {
+        "target": "Running tests/standard_host.rs (/tmp/anchor-goose-regression-target/debug/deps/standard_host-36ad98b8bf643981)",
+        "result": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.00s",
+        "counts": [
+          0,
+          0,
+          0
+        ]
+      },
+      {
+        "target": "Running tests/writer_lease.rs (/tmp/anchor-goose-regression-target/debug/deps/writer_lease-e300b426b204c613)",
+        "result": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 5 filtered out; finished in 0.00s",
+        "counts": [
+          0,
+          0,
+          0
+        ]
+      }
+    ],
+    "counts": [
+      123,
+      0,
+      0
+    ],
+    "target_count": 41,
+    "environment": {
+      "CARGO_TARGET_DIR": "/tmp/anchor-goose-regression-target",
+      "CARGO_BUILD_JOBS": "2",
+      "ANCHOR_GOOSE_BINARY": "/var/tmp/anchor-goose-build/artifacts/goose-acp.first",
+      "ANCHOR_GOOSE_LOCAL_NETWORK": "1",
+      "ANCHOR_GOOSE_RELAY_BINARY": "/tmp/anchor-goose-regression-target/debug/anchor-net-relay",
+      "ANCHOR_TEST_RUST_TOOLCHAIN": "stable-x86_64-unknown-linux-gnu",
+      "ANCHOR_PILOT_RUSTUP": "/home/mansteinl/.cargo/bin/rustup",
+      "ANCHOR_PILOT_RUSTUP_HOME": "/home/mansteinl/.rustup",
+      "ANCHOR_TEST_EVIDENCE_ROOT": "/tmp/anchor-m4/goose-final-evidence"
+    }
+  },
+  "preparation": {
+    "precompile_log": "/tmp/anchor-m4/goose-final-precompile.log",
+    "precompile_log_sha256": "040fa8e8b3f20032f8268e41c0901d9a1ac53456fbbe97003b276421a711a988",
+    "helpers_log": "/tmp/anchor-m4/goose-helpers.log",
+    "helpers_log_sha256": "525e61fd6cc3263cbe489c622858d780ba43c1dd9a0c17af68559be6d43ed628",
+    "earlier_compile_failures": "Removed field references initially failed to compile, then were repaired before targeted and full regression gates.",
+    "earlier_format_check": "Direct rustfmt lookup exited 127. Absolute rustup was used, included file formatting repaired, and the final check exited 0.",
+    "first_goose_run": {
+      "command": [
+        "cargo",
+        "+stable",
+        "test",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "-p",
+        "anchor-runner-host",
+        "--locked",
+        "--no-fail-fast",
+        "--",
+        "--ignored",
+        "--test-threads=1"
+      ],
+      "exit_code": 0,
+      "log": "/tmp/anchor-m4/goose-first.log",
+      "log_sha256": "4e0a9feb406062d92f130840e12ff8f387dd36f9e879781b9984db186d1922cd",
+      "targets": [
+        {
+          "target": "Running unittests src/bin/anchor-net-relay.rs (/tmp/anchor-goose-regression-target/debug/deps/anchor_net_relay-9f68a036ddfb9996)",
+          "result": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.00s",
+          "counts": [
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "target": "Running unittests src/main.rs (/tmp/anchor-goose-regression-target/debug/deps/anchor_runner_host-4c550752e4cfc861)",
+          "result": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 1043 filtered out; finished in 31.89s",
+          "counts": [
+            2,
+            0,
+            0
+          ]
+        },
+        {
+          "target": "Running tests/channel_startup.rs (/tmp/anchor-goose-regression-target/debug/deps/channel_startup-190ee1c998450a16)",
+          "result": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s",
+          "counts": [
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "target": "Running tests/goose_acp.rs (/tmp/anchor-goose-regression-target/debug/deps/goose_acp-e58b545a3b60cbf4)",
+          "result": "test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 8 filtered out; finished in 106.85s",
+          "counts": [
+            15,
+            0,
+            0
+          ]
+        },
+        {
+          "target": "Running tests/goose_channel.rs (/tmp/anchor-goose-regression-target/debug/deps/goose_channel-a81a59818bcc4d2e)",
+          "result": "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 33.31s",
+          "counts": [
+            4,
+            0,
+            0
+          ]
+        },
+        {
+          "target": "Running tests/goose_compaction.rs (/tmp/anchor-goose-regression-target/debug/deps/goose_compaction-7d92ac1168bd375e)",
+          "result": "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 37.11s",
+          "counts": [
+            4,
+            0,
+            0
+          ]
+        },
+        {
+          "target": "Running tests/goose_completion.rs (/tmp/anchor-goose-regression-target/debug/deps/goose_completion-beeec06910d9a5a7)",
+          "result": "test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 68.49s",
+          "counts": [
+            9,
+            0,
+            0
+          ]
+        },
+        {
+          "target": "Running tests/goose_conversation.rs (/tmp/anchor-goose-regression-target/debug/deps/goose_conversation-e20a9207d2a35697)",
+          "result": "test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 116.38s",
+          "counts": [
+            13,
+            0,
+            0
+          ]
+        },
+        {
+          "target": "Running tests/goose_development_environment.rs (/tmp/anchor-goose-regression-target/debug/deps/goose_development_environment-f6a68290329ad9a4)",
+          "result": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 20.25s",
+          "counts": [
+            1,
+            0,
+            0
+          ]
+        },
+        {
+          "target": "Running tests/goose_distribution.rs (/tmp/anchor-goose-regression-target/debug/deps/goose_distribution-004bbf8b0b920d70)",
+          "result": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 85.26s",
+          "counts": [
+            1,
+            0,
+            0
+          ]
+        },
+        {
+          "target": "Running tests/goose_elicitation.rs (/tmp/anchor-goose-regression-target/debug/deps/goose_elicitation-272ed12f6ed8002f)",
+          "result": "test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 65.75s",
+          "counts": [
+            10,
+            0,
+            0
+          ]
+        },
+        {
+          "target": "Running tests/goose_kernel_recovery.rs (/tmp/anchor-goose-regression-target/debug/deps/goose_kernel_recovery-cd3bdbc75fb8a1ba)",
+          "result": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 17.55s",
+          "counts": [
+            1,
+            0,
+            0
+          ]
+        },
+        {
+          "target": "Running tests/goose_library.rs (/tmp/anchor-goose-regression-target/debug/deps/goose_library-5b5bd82b812dd05c)",
+          "result": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 9.08s",
+          "counts": [
+            1,
+            0,
+            0
+          ]
+        },
+        {
+          "target": "Running tests/goose_media.rs (/tmp/anchor-goose-regression-target/debug/deps/goose_media-94a94a7604f956e3)",
+          "result": "test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 55.29s",
+          "counts": [
+            6,
+            0,
+            0
+          ]
+        },
+        {
+          "target": "Running tests/goose_model_settings.rs (/tmp/anchor-goose-regression-target/debug/deps/goose_model_settings-368bb3e492c012cb)",
+          "result": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 16.26s",
+          "counts": [
+            2,
+            0,
+            0
+          ]
+        },
+        {
+          "target": "Running tests/goose_native_activation_spike.rs (/tmp/anchor-goose-regression-target/debug/deps/goose_native_activation_spike-1102fd7f18771319)",
+          "result": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 2.68s",
+          "counts": [
+            2,
+            0,
+            0
+          ]
+        },
+        {
+          "target": "Running tests/goose_persistent_assistant.rs (/tmp/anchor-goose-regression-target/debug/deps/goose_persistent_assistant-45d45adbcabcd0ff)",
+          "result": "test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 147.85s",
+          "counts": [
+            13,
+            0,
+            0
+          ]
+        },
+        {
+          "target": "Running tests/goose_pilot.rs (/tmp/anchor-goose-regression-target/debug/deps/goose_pilot-efe5de2e381b4436)",
+          "result": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 15.22s",
+          "counts": [
+            2,
+            0,
+            0
+          ]
+        },
+        {
+          "target": "Running tests/goose_pilot_attachments.rs (/tmp/anchor-goose-regression-target/debug/deps/goose_pilot_attachments-8a004bd1e0e6c8f2)",
+          "result": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 19.79s",
+          "counts": [
+            2,
+            0,
+            0
+          ]
+        },
+        {
+          "target": "Running tests/goose_pilot_authoring.rs (/tmp/anchor-goose-regression-target/debug/deps/goose_pilot_authoring-75e743f0dacc9ceb)",
+          "result": "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 35.54s",
+          "counts": [
+            4,
+            0,
+            0
+          ]
+        },
+        {
+          "target": "Running tests/goose_pilot_compaction.rs (/tmp/anchor-goose-regression-target/debug/deps/goose_pilot_compaction-0fc6827180187b82)",
+          "result": "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 28.43s",
+          "counts": [
+            3,
+            0,
+            0
+          ]
+        },
+        {
+          "target": "Running tests/goose_plugin_configuration.rs (/tmp/anchor-goose-regression-target/debug/deps/goose_plugin_configuration-d81fcf333aabb1b8)",
+          "result": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 45.53s",
+          "counts": [
+            1,
+            0,
+            0
+          ]
+        },
+        {
+          "target": "Running tests/goose_plugin_disclosure.rs (/tmp/anchor-goose-regression-target/debug/deps/goose_plugin_disclosure-13f3a526199a6bc1)",
+          "result": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 8.59s",
+          "counts": [
+            1,
+            0,
+            0
+          ]
+        },
+        {
+          "target": "Running tests/goose_plugin_mcp.rs (/tmp/anchor-goose-regression-target/debug/deps/goose_plugin_mcp-195a7008e44c8354)",
+          "result": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 29.19s",
+          "counts": [
+            2,
+            0,
+            0
+          ]
+        },
+        {
+          "target": "Running tests/goose_plugin_summary.rs (/tmp/anchor-goose-regression-target/debug/deps/goose_plugin_summary-12eacfbe56276a3b)",
+          "result": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 17.53s",
+          "counts": [
+            2,
+            0,
+            0
+          ]
+        },
+        {
+          "target": "Running tests/goose_plugin_turns.rs (/tmp/anchor-goose-regression-target/debug/deps/goose_plugin_turns-9d452769772451aa)",
+          "result": "test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 78.03s",
+          "counts": [
+            7,
+            0,
+            0
+          ]
+        },
+        {
+          "target": "Running tests/goose_provider_errors.rs (/tmp/anchor-goose-regression-target/debug/deps/goose_provider_errors-ae4e25da5c1a3d90)",
+          "result": "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 38.53s",
+          "counts": [
+            4,
+            0,
+            0
+          ]
+        },
+        {
+          "target": "Running tests/goose_responses.rs (/tmp/anchor-goose-regression-target/debug/deps/goose_responses-eee6f98c2e0139da)",
+          "result": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 16.43s",
+          "counts": [
+            2,
+            0,
+            0
+          ]
+        },
+        {
+          "target": "Running tests/goose_session_calls.rs (/tmp/anchor-goose-regression-target/debug/deps/goose_session_calls-a4d643977bba740a)",
+          "result": "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 57.30s",
+          "counts": [
+            5,
+            0,
+            0
+          ]
+        },
+        {
+          "target": "Running tests/goose_trace.rs (/tmp/anchor-goose-regression-target/debug/deps/goose_trace-9d538d8e298fde7e)",
+          "result": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 16.36s",
+          "counts": [
+            2,
+            0,
+            0
+          ]
+        },
+        {
+          "target": "Running tests/local_inputs.rs (/tmp/anchor-goose-regression-target/debug/deps/local_inputs-1e3b5f64ac574455)",
+          "result": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 4 filtered out; finished in 0.00s",
+          "counts": [
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "target": "Running tests/local_network.rs (/tmp/anchor-goose-regression-target/debug/deps/local_network-4ac6108322e16b02)",
+          "result": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s",
+          "counts": [
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "target": "Running tests/multinode.rs (/tmp/anchor-goose-regression-target/debug/deps/multinode-a74f6062c7d06f5e)",
+          "result": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.00s",
+          "counts": [
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "target": "Running tests/native_plugins.rs (/tmp/anchor-goose-regression-target/debug/deps/native_plugins-8e4305b1800582d6)",
+          "result": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 6 filtered out; finished in 44.81s",
+          "counts": [
+            2,
+            0,
+            0
+          ]
+        },
+        {
+          "target": "Running tests/parallel.rs (/tmp/anchor-goose-regression-target/debug/deps/parallel-1b33dc42a2196fe7)",
+          "result": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.00s",
+          "counts": [
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "target": "Running tests/routing.rs (/tmp/anchor-goose-regression-target/debug/deps/routing-4ac304eb4c62f968)",
+          "result": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 5 filtered out; finished in 0.00s",
+          "counts": [
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "target": "Running tests/run_access_fence.rs (/tmp/anchor-goose-regression-target/debug/deps/run_access_fence-f8aeeca760180e31)",
+          "result": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s",
+          "counts": [
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "target": "Running tests/standalone_graph_call.rs (/tmp/anchor-goose-regression-target/debug/deps/standalone_graph_call-42e474ef692eb459)",
+          "result": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.00s",
+          "counts": [
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "target": "Running tests/standalone_library.rs (/tmp/anchor-goose-regression-target/debug/deps/standalone_library-1f84c036e685b4d5)",
+          "result": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s",
+          "counts": [
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "target": "Running tests/standard_host.rs (/tmp/anchor-goose-regression-target/debug/deps/standard_host-36ad98b8bf643981)",
+          "result": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.00s",
+          "counts": [
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "target": "Running tests/writer_lease.rs (/tmp/anchor-goose-regression-target/debug/deps/writer_lease-e300b426b204c613)",
+          "result": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 5 filtered out; finished in 0.00s",
+          "counts": [
+            0,
+            0,
+            0
+          ]
+        }
+      ],
+      "counts": [
+        123,
+        0,
+        0
+      ],
+      "target_count": 41
+    },
+    "first_goose_identity_issue": "First run passed 123/0/0 in 41 targets, but Host and relay pre-run hashes belonged to the helper build feature set. Cargo restored the test feature binaries from cache when starting tests. The first run is retained but final acceptance uses a second complete run after final precompile and fresh identities.",
+    "first_goose_evidence_root": "/tmp/anchor-m4/goose-full-evidence"
+  },
+  "assertion_adaptations": {
+    "categories": 9,
+    "renamed_or_equivalent_functions": 34,
+    "deleted_tests": 0,
+    "new_ignores_on_existing_tests": 0,
+    "weakened_business_assertions": 0,
+    "frozen_snapshots_changed": false
+  },
+  "c2": {
+    "save": 0,
+    "mutation": 0,
+    "evidence": "structure-checks.json"
+  },
+  "unverified": [
+    "real model Provider",
+    "external channels over real network",
+    "deployment",
+    "W4"
+  ]
+}

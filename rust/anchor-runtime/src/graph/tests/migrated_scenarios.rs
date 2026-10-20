@@ -1,5 +1,5 @@
 #[tokio::test]
-async fn graph_runner_preserves_recorded_runtime_scenarios() {
+async fn kernel_scheduler_preserves_recorded_runtime_scenarios() {
     let fixture: Value = serde_json::from_str(include_str!(
         "../../../tests/fixtures/runtime-scenarios.json"
     ))
@@ -46,9 +46,12 @@ async fn graph_runner_preserves_recorded_runtime_scenarios() {
             other => panic!("unexpected Kernel phase: {other:?}"),
         };
         assert_eq!(
-            rust_status, expected["status"],
+            rust_status,
+            expected["status"],
             "scenario {}, reason {:?}, ceased {:?}",
-            scenario["id"], result.error, result.ceased
+            scenario["id"],
+            harness.phase(),
+            result.ceased
         );
 
         let calls = nodes.calls.lock().unwrap().clone();
@@ -143,8 +146,9 @@ async fn graph_runner_preserves_recorded_runtime_scenarios() {
         expected_ceased.sort();
         assert_eq!(ceased, expected_ceased, "scenario {}", scenario["id"]);
 
+        // Preserve the frozen scenario shape; its historical cursor is projected from the frontier.
         let expected_cursor = &expected["cursor"];
-        let cursor_fact = if expected_cursor["exists"] == true {
+        let pending_dispatch_fact = if expected_cursor["exists"] == true {
             let dispatch = harness.frontier().into_iter().next().unwrap();
             assert_eq!(dispatch.node.id, expected_cursor["node"].as_str().unwrap());
             assert_eq!(
@@ -194,12 +198,12 @@ async fn graph_runner_preserves_recorded_runtime_scenarios() {
             assert_eq!(expected_decisions.len(), 1);
             assert_eq!(expected_decisions[0]["to"], "downstream");
             assert_eq!(expected_decisions[0]["selected"], true);
-            assert_eq!(cursor_fact, expected_cursor.clone());
+            assert_eq!(pending_dispatch_fact, expected_cursor.clone());
         } else {
             assert_eq!(
-                (decisions, cursor_fact),
+                (decisions, pending_dispatch_fact),
                 (expected_decisions, expected_cursor.clone()),
-                "edge decisions and cursor, scenario {}",
+                "edge decisions and pending dispatch, scenario {}",
                 scenario["id"]
             );
         }

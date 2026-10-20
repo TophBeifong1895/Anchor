@@ -107,6 +107,8 @@ pub(crate) struct RunView<'record> {
     requested: Option<&'static str>,
     session_coordinated: bool,
     lifecycle: run_view::RunView,
+    // Read-only Kernel history projection, never Graph state.
+    recovery: Vec<anchor_runtime::graph::PendingRecovery>,
     // Read-only validator dispatch, never a saved execution cursor.
     frontier: Vec<anchor_runtime::graph::scheduler::DispatchInput>,
 }
@@ -158,6 +160,7 @@ impl<'record> RunView<'record> {
             requested: None,
             session_coordinated: false,
             lifecycle,
+            recovery: Vec::new(),
             frontier: Vec::new(),
         }
     }
@@ -306,7 +309,7 @@ impl<'record> RunView<'record> {
     }
 
     pub(crate) fn has_pending_recovery(&self) -> bool {
-        !self.is_settled() && !self.record.recovery.is_empty()
+        !self.is_settled() && !self.recovery.is_empty()
     }
 
     pub(crate) fn occupies_conversation_execution(&self) -> bool {
@@ -326,6 +329,7 @@ impl<'view> From<&'view RunView<'_>> for RunView<'view> {
             requested: view.requested,
             session_coordinated: view.session_coordinated,
             lifecycle: view.lifecycle.clone(),
+            recovery: view.recovery.clone(),
             frontier: view.frontier.clone(),
         }
     }

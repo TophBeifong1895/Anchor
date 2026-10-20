@@ -906,10 +906,10 @@ async fn op_call_wait_hands_off_input_map_files_and_selected_result() {
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
     }
     let parent_record = store.load(&parent_id).unwrap().unwrap();
-    assert!(parent_record.has_succeeded(), "{:?}", parent_record.error);
+    assert!(parent_record.has_succeeded(), "{:?}", parent_record.phase);
     assert!(!child_id.is_empty(), "parent did not admit a child Run");
     let child_record = store.load(&child_id).unwrap().unwrap();
-    assert!(child_record.has_succeeded(), "{:?}", child_record.error);
+    assert!(child_record.has_succeeded(), "{:?}", child_record.phase);
     // `input` constants override and `input_map` pointers select the parent input,
     // all merged under the child's own declared input.
     assert_eq!(child_record.input["constant"], "yes");
@@ -1246,7 +1246,7 @@ async fn restart_dispatches_ready_detach_child_only_with_staged_call_inputs() {
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
     }
     let child = store.load(child_id).unwrap().unwrap();
-    assert!(child.has_succeeded(), "{:?}", child.error);
+    assert!(child.has_succeeded(), "{:?}", child.phase);
     assert_eq!(
         child.results["answer"][0].completion.submission.trim(),
         "parent-report"
@@ -2812,8 +2812,8 @@ async fn waiting_parent_rejects_child_grant_drift_then_restores_same_child_witho
     wait_idle(&state).await;
     let parent = store.load(&parent_id).unwrap().unwrap();
     let child = store.load(&child_id).unwrap().unwrap();
-    assert!(parent.has_succeeded(), "{:?}", parent.error);
-    assert!(child.has_succeeded(), "{:?}", child.error);
+    assert!(parent.has_succeeded(), "{:?}", parent.phase);
+    assert!(child.has_succeeded(), "{:?}", child.phase);
     assert_eq!(
         parent
             .graph_calls

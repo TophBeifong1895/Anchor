@@ -13,7 +13,7 @@ pub(crate) struct RunView {
     pub(crate) phase: Phase,
     pub(crate) worker: bool,
     pub(crate) updated: Option<String>,
-    /// Legacy effect waits may have an explanation outside the Kernel waiter.
+    /// Optional Host explanation for child/effect waits.
     pub(crate) reason: Option<String>,
 }
 impl RunView {

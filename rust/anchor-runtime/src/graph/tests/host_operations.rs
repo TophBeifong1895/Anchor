@@ -451,7 +451,6 @@ async fn yielded_round_routes_back_to_wait_without_faking_model_success() {
     harness.run(&artifacts, &nodes).await.unwrap();
     let paused = harness.record();
     assert_eq!(harness.phase(), Phase::Executing);
-    assert_eq!(paused.error, None);
     assert_eq!(paused.results["work"].len(), 2);
     assert_eq!(paused.results["reply"].len(), 1);
     let interruption = &paused.results["work"][0];

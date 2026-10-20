@@ -225,8 +225,13 @@ impl RunApplication {
                 .map_err(|error| RunHttpError::Internal(error.to_string()))?;
         let projection = self.project_run(&view, Some(&metadata)).await?;
         let definition = crate::application::run_projection::run_definition(&record.snapshot);
+        let error = if projection.outcome == Some("failed") {
+            projection.reason.as_deref().unwrap_or_default()
+        } else {
+            ""
+        };
         Ok(
-            json!({"session_call":metadata.session_call,"channel_reply":channel_reply,"graph":metadata.graph,"run":id,"attachments":metadata.attachments,"plugins":plugins,"definition":definition,"state":{"objective":record.snapshot.objective,"started":metadata.created,"updated":updated,"trigger":trigger,"input":record.input,"cursor":cursor,"passes":record.passes,"decided":decided,"nodes":nodes,"executed":executed,"skipped":[],"error":record.error.unwrap_or_default(),"parallel":record.parallel,"recovery":record.recovery},"calls":calls,"traces":traces,"nodes":record.snapshot.nodes.iter().map(|node|node.id.clone()).collect::<Vec<_>>(),"active":projection.active,"projection":projection}),
+            json!({"session_call":metadata.session_call,"channel_reply":channel_reply,"graph":metadata.graph,"run":id,"attachments":metadata.attachments,"plugins":plugins,"definition":definition,"state":{"objective":record.snapshot.objective,"started":metadata.created,"updated":updated,"trigger":trigger,"input":record.input,"cursor":cursor,"passes":record.passes,"decided":decided,"nodes":nodes,"executed":executed,"skipped":[],"error":error,"parallel":record.parallel,"recovery":view.recovery},"calls":calls,"traces":traces,"nodes":record.snapshot.nodes.iter().map(|node|node.id.clone()).collect::<Vec<_>>(),"active":projection.active,"projection":projection}),
         )
     }
 }
@@ -349,7 +354,8 @@ mod tests {
                 "aborted" => fixtures::control(&application, id, "abandon", "recorded reason"),
                 _ => {}
             }
-            let record = fixtures::view(&application, id).record.into_owned();
+            let view = fixtures::view(&application, id);
+            let record = view.record.as_ref();
             let mut metadata = RunMetadata::new(
                 id.into(),
                 "fixture".into(),
@@ -380,8 +386,13 @@ mod tests {
                 "{}".into()
             };
             let passes = serde_json::to_string(&record.passes).unwrap();
-            let recovery = serde_json::to_string(&record.recovery).unwrap();
-            let error = serde_json::to_string(record.error.as_deref().unwrap_or_default()).unwrap();
+            let recovery = serde_json::to_string(&view.recovery).unwrap();
+            let error = serde_json::to_string(if id == "failed" {
+                "worker failed: recorded reason"
+            } else {
+                ""
+            })
+            .unwrap();
             let executed = if id == "done" { r#"["worker"]"# } else { "[]" };
             let expected = format!(
                 r#"{{"session_call":null,"channel_reply":false,"graph":"fixture","run":"{id}","attachments":[],"plugins":{{"worker":[]}},"definition":{{"entry":"worker","nodes":[{{"id":"worker","plugins":[],"agent":"role"}}],"edges":[],"ops":{{}}}},"state":{{"objective":"test","started":"2026-10-19T00:00:00+00:00","updated":{updated},"trigger":{{"source":"manual","schedule":null,"scheduled_at":null}},"input":{{}},"cursor":{cursor},"passes":{passes},"decided":{{}},"nodes":{nodes},"executed":{executed},"skipped":[],"error":{error},"parallel":null,"recovery":{recovery}}},"calls":[],"traces":{{}},"nodes":["worker"],"active":false,"projection":{projection}}}"#

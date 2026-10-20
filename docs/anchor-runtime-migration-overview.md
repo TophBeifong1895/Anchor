@@ -1,6 +1,6 @@
 # Anchor 运行时重建：设计、过程与现状
 
-版本：2026-10-20。这是 M3 验收后、合入 master 前的现状快照。本文用于通读和理解整件事，不是任务书；具体的执行要求以各任务书为准，文末附有索引。
+版本：2026-10-20。M3 已合入 master，M4 已按任务书 §10.19 完成并交回审查。本文用于通读和理解整件事，不是任务书；具体的执行要求以各任务书为准，文末附有索引。
 
 ---
 
@@ -24,7 +24,7 @@
 
 **做了什么。** 把 Anchor 中负责"运行一个 Graph"的那部分（Run 的运行时）从头重建。旧实现是一个推模型的 `GraphRunner`：它自己选节点、调用执行、等结果、决定下一步，Run 的状态由多处代码直接改写。新实现以一部"宪法"为依据：所有改变都是**提交**，由一个很小的**内核**统一裁决、记录、结算、测量；Graph 的规则写成纯函数的**校验器**；调度器只负责派活和把结果交回去。
 
-**现在在哪里。** 迁移在分支 `constitution-core` 上完成到 M3：所有 Run 默认走新内核，旧的 `GraphRunner`、`RunStore`、`RunStatus` 已删除。独立复验后的 §10.18 合并回归结果：workspace 2197 通过、0 失败；固定版本的 Goose 回归套件 123 通过、0 失败。用户已批准合入 master，分支已合入 master `dfd3427` 并通过全部门槛，待审查后由 master 一侧快进。
+**现在在哪里。** M3 已合入 master，所有新 Run 统一走 Kernel。M4 在 /home/mansteinl/Anchor 实现字段归属清理：Graph 记录删除 error/recovery/recovery_submissions/updated，失败及恢复展示由 Kernel 结算与 history 投影提供。常规门槛通过：workspace 2,200 / 0 / 126、Web 359 及构建、Clippy/fmt、围栏；完整固定 Goose 123 / 0 / 0 且七个二进制摘要前后一致。字段归属与当前验证见 [M4 交回](../experiments/constitution-host-preflight/m4/verification.md)；M5 未开始。
 
 **得到了什么。**
 
@@ -296,7 +296,7 @@ R2 曾把 pause 当成 stop 的别名，导致十多个 API 测试失败，原�
 
 ### 8.2 没达到预期的
 
-- **代码量**：生产代码净增约 5,600 行，这是按文件路径粗算的，内联测试也包含在内。M4 收尾时会精确统计，并逐个文件寻找可以删除的重复实现。
+- **代码量**：生产代码净增约 5,600 行，这是按文件路径粗算的，内联测试也包含在内。M4 按 §10.19 登记字段归属及本轮增删；相对迁移起点的最终逐 crate 度量留待 M5。
 - **Host 复杂度**：Session、授权、投递层的复杂度没有变化，这是 §5.2 的结论。
 - **测量**：探针已经在产出数据，但还缺时间、任务类别、模型这几个坐标。
 
@@ -313,11 +313,10 @@ R2 曾把 pause 当成 stop 的别名，导致十多个 API 测试失败，原�
 
 ### 9.1 接下来的步骤
 
-分支已以 `cf23ea8` 合入 master `dfd3427`，重跑全部门槛并通过；[合并交回与冲突审计](../experiments/constitution-host-preflight/m3/merge-verification.md)。接下来：
+master 已快进；M4 在 master 完成，完整门槛通过，见 [M4 交回](../experiments/constitution-host-preflight/m4/verification.md)。
 
-1. 审查方验收后，由 master 一侧执行 `git merge --ff-only constitution-core`。
-2. 在 master 上做 M4：清理 `GraphRunRecord` 中不再使用的字段和残余类型，并精确统计代码量。
-3. 在 master 上做 M5：补全测量探针，做最终度量，逐条对照宪法"完美"的三个条件和四个极限。
+1. M4 待审查；字段表、CompletionFact 结论和测试映射均已随交回提供。
+2. M5 不自动开始；待授权后做最终测量及宪法逐条复核。
 
 ### 9.2 待决问题
 
@@ -373,7 +372,7 @@ R2 曾把 pause 当成 stop 的别名，导致十多个 API 测试失败，原�
 
 ## 12. 文档索引
 
-以下路径都相对于分支 worktree `/home/mansteinl/code/anchor-constitution-core`，合入 master 后路径不变。
+以下路径都相对于当前工作目录 `/home/mansteinl/Anchor`；旧分支 worktree 只读保留。
 
 | 文档 | 用途 |
 | --- | --- |

@@ -7,7 +7,7 @@ KernelScheduler、Goose ACP、授权 MCP、Bubblewrap 和 Artifact，只替换�
 
 所有新 Run 默认使用 Kernel；回归不再选择 `execution=kernel_probe`，也不保留旧执行器。Runtime 的 30,000 例冻结旧侧对照覆盖串行、并行成功/失败、模块和 Call；Host 门面另持久化回放其中 1,000 个串行 seed，HTTP 测试经过真实 Op.run/Bubblewrap/Artifact。它们不启动 Goose，不能替代下列固定 Goose 确定性回归。快照来源与比较规则见 [M3 基线](../experiments/constitution-host-preflight/m3/snapshots/README.md)。
 
-`constitution-core` 与 master 并行时，按迁移任务书 §10.14 将下列所有命令的 target 改为 `/tmp/anchor-goose-regression-target-core`，relay 也使用该目录；两份 worktree 不得共享构建输出。
+M4 起按迁移任务书 §10.19 只在 master 工作目录执行，使用标准 target /tmp/anchor-goose-regression-target；旧 constitution-core worktree 只读，不再使用其 -core 构建目录采证。其他独立构建工作流不得覆盖正在采证的产物。
 
 ## 标准命令
 
@@ -87,14 +87,16 @@ cargo +stable test --manifest-path rust/Cargo.toml -p anchor-runner-host \
 ```
 
 workspace 与单包命令可能聚合不同的依赖特性，从而重新生成 Host 和 relay；
-上述预编译要放在 workspace 检查之后、冻结身份之前。采证期间不再执行会覆盖
-这些 binary 的构建；独跑与完整套件都复用冻结后的产物。
+上述预编译必须在 workspace 检查和所有 helper/example build 之后最后执行，再冻结身份。
+helper build 即使没有源码变化也可能切换特性集合；测试命令启动时会把 Host/relay 链接回测试集合的缓存产物。
+因此不能在预编译与冻结之间再 build。采证期间不执行会覆盖这些 binary 的构建；
+独跑与完整套件复用冻结后的产物，并在运行后复核摘要。
 
 普通 fixture helper 的 filtered 数不是忽略测试数；完整命令的 `--no-fail-fast`
 保证一个套件失败后仍采集后续套件。真实模型与外部服务不由本地 Provider
 结果代验。
 
-M3 按 §10.15 完成恢复契约更正和回归修复：完整 Host ignored **122 / 0 / 0**，原 12 项失败逐项单独复跑各 **1 / 0 / 0**；workspace 2,153 / 0 / 125、Web 333 与构建、严格 Clippy/fmt 均通过。固定 Host/Goose/helper 前后身份一致，原 110 / 12 / 0 停止现场保留；见 [M3 最终交回](../experiments/constitution-host-preflight/m3/completion-verification.md)。真实模型 Provider 与外部实网未新增验收；S27 和是否合回 master 待用户审查。以下 G0/F2 是各自提交的历史基线。
+M3 按 §10.15 完成恢复契约更正和回归修复：完整 Host ignored **122 / 0 / 0**，原 12 项失败逐项单独复跑各 **1 / 0 / 0**；workspace 2,153 / 0 / 125、Web 333 与构建、严格 Clippy/fmt 均通过。固定 Host/Goose/helper 前后身份一致，原 110 / 12 / 0 停止现场保留；见 [M3 最终交回](../experiments/constitution-host-preflight/m3/completion-verification.md)。S27 已批准并结清 S4，M3 已快进 master。M4 完整门槛见 [当前交回](../experiments/constitution-host-preflight/m4/verification.md)；真实模型 Provider 与外部实网未新增验收。以下 G0/F2 是各自提交的历史基线。
 
 ## Goose 比较基线（G0，2026-10-19）
 

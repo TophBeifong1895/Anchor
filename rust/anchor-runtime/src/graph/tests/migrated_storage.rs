@@ -133,7 +133,7 @@ async fn invalid_durable_route_fails_run_without_settling_or_replaying() {
 }
 
 #[tokio::test]
-async fn completion_fact_closes_run_store_crash_window_without_reexecution() {
+async fn completion_fact_survives_kernel_commit_failure_without_reexecution() {
     let artifacts = MemoryArtifacts::default();
     let nodes = FakeNodes::default();
     let harness = Harness::with_store(
@@ -155,8 +155,8 @@ async fn completion_fact_closes_run_store_crash_window_without_reexecution() {
 }
 
 #[tokio::test]
-async fn durable_run_save_feedback_error_requires_reloading_before_resume() {
-    let root = test_root("save-feedback");
+async fn durable_kernel_commit_feedback_error_preserves_result_across_reload() {
+    let root = test_root("commit-feedback");
     let initial = GraphRunRecord::create(graph(&["one"], &[], "one"), Value::Null).unwrap();
     let run_id = initial.run_id.clone();
     let ports = DurableTestPorts {
@@ -201,7 +201,7 @@ async fn durable_run_save_feedback_error_requires_reloading_before_resume() {
 }
 
 #[test]
-fn old_run_formats_are_named_refusals_on_decode_and_file_load() {
+fn legacy_run_formats_are_named_refusals_on_decode_and_kernel_resource_read() {
     let root = test_root("old-formats");
     let record =
         GraphRunRecord::create_with_id(graph(&["work"], &[], "work"), Value::Null, "old-format")
@@ -213,7 +213,15 @@ fn old_run_formats_are_named_refusals_on_decode_and_file_load() {
         old["format"] = serde_json::json!(format);
         fixtures.push(old);
     }
-    for field in ["environments", "status", "cursor"] {
+    for field in [
+        "environments",
+        "status",
+        "cursor",
+        "updated",
+        "error",
+        "recovery",
+        "recovery_submissions",
+    ] {
         let mut old = current.clone();
         old[field] = Value::Null;
         fixtures.push(old);
@@ -253,7 +261,7 @@ fn old_run_formats_are_named_refusals_on_decode_and_file_load() {
 }
 
 #[tokio::test]
-async fn old_cursor_counter_timing_is_named_refusal_without_rewrite() {
+async fn legacy_cursor_payload_is_named_refusal_without_resource_rewrite() {
     let record = GraphRunRecord::create(graph(&["work"], &[], "work"), Value::Null).unwrap();
     let mut resource = validator::run_resource(&record, 100).unwrap();
     resource.state["cursor"] = serde_json::json!({"node_id":"work","key":{"run_id":record.run_id,"graph_digest":record.graph_digest,"node_id":"work","invocation":1},"input_commits":[],"prepared_input":null});

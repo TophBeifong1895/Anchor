@@ -1,7 +1,7 @@
 #[test]
-fn file_run_store_read_leases_coexist_and_each_blocks_writers() {
+fn file_run_lease_provider_read_leases_coexist_and_each_blocks_writers() {
     let root = std::env::temp_dir().join(format!(
-        "anchor-run-store-read-leases-{}-{}",
+        "anchor-run-lease-read-leases-{}-{}",
         std::process::id(),
         SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -50,9 +50,9 @@ fn file_run_store_read_leases_coexist_and_each_blocks_writers() {
 }
 
 #[test]
-fn file_run_store_read_and_write_leases_preserve_lock_identity() {
+fn file_run_lease_provider_read_and_write_leases_preserve_lock_identity() {
     let root = std::env::temp_dir().join(format!(
-        "anchor-run-store-lock-identity-{}-{}",
+        "anchor-run-lease-lock-identity-{}-{}",
         std::process::id(),
         SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -102,9 +102,9 @@ fn file_run_store_read_and_write_leases_preserve_lock_identity() {
 }
 
 #[test]
-fn file_run_store_read_and_write_leases_reject_invalid_run_ids() {
+fn file_run_lease_provider_read_and_write_leases_reject_invalid_run_ids() {
     let root = std::env::temp_dir().join(format!(
-        "anchor-run-store-invalid-lease-{}-{}",
+        "anchor-run-lease-invalid-lease-{}-{}",
         std::process::id(),
         SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -137,9 +137,9 @@ fn file_run_store_read_and_write_leases_reject_invalid_run_ids() {
 }
 
 #[test]
-fn file_run_store_roundtrips_rejects_corruption_and_releases_lease_after_process_crash() {
+fn kernel_file_store_rejects_corruption_and_run_lease_releases_after_process_crash() {
     let root = std::env::temp_dir().join(format!(
-        "anchor-run-store-crash-{}-{}",
+        "anchor-run-lease-crash-{}-{}",
         std::process::id(),
         SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -180,7 +180,7 @@ fn file_run_store_roundtrips_rejects_corruption_and_releases_lease_after_process
     let mut child = Command::new(&executable)
         .args([
             "--exact",
-            "graph::tests::file_run_store_lease_process_helper",
+            "graph::tests::file_run_lease_process_helper",
             "--nocapture",
         ])
         .env("ANCHOR_FILE_LEASE_TEST_TOKEN", &token)
@@ -221,7 +221,7 @@ fn file_run_store_roundtrips_rejects_corruption_and_releases_lease_after_process
     let contender = Command::new(&executable)
         .args([
             "--exact",
-            "graph::tests::file_run_store_lease_process_helper",
+            "graph::tests::file_run_lease_process_helper",
             "--nocapture",
         ])
         .env("ANCHOR_FILE_LEASE_TEST_TOKEN", &token)
@@ -267,7 +267,7 @@ fn file_run_store_roundtrips_rejects_corruption_and_releases_lease_after_process
 }
 
 #[test]
-fn file_run_store_lease_process_helper() {
+fn file_run_lease_process_helper() {
     // This test is intentionally inert when run by the normal harness. The
     // parent test supplies a per-invocation token and a private temp root.
     let (Ok(token), Ok(mode), Ok(root), Ok(run_id)) = (
@@ -283,7 +283,7 @@ fn file_run_store_lease_process_helper() {
         || !PathBuf::from(&root)
             .file_name()
             .and_then(|name| name.to_str())
-            .is_some_and(|name| name.starts_with("anchor-run-store-crash-"))
+            .is_some_and(|name| name.starts_with("anchor-run-lease-crash-"))
     {
         return;
     }

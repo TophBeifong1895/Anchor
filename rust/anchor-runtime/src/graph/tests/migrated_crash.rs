@@ -1,5 +1,5 @@
 #[tokio::test]
-async fn file_run_store_recovers_completed_node_and_artifact_facts_after_process_crash() {
+async fn kernel_file_store_recovers_completed_node_and_artifact_facts_after_process_crash() {
     let executable = std::env::current_exe().unwrap();
     for (crash_name, expected_exit) in [("after-node-fact", 71), ("after-artifact-commit", 72)] {
         let root = std::env::temp_dir().join(format!(
@@ -19,7 +19,7 @@ async fn file_run_store_recovers_completed_node_and_artifact_facts_after_process
         let crashed = Command::new(&executable)
             .args([
                 "--exact",
-                "graph::tests::graph_runner_recovery_process_helper",
+                "graph::tests::kernel_scheduler_recovery_process_helper",
                 "--nocapture",
             ])
             .env("ANCHOR_GRAPH_RECOVERY_TEST_ROOT", &root)
@@ -37,7 +37,7 @@ async fn file_run_store_recovers_completed_node_and_artifact_facts_after_process
 
         let harness = Harness::reload(FileStore::new(root.join("kernel")).unwrap(), &run_id);
         assert_eq!(harness.phase(), Phase::Executing);
-        let cursor = harness
+        let dispatch_input = harness
             .pending_input(
                 &DurableTestPorts {
                     root: root.clone(),
@@ -46,11 +46,11 @@ async fn file_run_store_recovers_completed_node_and_artifact_facts_after_process
                 "one",
             )
             .await;
-        assert_eq!(cursor.node_id, "one");
-        assert_eq!(cursor.key.invocation, 1);
+        assert_eq!(dispatch_input.node_id, "one");
+        assert_eq!(dispatch_input.key.invocation, 1);
         assert_eq!(fs::read(root.join("execute-count")).unwrap(), b"1");
         assert!(
-            root.join(format!("node-{}.json", cursor.key.durable_key()))
+            root.join(format!("node-{}.json", dispatch_input.key.durable_key()))
                 .exists(),
             "durable completion fact must survive {crash_name}"
         );
@@ -91,7 +91,7 @@ async fn file_run_store_recovers_completed_node_and_artifact_facts_after_process
 }
 
 #[tokio::test]
-async fn file_run_store_recovers_not_started_invocation_after_process_crash() {
+async fn kernel_file_store_recovers_not_started_invocation_after_process_crash() {
     let executable = std::env::current_exe().unwrap();
     let root = std::env::temp_dir().join(format!(
         "anchor-graph-recovery-{}-{}-before-dispatch",
@@ -110,7 +110,7 @@ async fn file_run_store_recovers_not_started_invocation_after_process_crash() {
     let crashed = Command::new(&executable)
         .args([
             "--exact",
-            "graph::tests::graph_runner_recovery_process_helper",
+            "graph::tests::kernel_scheduler_recovery_process_helper",
             "--nocapture",
         ])
         .env("ANCHOR_GRAPH_RECOVERY_TEST_ROOT", &root)
@@ -122,7 +122,7 @@ async fn file_run_store_recovers_not_started_invocation_after_process_crash() {
 
     let harness = Harness::reload(FileStore::new(root.join("kernel")).unwrap(), &run_id);
     assert_eq!(harness.phase(), Phase::Executing);
-    let cursor = harness
+    let dispatch_input = harness
         .pending_input(
             &DurableTestPorts {
                 root: root.clone(),
@@ -131,11 +131,11 @@ async fn file_run_store_recovers_not_started_invocation_after_process_crash() {
             "one",
         )
         .await;
-    assert_eq!(cursor.node_id, "one");
-    assert_eq!(cursor.key.invocation, 1);
+    assert_eq!(dispatch_input.node_id, "one");
+    assert_eq!(dispatch_input.key.invocation, 1);
     assert!(
         !root
-            .join(format!("node-{}.json", cursor.key.durable_key()))
+            .join(format!("node-{}.json", dispatch_input.key.durable_key()))
             .exists()
     );
     assert!(!root.join("execute-count").exists());
@@ -163,15 +163,15 @@ async fn file_run_store_recovers_not_started_invocation_after_process_crash() {
     assert_eq!(recovered.results["one"].len(), 1);
     assert_eq!(fs::read(root.join("execute-count")).unwrap(), b"1");
     let result = &recovered.results["one"][0];
-    assert_eq!(result.key, cursor.key);
-    assert_eq!(result.commit.id, cursor.key.durable_key());
+    assert_eq!(result.key, dispatch_input.key);
+    assert_eq!(result.commit.id, dispatch_input.key.durable_key());
     assert_eq!(harness.record(), recovered);
 
     fs::remove_dir_all(root).unwrap();
 }
 
 #[tokio::test]
-async fn parallel_wave_recovers_each_branch_after_process_crash() {
+async fn kernel_parallel_activation_recovers_each_branch_after_process_crash() {
     let executable = std::env::current_exe().unwrap();
     for (crash_name, expected_exit) in [
         ("after-not-started", 70),
@@ -195,7 +195,7 @@ async fn parallel_wave_recovers_each_branch_after_process_crash() {
         let crashed = Command::new(&executable)
             .args([
                 "--exact",
-                "graph::tests::graph_runner_recovery_process_helper",
+                "graph::tests::kernel_scheduler_recovery_process_helper",
                 "--nocapture",
             ])
             .env("ANCHOR_GRAPH_RECOVERY_TEST_ROOT", &root)
@@ -247,7 +247,7 @@ async fn parallel_wave_recovers_each_branch_after_process_crash() {
 }
 
 #[tokio::test]
-async fn file_run_store_recovers_durable_failed_node_without_replay_or_freeze() {
+async fn kernel_file_store_recovers_durable_failed_node_without_replay_or_freeze() {
     let executable = std::env::current_exe().unwrap();
     let root = std::env::temp_dir().join(format!(
         "anchor-graph-recovery-{}-{}-after-failed-fact",
@@ -270,7 +270,7 @@ async fn file_run_store_recovers_durable_failed_node_without_replay_or_freeze() 
     let crashed = Command::new(&executable)
         .args([
             "--exact",
-            "graph::tests::graph_runner_recovery_process_helper",
+            "graph::tests::kernel_scheduler_recovery_process_helper",
             "--nocapture",
         ])
         .env("ANCHOR_GRAPH_RECOVERY_TEST_ROOT", &root)
@@ -282,7 +282,7 @@ async fn file_run_store_recovers_durable_failed_node_without_replay_or_freeze() 
 
     let harness = Harness::reload(FileStore::new(root.join("kernel")).unwrap(), &run_id);
     assert_eq!(harness.phase(), Phase::Executing);
-    let cursor = harness
+    let dispatch_input = harness
         .pending_input(
             &DurableTestPorts {
                 root: root.clone(),
@@ -291,11 +291,11 @@ async fn file_run_store_recovers_durable_failed_node_without_replay_or_freeze() 
             "one",
         )
         .await;
-    assert_eq!(cursor.node_id, "one");
-    assert_eq!(cursor.key.invocation, 1);
+    assert_eq!(dispatch_input.node_id, "one");
+    assert_eq!(dispatch_input.key.invocation, 1);
     assert_eq!(fs::read(root.join("execute-count")).unwrap(), b"1");
     let fact: DurableTestNodeFact = serde_json::from_slice(
-        &fs::read(root.join(format!("node-{}.json", cursor.key.durable_key()))).unwrap(),
+        &fs::read(root.join(format!("node-{}.json", dispatch_input.key.durable_key()))).unwrap(),
     )
     .unwrap();
     assert_eq!(
@@ -333,7 +333,10 @@ async fn file_run_store_recovers_durable_failed_node_without_replay_or_freeze() 
     assert!(!root.join("freeze-count").exists());
     assert!(
         !root
-            .join(format!("artifact-{}.json", cursor.key.durable_key()))
+            .join(format!(
+                "artifact-{}.json",
+                dispatch_input.key.durable_key()
+            ))
             .exists()
     );
     assert_eq!(harness.record(), recovered);
@@ -342,7 +345,7 @@ async fn file_run_store_recovers_durable_failed_node_without_replay_or_freeze() 
 }
 
 #[tokio::test]
-async fn graph_runner_recovery_process_helper() {
+async fn kernel_scheduler_recovery_process_helper() {
     let (Ok(root), Ok(run_id), Ok(crash_name)) = (
         std::env::var("ANCHOR_GRAPH_RECOVERY_TEST_ROOT"),
         std::env::var("ANCHOR_GRAPH_RECOVERY_TEST_RUN"),

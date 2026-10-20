@@ -229,7 +229,6 @@ impl FrozenOldRecord {
         GraphRunRecord {
             format: RunRecordFormat,
             started: self.started.clone(),
-            updated: self.updated.clone(),
             run_id: self.run_id.clone(),
             graph_digest: self.graph_digest.clone(),
             snapshot: self.snapshot.clone(),
@@ -238,8 +237,6 @@ impl FrozenOldRecord {
                 .parallel
                 .as_ref()
                 .map(FrozenParallelActivation::graph_progress),
-            recovery: self.recovery.clone(),
-            recovery_submissions: self.recovery_submissions.clone(),
             graph_calls: self.graph_calls.clone(),
             plugin_bindings: self.plugin_bindings.clone(),
             plugin_bindings_initialized: self.plugin_bindings_initialized,
@@ -250,7 +247,6 @@ impl FrozenOldRecord {
             results: self.results.clone(),
             decided: self.decided.clone(),
             sequence: self.sequence,
-            error: self.error.clone(),
         }
     }
     #[cfg(test)]
@@ -260,7 +256,7 @@ impl FrozenOldRecord {
             cursor: None,
             format: u32::from(record.format),
             started: record.started.clone(),
-            updated: record.updated.clone(),
+            updated: None,
             run_id: record.run_id.clone(),
             graph_digest: record.graph_digest.clone(),
             snapshot: record.snapshot.clone(),
@@ -269,8 +265,8 @@ impl FrozenOldRecord {
                 .parallel
                 .as_ref()
                 .map(FrozenParallelActivation::from_graph),
-            recovery: record.recovery.clone(),
-            recovery_submissions: record.recovery_submissions.clone(),
+            recovery: Vec::new(),
+            recovery_submissions: Vec::new(),
             graph_calls: record.graph_calls.clone(),
             plugin_bindings: record.plugin_bindings.clone(),
             plugin_bindings_initialized: record.plugin_bindings_initialized,
@@ -281,7 +277,7 @@ impl FrozenOldRecord {
             results: record.results.clone(),
             decided: record.decided.clone(),
             sequence: record.sequence,
-            error: record.error.clone(),
+            error: None,
         }
     }
 }

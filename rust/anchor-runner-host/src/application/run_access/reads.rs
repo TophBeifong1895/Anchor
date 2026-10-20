@@ -40,9 +40,14 @@ pub(crate) fn load(data_root: &Path, run_id: &str) -> Result<Option<RunView<'sta
             .flatten();
     let lifecycle = super::kernel_runs::KernelRuns::project(&resource, false, updated)
         .map_err(|error| GraphError::CorruptRun(format!("Run view: {error:?}")))?;
-    Ok(Some(
-        RunView::from_kernel(record, lifecycle).with_kernel_frontier(&resource)?,
-    ))
+    let history = store
+        .history(&resource.id)
+        .map_err(|error| GraphError::CorruptRun(error.to_string()))?;
+    let (recovery, _) = super::kernel_runs::KernelRuns::project_recovery(&resource, history)
+        .map_err(|error| GraphError::CorruptRun(format!("Run recovery view: {error:?}")))?;
+    let mut view = RunView::from_kernel(record, lifecycle).with_kernel_frontier(&resource)?;
+    view.recovery = recovery;
+    Ok(Some(view))
 }
 
 impl RunApplication {
@@ -147,9 +152,10 @@ impl RunApplication {
         };
         let resource = owner.load(run_id)?.ok_or(ApplicationError::Missing)?;
         let lifecycle = owner.view(&resource)?;
-        let mut record = super::kernel_runs::KernelRuns::record(&resource)?;
-        (record.recovery, record.recovery_submissions) = owner.recovery_facts(run_id)?;
+        let record = super::kernel_runs::KernelRuns::record(&resource)?;
+        let (recovery, _) = owner.recovery_facts(run_id)?;
         let mut view = RunView::from_kernel(record, lifecycle).with_kernel_frontier(&resource)?;
+        view.recovery = recovery;
         view.session_coordinated = self
             .metadata(run_id)?
             .is_some_and(|metadata| metadata.session_call.is_some());

@@ -167,7 +167,7 @@ pub struct ParallelActivation {
 }
 
 /// Current persisted Graph Run record format. Older records require offline migration.
-pub const RUN_RECORD_FORMAT: u32 = 14;
+pub const RUN_RECORD_FORMAT: u32 = 15;
 
 /// The only supported persisted Run schema. No invalid in-memory format can be constructed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -197,7 +197,7 @@ impl PartialEq<u32> for RunRecordFormat {
     }
 }
 
-/// RFC 3339 UTC timestamp used for `started`/`updated` on Run records.
+/// RFC 3339 UTC timestamp of Graph admission.
 pub(crate) fn timestamp_now() -> String {
     chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
 }
@@ -206,27 +206,15 @@ pub(crate) fn timestamp_now() -> String {
 #[serde(deny_unknown_fields)]
 pub struct GraphRunRecord {
     pub format: RunRecordFormat,
-    /// RFC 3339 UTC when the record was created. Absent on records written
-    /// before format 8: the real creation time is unknown and is deliberately
-    /// not inferred from file mtime.
+    /// Immutable admission-time observation; unknown time stays absent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub started: Option<String>,
-    /// RFC 3339 UTC of the last persisted mutation; writers refresh it through
-    /// [`GraphRunRecord::touch`] immediately before saving.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub updated: Option<String>,
     pub run_id: String,
     pub graph_digest: String,
     pub snapshot: GraphSnapshot,
     pub input: Value,
     #[serde(default)]
     pub parallel: Option<ParallelActivation>,
-    /// Retained tool-attempt observations tied to their exact invocation.
-    /// Kernel history owns current recovery and lifecycle decisions.
-    #[serde(default)]
-    pub recovery: Vec<PendingRecovery>,
-    #[serde(default)]
-    pub recovery_submissions: Vec<RecoverySubmission>,
     #[serde(default)]
     pub graph_calls: BTreeMap<String, GraphCallRecord>,
     #[serde(default)]
@@ -240,35 +228,23 @@ pub struct GraphRunRecord {
     pub ceased: BTreeSet<String>,
     pub results: BTreeMap<String, Vec<RunResult>>,
     pub decided: BTreeMap<String, EdgeDecision>,
+    /// Graph-local result and edge-decision ordering, independent of Kernel submissions.
     pub sequence: u64,
-    pub error: Option<String>,
 }
 
 #[derive(Deserialize)]
 #[serde(remote = "GraphRunRecord", deny_unknown_fields)]
 struct GraphRunRecordWire {
     pub format: RunRecordFormat,
-    /// RFC 3339 UTC when the record was created. Absent on records written
-    /// before format 8: the real creation time is unknown and is deliberately
-    /// not inferred from file mtime.
+    /// Immutable admission-time observation; unknown time stays absent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub started: Option<String>,
-    /// RFC 3339 UTC of the last persisted mutation; writers refresh it through
-    /// [`GraphRunRecord::touch`] immediately before saving.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub updated: Option<String>,
     pub run_id: String,
     pub graph_digest: String,
     pub snapshot: GraphSnapshot,
     pub input: Value,
     #[serde(default)]
     pub parallel: Option<ParallelActivation>,
-    /// Retained tool-attempt observations tied to their exact invocation.
-    /// Kernel history owns current recovery and lifecycle decisions.
-    #[serde(default)]
-    pub recovery: Vec<PendingRecovery>,
-    #[serde(default)]
-    pub recovery_submissions: Vec<RecoverySubmission>,
     #[serde(default)]
     pub graph_calls: BTreeMap<String, GraphCallRecord>,
     #[serde(default)]
@@ -282,8 +258,8 @@ struct GraphRunRecordWire {
     pub ceased: BTreeSet<String>,
     pub results: BTreeMap<String, Vec<RunResult>>,
     pub decided: BTreeMap<String, EdgeDecision>,
+    /// Graph-local result and edge-decision ordering, independent of Kernel submissions.
     pub sequence: u64,
-    pub error: Option<String>,
 }
 
 impl<'de> Deserialize<'de> for GraphRunRecord {
@@ -309,7 +285,16 @@ impl<'de> Deserialize<'de> for GraphRunRecord {
                         let Some(key) = self.0.next_key::<String>()? else {
                             return Ok(None);
                         };
-                        if matches!(key.as_str(), "environments" | "status" | "cursor") {
+                        if matches!(
+                            key.as_str(),
+                            "environments"
+                                | "status"
+                                | "cursor"
+                                | "updated"
+                                | "error"
+                                | "recovery"
+                                | "recovery_submissions"
+                        ) {
                             return Err(serde::de::Error::custom(
                                 "old Graph Run format; offline migration required",
                             ));
@@ -370,15 +355,12 @@ impl GraphRunRecord {
         let now = timestamp_now();
         Ok(Self {
             format: RunRecordFormat,
-            started: Some(now.clone()),
-            updated: Some(now),
+            started: Some(now),
             run_id,
             graph_digest,
             snapshot,
             input,
             parallel: None,
-            recovery: Vec::new(),
-            recovery_submissions: Vec::new(),
             graph_calls: BTreeMap::new(),
             plugin_bindings: BTreeMap::new(),
             plugin_bindings_initialized: false,
@@ -389,7 +371,6 @@ impl GraphRunRecord {
             results: BTreeMap::new(),
             decided: BTreeMap::new(),
             sequence: 0,
-            error: None,
         })
     }
 
@@ -423,14 +404,6 @@ impl GraphRunRecord {
         }
         record.plugin_bindings_initialized = true;
         Ok(record)
-    }
-
-    /// Mark the record as written now.
-    ///
-    /// Graph fact writers may refresh this observation before publishing.
-    /// Kernel task history remains the authority for Run lifecycle changes.
-    pub fn touch(&mut self) {
-        self.updated = Some(timestamp_now());
     }
 
     /// Returns node IDs in first durable completion order.
@@ -477,36 +450,6 @@ impl GraphRunRecord {
             {
                 return Err(GraphError::CorruptRun(
                     "Graph call record identity or child reference is invalid".into(),
-                ));
-            }
-        }
-        let mut recovery_ids = BTreeSet::new();
-        for pending in &self.recovery {
-            if pending.key.run_id != self.run_id
-                || pending.key.graph_digest != self.graph_digest
-                || pending.attempt.attempt_id <= 0
-                || pending.attempt.tool.is_empty()
-                || !recovery_ids.insert((pending.key.durable_key(), pending.attempt.attempt_id))
-            {
-                return Err(GraphError::CorruptRun(
-                    "pending recovery attempt does not match an active invocation".into(),
-                ));
-            }
-        }
-        let mut submitted_ids = BTreeSet::new();
-        for submission in &self.recovery_submissions {
-            if submission.key.run_id != self.run_id
-                || submission.key.graph_digest != self.graph_digest
-                || submission.attempt_id <= 0
-                || !self
-                    .snapshot
-                    .nodes
-                    .iter()
-                    .any(|node| node.id == submission.key.node_id && node.agent.is_some())
-                || !submitted_ids.insert((submission.key.durable_key(), submission.attempt_id))
-            {
-                return Err(GraphError::CorruptRun(
-                    "recovery submission identity is invalid or duplicated".into(),
                 ));
             }
         }

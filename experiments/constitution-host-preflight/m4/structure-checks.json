@@ -1,0 +1,71 @@
+{
+  "kernel": {
+    "command": [
+      "git",
+      "diff",
+      "0859373",
+      "--",
+      "rust/anchor-kernel"
+    ],
+    "exit_code": 0,
+    "diff_bytes": 0,
+    "empty": true
+  },
+  "validator_rules": {
+    "command": [
+      "git",
+      "diff",
+      "2cef07b",
+      "--",
+      "rust/anchor-runtime/src/graph/validator.rs",
+      "rust/anchor-runtime/src/graph/logic.rs",
+      "rust/anchor-runtime/src/graph/validator"
+    ],
+    "exit_code": 0,
+    "diff_bytes": 0,
+    "empty": true
+  },
+  "frozen_snapshots": {
+    "command": [
+      "git",
+      "diff",
+      "2cef07b",
+      "--",
+      "experiments/constitution-host-preflight/m3/snapshots"
+    ],
+    "exit_code": 0,
+    "diff_bytes": 0,
+    "empty": true
+  },
+  "fence_definition": {
+    "command": [
+      "git",
+      "diff",
+      "2cef07b",
+      "--",
+      "rust/anchor-runner-host/tests/run_access_fence.rs",
+      "rust/anchor-runner-host/run-access-fence.txt"
+    ],
+    "exit_code": 0,
+    "diff_bytes": 0,
+    "empty": true
+  },
+  "removed_types": {
+    "command": [
+      "rg",
+      "-n",
+      "GraphRunner|RunStatus|FileRunStore|stop_requested|pause_requested",
+      "rust",
+      "--glob",
+      "*.rs"
+    ],
+    "exit_code": 1,
+    "matches": []
+  },
+  "c2": {
+    "save": 0,
+    "mutation": 0,
+    "method": "review of M3 52-point destinations and M4 production diff; RunView-only projection replaces reads record field assignment",
+    "evidence": "../m3/c2-destinations.md"
+  }
+}

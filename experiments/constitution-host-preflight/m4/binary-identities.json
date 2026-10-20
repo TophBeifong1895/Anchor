@@ -1,0 +1,85 @@
+{
+  "captured_after": "2026-10-20T06:46:00.767199+00:00",
+  "all_unchanged": true,
+  "before": [
+    {
+      "path": "/tmp/anchor-goose-regression-target/debug/anchor-runner-host",
+      "sha256": "1b38d48dce446988b7ce1765d44836df840bb9e8b1500d45f9f76a27b0b1ac0b",
+      "size": 401464904
+    },
+    {
+      "path": "/tmp/anchor-goose-regression-target/debug/anchor-net-relay",
+      "sha256": "0dfdf1ae40ac6e567e0e43db232948c43dccd779275e738cdcdd6c1db87b582f",
+      "size": 17074040
+    },
+    {
+      "path": "/tmp/anchor-goose-regression-target/debug/anchor-sandbox-network",
+      "sha256": "4b33923978262bb67205dbd74c67ec74abaaca797f30ac8c570a791880b28c47",
+      "size": 18090992
+    },
+    {
+      "path": "/tmp/anchor-goose-regression-target/debug/anchor-wecom-tools",
+      "sha256": "6c2efa57dbc33abccfd287924446cfbebdd963de7047a6fc61f5de596806bcd5",
+      "size": 107181152
+    },
+    {
+      "path": "/tmp/anchor-goose-regression-target/debug/anchor-docmost-tools",
+      "sha256": "47201f100e0eecd50ecd389ff10d4ee203baaf0cb4d3eb9125705beab7503b4c",
+      "size": 107789752
+    },
+    {
+      "path": "/tmp/anchor-goose-regression-target/debug/examples/http_fixture",
+      "sha256": "bae3e0165d92e77193e72877ad7f41e61bf263be70bc34442efc6587e24ed941",
+      "size": 102625800
+    },
+    {
+      "path": "/var/tmp/anchor-goose-build/artifacts/goose-acp.first",
+      "sha256": "17e065a79cb0508413af714724aed51d6b76972dda9feebdda701330134fb640",
+      "size": 23860728
+    }
+  ],
+  "after": [
+    {
+      "path": "/tmp/anchor-goose-regression-target/debug/anchor-runner-host",
+      "sha256": "1b38d48dce446988b7ce1765d44836df840bb9e8b1500d45f9f76a27b0b1ac0b",
+      "size": 401464904
+    },
+    {
+      "path": "/tmp/anchor-goose-regression-target/debug/anchor-net-relay",
+      "sha256": "0dfdf1ae40ac6e567e0e43db232948c43dccd779275e738cdcdd6c1db87b582f",
+      "size": 17074040
+    },
+    {
+      "path": "/tmp/anchor-goose-regression-target/debug/anchor-sandbox-network",
+      "sha256": "4b33923978262bb67205dbd74c67ec74abaaca797f30ac8c570a791880b28c47",
+      "size": 18090992
+    },
+    {
+      "path": "/tmp/anchor-goose-regression-target/debug/anchor-wecom-tools",
+      "sha256": "6c2efa57dbc33abccfd287924446cfbebdd963de7047a6fc61f5de596806bcd5",
+      "size": 107181152
+    },
+    {
+      "path": "/tmp/anchor-goose-regression-target/debug/anchor-docmost-tools",
+      "sha256": "47201f100e0eecd50ecd389ff10d4ee203baaf0cb4d3eb9125705beab7503b4c",
+      "size": 107789752
+    },
+    {
+      "path": "/tmp/anchor-goose-regression-target/debug/examples/http_fixture",
+      "sha256": "bae3e0165d92e77193e72877ad7f41e61bf263be70bc34442efc6587e24ed941",
+      "size": 102625800
+    },
+    {
+      "path": "/var/tmp/anchor-goose-build/artifacts/goose-acp.first",
+      "sha256": "17e065a79cb0508413af714724aed51d6b76972dda9feebdda701330134fb640",
+      "size": 23860728
+    }
+  ],
+  "before_manifest": "/tmp/anchor-m4/binary-before.json",
+  "build_directory": "/tmp/anchor-goose-regression-target",
+  "first_run_preparation_issue": {
+    "before_manifest": "/tmp/anchor-m4/binary-before-helpers.json",
+    "actual_fixture_manifest": "/tmp/anchor-m4/first-run-fixture-identities.json",
+    "disposition": "First full run passed but final acceptance uses the second full run with matching before/after identities."
+  }
+}

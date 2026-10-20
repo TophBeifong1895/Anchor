@@ -21,6 +21,8 @@ React/TypeScript WebUI 调用 Rust Host 的资源 API。Host 可直接托管编�
 
 `GET/PUT /graphs/{graph}` 的 `plugin_activation: {mode,graph_digest}` 表示配置生效规则：`next_turn` 为常驻助手，`new_run` 为普通 Graph，不表示外部插件已可用。`GET /channel-sessions/{session}/assistant` 另投影 `plugin_update: {state,message?}`，状态为 `current/pending/restart_required/unavailable`；未知或读取失败不能显示为已生效。Web 在保存后提示下一条消息生效，活动 Graph 打开已有运行，渠道 Graph 打开助手管理，避免重复 trigger。
 
+Run 详情的 state.error 保留字符串：failed 时与 Kernel 结算投影 reason 一致，其他相位为空；时间线继续显示原始失败原因。state.recovery 保留数组，由已接受 Kernel history 的当前 invocation 观察扣除人工决定后投影；记录中不再存这些展示字段。
+
 HTTP DTO 是产品投影，不直接输出执行器私有记录。未知结束时间、exit status 或来源必须保持未知；下游失败不能改变上游已提交事实。更新时间来自 Host 对已接受提交的独立观察，不读取文件 mtime。
 
 Run 列表、详情、时间线、子调用及 Pilot Run 查询共用 `projection: {phase,waiting_for?,outcome?,reason,active,actions:{pause,stop,resume,abandon},updated}`。phase 为 executing / waiting / settled；waiting 才含 human / child / effect，settled 才含 done / failed / escalated / unknown / aborted。旧顶层 status、state.status 和 control_requested、投影 terminal/quiescent/needs_attention 均退出对外 Run 契约；Session Turn、投递、监听与节点结果的状态仍属各自事实。

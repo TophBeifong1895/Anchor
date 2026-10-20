@@ -1,5 +1,5 @@
 #[tokio::test]
-async fn serial_file_store_reload_resumes_same_invocation_after_interruption() {
+async fn serial_kernel_file_store_reload_resumes_same_invocation_after_budget_stop() {
     let root = test_root("serial-provider-retry");
     let artifacts = MemoryArtifacts::default();
     let nodes = FakeNodes {
@@ -44,7 +44,7 @@ async fn serial_file_store_reload_resumes_same_invocation_after_interruption() {
 }
 
 #[tokio::test]
-async fn serial_interrupted_file_store_reload_resumes_same_invocation_and_clears_error() {
+async fn serial_interrupted_file_store_reload_resumes_same_invocation_and_settles_done() {
     let root = test_root("serial-interrupted");
     let artifacts = MemoryArtifacts::default();
     let reason = "provider stream interrupted before final_result";
@@ -73,25 +73,28 @@ async fn serial_interrupted_file_store_reload_resumes_same_invocation_and_clears
         }
     );
     let stopped = harness.record();
-    assert!(stopped.recovery.is_empty());
     assert!(stopped.parallel.is_none());
-    let cursor = harness.pending_input(&artifacts, "work").await;
+    let dispatch_input = harness.pending_input(&artifacts, "work").await;
     let request = nodes.calls.lock().unwrap()[1].clone();
-    assert_eq!(cursor.node_id, "work");
-    assert_eq!(cursor.key, request.key);
-    assert_eq!(cursor.key.invocation, 1);
-    assert_eq!(cursor.input_commits, request.input_commits);
+    assert_eq!(dispatch_input.node_id, "work");
+    assert_eq!(dispatch_input.key, request.key);
+    assert_eq!(dispatch_input.key.invocation, 1);
+    assert_eq!(dispatch_input.input_commits, request.input_commits);
     assert_eq!(
-        cursor.input_commits,
+        dispatch_input.input_commits,
         vec![stopped.results["before"][0].commit.clone()]
     );
-    assert_eq!(cursor.prepared_input, request.input);
+    assert_eq!(dispatch_input.prepared_input, request.input);
     assert!(!stopped.invocations.contains_key("work"));
     assert!(!stopped.passes.contains_key("work"));
     assert!(!stopped.results.contains_key("work"));
     assert!(!stopped.invocations.contains_key("after"));
     assert_eq!(
-        nodes.facts.lock().unwrap().get(&cursor.key.durable_key()),
+        nodes
+            .facts
+            .lock()
+            .unwrap()
+            .get(&dispatch_input.key.durable_key()),
         Some(&CompletionFact::Resumable)
     );
     assert_eq!(*artifacts.freezes.lock().unwrap(), 1);
@@ -108,10 +111,9 @@ async fn serial_interrupted_file_store_reload_resumes_same_invocation_and_clears
     );
     let resumed = loaded.record();
     assert!(loaded.frontier().is_empty());
-    assert!(resumed.recovery.is_empty());
     assert_eq!(resumed.results["before"], stopped.results["before"]);
     assert_eq!(resumed.results["work"].len(), 1);
-    assert_eq!(resumed.results["work"][0].key, cursor.key);
+    assert_eq!(resumed.results["work"][0].key, dispatch_input.key);
     assert_eq!(resumed.results["after"].len(), 1);
     for node in ["before", "work", "after"] {
         assert_eq!(resumed.invocations[node], 1);
@@ -119,15 +121,16 @@ async fn serial_interrupted_file_store_reload_resumes_same_invocation_and_clears
     }
     let calls = nodes.calls.lock().unwrap();
     assert_eq!(calls.len(), 4);
-    assert_eq!(calls[2].key, cursor.key);
-    assert_eq!(calls[2].input_commits, cursor.input_commits);
-    assert_eq!(calls[2].input, cursor.prepared_input);
+    assert_eq!(calls[2].key, dispatch_input.key);
+    assert_eq!(calls[2].input_commits, dispatch_input.input_commits);
+    assert_eq!(calls[2].input, dispatch_input.prepared_input);
     assert_eq!(calls[3].key.node_id, "after");
     assert_eq!(*artifacts.freezes.lock().unwrap(), 3);
-    assert!(
-        resumed.error.is_none(),
-        "completed Run retains interruption: {:?}",
-        resumed.error
+    assert_eq!(
+        loaded.phase(),
+        Phase::Settled {
+            result: Outcome::Done
+        }
     );
     fs::remove_dir_all(root).unwrap();
 }
@@ -202,7 +205,6 @@ async fn finish_parallel_resume<S: Store>(
         );
     }
     let stopped = harness.record();
-    assert!(stopped.recovery.is_empty());
     let activation = stopped.parallel.as_ref().unwrap();
     assert_eq!(activation.branches.len(), 2);
     let completed = activation
@@ -219,20 +221,20 @@ async fn finish_parallel_resume<S: Store>(
         .unwrap();
     assert_eq!(pending.next_index, 0);
     assert!(pending.completed.is_empty());
-    let cursor = harness.pending_input(artifacts, &pending.entry).await;
+    let dispatch_input = harness.pending_input(artifacts, &pending.entry).await;
     let calls_before = nodes.calls.lock().unwrap().clone();
     let request = calls_before
         .iter()
         .find(|request| request.key.node_id == pending.entry)
         .unwrap();
-    assert_eq!(cursor.key, request.key);
-    assert_eq!(cursor.key.invocation, 1);
-    assert_eq!(cursor.input_commits, request.input_commits);
+    assert_eq!(dispatch_input.key, request.key);
+    assert_eq!(dispatch_input.key.invocation, 1);
+    assert_eq!(dispatch_input.input_commits, request.input_commits);
     assert_eq!(
-        cursor.input_commits,
+        dispatch_input.input_commits,
         vec![stopped.results["start"][0].commit.clone()]
     );
-    assert_eq!(cursor.prepared_input, request.input);
+    assert_eq!(dispatch_input.prepared_input, request.input);
     assert!(!stopped.invocations.contains_key(&pending.entry));
     assert!(!stopped.passes.contains_key(&pending.entry));
     assert_eq!(*artifacts.freezes.lock().unwrap(), 2);
@@ -249,8 +251,6 @@ async fn finish_parallel_resume<S: Store>(
     );
     let resumed = harness.record();
     assert!(resumed.parallel.is_none());
-    assert!(resumed.recovery.is_empty());
-    assert!(resumed.error.is_none());
     assert_eq!(resumed.results["start"], stopped.results["start"]);
     for node in &completed {
         assert_eq!(resumed.results[node], stopped.results[node]);
@@ -263,12 +263,12 @@ async fn finish_parallel_resume<S: Store>(
     let calls = nodes.calls.lock().unwrap();
     let pending_calls = calls
         .iter()
-        .filter(|request| request.key == cursor.key)
+        .filter(|request| request.key == dispatch_input.key)
         .collect::<Vec<_>>();
     assert_eq!(pending_calls.len(), 2);
     for request in pending_calls {
-        assert_eq!(request.input_commits, cursor.input_commits);
-        assert_eq!(request.input, cursor.prepared_input);
+        assert_eq!(request.input_commits, dispatch_input.input_commits);
+        assert_eq!(request.input, dispatch_input.prepared_input);
     }
     for node in completed {
         assert_eq!(
@@ -291,11 +291,11 @@ async fn finish_parallel_resume<S: Store>(
 }
 
 #[tokio::test]
-async fn parallel_resume_keeps_completed_branch_and_reuses_budget_cursor() {
+async fn parallel_resume_keeps_completed_branch_and_reuses_budget_dispatch() {
     exercise_parallel_resume("budget", false).await;
 }
 #[tokio::test]
-async fn parallel_file_store_roundtrip_preserves_activation_and_branch_cursors() {
+async fn parallel_kernel_file_store_roundtrip_preserves_activation_and_branch_dispatch() {
     exercise_parallel_resume("budget", true).await;
 }
 #[tokio::test]
@@ -303,6 +303,6 @@ async fn parallel_cancelled_branch_can_reload_without_replaying_completed_siblin
     exercise_parallel_resume("cancel", true).await;
 }
 #[tokio::test]
-async fn parallel_interrupted_file_store_reload_preserves_completed_branch_and_clears_error() {
+async fn parallel_interrupted_file_store_reload_preserves_completed_branch_and_settles_done() {
     exercise_parallel_resume("interrupted", true).await;
 }

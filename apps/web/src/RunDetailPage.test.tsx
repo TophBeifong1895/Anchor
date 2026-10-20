@@ -99,6 +99,15 @@ describe('Run-owned canvas and shared operation projection', () => {
     expect(element.textContent).toContain('Agent 上次工具调用的结果未记录');
   });
 
+  it('shows the settled failure reason from the Run projection', async () => {
+    const reason = '节点 module/original 未提交结果：工具连接已断开';
+    await render(detailFor(projection('settled', { outcome: 'failed', reason,
+      actions: { pause: false, stop: false, resume: false, abandon: false } })));
+    expect(element.querySelector('.canvas-head .pill')?.textContent).toBe('失败');
+    expect(element.querySelector('.canvas-head .problem')?.textContent).toBe(reason);
+    expect(element.querySelector('.run-controls button')).toBeNull();
+  });
+
   it('keeps an unknown effect waiting for review without offering automatic replay', async () => {
     await render(detailFor(projection('waiting', { waiting_for: 'effect', reason: '工具结果未记录',
       actions: { pause: false, stop: false, resume: false, abandon: true } })));

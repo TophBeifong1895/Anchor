@@ -1533,7 +1533,7 @@ async fn conversation_waiting_recovery_stop_keeps_unknown_attempts_without_execu
     );
     stop_run(&app, &state, &record.run_id).await;
     let stopped = store.load(&record.run_id).unwrap().unwrap();
-    assert_eq!(stopped.recovery, before.recovery);
+    assert_eq!(stopped.recovery(), before.recovery());
     assert_eq!(
         stopped
             .view

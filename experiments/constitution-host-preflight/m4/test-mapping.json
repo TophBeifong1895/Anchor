@@ -1,0 +1,212 @@
+{
+  "baseline": "2cef07b",
+  "deleted_tests": [],
+  "renamed_or_replaced": [
+    {
+      "file": "rust/anchor-runtime/src/graph/tests.rs",
+      "old": "created_records_carry_started_and_updated_timestamps",
+      "new": "created_records_carry_admission_timestamp_without_lifecycle_observations",
+      "disposition": "renamed or equivalent Kernel assertion; no test deleted"
+    },
+    {
+      "file": "rust/anchor-runtime/src/graph/tests/migrated_crash.rs",
+      "old": "file_run_store_recovers_completed_node_and_artifact_facts_after_process_crash",
+      "new": "kernel_file_store_recovers_completed_node_and_artifact_facts_after_process_crash",
+      "disposition": "renamed or equivalent Kernel assertion; no test deleted"
+    },
+    {
+      "file": "rust/anchor-runtime/src/graph/tests/migrated_crash.rs",
+      "old": "file_run_store_recovers_not_started_invocation_after_process_crash",
+      "new": "kernel_file_store_recovers_not_started_invocation_after_process_crash",
+      "disposition": "renamed or equivalent Kernel assertion; no test deleted"
+    },
+    {
+      "file": "rust/anchor-runtime/src/graph/tests/migrated_crash.rs",
+      "old": "parallel_wave_recovers_each_branch_after_process_crash",
+      "new": "kernel_parallel_activation_recovers_each_branch_after_process_crash",
+      "disposition": "renamed or equivalent Kernel assertion; no test deleted"
+    },
+    {
+      "file": "rust/anchor-runtime/src/graph/tests/migrated_crash.rs",
+      "old": "file_run_store_recovers_durable_failed_node_without_replay_or_freeze",
+      "new": "kernel_file_store_recovers_durable_failed_node_without_replay_or_freeze",
+      "disposition": "renamed or equivalent Kernel assertion; no test deleted"
+    },
+    {
+      "file": "rust/anchor-runtime/src/graph/tests/migrated_crash.rs",
+      "old": "graph_runner_recovery_process_helper",
+      "new": "kernel_scheduler_recovery_process_helper",
+      "disposition": "renamed or equivalent Kernel assertion; no test deleted"
+    },
+    {
+      "file": "rust/anchor-runtime/src/graph/tests/migrated_leases.rs",
+      "old": "file_run_store_read_leases_coexist_and_each_blocks_writers",
+      "new": "file_run_lease_provider_read_leases_coexist_and_each_blocks_writers",
+      "disposition": "renamed or equivalent Kernel assertion; no test deleted"
+    },
+    {
+      "file": "rust/anchor-runtime/src/graph/tests/migrated_leases.rs",
+      "old": "file_run_store_read_and_write_leases_preserve_lock_identity",
+      "new": "file_run_lease_provider_read_and_write_leases_preserve_lock_identity",
+      "disposition": "renamed or equivalent Kernel assertion; no test deleted"
+    },
+    {
+      "file": "rust/anchor-runtime/src/graph/tests/migrated_leases.rs",
+      "old": "file_run_store_read_and_write_leases_reject_invalid_run_ids",
+      "new": "file_run_lease_provider_read_and_write_leases_reject_invalid_run_ids",
+      "disposition": "renamed or equivalent Kernel assertion; no test deleted"
+    },
+    {
+      "file": "rust/anchor-runtime/src/graph/tests/migrated_leases.rs",
+      "old": "file_run_store_roundtrips_rejects_corruption_and_releases_lease_after_process_crash",
+      "new": "kernel_file_store_rejects_corruption_and_run_lease_releases_after_process_crash",
+      "disposition": "renamed or equivalent Kernel assertion; no test deleted"
+    },
+    {
+      "file": "rust/anchor-runtime/src/graph/tests/migrated_leases.rs",
+      "old": "file_run_store_lease_process_helper",
+      "new": "file_run_lease_process_helper",
+      "disposition": "renamed or equivalent Kernel assertion; no test deleted"
+    },
+    {
+      "file": "rust/anchor-runtime/src/graph/tests/migrated_lifecycle.rs",
+      "old": "waiting_recovery_preserves_cursor_and_direct_graph_resume_cannot_bypass_it",
+      "new": "waiting_recovery_preserves_dispatch_identity_and_scheduler_reentry_cannot_bypass_it",
+      "disposition": "renamed or equivalent Kernel assertion; no test deleted"
+    },
+    {
+      "file": "rust/anchor-runtime/src/graph/tests/migrated_lifecycle.rs",
+      "old": "stopped_conversation_run_can_retain_unknown_recovery_attempts",
+      "new": "human_stop_retains_unknown_recovery_observation_in_kernel_history",
+      "disposition": "renamed or equivalent Kernel assertion; no test deleted"
+    },
+    {
+      "file": "rust/anchor-runtime/src/graph/tests/migrated_lifecycle.rs",
+      "old": "budget_stop_keeps_cursor_and_resume_uses_same_invocation",
+      "new": "budget_stop_preserves_dispatch_identity_and_resume_uses_same_invocation",
+      "disposition": "renamed or equivalent Kernel assertion; no test deleted"
+    },
+    {
+      "file": "rust/anchor-runtime/src/graph/tests/migrated_lifecycle.rs",
+      "old": "graph_runner_dispatches_durable_resumable_node_with_same_invocation",
+      "new": "kernel_scheduler_dispatches_durable_resumable_node_with_same_invocation",
+      "disposition": "renamed or equivalent Kernel assertion; no test deleted"
+    },
+    {
+      "file": "rust/anchor-runtime/src/graph/tests/migrated_lifecycle.rs",
+      "old": "stop_before_dispatch_and_executor_cancel_preserve_safe_cursor",
+      "new": "stop_before_dispatch_and_executor_cancel_preserve_pending_dispatch",
+      "disposition": "renamed or equivalent Kernel assertion; no test deleted"
+    },
+    {
+      "file": "rust/anchor-runtime/src/graph/tests/migrated_lifecycle.rs",
+      "old": "run_rejects_cursor_identity_mismatch_before_dispatch",
+      "new": "legacy_cursor_payload_is_refused_while_frontier_identity_remains_authoritative",
+      "disposition": "renamed or equivalent Kernel assertion; no test deleted"
+    },
+    {
+      "file": "rust/anchor-runtime/src/graph/tests/migrated_lifecycle.rs",
+      "old": "reentering_a_terminal_run_does_not_advance_the_write_stamp",
+      "new": "reentering_a_terminal_run_does_not_advance_kernel_version_or_history",
+      "disposition": "renamed or equivalent Kernel assertion; no test deleted"
+    },
+    {
+      "file": "rust/anchor-runtime/src/graph/tests/migrated_lifecycle.rs",
+      "old": "persist_stamps_updated_and_keeps_memory_in_step_with_disk",
+      "new": "kernel_history_commit_preserves_graph_admission_across_file_reload",
+      "disposition": "renamed or equivalent Kernel assertion; no test deleted"
+    },
+    {
+      "file": "rust/anchor-runtime/src/graph/tests/migrated_plugins.rs",
+      "old": "legacy_in_progress_plugin_run_without_binding_fails_closed",
+      "new": "plugin_run_without_admitted_binding_fails_before_dispatch",
+      "disposition": "renamed or equivalent Kernel assertion; no test deleted"
+    },
+    {
+      "file": "rust/anchor-runtime/src/graph/tests/migrated_plugins.rs",
+      "old": "admission_accepts_paired_parallel_topology_and_runner_executes_control_ops",
+      "new": "admission_accepts_paired_parallel_topology_and_kernel_scheduler_executes_control_ops",
+      "disposition": "renamed or equivalent Kernel assertion; no test deleted"
+    },
+    {
+      "file": "rust/anchor-runtime/src/graph/tests/migrated_reload.rs",
+      "old": "serial_file_store_reload_resumes_same_invocation_after_interruption",
+      "new": "serial_kernel_file_store_reload_resumes_same_invocation_after_budget_stop",
+      "disposition": "renamed or equivalent Kernel assertion; no test deleted"
+    },
+    {
+      "file": "rust/anchor-runtime/src/graph/tests/migrated_reload.rs",
+      "old": "serial_interrupted_file_store_reload_resumes_same_invocation_and_clears_error",
+      "new": "serial_interrupted_file_store_reload_resumes_same_invocation_and_settles_done",
+      "disposition": "renamed or equivalent Kernel assertion; no test deleted"
+    },
+    {
+      "file": "rust/anchor-runtime/src/graph/tests/migrated_reload.rs",
+      "old": "parallel_resume_keeps_completed_branch_and_reuses_budget_cursor",
+      "new": "parallel_resume_keeps_completed_branch_and_reuses_budget_dispatch",
+      "disposition": "renamed or equivalent Kernel assertion; no test deleted"
+    },
+    {
+      "file": "rust/anchor-runtime/src/graph/tests/migrated_reload.rs",
+      "old": "parallel_file_store_roundtrip_preserves_activation_and_branch_cursors",
+      "new": "parallel_kernel_file_store_roundtrip_preserves_activation_and_branch_dispatch",
+      "disposition": "renamed or equivalent Kernel assertion; no test deleted"
+    },
+    {
+      "file": "rust/anchor-runtime/src/graph/tests/migrated_reload.rs",
+      "old": "parallel_interrupted_file_store_reload_preserves_completed_branch_and_clears_error",
+      "new": "parallel_interrupted_file_store_reload_preserves_completed_branch_and_settles_done",
+      "disposition": "renamed or equivalent Kernel assertion; no test deleted"
+    },
+    {
+      "file": "rust/anchor-runtime/src/graph/tests/migrated_scenarios.rs",
+      "old": "graph_runner_preserves_recorded_runtime_scenarios",
+      "new": "kernel_scheduler_preserves_recorded_runtime_scenarios",
+      "disposition": "renamed or equivalent Kernel assertion; no test deleted"
+    },
+    {
+      "file": "rust/anchor-runtime/src/graph/tests/migrated_storage.rs",
+      "old": "completion_fact_closes_run_store_crash_window_without_reexecution",
+      "new": "completion_fact_survives_kernel_commit_failure_without_reexecution",
+      "disposition": "renamed or equivalent Kernel assertion; no test deleted"
+    },
+    {
+      "file": "rust/anchor-runtime/src/graph/tests/migrated_storage.rs",
+      "old": "durable_run_save_feedback_error_requires_reloading_before_resume",
+      "new": "durable_kernel_commit_feedback_error_preserves_result_across_reload",
+      "disposition": "renamed or equivalent Kernel assertion; no test deleted"
+    },
+    {
+      "file": "rust/anchor-runtime/src/graph/tests/migrated_storage.rs",
+      "old": "old_run_formats_are_named_refusals_on_decode_and_file_load",
+      "new": "legacy_run_formats_are_named_refusals_on_decode_and_kernel_resource_read",
+      "disposition": "renamed or equivalent Kernel assertion; no test deleted"
+    },
+    {
+      "file": "rust/anchor-runtime/src/graph/tests/migrated_storage.rs",
+      "old": "old_cursor_counter_timing_is_named_refusal_without_rewrite",
+      "new": "legacy_cursor_payload_is_named_refusal_without_resource_rewrite",
+      "disposition": "renamed or equivalent Kernel assertion; no test deleted"
+    },
+    {
+      "file": "rust/anchor-runtime/src/graph/tests/migrated_validation.rs",
+      "old": "parallel_activation_facts_bind_pair_branch_paths_and_active_cursors",
+      "new": "parallel_activation_facts_bind_pair_and_branch_progress_and_refuse_legacy_cursors",
+      "disposition": "renamed or equivalent Kernel assertion; no test deleted"
+    },
+    {
+      "file": "rust/anchor-runtime/src/graph/tests/migrated_validation.rs",
+      "old": "file_run_store_rejects_edge_decision_not_newer_than_its_result",
+      "new": "graph_record_validation_rejects_edge_decision_not_newer_than_its_result",
+      "disposition": "renamed or equivalent Kernel assertion; no test deleted"
+    },
+    {
+      "file": "rust/anchor-runtime/src/graph/tests/migrated_validation.rs",
+      "old": "file_run_store_rejects_damaged_result_and_edge_facts",
+      "new": "kernel_graph_validation_rejects_damaged_result_and_edge_facts",
+      "disposition": "renamed or equivalent Kernel assertion; no test deleted"
+    }
+  ],
+  "existing_tests_ignored": 0,
+  "frozen_snapshots_changed": false
+}

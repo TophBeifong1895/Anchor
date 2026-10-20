@@ -1,0 +1,140 @@
+{
+  "parent_commit": "a98757a74e4458bcf0c6dbe82b378b09e968be5d",
+  "task_book_commit": "2cef07b",
+  "paths": {
+    "apps/web/src/ChannelSessions.test.tsx": {
+      "sha256": "ee770187049fce7886d49f38480f8cbefc6a0d03b52a76aecaf215ab3284f28d",
+      "git_blob": "4e451daf1afa9c40c853e9b5b35107c69bc3ccf8"
+    },
+    "apps/web/src/RunDetailPage.test.tsx": {
+      "sha256": "0ddaca0f0fd92aa4ffd16c376eae5ed51c73c654dc4a57a46ce98a51ec1e405d",
+      "git_blob": "14e1af2ba94695675981c07747c6013c079b4608"
+    },
+    "apps/web/src/TimelinePreview.test.tsx": {
+      "sha256": "230362ef513e0083a3756a201d6a75ce65ac1ba9e9b0e407836ef23b154fa62c",
+      "git_blob": "5c4f70dd76ae4ba3f2171c8253e9998953da159d"
+    },
+    "rust/anchor-runner-host/src/api/tests.rs": {
+      "sha256": "bdec68424877315b3e8da5487924cea7a363852a37ee26dac112b086b85d10da",
+      "git_blob": "641240ff60d8544e187fc783eb9266eb9005d7b9"
+    },
+    "rust/anchor-runner-host/src/api/tests/conversations.rs": {
+      "sha256": "5776c05020c751b3f36cdf0219147b54deacffe94ede3246ee45a007e73e004a",
+      "git_blob": "c5adfcaae141dd3b3fe469b3f80b2ab35ad30dc4"
+    },
+    "rust/anchor-runner-host/src/api/tests/kernel_probe/calls.rs": {
+      "sha256": "3b659ec791e73a1baa7d2781e8e4536c4cf3c352251d3df602db44e615f4d12a",
+      "git_blob": "2d08595041f6cff91bc7fff1b88c95d415262901"
+    },
+    "rust/anchor-runner-host/src/api/tests/kernel_probe/calls/recovery.rs": {
+      "sha256": "d94cad0cec0649b6a09f61f7458d875db96bbb65efc82b6aeb085e4c122c9c5b",
+      "git_blob": "268969e8835fc018092b7973881a1eff34b7c592"
+    },
+    "rust/anchor-runner-host/src/api/tests/run_abandon.rs": {
+      "sha256": "6dbed82e1a158e00e2eba53d3c48eb43e0085321f54d72ecc893cc6a68db8f6f",
+      "git_blob": "46f33d95dee655672d74585bf167659078e5dc38"
+    },
+    "rust/anchor-runner-host/src/application/run_access.rs": {
+      "sha256": "44135b69ebe76980eb6e02d7e7ac652b48c7e5c8dbaee7cd060e9aaa18ed2f23",
+      "git_blob": "b8e4400196e2ba31d93f6dd05631d5055de69a78"
+    },
+    "rust/anchor-runner-host/src/application/run_access/fixtures.rs": {
+      "sha256": "67e426c55103098a44d5e69b27daa011d3e9437c51829a328de635e94cad22f6",
+      "git_blob": "02387e6c727dc54927508e7fd7e5b861e51ab67d"
+    },
+    "rust/anchor-runner-host/src/application/run_access/http.rs": {
+      "sha256": "c4818d887edc8ebaa0872410f8f3a6aff62f8696a00ffbbb7832653b32a69a5f",
+      "git_blob": "5c72e75383a2d8804168606b1f132d7a67c69e6c"
+    },
+    "rust/anchor-runner-host/src/application/run_access/kernel_runs/recovery.rs": {
+      "sha256": "d20d0f98b1401be8f5678d8159e8dc1d62a22adb89f0c7abc10cc32f76f72009",
+      "git_blob": "494e9f74669ebf9925e0e62c9ba36add1688309d"
+    },
+    "rust/anchor-runner-host/src/application/run_access/kernel_runs/tests/recovery.rs": {
+      "sha256": "8fca64aa26c32eea48601a96063de67e77207b3a47afa9c94c0123067c148e7a",
+      "git_blob": "ee3dcbe594effd0c851c8b046ffafac0889d0d2a"
+    },
+    "rust/anchor-runner-host/src/application/run_access/reads.rs": {
+      "sha256": "1271bc73e50f19bfa723f8ea54e843d295a32ca7d1be1e03cdec0f4919d48972",
+      "git_blob": "1d6231064c2a1d11f7a821d31a9f5752823ece04"
+    },
+    "rust/anchor-runner-host/src/application/run_access/recovery.rs": {
+      "sha256": "9f8902cf8aefb6ed98697a9b6a90ec3e2fda6bdb3dfef55718da84e421aa8391",
+      "git_blob": "6a58a8b8c267140805ddb4ad1614fc8757ce9b04"
+    },
+    "rust/anchor-runner-host/src/application/run_access/run_view.rs": {
+      "sha256": "440de88b060308fa152b12509274ce8fb6013bac27e19f170651baa669e350c9",
+      "git_blob": "58ff7b0dabb4b501f213229ef4d4a698a2709fdb"
+    },
+    "rust/anchor-runtime/src/graph/ports.rs": {
+      "sha256": "bc74a78164b4edf25c350510a679f266dfd65e68a934d58d38aeec6a457f2e40",
+      "git_blob": "e5f274822b0c6d70492af9901e8d06fa82af72b5"
+    },
+    "rust/anchor-runtime/src/graph/state.rs": {
+      "sha256": "eca71daffc8eeb6828aea93e08db5a7d761f3609eb458d0568b9ade04b8a0b45",
+      "git_blob": "23ea3f1ec4db0172dd121d5737b7ada0c8e3723e"
+    },
+    "rust/anchor-runtime/src/graph/test_support/snapshots.rs": {
+      "sha256": "5f73d3a81355916e2183603b1bec541d7a735b5482455c47e7373aac15e9f5dd",
+      "git_blob": "2b648e25b03328fe2dc5216874b53549529a2959"
+    },
+    "rust/anchor-runtime/src/graph/tests.rs": {
+      "sha256": "b11a3e619b12ec0cb4715e93e909b5465dc67c9d5cec124487c87db06d5c1c42",
+      "git_blob": "cd8f9f2ed0447c14a5eac56651338cb4a9b7ee1f"
+    },
+    "rust/anchor-runtime/src/graph/tests/host_operations.rs": {
+      "sha256": "b83dd966355d376e52b88377070c1b0facf6adedfe86b043eada4a386f1a19bd",
+      "git_blob": "e101e3597d5ab4420cb655b481ca08df31657bae"
+    },
+    "rust/anchor-runtime/src/graph/tests/migrated_crash.rs": {
+      "sha256": "442511caa15b6338290aeeeda3ef736af8fc3ddc89587c1fab91e1d972e61b5c",
+      "git_blob": "4835c2120a754058bb61738f9ab9bdd6c390ff73"
+    },
+    "rust/anchor-runtime/src/graph/tests/migrated_leases.rs": {
+      "sha256": "4daf53670871d9fe85dad9eb3f2626cf60d6861422cf47f74acd0c91d00f89ee",
+      "git_blob": "a530c1e2f8dd76dd06e1fc48633b3d5853008e6b"
+    },
+    "rust/anchor-runtime/src/graph/tests/migrated_lifecycle.rs": {
+      "sha256": "94af8f5f157ee543056f5371d36f6d0508bb35c09a195b051c78cc8f615cb57c",
+      "git_blob": "61a9fd7fabb8fe282c26647874bdd6e2ca3865c9"
+    },
+    "rust/anchor-runtime/src/graph/tests/migrated_plugins.rs": {
+      "sha256": "2bddb01ac24ee04ff811f056560f43fe337c27703799045f8caa3f6c99134b43",
+      "git_blob": "09318bae124c16d1044e284416c1d46d23b49d71"
+    },
+    "rust/anchor-runtime/src/graph/tests/migrated_reload.rs": {
+      "sha256": "42a3eb5ae4eda322c7c0dceca855e4eff6881ed47340c284b06546764cab3c9b",
+      "git_blob": "eade63ae51f540ffff0dd28fab1a156d5258e012"
+    },
+    "rust/anchor-runtime/src/graph/tests/migrated_scenarios.rs": {
+      "sha256": "18db0b31fb6be86ce324f97d826770f8d7c93d0beb336671ba9201cfb2da0969",
+      "git_blob": "19437fdb0c18374546e712e72cbdb4e789ad8e3b"
+    },
+    "rust/anchor-runtime/src/graph/tests/migrated_storage.rs": {
+      "sha256": "ce5249d287a1e334989964206b245137c3b12e077a13c8b96b455d42d9d2cd0e",
+      "git_blob": "26ab17f47a1d11ffa9ca6d5745eaaf6a3632a49d"
+    },
+    "rust/anchor-runtime/src/graph/tests/migrated_validation.rs": {
+      "sha256": "ff08669e09e5f5948d197b7574d39fa090ae60f8fd1cc241ce90fd33da6efb07",
+      "git_blob": "1ace8eef365087cd1dd34f66bffe2f2bc8a6b4e0"
+    }
+  },
+  "external_commit": "a98757a74e4458bcf0c6dbe82b378b09e968be5d",
+  "external_test_functions": [
+    "idle_assistant_input_checks_do_not_request_a_database_writer",
+    "replaying_a_claimed_assistant_input_does_not_request_a_database_writer",
+    "assistant_claim_rechecks_input_key_and_binding_after_waiting_for_a_writer"
+  ],
+  "owned_source_files_unchanged": 29,
+  "concurrent_external_source_changes": [
+    "rust/anchor-rsi/src/redact.rs",
+    "rust/anchor-rsi/tests/weekly.rs"
+  ],
+  "goose_start_head": "a98757a74e4458bcf0c6dbe82b378b09e968be5d",
+  "external_documentation_commit": "7b7fa5948c7a5957a6d09f85094acc526b1f99f8",
+  "verification_source_base": "a98757a74e4458bcf0c6dbe82b378b09e968be5d",
+  "full_source_manifest_path": "/tmp/anchor-m4/source-goose-start.json",
+  "full_source_manifest_sha256": "ca0f7a9e1e7587ceb798be3b1bc55a515b4db96fda42cb641d57827c15d21ece",
+  "external_source_changes_included_in_m4_commit": false,
+  "external_source_changes_included_in_goose_binary": false
+}

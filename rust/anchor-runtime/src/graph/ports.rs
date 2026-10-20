@@ -308,8 +308,8 @@ pub struct PendingRecovery {
     pub attempt: RecoveryAttempt,
 }
 
-/// Durable operator decision for one exact Harness attempt. Keeping this in
-/// the Graph Run makes resubmission idempotent after the pending list advances.
+/// Durable operator decision for one exact Harness attempt. Kernel history
+/// retains decisions for idempotent resubmission after pending attempts advance.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RecoverySubmission {

@@ -513,13 +513,21 @@ fn expanded_graph_snapshot_fixture_preserves_node_policy() {
 }
 
 #[test]
-fn created_records_carry_started_and_updated_timestamps() {
+fn created_records_carry_admission_timestamp_without_lifecycle_observations() {
     let record = GraphRunRecord::create(graph(&["one"], &[], "one"), Value::Null).unwrap();
     assert_eq!(record.format, RUN_RECORD_FORMAT);
-    for stamp in [&record.started, &record.updated] {
-        let text = stamp.as_deref().expect("new records carry both timestamps");
-        assert!(text.ends_with('Z'), "{text}");
-        assert!(text.len() >= 20, "{text}");
+    let text = record
+        .started
+        .as_deref()
+        .expect("new records carry admission time");
+    assert!(text.ends_with('Z'), "{text}");
+    assert!(text.len() >= 20, "{text}");
+    let value = serde_json::to_value(&record).unwrap();
+    for field in ["updated", "error", "recovery", "recovery_submissions"] {
+        assert!(
+            value.get(field).is_none(),
+            "{field} belongs outside Graph facts"
+        );
     }
     record.validate().unwrap();
 }
@@ -601,7 +609,7 @@ fn run_record_decode_preserves_duplicate_field_rejection() {
     );
     let json = serde_json::to_string(&record).unwrap();
     for (field, duplicate) in [
-        ("\"format\":14", "\"format\":14,\"format\":14"),
+        ("\"format\":15", "\"format\":15,\"format\":15"),
         (
             "\"entry\":\"work\"",
             "\"entry\":\"other\",\"entry\":\"work\"",

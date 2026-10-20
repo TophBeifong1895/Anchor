@@ -593,7 +593,7 @@ async fn abandon_keeps_the_assistant_binding_workspace_and_history_for_handover(
     assert_eq!(after.input, before.input);
     assert_eq!(after.invocations, before.invocations);
     assert_eq!(after.results, before.results);
-    assert_eq!(after.recovery, before.recovery);
+    assert_eq!(after.recovery(), before.recovery());
     assert_eq!(after.plugin_bindings, before.plugin_bindings);
 
     // Nothing was retired or deleted, and the in-flight round was settled with
@@ -696,7 +696,7 @@ async fn abandon_leaves_other_runs_and_their_recovery_entry_points_unchanged() {
     let durable = record_of(&state, "abandon-recovery-target");
     assert!(is_aborted(&durable));
     // Unresolved attempts stay as read-only facts, exactly like a stop.
-    assert_eq!(durable.recovery, abandoned.recovery);
+    assert_eq!(durable.recovery(), abandoned.recovery());
     assert_eq!(durable.invocations, abandoned.invocations);
     assert_eq!(durable.results, abandoned.results);
 
@@ -734,8 +734,8 @@ async fn abandon_leaves_other_runs_and_their_recovery_entry_points_unchanged() {
             .has_pending_recovery()
     );
     assert_eq!(
-        record_of(&state, "abandon-recovery-sibling").recovery,
-        sibling.recovery
+        record_of(&state, "abandon-recovery-sibling").recovery(),
+        sibling.recovery()
     );
     assert!(state.application.active_runs(None).await.is_empty());
 

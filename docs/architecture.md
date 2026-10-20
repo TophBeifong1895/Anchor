@@ -38,7 +38,7 @@ Artifact、节点历史、工作区、Run / Session / Turn 事实
 
 GraphValidator 已支持并行分支内模块作用域：同一并行激活内共享模块首次从外部进入时计一次，后续激活重入递增，模块上限按首次终结事实结算。入口、成员 passes 与嵌套计数重置由纯校验逻辑决定；读取 frontier 不消费激活，也不增加持久化字段。该能力已通过内核用例与 5,000 个模块随机样本；Host 的 KernelScheduler 已接通多槽位并发，单个结果提交后即可补位，慢分支不形成波次屏障。串行 Op.call 复用共享调用准入、输入暂存与结果导出，父子 Run 都走 Kernel；宿主提交 Bound 后等待子 Run，观察结算后提交 resume 及 Completed/Failed/Uncertain。并行分支中的 Call 由共用的 Host 准入 `reject_snapshot` 具名拒绝，不扩展校验器，见 [M2 产品准入边界](../experiments/constitution-host-preflight/m2/parallel-call-boundary.md)。
 
-所有新 Run（HTTP、渠道、助手、子调用与独立宿主）都通过 `application/run_access` 接入共享 `KernelScheduler<S: Store>`，不再按存储分派。`POST /trigger` 不接受 `execution` 选择字段。调度器读取 Kernel 相位与 GraphValidator 开放空位，经 NodeExecutionPort / ArtifactPort 并发执行并提交。Run 只存于 `<state>/kernel-runs` 的 Kernel FileStore（资源 ID `run/{run_id}`），由单个 Host writer 持有文件锁；旧 `<state>/runs/*.json` 只检查存在性并以 `legacy_run_record` 具名拒绝，不读取内容。GraphRunRecord format 14；旧格式（含 M2 format 13）不兼容，开发状态清理见 M3 交回。
+所有新 Run（HTTP、渠道、助手、子调用与独立宿主）都通过 `application/run_access` 接入共享 `KernelScheduler<S: Store>`，不再按存储分派。`POST /trigger` 不接受 `execution` 选择字段。调度器读取 Kernel 相位与 GraphValidator 开放空位，经 NodeExecutionPort / ArtifactPort 并发执行并提交。Run 只存于 `<state>/kernel-runs` 的 Kernel FileStore（资源 ID `run/{run_id}`），由单个 Host writer 持有文件锁；旧 `<state>/runs/*.json` 只检查存在性并以 `legacy_run_record` 具名拒绝，不读取内容。GraphRunRecord format 15；旧格式 1–14 不兼容，开发状态清理见 M3 交回。Graph 记录不再持有 error/recovery/recovery_submissions/updated；失败原因来自 Kernel 结算，恢复观察/人工决定来自已接受 history，更新时间归 Host RunObservations。字段归属见 [M4 审计](../experiments/constitution-host-preflight/m4/field-disposition.md)。
 
 宿主Rust文件租约统一使用 `anchor-file-lease::FileLease`，保留各调用者的共享/独占、阻塞/非阻塞策略，Drop先显式解锁再关闭文件，提前返回与panic同样释放；避免fork继承的描述符延长父进程锁持有。
 

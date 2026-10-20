@@ -80,11 +80,22 @@ impl KernelRuns {
         id: &str,
     ) -> Result<(Vec<PendingRecovery>, Vec<RecoverySubmission>), ApplicationError> {
         let resource = self.load(id)?.ok_or(ApplicationError::Missing)?;
-        let record = record_of(&resource)?;
-        let frontier = GraphValidator::frontier(&resource)?;
+        Self::project_recovery(
+            &resource,
+            self.kernel.history(&resource.id).map_err(kernel_error)?,
+        )
+    }
+
+    /// Pure projection shared by the live facade and read-only disk access.
+    pub(in crate::application::run_access) fn project_recovery(
+        resource: &Resource,
+        history: Vec<anchor_kernel::Record>,
+    ) -> Result<(Vec<PendingRecovery>, Vec<RecoverySubmission>), ApplicationError> {
+        let record = record_of(resource)?;
+        let frontier = GraphValidator::frontier(resource)?;
         let mut pending = Vec::new();
         let mut decisions: Vec<RecoverySubmission> = Vec::new();
-        for entry in self.kernel.history(&resource.id).map_err(kernel_error)? {
+        for entry in history {
             if !entry.verdict.is_accepted() {
                 continue;
             }

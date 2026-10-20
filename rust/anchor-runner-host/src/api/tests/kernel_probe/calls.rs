@@ -173,10 +173,10 @@ async fn kernel_op_call_wait_hands_off_input_map_files_and_selected_result() {
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
     }
     let parent_record = store.load(&parent_id).unwrap().unwrap();
-    assert!(parent_record.has_succeeded(), "{:?}", parent_record.error);
+    assert!(parent_record.has_succeeded(), "{:?}", parent_record.phase);
     assert!(!child_id.is_empty(), "parent did not admit a child Run");
     let child_record = store.load(&child_id).unwrap().unwrap();
-    assert!(child_record.has_succeeded(), "{:?}", child_record.error);
+    assert!(child_record.has_succeeded(), "{:?}", child_record.phase);
     // `input` constants override and `input_map` pointers select the parent input,
     // all merged under the child's own declared input.
     assert_eq!(child_record.input["constant"], "yes");

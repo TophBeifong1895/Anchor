@@ -85,13 +85,13 @@ async fn plugin_code_changes_resume_and_are_observed_per_call() {
     current.digest = "code-v2".into();
     current.resources.push("skills/new/SKILL.md".into());
     *nodes.resolved_plugins.lock().unwrap() = vec![current.clone()];
-    let cursor = harness.pending_input(&artifacts, "work").await;
+    let dispatch_input = harness.pending_input(&artifacts, "work").await;
     nodes.observed_views.lock().unwrap().insert(
-        cursor.key.durable_key(),
+        dispatch_input.key.durable_key(),
         BTreeMap::from([("review".to_owned(), "view-v2".to_owned())]),
     );
     nodes.observed_digests.lock().unwrap().insert(
-        cursor.key.durable_key(),
+        dispatch_input.key.durable_key(),
         BTreeMap::from([("review".to_owned(), "code-v2".to_owned())]),
     );
     assert!(harness.request("resume").is_accepted());
@@ -209,7 +209,7 @@ async fn a_node_call_records_the_dependency_view_it_used() {
 }
 
 #[tokio::test]
-async fn legacy_in_progress_plugin_run_without_binding_fails_closed() {
+async fn plugin_run_without_admitted_binding_fails_before_dispatch() {
     let mut snapshot = graph(&["work"], &[], "work");
     snapshot.nodes[0].plugins = vec!["review".into()];
     let nodes = FakeNodes {
@@ -225,8 +225,8 @@ async fn legacy_in_progress_plugin_run_without_binding_fails_closed() {
         ..Default::default()
     };
     let artifacts = MemoryArtifacts::default();
-    let legacy = GraphRunRecord::create(snapshot, Value::Null).unwrap();
-    let harness = Harness::memory(legacy);
+    let unbound = GraphRunRecord::create(snapshot, Value::Null).unwrap();
+    let harness = Harness::memory(unbound);
     harness.run(&artifacts, &nodes).await.unwrap();
     assert!(matches!(
         harness.phase(),
@@ -360,7 +360,7 @@ async fn a_new_run_does_not_bind_plugins_without_a_current_authorization_baselin
 }
 
 #[tokio::test]
-async fn admission_accepts_paired_parallel_topology_and_runner_executes_control_ops() {
+async fn admission_accepts_paired_parallel_topology_and_kernel_scheduler_executes_control_ops() {
     let mut plugin_snapshot = graph(&["one"], &[], "one");
     plugin_snapshot.nodes[0].plugins = vec!["p".into()];
     let nodes = FakeNodes::default();

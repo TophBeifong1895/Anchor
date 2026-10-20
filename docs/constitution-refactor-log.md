@@ -1,6 +1,6 @@
 # 宪法内核重构：工作记录
 
-分支 `constitution-core`，worktree `/home/mansteinl/code/anchor-constitution-core`，基于 master `fc558e2`。设计依据：[docs/anchor-constitution.md](anchor-constitution.md)；概念验证：[experiments/constitution-poc](../experiments/constitution-poc/README.md)。
+起点为分支 `constitution-core`（基于 master `fc558e2`）；M3 已快进 master，M4 起只在 `/home/mansteinl/Anchor` 工作。旧分支 worktree 只读保留。设计依据：[docs/anchor-constitution.md](anchor-constitution.md)；概念验证：[experiments/constitution-poc](../experiments/constitution-poc/README.md)。
 
 本文记录每一刀的实际结果、数字和语义变更。它是分支内的工作记录，不是进度台账。
 
@@ -1277,3 +1277,29 @@ C2 save 0、mutation 0；Kernel 相对 `0859373` 零 diff，GraphValidator 裁�
 全部门槛通过：workspace **2,197 / 0 / 126**（132 targets）、Web **356** 及构建、浏览器 **10 / 0**、完整固定 Goose **123 / 0 / 0**（41 targets）；新增 canonical-account 用例独跑亦通过，七个二进制身份前后一致。C1 零 diff、C2 save 0/mutation 0、围栏不变，master 新增 45 个 Rust 测试全部保留。3 类机械夹具/词汇适配，删除测试 0、既有测试新增 ignore 0、业务断言放宽 0、新增 S 0；S27 已批准并结清 S4。[最终交回及逐 target 证据](../experiments/constitution-host-preflight/m3/merge-verification.md)。
 
 本分支包含 `dfd3427`，待审查后由 master 一侧快进；未修改 master 工作区，M4/M5 未开始。W4、真实模型 Provider、外部渠道实网与部署仍未验。
+
+### M4 §10.19：字段归属与旧机制收尾
+
+M3 已快进 master，M4 在 /home/mansteinl/Anchor 实施。GraphRunRecord 删除 error/recovery/recovery_submissions/updated 及 touch，恢复读取归 RunView 的 Kernel history 投影，失败原因归 Kernel 结算；HTTP 展示键保留，Web 失败及恢复提示保留。sequence/format 的保留理由及全部业务字段归属见 [字段表](../experiments/constitution-host-preflight/m4/field-disposition.md)；四个指定 CompletionFact 均为当前执行端口协议，无可删。schema 15 对旧 1–14 及旧字段具名拒绝，不迁移开发数据。
+
+M4 全部门槛通过：workspace 2,200 / 0 / 126、Web 359 及构建、完整固定 Goose 123 / 0 / 0，七个二进制身份前后一致；Clippy/fmt、围栏、C1/C2 通过。结论及最终证据集中于 [M4 交回](../experiments/constitution-host-preflight/m4/verification.md)，不以本段代替验收。
+
+#### S 候选
+
+| 候选 | 结论 |
+| --- | --- |
+| 无新增 | 0 条；Kernel、Graph 裁决、Session 控制及业务行为不变。 |
+
+#### 断言修改
+
+| 范围 | 处置 |
+| --- | --- |
+| M4A1–M4A9 | 状态展示、旧记录容器/时间、C6 及机制名称共 9 类；[逐项登记](../experiments/constitution-host-preflight/m4/assertion-mapping.md)。业务断言放宽 0，新增 3 项 Web 展示/动作回归。 |
+
+#### 删除测试映射
+
+| 范围 | 映射 |
+| --- | --- |
+| 旧机制测试及 helper | 34 个函数改名或等价替换；删除测试 0、新增既有 ignore 0、冻结快照修改 0；[机器清单](../experiments/constitution-host-preflight/m4/test-mapping.json)。 |
+
+M5 未开始，不推送；W4、真实模型 Provider、外部渠道实网与部署未验。

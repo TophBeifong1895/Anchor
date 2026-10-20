@@ -1,5 +1,5 @@
 #[test]
-fn parallel_activation_facts_bind_pair_branch_paths_and_active_cursors() {
+fn parallel_activation_facts_bind_pair_and_branch_progress_and_refuse_legacy_cursors() {
     let snapshot = parallel_graph();
     let mut record = GraphRunRecord::create(snapshot, Value::Null).unwrap();
     let fanout_key = InvocationKey {
@@ -86,7 +86,7 @@ fn parallel_activation_facts_bind_pair_branch_paths_and_active_cursors() {
 }
 
 #[test]
-fn file_run_store_rejects_edge_decision_not_newer_than_its_result() {
+fn graph_record_validation_rejects_edge_decision_not_newer_than_its_result() {
     let mut record =
         GraphRunRecord::create(graph(&["spin"], &[("spin", "spin")], "spin"), Value::Null).unwrap();
     let key = InvocationKey {
@@ -145,7 +145,7 @@ fn file_run_store_rejects_edge_decision_not_newer_than_its_result() {
 }
 
 #[tokio::test]
-async fn file_run_store_rejects_damaged_result_and_edge_facts() {
+async fn kernel_graph_validation_rejects_damaged_result_and_edge_facts() {
     let artifacts = MemoryArtifacts::default();
     let nodes = FakeNodes::default();
     let harness = Harness::memory(

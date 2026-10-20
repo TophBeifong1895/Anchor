@@ -118,7 +118,7 @@ async fn kernel_restart_dispatches_detach_child_only_with_staged_call_inputs() {
             .unwrap()
             .is_some()
     );
-    assert!(child.has_succeeded(), "{:?}", child.error);
+    assert!(child.has_succeeded(), "{:?}", child.phase);
     assert_eq!(
         child.results["answer"][0].completion.submission.trim(),
         "parent-report"

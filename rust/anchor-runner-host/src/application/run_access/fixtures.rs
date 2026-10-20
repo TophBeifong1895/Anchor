@@ -182,8 +182,6 @@ pub(crate) fn scenarios(app: &RunApplication) -> [&'static str; 9] {
 
 pub(crate) fn create(app: &RunApplication, record: &GraphRunRecord) {
     assert!(record.parallel.is_none());
-    assert!(record.recovery.is_empty());
-    assert!(record.recovery_submissions.is_empty());
     assert!(record.graph_calls.is_empty());
     assert!(record.invocations.is_empty());
     assert!(record.passes.is_empty());
@@ -192,7 +190,6 @@ pub(crate) fn create(app: &RunApplication, record: &GraphRunRecord) {
     assert!(record.results.is_empty());
     assert!(record.decided.is_empty());
     assert_eq!(record.sequence, 0);
-    assert!(record.error.is_none());
     app.kernel_runs(true)
         .unwrap()
         .unwrap()
@@ -235,6 +232,7 @@ impl PartialEq for Observation {
     fn eq(&self, other: &Self) -> bool {
         self.record == other.record
             && self.phase == other.phase
+            && self.recovery() == other.recovery()
             && self.view.active() == other.view.active()
             && self.view.updated() == other.view.updated()
     }
@@ -247,6 +245,9 @@ impl PartialEq<GraphRunRecord> for Observation {
 }
 
 impl Observation {
+    pub(crate) fn recovery(&self) -> &[anchor_runtime::graph::PendingRecovery] {
+        &self.view.recovery
+    }
     pub(crate) fn has_succeeded(&self) -> bool {
         self.view.has_succeeded()
     }
