@@ -92,7 +92,8 @@ fn point_of(record: &Record, validator: &str) -> Point {
         verification: record.verdict.verification,
         reason: record.verdict.reason,
         cost: record.stamp.cost(),
-        knobs: record.stamp.knobs().into(),
+        at: record.stamp.at(),
+        config: record.stamp.config().map(str::to_owned),
     }
 }
 

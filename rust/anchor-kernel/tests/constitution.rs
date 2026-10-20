@@ -531,14 +531,18 @@ impl Probe for Counter {
 fn every_verdict_is_recorded_and_measured_including_refusals() {
     let counter = Counter::default();
     let k = kernel().with_probe(Box::new(counter.clone()));
-    k.set_knobs("knobs-v2");
     k.submit(
         &agent(),
         3,
         Submission::new("run/1", 0, Action::Write).slot("writer"),
     )
     .unwrap();
-    k.submit(&agent(), 4, work(&k, "writer", "review")).unwrap();
+    k.submit(
+        &agent().with_config("config-v2"),
+        4,
+        work(&k, "writer", "review"),
+    )
+    .unwrap();
     let history = k.history("run/1").unwrap();
     assert_eq!(history.len(), 2);
     assert_eq!(history[0].verdict.reason, Reason::ContentInvalid);
@@ -547,7 +551,8 @@ fn every_verdict_is_recorded_and_measured_including_refusals() {
     let points = counter.0.lock().unwrap();
     assert_eq!(points.len(), 2);
     assert_eq!(points[0].reason, Reason::ContentInvalid);
-    assert_eq!(points[1].knobs, "knobs-v2");
+    assert_eq!(points[0].config, None);
+    assert_eq!(points[1].config.as_deref(), Some("config-v2"));
     assert_eq!(points[1].component, "run");
 }
 

@@ -25,6 +25,22 @@ pub trait Probe: Send + Sync {
     fn observe(&self, point: &Point);
 }
 
+/// The kernel's only source of time. It stamps time; it never judges by it.
+pub trait Clock: Send + Sync {
+    /// Milliseconds since the Unix epoch.
+    fn now_ms(&self) -> u64;
+}
+
+pub struct SystemClock;
+
+impl Clock for SystemClock {
+    fn now_ms(&self) -> u64 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |elapsed| elapsed.as_millis() as u64)
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum KernelError {
     #[error(transparent)]
@@ -49,7 +65,7 @@ pub struct Kernel<S: Store> {
     authority: Box<dyn Authority>,
     validators: Validators,
     probe: Option<Box<dyn Probe>>,
-    knobs: Mutex<String>,
+    clock: Box<dyn Clock>,
     /// One writer per state root. Adjudication is short; executors run outside.
     writer: Mutex<u64>,
 }
@@ -61,7 +77,7 @@ impl<S: Store> Kernel<S> {
             authority,
             validators: Validators::default(),
             probe: None,
-            knobs: Mutex::new("default".into()),
+            clock: Box::new(SystemClock),
             writer: Mutex::new(0),
         };
         kernel.install(CONSTITUTION, Arc::new(HumanOnly))?;
@@ -75,9 +91,9 @@ impl<S: Store> Kernel<S> {
         self
     }
 
-    /// The knob version stamped on every submission from now on.
-    pub fn set_knobs(&self, version: impl Into<String>) {
-        *self.knobs.lock().expect("knobs") = version.into();
+    pub fn with_clock(mut self, clock: Box<dyn Clock>) -> Self {
+        self.clock = clock;
+        self
     }
 
     /// Register validator code. Its resource is judged by the constitution, so
@@ -85,8 +101,10 @@ impl<S: Store> Kernel<S> {
     pub fn install(&mut self, id: &str, validator: Arc<dyn Validator>) -> Result<(), KernelError> {
         self.validators.map.insert(id.into(), validator);
         if self.store.load(id)?.is_none() {
-            self.store
-                .create(&Resource::new(id, CONSTITUTION, Value::Null))?;
+            self.store.create(&self.stamp_creation(
+                Resource::new(id, CONSTITUTION, Value::Null),
+                Some(self.clock.now_ms()),
+            ))?;
         }
         Ok(())
     }
@@ -95,7 +113,16 @@ impl<S: Store> Kernel<S> {
         if self.validators.get(&resource.validator).is_none() {
             return Err(KernelError::MissingValidator(resource.validator));
         }
+        let resource = self.stamp_creation(resource, Some(self.clock.now_ms()));
         Ok(self.store.create(&resource)?)
+    }
+
+    /// The creation time is always the kernel's; only the configuration digest
+    /// comes from the creator.
+    fn stamp_creation(&self, mut resource: Resource, at: Option<u64>) -> Resource {
+        let config = resource.created.take().and_then(|created| created.config);
+        resource.created = Some(Creation { at, config });
+        resource
     }
 
     pub fn load(&self, id: &str) -> Result<Option<Resource>, KernelError> {
@@ -143,7 +170,7 @@ impl<S: Store> Kernel<S> {
             principal: principal.clone(),
             cost,
             seq: *seq,
-            knobs: self.knobs.lock().expect("knobs").clone(),
+            at: Some(self.clock.now_ms()),
         };
         let (verdict, validator, after, effects) = self.adjudicate(&stamp, &submission)?;
         // Record: the target's history gets every verdict, refusals included.
@@ -158,8 +185,13 @@ impl<S: Store> Kernel<S> {
                 },
             )?;
         }
-        for created in effects {
-            self.store.create(&created)?;
+        for mut created in effects {
+            // Resources the kernel creates for a submission share its stamp.
+            created.created = principal.config.clone().map(|config| Creation {
+                at: None,
+                config: Some(config),
+            });
+            self.store.create(&self.stamp_creation(created, stamp.at))?;
         }
         self.measure(&stamp, &submission, &validator, verdict);
         Ok(verdict)
@@ -393,7 +425,8 @@ impl<S: Store> Kernel<S> {
                 &Record {
                     stamp: stamp.clone(),
                     submission: Submission::new(&target_id, target.version - 1, Action::Write)
-                        .content(json!({"approved": pending.id})),
+                        .content(json!({"approved": pending.id}))
+                        .cause(&pending.id, stamp.seq),
                     verdict: target_verdict,
                     after: Some(target),
                 },
@@ -442,7 +475,8 @@ impl<S: Store> Kernel<S> {
                 verification: verdict.verification,
                 reason: verdict.reason,
                 cost: stamp.cost,
-                knobs: stamp.knobs.clone(),
+                at: stamp.at,
+                config: stamp.principal.config.clone(),
             });
         }
     }

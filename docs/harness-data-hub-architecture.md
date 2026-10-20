@@ -57,16 +57,26 @@ anchor-kernel  ◄──  anchor-facts  ◄──  anchor-runner-host   （写�
 
 ## 5. 写侧组件
 
-### 5.1 内核变更（单独审）
+### 5.1 内核变更（P1 已实现，待独立审查）
 
-内核只多记录、不多裁决。共四处改动，最终形状以单独的变更提案为准：
+内核只多记录、不多裁决。实际落地（行号以 P1 提交为准，都在 `rust/anchor-kernel/src/` 下）：
 
-1. **Clock 端口**：和 `Authority`、`Probe` 一样，在构造内核时注入。内核在 `submit` 时用它盖时间，写进 Stamp。只有一个时间来源，提议方没法自己报时间；测试时可以注入固定时钟。
-2. **因果引用**：`Submission` 增加一个可选字段，引用引发这次提交的那条记录。内核只记录，不检查。
-3. **每次提交的配置摘要**：现在的 `knobs` 是内核全局的一个字符串（`kernel.rs:79`）。改为每次提交单独携带配置摘要，写进 Stamp。
-4. **只读历史读取**：`FileStore` 增加只读打开方式：不加锁、不写入，只返回以换行结尾的完整记录。磁盘布局归 `FileStore` 所有，中枢不自己解析目录结构。
+1. **Clock 端口**：`Clock` trait（`kernel.rs:29`），默认 `SystemClock`，通过 `with_clock`（`kernel.rs:94`）注入，和 `with_probe` 一样，现有的构造调用不用改。`submit` 在持有写锁时取一次时间，写进 `Stamp.at`（`model.rs:153`，单位为 Unix 纪元毫秒）。内核不保证时间单调，顺序以 `seq` 为准。
+2. **因果引用**：`Submission.cause: Option<Cause>`（`model.rs:97`、`:102`），形式为"资源 id + seq"，内核原样记录，不校验。内核自己生成的记录也会填写：人工批准后写入目标资源的那条记录，引用 pending 资源上的决定记录（`kernel.rs:429`）。
+3. **配置摘要随 Principal 走**：删除了全局的 `knobs` 和 `set_knobs`，改为 `Principal.config: Option<String>`（`model.rs:32`），用 `with_config` 设置；通过 `Stamp.config()` 读取。
+   - 理由：配置是宿主为某个提议者冻结的身份的一部分，"哪个配置下的 Agent 在提议"，和 principal 一样由宿主盖章。这样 `submit` 的签名不变，仍然只有一个入口，没有新增参数。
+   - 宿主在 P2 之前一律不填。
+4. **创建事实**：`Resource.created: Option<Creation { at, config }>`（`model.rs:312`、`:316`）。
+   - `Kernel::create` 和 `install` 由内核盖时间；创建者只能通过 `Resource::configured` 提供配置摘要，自带的时间会被覆盖（`kernel.rs:122`）。
+   - 内核为提交生成的 effect、pending 资源，沿用该提交的时间和配置。
+   - 选择"资源上的字段"而不是"在历史里写一条创建记录"：所有修改都是在内核加载的资源上进行的，Validator 只返回状态和阶段，所以这个字段在每次修改、崩溃恢复和结算之后都会保留；而且历史的条数、探针的重建、恢复投影都不受影响。
+5. **测量点**：`Point` 用 `at` 和 `config` 替代了 `knobs`（`model.rs:490`、`:492`）；Host 的探针重建同步修改。
+6. **只读历史读取**：`HistoryReader`（`store.rs:370`）提供 `open`、`list`、`load`、`history`。
+   - 不加锁，不创建任何文件或目录；
+   - 只返回以换行结尾的完整记录；
+   - 被删除的资源读出来就是不存在。
 
-测量点（Point）同步加上时间和配置摘要。这是 `0859373` 之后第一次改内核，审完重新冻结 C1。
+新字段一律可选，旧记录读出来是"未记录"，不迁移，也不拒绝。测试见 `rust/anchor-kernel/tests/recorded_facts.rs`，其中一项专门验证：不同时钟、不同配置、不同因果引用下，同一组提交序列得到的裁决完全相同。
 
 ### 5.2 `anchor-facts`：事实词汇表（新 crate）
 

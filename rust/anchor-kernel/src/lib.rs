@@ -21,6 +21,6 @@ mod kernel;
 mod model;
 mod store;
 
-pub use kernel::{Authority, Kernel, KernelError, Probe, Validators};
+pub use kernel::{Authority, Clock, Kernel, KernelError, Probe, SystemClock, Validators};
 pub use model::*;
-pub use store::{FileStore, MemoryStore, Store, StoreError};
+pub use store::{FileStore, HistoryReader, MemoryStore, Store, StoreError};

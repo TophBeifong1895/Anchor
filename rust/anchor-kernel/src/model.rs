@@ -25,6 +25,11 @@ pub enum PrincipalKind {
 pub struct Principal {
     pub id: String,
     pub kind: PrincipalKind,
+    /// Digest of the configuration the host froze for this principal: Graph,
+    /// node, Plugins, model and prompts. Part of who proposes, recorded on
+    /// every stamp; the kernel never judges by it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub config: Option<String>,
 }
 
 impl Principal {
@@ -32,7 +37,13 @@ impl Principal {
         Self {
             id: id.into(),
             kind,
+            config: None,
         }
+    }
+
+    pub fn with_config(mut self, digest: impl Into<String>) -> Self {
+        self.config = Some(digest.into());
+        self
     }
 }
 
@@ -80,6 +91,17 @@ pub struct Submission {
     pub content: Value,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub evidence: Vec<Evidence>,
+    /// The record that led to this submission. Recorded as given, never
+    /// checked or interpreted by the kernel.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cause: Option<Cause>,
+}
+
+/// A record in some resource's history: its resource and stamp sequence.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Cause {
+    pub resource: ResourceId,
+    pub seq: u64,
 }
 
 impl Submission {
@@ -91,7 +113,16 @@ impl Submission {
             slot: None,
             content: Value::Null,
             evidence: Vec::new(),
+            cause: None,
         }
+    }
+
+    pub fn cause(mut self, resource: impl Into<ResourceId>, seq: u64) -> Self {
+        self.cause = Some(Cause {
+            resource: resource.into(),
+            seq,
+        });
+        self
     }
 
     pub fn slot(mut self, slot: impl Into<String>) -> Self {
@@ -116,7 +147,10 @@ pub struct Stamp {
     pub(crate) principal: Principal,
     pub(crate) cost: u64,
     pub(crate) seq: u64,
-    pub(crate) knobs: String,
+    /// Milliseconds since the Unix epoch, from the kernel's clock. Order is
+    /// `seq`; time is only recorded. Absent on records made before it was.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) at: Option<u64>,
 }
 
 impl Stamp {
@@ -129,8 +163,11 @@ impl Stamp {
     pub fn seq(&self) -> u64 {
         self.seq
     }
-    pub fn knobs(&self) -> &str {
-        &self.knobs
+    pub fn at(&self) -> Option<u64> {
+        self.at
+    }
+    pub fn config(&self) -> Option<&str> {
+        self.principal.config.as_deref()
     }
 }
 
@@ -268,6 +305,19 @@ pub struct Resource {
     pub task: Option<Task>,
     #[serde(default)]
     pub state: Value,
+    /// When and with which configuration the resource was created. The
+    /// kernel stamps it on creation and carries it through every change;
+    /// no rule reads it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created: Option<Creation>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Creation {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub at: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub config: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -284,7 +334,18 @@ impl Resource {
             validator: validator.into(),
             task: None,
             state,
+            created: None,
         }
+    }
+
+    /// The configuration digest to record with the creation. The time is
+    /// always the kernel's own.
+    pub fn configured(mut self, digest: impl Into<String>) -> Self {
+        self.created = Some(Creation {
+            at: None,
+            config: Some(digest.into()),
+        });
+        self
     }
 
     pub fn task(mut self, budget: u64) -> Self {
@@ -425,5 +486,8 @@ pub struct Point {
     pub verification: Verification,
     pub reason: Reason,
     pub cost: u64,
-    pub knobs: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub at: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub config: Option<String>,
 }

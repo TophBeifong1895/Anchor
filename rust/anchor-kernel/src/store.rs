@@ -338,21 +338,82 @@ impl Store for FileStore {
     }
 
     fn list(&self, prefix: &str) -> Result<Vec<String>, StoreError> {
-        let mut ids = Vec::new();
-        for entry in fs::read_dir(&self.root)? {
-            let name = entry?.file_name();
-            // Internal directories (.locks and .deleting-*) can never be a
-            // canonical encoded resource name, even for ids with those words.
-            if let Some(name) = name.to_str()
-                && let Some(id) = decode(name)
-                && encode(&id).ok().as_deref() == Some(name)
-                && id.starts_with(prefix)
-            {
-                ids.push(id);
-            }
+        list_at(&self.root, prefix)
+    }
+}
+
+/// Ids under `root` starting with `prefix`, in order.
+fn list_at(root: &Path, prefix: &str) -> Result<Vec<String>, StoreError> {
+    let mut ids = Vec::new();
+    for entry in fs::read_dir(root)? {
+        let name = entry?.file_name();
+        // Internal directories (.locks and .deleting-*) can never be a
+        // canonical encoded resource name, even for ids with those words.
+        if let Some(name) = name.to_str()
+            && let Some(id) = decode(name)
+            && encode(&id).ok().as_deref() == Some(name)
+            && id.starts_with(prefix)
+        {
+            ids.push(id);
         }
-        ids.sort();
-        Ok(ids)
+    }
+    ids.sort();
+    Ok(ids)
+}
+
+// ---------------------------------------------------------------------------
+
+/// A read-only view of a [`FileStore`] root for observers outside the writer:
+/// it takes no lease, creates nothing and writes nothing. Racing a writer, it
+/// sees a prefix of complete records; an unterminated tail is not returned.
+/// A resource removed meanwhile reads as absent.
+pub struct HistoryReader {
+    root: PathBuf,
+}
+
+impl HistoryReader {
+    /// The root must already exist; the reader never creates it.
+    pub fn open(root: impl Into<PathBuf>) -> Result<Self, StoreError> {
+        let root = root.into();
+        if !fs::metadata(&root)?.is_dir() {
+            return Err(StoreError::Io(std::io::Error::new(
+                std::io::ErrorKind::NotADirectory,
+                root.display().to_string(),
+            )));
+        }
+        Ok(Self { root })
+    }
+
+    pub fn list(&self, prefix: &str) -> Result<Vec<String>, StoreError> {
+        list_at(&self.root, prefix)
+    }
+
+    /// The current resource as [`Store::load`] would return it.
+    pub fn load(&self, id: &str) -> Result<Option<Resource>, StoreError> {
+        let dir = self.root.join(encode(id)?);
+        let mut resource = match fs::read(dir.join("resource.json")) {
+            Ok(bytes) => serde_json::from_slice::<Resource>(&bytes)
+                .map_err(|e| StoreError::Corrupt(e.to_string()))?,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(error.into()),
+        };
+        let history = self.history(id)?;
+        if let Some(after) = history.iter().rev().find_map(|r| r.after.as_ref())
+            && after.version > resource.version
+        {
+            resource = after.clone();
+        }
+        derive_spent(&mut resource, &history);
+        Ok(Some(resource))
+    }
+
+    pub fn history(&self, id: &str) -> Result<Vec<Record>, StoreError> {
+        match history_at(&self.root.join(encode(id)?).join("history.jsonl")) {
+            Err(StoreError::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => {
+                Ok(Vec::new())
+            }
+            result => result,
+        }
     }
 }
 
