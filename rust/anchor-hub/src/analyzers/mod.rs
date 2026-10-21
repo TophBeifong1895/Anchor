@@ -11,6 +11,7 @@ use crate::query::{Key, Query};
 
 pub mod contrast;
 pub mod health;
+pub mod signals;
 pub mod stall;
 
 /// A field of the record an analyzer cannot work without.

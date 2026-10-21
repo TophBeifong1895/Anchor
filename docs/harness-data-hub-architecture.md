@@ -183,6 +183,12 @@ anchor-kernel  ◄──  anchor-facts  ◄──  anchor-runner-host   （写�
 
   统计函数是 L2 的纯函数。
 - P4 加入评分：L1 把 `validator/grade` 的记录投影成评分行；L2 的 `Query::grades` 给出每个 Run 最新被接受的评分；体检报告新增质量部分，按任务和任务版本列出平均分、全对比例、各检查项通过率，以及这些 Run 的 token、Agent 耗时和工具调用分布。某个检查项在至少 3 个 Run 里有一半以上失败时，报告 `check_failing`。
+- P7 加入信号分析器 `signals` 和只读 MCP 接口（见 P7 任务书）：
+  - `signals` 把体检和停滞的发现按"类型 + 位置"合并，每条信号有稳定 id、Harness 空间坐标（配置、Graph、节点、模型、工具、Host）和有界的证据；
+  - 每个评分任务求 (质量, token, Agent 用时) 上没被支配的 Harness 前沿，被支配的 Harness 本身是信号 `dominated_harness`；
+  - 正向离群作为范例：同任务同节点里 token 不到中位数一半的 `frugal_route`，以及只有一个调用走过、成本不高于中位数的 `rare_route`；
+  - 表有上限，放不下的按类型计数（`omitted`），不静默丢弃；
+  - `anchor-hub mcp PATH...` 在 stdio 上讲 JSON-RPC，工具 `signals`、`report`、`invocations`、`invocation`、`configurations`、`records` 都只读、分页、有上限，每次调用前增量刷新。没有新增依赖。
 - `run_access/reads.rs` 不改用 `HistoryReader`：它的调用方都在作为写入者的 Host 进程内，读时拿租约正好和提交串行；中枢不经过它。
 
 ## 7. 插件契约
@@ -243,6 +249,7 @@ anchor-kernel  ◄──  anchor-facts  ◄──  anchor-runner-host   （写�
 | P4 | 评测任务集：一组结果可以自动判断对错的任务，作为便宜、客观的质量信号。**已完成**，见 [P4 报告](../experiments/harness-hub/p4/report.md)：基线下质量几乎总在上限，受控实验以效率为目标、以质量为约束 | 任务集能稳定复跑，判分可信。**通过** |
 | P5 | 只读 MCP 接口，流程挖掘、对比挖掘；按第 10 节调整 `anchor-rsi` | 分析结论能落到具体的配置和节点上 |
 | P6 | 受控实验和 `Policy` 插件。**实验 1 已完成并采纳**，见 [实验 1](../experiments/harness-hub/p6/experiment-1.md)；`Policy` 插件未做 | G2：在能承受的样本量内检测出效率差异。实验 1 中，工具失败率的差异在每组 100 次时显著（p < 0.0001），用时和 token 7% 量级的差异在这个样本量下不显著。G3：未做 |
+| P7 | 在中枢上的 RSI：`signals` 分析器、只读 MCP 接口（**已实现**），按信号编排的 RSI Graph、带可证伪预测的提议账本（未做）。见 [任务书 §P7](harness-data-hub-tasks.md#p7-在数据中枢上的-rsi) | G4：RSI 读取的上下文不随 Run、Graph、Plugin 的数量增长；G5：提议的预测能被下一轮数据判定为成立或不成立 |
 
 `anchor-facts` 推迟到 P2，和它的第一个使用方一起交付，不提前建一个没人用的契约。
 

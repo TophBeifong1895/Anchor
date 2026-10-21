@@ -41,6 +41,14 @@ impl<'a> Query<'a> {
         self.facts.configurations.get(digest)
     }
 
+    /// Every configuration manifest, by digest.
+    pub fn configurations(&self) -> impl Iterator<Item = (&'a str, &'a AgentConfiguration)> {
+        self.facts
+            .configurations
+            .iter()
+            .map(|(digest, manifest)| (digest.as_str(), manifest))
+    }
+
     /// Task resources, each with its records in place order.
     pub fn tasks(&self) -> Vec<Task<'a>> {
         let mut rows: BTreeMap<(&str, &str), Vec<&'a Row>> = BTreeMap::new();
@@ -429,6 +437,19 @@ impl<'a> Invocation<'a> {
                 _ => None,
             })
             .collect()
+    }
+
+    /// The tools called, in recorded order, consecutive calls of one tool
+    /// counted together: the route the model took.
+    pub fn route(&self) -> Vec<(&'a str, usize)> {
+        let mut route: Vec<(&'a str, usize)> = Vec::new();
+        for call in self.calls() {
+            match route.last_mut() {
+                Some((tool, n)) if *tool == call.tool => *n += 1,
+                _ => route.push((call.tool, 1)),
+            }
+        }
+        route
     }
 
     /// When the model worked on each turn, by turn index. A turn's usage

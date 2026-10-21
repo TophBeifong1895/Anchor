@@ -2,10 +2,13 @@ mod support;
 
 use std::collections::BTreeSet;
 
+use anchor_facts::{AgentConfiguration, Outcome};
 use anchor_hub::adapters::{Hub, discover};
 use anchor_hub::analyzers::{
-    Analyzer, Finding, Need, Report, contrast::Contrast, health::Health, stall::Stall,
+    Analyzer, Finding, Need, Report, contrast::Contrast, health::Health, signals::Signals,
+    stall::Stall,
 };
+use anchor_hub::mcp::handle;
 use anchor_hub::query::{
     Activity, GapPlace, Query, Status, covered, mann_whitney, node_result, normal_cdf, repeats,
     summarize, two_proportions,
@@ -603,4 +606,340 @@ fn contrast_compares_arms_on_quality_first_then_cost() {
     }
     .analyze(&Query::new(table.facts(), None));
     assert_eq!(by_model.summary["arms"], json!(["flash"]));
+}
+
+/// One observed, accepted worker invocation: `turns` model turns, then the
+/// tools called in order.
+fn worked(
+    world: &World,
+    run: &str,
+    start: u64,
+    length: u64,
+    config: &AgentConfiguration,
+    turns: u64,
+    tools: &[&str],
+) {
+    world.run(run, start - 10);
+    let mut facts: Vec<_> = (1..=turns)
+        .map(|i| support::turn(i, start + i * 100, 50))
+        .collect();
+    for (n, tool) in tools.iter().enumerate() {
+        let at = start + 1_000 + n as u64 * 10;
+        facts.push(support::call(tool, turns, json!({}), (at, at + 1), None));
+    }
+    facts.push(support::lifecycle(
+        (start, start + length),
+        Outcome::Completed,
+        turns,
+        tools.len() as u64,
+    ));
+    world.observe(run, "worker", start + length + 5, config, facts);
+    world.result(run, "worker#1", start + length + 10, turns, true);
+}
+
+/// Two harnesses on one graded task, the second slower at equal tokens and
+/// failing its check; and seven ungraded invocations, one far cheaper than
+/// the rest and one taking a route nobody else took.
+fn harnesses(world: &World) -> (AgentConfiguration, AgentConfiguration) {
+    let fast = support::configuration("worker");
+    let mut slow = support::configuration("worker");
+    slow.host_sha256 = "host-b".into();
+    for n in 0..3u64 {
+        let start = 1_000_000 + n * 100_000;
+        worked(
+            world,
+            &format!("a{n}"),
+            start,
+            5_000,
+            &fast,
+            2,
+            &["anchor_edit", "final_result"],
+        );
+        world.grade(
+            &format!("a{n}"),
+            "ledger",
+            &[("total", true)],
+            start + 6_000,
+        );
+        let start = 2_000_000 + n * 100_000;
+        worked(
+            world,
+            &format!("b{n}"),
+            start,
+            10_000,
+            &slow,
+            2,
+            &["anchor_edit", "final_result"],
+        );
+        world.grade(
+            &format!("b{n}"),
+            "ledger",
+            &[("total", false)],
+            start + 11_000,
+        );
+    }
+    for n in 0..7u64 {
+        let (turns, tools): (u64, &[&str]) = match n {
+            5 => (1, &["final_result"]),
+            6 => (4, &["anchor_read", "final_result"]),
+            _ => (4, &["anchor_edit", "final_result"]),
+        };
+        worked(
+            world,
+            &format!("u{n}"),
+            3_000_000 + n * 100_000,
+            5_000,
+            &fast,
+            turns,
+            tools,
+        );
+    }
+    (fast, slow)
+}
+
+#[test]
+fn signals_rank_beaten_harnesses_and_exemplars_with_stable_ids() {
+    let world = World::new();
+    let (fast, slow) = harnesses(&world);
+    let mut hub = Hub::new(vec![world.path().to_path_buf()]);
+    hub.refresh().unwrap();
+    let table = Signals::default().table(&hub.query(None));
+
+    // Only the unbeaten harness is on the front.
+    let front = &table.front["ledger v1"];
+    assert_eq!(front.len(), 1, "{front:#?}");
+    assert_eq!(front[0].configs, vec![fast.digest()]);
+    assert_eq!(front[0].mean_score, 1.0);
+    let beaten = table
+        .signals
+        .iter()
+        .find(|s| s.code == "dominated_harness")
+        .expect("a beaten harness");
+    assert_eq!(beaten.weight, 3);
+    assert_eq!(beaten.evidence_total, 3);
+    assert_eq!(beaten.coordinates.len(), 1);
+    assert_eq!(beaten.coordinates[0].config, slow.digest());
+    assert_eq!(beaten.coordinates[0].host.as_deref(), Some("host-b"));
+    assert!(
+        beaten.detail.contains("score 1.000 against 0.000"),
+        "{}",
+        beaten.detail
+    );
+    assert_eq!(beaten.id.len(), 12);
+
+    // Ungraded invocations are peers within their Graph.
+    let codes: Vec<_> = table
+        .exemplars
+        .iter()
+        .map(|s| (s.code, s.subject.as_str()))
+        .collect();
+    assert_eq!(
+        codes,
+        vec![
+            ("frugal_route", "graph g node worker"),
+            ("rare_route", "graph g node worker")
+        ]
+    );
+    assert!(
+        table.exemplars[0]
+            .detail
+            .contains("u5/worker#1 took 110 tokens against a median of 1040")
+    );
+    assert!(
+        table.exemplars[1]
+            .detail
+            .contains("u6/worker#1 is the only one of 7")
+    );
+    assert!(
+        table.exemplars[1]
+            .detail
+            .ends_with("anchor_read → final_result")
+    );
+    assert!(table.omitted.is_empty());
+
+    // More of the same keeps the signal's id and adds to its weight.
+    worked(
+        &world,
+        "b3",
+        2_400_000,
+        10_000,
+        &slow,
+        2,
+        &["anchor_edit", "final_result"],
+    );
+    world.grade("b3", "ledger", &[("total", false)], 2_411_000);
+    hub.refresh().unwrap();
+    let again = Signals::default().table(&hub.query(None));
+    let same = again
+        .signals
+        .iter()
+        .find(|s| s.code == "dominated_harness")
+        .unwrap();
+    assert_eq!((same.id.as_str(), same.weight), (beaten.id.as_str(), 4));
+
+    // A bound counts what it leaves out.
+    let bounded = Signals { limit: 1 }.table(&hub.query(None));
+    assert_eq!((bounded.signals.len(), bounded.exemplars.len()), (1, 1));
+    assert_eq!(
+        bounded.omitted.values().sum::<usize>(),
+        again.signals.len() - 1 + again.exemplars.len() - 1
+    );
+    // As a report, every signal is a finding that names its id.
+    let report = Signals::default().analyze(&hub.query(None));
+    assert_eq!(
+        report.findings.len(),
+        again.signals.len() + again.exemplars.len()
+    );
+    assert!(report.findings[0].detail.starts_with('['));
+}
+
+#[test]
+fn the_mcp_server_answers_bounded_reads_and_sees_appends() {
+    let world = World::new();
+    let (fast, _) = harnesses(&world);
+    support::r1(&world);
+    let mut hub = Hub::new(vec![world.path().to_path_buf()]);
+    let ask = |hub: &mut Hub, method: &str, params: serde_json::Value| {
+        handle(
+            hub,
+            &json!({"jsonrpc": "2.0", "id": 7, "method": method, "params": params}),
+        )
+        .expect("a reply")
+    };
+    let call = |hub: &mut Hub, name: &str, arguments: serde_json::Value| {
+        let reply = ask(
+            hub,
+            "tools/call",
+            json!({"name": name, "arguments": arguments}),
+        );
+        let result = &reply["result"];
+        let text = result["content"][0]["text"].as_str().unwrap().to_owned();
+        assert!(!text.contains(SECRET), "{name} leaked business content");
+        (result["isError"].as_bool().unwrap(), text)
+    };
+    let read = |hub: &mut Hub, name: &str, arguments: serde_json::Value| {
+        let (failed, text) = call(hub, name, arguments);
+        assert!(!failed, "{name}: {text}");
+        serde_json::from_str::<serde_json::Value>(&text).unwrap()
+    };
+
+    let init = ask(
+        &mut hub,
+        "initialize",
+        json!({"protocolVersion": "2025-03-26"}),
+    );
+    assert_eq!(init["id"], json!(7));
+    assert_eq!(init["result"]["protocolVersion"], json!("2025-03-26"));
+    assert_eq!(init["result"]["serverInfo"]["name"], json!("anchor-hub"));
+    let notification = json!({"jsonrpc": "2.0", "method": "notifications/initialized"});
+    assert_eq!(handle(&mut hub, &notification), None);
+    let tools = ask(&mut hub, "tools/list", json!({}));
+    let tools = tools["result"]["tools"].as_array().unwrap();
+    let names: Vec<_> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
+    assert_eq!(
+        names,
+        [
+            "signals",
+            "report",
+            "invocations",
+            "invocation",
+            "configurations",
+            "records"
+        ]
+    );
+    assert!(
+        tools
+            .iter()
+            .all(|t| t["annotations"]["readOnlyHint"] == json!(true))
+    );
+
+    let signals = read(&mut hub, "signals", json!({}));
+    assert!(signals["front"]["ledger v1"].is_array());
+    assert!(
+        signals["signals"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|s| s["code"] == "dominated_harness")
+    );
+
+    // Lists are paged and filters combine.
+    let first = read(
+        &mut hub,
+        "invocations",
+        json!({"node": "worker", "limit": 2}),
+    );
+    let total = first["total"].as_u64().unwrap();
+    assert!(total >= 13, "{first}");
+    assert_eq!(first["items"].as_array().unwrap().len(), 2);
+    assert_eq!(first["next_offset"], json!(2));
+    let routed = read(
+        &mut hub,
+        "invocations",
+        json!({"tool": "anchor_read", "outcome": "completed"}),
+    );
+    assert_eq!(routed["total"], json!(1));
+    assert_eq!(routed["items"][0]["key"], json!("u6/worker#1"));
+    let graded = read(
+        &mut hub,
+        "invocations",
+        json!({"task": "ledger v1", "config": &fast.digest()[..8]}),
+    );
+    assert_eq!(graded["total"], json!(3));
+    assert_eq!(graded["items"][0]["grade"]["passed"], json!(true));
+
+    // Drilling down: one invocation, the records it cites, its manifest.
+    let one = read(&mut hub, "invocation", json!({"key": "u5/worker#1"}));
+    assert_eq!(one["brief"]["route"], json!("final_result"));
+    assert_eq!(one["brief"]["tokens"], json!(110));
+    assert_eq!(one["calls"]["total"], json!(1));
+    let cited = &one["evidence"][0];
+    let records = read(
+        &mut hub,
+        "records",
+        json!({"resource": cited["resource"], "place": cited["place"]}),
+    );
+    assert_eq!(records["total"], json!(1));
+    let manifest = read(
+        &mut hub,
+        "configurations",
+        json!({"digest": &fast.digest()[..10]}),
+    );
+    assert_eq!(manifest["manifest"]["host_sha256"], json!("host"));
+    let listed = read(&mut hub, "configurations", json!({}));
+    assert!(listed["total"].as_u64().unwrap() >= 2);
+
+    let health = read(
+        &mut hub,
+        "report",
+        json!({"analyzer": "health", "code": "tool_failures", "limit": 1}),
+    );
+    assert!(health["codes"]["tool_failures"].as_u64().unwrap() >= 1);
+    assert_eq!(health["findings"]["items"].as_array().unwrap().len(), 1);
+    let contrast = read(
+        &mut hub,
+        "report",
+        json!({"analyzer": "contrast", "reference": "host"}),
+    );
+    assert_eq!(contrast["summary"]["arms"][0], json!("host"));
+
+    // Every call reads what was appended since the last one.
+    worked(
+        &world,
+        "late",
+        9_000_000,
+        5_000,
+        &fast,
+        1,
+        &["final_result"],
+    );
+    let later = read(&mut hub, "invocations", json!({"node": "worker"}));
+    assert_eq!(later["total"].as_u64().unwrap(), total + 1);
+
+    // Mistakes are answered, not fatal.
+    assert!(call(&mut hub, "write", json!({})).0);
+    assert!(call(&mut hub, "invocation", json!({})).0);
+    assert!(call(&mut hub, "invocations", json!({"limit": "ten"})).0);
+    let unknown = ask(&mut hub, "resources/list", json!({}));
+    assert_eq!(unknown["error"]["code"], json!(-32601));
 }

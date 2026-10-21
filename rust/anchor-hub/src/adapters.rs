@@ -1,10 +1,13 @@
 //! L4: the command line. Finds kernel data roots under the given paths,
-//! projects them and prints analyzer reports or the fact rows themselves.
+//! projects them and prints analyzer reports or the fact rows themselves,
+//! or serves them over MCP (see [`crate::mcp`]).
 //!
 //! ```text
 //! anchor-hub health [--json] PATH...
 //! anchor-hub stall [--json] [--idle-minutes N] [--follow SECONDS] PATH...
 //! anchor-hub contrast [--json] [--by FIELD] [--reference PREFIX] PATH...
+//! anchor-hub signals [--json] [--limit N] PATH...
+//! anchor-hub mcp PATH...
 //! anchor-hub rows PATH...
 //! ```
 //!
@@ -15,7 +18,9 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use crate::analyzers::{Analyzer, Report, contrast::Contrast, health::Health, stall::Stall};
+use crate::analyzers::{
+    Analyzer, Report, contrast::Contrast, health::Health, signals::Signals, stall::Stall,
+};
 use crate::query::Query;
 use crate::source::{DataRoot, HistorySource};
 use crate::table::{FactTable, MemoryTable, Projector};
@@ -113,7 +118,7 @@ impl Hub {
     }
 }
 
-fn now_ms() -> u64 {
+pub(crate) fn now_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |d| d.as_millis() as u64)
@@ -126,6 +131,7 @@ struct Options {
     follow: Option<u64>,
     by: Option<String>,
     reference: Option<String>,
+    limit: Option<u64>,
     paths: Vec<PathBuf>,
 }
 
@@ -139,6 +145,7 @@ fn parse(args: &[String]) -> Result<Options, String> {
         follow: None,
         by: None,
         reference: None,
+        limit: None,
         paths: Vec::new(),
     };
     while let Some(arg) = args.next() {
@@ -151,6 +158,7 @@ fn parse(args: &[String]) -> Result<Options, String> {
             "--json" => options.json = true,
             "--idle-minutes" => options.idle_minutes = Some(number(arg)?),
             "--follow" => options.follow = Some(number(arg)?),
+            "--limit" => options.limit = Some(number(arg)?),
             "--by" => options.by = Some(args.next().ok_or("--by needs a field")?.clone()),
             "--reference" => {
                 options.reference = Some(
@@ -169,14 +177,14 @@ fn parse(args: &[String]) -> Result<Options, String> {
     Ok(options)
 }
 
-const USAGE: &str = "usage: anchor-hub health [--json] PATH...\n       anchor-hub contrast [--json] [--by FIELD] [--reference PREFIX] PATH...\n       anchor-hub stall [--json] [--idle-minutes N] [--follow SECONDS] PATH...\n       anchor-hub rows PATH...";
+const USAGE: &str = "usage: anchor-hub health [--json] PATH...\n       anchor-hub signals [--json] [--limit N] PATH...\n       anchor-hub mcp PATH...\n       anchor-hub contrast [--json] [--by FIELD] [--reference PREFIX] PATH...\n       anchor-hub stall [--json] [--idle-minutes N] [--follow SECONDS] PATH...\n       anchor-hub rows PATH...";
 
 pub fn run(args: &[String]) -> Result<(), String> {
     let options = parse(args)?;
     let mut hub = Hub::new(options.paths.clone());
     hub.refresh()?;
-    // A follower may start before the first root exists.
-    if hub.roots() == 0 && options.follow.is_none() {
+    // A follower or a server may start before the first root exists.
+    if hub.roots() == 0 && options.follow.is_none() && options.command != "mcp" {
         return Err("no kernel data root found under the given paths".into());
     }
     match options.command.as_str() {
@@ -195,6 +203,15 @@ pub fn run(args: &[String]) -> Result<(), String> {
             print(&contrast.analyze(&hub.query(Some(now_ms()))), options.json);
             Ok(())
         }
+        "signals" => {
+            let mut signals = Signals::default();
+            if let Some(limit) = options.limit {
+                signals.limit = limit as usize;
+            }
+            print(&signals.analyze(&hub.query(Some(now_ms()))), options.json);
+            Ok(())
+        }
+        "mcp" => crate::mcp::serve(hub),
         "health" => {
             print(&Health.analyze(&hub.query(Some(now_ms()))), options.json);
             Ok(())
