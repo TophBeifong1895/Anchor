@@ -15,3 +15,8 @@ futures = "0.3"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
 rmcp = { version = "=2.2.0", default-features = false, features = ["client", "transport-child-process", "transport-streamable-http-client-reqwest", "client-side-sse"] }
 sha2 = "0.10"
+
+# Content digests (the Host's own executable, artifacts) hash hundreds of
+# megabytes; unoptimized, sha2 takes seconds on a debug build.
+[profile.dev.package.sha2]
+opt-level = 3
