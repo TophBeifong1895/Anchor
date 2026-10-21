@@ -79,6 +79,8 @@ pub fn configuration(node: &str) -> AgentConfiguration {
         plugin_instructions_sha256: anchor_facts::text_digest(""),
         plugins: Vec::new(),
         routes: Vec::new(),
+        host_sha256: "host".into(),
+        tools_sha256: "tools".into(),
     }
 }
 

@@ -50,6 +50,13 @@ use std::{
 };
 use transport::AcpConnection;
 
+/// What the model was shown besides its instructions: Plugin instructions
+/// and tool definitions, as digests for the configuration manifest.
+struct Disclosed {
+    plugin_instructions_sha256: String,
+    tools_sha256: String,
+}
+
 pub(crate) struct GooseNodePort {
     binary: PathBuf,
     binary_sha256: String,
@@ -561,6 +568,14 @@ impl GooseNodePort {
         // This includes Session mounts and Library updates since dispatch.
         request.plugins = resolved.plugins;
         let plugin_instructions_sha256 = anchor_facts::text_digest(&resolved.plugin_instructions);
+        let definitions = resolved.tools.definitions();
+        let tools_sha256 = anchor_facts::tools_digest(definitions.iter().map(|tool| {
+            (
+                tool.name.as_str(),
+                tool.description.as_str(),
+                &tool.parameters,
+            )
+        }));
         let mut random = [0u8; 32];
         fs::File::open("/dev/urandom")?.read_exact(&mut random)?;
         let token = format!("{:x}", Sha256::digest(random));
@@ -714,7 +729,10 @@ impl GooseNodePort {
             .record_facts(
                 &request,
                 &binding,
-                plugin_instructions_sha256,
+                Disclosed {
+                    plugin_instructions_sha256,
+                    tools_sha256,
+                },
                 &evidence,
                 started_at_ms,
                 outcome,
@@ -758,7 +776,7 @@ impl GooseNodePort {
         &self,
         request: &NodeExecutionRequest,
         binding: &configuration::ModelBinding,
-        plugin_instructions_sha256: String,
+        disclosed: Disclosed,
         evidence: &Value,
         started_at_ms: u64,
         outcome: anchor_facts::Outcome,
@@ -766,7 +784,7 @@ impl GooseNodePort {
         let Some(recorder) = self.recorder.clone() else {
             return json!({"unavailable": true});
         };
-        let configuration = anchor_facts::AgentConfiguration {
+        let mut configuration = anchor_facts::AgentConfiguration {
             version: anchor_facts::VERSION,
             graph_digest: request.key.graph_digest.clone(),
             node_id: request.key.node_id.clone(),
@@ -777,7 +795,7 @@ impl GooseNodePort {
                 "{}\n{}",
                 request.instructions, request.task
             )),
-            plugin_instructions_sha256,
+            plugin_instructions_sha256: disclosed.plugin_instructions_sha256,
             plugins: request
                 .plugins
                 .iter()
@@ -788,6 +806,10 @@ impl GooseNodePort {
                 })
                 .collect(),
             routes: request.routes.clone(),
+            // Filled in off the async runtime below: hashing may still be
+            // finishing on the first invocation.
+            host_sha256: String::new(),
+            tools_sha256: disclosed.tools_sha256,
         };
         let invocation = anchor_facts::Invocation {
             run_id: request.key.run_id.clone(),
@@ -802,6 +824,7 @@ impl GooseNodePort {
             outcome,
         );
         match tokio::task::spawn_blocking(move || {
+            configuration.host_sha256 = crate::fact_recorder::host_sha256();
             recorder.record(&configuration, &invocation, facts)
         })
         .await

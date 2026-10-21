@@ -97,6 +97,15 @@ pub struct AgentConfiguration {
     pub plugin_instructions_sha256: String,
     pub plugins: Vec<PluginIdentity>,
     pub routes: Vec<String>,
+    /// Digest of the Host executable: every harness behavior it implements,
+    /// such as tool refusals and path rules. Empty on manifests recorded
+    /// before it was, so their digests do not change.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub host_sha256: String,
+    /// Digest of the tool definitions disclosed to the model, see
+    /// [`tools_digest`].
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub tools_sha256: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -118,6 +127,44 @@ impl AgentConfiguration {
     pub fn digest(&self) -> String {
         let bytes = serde_json::to_vec(&self.clone().normalized()).expect("manifest serializes");
         format!("{:x}", Sha256::digest(bytes))
+    }
+}
+
+/// The digest of tool definitions as (name, description, parameter schema):
+/// independent of their order and of the key order of their schemas.
+pub fn tools_digest<'a>(tools: impl IntoIterator<Item = (&'a str, &'a str, &'a Value)>) -> String {
+    let mut tools: Vec<Value> = tools
+        .into_iter()
+        .map(|(name, description, parameters)| {
+            Value::Array(vec![
+                Value::from(name),
+                Value::from(description),
+                canonical(parameters),
+            ])
+        })
+        .collect();
+    tools.sort_by_key(|tool| tool.to_string());
+    let bytes = serde_json::to_vec(&tools).expect("tools serialize");
+    format!("{:x}", Sha256::digest(bytes))
+}
+
+/// Objects with their keys sorted, recursively. With serde_json's
+/// `preserve_order`, which other crates in a build may enable, maps keep
+/// insertion order, so equal values could otherwise hash differently.
+fn canonical(value: &Value) -> Value {
+    match value {
+        Value::Object(map) => {
+            let mut entries: Vec<_> = map.iter().collect();
+            entries.sort_by(|a, b| a.0.cmp(b.0));
+            Value::Object(
+                entries
+                    .into_iter()
+                    .map(|(key, value)| (key.clone(), canonical(value)))
+                    .collect(),
+            )
+        }
+        Value::Array(items) => Value::Array(items.iter().map(canonical).collect()),
+        other => other.clone(),
     }
 }
 
@@ -242,18 +289,11 @@ pub fn classify_failure(error: &str) -> Failure {
 pub fn arguments_shape(arguments: &Value) -> String {
     fn shape(value: &Value) -> Value {
         match value {
-            // Sort explicitly: with serde_json's `preserve_order`, which other
-            // crates in a build may enable, maps keep insertion order.
-            Value::Object(map) => {
-                let mut entries: Vec<_> = map.iter().collect();
-                entries.sort_by(|a, b| a.0.cmp(b.0));
-                Value::Object(
-                    entries
-                        .into_iter()
-                        .map(|(key, value)| (key.clone(), shape(value)))
-                        .collect(),
-                )
-            }
+            Value::Object(map) => Value::Object(
+                map.iter()
+                    .map(|(key, value)| (key.clone(), shape(value)))
+                    .collect(),
+            ),
             Value::Array(_) => Value::from("array"),
             Value::String(_) => Value::from("string"),
             Value::Number(_) => Value::from("number"),
@@ -261,7 +301,7 @@ pub fn arguments_shape(arguments: &Value) -> String {
             Value::Null => Value::from("null"),
         }
     }
-    let bytes = serde_json::to_vec(&shape(arguments)).expect("shape serializes");
+    let bytes = serde_json::to_vec(&canonical(&shape(arguments))).expect("shape serializes");
     format!("{:x}", Sha256::digest(bytes))
 }
 

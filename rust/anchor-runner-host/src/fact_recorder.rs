@@ -14,6 +14,7 @@ use anchor_kernel::{
 };
 use serde::Serialize;
 use serde_json::Value;
+use sha2::Digest;
 
 pub(crate) const ROOT: &str = "kernel-facts";
 
@@ -34,6 +35,23 @@ pub(crate) struct Recording {
 
 pub(crate) fn now_ms() -> u64 {
     chrono::Utc::now().timestamp_millis().max(0) as u64
+}
+
+/// The digest of this Host executable, the identity of every harness
+/// behavior it implements. Hashed once; `open` starts it in the background so
+/// that no invocation waits for it.
+pub(crate) fn host_sha256() -> String {
+    static HOST: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    HOST.get_or_init(|| {
+        let digest = || -> std::io::Result<String> {
+            let mut file = std::fs::File::open(std::env::current_exe()?)?;
+            let mut hasher = sha2::Sha256::new();
+            std::io::copy(&mut file, &mut hasher)?;
+            Ok(format!("{:x}", hasher.finalize()))
+        };
+        digest().unwrap_or_else(|error| format!("unknown: {error}"))
+    })
+    .clone()
 }
 
 impl FactRecorder {
@@ -58,6 +76,7 @@ impl FactRecorder {
         )
         .map_err(|e| e.to_string())?;
         anchor_facts::install(&mut kernel).map_err(|e| e.to_string())?;
+        std::thread::spawn(host_sha256);
         Ok(Self {
             kernel,
             _lease: lease,
@@ -154,6 +173,8 @@ mod tests {
             plugin_instructions_sha256: anchor_facts::text_digest(""),
             plugins: Vec::new(),
             routes: vec!["verify".into()],
+            host_sha256: host_sha256(),
+            tools_sha256: anchor_facts::tools_digest([]),
         }
     }
 
@@ -223,6 +244,14 @@ mod tests {
             trace.created.unwrap().config.as_deref(),
             Some(digest.as_str())
         );
+    }
+
+    #[test]
+    fn the_host_is_identified_by_the_digest_of_its_executable() {
+        let digest = host_sha256();
+        assert_eq!(digest.len(), 64, "{digest}");
+        assert!(digest.chars().all(|c| c.is_ascii_hexdigit()));
+        assert_eq!(host_sha256(), digest);
     }
 
     #[test]

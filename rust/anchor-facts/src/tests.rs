@@ -34,6 +34,8 @@ fn configuration() -> AgentConfiguration {
             },
         ],
         routes: vec!["verify".into(), "done".into()],
+        host_sha256: String::new(),
+        tools_sha256: String::new(),
     }
 }
 
@@ -363,4 +365,36 @@ fn a_person_may_grade_where_the_authority_lets_them() {
     assert!(verdict.is_accepted());
     assert_eq!(grade("r1").score(), 0.5);
     assert!(!grade("r1").passed());
+}
+
+#[test]
+fn manifests_without_harness_identity_keep_their_digest() {
+    // A manifest recorded before the fields existed reads back and hashes
+    // the same: the fields are left out when empty.
+    let old = configuration();
+    let json = serde_json::to_value(&old).unwrap();
+    assert!(json.get("host_sha256").is_none() && json.get("tools_sha256").is_none());
+    let read: AgentConfiguration = serde_json::from_value(json).unwrap();
+    assert_eq!(read.digest(), old.digest());
+    let mut harness = configuration();
+    harness.host_sha256 = "h".into();
+    assert_ne!(harness.digest(), old.digest());
+    let mut tools = configuration();
+    tools.tools_sha256 = "t".into();
+    assert_ne!(tools.digest(), harness.digest());
+}
+
+#[test]
+fn tool_digests_ignore_order_but_not_content() {
+    let a = json!({"type": "object", "properties": {"path": {"type": "string"}, "limit": {"type": "integer"}}});
+    let b = json!({"properties": {"limit": {"type": "integer"}, "path": {"type": "string"}}, "type": "object"});
+    let run = json!({"type": "object"});
+    let one = tools_digest([("read", "Read a file", &a), ("run", "Run", &run)]);
+    let two = tools_digest([("run", "Run", &run), ("read", "Read a file", &b)]);
+    assert_eq!(one, two);
+    assert_ne!(one, tools_digest([("read", "Read a file", &a)]));
+    assert_ne!(
+        one,
+        tools_digest([("read", "Read one file", &a), ("run", "Run", &run)])
+    );
 }
