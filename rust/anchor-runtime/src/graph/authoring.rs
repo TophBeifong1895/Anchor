@@ -1172,6 +1172,10 @@ mod tests {
             ),
             ("rsi", include_str!("../../../../examples/graphs/rsi.json")),
             (
+                "rsi-signals",
+                include_str!("../../../../examples/graphs/rsi-signals.json"),
+            ),
+            (
                 "rust-rsi",
                 include_str!("../../../../examples/rust-rsi/graph.json"),
             ),

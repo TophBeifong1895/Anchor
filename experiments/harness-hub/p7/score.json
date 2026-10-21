@@ -1,0 +1,271 @@
+{
+  "date": "2026-10-21",
+  "model_trials": 1,
+  "zero_model_startup_failures": 1,
+  "content": {
+    "hits": 2,
+    "total": 3,
+    "passed": false,
+    "criteria": "Tool and specific trigger must both be stated.",
+    "defects": [
+      {
+        "tool": "anchor_run",
+        "trigger": "project provided outside Pilot",
+        "hit": true,
+        "evidence": [
+          "artifacts/investigate-1/1/signal-1-summary.json",
+          "artifacts/synthesize/1/synthesis.md#M1",
+          "proposals[0]"
+        ]
+      },
+      {
+        "tool": "anchor_edit",
+        "trigger": "absolute /workspace/... path",
+        "hit": true,
+        "evidence": [
+          "artifacts/synthesize/1/synthesis.md#0.2",
+          "proposals[2]"
+        ],
+        "limit": "Sufficient condition reproduced; historical argument values are absent."
+      },
+      {
+        "tool": "anchor_read",
+        "trigger": "absolute /workspace/... path",
+        "hit": false,
+        "evidence": [
+          "artifacts/investigate-3/1/signal-3-findings.md",
+          "proposals[1]"
+        ],
+        "reason": "Identified absolute mount check, but proposed /local-inputs origin; no workspace trigger."
+      }
+    ]
+  },
+  "workflow": {
+    "review": "REVISE",
+    "projection": {
+      "phase": "settled",
+      "outcome": "failed",
+      "reason": "gate failed: Bubblewrap startup was confirmed and the command exited (exit_code=Some(127))\nsh: python3: command not found",
+      "active": false,
+      "actions": {
+        "pause": false,
+        "stop": false,
+        "resume": false,
+        "abandon": false
+      },
+      "updated": "2026-10-21T14:01:29.558818761Z"
+    },
+    "published": false,
+    "model_rerun": false
+  },
+  "identity": {
+    "live_environment_pid": 38037,
+    "host_source_commit": "1af26b1273acba4fc422e0e2723798dd0d87afa5",
+    "host_sha256": "a8fbecdbf313258e465af90dcc0cf09ac0e69ffba610979a331e064d8f3b30eb",
+    "hub_sha256": "7c6610d4e1f4248cbff94dd4cc38f757dafc7696ea2909dc865c18fa576f7bd9",
+    "goose_sha256": "17e065a79cb0508413af714724aed51d6b76972dda9feebdda701330134fb640",
+    "relay_sha256": "3771bd6abf372551644cc747d949b8e156d98374282bbef40d5526810156291d",
+    "model_alias": "models.default.flash",
+    "guard_seconds": 1800
+  },
+  "graph_digest": "401030df60437636493695f297ecd78bbc3033bc5de167d1124ef89016e1842f",
+  "trial_allowed_commands": "sh,cat,printf,grep,test,true,ls,mkdir,cp,python3,anchor-hub",
+  "cost": {
+    "wall_seconds": 941.898743391037,
+    "agent_invocations": 9,
+    "messages": 319,
+    "input_tokens": 19647996,
+    "output_tokens": 301175,
+    "total_tokens": 19949171,
+    "cache_read_tokens": 19002240,
+    "cost_usd": 0.334584,
+    "tool_calls": 358,
+    "tool_failures": 16,
+    "tool_calls_dropped": 0,
+    "records_calls": 12
+  },
+  "discipline": {
+    "a_data_unchanged": true,
+    "host_source_unchanged": true,
+    "model_snapshot_removed": true,
+    "files_with_credentials": 0,
+    "other_slot_file_content_read_observed": false,
+    "unscoped_signals_calls_by_investigators": [
+      "investigate-2",
+      "investigate-4"
+    ],
+    "explore_commands_referencing_raw_data": 46,
+    "protected_write_observed": false,
+    "level_3_execution_observed": false,
+    "enforced_one_signal_access": false,
+    "enforced_mcp_only_data_access": false
+  },
+  "predictions": {
+    "status": "Directional comparison with P6 B only; proposed interventions were not run.",
+    "run": {
+      "predicted_max": 5,
+      "conflicting_validation_max": 8,
+      "observed_B_related_failures": 1
+    },
+    "read": {
+      "predicted_max": 5,
+      "observed_B_related_failures": 0,
+      "label_change_confounds_primary_metric": true
+    },
+    "edit": {
+      "predicted_max": 7,
+      "observed_B_related_failures": 0
+    },
+    "quality": {
+      "prediction": "non_decreasing",
+      "A_full_pass": 93,
+      "B_full_pass": 97,
+      "quality_loss_signal": false,
+      "per_task_tolerance_verified": false
+    },
+    "overall_failure_rate_prediction": null
+  },
+  "G4": "unverified: no same-input old Graph baseline; raw reads bypassed MCP",
+  "G5": "unverified: no proposal ledger or subsequent adjudication facts",
+  "post_trial_fix": {
+    "change": "Probe python3 then python3.12; authorize python3.12 in future runner configuration.",
+    "model_trial_repeated": false,
+    "op_only_replay": ".local/harness-hub-p7/gate-replay-03",
+    "expected_review": "REVISE",
+    "actual_gate_exit_code": 0,
+    "actual_gate_route": "triage",
+    "model_calls": 0,
+    "expected_fixture_stop": "triage failed: Recorded review requires revision"
+  },
+  "evidence": {
+    "local_root": ".local/harness-hub-p7/collected",
+    "raw_trace": {
+      "path": ".local/harness-hub-p7/collected/raw-trace.tar.gz",
+      "sha256": "1209a6afea12b2b42783d284f7294b713932f9c37e467cb14127967aa1ff60e5",
+      "bytes": 6740107
+    },
+    "tool_calls": {
+      "path": ".local/harness-hub-p7/collected/tool-calls.jsonl",
+      "sha256": "97d7d9c17e86cddce7fea798780e2f64aa6f1e959d8efcac50672b8785808c2b",
+      "rows": 358
+    },
+    "trial_graph_sha256": "0a8aef580b0962c9865d5d5a8b5e0f90e172a6a2d6d3ca3a5ed133f28aaf9052",
+    "proposals_sha256": "bafd127b1da9749f246232fcf2173616994c8dc8b83869cd1ac0d3c7b31f930e",
+    "source_manifest": {
+      "path": ".local/harness-hub-p7/blind-02/source-manifest.json",
+      "sha256": "90ae85bb4009e800c3858a9a4f9c5fc23609dd114b348f1b4c98fe09877cd85a"
+    },
+    "artifact_manifests": [
+      {
+        "key": {
+          "run_id": "p7-blind-01",
+          "graph_digest": "401030df60437636493695f297ecd78bbc3033bc5de167d1124ef89016e1842f",
+          "node_id": "explore",
+          "invocation": 1
+        },
+        "sha256": "900b435bbf72cc139d7e247597de8de5900e7b36931c8dbeeb8b8da745fdcc33",
+        "path": ".local/harness-hub-p7/collected/artifacts/explore/1/artifact-manifest.json"
+      },
+      {
+        "key": {
+          "run_id": "p7-blind-01",
+          "graph_digest": "401030df60437636493695f297ecd78bbc3033bc5de167d1124ef89016e1842f",
+          "node_id": "investigate-1",
+          "invocation": 1
+        },
+        "sha256": "99eb2b2a2f89684d5f1d1b03743bbf16f8935576aab5c96a70e93b4403ac221c",
+        "path": ".local/harness-hub-p7/collected/artifacts/investigate-1/1/artifact-manifest.json"
+      },
+      {
+        "key": {
+          "run_id": "p7-blind-01",
+          "graph_digest": "401030df60437636493695f297ecd78bbc3033bc5de167d1124ef89016e1842f",
+          "node_id": "investigate-2",
+          "invocation": 1
+        },
+        "sha256": "9bbef4df2cf049debd00c4dcc30c46b3f0574d91485c2cb2ca2a4839fae28e83",
+        "path": ".local/harness-hub-p7/collected/artifacts/investigate-2/1/artifact-manifest.json"
+      },
+      {
+        "key": {
+          "run_id": "p7-blind-01",
+          "graph_digest": "401030df60437636493695f297ecd78bbc3033bc5de167d1124ef89016e1842f",
+          "node_id": "investigate-3",
+          "invocation": 1
+        },
+        "sha256": "183892a1d164bbb04dab535f95ebe09dd4bc1beec5252f0a07981db8f66ba7b5",
+        "path": ".local/harness-hub-p7/collected/artifacts/investigate-3/1/artifact-manifest.json"
+      },
+      {
+        "key": {
+          "run_id": "p7-blind-01",
+          "graph_digest": "401030df60437636493695f297ecd78bbc3033bc5de167d1124ef89016e1842f",
+          "node_id": "investigate-4",
+          "invocation": 1
+        },
+        "sha256": "1b9115563484662d9f63cdd2e7558a38ddb3669855c10f7e04c19844c26c361d",
+        "path": ".local/harness-hub-p7/collected/artifacts/investigate-4/1/artifact-manifest.json"
+      },
+      {
+        "key": {
+          "run_id": "p7-blind-01",
+          "graph_digest": "401030df60437636493695f297ecd78bbc3033bc5de167d1124ef89016e1842f",
+          "node_id": "research-fanout",
+          "invocation": 1
+        },
+        "sha256": "b6852dc663a46e45b43d7c0f126cb6ee749352da4334e2bfbedf0543f8940940",
+        "path": ".local/harness-hub-p7/collected/artifacts/research-fanout/1/artifact-manifest.json"
+      },
+      {
+        "key": {
+          "run_id": "p7-blind-01",
+          "graph_digest": "401030df60437636493695f297ecd78bbc3033bc5de167d1124ef89016e1842f",
+          "node_id": "research-join",
+          "invocation": 1
+        },
+        "sha256": "5d2e61cb2a7a664ce927e8d6cb7143bc3488092bede30b50608ddb40d3604d1d",
+        "path": ".local/harness-hub-p7/collected/artifacts/research-join/1/artifact-manifest.json"
+      },
+      {
+        "key": {
+          "run_id": "p7-blind-01",
+          "graph_digest": "401030df60437636493695f297ecd78bbc3033bc5de167d1124ef89016e1842f",
+          "node_id": "review",
+          "invocation": 1
+        },
+        "sha256": "da57ffab83894aa67fdd7077f729bd49a1a70a2723a65309b03c90f293a7cb73",
+        "path": ".local/harness-hub-p7/collected/artifacts/review/1/artifact-manifest.json"
+      },
+      {
+        "key": {
+          "run_id": "p7-blind-01",
+          "graph_digest": "401030df60437636493695f297ecd78bbc3033bc5de167d1124ef89016e1842f",
+          "node_id": "signals",
+          "invocation": 1
+        },
+        "sha256": "057de5089c28a4dae570ac38835ff3ba45a5fe31a70a2fb28979fd03bf683906",
+        "path": ".local/harness-hub-p7/collected/artifacts/signals/1/artifact-manifest.json"
+      },
+      {
+        "key": {
+          "run_id": "p7-blind-01",
+          "graph_digest": "401030df60437636493695f297ecd78bbc3033bc5de167d1124ef89016e1842f",
+          "node_id": "synthesize",
+          "invocation": 1
+        },
+        "sha256": "a58e7a626196ab385923db26c3cafbf5837a6c7b568bd28e41c081719a92dd8b",
+        "path": ".local/harness-hub-p7/collected/artifacts/synthesize/1/artifact-manifest.json"
+      },
+      {
+        "key": {
+          "run_id": "p7-blind-01",
+          "graph_digest": "401030df60437636493695f297ecd78bbc3033bc5de167d1124ef89016e1842f",
+          "node_id": "triage",
+          "invocation": 1
+        },
+        "sha256": "3a8c41fd348a75eab063620fb853194bda6ea6082ddc4b95726c369947a47074",
+        "path": ".local/harness-hub-p7/collected/artifacts/triage/1/artifact-manifest.json"
+      }
+    ]
+  }
+}

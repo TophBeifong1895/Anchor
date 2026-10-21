@@ -87,3 +87,13 @@ cargo build --manifest-path rust/Cargo.toml -p anchor-rsi --locked
 RSI Graph 不自动提交、合并或部署代码，不自动改 Graph/Plugin，不重放历史外部副作用，也不把模型声称完成当成事实。`evolution.json` 的状态为 proposed/continue/hold/resolved；resolved 是有依据的复查判断，不代表本次 RSI 执行过改动。实际修改由维护者在隔离工作区完成，再用保留案例和相关测试验证。
 
 定向验证为 `cargo test --manifest-path rust/Cargo.toml -p anchor-rsi --locked --test business --test evidence`；Graph JSON 静态编译由 `anchor-runtime` 的 shipped-example 作者契约测试覆盖，不启动模型。它们验证正确发布、独立评审拒绝、commit/hash/window mismatch、安全提案门禁、冻结读取和历史 ID 连续性。真实 Goose/provider 的大型业务 Graph、公开业务服务与报告质量需另行验收；历史证据不算本轮新验收，单次报告也不证明长期改进收益。
+
+## 信号驱动的变体
+
+[rsi-signals.json](../examples/graphs/rsi-signals.json) 是独立的研究变体，保留原 `rsi`。中枢先经只读 stdio MCP 生成有界信号表，triage 选 3–4 条信号并说明未选原因；四个调查槽与一个 explore 在显式 fanout/join 中并行，空槽写跳过标记。调查沿事实键调用 `invocation`、`records`、`configurations`；explore 比较前沿、范例和工具源码。全部分支完成后综合、独立评审，gate 决定发布或带着反馈返回 triage。
+
+每条提议包含层级、信号 ID、具体改动和证据、指标/坐标/现值/预期值、质量预期与验证条件。gate 拦截质量下降、缺字段和评审 BLOCK；质量未知仍须受控验证，层级 3 只交给维护者。发布只生成本 Run 的报告和提议 Artifact，没有自动实施或协议改动。
+
+Plugin 构建、命令授权和节点只读输入见 [harness-hub 安装说明](../examples/rust-rsi/plugins/harness-hub/README.md)。设计要求从中枢查询运行事实；当前数据目录同时作为节点只读输入，shell 仍能直接读原始数据，P7 explore 实际走过此路径。源码由操作员授予只读副本，包含可选的 `anchor-rsi` 证据实现对照。上游 Artifact 与 MCP 查询没有按信号强制隔离，“一支一条”是注意力约定，不能把 `reads` 当作访问控制。
+
+P7 单次盲测命中 2/3，独立评审 REVISE 后 gate 因解释器启动失败而停止，未发布；解释器选择已修正并经无模型回放验证，未重跑模型。提议质量、成本及未覆盖边界见 [验收报告](../experiments/harness-hub/p7/report.md)。Graph 流程完成与找回缺陷分别判定，不能用静态编译或流程终态替代内容验收。

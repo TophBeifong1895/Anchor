@@ -1,0 +1,12 @@
+{
+  "name": "Anchor Harness data hub",
+  "description": "Read-only signal and trace projections for the Harness RSI Graph.",
+  "mcpServers": {
+    "harness-hub": {
+      "type": "stdio",
+      "command": "bin/anchor-hub",
+      "args": ["mcp", "/local-inputs/harness-hub-data"],
+      "cwd": "."
+    }
+  }
+}

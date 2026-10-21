@@ -1,0 +1,218 @@
+{
+  "node": "p7-blind-01:research-fanout:1:research-join",
+  "level_legend": {
+    "0": "knob（既有描述/默认值/文案，不新增能力）",
+    "1": "combination（多个既有旋钮一起改）",
+    "2": "new tool or Plugin（新工具/新分析面）",
+    "3": "protocol（仅提给人，本节点不执行）"
+  },
+  "quality_legend": {
+    "non_decreasing": "预期分数不下降（允许 ±0.02 噪声）",
+    "decreasing": "预期分数下降（按规则不可采纳，本文件无此类）",
+    "unknown": "纯度量/实验设计变化，分数影响不可先验断言，待验证"
+  },
+  "proposals": [
+    {
+      "level": 0,
+      "signal_id": "78f0661806ac",
+      "change": "anchor_run 在 development_projects 为 None 的节点上不广告 project（schema 省略该属性、描述不提 venv/Pilot Session），仍可解析以兼容旧客户端；当 project 存在时的拒绝改为可执行指令并归入 invalid_arguments 而非 not_executed：project is unavailable in this node; re-issue the same command without project。合并 9dcc0061ff1c：其 36 次 call_corrected(anchor_run) 与本次 30 次 not_executed 是同一批调用的两个侧面，不另立提议。",
+      "evidence": [
+        "/in/signals/signals.json:14（78f0661806ac: detail=30 of 854 call(s) failed: not_executed，weight 50，coordinates_total 8，tools=6638aa3017f8，host=d10438cc1fc0）",
+        "/in/signals/signals.json:16（9dcc0061ff1c: 36 failed call(s) were followed by a successful call with differently shaped arguments，subject=tool anchor_run，coordinates_total 6）",
+        "本节点复核（receipt 40a45dfd…）：sha256({\"command\":\"array\"})=4f9d1229…（成功常态）；sha256({\"command\":\"array\",\"project\":\"string\"})=d80c020b…（失败常态）；含 timeout_seconds 的 {command,timeout_seconds}=974b818f…、{command,project,timeout_seconds}=bdcea7b7…，均不等于 d80c020b，故失败调用键集恰为 {command,project}",
+        "trace/exp1-A-audit-01-1792543670158152177/agent/1（place=1, root=.../state/kernel-facts, hub 键）：5/5 采样失败全为 d80c020b，位于 model_request 5–7（共 11–17 turn），下一请求即以 4f9d1229 成功，失败耗时 22–23 ms",
+        "trace/exp1-A-logs-02-1792544024295642816/agent/1 与 trace/exp1-A-logs-05-1792545554768760692/agent/1（同桶补样，hub 键）：config 038a5751 上同样 1–2 次、同 shape",
+        "/local-inputs/host-source/rust/anchor-runner-host/src/node_tools.rs:619（schema 无条件广告可选 project）与 :698-701（refusal development projects are available only in a Pilot Session）—— 二手（经 /in/investigate-4/signal-4-triage.md:55-58、/in/investigate-1/findings-signal-1.md:41-45），本节点无 /local-inputs 挂载，未复验",
+        "探针 receipt f26aea21ead71f5546189ef79907f030df6f3e19c34db503e22eb791639f3f23（/in/investigate-1/signal-1-summary.json:30）：anchor_run {command:[true], project:.} 复现同一拒绝文本"
+      ],
+      "prediction": {
+        "metric": "anchor_run 的 not_executed 调用数（并按 arguments_shape 计数）＋ call_corrected(anchor_run) ＋ turns/tokens ＋ 10 任务 mean_score",
+        "coordinates": "tool=anchor_run, host=d10438cc1fc0, tools=6638aa3017f8, node=agent, model=deepseek-flash；config d1471c35(audit v1) 与 038a5751(logs v1) 各 10 次固定 config 重跑；信号另列 255a5480(routing)、68951b31(refactor)、7e60a17b(ledger)、9d0a0e6c(repair)",
+        "baseline": "not_executed 30/854 = 3.51%；call_corrected(anchor_run) 36；总回合 1214；总 tokens 12.14M；mean_score audit 0.888 / contacts 0.940 / incident 0.988 / triage 0.983 / 其余 1.0",
+        "expected": "not_executed ≤5/854；call_corrected(anchor_run) ≤8；回合 ≤1190（−2%）；tokens 下降 2%–4%；每任务 mean_score 变化在 ±0.02 内（不下降）；invalid_arguments 净增 ≤2；单 run 最大 tokens 反升 ≤5%",
+        "quality": "non_decreasing"
+      },
+      "validation": "experiment.py + anchor-hub contrast：单变量（仅本改动），d1471c35 与 038a5751 各 10 次重跑；report(health, code=tool_failures, subject=anchor_run) 取 not_executed 直方图，invocations{config} 取逐 run turns/tokens，report(contrast) 比两臂分数与 tokens（Mann-Whitney α=0.05）；逐 run 统计 (ok=false ∧ failure=not_executed) 的 arguments_shape 集合，要求不再出现 d80c020b 或任何非 {command} 键集。通过条件：not_executed ≤8 且 d80c020b 计数 = 0 且无任务 mean_score 降 >0.02 且 tokens 降幅 ≥1%。证伪：not_executed >8、或仍出现 d80c020b 形状（说明驱动力不是 schema 广告）、或分数下降、或 tokens 降幅 <1%（说明 30 次并非 project 所致，回到 U1）。"
+    },
+    {
+      "level": 0,
+      "signal_id": "3f329e110141",
+      "change": "read_description() 枚举本节点实际可读的绝对前缀（/in/<node_id>、/in/call、/in/channel、/previous、/spill、/plugins，与 anchor_run 的 authorized_commands_summary() 同构），并显式写明：工具结果里出现的宿主根路径（如 /local-inputs/…）不能用 path 读取，应改用 anchor_run 的 cat；同时让 read 的路径拒绝改用工具本地文案并回显被拒 path，不再复用写死 anchor_run + argv 数组的 invalid_arguments()。",
+      "evidence": [
+        "/in/signals/signals.json:17（3f329e110141: 13 of 188 call(s) failed: not_authorized，success 0.931，coordinates_total 5）",
+        "/in/investigate-3/signal-3-findings.md:31（O2：13 次失败与成功读取同形 5a0e39fb…，即 {path:string}）—— 本节点复核 5a0e39fb 原像成立（receipt 40a45dfd…）",
+        "/in/investigate-3/signal-3-findings.md:39-49（O6–O11：node_tools.rs:409-421 的挂载校验文案含 must belong to an authorized → classify_failure 首匹配为 NotAuthorized；call() 中 read 无第二授权闸门；read_description 不枚举前缀；可读目的地来自 artifacts.rs:67/94、previous.rs:54、channel_inputs.rs:185、preparation.rs:107-113 加 /plugins）—— 二手",
+        "/local-inputs/host-source/rust/anchor-facts/src/lib.rs:267-291（classify_failure 子串首匹配顺序）—— 二手",
+        "/local-inputs/host-source/rust/anchor-runner-host/src/node_tools.rs:235-242（invalid_arguments 文案写死 anchor_run）—— 二手，但本节点 receipt 1fa1d7e2… 现场复现同一文案（对 anchor_edit 的 path 错误同样自称 anchor_run 并建议传 argv）",
+        "trace/exp1-A-audit-01-1792543670158152177/agent/1、trace/exp1-A-contacts-04-1792545121336377251/agent/1、trace/exp1-A-contacts-10-1792548295886470710/agent/1（hub 键）：3/3 采样在下一请求内恢复，2 例同形重读成功、1 例改走 anchor_run"
+      ],
+      "prediction": {
+        "metric": "anchor_read 的 not_authorized 调用数（及 success_rate、turns 均值、tool_error 数）",
+        "coordinates": "tool=anchor_read, host=d10438cc1fc0, tools=6638aa3017f8；config 544001d8(triage)、68951b31(refactor)、9d0a0e6c(repair)、ab6bb2bb(contacts)、d1471c35(audit)，各 ≥10 次",
+        "baseline": "13/188 = 6.91%（success 0.931）；受影响任务 turns 均值 audit 15.7 / contacts 9.9 / triage 9.2 / refactor 18.9 / repair 11.2",
+        "expected": "not_authorized ≤5/188（≤2.7%）；success ≥0.97；不新增 tool_error（≤2）；turns 均值上升 ≤0.5；5 个任务 mean_score 变化在 ±0.02 内",
+        "quality": "non_decreasing"
+      },
+      "validation": "experiment.py + anchor-hub contrast：同一 5 个 config、每臂 ≥10 次；report(health, code=tool_failures, subject=anchor_read) 读 not_authorized 与 success_rate，report(contrast by=config) 比 turns/agent_ms，逐 run 统计 anchor_read 的 arguments_shape×failure。通过条件：not_authorized ≤5 且 success ≥0.97 且 turns 不升。证伪：not_authorized ≥10、或失败转移为 tool_error ≥5、或 turns 均值升 ≥1（说明描述不是杠杆，值来源在任务提示或宿主回显里）。"
+    },
+    {
+      "level": 1,
+      "signal_id": "fe5f1203bb91",
+      "change": "anchor_edit 写路径契约的三项组合：(a) edit_description 写明 path 必须相对 /workspace、不得以 / 开头或含 ..，并说明 anchor_read 可用的绝对输入路径不能直接用于编辑，给出 {\"path\":\"out/x.json\",\"content\":\"…\"} 示例；(b) 拒绝文案参数化为工具名并回显被拒 path 与可接受形式（当前一律自称 anchor_run 并建议传 argv）；(c) 仅当 path 以 <workspace 挂载前缀>/ 开头时剥前缀接受，其余绝对路径与 .. 仍拒。(a)(b) 属 0 级文本旋钮，(c) 属 1 级组合项；若审阅者判定 (c) 改变工具契约，则 (c) 降为 3 级仅提给人，本提议退化为 0 级、预测按 expected 中的 (a)(b) 分支折算。",
+      "evidence": [
+        "/in/signals/signals.json:15（fe5f1203bb91: 28 of 169 call(s) failed: invalid_arguments，success 0.822，coordinates_total 9）",
+        "本节点复核（receipt 40a45dfd…）：sha256({\"content\":\"string\",\"path\":\"string\"})=25384ae2…；sha256({\"new_string\":\"string\",\"old_string\":\"string\",\"path\":\"string\"})=960293d3…（局部替换成功形状）；sha256({\"content\":\"string\",\"path\":\"string\",\"base_sha256\":\"string\"})=4a516f1d…（不匹配 28 次的采样形状）",
+        "/in/investigate-2/report-signal-2.md:24-35（O2/O3：6/6 采样的失败调用形状均为 25384ae2，跨 audit-01/06/09、refactor-05、logs-05、contacts-03 四个 config，且下一次同形状即成功）",
+        "/in/investigate-2/report-signal-2.md:42（O5：invalid_arguments 只有四个来源——serde 失败、expected_matches==0、content 与增删组合违规、relative_candidate 的 path 规则；缺/过期 base_sha256 与命中数不符走 refused 文案 → not_executed/tool_error，169 次里合计仅 2）—— 二手，路径 node_tools.rs:506/562/579/369-389",
+        "本节点现场复现（receipt 1fa1d7e2…）：anchor_edit 传绝对路径 /workspace/synthesis.md → invalid arguments: … must be relative to /workspace without .. or a leading /，且文案自称 anchor_run 并建议 Pass {\"command\":[…]}; 改成相对路径后同一次调用成功 —— 证明 path 规则可达且提示误导",
+        "trace/exp1-A-audit-01-1792543670158152177/agent/1 等 6 条 trace（hub 键）：失败调用 model_request 3–7，下一请求恢复"
+      ],
+      "prediction": {
+        "metric": "anchor_edit 的 invalid_arguments 调用数（并按 arguments_shape 计数）＋ not_executed 护栏 ＋ pass_rate",
+        "coordinates": "tool=anchor_edit, host=d10438cc1fc0, tools=6638aa3017f8；9 个 config，重跑取 038a5751(logs)、255a5480(routing)、2ba2ce01(schedule)、544001d8(triage)、68951b31(refactor)，各 10 次（与既有 100 run 套件同构）",
+        "baseline": "invalid_arguments 28/169 = 16.57%（success 0.822）；形状 {content,path} 的失败 ≥6（6/6 采样）；not_executed 1、tool_error 1",
+        "expected": "含 (c)：invalid_arguments ≤7/169（≤4.1%）且 {content,path} 形状失败 = 0；不含 (c) 仅 (a)(b)：≤14/169 且该形状失败 ≤2；护栏：not_executed 由 1 升至 ≤3，pass_rate 不降（audit ≥0.889、其余任务 1.0）",
+        "quality": "non_decreasing"
+      },
+      "validation": "experiment.py + anchor-hub contrast：同一 100 次套件（10 任务×10）单变量复跑；report(health, code=tool_failures, subject=anchor_edit) 读 invalid_arguments，按 arguments_shape 归一化计数（本节点已验证 4 个原像可复算），report(contrast) 比两臂分数。针对性断言：(i) 编辑 /in/... 等只读输入路径仍被拒；(ii) 已存在文件 + content 无 base_sha256 仍 not_executed；(iii) sha 过期仍 not_executed 且回显当前 sha；(iv) 含 .. 的路径仍被拒。通过条件：invalid_arguments ≤7（或仅 a/b 时 ≤14）、该形状失败 ≤2、三条护栏全绿、pass_rate 不降。证伪：invalid_arguments ≥20/169 或 {content,path} 失败不降（说明描述不是杠杆，U4 转为「值来源在任务提示的绝对输出路径」），或护栏破防（(c) 让缺 sha 的整文件写入被静默覆盖）。"
+    },
+    {
+      "level": 2,
+      "signal_id": "9dcc0061ff1c",
+      "change": "新增 retry 事实：(tool, failure class, 下一次同工具成功调用, 间隔回合数)，不要求 arguments_shape 不同；并输出每任务 retry_turns 与 retry_tokens（失败回合 total_tokens 之和）。保留 call_corrected 但标注为「仅结构变化子集」，并修正其 detail 文案（现在写 failed call(s) 却计 invocation 数）。合并 78f0661806ac / fe5f1203bb91 / 3f329e110141 / 7c5fda10e645 / ccb058c24773 的「恢复率」口径问题为同一处修复。",
+      "evidence": [
+        "/in/signals/signals.json:16,18,24（call_corrected 三条：anchor_run 36 / anchor_edit 9 / anchor_read 1，合计 46）",
+        "/in/investigate-2/report-signal-2.md:38（O4：call_corrected 要求 later.arguments_shape != call.arguments_shape，路径 anchor-hub/src/analyzers/health.rs:338-371）—— 二手",
+        "/in/investigate-3/signal-3-findings.md:49（O11：detail 写「failed call(s)」但塞的是 invocations.len()；且同形恢复不计）—— 二手",
+        "/in/investigate-4/signal-4-triage.md:41（O4：9 次抽样失败中 4 次是同形换值恢复，故 46 是下界）—— hub 键推导",
+        "/in/investigate-4/signal-4-triage.md:29-39（O3：单 run 重试 tokens 占比 audit-01 23.0%、contacts-03 19.9%、incident-06 13.1%、ledger-01 8.4%、logs-02 8.4%；语料 3.6%/6.6%）",
+        "/in/explore/explore-report.md:79（反例 2：audit-03 零失败却最贵 305,848 tokens，failure 数与 tokens 不同向）"
+      ],
+      "prediction": {
+        "metric": "重试事件数、retry_tokens 占各任务 tokens 比例、retry 次数与 mean_tokens 的 Spearman ρ（控制回合数后的偏效应）",
+        "coordinates": "全语料 10 任务 × 10 run（100 run、1,310 次调用），host d10438cc1fc0，tools 6638aa3017f8",
+        "baseline": "call_corrected 46（run 36 / edit 9 / read 1）；单 run 重试开销 8.4%–23.0%；语料层 3.6%（计入 36）～6.6%（80 次失败）",
+        "expected": "重试事件 ≥70（80 次失败中 ≥70 在 1 回合内恢复）；retry_tokens 占各任务 3%–8%，单 run 上限 ≥15%（audit-01 23.0%、contacts-03 19.9% 应可复现）；ρ ≥0.5，但控制回合数后偏效应 ≤0.25（即重试解释不了 4.58× 差距）",
+        "quality": "unknown"
+      },
+      "validation": "无需重跑：在现有 100 个 run 上离线重放（输入为 records 的逐调用 failure/arguments_shape 与每回合 total_tokens），断言旧 46 事件是新集合的真子集，并把 audit-03（0 失败最贵）作为反向核对点。通过条件：事件 ≥70 且至少一个任务 retry_tokens >3% 且 ρ ≥0.5。证伪：事件 <55、或无任务 >3%、或 ρ <0.3 —— 则「重试是可定价的量」不成立，「重试解释高 token 前沿」被否决。因纯度量，quality 记 unknown：落地后需确认 10 任务 mean_score 不变（±0.01）才开始用新口径排序。"
+    },
+    {
+      "level": 1,
+      "signal_id": "9c7b3606babb",
+      "change": "在 front / contrast / health 的 grades 迭代上加联合过滤：仅当该 run 的 agent invocation outcome == completed 或 meta.graded == true 时计入 mean_score；并强制新增 ungraded_runs / non_completed_runs 计数（否则只是把问题藏起来）。二选一、不叠加的替代落点是产出侧：grade 节点在 agent 无已提交 effect 时写 no-result 而非逐项 false。合并 42f96fad5632、b78f26b1cc1a（同一 run 的并列事实）。",
+      "evidence": [
+        "/in/signals/signals.json:25-27（9c7b3606babb: ended interrupted；b78f26b1cc1a: waiting_human with nothing recorded for 715 min；42f96fad5632: observed outcome interrupted but Run recorded no result）",
+        "/in/explore/explore-report.md:53,63,67（audit-08 的 result.json 与满分 run audit-02 逐字节相同；meta.json graded=false score=0.0；kernel-facts/validator%2Feffect 为空；goose_acp.rs:972-980 Uncertain→Interrupted 是刻意设计）—— 二手",
+        "/in/explore/explore-report.md:20,78（audit 只看已评分运行 mean_score 0.986（n=9）；剔除 audit-08 后 Δmean_score = +0.0981、Δtokens = −0.11%、Δagent_ms = −1.3%）",
+        "grade/exp1-A-audit-08-1792547371548948228（root=.../state/kernel-grades, place=1, hub 键）：8 个 check 全 false 且 verdict accepted/mechanical —— 与 meta.graded=false 并存",
+        "/in/signals/signals.json:2（front audit v1 mean_score 0.888，config d1471c358fdf4b94…，runs=10）"
+      ],
+      "prediction": {
+        "metric": "audit v1 的 mean_score 与 pass_rate、其余任务 mean_score、(存在 accepted Grade) ⇔ meta.graded 的不变量违反数",
+        "coordinates": "task=audit v1, config=d1471c358fdf4b942171e7b589c22a6819e6661a64305585a9df6997c3ce4b8d, host d10438cc1fc0, model deepseek-flash；全 10 任务回归",
+        "baseline": "audit mean_score 0.888（10 run 含 1 个 0.0）、pass_rate 0.8；不变量违反 1/100",
+        "expected": "audit mean_score → 0.986（n=9）、pass_rate → 0.889；其余 9 任务变化 ≤0.001；不变量违反 0/100；ungraded_runs 计数 = 1/100（可见）",
+        "quality": "non_decreasing"
+      },
+      "validation": "离线重算即可（不改采集）：重跑 report(contrast) 与 signals，audit v1 行应显示 runs=9、mean_score=0.986；对 100 个 run 目录断言 meta.json:graded 与 kernel-grades/grade%2F… 是否一致，要求 0 violation；并断言新字段 ungraded_runs 把该 run 明确列出。通过条件：audit 0.986 且其余任务 ≤0.001 变动且 0 violation 且 ungraded 可见。证伪：audit 仍 0.888、或任一其他任务变动 >0.01、或无 ungraded 计数（此时该改动只是隐藏而非修正，应退回）。"
+    },
+    {
+      "level": 0,
+      "signal_id": "3f329e110141",
+      "change": "contacts 指令把格式占位符换成成对实例并明示位数：keep all 11 digits (do not drop the leading 1): 13056807375 -> +86 130 5680 7375；只改 instructions_sha256，task_version 1→2，v1 保留为并行基线，不得把 v2 的 1.0 记作 harness 进步。（信号表无 contacts 专属信号；3f329e110141 是唯一把 contacts config ab6bb2bb 挂进坐标集的信号，仅作坐标载体，真实证据是 front 行、grade.json 与输出 CSV。）",
+      "evidence": [
+        "/in/signals/signals.json:3（front contacts v1 mean_score 0.94，config ab6bb2bbf1a2cfcb…，mean_tokens 82,222，runs 10）",
+        "/in/explore/explore-report.md:55,82（contacts-04/06/07 三个 run 的输出互相一致：31 行电话全为 10 位 3-4-3，少了首位 1；5 个 check 全有全无，phones 归零）",
+        "/in/explore/explore-report.md:80（反例 3：全组最便宜的 contacts-05 满分，故「便宜就漏查」被否定，错的是规则不是覆盖面）",
+        "grade/exp1-A-contacts-04-1792545121336377251、grade/…-06-…、grade/…-07-…（hub 键）：phones check false，其余 check true",
+        "/in/explore/explore-report.md:112（原指令文本：write it as +86 XXX XXXX XXXX）"
+      ],
+      "prediction": {
+        "metric": "输出中 10 位 3-4-3 形式的电话行数（正则 ^\\+86 \\d{3} \\d{4} \\d{3}$）＋ phones check 通过数",
+        "coordinates": "task=contacts v1, config=ab6bb2bbf1a2cfcb50dbff64d9c83881517f989ab25219dc93724256915eb525, 每臂 10 run",
+        "baseline": "phones 通过 7/10；10 位形式 93 行（3 run × 31 行）",
+        "expected": "10 位形式 0 行；phones ≥9/10；header/emails/names/order 仍 10/10",
+        "quality": "non_decreasing"
+      },
+      "validation": "experiment.py 两臂（v1 指令 vs v2 指令，各 10 run，graph/model/tools/grade 全同）+ anchor-hub contrast 比两臂；逐 check 计数并用上述正则数 10 位形式行数。通过条件：0 行 10 位形式 且 phones ≥9/10 且其余 4 个 check 10/10。证伪：phones ≤8/10、或任一其他 check <10/10、或仍出现 10 位形式。判据用形态不变量而非通过率，避免 n=10 的噪声与「题目变简单」被记成能力提升。"
+    },
+    {
+      "level": 0,
+      "signal_id": "3f329e110141",
+      "change": "audit 指令的 short 从句补上所指并声明互斥：short: open orders that have at least one payment or refund record AND whose net is more than 100 cents below amount_cny in cents; an order with no record at all belongs only to unpaid（原文 a record whose net 无语法所指）。（同样以 3f329e110141 作坐标载体，证据是 front 行与 grade.json。）",
+      "evidence": [
+        "/in/signals/signals.json:2（front audit v1 0.888/0.986，config d1471c35…）",
+        "/in/explore/explore-report.md:54（audit-01 的 short 多出 6 个 id，恰等于 unpaid 的 6 个：O2002/O2007/O2014/O2016/O2038/O2044）",
+        "/in/explore/explore-report.md:120（原指令：short: open orders with at least one record whose net is more than 100 cents below amount_cny）",
+        "grade/exp1-A-audit-01-1792543670158152177（hub 键）：short check false，其余 7 个 true（0.875）"
+      ],
+      "prediction": {
+        "metric": "出现 set(unpaid) ⊆ set(short) 的 run 数 ＋ short check 通过数",
+        "coordinates": "task=audit v1, config=d1471c358fdf4b942171e7b589c22a6819e6661a64305585a9df6997c3ce4b8d, 10 run",
+        "baseline": "1/9 graded run 出现包含（audit-01）；short 通过 8/9",
+        "expected": "0/10 出现包含；short 10/10；total / top_outstanding 等其余 check 无新失败",
+        "quality": "non_decreasing"
+      },
+      "validation": "10 run，只改指令；对每个 result.json 做集合包含断言（unpaid ⊆ short 计数）+ short check 计数。通过条件：包含 0 次 且 short 10/10 且其余 check 无新失败。证伪：任一 run 仍满足 unpaid ⊆ short（说明歧义不在该从句）。"
+    },
+    {
+      "level": 3,
+      "signal_id": "3f329e110141",
+      "change": "仅提给人、本节点不执行：把「路径/参数契约拒绝」与「授权/沙箱策略拒绝」在健康投影里分开——新增 path_outside_mount 类（或至少先判 invalid arguments 再判 not authorized），把共享 invalid_arguments() 文案按工具名参数化，并让 anchor_run 的 pre-launch 拒绝保留 request_contract / sandbox_policy / adapter 的区分。合并 fe5f1203bb91、78f0661806ac、b9bdfc3926af 的同一处放大项；涉及 host↔hub 的 Failure 枚举与信号含义，属协议变更。",
+      "evidence": [
+        "/local-inputs/host-source/rust/anchor-facts/src/lib.rs:267-291（classify_failure 按英文子串首匹配：not authorized → NotAuthorized；invalid arguments/missing field → InvalidArguments；not_executed/refused → NotExecuted）—— 二手",
+        "/local-inputs/host-source/rust/anchor-runner-host/src/node_tools.rs:409-421（读挂载校验用 invalid_arguments，文案含 must belong to an authorized → 被首匹配成 NotAuthorized）—— 二手",
+        "/local-inputs/host-source/rust/anchor-runner-host/src/node_tools.rs:235-242（共享文案写死 anchor_run + argv 建议）—— 二手，但本节点 receipt 1fa1d7e2… 现场复现同一文案",
+        "/in/signals/signals.json:17（anchor_read 13/188 not_authorized）与 :19（anchor_run 6/854 invalid_arguments，信号 b9bdfc3926af，未被任何槽位下钻）",
+        "/in/investigate-3/signal-3-findings.md:96-103（P2 的拆分设计、预测 ≥12/13 落入 path_outside_mount）",
+        "/in/investigate-1/signal-1-summary.json:46（P2：pre-launch 拒绝三分法的预测与证伪条件）"
+      ],
+      "prediction": {
+        "metric": "anchor_read 的 not_authorized 中有多少属 path 契约的比例、拆分类后各子类的恢复率与分数损失",
+        "coordinates": "全语料 1,211 次工具调用（anchor_run 854 / anchor_edit 169 / anchor_read 188），10 个 config，host d10438cc1fc0，tools 6638aa3017f8",
+        "baseline": "anchor_read 13 次 not_authorized 全部来自唯一生产者（挂载校验），真正授权拒绝 0；anchor_edit 的 28 次拒绝文案自称 anchor_run；anchor_run 30 次 not_executed 与 6 次 invalid_arguments 同处一个兜底类",
+        "expected": "≥12/13 落入 path_outside_mount、≤1 为真正授权拒绝；anchor_run 侧最大子类（request_contract）≥60% 且复现同一指纹（同 shape、request 5–7、下一请求恢复、0 分数损失）；10 任务 mean_score 变化 ±0.01 内（拆分类不改变执行面）",
+        "quality": "non_decreasing"
+      },
+      "validation": "用现有 tool_call 事实离线重放即可（failure 类别与 arguments_shape 已在库，无需新采集）：重建三类计数，与现信号表并列一版，检查 (a) 各类是否有不同 shape 指纹、(b) 每类后是否紧跟同工具成功调用（恢复率）、(c) 各类 run 的 grade；并把拒绝正文与 trace 一一对应。通过条件：path_outside_mount ≥12/13 且最大子类 ≥60% 且分数不变。证伪：path_outside_mount <40%（<6/13）或最大子类 <60% —— 则分类不是主因，P2/P3 应改靶（转向相对路径与 .. 的纠正提示）。"
+    },
+    {
+      "level": 3,
+      "signal_id": "structural:none",
+      "change": "仅提给人：每个任务准备 ≥2 个配置（基线臂 vs 指令臂/tools 臂），每臂 ≥10 次运行，使 report contrast 有 arm 可比、dominates 才有意义。无信号 id 可引用——这是结构性缺口（by=graph 返回 arms=[unrecorded]、findings=0；by=host_sha256 单臂）。",
+      "evidence": [
+        "/in/signals/signals.json:2-11（每个任务只列 1 个 config，runs=10）",
+        "/in/explore/explore-report.md:14,81（contrast by=graph 把 100 run 折成单臂 unrecorded，findings=0；front 的「未被击败」恒真）",
+        "/local-inputs/hub-source/src/analyzers/signals.rs（MIN_RUNS=3、dominates() 需 p<0.05 且 score_b ≥ score_a）与 contrast.rs（arms / runs_without_one_arm）—— 二手"
+      ],
+      "prediction": {
+        "metric": "report contrast 的 findings 数与 runs_without_one_arm",
+        "coordinates": "实验设计层：10 任务 × ≥2 config × ≥10 run；host d10438cc1fc0、model deepseek-flash 保持不变以隔离变量",
+        "baseline": "arms = [unrecorded]；findings.total = 0；runs_without_one_arm = 100（全部）",
+        "expected": "findings.total > 0、runs_without_one_arm = 0、至少一个任务出现 p<0.05 的 tokens 或 agent_ms 差异；本节点的每条提议都能得到真实对照臂",
+        "quality": "unknown"
+      },
+      "validation": "直接读 report contrast by=<field> 的 arms / findings / runs_without_one_arm。通过条件：findings.total > 0。证伪：仍为 0（说明两臂未真正区分，或功效仍不足）。成本翻倍以上，属流程/预算决策，只能由人定；本节点不执行。"
+    }
+  ],
+  "not_adopted": [
+    {
+      "candidate": "anchor_run 描述前置授权命令清单与「只传 argv」契约（triage §5 的 0 级建议）",
+      "reason": "已在现状中（run_description() 列命令 + refusal() 复述），且样本 tools_sha256 与坐标一致；无法解释 30 次失败。"
+    },
+    {
+      "candidate": "anchor_edit 把 base_sha256 / expected_matches 设为描述必填并给范例（triage §5）",
+      "reason": "该路径走 refused 文案 → not_executed/tool_error，169 次里仅 2 次；与 28 次 invalid_arguments 的成因不符。"
+    },
+    {
+      "candidate": "批量独立调用以减少 turn 数的 A/B（explore P4）",
+      "reason": "预期收益量级（10%–15%）在本套件 n=10、CV 18%–49% 下不可证伪；explore 自己已写明「若预期收益 15% 不应执行」。保留为待 n≈25/臂 的实验。"
+    },
+    {
+      "candidate": "给未交卷运行一次有界自动补交（explore P5）",
+      "reason": "本轮不采纳为独立提议：它与 P5（聚合侧）解决同一处失分，且直接撞上 goose_acp.rs 的 fail-closed 刻意设计（多给一回合即改 agent 可见协议）。若要动，应由人决定先做 P5 还是先做补交，二者不叠加。"
+    }
+  ],
+  "boundaries": "未修改源码 / Graph / Plugin / 权限；未执行任何 level ≥2 提议；level 3 两条仅为人类阅读文本。证据标注：标「二手」者来自分支报告的源码行号与探针，本节点无 /local-inputs 挂载、无可用 python3、无 anchor-hub，无法复验；标「复核」者为本节点 sha256sum / 现场探针所得。"
+}

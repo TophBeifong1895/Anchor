@@ -260,7 +260,31 @@ pub fn route_label(route: &[(&str, usize)]) -> String {
         .join(" → ")
 }
 
-/// Health and stall findings, merged by kind and place.
+/// A finding's detail with its counts and times taken out: what it says,
+/// rather than how much of it there was. Two findings of one kind at one
+/// place that say the same thing are the same signal; one that fails for
+/// another class than its neighbour is not.
+fn shape(detail: &str) -> String {
+    let mut shaped = String::with_capacity(detail.len());
+    let mut number = false;
+    for letter in detail.chars() {
+        if letter.is_ascii_digit() {
+            number = true;
+        } else {
+            if number {
+                shaped.push('N');
+                number = false;
+            }
+            shaped.push(letter);
+        }
+    }
+    if number {
+        shaped.push('N');
+    }
+    shaped
+}
+
+/// Health and stall findings, merged by kind, place and what they say.
 fn merged(query: &Query) -> Vec<Signal> {
     struct Merged {
         source: &'static str,
@@ -273,12 +297,16 @@ fn merged(query: &Query) -> Vec<Signal> {
         .iter()
         .filter_map(|row| Some((&row.key, row.config.as_deref()?)))
         .collect();
-    let mut found: BTreeMap<(&'static str, String), Merged> = BTreeMap::new();
+    let mut found: BTreeMap<(&'static str, String, String), Merged> = BTreeMap::new();
     for report in [Health.analyze(query), Stall::default().analyze(query)] {
         let source = report.analyzer;
         for finding in report.findings {
             let entry = found
-                .entry((finding.code, place(&finding.subject)))
+                .entry((
+                    finding.code,
+                    place(&finding.subject),
+                    shape(&finding.detail),
+                ))
                 .or_insert_with(|| Merged {
                     source,
                     count: 0,
@@ -291,14 +319,14 @@ fn merged(query: &Query) -> Vec<Signal> {
     }
     found
         .into_iter()
-        .map(|((code, subject), merged)| {
+        .map(|((code, subject, shape), merged)| {
             let configs = merged
                 .evidence
                 .iter()
                 .filter_map(|key| config_of.get(key).map(|c| (*c).to_owned()));
             let (coordinates, coordinates_total) = situate(query, configs);
             Signal {
-                id: id(code, &subject),
+                id: id(&format!("{code}\n{shape}"), &subject),
                 code,
                 source: merged.source,
                 detail: match merged.count {
