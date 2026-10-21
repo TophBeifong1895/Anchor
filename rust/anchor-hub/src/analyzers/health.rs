@@ -316,18 +316,49 @@ fn tools(invocations: &[Invocation], report: &mut Report) {
                 "failures": failures.iter().map(|(k, v)| (k.clone(), v.len())).collect::<BTreeMap<_, _>>(),
                 "duration_ms": summarize(calls.iter().filter_map(|(_, c)| c.duration_ms())),
                 "shapes": calls.iter().map(|(_, c)| c.arguments_shape).collect::<BTreeSet<_>>().len(),
+                // Where the `path` arguments of this tool pointed, and what
+                // happened there: the only handle on the value of a rejected
+                // path, whose value itself is never recorded.
+                "paths": group_by(
+                    calls.iter().filter_map(|(_, c)| Some((c.path?, c))),
+                    |(class, _)| *class,
+                )
+                    .into_iter()
+                    .map(|(class, of)| {
+                        let failed = of.iter().filter(|(_, call)| !call.ok).count();
+                        (format!("{class:?}").to_lowercase(), json!({"calls": of.len(), "failed": failed}))
+                    })
+                    .collect::<BTreeMap<_, _>>(),
             }),
         );
         for (class, failed) in failures {
             let mut keys: Vec<Key> = failed.iter().flat_map(|(i, _)| i.evidence()).collect();
             keys.dedup();
+            // The path families the failing calls named; the path itself is
+            // not recorded, so this is as close to the value as the records
+            // can come.
+            let paths: Vec<String> = {
+                let mut seen: Vec<String> = failed
+                    .iter()
+                    .filter_map(|(_, c)| c.path)
+                    .map(|class| format!("{class:?}").to_lowercase())
+                    .collect();
+                seen.sort();
+                seen.dedup();
+                seen
+            };
             report.findings.push(Finding {
                 code: "tool_failures",
                 subject: format!("tool {tool}"),
                 detail: format!(
-                    "{} of {} call(s) failed: {class}",
+                    "{} of {} call(s) failed: {class}{}",
                     failed.len(),
-                    calls.len()
+                    calls.len(),
+                    if paths.is_empty() {
+                        String::new()
+                    } else {
+                        format!(", on {} path(s)", paths.join(", "))
+                    }
                 ),
                 evidence: cite(keys),
             });
@@ -336,35 +367,43 @@ fn tools(invocations: &[Invocation], report: &mut Report) {
     report.summary.insert("tools", json!(summary));
 
     // A failed call followed, in the same invocation, by a successful call of
-    // the same tool with arguments of another shape: the model learned the
-    // tool's contract by failing against it.
-    let mut corrected: BTreeMap<String, Vec<&Invocation>> = BTreeMap::new();
+    // the same tool: the model recovered from the refusal. Arguments of another
+    // shape mean it changed how it asked; the same shape means it changed only
+    // the value, which is what a rejected path looks like from here. Both are
+    // recoveries, so both count, and the count is of failed calls rather than
+    // of the invocations they happened in.
+    let mut corrected: BTreeMap<String, (usize, usize, Vec<&Invocation>)> = BTreeMap::new();
     for invocation in invocations {
         let calls = invocation.calls();
         for (index, call) in calls.iter().enumerate() {
-            if !call.ok
-                && calls[index + 1..].iter().any(|later| {
-                    later.tool == call.tool
-                        && later.ok
-                        && later.arguments_shape != call.arguments_shape
-                })
-            {
-                corrected
-                    .entry(call.tool.to_owned())
-                    .or_default()
-                    .push(invocation);
+            if call.ok {
+                continue;
+            }
+            let Some(later) = calls[index + 1..]
+                .iter()
+                .find(|later| later.tool == call.tool && later.ok)
+            else {
+                continue;
+            };
+            let entry = corrected.entry(call.tool.to_owned()).or_default();
+            entry.2.push(invocation);
+            if later.arguments_shape == call.arguments_shape {
+                entry.1 += 1;
+            } else {
+                entry.0 += 1;
             }
         }
     }
-    for (tool, invocations) in corrected {
+    for (tool, (reshaped, revalued, invocations)) in corrected {
         let mut keys: Vec<Key> = invocations.iter().flat_map(|i| i.evidence()).collect();
         keys.dedup();
         report.findings.push(Finding {
             code: "call_corrected",
             subject: format!("tool {tool}"),
             detail: format!(
-                "{} failed call(s) were followed by a successful call with differently shaped arguments",
-                invocations.len()
+                "{} failed call(s) were followed by a successful call of the same tool: \
+                 {reshaped} with arguments of another shape, {revalued} with arguments of the same shape",
+                reshaped + revalued
             ),
             evidence: cite(keys),
         });

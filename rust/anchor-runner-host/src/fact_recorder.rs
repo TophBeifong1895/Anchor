@@ -194,6 +194,7 @@ mod tests {
                 tool_call_id: Some("call_1".into()),
                 model_request: 1,
                 arguments_shape: anchor_facts::arguments_shape(&serde_json::json!({})),
+                path: None,
                 started_at_ms: Some(1),
                 ended_at_ms: Some(2),
                 ok: false,

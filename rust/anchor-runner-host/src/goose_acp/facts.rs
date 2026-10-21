@@ -42,6 +42,9 @@ pub(super) fn observations(
             tool_call_id: call["tool_call_id"].as_str().map(str::to_owned),
             model_request: call["provider_request"].as_u64().unwrap_or(0),
             arguments_shape: anchor_facts::arguments_shape(&call["arguments"]),
+            path: call["arguments"]["path"]
+                .as_str()
+                .map(anchor_facts::path_class),
             started_at_ms: call["started_at_ms"].as_u64(),
             ended_at_ms: call["ended_at_ms"].as_u64(),
             ok,

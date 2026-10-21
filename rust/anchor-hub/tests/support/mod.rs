@@ -113,6 +113,7 @@ pub fn call(
         tool_call_id: Some(format!("c{request}-{}", span.0)),
         model_request: request,
         arguments_shape: anchor_facts::arguments_shape(&arguments),
+        path: arguments["path"].as_str().map(anchor_facts::path_class),
         started_at_ms: Some(span.0),
         ended_at_ms: Some(span.1),
         ok: failure.is_none(),

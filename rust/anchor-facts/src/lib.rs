@@ -230,6 +230,12 @@ pub enum Fact {
         /// call answers model request number `model_request`.
         model_request: u64,
         arguments_shape: String,
+        /// Where a `path` argument pointed, for the tools that take one.
+        /// Only the family, never the path: a host-side check can then be
+        /// told apart from a mistake in the value without recording the
+        /// value. Records from before this field read as `None`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        path: Option<PathClass>,
         started_at_ms: Option<u64>,
         ended_at_ms: Option<u64>,
         ok: bool,
@@ -267,6 +273,11 @@ pub enum Failure {
 
 /// Classify a tool error by the host's own refusal wording. Only the class is
 /// recorded, never the text.
+///
+/// Classes stay what they were recorded as, so experiments compare. A path
+/// refused for leaving the read grant is `NotAuthorized` even when the wording
+/// quotes the argument contract; the call's [`PathClass`] tells whether the
+/// model addressed the wrong place.
 pub fn classify_failure(error: &str) -> Failure {
     let error = error.to_ascii_lowercase();
     if error.contains("not authorized") || error.contains("must belong to an authorized") {
@@ -281,6 +292,35 @@ pub fn classify_failure(error: &str) -> Failure {
         Failure::NotExecuted
     } else {
         Failure::ToolError
+    }
+}
+
+/// The family a `path` argument belongs to, without the path itself. A tool
+/// refuses a path either because the host does not let it go there or because
+/// the model addressed the wrong place; this tells the two apart later.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PathClass {
+    /// Relative to the workspace, and staying inside it.
+    Relative,
+    /// Absolute, under the workspace prefix.
+    Workspace,
+    /// Absolute, somewhere else.
+    Absolute,
+    /// Relative, but climbing out with `..`.
+    Parent,
+}
+
+/// The family of a `path` argument. The path itself is never recorded.
+pub fn path_class(path: &str) -> PathClass {
+    if path.starts_with("/workspace/") {
+        PathClass::Workspace
+    } else if path.starts_with('/') {
+        PathClass::Absolute
+    } else if path.split('/').any(|segment| segment == "..") {
+        PathClass::Parent
+    } else {
+        PathClass::Relative
     }
 }
 

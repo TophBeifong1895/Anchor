@@ -943,3 +943,112 @@ fn the_mcp_server_answers_bounded_reads_and_sees_appends() {
     let unknown = ask(&mut hub, "resources/list", json!({}));
     assert_eq!(unknown["error"]["code"], json!(-32601));
 }
+
+#[test]
+fn a_rejected_paths_family_is_recorded_and_a_recovery_needs_no_new_shape() {
+    let world = World::new();
+    let worker = support::configuration("worker");
+    world.run("p1", 1_000);
+    // Two rejections of an absolute path outside the workspace; the model then
+    // asks the same way with a workspace path and is let through.
+    world.observe(
+        "p1",
+        "worker",
+        2_000,
+        &worker,
+        vec![
+            support::turn(1, 1_100, 100),
+            support::call(
+                "anchor_read",
+                1,
+                json!({"path": "/local-inputs/data"}),
+                (1_100, 1_110),
+                Some(anchor_facts::Failure::InvalidArguments),
+            ),
+            support::turn(2, 1_200, 100),
+            support::call(
+                "anchor_read",
+                2,
+                json!({"path": "/in/previous/x"}),
+                (1_200, 1_210),
+                Some(anchor_facts::Failure::InvalidArguments),
+            ),
+            support::turn(3, 1_300, 100),
+            support::call(
+                "anchor_read",
+                3,
+                json!({"path": "/workspace/x"}),
+                (1_300, 1_310),
+                None,
+            ),
+            support::lifecycle((1_000, 1_400), anchor_facts::Outcome::Completed, 3, 3),
+        ],
+    );
+    let (table, _) = project(&world);
+    let query = Query::new(table.facts(), Some(2_000));
+    let calls = query.invocations()[0].calls();
+    assert_eq!(
+        calls.iter().map(|c| c.path).collect::<Vec<_>>(),
+        vec![
+            Some(anchor_facts::PathClass::Absolute),
+            Some(anchor_facts::PathClass::Absolute),
+            Some(anchor_facts::PathClass::Workspace),
+        ]
+    );
+    let report = Health.analyze(&query);
+    let tools = &report.summary["tools"]["anchor_read"];
+    assert_eq!(tools["paths"]["absolute"], json!({"calls": 2, "failed": 2}));
+    assert_eq!(
+        tools["paths"]["workspace"],
+        json!({"calls": 1, "failed": 0})
+    );
+    let failed = finding(&report, "tool_failures");
+    assert!(
+        failed.detail.contains("on absolute path(s)"),
+        "{}",
+        failed.detail
+    );
+    // Recovery does not need a new shape: the same shape with another value
+    // counts, and the count is of failed calls.
+    let corrected = finding(&report, "call_corrected");
+    assert!(
+        corrected.detail.contains("2 failed call(s)")
+            && corrected
+                .detail
+                .contains("0 with arguments of another shape")
+            && corrected
+                .detail
+                .contains("2 with arguments of the same shape"),
+        "{}",
+        corrected.detail
+    );
+}
+
+#[test]
+fn failure_classes_stay_comparable_and_the_path_class_tells_wrong_places_apart() {
+    // Classes keep what earlier experiments recorded; whether the model
+    // addressed the wrong place is the path class's to say.
+    assert_eq!(
+        anchor_facts::classify_failure(
+            "anchor_read refused: invalid arguments: absolute read paths must belong to an authorized read-only input. No change was made."
+        ),
+        anchor_facts::Failure::NotAuthorized
+    );
+    assert_eq!(
+        anchor_facts::classify_failure(
+            "anchor_run not_executed: command `find` is not authorized by the host sandbox policy"
+        ),
+        anchor_facts::Failure::NotAuthorized
+    );
+    use anchor_facts::PathClass;
+    assert_eq!(anchor_facts::path_class("a/b"), PathClass::Relative);
+    assert_eq!(anchor_facts::path_class("../x"), PathClass::Parent);
+    assert_eq!(
+        anchor_facts::path_class("/workspace/a"),
+        PathClass::Workspace
+    );
+    assert_eq!(
+        anchor_facts::path_class("/in/previous/a"),
+        PathClass::Absolute
+    );
+}
