@@ -591,3 +591,87 @@ pub fn summarize(values: impl IntoIterator<Item = u64>) -> Option<Summary> {
         },
     })
 }
+
+// ---------------------------------------------------------------------------
+// Tests between samples
+// ---------------------------------------------------------------------------
+
+/// A two-sided Mann-Whitney U test of whether two samples come from the same
+/// distribution, by the normal approximation with a tie correction. `None`
+/// when either sample is empty.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+pub struct RankTest {
+    /// U of the first sample.
+    pub u: f64,
+    pub z: f64,
+    pub p: f64,
+}
+
+pub fn mann_whitney(a: &[f64], b: &[f64]) -> Option<RankTest> {
+    if a.is_empty() || b.is_empty() {
+        return None;
+    }
+    let mut all: Vec<(f64, bool)> = a
+        .iter()
+        .map(|&v| (v, true))
+        .chain(b.iter().map(|&v| (v, false)))
+        .collect();
+    all.sort_by(|x, y| x.0.total_cmp(&y.0));
+    let (n1, n2) = (a.len() as f64, b.len() as f64);
+    let n = n1 + n2;
+    let (mut rank_a, mut ties, mut i) = (0.0, 0.0, 0);
+    while i < all.len() {
+        let mut j = i;
+        while j + 1 < all.len() && all[j + 1].0 == all[i].0 {
+            j += 1;
+        }
+        // Ranks i+1 ..= j+1 share their mean.
+        let rank = (i + j + 2) as f64 / 2.0;
+        let t = (j - i + 1) as f64;
+        ties += t * t * t - t;
+        rank_a += rank * all[i..=j].iter().filter(|(_, first)| *first).count() as f64;
+        i = j + 1;
+    }
+    let u = rank_a - n1 * (n1 + 1.0) / 2.0;
+    let variance = n1 * n2 / 12.0 * ((n + 1.0) - ties / (n * (n - 1.0)).max(1.0));
+    if variance <= 0.0 {
+        return Some(RankTest { u, z: 0.0, p: 1.0 });
+    }
+    let z = (u - n1 * n2 / 2.0) / variance.sqrt();
+    Some(RankTest {
+        u,
+        z,
+        p: (2.0 * (1.0 - normal_cdf(z.abs()))).clamp(0.0, 1.0),
+    })
+}
+
+/// The standard normal distribution function (Abramowitz and Stegun 7.1.26,
+/// absolute error below 1.5e-7).
+pub fn normal_cdf(x: f64) -> f64 {
+    let t = 1.0 / (1.0 + 0.327_591_1 * x.abs() / std::f64::consts::SQRT_2);
+    let poly = t
+        * (0.254_829_592
+            + t * (-0.284_496_736
+                + t * (1.421_413_741 + t * (-1.453_152_027 + t * 1.061_405_429))));
+    let erf = 1.0 - poly * (-(x * x) / 2.0).exp();
+    if x >= 0.0 {
+        0.5 * (1.0 + erf)
+    } else {
+        0.5 * (1.0 - erf)
+    }
+}
+
+/// A two-sided test of whether two proportions differ, by the pooled normal
+/// approximation. `None` when either has no trials.
+pub fn two_proportions(hits_a: u64, n_a: u64, hits_b: u64, n_b: u64) -> Option<f64> {
+    if n_a == 0 || n_b == 0 {
+        return None;
+    }
+    let (pa, pb) = (hits_a as f64 / n_a as f64, hits_b as f64 / n_b as f64);
+    let pooled = (hits_a + hits_b) as f64 / (n_a + n_b) as f64;
+    let se = (pooled * (1.0 - pooled) * (1.0 / n_a as f64 + 1.0 / n_b as f64)).sqrt();
+    if se == 0.0 {
+        return Some(1.0);
+    }
+    Some((2.0 * (1.0 - normal_cdf(((pa - pb) / se).abs()))).clamp(0.0, 1.0))
+}

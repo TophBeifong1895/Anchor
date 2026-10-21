@@ -4,6 +4,7 @@
 //! ```text
 //! anchor-hub health [--json] PATH...
 //! anchor-hub stall [--json] [--idle-minutes N] [--follow SECONDS] PATH...
+//! anchor-hub contrast [--json] [--by FIELD] [--reference PREFIX] PATH...
 //! anchor-hub rows PATH...
 //! ```
 //!
@@ -14,7 +15,7 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use crate::analyzers::{Analyzer, Report, health::Health, stall::Stall};
+use crate::analyzers::{Analyzer, Report, contrast::Contrast, health::Health, stall::Stall};
 use crate::query::Query;
 use crate::source::{DataRoot, HistorySource};
 use crate::table::{FactTable, MemoryTable, Projector};
@@ -123,6 +124,8 @@ struct Options {
     json: bool,
     idle_minutes: Option<u64>,
     follow: Option<u64>,
+    by: Option<String>,
+    reference: Option<String>,
     paths: Vec<PathBuf>,
 }
 
@@ -134,6 +137,8 @@ fn parse(args: &[String]) -> Result<Options, String> {
         json: false,
         idle_minutes: None,
         follow: None,
+        by: None,
+        reference: None,
         paths: Vec::new(),
     };
     while let Some(arg) = args.next() {
@@ -146,6 +151,14 @@ fn parse(args: &[String]) -> Result<Options, String> {
             "--json" => options.json = true,
             "--idle-minutes" => options.idle_minutes = Some(number(arg)?),
             "--follow" => options.follow = Some(number(arg)?),
+            "--by" => options.by = Some(args.next().ok_or("--by needs a field")?.clone()),
+            "--reference" => {
+                options.reference = Some(
+                    args.next()
+                        .ok_or("--reference needs an arm prefix")?
+                        .clone(),
+                )
+            }
             flag if flag.starts_with("--") => return Err(format!("unknown flag {flag}\n{USAGE}")),
             path => options.paths.push(path.into()),
         }
@@ -156,7 +169,7 @@ fn parse(args: &[String]) -> Result<Options, String> {
     Ok(options)
 }
 
-const USAGE: &str = "usage: anchor-hub health [--json] PATH...\n       anchor-hub stall [--json] [--idle-minutes N] [--follow SECONDS] PATH...\n       anchor-hub rows PATH...";
+const USAGE: &str = "usage: anchor-hub health [--json] PATH...\n       anchor-hub contrast [--json] [--by FIELD] [--reference PREFIX] PATH...\n       anchor-hub stall [--json] [--idle-minutes N] [--follow SECONDS] PATH...\n       anchor-hub rows PATH...";
 
 pub fn run(args: &[String]) -> Result<(), String> {
     let options = parse(args)?;
@@ -171,6 +184,15 @@ pub fn run(args: &[String]) -> Result<(), String> {
             for row in hub.query(None).rows() {
                 println!("{}", serde_json::to_string(row).map_err(|e| e.to_string())?);
             }
+            Ok(())
+        }
+        "contrast" => {
+            let mut contrast = Contrast::default();
+            if let Some(by) = options.by {
+                contrast.by = by;
+            }
+            contrast.reference = options.reference;
+            print(&contrast.analyze(&hub.query(Some(now_ms()))), options.json);
             Ok(())
         }
         "health" => {

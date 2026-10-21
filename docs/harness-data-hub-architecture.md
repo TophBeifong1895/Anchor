@@ -108,6 +108,7 @@ anchor-kernel  ◄──  anchor-facts  ◄──  anchor-runner-host   （写�
   - `model_turn`：token、费用、耗时、首 token 时间、`messageId`、观察时间。注意观察时间是 Host 收到用量报告的时间，Goose 要等这一轮请求的工具调用跑完才报告，所以它不是模型响应结束的时间；一轮最晚在它的第一个工具调用开始时结束（P3 用真实数据发现，见 [P3 报告](../experiments/harness-hub/p3/report.md)）；
   - `tool_call`：工具名、参数形状摘要、开始和结束时间、Goose 的 `toolCallId`、它回应的是第几次模型请求、是否成功、失败类别。
 - **配置清单** `AgentConfiguration`：Graph 摘要、节点、模型及绑定、Goose 二进制、提示词摘要、Plugin 说明摘要、Plugin 身份、路由。摘要与 Plugin 和路由的顺序无关。
+  - P6 起还记录 `host_sha256`（Host 可执行文件的摘要）和 `tools_sha256`（交给模型的工具定义摘要，与顺序和键序无关）。这样，只在工具行为或工具定义上不同的两个 Harness，会记成不同的配置，受控实验靠它分组。两个字段为空时不序列化，旧清单的摘要不变。
 - **不带业务内容**：工具参数只记形状摘要，错误只记类别，提示词只记摘要。
 
 - **评分**（P4 已实现）：
@@ -174,6 +175,13 @@ anchor-kernel  ◄──  anchor-facts  ◄──  anchor-runner-host   （写�
 - L2：Run 的节点结果按 `run/{run_id}` 和槽位 `{node}#{invocation}` 与观察记录的 invocation 关联；时间线、空档及其位置（启动、工具到下一轮、收尾）、任务步骤（相邻记录的时间差）、分组、连续重复、分布。
 - L4：`anchor-hub health|stall|rows [--json] PATH...`，自动发现路径下的所有内核数据根；`stall --follow` 持续跟读。
 - 围栏测试在 `rust/anchor-hub/tests/fences.rs`，覆盖第 9 节第 1 到 3 项。
+- P6 加入对比分析器 `contrast`（`anchor-hub contrast [--by FIELD] [--reference PREFIX]`）：
+  - 按配置清单的某个字段（默认 `host_sha256`）把评过分的 Run 分组；
+  - 每个任务比较质量、Agent 用时、token、轮数、工具失败；
+  - 跨任务时，把用时和 token 除以该任务对照组的均值再合并，做 Mann-Whitney 检验；工具失败率做两比例检验；
+  - 质量下降超过 0.05 时报告 `contrast_quality_loss`。
+
+  统计函数是 L2 的纯函数。
 - P4 加入评分：L1 把 `validator/grade` 的记录投影成评分行；L2 的 `Query::grades` 给出每个 Run 最新被接受的评分；体检报告新增质量部分，按任务和任务版本列出平均分、全对比例、各检查项通过率，以及这些 Run 的 token、Agent 耗时和工具调用分布。某个检查项在至少 3 个 Run 里有一半以上失败时，报告 `check_failing`。
 - `run_access/reads.rs` 不改用 `HistoryReader`：它的调用方都在作为写入者的 Host 进程内，读时拿租约正好和提交串行；中枢不经过它。
 
@@ -234,7 +242,7 @@ anchor-kernel  ◄──  anchor-facts  ◄──  anchor-runner-host   （写�
 | P3 | `anchor-hub` 的 L0–L2，体检报告、停滞检测两个分析器，CLI。**已完成**，见 [P3 报告](../experiments/harness-hub/p3/report.md) | G1：用真实 Run 的数据发现至少一个以前不知道的问题。**通过** |
 | P4 | 评测任务集：一组结果可以自动判断对错的任务，作为便宜、客观的质量信号。**已完成**，见 [P4 报告](../experiments/harness-hub/p4/report.md)：基线下质量几乎总在上限，受控实验以效率为目标、以质量为约束 | 任务集能稳定复跑，判分可信。**通过** |
 | P5 | 只读 MCP 接口，流程挖掘、对比挖掘；按第 10 节调整 `anchor-rsi` | 分析结论能落到具体的配置和节点上 |
-| P6 | 受控实验和 `Policy` 插件 | G2：在能承受的样本量内检测出效率差异；G3：优化结果在没参与优化的任务上同样成立 |
+| P6 | 受控实验和 `Policy` 插件。**实验 1 已完成并采纳**，见 [实验 1](../experiments/harness-hub/p6/experiment-1.md)；`Policy` 插件未做 | G2：在能承受的样本量内检测出效率差异。实验 1 中，工具失败率的差异在每组 100 次时显著（p < 0.0001），用时和 token 7% 量级的差异在这个样本量下不显著。G3：未做 |
 
 `anchor-facts` 推迟到 P2，和它的第一个使用方一起交付，不提前建一个没人用的契约。
 

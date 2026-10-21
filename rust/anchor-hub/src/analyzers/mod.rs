@@ -9,6 +9,7 @@ use serde_json::Value;
 
 use crate::query::{Key, Query};
 
+pub mod contrast;
 pub mod health;
 pub mod stall;
 

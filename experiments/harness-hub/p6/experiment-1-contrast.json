@@ -1,0 +1,862 @@
+{
+    "analyzer": "contrast",
+    "version": 1,
+    "not_applicable": [],
+    "summary": {
+        "arms": [
+            "d10438cc1fc0fbb97caa0ab96afb230f2b6f02c9578d3c046ef273e2559faf5a",
+            "3d8b09e3ffbce85cf90757e7a456f7236bd387ee53b7a998d3492f78dd14006c"
+        ],
+        "by": "host_sha256",
+        "overall": {
+            "3d8b09e3ffbce85cf90757e7a456f7236bd387ee53b7a998d3492f78dd14006c": {
+                "agent_ms_p": 0.197,
+                "agent_ms_relative": 0.979,
+                "runs": 100,
+                "tokens_p": 0.123,
+                "tokens_relative": 0.93,
+                "tool_calls": 1246,
+                "tool_failure_p": 0.0,
+                "tool_failure_rate": 0.008
+            },
+            "d10438cc1fc0fbb97caa0ab96afb230f2b6f02c9578d3c046ef273e2559faf5a": {
+                "agent_ms_relative": 1.0,
+                "runs": 100,
+                "tokens_relative": 1.0,
+                "tool_calls": 1310,
+                "tool_failure_rate": 0.061
+            }
+        },
+        "runs_without_one_arm": 0,
+        "tasks": {
+            "audit v1": {
+                "against_reference": {
+                    "3d8b09e3ffbce85cf90757e7a456f7236bd387ee53b7a998d3492f78dd14006c": {
+                        "agent_ms_p": 0.65,
+                        "agent_ms_ratio": 1.006,
+                        "score_change": 0.113,
+                        "tokens_p": 0.096,
+                        "tokens_ratio": 0.856,
+                        "turns_ratio": 0.911
+                    }
+                },
+                "arms": {
+                    "3d8b09e3ffbce85cf90757e7a456f7236bd387ee53b7a998d3492f78dd14006c": {
+                        "agent_ms": {
+                            "max": 46573,
+                            "mean": 36090.9,
+                            "median": 33718,
+                            "min": 24193,
+                            "n": 10,
+                            "p90": 45237,
+                            "sd": 6887.339245149594
+                        },
+                        "mean_score": 1.0,
+                        "pass_rate": 1.0,
+                        "runs": 10,
+                        "tokens": {
+                            "max": 334242,
+                            "mean": 201763.9,
+                            "median": 180059,
+                            "min": 139551,
+                            "n": 10,
+                            "p90": 272827,
+                            "sd": 59582.95347841622
+                        },
+                        "tool_calls": 152,
+                        "tool_failures": 1,
+                        "turns": {
+                            "max": 22,
+                            "mean": 14.3,
+                            "median": 13,
+                            "min": 11,
+                            "n": 10,
+                            "p90": 16,
+                            "sd": 3.1640339933558095
+                        }
+                    },
+                    "d10438cc1fc0fbb97caa0ab96afb230f2b6f02c9578d3c046ef273e2559faf5a": {
+                        "agent_ms": {
+                            "max": 49518,
+                            "mean": 35879.8,
+                            "median": 32346,
+                            "min": 23918,
+                            "n": 10,
+                            "p90": 46159,
+                            "sd": 8466.96427036016
+                        },
+                        "mean_score": 0.888,
+                        "pass_rate": 0.8,
+                        "runs": 10,
+                        "tokens": {
+                            "max": 305848,
+                            "mean": 235739.6,
+                            "median": 231106,
+                            "min": 154202,
+                            "n": 10,
+                            "p90": 301625,
+                            "sd": 47775.73162926039
+                        },
+                        "tool_calls": 168,
+                        "tool_failures": 11,
+                        "turns": {
+                            "max": 22,
+                            "mean": 15.7,
+                            "median": 15,
+                            "min": 12,
+                            "n": 10,
+                            "p90": 18,
+                            "sd": 2.8303906287138374
+                        }
+                    }
+                }
+            },
+            "contacts v1": {
+                "against_reference": {
+                    "3d8b09e3ffbce85cf90757e7a456f7236bd387ee53b7a998d3492f78dd14006c": {
+                        "agent_ms_p": 0.257,
+                        "agent_ms_ratio": 0.838,
+                        "score_change": 0.0,
+                        "tokens_p": 0.406,
+                        "tokens_ratio": 0.9,
+                        "turns_ratio": 0.96
+                    }
+                },
+                "arms": {
+                    "3d8b09e3ffbce85cf90757e7a456f7236bd387ee53b7a998d3492f78dd14006c": {
+                        "agent_ms": {
+                            "max": 26534,
+                            "mean": 18202.6,
+                            "median": 17522,
+                            "min": 10867,
+                            "n": 10,
+                            "p90": 22244,
+                            "sd": 4708.844496146468
+                        },
+                        "mean_score": 0.94,
+                        "pass_rate": 0.7,
+                        "runs": 10,
+                        "tokens": {
+                            "max": 144222,
+                            "mean": 74003.3,
+                            "median": 59252,
+                            "min": 43430,
+                            "n": 10,
+                            "p90": 99761,
+                            "sd": 30544.417187833926
+                        },
+                        "tool_calls": 100,
+                        "tool_failures": 1,
+                        "turns": {
+                            "max": 15,
+                            "mean": 9.5,
+                            "median": 8,
+                            "min": 7,
+                            "n": 10,
+                            "p90": 12,
+                            "sd": 2.5495097567963922
+                        }
+                    },
+                    "d10438cc1fc0fbb97caa0ab96afb230f2b6f02c9578d3c046ef273e2559faf5a": {
+                        "agent_ms": {
+                            "max": 37792,
+                            "mean": 21730.4,
+                            "median": 19048,
+                            "min": 12722,
+                            "n": 10,
+                            "p90": 26106,
+                            "sd": 7037.18717796946
+                        },
+                        "mean_score": 0.94,
+                        "pass_rate": 0.7,
+                        "runs": 10,
+                        "tokens": {
+                            "max": 153851,
+                            "mean": 82221.6,
+                            "median": 77158,
+                            "min": 46386,
+                            "n": 10,
+                            "p90": 105273,
+                            "sd": 31462.711228090662
+                        },
+                        "tool_calls": 100,
+                        "tool_failures": 5,
+                        "turns": {
+                            "max": 15,
+                            "mean": 9.9,
+                            "median": 10,
+                            "min": 7,
+                            "n": 10,
+                            "p90": 11,
+                            "sd": 2.330951164939612
+                        }
+                    }
+                }
+            },
+            "incident v1": {
+                "against_reference": {
+                    "3d8b09e3ffbce85cf90757e7a456f7236bd387ee53b7a998d3492f78dd14006c": {
+                        "agent_ms_p": 1.0,
+                        "agent_ms_ratio": 0.951,
+                        "score_change": 0.012,
+                        "tokens_p": 0.94,
+                        "tokens_ratio": 1.005,
+                        "turns_ratio": 1.011
+                    }
+                },
+                "arms": {
+                    "3d8b09e3ffbce85cf90757e7a456f7236bd387ee53b7a998d3492f78dd14006c": {
+                        "agent_ms": {
+                            "max": 55749,
+                            "mean": 42215.3,
+                            "median": 41602,
+                            "min": 31814,
+                            "n": 10,
+                            "p90": 44151,
+                            "sd": 5842.3901511092
+                        },
+                        "mean_score": 1.0,
+                        "pass_rate": 1.0,
+                        "runs": 10,
+                        "tokens": {
+                            "max": 325673,
+                            "mean": 251084.9,
+                            "median": 246183,
+                            "min": 153312,
+                            "n": 10,
+                            "p90": 300726,
+                            "sd": 53124.03117955815
+                        },
+                        "tool_calls": 198,
+                        "tool_failures": 0,
+                        "turns": {
+                            "max": 25,
+                            "mean": 18.5,
+                            "median": 17,
+                            "min": 13,
+                            "n": 10,
+                            "p90": 24,
+                            "sd": 3.9791121287711073
+                        }
+                    },
+                    "d10438cc1fc0fbb97caa0ab96afb230f2b6f02c9578d3c046ef273e2559faf5a": {
+                        "agent_ms": {
+                            "max": 67193,
+                            "mean": 44398.2,
+                            "median": 41082,
+                            "min": 32741,
+                            "n": 10,
+                            "p90": 55199,
+                            "sd": 10583.271252311357
+                        },
+                        "mean_score": 0.988,
+                        "pass_rate": 0.9,
+                        "runs": 10,
+                        "tokens": {
+                            "max": 389492,
+                            "mean": 249892.9,
+                            "median": 198087,
+                            "min": 152788,
+                            "n": 10,
+                            "p90": 369983,
+                            "sd": 85712.13299624894
+                        },
+                        "tool_calls": 202,
+                        "tool_failures": 9,
+                        "turns": {
+                            "max": 26,
+                            "mean": 18.3,
+                            "median": 16,
+                            "min": 15,
+                            "n": 10,
+                            "p90": 23,
+                            "sd": 3.831158803518562
+                        }
+                    }
+                }
+            },
+            "ledger v1": {
+                "against_reference": {
+                    "3d8b09e3ffbce85cf90757e7a456f7236bd387ee53b7a998d3492f78dd14006c": {
+                        "agent_ms_p": 0.496,
+                        "agent_ms_ratio": 1.021,
+                        "score_change": 0.0,
+                        "tokens_p": 0.29,
+                        "tokens_ratio": 0.942,
+                        "turns_ratio": 0.978
+                    }
+                },
+                "arms": {
+                    "3d8b09e3ffbce85cf90757e7a456f7236bd387ee53b7a998d3492f78dd14006c": {
+                        "agent_ms": {
+                            "max": 23914,
+                            "mean": 13831.2,
+                            "median": 11684,
+                            "min": 9143,
+                            "n": 10,
+                            "p90": 17369,
+                            "sd": 4355.308862628331
+                        },
+                        "mean_score": 1.0,
+                        "pass_rate": 1.0,
+                        "runs": 10,
+                        "tokens": {
+                            "max": 88047,
+                            "mean": 54120.4,
+                            "median": 47252,
+                            "min": 42454,
+                            "n": 10,
+                            "p90": 63276,
+                            "sd": 14076.195510309042
+                        },
+                        "tool_calls": 95,
+                        "tool_failures": 1,
+                        "turns": {
+                            "max": 14,
+                            "mean": 8.8,
+                            "median": 8,
+                            "min": 7,
+                            "n": 10,
+                            "p90": 10,
+                            "sd": 2.1499353995462798
+                        }
+                    },
+                    "d10438cc1fc0fbb97caa0ab96afb230f2b6f02c9578d3c046ef273e2559faf5a": {
+                        "agent_ms": {
+                            "max": 16818,
+                            "mean": 13548.6,
+                            "median": 13419,
+                            "min": 10597,
+                            "n": 10,
+                            "p90": 15451,
+                            "sd": 1752.830929287439
+                        },
+                        "mean_score": 1.0,
+                        "pass_rate": 1.0,
+                        "runs": 10,
+                        "tokens": {
+                            "max": 81253,
+                            "mean": 57441.7,
+                            "median": 54142,
+                            "min": 44740,
+                            "n": 10,
+                            "p90": 67451,
+                            "sd": 11031.570161737329
+                        },
+                        "tool_calls": 98,
+                        "tool_failures": 3,
+                        "turns": {
+                            "max": 12,
+                            "mean": 9.0,
+                            "median": 9,
+                            "min": 7,
+                            "n": 10,
+                            "p90": 10,
+                            "sd": 1.4142135623730951
+                        }
+                    }
+                }
+            },
+            "logs v1": {
+                "against_reference": {
+                    "3d8b09e3ffbce85cf90757e7a456f7236bd387ee53b7a998d3492f78dd14006c": {
+                        "agent_ms_p": 0.326,
+                        "agent_ms_ratio": 0.944,
+                        "score_change": 0.0,
+                        "tokens_p": 0.821,
+                        "tokens_ratio": 0.996,
+                        "turns_ratio": 0.99
+                    }
+                },
+                "arms": {
+                    "3d8b09e3ffbce85cf90757e7a456f7236bd387ee53b7a998d3492f78dd14006c": {
+                        "agent_ms": {
+                            "max": 24394,
+                            "mean": 17042.5,
+                            "median": 15413,
+                            "min": 13880,
+                            "n": 10,
+                            "p90": 19883,
+                            "sd": 3315.515721573342
+                        },
+                        "mean_score": 1.0,
+                        "pass_rate": 1.0,
+                        "runs": 10,
+                        "tokens": {
+                            "max": 101653,
+                            "mean": 70029.2,
+                            "median": 62374,
+                            "min": 50200,
+                            "n": 10,
+                            "p90": 94068,
+                            "sd": 17567.119904336436
+                        },
+                        "tool_calls": 109,
+                        "tool_failures": 3,
+                        "turns": {
+                            "max": 13,
+                            "mean": 10.4,
+                            "median": 10,
+                            "min": 8,
+                            "n": 10,
+                            "p90": 13,
+                            "sd": 1.776388345929897
+                        }
+                    },
+                    "d10438cc1fc0fbb97caa0ab96afb230f2b6f02c9578d3c046ef273e2559faf5a": {
+                        "agent_ms": {
+                            "max": 22581,
+                            "mean": 18058.4,
+                            "median": 18214,
+                            "min": 14235,
+                            "n": 10,
+                            "p90": 20302,
+                            "sd": 2631.8850954317054
+                        },
+                        "mean_score": 1.0,
+                        "pass_rate": 1.0,
+                        "runs": 10,
+                        "tokens": {
+                            "max": 87456,
+                            "mean": 70280.8,
+                            "median": 71782,
+                            "min": 43820,
+                            "n": 10,
+                            "p90": 83998,
+                            "sd": 12639.951483732488
+                        },
+                        "tool_calls": 111,
+                        "tool_failures": 6,
+                        "turns": {
+                            "max": 13,
+                            "mean": 10.5,
+                            "median": 10,
+                            "min": 7,
+                            "n": 10,
+                            "p90": 12,
+                            "sd": 1.7159383568311668
+                        }
+                    }
+                }
+            },
+            "refactor v1": {
+                "against_reference": {
+                    "3d8b09e3ffbce85cf90757e7a456f7236bd387ee53b7a998d3492f78dd14006c": {
+                        "agent_ms_p": 0.45,
+                        "agent_ms_ratio": 1.056,
+                        "score_change": 0.0,
+                        "tokens_p": 0.406,
+                        "tokens_ratio": 1.074,
+                        "turns_ratio": 1.026
+                    }
+                },
+                "arms": {
+                    "3d8b09e3ffbce85cf90757e7a456f7236bd387ee53b7a998d3492f78dd14006c": {
+                        "agent_ms": {
+                            "max": 51164,
+                            "mean": 42526.8,
+                            "median": 41269,
+                            "min": 30829,
+                            "n": 10,
+                            "p90": 50639,
+                            "sd": 7436.483350497211
+                        },
+                        "mean_score": 1.0,
+                        "pass_rate": 1.0,
+                        "runs": 10,
+                        "tokens": {
+                            "max": 298102,
+                            "mean": 216330.1,
+                            "median": 200376,
+                            "min": 136023,
+                            "n": 10,
+                            "p90": 287593,
+                            "sd": 52227.27524207166
+                        },
+                        "tool_calls": 204,
+                        "tool_failures": 2,
+                        "turns": {
+                            "max": 26,
+                            "mean": 19.4,
+                            "median": 18,
+                            "min": 16,
+                            "n": 10,
+                            "p90": 23,
+                            "sd": 3.204163957519444
+                        }
+                    },
+                    "d10438cc1fc0fbb97caa0ab96afb230f2b6f02c9578d3c046ef273e2559faf5a": {
+                        "agent_ms": {
+                            "max": 59223,
+                            "mean": 40275.8,
+                            "median": 37664,
+                            "min": 28812,
+                            "n": 10,
+                            "p90": 44288,
+                            "sd": 8112.451839268104
+                        },
+                        "mean_score": 1.0,
+                        "pass_rate": 1.0,
+                        "runs": 10,
+                        "tokens": {
+                            "max": 350956,
+                            "mean": 201422.9,
+                            "median": 190457,
+                            "min": 103115,
+                            "n": 10,
+                            "p90": 227883,
+                            "sd": 63103.39773287436
+                        },
+                        "tool_calls": 207,
+                        "tool_failures": 17,
+                        "turns": {
+                            "max": 26,
+                            "mean": 18.9,
+                            "median": 19,
+                            "min": 11,
+                            "n": 10,
+                            "p90": 21,
+                            "sd": 3.7252889522529364
+                        }
+                    }
+                }
+            },
+            "repair v1": {
+                "against_reference": {
+                    "3d8b09e3ffbce85cf90757e7a456f7236bd387ee53b7a998d3492f78dd14006c": {
+                        "agent_ms_p": 0.94,
+                        "agent_ms_ratio": 1.019,
+                        "score_change": 0.0,
+                        "tokens_p": 0.496,
+                        "tokens_ratio": 1.016,
+                        "turns_ratio": 1.009
+                    }
+                },
+                "arms": {
+                    "3d8b09e3ffbce85cf90757e7a456f7236bd387ee53b7a998d3492f78dd14006c": {
+                        "agent_ms": {
+                            "max": 36409,
+                            "mean": 26800.4,
+                            "median": 25876,
+                            "min": 15439,
+                            "n": 10,
+                            "p90": 34719,
+                            "sd": 6293.400109109013
+                        },
+                        "mean_score": 1.0,
+                        "pass_rate": 1.0,
+                        "runs": 10,
+                        "tokens": {
+                            "max": 159694,
+                            "mean": 95366.0,
+                            "median": 90075,
+                            "min": 35832,
+                            "n": 10,
+                            "p90": 134878,
+                            "sd": 33508.907117693685
+                        },
+                        "tool_calls": 123,
+                        "tool_failures": 1,
+                        "turns": {
+                            "max": 16,
+                            "mean": 11.3,
+                            "median": 11,
+                            "min": 6,
+                            "n": 10,
+                            "p90": 15,
+                            "sd": 2.8303906287138374
+                        }
+                    },
+                    "d10438cc1fc0fbb97caa0ab96afb230f2b6f02c9578d3c046ef273e2559faf5a": {
+                        "agent_ms": {
+                            "max": 32788,
+                            "mean": 26304.8,
+                            "median": 24213,
+                            "min": 19775,
+                            "n": 10,
+                            "p90": 31319,
+                            "sd": 4491.300524347041
+                        },
+                        "mean_score": 1.0,
+                        "pass_rate": 1.0,
+                        "runs": 10,
+                        "tokens": {
+                            "max": 189165,
+                            "mean": 93831.0,
+                            "median": 83808,
+                            "min": 58265,
+                            "n": 10,
+                            "p90": 111576,
+                            "sd": 37375.8259187822
+                        },
+                        "tool_calls": 122,
+                        "tool_failures": 7,
+                        "turns": {
+                            "max": 19,
+                            "mean": 11.2,
+                            "median": 10,
+                            "min": 8,
+                            "n": 10,
+                            "p90": 13,
+                            "sd": 3.190262963734773
+                        }
+                    }
+                }
+            },
+            "routing v1": {
+                "against_reference": {
+                    "3d8b09e3ffbce85cf90757e7a456f7236bd387ee53b7a998d3492f78dd14006c": {
+                        "agent_ms_p": 0.174,
+                        "agent_ms_ratio": 0.865,
+                        "score_change": 0.0,
+                        "tokens_p": 0.112,
+                        "tokens_ratio": 0.769,
+                        "turns_ratio": 0.84
+                    }
+                },
+                "arms": {
+                    "3d8b09e3ffbce85cf90757e7a456f7236bd387ee53b7a998d3492f78dd14006c": {
+                        "agent_ms": {
+                            "max": 21534,
+                            "mean": 17371.5,
+                            "median": 16542,
+                            "min": 14313,
+                            "n": 10,
+                            "p90": 19323,
+                            "sd": 2088.1697062792146
+                        },
+                        "mean_score": 1.0,
+                        "pass_rate": 1.0,
+                        "runs": 10,
+                        "tokens": {
+                            "max": 104936,
+                            "mean": 61893.6,
+                            "median": 55003,
+                            "min": 47131,
+                            "n": 10,
+                            "p90": 74914,
+                            "sd": 16973.04910209778
+                        },
+                        "tool_calls": 95,
+                        "tool_failures": 0,
+                        "turns": {
+                            "max": 14,
+                            "mean": 8.9,
+                            "median": 8,
+                            "min": 7,
+                            "n": 10,
+                            "p90": 10,
+                            "sd": 1.9692073983655907
+                        }
+                    },
+                    "d10438cc1fc0fbb97caa0ab96afb230f2b6f02c9578d3c046ef273e2559faf5a": {
+                        "agent_ms": {
+                            "max": 32947,
+                            "mean": 20074.6,
+                            "median": 20273,
+                            "min": 13427,
+                            "n": 10,
+                            "p90": 22215,
+                            "sd": 5508.487051813774
+                        },
+                        "mean_score": 1.0,
+                        "pass_rate": 1.0,
+                        "runs": 10,
+                        "tokens": {
+                            "max": 181850,
+                            "mean": 80521.1,
+                            "median": 75563,
+                            "min": 38608,
+                            "n": 10,
+                            "p90": 96776,
+                            "sd": 39633.626308000414
+                        },
+                        "tool_calls": 112,
+                        "tool_failures": 9,
+                        "turns": {
+                            "max": 19,
+                            "mean": 10.6,
+                            "median": 10,
+                            "min": 6,
+                            "n": 10,
+                            "p90": 13,
+                            "sd": 3.6270588023294517
+                        }
+                    }
+                }
+            },
+            "schedule v1": {
+                "against_reference": {
+                    "3d8b09e3ffbce85cf90757e7a456f7236bd387ee53b7a998d3492f78dd14006c": {
+                        "agent_ms_p": 0.94,
+                        "agent_ms_ratio": 1.13,
+                        "score_change": 0.0,
+                        "tokens_p": 0.762,
+                        "tokens_ratio": 0.963,
+                        "turns_ratio": 0.951
+                    }
+                },
+                "arms": {
+                    "3d8b09e3ffbce85cf90757e7a456f7236bd387ee53b7a998d3492f78dd14006c": {
+                        "agent_ms": {
+                            "max": 55807,
+                            "mean": 18311.7,
+                            "median": 13911,
+                            "min": 11178,
+                            "n": 10,
+                            "p90": 17829,
+                            "sd": 13289.52157863062
+                        },
+                        "mean_score": 1.0,
+                        "pass_rate": 1.0,
+                        "runs": 10,
+                        "tokens": {
+                            "max": 73649,
+                            "mean": 49592.9,
+                            "median": 47889,
+                            "min": 32585,
+                            "n": 10,
+                            "p90": 56992,
+                            "sd": 11685.786888828288
+                        },
+                        "tool_calls": 82,
+                        "tool_failures": 1,
+                        "turns": {
+                            "max": 10,
+                            "mean": 7.7,
+                            "median": 7,
+                            "min": 6,
+                            "n": 10,
+                            "p90": 9,
+                            "sd": 1.3374935098492586
+                        }
+                    },
+                    "d10438cc1fc0fbb97caa0ab96afb230f2b6f02c9578d3c046ef273e2559faf5a": {
+                        "agent_ms": {
+                            "max": 24455,
+                            "mean": 16199.0,
+                            "median": 13825,
+                            "min": 10590,
+                            "n": 10,
+                            "p90": 23604,
+                            "sd": 5488.082401389801
+                        },
+                        "mean_score": 1.0,
+                        "pass_rate": 1.0,
+                        "runs": 10,
+                        "tokens": {
+                            "max": 87385,
+                            "mean": 51502.6,
+                            "median": 42008,
+                            "min": 33966,
+                            "n": 10,
+                            "p90": 83770,
+                            "sd": 19302.399333876718
+                        },
+                        "tool_calls": 89,
+                        "tool_failures": 3,
+                        "turns": {
+                            "max": 12,
+                            "mean": 8.1,
+                            "median": 7,
+                            "min": 6,
+                            "n": 10,
+                            "p90": 12,
+                            "sd": 2.282785822435191
+                        }
+                    }
+                }
+            },
+            "triage v1": {
+                "against_reference": {
+                    "3d8b09e3ffbce85cf90757e7a456f7236bd387ee53b7a998d3492f78dd14006c": {
+                        "agent_ms_p": 0.677,
+                        "agent_ms_ratio": 0.964,
+                        "score_change": 0.017,
+                        "tokens_p": 0.082,
+                        "tokens_ratio": 0.782,
+                        "turns_ratio": 0.837
+                    }
+                },
+                "arms": {
+                    "3d8b09e3ffbce85cf90757e7a456f7236bd387ee53b7a998d3492f78dd14006c": {
+                        "agent_ms": {
+                            "max": 24963,
+                            "mean": 19002.5,
+                            "median": 17882,
+                            "min": 15089,
+                            "n": 10,
+                            "p90": 24529,
+                            "sd": 3277.4266412673355
+                        },
+                        "mean_score": 1.0,
+                        "pass_rate": 1.0,
+                        "runs": 10,
+                        "tokens": {
+                            "max": 101364,
+                            "mean": 71181.9,
+                            "median": 73257,
+                            "min": 49379,
+                            "n": 10,
+                            "p90": 97371,
+                            "sd": 18357.93946589141
+                        },
+                        "tool_calls": 88,
+                        "tool_failures": 0,
+                        "turns": {
+                            "max": 10,
+                            "mean": 7.7,
+                            "median": 8,
+                            "min": 6,
+                            "n": 10,
+                            "p90": 9,
+                            "sd": 1.4181364924121764
+                        }
+                    },
+                    "d10438cc1fc0fbb97caa0ab96afb230f2b6f02c9578d3c046ef273e2559faf5a": {
+                        "agent_ms": {
+                            "max": 25455,
+                            "mean": 19720.7,
+                            "median": 17971,
+                            "min": 15299,
+                            "n": 10,
+                            "p90": 24429,
+                            "sd": 3393.808154402498
+                        },
+                        "mean_score": 0.983,
+                        "pass_rate": 0.9,
+                        "runs": 10,
+                        "tokens": {
+                            "max": 128846,
+                            "mean": 91009.5,
+                            "median": 86866,
+                            "min": 61929,
+                            "n": 10,
+                            "p90": 123176,
+                            "sd": 24042.753776692607
+                        },
+                        "tool_calls": 101,
+                        "tool_failures": 10,
+                        "turns": {
+                            "max": 12,
+                            "mean": 9.2,
+                            "median": 9,
+                            "min": 7,
+                            "n": 10,
+                            "p90": 11,
+                            "sd": 1.7511900715418263
+                        }
+                    }
+                }
+            }
+        }
+    },
+    "findings": [
+        {
+            "code": "contrast_tool_failures",
+            "subject": "3d8b09e3ffbc",
+            "detail": "tool failure rate 0.008 against 0.061 for d10438cc1fc0 (p=0.0000)",
+            "evidence": []
+        }
+    ]
+}

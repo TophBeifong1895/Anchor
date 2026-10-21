@@ -3,9 +3,12 @@ mod support;
 use std::collections::BTreeSet;
 
 use anchor_hub::adapters::{Hub, discover};
-use anchor_hub::analyzers::{Analyzer, Finding, Need, Report, health::Health, stall::Stall};
+use anchor_hub::analyzers::{
+    Analyzer, Finding, Need, Report, contrast::Contrast, health::Health, stall::Stall,
+};
 use anchor_hub::query::{
-    Activity, GapPlace, Query, Status, covered, node_result, repeats, summarize,
+    Activity, GapPlace, Query, Status, covered, mann_whitney, node_result, normal_cdf, repeats,
+    summarize, two_proportions,
 };
 use anchor_hub::source::{DataRoot, Stored};
 use anchor_hub::table::{Body, FactTable, MemoryTable, Projector};
@@ -470,4 +473,134 @@ fn grades_join_their_runs_and_failing_checks_are_reported() {
         failing[0].detail
     );
     assert_eq!(failing[0].evidence.len(), 2);
+}
+
+#[test]
+fn rank_and_proportion_tests_match_known_values() {
+    assert!((normal_cdf(1.96) - 0.975).abs() < 1e-4);
+    assert!((normal_cdf(-1.0) - 0.158_655).abs() < 1e-5);
+    let separated = mann_whitney(&[1.0, 2.0, 3.0], &[4.0, 5.0, 6.0]).unwrap();
+    assert_eq!(separated.u, 0.0);
+    assert!((separated.p - 0.0495).abs() < 1e-3, "{separated:?}");
+    let same = mann_whitney(&[1.0, 2.0, 3.0], &[1.0, 2.0, 3.0]).unwrap();
+    assert!((same.p - 1.0).abs() < 1e-6);
+    let tied = mann_whitney(&[5.0, 5.0], &[5.0, 5.0]).unwrap();
+    assert_eq!(tied.p, 1.0);
+    assert_eq!(mann_whitney(&[], &[1.0]), None);
+    let p = two_proportions(10, 100, 30, 100).unwrap();
+    assert!((p - 0.0004).abs() < 1e-4, "{p}");
+    assert_eq!(two_proportions(0, 10, 0, 10), Some(1.0));
+}
+
+/// Two harnesses on one task: the variant halves agent time and tool
+/// failures, and loses quality on one Run.
+fn experiment(world: &World) {
+    let mut variant = support::configuration("worker");
+    variant.host_sha256 = "host-b".into();
+    for n in 0..6u64 {
+        let (arm, run) = if n % 2 == 0 {
+            (support::configuration("worker"), format!("a{n}"))
+        } else {
+            (variant.clone(), format!("b{n}"))
+        };
+        let start = 1_000_000 + n * 100_000;
+        let length = if n % 2 == 0 {
+            10_000 + n * 100
+        } else {
+            5_000 + n * 100
+        };
+        world.run(&run, start - 10);
+        let failed = (n % 2 == 0).then_some(anchor_facts::Failure::InvalidArguments);
+        world.observe(
+            &run,
+            "worker",
+            start + length + 5,
+            &arm,
+            vec![
+                support::turn(1, start + 1_000, 900),
+                support::call(
+                    "anchor_edit",
+                    1,
+                    json!({"path": "x"}),
+                    (start + 1_000, start + 1_010),
+                    failed,
+                ),
+                support::turn(2, start + 2_000, 900),
+                support::call(
+                    "final_result",
+                    2,
+                    json!({}),
+                    (start + 2_000, start + 2_001),
+                    None,
+                ),
+                support::lifecycle(
+                    (start, start + length),
+                    anchor_facts::Outcome::Completed,
+                    2,
+                    2,
+                ),
+            ],
+        );
+        world.result(&run, "worker#1", start + length + 10, 2, true);
+        let passed = n != 5;
+        world.grade(&run, "ledger", &[("total", passed)], start + length + 20);
+    }
+}
+
+#[test]
+fn contrast_compares_arms_on_quality_first_then_cost() {
+    let world = World::new();
+    experiment(&world);
+    let mut table = MemoryTable::default();
+    let mut projector = Projector::default();
+    for name in ["kernel-runs", "kernel-facts", "kernel-grades"] {
+        projector
+            .pull(
+                &DataRoot::open(&world.root(name), name).unwrap(),
+                &mut table,
+            )
+            .unwrap();
+    }
+    let report = Contrast::default().analyze(&Query::new(table.facts(), None));
+    assert!(report.not_applicable.is_empty());
+    assert_eq!(report.summary["arms"], json!(["host", "host-b"]));
+    let task = &report.summary["tasks"]["ledger v1"];
+    assert_eq!(task["arms"]["host"]["runs"], json!(3));
+    assert_eq!(task["arms"]["host-b"]["mean_score"], json!(0.667));
+    let against = &task["against_reference"]["host-b"];
+    assert_eq!(against["score_change"], json!(-0.333));
+    let ratio = against["agent_ms_ratio"].as_f64().unwrap();
+    assert!((ratio - 5_300.0 / 10_200.0).abs() < 0.002, "{ratio}");
+    assert!(against["agent_ms_p"].as_f64().unwrap() < 0.1);
+    let overall = &report.summary["overall"];
+    assert_eq!(overall["host"]["tool_failure_rate"], json!(0.5));
+    assert_eq!(overall["host-b"]["tool_failure_rate"], json!(0.0));
+    assert!(overall["host-b"]["agent_ms_relative"].as_f64().unwrap() < 0.55);
+    let loss = finding(&report, "contrast_quality_loss");
+    assert_eq!(loss.subject, "ledger v1: host-b");
+    assert_eq!(loss.evidence.len(), 3);
+
+    // The reference may be named; the other arm is then compared to it.
+    let named = Contrast {
+        reference: Some("host-b".into()),
+        ..Contrast::default()
+    }
+    .analyze(&Query::new(table.facts(), None));
+    assert_eq!(named.summary["arms"], json!(["host-b", "host"]));
+    let back = &named.summary["tasks"]["ledger v1"]["against_reference"]["host"];
+    assert_eq!(back["score_change"], json!(0.333));
+    assert!(
+        named
+            .findings
+            .iter()
+            .all(|f| f.code != "contrast_quality_loss")
+    );
+
+    // Another field names other arms: here every Run shares one.
+    let by_model = Contrast {
+        by: "model".into(),
+        reference: None,
+    }
+    .analyze(&Query::new(table.facts(), None));
+    assert_eq!(by_model.summary["arms"], json!(["flash"]));
 }
