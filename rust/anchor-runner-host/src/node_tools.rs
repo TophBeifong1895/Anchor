@@ -21,6 +21,8 @@ mod workspace_files;
 pub(crate) const RUN_TOOL_NAME: &str = "anchor_run";
 pub(crate) const READ_TOOL_NAME: &str = "anchor_read";
 pub(crate) const EDIT_TOOL_NAME: &str = "anchor_edit";
+/// Where the sandbox mounts the workspace, as a path prefix.
+const WORKSPACE_PREFIX: &str = "/workspace/";
 
 /// Lines returned by one `anchor_read` call unless the model asks for fewer.
 const READ_DEFAULT_LINES: usize = 200;
@@ -232,6 +234,16 @@ impl NodeTools {
         ))
     }
 
+    /// Invalid arguments to anchor_read or anchor_edit, named as such and
+    /// with their own correction.
+    fn invalid_path_arguments(&self, tool: &str, error: impl std::fmt::Display) -> ToolError {
+        ToolError::Failed(format!(
+            "{tool} refused: invalid arguments: {error}. Pass `path` relative to /workspace \
+             (`/workspace/<path>` names the same file); anchor_read also accepts an absolute \
+             path inside an authorized read-only input. No change was made."
+        ))
+    }
+
     fn invalid_arguments(&self, error: impl std::fmt::Display) -> ToolError {
         ToolError::Failed(format!(
             "anchor_run not_executed: invalid arguments: {error}. \
@@ -366,9 +378,12 @@ impl NodeTools {
         })
     }
 
-    fn relative_candidate(&self, path: &str) -> Result<PathBuf, ToolError> {
+    fn relative_candidate(&self, tool: &str, path: &str) -> Result<PathBuf, ToolError> {
+        // The sandbox mounts the workspace at /workspace, so a model writes
+        // its files that way; the rest of the path is checked as given.
+        let path = path.strip_prefix(WORKSPACE_PREFIX).unwrap_or(path);
         if path.trim().is_empty() {
-            return Err(self.invalid_arguments("path must not be empty"));
+            return Err(self.invalid_path_arguments(tool, "path must not be empty"));
         }
         let candidate = Path::new(path);
         if candidate.is_absolute()
@@ -381,23 +396,24 @@ impl NodeTools {
                 )
             })
         {
-            return Err(self.invalid_arguments(format!(
-                "`{path}` must be relative to /workspace without `..` or a leading `/`"
-            )));
+            return Err(self.invalid_path_arguments(
+                tool,
+                format!("`{path}` must be relative to /workspace without `..`"),
+            ));
         }
         Ok(candidate.to_path_buf())
     }
 
     fn read_description(&self) -> String {
         format!(
-            "Read a text file by line. `path` is relative to /workspace, or an absolute path inside an explicitly authorized read-only input mount. Other absolute paths and `..` are refused. \
+            "Read a text file by line. `path` is relative to /workspace (`/workspace/<path>` names the same file), or an absolute path inside an explicitly authorized read-only input mount. Other absolute paths and `..` are refused. \
              Returns at most {READ_DEFAULT_LINES} lines (ceiling {READ_MAX_LINES}) or {READ_MAX_BYTES} bytes with 1-based line numbers, plus the file's `sha256`. \
              Page with `offset`/`next_offset`, and pass `sha256` as `base_sha256` to anchor_edit."
         )
     }
 
     fn edit_description(&self) -> String {
-        "Modify a text file inside /workspace. Either pass `content` to replace the whole file \
+        "Modify a text file inside /workspace; `path` is relative to it, and `/workspace/<path>` names the same file. Either pass `content` to replace the whole file \
          (requires `base_sha256` from anchor_read unless the file does not exist yet) or pass `old_string` \
          and `new_string` to replace exactly `expected_matches` occurrences (default 1). \
          The edit changes nothing and fails when the file hash or the match count does not match, so read the file first."
@@ -405,24 +421,27 @@ impl NodeTools {
     }
 
     fn read_file(&self, arguments: Value) -> Result<Vec<ToolResultContent>, ToolError> {
-        let arguments: ReadArguments =
-            serde_json::from_value(arguments).map_err(|error| self.invalid_arguments(error))?;
-        let bytes = if Path::new(&arguments.path).is_absolute() {
-            let mount = self
-                .readonly_inputs
-                .iter()
-                .find(|mount| Path::new(&arguments.path).starts_with(&mount.destination))
-                .ok_or_else(|| {
-                    self.invalid_arguments(
-                        "absolute read paths must belong to an authorized read-only input",
-                    )
-                })?;
+        let arguments: ReadArguments = serde_json::from_value(arguments)
+            .map_err(|error| self.invalid_path_arguments(READ_TOOL_NAME, error))?;
+        let input = self
+            .readonly_inputs
+            .iter()
+            .find(|mount| Path::new(&arguments.path).starts_with(&mount.destination));
+        let bytes = if Path::new(&arguments.path).is_absolute()
+            && (input.is_some() || !arguments.path.starts_with(WORKSPACE_PREFIX))
+        {
+            let mount = input.ok_or_else(|| {
+                self.invalid_path_arguments(
+                    READ_TOOL_NAME,
+                    "absolute read paths must belong to an authorized read-only input",
+                )
+            })?;
             let relative = Path::new(&arguments.path)
                 .strip_prefix(&mount.destination)
-                .map_err(|_| self.invalid_arguments("invalid input path"))?;
+                .map_err(|_| self.invalid_path_arguments(READ_TOOL_NAME, "invalid input path"))?;
             let relative = relative
                 .to_str()
-                .ok_or_else(|| self.invalid_arguments("invalid input path"))?;
+                .ok_or_else(|| self.invalid_path_arguments(READ_TOOL_NAME, "invalid input path"))?;
             let mut file =
                 crate::resource_read::open_resource(&mount.source, relative).map_err(|error| {
                     ToolError::Failed(format!("anchor_read input unavailable: {error}"))
@@ -440,7 +459,7 @@ impl NodeTools {
             }
             bytes
         } else {
-            let candidate = self.relative_candidate(&arguments.path)?;
+            let candidate = self.relative_candidate(READ_TOOL_NAME, &arguments.path)?;
             self.workspace_files()?.read(&candidate).map_err(|error| {
                 ToolError::Failed(format!("anchor_read failed: `{}`: {error}", arguments.path))
             })?
@@ -502,9 +521,9 @@ impl NodeTools {
     }
 
     fn edit_file(&self, arguments: Value) -> Result<Vec<ToolResultContent>, ToolError> {
-        let arguments: EditArguments =
-            serde_json::from_value(arguments).map_err(|error| self.invalid_arguments(error))?;
-        let candidate = self.relative_candidate(&arguments.path)?;
+        let arguments: EditArguments = serde_json::from_value(arguments)
+            .map_err(|error| self.invalid_path_arguments(EDIT_TOOL_NAME, error))?;
+        let candidate = self.relative_candidate(EDIT_TOOL_NAME, &arguments.path)?;
         let read_error =
             |error| ToolError::Failed(format!("anchor_edit failed: `{}`: {error}", arguments.path));
         let target = self
@@ -559,7 +578,10 @@ impl NodeTools {
                 }
                 let expected = arguments.expected_matches.unwrap_or(1);
                 if expected == 0 {
-                    return Err(self.invalid_arguments("expected_matches must be at least 1"));
+                    return Err(self.invalid_path_arguments(
+                        EDIT_TOOL_NAME,
+                        "expected_matches must be at least 1",
+                    ));
                 }
                 let found = current.matches(old.as_str()).count();
                 if found as u64 != expected {
@@ -576,7 +598,8 @@ impl NodeTools {
                 )
             }
             _ => {
-                return Err(self.invalid_arguments(
+                return Err(self.invalid_path_arguments(
+                    EDIT_TOOL_NAME,
                     "pass either `content`, or both `old_string` and `new_string`",
                 ));
             }
@@ -609,19 +632,24 @@ impl NodeTools {
 impl ToolPort for NodeTools {
     fn definitions(&self) -> Vec<ToolDefinition> {
         let mut definitions = self.inner.definitions();
+        let mut run = json!({
+            "type": "object",
+            "properties": {
+                "command": {"type": "array", "items": {"type": "string"}, "minItems": 1},
+                "timeout_seconds": {"type":"integer", "minimum":1, "maximum":self.timeout_ceiling.as_secs()}
+            },
+            "required": ["command"],
+            "additionalProperties": false
+        });
+        // Offer `project` only where it can be used: a model shown a
+        // parameter tries it.
+        if self.development_projects.is_some() {
+            run["properties"]["project"] = json!({"type":"string","description":"Prepared workspace-relative Python project. Runs inside this directory using its private venv/pip/PATH, or its preserved read-only legacy view until explicit rebuild. Use '.' for workspace root. Same-project commands and preparation serialize; interrupted pip may partially change state, so inspect before continuing."});
+        }
         definitions.push(ToolDefinition::new(
             ToolName::new(RUN_TOOL_NAME).expect("static tool name"),
             self.run_description(),
-            json!({
-                "type": "object",
-                "properties": {
-                    "command": {"type": "array", "items": {"type": "string"}, "minItems": 1},
-                    "project": {"type":"string","description":"Prepared workspace-relative Python project. Runs inside this directory using its private venv/pip/PATH, or its preserved read-only legacy view until explicit rebuild. Use '.' for workspace root. Same-project commands and preparation serialize; interrupted pip may partially change state, so inspect before continuing."},
-                    "timeout_seconds": {"type":"integer", "minimum":1, "maximum":self.timeout_ceiling.as_secs()}
-                },
-                "required": ["command"],
-                "additionalProperties": false
-            }),
+            run,
         ));
         definitions.push(ToolDefinition::new(
             ToolName::new(READ_TOOL_NAME).expect("static tool name"),

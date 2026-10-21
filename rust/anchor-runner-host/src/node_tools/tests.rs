@@ -887,7 +887,7 @@ async fn file_tools_stay_inside_the_workspace() {
         let error = call_tool_error(&tools, READ_TOOL_NAME, json!({"path": path})).await;
         assert!(!error.contains("host only"), "{error}");
         assert!(
-            error.contains("not_executed") || error.contains("outside") || error.contains("empty"),
+            error.contains("refused") || error.contains("outside") || error.contains("empty"),
             "{path}: {error}"
         );
     }
@@ -899,6 +899,87 @@ async fn file_tools_stay_inside_the_workspace() {
     .unwrap();
     let error = call_tool_error(&tools, READ_TOOL_NAME, json!({"path":"link.txt"})).await;
     assert!(error.contains("outside /workspace"), "{error}");
+}
+
+#[tokio::test]
+async fn file_tools_accept_the_workspace_mount_path_and_name_themselves_in_refusals() {
+    let fixture = Fixture::new();
+    let tools = fixture.tools(cancellation());
+    // `/workspace/<path>` is where the model sees the file in the sandbox.
+    let created = call_tool(
+        &tools,
+        EDIT_TOOL_NAME,
+        json!({"path":"/workspace/notes.txt","content":"one\n"}),
+    )
+    .await;
+    assert_eq!(created["created"], true);
+    assert_eq!(
+        std::fs::read_to_string(fixture.workspace.join("notes.txt")).unwrap(),
+        "one\n"
+    );
+    let read = call_tool(
+        &tools,
+        READ_TOOL_NAME,
+        json!({"path":"/workspace/notes.txt"}),
+    )
+    .await;
+    let relative = call_tool(&tools, READ_TOOL_NAME, json!({"path":"notes.txt"})).await;
+    assert_eq!(read["sha256"], relative["sha256"]);
+    assert_eq!(read["lines"][0]["text"], "one");
+
+    // The prefix grants nothing more: the rest is checked as a relative path.
+    std::fs::write(fixture.directory.path().join("outside.txt"), "host only").unwrap();
+    for path in ["/workspace/../outside.txt", "/workspace//etc/passwd"] {
+        let error = call_tool_error(&tools, READ_TOOL_NAME, json!({"path": path})).await;
+        assert!(!error.contains("host only"), "{error}");
+        assert!(
+            error.contains("anchor_read refused: invalid arguments"),
+            "{error}"
+        );
+        assert!(!error.contains("anchor_run"), "{error}");
+        let error = call_tool_error(
+            &tools,
+            EDIT_TOOL_NAME,
+            json!({"path": path, "content": "x"}),
+        )
+        .await;
+        assert!(
+            error.contains("anchor_edit refused: invalid arguments"),
+            "{error}"
+        );
+        assert!(!error.contains("\"command\""), "{error}");
+    }
+    // The failure classes recorded as facts stay what they were.
+    let error = call_tool_error(&tools, READ_TOOL_NAME, json!({"path":"/etc/passwd"})).await;
+    assert_eq!(
+        anchor_facts::classify_failure(&error),
+        anchor_facts::Failure::NotAuthorized
+    );
+    let error = call_tool_error(&tools, EDIT_TOOL_NAME, json!({"path":"../x","content":"x"})).await;
+    assert_eq!(
+        anchor_facts::classify_failure(&error),
+        anchor_facts::Failure::InvalidArguments
+    );
+}
+
+#[tokio::test]
+async fn development_projects_are_offered_only_where_they_can_be_used() {
+    let fixture = Fixture::new();
+    let schema = |tools: &NodeTools| {
+        tools
+            .definitions()
+            .into_iter()
+            .find(|tool| tool.name == RUN_TOOL_NAME)
+            .unwrap()
+            .parameters
+    };
+    let node = fixture.tools(cancellation());
+    assert!(schema(&node)["properties"].get("project").is_none());
+    let pilot = fixture.tools(cancellation()).with_development_projects(
+        fixture.directory.path().join("library"),
+        fixture.directory.path().join("scope"),
+    );
+    assert_eq!(schema(&pilot)["properties"]["project"]["type"], "string");
 }
 
 #[tokio::test]
