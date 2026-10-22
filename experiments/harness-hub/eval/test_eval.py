@@ -304,5 +304,20 @@ class Determinism(unittest.TestCase):
         self.assertNotIn('from ', ''.join(l for l in source.splitlines() if l.startswith('from')))
 
 
+class Stopping(unittest.TestCase):
+    """experiment.py stops once the gate has decided every arm."""
+
+    def test_an_arm_the_gate_has_not_seen_is_open_and_only_decided_arms_stop(self):
+        import experiment
+        report = {'summary': {'arms': {'bbb': {'decision': 'admitted'},
+                                       'ccc': {'decision': 'rejected'}}}}
+        self.assertEqual(experiment.decisions(report, {'B': 'bbb', 'C': 'ccc', 'D': 'ddd'}),
+                         {'B': 'admitted', 'C': 'rejected', 'D': 'open'})
+        self.assertTrue(experiment.settled({'B': 'admitted', 'C': 'rejected'}))
+        self.assertFalse(experiment.settled({'B': 'admitted', 'D': 'open'}))
+        # A report the gate could not make (no grades yet) decides nothing.
+        self.assertEqual(experiment.decisions({'summary': {}}, {'B': 'bbb'}), {'B': 'open'})
+
+
 if __name__ == '__main__':
     unittest.main()
