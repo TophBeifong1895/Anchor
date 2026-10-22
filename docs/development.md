@@ -22,12 +22,14 @@
 
 ```sh
 cargo +stable test --manifest-path rust/Cargo.toml -p anchor-devtools --locked
-cargo +stable test --manifest-path rust/Cargo.toml --workspace --all-features --all-targets --locked -- --test-threads=8
+scripts/test.sh --workspace --all-features --all-targets --locked -- --test-threads=8
 cargo +stable clippy --manifest-path rust/Cargo.toml --workspace --all-features --all-targets --locked -- -D warnings
 cargo +stable fmt --manifest-path rust/Cargo.toml --all -- --check
 npm --prefix apps/web test
 npm --prefix apps/web run build
 ```
+
+`scripts/test.sh` 把测试临时目录放到 `XDG_RUNTIME_DIR` 的 tmpfs 上再调用 `cargo +stable test`：Host 的存储每次持久写都 fsync，磁盘上这部分占了 Host 套件大半时间（217 秒对 56 秒）。不用 `/dev/shm`，因为沙箱测试保留了 `/dev`；没有 tmpfs 时脚本提示并退回普通临时目录。
 
 已缓存依赖时可加 `--offline`，缓存缺失要如实报告。Goose 条件集成用例不在普通 `cargo test` 中自动执行，必须通过 [确定性 Graph 回归](runtime-contract-tests.md) 显式选择；缺少 Goose、浏览器或外部配置与通过是不同结果。
 

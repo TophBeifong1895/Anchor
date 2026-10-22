@@ -16,6 +16,13 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
 rmcp = { version = "=2.2.0", default-features = false, features = ["client", "transport-child-process", "transport-streamable-http-client-reqwest", "client-side-sse"] }
 sha2 = "0.10"
 
+# Tests spend their time in our own code (the scheduler differentials replay
+# tens of thousands of seeds). opt-level 1 makes them about 3x faster and keeps
+# debug assertions, overflow checks and debuginfo; incremental rebuilds cost
+# the same (5 s for a Host change).
+[profile.dev]
+opt-level = 1
+
 # Content digests (the Host's own executable, artifacts) hash hundreds of
 # megabytes; unoptimized, sha2 takes seconds on a debug build.
 [profile.dev.package.sha2]

@@ -27,7 +27,8 @@
   | Host 或 Runtime 代码 | 受影响 crate 的测试，加上相关的一两个 Goose 套件（例如 `--test goose_acp`） | workspace，加上完整 Goose 回归 |
   | 内核代码 | `anchor-kernel` 测试 | workspace，加上完整 Goose 回归 |
 
-  - "完整 Goose 回归"指 `cargo +stable test -p anchor-runner-host --locked --no-fail-fast -- --ignored --test-threads=1`，环境同 M4 的 `goose_full`，耗时约 21 分钟；workspace 约 9 分钟。
+  - "完整 Goose 回归"指 `cargo +stable test -p anchor-runner-host --locked --no-fail-fast -- --ignored --test-threads=1`，环境同 M4 的 `goose_full`，耗时约 21 分钟；workspace 用 `scripts/test.sh --workspace --all-features --all-targets --locked` 约 2.5 分钟（2026-10-23 实测 147–158 秒）。
+  - 时间预算：开发中跑的子集控制在 1 分钟内，workspace 控制在 3 分钟内。新测试让套件超出预算时，要说明为什么不能更便宜地覆盖同一行为。
   - 标准套件 `anchor-devtools regression goose-fixture`（107 项）完全包含在完整回归（123 项）里，两者不要一起跑。
   - 只有审查要求、或者修复改到了代码时，才重跑切片门槛。
 
