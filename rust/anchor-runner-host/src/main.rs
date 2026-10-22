@@ -394,9 +394,12 @@ fn standalone_application() -> Result<application::RunApplication, String> {
     // The same runtime configuration `serve` uses: nodes run the Python and
     // Rust the deployment configured, not whatever the sandbox's system
     // directories happen to resolve.
+    // Without a configured Library there is none to share; dependency
+    // preparation then gets the same disjoint default `serve` uses.
+    let dependency_library = standalone_library_root().unwrap_or_else(|| state.join("catalog"));
     let runtime_configuration = runtime_configuration::RuntimeConfiguration::from_env(
         &state,
-        &library_root(&catalog),
+        &dependency_library,
         env::var_os("ANCHOR_BWRAP")
             .map(PathBuf::from)
             .unwrap_or_else(|| PathBuf::from("bwrap")),

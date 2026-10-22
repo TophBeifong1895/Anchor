@@ -2,7 +2,7 @@ use rustix::fs::{Mode, OFlags, RenameFlags, open, renameat_with};
 use sha2::{Digest, Sha256};
 use std::{
     fs::{self, File, Metadata, OpenOptions},
-    io::{Read, Write},
+    io::{Read, Seek, SeekFrom, Write},
     os::unix::fs::{MetadataExt, PermissionsExt},
     path::{Component, Path, PathBuf},
 };
@@ -159,7 +159,8 @@ fn package_checked(
         }
         copied_digest.update(&buffer[..count]);
     }
-    if digest.finalize() != copied_digest.finalize() {
+    let digest = digest.finalize();
+    if digest != copied_digest.finalize() {
         return Err(PackageError::Identity);
     }
     let mut manifest: serde_json::Value =
@@ -181,6 +182,24 @@ fn package_checked(
     let after = source.metadata().map_err(|_| PackageError::Identity)?;
     let current = fs::symlink_metadata(executable).map_err(|_| PackageError::Identity)?;
     if identity(&before) != identity(&after) || identity(&before) != identity(&current) {
+        return Err(PackageError::Identity);
+    }
+    // Metadata alone misses a same-length rewrite within one timestamp tick;
+    // the bytes must still be the ones that were copied.
+    source
+        .seek(SeekFrom::Start(0))
+        .map_err(|_| PackageError::Identity)?;
+    let mut current_digest = Sha256::new();
+    loop {
+        let count = source
+            .read(&mut buffer)
+            .map_err(|_| PackageError::Identity)?;
+        if count == 0 {
+            break;
+        }
+        current_digest.update(&buffer[..count]);
+    }
+    if current_digest.finalize() != digest {
         return Err(PackageError::Identity);
     }
     let current_parent = fs::symlink_metadata(parent).map_err(|_| PackageError::Destination)?;

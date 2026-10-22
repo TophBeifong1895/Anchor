@@ -306,6 +306,10 @@ async fn special_workspace_files_are_rejected() {
     let (_temp, artifacts) = fixture();
     let key = key("work");
     let path = workspace(&artifacts, &key);
-    let _socket = std::os::unix::net::UnixListener::bind(path.join("socket")).unwrap();
+    // Bound where the path is short, then moved in: the workspace path can
+    // exceed the socket address limit when TMPDIR is deep.
+    let short = tempfile::tempdir().unwrap();
+    let _socket = std::os::unix::net::UnixListener::bind(short.path().join("s")).unwrap();
+    fs::rename(short.path().join("s"), path.join("socket")).unwrap();
     assert!(artifacts.freeze(&key, &completion()).await.is_err());
 }

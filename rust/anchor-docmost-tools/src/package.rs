@@ -99,6 +99,9 @@ fn package_checked(
     }
     validate_parent(parent, &parent_fd)?;
     validate_source(executable, &source, source_identity)?;
+    // Metadata alone misses a same-length rewrite within one timestamp tick;
+    // the bytes must still be the ones that were copied.
+    verify_copy(&mut source, source_metadata.len(), &expected_digest)?;
     validate_entry(&parent_fd, staging_name, &staging_fd)?;
     validate_binary(&binary_directory, &binary, copied_identity)?;
     checkpoint(Checkpoint::BeforeRename, &parent_fd);
@@ -120,6 +123,7 @@ fn package_checked(
     let published = (|| {
         validate_parent(parent, &parent_fd)?;
         validate_source(executable, &source, source_identity)?;
+        verify_copy(&mut source, source_metadata.len(), &expected_digest)?;
         validate_entry(&parent_fd, destination_name, &staging_fd)?;
         validate_binary(&binary_directory, &binary, copied_identity)?;
         parent_fd.sync_all().map_err(|_| PackageError::Write)
