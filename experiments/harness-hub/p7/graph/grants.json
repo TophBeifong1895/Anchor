@@ -1,0 +1,50 @@
+{
+ "profile": [
+  "harness-hub-data",
+  "hub-bin"
+ ],
+ "frame": [
+  "harness-hub-data"
+ ],
+ "investigate-1": [
+  "harness-hub-data",
+  "host-source",
+  "hub-source"
+ ],
+ "investigate-2": [
+  "harness-hub-data",
+  "host-source",
+  "hub-source"
+ ],
+ "investigate-3": [
+  "harness-hub-data",
+  "host-source",
+  "hub-source"
+ ],
+ "investigate-4": [
+  "harness-hub-data",
+  "host-source",
+  "hub-source"
+ ],
+ "explore": [
+  "harness-hub-data",
+  "host-source",
+  "hub-source",
+  "anchor-rsi-source"
+ ],
+ "verify": [
+  "harness-hub-data",
+  "hub-bin",
+  "host-source",
+  "hub-source",
+  "anchor-rsi-source"
+ ],
+ "synthesize": [
+  "harness-hub-data"
+ ],
+ "review": [
+  "harness-hub-data",
+  "host-source",
+  "hub-source"
+ ]
+}
