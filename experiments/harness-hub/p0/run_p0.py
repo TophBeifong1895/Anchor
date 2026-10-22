@@ -27,6 +27,9 @@ LOCAL = Path(os.environ.get('ANCHOR_P0_LOCAL', REPO / '.local/harness-hub-p0'))
 GUARD_SECONDS = 900
 FORWARD = ('PATH', 'LANG', 'LC_ALL', 'HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'NO_PROXY',
            'http_proxy', 'https_proxy', 'all_proxy', 'no_proxy', 'SSL_CERT_FILE', 'SSL_CERT_DIR')
+# The deployment's runtime: nodes run the Python it configured, not the
+# sandbox's system one. Dependency preparation is not forwarded.
+RUNTIME = ('ANCHOR_DEPENDENCIES_PYTHON', 'ANCHOR_PILOT_PYTHON_ENABLED')
 
 sys.path.insert(0, str(HERE))
 from fixtures import graphs  # noqa: E402
@@ -68,7 +71,8 @@ def run_once(task, index, host, live_env, graph=None, commands=None, local=None,
     root = (local or LOCAL) / 'runs' / run
     for name in ('home', 'library', 'operator', 'catalog'):
         (root / name).mkdir(parents=True)
-    env = {k: v for k, v in live_env.items() if k in FORWARD or k.startswith(('ANCHOR_GOOSE_', 'ANCHOR_MODEL_'))}
+    env = {k: v for k, v in live_env.items()
+           if k in FORWARD or k in RUNTIME or k.startswith(('ANCHOR_GOOSE_', 'ANCHOR_MODEL_'))}
     env.update({
         'HOME': str(root / 'home'),
         'ANCHOR_RUNNER_STATE_ROOT': str(root / 'state'),

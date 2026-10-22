@@ -46,6 +46,8 @@ fn tool_call_fact(ok: bool) -> Fact {
         model_request: 2,
         arguments_shape: arguments_shape(&json!({"command": ["cat", "x"]})),
         path: None,
+        program: Some("cat".into()),
+        command: None,
         started_at_ms: Some(10),
         ended_at_ms: Some(25),
         ok,

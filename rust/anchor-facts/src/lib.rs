@@ -236,11 +236,80 @@ pub enum Fact {
         /// value. Records from before this field read as `None`.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         path: Option<PathClass>,
+        /// For a tool that runs a command, the base name of the program it
+        /// was asked to run: a name the host's allowlist carries anyway, never
+        /// its arguments. Records from before this field read as `None`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        program: Option<String>,
+        /// For a tool that runs a command, how the command ended. The call
+        /// succeeds whenever the host ran the command, so `ok` says nothing
+        /// about the command itself. Records from before this field read as
+        /// `None`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        command: Option<CommandEnd>,
         started_at_ms: Option<u64>,
         ended_at_ms: Option<u64>,
         ok: bool,
         failure: Option<Failure>,
     },
+}
+
+/// How a command a tool ran ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct CommandEnd {
+    pub status: CommandStatus,
+    /// The exit code, when the command exited.
+    pub exit_code: Option<i32>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CommandStatus {
+    /// The program started and exited, with whatever code.
+    Exited,
+    /// The sandbox could not start the program: it is not there, or not
+    /// executable, inside the sandbox.
+    NotStarted,
+    /// The host stopped it at its time limit.
+    TimedOut,
+}
+
+impl CommandEnd {
+    /// Whether the command ran and exited 0.
+    pub fn clean(&self) -> bool {
+        self.status == CommandStatus::Exited && self.exit_code == Some(0)
+    }
+}
+
+/// How a command ended, from a command tool's result: its `status`, its
+/// `exit_code`, and whether the sandbox reported that it could not start the
+/// program. The output is read for that report only and never recorded.
+pub fn command_end(result: &Value) -> Option<CommandEnd> {
+    let status = result.get("status")?.as_str()?;
+    let exit_code = result
+        .get("exit_code")
+        .and_then(Value::as_i64)
+        .and_then(|code| i32::try_from(code).ok());
+    let status = match status {
+        "timed_out" => CommandStatus::TimedOut,
+        _ if result
+            .get("stderr")
+            .and_then(Value::as_str)
+            .is_some_and(|stderr| stderr.starts_with("bwrap: execvp ")) =>
+        {
+            CommandStatus::NotStarted
+        }
+        _ => CommandStatus::Exited,
+    };
+    Some(CommandEnd { status, exit_code })
+}
+
+/// The program a command tool was asked to run: the base name of the first
+/// element of its `command` argument.
+pub fn command_program(arguments: &Value) -> Option<String> {
+    let first = arguments.get("command")?.as_array()?.first()?.as_str()?;
+    let name = first.rsplit('/').next().unwrap_or(first);
+    (!name.is_empty()).then(|| name.to_owned())
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

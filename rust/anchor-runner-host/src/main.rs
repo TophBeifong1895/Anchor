@@ -391,7 +391,18 @@ fn standalone_application() -> Result<application::RunApplication, String> {
     let catalog = env::var_os("ANCHOR_RUNNER_CATALOG_ROOT")
         .map(PathBuf::from)
         .unwrap_or_else(|| state.clone());
-    Ok(application::RunApplication::new(state, catalog))
+    // The same runtime configuration `serve` uses: nodes run the Python and
+    // Rust the deployment configured, not whatever the sandbox's system
+    // directories happen to resolve.
+    let runtime_configuration = runtime_configuration::RuntimeConfiguration::from_env(
+        &state,
+        &library_root(&catalog),
+        env::var_os("ANCHOR_BWRAP")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("bwrap")),
+    )?;
+    Ok(application::RunApplication::new(state, catalog)
+        .with_runtime_configuration(Arc::new(runtime_configuration)))
 }
 
 async fn handle(request: Request) -> Response {
@@ -831,6 +842,68 @@ async fn main() -> io::Result<()> {
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    /// A standalone Run carries the deployment's runtime configuration, so
+    /// its nodes get the configured Python rather than the sandbox's system
+    /// one. Before, `start_bundle` built its application without it and an
+    /// AgentNode's `python3` resolved to whatever `/usr/bin` held.
+    #[test]
+    fn a_standalone_run_carries_the_configured_python() {
+        let Some(python) = [
+            "/usr/bin/python3.12",
+            "/usr/bin/python3.11",
+            "/usr/bin/python3.10",
+        ]
+        .into_iter()
+        .map(PathBuf::from)
+        .find(|path| path.is_file()) else {
+            eprintln!("SKIPPED (no verification): no system Python 3.8+ is available");
+            return;
+        };
+        let _env = PROCESS_ENV_LOCK.blocking_lock();
+        let root = tempdir().unwrap();
+        let saved: Vec<_> = [
+            "ANCHOR_RUNNER_STATE_ROOT",
+            "ANCHOR_RUNNER_CATALOG_ROOT",
+            "ANCHOR_RUNNER_LIBRARY_ROOT",
+            "ANCHOR_DEPENDENCIES_PYTHON",
+            "ANCHOR_PILOT_PYTHON_ENABLED",
+        ]
+        .into_iter()
+        .map(|name| (name, env::var_os(name)))
+        .collect();
+        let set = |name: &str, value: &std::ffi::OsStr| unsafe { env::set_var(name, value) };
+        set(
+            "ANCHOR_RUNNER_STATE_ROOT",
+            root.path().join("state").as_os_str(),
+        );
+        set(
+            "ANCHOR_RUNNER_CATALOG_ROOT",
+            root.path().join("catalog").as_os_str(),
+        );
+        set(
+            "ANCHOR_RUNNER_LIBRARY_ROOT",
+            root.path().join("library").as_os_str(),
+        );
+        set("ANCHOR_DEPENDENCIES_PYTHON", python.as_os_str());
+        set("ANCHOR_PILOT_PYTHON_ENABLED", "1".as_ref());
+        let snapshot = standalone_application().and_then(|application| {
+            application
+                .runtime_snapshot()
+                .map_err(|error| format!("{error:?}"))
+        });
+        for (name, value) in saved {
+            unsafe {
+                match value {
+                    Some(value) => env::set_var(name, value),
+                    None => env::remove_var(name),
+                }
+            }
+        }
+        let snapshot = snapshot.unwrap().expect("a runtime snapshot");
+        assert_eq!(snapshot.python.as_deref(), Some(python.as_path()));
+        assert!(snapshot.python_enabled);
+    }
 
     #[test]
     fn write_durable_preserves_creation_and_existing_permissions() {

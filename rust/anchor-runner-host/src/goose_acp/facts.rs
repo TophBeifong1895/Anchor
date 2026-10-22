@@ -45,6 +45,11 @@ pub(super) fn observations(
             path: call["arguments"]["path"]
                 .as_str()
                 .map(anchor_facts::path_class),
+            program: anchor_facts::command_program(&call["arguments"]),
+            command: ok
+                .then(|| command_result(&call["result"]))
+                .flatten()
+                .and_then(anchor_facts::command_end),
             started_at_ms: call["started_at_ms"].as_u64(),
             ended_at_ms: call["ended_at_ms"].as_u64(),
             ok,
@@ -63,6 +68,17 @@ pub(super) fn observations(
         resumed: evidence["resume"].as_bool().unwrap_or(false),
     });
     facts
+}
+
+/// The JSON body a command tool answered with: the bridge wraps the tool's
+/// own `{ok, output: [content]}` in its `output`.
+fn command_result(result: &Value) -> Option<&Value> {
+    let output = &result["output"];
+    let contents = output["output"].as_array().or_else(|| output.as_array())?;
+    contents
+        .iter()
+        .find(|content| content["type"] == "json")
+        .map(|content| &content["value"])
 }
 
 /// Bridge errors are text, or a JSON envelope whose `error` is text.
@@ -153,10 +169,69 @@ mod tests {
                 ..
             }
         ));
-        // No argument or result value is carried.
+        // The program's base name is kept, as the allowlist names it; no
+        // other argument or result value is carried.
+        assert!(
+            matches!(&facts[2], Fact::ToolCall { program: Some(p), command: None, .. } if p == "find")
+        );
         let recorded = format!("{facts:?}");
-        assert!(!recorded.contains("find"));
         assert!(!recorded.contains("sandbox policy"));
         assert!(!recorded.contains("done"));
+    }
+
+    #[test]
+    fn a_command_that_did_not_start_timed_out_or_exited_nonzero_is_told_apart_from_a_clean_one() {
+        let run = |argv: Value, value: Value| {
+            json!({"provider_request": 1, "tool": "anchor_run", "arguments": {"command": argv},
+                   "started_at_ms": 1, "ended_at_ms": 2,
+                   "result": {"ok": true, "output": {"ok": true, "output": [{"type": "json", "value": value}]}}})
+        };
+        let evidence = json!({"usage": {"samples": []}, "tool_calls": [
+            run(json!(["python3", "-c", "secret"]),
+                json!({"status": "completed", "exit_code": 1, "stdout": "", "stderr": "bwrap: execvp python3: No such file or directory\n"})),
+            run(json!(["/usr/bin/sh", "-c", "sleep 99"]),
+                json!({"status": "timed_out", "exit_code": null, "stdout": "", "stderr": ""})),
+            run(json!(["grep", "x", "y"]),
+                json!({"status": "completed", "exit_code": 2, "stdout": "", "stderr": "grep: y: No such file"})),
+            run(json!(["ls"]),
+                json!({"status": "completed", "exit_code": 0, "stdout": "a\n", "stderr": ""})),
+        ]});
+        let facts = observations(&evidence, 0, 9, Outcome::Completed);
+        let ends: Vec<_> = facts
+            .iter()
+            .filter_map(|fact| match fact {
+                Fact::ToolCall {
+                    program,
+                    command,
+                    ok,
+                    ..
+                } => Some((program.clone(), *command, *ok)),
+                _ => None,
+            })
+            .collect();
+        use anchor_facts::{CommandEnd, CommandStatus};
+        let end = |status, exit_code| Some(CommandEnd { status, exit_code });
+        assert_eq!(
+            ends,
+            vec![
+                (
+                    Some("python3".into()),
+                    end(CommandStatus::NotStarted, Some(1)),
+                    true
+                ),
+                (Some("sh".into()), end(CommandStatus::TimedOut, None), true),
+                (
+                    Some("grep".into()),
+                    end(CommandStatus::Exited, Some(2)),
+                    true
+                ),
+                (Some("ls".into()), end(CommandStatus::Exited, Some(0)), true),
+            ]
+        );
+        assert!(ends[3].1.unwrap().clean() && !ends[2].1.unwrap().clean());
+        let recorded = format!("{facts:?}");
+        for value in ["secret", "sleep 99", "No such file", "a\\n"] {
+            assert!(!recorded.contains(value), "{value}");
+        }
     }
 }
