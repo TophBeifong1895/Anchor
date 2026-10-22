@@ -39,19 +39,19 @@ class PublicationGate(unittest.TestCase):
 
     def test_quality_loss_cannot_be_overridden_by_a_pass(self):
         result, feedback = self.gate('PASS', [proposal('decreasing')])
-        self.assertEqual(result.stdout.strip(), 'ANCHOR_ROUTE: triage')
+        self.assertEqual(result.stdout.strip(), 'ANCHOR_ROUTE: synthesize')
         self.assertIn('quality loss', feedback)
 
     def test_missing_prediction_returns_actionable_feedback(self):
         candidate = proposal()
         del candidate['prediction']['coordinates']
         result, feedback = self.gate('PASS', [candidate])
-        self.assertEqual(result.stdout.strip(), 'ANCHOR_ROUTE: triage')
+        self.assertEqual(result.stdout.strip(), 'ANCHOR_ROUTE: synthesize')
         self.assertIn('coordinates', feedback)
 
-    def test_reviewer_revision_returns_to_triage(self):
+    def test_reviewer_revision_returns_to_synthesis(self):
         result, feedback = self.gate('REVISE', [proposal()])
-        self.assertEqual(result.stdout.strip(), 'ANCHOR_ROUTE: triage')
+        self.assertEqual(result.stdout.strip(), 'ANCHOR_ROUTE: synthesize')
         self.assertIn('review evidence', feedback)
 
     def test_a_block_stops_without_publishing(self):

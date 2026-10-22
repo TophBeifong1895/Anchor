@@ -32,16 +32,22 @@ def replay(collected, root):
         ops[node] = {'run': f'cp /local-inputs/trial/{name} {name}', 'writes': [name]}
     ops['synthesize']['run'] += '; cp /local-inputs/trial/synthesis.md synthesis.md'
     ops['synthesize']['writes'].append('synthesis.md')
+    # A revision routes back into synthesize. Its second pass stops on purpose
+    # instead of retrying, so the fixture never stands in for a model revision.
+    ops['synthesize']['run'] = (
+        "if test -e /in/gate/gate.txt; then printf '%s\\n' "
+        "'Recorded review requires revision; no model retry.' >&2; exit 1; fi; "
+        + ops['synthesize']['run'])
     # These two author declarations are unused by the publication command and
     # belong to the omitted research nodes, so they are absent in this fixture.
     ops['publish']['reads'] = [name for name in ops['publish']['reads']
                               if name not in ('signals.json', 'triage.md')]
-    ops['triage'] = {'run': "printf '%s\\n' 'Recorded review requires revision; no model retry.' >&2; exit 1"}
     replay_graph = {
         'entry': 'synthesize', 'objective': 'Replay saved publication inputs without a model.',
         'ops': ops, 'nodes': [{'id': node, 'op': node} for node in ops],
         'edges': [{'from': a, 'to': b} for a, b in (
-            ('synthesize', 'review'), ('review', 'gate'), ('gate', 'publish'), ('gate', 'triage'))],
+            ('synthesize', 'review'), ('review', 'gate'), ('gate', 'publish'),
+            ('gate', 'synthesize'))],
     }
     run_p0.save(root / 'bundle/graph.json', replay_graph)
     run_p0.save(root / 'bundle/manifest.json', {'format': 1, 'graph': 'graph.json', 'plugins': []})
@@ -85,7 +91,7 @@ def replay(collected, root):
                  for path in (root / 'state/artifacts').glob('*/manifest.json')]
     gate = next(item for item in artifacts if item['key']['node_id'] == 'gate')
     decision = (root / 'inputs/review.md').read_text().splitlines()[0]
-    route = 'publish' if decision == 'PASS' else 'triage'
+    route = 'publish' if decision == 'PASS' else 'synthesize'
     assert gate['completion']['route'] == route, gate['completion']
     assert gate['completion']['output']['exit_code'] == 0
     if decision != 'PASS':
