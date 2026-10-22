@@ -15,6 +15,7 @@ use crate::adapters::{Hub, now_ms};
 use crate::analyzers::{
     Analyzer, Finding,
     contrast::Contrast,
+    gate::Gate,
     health::Health,
     signals::{Signals, route_label},
     stall::Stall,
@@ -169,9 +170,17 @@ fn report(query: &Query, args: &Value) -> Result<Value, String> {
             contrast.reference = text(args, "reference").map(str::to_owned);
             contrast.analyze(query)
         }
+        Some("gate") => {
+            let mut gate = Gate::default();
+            if let Some(by) = text(args, "by") {
+                gate.by = by.to_owned();
+            }
+            gate.reference = text(args, "reference").map(str::to_owned);
+            gate.analyze(query)
+        }
         other => {
             return Err(format!(
-                "analyzer must be health, stall or contrast, not {other:?}"
+                "analyzer must be health, stall, contrast or gate, not {other:?}"
             ));
         }
     };
@@ -377,7 +386,7 @@ fn tools() -> Value {
             "name": "report",
             "description": "One analyzer's report: health (record integrity, failures, startup), stall (stalled tasks, gaps, slow calls, loops) or contrast (graded Runs compared by a configuration field). Findings are paged and can be filtered by code and subject.",
             "inputSchema": {"type": "object", "required": ["analyzer"], "properties": with_paging(json!({
-                "analyzer": {"type": "string", "enum": ["health", "stall", "contrast"]},
+                "analyzer": {"type": "string", "enum": ["health", "stall", "contrast", "gate"]},
                 "code": {"type": "string"},
                 "subject": {"type": "string", "description": "substring"},
                 "idle_minutes": {"type": "integer", "minimum": 1},

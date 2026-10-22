@@ -670,6 +670,75 @@ pub fn mann_whitney(a: &[f64], b: &[f64]) -> Option<RankTest> {
     })
 }
 
+/// Evidence against "the mean of the pushed values is at most zero", as the
+/// wealth of a gambler who bets on each value before seeing it (testing by
+/// betting, with the aGRAPA bet of Waudby-Smith and Ramdas). Values must not
+/// fall below `floor` (negative). Under that hypothesis the wealth is a
+/// nonnegative supermartingale, so the chance that it *ever* reaches 1/α is
+/// at most α: it may be read after every value and the reading stopped at
+/// any time, which a p-value may not.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Wealth {
+    floor: f64,
+    value: f64,
+    n: f64,
+    sum: f64,
+    squares: f64,
+}
+
+impl Wealth {
+    pub fn new(floor: f64) -> Self {
+        assert!(floor < 0.0, "a floor below zero");
+        Self {
+            floor,
+            value: 1.0,
+            n: 0.0,
+            sum: 0.0,
+            squares: 0.0,
+        }
+    }
+
+    /// Bet on `x` with what the earlier values suggest, then see it.
+    pub fn push(&mut self, x: f64) {
+        let x = x.max(self.floor);
+        let mean = self.sum / (self.n + 1.0);
+        let variance = (self.floor * self.floor / 4.0 + self.squares) / (self.n + 1.0);
+        // Stake at most three quarters of what the floor would take: wealth
+        // can shrink, never vanish.
+        let bet = (mean / (variance + mean * mean)).clamp(0.0, 0.75 / -self.floor);
+        self.value *= 1.0 + bet * x;
+        self.squares += (x - mean).powi(2);
+        self.sum += x;
+        self.n += 1.0;
+    }
+
+    /// The e-value so far.
+    pub fn value(&self) -> f64 {
+        self.value
+    }
+
+    /// How many values were pushed.
+    pub fn n(&self) -> usize {
+        self.n as usize
+    }
+}
+
+/// Which of several e-values may be rejected together while the expected
+/// share of false rejections stays at most `alpha` (e-BH, Wang and Ramdas),
+/// whatever the dependence between them. Indices into `evalues`.
+pub fn e_bh(evalues: &[f64], alpha: f64) -> Vec<usize> {
+    let mut order: Vec<usize> = (0..evalues.len()).collect();
+    order.sort_by(|&a, &b| evalues[b].total_cmp(&evalues[a]));
+    let k = evalues.len() as f64;
+    let kept = (1..=order.len())
+        .rev()
+        .find(|&rank| evalues[order[rank - 1]] >= k / (alpha * rank as f64))
+        .unwrap_or(0);
+    let mut chosen = order[..kept].to_vec();
+    chosen.sort();
+    chosen
+}
+
 /// The standard normal distribution function (Abramowitz and Stegun 7.1.26,
 /// absolute error below 1.5e-7).
 pub fn normal_cdf(x: f64) -> f64 {

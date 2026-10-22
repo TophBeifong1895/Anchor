@@ -5,13 +5,13 @@ use std::collections::BTreeSet;
 use anchor_facts::{AgentConfiguration, Outcome};
 use anchor_hub::adapters::{Hub, discover};
 use anchor_hub::analyzers::{
-    Analyzer, Finding, Need, Report, contrast::Contrast, health::Health, signals::Signals,
-    stall::Stall,
+    Analyzer, Finding, Need, Report, contrast::Contrast, gate::Gate, health::Health,
+    signals::Signals, stall::Stall,
 };
 use anchor_hub::mcp::handle;
 use anchor_hub::query::{
-    Activity, GapPlace, Query, Status, covered, mann_whitney, node_result, normal_cdf, repeats,
-    summarize, two_proportions,
+    Activity, GapPlace, Query, Status, Wealth, covered, e_bh, mann_whitney, node_result,
+    normal_cdf, repeats, summarize, two_proportions,
 };
 use anchor_hub::source::{DataRoot, Stored};
 use anchor_hub::table::{Body, FactTable, MemoryTable, Projector};
@@ -1051,4 +1051,149 @@ fn failure_classes_stay_comparable_and_the_path_class_tells_wrong_places_apart()
         anchor_facts::path_class("/in/previous/a"),
         PathClass::Absolute
     );
+}
+
+/// A fixed generator, so the simulation is the same on every machine.
+struct Lcg(u64);
+
+impl Lcg {
+    fn unit(&mut self) -> f64 {
+        self.0 = self
+            .0
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(1_442_695_040_888_963_407);
+        (self.0 >> 11) as f64 / (1u64 << 53) as f64
+    }
+}
+
+#[test]
+fn a_bet_watched_after_every_value_stays_within_its_error_rate() {
+    // Pass/fail differences of two arms of equal quality, read after every
+    // pair as a gate would be: the share of streams that ever reach 1/α
+    // stays below α, though no one fixed when to stop.
+    let mut random = Lcg(7);
+    let (streams, pairs, alpha) = (2_000, 200, 0.05);
+    let mut false_alarms = 0;
+    for _ in 0..streams {
+        let mut worse = Wealth::new(-1.0 - 0.0);
+        let mut alarmed = false;
+        for _ in 0..pairs {
+            let a = (random.unit() < 0.8) as u8 as f64;
+            let b = (random.unit() < 0.8) as u8 as f64;
+            worse.push(-(b - a));
+            alarmed |= worse.value() >= 1.0 / alpha;
+        }
+        false_alarms += alarmed as usize;
+    }
+    assert!(
+        (false_alarms as f64 / streams as f64) < alpha,
+        "{false_alarms}"
+    );
+
+    // A real loss of 0.3 in pass rate is found, and early.
+    let mut found = Vec::new();
+    for _ in 0..200 {
+        let mut worse = Wealth::new(-1.0);
+        let at = (1..=pairs).find(|_| {
+            let a = (random.unit() < 0.9) as u8 as f64;
+            let b = (random.unit() < 0.6) as u8 as f64;
+            worse.push(a - b);
+            worse.value() >= 1.0 / alpha
+        });
+        found.extend(at);
+    }
+    assert!(found.len() >= 190, "{}", found.len());
+    found.sort();
+    assert!(
+        found[found.len() / 2] <= 60,
+        "median {}",
+        found[found.len() / 2]
+    );
+
+    // e-BH: the largest set whose k-th largest e-value reaches K/(αk).
+    assert_eq!(e_bh(&[100.0, 30.0, 1.0, 0.5], 0.1), vec![0, 1]);
+    assert_eq!(e_bh(&[39.0, 39.0], 0.05), vec![0, 1]);
+    assert_eq!(e_bh(&[15.0, 15.0], 0.05), Vec::<usize>::new());
+    assert_eq!(e_bh(&[], 0.05), Vec::<usize>::new());
+}
+
+/// Paired Runs of one task under two Hosts, interleaved, with the given
+/// pass/fail outcomes for each arm in order.
+fn paired(world: &World, task: &str, start: u64, outcomes: &[(bool, bool)]) {
+    let mut variant = support::configuration("worker");
+    variant.host_sha256 = "host-b".into();
+    for (n, (a, b)) in outcomes.iter().enumerate() {
+        for (arm, passed, config) in [
+            ("a", a, support::configuration("worker")),
+            ("b", b, variant.clone()),
+        ] {
+            let run = format!("{task}-{start}-{arm}{n}");
+            let at = start + n as u64 * 10_000 + if arm == "a" { 0 } else { 5_000 };
+            world.run(&run, at);
+            world.observe(
+                &run,
+                "worker",
+                at + 1_100,
+                &config,
+                vec![
+                    support::turn(1, at + 500, 400),
+                    support::lifecycle((at + 10, at + 1_000), Outcome::Completed, 1, 0),
+                ],
+            );
+            world.result(&run, "worker#1", at + 1_200, 1, true);
+            world.grade(&run, task, &[("total", *passed)], at + 1_300);
+        }
+    }
+}
+
+#[test]
+fn the_gate_admits_an_arm_no_worse_anywhere_and_vetoes_one_worse_on_a_task() {
+    let gate = |world: &World| {
+        let mut table = MemoryTable::default();
+        let mut projector = Projector::default();
+        for name in ["kernel-runs", "kernel-facts", "kernel-grades"] {
+            projector
+                .pull(
+                    &DataRoot::open(&world.root(name), name).unwrap(),
+                    &mut table,
+                )
+                .unwrap();
+        }
+        Gate {
+            delta: 0.1,
+            ..Gate::default()
+        }
+        .analyze(&Query::new(table.facts(), None))
+    };
+
+    // Equal on two tasks, every pair passing: admitted once the pooled bet
+    // is large enough, and not before.
+    let world = World::new();
+    paired(&world, "ledger", 1_000_000, &[(true, true); 3]);
+    let early = gate(&world);
+    assert_eq!(early.summary["arms"]["host-b"]["decision"], json!("open"));
+    paired(&world, "ledger", 2_000_000, &[(true, true); 30]);
+    paired(&world, "audit", 3_000_000, &[(true, true); 30]);
+    let report = gate(&world);
+    assert!(report.not_applicable.is_empty());
+    assert_eq!(report.summary["reference"], json!("host"));
+    assert_eq!(
+        report.summary["arms"]["host-b"]["decision"],
+        json!("admitted")
+    );
+    assert_eq!(report.summary["arms"]["host-b"]["pairs"], json!(63));
+    assert_eq!(finding(&report, "gate_admits").subject, "host-b");
+
+    // Better on one task does not buy a loss on another: the guard of the
+    // task it loses vetoes it.
+    let world = World::new();
+    paired(&world, "ledger", 1_000_000, &[(false, true); 30]);
+    paired(&world, "audit", 2_000_000, &[(true, false); 30]);
+    let report = gate(&world);
+    assert_eq!(
+        report.summary["arms"]["host-b"]["decision"],
+        json!("rejected")
+    );
+    assert_eq!(finding(&report, "gate_worse").subject, "audit v1: host-b");
+    assert!(report.findings.iter().all(|f| f.code != "gate_admits"));
 }

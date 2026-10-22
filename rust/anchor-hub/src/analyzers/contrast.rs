@@ -34,15 +34,15 @@ impl Default for Contrast {
 }
 
 /// What one graded Run cost and scored.
-struct Measured {
-    first_at: u64,
-    score: f64,
-    agent_ms: f64,
-    tokens: f64,
-    turns: f64,
-    calls: u64,
-    failed_calls: u64,
-    grade: Key,
+pub(super) struct Measured {
+    pub(super) first_at: u64,
+    pub(super) score: f64,
+    pub(super) agent_ms: f64,
+    pub(super) tokens: f64,
+    pub(super) turns: f64,
+    pub(super) calls: u64,
+    pub(super) failed_calls: u64,
+    pub(super) grade: Key,
 }
 
 impl Analyzer for Contrast {
@@ -68,56 +68,7 @@ impl Analyzer for Contrast {
             return report;
         }
         report.summary.insert("by", json!(self.by));
-        let invocations = query.invocations();
-        let by_run = crate::query::group_by(&invocations, |i| i.run_id.as_str());
-        // task -> arm -> Runs
-        let mut tasks: BTreeMap<String, BTreeMap<String, Vec<Measured>>> = BTreeMap::new();
-        let mut unassigned = 0;
-        for (run, graded) in query.grades() {
-            let observed: Vec<&&Invocation> = by_run
-                .get(run)
-                .map(|v| v.iter().filter(|i| !i.traces.is_empty()).collect())
-                .unwrap_or_default();
-            let arms: BTreeSet<String> = observed
-                .iter()
-                .map(|i| self.arm(query, i.config()))
-                .collect();
-            let (Some(arm), 1) = (arms.first(), arms.len()) else {
-                unassigned += 1;
-                continue;
-            };
-            let lifecycles: Vec<_> = observed.iter().flat_map(|i| i.lifecycles()).collect();
-            let calls: Vec<_> = observed.iter().flat_map(|i| i.calls()).collect();
-            tasks
-                .entry(format!(
-                    "{} v{}",
-                    graded.grade.task, graded.grade.task_version
-                ))
-                .or_default()
-                .entry(arm.clone())
-                .or_default()
-                .push(Measured {
-                    first_at: lifecycles
-                        .iter()
-                        .map(|l| l.started_at_ms)
-                        .min()
-                        .unwrap_or(0),
-                    score: graded.grade.score(),
-                    agent_ms: lifecycles
-                        .iter()
-                        .map(|l| l.ended_at_ms.saturating_sub(l.started_at_ms))
-                        .sum::<u64>() as f64,
-                    tokens: observed
-                        .iter()
-                        .flat_map(|i| i.turns())
-                        .map(|t| t.total_tokens)
-                        .sum::<u64>() as f64,
-                    turns: observed.iter().map(|i| i.turns().len()).sum::<usize>() as f64,
-                    calls: calls.len() as u64,
-                    failed_calls: calls.iter().filter(|c| !c.ok).count() as u64,
-                    grade: graded.row.key.clone(),
-                });
-        }
+        let (tasks, unassigned) = self.runs(query);
         report
             .summary
             .insert("runs_without_one_arm", json!(unassigned));
@@ -277,6 +228,63 @@ impl Analyzer for Contrast {
 }
 
 impl Contrast {
+    /// Graded Runs by task and arm, and how many Runs had no single arm.
+    pub(super) fn runs(
+        &self,
+        query: &Query,
+    ) -> (BTreeMap<String, BTreeMap<String, Vec<Measured>>>, usize) {
+        let invocations = query.invocations();
+        let by_run = crate::query::group_by(&invocations, |i| i.run_id.as_str());
+        let mut tasks: BTreeMap<String, BTreeMap<String, Vec<Measured>>> = BTreeMap::new();
+        let mut unassigned = 0;
+        for (run, graded) in query.grades() {
+            let observed: Vec<&&Invocation> = by_run
+                .get(run)
+                .map(|v| v.iter().filter(|i| !i.traces.is_empty()).collect())
+                .unwrap_or_default();
+            let arms: BTreeSet<String> = observed
+                .iter()
+                .map(|i| self.arm(query, i.config()))
+                .collect();
+            let (Some(arm), 1) = (arms.first(), arms.len()) else {
+                unassigned += 1;
+                continue;
+            };
+            let lifecycles: Vec<_> = observed.iter().flat_map(|i| i.lifecycles()).collect();
+            let calls: Vec<_> = observed.iter().flat_map(|i| i.calls()).collect();
+            tasks
+                .entry(format!(
+                    "{} v{}",
+                    graded.grade.task, graded.grade.task_version
+                ))
+                .or_default()
+                .entry(arm.clone())
+                .or_default()
+                .push(Measured {
+                    first_at: lifecycles
+                        .iter()
+                        .map(|l| l.started_at_ms)
+                        .min()
+                        .unwrap_or(0),
+                    score: graded.grade.score(),
+                    agent_ms: lifecycles
+                        .iter()
+                        .map(|l| l.ended_at_ms.saturating_sub(l.started_at_ms))
+                        .sum::<u64>() as f64,
+                    tokens: observed
+                        .iter()
+                        .flat_map(|i| i.turns())
+                        .map(|t| t.total_tokens)
+                        .sum::<u64>() as f64,
+                    turns: observed.iter().map(|i| i.turns().len()).sum::<usize>() as f64,
+                    calls: calls.len() as u64,
+                    failed_calls: calls.iter().filter(|c| !c.ok).count() as u64,
+                    grade: graded.row.key.clone(),
+                });
+        }
+        (tasks, unassigned)
+    }
+
     fn arm(&self, query: &Query, config: Option<&str>) -> String {
         config
             .and_then(|digest| query.configuration(digest))

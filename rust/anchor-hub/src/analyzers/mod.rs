@@ -10,6 +10,7 @@ use serde_json::Value;
 use crate::query::{Key, Query};
 
 pub mod contrast;
+pub mod gate;
 pub mod health;
 pub mod signals;
 pub mod stall;

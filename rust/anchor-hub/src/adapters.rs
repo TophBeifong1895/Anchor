@@ -19,7 +19,8 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::analyzers::{
-    Analyzer, Report, contrast::Contrast, health::Health, signals::Signals, stall::Stall,
+    Analyzer, Report, contrast::Contrast, gate::Gate, health::Health, signals::Signals,
+    stall::Stall,
 };
 use crate::query::Query;
 use crate::source::{DataRoot, HistorySource};
@@ -132,6 +133,8 @@ struct Options {
     by: Option<String>,
     reference: Option<String>,
     limit: Option<u64>,
+    alpha: Option<f64>,
+    delta: Option<f64>,
     paths: Vec<PathBuf>,
 }
 
@@ -146,6 +149,8 @@ fn parse(args: &[String]) -> Result<Options, String> {
         by: None,
         reference: None,
         limit: None,
+        alpha: None,
+        delta: None,
         paths: Vec::new(),
     };
     while let Some(arg) = args.next() {
@@ -159,6 +164,8 @@ fn parse(args: &[String]) -> Result<Options, String> {
             "--idle-minutes" => options.idle_minutes = Some(number(arg)?),
             "--follow" => options.follow = Some(number(arg)?),
             "--limit" => options.limit = Some(number(arg)?),
+            "--alpha" => options.alpha = Some(fraction(args.next(), arg)?),
+            "--delta" => options.delta = Some(fraction(args.next(), arg)?),
             "--by" => options.by = Some(args.next().ok_or("--by needs a field")?.clone()),
             "--reference" => {
                 options.reference = Some(
@@ -177,7 +184,15 @@ fn parse(args: &[String]) -> Result<Options, String> {
     Ok(options)
 }
 
-const USAGE: &str = "usage: anchor-hub health [--json] PATH...\n       anchor-hub signals [--json] [--limit N] PATH...\n       anchor-hub mcp PATH...\n       anchor-hub contrast [--json] [--by FIELD] [--reference PREFIX] PATH...\n       anchor-hub stall [--json] [--idle-minutes N] [--follow SECONDS] PATH...\n       anchor-hub rows PATH...";
+/// A number strictly between 0 and 1.
+fn fraction(value: Option<&String>, name: &str) -> Result<f64, String> {
+    value
+        .and_then(|v| v.parse::<f64>().ok())
+        .filter(|v| *v > 0.0 && *v < 1.0)
+        .ok_or(format!("{name} needs a number between 0 and 1"))
+}
+
+const USAGE: &str = "usage: anchor-hub health [--json] PATH...\n       anchor-hub signals [--json] [--limit N] PATH...\n       anchor-hub mcp PATH...\n       anchor-hub contrast [--json] [--by FIELD] [--reference PREFIX] PATH...\n       anchor-hub gate [--json] [--by FIELD] [--reference PREFIX] [--alpha A] [--delta D] PATH...\n       anchor-hub stall [--json] [--idle-minutes N] [--follow SECONDS] PATH...\n       anchor-hub rows PATH...";
 
 pub fn run(args: &[String]) -> Result<(), String> {
     let options = parse(args)?;
@@ -201,6 +216,17 @@ pub fn run(args: &[String]) -> Result<(), String> {
             }
             contrast.reference = options.reference;
             print(&contrast.analyze(&hub.query(Some(now_ms()))), options.json);
+            Ok(())
+        }
+        "gate" => {
+            let mut gate = Gate::default();
+            if let Some(by) = options.by {
+                gate.by = by;
+            }
+            gate.reference = options.reference;
+            gate.alpha = options.alpha.unwrap_or(gate.alpha);
+            gate.delta = options.delta.unwrap_or(gate.delta);
+            print(&gate.analyze(&hub.query(Some(now_ms()))), options.json);
             Ok(())
         }
         "signals" => {
