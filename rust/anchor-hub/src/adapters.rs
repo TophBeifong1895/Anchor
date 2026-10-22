@@ -4,23 +4,25 @@
 //!
 //! ```text
 //! anchor-hub health [--json] PATH...
+//! anchor-hub profile [--json] PATH...
 //! anchor-hub stall [--json] [--idle-minutes N] [--follow SECONDS] PATH...
 //! anchor-hub contrast [--json] [--by FIELD] [--reference PREFIX] PATH...
 //! anchor-hub signals [--json] [--limit N] PATH...
 //! anchor-hub mcp PATH...
+//! anchor-hub tool NAME [--args JSON] PATH...
 //! anchor-hub rows PATH...
 //! ```
 //!
 //! A PATH may be a data root, a Host state directory, or any directory above
 //! them; every data root found below it is read.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::analyzers::{
-    Analyzer, Report, contrast::Contrast, gate::Gate, health::Health, signals::Signals,
-    stall::Stall,
+    Analyzer, Report, contrast::Contrast, gate::Gate, health::Health, profile::Profile,
+    signals::Signals, stall::Stall,
 };
 use crate::query::Query;
 use crate::source::{DataRoot, HistorySource};
@@ -69,6 +71,32 @@ pub fn discover(path: &Path) -> Vec<PathBuf> {
     found
 }
 
+/// The Goose execution port's evidence files at or below `path`: one
+/// `*.evidence.json` per invocation in a `goose-acp` directory.
+pub fn evidence_files(path: &Path) -> Vec<PathBuf> {
+    let mut found = Vec::new();
+    let mut stack = vec![(path.to_path_buf(), 0)];
+    while let Some((dir, depth)) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        let here = dir.file_name().is_some_and(|name| name == "goose-acp");
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            let Ok(kind) = entry.file_type() else {
+                continue;
+            };
+            if here && kind.is_file() && name.ends_with(".evidence.json") {
+                found.push(entry.path());
+            } else if kind.is_dir() && !name.starts_with('.') && depth < DEPTH {
+                stack.push((entry.path(), depth + 1));
+            }
+        }
+    }
+    found.sort();
+    found
+}
+
 /// Sources, a table and the projector that keeps one up to date with the
 /// other.
 #[derive(Default)]
@@ -78,6 +106,8 @@ pub struct Hub {
     opened: BTreeSet<PathBuf>,
     projector: Projector,
     table: MemoryTable,
+    /// Evidence files read, with the size and time they had then.
+    evidence: BTreeMap<PathBuf, (u64, Option<SystemTime>)>,
 }
 
 impl Hub {
@@ -107,7 +137,34 @@ impl Hub {
                 .pull(source as &dyn HistorySource, &mut self.table)
                 .map_err(|e| e.to_string())?;
         }
+        self.read_evidence();
         Ok(added)
+    }
+
+    /// Read the execution port's evidence files that appeared or changed
+    /// since the last refresh. Evidence is optional: a file that cannot be
+    /// read now is tried again next time, and facts never wait for it.
+    fn read_evidence(&mut self) {
+        for path in &self.paths {
+            for file in evidence_files(path) {
+                let Ok(meta) = std::fs::metadata(&file) else {
+                    continue;
+                };
+                let stamp = (meta.len(), meta.modified().ok());
+                if self.evidence.get(&file) == Some(&stamp) {
+                    continue;
+                }
+                let Some((id, details)) = std::fs::read(&file)
+                    .ok()
+                    .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+                    .and_then(|value| crate::table::details_of(&value))
+                else {
+                    continue;
+                };
+                self.table.details(id, details);
+                self.evidence.insert(file, stamp);
+            }
+        }
     }
 
     pub fn roots(&self) -> usize {
@@ -135,6 +192,7 @@ struct Options {
     limit: Option<u64>,
     alpha: Option<f64>,
     delta: Option<f64>,
+    args: Option<String>,
     paths: Vec<PathBuf>,
 }
 
@@ -151,6 +209,7 @@ fn parse(args: &[String]) -> Result<Options, String> {
         limit: None,
         alpha: None,
         delta: None,
+        args: None,
         paths: Vec::new(),
     };
     while let Some(arg) = args.next() {
@@ -167,6 +226,7 @@ fn parse(args: &[String]) -> Result<Options, String> {
             "--alpha" => options.alpha = Some(fraction(args.next(), arg)?),
             "--delta" => options.delta = Some(fraction(args.next(), arg)?),
             "--by" => options.by = Some(args.next().ok_or("--by needs a field")?.clone()),
+            "--args" => options.args = Some(args.next().ok_or("--args needs JSON")?.clone()),
             "--reference" => {
                 options.reference = Some(
                     args.next()
@@ -178,7 +238,7 @@ fn parse(args: &[String]) -> Result<Options, String> {
             path => options.paths.push(path.into()),
         }
     }
-    if options.paths.is_empty() {
+    if options.paths.is_empty() || (options.command == "tool" && options.paths.len() < 2) {
         return Err(USAGE.into());
     }
     Ok(options)
@@ -192,11 +252,16 @@ fn fraction(value: Option<&String>, name: &str) -> Result<f64, String> {
         .ok_or(format!("{name} needs a number between 0 and 1"))
 }
 
-const USAGE: &str = "usage: anchor-hub health [--json] PATH...\n       anchor-hub signals [--json] [--limit N] PATH...\n       anchor-hub mcp PATH...\n       anchor-hub contrast [--json] [--by FIELD] [--reference PREFIX] PATH...\n       anchor-hub gate [--json] [--by FIELD] [--reference PREFIX] [--alpha A] [--delta D] PATH...\n       anchor-hub stall [--json] [--idle-minutes N] [--follow SECONDS] PATH...\n       anchor-hub rows PATH...";
+const USAGE: &str = "usage: anchor-hub health [--json] PATH...\n       anchor-hub profile [--json] PATH...\n       anchor-hub signals [--json] [--limit N] PATH...\n       anchor-hub mcp PATH...\n       anchor-hub tool NAME [--args JSON] PATH...\n       anchor-hub contrast [--json] [--by FIELD] [--reference PREFIX] PATH...\n       anchor-hub gate [--json] [--by FIELD] [--reference PREFIX] [--alpha A] [--delta D] PATH...\n       anchor-hub stall [--json] [--idle-minutes N] [--follow SECONDS] PATH...\n       anchor-hub rows PATH...";
 
 pub fn run(args: &[String]) -> Result<(), String> {
     let options = parse(args)?;
-    let mut hub = Hub::new(options.paths.clone());
+    // `tool` takes the tool's name before the paths.
+    let paths = match options.command.as_str() {
+        "tool" => options.paths[1..].to_vec(),
+        _ => options.paths.clone(),
+    };
+    let mut hub = Hub::new(paths);
     hub.refresh()?;
     // A follower or a server may start before the first root exists.
     if hub.roots() == 0 && options.follow.is_none() && options.command != "mcp" {
@@ -238,8 +303,30 @@ pub fn run(args: &[String]) -> Result<(), String> {
             Ok(())
         }
         "mcp" => crate::mcp::serve(hub),
+        // One MCP tool's answer on stdout: the same read an agent makes, for
+        // a script or a check to repeat.
+        "tool" => {
+            let name = options.paths[0].display().to_string();
+            // `--args @FILE` reads the arguments from a file, for checks too
+            // long for a command line.
+            let text = match options.args.as_deref() {
+                Some(file) if file.starts_with('@') => std::fs::read_to_string(&file[1..])
+                    .map_err(|e| format!("--args {file}: {e}"))?,
+                Some(text) => text.to_owned(),
+                None => "{}".to_owned(),
+            };
+            let args: serde_json::Value =
+                serde_json::from_str(&text).map_err(|e| format!("--args: {e}"))?;
+            let answer = crate::mcp::tool(&hub.query(Some(now_ms())), &name, &args)?;
+            println!("{answer}");
+            Ok(())
+        }
         "health" => {
             print(&Health.analyze(&hub.query(Some(now_ms()))), options.json);
+            Ok(())
+        }
+        "profile" => {
+            print(&Profile.analyze(&hub.query(Some(now_ms()))), options.json);
             Ok(())
         }
         "stall" => {

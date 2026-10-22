@@ -12,11 +12,12 @@ use crate::query::{
     node_result, summarize,
 };
 
-/// Evidence cited per finding, at most.
-const CITED: usize = 50;
-/// A check failing in at least this share of a task's graded Runs, over at
-/// least [`FAILING_RUNS`] of them, is reported.
-const FAILING_SHARE: f64 = 0.5;
+/// Evidence cited per finding, at most. Signals count the Runs a finding
+/// reaches from its evidence, so this bounds that count too.
+const CITED: usize = 2000;
+/// A check failing in any of a task's graded Runs is reported, once the task
+/// has at least this many: a check that fails now and then is still a
+/// quality gap, and the rate says how big.
 const FAILING_RUNS: usize = 3;
 /// A configuration whose invocations spend this share of their time before
 /// the first model request is reported.
@@ -292,6 +293,17 @@ fn coverage(query: &Query, invocations: &[Invocation], report: &mut Report) {
 
 /// Tool efficiency: frequency, success, failure classes, duration, and calls
 /// the model had to correct.
+/// How a command ended, as a class name.
+fn command_class(end: anchor_facts::CommandEnd) -> &'static str {
+    use anchor_facts::CommandStatus;
+    match end.status {
+        CommandStatus::NotStarted => "not_started",
+        CommandStatus::TimedOut => "timed_out",
+        CommandStatus::Exited if end.exit_code == Some(0) => "clean",
+        CommandStatus::Exited => "exit_nonzero",
+    }
+}
+
 fn tools(invocations: &[Invocation], report: &mut Report) {
     let calls: Vec<(&Invocation, Call)> = invocations
         .iter()
@@ -307,11 +319,27 @@ fn tools(invocations: &[Invocation], report: &mut Report) {
                 .unwrap_or("unclassified")
                 .to_owned()
         });
+        // For command tools: how the commands ended, by program. A call the
+        // host accepted can still have run nothing, been stopped or failed.
+        let mut programs: BTreeMap<&str, BTreeMap<String, usize>> = BTreeMap::new();
+        for (_, call) in calls.iter().filter(|(_, c)| c.ok) {
+            let (Some(program), Some(end)) = (call.program, call.command) else {
+                continue;
+            };
+            *programs
+                .entry(program)
+                .or_default()
+                .entry(command_class(end).to_owned())
+                .or_insert(0) += 1;
+        }
         summary.insert(
             tool.clone(),
             json!({
+                "commands": programs,
                 "calls": calls.len(),
                 "ok": calls.len() - failed.len(),
+                // Accepted and, for a command, run to a clean exit.
+                "done": calls.iter().filter(|(_, c)| c.done()).count(),
                 "success_rate": share(calls.len() - failed.len(), calls.len()),
                 "failures": failures.iter().map(|(k, v)| (k.clone(), v.len())).collect::<BTreeMap<_, _>>(),
                 "duration_ms": summarize(calls.iter().filter_map(|(_, c)| c.duration_ms())),
@@ -331,6 +359,45 @@ fn tools(invocations: &[Invocation], report: &mut Report) {
                     .collect::<BTreeMap<_, _>>(),
             }),
         );
+        // Commands that the host accepted but that did not run to a clean
+        // exit, by program and how they ended. Exiting nonzero is how many
+        // programs answer (`grep` finding nothing), so it is its own kind,
+        // apart from a program that never started or was stopped.
+        let ended = group_by(
+            calls.iter().filter(|(_, c)| c.ok).filter_map(|(i, c)| {
+                let end = c.command?;
+                (!end.clean()).then_some((i, c.program.unwrap_or("?"), command_class(end)))
+            }),
+            |(_, program, class)| (program.to_string(), class.to_string()),
+        );
+        for ((program, class), ended) in ended {
+            let of_program = calls
+                .iter()
+                .filter(|(_, c)| c.program == Some(program.as_str()))
+                .count();
+            let mut keys: Vec<Key> = ended.iter().flat_map(|(i, _, _)| i.evidence()).collect();
+            keys.dedup();
+            let runs: BTreeSet<&str> = ended.iter().map(|(i, _, _)| i.run_id.as_str()).collect();
+            report.findings.push(Finding {
+                code: if class == "exit_nonzero" {
+                    "command_nonzero"
+                } else {
+                    "command_failures"
+                },
+                subject: format!("tool {tool} program {program}"),
+                detail: format!(
+                    "{} of {of_program} {program} command(s) {}, in {} Run(s); the calls themselves succeeded",
+                    ended.len(),
+                    match class.as_str() {
+                        "not_started" => "never started in the sandbox",
+                        "timed_out" => "were stopped at the time limit",
+                        _ => "exited nonzero",
+                    },
+                    runs.len(),
+                ),
+                evidence: cite(keys),
+            });
+        }
         for (class, failed) in failures {
             let mut keys: Vec<Key> = failed.iter().flat_map(|(i, _)| i.evidence()).collect();
             keys.dedup();
@@ -381,7 +448,7 @@ fn tools(invocations: &[Invocation], report: &mut Report) {
             }
             let Some(later) = calls[index + 1..]
                 .iter()
-                .find(|later| later.tool == call.tool && later.ok)
+                .find(|later| later.tool == call.tool && later.done())
             else {
                 continue;
             };
@@ -650,20 +717,44 @@ fn quality(query: &Query, invocations: &[Invocation], report: &mut Report) {
                 "tool_calls": summarize(tool_calls),
             }),
         );
+        let run_tokens = |run: &str| -> u64 {
+            of_run(run)
+                .flat_map(|i| i.turns())
+                .map(|t| t.total_tokens)
+                .sum()
+        };
         for (name, (passed, failed)) in checks {
-            let failing = 1.0 - passed as f64 / graded.len() as f64;
-            if graded.len() >= FAILING_RUNS && failing >= FAILING_SHARE {
-                report.findings.push(Finding {
-                    code: "check_failing",
-                    subject: format!("task {task} v{version}"),
-                    detail: format!(
-                        "check {name} failed in {} of {} graded Run(s)",
-                        failed.len(),
-                        graded.len()
-                    ),
-                    evidence: cite(failed),
-                });
+            if graded.len() < FAILING_RUNS || passed == graded.len() {
+                continue;
             }
+            // Where the failing Runs sit in cost among the task's Runs: a
+            // check failing only in the cheapest Runs reads differently from
+            // one failing in the dearest.
+            let failing_runs: BTreeSet<&str> = graded
+                .iter()
+                .filter(|g| g.grade.checks.iter().any(|c| c.name == name && !c.passed))
+                .map(|g| g.grade.run_id.as_str())
+                .collect();
+            let mean_of = |pick: bool| {
+                let picked: Vec<u64> = runs
+                    .iter()
+                    .filter(|run| failing_runs.contains(*run) == pick)
+                    .map(|run| run_tokens(run))
+                    .collect();
+                (!picked.is_empty()).then(|| picked.iter().sum::<u64>() / picked.len() as u64)
+            };
+            report.findings.push(Finding {
+                code: "check_failing",
+                subject: format!("task {task} v{version}"),
+                detail: format!(
+                    "check {name} failed in {} of {} graded Run(s); mean tokens {} where it failed, {} where it passed",
+                    failed.len(),
+                    graded.len(),
+                    mean_of(true).map_or("?".into(), |t| t.to_string()),
+                    mean_of(false).map_or("?".into(), |t| t.to_string()),
+                ),
+                evidence: cite(failed),
+            });
         }
     }
     report.summary.insert("quality", json!(summary));

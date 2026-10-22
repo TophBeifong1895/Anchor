@@ -11,7 +11,7 @@ pub use anchor_kernel::{Action, Effect, PrincipalKind, Reason};
 use serde::Serialize;
 
 use crate::table::Body;
-pub use crate::table::{Entry, Facts, Key, Row, Status};
+pub use crate::table::{Detail, Entry, Facts, Key, Row, Status};
 
 /// Projected facts, and the time the caller considers now.
 #[derive(Clone, Copy)]
@@ -95,6 +95,12 @@ impl<'a> Query<'a> {
                     invocation,
                     result: None,
                     traces: Vec::new(),
+                    details: self
+                        .facts
+                        .details
+                        .get(&(run.to_owned(), node.to_owned(), invocation))
+                        .map(Vec::as_slice)
+                        .unwrap_or_default(),
                 });
             match &row.body {
                 Body::Observation(observation) => entry.traces.push(Trace { row, observation }),
@@ -198,6 +204,9 @@ pub struct Invocation<'a> {
     pub result: Option<&'a Row>,
     /// Observation records; more than one when the invocation was resumed.
     pub traces: Vec<Trace<'a>>,
+    /// Its tool calls at the value level, from the execution port's
+    /// evidence, in call order; empty where none was found.
+    pub details: &'a [Detail],
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize)]
@@ -243,6 +252,10 @@ pub struct Call<'a> {
     pub arguments_shape: &'a str,
     /// The family a `path` argument belonged to, when the tool took one.
     pub path: Option<anchor_facts::PathClass>,
+    /// The program a command tool was asked to run.
+    pub program: Option<&'a str>,
+    /// How that command ended; `None` when unrecorded or not a command.
+    pub command: Option<anchor_facts::CommandEnd>,
     pub started_at_ms: Option<u64>,
     pub ended_at_ms: Option<u64>,
     pub ok: bool,
@@ -256,6 +269,13 @@ impl Call<'_> {
 
     pub fn duration_ms(&self) -> Option<u64> {
         self.span().map(|span| span.end - span.start)
+    }
+
+    /// Whether the call did what was asked: the tool accepted it and, for a
+    /// command, the command ran and exited 0. A command whose end was not
+    /// recorded counts as done, as it did before ends were recorded.
+    pub fn done(&self) -> bool {
+        self.ok && self.command.is_none_or(|end| end.clean())
     }
 }
 
@@ -423,6 +443,8 @@ impl<'a> Invocation<'a> {
                     model_request,
                     arguments_shape,
                     path,
+                    program,
+                    command,
                     started_at_ms,
                     ended_at_ms,
                     ok,
@@ -433,12 +455,40 @@ impl<'a> Invocation<'a> {
                     model_request: *model_request,
                     arguments_shape,
                     path: *path,
+                    program: program.as_deref(),
+                    command: *command,
                     started_at_ms: *started_at_ms,
                     ended_at_ms: *ended_at_ms,
                     ok: *ok,
                     failure: *failure,
                 }),
                 _ => None,
+            })
+            .collect::<Vec<_>>()
+            .into_iter()
+            .enumerate()
+            .map(|(index, mut call)| {
+                // Records from before commands had ends: the evidence has
+                // them, when it is there and lines up with the facts.
+                if let Some(detail) = self.details.get(index)
+                    && detail.tool == call.tool
+                {
+                    call.program = call.program.or(detail.program.as_deref());
+                    call.command = call.command.or(detail.command);
+                }
+                call
+            })
+            .collect()
+    }
+
+    /// The tool calls with their details, where both are known.
+    pub fn detailed(&self) -> Vec<(usize, Call<'a>, Option<&'a Detail>)> {
+        self.calls()
+            .into_iter()
+            .enumerate()
+            .map(|(index, call)| {
+                let detail = self.details.get(index).filter(|d| d.tool == call.tool);
+                (index, call, detail)
             })
             .collect()
     }

@@ -12,6 +12,7 @@ use crate::query::{Key, Query};
 pub mod contrast;
 pub mod gate;
 pub mod health;
+pub mod profile;
 pub mod signals;
 pub mod stall;
 

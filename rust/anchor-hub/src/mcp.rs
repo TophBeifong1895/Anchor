@@ -17,6 +17,7 @@ use crate::analyzers::{
     contrast::Contrast,
     gate::Gate,
     health::Health,
+    profile::Profile,
     signals::{Signals, route_label},
     stall::Stall,
 };
@@ -32,7 +33,7 @@ const DETAIL: usize = 500;
 /// Evidence cited per finding in a page of findings.
 const CITED: usize = 5;
 
-const INSTRUCTIONS: &str = "Read-only facts about recorded Anchor Runs. Start with `signals`: a bounded, ranked table of what went wrong, which harnesses are beaten on a graded task, and which invocations stand out among their peers. Drill down only where a signal points: `invocation` by key, `records` by evidence key, `configurations` by digest, `report` for one analyzer's findings, `invocations` to list and filter. Lists are paged; `total` says how many there are.";
+const INSTRUCTIONS: &str = "Read-only facts about recorded Anchor Runs. Start with `signals`: a bounded table of what went wrong ranked by how many Runs it reaches, which harnesses are beaten on a graded task, and which invocations stand out among their peers; and `report` with analyzer `profile` for where each task's cost goes. Drill down only where they point: `invocation` by key, `calls` for what calls actually asked and answered, `records` by evidence key, `configurations` by digest, `report` for one analyzer's findings, `invocations` to list and filter. Lists are paged (20 by default); `total` says how many there are.";
 
 /// Answer requests from stdin until it closes.
 pub fn serve(mut hub: Hub) -> Result<(), String> {
@@ -98,7 +99,9 @@ fn call(hub: &mut Hub, params: &Value) -> Value {
     }
 }
 
-fn tool(query: &Query, name: &str, args: &Value) -> Result<Value, String> {
+/// One tool's answer, as `tools/call` gives it and the `tool` command
+/// prints it.
+pub fn tool(query: &Query, name: &str, args: &Value) -> Result<Value, String> {
     match name {
         "signals" => {
             let mut signals = Signals::default();
@@ -112,6 +115,8 @@ fn tool(query: &Query, name: &str, args: &Value) -> Result<Value, String> {
         "invocation" => invocation(query, args),
         "configurations" => configurations(query, args),
         "records" => records(query, args),
+        "calls" => calls(query, args),
+        "check" => check(query, args),
         other => Err(format!("unknown tool {other}")),
     }
 }
@@ -155,6 +160,7 @@ fn bounded<T: Serialize>(items: Vec<T>) -> Value {
 fn report(query: &Query, args: &Value) -> Result<Value, String> {
     let report = match text(args, "analyzer") {
         Some("health") => Health.analyze(query),
+        Some("profile") => Profile.analyze(query),
         Some("stall") => {
             let mut stall = Stall::default();
             if let Some(minutes) = number(args, "idle_minutes")? {
@@ -180,7 +186,7 @@ fn report(query: &Query, args: &Value) -> Result<Value, String> {
         }
         other => {
             return Err(format!(
-                "analyzer must be health, stall, contrast or gate, not {other:?}"
+                "analyzer must be health, profile, stall, contrast or gate, not {other:?}"
             ));
         }
     };
@@ -347,6 +353,147 @@ fn configurations(query: &Query, args: &Value) -> Result<Value, String> {
     page(listed, args)
 }
 
+/// Tool calls at the value level: what they asked and answered, cut to a
+/// head, beside their facts. Either the calls of one invocation, or calls
+/// across invocations picked by tool, program and how they ended, so that a
+/// failure class is read from its instances rather than guessed.
+fn calls(query: &Query, args: &Value) -> Result<Value, String> {
+    let key = text(args, "key");
+    let (tool, program, ended) = (
+        text(args, "tool"),
+        text(args, "program"),
+        text(args, "ended"),
+    );
+    if key.is_none() && tool.is_none() && program.is_none() && ended.is_none() {
+        return Err("give an invocation key, or filter by tool, program or ended".into());
+    }
+    let invocations = query.invocations();
+    let mut listed = Vec::new();
+    for invocation in invocations
+        .iter()
+        .filter(|i| key.is_none_or(|k| i.key() == k))
+    {
+        for (index, call, detail) in invocation.detailed() {
+            let class = match (call.ok, call.command) {
+                (false, _) => json!(call.failure).as_str().unwrap_or("failed").to_owned(),
+                (true, None) => "ok".to_owned(),
+                (true, Some(end)) if end.clean() => "clean".to_owned(),
+                (true, Some(end)) => match end.status {
+                    anchor_facts::CommandStatus::NotStarted => "not_started".to_owned(),
+                    anchor_facts::CommandStatus::TimedOut => "timed_out".to_owned(),
+                    anchor_facts::CommandStatus::Exited => "exit_nonzero".to_owned(),
+                },
+            };
+            if tool.is_some_and(|t| call.tool != t)
+                || program.is_some_and(|p| call.program != Some(p))
+                || ended.is_some_and(|e| {
+                    let wanted = if e == "not_done" {
+                        !call.done()
+                    } else {
+                        class == e
+                    };
+                    !wanted
+                })
+            {
+                continue;
+            }
+            listed.push(json!({
+                "invocation": invocation.key(),
+                "index": index,
+                "model_request": call.model_request,
+                "tool": call.tool,
+                "ended": class,
+                "duration_ms": call.duration_ms(),
+                "exit_code": call.command.and_then(|end| end.exit_code),
+                "arguments": detail.map(|d| d.arguments.as_str()),
+                "answer": detail.map(|d| d.answer.as_str()),
+            }));
+        }
+    }
+    page(listed, args)
+}
+
+/// Run checks: each names a read-only tool and its arguments, a JSON Pointer
+/// into the answer, and optionally a comparison with an expected value. A
+/// claim about the data is only as good as a check anyone can repeat; this
+/// is that repetition, the same for an agent over MCP and for a script over
+/// the command line.
+fn check(query: &Query, args: &Value) -> Result<Value, String> {
+    let checks = args
+        .get("checks")
+        .and_then(Value::as_array)
+        .ok_or("checks is required: a list of {tool, args, path, op, value}")?;
+    if checks.len() > MAX_PAGE {
+        return Err(format!("at most {MAX_PAGE} checks per call"));
+    }
+    let results: Vec<Value> = checks
+        .iter()
+        .map(|spec| match run_check(query, spec) {
+            Ok((status, actual)) => json!({"status": status, "actual": actual}),
+            Err(message) => json!({"status": "error", "actual": null, "message": message}),
+        })
+        .collect();
+    Ok(json!({"results": results}))
+}
+
+/// One check: `pass` or `fail` with the value found, or just `value` when no
+/// comparison was asked for.
+fn run_check(query: &Query, spec: &Value) -> Result<(&'static str, Value), String> {
+    let name = text(spec, "tool").ok_or("a check names a tool")?;
+    if name == "check" {
+        return Err("a check cannot run checks".into());
+    }
+    let empty = json!({});
+    let answer = tool(query, name, spec.get("args").unwrap_or(&empty))?;
+    let path = text(spec, "path").unwrap_or("");
+    let found = answer.pointer(path).cloned();
+    let Some(op) = text(spec, "op") else {
+        return Ok(("value", found.unwrap_or(Value::Null)));
+    };
+    let expected = spec.get("value").cloned().unwrap_or(Value::Null);
+    let actual = found.clone().unwrap_or(Value::Null);
+    let number = |v: &Value| v.as_f64();
+    let passed = match op {
+        "exists" => found.is_some(),
+        "absent" => found.is_none(),
+        "==" => {
+            actual == expected
+                || matches!((number(&actual), number(&expected)), (Some(a), Some(b)) if a == b)
+        }
+        "!=" => {
+            actual != expected
+                && !matches!((number(&actual), number(&expected)), (Some(a), Some(b)) if a == b)
+        }
+        ">=" | "<=" | ">" | "<" => {
+            let (Some(a), Some(b)) = (number(&actual), number(&expected)) else {
+                return Err(format!("{op} needs numbers, found {actual} and {expected}"));
+            };
+            match op {
+                ">=" => a >= b,
+                "<=" => a <= b,
+                ">" => a > b,
+                _ => a < b,
+            }
+        }
+        "contains" => match (&actual, &expected) {
+            (Value::String(a), Value::String(b)) => a.contains(b.as_str()),
+            (Value::Array(items), wanted) => items.contains(wanted),
+            (Value::Object(map), Value::String(key)) => map.contains_key(key),
+            _ => actual.to_string().contains(&expected.to_string()),
+        },
+        other => return Err(format!("unknown op {other}")),
+    };
+    // The value is kept short: the check says what was found, it does not
+    // carry the answer.
+    let shown = match &actual {
+        Value::String(s) => Value::String(crate::table::head(s)),
+        Value::Array(items) if items.len() > 5 => json!({"length": items.len()}),
+        Value::Object(map) if map.len() > 10 => json!({"keys": map.len()}),
+        other => other.clone(),
+    };
+    Ok((if passed { "pass" } else { "fail" }, shown))
+}
+
 /// Fact rows of one resource, as cited by evidence keys.
 fn records(query: &Query, args: &Value) -> Result<Value, String> {
     let resource = text(args, "resource").ok_or("resource is required")?;
@@ -384,9 +531,9 @@ fn tools() -> Value {
         },
         {
             "name": "report",
-            "description": "One analyzer's report: health (record integrity, failures, startup), stall (stalled tasks, gaps, slow calls, loops) or contrast (graded Runs compared by a configuration field). Findings are paged and can be filtered by code and subject.",
+            "description": "One analyzer's report: health (record integrity, tool and command failures, check failures, startup), profile (per task: cost spread, turns, context growth, model and tool time shares, cheapest and dearest Runs), stall (stalled tasks, gaps, slow calls, loops) or contrast (graded Runs compared by a configuration field). Findings are paged and can be filtered by code and subject.",
             "inputSchema": {"type": "object", "required": ["analyzer"], "properties": with_paging(json!({
-                "analyzer": {"type": "string", "enum": ["health", "stall", "contrast", "gate"]},
+                "analyzer": {"type": "string", "enum": ["health", "profile", "stall", "contrast", "gate"]},
                 "code": {"type": "string"},
                 "subject": {"type": "string", "description": "substring"},
                 "idle_minutes": {"type": "integer", "minimum": 1},
@@ -418,6 +565,29 @@ fn tools() -> Value {
             "name": "configurations",
             "description": "AgentNode configuration manifests: Graph, node, model, plugins, Host and tool digests. With a digest prefix matching one manifest, that manifest whole; otherwise a page of them with how many invocations ran under each.",
             "inputSchema": {"type": "object", "properties": with_paging(json!({"digest": {"type": "string", "description": "prefix"}}))},
+            "annotations": read_only,
+        },
+        {
+            "name": "calls",
+            "description": "Tool calls at the value level: arguments and the head of the answer (a command's stderr, else stdout, or the refusal), with how each ended: ok, clean, exit_nonzero, not_started, timed_out, or a failure class. Give an invocation key for its calls in order, or filter across invocations by tool, program and ended (`not_done` = anything but a clean or ok end). Use it to read a failure from its instances before explaining it.",
+            "inputSchema": {"type": "object", "properties": with_paging(json!({
+                "key": {"type": "string", "description": "run/node#invocation"},
+                "tool": {"type": "string"},
+                "program": {"type": "string", "description": "base name of the command a command tool ran"},
+                "ended": {"type": "string", "description": "ok, clean, exit_nonzero, not_started, timed_out, not_done, or a failure class such as invalid_arguments"},
+            }))},
+            "annotations": read_only,
+        },
+        {
+            "name": "check",
+            "description": "Run up to 200 checks and report pass, fail or error for each, with the value found. A check is {tool, args, path, op, value}: `tool` and `args` are one of this server's read tools and its arguments, `path` a JSON Pointer into its answer (\"/total\", \"/summary/tools/anchor_run/commands/python3/not_started\"), `op` one of == != >= <= > < contains exists absent, `value` the expected value. Without `op` the value found is returned. Use it to confirm a claim before stating it.",
+            "inputSchema": {"type": "object", "required": ["checks"], "properties": {"checks": {"type": "array", "maxItems": MAX_PAGE, "items": {"type": "object", "required": ["tool"], "properties": {
+                "tool": {"type": "string"},
+                "args": {"type": "object"},
+                "path": {"type": "string", "description": "JSON Pointer"},
+                "op": {"type": "string", "enum": ["==", "!=", ">=", "<=", ">", "<", "contains", "exists", "absent"]},
+                "value": {},
+            }}}}},
             "annotations": read_only,
         },
         {

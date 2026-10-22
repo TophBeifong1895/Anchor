@@ -73,6 +73,10 @@ pub struct Signal {
     pub detail: String,
     /// How many occurrences, Runs or peers it rests on.
     pub weight: usize,
+    /// How many distinct Runs it touches: the reach of the problem, which
+    /// ranks signals of one tier. Occurrences pile up in one Run; Runs do
+    /// not.
+    pub runs: usize,
     pub coordinates: Vec<Coordinate>,
     /// The configurations it rests on, listed or not.
     pub coordinates_total: usize,
@@ -133,7 +137,7 @@ impl Analyzer for Signals {
                     .signals
                     .iter()
                     .chain(&table.exemplars)
-                    .map(|s| json!({"id": s.id, "code": s.code, "subject": s.subject, "weight": s.weight, "coordinates": s.coordinates}))
+                    .map(|s| json!({"id": s.id, "code": s.code, "subject": s.subject, "weight": s.weight, "runs": s.runs, "coordinates": s.coordinates}))
                     .collect::<Vec<_>>()
             ),
         );
@@ -161,6 +165,7 @@ impl Signals {
         signals.sort_by(|a, b| {
             tier(b.code)
                 .cmp(&tier(a.code))
+                .then(b.runs.cmp(&a.runs))
                 .then(b.weight.cmp(&a.weight))
                 .then_with(|| a.id.cmp(&b.id))
         });
@@ -190,13 +195,14 @@ fn tier(code: &str) -> u8 {
     match code {
         "dominated_harness" | "check_failing" | "task_not_done" => 3,
         "tool_failures"
+        | "command_failures"
         | "call_corrected"
         | "repeated_failure"
         | "invocation_not_completed"
         | "startup_heavy"
         | "not_accepted"
         | "stalled_task" => 2,
-        "idle_gap" | "slow_tool_call" | "slow_model_turn" | "parked_task" => 1,
+        "idle_gap" | "slow_tool_call" | "slow_model_turn" | "parked_task" | "command_nonzero" => 1,
         _ => 0,
     }
 }
@@ -284,6 +290,24 @@ fn shape(detail: &str) -> String {
     shaped
 }
 
+/// The Run a record belongs to, by the resource naming the Runtime, the
+/// recorder and the grader use: `run/{run}`, `trace/{run}/…`, `grade/{run}`.
+fn run_of(key: &Key) -> Option<&str> {
+    let mut parts = key.resource.split('/');
+    match (parts.next(), parts.next()) {
+        (Some("run" | "trace" | "grade"), Some(run)) => Some(run),
+        _ => None,
+    }
+}
+
+/// How many distinct Runs the records belong to.
+fn runs_of<'k>(keys: impl IntoIterator<Item = &'k Key>) -> usize {
+    keys.into_iter()
+        .filter_map(run_of)
+        .collect::<BTreeSet<_>>()
+        .len()
+}
+
 /// Health and stall findings, merged by kind, place and what they say.
 fn merged(query: &Query) -> Vec<Signal> {
     struct Merged {
@@ -334,6 +358,7 @@ fn merged(query: &Query) -> Vec<Signal> {
                     n => format!("{n} occurrences, for example: {}", merged.detail),
                 },
                 weight: merged.count.max(merged.evidence.len()),
+                runs: runs_of(&merged.evidence),
                 coordinates,
                 coordinates_total,
                 evidence_total: merged.evidence.len(),
@@ -480,6 +505,7 @@ fn front(
                     runs.len()
                 ),
                 weight: runs.len(),
+                runs: runs.len(),
                 coordinates,
                 coordinates_total,
                 evidence: runs.iter().map(|r| r.grade.clone()).take(CITED).collect(),
@@ -536,6 +562,7 @@ fn exemplars(query: &Query, invocations: &[Invocation]) -> Vec<Signal> {
             subject: subject.clone(),
             detail,
             weight: peers.len(),
+            runs: 1,
             coordinates: situate(query, invocation.config().map(str::to_owned)).0,
             coordinates_total: usize::from(invocation.config().is_some()),
             evidence: invocation.evidence().into_iter().take(CITED).collect(),

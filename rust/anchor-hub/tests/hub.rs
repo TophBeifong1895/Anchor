@@ -462,20 +462,26 @@ fn grades_join_their_runs_and_failing_checks_are_reported() {
     assert_eq!(quality["tokens"]["n"], json!(3));
     // r1 also observed its ghost invocation, under its own configuration.
     assert_eq!(quality["configurations"], json!(2));
-    // Only `total` fails in at least half the Runs, once r3's regrade counts.
+    // Every check that fails in any Run is reported, at its rate, once r3's
+    // regrade counts: `total` in 2 of 3, `unpaid` in 1 of 3.
     let failing: Vec<_> = report
         .findings
         .iter()
         .filter(|f| f.code == "check_failing")
         .collect();
-    assert_eq!(failing.len(), 1, "{failing:#?}");
-    assert_eq!(failing[0].subject, "task ledger v1");
+    assert_eq!(failing.len(), 2, "{failing:#?}");
+    assert!(failing.iter().all(|f| f.subject == "task ledger v1"));
+    let total = failing
+        .iter()
+        .find(|f| f.detail.contains("check total failed in 2 of 3"))
+        .expect("total is reported");
+    assert_eq!(total.evidence.len(), 2);
     assert!(
-        failing[0].detail.contains("check total failed in 2 of 3"),
-        "{}",
-        failing[0].detail
+        failing
+            .iter()
+            .any(|f| f.detail.contains("check unpaid failed in 1 of 3")),
+        "{failing:#?}"
     );
-    assert_eq!(failing[0].evidence.len(), 2);
 }
 
 #[test]
@@ -844,6 +850,8 @@ fn the_mcp_server_answers_bounded_reads_and_sees_appends() {
             "invocations",
             "invocation",
             "configurations",
+            "calls",
+            "check",
             "records"
         ]
     );
@@ -1196,4 +1204,229 @@ fn the_gate_admits_an_arm_no_worse_anywhere_and_vetoes_one_worse_on_a_task() {
     );
     assert_eq!(finding(&report, "gate_worse").subject, "audit v1: host-b");
     assert!(report.findings.iter().all(|f| f.code != "gate_admits"));
+}
+
+/// A command fact as the recorder now writes it: the program, and how the
+/// command ended.
+fn command(
+    request: u64,
+    program: &str,
+    end: Option<anchor_facts::CommandEnd>,
+) -> anchor_facts::Fact {
+    let mut fact = support::call(
+        "anchor_run",
+        request,
+        json!({"command": [program]}),
+        (request * 10, request * 10 + 5),
+        None,
+    );
+    if let anchor_facts::Fact::ToolCall { command, .. } = &mut fact {
+        *command = end;
+    }
+    fact
+}
+
+#[test]
+fn commands_that_did_not_run_cleanly_are_failures_ranked_by_the_runs_they_reach() {
+    use anchor_facts::{CommandEnd, CommandStatus};
+    let world = World::new();
+    let worker = support::configuration("worker");
+    let not_started = Some(CommandEnd {
+        status: CommandStatus::NotStarted,
+        exit_code: Some(1),
+    });
+    let clean = Some(CommandEnd {
+        status: CommandStatus::Exited,
+        exit_code: Some(0),
+    });
+    let nonzero = Some(CommandEnd {
+        status: CommandStatus::Exited,
+        exit_code: Some(2),
+    });
+    // Three Runs each try `python3` once, which never starts, and fall back
+    // to `python3.12`; one Run fails a call's arguments three times.
+    for (index, run) in ["a", "b", "c"].iter().enumerate() {
+        let at = 1000 * index as u64;
+        world.run(run, at);
+        world.result(run, "worker#1", at + 100, 1, true);
+        let mut facts = vec![
+            support::turn(1, at + 20, 10),
+            command(1, "python3", not_started),
+            command(2, "python3.12", clean),
+            command(3, "grep", nonzero),
+        ];
+        if *run == "a" {
+            for request in 4..7 {
+                facts.push(support::call(
+                    "anchor_edit",
+                    request,
+                    json!({}),
+                    (request * 10, request * 10 + 1),
+                    Some(anchor_facts::Failure::InvalidArguments),
+                ));
+            }
+        }
+        facts.push(support::lifecycle(
+            (at, at + 90),
+            Outcome::Completed,
+            1,
+            facts.len() as u64 - 1,
+        ));
+        world.observe(run, "worker", at + 95, &worker, facts);
+        world.grade(
+            run,
+            "ledger",
+            &[("total", true), ("unpaid", *run != "c")],
+            at + 110,
+        );
+    }
+    let (mut table, mut projector) = project(&world);
+    let grades = DataRoot::open(&world.root("kernel-grades"), "kernel-grades").unwrap();
+    projector.pull(&grades, &mut table).unwrap();
+    let query = Query::new(table.facts(), Some(10_000));
+
+    let health = Health.analyze(&query);
+    let python = health
+        .findings
+        .iter()
+        .find(|f| f.code == "command_failures")
+        .expect("python3 is reported");
+    assert_eq!(python.subject, "tool anchor_run program python3");
+    assert!(
+        python
+            .detail
+            .contains("3 of 3 python3 command(s) never started"),
+        "{}",
+        python.detail
+    );
+    assert!(
+        health
+            .findings
+            .iter()
+            .any(|f| f.code == "command_nonzero" && f.subject.ends_with("grep"))
+    );
+    assert_eq!(
+        health.summary["tools"]["anchor_run"]["commands"]["python3"],
+        json!({"not_started": 3})
+    );
+    // The call to `python3.12` after `python3` is a recovery only once a
+    // command ran cleanly.
+    assert_eq!(health.summary["tools"]["anchor_run"]["done"], json!(3));
+    // A check failing in one Run of three is a quality gap too.
+    let unpaid = finding(&health, "check_failing");
+    assert!(
+        unpaid.detail.contains("check unpaid failed in 1 of 3"),
+        "{}",
+        unpaid.detail
+    );
+
+    // Signals of one tier rank by the Runs they reach, not by how often:
+    // three Runs of python3 come before one Run's three bad edits.
+    let table = Signals::default().table(&query);
+    let order: Vec<_> = table.signals.iter().map(|s| (s.code, s.runs)).collect();
+    let python_at = order
+        .iter()
+        .position(|(c, _)| *c == "command_failures")
+        .unwrap();
+    let edits_at = order
+        .iter()
+        .position(|(c, _)| *c == "tool_failures")
+        .unwrap();
+    assert!(python_at < edits_at, "{order:?}");
+    assert_eq!(order[python_at].1, 3);
+    assert_eq!(order[0].0, "check_failing", "quality first: {order:?}");
+
+    // The profile says where each task's cost went.
+    let profile = anchor_hub::analyzers::profile::Profile.analyze(&query);
+    let ledger = &profile.summary["scopes"]["task ledger v1"];
+    assert_eq!(ledger["runs"], json!(3));
+    assert_eq!(ledger["turns"]["median"], json!(1));
+    assert!(
+        ledger["cheapest"]["route"]
+            .as_str()
+            .unwrap()
+            .contains("anchor_run")
+    );
+}
+
+#[test]
+fn the_value_level_of_a_call_comes_from_the_ports_evidence_and_fills_older_facts() {
+    let world = World::new();
+    let worker = support::configuration("worker");
+    world.run("r", 0);
+    world.result("r", "worker#1", 100, 1, true);
+    // An older record: the fact knows nothing of how the command ended.
+    world.observe(
+        "r",
+        "worker",
+        95,
+        &worker,
+        vec![
+            support::call(
+                "anchor_run",
+                1,
+                json!({"command": ["python3", "-c", "x"]}),
+                (10, 15),
+                None,
+            ),
+            support::lifecycle((0, 90), Outcome::Completed, 0, 1),
+        ],
+    );
+    let evidence = world.state().join("goose-acp");
+    std::fs::create_dir_all(&evidence).unwrap();
+    let long = "y".repeat(5000);
+    std::fs::write(
+        evidence.join("k.evidence.json"),
+        json!({
+            "key": {"run_id": "r", "node_id": "worker", "invocation": 1},
+            "tool_calls": [{"tool": "anchor_run", "tool_call_id": "c1",
+                "arguments": {"command": ["python3", "-c", long]},
+                "result": {"ok": true, "output": {"ok": true, "output": [{"type": "json", "value":
+                    {"status": "completed", "exit_code": 1, "stdout": "", "stderr": "bwrap: execvp python3: No such file or directory\n"}}]}}}]
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let mut hub = Hub::new(vec![world.path().to_path_buf()]);
+    hub.refresh().unwrap();
+    let query = hub.query(Some(1000));
+    let health = Health.analyze(&query);
+    assert!(
+        health
+            .findings
+            .iter()
+            .any(|f| f.code == "command_failures" && f.subject.ends_with("python3")),
+        "{:#?}",
+        health.findings
+    );
+    let reply = handle(
+        &mut hub,
+        &json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                "params": {"name": "calls", "arguments": {"ended": "not_started"}}}),
+    )
+    .unwrap();
+    let page: serde_json::Value =
+        serde_json::from_str(reply["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
+    assert_eq!(page["total"], json!(1));
+    let item = &page["items"][0];
+    assert_eq!(item["invocation"], json!("r/worker#1"));
+    assert!(
+        item["answer"]
+            .as_str()
+            .unwrap()
+            .starts_with("bwrap: execvp python3")
+    );
+    // Values are cut to a head.
+    let arguments = item["arguments"].as_str().unwrap();
+    assert!(
+        arguments.len() < 1000 && arguments.contains("chars]"),
+        "{arguments}"
+    );
+    // A query with no filter is refused rather than dumping every call.
+    let refused = handle(
+        &mut hub,
+        &json!({"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "calls", "arguments": {}}}),
+    )
+    .unwrap();
+    assert_eq!(refused["result"]["isError"], json!(true));
 }
