@@ -30,3 +30,6 @@ class Task:
     # exact: one right answer, checked exactly; a capable baseline gets it,
     # so efficiency is the signal. graded: quality comes in degrees.
     tier: str = 'exact'
+    # (function in generators.py, seed) when the prepare Op generates the
+    # inputs instead of carrying them; `files` then holds bytes.
+    generator: tuple = ()

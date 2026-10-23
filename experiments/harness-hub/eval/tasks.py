@@ -5,13 +5,17 @@ works on them, and a fixed `grade` Op checks its outputs with graders.py.
 The grader is never part of what a variant may change.
 """
 
+import base64
 import hashlib
 import json
 import math
 import random
+import zlib
 
 from graded import graded_tasks
+import generators
 from hard import hard_tasks
+from harder import harder_tasks
 from spec import AGENT, COMMANDS, COMPLETION, HERE, PYTHON, SEED, Task  # noqa: F401
 
 
@@ -413,7 +417,8 @@ def schedule():
 
 
 def all_tasks():
-    return [ledger(), logs(), contacts(), repair(), schedule()] + hard_tasks() + graded_tasks()
+    return ([ledger(), logs(), contacts(), repair(), schedule()] + hard_tasks() + harder_tasks()
+            + graded_tasks())
 
 
 TASKS = {task.id: task for task in all_tasks()}
@@ -423,19 +428,44 @@ TASKS = {task.id: task for task in all_tasks()}
 # ---------------------------------------------------------------------------
 
 
-def grader_source():
-    return (HERE / 'graders.py').read_text()
+# Tasks whose graders live in graders_harder.py; the others' grader source,
+# and so their grader digests, is graders.py alone.
+HARDER = {'shards', 'payroll', 'contracts', 'bugtrail'}
+
+
+def grader_source(task=None):
+    """The grader code `task`'s grade Op runs, all of it without a task."""
+    source = (HERE / 'graders.py').read_text()
+    if task is None or task.id in HARDER:
+        source += '\n\n' + (HERE / 'graders_harder.py').read_text()
+    return source
+
+
+def grading():
+    """Every task's grader by id, loaded the way a grade Op loads them."""
+    namespace = {'__name__': 'graders'}
+    exec(compile(grader_source(), 'graders', 'exec'), namespace)
+    return namespace['GRADERS'], namespace
 
 
 def grader_digest(task):
     """The grader's configuration: task definition, expected values and the
     grader code. Stamped on every grade it records."""
     material = json.dumps({'task': task.id, 'version': task.version, 'expected': task.expected,
-                           'grader': grader_source()}, sort_keys=True)
+                           'grader': grader_source(task)}, sort_keys=True)
     return hashlib.sha256(material.encode()).hexdigest()
 
 
+# An Op runs as `sh -c <run>`, one argv string, which Linux caps at 128 KiB
+# (MAX_ARG_STRLEN). A script near that size is carried compressed.
+MAX_RUN = 131072
+COMPRESS_ABOVE = 64 * 1024
+
+
 def _python(script):
+    if len(script.encode()) > COMPRESS_ABOVE:
+        packed = base64.b64encode(zlib.compress(script.encode(), 9)).decode()
+        script = f'import base64, zlib\nexec(zlib.decompress(base64.b64decode({packed!r})).decode())'
     return f"{PYTHON} - <<'ANCHOR_EVAL_SCRIPT'\n{script}\nANCHOR_EVAL_SCRIPT"
 
 
@@ -449,11 +479,27 @@ def _writer(directory, files):
         '    open(path, "w").write(text)\n')
 
 
-def grade_command(task):
+def _generate(task):
+    """Run the task's generator in the sandbox, refuse inputs whose digest
+    differs from the task definition's, and write them under data/."""
+    function, seed = task.generator
     return _python(
-        grader_source()
+        (HERE / 'generators.py').read_text()
+        + '\nimport os, sys\n'
+        + f'files, _ = {function}({seed})\n'
+        + f'if digest(files) != {generators.digest(task.files)!r}:\n'
+        + '    sys.exit("generated inputs differ from the task definition")\n'
+        + 'for name, data in files.items():\n'
+        + '    path = os.path.join("data", name)\n'
+        + '    os.makedirs(os.path.dirname(path), exist_ok=True)\n'
+        + '    open(path, "wb").write(data)\n')
+
+
+def grade_command(task, directory='/in/' + AGENT):
+    return _python(
+        grader_source(task)
         + '\n'
-        + f'checks = GRADERS[{task.id!r}]({"/in/" + AGENT!r}, json.loads({json.dumps(json.dumps(task.expected))}))\n'
+        + f'checks = GRADERS[{task.id!r}]({directory!r}, json.loads({json.dumps(json.dumps(task.expected))}))\n'
         + f'print(json.dumps({{"anchor_grade": 1, "task": {task.id!r}, "checks": '
           '[{"name": n, "passed": bool(p)} for n, p in checks]}))\n')
 
@@ -466,7 +512,8 @@ def graph(task, agent=None):
         'objective': f'Evaluation task {task.id} v{task.version}',
         'entry': 'prepare',
         'ops': {
-            'prepare': {'run': 'set -eu; mkdir -p data\n' + _writer('data', task.files),
+            'prepare': {'run': 'set -eu; mkdir -p data\n' + (
+                _generate(task) if task.generator else _writer('data', task.files)),
                         'writes': ['data']},
             'grade': {'run': grade_command(task), 'reads': list(task.outputs)},
         },
@@ -481,6 +528,8 @@ def graph(task, agent=None):
                   {'id': 'grade', 'op': 'grade'}],
         'edges': [{'from': 'prepare', 'to': AGENT}, {'from': AGENT, 'to': 'grade'}],
     }
+    for name, op in graph['ops'].items():
+        assert len(op['run'].encode()) < MAX_RUN, (task.id, name)
     return graph
 
 
@@ -491,4 +540,5 @@ def reference_graph(task):
     g['ops']['reference'] = {'run': 'set -eu\n' + _writer('.', task.reference),
                              'reads': ['data'], 'writes': list(task.outputs)}
     del g['agents']
+    assert len(g['ops']['reference']['run'].encode()) < MAX_RUN, task.id
     return g

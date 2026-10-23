@@ -28,16 +28,17 @@ REPO = HERE.parents[2]
 LOCAL = Path(os.environ.get('ANCHOR_EVAL_LOCAL', REPO / '.local/harness-hub-p4'))
 sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(HERE.parent / 'p0'))
-import graders  # noqa: E402
 import run_p0  # noqa: E402
 import tasks  # noqa: E402
+
+GRADERS, _ = tasks.grading()
 
 EVAL = Path(os.environ.get('ANCHOR_EVAL', REPO / 'rust/target/debug/anchor-eval'))
 
 
 def check_names(task):
     with tempfile.TemporaryDirectory() as empty:
-        return [name for name, _ in graders.GRADERS[task.id](empty, task.expected)]
+        return [name for name, _ in GRADERS[task.id](empty, task.expected)]
 
 
 def graded_checks(root, run, task):
@@ -81,8 +82,10 @@ def agent_outputs(root, run, task):
                 record['verdict']['effect'] == 'accepted':
             commit = record['submission']['content']['commit']['id']
             files = root / 'state/artifacts' / commit / 'files'
-            return {name: (files / name).read_text() for name in task.outputs
-                    if (files / name).is_file()}
+            found = [files / name for name in task.outputs if (files / name).is_file()]
+            found += [path for name in task.outputs if (files / name).is_dir()
+                      for path in (files / name).rglob('*') if path.is_file()]
+            return {str(path.relative_to(files)): path.read_text() for path in found}
     return {}
 
 
@@ -100,9 +103,10 @@ def regrade(directory):
             if (root / 'grade.json').exists() else meta.get('task_version')
         with tempfile.TemporaryDirectory() as scratch:
             for name, text in agent_outputs(root, meta['run'], task).items():
+                Path(scratch, name).parent.mkdir(parents=True, exist_ok=True)
                 Path(scratch, name).write_text(text)
             checks = [{'name': n, 'passed': bool(p)}
-                      for n, p in graders.GRADERS[task.id](scratch, task.expected)]
+                      for n, p in GRADERS[task.id](scratch, task.expected)]
         grade = record(root, meta['run'], task, checks)
         run_p0.save(root / 'grade.json', grade)
         meta.update({'task_version': task.version,
