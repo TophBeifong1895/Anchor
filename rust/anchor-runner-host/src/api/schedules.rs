@@ -228,6 +228,37 @@ pub(super) fn skip_missed_schedules(state: &ApiState, now: NaiveDateTime) -> Res
     Ok(())
 }
 
+/// Retention (design card 003): one pass now, then one every interval. The
+/// first tick of a Tokio interval is immediate. A pass that fails is logged
+/// and retried at the next tick; it never stops the Host.
+pub(super) fn start_retention(state: ApiState, policy: crate::retention::Policy) {
+    if policy.disabled() {
+        return;
+    }
+    tokio::spawn(async move {
+        let mut ticker = tokio::time::interval(crate::retention::INTERVAL);
+        loop {
+            ticker.tick().await;
+            match state
+                .application
+                .reclaim(
+                    &policy,
+                    &state.workspace_root,
+                    chrono::Utc::now().timestamp(),
+                )
+                .await
+            {
+                Ok(report) => {
+                    if let Some(line) = report.line() {
+                        eprintln!("{line}");
+                    }
+                }
+                Err(error) => eprintln!("anchor-runner-host: retention pass failed: {error:?}"),
+            }
+        }
+    });
+}
+
 pub(super) fn start_schedule_ticker(state: ApiState) {
     tokio::spawn(async move {
         let mut ticker = tokio::time::interval(StdDuration::from_secs(1));

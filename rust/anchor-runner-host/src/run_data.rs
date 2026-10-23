@@ -12,7 +12,7 @@ use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-fn safe_component(value: &str) -> bool {
+pub(crate) fn safe_component(value: &str) -> bool {
     !value.is_empty()
         && value != "."
         && value != ".."

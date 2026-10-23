@@ -268,4 +268,267 @@ impl RunApplication {
         }
         self.delete_inactive_run(run_id, workspace_root, &active)
     }
+
+    /// One retention pass (design card 003): reclaim settled Runs past the
+    /// policy through `delete_run`, so every refusal it has (referenced,
+    /// conversation current, reply undelivered) holds here too.
+    pub(crate) async fn reclaim(
+        &self,
+        policy: &crate::retention::Policy,
+        workspace_root: &Path,
+        now: i64,
+    ) -> Result<crate::retention::Report, ApplicationError> {
+        let mut report = crate::retention::Report {
+            facts_bytes: crate::retention::facts_bytes(&self.data_root),
+            ..Default::default()
+        };
+        if policy.disabled() {
+            return Ok(report);
+        }
+        let mut settled = Vec::new();
+        let mut total = 0;
+        for (id, view) in self.run_views()? {
+            let bytes = self.run_bytes(&view.progress(), workspace_root);
+            total += bytes;
+            // Only a settled Run that no worker holds is a candidate; a waiting
+            // Run still has a human, a child or an effect that may answer it.
+            if view.active() || !matches!(view.phase(), super::run_access::RunPhase::Settled { .. })
+            {
+                continue;
+            }
+            let Some(settled_at) = view
+                .updated()
+                .and_then(|at| chrono::DateTime::parse_from_rfc3339(at).ok())
+                .map(|at| at.timestamp())
+            else {
+                // Without an observed settle time its age is unknown: only the
+                // size limit may reclaim it, as the oldest.
+                settled.push(crate::retention::Candidate {
+                    run_id: id,
+                    settled_at: i64::MIN,
+                    bytes,
+                });
+                continue;
+            };
+            settled.push(crate::retention::Candidate {
+                run_id: id,
+                settled_at,
+                bytes,
+            });
+        }
+        report.remaining_bytes = total;
+        for candidate in crate::retention::select(policy, settled, total, now) {
+            match self.delete_run(&candidate.run_id, workspace_root).await {
+                Ok(()) => {
+                    report.removed += 1;
+                    report.freed_bytes += candidate.bytes;
+                    report.remaining_bytes = report.remaining_bytes.saturating_sub(candidate.bytes);
+                }
+                Err(error) => report.skipped.push((
+                    candidate.run_id,
+                    match error {
+                        ApplicationError::Missing => "already gone".into(),
+                        ApplicationError::Conflict(reason)
+                        | ApplicationError::Invalid(reason)
+                        | ApplicationError::Storage(reason) => reason,
+                    },
+                )),
+            }
+        }
+        Ok(report)
+    }
+
+    /// The bytes a Run's deletion frees, by the same places it removes: its
+    /// workspaces, its artifacts and its spill. Goose process state and facts
+    /// are small beside them and left out of the estimate.
+    fn run_bytes(&self, run: &super::run_access::RunProgress<'_>, workspace_root: &Path) -> u64 {
+        let artifacts = self.data_root.join("artifacts");
+        let mut commits = run
+            .results
+            .values()
+            .flatten()
+            .map(|result| result.commit.id.as_str())
+            .filter(|id| crate::run_data::safe_component(id))
+            .collect::<Vec<_>>();
+        commits.sort();
+        commits.dedup();
+        crate::retention::size(&workspace_root.join(run.run_id))
+            + crate::retention::size(&self.data_root.join("spill").join(run.run_id))
+            + commits
+                .into_iter()
+                .map(|id| crate::retention::size(&artifacts.join(id)))
+                .sum::<u64>()
+    }
+}
+
+#[cfg(test)]
+mod retention_tests {
+    use super::super::run_access::fixtures;
+    use super::*;
+    use crate::retention::Policy;
+
+    const DAY: i64 = 86_400;
+
+    fn application() -> (tempfile::TempDir, RunApplication) {
+        let root = tempfile::tempdir().unwrap();
+        let application = RunApplication::new(root.path().into(), root.path().join("catalog"));
+        std::fs::create_dir_all(&application.catalog_root).unwrap();
+        (root, application)
+    }
+
+    /// Settle time as the Host's observer records it, moved into the past.
+    fn settled_at(application: &RunApplication, id: &str, at: i64) {
+        let at = chrono::DateTime::from_timestamp(at, 0).unwrap();
+        std::fs::write(
+            application
+                .data_root
+                .join("kernel-run-observations")
+                .join(format!("{id}.json")),
+            serde_json::json!({"updated": at.to_rfc3339()}).to_string(),
+        )
+        .unwrap();
+    }
+
+    fn by_age(days: u64) -> Policy {
+        Policy {
+            max_age: Some(Duration::from_secs(days * DAY as u64)),
+            max_bytes: None,
+        }
+    }
+
+    fn exists(application: &RunApplication, id: &str) -> bool {
+        application.read_run(id).unwrap().is_some()
+    }
+
+    #[tokio::test]
+    async fn age_reclaims_only_settled_runs_past_it_and_never_live_ones() {
+        // T1 and T3: every phase, all of them "old".
+        let (root, application) = application();
+        let work = root.path().join("work");
+        let ids = fixtures::scenarios(&application);
+        let now = 100 * DAY;
+        for id in ids {
+            settled_at(&application, id, now - 60 * DAY);
+        }
+        fixtures::create(&application, &fixtures::work_record("recent"));
+        fixtures::finish(&application, "recent");
+        settled_at(&application, "recent", now - DAY);
+        let report = application.reclaim(&by_age(30), &work, now).await.unwrap();
+        // Done, failed and aborted are settled; the rest still execute or wait.
+        assert_eq!(report.removed, 3, "{report:?}");
+        assert!(report.skipped.is_empty(), "{report:?}");
+        for id in ["done", "failed", "aborted"] {
+            assert!(!exists(&application, id), "{id}");
+        }
+        for id in [
+            "executing",
+            "paused",
+            "stopped",
+            "budget",
+            "recovery",
+            "child",
+            "recent",
+        ] {
+            assert!(exists(&application, id), "{id}");
+        }
+    }
+
+    #[tokio::test]
+    async fn size_reclaims_the_oldest_settled_runs_until_the_rest_fit() {
+        // T2: three settled Runs of 1 KB of workspace each, a limit of 2 KB.
+        let (root, application) = application();
+        let work = root.path().join("work");
+        for (index, id) in ["first", "second", "third"].into_iter().enumerate() {
+            fixtures::create(&application, &fixtures::work_record(id));
+            fixtures::finish(&application, id);
+            settled_at(&application, id, DAY * (index as i64 + 1));
+            std::fs::create_dir_all(work.join(id)).unwrap();
+            std::fs::write(work.join(id).join("output"), vec![0u8; 1024]).unwrap();
+        }
+        let policy = Policy {
+            max_age: None,
+            max_bytes: Some(2048),
+        };
+        let report = application.reclaim(&policy, &work, 10 * DAY).await.unwrap();
+        assert_eq!(report.removed, 1, "{report:?}");
+        assert_eq!(report.freed_bytes, 1024);
+        assert_eq!(report.remaining_bytes, 2048);
+        assert!(!exists(&application, "first"));
+        assert!(!work.join("first").exists());
+        assert!(exists(&application, "second") && exists(&application, "third"));
+    }
+
+    #[tokio::test]
+    async fn hub_facts_and_grades_stay_and_disabled_retention_deletes_nothing() {
+        // T5 and T7.
+        let (root, application) = application();
+        let work = root.path().join("work");
+        fixtures::create(&application, &fixtures::work_record("old"));
+        fixtures::finish(&application, "old");
+        settled_at(&application, "old", 0);
+        for name in ["facts", "grades"].map(|kind| format!("kernel-{kind}")) {
+            let path = application.data_root.join(name).join("old");
+            std::fs::create_dir_all(&path).unwrap();
+            std::fs::write(path.join("history.jsonl"), b"{}\n").unwrap();
+        }
+        let off = Policy {
+            max_age: None,
+            max_bytes: None,
+        };
+        let report = application.reclaim(&off, &work, 1_000 * DAY).await.unwrap();
+        assert_eq!(report.removed, 0);
+        assert!(exists(&application, "old"));
+        let report = application
+            .reclaim(&by_age(30), &work, 1_000 * DAY)
+            .await
+            .unwrap();
+        assert_eq!(report.removed, 1);
+        assert!(report.facts_bytes > 0);
+        for name in ["facts", "grades"].map(|kind| format!("kernel-{kind}")) {
+            assert!(
+                application
+                    .data_root
+                    .join(name)
+                    .join("old/history.jsonl")
+                    .is_file()
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn a_run_the_deletion_path_refuses_is_skipped_with_its_reason() {
+        // T4 and T6: the deletion path refuses a settled Run that an open
+        // parent's Graph call still binds. Reclamation skips it, names why,
+        // and goes on with the next one.
+        let (root, application) = application();
+        let work = root.path().join("work");
+        for id in ["bound-child", "free"] {
+            fixtures::create(&application, &fixtures::work_record(id));
+            fixtures::finish(&application, id);
+            settled_at(&application, id, 0);
+        }
+        let parent = anchor_runtime::graph::GraphRunRecord::create_with_id(
+            GraphSnapshot::from_authoring(serde_json::json!({
+                "entry":"invoke", "agents":{}, "ops":{"invoke":{"call":{"graph":"child","mode":"wait"}}},
+                "nodes":[{"id":"invoke","op":"invoke"}], "edges":[]
+            }))
+            .unwrap(),
+            serde_json::json!({}),
+            "parent",
+        )
+        .unwrap();
+        fixtures::create(&application, &parent);
+        fixtures::bind_child(&application, "parent", "invoke", "bound-child");
+        let report = application
+            .reclaim(&by_age(30), &work, 1_000 * DAY)
+            .await
+            .unwrap();
+        assert_eq!(report.removed, 1, "{report:?}");
+        assert_eq!(report.skipped.len(), 1, "{report:?}");
+        assert_eq!(report.skipped[0].0, "bound-child");
+        assert!(report.skipped[0].1.contains("Graph call"), "{report:?}");
+        assert!(exists(&application, "bound-child") && exists(&application, "parent"));
+        assert!(!exists(&application, "free"));
+        assert!(report.line().unwrap().contains("skipped 1 (bound-child:"));
+    }
 }

@@ -267,6 +267,7 @@ pub async fn serve() -> io::Result<()> {
     let configured_graph_ready =
         validate_service_configuration(&bundle_root, &data_root, &workspace_root, &catalog_root)?;
     let _writer = crate::acquire_deployment_writer().map_err(io::Error::other)?;
+    let retention = crate::retention::Policy::from_env().map_err(io::Error::other)?;
     crate::durable_write::cleanup_at_startup(&data_root, &workspace_root);
     let swept = plugin_management::sweep_staging(&data_root);
     if swept > 0 {
@@ -464,6 +465,7 @@ pub async fn serve() -> io::Result<()> {
         configured_bundle.is_none() || configured_graph_ready,
     ));
     start_schedule_ticker(state.clone());
+    schedules::start_retention(state.clone(), retention);
     let app = router_with_readiness(state, ready.clone());
     let shutdown_ready = ready.clone();
     let result = axum::serve(listener, app)
