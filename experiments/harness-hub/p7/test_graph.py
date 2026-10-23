@@ -131,6 +131,23 @@ class Gate(unittest.TestCase):
         _, decision = self.gate([proposal()], [])
         self.assertEqual(self.status(decision), {'P1': 'revise'})
 
+    def test_a_missing_review_is_the_reviewers_fault_not_the_proposals(self):
+        # blind-03: the reviewer wrote review/review.json, and every sound
+        # proposal was sent back for revision.
+        self.op.give('synthesize', 'proposals.json', {'proposals': [
+            proposal('P1'), proposal('P2', claims=['investigate-2:c1'])]})
+        first = self.op.run('gate')
+        decision = self.op.read('gate.json')
+        self.assertTrue(first.stdout.strip().endswith('synthesize'), first.stdout + first.stderr)
+        self.assertEqual(self.status(decision), {'P1': 'unreviewed', 'P2': 'revise'})
+        self.assertIn('review.json is missing', ' '.join(decision['problems']))
+        p1 = next(i for i in decision['proposals'] if i['id'] == 'P1')
+        self.assertEqual(p1['structure'], [])
+        self.op.give('gate', 'gate.json', decision)
+        second = self.op.run('gate')
+        self.assertTrue(second.stdout.strip().endswith('publish'), second.stdout + second.stderr)
+        self.assertEqual(self.status(self.op.read('gate.json')), {'P1': 'unresolved', 'P2': 'unresolved'})
+
     def test_an_unreadable_proposals_file_goes_back_once_then_publishes(self):
         self.op.give('synthesize', 'proposals.json', 'not json')
         self.op.give('review', 'review.json', {'proposals': []})

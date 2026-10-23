@@ -16,7 +16,11 @@ arm still open when the budget ends is not adopted. `--no-stop` runs every
 round whatever the gate says.
 
 Usage: python3 experiment.py NAME ROUNDS TASK|exact|graded|all... --arm NAME=HOST ...
-           [--alpha A] [--delta D] [--no-stop]
+           [--variants NAME=V1,V2] [--by FIELD] [--alpha A] [--delta D] [--no-stop]
+
+`--variants` gives an arm the instruction sentences of variants.py. Arms
+that share a Host differ only there; `--by instructions_sha256` then tells
+them apart, which holds within one task, so it needs exactly one.
 """
 
 import json
@@ -32,15 +36,29 @@ sys.path.insert(0, str(HERE.parent / 'p0'))
 import run  # noqa: E402
 import run_p0  # noqa: E402
 import tasks  # noqa: E402
+import variants as variants_mod  # noqa: E402
 
 HUB = Path(os.environ.get('ANCHOR_HUB', REPO / 'rust/target/debug/anchor-hub'))
 
 
-def gate(local, reference, alpha, delta):
+def gate(local, reference, alpha, delta, by='host_sha256'):
     """The gate's report on the Runs recorded under `local` so far."""
-    command = [str(HUB), 'gate', '--json', '--reference', reference,
+    command = [str(HUB), 'gate', '--json', '--by', by, '--reference', reference,
                '--alpha', str(alpha), '--delta', str(delta), str(local)]
     return json.loads(subprocess.run(command, check=True, capture_output=True, text=True).stdout)
+
+
+def hub_tool(local, name, args):
+    command = [str(HUB), 'tool', name, '--args', json.dumps(args), str(local)]
+    return json.loads(subprocess.run(command, check=True, capture_output=True, text=True).stdout)
+
+
+def recorded(local, run_id, field):
+    """`field` of the configuration manifest the AgentNode of `run_id` ran
+    under, as the data hub recorded it."""
+    items = hub_tool(local, 'invocations', {'run': run_id, 'node': tasks.AGENT})['items']
+    config = next(i['config'] for i in items if i.get('config'))
+    return hub_tool(local, 'configurations', {'digest': config})['manifest'][field]
 
 
 def decisions(report, digests):
@@ -57,13 +75,21 @@ def settled(decided):
 
 def main():
     args = sys.argv[1:]
-    arms, rest = {}, []
-    alpha, delta, stop = 0.05, 0.05, True
+    arms, variants, rest = {}, {}, []
+    alpha, delta, stop, by = 0.05, 0.05, True, 'host_sha256'
     while args:
         arg = args.pop(0)
         if arg == '--arm':
             name, host = args.pop(0).split('=', 1)
             arms[name] = Path(host)
+        elif arg == '--variants':
+            name, names = args.pop(0).split('=', 1)
+            variants[name] = [n for n in names.split(',') if n]
+            unknown = set(variants[name]) - set(variants_mod.VARIANTS)
+            if unknown:
+                raise SystemExit(f'unknown variants: {sorted(unknown)}')
+        elif arg == '--by':
+            by = args.pop(0)
         elif arg == '--alpha':
             alpha = float(args.pop(0))
         elif arg == '--delta':
@@ -78,10 +104,17 @@ def main():
     _, _, live_env = run_p0.live_host()
     digests = {arm: run_p0.sha(host) for arm, host in arms.items()}
     names = list(arms)
-    reference, others = digests[names[0]], {a: digests[a] for a in names[1:]}
+    reference = digests[names[0]]
+    others = {a: digests[a] for a in names[1:]}
+    if by != 'host_sha256' and len(chosen) != 1:
+        # Another field, such as instructions_sha256, differs from task to
+        # task, so it names an arm consistently only within one task.
+        raise SystemExit('--by other than host_sha256 needs exactly one task')
     run_p0.save(local / 'design.json', {
-        'arms': {arm: {'host': str(host), 'host_sha256': digests[arm]}
+        'arms': {arm: {'host': str(host), 'host_sha256': digests[arm],
+                       'variants': {v: variants_mod.VARIANTS[v] for v in variants.get(arm, [])}}
                  for arm, host in arms.items()},
+        'by': by,
         'rounds': rounds,
         'stopping': {'rule': 'anchor-hub gate after every round, against the first arm',
                      'alpha': alpha, 'delta': delta} if stop else None,
@@ -93,8 +126,11 @@ def main():
         for index, task in enumerate(chosen):
             order = names if (round_ + index) % 2 == 0 else list(reversed(names))
             for arm in order:
+                graph = tasks.graph(task)
+                graph['agents']['solver']['instructions'] = variants_mod.instructions(
+                    task, variants.get(arm, []))
                 meta = run_p0.run_once(task.id, round_, arms[arm], live_env,
-                                       graph=tasks.graph(task), commands=task.commands,
+                                       graph=graph, commands=task.commands,
                                        local=local / arm, prefix=f'{name}-{arm}')
                 root, run_id = Path(meta['root']), meta['run']
                 meta.update({'experiment': name, 'arm': arm, 'task_version': task.version})
@@ -108,7 +144,13 @@ def main():
                 run_p0.save(root / 'meta.json', meta)
                 print(json.dumps({k: meta[k] for k in ('run', 'arm', 'wall_seconds', 'guard',
                                                        'score')}), flush=True)
-        report = gate(local, reference, alpha, delta)
+                if by != 'host_sha256':
+                    value = recorded(local, run_id, by)
+                    if arm == names[0]:
+                        reference = value
+                    else:
+                        others[arm] = value
+        report = gate(local, reference, alpha, delta, by)
         decided = decisions(report, others)
         run_p0.save(local / 'gate.json', {'round': round_, 'decisions': decided, 'report': report})
         print(json.dumps({'round': round_, 'gate': decided}), flush=True)

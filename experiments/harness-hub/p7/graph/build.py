@@ -112,7 +112,8 @@ AGENTS = {
         '只用 verified 和 supported 的 claim 作依据；refuted、unsupported 的写明被推翻，unverified 的只能列为待查。写 synthesis.md（给人读：按影响排列的结论，每条注明依据的 claim id；'
         '质量；没调查的大信号；限制。两页以内）和 proposals.json。需要基线数字时用 harness-hub 读出，不要估。'
         '修订轮（存在 /in/gate/gate.json）：只改 status 为 revise 的提议，逐条处理 gate.json 的 structure 和 review 里的问题；'
-        '其余提议原样保留；处理不了的可以删掉并说明。在 synthesis.md 末尾加一张表：每条意见怎么处理的。' + PROPOSAL,
+        '其余提议原样保留（unreviewed 表示复核缺失，不是提议有问题，不要改）；处理不了的可以删掉并说明。'
+        '在 synthesis.md 末尾加一张表：每条意见怎么处理的。' + PROPOSAL,
         ['verified.json', 'verified.md', 'profile.md', 'frame.md', 'explore.md']
         + [f'investigation-{n}.md' for n in range(1, SLOTS + 1)]
         + ['synthesis.md', 'proposals.json', 'gate.json', 'gate.md', 'review.json'],
@@ -126,8 +127,9 @@ AGENTS = {
         '第二轮（存在 /in/review/review.json，/in/gate/gate.md 列出了结构问题）：proposals.json 里每一条都要给 verdict；'
         '上一轮 keep 且没改动的照旧 keep；对修订过的，只能因为你上一轮的 blocking 仍未解决、或修订带进了新的问题而 blocking，'
         '不能针对你自己要求加上的文字。'
-        '写 review.json：{"summary":"几句话：报告最大的缺口，例如影响大却没调查的信号","proposals":[{"id":"P1","verdict":"keep|revise|reject",'
-        '"blocking":["具体问题和证据"],"notes":"非阻塞意见"}]}，以及 review.md（给人读，一页以内）。',
+        '在当前工作目录的根下写 review.json（不要放进 review/ 之类的子目录，下游只读根下这一个文件，读不到就当作没有复核）：'
+        '{"summary":"几句话：报告最大的缺口，例如影响大却没调查的信号","proposals":[{"id":"P1","verdict":"keep|revise|reject",'
+        '"blocking":["具体问题和证据"],"notes":"非阻塞意见"}]}，以及同样在根下的 review.md（给人读，一页以内）。',
         ['proposals.json', 'synthesis.md', 'verified.json', 'verified.md', 'profile.md', 'review.json'],
         ['review.json', 'review.md']),
 }

@@ -71,20 +71,26 @@ for proposal in proposals:
     seen.add(pid)
     verdict = verdicts.get(pid, {})
     judged = verdict.get('verdict') if verdict.get('verdict') in VERDICTS else None
-    if judged is None:
+    if judged is None and not review_problem:
         found.append('the review gave it no verdict')
     if judged == 'reject':
         status = 'rejected'
     elif found or judged == 'revise':
         status = 'unresolved' if final_pass else 'revise'
+    elif judged is None:
+        # The review itself is missing: a fault of the reviewer, not of the
+        # proposal, so the synthesizer leaves it as it is and the next
+        # review judges it.
+        status = 'unresolved' if final_pass else 'unreviewed'
     else:
         status = 'accepted'
     items.append({'id': pid, 'title': proposal.get('title'), 'status': status,
                   'structure': found, 'review': verdict.get('blocking') or [],
                   'notes': verdict.get('notes', '')})
 
-# A first pass sends back what needs revising, or a proposals file that could
-# not be read at all; the second pass always publishes.
+# A first pass sends back what needs revising, a proposals file that could
+# not be read at all, or a missing review (the way back runs the reviewer
+# again); the second pass always publishes.
 back = not final_pass and (bool(problems) or any(i['status'] == 'revise' for i in items))
 decision = {'pass': 2 if final_pass else 1, 'route': 'synthesize' if back else 'publish',
             'problems': problems, 'proposals': items}

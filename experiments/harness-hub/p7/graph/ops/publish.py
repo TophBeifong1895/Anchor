@@ -21,7 +21,7 @@ def section(path, title):
         return [f'## {title}', '', f'({path} is missing)', '']
 
 
-order = {'accepted': 0, 'unresolved': 1, 'revise': 1, 'unjudged': 2, 'rejected': 3}
+order = {'accepted': 0, 'unresolved': 1, 'revise': 1, 'unreviewed': 1, 'unjudged': 2, 'rejected': 3}
 lines = ['# Harness RSI report', '']
 counts = {}
 for proposal in proposals:
