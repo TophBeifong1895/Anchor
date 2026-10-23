@@ -363,6 +363,7 @@ async fn host_wait_suspends_without_artifact_and_resumes_same_invocation() {
     assert_eq!(harness.phase(), Phase::Executing);
     let paused = harness.record();
     let key = harness.pending_input(&artifacts, "wait").await.key;
+    assert_eq!(key.invocation, 1);
     assert!(paused.results.is_empty());
     assert!(paused.decided.is_empty());
     assert_eq!(*artifacts.freezes.lock().unwrap(), 0);
@@ -498,6 +499,7 @@ async fn durable_yielded_fact_recovers_all_pre_result_crash_windows_without_disp
         let saved = harness.record();
         assert!(saved.results.is_empty());
         let key = harness.pending_input(&artifacts, "work").await.key;
+        assert_eq!(key.invocation, 1);
         assert!(matches!(
             nodes.facts.lock().unwrap().get(&key.durable_key()),
             Some(CompletionFact::Yielded { .. })

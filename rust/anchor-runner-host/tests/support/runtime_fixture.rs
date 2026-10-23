@@ -285,16 +285,6 @@ impl HttpHost {
         self.try_request(method, path, body).unwrap()
     }
 
-    pub fn request_with_headers(
-        &self,
-        method: &str,
-        path: &str,
-        headers: &[(&str, &str)],
-    ) -> (u16, Value) {
-        self.try_request_with_headers(method, path, None, headers)
-            .unwrap()
-    }
-
     pub fn events(&self, path: &str, last_event: Option<u64>) -> (u16, String) {
         self.runtime.block_on(async {
             let mut request = self.client.get(format!("{}{path}", self.url));

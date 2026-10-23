@@ -199,7 +199,7 @@ Pilot 清理保存 format 1 的不可变归属绑定 `state/platform/pilot-resou
 - 新输入打断旧轮而非停止整个 Run。Host 取消并等待 Goose 与工具执行者真正退出，保存未提交现场 checkpoint 和持久 `Yielded` 事实；Runner 冻结 `Interruption` 控制 Artifact 后沿普通 route 到 `reply`，旧回复记 `suppressed`，再回到等待节点。它不把旧 Agent/Turn 标成成功，不自动重放未知业务效果。
 - `reply` 读取本 Turn 绑定的确切 Agent commit；出站图片按 Turn 登记，不取长期 Run 的“最新回复”，不串到下一轮。Turn 结算不等待 Run `Completed`，平台发送 claim、ACK 与 unknown 仍复用既有账本。
 
-Session SQLite 使用 v8。渠道会话键为 `(owner, source, account, conversation_kind, conversation_id, participant_id)`：私聊 participant 为真实 sender，群聊为空；每条输入仍保存真实 sender。旧身份缺省为 single，旧私聊 Session JSON 与 ID 不变；v7→v8 在启用外键的单次事务内重建索引表并保留助手/输入绑定，升级前须做一致性备份。助手继续按 Run 保留历史 binding、每 Session 一个 current 及 `(run, wait invocation key) → Turn` 领取事实；普通 `associate_channel_run` 不因此获得一 Run 多 Turn 授权。
+Session SQLite 仅支持 v9：新文件以 IMMEDIATE 事务创建并在取得写锁后复核，已存在的库须与当前 schema（含账户别名表）完全一致。旧版本、未知身份或被改动的 schema 在写入和启用 WAL 前报错退出，不自动升级或修复，原数据库保持不变。渠道会话键为 `(owner, source, account, conversation_kind, conversation_id, participant_id)`：私聊 participant 为真实 sender，群聊为空；每条输入仍保存真实 sender。助手继续按 Run 保留历史 binding、每 Session 一个 current 及 `(run, wait invocation key) → Turn` 领取事实；普通 `associate_channel_run` 不因此获得一 Run 多 Turn 授权。
 
 Run 详情和 Web 节点投影将 `RunResult.interruption` 显示为“已中断”，不标作成功提交或普通执行失败。新版初始化遇前驱的中断控制 Artifact 时读取其已收束的工作现场快照，不把控制 Artifact 当作业务文件提交。
 
@@ -255,4 +255,4 @@ source-free builder 校验固定 Goose、目标 ELF、Graph 闭包、资源摘�
 
 常驻循环、实际 WeCom transport 和外部业务分别验收，具体范围与证据见 [企微助手验收边界](wecom-assistant.md#docmost-和验收) 与 [验收摘要](pilot-development-plan.md)。
 
-候选代码和本地证据不等于生产已切换。外部业务、目标发行版、旧数据/配置迁移与回滚的未关闭范围统一见 [验收摘要](pilot-development-plan.md#保留的验收边界)。早期实现和设计快照见 [历史归档](archive/README.md)。
+候选代码和本地证据不等于生产已切换。外部业务、目标发行版、升级回滚与配置兼容的未关闭范围统一见 [验收摘要](pilot-development-plan.md#保留的验收边界)。早期实现和设计快照见 [历史归档](archive/README.md)。

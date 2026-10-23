@@ -328,17 +328,17 @@ async fn legacy_view_is_preserved_and_store_only_offline_install_is_explicitly_u
     let Some(f) = Fixture::new() else {
         return;
     };
-    f.application
-        .prepare_development_dependencies(
-            &f.library,
-            &f.scope,
-            "one",
-            &["probepkg==1.0".into()],
-            &[],
-            &f.access,
-        )
-        .await
-        .unwrap();
+    crate::application::development_dependencies::test_support::legacy_view(
+        &f.provisioner,
+        &f.library,
+        &f.scope,
+        "one",
+        &["probepkg==1.0".into()],
+        &[],
+        &f.access,
+    )
+    .await
+    .unwrap();
     let legacy = f.prepare("one", PrepareAction::Ensure, &[]).await.unwrap();
     assert_eq!(legacy["environment_kind"], "legacy_read_only");
     assert_eq!(legacy["pip_available"], false);

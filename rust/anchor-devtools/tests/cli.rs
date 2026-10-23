@@ -11,7 +11,6 @@ fn help_is_available_without_provider_or_fixture_execution() {
         vec!["regression", "goose-fixture", "-h"],
         vec!["regression", "candidate", "--help"],
         vec!["preflight", "--help"],
-        vec!["cutover", "-h"],
     ] {
         let output = Command::new(env!("CARGO_BIN_EXE_anchor-devtools"))
             .args(&arguments)
@@ -29,10 +28,9 @@ fn help_is_available_without_provider_or_fixture_execution() {
         assert!(help.contains("validated by SHA256"));
         assert!(help.contains("anchor-devtools regression candidate"));
         assert!(help.contains("anchor-devtools preflight"));
-        assert!(help.contains("anchor-devtools cutover"));
+        assert!(!help.contains("cutover"));
         assert!(help.contains("locked offline release binaries once"));
         assert!(help.contains("ANCHOR_DISTRIBUTION_GOOSE"));
-        assert!(help.contains("a blocked decision exits 2"));
         assert!(help.contains("Does not call a real model or load dotenv"));
         assert!(help.contains("Live/business/production acceptance is separate"));
     }
@@ -120,8 +118,6 @@ fn unsupported_live_mode_unknown_flags_and_missing_paths_are_errors() {
         vec!["preflight", "extra"],
         vec!["preflight", "--launcher"],
         vec!["preflight", "--launcher", "--unknown"],
-        vec!["cutover", "--unknown"],
-        vec!["cutover", "--rust-state-root"],
         vec!["--help", "unexpected"],
     ]);
     for arguments in cases {
@@ -215,35 +211,56 @@ fn preflight_without_flags_calls_validation_and_fails_closed_when_unconfigured()
 }
 
 #[test]
-fn cutover_forwards_paths_and_returns_blocked_json_with_exit_two() {
+fn retired_cutover_command_is_unknown_and_never_writes_data() {
     let root = tempfile::tempdir().unwrap();
     let legacy = root.path().join("legacy");
     fs::create_dir(&legacy).unwrap();
     fs::write(legacy.join("retained.txt"), b"retained facts").unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_anchor-devtools"))
-        .arg("cutover")
-        .arg("--legacy-root")
-        .arg(&legacy)
-        .arg("--rust-state-root")
-        .arg(root.path().join("state"))
-        .arg("--rust-workspace-root")
-        .arg(root.path().join("work"))
-        .arg("--rust-catalog-root")
-        .arg(root.path().join("catalog"))
-        .env_clear()
-        .env("HOME", root.path())
-        .output()
-        .unwrap();
-    assert_eq!(output.status.code(), Some(2), "{output:?}");
-    assert!(output.stderr.is_empty(), "{output:?}");
-    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(report["decision"], "blocked");
-    assert!(String::from_utf8_lossy(&output.stdout).contains(legacy.to_str().unwrap()));
-    assert_eq!(
-        fs::read(legacy.join("retained.txt")).unwrap(),
-        b"retained facts"
-    );
-    for directory in ["state", "work", "catalog"] {
-        assert!(!root.path().join(directory).exists());
+    let state = root.path().join("state");
+    let work = root.path().join("work");
+    let catalog = root.path().join("catalog");
+    let preparation = root.path().join("preparation");
+    for arguments in [
+        vec!["cutover"],
+        vec!["cutover", "--help"],
+        vec!["cutover", "-h"],
+        vec![
+            "cutover",
+            "--legacy-root",
+            legacy.to_str().unwrap(),
+            "--rust-state-root",
+            state.to_str().unwrap(),
+            "--rust-workspace-root",
+            work.to_str().unwrap(),
+            "--rust-catalog-root",
+            catalog.to_str().unwrap(),
+            "--legacy-writer-stopped",
+            "--legacy-read-only-confirmed",
+            "--credentials-reviewed",
+            "--prepare",
+            "--output-dir",
+            preparation.to_str().unwrap(),
+        ],
+    ] {
+        let output = Command::new(env!("CARGO_BIN_EXE_anchor-devtools"))
+            .args(&arguments)
+            .env_clear()
+            .env("HOME", root.path())
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(2), "{arguments:?}: {output:?}");
+        assert!(output.stdout.is_empty(), "{arguments:?}: {output:?}");
+        assert!(
+            String::from_utf8_lossy(&output.stderr)
+                .contains("expected regression or preflight; use --help"),
+            "{arguments:?}: {output:?}"
+        );
+        assert_eq!(
+            fs::read(legacy.join("retained.txt")).unwrap(),
+            b"retained facts"
+        );
+        for directory in [&state, &work, &catalog, &preparation] {
+            assert!(!directory.exists(), "{arguments:?}: {directory:?}");
+        }
     }
 }

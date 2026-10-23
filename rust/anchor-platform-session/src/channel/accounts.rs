@@ -86,7 +86,6 @@ fn registered_account(
 
 #[cfg(test)]
 mod tests {
-    use super::canonical_account;
     use crate::{SessionError, SessionStore};
 
     #[test]
@@ -145,28 +144,5 @@ mod tests {
                 .unwrap(),
             "new-canonical"
         );
-    }
-
-    #[test]
-    fn canonical_lookup_preserves_unregistered_values_and_namespace_boundaries() {
-        let directory = tempfile::tempdir().unwrap();
-        let store = SessionStore::open(directory.path().join("sessions.sqlite")).unwrap();
-        store
-            .register_channel_account("owner", "channel", "canonical", &["alias".into()])
-            .unwrap();
-        let connection = store.lock().unwrap();
-        for (owner, source, account, expected) in [
-            ("owner", "channel", "alias", "canonical"),
-            ("owner", "channel", "canonical", "canonical"),
-            ("owner", "channel", "", ""),
-            ("owner", "channel", "unregistered", "unregistered"),
-            ("other", "channel", "alias", "alias"),
-            ("owner", "other", "alias", "alias"),
-        ] {
-            assert_eq!(
-                canonical_account(&connection, owner, source, account).unwrap(),
-                expected
-            );
-        }
     }
 }

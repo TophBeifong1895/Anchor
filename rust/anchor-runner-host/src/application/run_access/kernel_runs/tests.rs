@@ -146,13 +146,37 @@ fn cancel() -> anchor_runtime::Cancellation {
     Arc::new(AtomicBool::new(false))
 }
 
-#[tokio::test]
-async fn worker_registration_is_visible_before_poll_and_drops_with_its_future() {
+fn setup(
+    id: &str,
+    budget: u64,
+) -> (
+    tempfile::TempDir,
+    RunApplication,
+    Arc<KernelRuns>,
+    GraphRunRecord,
+) {
     let root = tempfile::tempdir().unwrap();
     let application = app(root.path());
     let runs = application.kernel_runs(true).unwrap().unwrap();
-    let record = record("registered-before-poll");
-    runs.create(&record, 30).unwrap();
+    let record = record(id);
+    runs.create(&record, budget).unwrap();
+    (root, application, runs, record)
+}
+
+fn spawn_drive(
+    runs: &Arc<KernelRuns>,
+    nodes: &Arc<Nodes>,
+    id: &str,
+) -> tokio::task::JoinHandle<Result<anchor_kernel::Resource, GraphError>> {
+    let runs = runs.clone();
+    let nodes = nodes.clone();
+    let id = id.to_owned();
+    tokio::spawn(async move { runs.drive(&id, &Artifacts, nodes.as_ref(), cancel()).await })
+}
+
+#[tokio::test]
+async fn worker_registration_is_visible_before_poll_and_drops_with_its_future() {
+    let (root, _application, runs, record) = setup("registered-before-poll", 30);
     let nodes = Nodes::new(&root.path().join("facts"), Mode::Complete);
     let worker = runs.drive(&record.run_id, &Artifacts, &nodes, cancel());
     assert!(runs.active(&record.run_id));
@@ -174,11 +198,7 @@ async fn worker_registration_is_visible_before_poll_and_drops_with_its_future() 
 
 #[tokio::test]
 async fn registered_worker_aborted_before_first_poll_releases_the_same_registry() {
-    let root = tempfile::tempdir().unwrap();
-    let application = app(root.path());
-    let runs = application.kernel_runs(true).unwrap().unwrap();
-    let record = record("registered-aborted-before-poll");
-    runs.create(&record, 30).unwrap();
+    let (root, _application, runs, record) = setup("registered-aborted-before-poll", 30);
     let registration = runs.register(&record.run_id, cancel()).unwrap();
     let owner = Arc::clone(&runs);
     let nodes = Nodes::new(&root.path().join("facts"), Mode::Complete);
@@ -207,11 +227,7 @@ async fn registered_worker_aborted_before_first_poll_releases_the_same_registry(
 
 #[tokio::test]
 async fn wait_idle_releases_all_waiters_when_an_unpolled_worker_is_dropped() {
-    let root = tempfile::tempdir().unwrap();
-    let application = app(root.path());
-    let runs = application.kernel_runs(true).unwrap().unwrap();
-    let record = record("registered-waiters");
-    runs.create(&record, 30).unwrap();
+    let (root, _application, runs, record) = setup("registered-waiters", 30);
     let nodes = Nodes::new(&root.path().join("facts"), Mode::Complete);
     let worker = runs.drive(&record.run_id, &Artifacts, &nodes, cancel());
     let first = runs.wait_idle(&record.run_id);
@@ -240,11 +256,7 @@ async fn wait_idle_releases_all_waiters_when_an_unpolled_worker_is_dropped() {
 
 #[tokio::test]
 async fn serial_probe_commits_artifacts_cost_and_phase_through_application() {
-    let root = tempfile::tempdir().unwrap();
-    let application = app(root.path());
-    let runs = application.kernel_runs(true).unwrap().unwrap();
-    let record = record("p-serial");
-    runs.create(&record, 30).unwrap();
+    let (root, application, runs, record) = setup("p-serial", 30);
     let nodes = Nodes::new(&root.path().join("facts"), Mode::Complete);
     let resource = runs
         .drive(&record.run_id, &Artifacts, &nodes, cancel())
@@ -295,20 +307,10 @@ async fn serial_probe_commits_artifacts_cost_and_phase_through_application() {
 
 #[tokio::test]
 async fn pause_commits_current_result_before_human_wait_and_resume_does_not_replay() {
-    let root = tempfile::tempdir().unwrap();
-    let application = app(root.path());
-    let runs = application.kernel_runs(true).unwrap().unwrap();
-    let record = record("m1-pause");
-    runs.create(&record, 50).unwrap();
+    let (root, application, runs, record) = setup("m1-pause", 50);
     assert!(application.control(&record.run_id, "pause").await.is_err());
     let nodes = Arc::new(Nodes::new(&root.path().join("facts"), Mode::PauseGate));
-    let worker_runs = runs.clone();
-    let worker_nodes = nodes.clone();
-    let worker = tokio::spawn(async move {
-        worker_runs
-            .drive("m1-pause", &Artifacts, worker_nodes.as_ref(), cancel())
-            .await
-    });
+    let worker = spawn_drive(&runs, &nodes, &record.run_id);
     nodes.started.notified().await;
     application.control(&record.run_id, "pause").await.unwrap();
     assert_eq!(
@@ -354,24 +356,9 @@ async fn pause_commits_current_result_before_human_wait_and_resume_does_not_repl
 
 #[tokio::test]
 async fn pause_on_final_node_preserves_settlement_and_all_committed_results() {
-    let root = tempfile::tempdir().unwrap();
-    let application = app(root.path());
-    let runs = application.kernel_runs(true).unwrap().unwrap();
-    let record = record("m1-pause-final");
-    runs.create(&record, 50).unwrap();
+    let (root, application, runs, record) = setup("m1-pause-final", 50);
     let nodes = Arc::new(Nodes::new(&root.path().join("facts"), Mode::PauseLastGate));
-    let worker_runs = runs.clone();
-    let worker_nodes = nodes.clone();
-    let worker = tokio::spawn(async move {
-        worker_runs
-            .drive(
-                "m1-pause-final",
-                &Artifacts,
-                worker_nodes.as_ref(),
-                cancel(),
-            )
-            .await
-    });
+    let worker = spawn_drive(&runs, &nodes, &record.run_id);
     nodes.started.notified().await;
     application.control(&record.run_id, "pause").await.unwrap();
     nodes.release.add_permits(1);
@@ -390,19 +377,9 @@ async fn pause_on_final_node_preserves_settlement_and_all_committed_results() {
 
 #[tokio::test]
 async fn stop_preempts_pending_pause_without_repausing_the_resumed_run() {
-    let root = tempfile::tempdir().unwrap();
-    let application = app(root.path());
-    let runs = application.kernel_runs(true).unwrap().unwrap();
-    let record = record("m1-pause-stop");
-    runs.create(&record, 50).unwrap();
+    let (root, application, runs, record) = setup("m1-pause-stop", 50);
     let nodes = Arc::new(Nodes::new(&root.path().join("facts"), Mode::Gate));
-    let worker_runs = runs.clone();
-    let worker_nodes = nodes.clone();
-    let worker = tokio::spawn(async move {
-        worker_runs
-            .drive("m1-pause-stop", &Artifacts, worker_nodes.as_ref(), cancel())
-            .await
-    });
+    let worker = spawn_drive(&runs, &nodes, &record.run_id);
     nodes.started.notified().await;
     application.control(&record.run_id, "pause").await.unwrap();
     application.control(&record.run_id, "stop").await.unwrap();
@@ -444,24 +421,9 @@ async fn pending_pause_restart_commits_durable_completion_before_waiting() {
 }
 
 async fn pending_pause_restart(completed: bool) {
-    let root = tempfile::tempdir().unwrap();
-    let application = app(root.path());
-    let runs = application.kernel_runs(true).unwrap().unwrap();
-    let record = record("m1-pause-restart");
-    runs.create(&record, 50).unwrap();
+    let (root, application, runs, record) = setup("m1-pause-restart", 50);
     let nodes = Arc::new(Nodes::new(&root.path().join("facts"), Mode::PauseGate));
-    let worker_runs = runs.clone();
-    let worker_nodes = nodes.clone();
-    let worker = tokio::spawn(async move {
-        worker_runs
-            .drive(
-                "m1-pause-restart",
-                &Artifacts,
-                worker_nodes.as_ref(),
-                cancel(),
-            )
-            .await
-    });
+    let worker = spawn_drive(&runs, &nodes, &record.run_id);
     nodes.started.notified().await;
     runs.control(&record.run_id, "pause", None).unwrap();
     worker.abort();
@@ -499,19 +461,9 @@ async fn pending_pause_restart(completed: bool) {
 
 #[tokio::test]
 async fn stop_refuses_late_result_then_resume_uses_durable_completion() {
-    let root = tempfile::tempdir().unwrap();
-    let application = app(root.path());
-    let runs = application.kernel_runs(true).unwrap().unwrap();
-    let record = record("p-stop");
-    runs.create(&record, 50).unwrap();
+    let (root, application, runs, record) = setup("p-stop", 50);
     let nodes = Arc::new(Nodes::new(&root.path().join("facts"), Mode::Gate));
-    let worker_runs = runs.clone();
-    let worker_nodes = nodes.clone();
-    let worker = tokio::spawn(async move {
-        worker_runs
-            .drive("p-stop", &Artifacts, worker_nodes.as_ref(), cancel())
-            .await
-    });
+    let worker = spawn_drive(&runs, &nodes, &record.run_id);
     nodes.started.notified().await;
     application.control("p-stop", "stop").await.unwrap();
     assert!(matches!(
@@ -556,11 +508,7 @@ async fn stop_refuses_late_result_then_resume_uses_durable_completion() {
 
 #[tokio::test]
 async fn abandon_waiting_probe_is_terminal_and_refuses_late_submission() {
-    let root = tempfile::tempdir().unwrap();
-    let application = app(root.path());
-    let runs = application.kernel_runs(true).unwrap().unwrap();
-    let record = record("p-abandon");
-    runs.create(&record, 50).unwrap();
+    let (_root, application, runs, _record) = setup("p-abandon", 50);
     application.control("p-abandon", "stop").await.unwrap();
     application.abandon_run("p-abandon", None).await.unwrap();
     let resource = runs.load("p-abandon").unwrap().unwrap();
@@ -598,11 +546,7 @@ async fn abandon_waiting_probe_is_terminal_and_refuses_late_submission() {
 #[tokio::test]
 async fn restart_recovers_same_invocation_from_completed_or_not_started_fact() {
     for completed in [true, false] {
-        let root = tempfile::tempdir().unwrap();
-        let application = app(root.path());
-        let runs = application.kernel_runs(true).unwrap().unwrap();
-        let record = record("p-restart");
-        runs.create(&record, 50).unwrap();
+        let (root, application, runs, _record) = setup("p-restart", 50);
         let crashing = Nodes::new(&root.path().join("facts"), Mode::Crash(completed));
         assert!(
             runs.drive("p-restart", &Artifacts, &crashing, cancel())
@@ -646,11 +590,7 @@ async fn restart_recovers_same_invocation_from_completed_or_not_started_fact() {
 #[tokio::test]
 async fn uncertain_effect_parks_until_human_verification_then_resume_or_abandon() {
     for abandon in [false, true] {
-        let root = tempfile::tempdir().unwrap();
-        let application = app(root.path());
-        let runs = application.kernel_runs(true).unwrap().unwrap();
-        let record = record("p-unknown");
-        runs.create(&record, 50).unwrap();
+        let (root, application, runs, record) = setup("p-unknown", 50);
         let nodes = Nodes::new(&root.path().join("facts"), Mode::Complete);
         let key = InvocationKey {
             run_id: record.run_id.clone(),
@@ -687,11 +627,7 @@ async fn uncertain_effect_parks_until_human_verification_then_resume_or_abandon(
 #[tokio::test]
 async fn waiting_recovery_outcome_parks_and_known_failure_settles() {
     for mode in [Mode::Recovery, Mode::Fail] {
-        let root = tempfile::tempdir().unwrap();
-        let application = app(root.path());
-        let runs = application.kernel_runs(true).unwrap().unwrap();
-        let record = record("p-outcome");
-        runs.create(&record, 50).unwrap();
+        let (root, _application, runs, _record) = setup("p-outcome", 50);
         let nodes = Nodes::new(&root.path().join("facts"), mode);
         let resource = runs
             .drive("p-outcome", &Artifacts, &nodes, cancel())
@@ -782,11 +718,7 @@ async fn application_matches_frozen_baseline_on_one_thousand_serial_seeds() {
 
 #[test]
 fn probe_guards_keep_one_writer_and_charge_stale_work_once() {
-    let root = tempfile::tempdir().unwrap();
-    let application = app(root.path());
-    let runs = application.kernel_runs(true).unwrap().unwrap();
-    let record = record("p-stale");
-    runs.create(&record, 50).unwrap();
+    let (root, application, runs, record) = setup("p-stale", 50);
     assert!(matches!(
         app(root.path()).kernel_runs(false),
         Err(ApplicationError::Conflict(_))
@@ -851,11 +783,7 @@ fn probe_guards_keep_one_writer_and_charge_stale_work_once() {
 
 #[test]
 fn broken_host_observation_never_blocks_kernel_control_or_lifecycle_reads() {
-    let root = tempfile::tempdir().unwrap();
-    let application = app(root.path());
-    let runs = application.kernel_runs(true).unwrap().unwrap();
-    let record = record("r-observation-failure");
-    runs.create(&record, 50).unwrap();
+    let (root, _application, runs, record) = setup("r-observation-failure", 50);
     let observations = root.path().join("kernel-run-observations");
     std::fs::remove_file(observations.join("r-observation-failure.json")).unwrap();
     std::fs::remove_dir(&observations).unwrap();

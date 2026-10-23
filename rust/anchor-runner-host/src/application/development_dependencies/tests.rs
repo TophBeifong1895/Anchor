@@ -1,4 +1,7 @@
+use super::test_support::legacy_view;
 use super::*;
+use crate::application::RunApplication;
+use crate::dependency_provision::DependencyAccess;
 use crate::dependency_provision::{
     DependencyProvisioner,
     test_support::{config, fixture_wheel, toolchain},
@@ -113,48 +116,11 @@ async fn a_runtime_published_by_another_session_only_changes_new_turn_dependency
     let old_turn = application
         .clone()
         .with_frozen_runtime_snapshot(old_snapshot);
-    let old_scope = data.join("pilot/old-session");
-    let unavailable_scope = data.join("pilot/unavailable-session");
-    let new_scope = data.join("pilot/new-session");
-    let access = DependencyAccess {
-        network: false,
-        ..Default::default()
-    };
-    let writer = crate::plugin_dependencies::write_lock(&library.join("dependencies"), &access)
-        .await
-        .unwrap();
-    let preparing = {
-        let turn = old_turn.clone();
-        let library = library.clone();
-        let scope = old_scope.clone();
-        let access = access.clone();
-        tokio::spawn(async move {
-            turn.prepare_development_dependencies(
-                &library,
-                &scope,
-                "project",
-                &["idna==3.6".into()],
-                &[],
-                &access,
-            )
-            .await
-        })
-    };
-    // Preparation acquires its scope before it waits for the shared writer;
-    // holding the writer ensures the provisioner is read after publication.
-    let leases = library.join("dependencies/.development-leases");
-    tokio::time::timeout(Duration::from_secs(2), async {
-        while !leases.is_dir() || std::fs::read_dir(&leases).unwrap().next().is_none() {
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
-    })
-    .await
-    .expect("old Turn preparation did not reach the writer lock");
     configuration.publish_snapshot_for_test(RuntimeSnapshot {
         python: Some(new_python.clone()),
         python_enabled: true,
         rust: None,
-        provisioner: Some(new_provisioner.clone()),
+        provisioner: Some(new_provisioner),
     });
     assert_eq!(
         old_turn.dependency_provisioner().unwrap().config.python,
@@ -162,94 +128,24 @@ async fn a_runtime_published_by_another_session_only_changes_new_turn_dependency
     );
     assert!(
         unavailable_turn.dependency_provisioner().is_err(),
-        "explicitly frozen unavailability must not fall back to the new runtime or a legacy provisioner"
+        "a frozen unavailable grant must not fall back to dynamic configuration or a test provisioner"
     );
     assert_eq!(
         application.dependency_provisioner().unwrap().config.python,
         new_python
     );
-    let new_turn = application
-        .clone()
-        .with_frozen_runtime_snapshot(configuration.snapshot().unwrap());
-    drop(writer);
-    let old = preparing.await.unwrap().unwrap();
-    let unavailable = unavailable_turn
-        .prepare_development_dependencies(
-            &library,
-            &unavailable_scope,
-            "project",
-            &["idna==3.6".into()],
-            &[],
-            &access,
-        )
-        .await;
-    assert!(
-        matches!(unavailable, Err(ApplicationError::Invalid(reason)) if reason.contains("authorize dependency preparation"))
-    );
-    assert!(select_development_view(&library, &unavailable_scope, "project").is_err());
-    let new = new_turn
-        .prepare_development_dependencies(
-            &library,
-            &new_scope,
-            "project",
-            &["idna==3.6".into()],
-            &[],
-            &access,
-        )
-        .await
-        .unwrap();
-    assert_eq!(old.resolved.interpreter_path, chain.python);
-    assert_eq!(new.resolved.interpreter_path, new_python);
-    assert_eq!(new.resolved.interpreter_prefix, python_root);
-    let old_view = select_development_view(&library, &old_scope, "project").unwrap();
-    let new_view = select_development_view(&library, &new_scope, "project").unwrap();
-    assert_ne!(old_view.view.view(), new_view.view.view());
-    for (selected, expected, provisioner) in [
-        (&old_view, &chain.python, &old_provisioner),
-        (&new_view, &new_python, &new_provisioner),
-    ] {
-        assert_eq!(
-            selected
-                .view
-                .view()
-                .join("bin/python")
-                .canonicalize()
-                .unwrap(),
-            *expected
-        );
-        let output = command(
-            &selected.view,
-            &provisioner.config.build_root.join("runtime-freeze-probe"),
-            &provisioner.sandbox,
-            vec![
-                selected
-                    .view
-                    .view()
-                    .join("bin/python")
-                    .to_string_lossy()
-                    .into_owned(),
-                "-c".into(),
-                "import idna; print(idna.__version__)".into(),
-            ],
-        )
-        .await;
-        assert_eq!(output.trim(), "3.6");
-    }
-    assert_eq!(
-        std::fs::read_dir(anchor_graph_host::store_root(&library).join("idna"))
-            .unwrap()
-            .count(),
-        1
-    );
     assert_eq!(
         application.runtime_configuration().map(Arc::as_ptr),
         old_turn.runtime_configuration().map(Arc::as_ptr),
-        "freezing development capability must preserve dynamic runtime management"
+        "frozen capability must preserve access to runtime management"
     );
+    let unconfigured = RunApplication::new(root.path().join("unconfigured"), library);
+    assert!(unconfigured.dependency_provisioner().is_err());
+    assert_eq!(unconfigured.pilot_dependency_status()["configured"], false);
 }
 
 #[tokio::test]
-async fn project_versions_share_bytes_with_candidates_and_formal_views_and_offline_retry_works() {
+async fn legacy_project_views_share_bytes_and_selection_rejects_inconsistent_facts() {
     let Some(chain) = toolchain() else {
         return;
     };
@@ -263,8 +159,6 @@ async fn project_versions_share_bytes_with_candidates_and_formal_views_and_offli
         Arc::new(DependencyProvisioner::new(config(root.path(), &chain, wheels.clone())).unwrap());
     let library = root.path().join("library");
     let scope_path = root.path().join("pilot/owner-session");
-    let application = RunApplication::new(root.path().join("data"), root.path().join("catalog"))
-        .with_dependency_provisioner(provisioner.clone());
     let access = DependencyAccess {
         network: false,
         ..Default::default()
@@ -272,7 +166,8 @@ async fn project_versions_share_bytes_with_candidates_and_formal_views_and_offli
     let requirements_one = ["idna==3.6".into()];
     let development_one = ["pytest==8.0".into()];
     let requirements_two = ["idna==3.7".into()];
-    let first = application.prepare_development_dependencies(
+    let first = legacy_view(
+        &provisioner,
         &library,
         &scope_path,
         "one",
@@ -280,7 +175,8 @@ async fn project_versions_share_bytes_with_candidates_and_formal_views_and_offli
         &development_one,
         &access,
     );
-    let second = application.prepare_development_dependencies(
+    let second = legacy_view(
+        &provisioner,
         &library,
         &scope_path,
         "two",
@@ -288,22 +184,9 @@ async fn project_versions_share_bytes_with_candidates_and_formal_views_and_offli
         &[],
         &access,
     );
-    let twin = application.prepare_development_dependencies(
-        &library,
-        &scope_path,
-        "twin",
-        &requirements_one,
-        &development_one,
-        &access,
-    );
-    let (first, second, twin) = tokio::join!(first, second, twin);
+    let (first, second) = tokio::join!(first, second);
     let first = first.unwrap();
     let second = second.unwrap();
-    let twin = twin.unwrap();
-    assert_eq!(
-        first.resolved, twin.resolved,
-        "same-version concurrent projects share the actual solve"
-    );
     assert_eq!(first.resolved.packages.len(), 2);
     assert_eq!(second.resolved.packages.len(), 1);
     let one = select_development_view(&library, &scope_path, "one").unwrap();
@@ -379,68 +262,19 @@ async fn project_versions_share_bytes_with_candidates_and_formal_views_and_offli
     assert_eq!(output.trim(), "hello 8.0");
     let output = command(&one.view, &command_workspace, &provisioner.sandbox, vec![one.view.view().join("bin/python").to_string_lossy().into_owned(), "-c".into(), format!("from pathlib import Path\ntry:\n Path({:?}).write_text('bad')\nexcept OSError:\n print('read-only')\nelse:\n raise Exception('shared package was writable')", store.join("idna/3.6/idna/__init__.py").to_string_lossy())]).await;
     assert_eq!(output.trim(), "read-only");
-    let third = application
-        .prepare_development_dependencies(
-            &library,
-            &scope_path,
-            "three",
-            &["idna==3.6".into()],
-            &[],
-            &access,
-        )
-        .await
-        .unwrap();
+    let third = legacy_view(
+        &provisioner,
+        &library,
+        &scope_path,
+        "three",
+        &["idna==3.6".into()],
+        &[],
+        &access,
+    )
+    .await
+    .unwrap();
     let runtime_only = third.resolved;
 
-    // A source edit changes no dependency identity. Removing every artifact and
-    // uv resolution cache still permits reuse of this project's exact ready fact.
-    std::fs::remove_dir_all(&wheels).unwrap();
-    std::fs::create_dir_all(&wheels).unwrap();
-    std::fs::remove_dir_all(root.path().join("build/artifacts")).unwrap();
-    std::fs::remove_dir_all(root.path().join("build/cache")).unwrap();
-    let retried = application
-        .prepare_development_dependencies(
-            &library,
-            &scope_path,
-            "./one",
-            &["idna==3.6".into()],
-            &["pytest==8.0".into()],
-            &access,
-        )
-        .await
-        .unwrap();
-    assert_eq!(retried.resolved, first.resolved);
-    let recategorized = application
-        .prepare_development_dependencies(
-            &library,
-            &scope_path,
-            "one",
-            &["pytest==8.0".into(), "idna==3.6".into()],
-            &[],
-            &access,
-        )
-        .await
-        .unwrap();
-    assert_eq!(recategorized.resolved, first.resolved);
-    assert_ne!(recategorized.declaration_digest, first.declaration_digest);
-    let reordered = application
-        .prepare_development_dependencies(
-            &library,
-            &scope_path,
-            "one",
-            &["idna==3.6".into(), "pytest==8.0".into()],
-            &[],
-            &access,
-        )
-        .await
-        .unwrap();
-    assert_eq!(
-        reordered.declaration_digest,
-        recategorized.declaration_digest
-    );
-    let same_view = select_development_view(&library, &scope_path, "one").unwrap();
-    assert_eq!(same_view.view.view(), one.view.view());
-    drop(same_view);
     // Selection must establish a complete ready fact and the exact shared
     // interpreter/package set rather than accepting a merely existing venv.
     let ready = one
@@ -448,7 +282,7 @@ async fn project_versions_share_bytes_with_candidates_and_formal_views_and_offli
         .view()
         .parent()
         .unwrap()
-        .join(format!("preparation-{}.json", reordered.declaration_digest));
+        .join(format!("preparation-{}.json", first.declaration_digest));
     let ready_bytes = std::fs::read(&ready).unwrap();
     std::fs::remove_file(&ready).unwrap();
     assert!(select_development_view(&library, &scope_path, "one").is_err());
@@ -462,7 +296,7 @@ async fn project_versions_share_bytes_with_candidates_and_formal_views_and_offli
         .unwrap()
         .join("current.json");
     let current_bytes = std::fs::read(&current).unwrap();
-    let mut changed = reordered.clone();
+    let mut changed = first.clone();
     changed.resolved.packages.pop();
     std::fs::write(&current, serde_json::to_vec(&changed).unwrap()).unwrap();
     assert!(select_development_view(&library, &scope_path, "one").is_err());
@@ -479,21 +313,11 @@ async fn project_versions_share_bytes_with_candidates_and_formal_views_and_offli
     assert!(select_development_view(&library, &scope_path, "one").is_err());
     std::fs::remove_file(additional).unwrap();
     assert!(select_development_view(&library, &scope_path, "one").is_ok());
-    assert!(
-        application
-            .prepare_development_dependencies(
-                &library,
-                &scope_path,
-                "missing",
-                &["absent==1.0".into()],
-                &[],
-                &access
-            )
-            .await
-            .is_err()
-    );
-    assert!(select_development_view(&library, &scope_path, "missing").is_err());
-    // Land a formal view using the shared package and no downloadable wheel.
+    // Production landing can reuse the shared package without its original wheel.
+    std::fs::remove_dir_all(&wheels).unwrap();
+    std::fs::create_dir_all(&wheels).unwrap();
+    std::fs::remove_dir_all(root.path().join("build/artifacts")).unwrap();
+    std::fs::remove_dir_all(root.path().join("build/cache")).unwrap();
     crate::plugin_dependencies::land_with_access(
         &provisioner,
         &library,
@@ -529,26 +353,6 @@ async fn project_versions_share_bytes_with_candidates_and_formal_views_and_offli
         vec![store.join("idna/3.6")]
     );
     assert_eq!(std::fs::read_dir(store.join("idna")).unwrap().count(), 2);
-    // Cancellation is surfaced without switching the prior usable selection.
-    access
-        .cancellation
-        .store(true, std::sync::atomic::Ordering::Release);
-    assert!(
-        application
-            .prepare_development_dependencies(
-                &library,
-                &scope_path,
-                "one",
-                &["idna==3.7".into()],
-                &[],
-                &access
-            )
-            .await
-            .is_err()
-    );
-    let unchanged = select_development_view(&library, &scope_path, "one").unwrap();
-    assert_eq!(unchanged.view.view(), one.view.view());
-    drop(unchanged);
     drop(scope);
     drop(one);
     drop(two);
@@ -614,22 +418,20 @@ async fn separate_distributions_in_a_namespace_are_imported_together_without_pac
         Arc::new(DependencyProvisioner::new(config(root.path(), &chain, wheels)).unwrap());
     let library = root.path().join("library");
     let identity = root.path().join("pilot/namespace");
-    let application = RunApplication::new(root.path().join("data"), root.path().join("catalog"))
-        .with_dependency_provisioner(provisioner.clone());
-    application
-        .prepare_development_dependencies(
-            &library,
-            &identity,
-            "project",
-            &["namespace_one==1.0".into(), "namespace_two==1.0".into()],
-            &[],
-            &DependencyAccess {
-                network: false,
-                ..Default::default()
-            },
-        )
-        .await
-        .unwrap();
+    legacy_view(
+        &provisioner,
+        &library,
+        &identity,
+        "project",
+        &["namespace_one==1.0".into(), "namespace_two==1.0".into()],
+        &[],
+        &DependencyAccess {
+            network: false,
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
     let selected = select_development_view(&library, &identity, "project").unwrap();
     let output = command(&selected.view, &root.path().join("build/namespace-probe"), &provisioner.sandbox,
         vec![selected.view.view().join("bin/python").to_string_lossy().into_owned(), "-c".into(), "from shared.one import VALUE as one; from shared.two import VALUE as two; print(one,two)".into()]).await;
@@ -640,97 +442,6 @@ async fn separate_distributions_in_a_namespace_are_imported_together_without_pac
     )
     .unwrap();
     assert_eq!(refs.len(), 2);
-    assert_eq!(
-        anchor_library::reclaim(&library, true)
-            .unwrap()
-            .kept_referenced,
-        2
-    );
-}
-
-#[tokio::test]
-async fn cancelled_prepare_does_not_switch_the_project_and_retry_can_reuse_the_store() {
-    let Some(chain) = toolchain() else {
-        return;
-    };
-    let root = tempfile::tempdir().unwrap();
-    let wheels = root.path().join("wheels");
-    std::fs::create_dir_all(&wheels).unwrap();
-    fixture_wheel(&wheels, "idna", "3.6");
-    fixture_wheel(&wheels, "idna", "3.7");
-    let provisioner =
-        Arc::new(DependencyProvisioner::new(config(root.path(), &chain, wheels)).unwrap());
-    let library = root.path().join("library");
-    let identity = root.path().join("pilot/cancellation");
-    let application = RunApplication::new(root.path().join("data"), root.path().join("catalog"))
-        .with_dependency_provisioner(provisioner);
-    let access = DependencyAccess {
-        network: false,
-        ..Default::default()
-    };
-    application
-        .prepare_development_dependencies(
-            &library,
-            &identity,
-            "project",
-            &["idna==3.6".into()],
-            &[],
-            &access,
-        )
-        .await
-        .unwrap();
-    let old = select_development_view(&library, &identity, "project").unwrap();
-    let dependencies = library.join(anchor_graph_host::DEPENDENCIES_DIRECTORY);
-    let held = crate::plugin_dependencies::write_lock(&dependencies, &access)
-        .await
-        .unwrap();
-    let waiting = DependencyAccess {
-        network: false,
-        ..Default::default()
-    };
-    let requirements = ["idna==3.7".into()];
-    let prepare = application.prepare_development_dependencies(
-        &library,
-        &identity,
-        "project",
-        &requirements,
-        &[],
-        &waiting,
-    );
-    let cancel = async {
-        tokio::time::sleep(Duration::from_millis(60)).await;
-        waiting
-            .cancellation
-            .store(true, std::sync::atomic::Ordering::Release);
-    };
-    let (result, ()) = tokio::join!(prepare, cancel);
-    assert!(matches!(result,Err(ApplicationError::Invalid(reason)) if reason.contains("cancel")));
-    drop(held);
-    assert_eq!(
-        select_development_view(&library, &identity, "project")
-            .unwrap()
-            .view
-            .view(),
-        old.view.view()
-    );
-    application
-        .prepare_development_dependencies(
-            &library,
-            &identity,
-            "project",
-            &requirements,
-            &[],
-            &access,
-        )
-        .await
-        .unwrap();
-    let updated = select_development_view(&library, &identity, "project").unwrap();
-    assert_ne!(updated.view.view(), old.view.view());
-    assert!(
-        old.view.view().exists(),
-        "an active command can still lazy-load its previous project view"
-    );
-    assert!(release_development_scope(&library, &identity).is_err());
     assert_eq!(
         anchor_library::reclaim(&library, true)
             .unwrap()

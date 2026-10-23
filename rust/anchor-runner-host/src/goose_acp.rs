@@ -166,27 +166,6 @@ fn file_sha256(path: &Path) -> Result<String, String> {
     Ok(format!("{:x}", digest.finalize()))
 }
 
-#[cfg(test)]
-fn upstream_url(value: &str) -> Result<reqwest::Url, String> {
-    let mut url = reqwest::Url::parse(value).map_err(|error| error.to_string())?;
-    let loopback = url.host_str().is_some_and(|host| {
-        host.parse::<std::net::IpAddr>()
-            .is_ok_and(|address| address.is_loopback())
-    });
-    if url.scheme() != "http"
-        || !loopback
-        || !url.username().is_empty()
-        || url.password().is_some()
-        || url.query().is_some()
-        || url.fragment().is_some()
-        || url.path() != "/"
-    {
-        return Err("Goose spike requires an explicit local HTTP fixture host, without credentials or a path".into());
-    }
-    url.set_path("/v1/chat/completions");
-    Ok(url)
-}
-
 fn store_fact(path: &Path, fact: &Fact) -> Result<(), GraphError> {
     let temporary = path.with_extension("tmp");
     let mut file = fs::OpenOptions::new()
@@ -1076,20 +1055,6 @@ mod tests {
     }
 
     #[test]
-    fn provider_fixture_must_be_explicit_loopback_without_credentials() {
-        assert!(upstream_url("http://127.0.0.1:1234").is_ok());
-        for value in [
-            "https://127.0.0.1:1234",
-            "http://example.org",
-            "http://key@127.0.0.1",
-            "http://127.0.0.1/v1",
-            "http://127.0.0.1?key=secret",
-        ] {
-            assert!(upstream_url(value).is_err(), "{value}");
-        }
-    }
-
-    #[test]
     fn goose_network_opt_in_needs_one_explicit_mode() {
         assert!(!network_opt_in(false, false));
         assert!(network_opt_in(true, false));
@@ -1115,30 +1080,16 @@ mod tests {
     }
 
     #[test]
-    fn an_agent_that_ended_without_the_completion_tool_stays_resumable() {
-        // The media fail-closed scenarios require this: the agent ended its turn
-        // without `final_result`, so the retained session may be resumed to
-        // inspect the scene and finish.
-        assert!(matches!(
-            failure_outcome(
-                false,
-                false,
-                InvocationFailure::Uncertain("Goose ended without a validated final_result".into())
-            ),
-            NodeExecutionOutcome::Interrupted { .. }
-        ));
-    }
-
-    #[test]
     fn uncertain_invocations_stay_resumable_and_cancellation_wins() {
-        assert!(matches!(
-            failure_outcome(
-                false,
-                false,
-                InvocationFailure::Uncertain("transport failed".into())
-            ),
-            NodeExecutionOutcome::Interrupted { .. }
-        ));
+        for reason in [
+            "transport failed",
+            "Goose ended without a validated final_result",
+        ] {
+            assert!(matches!(
+                failure_outcome(false, false, InvocationFailure::Uncertain(reason.into())),
+                NodeExecutionOutcome::Interrupted { .. }
+            ));
+        }
         assert!(matches!(
             failure_outcome(
                 false,

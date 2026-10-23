@@ -89,26 +89,6 @@ use crate::application::{
 };
 use anchor_platform_session::{CreateSession, SessionStore};
 
-async fn authorized_call(
-    app: Router,
-    method: &str,
-    uri: &str,
-    key: &str,
-    body: Value,
-) -> (StatusCode, Value) {
-    let request = Request::builder()
-        .method(method)
-        .uri(uri)
-        .header(header::CONTENT_TYPE, "application/json")
-        .header(header::AUTHORIZATION, format!("Bearer {key}"))
-        .body(Body::from(body.to_string()))
-        .unwrap();
-    let response = app.oneshot(request).await.unwrap();
-    let status = response.status();
-    let bytes = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
-    (status, serde_json::from_slice(&bytes).unwrap())
-}
-
 #[tokio::test]
 async fn native_session_lifecycle_events_restart_and_explicit_execution_boundary() {
     let (root, state) = fixture();

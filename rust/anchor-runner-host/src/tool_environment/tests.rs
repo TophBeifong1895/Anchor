@@ -3,33 +3,7 @@ use anchor_runtime::{NetworkPolicy, SandboxPort};
 use anchor_sandbox_bwrap::BubblewrapSandbox;
 use serde_json::json;
 
-struct Environment(Vec<(&'static str, Option<std::ffi::OsString>)>);
-
-impl Environment {
-    fn cleared(names: &[&'static str]) -> Self {
-        let previous = names
-            .iter()
-            .map(|name| (*name, std::env::var_os(name)))
-            .collect();
-        for name in names {
-            unsafe { std::env::remove_var(name) };
-        }
-        Self(previous)
-    }
-}
-
-impl Drop for Environment {
-    fn drop(&mut self) {
-        for (name, value) in &self.0 {
-            unsafe {
-                match value {
-                    Some(value) => std::env::set_var(name, value),
-                    None => std::env::remove_var(name),
-                }
-            }
-        }
-    }
-}
+use crate::test_support::Environment;
 
 #[test]
 fn python_probe_times_out_and_reaps_the_configured_process() {

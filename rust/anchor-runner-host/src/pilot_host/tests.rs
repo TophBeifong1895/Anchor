@@ -1,7 +1,7 @@
 use super::*;
 use anchor_platform_session::CreateSession;
 use serde_json::json;
-use std::{ffi::OsStr, time::Duration};
+use std::time::Duration;
 
 #[tokio::test]
 async fn continuation_facts_keep_stop_interrupt_supersession_and_replay_distinct() {
@@ -138,13 +138,18 @@ async fn credential_submission_and_stop_share_one_control_boundary() {
         .await
         .unwrap();
     let service = fixture.service.clone();
-    let stopped_root = root.clone();
-    let stop = tokio::spawn(async move { service.stop(&stopped_root).await });
+    let sessions = fixture.sessions.clone();
+    let data = fixture.data.clone();
+    let stop = tokio::spawn(async move {
+        service
+            .stop_session(sessions, data, "owner".into(), session)
+            .await
+    });
     tokio::task::yield_now().await;
     assert!(!stop.is_finished());
     assert!(!cancellation.load(Ordering::Acquire));
     drop(guard);
-    assert!(stop.await.unwrap());
+    assert!(stop.await.unwrap().unwrap());
     assert!(
         fixture
             .service
@@ -359,12 +364,7 @@ async fn stop_wins_over_success_computed_before_terminal_settlement() {
         .unwrap();
     drop(guard);
     let computed_result = TurnStatus::Completed;
-    assert!(
-        fixture
-            .service
-            .stop(&scope(&fixture.data, "owner", &session))
-            .await
-    );
+    assert!(fixture.stop(&session).await.unwrap());
     let saved = fixture
         .service
         .settle(
@@ -656,32 +656,7 @@ async fn automatic_continuation_preserves_scope_and_replaces_a_superseded_busine
     );
 }
 
-struct Environment(Vec<(&'static str, Option<std::ffi::OsString>)>);
-
-impl Environment {
-    fn set(&mut self, name: &'static str, value: impl AsRef<OsStr>) {
-        self.0.push((name, std::env::var_os(name)));
-        unsafe { std::env::set_var(name, value) };
-    }
-
-    fn remove(&mut self, name: &'static str) {
-        self.0.push((name, std::env::var_os(name)));
-        unsafe { std::env::remove_var(name) };
-    }
-}
-
-impl Drop for Environment {
-    fn drop(&mut self) {
-        for (name, value) in self.0.drain(..).rev() {
-            unsafe {
-                match value {
-                    Some(value) => std::env::set_var(name, value),
-                    None => std::env::remove_var(name),
-                }
-            }
-        }
-    }
-}
+use crate::test_support::Environment;
 
 struct Fixture {
     _root: tempfile::TempDir,
@@ -693,6 +668,17 @@ struct Fixture {
 }
 
 impl Fixture {
+    async fn stop(&self, session: &Session) -> Result<bool, SessionError> {
+        self.service
+            .stop_session(
+                self.sessions.clone(),
+                self.data.clone(),
+                "owner".into(),
+                session.clone(),
+            )
+            .await
+    }
+
     fn new() -> Self {
         let root = tempfile::tempdir().unwrap();
         let catalog = root.path().to_path_buf();
@@ -971,16 +957,20 @@ async fn slow_mcp_startup_keeps_controls_and_other_sessions_available() {
         fixture.delete(&first).await,
         Err(SessionError::Conflict(_))
     ));
-    assert!(
-        !tokio::time::timeout(
+    assert!(matches!(
+        tokio::time::timeout(
             Duration::from_secs(2),
-            fixture
-                .service
-                .stop(&scope(&fixture.data, "other-owner", &first)),
+            fixture.service.stop_session(
+                fixture.sessions.clone(),
+                fixture.data.clone(),
+                "other-owner".into(),
+                first.clone(),
+            ),
         )
         .await
-        .unwrap()
-    );
+        .unwrap(),
+        Err(SessionError::Missing)
+    ));
 
     let idle = fixture.create("idle");
     fixture.delete(&idle).await.unwrap();
@@ -989,14 +979,10 @@ async fn slow_mcp_startup_keeps_controls_and_other_sessions_available() {
     let second_turn = fixture.admit(&second, "second-request").await;
     server.entered().await;
     assert!(
-        tokio::time::timeout(
-            Duration::from_secs(2),
-            fixture
-                .service
-                .stop(&scope(&fixture.data, "owner", &second)),
-        )
-        .await
-        .unwrap()
+        tokio::time::timeout(Duration::from_secs(2), fixture.stop(&second),)
+            .await
+            .unwrap()
+            .unwrap()
     );
     assert_eq!(
         fixture.terminal(&second, &second_turn).await.status,
@@ -1025,8 +1011,9 @@ async fn slow_mcp_startup_keeps_controls_and_other_sessions_available() {
     .unwrap();
     assert_eq!(snapshot.mounts.get("slow"), Some(&true));
     assert!(
-        tokio::time::timeout(Duration::from_secs(2), fixture.service.stop(&first_scope))
+        tokio::time::timeout(Duration::from_secs(2), fixture.stop(&first))
             .await
+            .unwrap()
             .unwrap()
     );
     assert_eq!(
@@ -1040,7 +1027,9 @@ async fn slow_mcp_startup_keeps_controls_and_other_sessions_available() {
     fixture.mount_slow_plugin(&recreated, &server.endpoint);
     let current_turn = fixture.admit(&recreated, "new-identity").await;
     server.entered().await;
-    assert!(!fixture.service.stop(&first_scope).await);
+    assert!(
+        matches!(fixture.stop(&first).await, Err(SessionError::Conflict(reason)) if reason.contains("identity"))
+    );
     assert!(
         matches!(fixture.delete(&first).await, Err(SessionError::Conflict(reason)) if reason.contains("identity"))
     );
@@ -1059,12 +1048,7 @@ async fn slow_mcp_startup_keeps_controls_and_other_sessions_available() {
             .status,
         TurnStatus::Running
     );
-    assert!(
-        fixture
-            .service
-            .stop(&scope(&fixture.data, "owner", &recreated))
-            .await
-    );
+    assert!(fixture.stop(&recreated).await.unwrap());
     assert_eq!(
         fixture.terminal(&recreated, &current_turn).await.status,
         TurnStatus::Stopped
@@ -1103,12 +1087,7 @@ async fn stopping_an_accepted_turn_before_startup_skips_the_sandbox() {
     let turn = fixture.admit(&session, "stop").await;
     // Admission spawned the executor without yielding after active registration;
     // in this current-thread test the stop happens before its first poll.
-    assert!(
-        fixture
-            .service
-            .stop(&scope(&fixture.data, "owner", &session))
-            .await
-    );
+    assert!(fixture.stop(&session).await.unwrap());
     assert_eq!(
         fixture.terminal(&session, &turn).await.status,
         TurnStatus::Stopped
@@ -1286,78 +1265,38 @@ time.sleep(600)
 
 #[tokio::test]
 async fn stale_admission_and_delete_cannot_reach_a_recreated_session() {
-    let root = tempfile::tempdir().unwrap();
-    let data = root.path().join("state");
-    let workspace = root.path().join("workspace");
-    std::fs::create_dir_all(data.join("platform")).unwrap();
-    let sessions = SessionStore::open(data.join("platform/sessions.sqlite")).unwrap();
-    let create = || {
-        sessions
-            .create(
-                "owner",
-                CreateSession {
-                    id: Some("reused".into()),
-                    ..Default::default()
-                },
-            )
-            .unwrap()
-    };
-    let old = create();
-    sessions.delete("owner", "reused").unwrap();
-    let current = create();
+    let fixture = Fixture::new();
+    let old = fixture.create("reused");
+    fixture.sessions.delete("owner", "reused").unwrap();
+    let current = fixture.create("reused");
     assert_ne!(old.created_at, current.created_at);
-    crate::pilot_resources::register(&data, &workspace, "owner", &current).unwrap();
-    let task = crate::pilot_tools::session_workspace(&workspace, "owner", "reused");
+    crate::pilot_resources::register(&fixture.data, &fixture.workspace, "owner", &current).unwrap();
+    let task = crate::pilot_tools::session_workspace(&fixture.workspace, "owner", "reused");
     std::fs::create_dir_all(&task).unwrap();
     std::fs::write(task.join("keep"), "new Session").unwrap();
-    let service = PilotService::default();
-    let rejected = service
-        .delete_session(
-            sessions.clone(),
-            data.clone(),
-            workspace.clone(),
-            root.path().to_path_buf(),
-            "owner".into(),
-            old.clone(),
-        )
-        .await;
+    let rejected = fixture.delete(&old).await;
     assert!(matches!(rejected,Err(SessionError::Conflict(reason)) if reason.contains("identity")));
-    let tools = PilotTools {
-        application: crate::application::RunApplication::new(data.clone(), root.path().to_owned()),
-        graph_name: "pilot".into(),
-        library_root: root.path().to_owned(),
-        data_root: data.clone(),
-        workspace_root: workspace,
-        sessions: sessions.clone(),
-        owner: "owner".into(),
-        session: "reused".into(),
-        turn: String::new(),
-        context: None,
-    };
-    let rejected = service
-        .admit(PilotAdmission {
-            sessions: sessions.clone(),
-            owner: "owner".into(),
-            session: old.clone(),
-            request_id: "stale".into(),
-            prompt: Some("develop".into()),
-            attachments: Default::default(),
-            input_source: None,
-            root: scope(&data, "owner", &old),
-            tools,
-        })
+    let rejected = fixture
+        .service
+        .admit(fixture.admission(&old, "stale"))
         .await;
     assert!(
         matches!(rejected,Err(AdmissionError::Session(SessionError::Conflict(reason))) if reason.contains("identity"))
     );
     assert_eq!(
-        sessions.get("owner", "reused").unwrap().created_at,
+        fixture.sessions.get("owner", "reused").unwrap().created_at,
         current.created_at
     );
-    assert!(sessions.list_turns("owner", "reused").unwrap().is_empty());
+    assert!(
+        fixture
+            .sessions
+            .list_turns("owner", "reused")
+            .unwrap()
+            .is_empty()
+    );
     assert_eq!(
         std::fs::read_to_string(task.join("keep")).unwrap(),
         "new Session"
     );
-    assert!(service.active.lock().unwrap().is_empty());
+    assert!(fixture.service.active.lock().unwrap().is_empty());
 }

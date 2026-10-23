@@ -54,7 +54,7 @@ Terminal delivery is immutable, so a terminal SSE reader cannot miss a late appe
 Finishing a Turn commits its status, Session projection and lifecycle events
 together. Status changes and deletion cannot invalidate a running Turn.
 
-`interrupt_running()` is an explicit deployment-writer startup operation. It
+`interrupt_running_except_assistants(&[])` is an explicit deployment-writer startup operation. It
 marks leftover business Turns interrupted without rerunning the model, changing
 native Harness outcomes or manufacturing a reply. Opening the store does not
 perform startup interruption. Accepted prompt metadata and UI chunks are not
@@ -95,11 +95,10 @@ retriever and bounded regex execution.
 Question mutations, the Session snapshot and delivery/activity events commit in
 one immediate transaction. SSE data is `{type:"question", question}`,
 `{type:"question-answered", question}` or `{type:"question-interrupted", question}`.
-`finish_turn` and `interrupt_running` interrupt pending questions before the
+`finish_turn` and `interrupt_running_except_assistants` interrupt pending questions before the
 terminal SSE event in the same transaction and preserve answered questions.
 Opening the store alone does not claim to restore a live Goose process or its
-in-memory pending elicitation. Schema version 5 adds the questions table and
-single-pending partial index while preserving version 1–4 facts and events.
+in-memory pending elicitation. The questions table and single-pending partial index enforce the stored form contract.
 
 ## Channel Session admission
 
@@ -127,8 +126,7 @@ Turns, retained Runs and unfinished deliveries. Explicitly retired bindings and
 their historical input links cascade with an otherwise authorized Session
 deletion; no Run state is copied into the Session store. These APIs are storage contracts only: no channel
 supervisor, send loop, WeCom transport, webhook verification, Graph execution
-or Host wiring is implemented in this crate. Schema version 6 adds the channel
-tables transactionally on top of versions 1–5.
+or Host wiring is implemented in this crate. Channel tables share the Session transaction boundary.
 
 ## Persistent channel assistants
 
@@ -214,16 +212,13 @@ selection as complete historical retention or silently union in omitted inputs.
 Legacy `associate_channel_run` and admission with `request.run_id` still reject
 Run reuse across channel Turns, even when the Run belongs to an assistant.
 Persistent callers admit with `request.run_id = None` and use the claim API.
-Schema v7 transactionally rebuilds `channel_inbounds` without `run_id UNIQUE`,
-preserving its rows, Turn uniqueness, primary key and chronological index;
-a nonunique Run lookup index replaces the removed unique Run lookup. The new
-`channel_assistants` and `channel_assistant_inputs` tables retain bindings with
+`channel_inbounds` permits shared assistant Run IDs while retaining Turn
+uniqueness, its primary key, chronological index and a nonunique Run lookup.
+`channel_assistants` and `channel_assistant_inputs` retain bindings with
 foreign keys and unique Run, wait-key and claimed-Turn constraints. Assistant
 bindings use Run as their primary key, with a partial unique Session index for
 unretired bindings; the private retirement flag is a binding fact, not Run state.
-This v7 schema is adjusted before deployment, not a migration of an earlier
-deployed v7 schema. Existing databases must still match their exact versioned
-schema before any DDL.
+Existing databases must match the exact current schema before use.
 
 ## Execution associations
 
@@ -277,21 +272,23 @@ No directories are created. Symlinks in the database path or its ancestors,
 non-regular files, unsafe SQLite sidecars, parent traversal, memory databases and
 SQLite URI paths are rejected. SQLite also opens with `SQLITE_OPEN_NOFOLLOW`.
 
-The separate database uses application ID `0x414e5353` and schema version `7`.
-Only an empty, unversioned database can be initialized. Existing identity,
-version and schema definitions must match exactly. Exact native v1/v2/v3/v4/v5/v6 databases
-upgrade transactionally to v7; foreign, altered or future schemas are rejected
-before DDL. This does not migrate legacy Session/Turn history. Successful stores use
-WAL, full synchronous commits, foreign keys and a five-second busy timeout.
-The v3 `turn_native` and `turn_runs` tables preserve the existing Turn SQL and
-delivery records and cascade with business Turn/Session deletion. Retained Graph
-run IDs still prevent Session deletion; native facts alone do not retain it.
-The additive v4 `turn_goose` table and lookup index leave native records and
-delivery JSON unchanged and cascade with business deletion. Host adapters must
+The separate database uses application ID `0x414e5353` and schema version `9`.
+Only an empty, unversioned database can be initialized. Creation uses an IMMEDIATE
+transaction and rechecks the file after acquiring its writer lease. Existing files
+are checked through a read-only connection before any writable open or WAL setup;
+identity, version and schema definitions must match exactly. Older, foreign,
+altered or future schemas fail closed without upgrading, repairing or checkpointing
+the database. A v8 file receives `incompatible database: expected exact Anchor
+platform Session schema version 9 (found version 8)`.
+Successful stores use WAL, full synchronous commits, foreign keys and a five-second
+busy timeout. `turn_native` and `turn_runs` cascade with business Turn/Session
+deletion. Retained Graph run IDs still prevent Session deletion; native facts alone
+do not retain it. `turn_goose` and its lookup index also cascade with business
+deletion. Host adapters must
 reject incompatible legacy runtime histories rather than reuse them as Goose
 sessions; the platform store does not choose a runtime or migrate that history.
 
 The integration tests use only temporary SQLite files and local threads. They
 cover DTOs, ownership, lifecycle, cursors, persistence, parallel connections,
 path/schema rejection and injected transaction failures. No model or external
-service is involved. API/Host assembly and production migration remain separate.
+service is involved. API/Host assembly and deployment acceptance remain separate.

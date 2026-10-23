@@ -65,7 +65,7 @@
 实施前复核（2026-10-10，批准后、写代码前完成）：
 
 - **已确认**：turn 终结统一经由 `finish(...)`（`anchor-platform-session/src/turns.rs:478-492`），而它**总是**
-  调用 `crate::questions::interrupt_pending`；`interrupt_running`（同文件 `:214`）也走 `finish`。因此
+  调用 `crate::questions::interrupt_pending`；启动收尾用的 `interrupt_running_except_assistants`（同文件）也走 `finish`。因此
   `stop_pilot`（`anchor-runner-host/src/api/turns.rs:253` → `pilots.stop`）与 channel 中断最终都会把待答问题
   标成 `interrupted`——"没人能再回答"在任何停止路径上都是落盘事实，不需要新机制。
 - **已确认**：`environment_publish` 的取消分支与传输失败分支都在 `active(...)` 之前 `return Err`
@@ -100,7 +100,7 @@
 - **T8 不是"能红"用例**：它是向后兼容护栏（本切片未新增记录字段），已注明，不计入"本切片行为已验证"。
 - **表单里点 Cancel/Decline 仍记为 `Refused`**：维持既有行为，不改。
 - **启动把崩溃遗留的 `Running` turn 一并收尾为 `Cancelled`**：正确（该 turn 已无人能答），
-  顺序是"先 `interrupt_running()` 再收尾"。
+  顺序是"先 `interrupt_running_except_assistants()` 再收尾"。
 
 ## 7. 明确不做
 

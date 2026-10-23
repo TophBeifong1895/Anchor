@@ -439,6 +439,7 @@ fn latest_group_event_is_shared_but_other_groups_and_private_actors_are_isolated
     // cancelled after a slower media callback reached the Host.
     ledger.supersede(&second.event_id).unwrap();
     assert!(ledger.is_latest(&first).unwrap());
+    assert!(ledger.is_latest(&second).unwrap());
     drop(ledger);
     let reopened = crate::ledger::Ledger::open(&path, "profile").unwrap();
     assert!(reopened.is_latest(&first).unwrap());
@@ -505,32 +506,6 @@ fn stale_undelivered_inbounds_are_retired_instead_of_replayed() {
 }
 
 #[test]
-fn the_hosts_cancellation_decides_which_turn_is_live() {
-    let root = tempfile::tempdir().unwrap();
-    let ledger =
-        crate::ledger::Ledger::open(&root.path().join("ledger.sqlite"), "profile").unwrap();
-    let first = normalize_message(&callback()).unwrap().unwrap();
-    let mut frame = callback();
-    frame["body"]["msgid"] = json!("message-2");
-    frame["headers"]["req_id"] = json!("callback-2");
-    let second = normalize_message(&frame).unwrap().unwrap();
-    assert!(ledger.admit(&first).unwrap());
-    assert!(ledger.admit(&second).unwrap());
-
-    // Arrival order alone says the second message took the conversation over.
-    assert!(ledger.is_latest(&second).unwrap());
-    assert!(!ledger.is_latest(&first).unwrap());
-
-    // The Host cancelled the second turn, so the first one is the live turn
-    // again: it keeps its progress bubble and its reply.
-    ledger.supersede(&second.event_id).unwrap();
-    assert!(ledger.is_latest(&first).unwrap());
-    // A cancelled message is still the newest row, but it no longer shadows
-    // the running turn; its own reply is suppressed by the Host's refusal.
-    assert!(ledger.is_latest(&second).unwrap());
-}
-
-#[test]
 fn version_three_ledger_gains_the_recovery_window_column() {
     use rusqlite::Connection;
 
@@ -594,8 +569,6 @@ fn version_three_ledger_gains_the_recovery_window_column() {
 
 #[test]
 fn webhook_receipt_has_bounded_stable_key_digest_and_exact_fields() {
-    use serde_json::json;
-
     let valid = json!({"key":"channel-turn-123", "content_sha256":"a".repeat(64)});
     assert!(crate::webhook::parse_receipt(&valid).is_ok());
     for invalid in [
@@ -765,7 +738,6 @@ fn platform_media_decryption_follows_the_official_aes_conventions() {
 #[test]
 fn media_urls_filenames_and_fallbacks_stay_inside_the_transport_contract() {
     use crate::media::{attachment_name, disposition_filename, permitted_media_url};
-    use serde_json::json;
 
     assert!(permitted_media_url(
         "https://media.example.invalid/a?sign=1"
@@ -824,5 +796,4 @@ fn media_urls_filenames_and_fallbacks_stay_inside_the_transport_contract() {
         b"x",
     );
     assert_eq!(long.chars().count(), 180);
-    let _ = json!({"probe": long});
 }

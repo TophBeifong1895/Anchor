@@ -1,32 +1,7 @@
 use super::*;
 use anchor_platform_session::{SessionStore, TurnStatus};
-use axum::body::Body;
 use sha2::{Digest, Sha256};
 use std::time::Duration;
-
-async fn authorized_call(
-    app: Router,
-    method: &str,
-    uri: &str,
-    key: &str,
-    body: Value,
-) -> (StatusCode, Value) {
-    let response = app
-        .oneshot(
-            Request::builder()
-                .method(method)
-                .uri(uri)
-                .header(header::CONTENT_TYPE, "application/json")
-                .header(header::AUTHORIZATION, format!("Bearer {key}"))
-                .body(Body::from(body.to_string()))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    let status = response.status();
-    let bytes = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
-    (status, serde_json::from_slice(&bytes).unwrap())
-}
 
 fn inbound(id: &str, conversation: &str) -> Value {
     json!({

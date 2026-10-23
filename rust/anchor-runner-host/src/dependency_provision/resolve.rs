@@ -576,31 +576,6 @@ pub(crate) fn tail(output: &str) -> String {
 }
 
 #[cfg(test)]
-fn verify_interpreter(resolved: &ResolvedRequirements) -> Result<(), ProvisionError> {
-    let observed = sha256_file(&resolved.interpreter_path).map_err(|error| {
-        ProvisionError::Failed(format!("the planned interpreter cannot be read: {error}"))
-    })?;
-    if observed != resolved.interpreter_digest {
-        return Err(ProvisionError::Failed(format!(
-            "the planned interpreter changed since it was resolved (approved {}, found {observed})",
-            resolved.interpreter_digest
-        )));
-    }
-    Ok(())
-}
-
-#[cfg(test)]
-fn is_interpreter_constraint(value: &str) -> bool {
-    let value = value.trim();
-    let parts = value.split('.').collect::<Vec<_>>();
-    !value.is_empty()
-        && value.len() <= 16
-        && parts.len() <= 3
-        && parts
-            .iter()
-            .all(|part| !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit()))
-}
-#[cfg(test)]
 mod resolve_tests {
     use super::*;
 
@@ -637,25 +612,6 @@ idna==3.7 \\
         assert_eq!(packages[0].version, "2.32.3");
         assert_eq!(packages[0].hashes.len(), 2);
         assert_eq!(packages[1].name, "idna");
-    }
-
-    #[test]
-    fn an_interpreter_constraint_is_a_version_prefix_not_a_specifier() {
-        for accepted in ["3", "3.12", "3.12.13", " 3.12 "] {
-            assert!(is_interpreter_constraint(accepted), "{accepted}");
-        }
-        for refused in [
-            "python>=3.11",
-            ">=3.11",
-            "~=3.12",
-            "3.x",
-            "",
-            ".",
-            "3.",
-            "3.12.13.1",
-        ] {
-            assert!(!is_interpreter_constraint(refused), "{refused}");
-        }
     }
 
     #[test]
@@ -714,33 +670,6 @@ idna==3.7 \\
             vec!["HOME", "PATH", "UV_CACHE_DIR", "UV_PYTHON_DOWNLOADS"],
             "anything else could widen the authorized source set"
         );
-    }
-
-    #[test]
-    fn an_interpreter_that_changed_after_resolution_is_refused() {
-        let root = tempfile::tempdir().unwrap();
-        let binary = root.path().join("python3");
-        std::fs::write(&binary, b"first build").unwrap();
-        let mut resolved = ResolvedRequirements {
-            interpreter: "3.12.13".into(),
-            interpreter_path: binary.clone(),
-            interpreter_prefix: root.path().to_path_buf(),
-            interpreter_digest: sha256_file(&binary).unwrap(),
-            lock: String::new(),
-            lock_digest: String::new(),
-            packages: Vec::new(),
-        };
-        assert!(verify_interpreter(&resolved).is_ok());
-        std::fs::write(&binary, b"another build").unwrap();
-        let error = verify_interpreter(&resolved).unwrap_err();
-        assert!(
-            matches!(error, ProvisionError::Failed(ref reason) if reason.contains("changed since it was resolved")),
-            "{error:?}"
-        );
-        // Repairing the record is not a way to make it true again for the
-        // approved build: the digest is what was approved.
-        resolved.interpreter_digest = sha256_file(&binary).unwrap();
-        assert!(verify_interpreter(&resolved).is_ok());
     }
 
     #[test]

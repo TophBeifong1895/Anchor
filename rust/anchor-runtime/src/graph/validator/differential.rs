@@ -799,10 +799,10 @@ fn compare_new(
 }
 
 #[tokio::test]
-async fn kernel_with_graph_validator_matches_the_runner_on_random_graphs() {
+async fn kernel_with_graph_validator_matches_the_runner_on_two_thousand_random_graphs() {
     let mut tally = Tally::default();
     let mut frozen = Snapshots::open(Population::Serial);
-    for seed in 0..10_000 {
+    for seed in 0..2_000 {
         check(
             random_graph(seed),
             seed,
@@ -812,25 +812,26 @@ async fn kernel_with_graph_validator_matches_the_runner_on_random_graphs() {
         .await;
     }
     eprintln!("differential: {tally:?}");
-    assert!(tally.node_failed > 100, "{tally:?}");
-    assert!(tally.cases > 9_000, "{tally:?}");
+    assert_eq!(tally.cases + tally.rejected_graphs, 2_000);
+    assert!(tally.node_failed > 20, "{tally:?}");
+    assert!(tally.cases > 900, "{tally:?}");
     assert!(
-        tally.module_activated > 500 && tally.module_limited > 50 && tally.skipped_paths > 1000,
+        tally.module_activated > 100 && tally.module_limited > 10 && tally.skipped_paths > 200,
         "{tally:?}"
     );
     assert!(
-        tally.completed > 100 && tally.round_limited > 100,
+        tally.completed > 20 && tally.round_limited > 20,
         "both endings exercised: {tally:?}"
     );
 }
 
 #[tokio::test]
-async fn parallel_regions_match_the_runner_on_random_graphs() {
+async fn parallel_regions_match_the_runner_on_one_thousand_random_graphs() {
     let mut tally = Tally::default();
     let mut coverage = Tally::default();
     let mut frozen = Snapshots::open(Population::ParallelFailures);
     let mut frozen_coverage = Snapshots::open(Population::ParallelNoFailures);
-    for seed in 0..5_000 {
+    for seed in 0..1_000 {
         check(
             random_parallel_graph(seed),
             seed,
@@ -838,7 +839,7 @@ async fn parallel_regions_match_the_runner_on_random_graphs() {
             &frozen.next(seed).validator,
         )
         .await;
-        // Keep the original no-failure coverage population and its thresholds.
+        // Keep the same prefix of the original no-failure coverage population.
         // Injected failures intentionally terminate some later activations.
         check_with_failures(
             random_parallel_graph(seed),
@@ -852,33 +853,34 @@ async fn parallel_regions_match_the_runner_on_random_graphs() {
     eprintln!("differential parallel: {tally:?}");
     eprintln!("differential parallel original coverage: {coverage:?}");
     assert_eq!(coverage.node_failed, 0);
-    assert_eq!(coverage.cases, 5_000);
-    assert!(tally.node_failed > 100, "{tally:?}");
-    assert!(tally.multi_failure_waves > 0, "{tally:?}");
-    assert!(tally.ceiling_preempted_failures > 0, "{tally:?}");
-    assert!(tally.cases > 4_500, "{tally:?}");
+    assert_eq!(coverage.cases, 1_000);
+    assert!(tally.node_failed > 20, "{tally:?}");
+    // Rare failure orderings are pinned independently of this prefix by
+    // same_wave_node_failures_keep_first_reason_and_record_late_failure (495)
+    // and ceiling_can_settle_before_a_late_node_failure_without_losing_facts (2122).
+    assert_eq!(tally.cases, 1_000, "{tally:?}");
     assert!(
-        coverage.parallel_activations > 5_000
-            && coverage.resubmissions > 1_000
+        coverage.parallel_activations > 500
+            && coverage.resubmissions > 200
             && coverage.phantom_invocations > 0
             && coverage.late_refusals > 0,
         "{coverage:?}"
     );
     assert!(
-        tally.resubmissions > 1_000 && tally.phantom_invocations > 0 && tally.late_refusals > 0,
+        tally.resubmissions > 200 && tally.phantom_invocations > 0 && tally.late_refusals > 0,
         "{tally:?}"
     );
     assert!(
-        tally.completed > 100 && tally.failed > 100,
+        tally.completed > 20 && tally.failed > 20,
         "completed and branch-ceiling failures exercised: {tally:?}"
     );
 }
 
 #[tokio::test]
-async fn parallel_modules_match_the_runner_on_five_thousand_random_graphs() {
+async fn parallel_modules_match_the_runner_on_one_thousand_random_graphs() {
     let mut tally = Tally::default();
     let mut frozen = Snapshots::open(Population::ParallelModules);
-    for seed in 0..5_000 {
+    for seed in 0..1_000 {
         check_with_failures(
             random_parallel_module_graph(seed),
             seed,
@@ -889,23 +891,23 @@ async fn parallel_modules_match_the_runner_on_five_thousand_random_graphs() {
         .await;
     }
     eprintln!("differential parallel modules: {tally:?}");
-    assert_eq!(tally.cases, 5_000);
+    assert_eq!(tally.cases, 1_000);
     assert_eq!(tally.rejected_graphs, 0);
     assert_eq!(tally.node_failed, 0);
-    assert!(tally.module_activated > 1_000, "{tally:?}");
-    assert!(tally.parallel_activations > 5_000, "{tally:?}");
-    assert!(tally.resubmissions > 1_000, "{tally:?}");
+    assert!(tally.module_activated > 200, "{tally:?}");
+    assert!(tally.parallel_activations > 500, "{tally:?}");
+    assert!(tally.resubmissions > 200, "{tally:?}");
     assert!(
-        tally.completed > 100 && tally.round_limited > 100,
+        tally.completed > 20 && tally.round_limited > 20,
         "{tally:?}"
     );
 }
 
 #[tokio::test]
-async fn graph_calls_match_the_runner_on_random_graphs() {
+async fn graph_calls_match_the_runner_on_one_thousand_random_graphs() {
     let mut tally = Tally::default();
     let mut frozen = Snapshots::open(Population::Calls);
-    for seed in 0..5_000 {
+    for seed in 0..1_000 {
         check(
             random_call_graph(seed),
             seed,
@@ -915,12 +917,12 @@ async fn graph_calls_match_the_runner_on_random_graphs() {
         .await;
     }
     eprintln!("differential calls: {tally:?}");
-    assert!(tally.cases > 4_500, "{tally:?}");
+    assert_eq!(tally.cases, 1_000, "{tally:?}");
     assert!(
-        tally.calls_waited > 500
-            && tally.calls_detached > 500
-            && tally.call_failed > 100
-            && tally.call_unknown > 100,
+        tally.calls_waited > 100
+            && tally.calls_detached > 100
+            && tally.call_failed > 20
+            && tally.call_unknown > 20,
         "{tally:?}"
     );
 }

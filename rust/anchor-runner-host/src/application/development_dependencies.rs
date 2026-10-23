@@ -1,23 +1,13 @@
 //! Session project dependencies for ordinary sandbox commands. The Host supplies
 //! the Pilot scope; the model supplies only a confined project and requirements.
 
-#[cfg(test)]
-use super::{ApplicationError, RunApplication};
 use crate::dependency_provision::ResolvedRequirements;
-#[cfg(test)]
-use crate::dependency_provision::{DependencyAccess, resolve_requirements_with_access};
 use anchor_library::{DevelopmentScope, Library};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
-#[cfg(test)]
-use std::io::Write;
 use std::path::{Component, Path, PathBuf};
 
-#[cfg(test)]
-fn invalid(error: impl std::fmt::Display) -> ApplicationError {
-    ApplicationError::Invalid(error.to_string())
-}
 fn digest(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
 }
@@ -100,55 +90,6 @@ fn declaration_digest(requirements: &[String], development: &[String]) -> String
     )
 }
 
-#[cfg(test)]
-struct Requirements {
-    runtime: Vec<String>,
-    development: Vec<String>,
-    all: Vec<String>,
-}
-
-#[cfg(test)]
-fn checked_requirements(
-    requirements: &[String],
-    development: &[String],
-) -> Result<Requirements, ApplicationError> {
-    if requirements.len() + development.len() > 64
-        || requirements.iter().chain(development).any(|entry| {
-            entry.is_empty()
-                || entry.len() > 128
-                || entry.trim() != entry
-                || entry.chars().any(char::is_control)
-        })
-    {
-        return Err(invalid(
-            "development dependencies require at most 64 plain requirements of up to 128 characters",
-        ));
-    }
-    let mut requirements = requirements.to_vec();
-    let mut development = development.to_vec();
-    requirements.sort();
-    requirements.dedup();
-    development.sort();
-    development.dedup();
-    let mut all = requirements
-        .iter()
-        .chain(&development)
-        .cloned()
-        .collect::<Vec<_>>();
-    all.sort();
-    all.dedup();
-    if all.is_empty() {
-        return Err(invalid(
-            "name at least one runtime or development requirement",
-        ));
-    }
-    Ok(Requirements {
-        runtime: requirements,
-        development,
-        all,
-    })
-}
-
 fn checked_fact(fact: &DevelopmentPreparation, project: &str) -> Result<(), String> {
     if fact.format != 1
         || fact.project != project
@@ -159,124 +100,6 @@ fn checked_fact(fact: &DevelopmentPreparation, project: &str) -> Result<(), Stri
         return Err("development dependency preparation identity changed".into());
     }
     Ok(())
-}
-
-#[cfg(test)]
-fn combined(requirements: &[String], development: &[String]) -> Vec<String> {
-    let mut all = requirements
-        .iter()
-        .chain(development)
-        .cloned()
-        .collect::<Vec<_>>();
-    all.sort();
-    all.dedup();
-    all
-}
-
-#[cfg(test)]
-fn save_current(path: &Path, fact: &DevelopmentPreparation) -> Result<(), ApplicationError> {
-    let parent = path.parent().expect("project preparation parent");
-    crate::create_durable_directory(parent).map_err(invalid)?;
-    let mut temporary = tempfile::NamedTempFile::new_in(parent).map_err(invalid)?;
-    temporary
-        .write_all(&serde_json::to_vec(fact).map_err(invalid)?)
-        .map_err(invalid)?;
-    temporary.as_file().sync_all().map_err(invalid)?;
-    temporary.persist(path).map_err(invalid)?;
-    std::fs::File::open(parent)
-        .and_then(|file| file.sync_all())
-        .map_err(invalid)
-}
-
-#[cfg(test)]
-impl RunApplication {
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) async fn prepare_development_dependencies(
-        &self,
-        library_root: &Path,
-        scope: &Path,
-        project: &str,
-        requirements: &[String],
-        development_requirements: &[String],
-        access: &DependencyAccess,
-    ) -> Result<DevelopmentPreparation, ApplicationError> {
-        access.check().map_err(invalid)?;
-        let project = normalize_project(project).map_err(invalid)?;
-        let Requirements {
-            runtime: requirements,
-            development: development_requirements,
-            all,
-        } = checked_requirements(requirements, development_requirements)?;
-        let declaration_digest = declaration_digest(&requirements, &development_requirements);
-        let scope = Library::new(library_root)
-            .development_scope(scope, true)
-            .map_err(invalid)?
-            .ok_or_else(|| invalid("development scope unavailable"))?;
-        // The same lock order applies to preparation and deletion: scope lease,
-        // then project lock, then the shared dependency writer. Selection needs
-        // only the shared scope lease because the current fact switches atomically.
-        let dependencies = anchor_graph_host::resolved_library_root(library_root)
-            .join(anchor_graph_host::DEPENDENCIES_DIRECTORY);
-        {
-            let _writer = crate::plugin_dependencies::write_lock(&dependencies, access)
-                .await
-                .map_err(invalid)?;
-            scope.register().map_err(invalid)?;
-        }
-        let project_root = project_root(&scope, &project);
-        crate::create_durable_directory(&project_root).map_err(invalid)?;
-        let _project_lease = crate::plugin_dependencies::write_lock(&project_root, access)
-            .await
-            .map_err(invalid)?;
-        let current = project_root.join("current.json");
-        let existing =
-            crate::assistant::read_json::<DevelopmentPreparation>(&current).map_err(invalid)?;
-        if let Some(fact) = &existing {
-            checked_fact(fact, &project).map_err(invalid)?;
-        }
-        let provisioner = self.dependency_provisioner()?;
-        let interpreter = provisioner.config.python.canonicalize().map_err(invalid)?;
-        let interpreter_digest = digest(&std::fs::read(&interpreter).map_err(invalid)?);
-        let resolved = match existing {
-            Some(fact)
-                if combined(&fact.requirements, &fact.development_requirements) == all
-                    && fact.resolved.interpreter_path == interpreter
-                    && fact.resolved.interpreter_digest == interpreter_digest =>
-            {
-                fact.resolved
-            }
-            _ => resolve_requirements_with_access(&provisioner.config, None, &all, access)
-                .await
-                .map_err(invalid)?,
-        };
-        crate::plugin_dependencies::prepare_development(
-            &provisioner,
-            library_root,
-            &scope,
-            &digest(project.as_bytes()),
-            &resolved,
-            access,
-        )
-        .await
-        .map_err(invalid)?;
-        access.check().map_err(invalid)?;
-        let fact = DevelopmentPreparation {
-            format: 1,
-            project,
-            requirements,
-            development_requirements,
-            declaration_digest,
-            resolved,
-        };
-        let immutable = project_root
-            .join(crate::plugin_dependencies::resolved_view_key(
-                &fact.resolved,
-            ))
-            .join(format!("preparation-{}.json", fact.declaration_digest));
-        crate::assistant::save_immutable(&immutable, &fact).map_err(invalid)?;
-        save_current(&current, &fact)?;
-        Ok(fact)
-    }
 }
 
 pub(crate) struct LeasedDevelopmentView {
@@ -372,6 +195,9 @@ pub(crate) fn release_development_scope(library_root: &Path, scope: &Path) -> Re
         Err(error) => Err(error.to_string()),
     }
 }
+
+#[cfg(test)]
+pub(crate) mod test_support;
 
 #[cfg(test)]
 mod tests;

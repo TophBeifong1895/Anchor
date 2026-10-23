@@ -7,7 +7,6 @@ mod goose;
 
 use goose::{Host, HttpHost, Provider, Step};
 use serde_json::{Value, json};
-use std::fs;
 
 const SESSION: &str = "provider-errors";
 const RAW_ERROR: &str = "fixture-provider-diagnostic-9a31";
@@ -60,23 +59,11 @@ fn history(host: &Host, turn: &Value) -> Value {
 }
 
 fn evidence(host: &Host, provider: &Provider, checks: Value) {
-    provider.assert_consumed();
-    let record = json!({
-        "status":"passed", "runtime":"goose", "goose_version":"1.53.0",
-        "goose_binary_sha256":goose::GOOSE_SHA256,"real_model_requests":0,
-        "host_binary_sha256":goose::digest(&host.base.root.path().join("anchor-runner-host")),
-        "source_sha256":goose::digest(&std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("tests/goose_provider_errors.rs")),
-        "checks":checks,"provider_requests":provider.requests(),"production_data_used":false,
-    });
-    fs::write(
-        provider.root.join("evidence.json"),
-        serde_json::to_vec_pretty(&record).unwrap(),
-    )
-    .unwrap();
-    println!(
-        "evidence: {}",
-        provider.root.join("evidence.json").display()
+    host.evidence_report(
+        provider,
+        "tests/goose_provider_errors.rs",
+        checks,
+        json!({}),
     );
 }
 

@@ -1,101 +1,21 @@
+use std::fs;
+
 use rusqlite::Connection;
 
-use super::{
-    APPLICATION_ID, CHANNEL_ACCOUNT_SCHEMA, CHANNEL_SCHEMA, GOOSE_SCHEMA, QUESTION_SCHEMA,
-    RELATION_SCHEMA, SCHEMA_V1, SCHEMA_VERSION, TURN_SCHEMA, migrate, migrate_channel_assistants,
-    migrate_channel_conversations, schema,
-};
+use super::{APPLICATION_ID, SCHEMA_VERSION, expected_schema, initialize, open, schema};
 use crate::SessionError;
 
-mod channel_accounts;
-mod channel_assistants;
-
-fn assert_failed_migration_rolls_back(version: i32) {
-    let mut connection = Connection::open_in_memory().unwrap();
-    connection.pragma_update(None, "page_size", 512).unwrap();
-    for (_, _, statement) in SCHEMA_V1
-        .iter()
-        .chain(TURN_SCHEMA.iter().filter(|_| version >= 2))
-        .chain(RELATION_SCHEMA.iter().filter(|_| version >= 3))
-        .chain(GOOSE_SCHEMA.iter().filter(|_| version >= 4))
-        .chain(QUESTION_SCHEMA.iter().filter(|_| version >= 5))
-        .chain(CHANNEL_SCHEMA.iter().filter(|_| version >= 6))
-    {
-        connection.execute(statement, []).unwrap();
-    }
-    connection
-        .pragma_update(None, "application_id", APPLICATION_ID)
-        .unwrap();
-    connection
-        .pragma_update(None, "user_version", version)
-        .unwrap();
-    connection
-        .execute(
-            "INSERT INTO sessions VALUES ('preserved', 'alice', '{}', 'unchanged')",
-            [],
-        )
-        .unwrap();
-    let original_schema = schema(&connection).unwrap();
-    let transaction = connection.transaction().unwrap();
-    if version == 1 {
-        for (_, _, statement) in TURN_SCHEMA {
-            transaction.execute(statement, []).unwrap();
-        }
-    }
-    let additions: &[(&str, &str, &str)] = match version {
-        5 => &CHANNEL_SCHEMA,
-        4 => &QUESTION_SCHEMA,
-        3 => &GOOSE_SCHEMA,
-        _ => &RELATION_SCHEMA,
-    };
-    transaction.execute(additions[0].2, []).unwrap();
-    let budget: i64 = transaction
-        .pragma_query_value(None, "page_count", |row| row.get(0))
-        .unwrap();
-    transaction.execute(additions[1].2, []).unwrap();
-    if version < 3 {
-        for (_, _, statement) in GOOSE_SCHEMA {
-            transaction.execute(statement, []).unwrap();
-        }
-    }
-    if version < 4 {
-        for (_, _, statement) in QUESTION_SCHEMA {
-            transaction.execute(statement, []).unwrap();
-        }
-    }
-    if version < 5 {
-        for (_, _, statement) in CHANNEL_SCHEMA {
-            transaction.execute(statement, []).unwrap();
-        }
-    } else if version == 5 {
-        for (_, _, statement) in CHANNEL_SCHEMA.iter().skip(2) {
-            transaction.execute(statement, []).unwrap();
-        }
-    }
-    migrate_channel_assistants(&transaction).unwrap();
-    migrate_channel_conversations(&transaction).unwrap();
-    for (_, _, statement) in CHANNEL_ACCOUNT_SCHEMA {
-        transaction.execute(statement, []).unwrap();
-    }
-    let required: i64 = transaction
-        .pragma_query_value(None, "page_count", |row| row.get(0))
-        .unwrap();
-    assert!(required > budget);
-    transaction.rollback().unwrap();
-    connection
-        .pragma_update(None, "max_page_count", budget)
-        .unwrap();
-    let result = migrate(&mut connection);
-    assert!(
-        matches!(&result, Err(SessionError::Storage(message)) if message.contains("full")),
-        "unexpected migration result: {result:?}"
-    );
-    assert_eq!(schema(&connection).unwrap(), original_schema);
+#[test]
+fn fresh_database_creates_the_exact_current_schema_and_reopens_with_its_data() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("sessions.sqlite");
+    let connection = open(&path).unwrap();
+    assert_eq!(schema(&connection).unwrap(), expected_schema());
     assert_eq!(
         connection
             .pragma_query_value(None, "user_version", |row| row.get::<_, i32>(0))
             .unwrap(),
-        version
+        SCHEMA_VERSION
     );
     assert_eq!(
         connection
@@ -105,51 +25,165 @@ fn assert_failed_migration_rolls_back(version: i32) {
     );
     assert_eq!(
         connection
-            .query_row(
-                "SELECT owner, data, updated_at FROM sessions WHERE id = 'preserved'",
-                [],
-                |row| Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, String>(2)?
-                ))
-            )
+            .pragma_query_value(None, "journal_mode", |row| row.get::<_, String>(0))
             .unwrap(),
-        ("alice".into(), "{}".into(), "unchanged".into())
+        "wal"
     );
     connection
-        .pragma_update(None, "max_page_count", required)
+        .execute(
+            "INSERT INTO sessions VALUES ('saved', 'alice', '{}', 'unchanged')",
+            [],
+        )
         .unwrap();
-    migrate(&mut connection).unwrap();
+    drop(connection);
+    let reopened = open(&path).unwrap();
+    assert_eq!(schema(&reopened).unwrap(), expected_schema());
     assert_eq!(
-        connection
-            .pragma_query_value(None, "user_version", |row| row.get::<_, i32>(0))
+        reopened
+            .query_row("SELECT owner FROM sessions WHERE id = 'saved'", [], |row| {
+                row.get::<_, String>(0)
+            })
             .unwrap(),
-        SCHEMA_VERSION
+        "alice"
     );
 }
 
 #[test]
-fn v1_migration_rolls_back_every_ddl_when_the_second_relation_cannot_be_created() {
-    assert_failed_migration_rolls_back(1);
+fn older_versions_are_refused_without_changing_bytes_version_or_facts() {
+    for (version, journal) in [(1, "delete"), (8, "delete"), (1, "wal"), (8, "wal")] {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("source.sqlite");
+        let path = directory.path().join("sessions.sqlite");
+        let connection = Connection::open(&source).unwrap();
+        connection
+            .pragma_update(None, "journal_mode", journal)
+            .unwrap();
+        connection
+            .execute_batch(
+                "CREATE TABLE preserved(value TEXT); INSERT INTO preserved VALUES ('untouched');",
+            )
+            .unwrap();
+        connection
+            .pragma_update(None, "application_id", APPLICATION_ID)
+            .unwrap();
+        connection
+            .pragma_update(None, "user_version", version)
+            .unwrap();
+        // Copy a live WAL snapshot so the rejected database would checkpoint
+        // on closing a read-write connection. No user database is involved.
+        fs::copy(&source, &path).unwrap();
+        let wal_before = if journal == "wal" {
+            let wal = fs::read(source.with_extension("sqlite-wal")).unwrap();
+            fs::write(path.with_extension("sqlite-wal"), &wal).unwrap();
+            Some(wal)
+        } else {
+            None
+        };
+        let before = fs::read(&path).unwrap();
+        assert!(matches!(
+            open(&path),
+            Err(SessionError::Storage(message)) if message == format!(
+                "incompatible database: expected exact Anchor platform Session schema version 9 (found version {version})"
+            )
+        ));
+        assert_eq!(
+            fs::read(&path).unwrap(),
+            before,
+            "version {version}, journal {journal}"
+        );
+        assert_eq!(fs::read(path.with_extension("sqlite-wal")).ok(), wal_before);
+        assert!(!path.with_extension("sqlite-journal").exists());
+        let readonly =
+            Connection::open_with_flags(&path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();
+        assert_eq!(
+            readonly
+                .pragma_query_value(None, "user_version", |row| row.get::<_, i32>(0))
+                .unwrap(),
+            version
+        );
+        assert_eq!(
+            readonly
+                .query_row("SELECT value FROM preserved", [], |row| row
+                    .get::<_, String>(0))
+                .unwrap(),
+            "untouched"
+        );
+    }
 }
 
 #[test]
-fn v2_migration_rolls_back_every_ddl_when_the_second_relation_cannot_be_created() {
-    assert_failed_migration_rolls_back(2);
+fn altered_current_schema_identity_and_future_version_are_refused_without_changes() {
+    for alteration in [
+        "DROP INDEX channel_assistants_current_session",
+        "DROP INDEX sessions_owner_updated",
+        "CREATE TABLE unexpected(value TEXT)",
+        "CREATE VIEW unexpected AS SELECT * FROM sessions",
+        "CREATE TRIGGER unexpected AFTER INSERT ON sessions BEGIN SELECT 1; END",
+        "ALTER TABLE sessions ADD COLUMN extra TEXT",
+        "DROP TABLE session_events; CREATE TABLE session_events(session_id TEXT, seq INTEGER)",
+        "CREATE INDEX unexpected_alias_index ON channel_account_aliases(canonical)",
+        "PRAGMA application_id = 0",
+        "PRAGMA application_id = 42",
+        "PRAGMA user_version = 0",
+        "PRAGMA user_version = 999",
+    ] {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("sessions.sqlite");
+        let connection = open(&path).unwrap();
+        connection.execute_batch(
+            "INSERT INTO sessions VALUES ('protected', 'local', '{}', 'unchanged');
+             INSERT INTO channel_account_aliases VALUES ('owner', 'channel', 'canonical', 'canonical');
+             INSERT INTO channel_account_aliases VALUES ('owner', 'channel', 'legacy', 'canonical');
+             PRAGMA journal_mode = DELETE;",
+        ).unwrap();
+        connection.execute_batch(alteration).unwrap();
+        let original_schema = schema(&connection).unwrap();
+        drop(connection);
+        let before = fs::read(&path).unwrap();
+        assert!(
+            matches!(open(&path), Err(SessionError::Storage(_))),
+            "{alteration}"
+        );
+        assert_eq!(fs::read(&path).unwrap(), before, "{alteration}");
+        let connection = Connection::open(&path).unwrap();
+        assert_eq!(
+            schema(&connection).unwrap(),
+            original_schema,
+            "{alteration}"
+        );
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT canonical FROM channel_account_aliases WHERE alias = 'legacy'",
+                    [],
+                    |row| row.get::<_, String>(0),
+                )
+                .unwrap(),
+            "canonical",
+            "{alteration}"
+        );
+    }
 }
 
 #[test]
-fn v3_migration_rolls_back_the_goose_table_when_the_index_cannot_be_created() {
-    assert_failed_migration_rolls_back(3);
-}
-
-#[test]
-fn v4_migration_rolls_back_questions_when_the_pending_index_cannot_be_created() {
-    assert_failed_migration_rolls_back(4);
-}
-
-#[test]
-fn v5_migration_rolls_back_channel_tables_when_an_index_cannot_be_created() {
-    assert_failed_migration_rolls_back(5);
+fn failed_fresh_creation_rolls_back_schema_and_identity() {
+    let mut connection = Connection::open_in_memory().unwrap();
+    connection.pragma_update(None, "max_page_count", 2).unwrap();
+    assert!(
+        matches!(initialize(&mut connection), Err(SessionError::Storage(message)) if message.contains("full"))
+    );
+    assert!(schema(&connection).unwrap().is_empty());
+    for pragma in ["application_id", "user_version"] {
+        assert_eq!(
+            connection
+                .pragma_query_value(None, pragma, |row| row.get::<_, i32>(0))
+                .unwrap(),
+            0
+        );
+    }
+    connection
+        .pragma_update(None, "max_page_count", 100)
+        .unwrap();
+    initialize(&mut connection).unwrap();
+    assert_eq!(schema(&connection).unwrap(), expected_schema());
 }

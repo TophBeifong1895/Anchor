@@ -667,12 +667,6 @@ impl PilotService {
         Ok(stopping || cancelled)
     }
 
-    #[cfg(test)]
-    async fn stop(&self, root: &std::path::Path) -> bool {
-        let _gate = self.gate.lock().await;
-        self.cancel_active(root)
-    }
-
     fn cancel_active(&self, root: &std::path::Path) -> bool {
         if let Ok(active) = self.active.lock()
             && let Some(active) = active.get(root)

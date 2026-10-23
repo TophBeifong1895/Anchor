@@ -9,10 +9,8 @@ description = "Native development entry points for bounded Anchor regression"
 anchor-distribution = { path = "../anchor-distribution" }
 anchor-file-lease = { path = "../anchor-file-lease" }
 object = { version = "=0.40.0", default-features = false, features = ["read_core", "elf", "std"] }
-rusqlite = { version = "=0.40.2", features = ["bundled"] }
 rustix = { version = "=1.1.5", features = ["fs", "process"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
 tempfile = "3"
-url = "=2.5.8"

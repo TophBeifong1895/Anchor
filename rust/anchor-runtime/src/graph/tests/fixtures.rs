@@ -56,10 +56,6 @@ struct FakeNodes {
     invalid_route_once: Mutex<bool>,
     recovery_once: Mutex<bool>,
     delays_ms: Mutex<BTreeMap<String, u64>>,
-    completed_order: Mutex<Vec<String>>,
-    active_calls: std::sync::atomic::AtomicUsize,
-    max_active_calls: std::sync::atomic::AtomicUsize,
-    graph_call_port: Option<Arc<FakeGraphCalls>>,
     resolved_plugins: Mutex<Vec<PluginBinding>>,
     /// What a node call observed: the dependency view it actually used, by Plugin
     /// id. Empty means "this host observed nothing", which is not a failure.
@@ -74,11 +70,6 @@ impl NodeExecutionPort for FakeNodes {
             host_operations: false,
             exact_provider_request_budget: !self.caps_budget_off,
         }
-    }
-    fn graph_call_port(&self) -> Option<&dyn GraphCallPort> {
-        self.graph_call_port
-            .as_deref()
-            .map(|port| port as &dyn GraphCallPort)
     }
     fn observed_plugin_views(&self, key: &InvocationKey) -> BTreeMap<String, String> {
         // Reading consumes it, exactly as the host's resolver does: one entry per
@@ -142,12 +133,6 @@ impl NodeExecutionPort for FakeNodes {
                 ));
             }
             self.calls.lock().unwrap().push(request.clone());
-            let active = self
-                .active_calls
-                .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
-                + 1;
-            self.max_active_calls
-                .fetch_max(active, std::sync::atomic::Ordering::SeqCst);
             let delay = self
                 .delays_ms
                 .lock()
@@ -162,8 +147,6 @@ impl NodeExecutionPort for FakeNodes {
                 let mut recovery = self.recovery_once.lock().unwrap();
                 if *recovery {
                     *recovery = false;
-                    self.active_calls
-                        .fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
                     return Ok(NodeExecutionOutcome::WaitingRecovery {
                         attempts: vec![RecoveryAttempt {
                             attempt_id: 17,
@@ -179,8 +162,6 @@ impl NodeExecutionPort for FakeNodes {
                     request.key.durable_key(),
                     CompletionFact::Failed(reason.clone()),
                 );
-                self.active_calls
-                    .fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
                 return Ok(NodeExecutionOutcome::Failed { reason });
             }
             if let Some(reason) = self
@@ -193,8 +174,6 @@ impl NodeExecutionPort for FakeNodes {
                     .lock()
                     .unwrap()
                     .insert(request.key.durable_key(), CompletionFact::Resumable);
-                self.active_calls
-                    .fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
                 return Ok(NodeExecutionOutcome::Interrupted { reason });
             }
             {
@@ -206,8 +185,6 @@ impl NodeExecutionPort for FakeNodes {
                         .is_none_or(|node| node == request.key.node_id)
                 {
                     *budget = false;
-                    self.active_calls
-                        .fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
                     return Ok(NodeExecutionOutcome::BudgetExhausted { model_requests: 2 });
                 }
             }
@@ -216,8 +193,6 @@ impl NodeExecutionPort for FakeNodes {
                 if *cancel {
                     *cancel = false;
                     request.cancellation.store(true, Ordering::Relaxed);
-                    self.active_calls
-                        .fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
                     return Ok(NodeExecutionOutcome::Cancelled);
                 }
             }
@@ -240,39 +215,7 @@ impl NodeExecutionPort for FakeNodes {
                 request.key.durable_key(),
                 CompletionFact::Completed(completion.clone()),
             );
-            self.completed_order
-                .lock()
-                .unwrap()
-                .push(request.key.node_id.clone());
-            self.active_calls
-                .fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
             Ok(NodeExecutionOutcome::Completed(completion))
-        })
-    }
-}
-
-#[derive(Default)]
-struct FakeGraphCalls {
-    outcomes: Mutex<Vec<GraphCallOutcome>>,
-    identities: Mutex<Vec<String>>,
-}
-impl GraphCallPort for FakeGraphCalls {
-    fn call<'a>(
-        &'a self,
-        identity: &'a CallIdentity,
-        _spec: &'a Value,
-        _input: &'a Value,
-        _input_commits: &'a [CommitRef],
-        _cancellation: crate::Cancellation,
-    ) -> Pin<Box<dyn Future<Output = Result<GraphCallOutcome, GraphError>> + Send + 'a>> {
-        Box::pin(async move {
-            self.identities.lock().unwrap().push(identity.durable_key());
-            if self.outcomes.lock().unwrap().is_empty() {
-                return Err(GraphError::CorruptRun(
-                    "fake GraphCallPort exhausted".into(),
-                ));
-            }
-            Ok(self.outcomes.lock().unwrap().remove(0))
         })
     }
 }

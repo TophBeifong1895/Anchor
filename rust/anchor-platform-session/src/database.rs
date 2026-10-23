@@ -13,7 +13,7 @@ mod tests;
 
 const APPLICATION_ID: i32 = 0x414e5353;
 const SCHEMA_VERSION: i32 = 9;
-const SCHEMA_V1: [(&str, &str, &str); 3] = [
+const SESSION_SCHEMA: [(&str, &str, &str); 3] = [
     (
         "table",
         "sessions",
@@ -159,9 +159,13 @@ const CHANNEL_SCHEMA: [(&str, &str, &str); 6] = [
             owner TEXT NOT NULL,
             source TEXT NOT NULL CHECK(length(CAST(source AS BLOB)) BETWEEN 1 AND 256),
             account TEXT NOT NULL CHECK(length(CAST(account AS BLOB)) <= 256),
+            conversation_kind TEXT NOT NULL CHECK(conversation_kind IN ('single', 'group')),
             conversation_id TEXT NOT NULL CHECK(length(CAST(conversation_id AS BLOB)) BETWEEN 1 AND 256),
-            sender_id TEXT NOT NULL CHECK(length(CAST(sender_id AS BLOB)) BETWEEN 1 AND 256),
-            UNIQUE(owner, source, account, conversation_id, sender_id)
+            participant_id TEXT NOT NULL CHECK(
+                (conversation_kind = 'single' AND length(CAST(participant_id AS BLOB)) BETWEEN 1 AND 256)
+                OR (conversation_kind = 'group' AND participant_id = '')
+            ),
+            UNIQUE(owner, source, account, conversation_kind, conversation_id, participant_id)
         )",
     ),
     (
@@ -176,7 +180,7 @@ const CHANNEL_SCHEMA: [(&str, &str, &str); 6] = [
             session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
             inbound_id TEXT NOT NULL CHECK(length(CAST(inbound_id AS BLOB)) BETWEEN 1 AND 128),
             turn_id TEXT NOT NULL UNIQUE REFERENCES turns(id) ON DELETE CASCADE,
-            run_id TEXT UNIQUE,
+            run_id TEXT,
             request TEXT NOT NULL CHECK(json_valid(request) AND length(CAST(request AS BLOB)) <= 262144),
             superseded_by_turn_id TEXT REFERENCES turns(id) ON DELETE SET NULL,
             created_at TEXT NOT NULL,
@@ -211,39 +215,6 @@ const CHANNEL_SCHEMA: [(&str, &str, &str); 6] = [
         "CREATE INDEX channel_deliveries_unfinished ON channel_deliveries(session_id, status, updated_at)",
     ),
 ];
-
-const CHANNEL_INBOUND_SCHEMA_V7: (&str, &str, &str) = (
-    "table",
-    "channel_inbounds",
-    "CREATE TABLE channel_inbounds (
-            session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
-            inbound_id TEXT NOT NULL CHECK(length(CAST(inbound_id AS BLOB)) BETWEEN 1 AND 128),
-            turn_id TEXT NOT NULL UNIQUE REFERENCES turns(id) ON DELETE CASCADE,
-            run_id TEXT,
-            request TEXT NOT NULL CHECK(json_valid(request) AND length(CAST(request AS BLOB)) <= 262144),
-            superseded_by_turn_id TEXT REFERENCES turns(id) ON DELETE SET NULL,
-            created_at TEXT NOT NULL,
-            PRIMARY KEY(session_id, inbound_id)
-        )",
-);
-
-const CHANNEL_SESSION_SCHEMA_V8: (&str, &str, &str) = (
-    "table",
-    "channel_sessions",
-    "CREATE TABLE channel_sessions (
-            session_id TEXT PRIMARY KEY NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
-            owner TEXT NOT NULL,
-            source TEXT NOT NULL CHECK(length(CAST(source AS BLOB)) BETWEEN 1 AND 256),
-            account TEXT NOT NULL CHECK(length(CAST(account AS BLOB)) <= 256),
-            conversation_kind TEXT NOT NULL CHECK(conversation_kind IN ('single', 'group')),
-            conversation_id TEXT NOT NULL CHECK(length(CAST(conversation_id AS BLOB)) BETWEEN 1 AND 256),
-            participant_id TEXT NOT NULL CHECK(
-                (conversation_kind = 'single' AND length(CAST(participant_id AS BLOB)) BETWEEN 1 AND 256)
-                OR (conversation_kind = 'group' AND participant_id = '')
-            ),
-            UNIQUE(owner, source, account, conversation_kind, conversation_id, participant_id)
-        )",
-);
 
 const CHANNEL_ASSISTANT_SCHEMA: [(&str, &str, &str); 4] = [
     (
@@ -297,13 +268,23 @@ const CHANNEL_ACCOUNT_SCHEMA: [(&str, &str, &str); 1] = [(
 
 pub(crate) fn open(path: &Path) -> Result<Connection, SessionError> {
     let path = validate_path(path)?;
+    if path.exists() {
+        let mut existing = Connection::open_with_flags(
+            &path,
+            OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NOFOLLOW,
+        )?;
+        existing.busy_timeout(Duration::from_secs(5))?;
+        let transaction = existing.transaction()?;
+        validate_schema(&transaction)?;
+        transaction.commit()?;
+    }
     let flags = OpenFlags::SQLITE_OPEN_READ_WRITE
         | OpenFlags::SQLITE_OPEN_CREATE
         | OpenFlags::SQLITE_OPEN_NOFOLLOW;
     let mut connection = Connection::open_with_flags(path, flags)?;
     connection.busy_timeout(Duration::from_secs(5))?;
     connection.pragma_update(None, "foreign_keys", true)?;
-    migrate(&mut connection)?;
+    initialize(&mut connection)?;
     let mut journal: String =
         connection.pragma_query_value(None, "journal_mode", |row| row.get(0))?;
     if !journal.eq_ignore_ascii_case("wal") {
@@ -319,63 +300,22 @@ pub(crate) fn open(path: &Path) -> Result<Connection, SessionError> {
     Ok(connection)
 }
 
-fn migrate(connection: &mut Connection) -> Result<(), SessionError> {
-    // API reads open independent connections while the executor appends Turn
-    // events. A current database needs schema validation, not a writer lease.
-    // A migration takes IMMEDIATE below and rechecks its identity under that
-    // lease, preserving concurrent first-open and fail-closed schema behavior.
+fn initialize(connection: &mut Connection) -> Result<(), SessionError> {
+    // Existing databases are checked in a read transaction before any WAL or
+    // schema writes. Only a fresh database needs a writer lease.
     {
         let transaction = connection.transaction()?;
-        let application: i32 =
-            transaction.pragma_query_value(None, "application_id", |row| row.get(0))?;
-        let version: i32 =
-            transaction.pragma_query_value(None, "user_version", |row| row.get(0))?;
-        if application == APPLICATION_ID
-            && version == SCHEMA_VERSION
-            && schema(&transaction)? == expected_schema(SCHEMA_VERSION)
-        {
+        if validate_schema(&transaction)? {
             transaction.commit()?;
             return Ok(());
         }
     }
+    // Another opener may initialize the file before this lease is acquired.
     let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
-    let application: i32 =
-        transaction.pragma_query_value(None, "application_id", |row| row.get(0))?;
-    let version: i32 = transaction.pragma_query_value(None, "user_version", |row| row.get(0))?;
-    let existing = schema(&transaction)?;
-    let empty = application == 0 && version == 0 && existing.is_empty();
-    let compatible = application == APPLICATION_ID
-        && (1..=SCHEMA_VERSION).contains(&version)
-        && existing == expected_schema(version);
-    if !empty && !compatible {
-        return Err(SessionError::Storage(
-            "incompatible database: expected exact Anchor platform Session schema version 1, 2, 3, 4, 5, 6, 7, 8 or 9"
-                .into(),
-        ));
-    }
-    for (_, _, statement) in SCHEMA_V1
-        .iter()
-        .filter(|_| version < 1)
-        .chain(TURN_SCHEMA.iter().filter(|_| version < 2))
-        .chain(RELATION_SCHEMA.iter().filter(|_| version < 3))
-        .chain(GOOSE_SCHEMA.iter().filter(|_| version < 4))
-        .chain(QUESTION_SCHEMA.iter().filter(|_| version < 5))
-        .chain(CHANNEL_SCHEMA.iter().filter(|_| version < 6))
-    {
-        transaction.execute(statement, [])?;
-    }
-    if version < 7 {
-        migrate_channel_assistants(&transaction)?;
-    }
-    if version < 8 {
-        migrate_channel_conversations(&transaction)?;
-    }
-    if version < 9 {
-        for (_, _, statement) in CHANNEL_ACCOUNT_SCHEMA {
+    if !validate_schema(&transaction)? {
+        for (_, _, statement) in schema_definitions() {
             transaction.execute(statement, [])?;
         }
-    }
-    if version < SCHEMA_VERSION {
         transaction.pragma_update(None, "application_id", APPLICATION_ID)?;
         transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
     }
@@ -383,98 +323,38 @@ fn migrate(connection: &mut Connection) -> Result<(), SessionError> {
     Ok(())
 }
 
-fn migrate_channel_assistants(connection: &Connection) -> Result<(), SessionError> {
-    connection.execute(
-        "CREATE TEMP TABLE channel_inbounds_migration AS SELECT * FROM channel_inbounds",
-        [],
-    )?;
-    connection.execute("DROP TABLE channel_inbounds", [])?;
-    connection.execute(CHANNEL_INBOUND_SCHEMA_V7.2, [])?;
-    connection.execute(
-        "INSERT INTO channel_inbounds(
-            session_id, inbound_id, turn_id, run_id, request, superseded_by_turn_id, created_at
-         ) SELECT session_id, inbound_id, turn_id, run_id, request, superseded_by_turn_id, created_at
-           FROM temp.channel_inbounds_migration",
-        [],
-    )?;
-    connection.execute("DROP TABLE temp.channel_inbounds_migration", [])?;
-    for (_, _, statement) in CHANNEL_SCHEMA
+// True means current, false means empty. Every other database is left intact.
+fn validate_schema(connection: &Connection) -> Result<bool, SessionError> {
+    let application: i32 =
+        connection.pragma_query_value(None, "application_id", |row| row.get(0))?;
+    let version: i32 = connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
+    let existing = schema(connection)?;
+    if application == 0 && version == 0 && existing.is_empty() {
+        return Ok(false);
+    }
+    if application == APPLICATION_ID && version == SCHEMA_VERSION && existing == expected_schema() {
+        return Ok(true);
+    }
+    Err(SessionError::Storage(format!(
+        "incompatible database: expected exact Anchor platform Session schema version {SCHEMA_VERSION} (found version {version})"
+    )))
+}
+
+fn schema_definitions() -> impl Iterator<Item = &'static (&'static str, &'static str, &'static str)>
+{
+    SESSION_SCHEMA
         .iter()
-        .filter(|(_, name, _)| *name == "channel_inbounds_session_created")
+        .chain(TURN_SCHEMA.iter())
+        .chain(RELATION_SCHEMA.iter())
+        .chain(GOOSE_SCHEMA.iter())
+        .chain(QUESTION_SCHEMA.iter())
+        .chain(CHANNEL_SCHEMA.iter())
         .chain(CHANNEL_ASSISTANT_SCHEMA.iter())
-    {
-        connection.execute(statement, [])?;
-    }
-    Ok(())
+        .chain(CHANNEL_ACCOUNT_SCHEMA.iter())
 }
 
-fn migrate_channel_conversations(connection: &Connection) -> Result<(), SessionError> {
-    // Keep foreign keys enabled: remove dependent tables only after preserving
-    // their rows, then rebuild from the parent out. Sessions and their JSON,
-    // Turns, native histories, inbounds and delivery facts remain untouched.
-    for table in [
-        "channel_sessions",
-        "channel_assistants",
-        "channel_assistant_inputs",
-    ] {
-        connection.execute(
-            &format!("CREATE TEMP TABLE {table}_migration AS SELECT * FROM {table}"),
-            [],
-        )?;
-    }
-    for table in [
-        "channel_assistant_inputs",
-        "channel_assistants",
-        "channel_sessions",
-    ] {
-        connection.execute(&format!("DROP TABLE {table}"), [])?;
-    }
-    connection.execute(CHANNEL_SESSION_SCHEMA_V8.2, [])?;
-    connection.execute(CHANNEL_SCHEMA[1].2, [])?;
-    connection.execute(
-        "INSERT INTO channel_sessions(session_id, owner, source, account, conversation_kind, conversation_id, participant_id)
-         SELECT session_id, owner, source, account, 'single', conversation_id, sender_id
-         FROM temp.channel_sessions_migration",
-        [],
-    )?;
-    for (_, _, statement) in CHANNEL_ASSISTANT_SCHEMA.iter().skip(1) {
-        connection.execute(statement, [])?;
-    }
-    for table in ["channel_assistants", "channel_assistant_inputs"] {
-        connection.execute(
-            &format!("INSERT INTO {table} SELECT * FROM temp.{table}_migration"),
-            [],
-        )?;
-    }
-    for table in [
-        "channel_sessions",
-        "channel_assistants",
-        "channel_assistant_inputs",
-    ] {
-        connection.execute(&format!("DROP TABLE temp.{table}_migration"), [])?;
-    }
-    Ok(())
-}
-
-fn expected_schema(version: i32) -> Vec<(String, String, String)> {
-    let mut expected: Vec<_> = SCHEMA_V1
-        .iter()
-        .chain(TURN_SCHEMA.iter().filter(|_| version >= 2))
-        .chain(RELATION_SCHEMA.iter().filter(|_| version >= 3))
-        .chain(GOOSE_SCHEMA.iter().filter(|_| version >= 4))
-        .chain(QUESTION_SCHEMA.iter().filter(|_| version >= 5))
-        .chain(CHANNEL_SCHEMA.iter().filter(|_| version >= 6))
-        .chain(CHANNEL_ASSISTANT_SCHEMA.iter().filter(|_| version >= 7))
-        .chain(CHANNEL_ACCOUNT_SCHEMA.iter().filter(|_| version >= 9))
-        .map(|definition| {
-            if version >= 8 && definition.1 == "channel_sessions" {
-                &CHANNEL_SESSION_SCHEMA_V8
-            } else if version >= 7 && definition.1 == "channel_inbounds" {
-                &CHANNEL_INBOUND_SCHEMA_V7
-            } else {
-                definition
-            }
-        })
+fn expected_schema() -> Vec<(String, String, String)> {
+    let mut expected: Vec<_> = schema_definitions()
         .map(|(kind, name, statement)| (kind.to_string(), name.to_string(), statement.to_string()))
         .collect();
     expected.sort();

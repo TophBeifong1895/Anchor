@@ -1,38 +1,22 @@
+mod support;
+
+use support::{
+    assert_conflict, assert_invalid, assert_storage, create_session as create,
+    session_fixture as fixture,
+};
+
 use std::{
     collections::BTreeMap,
-    fs,
     path::PathBuf,
     sync::{Arc, Barrier},
     thread,
 };
 
 use anchor_platform_session::{
-    CreateSession, Session, SessionError, SessionStatus, SessionStore, Turn, TurnEvent, TurnStatus,
+    CreateSession, SessionError, SessionStatus, SessionStore, Turn, TurnEvent, TurnStatus,
 };
-use chrono::Utc;
 use rusqlite::{Connection, params};
 use serde_json::{Value, json};
-use tempfile::TempDir;
-
-fn fixture() -> (TempDir, PathBuf, SessionStore) {
-    let directory = tempfile::tempdir().unwrap();
-    let path = directory.path().join("sessions.sqlite");
-    let store = SessionStore::open(&path).unwrap();
-    create(&store, "alice", "pilot");
-    (directory, path, store)
-}
-
-fn create(store: &SessionStore, owner: &str, session: &str) -> Session {
-    store
-        .create(
-            owner,
-            CreateSession {
-                id: Some(session.into()),
-                ..Default::default()
-            },
-        )
-        .unwrap()
-}
 
 fn start(store: &SessionStore, request: &str) -> Turn {
     let (turn, created) = store
@@ -40,18 +24,6 @@ fn start(store: &SessionStore, request: &str) -> Turn {
         .unwrap();
     assert!(created);
     turn
-}
-
-fn assert_conflict<ResultValue>(result: Result<ResultValue, SessionError>) {
-    assert!(matches!(result, Err(SessionError::Conflict(_))));
-}
-
-fn assert_invalid<ResultValue>(result: Result<ResultValue, SessionError>) {
-    assert!(matches!(result, Err(SessionError::Invalid(_))));
-}
-
-fn assert_storage<ResultValue>(result: Result<ResultValue, SessionError>) {
-    assert!(matches!(result, Err(SessionError::Storage(_))));
 }
 
 #[test]
@@ -563,7 +535,10 @@ fn reopen_does_not_interrupt_and_explicit_startup_interruption_is_durable_and_id
         TurnStatus::Running
     );
     assert_conflict(reopened.create_turn("alice", "pilot", "new", Some("hello")));
-    assert_eq!(reopened.interrupt_running().unwrap(), 2);
+    assert_eq!(
+        reopened.interrupt_running_except_assistants(&[]).unwrap(),
+        2
+    );
     let pilot_events = reopened
         .turn_events("alice", "pilot", &pilot.id, 0)
         .unwrap();
@@ -583,7 +558,10 @@ fn reopen_does_not_interrupt_and_explicit_startup_interruption_is_durable_and_id
             .unwrap(),
         completed
     );
-    assert_eq!(reopened.interrupt_running().unwrap(), 0);
+    assert_eq!(
+        reopened.interrupt_running_except_assistants(&[]).unwrap(),
+        0
+    );
     assert_eq!(
         reopened
             .turn_events("alice", "pilot", &pilot.id, 0)
@@ -599,7 +577,10 @@ fn reopen_does_not_interrupt_and_explicit_startup_interruption_is_durable_and_id
     );
     drop(reopened);
     let reopened = SessionStore::open(&path).unwrap();
-    assert_eq!(reopened.interrupt_running().unwrap(), 0);
+    assert_eq!(
+        reopened.interrupt_running_except_assistants(&[]).unwrap(),
+        0
+    );
     assert_eq!(
         reopened
             .turn_events("alice", "pilot", &pilot.id, 1)
@@ -832,7 +813,7 @@ fn startup_interruption_rolls_back_all_sessions_if_any_event_fails() {
     let second_snapshot = store.get("bob", "second").unwrap();
     let connection = Connection::open(path).unwrap();
     connection.execute_batch(&format!("CREATE TRIGGER fail_event BEFORE INSERT ON turn_events WHEN NEW.turn_id = '{}' BEGIN SELECT RAISE(ABORT, 'second event failed'); END;", second.id)).unwrap();
-    assert_storage(store.interrupt_running());
+    assert_storage(store.interrupt_running_except_assistants(&[]));
     assert_eq!(store.get("alice", "pilot").unwrap(), first_snapshot);
     assert_eq!(store.get("bob", "second").unwrap(), second_snapshot);
     assert_eq!(store.get_turn("alice", "pilot", &pilot.id).unwrap(), pilot);
@@ -852,7 +833,7 @@ fn startup_interruption_rolls_back_all_sessions_if_any_event_fails() {
         1
     );
     connection.execute_batch("DROP TRIGGER fail_event").unwrap();
-    assert_eq!(store.interrupt_running().unwrap(), 2);
+    assert_eq!(store.interrupt_running_except_assistants(&[]).unwrap(), 2);
 }
 
 #[test]
@@ -940,210 +921,4 @@ fn cascading_turn_event_deletion_failure_restores_all_facts() {
         .execute_batch("DROP TRIGGER fail_delete")
         .unwrap();
     store.delete("alice", "pilot").unwrap();
-}
-
-const V1_SCHEMA: &str = "CREATE TABLE sessions (
-            id TEXT PRIMARY KEY NOT NULL,
-            owner TEXT NOT NULL,
-            data TEXT NOT NULL CHECK(json_valid(data)),
-            updated_at TEXT NOT NULL
-        );
-        CREATE TABLE session_events (
-            session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
-            seq INTEGER NOT NULL CHECK(seq > 0),
-            at TEXT NOT NULL,
-            kind TEXT NOT NULL,
-            data TEXT NOT NULL CHECK(json_valid(data)),
-            PRIMARY KEY(session_id, seq)
-        );
-        CREATE INDEX sessions_owner_updated ON sessions(owner, updated_at DESC, id);
-        PRAGMA application_id = 1095652179;
-        PRAGMA user_version = 1;";
-
-fn v1_fixture() -> (TempDir, PathBuf, Session) {
-    let directory = tempfile::tempdir().unwrap();
-    let path = directory.path().join("v1.sqlite");
-    let connection = Connection::open(&path).unwrap();
-    connection.execute_batch(V1_SCHEMA).unwrap();
-    let now = Utc::now();
-    let snapshot = Session {
-        id: "pilot".into(),
-        conversation_id: "pilot".into(),
-        title: "v1 preserved".into(),
-        status: SessionStatus::Interrupted,
-        waiting_reason: "restart".into(),
-        run_ids: vec![],
-        graph: String::new(),
-        reply_node: String::new(),
-        channel: BTreeMap::new(),
-        approval: None,
-        approvals: vec![],
-        questions: vec![],
-        operation: None,
-        operations: BTreeMap::new(),
-        plugin_mounts: BTreeMap::new(),
-        network_allowed: true,
-        created_at: now,
-        updated_at: now,
-    };
-    connection
-        .execute(
-            "INSERT INTO sessions VALUES (?1, 'alice', ?2, ?3)",
-            params![
-                snapshot.id,
-                serde_json::to_string(&snapshot).unwrap(),
-                now.to_rfc3339()
-            ],
-        )
-        .unwrap();
-    connection
-        .execute(
-            "INSERT INTO session_events VALUES ('pilot', 1, ?1, 'session.created', '{}')",
-            [now.to_rfc3339()],
-        )
-        .unwrap();
-    (directory, path, snapshot)
-}
-
-#[test]
-fn exact_v1_migrates_transactionally_and_preserves_sessions_events_and_ownership() {
-    let (_directory, path, original) = v1_fixture();
-    let store = SessionStore::open(&path).unwrap();
-    assert_eq!(store.get("alice", "pilot").unwrap(), original);
-    assert_eq!(store.get("bob", "pilot"), Err(SessionError::Missing));
-    assert!(store.list_turns("alice", "pilot").unwrap().is_empty());
-    assert_eq!(store.events("alice", "pilot", 0).unwrap()[0].seq, 1);
-    let turn = start(&store, "v2-request");
-    let connection = Connection::open(&path).unwrap();
-    assert_eq!(
-        connection
-            .pragma_query_value(None, "user_version", |row| row.get::<_, i32>(0))
-            .unwrap(),
-        9
-    );
-    assert_eq!(
-        connection
-            .pragma_query_value(None, "journal_mode", |row| row.get::<_, String>(0))
-            .unwrap(),
-        "wal"
-    );
-    let tables = connection
-        .prepare("SELECT name FROM sqlite_schema WHERE type = 'table' ORDER BY name")
-        .unwrap()
-        .query_map([], |row| row.get::<_, String>(0))
-        .unwrap()
-        .collect::<Result<Vec<_>, _>>()
-        .unwrap();
-    assert_eq!(
-        tables,
-        vec![
-            "channel_account_aliases",
-            "channel_assistant_inputs",
-            "channel_assistants",
-            "channel_deliveries",
-            "channel_inbounds",
-            "channel_sessions",
-            "questions",
-            "session_events",
-            "sessions",
-            "turn_events",
-            "turn_goose",
-            "turn_native",
-            "turn_runs",
-            "turns"
-        ]
-    );
-    drop(connection);
-    drop(store);
-    let reopened = SessionStore::open(path).unwrap();
-    assert_eq!(reopened.get_turn("alice", "pilot", &turn.id).unwrap(), turn);
-    assert_eq!(reopened.events("alice", "pilot", 1).unwrap().len(), 1);
-}
-
-#[test]
-fn unknown_v1_schema_identity_or_future_version_is_unchanged_without_partial_migration() {
-    for change in [
-        "PRAGMA application_id = 0",
-        "PRAGMA application_id = 42",
-        "PRAGMA user_version = 0",
-        "PRAGMA user_version = 2",
-        "PRAGMA user_version = 3",
-        "PRAGMA user_version = 999",
-        "DROP INDEX sessions_owner_updated",
-        "CREATE TABLE unexpected(value TEXT)",
-        "CREATE TABLE turns(value TEXT)",
-        "CREATE VIEW unexpected AS SELECT * FROM sessions",
-        "CREATE TRIGGER unexpected AFTER INSERT ON sessions BEGIN SELECT 1; END",
-        "ALTER TABLE sessions ADD COLUMN extra TEXT",
-        "DROP TABLE session_events; CREATE TABLE session_events(session_id TEXT, seq INTEGER)",
-    ] {
-        let (_directory, path, _) = v1_fixture();
-        let connection = Connection::open(&path).unwrap();
-        connection.execute_batch(change).unwrap();
-        let schema: Vec<_> = connection
-            .prepare("SELECT type, name, sql FROM sqlite_schema ORDER BY type, name")
-            .unwrap()
-            .query_map([], |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, Option<String>>(2)?,
-                ))
-            })
-            .unwrap()
-            .collect::<Result<Vec<_>, _>>()
-            .unwrap();
-        drop(connection);
-        let bytes = fs::read(&path).unwrap();
-        assert_storage(SessionStore::open(&path));
-        assert_eq!(
-            fs::read(&path).unwrap(),
-            bytes,
-            "database was changed after {change}"
-        );
-        assert!(!path.with_extension("sqlite-wal").exists());
-        let connection = Connection::open(&path).unwrap();
-        let after: Vec<_> = connection
-            .prepare("SELECT type, name, sql FROM sqlite_schema ORDER BY type, name")
-            .unwrap()
-            .query_map([], |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, Option<String>>(2)?,
-                ))
-            })
-            .unwrap()
-            .collect::<Result<Vec<_>, _>>()
-            .unwrap();
-        assert_eq!(after, schema, "DDL occurred before rejecting {change}");
-    }
-}
-
-#[test]
-fn two_connections_can_open_and_migrate_v1_once_without_losing_facts() {
-    let (_directory, path, original) = v1_fixture();
-    let barrier = Arc::new(Barrier::new(2));
-    let workers: Vec<_> = (0..2)
-        .map(|_| {
-            let path = path.clone();
-            let start = Arc::clone(&barrier);
-            thread::spawn(move || {
-                start.wait();
-                SessionStore::open(path).unwrap()
-            })
-        })
-        .collect();
-    let stores: Vec<_> = workers
-        .into_iter()
-        .map(|worker| worker.join().unwrap())
-        .collect();
-    for store in &stores {
-        assert_eq!(store.get("alice", "pilot").unwrap(), original);
-    }
-    let turn = start(&stores[0], "migrated");
-    assert_eq!(
-        stores[1].get_turn("alice", "pilot", &turn.id).unwrap(),
-        turn
-    );
 }

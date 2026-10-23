@@ -74,6 +74,31 @@ async fn plugin_catalog_detail_and_file_projection_are_read_only() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body, b"private note");
 
+    let install = json!({"source":"https://github.com/fixture/plugins/tree/main/demo"}).to_string();
+    for (method, route, body) in [
+        ("POST", "/plugins/install", Some(install.as_str())),
+        ("GET", "/environment-requirements", None),
+    ] {
+        let (status, _) = call(app.clone(), method, route, body).await;
+        assert!(
+            matches!(
+                status,
+                StatusCode::NOT_FOUND | StatusCode::METHOD_NOT_ALLOWED
+            ),
+            "{method} {route} must stay retired, got {status}"
+        );
+    }
+    assert!(
+        state
+            .catalog_root
+            .join("plugins/demo/plugin.json")
+            .is_file()
+    );
+
+    let (status, catalog) = call(app.clone(), "GET", "/plugins", None).await;
+    assert_eq!(status, StatusCode::OK, "{catalog}");
+    assert_eq!(catalog["plugins"][0]["id"], "demo");
+
     let (status, body) = raw(app, "GET", "/plugins/demo/files/../plugin.json", None).await;
     assert!(
         matches!(status, StatusCode::BAD_REQUEST | StatusCode::NOT_FOUND),
@@ -184,57 +209,4 @@ async fn plugin_internal_symlink_is_rejected() {
     .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body, b"linked");
-}
-
-/// Plugin installation has exactly one entry point — the steward's confirmation
-/// flow — so the HTTP route is gone and stays gone. The catalog stays readable.
-#[tokio::test]
-async fn the_plugin_install_route_does_not_exist() {
-    let _environment = PROCESS_ENV.lock().await;
-    let (_root, state) = fixture();
-    write_plugin(&state);
-    let body = json!({"source":"https://github.com/fixture/plugins/tree/main/demo"}).to_string();
-    let (status, _) = call(
-        router(state.clone()),
-        "POST",
-        "/plugins/install",
-        Some(&body),
-    )
-    .await;
-    assert!(
-        matches!(
-            status,
-            StatusCode::NOT_FOUND | StatusCode::METHOD_NOT_ALLOWED
-        ),
-        "POST /plugins/install must not exist, got {status}"
-    );
-    assert!(
-        state
-            .catalog_root
-            .join("plugins/demo/plugin.json")
-            .is_file(),
-        "the route removal must not have installed anything"
-    );
-
-    // The read paths the operator UI still uses are unaffected.
-    let (status, catalog) = call(router(state), "GET", "/plugins", None).await;
-    assert_eq!(status, StatusCode::OK, "{catalog}");
-    assert_eq!(catalog["plugins"][0]["id"], "demo");
-}
-
-/// The retired environment routes are gone, exactly like the install route.
-#[tokio::test]
-async fn the_environment_routes_do_not_exist() {
-    let _environment = PROCESS_ENV.lock().await;
-    let (_root, state) = fixture();
-    for path in ["/environment-requirements"] {
-        let (status, _) = call(router(state.clone()), "GET", path, None).await;
-        assert!(
-            matches!(
-                status,
-                StatusCode::NOT_FOUND | StatusCode::METHOD_NOT_ALLOWED
-            ),
-            "GET {path} must not exist, got {status}"
-        );
-    }
 }

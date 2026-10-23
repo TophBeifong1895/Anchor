@@ -1,7 +1,8 @@
-use anchor_platform_session::{
-    ChannelAdmission, ChannelIdentity, ChannelInboundRequest, SessionError, SessionStore,
-    TurnStatus,
-};
+mod support;
+
+use support::assert_conflict;
+
+use anchor_platform_session::{ChannelAdmission, SessionStore, TurnStatus};
 use rusqlite::Connection;
 use std::{
     sync::{Arc, Barrier},
@@ -15,22 +16,13 @@ fn fixture() -> (TempDir, SessionStore, ChannelAdmission) {
     let first = store
         .admit_channel_inbound(
             "owner",
-            ChannelInboundRequest {
-                inbound_id: "message-1".into(),
-                identity: ChannelIdentity {
-                    conversation_kind: Default::default(),
-                    source: "test-channel".into(),
-                    account: Some("account".into()),
-                    conversation_id: "conversation".into(),
-                    sender_id: "sender".into(),
-                },
-                graph: "fixture".into(),
-                reply_node: "assistant".into(),
-                text: Some("input".into()),
-                attachments: Default::default(),
-                run_id: None,
-                replace_running: false,
-            },
+            support::channel_request(
+                "message-1",
+                "test-channel",
+                Some("account"),
+                "conversation",
+                "sender",
+            ),
         )
         .unwrap();
     bind(&store, &first.session.id, "run-a");
@@ -53,13 +45,6 @@ fn finish(store: &SessionStore, first: &ChannelAdmission) {
             None,
         )
         .unwrap();
-}
-
-fn assert_conflict<T: std::fmt::Debug>(result: Result<T, SessionError>) {
-    assert!(
-        matches!(result, Err(SessionError::Conflict(_))),
-        "{result:?}"
-    );
 }
 
 #[test]
@@ -165,9 +150,27 @@ fn committed_handover_retry_after_reopen_preserves_the_in_flight_turn_and_events
         .claim_channel_assistant_input("owner", session, "run-a", "wait/a")
         .unwrap()
         .unwrap();
+    let other = store
+        .admit_channel_inbound(
+            "owner",
+            support::channel_request(
+                "other-message",
+                "test-channel",
+                Some("account"),
+                "other-conversation",
+                "sender",
+            ),
+        )
+        .unwrap();
+    bind(&store, &other.session.id, "other-run");
     let current = store
         .handover_channel_assistant("owner", session, "run-a", "run-b", "wait/b")
         .unwrap();
+    assert_eq!(current.run_id, "run-b");
+    assert_eq!(
+        store.get_channel_assistant("owner", session).unwrap(),
+        Some(current.clone())
+    );
     let committed_turn = store.get_turn("owner", session, &first.turn.id).unwrap();
     assert_eq!(committed_turn.id, claimed.turn.id);
     assert_eq!(committed_turn.status, TurnStatus::Running);
@@ -210,6 +213,23 @@ fn committed_handover_retry_after_reopen_preserves_the_in_flight_turn_and_events
         carried.relation
     );
     assert_conflict(reopened.claim_channel_assistant_input("owner", session, "run-a", "wait/a"));
+    assert_eq!(
+        reopened
+            .get_channel_assistant("owner", &other.session.id)
+            .unwrap()
+            .unwrap()
+            .run_id,
+        "other-run"
+    );
+    assert_eq!(
+        reopened
+            .claim_channel_assistant_input("owner", &other.session.id, "other-run", "other-wait")
+            .unwrap()
+            .unwrap()
+            .relation
+            .inbound_id,
+        "other-message"
+    );
     assert_eq!(
         reopened
             .channel_assistant_wait_key("owner", session, &first.turn.id)

@@ -12,7 +12,9 @@ use std::{
     time::Duration,
 };
 
-use anchor_wecom_gateway::{GatewayConfig, Timing, WebhookConfig};
+use anchor_wecom_gateway::{
+    Gateway, GatewayConfig, GatewayError, RunningGateway, Timing, WebhookConfig,
+};
 use axum::{
     Json, Router,
     extract::{Path as AxumPath, State},
@@ -28,12 +30,41 @@ use serde_json::{Value, json};
 use tokio::{
     io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader},
     net::{TcpListener, UnixStream},
-    sync::{Notify, mpsc},
+    sync::{Notify, broadcast, mpsc},
     task::JoinHandle,
 };
 use tokio_tungstenite::{accept_async, tungstenite::Message};
 
 pub const TOKEN: &str = "fixture-control-token-000000000000000000000";
+
+pub async fn start_authenticated(config: GatewayConfig) -> RunningGateway {
+    let gateway = Gateway::start(config).await.unwrap();
+    gateway
+        .wait_authenticated(Duration::from_secs(2))
+        .await
+        .unwrap();
+    gateway
+}
+
+pub async fn next_error(
+    errors: &mut broadcast::Receiver<GatewayError>,
+    timeout: Duration,
+) -> GatewayError {
+    tokio::time::timeout(timeout, errors.recv())
+        .await
+        .unwrap()
+        .unwrap()
+}
+
+pub async fn poll_until(mut ready: impl FnMut() -> bool) {
+    tokio::time::timeout(Duration::from_secs(3), async {
+        while !ready() {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .unwrap();
+}
 
 enum Command {
     Frame(Value),
@@ -127,6 +158,17 @@ impl Platform {
             .await;
     }
 
+    pub async fn acknowledge_upload(&mut self, upload_id: &str, media_id: &str) {
+        let init = self.next("aibot_upload_media_init").await;
+        self.acknowledge_body(&init, 0, json!({"upload_id": upload_id}))
+            .await;
+        let chunk = self.next("aibot_upload_media_chunk").await;
+        self.acknowledge(&chunk, 0).await;
+        let finish = self.next("aibot_upload_media_finish").await;
+        self.acknowledge_body(&finish, 0, json!({"media_id": media_id}))
+            .await;
+    }
+
     pub async fn close(&self) {
         self.commands.send(Command::Close).await.unwrap();
     }
@@ -216,6 +258,11 @@ impl HttpReply {
         }
     }
 
+    pub fn delayed(mut self, delay: Duration) -> Self {
+        self.delay = delay;
+        self
+    }
+
     pub fn gated(mut self, gate: &ReplyGate) -> Self {
         self.gate = Some(gate.clone());
         self
@@ -279,29 +326,11 @@ impl WebhookServer {
     }
 
     pub async fn wait_events(&self, expected: usize) {
-        tokio::time::timeout(Duration::from_secs(3), async {
-            loop {
-                if self.events.lock().unwrap().len() >= expected {
-                    break;
-                }
-                tokio::time::sleep(Duration::from_millis(5)).await;
-            }
-        })
-        .await
-        .unwrap();
+        poll_until(|| self.events.lock().unwrap().len() >= expected).await;
     }
 
     pub async fn wait_requests(&self, expected: usize) {
-        tokio::time::timeout(Duration::from_secs(3), async {
-            loop {
-                if self.requests.lock().unwrap().len() >= expected {
-                    break;
-                }
-                tokio::time::sleep(Duration::from_millis(5)).await;
-            }
-        })
-        .await
-        .unwrap();
+        poll_until(|| self.requests.lock().unwrap().len() >= expected).await;
     }
 }
 
@@ -472,29 +501,11 @@ impl ProgressServer {
     }
 
     pub async fn wait_requested(&self, expected: usize) {
-        tokio::time::timeout(Duration::from_secs(3), async {
-            loop {
-                if self.requested.lock().unwrap().len() >= expected {
-                    break;
-                }
-                tokio::time::sleep(Duration::from_millis(5)).await;
-            }
-        })
-        .await
-        .unwrap();
+        poll_until(|| self.requested.lock().unwrap().len() >= expected).await;
     }
 
     pub async fn wait_closed(&self, expected: usize) {
-        tokio::time::timeout(Duration::from_secs(3), async {
-            loop {
-                if self.closed.lock().unwrap().len() >= expected {
-                    break;
-                }
-                tokio::time::sleep(Duration::from_millis(5)).await;
-            }
-        })
-        .await
-        .unwrap();
+        poll_until(|| self.closed.lock().unwrap().len() >= expected).await;
     }
 }
 

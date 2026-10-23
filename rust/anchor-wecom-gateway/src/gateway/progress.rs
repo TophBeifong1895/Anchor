@@ -263,33 +263,62 @@ mod tests {
         assert_eq!(encode_segment("msg-1_2.3~4"), "msg-1_2.3~4");
     }
 
-    #[test]
-    fn a_status_frame_carries_its_optional_category_and_step() {
-        let framed = |data: &str| serde_json::from_str::<Value>(data).unwrap();
-        let formatted = framed(
-            r#"{"seq":2,"kind":"status","content":"正在查看文件","category":"read_file","step":2}"#,
-        );
-        assert_eq!(formatted["category"], "read_file");
-        assert_eq!(formatted["step"], 2);
-        assert_eq!(
-            formatted["step"]
-                .as_u64()
-                .and_then(|s| u32::try_from(s).ok()),
-            Some(2)
-        );
-        // A Host that predates the fields sends neither, and that is not an
-        // error: the line still renders.
-        let legacy = framed(r#"{"seq":1,"kind":"status","content":"正在查看文件"}"#);
-        assert!(legacy["category"].as_str().is_none());
-        assert!(
-            legacy["step"]
-                .as_u64()
-                .and_then(|s| u32::try_from(s).ok())
-                .is_none()
-        );
-        // A hostile or malformed step must not become a marker.
-        let hostile = framed(r#"{"content":"x","category":7,"step":"two"}"#);
-        assert!(hostile["category"].as_str().is_none());
-        assert!(hostile["step"].as_u64().is_none());
+    #[tokio::test]
+    async fn status_category_and_step_are_parsed_through_the_production_reader() {
+        use axum::{Router, routing::get};
+        use serde_json::json;
+        use tokio::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let frames = [
+            json!({"content":"formatted", "category":"read_file", "step":2}),
+            json!({"content":"legacy"}),
+            json!({"content":"hostile", "category":7, "step":"two"}),
+            json!({"content":"overflow", "category":"command", "step":u64::from(u32::MAX) + 1}),
+        ];
+        let wire = frames
+            .iter()
+            .map(|value| format!("data: {value}\n\n"))
+            .collect::<String>();
+        let server = tokio::spawn(async move {
+            axum::serve(
+                listener,
+                Router::new().route("/{event}", get(move || async move { wire })),
+            )
+            .await
+            .unwrap();
+        });
+        let (sender, mut receiver) = mpsc::unbounded_channel();
+        let scope = ConversationScope::Group {
+            conversation_id: "group".into(),
+        };
+        assert!(matches!(
+            read(
+                format!("http://{address}"),
+                None,
+                "event".into(),
+                scope.clone(),
+                sender,
+            )
+            .await,
+            Outcome::Closed
+        ));
+        for (content, category, step) in [
+            ("formatted", Some("read_file"), Some(2)),
+            ("legacy", None, None),
+            ("hostile", None, None),
+            ("overflow", Some("command"), None),
+        ] {
+            let line = receiver.recv().await.unwrap();
+            assert_eq!(line.event_id, "event");
+            assert_eq!(line.scope, scope);
+            assert_eq!(line.content, content);
+            assert_eq!(line.category.as_deref(), category);
+            assert_eq!(line.step, step);
+            assert!(!line.settled);
+        }
+        assert!(receiver.recv().await.is_none());
+        server.abort();
     }
 }

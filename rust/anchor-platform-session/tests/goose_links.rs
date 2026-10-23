@@ -1,39 +1,19 @@
+mod support;
+
+use support::{
+    assert_conflict, assert_invalid, assert_storage, create_turn, turn_fixture as fixture,
+};
+
 use std::{
-    path::PathBuf,
     sync::{Arc, Barrier},
     thread,
 };
 
 use anchor_platform_session::{
-    CreateSession, GooseExecution, NativeExecution, SessionError, SessionStore, Turn, TurnStatus,
+    GooseExecution, NativeExecution, SessionError, SessionStore, Turn, TurnStatus,
 };
 use rusqlite::{Connection, params};
 use serde_json::json;
-use tempfile::TempDir;
-
-fn fixture() -> (TempDir, PathBuf, SessionStore, Turn) {
-    let directory = tempfile::tempdir().unwrap();
-    let path = directory.path().join("sessions.sqlite");
-    let store = SessionStore::open(&path).unwrap();
-    let turn = create_turn(&store, "alice", "pilot");
-    (directory, path, store, turn)
-}
-
-fn create_turn(store: &SessionStore, owner: &str, session: &str) -> Turn {
-    store
-        .create(
-            owner,
-            CreateSession {
-                id: Some(session.into()),
-                ..Default::default()
-            },
-        )
-        .unwrap();
-    store
-        .create_turn(owner, session, "request", Some("hello"))
-        .unwrap()
-        .0
-}
 
 fn execution() -> GooseExecution {
     GooseExecution {
@@ -48,18 +28,6 @@ fn native() -> NativeExecution {
         session: 11,
         run: 22,
     }
-}
-
-fn assert_conflict<Output>(result: Result<Output, SessionError>) {
-    assert!(matches!(result, Err(SessionError::Conflict(_))));
-}
-
-fn assert_invalid<Output>(result: Result<Output, SessionError>) {
-    assert!(matches!(result, Err(SessionError::Invalid(_))));
-}
-
-fn assert_storage<Output>(result: Result<Output, SessionError>) {
-    assert!(matches!(result, Err(SessionError::Storage(_))));
 }
 
 #[test]
@@ -170,7 +138,7 @@ fn a_goose_session_is_reused_by_later_turns_in_the_same_platform_session() {
         .unwrap();
     assert_eq!(first.goose, second.goose);
     assert_ne!(first.id, second.id);
-    assert_eq!(store.interrupt_running().unwrap(), 1);
+    assert_eq!(store.interrupt_running_except_assistants(&[]).unwrap(), 1);
     let interrupted = store.get_turn("alice", "pilot", &second.id).unwrap();
     assert_eq!(interrupted.status, TurnStatus::Interrupted);
     assert_eq!(interrupted.goose, second.goose);

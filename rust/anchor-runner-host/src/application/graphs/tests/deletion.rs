@@ -1,5 +1,17 @@
 use super::*;
 
+async fn delete_snapshot(application: &RunApplication, name: &str) -> String {
+    application.graph_delete_precondition(name).await.unwrap()
+}
+
+async fn assert_waiting<T>(task: &mut tokio::task::JoinHandle<T>) {
+    assert!(
+        tokio::time::timeout(Duration::from_millis(30), task)
+            .await
+            .is_err()
+    );
+}
+
 fn create_run(application: &RunApplication, name: &str, run_id: &str) {
     let (path, bundle) = application.load_graph(name).unwrap();
     let mut record = GraphRunRecord::create_with_id(bundle.snapshot, json!({}), run_id).unwrap();
@@ -61,16 +73,18 @@ async fn assert_conflict_unchanged(
     name: &str,
     workspace_root: &Path,
     expected: &str,
-) {
+) -> String {
     let path = application.graph_path_checked(name).unwrap();
     let before = files(&path);
-    assert!(matches!(
-        application
-            .remove_graph_if_unchanged(name, workspace_root, expected)
-            .await,
-        Err(GraphManagementError::Conflict(_))
-    ));
+    let failure = application
+        .remove_graph_if_unchanged(name, workspace_root, expected)
+        .await;
+    let reason = match failure {
+        Err(GraphManagementError::Conflict(reason)) => reason,
+        result => panic!("expected a deletion conflict, got {result:?}"),
+    };
     assert_eq!(files(&path), before);
+    reason
 }
 
 #[tokio::test]
@@ -86,28 +100,16 @@ async fn unchanged_snapshot_survives_reopen_and_reuses_terminal_run_cleanup() {
     std::fs::write(target_workspace.join("result.txt"), "result").unwrap();
     let target_path = application.graph_path_checked("fixture").unwrap();
     let before = files(&target_path);
-    let expected = application
-        .graph_delete_precondition("fixture")
-        .await
-        .unwrap();
+    let expected = delete_snapshot(&application, "fixture").await;
     assert_eq!(files(&target_path), before);
-    assert_eq!(
-        application
-            .graph_delete_precondition("fixture")
-            .await
-            .unwrap(),
-        expected
-    );
+    assert_eq!(delete_snapshot(&application, "fixture").await, expected);
     let reopened = RunApplication::new(
         application.data_root.clone(),
         application.catalog_root.clone(),
     )
     .with_configured_graph("fixture".into(), target_path.clone());
     drop(application);
-    assert_eq!(
-        reopened.graph_delete_precondition("fixture").await.unwrap(),
-        expected
-    );
+    assert_eq!(delete_snapshot(&reopened, "fixture").await, expected);
     assert_eq!(
         reopened
             .remove_graph_if_unchanged("fixture", &workspace_root, &expected)
@@ -137,10 +139,7 @@ async fn definition_and_layout_changes_refuse_the_old_confirmation() {
         replacement["layout"] = json!({"work": {"x": 12, "y": 34}});
         replacement
     }] {
-        let expected = application
-            .graph_delete_precondition("fixture")
-            .await
-            .unwrap();
+        let expected = delete_snapshot(&application, "fixture").await;
         application
             .update_graph("fixture", replacement)
             .await
@@ -159,10 +158,7 @@ async fn definition_and_layout_changes_refuse_the_old_confirmation() {
 async fn definition_changed_then_restored_still_refuses_the_old_confirmation() {
     let _env_guard = crate::PROCESS_ENV_LOCK.lock().await;
     let (root, application) = fixture();
-    let expected = application
-        .graph_delete_precondition("fixture")
-        .await
-        .unwrap();
+    let expected = delete_snapshot(&application, "fixture").await;
     application
         .update_graph("fixture", definition("changed"))
         .await
@@ -185,10 +181,7 @@ async fn deletion_and_identical_recreation_refuse_the_old_confirmation() {
     let _env_guard = crate::PROCESS_ENV_LOCK.lock().await;
     let (root, application) = fixture();
     application.create_graph("target", None).await.unwrap();
-    let expected = application
-        .graph_delete_precondition("target")
-        .await
-        .unwrap();
+    let expected = delete_snapshot(&application, "target").await;
     let workspace_root = root.path().join("workspaces");
     application
         .remove_graph("target", &workspace_root)
@@ -196,10 +189,7 @@ async fn deletion_and_identical_recreation_refuse_the_old_confirmation() {
         .unwrap();
     application.create_graph("target", None).await.unwrap();
     assert_conflict_unchanged(&application, "target", &workspace_root, &expected).await;
-    let fresh = application
-        .graph_delete_precondition("target")
-        .await
-        .unwrap();
+    let fresh = delete_snapshot(&application, "target").await;
     assert_ne!(fresh, expected);
     assert_eq!(
         application
@@ -213,10 +203,7 @@ async fn deletion_and_identical_recreation_refuse_the_old_confirmation() {
 #[tokio::test]
 async fn identical_directory_replacement_refuses_the_old_confirmation() {
     let (root, application) = fixture();
-    let expected = application
-        .graph_delete_precondition("fixture")
-        .await
-        .unwrap();
+    let expected = delete_snapshot(&application, "fixture").await;
     let path = application.graph_path_checked("fixture").unwrap();
     let before = files(&path);
     std::fs::rename(&path, root.path().join("old-bundle")).unwrap();
@@ -235,10 +222,7 @@ async fn identical_directory_replacement_refuses_the_old_confirmation() {
 async fn identical_resource_replacement_refuses_the_old_confirmation() {
     let (root, application) = fixture();
     let path = plugin_bundle(&application);
-    let expected = application
-        .graph_delete_precondition("fixture")
-        .await
-        .unwrap();
+    let expected = delete_snapshot(&application, "fixture").await;
     let resource = path.join("graph.json");
     let replacement = root.path().join("replacement");
     std::fs::write(&replacement, std::fs::read(&resource).unwrap()).unwrap();
@@ -257,10 +241,7 @@ async fn identical_resource_replacement_refuses_the_old_confirmation() {
 async fn valid_resource_updates_refuse_the_old_confirmation() {
     let (root, application) = fixture();
     let path = plugin_bundle(&application);
-    let expected = application
-        .graph_delete_precondition("fixture")
-        .await
-        .unwrap();
+    let expected = delete_snapshot(&application, "fixture").await;
     // A changed but still valid Graph: the same Plugin reference, a new objective.
     let mut updated: serde_json::Value =
         serde_json::from_slice(&std::fs::read(path.join("graph.json")).unwrap()).unwrap();
@@ -280,10 +261,7 @@ async fn valid_resource_updates_refuse_the_old_confirmation() {
 async fn invalid_and_changed_resources_fail_closed_without_cleanup() {
     let (root, application) = fixture();
     let path = plugin_bundle(&application);
-    let expected = application
-        .graph_delete_precondition("fixture")
-        .await
-        .unwrap();
+    let expected = delete_snapshot(&application, "fixture").await;
     finished_run(&application, "fixture", "retained-run");
     let resource = path.join("graph.json");
     std::fs::write(&resource, "not a graph").unwrap();
@@ -312,10 +290,7 @@ async fn invalid_and_changed_resources_fail_closed_without_cleanup() {
 #[tokio::test]
 async fn malformed_tokens_and_names_are_rejected_without_deleting() {
     let (root, application) = fixture();
-    let valid = application
-        .graph_delete_precondition("fixture")
-        .await
-        .unwrap();
+    let valid = delete_snapshot(&application, "fixture").await;
     let before = files(root.path());
     for token in [
         String::new(),
@@ -364,10 +339,7 @@ async fn tokens_are_bound_to_target_name_path_and_configured_alias() {
         .create_graph("other", Some(definition("fixture")))
         .await
         .unwrap();
-    let expected = application
-        .graph_delete_precondition("fixture")
-        .await
-        .unwrap();
+    let expected = delete_snapshot(&application, "fixture").await;
     for name in ["other", "bundle"] {
         assert_conflict_unchanged(
             &application,
@@ -397,10 +369,7 @@ async fn missing_invalid_and_symlink_targets_cannot_produce_or_consume_a_snapsho
         Err(GraphManagementError::Missing(_))
     ));
     let path = application.graph_path_checked("fixture").unwrap();
-    let expected = application
-        .graph_delete_precondition("fixture")
-        .await
-        .unwrap();
+    let expected = delete_snapshot(&application, "fixture").await;
     let moved = root.path().join("moved");
     std::fs::rename(&path, &moved).unwrap();
     symlink(&moved, &path).unwrap();
@@ -446,10 +415,7 @@ async fn resource_symlinks_and_special_files_are_rejected_without_following_them
 
     let (root, application) = fixture();
     let path = plugin_bundle(&application);
-    let expected = application
-        .graph_delete_precondition("fixture")
-        .await
-        .unwrap();
+    let expected = delete_snapshot(&application, "fixture").await;
     let resource = path.join("graph.json");
     let outside = root.path().join("outside");
     std::fs::write(&outside, "safe resource").unwrap();
@@ -513,40 +479,36 @@ async fn ordinary_remove_keeps_existing_symlink_compatibility() {
 #[tokio::test]
 async fn guarded_delete_rechecks_unfinished_runs_created_after_the_snapshot() {
     let (root, application) = fixture();
-    let expected = application
-        .graph_delete_precondition("fixture")
-        .await
-        .unwrap();
+    let expected = delete_snapshot(&application, "fixture").await;
     stopped_run(&application, "fixture", "unfinished");
-    assert_conflict_unchanged(
+    let reason = assert_conflict_unchanged(
         &application,
         "fixture",
         &root.path().join("workspaces"),
         &expected,
     )
     .await;
+    assert!(reason.contains("unfinished Run `unfinished`"), "{reason}");
     assert!(application.read_run("unfinished").unwrap().is_some());
 }
 
 #[tokio::test]
 async fn guarded_delete_rechecks_active_execution_even_with_a_terminal_record() {
     let (root, application) = fixture();
-    let expected = application
-        .graph_delete_precondition("fixture")
-        .await
-        .unwrap();
+    let expected = delete_snapshot(&application, "fixture").await;
     create_run(&application, "fixture", "active");
     let drive = fixtures::gated_drive(&application, "active").await;
     fixtures::finish(&application, "active");
     assert!(fixtures::view(&application, "active").has_succeeded());
     assert!(fixtures::view(&application, "active").active());
-    assert_conflict_unchanged(
+    let reason = assert_conflict_unchanged(
         &application,
         "fixture",
         &root.path().join("workspaces"),
         &expected,
     )
     .await;
+    assert_eq!(reason, "that Run is still running");
     assert!(application.read_run("active").unwrap().is_some());
     drive.drain(&application, "active").await;
 }
@@ -556,10 +518,7 @@ async fn guarded_delete_preserves_pending_session_delivery() {
     use crate::application::session_calls::{SessionCall, SessionContext};
 
     let (root, application) = fixture();
-    let expected = application
-        .graph_delete_precondition("fixture")
-        .await
-        .unwrap();
+    let expected = delete_snapshot(&application, "fixture").await;
     finished_run(&application, "fixture", "pending");
     let mut run_metadata = application.metadata("pending").unwrap().unwrap();
     run_metadata.session_call = Some(SessionCall {
@@ -573,13 +532,17 @@ async fn guarded_delete_preserves_pending_session_delivery() {
         error: String::new(),
     });
     metadata::save(&application.data_root, &run_metadata).unwrap();
-    assert_conflict_unchanged(
+    let reason = assert_conflict_unchanged(
         &application,
         "fixture",
         &root.path().join("workspaces"),
         &expected,
     )
     .await;
+    assert!(
+        reason.contains("Run has pending Session execution or delivery"),
+        "{reason}"
+    );
     assert!(application.read_run("pending").unwrap().is_some());
 }
 
@@ -588,10 +551,7 @@ async fn permission_changes_invalidate_the_snapshot_without_expanding_authority(
     use std::os::unix::fs::PermissionsExt;
 
     let (root, application) = fixture();
-    let expected = application
-        .graph_delete_precondition("fixture")
-        .await
-        .unwrap();
+    let expected = delete_snapshot(&application, "fixture").await;
     let path = application.graph_path_checked("fixture").unwrap();
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o500)).unwrap();
     assert_conflict_unchanged(
@@ -608,21 +568,19 @@ async fn permission_changes_invalidate_the_snapshot_without_expanding_authority(
 async fn guarded_delete_rechecks_current_callers_created_after_the_snapshot() {
     let _env_guard = crate::PROCESS_ENV_LOCK.lock().await;
     let (root, application) = fixture();
-    let expected = application
-        .graph_delete_precondition("fixture")
-        .await
-        .unwrap();
+    let expected = delete_snapshot(&application, "fixture").await;
     application
         .create_graph("caller", Some(caller_definition("fixture")))
         .await
         .unwrap();
-    assert_conflict_unchanged(
+    let reason = assert_conflict_unchanged(
         &application,
         "fixture",
         &root.path().join("workspaces"),
         &expected,
     )
     .await;
+    assert!(reason.contains("Graph `caller`"), "{reason}");
     assert!(application.read_graph("caller").is_ok());
 }
 
@@ -639,10 +597,7 @@ async fn guarded_delete_preserves_unfinished_callers_frozen_in_run_snapshots() {
         .update_graph("caller", definition("no longer calls"))
         .await
         .unwrap();
-    let expected = application
-        .graph_delete_precondition("fixture")
-        .await
-        .unwrap();
+    let expected = delete_snapshot(&application, "fixture").await;
     assert_conflict_unchanged(
         &application,
         "fixture",
@@ -664,11 +619,7 @@ async fn snapshot_and_guarded_delete_wait_for_graph_admission_before_reading() {
             .graph_delete_precondition("fixture")
             .await
     });
-    assert!(
-        tokio::time::timeout(Duration::from_millis(30), &mut snapshot)
-            .await
-            .is_err()
-    );
+    assert_waiting(&mut snapshot).await;
     drop(held);
     let expected = snapshot.await.unwrap().unwrap();
     let held = application.graph_admission_lease(&path).unwrap();
@@ -679,11 +630,7 @@ async fn snapshot_and_guarded_delete_wait_for_graph_admission_before_reading() {
             .remove_graph_if_unchanged("fixture", &workspace_root, &expected)
             .await
     });
-    assert!(
-        tokio::time::timeout(Duration::from_millis(30), &mut delete)
-            .await
-            .is_err()
-    );
+    assert_waiting(&mut delete).await;
     write_graph_bundle(&path, &definition("changed under admission lease")).unwrap();
     drop(held);
     assert!(matches!(
@@ -696,10 +643,7 @@ async fn snapshot_and_guarded_delete_wait_for_graph_admission_before_reading() {
 #[tokio::test]
 async fn concurrent_admission_is_rechecked_after_the_guarded_delete_gets_its_lease() {
     let (root, application) = fixture();
-    let expected = application
-        .graph_delete_precondition("fixture")
-        .await
-        .unwrap();
+    let expected = delete_snapshot(&application, "fixture").await;
     let path = application.graph_path_checked("fixture").unwrap();
     let held = application.graph_admission_lease(&path).unwrap();
     let delete_application = application.clone();
@@ -709,11 +653,7 @@ async fn concurrent_admission_is_rechecked_after_the_guarded_delete_gets_its_lea
             .remove_graph_if_unchanged("fixture", &workspace_root, &expected)
             .await
     });
-    assert!(
-        tokio::time::timeout(Duration::from_millis(30), &mut delete)
-            .await
-            .is_err()
-    );
+    assert_waiting(&mut delete).await;
     create_run(&application, "fixture", "admitted");
     drop(held);
     assert!(
@@ -726,10 +666,7 @@ async fn concurrent_admission_is_rechecked_after_the_guarded_delete_gets_its_lea
 #[tokio::test]
 async fn guarded_delete_holds_the_graph_lease_until_cleanup_finishes() {
     let (root, application) = fixture();
-    let expected = application
-        .graph_delete_precondition("fixture")
-        .await
-        .unwrap();
+    let expected = delete_snapshot(&application, "fixture").await;
     let path = application.graph_path_checked("fixture").unwrap();
     let active = application.admission.lock().await;
     let delete_application = application.clone();
@@ -739,11 +676,7 @@ async fn guarded_delete_holds_the_graph_lease_until_cleanup_finishes() {
             .remove_graph_if_unchanged("fixture", &workspace_root, &expected)
             .await
     });
-    assert!(
-        tokio::time::timeout(Duration::from_millis(30), &mut delete)
-            .await
-            .is_err()
-    );
+    assert_waiting(&mut delete).await;
     assert!(matches!(
         application.graph_admission_lease(&path),
         Err(ApplicationError::Conflict(_))
@@ -759,10 +692,7 @@ async fn catalog_gate_serializes_snapshot_and_guarded_delete_with_reference_muta
     let _env_guard = crate::PROCESS_ENV_LOCK.lock().await;
     let (root, application) = fixture();
     application.create_graph("caller", None).await.unwrap();
-    let expected = application
-        .graph_delete_precondition("fixture")
-        .await
-        .unwrap();
+    let expected = delete_snapshot(&application, "fixture").await;
     let guard = application.graph_catalog_mutation_guard().await;
     let update_application = application.clone();
     let mut update = tokio::spawn(async move {
@@ -770,11 +700,7 @@ async fn catalog_gate_serializes_snapshot_and_guarded_delete_with_reference_muta
             .update_graph("caller", caller_definition("fixture"))
             .await
     });
-    assert!(
-        tokio::time::timeout(Duration::from_millis(30), &mut update)
-            .await
-            .is_err()
-    );
+    assert_waiting(&mut update).await;
     let delete_application = application.clone();
     let workspace_root = root.path().join("workspaces");
     let mut delete = tokio::spawn(async move {
@@ -782,11 +708,7 @@ async fn catalog_gate_serializes_snapshot_and_guarded_delete_with_reference_muta
             .remove_graph_if_unchanged("fixture", &workspace_root, &expected)
             .await
     });
-    assert!(
-        tokio::time::timeout(Duration::from_millis(30), &mut delete)
-            .await
-            .is_err()
-    );
+    assert_waiting(&mut delete).await;
     drop(guard);
     update.await.unwrap().unwrap();
     assert!(
@@ -798,10 +720,7 @@ async fn catalog_gate_serializes_snapshot_and_guarded_delete_with_reference_muta
 #[tokio::test]
 async fn concurrent_confirmed_deletes_have_only_one_success() {
     let (root, application) = fixture();
-    let expected = application
-        .graph_delete_precondition("fixture")
-        .await
-        .unwrap();
+    let expected = delete_snapshot(&application, "fixture").await;
     let workspace_root = root.path().join("workspaces");
     let (first, second) = tokio::join!(
         application.remove_graph_if_unchanged("fixture", &workspace_root, &expected),
@@ -818,10 +737,7 @@ async fn concurrent_confirmed_deletes_have_only_one_success() {
 async fn snapshots_wait_for_the_catalog_gate_and_capture_the_published_definition() {
     let _env_guard = crate::PROCESS_ENV_LOCK.lock().await;
     let (_root, application) = fixture();
-    let previous = application
-        .graph_delete_precondition("fixture")
-        .await
-        .unwrap();
+    let previous = delete_snapshot(&application, "fixture").await;
     let guard = application.graph_catalog_mutation_guard().await;
     let update_application = application.clone();
     let mut update = tokio::spawn(async move {
@@ -829,33 +745,19 @@ async fn snapshots_wait_for_the_catalog_gate_and_capture_the_published_definitio
             .update_graph("fixture", definition("published"))
             .await
     });
-    assert!(
-        tokio::time::timeout(Duration::from_millis(30), &mut update)
-            .await
-            .is_err()
-    );
+    assert_waiting(&mut update).await;
     let snapshot_application = application.clone();
     let mut snapshot = tokio::spawn(async move {
         snapshot_application
             .graph_delete_precondition("fixture")
             .await
     });
-    assert!(
-        tokio::time::timeout(Duration::from_millis(30), &mut snapshot)
-            .await
-            .is_err()
-    );
+    assert_waiting(&mut snapshot).await;
     drop(guard);
     update.await.unwrap().unwrap();
     let expected = snapshot.await.unwrap().unwrap();
     assert_ne!(expected, previous);
-    assert_eq!(
-        expected,
-        application
-            .graph_delete_precondition("fixture")
-            .await
-            .unwrap()
-    );
+    assert_eq!(expected, delete_snapshot(&application, "fixture").await);
 }
 
 /// A Graph the catalog lists but this host cannot read may call the target, so
@@ -865,10 +767,7 @@ async fn a_graph_that_cannot_be_read_refuses_the_delete_and_is_named() {
     let (root, application) = fixture();
     let workspace_root = root.path().join("workspaces");
     let path = application.graph_path_checked("fixture").unwrap();
-    let expected = application
-        .graph_delete_precondition("fixture")
-        .await
-        .unwrap();
+    let expected = delete_snapshot(&application, "fixture").await;
 
     // `broken` has a definition but no manifest, so loading it fails. The report
     // may not turn that into "nobody calls this".
@@ -902,31 +801,4 @@ async fn a_graph_that_cannot_be_read_refuses_the_delete_and_is_named() {
         0
     );
     assert!(!path.exists());
-}
-
-/// A completely readable catalog with a caller still refuses by name.
-#[tokio::test]
-async fn a_readable_caller_still_refuses_the_delete_by_name() {
-    let _env_guard = crate::PROCESS_ENV_LOCK.lock().await;
-    let (root, application) = fixture();
-    let workspace_root = root.path().join("workspaces");
-    let path = application.graph_path_checked("fixture").unwrap();
-    let expected = application
-        .graph_delete_precondition("fixture")
-        .await
-        .unwrap();
-    application
-        .create_graph("caller", Some(caller_definition("fixture")))
-        .await
-        .unwrap();
-
-    let error = application
-        .remove_graph_if_unchanged("fixture", &workspace_root, &expected)
-        .await
-        .unwrap_err();
-    assert!(
-        matches!(error, GraphManagementError::Conflict(ref message) if message.contains("Graph `caller`")),
-        "{error:?}"
-    );
-    assert!(path.exists());
 }

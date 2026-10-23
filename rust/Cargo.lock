@@ -72,13 +72,11 @@ dependencies = [
  "anchor-distribution",
  "anchor-file-lease",
  "object",
- "rusqlite",
  "rustix",
  "serde",
  "serde_json",
  "sha2",
  "tempfile",
- "url",
 ]
 
 [[package]]

@@ -10,6 +10,14 @@ use super::fetch::{FetchedArtifact, fetch_wheelhouse_reporting};
 use super::test_support::*;
 use super::*;
 
+fn wheel_fixture() -> (tempfile::TempDir, PathBuf, PathBuf) {
+    let root = tempfile::tempdir().unwrap();
+    let wheels = root.path().join("wheels");
+    std::fs::create_dir_all(&wheels).unwrap();
+    let wheel = fixture_wheel(&wheels, "probepkg", "0.1.0");
+    (root, wheels, wheel)
+}
+
 /// The boundary the whole design rests on: this sandbox cannot reach the network
 /// even when a request asks for it.
 #[tokio::test(flavor = "multi_thread")]
@@ -257,15 +265,6 @@ async fn index_fixture(wheel: &Path, as_html: bool) -> IndexFixture {
     index_fixture_named(wheel, as_html, None).await
 }
 
-/// An index that reports it does not have the project at all.
-async fn index_fixture_missing(wheel: &Path) -> IndexFixture {
-    let fixture = index_fixture_named(wheel, false, None).await;
-    fixture
-        .missing
-        .store(true, std::sync::atomic::Ordering::SeqCst);
-    fixture
-}
-
 /// The same fixture, optionally advertising a different file name — an sdist, so
 /// a case can prove this host never fetches one. Its artifact URL is relative,
 /// which is the shape the real mirrors serve.
@@ -276,44 +275,6 @@ async fn index_fixture_named(wheel: &Path, as_html: bool, rename_to: Option<&str
         rename_to,
         "application/vnd.pypi.simple.v1+json",
         IndexUrlStyle::Relative,
-    )
-    .await
-}
-
-/// The older shape: an absolute artifact URL. Kept so both forms stay proven.
-async fn index_fixture_absolute(wheel: &Path) -> IndexFixture {
-    index_fixture_serving(
-        wheel,
-        false,
-        None,
-        "application/vnd.pypi.simple.v1+json",
-        IndexUrlStyle::Absolute,
-    )
-    .await
-}
-
-/// The same fixture offering an exact artifact URL, so a case can prove the
-/// outbound policy refuses it instead of requesting it.
-async fn index_fixture_offering(wheel: &Path, url: &str) -> IndexFixture {
-    index_fixture_serving(
-        wheel,
-        false,
-        None,
-        "application/vnd.pypi.simple.v1+json",
-        IndexUrlStyle::Exact(url.to_owned()),
-    )
-    .await
-}
-
-/// The same fixture whose artifact path does not exist, so the download answers
-/// `404` — a source with the package page but not the bytes.
-async fn index_fixture_without_the_artifact(wheel: &Path) -> IndexFixture {
-    index_fixture_serving(
-        wheel,
-        false,
-        None,
-        "application/vnd.pypi.simple.v1+json",
-        IndexUrlStyle::AbsentPath,
     )
     .await
 }
@@ -376,11 +337,12 @@ async fn a_package_the_authorized_index_lacks_is_not_resolved_elsewhere() {
     let Some(toolchain) = toolchain() else {
         return;
     };
-    let root = tempfile::tempdir().unwrap();
-    let wheels = root.path().join("wheels");
-    std::fs::create_dir_all(&wheels).unwrap();
-    let wheel = fixture_wheel(&wheels, "probepkg", "0.1.0");
-    let index = index_fixture_missing(&wheel).await;
+    let (root, _wheels, wheel) = wheel_fixture();
+    let index = index_fixture(&wheel, false).await;
+    // Report that the authorized index does not contain the requested project.
+    index
+        .missing
+        .store(true, std::sync::atomic::Ordering::SeqCst);
     let config = config_with_sources(
         root.path(),
         &toolchain,
@@ -408,10 +370,7 @@ async fn an_index_that_serves_other_bytes_than_it_advertised_is_refused() {
     let Some(toolchain) = toolchain() else {
         return;
     };
-    let root = tempfile::tempdir().unwrap();
-    let wheels = root.path().join("wheels");
-    std::fs::create_dir_all(&wheels).unwrap();
-    let wheel = fixture_wheel(&wheels, "probepkg", "0.1.0");
+    let (root, _wheels, wheel) = wheel_fixture();
     let index = index_fixture(&wheel, false).await;
     let config = config_with_sources(
         root.path(),
@@ -457,10 +416,7 @@ async fn an_index_that_answers_html_instead_of_json_is_refused_with_a_reason() {
     let Some(toolchain) = toolchain() else {
         return;
     };
-    let root = tempfile::tempdir().unwrap();
-    let wheels = root.path().join("wheels");
-    std::fs::create_dir_all(&wheels).unwrap();
-    let wheel = fixture_wheel(&wheels, "probepkg", "0.1.0");
+    let (root, _wheels, wheel) = wheel_fixture();
     let index = index_fixture(&wheel, true).await;
     let config = config_with_sources(
         root.path(),
@@ -485,10 +441,7 @@ async fn an_index_that_answers_html_instead_of_json_is_refused_with_a_reason() {
 /// fixture passes and the HTML fixture does not.
 #[tokio::test(flavor = "multi_thread")]
 async fn the_json_probe_distinguishes_a_pep_691_index_from_an_html_one() {
-    let root = tempfile::tempdir().unwrap();
-    let wheels = root.path().join("wheels");
-    std::fs::create_dir_all(&wheels).unwrap();
-    let wheel = fixture_wheel(&wheels, "probepkg", "0.1.0");
+    let (_root, _wheels, wheel) = wheel_fixture();
 
     let json = index_fixture(&wheel, false).await;
     verify_index_json(&json.endpoint, "probepkg")
@@ -509,10 +462,7 @@ async fn the_json_probe_distinguishes_a_pep_691_index_from_an_html_one() {
 /// the probe compares the media type rather than the whole header value.
 #[tokio::test(flavor = "multi_thread")]
 async fn the_json_probe_accepts_a_pep_691_content_type_with_parameters() {
-    let root = tempfile::tempdir().unwrap();
-    let wheels = root.path().join("wheels");
-    std::fs::create_dir_all(&wheels).unwrap();
-    let wheel = fixture_wheel(&wheels, "probepkg", "0.1.0");
+    let (_root, _wheels, wheel) = wheel_fixture();
     let index = index_fixture_serving(
         &wheel,
         false,
@@ -596,10 +546,7 @@ fn locked_package(name: &str, version: &str, digest: &str) -> LockedPackage {
 /// (`../../packages/…`), so the fetch has to resolve it against that page.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_relative_artifact_url_is_resolved_against_the_package_page() {
-    let root = tempfile::tempdir().unwrap();
-    let wheels = root.path().join("wheels");
-    std::fs::create_dir_all(&wheels).unwrap();
-    let wheel = fixture_wheel(&wheels, "probepkg", "0.1.0");
+    let (root, _wheels, wheel) = wheel_fixture();
     let digest = super::config::sha256_file(&wheel).unwrap();
     let index = index_fixture(&wheel, false).await;
     let config = fetch_only_config(root.path(), &index.endpoint);
@@ -620,12 +567,16 @@ async fn a_relative_artifact_url_is_resolved_against_the_package_page() {
 /// An absolute artifact URL keeps working: both shapes are legal PEP 691.
 #[tokio::test(flavor = "multi_thread")]
 async fn an_absolute_artifact_url_is_still_fetched() {
-    let root = tempfile::tempdir().unwrap();
-    let wheels = root.path().join("wheels");
-    std::fs::create_dir_all(&wheels).unwrap();
-    let wheel = fixture_wheel(&wheels, "probepkg", "0.1.0");
+    let (root, _wheels, wheel) = wheel_fixture();
     let digest = super::config::sha256_file(&wheel).unwrap();
-    let index = index_fixture_absolute(&wheel).await;
+    let index = index_fixture_serving(
+        &wheel,
+        false,
+        None,
+        "application/vnd.pypi.simple.v1+json",
+        IndexUrlStyle::Absolute,
+    )
+    .await;
     let config = fetch_only_config(root.path(), &index.endpoint);
 
     let fetched = fetch_wheelhouse(
@@ -643,12 +594,16 @@ async fn an_absolute_artifact_url_is_still_fetched() {
 /// without the artifact being requested at all.
 #[tokio::test(flavor = "multi_thread")]
 async fn an_artifact_url_the_policy_refuses_is_never_requested() {
-    let root = tempfile::tempdir().unwrap();
-    let wheels = root.path().join("wheels");
-    std::fs::create_dir_all(&wheels).unwrap();
-    let wheel = fixture_wheel(&wheels, "probepkg", "0.1.0");
+    let (root, _wheels, wheel) = wheel_fixture();
     let digest = super::config::sha256_file(&wheel).unwrap();
-    let index = index_fixture_offering(&wheel, "//10.0.0.1/packages/probepkg-0.1.0.whl").await;
+    let index = index_fixture_serving(
+        &wheel,
+        false,
+        None,
+        "application/vnd.pypi.simple.v1+json",
+        IndexUrlStyle::Exact("//10.0.0.1/packages/probepkg-0.1.0.whl".into()),
+    )
+    .await;
     let config = fetch_only_config(root.path(), &index.endpoint);
 
     let error = fetch_wheelhouse(
@@ -673,13 +628,17 @@ async fn an_artifact_url_the_policy_refuses_is_never_requested() {
 /// per source, and the artifact must come from the second one.
 #[tokio::test(flavor = "multi_thread")]
 async fn the_fetch_reports_every_source_and_serves_from_the_one_that_has_the_bytes() {
-    let root = tempfile::tempdir().unwrap();
-    let wheels = root.path().join("wheels");
-    std::fs::create_dir_all(&wheels).unwrap();
-    let wheel = fixture_wheel(&wheels, "probepkg", "0.1.0");
+    let (root, _wheels, wheel) = wheel_fixture();
     let digest = super::config::sha256_file(&wheel).unwrap();
     // The first source lists the package but not the artifact; the second serves it.
-    let broken = index_fixture_without_the_artifact(&wheel).await;
+    let broken = index_fixture_serving(
+        &wheel,
+        false,
+        None,
+        "application/vnd.pypi.simple.v1+json",
+        IndexUrlStyle::AbsentPath,
+    )
+    .await;
     let good = index_fixture(&wheel, false).await;
     let config = fetch_only_config_for(
         root.path(),
@@ -718,10 +677,7 @@ async fn the_fetch_reports_every_source_and_serves_from_the_one_that_has_the_byt
 /// One source that has the bytes: exactly one line, marked as serving them.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_single_source_fetch_reports_one_served_line() {
-    let root = tempfile::tempdir().unwrap();
-    let wheels = root.path().join("wheels");
-    std::fs::create_dir_all(&wheels).unwrap();
-    let wheel = fixture_wheel(&wheels, "probepkg", "0.1.0");
+    let (root, _wheels, wheel) = wheel_fixture();
     let digest = super::config::sha256_file(&wheel).unwrap();
     let index = index_fixture(&wheel, false).await;
     let config = fetch_only_config(root.path(), &index.endpoint);
@@ -747,10 +703,7 @@ async fn a_single_source_fetch_reports_one_served_line() {
 /// the log then says which mirror was skipped rather than leaving it to inference.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_source_that_was_not_needed_is_recorded_as_such() {
-    let root = tempfile::tempdir().unwrap();
-    let wheels = root.path().join("wheels");
-    std::fs::create_dir_all(&wheels).unwrap();
-    let wheel = fixture_wheel(&wheels, "probepkg", "0.1.0");
+    let (root, _wheels, wheel) = wheel_fixture();
     let digest = super::config::sha256_file(&wheel).unwrap();
     let first = index_fixture(&wheel, false).await;
     let unused = index_fixture(&wheel, false).await;
@@ -787,10 +740,7 @@ async fn an_sdist_is_never_fetched_even_when_it_carries_an_approved_digest() {
     let Some(toolchain) = toolchain() else {
         return;
     };
-    let root = tempfile::tempdir().unwrap();
-    let wheels = root.path().join("wheels");
-    std::fs::create_dir_all(&wheels).unwrap();
-    let wheel = fixture_wheel(&wheels, "probepkg", "0.1.0");
+    let (root, _wheels, wheel) = wheel_fixture();
     let digest = super::config::sha256_file(&wheel).unwrap();
     let index = index_fixture_named(&wheel, false, Some("probepkg-0.1.0.tar.gz")).await;
     let config = config_with_sources(
@@ -820,10 +770,7 @@ async fn a_source_that_offers_only_source_distributions_is_refused_at_resolution
     let Some(toolchain) = toolchain() else {
         return;
     };
-    let root = tempfile::tempdir().unwrap();
-    let wheels = root.path().join("wheels");
-    std::fs::create_dir_all(&wheels).unwrap();
-    let wheel = fixture_wheel(&wheels, "probepkg", "0.1.0");
+    let (root, _wheels, wheel) = wheel_fixture();
     let index = index_fixture_named(&wheel, false, Some("probepkg-0.1.0.tar.gz")).await;
     let config = config_with_sources(
         root.path(),
@@ -843,10 +790,7 @@ async fn a_source_that_offers_only_source_distributions_is_refused_at_resolution
 /// is what the deployment's host log records.
 #[tokio::test(flavor = "multi_thread")]
 async fn the_fetch_report_reaches_this_process_stderr() {
-    let root = tempfile::tempdir().unwrap();
-    let wheels = root.path().join("wheels");
-    std::fs::create_dir_all(&wheels).unwrap();
-    let wheel = fixture_wheel(&wheels, "probepkg", "0.1.0");
+    let (root, _wheels, wheel) = wheel_fixture();
     let digest = super::config::sha256_file(&wheel).unwrap();
     let index = index_fixture(&wheel, false).await;
     let config = fetch_only_config(root.path(), &index.endpoint);
@@ -880,10 +824,7 @@ async fn a_directory_source_keeps_a_plugin_package_deliverable_when_an_index_ans
     let Some(toolchain) = toolchain() else {
         return;
     };
-    let root = tempfile::tempdir().unwrap();
-    let wheels = root.path().join("wheels");
-    std::fs::create_dir_all(&wheels).unwrap();
-    let wheel = fixture_wheel(&wheels, "probepkg", "0.1.0");
+    let (root, wheels, wheel) = wheel_fixture();
     // The index answers PEP 503 HTML, which this host cannot fetch from; the
     // directory can still deliver the artifact.
     let index = index_fixture(&wheel, true).await;

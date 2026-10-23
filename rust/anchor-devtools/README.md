@@ -72,17 +72,12 @@ The flagless form remains available for explicit operator process settings.
 It does not contact a provider or start the service. See the
 [deployment guide](../../docs/rust-production-deployment.md).
 
-`anchor-devtools cutover` inventories old records read-only. It reports blocked
-conditions with exit code 2; explicit preparation writes a protected manifest
-and backup index, not a backup or migration. See
-[cutover preparation](../../docs/rust-production-cutover.md).
-
 `anchor-devtools regression candidate` builds Web and release binaries, reuses
 the Host's extracted-runtime fixture and saves actual command/evidence reports.
 See [candidate regression](../../docs/rust-production-candidate.md).
 
 Target paths default to `CARGO_TARGET_DIR` or `/tmp/anchor-native-regression-target`;
 evidence defaults to a new private directory under the system temporary directory.
-Real provider, full business-Graph, public-service and production-cutover
+Real provider, full business-Graph, public-service and production-deployment
 acceptance remain separate. See the
 [standard regression guide](../../docs/runtime-contract-tests.md).

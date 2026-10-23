@@ -1,5 +1,8 @@
+mod support;
+
+use support::{assert_conflict, assert_invalid, turn_fixture as fixture};
+
 use std::{
-    path::PathBuf,
     sync::{Arc, Barrier},
     thread,
 };
@@ -10,27 +13,6 @@ use anchor_platform_session::{
 };
 use rusqlite::Connection;
 use serde_json::{Value, json};
-use tempfile::TempDir;
-
-fn fixture() -> (TempDir, PathBuf, SessionStore, Turn) {
-    let directory = tempfile::tempdir().unwrap();
-    let path = directory.path().join("sessions.sqlite");
-    let store = SessionStore::open(&path).unwrap();
-    store
-        .create(
-            "alice",
-            CreateSession {
-                id: Some("pilot".into()),
-                ..Default::default()
-            },
-        )
-        .unwrap();
-    let turn = store
-        .create_turn("alice", "pilot", "request", Some("hello"))
-        .unwrap()
-        .0;
-    (directory, path, store, turn)
-}
 
 fn schema() -> Value {
     json!({"type":"object", "properties":{
@@ -53,14 +35,6 @@ fn accept(content: Value) -> QuestionAnswer {
         action: QuestionAction::Accept,
         content: Some(content),
     }
-}
-
-fn assert_invalid<Output>(result: Result<Output, SessionError>) {
-    assert!(matches!(result, Err(SessionError::Invalid(_))));
-}
-
-fn assert_conflict<Output>(result: Result<Output, SessionError>) {
-    assert!(matches!(result, Err(SessionError::Conflict(_))));
 }
 
 #[test]
@@ -489,7 +463,10 @@ fn restart_interruption_preserves_answered_facts_and_allows_identical_history_re
             .status,
         QuestionStatus::Pending
     );
-    assert_eq!(reopened.interrupt_running().unwrap(), 1);
+    assert_eq!(
+        reopened.interrupt_running_except_assistants(&[]).unwrap(),
+        1
+    );
     assert_eq!(
         reopened.get("alice", "pilot").unwrap().status,
         SessionStatus::Interrupted
@@ -528,7 +505,10 @@ fn restart_interruption_preserves_answered_facts_and_allows_identical_history_re
         accept(json!({"choice":"alpha"})),
     ));
     let events = reopened.turn_events("alice", "pilot", &turn.id, 0).unwrap();
-    assert_eq!(reopened.interrupt_running().unwrap(), 0);
+    assert_eq!(
+        reopened.interrupt_running_except_assistants(&[]).unwrap(),
+        0
+    );
     assert_eq!(
         reopened.turn_events("alice", "pilot", &turn.id, 0).unwrap(),
         events
@@ -716,7 +696,7 @@ fn turn_finish_rolls_back_all_facts_when_question_interruption_sse_write_fails()
         Err(SessionError::Storage(_))
     ));
     assert!(matches!(
-        store.interrupt_running(),
+        store.interrupt_running_except_assistants(&[]),
         Err(SessionError::Storage(_))
     ));
     assert_eq!(

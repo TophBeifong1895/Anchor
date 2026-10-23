@@ -41,6 +41,8 @@ mod oauth_http;
 mod op;
 mod run_data;
 mod run_deletions;
+#[cfg(test)]
+mod test_support;
 mod tool_disclosure;
 mod tool_environment;
 mod tool_host;

@@ -4,80 +4,57 @@ use crate::application::run_access::fixtures;
 use anchor_platform_session::{CreateSession, SessionStore};
 use serde_json::json;
 use sha2::{Digest, Sha256};
-use std::{ffi::OsString, fs, time::Duration};
+use std::{fs, time::Duration};
 
-struct Environment(Vec<(&'static str, Option<OsString>)>);
+use crate::test_support::Environment;
 
-impl Environment {
-    fn configure(root: &Path) -> Self {
-        let names = [
-            "ANCHOR_RUNNER_STATE_ROOT",
-            "ANCHOR_RUNNER_WORKSPACE_ROOT",
-            "ANCHOR_RUNNER_CATALOG_ROOT",
-            "ANCHOR_RUNNER_LIBRARY_ROOT",
-            "ANCHOR_RUNNER_ALLOWED_COMMANDS",
-            "ANCHOR_RUNNER_LOCAL_INPUTS_ROOT",
-            "ANCHOR_MODEL_API_KEY",
-            "ANCHOR_MODEL_URL",
-            "ANCHOR_MODEL_NAME",
-            "ANCHOR_MODEL_WIRE_API",
-            "ANCHOR_MODEL_DIRECT",
-            "ANCHOR_MODEL_ALIASES",
-            "ANCHOR_MODEL_CONTEXT_WINDOW",
-            "ANCHOR_RUNNER_AGENT_RUNTIME",
-            "ANCHOR_GOOSE_BINARY",
-            "ANCHOR_GOOSE_BINARY_SHA256",
-            "ANCHOR_GOOSE_LOCAL_NETWORK",
-            "ANCHOR_GOOSE_ALLOW_SHARED_NETWORK",
-        ];
-        let previous = names
-            .iter()
-            .map(|name| (*name, std::env::var_os(name)))
-            .collect();
-        // Admission needs a valid provider configuration for the Agent that
-        // owns this Plugin reference. The preceding real Op gate is cancelled
-        // before that Agent can execute, so Goose/model transport must not run.
-        let binary = root.join("unstarted-goose");
-        let bytes = b"Goose must not execute in this reference admission fixture";
-        fs::write(&binary, bytes).unwrap();
-        unsafe {
-            for name in names {
-                std::env::remove_var(name);
-            }
-            std::env::set_var("ANCHOR_RUNNER_STATE_ROOT", root.join("state"));
-            std::env::set_var("ANCHOR_RUNNER_WORKSPACE_ROOT", root.join("workspaces"));
-            std::env::set_var("ANCHOR_RUNNER_CATALOG_ROOT", root);
-            std::env::set_var("ANCHOR_RUNNER_LIBRARY_ROOT", root.join("library"));
-            std::env::set_var("ANCHOR_RUNNER_ALLOWED_COMMANDS", "sh,sleep,printf");
-            std::env::set_var("ANCHOR_RUNNER_AGENT_RUNTIME", "goose");
-            std::env::set_var("ANCHOR_GOOSE_BINARY", &binary);
-            std::env::set_var(
-                "ANCHOR_GOOSE_BINARY_SHA256",
-                format!("{:x}", Sha256::digest(bytes)),
-            );
-            std::env::set_var("ANCHOR_GOOSE_LOCAL_NETWORK", "0");
-            std::env::set_var("ANCHOR_GOOSE_ALLOW_SHARED_NETWORK", "1");
-            std::env::set_var("ANCHOR_MODEL_DIRECT", "0");
-        }
-        crate::model_configuration::ModelConfiguration::from_env(&root.join("state"))
+fn environment(root: &Path) -> Environment {
+    let names = [
+        "ANCHOR_RUNNER_STATE_ROOT",
+        "ANCHOR_RUNNER_WORKSPACE_ROOT",
+        "ANCHOR_RUNNER_CATALOG_ROOT",
+        "ANCHOR_RUNNER_LIBRARY_ROOT",
+        "ANCHOR_RUNNER_ALLOWED_COMMANDS",
+        "ANCHOR_RUNNER_LOCAL_INPUTS_ROOT",
+        "ANCHOR_MODEL_API_KEY",
+        "ANCHOR_MODEL_URL",
+        "ANCHOR_MODEL_NAME",
+        "ANCHOR_MODEL_WIRE_API",
+        "ANCHOR_MODEL_DIRECT",
+        "ANCHOR_MODEL_ALIASES",
+        "ANCHOR_MODEL_CONTEXT_WINDOW",
+        "ANCHOR_RUNNER_AGENT_RUNTIME",
+        "ANCHOR_GOOSE_BINARY",
+        "ANCHOR_GOOSE_BINARY_SHA256",
+        "ANCHOR_GOOSE_LOCAL_NETWORK",
+        "ANCHOR_GOOSE_ALLOW_SHARED_NETWORK",
+    ];
+    let mut environment = Environment::cleared(&names);
+    // Admission needs a valid provider configuration for the Agent that
+    // owns this Plugin reference. The preceding real Op gate is cancelled
+    // before that Agent can execute, so Goose/model transport must not run.
+    let binary = root.join("unstarted-goose");
+    let bytes = b"Goose must not execute in this reference admission fixture";
+    fs::write(&binary, bytes).unwrap();
+    environment.set("ANCHOR_RUNNER_STATE_ROOT", root.join("state"));
+    environment.set("ANCHOR_RUNNER_WORKSPACE_ROOT", root.join("workspaces"));
+    environment.set("ANCHOR_RUNNER_CATALOG_ROOT", root);
+    environment.set("ANCHOR_RUNNER_LIBRARY_ROOT", root.join("library"));
+    environment.set("ANCHOR_RUNNER_ALLOWED_COMMANDS", "sh,sleep,printf");
+    environment.set("ANCHOR_RUNNER_AGENT_RUNTIME", "goose");
+    environment.set("ANCHOR_GOOSE_BINARY", &binary);
+    environment.set(
+        "ANCHOR_GOOSE_BINARY_SHA256",
+        format!("{:x}", Sha256::digest(bytes)),
+    );
+    environment.set("ANCHOR_GOOSE_LOCAL_NETWORK", "0");
+    environment.set("ANCHOR_GOOSE_ALLOW_SHARED_NETWORK", "1");
+    environment.set("ANCHOR_MODEL_DIRECT", "0");
+    crate::model_configuration::ModelConfiguration::from_env(&root.join("state"))
             .unwrap()
             .save(serde_json::from_value(json!({"endpoint":"http://127.0.0.1:1/v1","wire_api":"chat","model":"admission-fixture","api_key":{"action":"set","value":"admission-fixture-only"}})).unwrap())
             .unwrap();
-        Self(previous)
-    }
-}
-
-impl Drop for Environment {
-    fn drop(&mut self) {
-        for (name, value) in &self.0 {
-            unsafe {
-                match value {
-                    Some(value) => std::env::set_var(name, value),
-                    None => std::env::remove_var(name),
-                }
-            }
-        }
-    }
+    environment
 }
 
 fn fixture(root: &Path) -> (RunApplication, SessionStore) {
@@ -198,7 +175,7 @@ async fn stop_gate(application: &RunApplication, root: &Path, run: &str) {
 async fn concurrent_run_admission_publishes_its_reference_before_uninstall_rechecks() {
     let _env_guard = crate::PROCESS_ENV_LOCK.lock().await;
     let root = tempfile::tempdir().unwrap();
-    let _environment = Environment::configure(root.path());
+    let _environment = environment(root.path());
     let (application, sessions) = fixture(root.path());
     let library = root.path().join("library");
     let precondition = application
@@ -262,7 +239,7 @@ async fn concurrent_run_admission_publishes_its_reference_before_uninstall_reche
 async fn an_uninstalled_plugin_cannot_be_admitted_from_an_already_loaded_bundle() {
     let _env_guard = crate::PROCESS_ENV_LOCK.lock().await;
     let root = tempfile::tempdir().unwrap();
-    let _environment = Environment::configure(root.path());
+    let _environment = environment(root.path());
     let (application, sessions) = fixture(root.path());
     let library = root.path().join("library");
     let (source, bundle) = application.load_graph("fixture").unwrap();

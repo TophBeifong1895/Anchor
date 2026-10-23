@@ -1027,103 +1027,18 @@ async fn wecom_progress_requires_authentication() {
 /// reported nothing.
 #[tokio::test]
 async fn persistent_assistant_progress_resolves_the_bound_round() {
-    use anchor_runtime::graph::GraphSnapshot;
     use futures_util::StreamExt;
-    use sha2::{Digest, Sha256};
 
     let (root, state) = fixture();
     let _env = PROCESS_ENV.lock().await;
     set_host_env(root.path(), &state.data_root);
-    std::fs::create_dir_all(state.data_root.join("platform")).unwrap();
-
-    let mut definition: Value = serde_json::from_str(include_str!(
-        "../../../../../examples/graphs/wecom-persistent-assistant.json"
-    ))
-    .unwrap();
-    definition["nodes"][1]["plugins"] = json!([]);
-    write_graph_bundle(&state.bundle_root, &definition).unwrap();
-
+    let definition = assistant_definition();
+    let (session, turn, expected_work, fact) =
+        seed_running_assistant_round(&state, &definition, "message-1", 1);
     let owner = "local";
     let sessions = SessionStore::open(state.data_root.join("platform/sessions.sqlite")).unwrap();
-    let admission = sessions
-        .admit_channel_inbound(
-            owner,
-            ChannelInboundRequest {
-                inbound_id: inbound_id_for("message-1"),
-                identity: ChannelIdentity {
-                    conversation_kind: Default::default(),
-                    source: "wecom".into(),
-                    account: None,
-                    conversation_id: "conversation-1".into(),
-                    sender_id: "user-1".into(),
-                },
-                graph: "fixture".into(),
-                // The channel Session's result node is the node whose
-                // completion carries the reply: the work agent, not the loop's
-                // reply op.
-                reply_node: "assistant".into(),
-                text: Some("看看工作区".into()),
-                attachments: Default::default(),
-                run_id: None,
-                replace_running: true,
-            },
-        )
-        .unwrap();
-    let session = admission.session.id.clone();
-    let turn = admission.turn.id.clone();
-    let run = "assistant-progress-fixture";
-    let record = GraphRunRecord::create_with_id(
-        GraphSnapshot::admit(definition.clone()).unwrap(),
-        json!({"session":session}),
-        run,
-    )
-    .unwrap();
-    fixtures::create(&state.application, &record);
-
-    sessions
-        .bind_channel_assistant(owner, &session, run, "wait_input", "assistant", "reply")
-        .unwrap();
-    let wait_key = format!("{run}:{}:wait_input:1", record.graph_digest);
-    let claimed = sessions
-        .claim_channel_assistant_input(owner, &session, run, &wait_key)
-        .unwrap()
-        .unwrap();
-    // The wait op records its own invocation for the round it claimed.
-    crate::assistant::bind(
-        &state.data_root,
-        &InvocationKey {
-            run_id: run.into(),
-            graph_digest: record.graph_digest.clone(),
-            node_id: "wait_input".into(),
-            invocation: 1,
-        },
-        wait_key.clone(),
-        &claimed,
-        Vec::new(),
-        false,
-    )
-    .unwrap();
-
-    let mut saved = RunMetadata::new(
-        run.into(),
-        "fixture".into(),
-        record.graph_digest.clone(),
-        &state.bundle_root,
-    )
-    .unwrap();
-    saved.conversation = Some(metadata::ConversationSource {
-        session: session.clone(),
-        reply_node: "assistant".into(),
-        previous_run: None,
-    });
-    saved.assistant = Some(metadata::AssistantSource {
-        owner: owner.into(),
-        session: session.clone(),
-        wait_node: "wait_input".into(),
-        work_node: "assistant".into(),
-        reply_node: "reply".into(),
-    });
-    metadata::save(&state.data_root, &saved).unwrap();
+    let run = expected_work.run_id.as_str();
+    let wait_key = format!("{run}:{}:wait_input:1", expected_work.graph_digest);
 
     // The round is identified by the persisted association, and the work
     // invocation is that round with the node substituted.
@@ -1135,7 +1050,7 @@ async fn persistent_assistant_progress_resolves_the_bound_round() {
     let work = crate::api::wecom_progress::round_work_invocation(
         &persisted,
         run,
-        &record.graph_digest,
+        &expected_work.graph_digest,
         "assistant",
     )
     .expect("a durable wait key names the work invocation of its round");
@@ -1155,19 +1070,7 @@ async fn persistent_assistant_progress_resolves_the_bound_round() {
 
     // Seed the work invocation's in-process trace exactly as a running Goose
     // node would: same durable-key stem, same session update shape.
-    let work_key = InvocationKey {
-        run_id: run.into(),
-        graph_digest: record.graph_digest.clone(),
-        node_id: "assistant".into(),
-        invocation: 1,
-    };
-    let stem = format!("{:x}", Sha256::digest(work_key.durable_key().as_bytes()));
-    let fact = state
-        .data_root
-        .join("goose-acp")
-        .join(format!("{stem}.json"));
-    std::fs::create_dir_all(fact.parent().unwrap()).unwrap();
-    std::fs::write(&fact, b"{}").unwrap();
+    assert_eq!(work, expected_work);
     let live = crate::goose_acp::LiveTrace::open(&fact).unwrap();
     live.restore("native-fixture", &[]).unwrap();
     live.observe(&json!({"method":"session/update","params":{
@@ -1423,6 +1326,7 @@ fn seed_running_assistant_round(
     use anchor_runtime::graph::GraphSnapshot;
     use sha2::{Digest, Sha256};
 
+    std::fs::create_dir_all(state.data_root.join("platform")).unwrap();
     write_graph_bundle(&state.bundle_root, definition).unwrap();
     let owner = "local";
     let sessions = SessionStore::open(state.data_root.join("platform/sessions.sqlite")).unwrap();

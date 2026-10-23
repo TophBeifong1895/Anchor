@@ -105,6 +105,5 @@ provider/business acceptance, target-machine deployment validation, migration,
 or authorization to switch production traffic and data.
 
 `anchor-devtools preflight` prints the deployment preflight JSON without flags.
-`anchor-devtools cutover ...` forwards options to the native inventory module;
-a JSON `decision` of `blocked` exits 2. `regression fixture` and
-`regression goose-fixture` retain their existing bounded regression behavior.
+`regression fixture` and `regression goose-fixture` retain their existing
+bounded regression behavior.

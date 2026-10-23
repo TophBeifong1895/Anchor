@@ -1,9 +1,13 @@
+mod support;
+
+use support::{assert_conflict, assert_invalid};
+
 use std::sync::{Arc, Barrier};
 use std::thread;
 
 use anchor_platform_session::{
-    AttachmentManifest, AttachmentManifestEntry, ChannelDeliveryRequest, ChannelDeliveryStatus,
-    ChannelIdentity, ChannelInboundRequest, CreateSession, SessionError, SessionStore, TurnStatus,
+    AttachmentManifestEntry, ChannelDeliveryRequest, ChannelDeliveryStatus, ChannelInboundRequest,
+    CreateSession, SessionError, SessionStore, TurnStatus,
 };
 use tempfile::TempDir;
 
@@ -15,20 +19,10 @@ fn fixture() -> (TempDir, SessionStore) {
 
 fn request(inbound_id: &str, identity: &str) -> ChannelInboundRequest {
     ChannelInboundRequest {
-        inbound_id: inbound_id.into(),
-        identity: ChannelIdentity {
-            conversation_kind: Default::default(),
-            source: "wecom".into(),
-            account: Some("corp-a".into()),
-            conversation_id: identity.into(),
-            sender_id: "user-1".into(),
-        },
         graph: "support-graph".into(),
         reply_node: "reply".into(),
         text: Some("hello".into()),
-        attachments: AttachmentManifest::default(),
-        run_id: None,
-        replace_running: false,
+        ..support::channel_request(inbound_id, "wecom", Some("corp-a"), identity, "user-1")
     }
 }
 
@@ -51,14 +45,6 @@ fn delivery(key: &str) -> ChannelDeliveryRequest {
         kind: "text".into(),
         content_sha256: "b".repeat(64),
     }
-}
-
-fn assert_conflict<T>(result: Result<T, SessionError>) {
-    assert!(matches!(result, Err(SessionError::Conflict(_))));
-}
-
-fn assert_invalid<T>(result: Result<T, SessionError>) {
-    assert!(matches!(result, Err(SessionError::Invalid(_))));
 }
 
 #[test]

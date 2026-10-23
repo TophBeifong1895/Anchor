@@ -1,3 +1,7 @@
+mod support;
+
+use support::assert_conflict;
+
 use std::{
     collections::BTreeMap,
     sync::{Arc, Barrier},
@@ -5,8 +9,8 @@ use std::{
 };
 
 use anchor_platform_session::{
-    AttachmentManifest, AttachmentManifestEntry, ChannelAdmission, ChannelAssistant,
-    ChannelIdentity, ChannelInboundRequest, CreateSession, SessionError, SessionStore, TurnStatus,
+    AttachmentManifestEntry, ChannelAdmission, ChannelAssistant, ChannelInboundRequest,
+    CreateSession, SessionError, SessionStore, TurnStatus,
 };
 use rusqlite::Connection;
 use tempfile::TempDir;
@@ -22,20 +26,9 @@ fn fixture() -> (TempDir, SessionStore, ChannelAdmission) {
 
 fn request(inbound: &str, conversation: &str) -> ChannelInboundRequest {
     ChannelInboundRequest {
-        inbound_id: inbound.into(),
-        identity: ChannelIdentity {
-            conversation_kind: Default::default(),
-            source: "wecom".into(),
-            account: Some("corp-a".into()),
-            conversation_id: conversation.into(),
-            sender_id: "user-1".into(),
-        },
         graph: "support-graph".into(),
-        reply_node: "assistant".into(),
         text: Some(format!("input for {inbound}")),
-        attachments: AttachmentManifest::default(),
-        run_id: None,
-        replace_running: false,
+        ..support::channel_request(inbound, "wecom", Some("corp-a"), conversation, "user-1")
     }
 }
 
@@ -56,13 +49,6 @@ fn replace(store: &SessionStore, inbound: &str) -> ChannelAdmission {
     let mut replacement = request(inbound, "conversation-1");
     replacement.replace_running = true;
     store.admit_channel_inbound("owner", replacement).unwrap()
-}
-
-fn assert_conflict<T: std::fmt::Debug>(result: Result<T, SessionError>) {
-    assert!(
-        matches!(result, Err(SessionError::Conflict(_))),
-        "{result:?}"
-    );
 }
 
 #[test]
@@ -174,7 +160,7 @@ fn startup_preserves_only_verified_current_claimed_assistant_turns_for_handover(
     assert_eq!(recovered.turn.id, claimed.turn.id);
     assert_eq!(recovered.turn.status, TurnStatus::Running);
     // The existing explicit interruption API still interrupts every Running Turn.
-    assert_eq!(store.interrupt_running().unwrap(), 1);
+    assert_eq!(store.interrupt_running_except_assistants(&[]).unwrap(), 1);
 }
 
 #[test]

@@ -257,8 +257,8 @@ Per-file size is limited to 1 GiB, textual resource parsing to 64 MiB, and paths
 to deterministic USTAR limits. There is no total-size/file-count quota, binary
 provenance verifier, ELF shared-library resolver, automatic external-service
 installation, or cross-platform package builder. Use reviewed local inputs.
-Packaging alone is not runtime execution, real-provider acceptance, a test on an
-production-cutover evidence. Model/API credentials,
+Packaging alone does not prove runtime execution, real-provider acceptance,
+compatibility with a target distribution, or production readiness. Model/API credentials,
 host-path grants and runtime state must be configured outside the archive.
 
 ## Focused Verification

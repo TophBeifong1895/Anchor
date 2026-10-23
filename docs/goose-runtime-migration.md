@@ -26,4 +26,4 @@ Goose 已提供 Agent loop、Provider、原生会话、加载、取消和 compac
 
 ## 后续查证
 
-[原迁移计划](archive/development-2026-10-13/goose-runtime-migration.md) 保留 G0–G3、阶段验收和当时部署边界，不再用于安排开工。Runtime 回归入口见 [回归指南](runtime-contract-tests.md)；MCP 按需连接仍是 [独立未实施路线](goose-native-capability-reuse-plan.md)。生产切换与旧数据迁移按 [切换指南](rust-production-cutover.md) 独立授权和验收。
+[原迁移计划](archive/development-2026-10-13/goose-runtime-migration.md) 保留 G0–G3、阶段验收和当时部署边界，不再用于安排开工。Runtime 回归入口见 [回归指南](runtime-contract-tests.md)；MCP 按需连接仍是 [独立未实施路线](goose-native-capability-reuse-plan.md)。新部署边界见 [部署指南](rust-production-deployment.md)，旧 Python 数据不提供迁移工具。

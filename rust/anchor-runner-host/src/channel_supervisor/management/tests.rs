@@ -1,6 +1,6 @@
 use super::*;
 use anchor_platform_session::{CreateSession, Session, SessionStore};
-use std::{ffi::OsString, sync::Arc, time::Duration};
+use std::{sync::Arc, time::Duration};
 
 const FIELDS: &[&str] = &[
     "WECOM_BOT_ID",
@@ -11,31 +11,7 @@ const FIELDS: &[&str] = &[
     "ANCHOR_WECOM_SEND_USERS",
 ];
 
-struct Environment(Vec<(&'static str, Option<OsString>)>);
-impl Environment {
-    fn clear() -> Self {
-        let fields = FIELDS
-            .iter()
-            .map(|name| (*name, env::var_os(name)))
-            .collect();
-        for field in FIELDS {
-            unsafe { env::remove_var(field) };
-        }
-        Self(fields)
-    }
-}
-impl Drop for Environment {
-    fn drop(&mut self) {
-        for (field, value) in &self.0 {
-            unsafe {
-                match value {
-                    Some(value) => env::set_var(field, value),
-                    None => env::remove_var(field),
-                };
-            }
-        }
-    }
-}
+use crate::test_support::Environment;
 
 struct Fixture {
     root: tempfile::TempDir,
@@ -52,7 +28,7 @@ async fn channel_observation_skips_code_reads_but_revalidates_live_authorization
     use std::mem::MaybeUninit;
 
     let _guard = crate::PROCESS_ENV_LOCK.lock().await;
-    let _environment = Environment::clear();
+    let _environment = Environment::cleared(FIELDS);
     let fixture = Fixture::new();
     fixture.prepare().await;
     let (metadata, channel) = fixture.adapter.metadata(&Fixture::binding()).unwrap();
@@ -267,7 +243,7 @@ while :; do sleep 0.02; done
 #[tokio::test]
 async fn managed_channel_uses_private_input_and_shared_binding_without_network_or_mount_grants() {
     let _guard = crate::PROCESS_ENV_LOCK.lock().await;
-    let _environment = Environment::clear();
+    let _environment = Environment::cleared(FIELDS);
     let fixture = Fixture::new();
     let before = fixture.sessions.get("local", "pilot").unwrap();
     fixture.prepare().await;
@@ -350,7 +326,7 @@ async fn managed_channel_uses_private_input_and_shared_binding_without_network_o
 #[tokio::test]
 async fn channel_reloads_one_durable_binding_and_rejects_another_owner_or_live_rebinding() {
     let _guard = crate::PROCESS_ENV_LOCK.lock().await;
-    let _environment = Environment::clear();
+    let _environment = Environment::cleared(FIELDS);
     let fixture = Fixture::new();
     fixture.prepare().await;
     fixture
@@ -431,7 +407,7 @@ async fn channel_reloads_one_durable_binding_and_rejects_another_owner_or_live_r
 #[tokio::test]
 async fn concurrent_enables_start_one_gateway_and_disabling_waits_for_shutdown() {
     let _guard = crate::PROCESS_ENV_LOCK.lock().await;
-    let _environment = Environment::clear();
+    let _environment = Environment::cleared(FIELDS);
     let fixture = Fixture::new();
     fixture.prepare().await;
     let (first, second) = tokio::join!(
@@ -469,7 +445,7 @@ async fn concurrent_enables_start_one_gateway_and_disabling_waits_for_shutdown()
 #[tokio::test]
 async fn removing_graph_or_plugin_stops_the_gateway_and_preserves_inspectable_intent() {
     let _guard = crate::PROCESS_ENV_LOCK.lock().await;
-    let _environment = Environment::clear();
+    let _environment = Environment::cleared(FIELDS);
     for remove_graph in [true, false] {
         let fixture = Fixture::new();
         fixture.prepare().await;
@@ -514,7 +490,7 @@ async fn removing_graph_or_plugin_stops_the_gateway_and_preserves_inspectable_in
 #[tokio::test]
 async fn deployment_binding_is_read_only_and_missing_credentials_do_not_enable() {
     let _guard = crate::PROCESS_ENV_LOCK.lock().await;
-    let _environment = Environment::clear();
+    let _environment = Environment::cleared(FIELDS);
     let fixture = Fixture::new();
     fixture
         .adapter
@@ -573,7 +549,7 @@ async fn deployment_binding_is_read_only_and_missing_credentials_do_not_enable()
 #[tokio::test]
 async fn deployment_and_managed_configuration_share_one_persisted_account_identity() {
     let _guard = crate::PROCESS_ENV_LOCK.lock().await;
-    let _environment = Environment::clear();
+    let _environment = Environment::cleared(FIELDS);
     let fixture = Fixture::new();
     fixture.prepare().await;
     fixture
@@ -630,7 +606,7 @@ async fn deployment_and_managed_configuration_share_one_persisted_account_identi
 #[tokio::test]
 async fn damaged_or_linked_channel_configuration_is_not_loaded_or_overwritten() {
     let _guard = crate::PROCESS_ENV_LOCK.lock().await;
-    let _environment = Environment::clear();
+    let _environment = Environment::cleared(FIELDS);
     let fixture = Fixture::new();
     fixture
         .adapter

@@ -1,6 +1,6 @@
-use anchor_platform_session::{
-    AttachmentManifest, ChannelIdentity, ChannelInboundRequest, SessionError, SessionStore,
-};
+mod support;
+
+use anchor_platform_session::{ChannelInboundRequest, SessionError, SessionStore};
 use std::{
     sync::{Arc, Barrier},
     thread,
@@ -8,20 +8,14 @@ use std::{
 
 fn request(account: Option<&str>, inbound: &str) -> ChannelInboundRequest {
     ChannelInboundRequest {
-        inbound_id: inbound.into(),
-        identity: ChannelIdentity {
-            source: "fixture-channel".into(),
-            account: account.map(str::to_owned),
-            conversation_kind: Default::default(),
-            conversation_id: "conversation".into(),
-            sender_id: "member".into(),
-        },
-        graph: "fixture".into(),
-        reply_node: "assistant".into(),
-        text: Some("input".into()),
-        attachments: AttachmentManifest::default(),
-        run_id: None,
         replace_running: true,
+        ..support::channel_request(
+            inbound,
+            "fixture-channel",
+            account,
+            "conversation",
+            "member",
+        )
     }
 }
 

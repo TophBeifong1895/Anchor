@@ -1,3 +1,7 @@
+mod support;
+
+use support::{assert_invalid, assert_storage, store_fixture as fixture};
+
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
@@ -10,14 +14,6 @@ use std::{
 use anchor_platform_session::{CreateSession, Session, SessionError, SessionStatus, SessionStore};
 use rusqlite::Connection;
 use serde_json::json;
-use tempfile::TempDir;
-
-fn fixture() -> (TempDir, PathBuf, SessionStore) {
-    let directory = tempfile::tempdir().unwrap();
-    let path = directory.path().join("platform-sessions.sqlite");
-    let store = SessionStore::open(&path).unwrap();
-    (directory, path, store)
-}
 
 fn request(id: &str) -> CreateSession {
     CreateSession {
@@ -28,14 +24,6 @@ fn request(id: &str) -> CreateSession {
 
 fn create(store: &SessionStore, owner: &str, id: &str) -> Session {
     store.create(owner, request(id)).unwrap()
-}
-
-fn assert_invalid<T>(result: Result<T, SessionError>) {
-    assert!(matches!(result, Err(SessionError::Invalid(_))));
-}
-
-fn assert_storage<T>(result: Result<T, SessionError>) {
-    assert!(matches!(result, Err(SessionError::Storage(_))));
 }
 
 #[test]
@@ -960,30 +948,4 @@ fn foreign_and_corrupt_databases_are_rejected_without_replacing_their_data() {
         fs::read_to_string(corrupt).unwrap(),
         "not a sqlite database"
     );
-}
-
-#[test]
-fn incompatible_schema_version_identity_or_shape_is_not_overwritten() {
-    for change in [
-        "PRAGMA user_version = 10",
-        "PRAGMA application_id = 42",
-        "CREATE TABLE unexpected(value TEXT)",
-        "DROP INDEX sessions_owner_updated",
-        "DROP TABLE session_events; CREATE TABLE session_events(session_id TEXT, seq INTEGER)",
-        "ALTER TABLE sessions ADD COLUMN unexpected TEXT",
-    ] {
-        let (_directory, path, store) = fixture();
-        create(&store, "local", "protected");
-        drop(store);
-        let connection = Connection::open(&path).unwrap();
-        connection.execute_batch(change).unwrap();
-        drop(connection);
-        let original = fs::read(&path).unwrap();
-        assert_storage(SessionStore::open(&path));
-        assert_eq!(
-            fs::read(&path).unwrap(),
-            original,
-            "schema was changed after {change}"
-        );
-    }
 }

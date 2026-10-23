@@ -1150,6 +1150,32 @@ impl Host {
         server
     }
 
+    /// Common evidence identity; callers supply the facts specific to their case.
+    pub fn evidence_report(
+        &self,
+        provider: &Provider,
+        case_source: &str,
+        checks: Value,
+        extra: Value,
+    ) {
+        provider.assert_consumed();
+        let source = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let mut report = json!({
+            "status":"passed", "runtime":"goose", "goose_version":"1.53.0",
+            "goose_binary_sha256":digest(&self.goose), "real_model_requests":0,
+            "host_binary_sha256":digest(&self.binary),
+            "source_sha256":digest(&source.join(case_source)),
+            "checks":checks, "provider_requests":provider.requests(), "production_data_used":false,
+        });
+        report
+            .as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        let path = provider.root.join("evidence.json");
+        fs::write(&path, serde_json::to_vec_pretty(&report).unwrap()).unwrap();
+        println!("evidence: {}", path.display());
+    }
+
     pub fn evidence(&self, provider: &Provider, run: &str, checks: Value) {
         provider.assert_consumed();
         let root = self.base.root.path();

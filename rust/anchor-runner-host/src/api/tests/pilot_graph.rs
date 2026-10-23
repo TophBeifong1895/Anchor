@@ -9,27 +9,7 @@
 
 use super::*;
 
-/// Set (or clear) one process environment variable for a test, and restore it.
-struct EnvVar(&'static str, Option<std::ffi::OsString>);
-
-impl EnvVar {
-    fn set(name: &'static str, value: impl AsRef<std::ffi::OsStr>) -> Self {
-        let previous = env::var_os(name);
-        unsafe { env::set_var(name, value) };
-        Self(name, previous)
-    }
-}
-
-impl Drop for EnvVar {
-    fn drop(&mut self) {
-        unsafe {
-            match &self.1 {
-                Some(value) => env::set_var(self.0, value),
-                None => env::remove_var(self.0),
-            }
-        }
-    }
-}
+use crate::test_support::EnvVar;
 
 fn escalated_definition() -> String {
     json!({"definition":{

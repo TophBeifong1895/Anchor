@@ -8,7 +8,6 @@ use axum::{
     body::Body,
     extract::Form,
     http::{Request, header},
-    response::Response,
     routing::{get, post},
 };
 use base64::Engine;
@@ -16,38 +15,11 @@ use serde_json::json;
 use sha2::{Digest, Sha256};
 use std::{
     collections::HashMap,
-    ffi::OsString,
     sync::{Arc, Mutex},
 };
 use tower::ServiceExt;
 
-struct Environment(Vec<(&'static str, Option<OsString>)>);
-
-impl Environment {
-    fn cleared(names: &[&'static str]) -> Self {
-        let previous = names
-            .iter()
-            .map(|name| (*name, std::env::var_os(name)))
-            .collect();
-        for name in names {
-            unsafe { std::env::remove_var(name) };
-        }
-        Self(previous)
-    }
-}
-
-impl Drop for Environment {
-    fn drop(&mut self) {
-        for (name, value) in &self.0 {
-            unsafe {
-                match value {
-                    Some(value) => std::env::set_var(name, value),
-                    None => std::env::remove_var(name),
-                }
-            }
-        }
-    }
-}
+use crate::test_support::Environment;
 
 #[test]
 fn oauth_binding_owner_is_stable_private_and_keeps_local_development_scoped() {
@@ -134,45 +106,6 @@ fn seed_oauth_authorization(state: &ApiState, key: &str) {
     )
     .authorize(binding, metadata, response, 100)
     .unwrap();
-}
-
-async fn authorized_call(
-    app: Router,
-    method: &str,
-    uri: &str,
-    key: &str,
-    body: Option<Value>,
-) -> (StatusCode, Value) {
-    json_response(authorized_response(app, method, uri, key, body).await).await
-}
-
-async fn authorized_response(
-    app: Router,
-    method: &str,
-    uri: &str,
-    key: &str,
-    body: Option<Value>,
-) -> Response {
-    let request = Request::builder()
-        .method(method)
-        .uri(uri)
-        .header(header::AUTHORIZATION, format!("Bearer {key}"))
-        .header(header::CONTENT_TYPE, "application/json");
-    let body = body.map_or_else(Body::empty, |value| Body::from(value.to_string()));
-    app.oneshot(request.body(body).unwrap()).await.unwrap()
-}
-
-async fn json_response(response: Response) -> (StatusCode, Value) {
-    let status = response.status();
-    let bytes = axum::body::to_bytes(response.into_body(), 1024 * 1024)
-        .await
-        .unwrap();
-    let value = if bytes.is_empty() {
-        Value::Null
-    } else {
-        serde_json::from_slice(&bytes).unwrap()
-    };
-    (status, value)
 }
 
 #[tokio::test]

@@ -1,12 +1,12 @@
+mod support;
+
 use std::{
     path::Path,
     sync::{Arc, Barrier},
     thread,
 };
 
-use anchor_platform_session::{
-    ChannelIdentity, ChannelInboundRequest, SessionError, SessionStore, TurnStatus,
-};
+use anchor_platform_session::{ChannelInboundRequest, SessionError, SessionStore, TurnStatus};
 use rusqlite::{Connection, types::Value};
 
 fn aliases(path: &Path) -> Vec<(String, String, String, String)> {
@@ -317,7 +317,7 @@ fn competing_canonicals_cannot_claim_the_same_alias() {
 }
 
 #[test]
-fn v8_migration_and_registration_preserve_existing_session_and_input_history() {
+fn registration_preserves_existing_session_and_input_history() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("sessions.sqlite");
     let store = SessionStore::open(&path).unwrap();
@@ -325,20 +325,17 @@ fn v8_migration_and_registration_preserve_existing_session_and_input_history() {
         .admit_channel_inbound(
             "owner",
             ChannelInboundRequest {
-                inbound_id: "message".into(),
-                identity: ChannelIdentity {
-                    source: "channel".into(),
-                    account: Some("legacy".into()),
-                    conversation_kind: Default::default(),
-                    conversation_id: "conversation".into(),
-                    sender_id: "sender".into(),
-                },
                 graph: "graph".into(),
                 reply_node: "work".into(),
                 text: Some("hello".into()),
-                attachments: Default::default(),
-                run_id: None,
                 replace_running: true,
+                ..support::channel_request(
+                    "message",
+                    "channel",
+                    Some("legacy"),
+                    "conversation",
+                    "sender",
+                )
             },
         )
         .unwrap();
@@ -367,11 +364,6 @@ fn v8_migration_and_registration_preserve_existing_session_and_input_history() {
         .unwrap();
     drop(store);
     let before = history(&path);
-    let connection = Connection::open(&path).unwrap();
-    connection
-        .execute_batch("DROP TABLE channel_account_aliases; PRAGMA user_version = 8;")
-        .unwrap();
-    drop(connection);
     let barrier = Arc::new(Barrier::new(3));
     let workers = (0..3)
         .map(|_| {

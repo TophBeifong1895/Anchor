@@ -9,9 +9,9 @@ installation nor startup loads `.env`, `anchor.env` or `model.env`.
 Model services, Plugin credentials, Graphs, channels, schedules and Python/Rust
 initialization use the existing Host-managed WebUI flows. Missing model settings
 do not prevent opening the WebUI; Pilot directs the user to Settings when needed.
-The installer supports fresh roots only. This guide does not establish an
-in-place upgrade or migration contract; see [cutover preparation](rust-production-cutover.md)
-for existing deployments.
+The installer supports fresh roots only. The legacy Python deployment was
+removed; no legacy inventory or migration tool is provided. This guide does not
+establish an in-place upgrade or migration contract.
 
 ## Install a reviewed platform
 
@@ -107,8 +107,8 @@ Inspect `journalctl -u anchor.service` for Host and gateway failures.
 Keep existing installations, state and workspace roots intact. Do not replace an
 existing installation with the fresh installer, copy an older release over live
 state, bypass runtime pins, weaken sandbox controls or relax the writer lock.
-Before an upgrade, stop the writer and make a consistent backup under the
-existing cutover contract. Inspect saved Run status and external effects before
+Before an upgrade, stop the writer and make a consistent backup of the mutable
+roots. Inspect saved Run status and external effects before
 resuming; deployment rollback does not make external actions exactly-once.
 
 Offline fixtures establish only their tested startup, inventory, configuration

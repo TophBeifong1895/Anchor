@@ -14,7 +14,6 @@ mod invocation_authority;
 include!("tests/migrated_behavior.rs");
 include!("tests/migrated_lifecycle.rs");
 include!("tests/migrated_crash.rs");
-include!("tests/migrated_calls.rs");
 include!("tests/migrated_storage.rs");
 include!("tests/migrated_leases.rs");
 include!("tests/migrated_plugins.rs");

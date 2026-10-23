@@ -4,7 +4,10 @@ mod calls;
 mod differential;
 use crate::graph::test_support::{Artifacts, commit_of, parallel_fixture_graph};
 use anchor_kernel::{Authority, Evidence, MemoryStore, Outcome, Waiter};
-use std::sync::{Arc, Mutex, atomic::AtomicBool};
+use std::sync::{
+    Arc, Mutex,
+    atomic::{AtomicBool, AtomicUsize, Ordering},
+};
 use tokio::sync::{Semaphore, mpsc};
 
 struct AuthorityFixture;
@@ -44,6 +47,8 @@ struct Nodes {
     events: mpsc::UnboundedSender<String>,
     requests: Mutex<Vec<NodeExecutionRequest>>,
     facts: Mutex<BTreeMap<String, NodeCompletion>>,
+    active_calls: AtomicUsize,
+    max_active_calls: AtomicUsize,
 }
 impl Nodes {
     fn new(
@@ -64,6 +69,8 @@ impl Nodes {
                 events,
                 requests: Mutex::default(),
                 facts: Mutex::default(),
+                active_calls: AtomicUsize::new(0),
+                max_active_calls: AtomicUsize::new(0),
             },
             receiver,
         )
@@ -102,10 +109,15 @@ impl NodeExecutionPort for Nodes {
         Box::pin(async move {
             let key = request.key.clone();
             self.requests.lock().unwrap().push(request);
+            let active = self.active_calls.fetch_add(1, Ordering::SeqCst) + 1;
+            self.max_active_calls.fetch_max(active, Ordering::SeqCst);
             self.events.send(key.node_id.clone()).unwrap();
             if let Some(gate) = self.gates.get(&key.node_id) {
                 gate.acquire().await.unwrap().forget();
             }
+            // The rest of execution is synchronous, so no other call can
+            // overlap after the gate has been acquired in this test fixture.
+            self.active_calls.fetch_sub(1, Ordering::SeqCst);
             match self
                 .results
                 .get(&key.node_id)
@@ -184,107 +196,136 @@ async fn started(events: &mut mpsc::UnboundedReceiver<String>) -> String {
 
 #[tokio::test]
 async fn parallel_branches_complete_out_of_order_and_join_receives_all_branch_facts() {
-    // Copied legacy behavior: overlapping branches, exact immutable provenance,
-    // one coordinator-owned join. Add a successor to prove no wave barrier.
-    let mut snapshot = parallel_fixture_graph();
-    let mut tail = snapshot.nodes[1].clone();
-    tail.id = "tail".into();
-    snapshot.nodes.push(tail);
-    snapshot
-        .edges
-        .iter_mut()
-        .find(|e| e.from_node == "left")
-        .unwrap()
-        .to_node = "tail".into();
-    snapshot.edges.push(GraphEdge {
-        from_node: "tail".into(),
-        to_node: "collect".into(),
-    });
-    let (kernel, id) = kernel(snapshot);
-    let (nodes, mut events) = Nodes::new(&["left", "right", "tail"], &[]);
-    let artifacts = TrackingArtifacts::default();
-    let scheduler = scheduler(&kernel, &artifacts, &nodes);
-    let execute = async {
-        let initial = BTreeSet::from([started(&mut events).await, started(&mut events).await]);
-        assert_eq!(initial, BTreeSet::from(["left".into(), "right".into()]));
-        nodes.release("left");
-        assert_eq!(started(&mut events).await, "tail");
-        let resource = kernel.load(&id).unwrap().unwrap();
-        let record = record_of(&resource).unwrap();
-        assert_eq!(record.results["left"].len(), 1);
-        assert!(!record.results.contains_key("right"));
-        nodes.release("tail");
-        nodes.release("right");
-    };
-    let (result, ()) = tokio::join!(scheduler.run(&id), execute);
-    let resource = result.unwrap();
-    assert_eq!(
-        resource.phase(),
-        Some(&Phase::Settled {
-            result: Outcome::Done
-        })
-    );
-    assert_eq!(resource.task.as_ref().unwrap().budget.spent, 12);
-    let record = record_of(&resource).unwrap();
-    assert_eq!(record.results["collect"].len(), 1);
-    for branch in record.results["collect"][0].completion.output["branches"]
-        .as_array()
-        .unwrap()
-    {
-        for node in branch["nodes"].as_array().unwrap() {
-            let id = node["node"].as_str().unwrap();
-            assert_eq!(
-                node["commit"],
-                serde_json::to_value(&record.results[id][0].commit).unwrap()
-            );
-            assert_eq!(node["output"], record.results[id][0].completion.output);
-        }
-    }
-    let requests = nodes.requests.lock().unwrap();
-    assert!(
-        !requests
-            .iter()
-            .any(|r| ["start", "collect"].contains(&r.key.node_id.as_str()))
-    );
-    for request in requests.iter().filter(|r| r.key.node_id != "after") {
-        assert!(request.input["parallel_activation"].is_string());
-        assert!(request.input["branch_id"].is_string());
-        assert_eq!(request.input_commits.len(), 1);
-    }
-    let freezes = artifacts.0.lock().unwrap();
-    assert_eq!(
-        freezes
-            .iter()
-            .find(|(k, _)| k.node_id == "start")
+    for right_first in [false, true] {
+        // Copied legacy behavior: overlapping branches, exact immutable provenance,
+        // one coordinator-owned join. Add a successor to prove no wave barrier.
+        let mut snapshot = parallel_fixture_graph();
+        let mut tail = snapshot.nodes[1].clone();
+        tail.id = "tail".into();
+        snapshot.nodes.push(tail);
+        snapshot
+            .edges
+            .iter_mut()
+            .find(|e| e.from_node == "left")
             .unwrap()
-            .1
-            .kind,
-        ArtifactKind::Fanout
-    );
-    let join = &freezes
-        .iter()
-        .find(|(k, _)| k.node_id == "collect")
-        .unwrap()
-        .1;
-    assert_eq!(join.kind, ArtifactKind::Join);
-    assert_eq!(join.input_commits.len(), 3);
-    let history = kernel.history(&id).unwrap();
-    assert!(
-        history
+            .to_node = "tail".into();
+        snapshot.edges.push(GraphEdge {
+            from_node: "tail".into(),
+            to_node: "collect".into(),
+        });
+        let (kernel, id) = kernel(snapshot);
+        let (nodes, mut events) = Nodes::new(&["left", "right", "tail"], &[]);
+        let artifacts = TrackingArtifacts::default();
+        let scheduler = scheduler(&kernel, &artifacts, &nodes);
+        let execute = async {
+            let initial = BTreeSet::from([started(&mut events).await, started(&mut events).await]);
+            assert_eq!(initial, BTreeSet::from(["left".into(), "right".into()]));
+            if right_first {
+                nodes.release("right");
+                tokio::time::timeout(std::time::Duration::from_secs(3), async {
+                    while !record_of(&kernel.load(&id).unwrap().unwrap())
+                        .unwrap()
+                        .results
+                        .contains_key("right")
+                    {
+                        tokio::task::yield_now().await;
+                    }
+                })
+                .await
+                .unwrap();
+            }
+            nodes.release("left");
+            assert_eq!(started(&mut events).await, "tail");
+            let resource = kernel.load(&id).unwrap().unwrap();
+            let record = record_of(&resource).unwrap();
+            assert_eq!(record.results["left"].len(), 1);
+            assert_eq!(record.results.contains_key("right"), right_first);
+            nodes.release("tail");
+            if !right_first {
+                nodes.release("right");
+            }
+        };
+        let (result, ()) = tokio::join!(scheduler.run(&id), execute);
+        let resource = result.unwrap();
+        assert_eq!(
+            resource.phase(),
+            Some(&Phase::Settled {
+                result: Outcome::Done
+            })
+        );
+        assert_eq!(resource.task.as_ref().unwrap().budget.spent, 12);
+        let record = record_of(&resource).unwrap();
+        assert_eq!(nodes.max_active_calls.load(Ordering::SeqCst), 2);
+        if right_first {
+            assert!(record.results["right"][0].sequence < record.results["left"][0].sequence);
+        }
+        assert_eq!(record.results["collect"].len(), 1);
+        assert_eq!(
+            record.results["collect"][0].completion.output["branches"]
+                .as_array()
+                .unwrap()
+                .len(),
+            2
+        );
+        for branch in record.results["collect"][0].completion.output["branches"]
+            .as_array()
+            .unwrap()
+        {
+            for node in branch["nodes"].as_array().unwrap() {
+                let id = node["node"].as_str().unwrap();
+                assert_eq!(
+                    node["commit"],
+                    serde_json::to_value(&record.results[id][0].commit).unwrap()
+                );
+                assert_eq!(node["output"], record.results[id][0].completion.output);
+            }
+        }
+        let requests = nodes.requests.lock().unwrap();
+        assert!(
+            !requests
+                .iter()
+                .any(|r| ["start", "collect"].contains(&r.key.node_id.as_str()))
+        );
+        for request in requests.iter().filter(|r| r.key.node_id != "after") {
+            assert!(request.input["parallel_activation"].is_string());
+            assert!(request.input["branch_id"].is_string());
+            assert_eq!(request.input_commits.len(), 1);
+        }
+        let freezes = artifacts.0.lock().unwrap();
+        assert_eq!(
+            freezes
+                .iter()
+                .find(|(k, _)| k.node_id == "start")
+                .unwrap()
+                .1
+                .kind,
+            ArtifactKind::Fanout
+        );
+        let join = &freezes
             .iter()
-            .any(|r| r.verdict.reason == Reason::StaleVersion)
-    );
-    assert!(
-        history
-            .iter()
-            .filter(|r| r.verdict.is_accepted()
-                && r.submission
-                    .slot
-                    .as_deref()
-                    .is_some_and(|s| s.starts_with("start#") || s.starts_with("collect#")))
-            .all(|r| r.stamp.principal().kind == PrincipalKind::Code)
-    );
-    assert_eq!(history.iter().map(|r| r.stamp.cost()).sum::<u64>(), 12);
+            .find(|(k, _)| k.node_id == "collect")
+            .unwrap()
+            .1;
+        assert_eq!(join.kind, ArtifactKind::Join);
+        assert_eq!(join.input_commits.len(), 3);
+        let history = kernel.history(&id).unwrap();
+        assert!(
+            history
+                .iter()
+                .any(|r| r.verdict.reason == Reason::StaleVersion)
+        );
+        assert!(
+            history
+                .iter()
+                .filter(|r| r.verdict.is_accepted()
+                    && r.submission
+                        .slot
+                        .as_deref()
+                        .is_some_and(|s| s.starts_with("start#") || s.starts_with("collect#")))
+                .all(|r| r.stamp.principal().kind == PrincipalKind::Code)
+        );
+        assert_eq!(history.iter().map(|r| r.stamp.cost()).sum::<u64>(), 12);
+    }
 }
 
 #[tokio::test]
@@ -329,8 +370,21 @@ async fn parallel_branch_failure_is_terminal_and_never_dispatches_join() {
             matches!(resource.phase(),Some(Phase::Settled { result:Outcome::Failed { detail,.. } }) if detail=="left failed: left failure")
         );
         let record = record_of(&resource).unwrap();
+        assert!(record.parallel.is_some());
         assert!(!record.results.contains_key("collect"));
         assert!(!record.results.contains_key("right"));
+        assert!(
+            !nodes
+                .requests
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|r| r.key.node_id == "collect")
+        );
+        assert_eq!(
+            artifacts.0.lock().unwrap().len(),
+            if late_failure { 1 } else { 2 }
+        );
         let history = kernel.history(&id).unwrap();
         let late = history
             .iter()

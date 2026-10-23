@@ -1,3 +1,7 @@
+mod support;
+
+use support::assert_conflict;
+
 use std::{
     sync::{Arc, Barrier},
     thread,
@@ -5,24 +9,15 @@ use std::{
 
 use anchor_platform_session::{
     AttachmentManifest, AttachmentManifestEntry, ChannelAdmission, ChannelAssistant,
-    ChannelDeliveryRequest, ChannelDeliveryStatus, ChannelIdentity, ChannelInboundRequest,
-    SessionError, SessionStore, TurnStatus,
+    ChannelDeliveryRequest, ChannelDeliveryStatus, ChannelInboundRequest, SessionError,
+    SessionStore, TurnStatus,
 };
 use rusqlite::{Connection, params};
 use tempfile::TempDir;
 
 fn request(inbound: &str, conversation: &str) -> ChannelInboundRequest {
     ChannelInboundRequest {
-        inbound_id: inbound.into(),
-        identity: ChannelIdentity {
-            conversation_kind: Default::default(),
-            source: "wecom".into(),
-            account: Some("corp-a".into()),
-            conversation_id: conversation.into(),
-            sender_id: "user-1".into(),
-        },
         graph: "support-graph".into(),
-        reply_node: "assistant".into(),
         text: Some(format!("input for {inbound}")),
         attachments: AttachmentManifest {
             format: 1,
@@ -34,8 +29,8 @@ fn request(inbound: &str, conversation: &str) -> ChannelInboundRequest {
                 media_type: Some("text/plain".into()),
             }],
         },
-        run_id: None,
         replace_running: true,
+        ..support::channel_request(inbound, "wecom", Some("corp-a"), conversation, "user-1")
     }
 }
 
@@ -100,13 +95,6 @@ fn confirm(store: &SessionStore, admission: &ChannelAdmission, key: &str) {
             None,
         )
         .unwrap();
-}
-
-fn assert_conflict<T: std::fmt::Debug>(result: Result<T, SessionError>) {
-    assert!(
-        matches!(result, Err(SessionError::Conflict(_))),
-        "{result:?}"
-    );
 }
 
 #[test]

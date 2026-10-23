@@ -1087,33 +1087,7 @@ mod frozen_mounts_tests {
     use anchor_platform_session::CreateSession;
     use serde_json::json;
 
-    /// Set one environment variable for a test, and restore it on drop.
-    struct EnvVar(&'static str, Option<std::ffi::OsString>);
-
-    impl EnvVar {
-        fn set(name: &'static str, value: impl AsRef<std::ffi::OsStr>) -> Self {
-            let previous = std::env::var_os(name);
-            unsafe { std::env::set_var(name, value) };
-            Self(name, previous)
-        }
-
-        fn unset(name: &'static str) -> Self {
-            let previous = std::env::var_os(name);
-            unsafe { std::env::remove_var(name) };
-            Self(name, previous)
-        }
-    }
-
-    impl Drop for EnvVar {
-        fn drop(&mut self) {
-            unsafe {
-                match &self.1 {
-                    Some(value) => std::env::set_var(self.0, value),
-                    None => std::env::remove_var(self.0),
-                }
-            }
-        }
-    }
+    use crate::test_support::EnvVar;
 
     struct Fixture {
         _root: tempfile::TempDir,

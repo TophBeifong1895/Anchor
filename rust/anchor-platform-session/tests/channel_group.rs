@@ -1,25 +1,18 @@
+mod support;
+
 use anchor_platform_session::{
     ChannelConversationKind, ChannelIdentity, ChannelInboundRequest, SessionError, SessionStore,
     TurnStatus,
 };
 
 fn inbound(id: &str, actor: &str) -> ChannelInboundRequest {
-    ChannelInboundRequest {
-        inbound_id: id.into(),
-        identity: ChannelIdentity {
-            source: "wecom".into(),
-            account: Some("corp".into()),
-            conversation_kind: ChannelConversationKind::Group,
-            conversation_id: "shared-group".into(),
-            sender_id: actor.into(),
-        },
-        graph: "assistant".into(),
-        reply_node: "work".into(),
-        text: Some(format!("message from {actor}")),
-        attachments: Default::default(),
-        run_id: None,
-        replace_running: true,
-    }
+    let mut request = support::channel_request(id, "wecom", Some("corp"), "shared-group", actor);
+    request.identity.conversation_kind = ChannelConversationKind::Group;
+    request.graph = "assistant".into();
+    request.reply_node = "work".into();
+    request.text = Some(format!("message from {actor}"));
+    request.replace_running = true;
+    request
 }
 
 #[test]

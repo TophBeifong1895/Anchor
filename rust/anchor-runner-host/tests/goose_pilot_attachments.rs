@@ -59,7 +59,6 @@ use sha2::{Digest, Sha256};
 use std::{
     fs,
     io::Cursor,
-    path::Path,
     sync::{
         Arc,
         atomic::{AtomicUsize, Ordering},
@@ -242,18 +241,12 @@ fn image_urls(value: &Value) -> Vec<String> {
 }
 
 fn evidence(host: &Host, provider: &Provider, checks: Value) {
-    provider.assert_consumed();
-    let path = provider.root.join("evidence.json");
-    fs::write(&path, serde_json::to_vec_pretty(&json!({
-        "status":"passed","runtime":"goose","goose_version":"1.53.0",
-        "goose_binary_sha256":goose::GOOSE_SHA256,
-        "host_binary_sha256":goose::digest(&host.base.root.path().join("anchor-runner-host")),
-        "source_sha256":goose::digest(&Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/goose_pilot_attachments.rs")),
-        "test_binary_sha256":goose::digest(&std::env::current_exe().unwrap()),
-        "real_model_requests":0,"production_data_used":false,
-        "checks":checks,"provider_requests":provider.requests()
-    })).unwrap()).unwrap();
-    println!("evidence: {}", path.display());
+    host.evidence_report(
+        provider,
+        "tests/goose_pilot_attachments.rs",
+        checks,
+        json!({"test_binary_sha256":goose::digest(&std::env::current_exe().unwrap())}),
+    );
 }
 
 #[test]

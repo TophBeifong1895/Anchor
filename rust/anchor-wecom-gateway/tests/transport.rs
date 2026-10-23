@@ -16,46 +16,32 @@ use serde_json::{Value, json};
 use support::{
     HttpReply, MediaServer, Platform, ProgressFrame, ProgressServer, ReplyGate, TOKEN,
     WebhookServer, callback, config, config_with_progress, control, group_callback, media_callback,
-    raw_control, send_request,
+    next_error, poll_until, raw_control, send_request, start_authenticated,
 };
 
 async fn wait_fact(gateway: &RunningGateway, request_id: &str, status: DeliveryStatus) {
-    tokio::time::timeout(Duration::from_secs(3), async {
-        loop {
-            if gateway
-                .delivery_facts()
-                .unwrap()
-                .iter()
-                .any(|fact| fact.request_id == request_id && fact.status == status)
-            {
-                break;
-            }
-            tokio::time::sleep(Duration::from_millis(5)).await;
-        }
+    poll_until(|| {
+        gateway
+            .delivery_facts()
+            .unwrap()
+            .iter()
+            .any(|fact| fact.request_id == request_id && fact.status == status)
     })
-    .await
-    .unwrap();
+    .await;
 }
 
 async fn wait_settlement_delivered(state_dir: &std::path::Path, key: &str) {
-    tokio::time::timeout(Duration::from_secs(3), async {
-        loop {
-            let connection = rusqlite::Connection::open(state_dir.join("delivery.sqlite")).unwrap();
-            let delivered: bool = connection
-                .query_row(
-                    "SELECT delivered FROM settlement_outbox WHERE receipt_key=?1",
-                    [key],
-                    |row| row.get(0),
-                )
-                .unwrap();
-            if delivered {
-                break;
-            }
-            tokio::time::sleep(Duration::from_millis(5)).await;
-        }
+    poll_until(|| {
+        let connection = rusqlite::Connection::open(state_dir.join("delivery.sqlite")).unwrap();
+        connection
+            .query_row(
+                "SELECT delivered FROM settlement_outbox WHERE receipt_key=?1",
+                [key],
+                |row| row.get::<_, bool>(0),
+            )
+            .unwrap()
     })
-    .await
-    .unwrap();
+    .await;
 }
 
 /// Which progress streams the fixture transport stopped early.
@@ -64,38 +50,24 @@ fn closed_streams(progress: &ProgressServer) -> Vec<String> {
 }
 
 async fn wait_stream_requested(progress: &ProgressServer, event_id: &str) {
-    tokio::time::timeout(Duration::from_secs(3), async {
-        loop {
-            if progress
-                .requested
-                .lock()
-                .unwrap()
-                .iter()
-                .any(|requested| requested == event_id)
-            {
-                break;
-            }
-            tokio::time::sleep(Duration::from_millis(5)).await;
-        }
+    poll_until(|| {
+        progress
+            .requested
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|requested| requested == event_id)
     })
-    .await
-    .unwrap();
+    .await;
 }
 
 async fn wait_stream_closed(progress: &ProgressServer, event_id: &str) {
-    tokio::time::timeout(Duration::from_secs(3), async {
-        loop {
-            if closed_streams(progress)
-                .iter()
-                .any(|closed| closed == event_id)
-            {
-                break;
-            }
-            tokio::time::sleep(Duration::from_millis(5)).await;
-        }
+    poll_until(|| {
+        closed_streams(progress)
+            .iter()
+            .any(|closed| closed == event_id)
     })
-    .await
-    .unwrap();
+    .await;
 }
 
 #[tokio::test]
@@ -253,11 +225,7 @@ async fn confirmed_send_is_bound_to_identity_content_and_survives_token_rotation
     let mut platform = Platform::new(Some(0)).await;
     let settings = config(root.path(), &platform, None);
     let path = settings.socket_path();
-    let gateway = Gateway::start(settings).await.unwrap();
-    gateway
-        .wait_authenticated(Duration::from_secs(2))
-        .await
-        .unwrap();
+    let gateway = start_authenticated(settings).await;
     for filename in ["control.json", "control.sock", "delivery.sqlite"] {
         assert_eq!(
             std::fs::metadata(root.path().join("state").join(filename))
@@ -269,8 +237,6 @@ async fn confirmed_send_is_bound_to_identity_content_and_survives_token_rotation
         );
     }
     let request = send_request("request-1", "alice", "authorized notification");
-    let wrong_token = control(&path, "wrong-secret-not-echoed", request.clone()).await;
-    assert_eq!(wrong_token, json!({"error":"unauthorized channel request"}));
     let prohibited = control(&path, TOKEN, send_request("broadcast", "@all", "hello")).await;
     assert!(
         prohibited["error"]
@@ -321,11 +287,7 @@ async fn confirmed_send_is_bound_to_identity_content_and_survives_token_rotation
     let mut settings = config(root.path(), &platform, None);
     let rotated = "rotated-control-token-000000000000000000000";
     settings.control_token = rotated.into();
-    let reopened = Gateway::start(settings).await.unwrap();
-    reopened
-        .wait_authenticated(Duration::from_secs(2))
-        .await
-        .unwrap();
+    let reopened = start_authenticated(settings).await;
     let descriptor: Value =
         serde_json::from_slice(&std::fs::read(root.path().join("state/control.json")).unwrap())
             .unwrap();
@@ -342,11 +304,7 @@ async fn timeout_rejection_and_disconnect_stay_unknown_across_reconnect_and_rest
     let mut platform = Platform::new(Some(0)).await;
     let settings = config(root.path(), &platform, None);
     let path = settings.socket_path();
-    let gateway = Gateway::start(settings).await.unwrap();
-    gateway
-        .wait_authenticated(Duration::from_secs(2))
-        .await
-        .unwrap();
+    let gateway = start_authenticated(settings).await;
     for failure in ["timeout", "rejected", "disconnected"] {
         let request = send_request(failure, "alice", "uncertain notification");
         let pending_path = path.clone();
@@ -380,13 +338,7 @@ async fn timeout_rejection_and_disconnect_stay_unknown_across_reconnect_and_rest
     }
     assert_eq!(gateway.delivery_facts().unwrap().len(), 3);
     gateway.shutdown().await.unwrap();
-    let reopened = Gateway::start(config(root.path(), &platform, None))
-        .await
-        .unwrap();
-    reopened
-        .wait_authenticated(Duration::from_secs(2))
-        .await
-        .unwrap();
+    let reopened = start_authenticated(config(root.path(), &platform, None)).await;
     for failure in ["timeout", "rejected", "disconnected"] {
         let request = send_request(failure, "alice", "uncertain notification");
         assert!(
@@ -438,10 +390,7 @@ async fn text_and_mixed_callbacks_use_real_webhook_reply_ack_and_deduplicate() {
     changed["body"]["from"]["userid"] = json!("bob");
     platform.send(changed).await;
     assert!(matches!(
-        tokio::time::timeout(Duration::from_secs(1), errors.recv())
-            .await
-            .unwrap()
-            .unwrap(),
+        next_error(&mut errors, Duration::from_secs(1)).await,
         GatewayError::Conflict(_)
     ));
     let mut mixed = callback("mixed-1", "bob", "unused");
@@ -473,11 +422,7 @@ async fn saved_unsent_reply_rechecks_current_inbound_permission_after_restart() 
     let mut platform = Platform::new(Some(0)).await;
     let settings = config(root.path(), &platform, None);
     let directory = settings.state_dir.clone();
-    let gateway = Gateway::start(settings).await.unwrap();
-    gateway
-        .wait_authenticated(Duration::from_secs(2))
-        .await
-        .unwrap();
+    let gateway = start_authenticated(settings).await;
     gateway.shutdown().await.unwrap();
     let connection = rusqlite::Connection::open(directory.join("delivery.sqlite")).unwrap();
     connection.execute("INSERT INTO inbound(event_id,digest,callback_id,sender_id,conversation_id,state,reply)
@@ -492,10 +437,7 @@ async fn saved_unsent_reply_rechecks_current_inbound_permission_after_restart() 
         .await
         .unwrap();
     assert_eq!(
-        tokio::time::timeout(Duration::from_secs(1), errors.recv())
-            .await
-            .unwrap()
-            .unwrap(),
+        next_error(&mut errors, Duration::from_secs(1)).await,
         GatewayError::Invalid("saved reply sender is no longer allowed")
     );
     platform.no_command("aibot_respond_msg").await;
@@ -517,13 +459,7 @@ async fn assert_lost_reply_ack_is_not_replayed(group: bool) {
     let root = tempfile::tempdir().unwrap();
     let mut platform = Platform::new(Some(0)).await;
     let webhook = WebhookServer::new(|_| HttpReply::ok(json!({"reply":"saved final reply"}))).await;
-    let gateway = Gateway::start(config(root.path(), &platform, Some(&webhook)))
-        .await
-        .unwrap();
-    gateway
-        .wait_authenticated(Duration::from_secs(2))
-        .await
-        .unwrap();
+    let gateway = start_authenticated(config(root.path(), &platform, Some(&webhook))).await;
     let input = if group {
         group_callback("lost-reply", "bob", "group-1", "hello")
     } else {
@@ -543,13 +479,7 @@ async fn assert_lost_reply_ack_is_not_replayed(group: bool) {
     platform.send(input.clone()).await;
     platform.no_command("aibot_respond_msg").await;
     gateway.shutdown().await.unwrap();
-    let reopened = Gateway::start(config(root.path(), &platform, Some(&webhook)))
-        .await
-        .unwrap();
-    reopened
-        .wait_authenticated(Duration::from_secs(2))
-        .await
-        .unwrap();
+    let reopened = start_authenticated(config(root.path(), &platform, Some(&webhook))).await;
     platform.send(input).await;
     platform.no_command("aibot_respond_msg").await;
     assert_eq!(webhook.events.lock().unwrap().len(), 1);
@@ -580,11 +510,7 @@ async fn slow_callback_does_not_block_control_and_older_reply_is_suppressed() {
     let settings = config(root.path(), &platform, Some(&webhook));
     let path = settings.socket_path();
     let ledger_path = settings.state_dir.join("delivery.sqlite");
-    let gateway = Gateway::start(settings).await.unwrap();
-    gateway
-        .wait_authenticated(Duration::from_secs(2))
-        .await
-        .unwrap();
+    let gateway = start_authenticated(settings).await;
     let ledger = rusqlite::Connection::open(ledger_path).unwrap();
     let old_state = || {
         ledger
@@ -650,10 +576,7 @@ async fn media_and_untrusted_callbacks_are_rejected_before_webhook() {
         {"msgtype":"image","image":{"url":"https://example.invalid/private"}}]});
     platform.send(media).await;
     assert_eq!(
-        tokio::time::timeout(Duration::from_secs(1), errors.recv())
-            .await
-            .unwrap()
-            .unwrap(),
+        next_error(&mut errors, Duration::from_secs(1)).await,
         GatewayError::Invalid("media callback key is missing")
     );
     // A plaintext non-loopback URL is never a platform download.
@@ -666,20 +589,14 @@ async fn media_and_untrusted_callbacks_are_rejected_before_webhook() {
     });
     platform.send(plain).await;
     assert_eq!(
-        tokio::time::timeout(Duration::from_secs(1), errors.recv())
-            .await
-            .unwrap()
-            .unwrap(),
+        next_error(&mut errors, Duration::from_secs(1)).await,
         GatewayError::Invalid("media callback URL is missing or unsupported")
     );
     platform
         .send(callback("untrusted", "mallory", "not admitted"))
         .await;
     assert_eq!(
-        tokio::time::timeout(Duration::from_secs(1), errors.recv())
-            .await
-            .unwrap()
-            .unwrap(),
+        next_error(&mut errors, Duration::from_secs(1)).await,
         GatewayError::Invalid("callback sender is not allowed")
     );
     platform.no_command("aibot_respond_msg").await;
@@ -707,10 +624,7 @@ async fn group_callbacks_check_the_real_actor_and_require_a_chatid_before_host_w
         .send(group_callback("group-message", "mallory", "alice", "hello"))
         .await;
     assert_eq!(
-        tokio::time::timeout(Duration::from_secs(1), errors.recv())
-            .await
-            .unwrap()
-            .unwrap(),
+        next_error(&mut errors, Duration::from_secs(1)).await,
         GatewayError::Invalid("callback sender is not allowed")
     );
     let mut missing_chat = group_callback("missing-chat", "alice", "group-1", "hello");
@@ -720,10 +634,7 @@ async fn group_callbacks_check_the_real_actor_and_require_a_chatid_before_host_w
         .remove("chatid");
     platform.send(missing_chat).await;
     assert_eq!(
-        tokio::time::timeout(Duration::from_secs(1), errors.recv())
-            .await
-            .unwrap()
-            .unwrap(),
+        next_error(&mut errors, Duration::from_secs(1)).await,
         GatewayError::Invalid("group callback has no chatid")
     );
     platform.no_command("aibot_respond_msg").await;
@@ -737,11 +648,8 @@ async fn different_members_of_a_group_share_progress_and_only_the_latest_reply_i
     let root = tempfile::tempdir().unwrap();
     let mut platform = Platform::new(Some(0)).await;
     let webhook = WebhookServer::new(|event| {
-        let mut reply = HttpReply::ok(
-            json!({"text":format!("reply for {}", event["event_id"].as_str().unwrap())}),
-        );
-        reply.delay = Duration::from_millis(600);
-        reply
+        HttpReply::ok(json!({"text":format!("reply for {}", event["event_id"].as_str().unwrap())}))
+            .delayed(Duration::from_millis(600))
     })
     .await;
     let progress = ProgressServer::new(|event_id| {
@@ -762,11 +670,7 @@ async fn different_members_of_a_group_share_progress_and_only_the_latest_reply_i
     let mut settings =
         config_with_progress(root.path(), &platform, Some(&webhook), Some(&progress));
     settings.timing.ack_delay = Duration::from_millis(80);
-    let gateway = Gateway::start(settings).await.unwrap();
-    gateway
-        .wait_authenticated(Duration::from_secs(2))
-        .await
-        .unwrap();
+    let gateway = start_authenticated(settings).await;
 
     platform
         .send(group_callback("group-old", "alice", "group-1", "first"))
@@ -824,9 +728,7 @@ async fn groups_and_a_private_chat_with_the_same_id_keep_independent_progress_an
     let root = tempfile::tempdir().unwrap();
     let mut platform = Platform::new(Some(0)).await;
     let webhook = WebhookServer::new(|event| {
-        let mut reply = HttpReply::ok(json!({"text":event["event_id"]}));
-        reply.delay = Duration::from_millis(300);
-        reply
+        HttpReply::ok(json!({"text":event["event_id"]})).delayed(Duration::from_millis(300))
     })
     .await;
     let mut settings = config(root.path(), &platform, Some(&webhook));
@@ -834,11 +736,7 @@ async fn groups_and_a_private_chat_with_the_same_id_keep_independent_progress_an
     // Three simultaneous streams share this fixture connection. Give the test
     // reader time to acknowledge each one under the crate's parallel workload.
     settings.timing.ack_timeout = Duration::from_secs(1);
-    let gateway = Gateway::start(settings).await.unwrap();
-    gateway
-        .wait_authenticated(Duration::from_secs(2))
-        .await
-        .unwrap();
+    let gateway = start_authenticated(settings).await;
     platform
         .send(group_callback(
             "group-one",
@@ -888,7 +786,7 @@ async fn webhook_media_error_and_oversized_replies_are_not_silently_downgraded()
     let root = tempfile::tempdir().unwrap();
     let mut platform = Platform::new(Some(0)).await;
     let webhook = WebhookServer::new(|event| {
-        let mut reply = match event["event_id"].as_str().unwrap() {
+        let reply = match event["event_id"].as_str().unwrap() {
             "media" => HttpReply::ok(
                 json!({"text":"do not return only this text", "msg_item":[{"msgtype":"image"}]}),
             ),
@@ -898,8 +796,7 @@ async fn webhook_media_error_and_oversized_replies_are_not_silently_downgraded()
             }
         };
         // Slow enough that the progress bubble is shown before the failure.
-        reply.delay = Duration::from_millis(400);
-        reply
+        reply.delayed(Duration::from_millis(400))
     })
     .await;
     let mut settings = config(root.path(), &platform, Some(&webhook));
@@ -917,10 +814,7 @@ async fn webhook_media_error_and_oversized_replies_are_not_silently_downgraded()
         assert_eq!(processing["body"]["stream"]["content"], "⏳ 正在处理");
         assert_eq!(processing["body"]["stream"]["finish"], false);
         platform.acknowledge(&processing, 0).await;
-        let error = tokio::time::timeout(Duration::from_secs(1), errors.recv())
-            .await
-            .unwrap()
-            .unwrap();
+        let error = next_error(&mut errors, Duration::from_secs(1)).await;
         assert!(!error.to_string().contains("fixture-secret"));
         if event_id == "media" {
             assert_eq!(error, GatewayError::UnsupportedMedia);
@@ -953,8 +847,7 @@ async fn failed_webhook_is_retried_after_restart_without_reply_claim() {
         if webhook_attempts.fetch_add(1, Ordering::SeqCst) == 0 {
             let mut reply = HttpReply::ok(json!({}));
             reply.status = axum::http::StatusCode::SERVICE_UNAVAILABLE;
-            reply.delay = Duration::from_millis(400);
-            reply
+            reply.delayed(Duration::from_millis(400))
         } else {
             HttpReply::ok(json!({"text":"recovered reply"}))
         }
@@ -976,10 +869,7 @@ async fn failed_webhook_is_retried_after_restart_without_reply_claim() {
     assert_eq!(processing["body"]["stream"]["finish"], false);
     platform.acknowledge(&processing, 0).await;
     assert_eq!(
-        tokio::time::timeout(Duration::from_secs(1), errors.recv())
-            .await
-            .unwrap()
-            .unwrap(),
+        next_error(&mut errors, Duration::from_secs(1)).await,
         GatewayError::Webhook
     );
     let failure = platform.next_final_response().await;
@@ -993,13 +883,7 @@ async fn failed_webhook_is_retried_after_restart_without_reply_claim() {
     assert!(gateway.delivery_facts().unwrap().is_empty());
     gateway.shutdown().await.unwrap();
 
-    let reopened = Gateway::start(config(root.path(), &platform, Some(&webhook)))
-        .await
-        .unwrap();
-    reopened
-        .wait_authenticated(Duration::from_secs(2))
-        .await
-        .unwrap();
+    let reopened = start_authenticated(config(root.path(), &platform, Some(&webhook))).await;
     webhook.wait_events(2).await;
     let reply = platform.next_final_response().await;
     assert_eq!(reply["body"]["stream"]["content"], "recovered reply");
@@ -1021,33 +905,22 @@ async fn interrupted_webhook_is_recovered_after_gateway_restart_without_duplicat
     let webhook_attempts = attempts.clone();
     let webhook = WebhookServer::new(move |_| {
         if webhook_attempts.fetch_add(1, Ordering::SeqCst) == 0 {
-            let mut reply = HttpReply::ok(json!({"text":"discarded first response"}));
-            reply.delay = Duration::from_secs(1);
-            reply
+            HttpReply::ok(json!({"text":"discarded first response"}))
+                .delayed(Duration::from_secs(1))
         } else {
             HttpReply::ok(json!({"text":"recovered reply"}))
         }
     })
     .await;
     let settings = config(root.path(), &platform, Some(&webhook));
-    let gateway = Gateway::start(settings).await.unwrap();
-    gateway
-        .wait_authenticated(Duration::from_secs(2))
-        .await
-        .unwrap();
+    let gateway = start_authenticated(settings).await;
 
     let input = callback("interrupted-webhook", "alice", "hello");
     platform.send(input.clone()).await;
     webhook.wait_events(1).await;
     gateway.shutdown().await.unwrap();
 
-    let reopened = Gateway::start(config(root.path(), &platform, Some(&webhook)))
-        .await
-        .unwrap();
-    reopened
-        .wait_authenticated(Duration::from_secs(2))
-        .await
-        .unwrap();
+    let reopened = start_authenticated(config(root.path(), &platform, Some(&webhook))).await;
     webhook.wait_events(2).await;
     let reply = platform.next_final_response().await;
     assert_eq!(reply["body"]["stream"]["content"], "recovered reply");
@@ -1064,11 +937,7 @@ async fn unix_ndjson_limits_invalid_fields_and_private_state_fail_closed() {
     let mut platform = Platform::new(Some(0)).await;
     let settings = config(root.path(), &platform, None);
     let path = settings.socket_path();
-    let gateway = Gateway::start(settings).await.unwrap();
-    gateway
-        .wait_authenticated(Duration::from_secs(2))
-        .await
-        .unwrap();
+    let gateway = start_authenticated(settings).await;
     for bytes in [b"{bad-sensitive-json}\n".as_slice(), b"{}".as_slice()] {
         let response = raw_control(&path, bytes).await;
         assert!(response.get("error").is_some());
@@ -1137,11 +1006,7 @@ async fn confirmed_settlement_retries_after_http_failure_without_resending_platf
     .await;
     let settings = config(root.path(), &platform, Some(&webhook));
     let state_dir = settings.state_dir.clone();
-    let gateway = Gateway::start(settings).await.unwrap();
-    gateway
-        .wait_authenticated(Duration::from_secs(2))
-        .await
-        .unwrap();
+    let gateway = start_authenticated(settings).await;
     let input = callback("confirmed-event", "alice", "request a reply");
     platform.send(input.clone()).await;
     let reply = platform.next_final_response().await;
@@ -1163,13 +1028,7 @@ async fn confirmed_settlement_retries_after_http_failure_without_resending_platf
     }
     gateway.shutdown().await.unwrap();
 
-    let reopened = Gateway::start(config(root.path(), &platform, Some(&webhook)))
-        .await
-        .unwrap();
-    reopened
-        .wait_authenticated(Duration::from_secs(2))
-        .await
-        .unwrap();
+    let reopened = start_authenticated(config(root.path(), &platform, Some(&webhook))).await;
     platform.send(input).await;
     platform.no_command("aibot_respond_msg").await;
     assert_eq!(webhook.requests.lock().unwrap().len(), 3);
@@ -1200,11 +1059,7 @@ async fn unknown_ack_is_settled_and_retried_after_restart_without_platform_resen
     )
     .await;
     let settings = config(root.path(), &platform, Some(&webhook));
-    let gateway = Gateway::start(settings).await.unwrap();
-    gateway
-        .wait_authenticated(Duration::from_secs(2))
-        .await
-        .unwrap();
+    let gateway = start_authenticated(settings).await;
     let input = callback("unknown-event", "alice", "request a reply");
     platform.send(input.clone()).await;
     let reply = platform.next_final_response().await;
@@ -1223,13 +1078,7 @@ async fn unknown_ack_is_settled_and_retried_after_restart_without_platform_resen
     );
     gateway.shutdown().await.unwrap();
 
-    let reopened = Gateway::start(config(root.path(), &platform, Some(&webhook)))
-        .await
-        .unwrap();
-    reopened
-        .wait_authenticated(Duration::from_secs(2))
-        .await
-        .unwrap();
+    let reopened = start_authenticated(config(root.path(), &platform, Some(&webhook))).await;
     webhook.wait_requests(3).await;
     assert_eq!(settlement_attempts.load(Ordering::SeqCst), 2);
     assert_eq!(
@@ -1258,13 +1107,7 @@ async fn newer_message_suppression_is_settled_without_dispatching_old_reply() {
         response
     })
     .await;
-    let gateway = Gateway::start(config(root.path(), &platform, Some(&webhook)))
-        .await
-        .unwrap();
-    gateway
-        .wait_authenticated(Duration::from_secs(2))
-        .await
-        .unwrap();
+    let gateway = start_authenticated(config(root.path(), &platform, Some(&webhook))).await;
     platform.send(callback("old-event", "alice", "first")).await;
     webhook.wait_events(1).await;
     platform
@@ -1303,13 +1146,7 @@ async fn host_superseded_response_is_settled_without_platform_dispatch() {
         }))
     })
     .await;
-    let gateway = Gateway::start(config(root.path(), &platform, Some(&webhook)))
-        .await
-        .unwrap();
-    gateway
-        .wait_authenticated(Duration::from_secs(2))
-        .await
-        .unwrap();
+    let gateway = start_authenticated(config(root.path(), &platform, Some(&webhook))).await;
 
     platform
         .send(callback("host-superseded", "alice", "older request"))
@@ -1362,13 +1199,7 @@ async fn reply_image_is_uploaded_in_chunks_then_sent_after_the_text() {
     let root = tempfile::tempdir().unwrap();
     let mut platform = Platform::new(Some(0)).await;
     let webhook = WebhookServer::new(|_| HttpReply::ok(image_reply("结果图片"))).await;
-    let gateway = Gateway::start(config(root.path(), &platform, Some(&webhook)))
-        .await
-        .unwrap();
-    gateway
-        .wait_authenticated(Duration::from_secs(2))
-        .await
-        .unwrap();
+    let gateway = start_authenticated(config(root.path(), &platform, Some(&webhook))).await;
 
     platform
         .send(callback("image-reply", "alice", "画一张图"))
@@ -1423,13 +1254,7 @@ async fn group_mixed_media_preserves_the_actor_and_replies_with_text_and_image_t
     )
     .await;
     let webhook = WebhookServer::new(|_| HttpReply::ok(image_reply("群内图片结果"))).await;
-    let gateway = Gateway::start(config(root.path(), &platform, Some(&webhook)))
-        .await
-        .unwrap();
-    gateway
-        .wait_authenticated(Duration::from_secs(2))
-        .await
-        .unwrap();
+    let gateway = start_authenticated(config(root.path(), &platform, Some(&webhook))).await;
     let mut incoming = group_callback("group-image", "bob", "group-1", "看看附件");
     incoming["body"].as_object_mut().unwrap().remove("text");
     incoming["body"]["msgtype"] = json!("mixed");
@@ -1456,15 +1281,8 @@ async fn group_mixed_media_preserves_the_actor_and_replies_with_text_and_image_t
     assert!(attachment.get("aeskey").is_none());
     assert_eq!(media.requests().len(), 1);
 
-    let init = platform.next("aibot_upload_media_init").await;
     platform
-        .acknowledge_body(&init, 0, json!({"upload_id":"group-upload"}))
-        .await;
-    let chunk = platform.next("aibot_upload_media_chunk").await;
-    platform.acknowledge(&chunk, 0).await;
-    let finish = platform.next("aibot_upload_media_finish").await;
-    platform
-        .acknowledge_body(&finish, 0, json!({"media_id":"group-image-media"}))
+        .acknowledge_upload("group-upload", "group-image-media")
         .await;
     let image = platform.next("aibot_respond_msg").await;
     assert_eq!(image["headers"], incoming["headers"]);
@@ -1481,28 +1299,15 @@ async fn unacknowledged_image_send_is_not_repeated_after_restart() {
     let root = tempfile::tempdir().unwrap();
     let mut platform = Platform::new(Some(0)).await;
     let webhook = WebhookServer::new(|_| HttpReply::ok(image_reply("结果图片"))).await;
-    let gateway = Gateway::start(config(root.path(), &platform, Some(&webhook)))
-        .await
-        .unwrap();
-    gateway
-        .wait_authenticated(Duration::from_secs(2))
-        .await
-        .unwrap();
+    let gateway = start_authenticated(config(root.path(), &platform, Some(&webhook))).await;
 
     platform
         .send(callback("image-unknown", "alice", "画一张图"))
         .await;
     let text = next_text_final(&mut platform).await;
     platform.acknowledge(&text, 0).await;
-    let init = platform.next("aibot_upload_media_init").await;
     platform
-        .acknowledge_body(&init, 0, json!({"upload_id":"upload-fixture"}))
-        .await;
-    let chunk = platform.next("aibot_upload_media_chunk").await;
-    platform.acknowledge(&chunk, 0).await;
-    let finish = platform.next("aibot_upload_media_finish").await;
-    platform
-        .acknowledge_body(&finish, 0, json!({"media_id":"media-fixture"}))
+        .acknowledge_upload("upload-fixture", "media-fixture")
         .await;
     // The image message is claimed before it is written, then never acknowledged.
     let image = platform.next("aibot_respond_msg").await;
@@ -1514,11 +1319,7 @@ async fn unacknowledged_image_send_is_not_repeated_after_restart() {
     // send, and must not even re-upload for it.
     let mut restarted_settings = config(root.path(), &platform, Some(&webhook));
     restarted_settings.timing.ack_timeout = Duration::from_millis(400);
-    let gateway = Gateway::start(restarted_settings).await.unwrap();
-    gateway
-        .wait_authenticated(Duration::from_secs(2))
-        .await
-        .unwrap();
+    let gateway = start_authenticated(restarted_settings).await;
     platform.no_command("aibot_upload_media_init").await;
     platform.no_command("aibot_respond_msg").await;
     assert!(
@@ -1545,13 +1346,7 @@ async fn reply_images_are_serialized_and_each_send_is_confirmed_once() {
         HttpReply::ok(reply)
     })
     .await;
-    let gateway = Gateway::start(config(root.path(), &platform, Some(&webhook)))
-        .await
-        .unwrap();
-    gateway
-        .wait_authenticated(Duration::from_secs(2))
-        .await
-        .unwrap();
+    let gateway = start_authenticated(config(root.path(), &platform, Some(&webhook))).await;
 
     platform
         .send(callback("two-images", "alice", "两张图"))
@@ -1560,15 +1355,8 @@ async fn reply_images_are_serialized_and_each_send_is_confirmed_once() {
     platform.acknowledge(&text, 0).await;
 
     for index in 0..2 {
-        let init = platform.next("aibot_upload_media_init").await;
         platform
-            .acknowledge_body(&init, 0, json!({"upload_id":format!("upload-{index}")}))
-            .await;
-        let chunk = platform.next("aibot_upload_media_chunk").await;
-        platform.acknowledge(&chunk, 0).await;
-        let finish = platform.next("aibot_upload_media_finish").await;
-        platform
-            .acknowledge_body(&finish, 0, json!({"media_id":format!("media-{index}")}))
+            .acknowledge_upload(&format!("upload-{index}"), &format!("media-{index}"))
             .await;
         let image = platform.next("aibot_respond_msg").await;
         assert_eq!(image["body"]["msgtype"], "image");
@@ -1599,11 +1387,7 @@ async fn images_are_dropped_when_the_text_reply_is_never_confirmed() {
     let webhook = WebhookServer::new(|_| HttpReply::ok(image_reply("结果图片"))).await;
     let mut settings = config(root.path(), &platform, Some(&webhook));
     settings.timing.ack_timeout = Duration::from_millis(120);
-    let gateway = Gateway::start(settings).await.unwrap();
-    gateway
-        .wait_authenticated(Duration::from_secs(2))
-        .await
-        .unwrap();
+    let gateway = start_authenticated(settings).await;
 
     platform
         .send(callback("no-text-ack", "alice", "画一张图"))
@@ -1647,24 +1431,15 @@ fn platform_media_key() -> String {
 async fn inbound_media_is_downloaded_decrypted_and_handed_to_the_host() {
     let root = tempfile::tempdir().unwrap();
     let mut platform = Platform::new(Some(0)).await;
-    let png = base64::Engine::decode(
-        &base64::engine::general_purpose::STANDARD,
-        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
-    )
-    .unwrap();
+    let png = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, TINY_PNG_BASE64)
+        .unwrap();
     let server = MediaServer::new(
         encrypt_platform_media(&png, &PLATFORM_MEDIA_KEY),
         Some("attachment; filename=\"pelican.png\""),
     )
     .await;
     let webhook = WebhookServer::new(|_| HttpReply::ok(json!({"text":"收到图片"}))).await;
-    let gateway = Gateway::start(config(root.path(), &platform, Some(&webhook)))
-        .await
-        .unwrap();
-    gateway
-        .wait_authenticated(Duration::from_secs(2))
-        .await
-        .unwrap();
+    let gateway = start_authenticated(config(root.path(), &platform, Some(&webhook))).await;
 
     platform
         .send(media_callback(
@@ -1713,13 +1488,7 @@ async fn inbound_file_media_keeps_its_decoded_platform_filename() {
     )
     .await;
     let webhook = WebhookServer::new(|_| HttpReply::ok(json!({"text":"收到文件"}))).await;
-    let gateway = Gateway::start(config(root.path(), &platform, Some(&webhook)))
-        .await
-        .unwrap();
-    gateway
-        .wait_authenticated(Duration::from_secs(2))
-        .await
-        .unwrap();
+    let gateway = start_authenticated(config(root.path(), &platform, Some(&webhook))).await;
     platform
         .send(media_callback(
             "inbound-file",
@@ -1777,10 +1546,7 @@ async fn unreadable_inbound_media_never_reaches_the_host() {
         ))
         .await;
     assert_eq!(
-        tokio::time::timeout(Duration::from_secs(2), errors.recv())
-            .await
-            .unwrap()
-            .unwrap(),
+        next_error(&mut errors, Duration::from_secs(2)).await,
         GatewayError::Media
     );
     let failure = next_text_final(&mut platform).await;
@@ -1822,10 +1588,7 @@ async fn oversized_inbound_media_is_refused_before_it_is_read() {
             &platform_media_key(),
         ))
         .await;
-    let error = tokio::time::timeout(Duration::from_secs(5), errors.recv())
-        .await
-        .unwrap()
-        .unwrap();
+    let error = next_error(&mut errors, Duration::from_secs(5)).await;
     assert_eq!(
         error,
         GatewayError::Invalid("inbound media exceeds the per-file limit")
@@ -1855,13 +1618,7 @@ async fn assert_a_newer_message_suppresses_an_image(group: bool) {
         }
     })
     .await;
-    let gateway = Gateway::start(config(root.path(), &platform, Some(&webhook)))
-        .await
-        .unwrap();
-    gateway
-        .wait_authenticated(Duration::from_secs(2))
-        .await
-        .unwrap();
+    let gateway = start_authenticated(config(root.path(), &platform, Some(&webhook))).await;
 
     let older = if group {
         group_callback("stale-image", "alice", "group-1", "画一张图")
@@ -1948,23 +1705,14 @@ async fn assert_host_refusal(body: Value, expected_error: GatewayError, notice: 
     assert_eq!(failure["body"]["stream"]["content"], notice);
     platform.acknowledge(&failure, 0).await;
     assert_eq!(
-        tokio::time::timeout(Duration::from_secs(1), errors.recv())
-            .await
-            .unwrap()
-            .unwrap(),
+        next_error(&mut errors, Duration::from_secs(1)).await,
         expected_error
     );
     assert_eq!(webhook.events.lock().unwrap().len(), 1);
     gateway.shutdown().await.unwrap();
 
     // Restarting must not replay the refused event.
-    let gateway = Gateway::start(config(root.path(), &platform, Some(&webhook)))
-        .await
-        .unwrap();
-    gateway
-        .wait_authenticated(Duration::from_secs(2))
-        .await
-        .unwrap();
+    let gateway = start_authenticated(config(root.path(), &platform, Some(&webhook))).await;
     tokio::time::sleep(Duration::from_millis(200)).await;
     assert_eq!(webhook.events.lock().unwrap().len(), 1);
     let connection = rusqlite::Connection::open(root.path().join("state/delivery.sqlite")).unwrap();
@@ -1992,13 +1740,7 @@ async fn undelivered_events_outside_the_recovery_window_are_never_replayed() {
         gate: None,
     })
     .await;
-    let gateway = Gateway::start(config(root.path(), &platform, Some(&webhook)))
-        .await
-        .unwrap();
-    gateway
-        .wait_authenticated(Duration::from_secs(2))
-        .await
-        .unwrap();
+    let gateway = start_authenticated(config(root.path(), &platform, Some(&webhook))).await;
     platform
         .send(callback("long-ago", "alice", "old message"))
         .await;
@@ -2019,11 +1761,7 @@ async fn undelivered_events_outside_the_recovery_window_are_never_replayed() {
 
     let mut restarted = config(root.path(), &platform, Some(&webhook));
     restarted.recovery_window = Duration::from_secs(60);
-    let gateway = Gateway::start(restarted).await.unwrap();
-    gateway
-        .wait_authenticated(Duration::from_secs(2))
-        .await
-        .unwrap();
+    let gateway = start_authenticated(restarted).await;
     tokio::time::sleep(Duration::from_millis(200)).await;
     assert_eq!(webhook.events.lock().unwrap().len(), 1);
     let connection = rusqlite::Connection::open(root.path().join("state/delivery.sqlite")).unwrap();
@@ -2045,21 +1783,15 @@ async fn a_message_burst_shows_exactly_one_progress_bubble() {
     let root = tempfile::tempdir().unwrap();
     let mut platform = Platform::new(Some(0)).await;
     let webhook = WebhookServer::new(|event| {
-        let mut reply = HttpReply::ok(json!({
+        HttpReply::ok(json!({
             "text": format!("reply for {}", event["event_id"].as_str().unwrap()),
-        }));
-        // Slow enough that the acknowledgement delay elapses for every message.
-        reply.delay = Duration::from_millis(400);
-        reply
+        }))
+        .delayed(Duration::from_millis(400))
     })
     .await;
     let mut settings = config(root.path(), &platform, Some(&webhook));
     settings.timing.ack_delay = Duration::from_millis(50);
-    let gateway = Gateway::start(settings).await.unwrap();
-    gateway
-        .wait_authenticated(Duration::from_secs(2))
-        .await
-        .unwrap();
+    let gateway = start_authenticated(settings).await;
 
     for event_id in ["m1", "m2", "m3"] {
         platform
@@ -2080,56 +1812,6 @@ async fn a_message_burst_shows_exactly_one_progress_bubble() {
     gateway.shutdown().await.unwrap();
 }
 
-/// A bubble that is already shown is closed when a newer message replaces the
-/// turn, so no conversation is left saying "processing" forever.
-#[tokio::test]
-async fn a_superseded_progress_bubble_is_closed_with_one_line() {
-    let root = tempfile::tempdir().unwrap();
-    let mut platform = Platform::new(Some(0)).await;
-    let webhook = WebhookServer::new(|event| {
-        let mut reply = HttpReply::ok(json!({
-            "text": format!("reply for {}", event["event_id"].as_str().unwrap()),
-        }));
-        reply.delay = Duration::from_millis(500);
-        reply
-    })
-    .await;
-    let mut settings = config(root.path(), &platform, Some(&webhook));
-    settings.timing.ack_delay = Duration::from_millis(50);
-    let gateway = Gateway::start(settings).await.unwrap();
-    gateway
-        .wait_authenticated(Duration::from_secs(2))
-        .await
-        .unwrap();
-
-    platform.send(callback("first", "alice", "first")).await;
-    let bubble = platform.next("aibot_respond_msg").await;
-    assert_eq!(bubble["body"]["stream"]["content"], "⏳ 正在处理");
-    assert_eq!(bubble["headers"]["req_id"], "callback-first");
-    platform.acknowledge(&bubble, 0).await;
-
-    platform.send(callback("second", "alice", "second")).await;
-    let closing = platform.next("aibot_respond_msg").await;
-    assert_eq!(closing["headers"]["req_id"], "callback-first");
-    assert_eq!(
-        closing["body"]["stream"]["content"],
-        "已被你的新消息接续处理。"
-    );
-    assert_eq!(closing["body"]["stream"]["finish"], true);
-    platform.acknowledge(&closing, 0).await;
-
-    let second_bubble = platform.next("aibot_respond_msg").await;
-    assert_eq!(second_bubble["headers"]["req_id"], "callback-second");
-    assert_eq!(second_bubble["body"]["stream"]["finish"], false);
-    platform.acknowledge(&second_bubble, 0).await;
-
-    let reply = platform.next_final_response().await;
-    assert_eq!(reply["body"]["stream"]["content"], "reply for second");
-    platform.acknowledge(&reply, 0).await;
-    platform.no_command("aibot_respond_msg").await;
-    gateway.shutdown().await.unwrap();
-}
-
 /// A fast answer needs no progress bubble at all.
 #[tokio::test]
 async fn a_fast_reply_skips_the_progress_bubble() {
@@ -2138,11 +1820,7 @@ async fn a_fast_reply_skips_the_progress_bubble() {
     let webhook = WebhookServer::new(|_| HttpReply::ok(json!({"text":"instant reply"}))).await;
     let mut settings = config(root.path(), &platform, Some(&webhook));
     settings.timing.ack_delay = Duration::from_millis(50);
-    let gateway = Gateway::start(settings).await.unwrap();
-    gateway
-        .wait_authenticated(Duration::from_secs(2))
-        .await
-        .unwrap();
+    let gateway = start_authenticated(settings).await;
 
     platform.send(callback("fast", "alice", "quick")).await;
     let first = platform.next("aibot_respond_msg").await;
@@ -2160,9 +1838,7 @@ async fn progress_status_lines_update_the_open_bubble_in_place() {
     let root = tempfile::tempdir().unwrap();
     let mut platform = Platform::new(Some(0)).await;
     let webhook = WebhookServer::new(|_| {
-        let mut reply = HttpReply::ok(json!({"text":"done"}));
-        reply.delay = Duration::from_millis(3200);
-        reply
+        HttpReply::ok(json!({"text":"done"})).delayed(Duration::from_millis(3200))
     })
     .await;
     let progress = ProgressServer::new(|_| {
@@ -2186,11 +1862,7 @@ async fn progress_status_lines_update_the_open_bubble_in_place() {
     // The turn deliberately outlives the fixture's default webhook timeout: it
     // must still be running after several throttled status updates.
     settings.webhook.as_mut().unwrap().timeout = Some(Duration::from_secs(8));
-    let gateway = Gateway::start(settings).await.unwrap();
-    gateway
-        .wait_authenticated(Duration::from_secs(2))
-        .await
-        .unwrap();
+    let gateway = start_authenticated(settings).await;
 
     platform
         .send(callback("progress-1", "alice", "hello"))
@@ -2245,9 +1917,7 @@ async fn a_settled_host_stream_stops_its_subscription() {
     let root = tempfile::tempdir().unwrap();
     let mut platform = Platform::new(Some(0)).await;
     let webhook = WebhookServer::new(|_| {
-        let mut reply = HttpReply::ok(json!({"text":"done"}));
-        reply.delay = Duration::from_millis(600);
-        reply
+        HttpReply::ok(json!({"text":"done"})).delayed(Duration::from_millis(600))
     })
     .await;
     let progress = ProgressServer::new(|_| {
@@ -2261,11 +1931,7 @@ async fn a_settled_host_stream_stops_its_subscription() {
     })
     .await;
     let settings = config_with_progress(root.path(), &platform, Some(&webhook), Some(&progress));
-    let gateway = Gateway::start(settings).await.unwrap();
-    gateway
-        .wait_authenticated(Duration::from_secs(2))
-        .await
-        .unwrap();
+    let gateway = start_authenticated(settings).await;
 
     platform
         .send(callback("settled-turn", "alice", "hello"))
@@ -2286,11 +1952,10 @@ async fn superseded_and_broken_progress_streams_never_affect_delivery() {
     let root = tempfile::tempdir().unwrap();
     let mut platform = Platform::new(Some(0)).await;
     let webhook = WebhookServer::new(|event| {
-        let mut reply = HttpReply::ok(json!({
+        HttpReply::ok(json!({
             "text": format!("reply for {}", event["event_id"].as_str().unwrap()),
-        }));
-        reply.delay = Duration::from_millis(1500);
-        reply
+        }))
+        .delayed(Duration::from_millis(1500))
     })
     .await;
     let progress = ProgressServer::new(|event_id| {
@@ -2307,11 +1972,7 @@ async fn superseded_and_broken_progress_streams_never_affect_delivery() {
     let mut settings =
         config_with_progress(root.path(), &platform, Some(&webhook), Some(&progress));
     settings.timing.ack_delay = Duration::from_millis(50);
-    let gateway = Gateway::start(settings).await.unwrap();
-    gateway
-        .wait_authenticated(Duration::from_secs(2))
-        .await
-        .unwrap();
+    let gateway = start_authenticated(settings).await;
 
     platform
         .send(callback("progress-old", "alice", "first"))
@@ -2327,11 +1988,16 @@ async fn superseded_and_broken_progress_streams_never_affect_delivery() {
     let closing = platform.next("aibot_respond_msg").await;
     assert_eq!(closing["headers"]["req_id"], "callback-progress-old");
     assert_eq!(closing["body"]["stream"]["finish"], true);
+    assert_eq!(
+        closing["body"]["stream"]["content"],
+        "已被你的新消息接续处理。"
+    );
     platform.acknowledge(&closing, 0).await;
     progress.wait_closed(1).await;
 
     let second = platform.next("aibot_respond_msg").await;
     assert_eq!(second["headers"]["req_id"], "callback-progress-new");
+    assert_eq!(second["body"]["stream"]["finish"], false);
     assert_eq!(second["body"]["stream"]["content"], "正在查询业务系统");
     platform.acknowledge(&second, 0).await;
 
@@ -2350,11 +2016,7 @@ async fn superseded_and_broken_progress_streams_never_affect_delivery() {
     drop(dead);
     let mut settings = config_with_progress(root.path(), &platform, Some(&webhook), None);
     settings.progress_url = Some(unreachable);
-    let gateway = Gateway::start(settings).await.unwrap();
-    gateway
-        .wait_authenticated(Duration::from_secs(2))
-        .await
-        .unwrap();
+    let gateway = start_authenticated(settings).await;
     platform
         .send(callback("progress-dead", "alice", "hello"))
         .await;
@@ -2371,9 +2033,7 @@ async fn progress_subscription_retries_until_the_event_is_admitted() {
     let root = tempfile::tempdir().unwrap();
     let mut platform = Platform::new(Some(0)).await;
     let webhook = WebhookServer::new(|_| {
-        let mut reply = HttpReply::ok(json!({"text":"done"}));
-        reply.delay = Duration::from_millis(1500);
-        reply
+        HttpReply::ok(json!({"text":"done"})).delayed(Duration::from_millis(1500))
     })
     .await;
     let progress = ProgressServer::new_with_refusals(2, |_| {
@@ -2386,11 +2046,7 @@ async fn progress_subscription_retries_until_the_event_is_admitted() {
     let mut settings =
         config_with_progress(root.path(), &platform, Some(&webhook), Some(&progress));
     settings.timing.ack_delay = Duration::from_millis(900);
-    let gateway = Gateway::start(settings).await.unwrap();
-    gateway
-        .wait_authenticated(Duration::from_secs(2))
-        .await
-        .unwrap();
+    let gateway = start_authenticated(settings).await;
 
     platform
         .send(callback("progress-race", "alice", "hello"))
@@ -2434,11 +2090,7 @@ async fn a_refused_settlement_is_abandoned_instead_of_retried() {
     .await;
     let settings = config(root.path(), &platform, Some(&webhook));
     let state_dir = settings.state_dir.clone();
-    let gateway = Gateway::start(settings).await.unwrap();
-    gateway
-        .wait_authenticated(Duration::from_secs(2))
-        .await
-        .unwrap();
+    let gateway = start_authenticated(settings).await;
     platform
         .send(callback("refused-settlement", "alice", "request a reply"))
         .await;
@@ -2457,13 +2109,7 @@ async fn a_refused_settlement_is_abandoned_instead_of_retried() {
     gateway.shutdown().await.unwrap();
 
     // A restart does not replay it either.
-    let reopened = Gateway::start(config(root.path(), &platform, Some(&webhook)))
-        .await
-        .unwrap();
-    reopened
-        .wait_authenticated(Duration::from_secs(2))
-        .await
-        .unwrap();
+    let reopened = start_authenticated(config(root.path(), &platform, Some(&webhook))).await;
     tokio::time::sleep(Duration::from_millis(300)).await;
     assert_eq!(settlement_attempts.load(Ordering::SeqCst), seen);
     reopened.shutdown().await.unwrap();
@@ -2476,9 +2122,7 @@ async fn unchanged_progress_does_not_refresh_the_open_bubble() {
     let root = tempfile::tempdir().unwrap();
     let mut platform = Platform::new(Some(0)).await;
     let webhook = WebhookServer::new(|_| {
-        let mut reply = HttpReply::ok(json!({"text":"done"}));
-        reply.delay = Duration::from_millis(2800);
-        reply
+        HttpReply::ok(json!({"text":"done"})).delayed(Duration::from_millis(2800))
     })
     .await;
     let progress = ProgressServer::new(|_| {
@@ -2504,11 +2148,7 @@ async fn unchanged_progress_does_not_refresh_the_open_bubble() {
         config_with_progress(root.path(), &platform, Some(&webhook), Some(&progress));
     settings.timing.ack_delay = Duration::from_millis(300);
     settings.webhook.as_mut().unwrap().timeout = Some(Duration::from_secs(8));
-    let gateway = Gateway::start(settings).await.unwrap();
-    gateway
-        .wait_authenticated(Duration::from_secs(2))
-        .await
-        .unwrap();
+    let gateway = start_authenticated(settings).await;
 
     platform
         .send(callback("unchanged-progress", "alice", "hello"))
@@ -2545,19 +2185,13 @@ async fn the_final_reply_waits_for_the_progress_acknowledgement() {
     let root = tempfile::tempdir().unwrap();
     let mut platform = Platform::new(Some(0)).await;
     let webhook = WebhookServer::new(|_| {
-        let mut reply = HttpReply::ok(json!({"text":"done"}));
-        reply.delay = Duration::from_millis(300);
-        reply
+        HttpReply::ok(json!({"text":"done"})).delayed(Duration::from_millis(300))
     })
     .await;
     let mut settings = config(root.path(), &platform, Some(&webhook));
     settings.timing.ack_delay = Duration::from_millis(50);
     settings.timing.ack_timeout = Duration::from_secs(2);
-    let gateway = Gateway::start(settings).await.unwrap();
-    gateway
-        .wait_authenticated(Duration::from_secs(2))
-        .await
-        .unwrap();
+    let gateway = start_authenticated(settings).await;
 
     platform
         .send(callback("progress-ack", "alice", "hello"))
@@ -2584,50 +2218,6 @@ async fn the_final_reply_waits_for_the_progress_acknowledgement() {
     gateway.shutdown().await.unwrap();
 }
 
-/// Arrival order does not say which turn the Host is running: when a later
-/// message is the one the Host cancels, the older turn must still get the one
-/// progress bubble instead of being silenced.
-#[tokio::test]
-async fn the_running_turn_keeps_its_bubble_when_a_later_message_is_cancelled() {
-    let root = tempfile::tempdir().unwrap();
-    let mut platform = Platform::new(Some(0)).await;
-    let webhook = WebhookServer::new(|event| {
-        if event["event_id"] == "cancelled" {
-            HttpReply::ok(json!({"text":"", "superseded": true}))
-        } else {
-            let mut reply = HttpReply::ok(json!({"text":"the running answer"}));
-            reply.delay = Duration::from_millis(1500);
-            reply
-        }
-    })
-    .await;
-    let mut settings = config(root.path(), &platform, Some(&webhook));
-    settings.timing.ack_delay = Duration::from_millis(300);
-    let gateway = Gateway::start(settings).await.unwrap();
-    gateway
-        .wait_authenticated(Duration::from_secs(2))
-        .await
-        .unwrap();
-
-    platform
-        .send(callback("running", "alice", "long request"))
-        .await;
-    platform
-        .send(callback("cancelled", "alice", "short request"))
-        .await;
-
-    let bubble = platform.next("aibot_respond_msg").await;
-    assert_eq!(bubble["headers"]["req_id"], "callback-running");
-    assert_eq!(bubble["body"]["stream"]["finish"], false);
-    platform.acknowledge(&bubble, 0).await;
-
-    let reply = platform.next_final_response().await;
-    assert_eq!(reply["body"]["stream"]["content"], "the running answer");
-    platform.acknowledge(&reply, 0).await;
-    platform.no_command("aibot_respond_msg").await;
-    gateway.shutdown().await.unwrap();
-}
-
 /// The Host decides which turn runs, and that turn keeps its progress stream.
 ///
 /// A message the transport receives *later* may be the one the Host cancels: it
@@ -2636,88 +2226,100 @@ async fn the_running_turn_keeps_its_bubble_when_a_later_message_is_cancelled() {
 /// left the open bubble with nothing but the placeholder.
 #[tokio::test]
 async fn a_later_cancelled_message_does_not_stop_the_running_turns_progress_stream() {
-    let root = tempfile::tempdir().unwrap();
-    let mut platform = Platform::new(Some(0)).await;
-    let webhook = WebhookServer::new(|event| {
-        if event["event_id"] == "cancelled-later" {
-            // The Host cancelled this turn for the message it received first.
-            HttpReply::ok(json!({"text":"", "superseded": true}))
-        } else {
-            let mut reply = HttpReply::ok(json!({"text":"the running answer"}));
-            reply.delay = Duration::from_millis(1400);
-            reply
-        }
-    })
-    .await;
-    let progress = ProgressServer::new(|event_id| {
-        if event_id == "running-first" {
-            vec![
-                ProgressFrame::status("正在查看文件", "read_file", 1, Duration::ZERO),
-                ProgressFrame::status("正在查询业务系统", "plugin", 2, Duration::from_millis(600)),
-                ProgressFrame::status(
-                    "正在整理回复",
-                    "final_result",
-                    3,
-                    Duration::from_millis(3000),
-                ),
-                ProgressFrame::settled("completed"),
-            ]
-        } else {
-            vec![
-                ProgressFrame::status("正在准备工作区", "command", 4, Duration::ZERO),
-                ProgressFrame::status("正在处理", "default", 5, Duration::from_secs(10)),
-            ]
-        }
-    })
-    .await;
-    let mut settings =
-        config_with_progress(root.path(), &platform, Some(&webhook), Some(&progress));
-    settings.timing.ack_delay = Duration::from_millis(150);
-    settings.webhook.as_mut().unwrap().timeout = Some(Duration::from_secs(8));
-    let gateway = Gateway::start(settings).await.unwrap();
-    gateway
-        .wait_authenticated(Duration::from_secs(2))
-        .await
-        .unwrap();
-
-    platform
-        .send(callback("running-first", "alice", "long request"))
+    for with_progress in [false, true] {
+        let root = tempfile::tempdir().unwrap();
+        let mut platform = Platform::new(Some(0)).await;
+        let webhook = WebhookServer::new(|event| {
+            if event["event_id"] == "cancelled-later" {
+                // The Host cancelled this turn for the message it received first.
+                HttpReply::ok(json!({"text":"", "superseded": true}))
+            } else {
+                HttpReply::ok(json!({"text":"the running answer"}))
+                    .delayed(Duration::from_millis(1400))
+            }
+        })
         .await;
-    platform
-        .send(callback("cancelled-later", "alice", "short request"))
+        let progress = ProgressServer::new(|event_id| {
+            if event_id == "running-first" {
+                vec![
+                    ProgressFrame::status("正在查看文件", "read_file", 1, Duration::ZERO),
+                    ProgressFrame::status(
+                        "正在查询业务系统",
+                        "plugin",
+                        2,
+                        Duration::from_millis(600),
+                    ),
+                    ProgressFrame::status(
+                        "正在整理回复",
+                        "final_result",
+                        3,
+                        Duration::from_millis(3000),
+                    ),
+                    ProgressFrame::settled("completed"),
+                ]
+            } else {
+                vec![
+                    ProgressFrame::status("正在准备工作区", "command", 4, Duration::ZERO),
+                    ProgressFrame::status("正在处理", "default", 5, Duration::from_secs(10)),
+                ]
+            }
+        })
         .await;
+        let mut settings = config_with_progress(
+            root.path(),
+            &platform,
+            Some(&webhook),
+            with_progress.then_some(&progress),
+        );
+        settings.timing.ack_delay = Duration::from_millis(150);
+        settings.webhook.as_mut().unwrap().timeout = Some(Duration::from_secs(8));
+        let gateway = start_authenticated(settings).await;
 
-    // Only the running turn gets a bubble: the cancelled message is settled
-    // before its acknowledgement is due, so it never opens one.
-    let bubble = platform.next("aibot_respond_msg").await;
-    assert_eq!(bubble["headers"]["req_id"], "callback-running-first");
-    assert_eq!(
-        bubble["body"]["stream"]["content"],
-        "第 1 步 · 🔍 正在查看文件"
-    );
-    assert_eq!(bubble["body"]["stream"]["finish"], false);
-    platform.acknowledge(&bubble, 0).await;
-    wait_stream_requested(&progress, "running-first").await;
-    assert!(
-        !closed_streams(&progress).contains(&"running-first".to_owned()),
-        "the later callback must not stop the stream of the turn the Host runs"
-    );
+        platform
+            .send(callback("running-first", "alice", "long request"))
+            .await;
+        platform
+            .send(callback("cancelled-later", "alice", "short request"))
+            .await;
 
-    // ...and that stream is still feeding its own bubble.
-    let update = platform.next("aibot_respond_msg").await;
-    assert_eq!(update["headers"]["req_id"], "callback-running-first");
-    assert_eq!(
-        update["body"]["stream"]["content"],
-        "第 2 步 · 🔎 正在查询业务系统"
-    );
-    assert_eq!(update["body"]["stream"]["finish"], false);
-    platform.acknowledge(&update, 0).await;
+        // Only the running turn gets a bubble: the cancelled message is settled
+        // before its acknowledgement is due, so it never opens one.
+        let bubble = platform.next("aibot_respond_msg").await;
+        assert_eq!(bubble["headers"]["req_id"], "callback-running-first");
+        assert_eq!(
+            bubble["body"]["stream"]["content"],
+            if with_progress {
+                "第 1 步 · 🔍 正在查看文件"
+            } else {
+                "⏳ 正在处理"
+            }
+        );
+        assert_eq!(bubble["body"]["stream"]["finish"], false);
+        platform.acknowledge(&bubble, 0).await;
+        if with_progress {
+            wait_stream_requested(&progress, "running-first").await;
+            assert!(
+                !closed_streams(&progress).contains(&"running-first".to_owned()),
+                "the later callback must not stop the stream of the turn the Host runs"
+            );
 
-    let reply = platform.next_final_response().await;
-    assert_eq!(reply["body"]["stream"]["content"], "the running answer");
-    platform.acknowledge(&reply, 0).await;
-    platform.no_command("aibot_respond_msg").await;
-    gateway.shutdown().await.unwrap();
+            // ...and that stream is still feeding its own bubble.
+            let update = platform.next("aibot_respond_msg").await;
+            assert_eq!(update["headers"]["req_id"], "callback-running-first");
+            assert_eq!(
+                update["body"]["stream"]["content"],
+                "第 2 步 · 🔎 正在查询业务系统"
+            );
+            assert_eq!(update["body"]["stream"]["finish"], false);
+            platform.acknowledge(&update, 0).await;
+        }
+
+        let reply = platform.next_final_response().await;
+        assert_eq!(reply["body"]["stream"]["content"], "the running answer");
+        platform.acknowledge(&reply, 0).await;
+        platform.no_command("aibot_respond_msg").await;
+        gateway.shutdown().await.unwrap();
+    }
 }
 
 /// An event's own callback settles its subscription: the stream stops even when
@@ -2727,9 +2329,7 @@ async fn an_events_own_callback_stops_its_progress_stream() {
     let root = tempfile::tempdir().unwrap();
     let mut platform = Platform::new(Some(0)).await;
     let webhook = WebhookServer::new(|_| {
-        let mut reply = HttpReply::ok(json!({"text":"done"}));
-        reply.delay = Duration::from_millis(300);
-        reply
+        HttpReply::ok(json!({"text":"done"})).delayed(Duration::from_millis(300))
     })
     .await;
     let progress = ProgressServer::new(|_| {
@@ -2742,11 +2342,7 @@ async fn an_events_own_callback_stops_its_progress_stream() {
     .await;
     // The default acknowledgement delay keeps the bubble out of this test.
     let settings = config_with_progress(root.path(), &platform, Some(&webhook), Some(&progress));
-    let gateway = Gateway::start(settings).await.unwrap();
-    gateway
-        .wait_authenticated(Duration::from_secs(2))
-        .await
-        .unwrap();
+    let gateway = start_authenticated(settings).await;
 
     platform
         .send(callback("settling-event", "alice", "hello"))
@@ -2768,9 +2364,7 @@ async fn stopping_the_transport_stops_live_progress_subscriptions() {
     let root = tempfile::tempdir().unwrap();
     let platform = Platform::new(Some(0)).await;
     let webhook = WebhookServer::new(|_| {
-        let mut reply = HttpReply::ok(json!({"text":"done"}));
-        reply.delay = Duration::from_secs(5);
-        reply
+        HttpReply::ok(json!({"text":"done"})).delayed(Duration::from_secs(5))
     })
     .await;
     let progress = ProgressServer::new(|_| {
@@ -2781,11 +2375,7 @@ async fn stopping_the_transport_stops_live_progress_subscriptions() {
     })
     .await;
     let settings = config_with_progress(root.path(), &platform, Some(&webhook), Some(&progress));
-    let gateway = Gateway::start(settings).await.unwrap();
-    gateway
-        .wait_authenticated(Duration::from_secs(2))
-        .await
-        .unwrap();
+    let gateway = start_authenticated(settings).await;
 
     platform
         .send(callback("live-until-stop", "alice", "hello"))

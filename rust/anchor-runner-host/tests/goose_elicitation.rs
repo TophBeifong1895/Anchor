@@ -7,7 +7,7 @@ mod goose;
 
 use goose::{Gate, Host, HttpHost, Provider, Step};
 use serde_json::{Value, json};
-use std::{fs, path::Path};
+use std::fs;
 
 const SESSION: &str = "goose-elicitation";
 const QUESTION: &str = "Choose the fixture topic and number of examples.";
@@ -252,31 +252,21 @@ fn last_tool_result(provider: &Provider, field: &str) -> Value {
 }
 
 fn evidence(host: &Host, provider: &Provider, checks: Value) {
-    provider.assert_consumed();
     assert!(
         provider.url.starts_with("http://127.0.0.1:"),
         "{}",
         provider.url
     );
-    let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/goose_elicitation.rs");
-    let report = json!({
-        "status":"passed","runtime":"goose",
-        "goose_version":"1.53.0","goose_binary_sha256":goose::GOOSE_SHA256,
-        "host_binary_sha256":goose::digest(&host.base.root.path().join("anchor-runner-host")),
-        "source_sha256":goose::digest(&source),"real_model_requests":0,"production_data_used":false,
-        "provider_requests":provider.requests(),"checks":checks,
-        "platform_files":goose::file_inventory(&host.base.root.path().join("state/platform")),
-        "bundle_files":goose::file_inventory(&host.base.root.path().join("bundle")),
-        "workspace_files":goose::file_inventory(&host.base.root.path().join("work")),
-    });
-    fs::write(
-        provider.root.join("evidence.json"),
-        serde_json::to_vec_pretty(&report).unwrap(),
-    )
-    .unwrap();
-    println!(
-        "evidence: {}",
-        provider.root.join("evidence.json").display()
+    let root = host.base.root.path();
+    host.evidence_report(
+        provider,
+        "tests/goose_elicitation.rs",
+        checks,
+        json!({
+            "platform_files":goose::file_inventory(&root.join("state/platform")),
+            "bundle_files":goose::file_inventory(&root.join("bundle")),
+            "workspace_files":goose::file_inventory(&root.join("work")),
+        }),
     );
 }
 

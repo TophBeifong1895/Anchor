@@ -378,7 +378,6 @@ impl McpToolConfig {
         Ok(())
     }
 
-    #[allow(dead_code)]
     pub async fn bind(
         &self,
         bindings: &[PluginBinding],
@@ -387,30 +386,6 @@ impl McpToolConfig {
         self.bind_inner(bindings, network, None)
             .await
             .map_err(|error| error.to_string())
-    }
-
-    /// Bind the same manifest MCP servers while giving stdio servers a
-    /// command created inside the host Bubblewrap boundary.
-    #[cfg(test)]
-    pub async fn bind_with_sandbox(
-        &self,
-        bindings: &[PluginBinding],
-        network: bool,
-        sandbox: &BubblewrapSandbox,
-        workspace: &Path,
-    ) -> Result<LiveMcpTools, String> {
-        let plugin_views = BTreeMap::new();
-        self.bind_with_node_inputs(
-            bindings,
-            network,
-            SandboxLaunch {
-                sandbox,
-                workspace,
-                readonly_inputs: &[],
-                plugin_views: &plugin_views,
-            },
-        )
-        .await
     }
 
     pub(crate) async fn bind_with_node_inputs(
@@ -1405,7 +1380,6 @@ impl PluginToolHost {
     /// Create a synthetic, secret-free fixture binding. The caller must ensure
     /// this exact fixture id was enabled by host configuration. It is not a
     /// filesystem Plugin manifest and must not be used as one.
-    #[allow(dead_code)]
     pub fn resolve_fixture_plugins(
         &self,
         plugin_ids: &[String],
@@ -1446,7 +1420,6 @@ impl PluginToolHost {
     /// Resolve the Plugin tools for one admitted node request into an owned
     /// port. The returned trait object retains the exact fake/live bindings
     /// and is suitable for an asynchronous node-host resolver.
-    #[allow(dead_code)]
     pub async fn assemble(
         &self,
         mcp: &McpToolConfig,
@@ -1825,7 +1798,16 @@ exec ./mcp-fixture --stdio inspect
         );
         assert!(!private.join("forbidden").exists());
         let tools = config
-            .bind_with_sandbox(&[binding], false, &sandbox, &other_workspace)
+            .bind_with_node_inputs(
+                &[binding],
+                false,
+                SandboxLaunch {
+                    sandbox: &sandbox,
+                    workspace: &other_workspace,
+                    readonly_inputs: &[],
+                    plugin_views: &BTreeMap::new(),
+                },
+            )
             .await
             .unwrap();
         let result = tools.call("reader-stdio_inspect", json!({})).await.unwrap();
@@ -1937,7 +1919,16 @@ exec ./mcp-fixture --stdio inspect
         .unwrap();
         let tools = match tokio::time::timeout(
             std::time::Duration::from_secs(5),
-            config.bind_with_sandbox(std::slice::from_ref(&binding), false, &sandbox, &workspace),
+            config.bind_with_node_inputs(
+                std::slice::from_ref(&binding),
+                false,
+                SandboxLaunch {
+                    sandbox: &sandbox,
+                    workspace: &workspace,
+                    readonly_inputs: &[],
+                    plugin_views: &BTreeMap::new(),
+                },
+            ),
         )
         .await
         {
@@ -1972,7 +1963,7 @@ exec ./mcp-fixture --stdio inspect
             .unwrap()
             .config["command"] = json!(ungranted);
         assert!(matches!(
-            config.bind_with_sandbox(&[binding], false, &sandbox, &workspace).await,
+            config.bind_with_node_inputs(&[binding], false, SandboxLaunch { sandbox: &sandbox, workspace: &workspace, readonly_inputs: &[], plugin_views: &BTreeMap::new() }).await,
             Err(error) if error.contains("sandbox launch rejected") && error.contains("command must select")
         ));
     }

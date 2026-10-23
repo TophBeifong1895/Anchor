@@ -926,6 +926,17 @@ impl RunApplication {
 }
 
 #[cfg(test)]
+async fn wait_for_catalog_guard(application: &RunApplication) {
+    tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        while application.catalog_mutations.try_lock().is_ok() {
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("mutation did not acquire the catalog guard");
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
@@ -961,96 +972,85 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn installation_waiting_for_a_library_lease_cancels_and_a_later_install_can_continue() {
-        let temporary = tempfile::tempdir().unwrap();
-        let library_root = temporary.path().join("library");
-        let application = application(temporary.path());
-        let source = candidate(temporary.path(), "lease");
-        let access = DependencyAccess::default();
-        let precondition = application
-            .plugin_install_precondition_with_access(
-                library_root.clone(),
-                source.clone(),
-                "demo".into(),
-                access.clone(),
-            )
-            .await
-            .unwrap();
-        let lease = Library::new(&library_root).install_lease().unwrap();
-        let cancel = async {
-            tokio::time::sleep(std::time::Duration::from_millis(60)).await;
+    async fn installation_waits_cancel_without_publishing_and_a_later_install_can_continue() {
+        for (catalog_wait, cancel_wait) in [(false, true), (true, true), (true, false)] {
+            let temporary = tempfile::tempdir().unwrap();
+            let library_root = temporary.path().join("library");
+            let application = application(temporary.path());
+            let source = candidate(temporary.path(), "waiting");
+            let access = DependencyAccess::default();
+            let precondition = application
+                .plugin_install_precondition_with_access(
+                    library_root.clone(),
+                    source.clone(),
+                    "demo".into(),
+                    access.clone(),
+                )
+                .await
+                .unwrap();
+            let catalog_guard = if catalog_wait {
+                Some(application.graph_catalog_mutation_guard().await)
+            } else {
+                None
+            };
+            let library_lease = if catalog_wait {
+                None
+            } else {
+                Some(Library::new(&library_root).install_lease().unwrap())
+            };
+            let installation =
+                application.install_plugin_if_unchanged(library_root.clone(), precondition);
+            tokio::pin!(installation);
+            assert!(
+                tokio::time::timeout(std::time::Duration::from_millis(60), &mut installation)
+                    .await
+                    .is_err(),
+                "the install must wait for the held guard"
+            );
+            if !cancel_wait {
+                drop(catalog_guard);
+                drop(library_lease);
+                let installed =
+                    tokio::time::timeout(std::time::Duration::from_secs(2), installation)
+                        .await
+                        .expect(
+                            "the same waiting install must continue after the guard is released",
+                        )
+                        .unwrap();
+                assert_eq!(
+                    installed_digest(&library_root, "demo"),
+                    Some(installed.digest)
+                );
+                continue;
+            }
             access
                 .cancellation
                 .store(true, std::sync::atomic::Ordering::Release);
-        };
-        let (result, ()) = tokio::time::timeout(std::time::Duration::from_secs(2), async {
-            tokio::join!(
-                application.install_plugin_if_unchanged(library_root.clone(), precondition),
-                cancel
-            )
-        })
-        .await
-        .expect("waiting for the Library publication lease must be cancellable");
-        assert!(format!("{:?}", result.unwrap_err()).contains("cancel"));
-        assert!(installed_digest(&library_root, "demo").is_none());
-        drop(lease);
-        let next = application
-            .plugin_install_precondition(library_root.clone(), source, "demo".into())
-            .await
-            .unwrap();
-        let installed = application
-            .install_plugin_if_unchanged(library_root.clone(), next)
-            .await
-            .unwrap();
-        assert_eq!(
-            installed_digest(&library_root, "demo"),
-            Some(installed.digest)
-        );
-    }
-
-    #[tokio::test]
-    async fn installation_waiting_for_the_catalog_guard_cancels_without_publishing() {
-        let temporary = tempfile::tempdir().unwrap();
-        let library_root = temporary.path().join("library");
-        let application = application(temporary.path());
-        let source = candidate(temporary.path(), "catalog");
-        let access = DependencyAccess::default();
-        let precondition = application
-            .plugin_install_precondition_with_access(
-                library_root.clone(),
-                source.clone(),
-                "demo".into(),
-                access.clone(),
-            )
-            .await
-            .unwrap();
-        let held = application.graph_catalog_mutation_guard().await;
-        let cancel = async {
-            tokio::time::sleep(std::time::Duration::from_millis(60)).await;
-            access
-                .cancellation
-                .store(true, std::sync::atomic::Ordering::Release);
-        };
-        let (result, ()) = tokio::time::timeout(std::time::Duration::from_secs(2), async {
-            tokio::join!(
-                application.install_plugin_if_unchanged(library_root.clone(), precondition),
-                cancel
-            )
-        })
-        .await
-        .expect("waiting for the catalog guard must be cancellable");
-        assert!(format!("{:?}", result.unwrap_err()).contains("catalog guard"));
-        assert!(installed_digest(&library_root, "demo").is_none());
-        drop(held);
-        let next = application
-            .plugin_install_precondition(library_root.clone(), source, "demo".into())
-            .await
-            .unwrap();
-        application
-            .install_plugin_if_unchanged(library_root.clone(), next)
-            .await
-            .unwrap();
-        assert!(installed_digest(&library_root, "demo").is_some());
+            let error = tokio::time::timeout(std::time::Duration::from_secs(2), installation)
+                .await
+                .expect("waiting for either publication guard must be cancellable")
+                .unwrap_err();
+            assert!(format!("{error:?}").contains(if catalog_wait {
+                "catalog guard"
+            } else {
+                "cancel"
+            }));
+            assert!(installed_digest(&library_root, "demo").is_none());
+            drop(catalog_guard);
+            drop(library_lease);
+            let next = application
+                .plugin_install_precondition(library_root.clone(), source, "demo".into())
+                .await
+                .unwrap();
+            let installed = application
+                .install_plugin_if_unchanged(library_root.clone(), next)
+                .await
+                .unwrap();
+            assert_eq!(
+                installed_digest(&library_root, "demo"),
+                Some(installed.digest)
+            );
+        }
     }
 
     #[tokio::test]
@@ -1072,13 +1072,7 @@ mod tests {
                     .await
             }
         });
-        tokio::time::timeout(std::time::Duration::from_secs(2), async {
-            while application.catalog_mutations.try_lock().is_ok() {
-                tokio::time::sleep(std::time::Duration::from_millis(5)).await;
-            }
-        })
-        .await
-        .unwrap();
+        wait_for_catalog_guard(&application).await;
         // The existing early validation is tiny; wait for the installer to reach
         // the externally held Library lease before changing its candidate.
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
@@ -1122,13 +1116,7 @@ mod tests {
                     .await
             }
         });
-        tokio::time::timeout(std::time::Duration::from_secs(2), async {
-            while application.catalog_mutations.try_lock().is_ok() {
-                tokio::time::sleep(std::time::Duration::from_millis(5)).await;
-            }
-        })
-        .await
-        .unwrap();
+        wait_for_catalog_guard(&application).await;
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
         let external = candidate(temporary.path(), "external");
         let published = Library::new(&library_root)
@@ -1740,16 +1728,11 @@ mod impact_tests {
         let bundle = root.path().join("bundles/main");
         fs::create_dir_all(&bundle).unwrap();
         let _guard = crate::PROCESS_ENV_LOCK.lock().await;
-        let previous = (
-            std::env::var_os("ANCHOR_RUNNER_LIBRARY_ROOT"),
-            std::env::var_os("ANCHOR_RUNNER_CATALOG_ROOT"),
-            std::env::var_os("ANCHOR_RUNNER_BUNDLE_ROOT"),
-        );
-        unsafe {
-            std::env::remove_var("ANCHOR_RUNNER_LIBRARY_ROOT");
-            std::env::remove_var("ANCHOR_RUNNER_CATALOG_ROOT");
-            std::env::set_var("ANCHOR_RUNNER_BUNDLE_ROOT", &bundle);
-        }
+        let mut environment = crate::test_support::Environment::cleared(&[
+            "ANCHOR_RUNNER_LIBRARY_ROOT",
+            "ANCHOR_RUNNER_CATALOG_ROOT",
+        ]);
+        environment.set("ANCHOR_RUNNER_BUNDLE_ROOT", &bundle);
         // The same root the API serves and the resolver binds from.
         let catalog_root = bundle.parent().unwrap();
         let library_root = crate::library_root(catalog_root);
@@ -1776,21 +1759,6 @@ mod impact_tests {
             .is_ok(),
             "the node call resolves the Plugin the API installed"
         );
-        let (library, catalog, bundle) = previous;
-        unsafe {
-            match library {
-                Some(value) => std::env::set_var("ANCHOR_RUNNER_LIBRARY_ROOT", value),
-                None => std::env::remove_var("ANCHOR_RUNNER_LIBRARY_ROOT"),
-            }
-            match catalog {
-                Some(value) => std::env::set_var("ANCHOR_RUNNER_CATALOG_ROOT", value),
-                None => std::env::remove_var("ANCHOR_RUNNER_CATALOG_ROOT"),
-            }
-            match bundle {
-                Some(value) => std::env::set_var("ANCHOR_RUNNER_BUNDLE_ROOT", value),
-                None => std::env::remove_var("ANCHOR_RUNNER_BUNDLE_ROOT"),
-            }
-        }
     }
 
     /// A Graph this host cannot load is a *gap* in the report, never a silent
@@ -1904,54 +1872,6 @@ mod impact_tests {
             "a refused declaration must not create store or views"
         );
     }
-
-    /// The catalog guard covers the dependency landing as well as the Plugin
-    /// publication, so Graph editing waits for the whole install.
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn an_install_holds_the_catalog_guard_for_its_whole_duration() {
-        let root = tempfile::tempdir().unwrap();
-        let library_root = root.path().join("library");
-        let application = RunApplication::new(root.path().join("state"), root.path().to_path_buf());
-        let source = candidate(root.path(), "guarded");
-        let precondition = application
-            .plugin_install_precondition(library_root.clone(), source, "guarded".into())
-            .await
-            .unwrap();
-
-        let guard = application.graph_catalog_mutation_guard().await;
-        let installer = application.clone();
-        let installing = tokio::spawn(async move {
-            installer
-                .install_plugin_if_unchanged(library_root, precondition)
-                .await
-        });
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-        assert!(
-            !installing.is_finished(),
-            "the install must wait for the catalog guard this host already holds"
-        );
-        drop(guard);
-        installing.await.unwrap().unwrap();
-    }
-
-    #[tokio::test]
-    async fn a_plugin_nobody_binds_installs_without_the_extra_decision() {
-        let root = tempfile::tempdir().unwrap();
-        let library_root = root.path().join("library");
-        let application = RunApplication::new(root.path().join("state"), root.path().to_path_buf());
-        let precondition = application
-            .plugin_install_precondition(
-                library_root.clone(),
-                candidate(root.path(), "alone"),
-                "solo".into(),
-            )
-            .await
-            .unwrap();
-        application
-            .install_plugin_if_unchanged(library_root, precondition)
-            .await
-            .unwrap();
-    }
 }
 
 /// Uninstalling a Plugin: what it refuses, what it deletes, what it frees.
@@ -1963,7 +1883,7 @@ mod uninstall_tests {
     use anchor_platform_session::{CreateSession, SessionStore};
     use anchor_runtime::graph::{GraphRunRecord, GraphSnapshot};
     use serde_json::json;
-    use std::{collections::BTreeMap, fs, path::Path};
+    use std::{fs, path::Path};
 
     /// Every byte the Library owns: Plugin directories, views and the store.
     fn library_bytes(root: &Path) -> Vec<(String, Vec<u8>)> {
@@ -2051,23 +1971,12 @@ mod uninstall_tests {
         sessions
     }
 
-    async fn wait_for_uninstall_guard(application: &RunApplication) {
-        tokio::time::timeout(std::time::Duration::from_secs(2), async {
-            while application.catalog_mutations.try_lock().is_ok() {
-                tokio::time::sleep(std::time::Duration::from_millis(5)).await;
-            }
-        })
-        .await
-        .expect("uninstall did not acquire the catalog guard");
-    }
-
     #[tokio::test]
     async fn uninstall_rechecks_the_approved_version_after_waiting_for_publication() {
         let root = tempfile::tempdir().unwrap();
         let sessions = session_store(root.path());
-        let (_runs, precondition) = installed(root.path(), &sessions, b"precious").await;
+        let (application, precondition) = installed(root.path(), &sessions, b"precious").await;
         let library_root = root.path().join("library");
-        let application = RunApplication::new(root.path().join("state"), root.path().to_path_buf());
         let lease = Library::new(&library_root).install_lease().unwrap();
         let deletion = tokio::spawn({
             let (application, library_root, sessions) =
@@ -2078,7 +1987,7 @@ mod uninstall_tests {
                     .await
             }
         });
-        wait_for_uninstall_guard(&application).await;
+        wait_for_catalog_guard(&application).await;
         let replacement = write_candidate(root.path(), b"unused");
         fs::write(
             replacement.join("plugin.json"),
@@ -2110,9 +2019,8 @@ mod uninstall_tests {
     async fn uninstall_rechecks_holders_after_waiting_for_publication() {
         let root = tempfile::tempdir().unwrap();
         let sessions = session_store(root.path());
-        let (_runs, precondition) = installed(root.path(), &sessions, b"precious").await;
+        let (application, precondition) = installed(root.path(), &sessions, b"precious").await;
         let library_root = root.path().join("library");
-        let application = RunApplication::new(root.path().join("state"), root.path().to_path_buf());
         let lease = Library::new(&library_root).install_lease().unwrap();
         let before = library_bytes(&library_root);
         let deletion = tokio::spawn({
@@ -2124,7 +2032,7 @@ mod uninstall_tests {
                     .await
             }
         });
-        wait_for_uninstall_guard(&application).await;
+        wait_for_catalog_guard(&application).await;
         sessions
             .set_plugin_mount("local", "sess", "demo", true, "operator", "click")
             .unwrap();
@@ -2146,10 +2054,8 @@ mod uninstall_tests {
         for publication_wait in [false, true] {
             let root = tempfile::tempdir().unwrap();
             let sessions = session_store(root.path());
-            let (_runs, precondition) = installed(root.path(), &sessions, b"precious").await;
+            let (application, precondition) = installed(root.path(), &sessions, b"precious").await;
             let library_root = root.path().join("library");
-            let application =
-                RunApplication::new(root.path().join("state"), root.path().to_path_buf());
             let held_catalog = if publication_wait {
                 None
             } else {
@@ -2234,11 +2140,10 @@ mod uninstall_tests {
         let root = tempfile::tempdir().unwrap();
         let root = root.path();
         let sessions = session_store(root);
-        installed(root, &sessions, b"precious").await;
+        let (application, _) = installed(root, &sessions, b"precious").await;
         sessions
             .set_plugin_mount("local", "sess", "demo", true, "operator", "click")
             .unwrap();
-        let application = RunApplication::new(root.join("state"), root.to_path_buf());
         let precondition = application
             .plugin_uninstall_precondition(&root.join("library"), "demo", &sessions)
             .await
@@ -2303,8 +2208,7 @@ mod uninstall_tests {
         let root = root.path();
         let sessions = session_store(root);
         let library_root = root.join("library");
-        let application = RunApplication::new(root.join("state"), root.to_path_buf());
-        let (_runs, precondition) = installed(root, &sessions, b"precious").await;
+        let (application, precondition) = installed(root, &sessions, b"precious").await;
         // One other Plugin stays installed: the reclaimer conservatively refuses to
         // delete anything when the Library holds no Plugin at all, and that guard
         // is the reclaimer's, not something an uninstall may bypass.
@@ -2385,8 +2289,7 @@ mod uninstall_tests {
         let root = tempfile::tempdir().unwrap();
         let root = root.path();
         let sessions = session_store(root);
-        let (_runs, precondition) = installed(root, &sessions, b"data").await;
-        let application = RunApplication::new(root.join("state"), root.to_path_buf());
+        let (application, precondition) = installed(root, &sessions, b"data").await;
         application
             .uninstall_plugin_if_unchanged(&root.join("library"), &precondition, &sessions)
             .await
@@ -2405,7 +2308,6 @@ mod uninstall_tests {
         let root = root.path();
         let sessions = session_store(root);
         let (_runs, precondition) = installed(root, &sessions, b"0123456789").await;
-        let _ = BTreeMap::<String, bool>::new();
         assert_eq!(precondition.id, "demo");
         assert_eq!(precondition.name, "Demo");
         assert_eq!(precondition.mutable, vec![("state/".to_owned(), Some(10))]);

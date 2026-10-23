@@ -12,7 +12,6 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
 pub mod candidate;
-pub mod cutover;
 mod goose;
 pub mod preflight;
 pub use goose::run_goose_fixture;

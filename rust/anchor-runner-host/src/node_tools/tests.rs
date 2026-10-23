@@ -212,9 +212,13 @@ async fn direct_rustc_uses_the_frozen_grant_and_rejects_unrelated_host_commands(
             json!({"command": [bin.join("unrelated").to_string_lossy(), "--version"]}),
         )
         .await;
-    if let Ok(result) = unavailable {
-        assert_ne!(result[0].as_json().unwrap()["exit_code"], 0);
-    }
+    let result = unavailable.expect("the sandbox must report the unavailable executable");
+    let result = result[0].as_json().unwrap();
+    assert!(
+        result["exit_code"].as_i64().is_some_and(|code| code != 0),
+        "an ungranted sibling executable ran successfully: {result}"
+    );
+    assert_eq!(result["stdout"], "");
     let refused = fixture
         .tools(cancellation())
         .call(RUN_TOOL_NAME, json!({"command": ["rustc", "--version"]}))

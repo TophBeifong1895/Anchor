@@ -78,8 +78,7 @@ pub(crate) async fn land_with_access(
     .await
 }
 
-/// Candidate and development views use the same Library package bytes as a
-/// formal Plugin. Their exact references are published under the writer lock.
+/// Candidate views use the same Library package bytes as a formal Plugin. Their exact references are published under the writer lock.
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn prepare_candidate(
     provisioner: &DependencyProvisioner,
@@ -112,7 +111,7 @@ pub(crate) async fn prepare_candidate(
 }
 
 #[cfg(test)]
-pub(crate) async fn prepare_development(
+pub(crate) async fn prepare_legacy_fixture(
     provisioner: &DependencyProvisioner,
     library_root: &Path,
     scope: &anchor_library::DevelopmentScope,
@@ -1351,37 +1350,20 @@ mod tests {
     /// view, not from the deployment's interpreter.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_plugin_tool_imports_its_declared_package_from_its_view_without_network() {
-        let Some(toolchain) = toolchain() else {
+        let Some(deployment) = deploy().await else {
             return;
         };
-        let root = tempfile::tempdir().unwrap();
-        let library = root.path().join("library");
-        let workspace = root.path().join("workspace");
-        std::fs::create_dir_all(&workspace).unwrap();
-        let Some(sandbox) = sandbox(&workspace) else {
-            return;
-        };
-
-        // The deployment authorizes one directory of already-built distributions.
-        // The wheel is crafted here so the case needs no network at all; the
-        // declaration's own `idna==3.6` decides what is installed.
-        let wheels = root.path().join("wheels");
-        std::fs::create_dir_all(&wheels).unwrap();
-        fixture_wheel(&wheels, "idna", "3.6");
-        let build_root = root.path().join("environment-build");
-        let provisioner = Arc::new(
-            crate::dependency_provision::DependencyProvisioner::new(config(
-                &build_root,
-                &toolchain,
-                wheels,
-            ))
-            .unwrap(),
-        );
+        let root = &deployment.root;
+        let library = deployment.library.clone();
+        let workspace = &deployment.workspace;
+        let sandbox = &deployment.sandbox;
+        let provisioner = &deployment.provisioner;
+        let application = &deployment.application;
 
         // The deployment interpreter is the control, but whether this particular
         // host happens to have the package is not the proof: the proof is where
         // the tool's import came from.
-        let control = std::process::Command::new(&toolchain.python)
+        let control = std::process::Command::new(&provisioner.config.python)
             .arg("-c")
             .arg("import idna")
             .output()
@@ -1390,18 +1372,13 @@ mod tests {
             eprintln!("NOTE: this host already imports idna; the view path below is the evidence");
         }
 
-        // The host listens here; only a process with the host's network can reach
-        // it, so this is what makes "the sandbox has no network" testable.
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let probe_address = listener.local_addr().unwrap().to_string();
-        let candidate = root.path().join("probe-candidate");
-        write_candidate(&candidate, &probe_address);
-        let application = RunApplication::new(root.path().join("state"), root.path().to_path_buf())
-            .with_dependency_provisioner(Arc::clone(&provisioner));
-
         // 1. The declaration is solved before a human is asked anything.
         let precondition = application
-            .plugin_install_precondition(library.clone(), candidate, "python-probe".into())
+            .plugin_install_precondition(
+                library.clone(),
+                deployment.candidate.clone(),
+                "python-probe".into(),
+            )
             .await
             .unwrap();
         let plan = precondition
@@ -1415,9 +1392,32 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![("idna", "3.6")]
         );
-        assert_eq!(plan.interpreter, resolved_interpreter(&toolchain));
+        assert_eq!(
+            plan.interpreter,
+            resolved_interpreter(&provisioner.config.python)
+        );
         assert!(plan.view.starts_with(&library), "{}", plan.view.display());
         assert_eq!(plan.sources.len(), 1);
+
+        let mut stale = resolved_of(&plan);
+        stale.interpreter_digest = "obsolete interpreter digest".into();
+        let refused = land(
+            provisioner,
+            &library,
+            "python-probe",
+            &plan.declaration_digest,
+            &stale,
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            refused.to_string().contains("interpreter changed"),
+            "{refused}"
+        );
+        assert!(
+            !plan.view.exists(),
+            "a stale interpreter cannot publish a view"
+        );
 
         let outcome = application
             .install_plugin_if_unchanged(library.clone(), precondition)
@@ -1446,19 +1446,11 @@ mod tests {
         // The store holds exactly one copy of the (package, version).
         assert_eq!(std::fs::read_dir(&store).unwrap().count(), 1);
         let reused = land(
-            &provisioner,
+            provisioner,
             &library,
             "python-probe",
             &plan.declaration_digest,
-            &ResolvedRequirements {
-                interpreter: plan.interpreter.clone(),
-                interpreter_path: plan.interpreter_path.clone(),
-                interpreter_prefix: PathBuf::from("/usr"),
-                interpreter_digest: plan.interpreter_digest.clone(),
-                lock: String::new(),
-                lock_digest: plan.lock_digest.clone(),
-                packages: plan.packages.clone(),
-            },
+            &resolved_of(&plan),
         )
         .await
         .unwrap();
@@ -1468,48 +1460,16 @@ mod tests {
         // 3. The Plugin's tool runs on the view's interpreter, in a sandbox with
         //    no network, and reports what that interpreter imported.
         let binding = catalog.resolve(&["python-probe".into()]).unwrap().remove(0);
-        let prepared = crate::plugin_view::prepare(&library, &binding)
-            .unwrap()
-            .expect("the installed Plugin has a view");
-        assert_eq!(prepared.view(), view);
-        let mcp = McpToolConfig::from_catalog(&library, std::slice::from_ref(&binding)).unwrap();
-        let plugin_views = BTreeMap::from([(
-            "python-probe".to_owned(),
-            crate::plugin_view::PreparedPlugin::for_candidate(
-                &FilePluginCatalog::new(&library),
-                "python-probe",
-                Some(prepared),
-            )
-            .unwrap(),
-        )]);
-        let tools = mcp
-            .bind_with_node_inputs(
-                std::slice::from_ref(&binding),
-                false,
-                SandboxLaunch {
-                    sandbox: &sandbox,
-                    workspace: &workspace,
-                    readonly_inputs: &[],
-                    plugin_views: &plugin_views,
-                },
-            )
-            .await
-            .unwrap_or_else(|error| panic!("the python Plugin server did not bind: {error}"));
-        let name = "python-probe-probe_report";
-        assert!(
-            tools
-                .definitions()
-                .iter()
-                .any(|definition| definition.name == name),
-            "{:?}",
-            tools
-                .definitions()
-                .iter()
-                .map(|definition| definition.name.to_string())
-                .collect::<Vec<_>>()
-        );
-        let result = tools.call(name, serde_json::json!({})).await.unwrap();
-        let report: serde_json::Value = serde_json::from_str(result[0].as_text().unwrap()).unwrap();
+        let report = report_at(
+            &library,
+            &library,
+            &binding,
+            sandbox,
+            workspace,
+            "python-probe-probe_report",
+            &view,
+        )
+        .await;
         assert_eq!(report["version"], "3.6", "{report}");
         assert_eq!(
             report["prefix"],
@@ -1532,7 +1492,7 @@ mod tests {
             report["network"].as_str().unwrap().starts_with("denied"),
             "the sandbox shares the host network: {report}"
         );
-        drop(listener);
+        drop(deployment.listener);
 
         // 4. A declaration that cannot be solved is refused before anything is
         //    written, and the view that already exists is untouched.
@@ -1648,21 +1608,25 @@ for line in sys.stdin:
         std::fs::write(directory.join("server.py"), WRITING_SERVER).unwrap();
     }
 
-    /// Bind the installed Plugin's server and ask its one tool.
-    async fn report_from(
-        deployment: &Deployment,
+    async fn report_at(
+        library: &Path,
+        catalog: &Path,
         binding: &anchor_runtime::graph::PluginBinding,
+        sandbox: &BubblewrapSandbox,
+        workspace: &Path,
+        name: &str,
+        expected_view: &Path,
     ) -> serde_json::Value {
-        let prepared = crate::plugin_view::prepare(&deployment.library, binding)
+        let prepared = crate::plugin_view::prepare(library, binding)
             .unwrap()
             .expect("the installed Plugin has a view");
-        let mcp = McpToolConfig::from_catalog(&deployment.library, std::slice::from_ref(binding))
-            .unwrap();
+        assert_eq!(prepared.view(), expected_view);
+        let mcp = McpToolConfig::from_catalog(catalog, std::slice::from_ref(binding)).unwrap();
         let plugin_views = BTreeMap::from([(
-            "python-probe".to_owned(),
+            binding.id.clone(),
             crate::plugin_view::PreparedPlugin::for_candidate(
-                &FilePluginCatalog::new(&deployment.library),
-                "python-probe",
+                &FilePluginCatalog::new(library),
+                &binding.id,
                 Some(prepared),
             )
             .unwrap(),
@@ -1672,19 +1636,41 @@ for line in sys.stdin:
                 std::slice::from_ref(binding),
                 false,
                 SandboxLaunch {
-                    sandbox: &deployment.sandbox,
-                    workspace: &deployment.workspace,
+                    sandbox,
+                    workspace,
                     readonly_inputs: &[],
                     plugin_views: &plugin_views,
                 },
             )
             .await
             .unwrap_or_else(|error| panic!("the Plugin server did not bind: {error}"));
-        let result = tools
-            .call("python-probe-probe_version", serde_json::json!({}))
-            .await
-            .unwrap();
+        assert!(
+            tools
+                .definitions()
+                .iter()
+                .any(|definition| definition.name == name),
+            "{name}: {:?}",
+            tools.definitions()
+        );
+        let result = tools.call(name, serde_json::json!({})).await.unwrap();
         serde_json::from_str(result[0].as_text().unwrap()).unwrap()
+    }
+
+    /// Bind the installed Plugin's server and ask its one tool.
+    async fn report_from(
+        deployment: &Deployment,
+        binding: &anchor_runtime::graph::PluginBinding,
+    ) -> serde_json::Value {
+        report_at(
+            &deployment.library,
+            &deployment.library,
+            binding,
+            &deployment.sandbox,
+            &deployment.workspace,
+            "python-probe-probe_version",
+            &deployment.view(),
+        )
+        .await
     }
 
     /// The same Run uses the **current** Plugin: its first call reads the 3.6 its
@@ -2234,42 +2220,16 @@ for line in sys.stdin:
             .resolve(&["python-probe".into()])
             .unwrap()
             .remove(0);
-        // The view is prepared from the *Library*, which is what the host grants.
-        let prepared = crate::plugin_view::prepare(&deployment.library, &binding)
-            .unwrap()
-            .expect("the installed Plugin has a view");
-        assert_eq!(prepared.view(), library_view);
-
-        let mcp = McpToolConfig::from_catalog(&bundle, std::slice::from_ref(&binding)).unwrap();
-        let plugin_views = BTreeMap::from([(
-            "python-probe".to_owned(),
-            crate::plugin_view::PreparedPlugin::for_candidate(
-                &FilePluginCatalog::new(&deployment.library),
-                "python-probe",
-                Some(prepared),
-            )
-            .unwrap(),
-        )]);
-        let tools = mcp
-            .bind_with_node_inputs(
-                std::slice::from_ref(&binding),
-                false,
-                SandboxLaunch {
-                    sandbox: &deployment.sandbox,
-                    workspace: &deployment.workspace,
-                    readonly_inputs: &[],
-                    plugin_views: &plugin_views,
-                },
-            )
-            .await
-            .unwrap_or_else(|error| {
-                panic!("a Plugin resolved from a bundle must still launch: {error}")
-            });
-        let result = tools
-            .call("python-probe-probe_report", serde_json::json!({}))
-            .await
-            .unwrap();
-        let report: serde_json::Value = serde_json::from_str(result[0].as_text().unwrap()).unwrap();
+        let report = report_at(
+            &deployment.library,
+            &bundle,
+            &binding,
+            &deployment.sandbox,
+            &deployment.workspace,
+            "python-probe-probe_report",
+            &library_view,
+        )
+        .await;
         assert_eq!(report["version"], "3.6", "{report}");
         assert!(
             report["file"]
@@ -2282,10 +2242,8 @@ for line in sys.stdin:
 
     /// The interpreter version the fixture wheel was built for, as the plan
     /// reports it.
-    fn resolved_interpreter(
-        toolchain: &crate::dependency_provision::test_support::Toolchain,
-    ) -> String {
-        let output = std::process::Command::new(&toolchain.python)
+    fn resolved_interpreter(python: &Path) -> String {
+        let output = std::process::Command::new(python)
             .arg("-c")
             .arg("import sys; print('%d.%d.%d' % sys.version_info[:3])")
             .output()

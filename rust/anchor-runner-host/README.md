@@ -68,7 +68,7 @@ configuration is not a passing acceptance result. Evidence checks final results,
 node histories, workspace/Artifact contents, identity and recovery.
 
 Use [native development tools](../anchor-devtools/README.md) for regression,
-preflight and read-only cutover preparation. The
+and preflight. The
 [distribution builder](../anchor-distribution/README.md) creates source-free
 packages; the [candidate regression](../../docs/rust-production-candidate.md)
 checks release Host, Web, Goose and packaged official tools together.

@@ -106,6 +106,7 @@ async fn graph_call_admission_failure_is_code_only_and_cannot_erase_a_bound_chil
         record_of(&kernel.load(&id).unwrap().unwrap()).unwrap()
     );
 }
+// Both node-port paths panic if a Call is dispatched outside the Host call port.
 impl NodeExecutionPort for Calls {
     fn graph_call_port(&self) -> Option<&dyn GraphCallPort> {
         Some(self)
@@ -187,6 +188,7 @@ async fn graph_call_wait_resumes_same_identity_and_detach_records_acceptance() {
             }
         })
     );
+    assert_eq!(GraphValidator::frontier(&first).unwrap()[0].node.id, "call");
     let resumed = drive(&kernel, &id, &calls, &artifacts).await;
     assert_eq!(
         resumed.phase(),
@@ -267,6 +269,12 @@ async fn graph_call_identity_must_keep_one_child_run_across_reload() {
     let (kernel, id) = kernel(snapshot("wait"));
     let artifacts = TrackingArtifacts::default();
     let waiting = drive(&kernel, &id, &calls, &artifacts).await;
+    assert!(matches!(
+        waiting.phase(),
+        Some(Phase::Waiting {
+            waiter: Waiter::Child { .. }
+        })
+    ));
     let result = KernelScheduler {
         kernel: &kernel,
         observer: None,
@@ -277,7 +285,9 @@ async fn graph_call_identity_must_keep_one_child_run_across_reload() {
     }
     .run(&id)
     .await;
-    assert!(matches!(result, Err(GraphError::CorruptRun(_))));
+    assert!(
+        matches!(result, Err(GraphError::CorruptRun(message)) if message.contains("changed child Run"))
+    );
     assert_eq!(kernel.load(&id).unwrap().unwrap().phase(), waiting.phase());
     let record = record_of(&kernel.load(&id).unwrap().unwrap()).unwrap();
     assert_eq!(

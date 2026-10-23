@@ -62,4 +62,4 @@ Run the crate's unit, local WebSocket/HTTP transport, and process tests with:
 cargo +stable test --manifest-path rust/Cargo.toml -p anchor-wecom-gateway --all-targets --locked
 ```
 
-These tests do not demonstrate public WeCom delivery, attachment handling, Host process supervision, or production cutover. The Host owns Session/Run replacement and cancellation; the Gateway suppresses stale replies and recovers durable callback/delivery facts but does not supervise its own process.
+These tests do not demonstrate public WeCom delivery, attachment handling, Host process supervision, or production deployment. The Host owns Session/Run replacement and cancellation; the Gateway suppresses stale replies and recovers durable callback/delivery facts but does not supervise its own process.

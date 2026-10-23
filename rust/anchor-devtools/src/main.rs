@@ -1,12 +1,11 @@
 use std::{env, path::PathBuf, process::ExitCode};
 
-use anchor_devtools::{FixtureOptions, candidate, cutover, preflight, run_goose_fixture};
+use anchor_devtools::{FixtureOptions, candidate, preflight, run_goose_fixture};
 use serde_json::Value;
 
 const HELP: &str = "anchor-devtools regression fixture|goose-fixture [--workspace-root PATH] [--target-dir PATH] [--evidence-root PATH]
 anchor-devtools regression candidate [--workspace-root PATH] [--target-dir PATH] [--evidence-root PATH] [--goose PATH]
 anchor-devtools preflight [--launcher PATH]
-anchor-devtools cutover [OPTIONS]
 
 fixture and goose-fixture are aliases for the standard Goose small-Graph regression.
 Runs standard Host Goose execution, model settings, Pilot, conversations, tools and recovery fixtures with a deterministic local Provider.
@@ -15,17 +14,13 @@ Candidate builds the WebUI and locked offline release binaries once, then runs t
 Candidate Goose path: --goose, ANCHOR_GOOSE_BINARY or ANCHOR_DISTRIBUTION_GOOSE; evidence-root must be a new directory.
 Requires stable Rust, Bubblewrap and the suite's normal Linux tools; candidate also requires installed Web dependencies.
 Does not call a real model or load dotenv. Live/business/production acceptance is separate.
-Preflight uses the installed launcher with --launcher PATH, or explicit process settings without it, and prints a JSON report. Cutover forwards options to the inventory module; a blocked decision exits 2.
-Cutover options: --legacy-root PATH --rust-state-root PATH --rust-workspace-root PATH --rust-catalog-root PATH
-  [--rust-library-root PATH] [--config PATH] [--credential-path PATH]
-  [--legacy-writer-stopped] [--legacy-read-only-confirmed] [--credentials-reviewed] [--prepare --output-dir PATH]";
+Preflight uses the installed launcher with --launcher PATH, or explicit process settings without it, and prints a JSON report.";
 
 enum Invocation {
     Help,
     Fixture(FixtureOptions),
     Candidate(candidate::CandidateOptions),
     Preflight(Option<PathBuf>),
-    Cutover(Vec<String>),
 }
 
 fn options(arguments: Vec<String>) -> Result<Invocation, String> {
@@ -55,16 +50,9 @@ fn options(arguments: Vec<String>) -> Result<Invocation, String> {
                 Err("preflight accepts only --launcher PATH; use preflight --help".into())
             };
         }
-        "cutover" => {
-            return if help(remaining) {
-                Ok(Invocation::Help)
-            } else {
-                Ok(Invocation::Cutover(remaining.to_vec()))
-            };
-        }
         "regression" if help(remaining) => return Ok(Invocation::Help),
         "regression" => {}
-        _ => return Err("expected regression, preflight or cutover; use --help".into()),
+        _ => return Err("expected regression or preflight; use --help".into()),
     }
     let entry = remaining.first().map(String::as_str);
     if !matches!(entry, Some("fixture" | "goose-fixture" | "candidate")) {
@@ -128,13 +116,11 @@ fn options(arguments: Vec<String>) -> Result<Invocation, String> {
     })
 }
 
-fn print_report(result: Result<Value, String>, failure_code: u8) -> ExitCode {
+fn print_report(result: Result<Value, String>) -> ExitCode {
     match result {
         Ok(report) => {
             println!("{report}");
-            if report["decision"] == "blocked" {
-                ExitCode::from(2)
-            } else if report["status"] == "failed" {
+            if report["status"] == "failed" {
                 ExitCode::FAILURE
             } else {
                 ExitCode::SUCCESS
@@ -142,7 +128,7 @@ fn print_report(result: Result<Value, String>, failure_code: u8) -> ExitCode {
         }
         Err(error) => {
             eprintln!("anchor-devtools: {error}");
-            ExitCode::from(failure_code)
+            ExitCode::FAILURE
         }
     }
 }
@@ -164,16 +150,11 @@ fn main() -> ExitCode {
             run_goose_fixture(&options)
                 .map_err(|error| error.to_string())
                 .and_then(|report| serde_json::to_value(report).map_err(|error| error.to_string())),
-            1,
         ),
-        Invocation::Candidate(options) => print_report(candidate::run(&options), 1),
-        Invocation::Preflight(launcher) => print_report(
-            match launcher {
-                Some(launcher) => preflight::run_installed(&launcher),
-                None => preflight::run(),
-            },
-            1,
-        ),
-        Invocation::Cutover(arguments) => print_report(cutover::run(&arguments), 2),
+        Invocation::Candidate(options) => print_report(candidate::run(&options)),
+        Invocation::Preflight(launcher) => print_report(match launcher {
+            Some(launcher) => preflight::run_installed(&launcher),
+            None => preflight::run(),
+        }),
     }
 }

@@ -8,6 +8,7 @@
 
 | 能力 | 已验范围 | 证据入口 |
 | --- | --- | --- |
+| 测试精简与遗留功能退役 | 重复用例先迁移独有断言，共享测试 setup 并改用生产入口；Runtime 常规种子降至原五分之一，冻结快照与稀有固定种子保留，独立单测耗时 42.37→8.38 秒。cutover、native activation spike 与 Session pre-v9 自动升级已退役；Session 仅接受精确 v9，旧库保持不变。2026-10-23 Rust workspace 2,160/0/124（passed/failed/ignored）、严格 Clippy/格式与 Kernel 冻结检查通过；本轮未新增固定 Goose、真实 Provider、Web 或部署验收 | [命令、原始输出与边界](../.local/test-cleanup/verification.md)、[差分回归](../rust/anchor-runtime/src/graph/scheduler/tests/differential.rs)、[Session 契约](architecture.md#常驻助手实例) |
 | Harness Hub 信号 RSI 第一轮 | 新 Graph/stdio Plugin 与结构化提议已实现；单次真实默认 Flash 盲测命中 2/3，未通过内容验收。评审 REVISE 后 gate 因沙箱 Python 启动失败停止，未发布；解释器已修正，真实 Host 无模型回放正确返回 triage，7 项 gate 检查及 Runtime 164 项通过。19,949,171 tokens、12 次 records；explore 另直接读原始目录，单信号隔离未强制。未重跑模型；G4 成本比较与 G5 下一轮闭环未验，Kernel 对 C1 零 diff | [Graph 行为](rsi.md#信号驱动的变体)、[评分/完整轨迹/边界](../experiments/harness-hub/p7/report.md)、[当前待办](harness-data-hub-tasks.md#p7-当前待办) |
 | 宪法内核接入 Host | M1–M4 已验收，M5 最终测量/探针复核/收尾完成并交回，迁移任务结束。固定基点 e60374f，C2 save 0/mutation 0，Kernel 对 0859373 零 diff；本轮 workspace 2,200/0/126、fmt/围栏通过；Web 359 及构建、完整固定 Goose 123/0/0 引用已验 M4，M5 未重跑完整 Goose | [M5 最终交回](../experiments/constitution-host-preflight/final/measurement.md)、[规则清单](../experiments/constitution-host-preflight/final/rules-audit.md)、[测试登记](../experiments/constitution-host-preflight/final/test-mapping-summary.md) |
 | Web 重复切页与布局复用 | 图编排/Pilot 首访后保留 DOM、搜索、草稿和视口，隐藏时暂停 effects/流，返回后台核对 Host 事实；已删除会话与图引用新草稿仍正确清理/切换。布局同步复用有界 LRU，未变 Markdown 不再重复解析，ELK/非首屏页面按需加载。Web 342 项、23 项确定性浏览器回归及构建通过，新增 Pilot 导航场景另重复 9/9；未放宽超时。2026-10-20 仅更新 Web 资产，Host PID 与后端二进制未变；真实 8077 三轮返回 Pilot 首个就绪帧中位 140.6→14.0 ms、加载帧 6→0、GET 12→7；六次返回图页均复用画布/缩放，无空节点状态。5173 亦验证 DOM/视口保留，46 条所选历史摘要不变，零写请求。主入口 JS 由约 2.9 MB 拆至 514 kB，不代表总资源量同幅下降；冷开及刷新单次数据、仍有大 chunk 和验收边界见证据，未新增真实模型或企微验收 | [页面与投影边界](architecture.md)、本机 `.local/page-navigation-20261020/README.md` |
@@ -78,7 +79,7 @@
 - **外部业务**：真实外部 OAuth、最终常驻路径的企微收发/媒体/vision、Docmost 知识库内容与写入/上传和公共学术服务仍需按具体场景验收；Docmost 的真实模型只读身份调用、已有私聊或本地 mock 结果不扩大为全部通过。
 - **WebUI 管理**：本轮原生浏览器安装使用本机插件目录；GitHub 获取、带依赖的插件安装及 Docmost 以外的远程 MCP 凭据业务未新增实际外部验收。插件预检操作句柄不跨 Host 重启保留，页面会依据 Library 实际状态重新预检；旧共享会话不自动迁入私有凭据作用域。
 - **共同事实收敛**：真实 Provider 新增验收仅为 default Flash、单个无插件 AgentNode；backup/Pro、真实外部插件连接与恢复并发不在该证据内。Run/Pilot 下载已验证 Bearer，Markdown 内嵌资源鉴权未专项覆盖；原始 HTTP 无 `If-Match` 删除兼容接口仍保留，Web/Pilot 交互确认使用条件删除。现有开发部署已只读复查，未执行旧接口退役、生产切换或全产品联合验收。
-- **发行与生产切换**：目标发行版 systemd/动态库、旧数据迁移与回滚、标准业务 Graph 完整兼容仍未统一验收。开发部署 A226/A228 不等于生产切换，操作边界见 [切换指南](rust-production-cutover.md)。
+- **发行与生产部署**：目标发行版 systemd/动态库、升级回滚、标准业务 Graph 完整兼容仍未统一验收。开发部署 A226/A228 不等于生产验收，操作边界见 [部署指南](rust-production-deployment.md)。发行仅支持新数据根；旧 Python 数据不提供迁移工具。
 - **未决定的范围**：Plugin 多条目升级事务/自动回滚、跨设备准备区和旧目录处置见 [依赖标准的开放问题](plugin-dependencies.md#开放问题)；长期 Copilot、研究应用、可见计划、跨会话附件整理/分支/导出等需求见 [产品架构](product-architecture.md)。它们不自动变成当前开发任务。
 
 ## 查证方式

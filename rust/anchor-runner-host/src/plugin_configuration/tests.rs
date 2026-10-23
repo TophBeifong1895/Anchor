@@ -29,6 +29,36 @@ fn manifest(url: &str) -> Value {
 fn update(definition: &PluginDefinition, revision: u64, fields: Value) -> ConfigurationUpdate {
     serde_json::from_value(json!({"authorization_digest":definition.authorization_digest,"revision":revision,"fields":fields})).unwrap()
 }
+fn configure_fields(
+    root: &Path,
+    sessions: &SessionStore,
+    definition: &PluginDefinition,
+    owner: &str,
+    revision: u64,
+    fields: Value,
+) -> Result<Value, String> {
+    configure(
+        &root.join("state"),
+        root,
+        owner,
+        &definition.id,
+        update(definition, revision, fields),
+        sessions,
+    )
+}
+
+fn owner_snapshot(
+    data: &Path,
+    owner: &str,
+    definition: &PluginDefinition,
+) -> Result<ConfigurationSnapshot, String> {
+    snapshot(
+        data,
+        &crate::credential_store::binding_owner(owner),
+        definition,
+    )
+}
+
 #[test]
 fn shared_secret_is_atomic_owner_bound_private_and_rotatable_without_environment_fallback() {
     let (root, sessions, definition) = fixture();
@@ -39,102 +69,60 @@ fn shared_secret_is_atomic_owner_bound_private_and_rotatable_without_environment
     assert_eq!(metadata["fields"][0]["editable"], true);
     // PATH exists in the Host, yet an unconfigured managed field stays missing.
     assert!(std::env::var_os("PATH").is_some());
-    assert!(
-        snapshot(
-            &data,
-            &crate::credential_store::binding_owner("owner-a"),
-            &definition
-        )
-        .is_err()
-    );
-    let result = configure(
-        &data,
+    assert!(owner_snapshot(&data, "owner-a", &definition).is_err());
+    let result = configure_fields(
         root.path(),
-        "owner-a",
-        "demo",
-        update(
-            &definition,
-            0,
-            json!({"api_key":{"action":"set","value":"private-first"}}),
-        ),
         &sessions,
+        &definition,
+        "owner-a",
+        0,
+        json!({"api_key":{"action":"set","value":"private-first"}}),
     )
     .unwrap();
     assert_eq!(result["revision"], 1);
     assert!(!result.to_string().contains("private-first"));
     assert!(result["fields"][0].get("value").is_none());
     assert_eq!(result["fields"][1]["value"], "https://example.com");
-    let private = snapshot(
-        &data,
-        &crate::credential_store::binding_owner("owner-a"),
-        &definition,
-    )
-    .unwrap();
+    let private = owner_snapshot(&data, "owner-a", &definition).unwrap();
     assert_eq!(private.environments["remote"]["PATH"], "private-first");
     assert_eq!(private.environments["attachments"]["PATH"], "private-first");
+    assert!(owner_snapshot(&data, "owner-b", &definition).is_err());
     assert!(
-        snapshot(
-            &data,
-            &crate::credential_store::binding_owner("owner-b"),
-            &definition
-        )
-        .is_err()
-    );
-    assert!(
-        configure(
-            &data,
+        configure_fields(
             root.path(),
+            &sessions,
+            &definition,
             "owner-a",
-            "demo",
-            update(
-                &definition,
-                0,
-                json!({"api_key":{"action":"set","value":"lost-update"}})
-            ),
-            &sessions
+            0,
+            json!({"api_key":{"action":"set","value":"lost-update"}})
         )
         .is_err()
     );
-    configure(
-        &data,
+    configure_fields(
         root.path(),
-        "owner-a",
-        "demo",
-        update(
-            &definition,
-            1,
-            json!({"api_key":{"action":"set","value":"private-second"}}),
-        ),
         &sessions,
+        &definition,
+        "owner-a",
+        1,
+        json!({"api_key":{"action":"set","value":"private-second"}}),
     )
     .unwrap();
     assert_eq!(
-        snapshot(
-            &data,
-            &crate::credential_store::binding_owner("owner-a"),
-            &definition
-        )
-        .unwrap()
-        .environments["remote"]["PATH"],
+        owner_snapshot(&data, "owner-a", &definition)
+            .unwrap()
+            .environments["remote"]["PATH"],
         "private-second"
     );
-    configure(
-        &data,
+    configure_fields(
         root.path(),
-        "owner-a",
-        "demo",
-        update(&definition, 2, json!({"api_key":{"action":"clear"}})),
         &sessions,
+        &definition,
+        "owner-a",
+        2,
+        json!({"api_key":{"action":"clear"}}),
     )
     .unwrap();
-    assert!(
-        snapshot(
-            &data,
-            &crate::credential_store::binding_owner("owner-a"),
-            &definition
-        )
-        .is_err()
-    );
+    assert!(owner_snapshot(&data, "owner-a", &definition).is_err());
     assert_eq!(
         configuration(&data, root.path(), "owner-a", "demo").unwrap()["fields"][0]["state"],
         "missing"
@@ -144,23 +132,18 @@ fn shared_secret_is_atomic_owner_bound_private_and_rotatable_without_environment
 fn atomic_validation_rejects_invalid_endpoint_and_stale_authorization() {
     let (root, sessions, definition) = fixture();
     let data = root.path().join("state");
-    assert!(configure(&data, root.path(), "owner-a", "demo", update(&definition, 0,
-        json!({"api_key":{"action":"set","value":"private-value"},"endpoint":{"action":"set","value":"https://user:password@example.com"}})), &sessions).is_err());
+    assert!(configure_fields(root.path(), &sessions, &definition, "owner-a", 0, json!({"api_key":{"action":"set","value":"private-value"},"endpoint":{"action":"set","value":"https://user:password@example.com"}})).is_err());
     assert_eq!(
         configuration(&data, root.path(), "owner-a", "demo").unwrap()["revision"],
         0
     );
-    configure(
-        &data,
+    configure_fields(
         root.path(),
-        "owner-a",
-        "demo",
-        update(
-            &definition,
-            0,
-            json!({"api_key":{"action":"set","value":"private-value"}}),
-        ),
         &sessions,
+        &definition,
+        "owner-a",
+        0,
+        json!({"api_key":{"action":"set","value":"private-value"}}),
     )
     .unwrap();
     fs::write(
@@ -171,17 +154,13 @@ fn atomic_validation_rejects_invalid_endpoint_and_stale_authorization() {
     let metadata = configuration(&data, root.path(), "owner-a", "demo").unwrap();
     assert_eq!(metadata["fields"][0]["state"], "stale");
     assert!(
-        configure(
-            &data,
+        configure_fields(
             root.path(),
+            &sessions,
+            &definition,
             "owner-a",
-            "demo",
-            update(
-                &definition,
-                1,
-                json!({"api_key":{"action":"set","value":"wrong-authority"}})
-            ),
-            &sessions
+            1,
+            json!({"api_key":{"action":"set","value":"wrong-authority"}})
         )
         .is_err()
     );
@@ -231,17 +210,13 @@ fn legacy_api_and_pilot_share_logical_fact_without_duplicate_management() {
         crate::credential_store::credentials(&data, root.path(), "owner-a", "demo").unwrap()["targets"],
         json!([])
     );
-    configure(
-        &data,
+    configure_fields(
         root.path(),
-        "owner-a",
-        "demo",
-        update(
-            &definition,
-            0,
-            json!({"api_key":{"action":"set","value":"private-shared"}}),
-        ),
         &sessions,
+        &definition,
+        "owner-a",
+        0,
+        json!({"api_key":{"action":"set","value":"private-shared"}}),
     )
     .unwrap();
     assert_eq!(
@@ -308,17 +283,13 @@ fn pending_logical_request_fixture() -> (
 ) {
     let (root, sessions, definition) = fixture();
     let data = root.path().join("state");
-    configure(
-        &data,
+    configure_fields(
         root.path(),
-        "owner-a",
-        "demo",
-        update(
-            &definition,
-            0,
-            json!({"api_key":{"action":"set","value":"original-fixture-key"}}),
-        ),
         &sessions,
+        &definition,
+        "owner-a",
+        0,
+        json!({"api_key":{"action":"set","value":"original-fixture-key"}}),
     )
     .unwrap();
     let session = sessions
@@ -365,15 +336,8 @@ fn assert_pending_logical_request_rejects_update(fields: Value, restore_pending_
         .path();
     let request_path = request_scope.join(format!("{}.json", request.id));
     let pending_fact = fs::read(&request_path).unwrap();
-    let saved = configure(
-        &data,
-        root.path(),
-        "owner-a",
-        "demo",
-        update(&definition, 1, fields),
-        &sessions,
-    )
-    .unwrap();
+    let saved =
+        configure_fields(root.path(), &sessions, &definition, "owner-a", 1, fields).unwrap();
     assert_eq!(saved["revision"], 2);
     if restore_pending_fact {
         assert_eq!(
@@ -477,17 +441,13 @@ fn pending_logical_request_accepts_submission_at_its_pinned_revision() {
 fn pending_logical_request_can_be_requested_again_in_the_same_turn_after_url_change() {
     let (root, sessions, definition, session, previous) = pending_logical_request_fixture();
     let data = root.path().join("state");
-    configure(
-        &data,
+    configure_fields(
         root.path(),
-        "owner-a",
-        "demo",
-        update(
-            &definition,
-            1,
-            json!({"endpoint":{"action":"set","value":"https://other.example"}}),
-        ),
         &sessions,
+        &definition,
+        "owner-a",
+        1,
+        json!({"endpoint":{"action":"set","value":"https://other.example"}}),
     )
     .unwrap();
     let current = crate::credential_store::request(
@@ -540,18 +500,7 @@ fn pending_logical_request_can_be_requested_again_in_the_same_turn_after_url_cha
 #[tokio::test]
 async fn explicitly_external_binding_is_read_only_and_cannot_fallback_after_removal() {
     let _environment = crate::PROCESS_ENV_LOCK.lock().await;
-    struct Restore(Option<std::ffi::OsString>);
-    impl Drop for Restore {
-        fn drop(&mut self) {
-            unsafe {
-                match self.0.take() {
-                    Some(value) => std::env::set_var(EXTERNAL_CONFIGURATION, value),
-                    None => std::env::remove_var(EXTERNAL_CONFIGURATION),
-                }
-            }
-        }
-    }
-    let _restore = Restore(std::env::var_os(EXTERNAL_CONFIGURATION));
+    let mut environment = crate::test_support::Environment::default();
     let (root, sessions, _) = fixture();
     fs::rename(
         root.path().join("plugins/demo"),
@@ -570,38 +519,28 @@ async fn explicitly_external_binding_is_read_only_and_cannot_fallback_after_remo
         &resolve_fields(&definition, &fact).unwrap(),
     )
     .unwrap();
-    unsafe {
-        std::env::set_var(
-            EXTERNAL_CONFIGURATION,
-            r#"{"external-demo":{"api_key":"PATH"}}"#,
-        );
-    }
+    environment.set(
+        EXTERNAL_CONFIGURATION,
+        r#"{"external-demo":{"api_key":"PATH"}}"#,
+    );
     assert_ne!(
         managed,
-        snapshot(
-            &data,
-            &crate::credential_store::binding_owner("owner-a"),
-            &definition
-        )
-        .unwrap()
-        .binding_digest
+        owner_snapshot(&data, "owner-a", &definition)
+            .unwrap()
+            .binding_digest
     );
     let metadata = configuration(&data, root.path(), "owner-a", "external-demo").unwrap();
     assert_eq!(metadata["fields"][0]["state"], "deployment");
     assert_eq!(metadata["fields"][0]["editable"], false);
     assert!(metadata["fields"][0].get("value").is_none());
     assert!(
-        configure(
-            &data,
+        configure_fields(
             root.path(),
+            &sessions,
+            &definition,
             "owner-a",
-            "external-demo",
-            update(
-                &definition,
-                0,
-                json!({"endpoint":{"action":"set","value":"https://other.example"}})
-            ),
-            &sessions
+            0,
+            json!({"endpoint":{"action":"set","value":"https://other.example"}})
         )
         .is_err()
     );
@@ -610,17 +549,13 @@ async fn explicitly_external_binding_is_read_only_and_cannot_fallback_after_remo
         0
     );
     assert!(
-        configure(
-            &data,
+        configure_fields(
             root.path(),
+            &sessions,
+            &definition,
             "owner-a",
-            "external-demo",
-            update(
-                &definition,
-                0,
-                json!({"api_key":{"action":"set","value":"cannot-override"}})
-            ),
-            &sessions
+            0,
+            json!({"api_key":{"action":"set","value":"cannot-override"}})
         )
         .is_err()
     );
@@ -634,31 +569,20 @@ async fn explicitly_external_binding_is_read_only_and_cannot_fallback_after_remo
     unsafe {
         std::env::remove_var(EXTERNAL_CONFIGURATION);
     }
-    assert!(
-        snapshot(
-            &data,
-            &crate::credential_store::binding_owner("owner-a"),
-            &definition
-        )
-        .is_err()
-    );
+    assert!(owner_snapshot(&data, "owner-a", &definition).is_err());
 }
 #[test]
 fn private_configuration_is_removed_with_plugin_and_uses_private_permissions() {
     use std::os::unix::fs::PermissionsExt;
     let (root, sessions, definition) = fixture();
     let data = root.path().join("state");
-    configure(
-        &data,
+    configure_fields(
         root.path(),
-        "owner-a",
-        "demo",
-        update(
-            &definition,
-            0,
-            json!({"api_key":{"action":"set","value":"private-value"}}),
-        ),
         &sessions,
+        &definition,
+        "owner-a",
+        0,
+        json!({"api_key":{"action":"set","value":"private-value"}}),
     )
     .unwrap();
     let file = path(
@@ -678,30 +602,19 @@ fn private_configuration_is_removed_with_plugin_and_uses_private_permissions() {
 fn clearing_default_endpoint_is_a_tombstone_and_never_restores_the_manifest_default() {
     let (root, sessions, definition) = fixture();
     let data = root.path().join("state");
-    let result = configure(
-        &data,
+    let result = configure_fields(
         root.path(),
-        "owner-a",
-        "demo",
-        update(
-            &definition,
-            0,
-            json!({"api_key":{"action":"set","value":"private-key"},"endpoint":{"action":"clear"}}),
-        ),
         &sessions,
+        &definition,
+        "owner-a",
+        0,
+        json!({"api_key":{"action":"set","value":"private-key"},"endpoint":{"action":"clear"}}),
     )
     .unwrap();
     assert_eq!(result["revision"], 1);
     assert_eq!(result["fields"][1]["state"], "missing");
     assert!(result["fields"][1].get("value").is_none());
-    assert!(
-        snapshot(
-            &data,
-            &crate::credential_store::binding_owner("owner-a"),
-            &definition
-        )
-        .is_err()
-    );
+    assert!(owner_snapshot(&data, "owner-a", &definition).is_err());
     let other = configuration(&data, root.path(), "owner-b", "demo").unwrap();
     assert_eq!(other["fields"][1]["value"], "https://example.com");
 }
@@ -714,32 +627,24 @@ fn concurrent_configuration_writes_accept_exactly_one_revision() {
     let results = std::thread::scope(|scope| {
         let first = scope.spawn(|| {
             barrier.wait();
-            configure(
-                &data,
+            configure_fields(
                 root.path(),
-                "owner-a",
-                "demo",
-                update(
-                    &definition,
-                    0,
-                    json!({"api_key":{"action":"set","value":"first-private-key"}}),
-                ),
                 &sessions,
+                &definition,
+                "owner-a",
+                0,
+                json!({"api_key":{"action":"set","value":"first-private-key"}}),
             )
         });
         let second = scope.spawn(|| {
             barrier.wait();
-            configure(
-                &data,
+            configure_fields(
                 root.path(),
-                "owner-a",
-                "demo",
-                update(
-                    &definition,
-                    0,
-                    json!({"api_key":{"action":"set","value":"second-private-key"}}),
-                ),
                 &sessions,
+                &definition,
+                "owner-a",
+                0,
+                json!({"api_key":{"action":"set","value":"second-private-key"}}),
             )
         });
         [first.join().unwrap(), second.join().unwrap()]
@@ -822,73 +727,53 @@ fn legacy_mcp_rotation_and_clear_invalidate_the_connection_test_version() {
 fn recovery_binding_tracks_owner_endpoint_and_source_but_never_secret_values() {
     let (root, sessions, definition) = fixture();
     let data = root.path().join("state");
-    configure(
-        &data,
+    configure_fields(
         root.path(),
-        "owner-a",
-        "demo",
-        update(
-            &definition,
-            0,
-            json!({"api_key":{"action":"set","value":"first-private-key"}}),
-        ),
         &sessions,
+        &definition,
+        "owner-a",
+        0,
+        json!({"api_key":{"action":"set","value":"first-private-key"}}),
     )
     .unwrap();
     let owner = crate::credential_store::binding_owner("owner-a");
     let original = snapshot(&data, &owner, &definition).unwrap().binding_digest;
-    configure(
-        &data,
+    configure_fields(
         root.path(),
-        "owner-a",
-        "demo",
-        update(
-            &definition,
-            1,
-            json!({"api_key":{"action":"set","value":"second-private-key"}}),
-        ),
         &sessions,
+        &definition,
+        "owner-a",
+        1,
+        json!({"api_key":{"action":"set","value":"second-private-key"}}),
     )
     .unwrap();
     assert_eq!(
         original,
         snapshot(&data, &owner, &definition).unwrap().binding_digest
     );
-    configure(
-        &data,
+    configure_fields(
         root.path(),
-        "owner-b",
-        "demo",
-        update(
-            &definition,
-            0,
-            json!({"api_key":{"action":"set","value":"second-private-key"}}),
-        ),
         &sessions,
+        &definition,
+        "owner-b",
+        0,
+        json!({"api_key":{"action":"set","value":"second-private-key"}}),
     )
     .unwrap();
     assert_ne!(
         original,
-        snapshot(
-            &data,
-            &crate::credential_store::binding_owner("owner-b"),
-            &definition
-        )
-        .unwrap()
-        .binding_digest
+        owner_snapshot(&data, "owner-b", &definition)
+            .unwrap()
+            .binding_digest
     );
-    configure(
-        &data,
+    configure_fields(
         root.path(),
-        "owner-a",
-        "demo",
-        update(
-            &definition,
-            2,
-            json!({"endpoint":{"action":"set","value":"https://other.example"},
-                "api_key":{"action":"set","value":"second-private-key"}}),
-        ),
         &sessions,
+        &definition,
+        "owner-a",
+        2,
+        json!({"endpoint":{"action":"set","value":"https://other.example"},
+                "api_key":{"action":"set","value":"second-private-key"}}),
     )
     .unwrap();
     assert_ne!(
@@ -901,90 +786,58 @@ fn recovery_binding_tracks_owner_endpoint_and_source_but_never_secret_values() {
 fn changing_connection_identity_clears_unconfirmed_keys_in_the_same_revision() {
     let (root, sessions, definition) = fixture();
     let data = root.path().join("state");
-    configure(
-        &data,
+    configure_fields(
         root.path(),
-        "owner-a",
-        "demo",
-        update(
-            &definition,
-            0,
-            json!({"api_key":{"action":"set","value":"key-for-original-service"}}),
-        ),
         &sessions,
+        &definition,
+        "owner-a",
+        0,
+        json!({"api_key":{"action":"set","value":"key-for-original-service"}}),
     )
     .unwrap();
-    let changed = configure(
-        &data,
+    let changed = configure_fields(
         root.path(),
-        "owner-a",
-        "demo",
-        update(
-            &definition,
-            1,
-            json!({"endpoint":{"action":"set","value":"https://other.example"}}),
-        ),
         &sessions,
+        &definition,
+        "owner-a",
+        1,
+        json!({"endpoint":{"action":"set","value":"https://other.example"}}),
     )
     .unwrap();
     assert_eq!(changed["revision"], 2);
     assert_eq!(changed["fields"][0]["state"], "missing");
     assert_eq!(changed["fields"][1]["value"], "https://other.example");
-    assert!(
-        snapshot(
-            &data,
-            &crate::credential_store::binding_owner("owner-a"),
-            &definition
-        )
-        .is_err()
-    );
-    configure(
-        &data,
+    assert!(owner_snapshot(&data, "owner-a", &definition).is_err());
+    configure_fields(
         root.path(),
-        "owner-a",
-        "demo",
-        update(
-            &definition,
-            2,
-            json!({"api_key":{"action":"set","value":"key-for-new-service"}}),
-        ),
         &sessions,
+        &definition,
+        "owner-a",
+        2,
+        json!({"api_key":{"action":"set","value":"key-for-new-service"}}),
     )
     .unwrap();
-    let same = configure(
-        &data,
+    let same = configure_fields(
         root.path(),
-        "owner-a",
-        "demo",
-        update(
-            &definition,
-            3,
-            json!({"endpoint":{"action":"set","value":"https://other.example"}}),
-        ),
         &sessions,
+        &definition,
+        "owner-a",
+        3,
+        json!({"endpoint":{"action":"set","value":"https://other.example"}}),
     )
     .unwrap();
     assert_eq!(same["fields"][0]["state"], "configured");
-    configure(
-        &data,
+    configure_fields(
         root.path(),
-        "owner-a",
-        "demo",
-        update(
-            &definition,
-            4,
-            json!({"endpoint":{"action":"set","value":"https://third.example"},
-            "api_key":{"action":"set","value":"explicit-key-for-third-service"}}),
-        ),
         &sessions,
-    )
-    .unwrap();
-    let snapshot = snapshot(
-        &data,
-        &crate::credential_store::binding_owner("owner-a"),
         &definition,
+        "owner-a",
+        4,
+        json!({"endpoint":{"action":"set","value":"https://third.example"},
+            "api_key":{"action":"set","value":"explicit-key-for-third-service"}}),
     )
     .unwrap();
+    let snapshot = owner_snapshot(&data, "owner-a", &definition).unwrap();
     assert_eq!(snapshot.revision, 5);
     assert_eq!(
         snapshot.environments["remote"]["PATH"],
@@ -1011,17 +864,13 @@ fn connection_changes_cannot_carry_unmapped_legacy_credentials_to_a_new_destinat
         .definition("demo")
         .unwrap();
     let data = root.path().join("state");
-    configure(
-        &data,
+    configure_fields(
         root.path(),
-        "owner-a",
-        "demo",
-        update(
-            &definition,
-            0,
-            json!({"api_key":{"action":"set","value":"managed-private-key"}}),
-        ),
         &sessions,
+        &definition,
+        "owner-a",
+        0,
+        json!({"api_key":{"action":"set","value":"managed-private-key"}}),
     )
     .unwrap();
     crate::credential_store::configure(
@@ -1037,17 +886,13 @@ fn connection_changes_cannot_carry_unmapped_legacy_credentials_to_a_new_destinat
     )
     .unwrap();
     assert!(
-        configure(
-            &data,
+        configure_fields(
             root.path(),
+            &sessions,
+            &definition,
             "owner-a",
-            "demo",
-            update(
-                &definition,
-                2,
-                json!({"endpoint":{"action":"set","value":"https://other.example"}})
-            ),
-            &sessions
+            2,
+            json!({"endpoint":{"action":"set","value":"https://other.example"}})
         )
         .is_err()
     );
@@ -1068,17 +913,13 @@ fn connection_changes_cannot_carry_unmapped_legacy_credentials_to_a_new_destinat
     )
     .unwrap();
     assert!(
-        configure(
-            &data,
+        configure_fields(
             root.path(),
+            &sessions,
+            &definition,
             "owner-a",
-            "demo",
-            update(
-                &definition,
-                3,
-                json!({"endpoint":{"action":"set","value":"https://other.example"}})
-            ),
-            &sessions
+            3,
+            json!({"endpoint":{"action":"set","value":"https://other.example"}})
         )
         .is_ok()
     );
@@ -1088,32 +929,24 @@ fn connection_changes_cannot_carry_unmapped_legacy_credentials_to_a_new_destinat
 fn root_origin_slash_is_normalized_without_clearing_keys_or_changing_recovery_identity() {
     let (root, sessions, definition) = fixture();
     let data = root.path().join("state");
-    configure(
-        &data,
+    configure_fields(
         root.path(),
-        "owner-a",
-        "demo",
-        update(
-            &definition,
-            0,
-            json!({"api_key":{"action":"set","value":"private-same-service"}}),
-        ),
         &sessions,
+        &definition,
+        "owner-a",
+        0,
+        json!({"api_key":{"action":"set","value":"private-same-service"}}),
     )
     .unwrap();
     let owner = crate::credential_store::binding_owner("owner-a");
     let before = snapshot(&data, &owner, &definition).unwrap().binding_digest;
-    let changed = configure(
-        &data,
+    let changed = configure_fields(
         root.path(),
-        "owner-a",
-        "demo",
-        update(
-            &definition,
-            1,
-            json!({"endpoint":{"action":"set","value":"https://example.com/"}}),
-        ),
         &sessions,
+        &definition,
+        "owner-a",
+        1,
+        json!({"endpoint":{"action":"set","value":"https://example.com/"}}),
     )
     .unwrap();
     assert_eq!(changed["fields"][0]["state"], "configured");

@@ -5,7 +5,7 @@ KernelScheduler、Goose ACP、授权 MCP、Bubblewrap 和 Artifact，只替换�
 远程业务 endpoint。官方执行和回归入口均在 Rust workspace；历史验收证据
 保留在台账和归档中，不自动成为当前源码的验收。
 
-所有新 Run 默认使用 Kernel；回归不再选择 `execution=kernel_probe`，也不保留旧执行器。Runtime 的 30,000 例冻结旧侧对照覆盖串行、并行成功/失败、模块和 Call；Host 门面另持久化回放其中 1,000 个串行 seed，HTTP 测试经过真实 Op.run/Bubblewrap/Artifact。它们不启动 Goose，不能替代下列固定 Goose 确定性回归。快照来源与比较规则见 [M3 基线](../experiments/constitution-host-preflight/m3/snapshots/README.md)。
+所有新 Run 默认使用 Kernel；回归不再选择 `execution=kernel_probe`，也不保留旧执行器。Runtime 冻结旧侧对照语料包含 30,000 个种子，常规测试读取各快照的前五分之一，共 6,000 个种子，覆盖串行、并行成功/失败、模块和 Call；罕见失败顺序由固定种子专项测试保留。Host 门面另持久化回放其中 1,000 个串行 seed，HTTP 测试经过真实 Op.run/Bubblewrap/Artifact。它们不启动 Goose，不能替代下列固定 Goose 确定性回归。快照来源与比较规则见 [M3 基线](../experiments/constitution-host-preflight/m3/snapshots/README.md)。
 
 M4 起按迁移任务书 §10.19 只在 master 工作目录执行，使用标准 target /tmp/anchor-goose-regression-target；旧 constitution-core worktree 只读，不再使用其 -core 构建目录采证。其他独立构建工作流不得覆盖正在采证的产物。
 
@@ -113,6 +113,7 @@ Goose。原本机证据位于该 worktree 的 `.local/goose-baseline-20261019/`�
 2/0/0；1,114 filtered 仅表示未选择普通测试。完整命令内部逐套执行、每套
 `--test-threads=1`；三个失败随后逐项独立复跑，监测期间无其他 Goose
 套件运行，均为 0/1/0。它们是当前残留基线，不算全绿或真实 Provider 验收。
+历史总数包含现已退役的两项 native activation spike 回归；下表仅列保留套件。
 
 | 套件 | 通过 | 失败 | 忽略 |
 | --- | ---: | ---: | ---: |
@@ -130,7 +131,6 @@ Goose。原本机证据位于该 worktree 的 `.local/goose-baseline-20261019/`�
 | `goose_library` | 1 | 0 | 0 |
 | `goose_media` | 6 | 0 | 0 |
 | `goose_model_settings` | 2 | 0 | 0 |
-| `goose_native_activation_spike` | 2 | 0 | 0 |
 | `goose_persistent_assistant` | 12 | 0 | 0 |
 | `goose_pilot` | 2 | 0 | 0 |
 | `goose_pilot_attachments` | 2 | 0 | 0 |
@@ -309,9 +309,8 @@ text 不能冒充 canonical 完成摘要。Pilot 手动 `/compact` 的公开接�
 
 当前本地 source-free 候选包检查见
 [Rust Production Candidate](rust-production-candidate.md)；
-部署与数据切换边界见 [部署指南](rust-production-deployment.md) 和
-[切换准备](rust-production-cutover.md)。运维预检与旧数据盘点也通过原生
-`anchor-devtools preflight` / `cutover` 执行。
+部署边界见 [部署指南](rust-production-deployment.md)，运维预检通过原生
+`anchor-devtools preflight` 执行。
 
 ## 历史证据
 

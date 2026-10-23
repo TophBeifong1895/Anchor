@@ -251,10 +251,6 @@ impl SessionStore {
         Ok(turn)
     }
 
-    pub fn interrupt_running(&self) -> Result<usize, SessionError> {
-        self.interrupt_running_except_assistants(&[])
-    }
-
     /// Interrupt detached Turns at startup while preserving the claimed input
     /// of each current assistant Run the Host verified can be recovered.
     /// Unclaimed, orphaned and one-shot channel Turns retain ordinary recovery.

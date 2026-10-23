@@ -2,37 +2,7 @@ use super::*;
 use anchor_platform_session::SessionStore;
 use std::path::Path;
 
-/// Set (or clear) one process environment variable for a test, and restore it.
-///
-/// The mount filter, the Session view and the HTTP graph routes all read the
-/// deployment's pilot Graph from the environment, so a test has to name it
-/// exactly as a deployment would — and put it back, even if an assertion fails.
-struct EnvVar(&'static str, Option<std::ffi::OsString>);
-
-impl EnvVar {
-    fn set(name: &'static str, value: impl AsRef<std::ffi::OsStr>) -> Self {
-        let previous = env::var_os(name);
-        unsafe { env::set_var(name, value) };
-        Self(name, previous)
-    }
-
-    fn unset(name: &'static str) -> Self {
-        let previous = env::var_os(name);
-        unsafe { env::remove_var(name) };
-        Self(name, previous)
-    }
-}
-
-impl Drop for EnvVar {
-    fn drop(&mut self) {
-        unsafe {
-            match &self.1 {
-                Some(value) => env::set_var(self.0, value),
-                None => env::remove_var(self.0),
-            }
-        }
-    }
-}
+use crate::test_support::EnvVar;
 
 /// One installed Plugin, exactly as the Library stores it.
 fn write_plugin(state: &ApiState, id: &str, manifest: Value) {
@@ -1106,7 +1076,7 @@ async fn a_pilot_graph_named_by_the_bundle_root_keeps_its_lock() {
 #[cfg(test)]
 mod served_router_tests {
     use super::*;
-    use axum::body::{Body, to_bytes};
+    use axum::body::Body;
     use axum::http::Request;
     use tower::ServiceExt;
 
@@ -1118,22 +1088,14 @@ mod served_router_tests {
         key: &str,
         body: Option<&str>,
     ) -> (StatusCode, Value) {
-        let request = Request::builder()
-            .method(method)
-            .uri(uri)
-            .header(header::CONTENT_TYPE, "application/json")
-            .header(header::AUTHORIZATION, format!("Bearer {key}"))
-            .body(body.map_or_else(Body::empty, |body| Body::from(body.to_owned())))
-            .unwrap();
-        let response = app.oneshot(request).await.unwrap();
-        let status = response.status();
-        let bytes = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
-        let value = if bytes.is_empty() {
-            Value::Null
-        } else {
-            serde_json::from_slice(&bytes).unwrap()
-        };
-        (status, value)
+        authorized_call(
+            app,
+            method,
+            uri,
+            key,
+            body.map(|body| serde_json::from_str::<Value>(body).unwrap()),
+        )
+        .await
     }
 
     #[tokio::test]

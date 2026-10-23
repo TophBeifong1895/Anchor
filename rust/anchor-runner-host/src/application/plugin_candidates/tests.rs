@@ -34,39 +34,19 @@ for line in sys.stdin:
     print(json.dumps({'jsonrpc':'2.0','id':message['id'],'result':result}),flush=True)
 "#;
 
-struct Environment(Vec<(&'static str, Option<std::ffi::OsString>)>);
-impl Environment {
-    fn set(&mut self, key: &'static str, value: Option<&str>) {
-        self.0.push((key, std::env::var_os(key)));
-        unsafe {
-            match value {
-                Some(value) => std::env::set_var(key, value),
-                None => std::env::remove_var(key),
-            }
-        }
-    }
+use crate::test_support::Environment;
 
-    fn new(root: &Path) -> Self {
-        let keys = [
-            "ANCHOR_RUNNER_LIBRARY_ROOT",
-            "ANCHOR_RUNNER_ALLOWED_COMMANDS",
-            "ANCHOR_PILOT_RUSTUP",
-            "ANCHOR_PILOT_RUSTUP_HOME",
-            "ANCHOR_PILOT_CARGO_HOME",
-        ];
-        let saved = keys
-            .iter()
-            .map(|key| (*key, std::env::var_os(key)))
-            .collect();
-        unsafe {
-            std::env::set_var("ANCHOR_RUNNER_LIBRARY_ROOT", root);
-            std::env::set_var("ANCHOR_RUNNER_ALLOWED_COMMANDS", "python3,sh,cat");
-            for key in &keys[2..] {
-                std::env::remove_var(key);
-            }
-        }
-        Self(saved)
-    }
+fn environment(root: &Path) -> Environment {
+    let mut environment = Environment::cleared(&[
+        "ANCHOR_RUNNER_LIBRARY_ROOT",
+        "ANCHOR_RUNNER_ALLOWED_COMMANDS",
+        "ANCHOR_PILOT_RUSTUP",
+        "ANCHOR_PILOT_RUSTUP_HOME",
+        "ANCHOR_PILOT_CARGO_HOME",
+    ]);
+    environment.set("ANCHOR_RUNNER_LIBRARY_ROOT", root);
+    environment.set("ANCHOR_RUNNER_ALLOWED_COMMANDS", "python3,sh,cat");
+    environment
 }
 
 #[tokio::test]
@@ -75,13 +55,13 @@ async fn candidate_host_templates_are_rejected_before_any_server_launch_or_conne
     let root = tempfile::tempdir().unwrap();
     let library = root.path().join("library");
     std::fs::create_dir_all(&library).unwrap();
-    let mut environment = Environment::new(&library);
+    let mut environment = environment(&library);
     let fixture_secret = format!(
         "private-{}",
         root.path().file_name().unwrap().to_string_lossy()
     );
-    environment.set("ANCHOR_CANDIDATE_HOST_SECRET", Some(&fixture_secret));
-    environment.set("anchor_candidate_host_secret", Some(&fixture_secret));
+    environment.set("ANCHOR_CANDIDATE_HOST_SECRET", &fixture_secret);
+    environment.set("anchor_candidate_host_secret", &fixture_secret);
     let application = RunApplication::new(root.path().join("state"), library.clone());
     let context = crate::pilot_tools::PilotTurnContext::new(
         &root.path().join("work"),
@@ -205,19 +185,6 @@ async fn candidate_host_templates_are_rejected_before_any_server_launch_or_conne
         );
     }
 }
-impl Drop for Environment {
-    fn drop(&mut self) {
-        for (key, value) in &self.0 {
-            unsafe {
-                match value {
-                    Some(value) => std::env::set_var(key, value),
-                    None => std::env::remove_var(key),
-                }
-            }
-        }
-    }
-}
-
 #[tokio::test]
 async fn candidate_does_not_inherit_an_installed_plugins_owner_credentials() {
     use anchor_platform_session::{CreateSession, SessionStore};
@@ -229,8 +196,8 @@ async fn candidate_does_not_inherit_an_installed_plugins_owner_credentials() {
     let root = tempfile::tempdir().unwrap();
     let library = root.path().join("library");
     std::fs::create_dir_all(&library).unwrap();
-    let mut environment = Environment::new(&library);
-    environment.set("ANCHOR_CANDIDATE_PRIVATE_SECRET", None);
+    let mut environment = environment(&library);
+    environment.remove("ANCHOR_CANDIDATE_PRIVATE_SECRET");
     let wheels = root.path().join("wheels");
     std::fs::create_dir_all(&wheels).unwrap();
     test_support::fixture_wheel(&wheels, "idna", "3.6");
@@ -441,7 +408,7 @@ async fn unchanged_candidate_reprepares_for_a_new_turn_interpreter_and_retains_t
     let root = tempfile::tempdir().unwrap();
     let library = root.path().join("library");
     std::fs::create_dir_all(&library).unwrap();
-    let _environment = Environment::new(&library);
+    let _environment = environment(&library);
     let wheels = root.path().join("wheels");
     std::fs::create_dir(&wheels).unwrap();
     let wheel = test_support::fixture_wheel(&wheels, "idna", "3.6");
@@ -738,7 +705,7 @@ async fn candidate_prepares_calls_offline_and_installs_independently_of_its_sess
     let root = tempfile::tempdir().unwrap();
     let library = root.path().join("library");
     std::fs::create_dir_all(&library).unwrap();
-    let mut environment = Environment::new(&library);
+    let mut environment = environment(&library);
     let fixture_secret = format!(
         "private-{}",
         root.path().file_name().unwrap().to_string_lossy()
@@ -751,7 +718,7 @@ async fn candidate_prepares_calls_offline_and_installs_independently_of_its_sess
         "CLAUDE_PLUGIN_ROOT",
         "ANCHOR_PLUGIN_VIEW",
     ] {
-        environment.set(key, Some(&fixture_secret));
+        environment.set(key, &fixture_secret);
     }
     let wheels = root.path().join("wheels");
     std::fs::create_dir(&wheels).unwrap();
@@ -919,7 +886,7 @@ async fn candidate_startup_and_call_cancellation_reap_the_actual_processes() {
     let root = tempfile::tempdir().unwrap();
     let library = root.path().join("library");
     std::fs::create_dir_all(&library).unwrap();
-    let _environment = Environment::new(&library);
+    let _environment = environment(&library);
     let wheels = root.path().join("wheels");
     std::fs::create_dir(&wheels).unwrap();
     test_support::fixture_wheel(&wheels, "idna", "3.6");

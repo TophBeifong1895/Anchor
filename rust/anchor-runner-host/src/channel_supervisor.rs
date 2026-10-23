@@ -795,40 +795,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn missing_required_channel_environment_fails_before_spawn() {
-        let root = bundle(&[("mounted", "wecom", "bin/gateway")]);
-        let channel = root.path().join("plugins/mounted/channel.json");
-        let mut value: Value = serde_json::from_slice(&fs::read(channel).unwrap()).unwrap();
-        value["required_environment"] = json!(["ANCHOR_CHANNEL_TEST_REQUIRED"]);
-        fs::write(
-            root.path().join("plugins/mounted/channel.json"),
-            value.to_string(),
-        )
-        .unwrap();
-        refresh_manifest(root.path(), &["mounted"]);
-        let _guard = crate::PROCESS_ENV_LOCK.lock().await;
-        let previous = env::var_os("ANCHOR_CHANNEL_TEST_REQUIRED");
-        unsafe { env::remove_var("ANCHOR_CHANNEL_TEST_REQUIRED") };
-        let result = ChannelSupervisor::start(
-            root.path(),
-            root.path(),
-            &root.path().join("state"),
-            "127.0.0.1:8077",
-            &[],
-        )
-        .await;
-        if let Some(previous) = previous {
-            unsafe { env::set_var("ANCHOR_CHANNEL_TEST_REQUIRED", previous) };
-        }
-        let error = match result {
-            Err(error) => error,
-            Ok(_) => panic!("missing channel credential must fail closed"),
-        };
-        assert!(error.to_string().contains("ANCHOR_CHANNEL_TEST_REQUIRED"));
-    }
-
-    #[tokio::test]
-    async fn blank_required_channel_environment_fails_before_spawn() {
+    async fn missing_or_blank_required_channel_environment_fails_before_spawn() {
         let root = bundle(&[("mounted", "wecom", "bin/gateway")]);
         let channel = root.path().join("plugins/mounted/channel.json");
         let mut value: Value = serde_json::from_slice(&fs::read(&channel).unwrap()).unwrap();
@@ -836,9 +803,13 @@ mod tests {
         fs::write(&channel, value.to_string()).unwrap();
         refresh_manifest(root.path(), &["mounted"]);
         let _guard = crate::PROCESS_ENV_LOCK.lock().await;
-        let previous = env::var_os("ANCHOR_CHANNEL_TEST_REQUIRED");
-        for blank in ["", "   "] {
-            unsafe { env::set_var("ANCHOR_CHANNEL_TEST_REQUIRED", blank) };
+        for value in [None, Some(""), Some("   ")] {
+            let _environment = match value {
+                Some(value) => {
+                    crate::test_support::EnvVar::set("ANCHOR_CHANNEL_TEST_REQUIRED", value)
+                }
+                None => crate::test_support::EnvVar::unset("ANCHOR_CHANNEL_TEST_REQUIRED"),
+            };
             let result = ChannelSupervisor::start(
                 root.path(),
                 root.path(),
@@ -849,13 +820,9 @@ mod tests {
             .await;
             let error = match result {
                 Err(error) => error,
-                Ok(_) => panic!("blank channel credential must fail closed"),
+                Ok(_) => panic!("missing or blank channel credential must fail closed: {value:?}"),
             };
             assert!(error.to_string().contains("ANCHOR_CHANNEL_TEST_REQUIRED"));
-        }
-        match previous {
-            Some(previous) => unsafe { env::set_var("ANCHOR_CHANNEL_TEST_REQUIRED", previous) },
-            None => unsafe { env::remove_var("ANCHOR_CHANNEL_TEST_REQUIRED") },
         }
     }
 

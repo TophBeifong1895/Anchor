@@ -46,18 +46,7 @@ fn wait(server: &goose::HttpHost, id: &str, expected: &str) -> Value {
 }
 
 fn evidence(host: &Host, provider: &Provider, checks: Value) {
-    provider.assert_consumed();
-    fs::write(provider.root.join("evidence.json"), serde_json::to_vec_pretty(&json!({
-        "status":"passed","runtime":"goose","goose_version":"1.53.0",
-        "goose_binary_sha256":goose::GOOSE_SHA256,"real_model_requests":0,
-        "host_binary_sha256":goose::digest(&host.base.root.path().join("anchor-runner-host")),
-        "source_sha256":goose::digest(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/goose_pilot.rs")),
-        "checks":checks,"provider_requests":provider.requests(),"production_data_used":false,
-    })).unwrap()).unwrap();
-    println!(
-        "evidence: {}",
-        provider.root.join("evidence.json").display()
-    );
+    host.evidence_report(provider, "tests/goose_pilot.rs", checks, json!({}));
 }
 
 #[test]

@@ -169,6 +169,6 @@ Docmost、公网企业微信与公共学术服务需要实际配置与真实业�
 
 手动 `/trigger`、Webhook、计划与 Responses 子集使用相同 Run 接纳。`/health` 返回进程存活，`/ready` 在配置 Graph 可用时返回 ready；它们不发送模型请求。Responses SSE 经反向代理时需要关闭缓冲并允许长连接。
 
-发行使用 [anchor-distribution](../rust/anchor-distribution/README.md)，构建后的 Web、固定 Goose、Host 与显式 Plugin 二进制进入受审闭包，状态和密钥留在包外。预检、切换盘点与候选验证使用 `anchor-devtools`，见 [部署指南](rust-production-deployment.md)、[切换准备](rust-production-cutover.md) 和 [候选回归](rust-production-candidate.md)。
+发行使用 [anchor-distribution](../rust/anchor-distribution/README.md)，构建后的 Web、固定 Goose、Host 与显式 Plugin 二进制进入受审闭包，状态和密钥留在包外。预检与候选验证使用 `anchor-devtools`，见 [部署指南](rust-production-deployment.md) 和 [候选回归](rust-production-candidate.md)。
 
 日常维护运行 [确定性小图](runtime-contract-tests.md)，真实模型兼容、目标机部署和大型业务内容验收单独安排。旧数据可原地只读保留，不自动导入或覆盖；本地候选通过也不等于生产服务与历史数据已切换。

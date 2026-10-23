@@ -1,40 +1,20 @@
+mod support;
+
+use support::{
+    assert_conflict, assert_invalid, assert_storage, create_turn, turn_fixture as fixture,
+};
+
 use std::{
     collections::BTreeSet,
-    path::PathBuf,
     sync::{Arc, Barrier},
     thread,
 };
 
 use anchor_platform_session::{
-    CreateSession, NativeExecution, SessionError, SessionStatus, SessionStore, Turn, TurnStatus,
+    NativeExecution, SessionError, SessionStatus, SessionStore, Turn, TurnStatus,
 };
 use rusqlite::{Connection, params};
 use serde_json::json;
-use tempfile::TempDir;
-
-fn fixture() -> (TempDir, PathBuf, SessionStore, Turn) {
-    let directory = tempfile::tempdir().unwrap();
-    let path = directory.path().join("sessions.sqlite");
-    let store = SessionStore::open(&path).unwrap();
-    let turn = create_turn(&store, "alice", "pilot");
-    (directory, path, store, turn)
-}
-
-fn create_turn(store: &SessionStore, owner: &str, session: &str) -> Turn {
-    store
-        .create(
-            owner,
-            CreateSession {
-                id: Some(session.into()),
-                ..Default::default()
-            },
-        )
-        .unwrap();
-    store
-        .create_turn(owner, session, "request", Some("hello"))
-        .unwrap()
-        .0
-}
 
 fn execution(run: i64) -> NativeExecution {
     NativeExecution {
@@ -42,18 +22,6 @@ fn execution(run: i64) -> NativeExecution {
         session: 1,
         run,
     }
-}
-
-fn assert_conflict<ResultValue>(result: Result<ResultValue, SessionError>) {
-    assert!(matches!(result, Err(SessionError::Conflict(_))));
-}
-
-fn assert_invalid<ResultValue>(result: Result<ResultValue, SessionError>) {
-    assert!(matches!(result, Err(SessionError::Invalid(_))));
-}
-
-fn assert_storage<ResultValue>(result: Result<ResultValue, SessionError>) {
-    assert!(matches!(result, Err(SessionError::Storage(_))));
 }
 
 #[test]
@@ -437,7 +405,10 @@ fn serial_turn_associations_preserve_insertion_order_and_the_session_union() {
         reopened.get_turn("alice", "pilot", &second.id).unwrap(),
         second
     );
-    assert_eq!(reopened.interrupt_running().unwrap(), 1);
+    assert_eq!(
+        reopened.interrupt_running_except_assistants(&[]).unwrap(),
+        1
+    );
     let interrupted = reopened.get_turn("alice", "pilot", &second.id).unwrap();
     assert_eq!(interrupted.native, second.native);
     assert_eq!(interrupted.runs, second.runs);
@@ -541,7 +512,7 @@ fn startup_reconciliation_of_old_turn_does_not_touch_the_next_running_turn() {
     store
         .bind_native("alice", "pilot", &old.id, execution(1))
         .unwrap();
-    assert_eq!(store.interrupt_running().unwrap(), 1);
+    assert_eq!(store.interrupt_running_except_assistants(&[]).unwrap(), 1);
     let old = store.get_turn("alice", "pilot", &old.id).unwrap();
     let current = store.create_turn("alice", "pilot", "next", None).unwrap().0;
     let delivery = store.turn_events("alice", "pilot", &old.id, 0).unwrap();

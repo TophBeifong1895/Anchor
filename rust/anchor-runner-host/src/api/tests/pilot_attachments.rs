@@ -2,48 +2,7 @@ use super::*;
 use anchor_platform_session::{CreateSession, SessionError, TurnStatus};
 use base64::{Engine, engine::general_purpose::STANDARD};
 
-struct RuntimeEnvironment(Option<std::ffi::OsString>);
-impl RuntimeEnvironment {
-    fn unavailable() -> Self {
-        let previous = env::var_os("ANCHOR_RUNNER_AGENT_RUNTIME");
-        unsafe { env::set_var("ANCHOR_RUNNER_AGENT_RUNTIME", "unavailable-fixture") };
-        Self(previous)
-    }
-}
-impl Drop for RuntimeEnvironment {
-    fn drop(&mut self) {
-        unsafe {
-            match &self.0 {
-                Some(value) => env::set_var("ANCHOR_RUNNER_AGENT_RUNTIME", value),
-                None => env::remove_var("ANCHOR_RUNNER_AGENT_RUNTIME"),
-            };
-        }
-    }
-}
-
-async fn authorized_call(
-    app: Router,
-    method: &str,
-    uri: &str,
-    key: &str,
-    body: Value,
-) -> (StatusCode, Value) {
-    let response = app
-        .oneshot(
-            Request::builder()
-                .method(method)
-                .uri(uri)
-                .header(header::CONTENT_TYPE, "application/json")
-                .header(header::AUTHORIZATION, format!("Bearer {key}"))
-                .body(Body::from(body.to_string()))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    let status = response.status();
-    let bytes = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
-    (status, serde_json::from_slice(&bytes).unwrap())
-}
+use crate::test_support::EnvVar;
 
 async fn raw(app: Router, uri: &str, key: &str) -> (StatusCode, HeaderMap, Vec<u8>) {
     let response = app
@@ -263,7 +222,7 @@ async fn pilot_attachment_image_inline_and_download_headers_follow_verified_byte
 #[tokio::test]
 async fn pilot_attachment_validation_and_route_limit_do_not_accept_partial_provider_failures() {
     let _guard = PROCESS_ENV.lock().await;
-    let _runtime = RuntimeEnvironment::unavailable();
+    let _runtime = EnvVar::set("ANCHOR_RUNNER_AGENT_RUNTIME", "unavailable-fixture");
     let (root, state) = fixture();
     let sessions = store(&state).unwrap();
     let session = sessions

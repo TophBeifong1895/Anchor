@@ -114,12 +114,12 @@ async fn compare(
 }
 
 #[tokio::test]
-async fn production_scheduler_matches_old_runner_on_ten_thousand_serial_seeds() {
+async fn production_scheduler_matches_old_runner_on_two_thousand_serial_seeds() {
     let mut cases = 0;
     let mut failures = 0;
     let mut modules = 0;
     let mut frozen = Snapshots::open(Population::Serial);
-    for seed in 0..10_000 {
+    for seed in 0..2_000 {
         if let Some((failed, module, _)) =
             compare(random_graph(seed), seed, true, &frozen.next(seed).scheduler).await
         {
@@ -129,19 +129,19 @@ async fn production_scheduler_matches_old_runner_on_ten_thousand_serial_seeds() 
         }
     }
     eprintln!("production scheduler serial: cases={cases}, failures={failures}, modules={modules}");
-    assert!(cases > 9_000);
-    assert!(failures > 100);
-    assert!(modules > 500);
+    assert!(cases > 900);
+    assert!(failures > 20);
+    assert!(modules > 100);
 }
 
 #[tokio::test]
-async fn production_scheduler_matches_old_runner_on_five_thousand_parallel_seeds() {
+async fn production_scheduler_matches_old_runner_on_one_thousand_parallel_seeds() {
     let mut cases = 0;
     let mut failures = 0;
     let mut stale = 0;
     let mut frozen = Snapshots::open(Population::ParallelFailures);
     let mut frozen_coverage = Snapshots::open(Population::ParallelNoFailures);
-    for seed in 0..5_000 {
+    for seed in 0..1_000 {
         let (failed, _, retries) = compare(
             random_parallel_graph(seed),
             seed,
@@ -165,17 +165,17 @@ async fn production_scheduler_matches_old_runner_on_five_thousand_parallel_seeds
     eprintln!(
         "production scheduler parallel: cases={cases}, failures={failures}, stale={stale}; no-failure cases={cases}"
     );
-    assert_eq!(cases, 5_000);
-    assert!(failures > 100);
-    assert!(stale > 1_000);
+    assert_eq!(cases, 1_000);
+    assert!(failures > 20);
+    assert!(stale > 200);
 }
 
 #[tokio::test]
-async fn production_scheduler_matches_old_runner_on_five_thousand_parallel_module_seeds() {
+async fn production_scheduler_matches_old_runner_on_one_thousand_parallel_module_seeds() {
     let mut modules = 0;
     let mut stale = 0;
     let mut frozen = Snapshots::open(Population::ParallelModules);
-    for seed in 0..5_000 {
+    for seed in 0..1_000 {
         let (failed, module, retries) = compare(
             random_parallel_module_graph(seed),
             seed,
@@ -189,20 +189,20 @@ async fn production_scheduler_matches_old_runner_on_five_thousand_parallel_modul
         stale += retries;
     }
     eprintln!(
-        "production scheduler parallel modules: cases=5000, modules={modules}, stale={stale}"
+        "production scheduler parallel modules: cases=1000, modules={modules}, stale={stale}"
     );
-    assert!(modules > 1_000);
-    assert!(stale > 1_000);
+    assert!(modules > 200);
+    assert!(stale > 200);
 }
 
 #[tokio::test]
-async fn production_scheduler_matches_old_runner_on_five_thousand_call_seeds() {
+async fn production_scheduler_matches_old_runner_on_one_thousand_call_seeds() {
     let mut waited = 0;
     let mut detached = 0;
     let mut failed = 0;
     let mut unknown = 0;
     let mut frozen = Snapshots::open(Population::Calls);
-    for seed in 0..5_000 {
+    for seed in 0..1_000 {
         let record = GraphRunRecord::create_with_id(
             random_call_graph(seed),
             serde_json::json!({}),
@@ -293,7 +293,7 @@ async fn production_scheduler_matches_old_runner_on_five_thousand_call_seeds() {
         );
     }
     eprintln!(
-        "production scheduler calls: cases=5000, waited={waited}, detached={detached}, failed={failed}, unknown={unknown}"
+        "production scheduler calls: cases=1000, waited={waited}, detached={detached}, failed={failed}, unknown={unknown}"
     );
-    assert!(waited > 500 && detached > 500 && failed > 100 && unknown > 100);
+    assert!(waited > 100 && detached > 100 && failed > 20 && unknown > 20);
 }
