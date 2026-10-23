@@ -35,8 +35,9 @@ def structure(proposal):
         found.append('claims must list the verified claims it rests on')
     else:
         for claim in claims:
-            if standing.get(claim) != 'verified':
-                found.append(f'claim {claim} is {standing.get(claim, "unknown to verify")}, not verified')
+            if standing.get(claim) not in ('verified', 'supported'):
+                found.append(f'claim {claim} is {standing.get(claim, "unknown to verify")}, '
+                             'not verified or supported')
     metric = proposal.get('metric')
     if not isinstance(metric, dict):
         found.append('metric is missing')

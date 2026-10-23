@@ -37,7 +37,12 @@ RULES = (
     '3 协议或内核（只提给人）。'
 )
 READING = (
-    'harness-hub 的列表每页默认 20 条，一次不要取超过 50 条；读源码先用 grep -n 定位，再用 sed -n 读几十行，不要整文件 cat。'
+    '每个工具结果都会在之后每一轮重新计入上下文，所以只取需要的部分。'
+    'harness-hub 的列表每页默认 20 条，一次不要取超过 50 条；跨 Run 看调用时给 calls 加 "group":true，按结局分组（一行带次数、Run 数和一个例子），'
+    '先看分组，再按 key 读一两个个例，不要逐个列出同一种失败。'
+    '读源码先用 grep -n 定位，再用 sed -n 读几十行，不要整文件 cat；不要 find 整个 /local-inputs。'
+    '原始 Run 数据（graph.json、history.jsonl 等）一行可能上万字符，先找 hub 有没有对应的工具，必须读时用 grep -o 或 cut -c 截断。'
+    '工具调用尽量在 40 次以内完成；到 60 次还没写结果，就先写已有的结论，其余列为 unknowns。'
 )
 CLAIMS = (
     '结果写成 JSON：{"question":"问题 id 或 explore","answer":"一段话","claims":[{"id":"c1","kind":"observed|inferred",'
@@ -47,8 +52,10 @@ CLAIMS = (
     '"args":{...},"path":"答案里的 JSON Pointer","op":"==|!=|>=|<=|>|<|contains|exists|absent","value":期望值}；'
     '源码核对 {"file":"/local-inputs/ 下的绝对路径","lines":[起,止],"contains":"该范围内应有的文字"}。'
     '每条 observed claim 至少一个 check，而且 claim 为假时 check 必须会失败；数字写成 == 或范围，不要只写 exists。'
-    'inferred claim 用 rests_on 指向它依据的 observed claim。写入前用 harness-hub 的 check 工具把所有数据核对跑一遍并改到通过：'
-    '下游会原样重跑，失败的 claim 记为被推翻，没有 check 的记为未核实，两者都不能支撑提议。'
+    'inferred claim 必须用 rests_on 列出它依据的 claim id（同一文件的 c1，或 investigate-2:c1 这样带槽位的）。'
+    '写入前用 harness-hub 的 check 工具把所有数据核对跑一遍并改到通过：下游会原样重跑。'
+    'check 失败的 claim 记为 refuted；observed 没有 check 记为 unverified；inferred 在依据全部成立时记为 supported，'
+    '依据有一条被推翻记为 unsupported，没有 rests_on 记为 unverified。只有 verified 和 supported 能支撑提议。'
 )
 PROPOSAL = (
     'proposals.json：{"proposals":[{"id":"P1","title":"一句话","level":0,"change":"一个具体改动",'
@@ -56,7 +63,7 @@ PROPOSAL = (
     '"target":"一个阈值：达到算成立，达不到算证伪"},"guardrails":["否决条件：任何一条触发就不采纳，例如某任务 mean_score 低于基线"],'
     '"scope":"适用的任务或配置；范围外不下结论","quality":"non_decreasing|unknown",'
     '"validation":"怎样得到新数据并读出主指标：experiment.py 两组对照加 anchor-hub gate，或下一轮 profile"}]}。'
-    '每条提议只含一个改动、一个主指标、一个阈值；claims 只能引用 verified 的 claim（id 带槽位前缀，见 verified.md）；'
+    '每条提议只含一个改动、一个主指标、一个阈值；claims 只能引用 verified 或 supported 的 claim（id 带槽位前缀，见 verified.md）；'
     '预期质量下降的不提；quality 为 unknown 表示待验证；level 3 只给人。最多 5 条，按预期影响排序：波及 Run 数乘以每个 Run 的损失。'
     '可以没有提议。'
 )
@@ -100,9 +107,9 @@ AGENTS = {
         '可以读 /local-inputs/host-source、hub-source 和 anchor-rsi-source 作对照。写 explore.json 和 explore.md（两页以内）。' + CLAIMS,
         ['profile.md', 'frame.md'], ['explore.json', 'explore.md']),
     'synthesizer': agent(
-        '首轮：读 /in/verify/verified.md（每条 claim 的核对结果：verified、refuted、unverified）、各 /in/investigate-N/investigation-N.md、'
-        '/in/explore/explore.md 和 /in/profile/profile.md，以 /in/research-join 里实际存在的为准。只用 verified 的 claim 作依据；'
-        'refuted 的写明被推翻，unverified 的只能列为待查。写 synthesis.md（给人读：按影响排列的结论，每条注明依据的 claim id；'
+        '首轮：读 /in/verify/verified.md（每条 claim 的核对结果：verified、supported、refuted、unsupported、unverified）、'
+        '各 /in/investigate-N/investigation-N.md、/in/explore/explore.md 和 /in/profile/profile.md，以 /in/research-join 里实际存在的为准。'
+        '只用 verified 和 supported 的 claim 作依据；refuted、unsupported 的写明被推翻，unverified 的只能列为待查。写 synthesis.md（给人读：按影响排列的结论，每条注明依据的 claim id；'
         '质量；没调查的大信号；限制。两页以内）和 proposals.json。需要基线数字时用 harness-hub 读出，不要估。'
         '修订轮（存在 /in/gate/gate.json）：只改 status 为 revise 的提议，逐条处理 gate.json 的 structure 和 review 里的问题；'
         '其余提议原样保留；处理不了的可以删掉并说明。在 synthesis.md 末尾加一张表：每条意见怎么处理的。' + PROPOSAL,

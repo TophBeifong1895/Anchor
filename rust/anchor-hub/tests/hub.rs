@@ -1402,20 +1402,38 @@ fn the_value_level_of_a_call_comes_from_the_ports_evidence_and_fills_older_facts
     let reply = handle(
         &mut hub,
         &json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
-                "params": {"name": "calls", "arguments": {"ended": "not_started"}}}),
+                "params": {"name": "calls", "arguments": {"ended": "not_started", "group": true}}}),
     )
     .unwrap();
     let page: serde_json::Value =
         serde_json::from_str(reply["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
+    // Grouped, calls that ended alike are one counted row.
     assert_eq!(page["total"], json!(1));
-    let item = &page["items"][0];
-    assert_eq!(item["invocation"], json!("r/worker#1"));
+    let row = &page["items"][0];
+    assert_eq!(
+        (&row["calls"], &row["runs"], &row["ended"]),
+        (&json!(1), &json!(1), &json!("not_started"))
+    );
+    assert_eq!(row["invocations"], json!(["r/worker#1"]));
     assert!(
-        item["answer"]
+        row["first_line"]
             .as_str()
             .unwrap()
             .starts_with("bwrap: execvp python3")
     );
+    // By default every call is listed with its own values: the shape
+    // recorded checks point into.
+    let reply = handle(
+        &mut hub,
+        &json!({"jsonrpc": "2.0", "id": 3, "method": "tools/call",
+                "params": {"name": "calls", "arguments": {"ended": "not_started"}}}),
+    )
+    .unwrap();
+    let listed: serde_json::Value =
+        serde_json::from_str(reply["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
+    let item = &listed["items"][0];
+    assert_eq!(item["invocation"], json!("r/worker#1"));
+    assert_eq!(&row["example"], item);
     // Values are cut to a head.
     let arguments = item["arguments"].as_str().unwrap();
     assert!(

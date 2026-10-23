@@ -84,6 +84,7 @@ class Gate(unittest.TestCase):
         self.op = Op()
         self.op.give('verify', 'verified.json', {'claims': [
             {'id': 'investigate-1:c1', 'verdict': 'verified'},
+            {'id': 'investigate-1:c2', 'verdict': 'supported'},
             {'id': 'investigate-2:c1', 'verdict': 'refuted'}]})
 
     def tearDown(self):
@@ -102,7 +103,9 @@ class Gate(unittest.TestCase):
         return {item['id']: item['status'] for item in decision['proposals']}
 
     def test_sound_proposals_kept_by_the_review_are_published(self):
-        route, decision = self.gate([proposal()], [{'id': 'P1', 'verdict': 'keep'}])
+        # A supported inference counts as a basis like a verified observation.
+        route, decision = self.gate([proposal(claims=['investigate-1:c1', 'investigate-1:c2'])],
+                                    [{'id': 'P1', 'verdict': 'keep'}])
         self.assertEqual(route, 'ANCHOR_ROUTE: publish')
         self.assertEqual(self.status(decision), {'P1': 'accepted'})
 
@@ -189,18 +192,32 @@ class OnRecordedData(unittest.TestCase):
                  'checks': [dict(python3, op='==', value=74),
                             {'file': str(source), 'lines': [2, 2], 'contains': 'from_secs(30)'}]},
                 {'id': 'c2', 'kind': 'observed', 'text': 'wrong count', 'checks': [dict(python3, op='==', value=3)]},
-                {'id': 'c3', 'kind': 'inferred', 'text': 'no check', 'rests_on': ['c1']},
+                {'id': 'c3', 'kind': 'inferred', 'text': 'rests on a verified claim', 'rests_on': ['c1']},
                 {'id': 'c4', 'kind': 'observed', 'text': 'bad tool', 'checks': [{'tool': 'nope'}]},
-                {'id': 'c5', 'kind': 'observed', 'text': 'outside', 'checks': [{'file': '/etc/passwd', 'contains': 'root'}]}]})
-            op.give('investigate-2', 'findings-2.json', {'skip': True})
+                {'id': 'c5', 'kind': 'observed', 'text': 'outside', 'checks': [{'file': '/etc/passwd', 'contains': 'root'}]},
+                {'id': 'c6', 'kind': 'inferred', 'text': 'rests on a refuted claim', 'rests_on': ['c1', 'c2']},
+                {'id': 'c7', 'kind': 'inferred', 'text': 'rests on nothing named'},
+                {'id': 'c8', 'kind': 'inferred', 'text': 'rests on itself', 'rests_on': ['c8']},
+                {'id': 'c9', 'kind': 'inferred', 'text': 'its own check fails',
+                 'rests_on': ['c1'], 'checks': [dict(python3, op='==', value=3)]}]})
+            op.give('investigate-2', 'findings-2.json', {'claims': [
+                {'id': 'c1', 'kind': 'inferred', 'text': 'across slots and through a supported claim',
+                 'rests_on': ['investigate-1:c3']},
+                {'id': 'c2', 'kind': 'inferred', 'text': 'on a claim that cannot be checked',
+                 'rests_on': ['investigate-1:c4']}]})
             done = op.run('verify')
             self.assertEqual(done.returncode, 0, done.stderr)
             verdicts = {c['id']: c['verdict'] for c in op.read('verified.json')['claims']}
             self.assertEqual(verdicts, {
                 'investigate-1:c1': 'verified', 'investigate-1:c2': 'refuted',
-                'investigate-1:c3': 'unverified', 'investigate-1:c4': 'unverified',
-                'investigate-1:c5': 'unverified'})
-            self.assertIn('| investigate-1:c2 | refuted |', op.read('verified.md'))
+                'investigate-1:c3': 'supported', 'investigate-1:c4': 'unverified',
+                'investigate-1:c5': 'unverified', 'investigate-1:c6': 'unsupported',
+                'investigate-1:c7': 'unverified', 'investigate-1:c8': 'unverified',
+                'investigate-1:c9': 'refuted',
+                'investigate-2:c1': 'supported', 'investigate-2:c2': 'unverified'})
+            page = op.read('verified.md')
+            self.assertIn('| investigate-1:c2 | refuted |', page)
+            self.assertIn('rests on investigate-1:c1 (verified), investigate-1:c2 (refuted)', page)
         finally:
             op.close()
 

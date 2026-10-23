@@ -367,8 +367,17 @@ fn calls(query: &Query, args: &Value) -> Result<Value, String> {
     if key.is_none() && tool.is_none() && program.is_none() && ended.is_none() {
         return Err("give an invocation key, or filter by tool, program or ended".into());
     }
+    // Across invocations one failure repeats verbatim (one missing program,
+    // dozens of Runs); asked to, calls that ended alike are one row that
+    // counts them. Opt-in, because recorded checks point into the listed
+    // shape and must keep reading the same answer.
+    let group = match args.get("group") {
+        None => false,
+        Some(value) => value.as_bool().ok_or("group must be true or false")?,
+    };
     let invocations = query.invocations();
     let mut listed = Vec::new();
+    let mut groups: BTreeMap<Ending, Group> = BTreeMap::new();
     for invocation in invocations
         .iter()
         .filter(|i| key.is_none_or(|k| i.key() == k))
@@ -397,7 +406,7 @@ fn calls(query: &Query, args: &Value) -> Result<Value, String> {
             {
                 continue;
             }
-            listed.push(json!({
+            let instance = json!({
                 "invocation": invocation.key(),
                 "index": index,
                 "model_request": call.model_request,
@@ -407,10 +416,81 @@ fn calls(query: &Query, args: &Value) -> Result<Value, String> {
                 "exit_code": call.command.and_then(|end| end.exit_code),
                 "arguments": detail.map(|d| d.arguments.as_str()),
                 "answer": detail.map(|d| d.answer.as_str()),
-            }));
+            });
+            if !group {
+                listed.push(instance);
+                continue;
+            }
+            let first_line = detail
+                .and_then(|d| d.answer.lines().next())
+                .map(|line| line.chars().take(GROUP_LINE).collect())
+                .unwrap_or_default();
+            let entry = groups
+                .entry((
+                    call.tool.to_owned(),
+                    call.program.map(str::to_owned),
+                    class,
+                    call.command.and_then(|end| end.exit_code),
+                    first_line,
+                ))
+                .or_default();
+            entry.calls += 1;
+            entry.runs.insert(invocation.run_id.clone());
+            let key = invocation.key();
+            if entry.invocations.len() < GROUP_INVOCATIONS && !entry.invocations.contains(&key) {
+                entry.invocations.push(key);
+            }
+            entry.example.get_or_insert(instance);
         }
     }
+    if group {
+        listed = grouped(groups);
+    }
     page(listed, args)
+}
+
+/// Characters of an answer's first line that tell like endings apart.
+const GROUP_LINE: usize = 200;
+/// Invocations named per group; `runs` and `calls` count all of them.
+const GROUP_INVOCATIONS: usize = 5;
+
+/// What makes two calls end alike: tool, program, ending, exit code and the
+/// first line of the answer.
+type Ending = (String, Option<String>, String, Option<i32>, String);
+
+#[derive(Default)]
+struct Group {
+    calls: usize,
+    runs: std::collections::BTreeSet<String>,
+    invocations: Vec<String>,
+    example: Option<Value>,
+}
+
+/// Groups of calls that ended alike (tool, program, ending, exit code and
+/// the first line of the answer), the most widespread first, each with one
+/// instance to read.
+fn grouped(groups: BTreeMap<Ending, Group>) -> Vec<Value> {
+    let mut rows: Vec<_> = groups.into_iter().collect();
+    rows.sort_by(|(a_key, a), (b_key, b)| {
+        (b.runs.len(), b.calls)
+            .cmp(&(a.runs.len(), a.calls))
+            .then_with(|| a_key.cmp(b_key))
+    });
+    rows.into_iter()
+        .map(|((tool, program, ended, exit_code, first_line), group)| {
+            json!({
+                "tool": tool,
+                "program": program,
+                "ended": ended,
+                "exit_code": exit_code,
+                "first_line": first_line,
+                "calls": group.calls,
+                "runs": group.runs.len(),
+                "invocations": group.invocations,
+                "example": group.example,
+            })
+        })
+        .collect()
 }
 
 /// Run checks: each names a read-only tool and its arguments, a JSON Pointer
@@ -569,9 +649,10 @@ fn tools() -> Value {
         },
         {
             "name": "calls",
-            "description": "Tool calls at the value level: arguments and the head of the answer (a command's stderr, else stdout, or the refusal), with how each ended: ok, clean, exit_nonzero, not_started, timed_out, or a failure class. Give an invocation key for its calls in order, or filter across invocations by tool, program and ended (`not_done` = anything but a clean or ok end). Use it to read a failure from its instances before explaining it.",
+            "description": "Tool calls at the value level: arguments and the head of the answer (a command's stderr, else stdout, or the refusal), with how each ended: ok, clean, exit_nonzero, not_started, timed_out, or a failure class. Give an invocation key for its calls in order, or filter across invocations by tool, program and ended (`not_done` = anything but a clean or ok end). With `group: true`, calls that ended alike (tool, program, ending, exit code, first line of the answer) are one row each with how many calls and Runs, up to 5 invocation keys and one example, most widespread first; read groups first when looking across Runs. Use it to read a failure from its instances before explaining it.",
             "inputSchema": {"type": "object", "properties": with_paging(json!({
                 "key": {"type": "string", "description": "run/node#invocation"},
+                "group": {"type": "boolean", "description": "group calls that ended alike instead of listing each; default false"},
                 "tool": {"type": "string"},
                 "program": {"type": "string", "description": "base name of the command a command tool ran"},
                 "ended": {"type": "string", "description": "ok, clean, exit_nonzero, not_started, timed_out, not_done, or a failure class such as invalid_arguments"},
