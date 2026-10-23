@@ -103,6 +103,7 @@ WebUI「设置 → 模型服务」固定提供 `default`、`backup` 两组，每
 | `ANCHOR_API_KEYS` | 可选部署 Bearer 白名单，JSON 字符串数组；非 loopback 必填，每项至少 32 字节且不可重复 |
 | `ANCHOR_DEPENDENCIES_PYTHON`、`ANCHOR_PILOT_PYTHON_ENABLED` | 开发部署已有 Python 路径及可选 Pilot 使用许可；完整平台在网页初始化 |
 | `ANCHOR_DEPENDENCIES_UV`、`ANCHOR_DEPENDENCIES_UV_SHA256`、`ANCHOR_DEPENDENCIES_SOURCES` | 开发部署显式登记固定依赖工具与软件源；三项配套，完整平台由发行 manifest 提供 |
+| `ANCHOR_RETENTION_DAYS`、`ANCHOR_RETENTION_MAX_GB` | 已结束 Run 的自动回收：超过天数（默认 30），或 Run 数据总量超过上限（默认 20 GB，从最旧的删起），就回收。启动时执行一次，之后每小时一次。`0` 或 `off` 关闭对应限制；数据中枢的事实和评分不回收。见[设计卡 003](design-cards/003-data-retention.md) |
 
 可写根应彼此隔离并在 release 外。Host 在监听前验证 bundle、探测可写根并获取 deployment-writer lease；同一 state root 只允许一个 writer。第三方工具环境与本地输入只按明确注册/授权挂载，不因模型提出路径就允许读取。
 
