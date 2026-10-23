@@ -69,6 +69,7 @@ async fn resolver_returns_owned_anchor_tools_under_admitted_plugin_authority() {
         network: false,
         kind: NodeKind::Agent,
         operation: None,
+        writes: Vec::new(),
         cancellation: std::sync::Arc::new(AtomicBool::new(false)),
     };
     let workspace = resolver.workspace(&request).unwrap();
@@ -200,6 +201,7 @@ async fn agent_tools_mount_plugins_without_a_run_policy_grant() {
         network: false,
         kind: NodeKind::Agent,
         operation: None,
+        writes: Vec::new(),
         cancellation: std::sync::Arc::new(AtomicBool::new(false)),
     };
     let tools = resolver.tools(&request).await.unwrap().tools;
@@ -299,6 +301,7 @@ async fn agent_command_tools_receive_only_the_nodes_frozen_local_inputs() {
         network: false,
         kind: NodeKind::Agent,
         operation: None,
+        writes: Vec::new(),
         cancellation: std::sync::Arc::new(AtomicBool::new(false)),
     };
     let tools = resolver.tools(&request).await.unwrap().tools;

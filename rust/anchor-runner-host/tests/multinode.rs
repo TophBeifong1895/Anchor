@@ -154,6 +154,41 @@ fn known_failure_stops_the_pipeline_and_does_not_create_downstream_workspace() {
 }
 
 #[test]
+fn an_op_that_exits_zero_without_its_declared_outputs_fails() {
+    // blind-03: a node wrote review/review.json where it declared review.json,
+    // and its downstream read nothing. Exit 0 alone is not the node's result.
+    let root = tempfile::tempdir().unwrap();
+    let mut graph = graph(&[
+        (
+            "nested",
+            "sh -c 'mkdir -p out && printf x > out/report.json && mkdir data'",
+        ),
+        ("never", "true"),
+    ]);
+    graph["ops"]["nested"]["writes"] = json!(["report.json", "data"]);
+    graph["ops"]["never"]["reads"] = json!(["report.json"]);
+    let response = finish(spawn(root.path(), &graph, "missing"));
+    assert_eq!(response["projection"]["outcome"], "failed", "{response}");
+    let reason = response.to_string();
+    assert!(
+        reason.contains("declared output(s) missing from /workspace: `report.json`"),
+        "{response}"
+    );
+    // A declared directory that exists counts as written.
+    assert!(!reason.contains("`data`"), "{response}");
+    assert!(
+        record(root.path(), "missing")["invocations"]
+            .get("never")
+            .is_none()
+    );
+
+    let mut graph = graph.clone();
+    graph["ops"]["nested"]["run"] = json!("sh -c 'printf x > report.json && mkdir data'");
+    let response = finish(spawn(root.path(), &graph, "present"));
+    assert_eq!(response["projection"]["outcome"], "done", "{response}");
+}
+
+#[test]
 fn killed_host_keeps_unknown_node_effects_and_never_replays_them() {
     let root = tempfile::tempdir().unwrap();
     let graph = graph(&[

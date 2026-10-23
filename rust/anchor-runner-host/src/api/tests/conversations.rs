@@ -355,7 +355,8 @@ async fn conversation_identity_and_lineage_reject_cross_session_graph_or_reply_c
     let _env = PROCESS_ENV.lock().await;
     set_host_env(root.path(), &state.data_root);
     let mut graph = gate_definition();
-    graph["ops"]["work"]["run"] = json!("true");
+    // Without the gate, but still writing the reply it declares.
+    graph["ops"]["work"]["run"] = json!("printf once > reply.txt");
     write_graph_bundle(&state.bundle_root, &graph).unwrap();
     let other = state.catalog_root.join("other");
     write_graph_bundle(&other, &graph).unwrap();

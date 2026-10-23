@@ -77,6 +77,7 @@ async fn claimed_input_survives_restart_before_artifact_even_after_new_input_arr
         wall_time_limit_seconds: None,
         network: false,
         operation: Some(json!({"operation":"session.wait_input"})),
+        writes: Vec::new(),
         cancellation: std::sync::Arc::new(AtomicBool::new(false)),
     };
     let mut completions = Vec::new();
@@ -397,6 +398,7 @@ async fn group_wait_input_preserves_current_and_interrupted_actors_and_turn_atta
         wall_time_limit_seconds: None,
         network: false,
         operation: Some(json!({"operation":"session.wait_input"})),
+        writes: Vec::new(),
         cancellation: std::sync::Arc::new(AtomicBool::new(false)),
     };
     let control = HostControl {
@@ -636,6 +638,7 @@ async fn pending_input_scope_reports_truncation_and_authorizes_only_the_latest_e
         wall_time_limit_seconds: None,
         network: false,
         operation: Some(json!({"operation":"session.wait_input"})),
+        writes: Vec::new(),
         cancellation: std::sync::Arc::new(AtomicBool::new(false)),
     };
     let control = HostControl {

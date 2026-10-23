@@ -42,12 +42,34 @@ struct BridgeSetup {
     token: String,
     observation_path: Option<PathBuf>,
     pilot: Option<Arc<super::pilot::PilotPort>>,
+    outputs: Option<DeclaredOutputs>,
 }
 
 pub(super) struct NodeBridgeContext {
     pub(super) routes: Vec<String>,
     pub(super) plugin_instructions: String,
     pub(super) observation_path: Option<PathBuf>,
+    pub(super) outputs: DeclaredOutputs,
+}
+
+/// What a node's definition says it writes, and where: `final_result` is
+/// refused while one of them is missing, so the model can still write it.
+pub(super) struct DeclaredOutputs {
+    pub(super) workspace: PathBuf,
+    pub(super) writes: Vec<String>,
+}
+
+impl DeclaredOutputs {
+    fn missing(&self) -> Result<(), String> {
+        let missing = crate::node_host::missing_outputs(&self.workspace, &self.writes);
+        if missing.is_empty() {
+            return Ok(());
+        }
+        Err(format!(
+            "final_result refused: {}. Write them at those paths, relative to /workspace, then call final_result again. No completion was recorded.",
+            crate::node_host::missing_outputs_reason(&missing)
+        ))
+    }
 }
 
 /// The model proxy carries whole prompts, including embedded images, so its body
@@ -86,6 +108,7 @@ pub(super) struct BridgeState {
     pub(super) calls: Mutex<Vec<Value>>,
     pub(super) dropped_calls: AtomicU64,
     observation_path: Option<PathBuf>,
+    outputs: Option<DeclaredOutputs>,
     pub(super) completion: Mutex<Option<Value>>,
     pub(super) after_completion: Mutex<bool>,
     response_tools: Mutex<Vec<String>>,
@@ -223,7 +246,15 @@ impl ServerHandler for McpBridge {
                         .unwrap()
                         .remove("observed_receipt");
                 }
-                let completion = validate_completion(&completion, &self.state.routes);
+                // Before the completion is frozen: a refusal here leaves the
+                // model free to write the output and call final_result again.
+                let completion =
+                    validate_completion(&completion, &self.state.routes).and_then(|completion| {
+                        match &self.state.outputs {
+                            Some(outputs) => outputs.missing().map(|()| completion),
+                            None => Ok(completion),
+                        }
+                    });
                 let completion = match completion {
                     Ok(completion) if native_node => {
                         self.state.native_completion.lock().await.submit(
@@ -650,6 +681,7 @@ impl Bridge {
                 token,
                 observation_path: context.observation_path,
                 pilot: None,
+                outputs: Some(context.outputs),
             },
         )
         .await
@@ -673,6 +705,7 @@ impl Bridge {
                 token,
                 observation_path: None,
                 pilot: Some(tools),
+                outputs: None,
             },
         )
         .await
@@ -688,6 +721,7 @@ impl Bridge {
             token,
             observation_path,
             pilot,
+            outputs,
         } = setup;
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
             .await
@@ -717,6 +751,7 @@ impl Bridge {
             calls: Mutex::new(Vec::new()),
             dropped_calls: AtomicU64::new(0),
             observation_path,
+            outputs,
             completion: Mutex::new(None),
             after_completion: Mutex::new(false),
             response_tools: Mutex::new(Vec::new()),
@@ -1082,6 +1117,10 @@ mod tests {
                 routes: Vec::new(),
                 plugin_instructions,
                 observation_path,
+                outputs: DeclaredOutputs {
+                    workspace: std::env::temp_dir(),
+                    writes: Vec::new(),
+                },
             },
             cancellation,
             Some(super::super::configuration::ModelUpstream {
@@ -1535,6 +1574,24 @@ mod tests {
             validate_completion(&json!({"summary":"done","route":"retry"}), &routes).unwrap(),
             json!({"summary":"done","route":"retry"})
         );
+    }
+
+    #[test]
+    fn completion_waits_for_every_declared_output_file_or_directory() {
+        let workspace = tempfile::tempdir().unwrap();
+        let outputs = DeclaredOutputs {
+            workspace: workspace.path().to_path_buf(),
+            writes: vec!["review.json".into(), "data".into()],
+        };
+        // The blind-03 reviewer wrote into a subdirectory.
+        std::fs::create_dir(workspace.path().join("review")).unwrap();
+        std::fs::write(workspace.path().join("review/review.json"), "{}").unwrap();
+        let refused = outputs.missing().unwrap_err();
+        assert!(refused.starts_with("final_result refused: declared output(s) missing from /workspace: `review.json`, `data`."), "{refused}");
+        assert!(refused.contains("No completion was recorded"), "{refused}");
+        std::fs::write(workspace.path().join("review.json"), "{}").unwrap();
+        std::fs::create_dir(workspace.path().join("data")).unwrap();
+        assert_eq!(outputs.missing(), Ok(()));
     }
 
     #[test]

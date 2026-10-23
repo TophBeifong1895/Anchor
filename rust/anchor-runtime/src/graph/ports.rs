@@ -160,6 +160,9 @@ pub struct NodeExecutionRequest {
     pub network: bool,
     pub kind: NodeKind,
     pub operation: Option<Value>,
+    /// Workspace-relative paths the node's definition declares it writes; a
+    /// node that ends without one of them has not produced its outputs.
+    pub writes: Vec<String>,
     pub cancellation: crate::Cancellation,
 }
 

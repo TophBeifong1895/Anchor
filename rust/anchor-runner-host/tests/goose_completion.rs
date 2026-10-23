@@ -215,6 +215,40 @@ fn mixed_completion(duplicate: bool) {
     );
 }
 
+#[test]
+#[ignore = "requires pinned Goose binary"]
+fn completion_waits_for_declared_outputs_then_is_correctable() {
+    // blind-03: the reviewer wrote review/review.json, finished, and its
+    // downstream read nothing. The refusal comes while the model can still act.
+    let mut graph = graph();
+    graph["agents"]["worker"]["writes"] = json!(["review.json"]);
+    graph["ops"]["done"]["reads"] = json!(["review.json"]);
+    let provider = Provider::new(
+        "completion-declared-outputs",
+        vec![
+            command("mkdir -p review && printf '{}' > review/review.json"),
+            finish("nested output must not commit"),
+            command("printf '{}' > review.json"),
+            finish("declared output written"),
+        ],
+    );
+    let host = Host::new(&graph).native();
+    let server = host.serve(&provider);
+    let run = server.trigger();
+    server.wait_status(&run, "completed");
+    let evidence = checked(&host, &provider, &run, "declared output written", 4);
+    let calls = evidence["tool_calls"].as_array().unwrap();
+    assert_eq!(calls[1]["tool"], "final_result");
+    assert_eq!(calls[1]["result"]["ok"], false);
+    assert!(
+        calls[1]["result"]
+            .to_string()
+            .contains("declared output(s) missing from /workspace: `review.json`"),
+        "{}",
+        calls[1]
+    );
+}
+
 // Each scenario has its own evidence record in the standard regression runner.
 
 #[test]

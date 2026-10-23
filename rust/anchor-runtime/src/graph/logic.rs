@@ -578,6 +578,23 @@ pub(crate) fn execution_request(
         .as_ref()
         .and_then(Value::as_str)
         .unwrap_or_default();
+    let writes = match agent {
+        Some(agent) => agent.writes.clone(),
+        None => node
+            .op
+            .as_ref()
+            .and_then(|name| record.snapshot.ops.get(name))
+            .and_then(|op| op.get("writes"))
+            .and_then(Value::as_array)
+            .map(|files| {
+                files
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .map(str::to_owned)
+                    .collect()
+            })
+            .unwrap_or_default(),
+    };
     Ok(NodeExecutionRequest {
         key: input.key.clone(),
         model,
@@ -612,6 +629,7 @@ pub(crate) fn execution_request(
         network,
         kind,
         operation,
+        writes,
         cancellation,
     })
 }

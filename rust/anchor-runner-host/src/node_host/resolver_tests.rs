@@ -165,6 +165,7 @@ fn session_fixture_with_snapshot(
         network: false,
         kind: NodeKind::Agent,
         operation: None,
+        writes: Vec::new(),
         cancellation: std::sync::Arc::new(AtomicBool::new(false)),
     };
     (root, resolver, mounts, request)

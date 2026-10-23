@@ -79,6 +79,8 @@ pub(crate) struct ResolvedNodeTools {
     pub(crate) plugins: Vec<PluginBinding>,
     /// Derived from the same frozen disclosure catalog as the tools.
     pub(crate) plugin_instructions: String,
+    /// The host path of the workspace the tools write into.
+    pub(crate) workspace: std::path::PathBuf,
 }
 
 pub(crate) type ToolResolution<'resolver> =

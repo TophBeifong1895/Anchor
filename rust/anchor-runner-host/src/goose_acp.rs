@@ -564,6 +564,10 @@ impl GooseNodePort {
                 routes: request.routes.clone(),
                 plugin_instructions: resolved.plugin_instructions,
                 observation_path: (!self.fixture).then(|| fact_path.clone()),
+                outputs: bridge::DeclaredOutputs {
+                    workspace: resolved.workspace,
+                    writes: request.writes.clone(),
+                },
             },
             tool_request.cancellation.clone(),
             models.model_upstream(),

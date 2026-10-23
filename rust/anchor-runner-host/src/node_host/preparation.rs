@@ -131,7 +131,7 @@ impl HostIoResolver {
                         request.cancellation.clone(),
                     ),
                     sandbox,
-                    workspace,
+                    workspace.clone(),
                     readonly_inputs,
                     request.cancellation.clone(),
                 )
@@ -167,6 +167,7 @@ impl HostIoResolver {
                     tools,
                     plugins: mounted.bindings,
                     plugin_instructions,
+                    workspace,
                 })
             }
             .await;

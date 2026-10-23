@@ -82,7 +82,7 @@ impl HostNodes {
             .network;
         let mut sandbox_request = SandboxRequest {
             writable_inputs: Vec::new(),
-            workspace,
+            workspace: workspace.clone(),
             working_directory: None,
             command: argv,
             readonly_inputs,
@@ -125,6 +125,19 @@ impl HostNodes {
         };
         match result.status {
             SandboxStatus::Completed if result.exit_code == Some(0) => {
+                // Exit 0 without a declared output is not success: downstream
+                // nodes would read a file that is not there.
+                let missing = super::missing_outputs(&workspace, &request.writes);
+                if !missing.is_empty() {
+                    let reason = super::missing_outputs_reason(&missing);
+                    write_durable(
+                        &self
+                            .facts_root
+                            .join(format!("{}.failed", fact_stem(&request.key))),
+                        reason.as_bytes(),
+                    )?;
+                    return Ok(NodeExecutionOutcome::Failed { reason });
+                }
                 let (submission, route) = read_op_route(&result.stdout);
                 self.complete(&request.key, NodeCompletion {
                     submission,
