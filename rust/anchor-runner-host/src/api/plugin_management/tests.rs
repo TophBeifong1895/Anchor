@@ -106,6 +106,12 @@ async fn standalone_install_credentials_rotation_update_and_uninstall_are_privat
     .await;
     assert_eq!(status, StatusCode::OK, "{review}");
     let review = settle(&state, &key, review).await;
+    // A review stages under the data root, where the next start-up can see
+    // what a lost process left behind; /tmp collected one per review.
+    let staged = std::fs::read_dir(lifecycle::staging_root(&state.data_root))
+        .unwrap()
+        .count();
+    assert_eq!(staged, 1);
     assert_eq!(
         call(&state, "GET", "/plugins/preflights", &other, json!({}))
             .await
@@ -384,6 +390,19 @@ async fn standalone_install_credentials_rotation_update_and_uninstall_are_privat
             .join("plugins/managed-demo")
             .exists()
     );
+}
+
+#[test]
+fn start_up_removes_staging_an_earlier_process_left() {
+    let root = tempfile::tempdir().unwrap();
+    assert_eq!(lifecycle::sweep_staging(root.path()), 0);
+    let staging = lifecycle::staging_root(root.path());
+    for name in ["upload-a", "upload-b"] {
+        std::fs::create_dir_all(staging.join(name).join("candidate")).unwrap();
+        std::fs::write(staging.join(name).join("candidate/plugin.json"), "{}").unwrap();
+    }
+    assert_eq!(lifecycle::sweep_staging(root.path()), 2);
+    assert_eq!(std::fs::read_dir(&staging).unwrap().count(), 0);
 }
 
 #[tokio::test]

@@ -18,6 +18,27 @@ const MAX_BYTES: usize = 32 * 1024 * 1024;
 const MAX_FILES: usize = 2048;
 const REVIEW_LIFETIME: Duration = Duration::from_secs(1800);
 
+/// Where install candidates are staged while their review is open. A review
+/// lives in this process only, so whatever a previous process left here is
+/// unreachable and is swept at start-up; staging in the system temp
+/// directory instead leaked one directory per review the process never
+/// dropped.
+pub(crate) fn staging_root(data_root: &Path) -> PathBuf {
+    data_root.join("plugin-staging")
+}
+
+/// Remove staging left by an earlier process. The caller holds the
+/// deployment writer lease, so no live review can own an entry here.
+pub(crate) fn sweep_staging(data_root: &Path) -> usize {
+    let Ok(entries) = std::fs::read_dir(staging_root(data_root)) else {
+        return 0;
+    };
+    entries
+        .flatten()
+        .filter(|entry| std::fs::remove_dir_all(entry.path()).is_ok())
+        .count()
+}
+
 pub(super) fn router() -> Router<ApiState> {
     let upload = Router::new()
         .route("/plugins/install-preflight", post(prepare_install))
@@ -367,11 +388,13 @@ async fn build_install(
     let source = body.source.clone();
     let id = body.id;
     let staging_access = access.clone();
+    let staging_root = staging_root(&state.data_root);
     let (staging, candidate) = tokio::task::spawn_blocking(move || {
         staging_access.check().map_err(|error| error.to_string())?;
+        std::fs::create_dir_all(&staging_root).map_err(|_| "Plugin staging unavailable")?;
         let staging = tempfile::Builder::new()
-            .prefix("anchor-plugin-upload-")
-            .tempdir()
+            .prefix("upload-")
+            .tempdir_in(&staging_root)
             .map_err(|_| "Plugin staging unavailable")?;
         let candidate = if let Some(source) = body.source {
             let source = GithubSource::parse(&source).map_err(|error| error.to_string())?;

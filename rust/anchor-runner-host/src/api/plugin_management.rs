@@ -2,6 +2,7 @@
 use super::*;
 mod configuration;
 mod lifecycle;
+pub(super) use lifecycle::sweep_staging;
 #[cfg(test)]
 mod tests;
 

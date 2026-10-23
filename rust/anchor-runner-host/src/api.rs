@@ -268,6 +268,12 @@ pub async fn serve() -> io::Result<()> {
         validate_service_configuration(&bundle_root, &data_root, &workspace_root, &catalog_root)?;
     let _writer = crate::acquire_deployment_writer().map_err(io::Error::other)?;
     crate::durable_write::cleanup_at_startup(&data_root, &workspace_root);
+    let swept = plugin_management::sweep_staging(&data_root);
+    if swept > 0 {
+        eprintln!(
+            "anchor-runner-host: removed {swept} Plugin staging directories left by an earlier process"
+        );
+    }
     crate::runtime_configuration::install_release_network(&crate::library_root(&catalog_root))
         .map_err(io::Error::other)?;
     // Start-up reclamation is best effort: a Library that cannot be swept (a busy

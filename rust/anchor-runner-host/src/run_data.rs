@@ -461,6 +461,9 @@ pub(crate) fn delete_run_data(
         if call_inputs.exists() {
             std::fs::remove_dir_all(&call_inputs).map_err(|error| error.to_string())?;
         }
+        // Command output cut from the previews is kept per Run and node
+        // workspace (`spill/<run>/<workspace>`), so it goes with the Run.
+        remove_directory_if_exists(&data_root.join("spill").join(&record.run_id))?;
     }
     for binding in bindings {
         remove_assistant_file_if_exists(
@@ -538,6 +541,12 @@ mod tests {
                     .join("data/history.sqlite"),
             );
             paths.push(work.join(&record.run_id).join("agent/work.txt"));
+            paths.push(
+                data.join("spill")
+                    .join(&record.run_id)
+                    .join(&hash)
+                    .join("call-1.stdout"),
+            );
             let store = data.join("io-harness/store");
             paths.push(store.join(format!("np1-{hash}.recordings/1/recording.json")));
             for suffix in [
