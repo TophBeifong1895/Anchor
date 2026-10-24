@@ -14,11 +14,31 @@ fn stopped_input(input: &anchor_platform_session::ChannelInboundAdmission) -> bo
         )
 }
 
+const SUPERSEDED: &str = "input superseded by a newer Turn";
+const PROVIDER_REJECTED: &str = "model provider rejected the request";
+
 #[derive(Debug, PartialEq, Serialize, Deserialize)]
 struct YieldFact {
     key: InvocationKey,
     reason: String,
     route: Option<String>,
+    /// Set when the provider rejected this Turn's request; the reply node then
+    /// answers for the Host instead of suppressing the Turn. Older facts lack
+    /// it and are superseded-input yields.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    provider_failure: Option<String>,
+}
+
+/// The Host's reply when the provider rejected a Turn. Only the classification
+/// is shown: raw provider text may quote the user's content or internal detail.
+fn provider_reply(kind: &str) -> String {
+    match kind {
+        "authentication" => "模型服务认证失败，本条消息未处理。请联系管理员检查模型凭据，之后可直接再发消息。".into(),
+        "credits_exhausted" => "模型服务额度已用完，本条消息未处理。请联系管理员处理额度，之后可直接再发消息。".into(),
+        // `provider_error` covers both transient faults (rate limits, 5xx)
+        // and content rejections; the Host cannot tell them apart.
+        _ => "模型服务拒绝了本次请求，本条消息未处理。可能是服务临时故障，也可能是内容被拦截：可以稍后重发或调整内容；如果连续出现，请联系管理员。".into(),
+    }
 }
 
 impl HostIoResolver {
@@ -100,14 +120,21 @@ impl HostNodes {
         &self,
         key: &InvocationKey,
         route: String,
+        provider_failure: Option<String>,
     ) -> Result<CompletionFact, GraphError> {
         if self.artifacts.workspace_path(key)?.exists() {
             self.artifacts.retain_interrupted_workspace(key)?;
         }
         let fact = YieldFact {
             key: key.clone(),
-            reason: "input superseded by a newer Turn".into(),
+            reason: if provider_failure.is_some() {
+                PROVIDER_REJECTED
+            } else {
+                SUPERSEDED
+            }
+            .into(),
             route: Some(route),
+            provider_failure,
         };
         assistant::save_immutable(
             &self
@@ -161,9 +188,31 @@ impl HostNodes {
             self.io_resolver
                 .prepare_node_workspace(key, &inputs)
                 .map_err(graph_error)?;
-            return self.yield_assistant(key, source.reply_node).map(Some);
+            return self.yield_assistant(key, source.reply_node, None).map(Some);
         }
         Ok(None)
+    }
+
+    /// The provider classification of a work invocation's yield, if the Host
+    /// yielded it because the provider rejected the request.
+    fn provider_yield(&self, key: &InvocationKey) -> Result<Option<String>, GraphError> {
+        Ok(assistant::read_json::<YieldFact>(
+            &self
+                .facts_root
+                .join(format!("{}.yielded.json", fact_stem(key))),
+        )
+        .map_err(graph_error)?
+        .map(|fact| {
+            if fact.key == *key {
+                Ok(fact.provider_failure)
+            } else {
+                Err(GraphError::CorruptRun(
+                    "assistant interruption identity changed".into(),
+                ))
+            }
+        })
+        .transpose()?
+        .flatten())
     }
 
     pub(super) fn settle_assistant_reply(
@@ -382,24 +431,37 @@ impl HostNodes {
                 let completion: NodeCompletion =
                     serde_json::from_value(self.artifacts.resolve(commit).await?)
                         .map_err(graph_error)?;
-                if completion.output.get("interrupted") == Some(&json!(true)) {
-                    return Err(graph_error("an interrupted Agent cannot produce a reply"));
-                }
-                if completion.submission.trim().is_empty() {
-                    return Err(graph_error("assistant reply is empty"));
-                }
                 let work_key = InvocationKey {
                     node_id: commit.node_id.clone(),
                     invocation: commit.invocation,
                     ..request.key.clone()
                 };
-                let items = crate::channel_tools::read_reply_images_for_invocation(root, &work_key)
-                    .map_err(graph_error)?;
-                let reply = NodeCompletion {
-                    submission: completion.submission,
-                    route: Some(source.wait_node),
-                    model_requests: 0,
-                    output: json!({"reply_for":input.relation.turn_id,"source_commit":commit,"items":items}),
+                let reply = if completion.output.get("interrupted") == Some(&json!(true)) {
+                    // Only a provider rejection recorded by the Host may answer
+                    // for an interrupted Agent; it never carries Agent images.
+                    let kind = self.provider_yield(&work_key)?.ok_or_else(|| {
+                        graph_error("an interrupted Agent cannot produce a reply")
+                    })?;
+                    NodeCompletion {
+                        submission: provider_reply(&kind),
+                        route: Some(source.wait_node),
+                        model_requests: 0,
+                        output: json!({"reply_for":input.relation.turn_id,"source_commit":commit,
+                            "items":[],"host_reply":"provider_rejected","provider_failure":kind}),
+                    }
+                } else {
+                    if completion.submission.trim().is_empty() {
+                        return Err(graph_error("assistant reply is empty"));
+                    }
+                    let items =
+                        crate::channel_tools::read_reply_images_for_invocation(root, &work_key)
+                            .map_err(graph_error)?;
+                    NodeCompletion {
+                        submission: completion.submission,
+                        route: Some(source.wait_node),
+                        model_requests: 0,
+                        output: json!({"reply_for":input.relation.turn_id,"source_commit":commit,"items":items}),
+                    }
                 };
                 let outcome = self.complete(&request.key, reply.clone())?;
                 self.settle_assistant_reply(&request.key, &reply)?;
@@ -430,7 +492,7 @@ impl HostNodes {
             .map_err(graph_error)?;
         if stopped_input(&input)
             && let CompletionFact::Yielded { reason, route } =
-                self.yield_assistant(&request.key, source.reply_node.clone())?
+                self.yield_assistant(&request.key, source.reply_node.clone(), None)?
         {
             return Ok(NodeExecutionOutcome::Yielded { reason, route });
         }
@@ -464,7 +526,7 @@ impl HostNodes {
                 node_cancel.store(true, Ordering::Release);
                 let _ = execution.await;
                 if !interruption? { return Ok(NodeExecutionOutcome::Cancelled); }
-                if let CompletionFact::Yielded { reason, route } = self.yield_assistant(&key, source.reply_node.clone())? { return Ok(NodeExecutionOutcome::Yielded { reason, route }); }
+                if let CompletionFact::Yielded { reason, route } = self.yield_assistant(&key, source.reply_node.clone(), None)? { return Ok(NodeExecutionOutcome::Yielded { reason, route }); }
                 return Err(graph_error("assistant interruption was not recorded"));
             }
         };
@@ -476,7 +538,21 @@ impl HostNodes {
             .ok_or_else(|| graph_error("assistant input disappeared"))?;
         if stopped_input(&current)
             && let CompletionFact::Yielded { reason, route } =
-                self.yield_assistant(&key, source.reply_node)?
+                self.yield_assistant(&key, source.reply_node.clone(), None)?
+        {
+            return Ok(NodeExecutionOutcome::Yielded { reason, route });
+        }
+        // A provider rejection ends this Turn with a Host reply; the assistant
+        // keeps waiting. Unclassified failures still stop it for inspection.
+        if matches!(outcome, NodeExecutionOutcome::Interrupted { .. })
+            && let Some(kind) = self
+                .goose_nodes
+                .as_ref()
+                .map(|nodes| nodes.provider_failure(&key))
+                .transpose()?
+                .flatten()
+            && let CompletionFact::Yielded { reason, route } =
+                self.yield_assistant(&key, source.reply_node, Some(kind))?
         {
             return Ok(NodeExecutionOutcome::Yielded { reason, route });
         }

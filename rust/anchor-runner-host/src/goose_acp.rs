@@ -93,6 +93,9 @@ struct Fact {
     tool_observation: Option<Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     conversation_scope: Option<String>,
+    /// Provider classification of this invocation's latest failed attempt.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    provider_failure: Option<String>,
 }
 
 fn read_fact(path: &Path) -> Result<Option<Fact>, GraphError> {
@@ -210,12 +213,19 @@ enum InvocationFailure {
     Contract(String),
     /// Unknown or externally caused failure; the invocation stays resumable.
     Uncertain(String),
+    /// The model provider rejected the prompt, as classified by validated ACP
+    /// error metadata (`authentication`, `credits_exhausted`, `provider_error`).
+    /// Ordinary Graphs keep it resumable like `Uncertain`; a persistent
+    /// assistant ends the Turn with a Host reply instead of stopping.
+    Provider { kind: &'static str, reason: String },
 }
 
 impl InvocationFailure {
     fn reason(&self) -> &str {
         match self {
-            Self::Contract(reason) | Self::Uncertain(reason) => reason,
+            Self::Contract(reason) | Self::Uncertain(reason) | Self::Provider { reason, .. } => {
+                reason
+            }
         }
     }
 }
@@ -256,7 +266,9 @@ fn failure_outcome(
     }
     match failure {
         InvocationFailure::Contract(reason) => NodeExecutionOutcome::Failed { reason },
-        InvocationFailure::Uncertain(reason) => NodeExecutionOutcome::Interrupted { reason },
+        InvocationFailure::Uncertain(reason) | InvocationFailure::Provider { reason, .. } => {
+            NodeExecutionOutcome::Interrupted { reason }
+        }
     }
 }
 
@@ -400,6 +412,19 @@ impl GooseNodePort {
                 }),
             ),
         })
+    }
+
+    /// The provider classification recorded by this invocation's latest
+    /// failed attempt, if the provider rejected it.
+    pub(crate) fn provider_failure(
+        &self,
+        key: &InvocationKey,
+    ) -> Result<Option<String>, GraphError> {
+        Ok(
+            read_fact(&self.facts.join(format!("{}.json", Self::stem(key))))?
+                .filter(|fact| fact.key == *key && fact.completion.is_none())
+                .and_then(|fact| fact.provider_failure),
+        )
     }
 
     pub(crate) async fn execute(
@@ -629,11 +654,15 @@ impl GooseNodePort {
                 .as_ref()
                 .and_then(|scope| scope.previous_observation.clone()),
             conversation_scope: conversation.as_ref().map(|scope| scope.scope.clone()),
+            provider_failure: None,
         });
         if !self.fixture && fact.model_binding.as_deref() != Some(binding.identity.as_str()) {
             bridge.close().await.map_err(GraphError::Unsupported)?;
             return Err(GraphError::Unsupported("Goose model or endpoint binding changed; retained invocation cannot silently switch".into()));
         }
+        // A resumed attempt is not yet classified; never let an earlier
+        // attempt's provider rejection describe this one.
+        fact.provider_failure = None;
         store_fact(&fact_path, &fact)?;
         if let Some(scope) = &mut conversation {
             scope.claim(&fact).map_err(GraphError::Unsupported)?;
@@ -703,7 +732,9 @@ impl GooseNodePort {
             Err(_) if request.cancellation.load(Ordering::Relaxed) => {
                 anchor_facts::Outcome::Cancelled
             }
-            Err(InvocationFailure::Uncertain(_)) if !self.fixture => {
+            Err(InvocationFailure::Uncertain(_) | InvocationFailure::Provider { .. })
+                if !self.fixture =>
+            {
                 anchor_facts::Outcome::Interrupted
             }
             Err(_) => anchor_facts::Outcome::Failed,
@@ -730,11 +761,20 @@ impl GooseNodePort {
             Ok(completion) => {
                 fact.completion = Some(completion.clone());
                 fact.reason = None;
+                fact.provider_failure = None;
                 store_fact(&fact_path, &fact)?;
                 Ok(NodeExecutionOutcome::Completed(completion))
             }
             Err(failure) => {
                 let reason = failure.reason().to_owned();
+                fact.provider_failure = match &failure {
+                    InvocationFailure::Provider { kind, .. }
+                        if !request.cancellation.load(Ordering::Relaxed) =>
+                    {
+                        Some((*kind).to_owned())
+                    }
+                    _ => None,
+                };
                 fact.reason = Some(format!(
                     "{reason}; native Goose history retained; {}",
                     if self.fixture {
@@ -919,6 +959,12 @@ impl GooseNodePort {
             Ok(prompted) => prompted,
             Err(error) => {
                 evidence["notifications"] = json!(live.prompt_notifications()?);
+                if let Some(kind) = connection.provider_failure() {
+                    return Err(InvocationFailure::Provider {
+                        kind,
+                        reason: format!("model provider rejected the request ({kind}): {error}"),
+                    });
+                }
                 // A transport or session failure leaves the real outcome unknown:
                 // keep the invocation resumable so it can be inspected first.
                 return Err(error.into());
@@ -1081,6 +1127,21 @@ mod tests {
                 "{reason}"
             );
         }
+    }
+
+    #[test]
+    fn provider_rejections_stay_resumable_for_ordinary_graphs() {
+        // Design card 004 D9A: only a persistent assistant turns a provider
+        // rejection into a Host reply; an ordinary Graph keeps it resumable.
+        let failure = InvocationFailure::Provider {
+            kind: "provider_error",
+            reason: "model provider rejected the request (provider_error)".into(),
+        };
+        assert!(failure.reason().contains("provider_error"));
+        assert!(matches!(
+            failure_outcome(false, false, failure),
+            NodeExecutionOutcome::Interrupted { .. }
+        ));
     }
 
     #[test]

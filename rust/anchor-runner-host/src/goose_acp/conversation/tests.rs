@@ -74,6 +74,7 @@ fn fact(run: &str) -> Fact {
         reason: None,
         tool_observation: Some(json!({"tool":"external","result":null})),
         conversation_scope: Some(scope_name(HINT).unwrap()),
+        provider_failure: None,
     }
 }
 

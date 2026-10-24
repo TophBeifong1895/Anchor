@@ -1103,6 +1103,110 @@ fn host_restart_requires_explicit_resume_when_automatic_recovery_is_disabled() {
     );
 }
 
+const PROVIDER_DIAGNOSTIC: &str = "persistent-provider-diagnostic-5c17";
+
+/// Design card 004 T14: a provider rejection ends only this Turn. The user gets
+/// a Host reply without the provider's raw text, the Run goes back to waiting,
+/// the next message is handled in the same Run and native session, and the
+/// Host's yield fact survives a restart without conflicting with Goose's.
+#[test]
+#[ignore = "requires pinned real Goose binary and local Bubblewrap"]
+fn provider_rejection_answers_the_turn_and_the_assistant_keeps_waiting() {
+    let provider = Provider::new(
+        "goose-persistent-assistant-provider-rejection",
+        vec![
+            // The pinned Goose (1.53.0, see GOOSE_SHA256) retries a failed
+            // request three times before ending the prompt with a classified
+            // provider error; a Goose bump that changes this fails here.
+            Step::http_error(400, PROVIDER_DIAGNOSTIC)
+                .expect_request_contains("persistent-rejected-input"),
+            Step::http_error(400, PROVIDER_DIAGNOSTIC),
+            Step::http_error(400, PROVIDER_DIAGNOSTIC),
+            Step::http_error(400, PROVIDER_DIAGNOSTIC),
+        ],
+    );
+    let host = host_without_auto_resume();
+    // Goose backs off between its retries, so the event outlasts the default
+    // client timeout.
+    let mut server = goose::serve_gated(&host, &provider);
+    let rejected_event = event(ALICE, "persistent-rejected", "persistent-rejected-input");
+    let (status, rejected) = server.request("POST", EVENTS, Some(&rejected_event));
+    assert_eq!(status, 200, "{rejected}");
+    let text = rejected["text"].as_str().unwrap();
+    assert!(text.contains("模型服务拒绝了本次请求"), "{rejected}");
+    assert!(!rejected.to_string().contains(PROVIDER_DIAGNOSTIC));
+    let run = rejected["run"].as_str().unwrap().to_owned();
+    let saved = waiting(&host, &run, 1);
+    let work: RunResult = serde_json::from_value(saved["results"]["assistant"][0].clone()).unwrap();
+    assert!(work.interruption.is_some(), "{saved}");
+    assert_eq!(work.completion.output["interrupted"], true);
+    let reply = &saved["results"]["reply"][0]["completion"];
+    assert_eq!(
+        reply["output"]["host_reply"], "provider_rejected",
+        "{reply}"
+    );
+    assert_eq!(reply["output"]["provider_failure"], "provider_error");
+    assert_eq!(reply["output"]["items"], json!([]));
+    assert!(host.native_fact(&run, "assistant", 1)["completion"].is_null());
+    assert_eq!(
+        host.native_fact(&run, "assistant", 1)["provider_failure"],
+        "provider_error"
+    );
+    assert_eq!(
+        submit_any(&server, &rejected_event, text),
+        rejected,
+        "a replayed event must return the same Host reply"
+    );
+    idle(&provider, 4);
+
+    server.kill();
+    drop(server);
+    let restarted = host.serve(&provider);
+    action(&restarted, &run, "resume");
+    let resumed = waiting(&host, &run, 1);
+    assert_eq!(resumed["results"], saved["results"]);
+    idle(&provider, 4);
+
+    provider.append(vec![
+        command("set -eu; printf after-rejection > after.txt; printf after-rejection-written")
+            .expect_request_contains("persistent-after-rejection-input"),
+        finish("persistent-after-rejection-reply").after("after-rejection-written"),
+    ]);
+    let next_event = event(
+        ALICE,
+        "persistent-after-rejection",
+        "persistent-after-rejection-input",
+    );
+    let next = submit(&restarted, &next_event, "persistent-after-rejection-reply");
+    assert_eq!(next["run"], rejected["run"]);
+    assert_eq!(next["session"], rejected["session"]);
+    waiting(&host, &run, 2);
+    assert_eq!(runs(&host).len(), 1);
+    let continued = native_round(&host, &provider, &run, 2);
+    assert_eq!(
+        continued["session_id"],
+        host.native_fact(&run, "assistant", 1)["session_id"]
+    );
+    // Goose keeps the rejected user message in its native history, so the
+    // next Turn sends it again. A content rejection can therefore repeat on
+    // every later Turn until the conversation is reset (card 004 §4.4).
+    let followup = provider.requests()[4]["messages"].to_string();
+    assert!(followup.contains("persistent-rejected-input"));
+    assert!(!followup.contains(PROVIDER_DIAGNOSTIC));
+    let stopped = stop(&restarted, &provider, &run);
+    evidence(
+        &host,
+        &provider,
+        &run,
+        json!({
+            "case_source":CASE_SOURCE,"rejected_response":rejected,"next_response":next,
+            "host_reply":reply,"raw_provider_text_not_exposed":true,
+            "results_unchanged_after_restart":true,"same_run_and_native_session":true,
+            "stopped":stopped
+        }),
+    );
+}
+
 #[test]
 #[ignore = "requires pinned real Goose binary and local Bubblewrap"]
 fn host_restart_recovers_only_the_canonical_account_and_preserves_legacy_history() {

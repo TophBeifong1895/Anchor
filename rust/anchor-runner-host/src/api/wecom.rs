@@ -642,11 +642,15 @@ async fn wait_for_channel_reply(
                             invocation: commit.invocation,
                             ..result.key.clone()
                         };
-                        let items = crate::channel_tools::read_reply_images_for_invocation(
-                            &state.data_root,
-                            &work_key,
-                        )
-                        .map_err(|message| error(StatusCode::UNPROCESSABLE_ENTITY, message))?;
+                        let items = if result.host_reply {
+                            Vec::new()
+                        } else {
+                            crate::channel_tools::read_reply_images_for_invocation(
+                                &state.data_root,
+                                &work_key,
+                            )
+                            .map_err(|message| error(StatusCode::UNPROCESSABLE_ENTITY, message))?
+                        };
                         if json!(items) != result.items {
                             return Err(error(
                                 StatusCode::CONFLICT,

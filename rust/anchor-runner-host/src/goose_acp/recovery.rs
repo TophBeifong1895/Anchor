@@ -124,6 +124,7 @@ mod tests {
             reason: None,
             model_binding: None,
             conversation_scope: None,
+            provider_failure: None,
             tool_observation: Some(
                 json!({"tool":"anchor_run","arguments":{"command":"inspect"},"native_tool_call":{"session":"native-session","tool_call":"tool-7"},"result":null}),
             ),

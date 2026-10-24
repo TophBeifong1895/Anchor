@@ -990,6 +990,7 @@ mod tests {
             reason: None,
             tool_observation: None,
             conversation_scope: None,
+            provider_failure: None,
         }
     }
 

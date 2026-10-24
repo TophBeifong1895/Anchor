@@ -14,6 +14,9 @@ pub(crate) struct ChannelReplyResult {
     pub(crate) reply_for: Option<String>,
     pub(crate) source_commit: Value,
     pub(crate) items: Value,
+    /// The Host answered this Turn itself (a provider rejection); it carries
+    /// no Agent images.
+    pub(crate) host_reply: bool,
 }
 
 pub(crate) struct ChannelReplyRun {
@@ -53,6 +56,8 @@ impl ChannelReplyRun {
                                 .map(str::to_owned),
                             source_commit: result.completion.output["source_commit"].clone(),
                             items: result.completion.output["items"].clone(),
+                            host_reply: result.completion.output.get("host_reply")
+                                == Some(&Value::from("provider_rejected")),
                             key: result.key.clone(),
                             text: result.completion.submission.clone(),
                         })
