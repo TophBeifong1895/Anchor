@@ -362,8 +362,8 @@ impl GooseNodePort {
         create_durable_directory(&facts).map_err(|error| error.to_string())?;
         create_durable_directory(&process_root).map_err(|error| error.to_string())?;
         // Recording is best effort and never a reason to refuse execution.
-        let recorder = match crate::fact_recorder::FactRecorder::open(state) {
-            Ok(recorder) => Some(Arc::new(recorder)),
+        let recorder = match crate::fact_recorder::FactRecorder::shared(state) {
+            Ok(recorder) => Some(recorder),
             Err(error) => {
                 eprintln!("Harness fact recording unavailable: {error}");
                 None

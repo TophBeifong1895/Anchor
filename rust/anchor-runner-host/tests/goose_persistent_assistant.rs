@@ -893,6 +893,21 @@ fn concurrent_users_keep_separate_runs_workspaces_and_native_histories() {
     assert_eq!(snapshot_inventory(&bob_artifact), bob_inventory);
     assert_eq!(waiting(&host, bob_run, 1)["results"], bob_saved["results"]);
     assert_eq!(submit(&server, &bob_event, "bob-private-first-reply"), bob);
+    // Both resident Runs share the process's fact recorder: the first one to
+    // wait must not leave the other's invocations unrecorded.
+    let traces = fs::read_dir(host.base.state_root().join("kernel-facts"))
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .filter(|name| name.starts_with("trace%2F"))
+        .collect::<Vec<_>>();
+    for run in [alice_run, bob_run] {
+        assert!(
+            traces
+                .iter()
+                .any(|name| name.starts_with(&format!("trace%2F{run}%2F"))),
+            "{run} has no recorded trace: {traces:?}"
+        );
+    }
     idle(&provider, 6);
     let alice_stopped = stop(&server, &provider, alice_run);
     let bob_stopped = stop(&server, &provider, bob_run);

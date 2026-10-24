@@ -6,7 +6,13 @@
 //! with Run adjudication. Recording is best effort: a failure is reported in
 //! the invocation evidence and never changes an execution.
 
-use std::{fs::OpenOptions, path::Path, time::Instant};
+use std::{
+    collections::BTreeMap,
+    fs::OpenOptions,
+    path::{Path, PathBuf},
+    sync::{Arc, Mutex, Weak},
+    time::Instant,
+};
 
 use anchor_facts::{AgentConfiguration, Fact, Invocation, Observation};
 use anchor_kernel::{
@@ -55,6 +61,24 @@ pub(crate) fn host_sha256() -> String {
 }
 
 impl FactRecorder {
+    /// The process's recorder for `state`. Every Run builds its own execution
+    /// port, but the store has one writer per process: a resident assistant
+    /// holds it for as long as it waits, and a second `open` would leave every
+    /// concurrent Run unrecorded. Ports share one recorder instead; the lease
+    /// is released when the last of them is dropped.
+    pub(crate) fn shared(state: &Path) -> Result<Arc<Self>, String> {
+        static OPEN: Mutex<BTreeMap<PathBuf, Weak<FactRecorder>>> = Mutex::new(BTreeMap::new());
+        let key = std::fs::canonicalize(state).unwrap_or_else(|_| state.to_path_buf());
+        let mut open = OPEN.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        open.retain(|_, recorder| recorder.strong_count() > 0);
+        if let Some(recorder) = open.get(&key).and_then(Weak::upgrade) {
+            return Ok(recorder);
+        }
+        let recorder = Arc::new(Self::open(state)?);
+        open.insert(key, Arc::downgrade(&recorder));
+        Ok(recorder)
+    }
+
     pub(crate) fn open(state: &Path) -> Result<Self, String> {
         let root = state.join(ROOT);
         std::fs::create_dir_all(&root).map_err(|e| e.to_string())?;
@@ -271,6 +295,21 @@ mod tests {
         let state = tempfile::tempdir().unwrap();
         let _first = FactRecorder::open(state.path()).unwrap();
         assert!(FactRecorder::open(state.path()).is_err());
+    }
+
+    #[test]
+    fn runs_of_one_process_share_the_recorder_and_release_it_together() {
+        let state = tempfile::tempdir().unwrap();
+        let first = FactRecorder::shared(state.path()).unwrap();
+        let second = FactRecorder::shared(state.path()).unwrap();
+        assert!(Arc::ptr_eq(&first, &second));
+        assert!(FactRecorder::open(state.path()).is_err());
+        drop(first);
+        assert!(FactRecorder::open(state.path()).is_err());
+        drop(second);
+        let reopened = FactRecorder::shared(state.path()).unwrap();
+        drop(reopened);
+        assert!(FactRecorder::open(state.path()).is_ok());
     }
 
     /// Only this module records observations; every other Host module goes
