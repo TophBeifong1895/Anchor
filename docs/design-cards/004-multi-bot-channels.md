@@ -72,7 +72,7 @@
 | --- | --- | --- |
 | 绑定 | `platform/channels/wecom.json`（format 1） | `platform/channels/graphs/<graph>.json`（format 2）。字段：owner、plugin、users、send_users、enabled、authorization_digest、callback_key、account。去掉 `graph`（文件名就是）和 `reply_node`（从 Graph 推导） |
 | 机器人凭据 | `credentials/<owner>/<plugin>/channel_wecom/<FIELD>.json` | `credentials/<owner>/<plugin>/channel_wecom/<graph>/<FIELD>.json`。文件格式、权限、锁和授权摘要的算法都不变 |
-| 网关状态（投递账本、profile、锁、control） | `channels/wecom/` | `channels/graphs/<graph>/` |
+| 网关状态（投递账本、profile、锁、control） | `channels/wecom/` | `channels/graphs/<digest>/`（见 S5 施工记录） |
 
 旧的单例文件 `platform/channels/wecom.json` 如果还在，Host 启动时**直接拒绝，并在报错里写明原因**。Host 不保留任何兼容旧格式的读取路径，这和 C6 的惯例一致。线上数据由部署脚本离线迁移，见 §6。
 
@@ -200,7 +200,7 @@
 3. 迁移文件：
    - `platform/channels/wecom.json` → `platform/channels/graphs/wecom-persistent-assistant.json`（format 2）；
    - 机器人凭据 → 绑定名下的新位置；
-   - `channels/wecom/` 下的 `delivery.sqlite`、profile 等数据 → `channels/graphs/wecom-persistent-assistant/`。运行时文件 `control.json` 和 `control.sock` 不迁移，也不参与 hash 比对。
+   - `channels/wecom/` 下的 `delivery.sqlite`、profile 等数据 → `channels/graphs/<digest>/`。运行时文件 `control.json` 和 `control.sock` 不迁移，也不参与 hash 比对。
 4. 核对迁移后的文件和迁移前逐字节一致。只有绑定文件是重新编码的，按字段逐一核对。
 5. 用新版本启动，等健康检查和就绪检查通过、网关认证成功，再跑冒烟测试。
 6. 会话数据库不改：账号和 Graph 都没变，现有会话和当前助手继续有效。
@@ -227,7 +227,7 @@
 
 | 编号 | 用例 | 断言 |
 | --- | --- | --- |
-| T1 | 两张机器人 Graph，用两个不同的模拟机器人账号同时启用 | 两个网关进程，状态目录分别是 `channels/graphs/<g>/`；各自认证成功 |
+| T1 | 两张机器人 Graph，用两个不同的模拟机器人账号同时启用 | 两个网关进程，状态目录各自独立（`channels/graphs/<digest>/`）；各自认证成功 |
 | T2 | 同一个用户分别给两个机器人发消息 | 落在两个不同的会话里，进入各自的 Graph；A 的成员名单不影响 B |
 | T3 | 用 A 的回调密钥调用 B 的回调路由 | 拒绝；B 的会话里没有新增任何内容 |
 | T4 | 第二张 Graph 填了相同的 BotID 并尝试启用 | 拒绝（R4），提示占用它的 Graph 名；第一个机器人不受影响 |

@@ -51,7 +51,7 @@
 
 - 绑定：`platform/channels/graphs/<graph>.json`（format 2），记录 owner、Plugin、成员名单、启用状态和账号身份；
 - 凭据：凭据库中 `channel_wecom@<graph>` 目标下的字段；
-- 网关状态：`channels/graphs/<graph>/`，回调路由是 `/channels/<graph>/events` 和 `/channels/<graph>/progress/<event_id>`。每个启用的绑定有自己的网关和回调密钥，这把密钥只能访问本 Graph 的路由。
+- 网关状态：`channels/graphs/<sha256(graph) 前 16 位>/`（网关的控制 socket 在这个目录里，Unix socket 路径有长度上限，所以目录名用固定长度的摘要，不用 Graph 名）；回调路由是 `/channels/<graph>/events` 和 `/channels/<graph>/progress/<event_id>`。每个启用的绑定有自己的网关和回调密钥，这把密钥只能访问本 Graph 的路由。
 
 状态目录里还留着旧版单绑定文件 `platform/channels/wecom.json` 时，Host 拒绝启动，需要先运行迁移（设计卡 004 §6）。空成员名单拒绝所有成员，`*` 表示明确允许全部平台成员；主动发送名单为空时继承入口名单。`ANCHOR_API_KEYS` 保护管理 API。
 

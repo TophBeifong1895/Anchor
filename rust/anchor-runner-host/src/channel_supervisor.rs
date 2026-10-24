@@ -88,10 +88,18 @@ pub(crate) struct ChannelSupervisor {
 }
 
 /// Where a bot Graph's gateway keeps its ledger, profile, lock and control
-/// descriptor. Nothing outside this directory is shared between bots.
+/// descriptor. Nothing outside this directory is shared between bots. The
+/// gateway binds `control.sock` inside it and a Unix socket path is limited to
+/// [`MAX_SOCKET_PATH`] bytes, so the directory is named by a fixed-length digest
+/// of the Graph rather than by the Graph name, which may be 64 characters.
 pub(crate) fn state_directory(state_root: &Path, graph: &str) -> PathBuf {
-    state_root.join("channels/graphs").join(graph)
+    use sha2::{Digest, Sha256};
+    let digest = format!("{:x}", Sha256::digest(graph.as_bytes()));
+    state_root.join("channels/graphs").join(&digest[..16])
 }
+
+/// `sun_path` holds 108 bytes including the terminating NUL.
+const MAX_SOCKET_PATH: usize = 107;
 
 /// The control descriptor a running bot Graph's gateway publishes.
 pub(crate) fn descriptor_path(state_root: &Path, graph: &str) -> PathBuf {
@@ -138,6 +146,11 @@ impl ChannelSupervisor {
         private_directory(&state_dir)?;
         let descriptor = state_dir.join("control.json");
         let control_socket = state_dir.join("control.sock");
+        if control_socket.as_os_str().len() > MAX_SOCKET_PATH {
+            return Err(io::Error::other(format!(
+                "the gateway control socket path exceeds {MAX_SOCKET_PATH} bytes; use a shorter Host state root"
+            )));
+        }
         let control_token = random_token("anchor-channel-control")?;
         let base = channel_base_url(listen, &managed.graph);
         environment.insert("WECOM_CHANNEL_STATE".into(), state_dir.clone().into());
@@ -542,7 +555,22 @@ mod tests {
         );
         assert_eq!(
             descriptor_path(Path::new("/state"), "sales-bot"),
-            Path::new("/state/channels/graphs/sales-bot/control.json")
+            Path::new("/state/channels/graphs/e12aa0cd6c08ef3d/control.json")
+        );
+        let longest = "g".repeat(64);
+        assert_eq!(
+            state_directory(Path::new("/state"), &longest),
+            state_directory(Path::new("/state"), &longest)
+        );
+        assert_ne!(
+            state_directory(Path::new("/state"), "sales-bot"),
+            state_directory(Path::new("/state"), "sales-bot2")
+        );
+        assert_eq!(
+            state_directory(Path::new("/state"), &longest)
+                .as_os_str()
+                .len(),
+            "/state/channels/graphs/".len() + 16
         );
     }
 
@@ -723,8 +751,8 @@ mod tests {
         let state = root
             .path()
             .join(format!("state-{}", TEST_ID.fetch_add(1, Ordering::Relaxed)));
-        let descriptor = state.join("channels/graphs/bot/control.json");
-        let socket = state.join("channels/graphs/bot/control.sock");
+        let descriptor = state_directory(&state, "bot").join("control.json");
+        let socket = state_directory(&state, "bot").join("control.sock");
         let executable = root.path().join("plugins/mounted/bin/gateway");
         fs::write(
             &executable,

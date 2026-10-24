@@ -73,7 +73,8 @@ fn a_bot_configured_on_its_graph_starts_its_gateway_and_the_graph_stays_editable
     assert_eq!(status, 200, "{enabled}");
     wait_until("the Graph's gateway process", || {
         host.state_root()
-            .join("channels/graphs/assistant/started")
+            // The gateway state directory is named by a digest of the Graph.
+            .join("channels/graphs/a39a7ffad4a3013f/started")
             .is_file()
     });
     let (status, channel) = server.request("GET", "/graphs/assistant/channel", None);

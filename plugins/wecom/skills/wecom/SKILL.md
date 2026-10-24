@@ -18,7 +18,7 @@ description: 企业微信机器人私聊、主动通知、附件分析和图文�
 
 ## 附件与回复
 
-图片、文件和混合消息下载解密后保存在该 Graph 的网关状态目录 `state/channels/graphs/<graph>/events/`；本轮 `input.channel.attachments` 给出只读 `/in/channel` 路径。原件始终保留。
+图片、文件和混合消息下载解密后保存在该 Graph 的网关状态目录（`state/channels/graphs/` 下）的 `events/`；本轮 `input.channel.attachments` 给出只读 `/in/channel` 路径。原件始终保留。
 
 `input.attachment_content` 提供 UTF-8 文本、PDF 文本层、DOCX 正文和 XLSX 单元格的有界提取结果；扫描 PDF 没有 OCR，Office 图片/嵌入对象不算已读取。遇到 `Not read` 或截断提示，明确指出范围，不能声称读完。PNG/JPEG/WebP 经实际解码验证后通过模型原生图片输入传入；是否理解取决于当前模型，不能把文件存在当成视觉成功。
 
