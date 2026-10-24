@@ -128,26 +128,43 @@ struct ImageArguments {
     path: String,
 }
 
-/// Add channel tools only when the admitted node explicitly mounts `wecom`.
-#[allow(clippy::too_many_arguments)]
+/// Add channel tools only to a bot Graph's assistant node (R1): the Run is the
+/// Graph's persistent assistant, this is its Agent node, and the node mounts
+/// the bot's channel Plugin. Any other node that mounts the same Plugin keeps
+/// only the Plugin's own application tools.
 pub(crate) fn wrap(
     inner: std::sync::Arc<dyn ToolPort>,
     bindings: &[anchor_runtime::graph::PluginBinding],
     key: anchor_runtime::graph::InvocationKey,
     state_root: PathBuf,
-    reply_node: Option<String>,
     workspace: PathBuf,
     readonly_inputs: Vec<ReadOnlyInput>,
     cancellation: Cancellation,
 ) -> std::sync::Arc<dyn ToolPort> {
-    if !bindings.iter().any(|binding| binding.id == "wecom") {
+    let Ok(Some(metadata)) = crate::application::metadata::load(&state_root, &key.run_id) else {
+        return inner;
+    };
+    if metadata
+        .assistant
+        .as_ref()
+        .is_none_or(|assistant| assistant.work_node != key.node_id)
+    {
+        return inner;
+    }
+    let Ok(Some(binding)) =
+        crate::channel_supervisor::management::saved_binding(&state_root, &metadata.graph)
+    else {
+        return inner;
+    };
+    if !bindings.iter().any(|mounted| mounted.id == binding.plugin) {
         return inner;
     }
     std::sync::Arc::new(ChannelTools {
         inner,
         key,
+        descriptor: crate::channel_supervisor::descriptor_path(&state_root, &metadata.graph),
+        send_users: binding.send_users,
         state_root,
-        reply_node,
         workspace,
         readonly_inputs,
         cancellation,
@@ -158,7 +175,10 @@ struct ChannelTools {
     inner: std::sync::Arc<dyn ToolPort>,
     key: anchor_runtime::graph::InvocationKey,
     state_root: PathBuf,
-    reply_node: Option<String>,
+    /// This bot Graph's own gateway.
+    descriptor: PathBuf,
+    /// The bot binding's recipients for proactive messages.
+    send_users: Vec<String>,
     workspace: PathBuf,
     readonly_inputs: Vec<ReadOnlyInput>,
     cancellation: Cancellation,
@@ -239,16 +259,7 @@ impl ChannelTools {
     }
 
     fn control_endpoint(&self) -> Result<(PathBuf, String), ToolError> {
-        if let (Some(socket), Ok(token)) = (
-            std::env::var_os("ANCHOR_CHANNEL_CONTROL_SOCKET").map(PathBuf::from),
-            std::env::var("ANCHOR_CHANNEL_CONTROL_TOKEN"),
-        ) {
-            return Ok((socket, token));
-        }
-        let descriptor = std::env::var_os("ANCHOR_CHANNEL_CONTROL_DESCRIPTOR")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| self.state_root.join("channels/wecom/control.json"));
-        let raw = fs::read(descriptor)
+        let raw = fs::read(&self.descriptor)
             .map_err(|_| ToolError::Failed("WeCom gateway descriptor is unavailable".into()))?;
         let value: Value = serde_json::from_slice(&raw)
             .map_err(|_| ToolError::Failed("invalid gateway descriptor".into()))?;
@@ -266,38 +277,24 @@ impl ChannelTools {
         }
     }
 
-    fn allowed_recipient(userid: &str) -> bool {
-        let raw = std::env::var("ANCHOR_WECOM_SEND_USERS")
-            .ok()
-            .filter(|value| !value.is_empty())
-            .or_else(|| std::env::var("ANCHOR_WECOM_USERS").ok())
-            .unwrap_or_default();
-        let allowed = raw
-            .split(',')
-            .map(str::trim)
-            .filter(|value| !value.is_empty());
-        userid != "@all" && allowed.clone().any(|value| value == "*" || value == userid)
+    fn allowed_recipient(&self, userid: &str) -> bool {
+        userid != "@all"
+            && self
+                .send_users
+                .iter()
+                .any(|value| value == "*" || value == userid)
     }
 
     fn reply_path(&self) -> Result<PathBuf, ToolError> {
-        if crate::assistant::source(&self.state_root, &self.key)
+        let binding = crate::assistant::binding(&self.state_root, &self.key)
             .map_err(ToolError::Failed)?
-            .is_some()
-        {
-            let binding = crate::assistant::binding(&self.state_root, &self.key)
-                .map_err(ToolError::Failed)?
-                .ok_or_else(|| {
-                    ToolError::Failed("reply images require a trusted Turn binding".into())
-                })?;
-            return Ok(self
-                .state_root
-                .join("channel-replies")
-                .join(format!("turn-{}.json", binding.turn)));
-        }
+            .ok_or_else(|| {
+                ToolError::Failed("reply images require a trusted Turn binding".into())
+            })?;
         Ok(self
             .state_root
             .join("channel-replies")
-            .join(format!("{}.json", self.key.run_id)))
+            .join(format!("turn-{}.json", binding.turn)))
     }
 
     fn visible_file(&self, value: &str) -> Result<PathBuf, ToolError> {
@@ -438,7 +435,7 @@ impl ChannelTools {
         }
         if args.userid.trim().is_empty()
             || args.content.trim().is_empty()
-            || !Self::allowed_recipient(&args.userid)
+            || !self.allowed_recipient(&args.userid)
         {
             return Err(ToolError::Failed("recipient is not allowed".into()));
         }
@@ -506,11 +503,9 @@ impl ToolPort for ChannelTools {
         definitions.push(ToolDefinition::new(ToolName::new(SEND_TOOL).expect("static tool name"),
             "Send Markdown to an explicitly authorized WeCom userid. The gateway owns delivery and idempotency; an error or timeout is not automatically retried.",
             json!({"type":"object","properties":{"userid":{"type":"string"},"content":{"type":"string"}},"required":["userid","content"],"additionalProperties":false})));
-        if self.reply_node.as_deref() == Some(self.key.node_id.as_str()) {
-            definitions.push(ToolDefinition::new(ToolName::new(IMAGE_TOOL).expect("static tool name"),
-                "Attach one validated PNG/JPEG from /workspace or an authorized read-only /in input to the final WeCom reply. This prepares the image; it does not send immediately.",
-                json!({"type":"object","properties":{"path":{"type":"string"}},"required":["path"],"additionalProperties":false})));
-        }
+        definitions.push(ToolDefinition::new(ToolName::new(IMAGE_TOOL).expect("static tool name"),
+            "Attach one validated PNG/JPEG from /workspace or an authorized read-only /in input to the final WeCom reply. This prepares the image; it does not send immediately.",
+            json!({"type":"object","properties":{"path":{"type":"string"}},"required":["path"],"additionalProperties":false})));
         definitions
     }
 
@@ -535,9 +530,6 @@ impl ToolPort for ChannelTools {
             }
             if name == IMAGE_TOOL {
                 self.check_active()?;
-                if self.reply_node.as_deref() != Some(self.key.node_id.as_str()) {
-                    return Err(ToolError::Unknown(name.to_owned()));
-                }
                 let args: ImageArguments = serde_json::from_value(arguments).map_err(|e| {
                     ToolError::Failed(format!("invalid WeCom image arguments: {e}"))
                 })?;
@@ -573,16 +565,33 @@ mod tests {
     }
     fn tools(root: &Path) -> ChannelTools {
         fs::create_dir_all(root.join("workspace")).unwrap();
+        let key = anchor_runtime::graph::InvocationKey {
+            run_id: "run".into(),
+            graph_digest: "digest".into(),
+            node_id: "reply".into(),
+            invocation: 1,
+        };
+        // Reply images belong to the assistant Turn this invocation answers.
+        crate::assistant::save_immutable(
+            &root
+                .join("assistant-invocations")
+                .join(format!("{}.json", crate::assistant::stem(&key))),
+            &crate::assistant::TurnBinding {
+                key: key.clone(),
+                wait_key: "wait".into(),
+                inbound: "inbound".into(),
+                turn: "turn-1".into(),
+                pending_inbounds: Vec::new(),
+                pending_truncated: false,
+            },
+        )
+        .unwrap();
         ChannelTools {
             inner: Arc::new(Empty),
-            key: anchor_runtime::graph::InvocationKey {
-                run_id: "run".into(),
-                graph_digest: "digest".into(),
-                node_id: "reply".into(),
-                invocation: 1,
-            },
+            key,
             state_root: root.into(),
-            reply_node: Some("reply".into()),
+            descriptor: root.join("missing-control.json"),
+            send_users: vec!["alice".into()],
             workspace: root.join("workspace"),
             readonly_inputs: vec![
                 ReadOnlyInput::new(root.join("input"), "/in/channel"),
@@ -832,7 +841,7 @@ mod tests {
     #[tokio::test]
     async fn channel_image_is_scoped_durable_deduplicated_and_cancellable() {
         let root = tempfile::tempdir().unwrap();
-        let mut host = tools(root.path());
+        let host = tools(root.path());
         fs::write(host.workspace.join("image.png"), png()).unwrap();
         host.call(IMAGE_TOOL, json!({"path":"image.png"}))
             .await
@@ -859,13 +868,6 @@ mod tests {
                 .is_err()
         );
         host.cancellation.store(false, Ordering::Relaxed);
-        host.reply_node = Some("other".into());
-        assert_eq!(host.definitions().len(), 1);
-        assert!(
-            host.call(IMAGE_TOOL, json!({"path":"image.png"}))
-                .await
-                .is_err()
-        );
         assert!(
             host.send(SendArguments {
                 userid: "@all".into(),
@@ -874,6 +876,15 @@ mod tests {
             .await
             .is_err()
         );
+        assert!(
+            host.send(SendArguments {
+                userid: "mallory".into(),
+                content: "blocked".into()
+            })
+            .await
+            .is_err()
+        );
+        // Without saved Run metadata the node is not a bot's assistant node.
         let plain: Arc<dyn ToolPort> = Arc::new(Empty);
         assert!(
             wrap(
@@ -881,7 +892,6 @@ mod tests {
                 &[],
                 host.key.clone(),
                 root.path().into(),
-                None,
                 host.workspace,
                 vec![],
                 host.cancellation

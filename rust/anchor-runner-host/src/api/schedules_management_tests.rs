@@ -216,8 +216,6 @@ fn fixture() -> (tempfile::TempDir, ApiState, PilotTools) {
         api_keys: Vec::new(),
         schedules,
         pilots: Default::default(),
-        wecom: Default::default(),
-        channel_descriptors: Default::default(),
         channel_event_locks: Default::default(),
         response_fixture: None,
     };

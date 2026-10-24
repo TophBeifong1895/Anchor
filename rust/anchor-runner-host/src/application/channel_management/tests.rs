@@ -1,62 +1,14 @@
 use super::*;
 use anchor_platform_session::{ChannelIdentity, ChannelInboundRequest, SessionStore};
 use serde_json::json;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
-struct Port(
-    Mutex<Option<ChannelRuntimeState>>,
-    Option<Box<dyn Fn() + Send + Sync>>,
-);
-
-impl ChannelManagementPort for Port {
-    fn status<'a>(
-        &'a self,
-        _: &'a str,
-        _: &'a str,
-    ) -> BoxFuture<'a, Result<Value, ApplicationError>> {
-        Box::pin(async { Ok(json!({})) })
-    }
-    fn configure<'a>(
-        &'a self,
-        _: &'a str,
-        _: &'a str,
-        _: ChannelBinding,
-    ) -> BoxFuture<'a, Result<Value, ApplicationError>> {
-        Box::pin(async { Err(ApplicationError::Missing) })
-    }
-    fn set_enabled<'a>(
-        &'a self,
-        _: &'a str,
-        _: &'a str,
-        _: bool,
-    ) -> BoxFuture<'a, Result<Value, ApplicationError>> {
-        Box::pin(async { Err(ApplicationError::Missing) })
-    }
-    fn snapshot(&self, _: &str) -> Result<Option<ChannelRuntimeState>, ApplicationError> {
-        if let Some(inspect) = &self.1 {
-            inspect();
-        }
-        Ok(self.0.lock().unwrap().clone())
-    }
-    fn callback_owner(&self, _: &str, _: &str) -> Option<String> {
-        None
-    }
-}
+use fake::FakeChannels;
 
 fn runtime() -> ChannelRuntimeState {
-    ChannelRuntimeState {
-        owner: "owner".into(),
-        binding: ChannelBinding {
-            graph: "graph".into(),
-            reply_node: "assistant".into(),
-            plugin: "channel".into(),
-            users: vec!["member".into()],
-            send_users: vec!["member".into()],
-        },
-        account: Some("canonical".into()),
-        enabled: true,
-        descriptor: None,
-    }
+    let mut state = FakeChannels::bot("graph", "owner", "assistant", &["member"]);
+    state.account = Some("canonical".into());
+    state
 }
 
 fn request(account: &str) -> ChannelInboundRequest {
@@ -90,7 +42,7 @@ fn recovery_and_control_share_deployment_eligibility_without_rewriting_history()
     sessions
         .register_channel_account("owner", "wecom", "canonical", &["legacy".into()])
         .unwrap();
-    let port = Arc::new(Port(Mutex::new(Some(runtime())), None));
+    let port = Arc::new(FakeChannels::new().with(runtime()));
     let app = RunApplication::new(root.path().into(), root.path().into())
         .with_channel_management(port.clone());
     assert!(
@@ -103,16 +55,20 @@ fn recovery_and_control_share_deployment_eligibility_without_rewriting_history()
             0 => current.enabled = false,
             1 => current.owner = "other-owner".into(),
             2 => current.account = Some("other-bot".into()),
-            3 => current.binding.graph = "other-graph".into(),
-            _ => current.binding.reply_node = "other-node".into(),
+            3 => current.reply_node = None,
+            _ => current.reply_node = Some("other-node".into()),
         }
-        *port.0.lock().unwrap() = Some(current);
+        port.put(current);
         assert!(matches!(
             app.ensure_channel_session_eligible("owner", &session.id),
             Err(ApplicationError::Conflict(_))
         ));
     }
-    *port.0.lock().unwrap() = None;
+    // Another Graph's bot does not serve this Session.
+    port.clear("graph");
+    let mut other = runtime();
+    other.graph = "other-graph".into();
+    port.put(other);
     assert!(matches!(
         app.ensure_channel_session_eligible("owner", &session.id),
         Err(ApplicationError::Conflict(_))
@@ -137,7 +93,7 @@ fn duplicate_account_sessions_have_one_recovery_target_but_keep_both_histories()
         .register_channel_account("owner", "wecom", "canonical", &["legacy".into()])
         .unwrap();
     let app = RunApplication::new(root.path().into(), root.path().into())
-        .with_channel_management(Arc::new(Port(Mutex::new(Some(runtime())), None)));
+        .with_channel_management(Arc::new(FakeChannels::new().with(runtime())));
     assert!(matches!(
         app.ensure_channel_session_eligible("owner", &old.id),
         Err(ApplicationError::Conflict(_))
@@ -183,9 +139,8 @@ async fn assistant_projection_releases_liveness_lock_and_skips_retired_deploymen
     let inspection = application.clone();
     let calls = Arc::new(AtomicUsize::new(0));
     let snapshots = calls.clone();
-    let port = Arc::new(Port(
-        Mutex::new(Some(runtime())),
-        Some(Box::new(move || {
+    let port = Arc::new(
+        FakeChannels::inspecting(move || {
             assert!(
                 inspection
                     .kernel_owner("current")
@@ -195,8 +150,9 @@ async fn assistant_projection_releases_liveness_lock_and_skips_retired_deploymen
                 "deployment lookup must not hold the global execution registry lock"
             );
             snapshots.fetch_add(1, Ordering::SeqCst);
-        })),
-    ));
+        })
+        .with(runtime()),
+    );
     let application = application.with_channel_management(port.clone());
     let snapshot = GraphSnapshot::from_authoring(json!({
         "entry":"work", "ops":{"work":{"run":"true"}},
@@ -228,7 +184,7 @@ async fn assistant_projection_releases_liveness_lock_and_skips_retired_deploymen
         assert_eq!(projection.actions.resume, run == "current");
         assert_eq!(calls.load(Ordering::SeqCst), usize::from(run == "current"));
         if run == "current" {
-            port.0.lock().unwrap().as_mut().unwrap().enabled = false;
+            port.update("graph", |state| state.enabled = false);
             let blocked = application
                 .project_run(&fixtures::view(&application, run), Some(&metadata))
                 .await

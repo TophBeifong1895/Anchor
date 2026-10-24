@@ -98,6 +98,11 @@ impl Gateway {
                                     let read = tokio::time::timeout(Duration::from_secs(5), (&mut reader).take(65_537).read_until(b'\n', &mut bytes)).await.unwrap().unwrap();
                                     assert!(read > 0 && read <= 65_536 && bytes.last() == Some(&b'\n'));
                                     let payload: Value = serde_json::from_slice(&bytes).unwrap();
+                                    // The Host probes its bots' gateways for status.
+                                    if payload["operation"] == "status" {
+                                        let _ = reader.get_mut().write_all(b"{\"status\":\"authenticated\"}\n").await;
+                                        return;
+                                    }
                                     assert_eq!(payload["operation"], "send");
                                     assert_eq!(payload["userid"], USER);
                                     assert_eq!(payload["content"], CONTENT);
@@ -141,13 +146,7 @@ impl Gateway {
 
     fn bind_host(&self, host: Host) -> Host {
         assert!(self.descriptor.starts_with(self.root.path()));
-        host.with_extra_environment([
-            (
-                "ANCHOR_CHANNEL_CONTROL_DESCRIPTOR",
-                self.descriptor.as_os_str().to_owned(),
-            ),
-            ("ANCHOR_WECOM_SEND_USERS", USER.into()),
-        ])
+        bind_bot(host, &self.descriptor)
     }
 
     fn requests(&self) -> Vec<Value> {
@@ -172,26 +171,48 @@ impl Drop for Gateway {
     }
 }
 
+/// The bot Graph's assistant is the node under test; its recipients come
+/// from the bot binding, never from the process environment.
+fn bind_bot(host: Host, descriptor: &std::path::Path) -> Host {
+    install_resource_plugin(&host, descriptor);
+    host.with_bot("fixture", &[USER])
+        .with_extra_environment([("ANCHOR_ASSISTANT_AUTO_RESUME", "0")])
+}
+
 fn graph() -> Value {
     json!({
         "objective":"Goose channel identity through the real Rust Host and private fake gateway",
-        "entry":"worker",
+        "entry":"wait_input",
         "agents":{"worker":{
             "model":goose::MODEL,
-            "instructions":"Use only admitted tools and recipients. An uncertain delivery is not permission to resend; inspect external state before continuing. Write evidence.txt and finish with route verify.",
+            "instructions":"Use only admitted tools and recipients. An uncertain delivery is not permission to resend; inspect external state before continuing. Write evidence.txt and finish with route reply.",
             "network":true
         }},
-        "ops":{"verify":{"run":"sh -c 'set -eu; cat /in/worker/evidence.txt > verified.txt'"}},
-        "nodes":[{"id":"worker","agent":"worker","plugins":["wecom"]},{"id":"verify","op":"verify"}],
-        "edges":[{"from":"worker","to":"verify"}]
+        "ops":{
+            "wait_input":{"host":{"operation":"session.wait_input"}},
+            "reply":{"host":{"operation":"session.reply"}}
+        },
+        "nodes":[
+            {"id":"wait_input","op":"wait_input"},
+            {"id":"worker","agent":"worker","plugins":["wecom","network"]},
+            {"id":"reply","op":"reply"}
+        ],
+        "edges":[
+            {"from":"wait_input","to":"worker"},
+            {"from":"worker","to":"reply"},
+            {"from":"reply","to":"wait_input"}
+        ]
     })
 }
 
-fn install_resource_plugin(host: &Host) -> Value {
+/// A channel Plugin whose gateway process publishes the test's private fake
+/// gateway descriptor as this bot Graph's own control descriptor.
+fn install_resource_plugin(host: &Host, descriptor: &std::path::Path) -> Value {
     let bundle = host.base.root.path().join("bundle");
     let library = host.base.root.path();
     let plugin = library.join("plugins/wecom");
     fs::create_dir_all(plugin.join("skills/channel")).unwrap();
+    fs::create_dir_all(plugin.join("bin")).unwrap();
     fs::write(plugin.join("plugin.json"), json!({
         "name":"WeCom resource-only fixture",
         "description":"Host-owned channel tools without an external MCP process or real messages.",
@@ -199,6 +220,21 @@ fn install_resource_plugin(host: &Host) -> Value {
     }).to_string()).unwrap();
     fs::write(plugin.join("skills/channel/SKILL.md"),
         "---\nname: fixture-channel\ndescription: Use host-scoped channel sends.\n---\nUse wecom_send_message for authorized users. Never automatically resend a cancelled or unconfirmed delivery. Inspect external state first.\n").unwrap();
+    fs::write(
+        plugin.join("channel.json"),
+        json!({"platform":"wecom","transport":"websocket","entrypoint":"bin/gateway","required_environment":[]}).to_string(),
+    )
+    .unwrap();
+    let gateway = plugin.join("bin/gateway");
+    fs::write(
+        &gateway,
+        format!(
+            "#!/bin/sh\nset -eu\ncat '{}' > \"$ANCHOR_CHANNEL_CONTROL_DESCRIPTOR\"\nexec /bin/sleep 3600\n",
+            descriptor.display()
+        ),
+    )
+    .unwrap();
+    fs::set_permissions(&gateway, fs::Permissions::from_mode(0o700)).unwrap();
     let binding = FilePluginCatalog::new(library)
         .resolve(&["wecom".into()])
         .unwrap()
@@ -206,12 +242,70 @@ fn install_resource_plugin(host: &Host) -> Value {
     let summary = json!({"id":binding.id,"digest":binding.digest,"resources":binding.resources,"mcp_servers":binding.mcp_servers});
     assert_eq!(summary["mcp_servers"], json!([]));
     assert!(!plugin.join(".mcp.json").exists());
+    // A persistent assistant reaches the network through the network Plugin.
+    let network = library.join("plugins/network");
+    fs::create_dir_all(&network).unwrap();
+    fs::write(
+        network.join("plugin.json"),
+        r#"{"name":"Fixture task network","network":true}"#,
+    )
+    .unwrap();
     fs::write(
         bundle.join("manifest.json"),
-        json!({"format":1,"graph":"graph.json","plugins":[{"id":"wecom"}]}).to_string(),
+        json!({"format":1,"graph":"graph.json","plugins":[{"id":"wecom"},{"id":"network"}]})
+            .to_string(),
     )
     .unwrap();
     summary
+}
+
+fn event(id: &str) -> Value {
+    json!({"event":{
+        "source":"wecom","event_id":id,"sender_id":USER,
+        "conversation_id":"goose-channel-conversation","text":id,
+        "reply_target":"goose-channel-conversation","message_type":"text",
+        "metadata":{"chat_type":"single","request_id":id},"attachments":[]
+    }})
+}
+
+/// Send one message to the bot and return the assistant Run that answered it.
+fn ask(server: &goose::HttpHost, id: &str) -> String {
+    let (status, response) = server.request_with_timeout(
+        "POST",
+        "/channels/fixture/events",
+        Some(&event(id)),
+        Duration::from_secs(60),
+    );
+    assert_eq!(status, 200, "{response}");
+    response["run"].as_str().unwrap().to_owned()
+}
+
+/// The bot's assistant Run, before any reply names it.
+fn assistant_run(host: &Host) -> String {
+    let mut run = None;
+    goose::wait_until("the bot's assistant Run", || {
+        run = fs::read_dir(host.base.state_root().join("run-metadata"))
+            .into_iter()
+            .flatten()
+            .flatten()
+            .filter_map(|entry| entry.file_name().into_string().ok())
+            .find_map(|name| {
+                name.strip_suffix(".json")
+                    .filter(|run| run.starts_with("assistant-"))
+                    .map(str::to_owned)
+            });
+        run.is_some()
+    });
+    run.unwrap()
+}
+
+/// The assistant answered `replies` Turns and waits for the next message.
+fn answered(host: &Host, run: &str, replies: usize) {
+    goose::wait_until("assistant answered its Turn", || {
+        host.record(run)["results"]["reply"]
+            .as_array()
+            .is_some_and(|results| results.len() == replies)
+    });
 }
 
 fn send(userid: &str) -> Step {
@@ -246,7 +340,6 @@ fn expected_request_id(key: &InvocationKey, session: &str, tool_call: &str) -> S
 fn assert_artifact(host: &Host, run: &str, expected: &[u8]) {
     let record = host.record(run);
     assert_eq!(host.base.file(&record, "worker", "evidence.txt"), expected);
-    assert_eq!(host.base.file(&record, "verify", "verified.txt"), expected);
 }
 
 fn assert_no_legacy_attempts(host: &Host) {
@@ -265,15 +358,14 @@ fn native_goose_identical_channel_messages_have_distinct_native_ids_and_gateway_
             send(USER).after("accepted"),
             command("printf channel-two-confirmed > evidence.txt; cat evidence.txt")
                 .after("accepted"),
-            complete("verify").after("channel-two-confirmed"),
+            complete("reply").after("channel-two-confirmed"),
         ],
     );
     let gateway = Gateway::new(&provider, Delivery::Ack);
     let host = gateway.bind_host(Host::new(&graph()).default_runtime());
-    let plugin = install_resource_plugin(&host);
+    let plugin = install_resource_plugin(&host, &gateway.descriptor);
     let server = host.serve(&provider);
-    let run = server.trigger();
-    server.wait_status(&run, "completed");
+    let run = ask(&server, "goose-channel-identical");
     provider.assert_consumed();
     let requests = gateway.requests();
     assert_eq!(requests.len(), 2);
@@ -345,15 +437,13 @@ fn native_goose_unauthorized_channel_recipient_is_rejected_before_gateway_connec
             send("fixture-other-user").after("recipient is not allowed"),
             command("printf channel-unauthorized-rejected > evidence.txt; cat evidence.txt")
                 .after("recipient is not allowed"),
-            complete("verify").after("channel-unauthorized-rejected"),
+            complete("reply").after("channel-unauthorized-rejected"),
         ],
     );
     let gateway = Gateway::new(&provider, Delivery::Ack);
     let host = gateway.bind_host(Host::new(&graph()).default_runtime());
-    install_resource_plugin(&host);
     let server = host.serve(&provider);
-    let run = server.trigger();
-    server.wait_status(&run, "completed");
+    let run = ask(&server, "goose-channel-unauthorized");
     provider.assert_consumed();
     assert!(gateway.requests().is_empty());
     assert!(provider.effects().is_empty());
@@ -391,10 +481,24 @@ fn native_goose_unknown_channel_result_resumes_same_session_and_inspects_without
             .default_runtime()
             .with_allowed_commands("sh,cat,curl,true"),
     );
-    install_resource_plugin(&host);
     let mut server = host.serve(&provider);
-    let run = server.trigger();
+    // The send is never acknowledged, so the message's reply never arrives;
+    // the Run is observed through the Host's facts instead.
+    let pending = {
+        let url = format!("{}/channels/fixture/events", server.url);
+        thread::spawn(move || {
+            let _ = reqwest::blocking::Client::builder()
+                .no_proxy()
+                .timeout(Duration::from_secs(30))
+                .build()
+                .unwrap()
+                .post(url)
+                .json(&event("goose-channel-unknown"))
+                .send();
+        })
+    };
     gateway.wait_received(1);
+    let run = assistant_run(&host);
     let before = host.native_fact(&run, "worker", 1);
     assert_eq!(before["tool_observation"]["tool"], SEND_TOOL);
     assert!(before["tool_observation"]["result"].is_null());
@@ -409,16 +513,17 @@ fn native_goose_unknown_channel_result_resumes_same_session_and_inspects_without
     .unwrap();
     server.kill();
     drop(server);
+    pending.join().unwrap();
     assert_eq!(provider.requests().len(), 1);
     provider.append(vec![
-        complete("verify"),
+        complete("reply"),
         command(&format!("set -eu; curl --silent --show-error --fail --max-time 5 --noproxy '*' '{}/effects' > evidence.txt; cat evidence.txt", business.url)).after("final_result.observed_receipt must match"),
-        complete("verify").after("effect_count"),
+        complete("reply").after("effect_count"),
     ]);
     let restarted = host.serve(&provider);
     let (status, accepted) = restarted.request("POST", &format!("/runs/{run}/resume"), None);
     assert_eq!(status, 202, "{accepted}");
-    restarted.wait_status(&run, "completed");
+    answered(&host, &run, 1);
     provider.assert_consumed();
     assert_eq!(gateway.requests(), gateway_requests);
     assert_eq!(provider.effects().len(), 1);
@@ -430,10 +535,6 @@ fn native_goose_unknown_channel_result_resumes_same_session_and_inspects_without
             .unwrap();
     assert_eq!(report["effect_count"], 1);
     assert_eq!(report["effects"], json!(gateway_requests));
-    assert_eq!(
-        host.base.file(&host.record(&run), "worker", "evidence.txt"),
-        host.base.file(&host.record(&run), "verify", "verified.txt")
-    );
     let resumed = &provider.requests()[1];
     assert!(
         resumed["messages"]

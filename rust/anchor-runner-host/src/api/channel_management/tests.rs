@@ -1,92 +1,25 @@
 use super::*;
-use crate::application::channel_management::{ChannelManagementPort, ChannelRuntimeState};
+use crate::application::channel_management::fake::FakeChannels;
 use axum::{
     body::{Body, to_bytes},
     http::Request,
 };
-use futures_util::future::BoxFuture;
+use serde_json::Value;
 use sha2::{Digest, Sha256};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use tower::ServiceExt;
 
-struct Port(Mutex<Option<ChannelRuntimeState>>);
-impl ChannelManagementPort for Port {
-    fn status<'a>(
-        &'a self,
-        owner: &'a str,
-        _: &'a str,
-    ) -> BoxFuture<'a, Result<Value, ApplicationError>> {
-        Box::pin(async move {
-            Ok(match self.0.lock().unwrap().as_ref() {
-                Some(state) if state.owner == owner => {
-                    json!({"configured":true,"binding":state.binding,"enabled":state.enabled})
-                }
-                Some(_) => json!({"configured":true,"owner_matches":false}),
-                None => json!({"configured":false}),
-            })
-        })
-    }
-    fn configure<'a>(
-        &'a self,
-        owner: &'a str,
-        _: &'a str,
-        binding: ChannelBinding,
-    ) -> BoxFuture<'a, Result<Value, ApplicationError>> {
-        Box::pin(async move {
-            let mut current = self.0.lock().unwrap();
-            if current.as_ref().is_some_and(|state| state.owner != owner) {
-                return Err(ApplicationError::Conflict("another owner".into()));
-            }
-            *current = Some(ChannelRuntimeState {
-                owner: owner.into(),
-                binding,
-                enabled: false,
-                account: None,
-                descriptor: None,
-            });
-            Ok(json!({"configured":true}))
-        })
-    }
-    fn set_enabled<'a>(
-        &'a self,
-        owner: &'a str,
-        _: &'a str,
-        enabled: bool,
-    ) -> BoxFuture<'a, Result<Value, ApplicationError>> {
-        Box::pin(async move {
-            let mut current = self.0.lock().unwrap();
-            let state = current.as_mut().ok_or(ApplicationError::Missing)?;
-            if state.owner != owner {
-                return Err(ApplicationError::Conflict("another owner".into()));
-            }
-            state.enabled = enabled;
-            Ok(json!({"enabled":enabled}))
-        })
-    }
-    fn snapshot(&self, _: &str) -> Result<Option<ChannelRuntimeState>, ApplicationError> {
-        Ok(self.0.lock().unwrap().clone())
-    }
-    fn callback_owner(&self, _: &str, _: &str) -> Option<String> {
-        None
-    }
-}
-
-fn fixture() -> (tempfile::TempDir, ApiState, Arc<Port>) {
+fn fixture() -> (tempfile::TempDir, ApiState, Arc<FakeChannels>) {
     let root = tempfile::tempdir().unwrap();
     std::fs::create_dir_all(root.path().join("task")).unwrap();
-    std::fs::create_dir_all(root.path().join("plugins/gateway")).unwrap();
-    std::fs::write(
-        root.path().join("plugins/gateway/plugin.json"),
-        r#"{"name":"Gateway"}"#,
-    )
-    .unwrap();
+    crate::application::channel_management::fake::install_channel_plugin(root.path(), "gateway");
     std::fs::write(root.path().join("task/graph.json"), r#"{"entry":"wait","agents":{"reply":{"model":"fixture","instructions":"fixture"}},"ops":{"wait":{"host":{"operation":"session.wait_input"}},"deliver":{"host":{"operation":"session.reply"}}},"nodes":[{"id":"wait","op":"wait"},{"id":"reply","agent":"reply","plugins":["gateway"]},{"id":"deliver","op":"deliver"}],"edges":[{"from":"wait","to":"reply"},{"from":"reply","to":"deliver"},{"from":"deliver","to":"wait"}]}"#).unwrap();
     std::fs::write(
         root.path().join("task/manifest.json"),
         r#"{"format":1,"graph":"graph.json","plugins":[{"id":"gateway"}]}"#,
     )
     .unwrap();
-    let port = Arc::new(Port(Mutex::new(None)));
+    let port = Arc::new(FakeChannels::new());
     let (model_configuration, runtime_management) =
         crate::api::tests::management_fixture(root.path());
     let state = ApiState {
@@ -104,13 +37,6 @@ fn fixture() -> (tempfile::TempDir, ApiState, Arc<Port>) {
         schedules: super::super::schedules::ScheduleStore::open(root.path().join("schedules.json"))
             .unwrap(),
         pilots: Default::default(),
-        wecom: WecomSettings {
-            graph: String::new(),
-            reply_node: String::new(),
-            account: None,
-            users: HashSet::new(),
-        },
-        channel_descriptors: Default::default(),
         channel_event_locks: Default::default(),
         response_fixture: None,
     };
@@ -130,13 +56,18 @@ async fn call(
     if let Some(key) = key {
         request = request.header(header::AUTHORIZATION, format!("Bearer {key}"));
     }
-    let response = router(state.clone())
+    let response = super::super::router(state.clone())
         .oneshot(request.body(Body::from(body.to_string())).unwrap())
         .await
         .unwrap();
     let status = response.status();
     let bytes = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
-    (status, serde_json::from_slice(&bytes).unwrap())
+    let body = if bytes.is_empty() {
+        Value::Null
+    } else {
+        serde_json::from_slice(&bytes).unwrap()
+    };
+    (status, body)
 }
 
 #[tokio::test]
@@ -144,41 +75,48 @@ async fn channel_management_http_is_authenticated_owner_bound_and_checks_expecte
     let _guard = crate::PROCESS_ENV_LOCK.lock().await;
     let (_root, state, port) = fixture();
     let key = "a".repeat(32);
-    let path = "/channels/wecom/configuration";
+    let path = "/graphs/task/channel";
     assert_eq!(
         call(&state, "GET", path, None, json!({})).await.0,
         StatusCode::UNAUTHORIZED
     );
-    let binding = json!({"graph":"task","reply_node":"reply","plugin":"gateway","users":["alice"],"send_users":["alice"]});
-    let (status, result) = call(&state, "PUT", path, Some(&key), binding.clone()).await;
+    let members = json!({"users":["alice"],"send_users":["alice"]});
+    let (status, result) = call(&state, "PUT", path, Some(&key), members).await;
     assert_eq!(status, StatusCode::OK, "{result}");
+    let saved = port.get("task").unwrap();
     let actual_owner = format!("api:{:x}", Sha256::digest(key.as_bytes()));
-    assert_eq!(port.0.lock().unwrap().as_ref().unwrap().owner, actual_owner);
+    assert_eq!(saved.owner, actual_owner);
+    // The Plugin comes from the Graph, never from the request.
+    assert_eq!(saved.binding.plugin, "gateway");
     let (_, other) = call(&state, "GET", path, Some(&"b".repeat(32)), json!({})).await;
     assert_eq!(other["owner_matches"], false);
     assert!(other.get("binding").is_none());
+    let binding = serde_json::to_value(&saved.binding).unwrap();
     let mut stale = binding.clone();
     stale["users"] = json!(["bob"]);
     let (status, _) = call(
         &state,
         "POST",
-        "/channels/wecom/enabled",
+        "/graphs/task/channel/enabled",
         Some(&key),
         json!({"enabled":true,"expected_binding":stale}),
     )
     .await;
     assert_eq!(status, StatusCode::CONFLICT);
-    assert!(!port.0.lock().unwrap().as_ref().unwrap().enabled);
+    assert!(!port.get("task").unwrap().enabled);
     let (status, result) = call(
         &state,
         "POST",
-        "/channels/wecom/enabled",
+        "/graphs/task/channel/enabled",
         Some(&key),
         json!({"enabled":true,"expected_binding":binding}),
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{result}");
-    assert!(port.0.lock().unwrap().as_ref().unwrap().enabled);
+    assert!(port.get("task").unwrap().enabled);
+    let (status, listed) = call(&state, "GET", "/channels", Some(&key), json!({})).await;
+    assert_eq!(status, StatusCode::OK, "{listed}");
+    assert_eq!(listed["channels"][0]["graph"], "task");
 }
 
 #[tokio::test]
@@ -186,34 +124,32 @@ async fn channel_management_http_rejects_secrets_owner_forgery_and_unbound_enabl
     let _guard = crate::PROCESS_ENV_LOCK.lock().await;
     let (_root, state, port) = fixture();
     let key = "a".repeat(32);
-    let binding =
-        json!({"graph":"task","reply_node":"reply","plugin":"gateway","users":[],"send_users":[]});
+    let members = json!({"users":[],"send_users":[]});
     for (field, value) in [
-        ("owner", "forged"),
-        ("WECOM_BOT_SECRET", "private"),
-        ("account", "bot"),
+        ("owner", json!("forged")),
+        ("WECOM_BOT_SECRET", json!("private")),
+        ("account", json!("bot")),
+        // Graph, node and Plugin are derived, never chosen by the caller.
+        ("graph", json!("other")),
+        ("reply_node", json!("reply")),
+        ("plugin", json!("gateway")),
     ] {
-        let mut request = binding.clone();
-        request[field] = json!(value);
+        let mut request = members.clone();
+        request[field] = value;
         assert_eq!(
-            call(
-                &state,
-                "PUT",
-                "/channels/wecom/configuration",
-                Some(&key),
-                request
-            )
-            .await
-            .0,
-            StatusCode::BAD_REQUEST
+            call(&state, "PUT", "/graphs/task/channel", Some(&key), request)
+                .await
+                .0,
+            StatusCode::BAD_REQUEST,
+            "{field}"
         );
     }
-    assert!(port.0.lock().unwrap().is_none());
+    assert!(port.get("task").is_none());
     assert_eq!(
         call(
             &state,
             "POST",
-            "/channels/wecom/enabled",
+            "/graphs/task/channel/enabled",
             Some(&key),
             json!({"enabled":true})
         )
@@ -224,14 +160,27 @@ async fn channel_management_http_rejects_secrets_owner_forgery_and_unbound_enabl
     assert_eq!(
         call(
             &state,
+            "PUT",
+            "/graphs/missing/channel",
+            Some(&key),
+            members
+        )
+        .await
+        .0,
+        StatusCode::NOT_FOUND
+    );
+    // The single-bot routes are gone.
+    assert_eq!(
+        call(
+            &state,
             "GET",
-            "/channels/unsupported/configuration",
+            "/channels/wecom/configuration",
             Some(&key),
             json!({})
         )
         .await
         .0,
-        StatusCode::UNPROCESSABLE_ENTITY
+        StatusCode::NOT_FOUND
     );
 }
 
@@ -240,16 +189,16 @@ async fn channel_binding_requires_a_persistent_assistant_graph() {
     let _guard = crate::PROCESS_ENV_LOCK.lock().await;
     let (root, state, port) = fixture();
     let key = "a".repeat(32);
-    let binding = json!({"graph":"task","reply_node":"reply","plugin":"gateway","users":["alice"],"send_users":["alice"]});
+    let members = json!({"users":["alice"],"send_users":["alice"]});
     let single = r#"{"entry":"reply","agents":{"reply":{"model":"fixture","instructions":"fixture"}},"nodes":[{"id":"reply","agent":"reply","plugins":["gateway"]}],"edges":[]}"#;
     let persistent = std::fs::read(root.path().join("task/graph.json")).unwrap();
     std::fs::write(root.path().join("task/graph.json"), single).unwrap();
     let (status, refused) = call(
         &state,
         "PUT",
-        "/channels/wecom/configuration",
+        "/graphs/task/channel",
         Some(&key),
-        binding.clone(),
+        members.clone(),
     )
     .await;
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{refused}");
@@ -260,29 +209,23 @@ async fn channel_binding_requires_a_persistent_assistant_graph() {
             .contains("persistent assistant"),
         "{refused}"
     );
-    assert!(port.0.lock().unwrap().is_none());
+    assert!(port.get("task").is_none());
 
     // A binding saved while the Graph was an assistant cannot be enabled once
     // the Graph has lost its input loop.
     std::fs::write(root.path().join("task/graph.json"), persistent).unwrap();
-    let (status, result) = call(
-        &state,
-        "PUT",
-        "/channels/wecom/configuration",
-        Some(&key),
-        binding.clone(),
-    )
-    .await;
+    let (status, result) = call(&state, "PUT", "/graphs/task/channel", Some(&key), members).await;
     assert_eq!(status, StatusCode::OK, "{result}");
+    let binding = serde_json::to_value(port.get("task").unwrap().binding).unwrap();
     std::fs::write(root.path().join("task/graph.json"), single).unwrap();
     let (status, refused) = call(
         &state,
         "POST",
-        "/channels/wecom/enabled",
+        "/graphs/task/channel/enabled",
         Some(&key),
         json!({"enabled":true,"expected_binding":binding}),
     )
     .await;
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{refused}");
-    assert!(!port.0.lock().unwrap().as_ref().unwrap().enabled);
+    assert!(!port.get("task").unwrap().enabled);
 }

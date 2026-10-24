@@ -34,7 +34,7 @@ use std::{
 };
 
 const CASE_SOURCE: &str = "tests/goose_persistent_assistant.rs";
-const EVENTS: &str = "/channels/wecom/events";
+const EVENTS: &str = "/channels/fixture/events";
 const ALICE: &str = "persistent-fixture-alice";
 const BOB: &str = "persistent-fixture-bob";
 
@@ -68,6 +68,10 @@ fn host() -> Host {
 }
 
 fn host_for(definition: &Value) -> Host {
+    host_with_channel_fields(definition, &[])
+}
+
+fn host_with_channel_fields(definition: &Value, fields: &[&str]) -> Host {
     let mut definition = definition.clone();
     for node in definition["nodes"].as_array_mut().unwrap() {
         if node.get("agent").is_some() {
@@ -76,11 +80,7 @@ fn host_for(definition: &Value) -> Host {
     }
     let host = Host::new(&definition)
         .default_runtime()
-        .with_extra_environment([
-            ("ANCHOR_WECOM_GRAPH", "fixture".to_owned()),
-            ("ANCHOR_WECOM_REPLY_NODE", "assistant".to_owned()),
-            ("ANCHOR_WECOM_USERS", format!("{ALICE},{BOB}")),
-        ]);
+        .with_bot("fixture", &[ALICE, BOB]);
     // Deployment routing settings do not enable a channel by themselves. Give
     // the real supervisor an isolated channel process; these tests submit HTTP
     // events directly and verify Run lifecycles, not external WeCom delivery.
@@ -96,7 +96,7 @@ fn host_for(definition: &Value) -> Host {
         plugin.join("channel.json"),
         json!({
             "platform":"wecom", "transport":"websocket", "entrypoint":"bin/gateway",
-            "required_environment":[]
+            "required_environment":fields
         })
         .to_string(),
     )
@@ -1224,7 +1224,8 @@ fn host_restart_recovers_only_the_canonical_account_and_preserves_legacy_history
     let bot_id = "persistent-fixture-account-bot";
     let canonical_account = format!("wecom:{:x}", Sha256::digest(bot_id.as_bytes()));
     let legacy_account = format!(" {bot_id} ");
-    let host = host().with_extra_environment([("WECOM_BOT_ID", bot_id.to_owned())]);
+    let host = host_with_channel_fields(&graph(), &["WECOM_BOT_ID"])
+        .with_bot_credential("WECOM_BOT_ID", bot_id);
     let mut server = host.serve(&provider);
     let first_event = event(
         ALICE,

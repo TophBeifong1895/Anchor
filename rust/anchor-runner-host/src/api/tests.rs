@@ -232,17 +232,32 @@ pub(super) fn fixture() -> (tempfile::TempDir, ApiState) {
         // must leave that root absent and otherwise unchanged.
         schedules,
         pilots: crate::pilot_host::PilotService::default(),
-        wecom: WecomSettings {
-            graph: "fixture".into(),
-            reply_node: "work".into(),
-            account: Some("corp-a".into()),
-            users: HashSet::from(["*".into()]),
-        },
-        channel_descriptors: Default::default(),
         channel_event_locks: Default::default(),
         response_fixture: Some("deterministic response fixture".into()),
     };
     (root, state)
+}
+
+/// Serve `fixture` as an enabled bot whose result node is `reply_node`. The
+/// real adapter, its files and gateway processes are covered by its own tests.
+fn with_bot(state: &mut ApiState, reply_node: &str, users: &[&str]) {
+    with_bot_of(state, "fixture", reply_node, users, None);
+}
+
+fn with_bot_of(
+    state: &mut ApiState,
+    graph: &str,
+    reply_node: &str,
+    users: &[&str],
+    descriptor: Option<PathBuf>,
+) {
+    use crate::application::channel_management::fake::FakeChannels;
+    let mut bot = FakeChannels::bot(graph, "local", reply_node, users);
+    bot.descriptor = descriptor;
+    state.application = state
+        .application
+        .clone()
+        .with_channel_management(Arc::new(FakeChannels::new().with(bot)));
 }
 
 async fn call(app: Router, method: &str, uri: &str, body: Option<&str>) -> (StatusCode, Value) {

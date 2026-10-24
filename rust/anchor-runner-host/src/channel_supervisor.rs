@@ -70,6 +70,8 @@ impl ChannelResourceGuard {
 }
 
 pub(crate) struct ManagedChannelLaunch {
+    /// The bot Graph; the gateway's state and callback routes are its own.
+    pub(crate) graph: String,
     pub(crate) plugin: String,
     pub(crate) platform: String,
     pub(crate) credentials: BTreeMap<String, String>,
@@ -78,34 +80,25 @@ pub(crate) struct ManagedChannelLaunch {
     pub(crate) callback_key: String,
 }
 
+/// One bot Graph's gateway process.
 pub(crate) struct ChannelSupervisor {
     shutdown: std::sync::Arc<Notify>,
     task: Option<JoinHandle<()>>,
-    descriptors: BTreeMap<String, PathBuf>,
-    definitions: BTreeMap<String, ChannelDefinition>,
-    callback_keys: BTreeMap<String, String>,
     cleanup_paths: Vec<(PathBuf, PathBuf)>,
 }
 
-impl ChannelSupervisor {
-    pub(crate) async fn start(
-        bundle_root: &Path,
-        library_root: &Path,
-        state_root: &Path,
-        listen: &str,
-        api_keys: &[String],
-    ) -> io::Result<Option<Self>> {
-        Self::start_with_configuration(
-            bundle_root,
-            library_root,
-            state_root,
-            listen,
-            api_keys,
-            None,
-        )
-        .await
-    }
+/// Where a bot Graph's gateway keeps its ledger, profile, lock and control
+/// descriptor. Nothing outside this directory is shared between bots.
+pub(crate) fn state_directory(state_root: &Path, graph: &str) -> PathBuf {
+    state_root.join("channels/graphs").join(graph)
+}
 
+/// The control descriptor a running bot Graph's gateway publishes.
+pub(crate) fn descriptor_path(state_root: &Path, graph: &str) -> PathBuf {
+    state_directory(state_root, graph).join("control.json")
+}
+
+impl ChannelSupervisor {
     pub(crate) async fn start_managed(
         bundle_root: &Path,
         library_root: &Path,
@@ -113,200 +106,103 @@ impl ChannelSupervisor {
         listen: &str,
         managed: ManagedChannelLaunch,
     ) -> io::Result<Self> {
-        Self::start_with_configuration(
-            bundle_root,
-            library_root,
-            state_root,
-            listen,
-            &[],
-            Some(managed),
-        )
-        .await?
-        .ok_or_else(|| io::Error::other("the Graph has no matching admitted channel"))
-    }
-
-    async fn start_with_configuration(
-        bundle_root: &Path,
-        library_root: &Path,
-        state_root: &Path,
-        listen: &str,
-        api_keys: &[String],
-        managed: Option<ManagedChannelLaunch>,
-    ) -> io::Result<Option<Self>> {
-        let discovered = discover(bundle_root, library_root)?;
-        let discovered = if let Some(configuration) = &managed {
-            discovered
-                .into_iter()
-                .filter(|channel| {
-                    channel.definition.plugin == configuration.plugin
-                        && channel.definition.platform == configuration.platform
-                })
-                .collect::<Vec<_>>()
-        } else {
-            discovered
-        };
-        if discovered.is_empty() {
-            return Ok(None);
-        }
-        let callback_override = env::var_os("ANCHOR_CHANNEL_WEBHOOK_URL");
-        let progress_override = env::var_os("ANCHOR_CHANNEL_PROGRESS_URL");
-        let callback_key = match &managed {
-            Some(configuration) => configuration.callback_key.clone(),
-            None => api_keys
-                .first()
-                .cloned()
-                .unwrap_or(random_token("anchor-channel-api")?),
-        };
-        let mut launches = Vec::with_capacity(discovered.len());
-        let mut descriptors = BTreeMap::new();
-        let mut definitions = BTreeMap::new();
-        let mut callback_keys = BTreeMap::new();
-        for channel in discovered {
-            let definition = &channel.definition;
-            definitions.insert(definition.platform.clone(), definition.clone());
-            callback_keys.insert(definition.platform.clone(), callback_key.clone());
-            let required_environment = definition
-                .required_environment
-                .iter()
-                .map(|required| {
-                    let value = match managed
-                        .as_ref()
-                        .and_then(|configuration| configuration.credentials.get(required))
-                    {
-                        Some(value)
-                            if !value.trim().is_empty() && !value.chars().any(char::is_control) =>
-                        {
-                            Ok(value.clone().into())
-                        }
-                        Some(_) => Err(io::Error::other(
-                            "channel credential is blank or contains control characters",
-                        )),
-                        None if managed.is_some() => Err(io::Error::other(format!(
-                            "required channel credential {required} is not configured"
-                        ))),
-                        None => required_environment_value(required),
-                    };
-                    value.map(|value| (required.clone(), value))
-                })
-                .collect::<io::Result<Vec<_>>>()
-                .map_err(|error| {
-                    io::Error::other(format!(
-                        "channel {} has invalid required environment: {error}",
-                        definition.platform
-                    ))
-                })?;
-            let state_dir = state_root.join("channels").join(&definition.platform);
-            private_directory(&state_dir)?;
-            let descriptor = state_dir.join("control.json");
-            let control_socket = state_dir.join("control.sock");
-            let control_token = random_token("anchor-channel-control")?;
-            let callback_url = callback_override
-                .clone()
-                .unwrap_or_else(|| OsString::from(callback_url(listen, &definition.platform)));
-            // The transport reads its progress from the same host and port, so
-            // an explicit override moves both endpoints together.
-            let progress_url = progress_override.clone().unwrap_or_else(|| {
-                OsString::from(progress_url(
-                    listen,
-                    &definition.platform,
-                    callback_override.as_deref(),
-                ))
-            });
-            let mut environment = BTreeMap::new();
-            environment.insert("PATH".into(), parent_environment("PATH"));
-            environment.insert("HOME".into(), parent_environment("HOME"));
-            for (required, value) in required_environment {
-                environment.insert(required, value);
-            }
-            environment.insert("WECOM_CHANNEL_STATE".into(), state_dir.clone().into());
-            environment.insert("ANCHOR_CHANNEL_WEBHOOK_URL".into(), callback_url);
-            environment.insert("ANCHOR_CHANNEL_PROGRESS_URL".into(), progress_url);
-            environment.insert("ANCHOR_API_KEY".into(), callback_key.clone().into());
-            environment.insert(
-                "ANCHOR_CHANNEL_CONTROL_TOKEN".into(),
-                control_token.clone().into(),
-            );
-            environment.insert(
-                "ANCHOR_CHANNEL_CONTROL_DESCRIPTOR".into(),
-                descriptor.clone().into(),
-            );
-            environment.insert(
-                "ANCHOR_CHANNEL_CONTROL_SOCKET".into(),
-                control_socket.clone().into(),
-            );
-            for name in [
-                "ANCHOR_WECOM_USERS",
-                "ANCHOR_WECOM_SEND_USERS",
-                "ANCHOR_WECOM_WS_URL",
-                "ANCHOR_WECOM_CONNECT_MS",
-                "ANCHOR_WECOM_ACK_MS",
-                "ANCHOR_WECOM_HEARTBEAT_MS",
-                "ANCHOR_WECOM_RECONNECT_MS",
-                "ANCHOR_WECOM_RECONNECT_MAX_MS",
-                "ANCHOR_WECOM_ACK_DELAY_MS",
-                "ANCHOR_WECOM_RECOVERY_WINDOW_MS",
-                "ANCHOR_WECOM_DEBUG",
-                "ANCHOR_WECOM_PROGRESS",
-            ] {
-                if let Some(value) = env::var_os(name) {
-                    environment.insert(name.into(), value);
+        let channel = discover(bundle_root, library_root)?
+            .into_iter()
+            .find(|channel| {
+                channel.definition.plugin == managed.plugin
+                    && channel.definition.platform == managed.platform
+            })
+            .ok_or_else(|| io::Error::other("the Graph has no matching admitted channel"))?;
+        let definition = &channel.definition;
+        let mut environment = BTreeMap::new();
+        environment.insert("PATH".into(), parent_environment("PATH"));
+        environment.insert("HOME".into(), parent_environment("HOME"));
+        for required in &definition.required_environment {
+            match managed.credentials.get(required) {
+                Some(value) if !value.trim().is_empty() && !value.chars().any(char::is_control) => {
+                    environment.insert(required.clone(), value.clone().into());
+                }
+                Some(_) => {
+                    return Err(io::Error::other(format!(
+                        "channel credential {required} is blank or contains control characters"
+                    )));
+                }
+                None => {
+                    return Err(io::Error::other(format!(
+                        "required channel credential {required} is not configured"
+                    )));
                 }
             }
-            if let Some(configuration) = &managed {
-                environment.insert(
-                    "ANCHOR_WECOM_USERS".into(),
-                    configuration.users.join(",").into(),
-                );
-                environment.insert(
-                    "ANCHOR_WECOM_SEND_USERS".into(),
-                    configuration.send_users.join(",").into(),
-                );
-            }
-            if let Some(previous) =
-                descriptors.insert(definition.platform.clone(), descriptor.clone())
-                && previous != descriptor
-            {
-                return Err(io::Error::other(format!(
-                    "conflicting channel descriptors for {}",
-                    definition.platform
-                )));
-            }
-            launches.push(LaunchSpec {
-                platform: definition.platform.clone(),
-                executable: channel.executable,
-                plugin_dir: channel.plugin_dir,
-                environment,
-                descriptor,
-                control_socket,
-                resource_guard: managed.as_ref().map(|_| ChannelResourceGuard {
-                    bundle_root: bundle_root.to_path_buf(),
-                    library_root: library_root.to_path_buf(),
-                    definition: definition.clone(),
-                }),
-            });
         }
+        let state_dir = state_directory(state_root, &managed.graph);
+        private_directory(&state_dir)?;
+        let descriptor = state_dir.join("control.json");
+        let control_socket = state_dir.join("control.sock");
+        let control_token = random_token("anchor-channel-control")?;
+        let base = channel_base_url(listen, &managed.graph);
+        environment.insert("WECOM_CHANNEL_STATE".into(), state_dir.clone().into());
+        environment.insert(
+            "ANCHOR_CHANNEL_WEBHOOK_URL".into(),
+            format!("{base}/events").into(),
+        );
+        environment.insert(
+            "ANCHOR_CHANNEL_PROGRESS_URL".into(),
+            format!("{base}/progress").into(),
+        );
+        environment.insert("ANCHOR_API_KEY".into(), managed.callback_key.into());
+        environment.insert("ANCHOR_CHANNEL_CONTROL_TOKEN".into(), control_token.into());
+        environment.insert(
+            "ANCHOR_CHANNEL_CONTROL_DESCRIPTOR".into(),
+            descriptor.clone().into(),
+        );
+        environment.insert(
+            "ANCHOR_CHANNEL_CONTROL_SOCKET".into(),
+            control_socket.clone().into(),
+        );
+        // Operator tuning passes through; who may talk to the bot is the
+        // binding's, never the process environment's.
+        for name in [
+            "ANCHOR_WECOM_WS_URL",
+            "ANCHOR_WECOM_CONNECT_MS",
+            "ANCHOR_WECOM_ACK_MS",
+            "ANCHOR_WECOM_HEARTBEAT_MS",
+            "ANCHOR_WECOM_RECONNECT_MS",
+            "ANCHOR_WECOM_RECONNECT_MAX_MS",
+            "ANCHOR_WECOM_ACK_DELAY_MS",
+            "ANCHOR_WECOM_RECOVERY_WINDOW_MS",
+            "ANCHOR_WECOM_DEBUG",
+            "ANCHOR_WECOM_PROGRESS",
+            "ANCHOR_CHANNEL_WEBHOOK_TIMEOUT_MS",
+        ] {
+            if let Some(value) = env::var_os(name) {
+                environment.insert(name.into(), value);
+            }
+        }
+        environment.insert("ANCHOR_WECOM_USERS".into(), managed.users.join(",").into());
+        environment.insert(
+            "ANCHOR_WECOM_SEND_USERS".into(),
+            managed.send_users.join(",").into(),
+        );
+        let launch = LaunchSpec {
+            platform: definition.platform.clone(),
+            executable: channel.executable.clone(),
+            plugin_dir: channel.plugin_dir.clone(),
+            environment,
+            descriptor: descriptor.clone(),
+            control_socket: control_socket.clone(),
+            resource_guard: Some(ChannelResourceGuard {
+                bundle_root: bundle_root.to_path_buf(),
+                library_root: library_root.to_path_buf(),
+                definition: definition.clone(),
+            }),
+        };
         let shutdown = std::sync::Arc::new(Notify::new());
-        let cleanup_paths = launches
-            .iter()
-            .map(|launch| (launch.descriptor.clone(), launch.control_socket.clone()))
-            .collect();
-        let task = tokio::spawn(supervise(launches, shutdown.clone()));
-        Ok(Some(Self {
+        let task = tokio::spawn(supervise(vec![launch], shutdown.clone()));
+        Ok(Self {
             shutdown,
             task: Some(task),
-            descriptors,
-            definitions,
-            callback_keys,
-            cleanup_paths,
-        }))
-    }
-
-    pub(crate) fn descriptor(&self, platform: &str) -> Option<&Path> {
-        self.descriptors.get(platform).map(PathBuf::as_path)
-    }
-
-    pub(crate) fn descriptors(&self) -> BTreeMap<String, PathBuf> {
-        self.descriptors.clone()
+            cleanup_paths: vec![(descriptor, control_socket)],
+        })
     }
 
     pub(crate) async fn shutdown(&mut self) {
@@ -523,20 +419,6 @@ fn parent_environment(name: &str) -> OsString {
     })
 }
 
-fn required_environment_value(name: &str) -> io::Result<OsString> {
-    let value = env::var(name).map_err(|_| {
-        io::Error::other(format!(
-            "required environment variable {name} is missing or not valid UTF-8"
-        ))
-    })?;
-    if value.trim().is_empty() || value.chars().any(char::is_control) {
-        return Err(io::Error::other(format!(
-            "required environment variable {name} is empty or contains control characters"
-        )));
-    }
-    Ok(value.into())
-}
-
 fn random_token(prefix: &str) -> io::Result<String> {
     use std::io::Read;
     let mut bytes = [0_u8; 32];
@@ -554,21 +436,7 @@ fn hex(bytes: &[u8]) -> String {
     output
 }
 
-fn callback_url(listen: &str, platform: &str) -> String {
-    format!("{}/events", channel_base_url(listen, platform))
-}
-
-fn progress_url(listen: &str, platform: &str, override_url: Option<&std::ffi::OsStr>) -> String {
-    match override_url.and_then(|url| url.to_str()) {
-        Some(url) => match url.strip_suffix("/events") {
-            Some(base) => format!("{base}/progress"),
-            None => format!("{}/progress", url.trim_end_matches('/')),
-        },
-        None => format!("{}/progress", channel_base_url(listen, platform)),
-    }
-}
-
-fn channel_base_url(listen: &str, platform: &str) -> String {
+fn channel_base_url(listen: &str, graph: &str) -> String {
     let port = listen
         .parse::<std::net::SocketAddr>()
         .ok()
@@ -579,7 +447,7 @@ fn channel_base_url(listen: &str, platform: &str) -> String {
                 .and_then(|(_, port)| port.parse().ok())
         })
         .unwrap_or(8077);
-    format!("http://127.0.0.1:{port}/channels/{platform}")
+    format!("http://127.0.0.1:{port}/channels/{graph}")
 }
 
 #[cfg(test)]
@@ -667,32 +535,27 @@ mod tests {
     }
 
     #[test]
-    fn progress_url_moves_with_the_webhook_endpoint() {
+    fn each_bot_graph_has_its_own_callback_routes_and_state() {
         assert_eq!(
-            callback_url("127.0.0.1:8077", "wecom"),
-            "http://127.0.0.1:8077/channels/wecom/events"
+            channel_base_url("127.0.0.1:8077", "sales-bot"),
+            "http://127.0.0.1:8077/channels/sales-bot"
         );
         assert_eq!(
-            progress_url("127.0.0.1:8077", "wecom", None),
-            "http://127.0.0.1:8077/channels/wecom/progress"
+            descriptor_path(Path::new("/state"), "sales-bot"),
+            Path::new("/state/channels/graphs/sales-bot/control.json")
         );
-        // An operator override must move both endpoints together.
-        assert_eq!(
-            progress_url(
-                "127.0.0.1:8077",
-                "wecom",
-                Some(std::ffi::OsStr::new("http://127.0.0.1:9999/events"))
-            ),
-            "http://127.0.0.1:9999/progress"
-        );
-        assert_eq!(
-            progress_url(
-                "127.0.0.1:8077",
-                "wecom",
-                Some(std::ffi::OsStr::new("http://127.0.0.1:9999/base/"))
-            ),
-            "http://127.0.0.1:9999/base/progress"
-        );
+    }
+
+    fn launch(credentials: BTreeMap<String, String>) -> ManagedChannelLaunch {
+        ManagedChannelLaunch {
+            graph: "bot".into(),
+            plugin: "mounted".into(),
+            platform: "wecom".into(),
+            credentials,
+            users: vec!["member".into()],
+            send_users: vec!["member".into()],
+            callback_key: "callback".into(),
+        }
     }
 
     /// The standard deployment's three roots: the Graph bundle is one directory,
@@ -802,20 +665,18 @@ mod tests {
         value["required_environment"] = json!(["ANCHOR_CHANNEL_TEST_REQUIRED"]);
         fs::write(&channel, value.to_string()).unwrap();
         refresh_manifest(root.path(), &["mounted"]);
-        let _guard = crate::PROCESS_ENV_LOCK.lock().await;
         for value in [None, Some(""), Some("   ")] {
-            let _environment = match value {
-                Some(value) => {
-                    crate::test_support::EnvVar::set("ANCHOR_CHANNEL_TEST_REQUIRED", value)
-                }
-                None => crate::test_support::EnvVar::unset("ANCHOR_CHANNEL_TEST_REQUIRED"),
-            };
-            let result = ChannelSupervisor::start(
+            let credentials = value
+                .map(|value| {
+                    BTreeMap::from([("ANCHOR_CHANNEL_TEST_REQUIRED".to_owned(), value.to_owned())])
+                })
+                .unwrap_or_default();
+            let result = ChannelSupervisor::start_managed(
                 root.path(),
                 root.path(),
                 &root.path().join("state"),
                 "127.0.0.1:8077",
-                &[],
+                launch(credentials),
             )
             .await;
             let error = match result {
@@ -840,11 +701,15 @@ mod tests {
         let state = root
             .path()
             .join(format!("state-{}", TEST_ID.fetch_add(1, Ordering::Relaxed)));
-        let mut supervisor =
-            ChannelSupervisor::start(root.path(), root.path(), &state, "127.0.0.1:8077", &[])
-                .await
-                .unwrap()
-                .unwrap();
+        let mut supervisor = ChannelSupervisor::start_managed(
+            root.path(),
+            root.path(),
+            &state,
+            "127.0.0.1:8077",
+            launch(BTreeMap::new()),
+        )
+        .await
+        .unwrap();
         tokio::time::sleep(POLL_INTERVAL * 2 + restart_delay() * 2).await;
         supervisor.shutdown().await;
         let count = fs::read_to_string(root.path().join("plugins/mounted/restart-count"))
@@ -858,8 +723,8 @@ mod tests {
         let state = root
             .path()
             .join(format!("state-{}", TEST_ID.fetch_add(1, Ordering::Relaxed)));
-        let descriptor = state.join("channels/wecom/control.json");
-        let socket = state.join("channels/wecom/control.sock");
+        let descriptor = state.join("channels/graphs/bot/control.json");
+        let socket = state.join("channels/graphs/bot/control.sock");
         let executable = root.path().join("plugins/mounted/bin/gateway");
         fs::write(
             &executable,
@@ -873,11 +738,15 @@ mod tests {
         .unwrap();
         fs::set_permissions(&executable, fs::Permissions::from_mode(0o700)).unwrap();
         refresh_manifest(root.path(), &["mounted"]);
-        let mut supervisor =
-            ChannelSupervisor::start(root.path(), root.path(), &state, "127.0.0.1:8077", &[])
-                .await
-                .unwrap()
-                .unwrap();
+        let mut supervisor = ChannelSupervisor::start_managed(
+            root.path(),
+            root.path(),
+            &state,
+            "127.0.0.1:8077",
+            launch(BTreeMap::new()),
+        )
+        .await
+        .unwrap();
         tokio::time::sleep(POLL_INTERVAL * 2 + restart_delay() * 2).await;
         supervisor.shutdown().await;
         assert!(!descriptor.exists());

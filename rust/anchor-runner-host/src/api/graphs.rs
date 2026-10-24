@@ -75,28 +75,22 @@ pub(super) async fn graphs(State(state): State<ApiState>) -> Result<Json<Value>,
         .list_graphs()
         .await
         .map_err(graph_management_error)?;
-    let channel = state
+    let channels = state
         .application
-        .channel_snapshot("wecom")
+        .channel_snapshots()
         .map_err(application_error)?;
-    let listener = match channel {
-        Some(channel) => channel
-            .descriptor
-            .map(|descriptor| (channel.binding.graph, descriptor)),
-        None if state.application.channel_management().is_err() => state
-            .channel_descriptors
-            .get("wecom")
-            .cloned()
-            .map(|descriptor| (state.wecom.graph.clone(), descriptor)),
-        None => None,
-    };
-    if let Some((target, descriptor)) = listener
-        && let Some(graph) = projection["graphs"]
-            .as_array_mut()
-            .and_then(|graphs| graphs.iter_mut().find(|graph| graph["graph"] == target))
-    {
-        let status = crate::channel_supervisor::status::read(&descriptor).await;
-        graph["listener"] = json!({"platform":"wecom","status":status});
+    for channel in channels {
+        let Some(descriptor) = channel.descriptor else {
+            continue;
+        };
+        if let Some(graph) = projection["graphs"].as_array_mut().and_then(|graphs| {
+            graphs
+                .iter_mut()
+                .find(|graph| graph["graph"] == channel.graph)
+        }) {
+            let status = crate::channel_supervisor::status::read(&descriptor).await;
+            graph["listener"] = json!({"platform":"wecom","status":status});
+        }
     }
     Ok(Json(projection))
 }

@@ -1,74 +1,16 @@
 use super::*;
-use crate::application::{
-    ApplicationError,
-    channel_management::{ChannelManagementPort, ChannelRuntimeState},
-};
+use crate::application::channel_management::fake::FakeChannels;
 use anchor_platform_session::{CreateSession, TurnStatus};
-use futures_util::future::BoxFuture;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
-#[derive(Default)]
-struct Port(Mutex<Option<ChannelRuntimeState>>);
-impl ChannelManagementPort for Port {
-    fn status<'a>(
-        &'a self,
-        _owner: &'a str,
-        _platform: &'a str,
-    ) -> BoxFuture<'a, Result<Value, ApplicationError>> {
-        Box::pin(async { Ok(json!({"configured":self.0.lock().unwrap().is_some()})) })
-    }
-    fn configure<'a>(
-        &'a self,
-        owner: &'a str,
-        _platform: &'a str,
-        binding: ChannelBinding,
-    ) -> BoxFuture<'a, Result<Value, ApplicationError>> {
-        Box::pin(async move {
-            *self.0.lock().unwrap() = Some(ChannelRuntimeState {
-                owner: owner.into(),
-                binding,
-                enabled: false,
-                account: None,
-                descriptor: None,
-            });
-            Ok(json!({"configured":true}))
-        })
-    }
-    fn set_enabled<'a>(
-        &'a self,
-        _owner: &'a str,
-        _platform: &'a str,
-        enabled: bool,
-    ) -> BoxFuture<'a, Result<Value, ApplicationError>> {
-        Box::pin(async move {
-            self.0
-                .lock()
-                .unwrap()
-                .as_mut()
-                .ok_or(ApplicationError::Missing)?
-                .enabled = enabled;
-            Ok(json!({"enabled":enabled}))
-        })
-    }
-    fn snapshot(&self, _platform: &str) -> Result<Option<ChannelRuntimeState>, ApplicationError> {
-        Ok(self.0.lock().unwrap().clone())
-    }
-    fn callback_owner(&self, _platform: &str, _key: &str) -> Option<String> {
-        None
-    }
-}
-
-fn fixture() -> (tempfile::TempDir, PilotTools, Arc<Port>) {
+fn fixture() -> (tempfile::TempDir, PilotTools, Arc<FakeChannels>) {
     let root = tempfile::tempdir().unwrap();
     let graph = root.path().join("catalog/task");
     std::fs::create_dir_all(&graph).unwrap();
-    let plugin = root.path().join("catalog/plugins/gateway");
-    std::fs::create_dir_all(&plugin).unwrap();
-    std::fs::write(
-        plugin.join("plugin.json"),
-        json!({"name":"Gateway fixture"}).to_string(),
-    )
-    .unwrap();
+    crate::application::channel_management::fake::install_channel_plugin(
+        &root.path().join("catalog"),
+        "gateway",
+    );
     std::fs::write(graph.join("graph.json"),json!({"entry":"wait","agents":{"reply":{"model":"fixture","instructions":"fixture"}},"ops":{"wait":{"host":{"operation":"session.wait_input"}},"deliver":{"host":{"operation":"session.reply"}}},"nodes":[{"id":"wait","op":"wait"},{"id":"reply","agent":"reply","plugins":["gateway"]},{"id":"deliver","op":"deliver"}],"edges":[{"from":"wait","to":"reply"},{"from":"reply","to":"deliver"},{"from":"deliver","to":"wait"}]}).to_string()).unwrap();
     std::fs::write(
         graph.join("manifest.json"),
@@ -89,7 +31,7 @@ fn fixture() -> (tempfile::TempDir, PilotTools, Arc<Port>) {
             },
         )
         .unwrap();
-    let port = Arc::new(Port::default());
+    let port = Arc::new(FakeChannels::new());
     let tools = PilotTools {
         application: crate::application::RunApplication::new(
             root.path().join("state"),
@@ -110,17 +52,19 @@ fn fixture() -> (tempfile::TempDir, PilotTools, Arc<Port>) {
 }
 
 fn arguments() -> Value {
-    json!({"platform":"wecom","graph":"task","reply_node":"reply","plugin":"gateway","users":["alice"],"send_users":["alice"]})
+    json!({"graph":"task","users":["alice"],"send_users":["alice"]})
 }
 
 #[tokio::test]
 async fn channel_mutations_require_an_owned_active_turn_and_leave_session_execution_grants_unchanged()
  {
+    // The bot plan resolves the Library root from the process environment.
+    let _guard = crate::PROCESS_ENV_LOCK.lock().await;
     let (_root, mut tools, port) = fixture();
-    let (platform, binding) = configuration_arguments(&arguments()).unwrap();
+    let (graph, members) = configuration_arguments(&arguments()).unwrap();
     assert!(
         tools
-            .configure_channel_approved(&platform, binding.clone())
+            .configure_channel_approved(&graph, members.clone())
             .await
             .is_err()
     );
@@ -132,21 +76,24 @@ async fn channel_mutations_require_an_owned_active_turn_and_leave_session_execut
     tools.owner = "other".into();
     assert!(
         tools
-            .configure_channel_approved(&platform, binding.clone())
+            .configure_channel_approved(&graph, members.clone())
             .await
             .is_err()
     );
     tools.owner = "local".into();
     let before = tools.sessions.get("local", "pilot").unwrap();
     tools
-        .configure_channel_approved(&platform, binding.clone())
+        .configure_channel_approved(&graph, members.clone())
         .await
         .unwrap();
+    // The confirmation carries the saved binding, Plugin included.
+    let binding = port.get("task").unwrap().binding;
+    assert_eq!(binding.plugin, "gateway");
     tools
-        .enable_channel_approved(&platform, true, &binding)
+        .enable_channel_approved(&graph, true, &binding)
         .await
         .unwrap();
-    assert!(port.0.lock().unwrap().as_ref().unwrap().enabled);
+    assert!(port.get("task").unwrap().enabled);
     let after = tools.sessions.get("local", "pilot").unwrap();
     assert_eq!(before.network_allowed, after.network_allowed);
     assert_eq!(before.plugin_mounts, after.plugin_mounts);
@@ -157,7 +104,7 @@ async fn channel_mutations_require_an_owned_active_turn_and_leave_session_execut
         .unwrap();
     assert!(
         tools
-            .enable_channel_approved(&platform, false, &binding)
+            .enable_channel_approved(&graph, false, &binding)
             .await
             .is_err()
     );
@@ -165,6 +112,8 @@ async fn channel_mutations_require_an_owned_active_turn_and_leave_session_execut
 
 #[tokio::test]
 async fn malformed_bindings_unknown_graphs_and_model_credentials_or_approval_are_rejected() {
+    // The bot plan resolves the Library root from the process environment.
+    let _guard = crate::PROCESS_ENV_LOCK.lock().await;
     let (_root, tools, port) = fixture();
     for field in [
         "secret",
@@ -174,37 +123,34 @@ async fn malformed_bindings_unknown_graphs_and_model_credentials_or_approval_are
         "confirm",
         "network",
         "owner",
+        "platform",
+        "reply_node",
+        "plugin",
     ] {
         let mut request = arguments();
         request[field] = json!("not-a-model-parameter");
-        assert!(configuration_arguments(&request).is_err());
-        assert!(enable_arguments(&json!({"platform":"wecom","enabled":true,field:true})).is_err());
+        assert!(configuration_arguments(&request).is_err(), "{field}");
+        assert!(enable_arguments(&json!({"graph":"task","enabled":true,field:true})).is_err());
     }
     let mut request = arguments();
     request["send_users"] = json!([]);
     assert!(configuration_arguments(&request).is_err());
-    let (platform, mut binding) = configuration_arguments(&arguments()).unwrap();
-    for (graph, node, plugin) in [
-        ("missing", "reply", "gateway"),
-        ("task", "missing", "gateway"),
-        ("task", "reply", "missing"),
-    ] {
-        binding.graph = graph.into();
-        binding.reply_node = node.into();
-        binding.plugin = plugin.into();
+    let (_, members) = configuration_arguments(&arguments()).unwrap();
+    for graph in ["missing", "../task", ""] {
         assert!(
             tools
                 .application
-                .configure_channel("local", &platform, binding.clone())
+                .configure_channel("local", graph, members.clone())
                 .await
-                .is_err()
+                .is_err(),
+            "{graph}"
         );
     }
-    assert!(port.0.lock().unwrap().is_none());
+    assert!(port.get("task").is_none());
     assert!(
         tools
             .application
-            .set_channel_enabled("local", "wecom", true)
+            .set_channel_enabled("local", "task", true)
             .await
             .is_err()
     );

@@ -1,9 +1,13 @@
-//! One Host-owned binding for the existing WeCom supervisor. Persisted values
-//! are configuration facts, not a new channel runtime or environment asset.
+//! Host-owned bot bindings, one per persistent assistant Graph, each with its
+//! own supervised gateway. Persisted values are configuration facts, not a new
+//! channel runtime or environment asset.
 use super::{ChannelSupervisor, ManagedChannelLaunch, random_token};
 use crate::application::{
     ApplicationError,
-    channel_management::{ChannelBinding, ChannelManagementPort, ChannelRuntimeState},
+    channel_management::{
+        ChannelBinding, ChannelCallback, ChannelManagementPort, ChannelRuntimeState, PLATFORM,
+        channel_plan, identifier,
+    },
 };
 use anchor_graph_host::{
     ChannelDefinition, FileGraphBundleLoader, FilePluginCatalog, PluginMetadata,
@@ -13,8 +17,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::{
-    collections::{BTreeMap, BTreeSet},
-    env, fs,
+    collections::BTreeMap,
+    fs,
     io::{Read, Write},
     os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt},
     path::{Path, PathBuf},
@@ -22,80 +26,38 @@ use std::{
 };
 use tokio::sync::Mutex;
 
+const FORMAT: u32 = 2;
+
 pub(crate) struct ChannelHostConfiguration {
     pub(crate) data_root: PathBuf,
     pub(crate) catalog_root: PathBuf,
+    /// The Host's configured Graph, served from its bundle root rather than
+    /// the catalog; same resolution as `RunApplication::graph_bundle_path`.
+    pub(crate) configured_graph: Option<(String, PathBuf)>,
     pub(crate) library_root: PathBuf,
     pub(crate) listen: String,
-    pub(crate) deployment_owner: String,
-    deployment_binding: Option<ChannelBinding>,
-    deployment_account: Option<String>,
 }
 
 impl ChannelHostConfiguration {
-    pub(crate) fn from_env(
-        data_root: PathBuf,
-        catalog_root: PathBuf,
-        library_root: PathBuf,
-        listen: String,
-        deployment_owner: String,
-    ) -> Self {
-        let externally_managed = [
-            "ANCHOR_WECOM_GRAPH",
-            "ANCHOR_WECOM_REPLY_NODE",
-            "ANCHOR_WECOM_USERS",
-            "ANCHOR_WECOM_SEND_USERS",
-        ]
-        .iter()
-        .any(|field| env::var_os(field).is_some());
-        let users = parse_users(&env::var("ANCHOR_WECOM_USERS").unwrap_or_default());
-        let send_users = env::var("ANCHOR_WECOM_SEND_USERS")
-            .map(|users| parse_users(&users))
-            .unwrap_or_else(|_| users.clone());
-        Self {
-            data_root,
-            catalog_root,
-            library_root,
-            listen,
-            deployment_owner,
-            deployment_binding: externally_managed.then(|| ChannelBinding {
-                graph: env::var("ANCHOR_WECOM_GRAPH")
-                    .unwrap_or_default()
-                    .trim()
-                    .into(),
-                reply_node: env::var("ANCHOR_WECOM_REPLY_NODE")
-                    .unwrap_or_else(|_| "assistant".into())
-                    .trim()
-                    .into(),
-                plugin: String::new(),
-                users,
-                send_users,
-            }),
-            deployment_account: env::var("WECOM_BOT_ID")
-                .ok()
-                .map(|value| value.trim().to_owned())
-                .filter(|value| !value.is_empty()),
-        }
+    fn graph_path(&self, graph: &str) -> PathBuf {
+        self.configured_graph
+            .as_ref()
+            .filter(|(name, _)| name == graph)
+            .map(|(_, path)| path.clone())
+            .unwrap_or_else(|| self.catalog_root.join(graph))
     }
 }
 
-fn parse_users(users: &str) -> Vec<String> {
-    users
-        .split(',')
-        .map(str::trim)
-        .filter(|user| !user.is_empty())
-        .map(str::to_owned)
-        .collect::<BTreeSet<_>>()
-        .into_iter()
-        .collect()
-}
-
+/// `platform/channels/graphs/<graph>.json`. The file name is the Graph; the
+/// reply node is derived from the Graph each time it is admitted.
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct ChannelFact {
     format: u32,
     owner: String,
-    binding: ChannelBinding,
+    plugin: String,
+    users: Vec<String>,
+    send_users: Vec<String>,
     enabled: bool,
     authorization_digest: String,
     callback_key: String,
@@ -103,22 +65,28 @@ struct ChannelFact {
     account: Option<String>,
 }
 
+impl ChannelFact {
+    fn binding(&self) -> ChannelBinding {
+        ChannelBinding {
+            plugin: self.plugin.clone(),
+            users: self.users.clone(),
+            send_users: self.send_users.clone(),
+        }
+    }
+}
+
 pub(crate) struct ChannelManagementAdapter {
     configuration: ChannelHostConfiguration,
     root: PathBuf,
-    current: RwLock<Option<ChannelFact>>,
-    supervisor: Mutex<Option<ChannelSupervisor>>,
-    external: bool,
-    external_descriptors: BTreeMap<String, PathBuf>,
-    external_callback_keys: BTreeMap<String, String>,
+    facts: RwLock<BTreeMap<String, ChannelFact>>,
+    /// Running gateways by Graph. Holding this lock serializes every binding
+    /// change, so account uniqueness (R4) is checked against settled facts.
+    supervisors: Mutex<BTreeMap<String, ChannelSupervisor>>,
     _owner_lease: anchor_file_lease::FileLease,
 }
 
 impl ChannelManagementAdapter {
-    pub(crate) fn open(
-        mut configuration: ChannelHostConfiguration,
-        supervisor: Option<ChannelSupervisor>,
-    ) -> Result<Self, String> {
+    pub(crate) fn open(configuration: ChannelHostConfiguration) -> Result<Self, String> {
         let root = configuration.data_root.join("platform/channels");
         crate::goose_acp::pilot::directory(&root)?;
         let metadata = fs::metadata(&root).map_err(|_| "channel configuration root unavailable")?;
@@ -152,101 +120,65 @@ impl ChannelManagementAdapter {
             rustix::fs::FlockOperation::NonBlockingLockExclusive,
         )
         .map_err(|_| "channel configuration already has a Host owner")?;
-        let current = read_fact(&root)?;
-        let external = configuration.deployment_binding.is_some() || supervisor.is_some();
-        let external_callback_keys = supervisor
-            .as_ref()
-            .map(|supervisor| supervisor.callback_keys.clone())
-            .unwrap_or_default();
-        let external_descriptors = supervisor
-            .as_ref()
-            .map(ChannelSupervisor::descriptors)
-            .unwrap_or_default();
-        if let Some(binding) = configuration.deployment_binding.as_mut() {
-            if let Some(discovered) = supervisor
-                .as_ref()
-                .and_then(|supervisor| supervisor.definitions.get("wecom"))
-            {
-                binding.plugin = discovered.plugin.clone();
-            } else if !binding.graph.is_empty() {
-                // Resolve only installed channel declarations referenced by the
-                // deployment's graph; never assume the Plugin ID is "wecom".
-                if let Ok(bundle) =
-                    FileGraphBundleLoader::new(configuration.catalog_root.join(&binding.graph))
-                        .with_library_root(&configuration.library_root)
-                        .load()
-                {
-                    for plugin in bundle.plugins {
-                        if FilePluginCatalog::new(&configuration.library_root)
-                            .channels(&plugin)
-                            .is_ok_and(|channels| {
-                                channels.iter().any(|channel| channel.platform == "wecom")
-                            })
-                        {
-                            binding.plugin = plugin;
-                            break;
-                        }
-                    }
-                }
-            }
+        if fs::symlink_metadata(root.join("wecom.json")).is_ok() {
+            return Err(LEGACY_BINDING.into());
         }
-        if let Some(identity) = configuration.deployment_account.as_deref() {
-            let account =
-                register_account(&configuration, &configuration.deployment_owner, identity)?;
-            configuration.deployment_account = Some(account);
-        }
+        let facts = read_facts(&root.join("graphs"))?;
         Ok(Self {
             configuration,
             root,
-            current: RwLock::new(current),
-            supervisor: Mutex::new(supervisor),
-            external,
-            external_descriptors,
-            external_callback_keys,
+            facts: RwLock::new(facts),
+            supervisors: Mutex::new(BTreeMap::new()),
             _owner_lease: owner_lease,
         })
     }
 
+    /// Start every enabled bot. A binding whose Graph, Plugin or credentials
+    /// went away stays saved but stopped; it must not keep the Host, the Pilot
+    /// or the other bots from starting.
     pub(crate) async fn resume(&self) -> Result<(), ApplicationError> {
-        if self.external {
-            return Ok(());
-        }
-        let mut supervisor = self.supervisor.lock().await;
-        let Some(mut fact) = self.fact()? else {
-            return Ok(());
-        };
-        if fact.enabled && supervisor.is_none() {
-            if let Ok((definition, channel)) = self.definition(&fact.binding)
-                && let Ok(credentials) = self.credentials(&fact, &definition, &channel)
+        let mut supervisors = self.supervisors.lock().await;
+        for (graph, mut fact) in self.facts()? {
+            if !fact.enabled || supervisors.contains_key(&graph) {
+                continue;
+            }
+            if let Ok((definition, channel)) = self.definition(&fact.plugin)
+                && let Ok(credentials) = self.credentials(&graph, &fact, &definition, &channel)
             {
                 let account = self.register_account(&fact.owner, &credentials)?;
                 if fact.account != account {
                     fact.account = account;
-                    self.publish(fact.clone())?;
+                    self.publish(&graph, fact.clone())?;
                 }
             }
-            match self.start(&fact).await {
-                Ok(started) => *supervisor = Some(started),
-                // A saved binding to removed resources must not prevent the
-                // otherwise healthy platform and Pilot from starting.
-                Err(_) => eprintln!("anchor channel wecom: saved binding is currently unavailable"),
+            match self.start(&graph, &fact).await {
+                Ok(started) => {
+                    supervisors.insert(graph, started);
+                }
+                Err(_) => eprintln!(
+                    "anchor channel wecom: the saved bot of Graph {graph} is currently unavailable"
+                ),
             }
         }
         Ok(())
     }
 
     pub(crate) async fn shutdown(&self) {
-        let mut supervisor = self.supervisor.lock().await;
-        if let Some(mut active) = supervisor.take() {
+        let mut supervisors = self.supervisors.lock().await;
+        for (_, mut active) in std::mem::take(&mut *supervisors) {
             active.shutdown().await;
         }
     }
 
-    fn fact(&self) -> Result<Option<ChannelFact>, ApplicationError> {
-        self.current
+    fn facts(&self) -> Result<BTreeMap<String, ChannelFact>, ApplicationError> {
+        self.facts
             .read()
-            .map(|fact| fact.clone())
+            .map(|facts| facts.clone())
             .map_err(|_| storage("channel configuration unavailable"))
+    }
+
+    fn fact(&self, graph: &str) -> Result<Option<ChannelFact>, ApplicationError> {
+        Ok(self.facts()?.remove(graph))
     }
 
     fn register_account(
@@ -260,26 +192,29 @@ impl ChannelManagementAdapter {
             .transpose()
     }
 
-    fn assert_managed_owner(&self, owner: &str) -> Result<(), ApplicationError> {
-        if self.external {
-            return Err(ApplicationError::Conflict(
-                "this channel binding is managed externally by the deployment".into(),
-            ));
-        }
+    fn assert_owner(&self, owner: &str, graph: &str) -> Result<(), ApplicationError> {
         if owner.is_empty() || owner.len() > 500 || owner.chars().any(char::is_control) {
             return Err(ApplicationError::Invalid("invalid channel owner".into()));
         }
-        if self.fact()?.is_some_and(|fact| fact.owner != owner) {
+        if !identifier(graph) {
+            return Err(ApplicationError::Invalid("invalid bot Graph name".into()));
+        }
+        if self.fact(graph)?.is_some_and(|fact| fact.owner != owner) {
             return Err(ApplicationError::Conflict(
-                "the platform's single wecom gateway belongs to another owner".into(),
+                "this Graph's bot belongs to another owner".into(),
             ));
         }
         Ok(())
     }
 
-    fn publish(&self, fact: ChannelFact) -> Result<(), ApplicationError> {
-        crate::goose_acp::pilot::directory(&self.root).map_err(storage)?;
-        let mut temporary = tempfile::NamedTempFile::new_in(&self.root)
+    fn path(&self, graph: &str) -> PathBuf {
+        self.root.join("graphs").join(format!("{graph}.json"))
+    }
+
+    fn publish(&self, graph: &str, fact: ChannelFact) -> Result<(), ApplicationError> {
+        let directory = self.root.join("graphs");
+        crate::goose_acp::pilot::directory(&directory).map_err(storage)?;
+        let mut temporary = tempfile::NamedTempFile::new_in(&directory)
             .map_err(|_| storage("channel configuration staging unavailable"))?;
         fs::set_permissions(temporary.path(), fs::Permissions::from_mode(0o600))
             .map_err(|_| storage("channel configuration permissions unavailable"))?;
@@ -291,13 +226,13 @@ impl ChannelManagementAdapter {
             .and_then(|_| temporary.as_file().sync_all())
             .map_err(|_| storage("channel configuration persistence failed"))?;
         temporary
-            .persist(self.root.join("wecom.json"))
+            .persist(self.path(graph))
             .map_err(|_| storage("channel configuration publication failed"))?;
-        *self
-            .current
+        self.facts
             .write()
-            .map_err(|_| storage("channel configuration unavailable"))? = Some(fact);
-        if fs::File::open(&self.root)
+            .map_err(|_| storage("channel configuration unavailable"))?
+            .insert(graph.to_owned(), fact);
+        if fs::File::open(&directory)
             .and_then(|directory| directory.sync_all())
             .is_err()
         {
@@ -310,20 +245,20 @@ impl ChannelManagementAdapter {
 
     fn definition(
         &self,
-        binding: &ChannelBinding,
+        plugin: &str,
     ) -> Result<(PluginMetadata, ChannelDefinition), ApplicationError> {
         let definition = FilePluginCatalog::new(&self.configuration.library_root)
-            .definition(&binding.plugin)
+            .definition(plugin)
             .map_err(|_| ApplicationError::Missing)?;
         Self::channel(definition.metadata())
     }
 
     fn metadata(
         &self,
-        binding: &ChannelBinding,
+        plugin: &str,
     ) -> Result<(PluginMetadata, ChannelDefinition), ApplicationError> {
         let definition = FilePluginCatalog::new(&self.configuration.library_root)
-            .metadata(&binding.plugin)
+            .metadata(plugin)
             .map_err(|_| ApplicationError::Missing)?;
         Self::channel(definition)
     }
@@ -334,7 +269,7 @@ impl ChannelManagementAdapter {
         let channel = definition
             .channels
             .iter()
-            .find(|channel| channel.platform == "wecom")
+            .find(|channel| channel.platform == PLATFORM)
             .cloned()
             .ok_or_else(|| {
                 ApplicationError::Invalid(
@@ -346,95 +281,80 @@ impl ChannelManagementAdapter {
 
     fn credentials(
         &self,
+        graph: &str,
         fact: &ChannelFact,
         definition: &PluginMetadata,
         channel: &ChannelDefinition,
     ) -> Result<BTreeMap<String, String>, ApplicationError> {
-        if crate::credential_store::channel_authorization(definition, "wecom")
+        if crate::credential_store::channel_authorization(definition, &channel.platform)
             .map_err(storage)?
             .1
             != fact.authorization_digest
         {
             return Err(ApplicationError::Conflict(
-                "channel declarations changed; disable and configure the binding again".into(),
+                "channel declarations changed; disable and configure the bot again".into(),
             ));
         }
-        let mut values = crate::credential_store::channel_environment_values(
+        crate::credential_store::channel_environment_values(
             &self.configuration.data_root,
             &crate::credential_store::binding_owner(&fact.owner),
             definition,
-            "channel_wecom",
+            &crate::credential_store::channel_target(PLATFORM, graph),
         )
-        .map_err(storage)?;
-        for field in &channel.required_environment {
-            if let Some(value) = env::var_os(field) {
-                let value = value.into_string().map_err(|_| {
-                    ApplicationError::Invalid(format!(
-                        "deployment channel credential {field} must be UTF-8"
-                    ))
-                })?;
-                values.insert(field.clone(), value);
-            }
-        }
-        Ok(values)
+        .map_err(storage)
     }
 
-    fn admission(&self, fact: &ChannelFact) -> Result<(), ApplicationError> {
-        let bundle =
-            FileGraphBundleLoader::new(self.configuration.catalog_root.join(&fact.binding.graph))
-                .with_library_root(&self.configuration.library_root)
-                .load()
-                .map_err(|_| ApplicationError::Missing)?;
-        if !bundle
-            .snapshot
-            .nodes
-            .iter()
-            .any(|node| node.id == fact.binding.reply_node)
-            || !bundle.snapshot.nodes.iter().any(|node| {
-                node.plugins
-                    .iter()
-                    .any(|plugin| plugin.id == fact.binding.plugin)
-            })
-        {
-            return Err(ApplicationError::Invalid(
-                "the channel Graph no longer contains the bound reply node and Plugin".into(),
-            ));
-        }
-        crate::assistant::AssistantPlan::from_snapshot(&bundle.snapshot, &fact.binding.reply_node)
-            .map_err(ApplicationError::Invalid)?
-            .ok_or_else(|| {
-                ApplicationError::Invalid(
-                    crate::application::channel_management::NOT_AN_ASSISTANT.into(),
-                )
-            })?;
-        Ok(())
-    }
-
-    async fn start(&self, fact: &ChannelFact) -> Result<ChannelSupervisor, ApplicationError> {
-        self.admission(fact)?;
-        let (definition, channel) = self.definition(&fact.binding)?;
-        let credentials = self.credentials(fact, &definition, &channel)?;
-        for field in &channel.required_environment {
-            if credentials
-                .get(field)
+    fn complete(
+        channel: &ChannelDefinition,
+        credentials: &BTreeMap<String, String>,
+    ) -> Result<(), ApplicationError> {
+        match channel.required_environment.iter().find(|field| {
+            credentials
+                .get(*field)
                 .is_none_or(|value| value.trim().is_empty() || value.chars().any(char::is_control))
-            {
-                return Err(ApplicationError::Invalid(format!(
-                    "channel credential {field} is not configured; use credential_request with server channel_wecom"
-                )));
-            }
+        }) {
+            Some(field) => Err(ApplicationError::Invalid(format!(
+                "bot credential {field} is not configured for this Graph"
+            ))),
+            None => Ok(()),
         }
+    }
+
+    /// The Graph still admits as this binding's bot; returns its reply node.
+    fn admission(&self, graph: &str, fact: &ChannelFact) -> Result<String, ApplicationError> {
+        let bundle = FileGraphBundleLoader::new(self.configuration.graph_path(graph))
+            .with_library_root(&self.configuration.library_root)
+            .load()
+            .map_err(|_| ApplicationError::Missing)?;
+        match channel_plan(&bundle.snapshot, &self.configuration.library_root)? {
+            Some(plan) if plan.plugin == fact.plugin => Ok(plan.work_node),
+            _ => Err(ApplicationError::Invalid(
+                crate::application::channel_management::NOT_A_BOT.into(),
+            )),
+        }
+    }
+
+    async fn start(
+        &self,
+        graph: &str,
+        fact: &ChannelFact,
+    ) -> Result<ChannelSupervisor, ApplicationError> {
+        self.admission(graph, fact)?;
+        let (definition, channel) = self.definition(&fact.plugin)?;
+        let credentials = self.credentials(graph, fact, &definition, &channel)?;
+        Self::complete(&channel, &credentials)?;
         ChannelSupervisor::start_managed(
-            &self.configuration.catalog_root.join(&fact.binding.graph),
+            &self.configuration.graph_path(graph),
             &self.configuration.library_root,
             &self.configuration.data_root,
             &self.configuration.listen,
             ManagedChannelLaunch {
-                plugin: fact.binding.plugin.clone(),
-                platform: "wecom".into(),
+                graph: graph.into(),
+                plugin: fact.plugin.clone(),
+                platform: PLATFORM.into(),
                 credentials,
-                users: fact.binding.users.clone(),
-                send_users: fact.binding.send_users.clone(),
+                users: fact.users.clone(),
+                send_users: fact.send_users.clone(),
                 callback_key: fact.callback_key.clone(),
             },
         )
@@ -442,40 +362,87 @@ impl ChannelManagementAdapter {
         .map_err(|_| storage("channel gateway could not start"))
     }
 
-    async fn public_status(&self, owner: &str) -> Result<Value, ApplicationError> {
-        if self.external {
-            if owner != self.configuration.deployment_owner {
-                return Ok(
-                    json!({"platform":"wecom","configuration_owner":"deployment","configured":true,"owner_matches":false,"mutable":false}),
-                );
-            }
-            let descriptor = self.external_descriptors.get("wecom");
-            let listener = match descriptor {
-                Some(descriptor) => serde_json::to_value(super::status::read(descriptor).await)
-                    .map_err(|_| storage("channel status encoding failed"))?,
-                None => json!("unavailable"),
-            };
-            return Ok(
-                json!({"platform":"wecom","configuration_owner":"deployment","configured":self.configuration.deployment_binding.as_ref().is_some_and(|binding|!binding.graph.is_empty()),"binding":self.configuration.deployment_binding,"enabled":descriptor.is_some(),"listener":listener,"owner_matches":true,"mutable":false}),
-            );
+    /// One account keeps one long connection: a second enabled binding would
+    /// disconnect the first (R4). And a Session belongs to one Graph, so an
+    /// account whose Sessions belong to another Graph cannot move here (D7).
+    fn check_account(
+        &self,
+        graph: &str,
+        owner: &str,
+        account: Option<&str>,
+    ) -> Result<(), ApplicationError> {
+        let Some(account) = account else {
+            return Ok(());
+        };
+        if let Some((other, _)) = self.facts()?.into_iter().find(|(other, fact)| {
+            other != graph && fact.enabled && fact.account.as_deref() == Some(account)
+        }) {
+            return Err(ApplicationError::Conflict(format!(
+                "this bot account is already in use by Graph {other}; stop that bot first"
+            )));
         }
-        let Some(fact) = self.fact()? else {
-            return Ok(
-                json!({"platform":"wecom","configuration_owner":"host","configured":false,"enabled":false,"listener":"stopped","mutable":true}),
-            );
+        let sessions = anchor_platform_session::SessionStore::open(
+            self.configuration
+                .data_root
+                .join("platform/sessions.sqlite"),
+        )
+        .map_err(|_| storage("channel Sessions unavailable"))?;
+        let mut foreign = Vec::new();
+        for session in sessions
+            .list(owner)
+            .map_err(|_| storage("channel Sessions unavailable"))?
+        {
+            if session.graph == graph
+                || session.channel.get("source").map(String::as_str) != Some(PLATFORM)
+            {
+                continue;
+            }
+            let saved = session.channel.get("account").map_or("", String::as_str);
+            if sessions
+                .canonical_channel_account(owner, PLATFORM, saved)
+                .map_err(|_| storage("channel Sessions unavailable"))?
+                == account
+            {
+                foreign.push(format!("{} ({})", session.title, session.graph));
+            }
+        }
+        if !foreign.is_empty() {
+            foreign.truncate(5);
+            return Err(ApplicationError::Conflict(format!(
+                "this bot account already has message Sessions of another Graph: {}. Clear them in 消息会话 before enabling it here",
+                foreign.join(", ")
+            )));
+        }
+        Ok(())
+    }
+
+    async fn public_status(&self, owner: &str, graph: &str) -> Result<Value, ApplicationError> {
+        let Some(fact) = self.fact(graph)? else {
+            return Ok(json!({"graph":graph,"platform":PLATFORM,"configured":false,
+                "enabled":false,"listener":"stopped","mutable":true}));
         };
         if fact.owner != owner {
-            return Ok(
-                json!({"platform":"wecom","configuration_owner":"host","configured":true,"owner_matches":false,"mutable":false}),
-            );
+            return Ok(json!({"graph":graph,"platform":PLATFORM,"configured":true,
+                "owner_matches":false,"mutable":false}));
         }
-        let admitted = self.admission(&fact).is_ok();
-        let (available, credentials, account) = match self.metadata(&fact.binding) {
+        let admitted = self.admission(graph, &fact);
+        let (available, credentials, account) = match self.metadata(&fact.plugin) {
             Ok((definition, channel)) => {
-                let values = self.credentials(&fact, &definition, &channel);
-                let fields = channel.required_environment.iter().map(|field| json!({"field":field,"configured":values.as_ref().is_ok_and(|values|values.get(field).is_some_and(|value|!value.trim().is_empty())),"configuration_owner":if env::var_os(field).is_some(){"deployment"}else{"host"}})).collect::<Vec<_>>();
+                let values = self.credentials(graph, &fact, &definition, &channel);
+                let fields = channel
+                    .required_environment
+                    .iter()
+                    .map(|field| {
+                        json!({"field":field,"configured":values.as_ref().is_ok_and(|values| {
+                            values.get(field).is_some_and(|value| !value.trim().is_empty())
+                        })})
+                    })
+                    .collect::<Vec<_>>();
+                let complete = values
+                    .as_ref()
+                    .is_ok_and(|values| Self::complete(&channel, values).is_ok());
                 let account = values.as_ref().ok().and_then(account_identity);
-                (admitted && values.is_ok(), fields, account)
+                (admitted.is_ok() && complete, fields, account)
             }
             Err(_) => (false, Vec::new(), None),
         };
@@ -485,77 +452,112 @@ impl ChannelManagementAdapter {
             json!("unavailable")
         } else {
             serde_json::to_value(
-                super::status::read(
-                    &self
-                        .configuration
-                        .data_root
-                        .join("channels/wecom/control.json"),
-                )
+                super::status::read(&super::descriptor_path(
+                    &self.configuration.data_root,
+                    graph,
+                ))
                 .await,
             )
             .map_err(|_| storage("channel status encoding failed"))?
         };
         Ok(
-            json!({"platform":"wecom","configuration_owner":"host","configured":true,"owner_matches":true,"mutable":true,
-            "enabled":fact.enabled,"available":available,"binding":fact.binding,"credentials":credentials,"listener":listener,
-            "account":account,"restart_required":fact.enabled && fact.account != account}),
+            json!({"graph":graph,"platform":PLATFORM,"configured":true,"owner_matches":true,
+            "mutable":true,"enabled":fact.enabled,"available":available,
+            "reply_node":admitted.ok(),"binding":fact.binding(),"credentials":credentials,
+            "listener":listener,"account":account,
+            "restart_required":fact.enabled && fact.account != account}),
         )
+    }
+
+    fn runtime_state(&self, graph: &str, fact: ChannelFact) -> ChannelRuntimeState {
+        let reply_node = self.admission(graph, &fact).ok();
+        let enabled = fact.enabled
+            && reply_node.is_some()
+            && self
+                .metadata(&fact.plugin)
+                .is_ok_and(|(definition, channel)| {
+                    self.credentials(graph, &fact, &definition, &channel)
+                        .is_ok_and(|values| {
+                            account_identity(&values) == fact.account
+                                && Self::complete(&channel, &values).is_ok()
+                        })
+                });
+        ChannelRuntimeState {
+            graph: graph.into(),
+            owner: fact.owner.clone(),
+            binding: fact.binding(),
+            reply_node,
+            enabled,
+            account: fact.account.clone(),
+            descriptor: fact
+                .enabled
+                .then(|| super::descriptor_path(&self.configuration.data_root, graph)),
+        }
     }
 }
 
 impl ChannelManagementPort for ChannelManagementAdapter {
+    fn list<'a>(&'a self, owner: &'a str) -> BoxFuture<'a, Result<Value, ApplicationError>> {
+        Box::pin(async move {
+            let mut channels = Vec::new();
+            for graph in self.facts()?.into_keys() {
+                channels.push(self.public_status(owner, &graph).await?);
+            }
+            Ok(json!({"channels":channels}))
+        })
+    }
+
     fn status<'a>(
         &'a self,
         owner: &'a str,
-        platform: &'a str,
+        graph: &'a str,
     ) -> BoxFuture<'a, Result<Value, ApplicationError>> {
-        Box::pin(async move {
-            supported(platform)?;
-            self.public_status(owner).await
-        })
+        Box::pin(async move { self.public_status(owner, graph).await })
     }
 
     fn configure<'a>(
         &'a self,
         owner: &'a str,
-        platform: &'a str,
+        graph: &'a str,
         binding: ChannelBinding,
     ) -> BoxFuture<'a, Result<Value, ApplicationError>> {
         Box::pin(async move {
-            supported(platform)?;
-            let _supervisor = self.supervisor.lock().await;
-            self.assert_managed_owner(owner)?;
+            let _supervisors = self.supervisors.lock().await;
+            self.assert_owner(owner, graph)?;
             binding.validate()?;
-            if self.fact()?.is_some_and(|fact| fact.enabled) {
+            let previous = self.fact(graph)?;
+            if previous.as_ref().is_some_and(|fact| fact.enabled) {
                 return Err(ApplicationError::Conflict(
-                    "stop the channel before changing its binding".into(),
+                    "stop this Graph's bot before changing its members".into(),
                 ));
             }
-            let (definition, _) = self.definition(&binding)?;
-            let previous = self.fact()?;
-            let digest = crate::credential_store::channel_authorization(&definition, "wecom")
+            let (definition, _) = self.definition(&binding.plugin)?;
+            let digest = crate::credential_store::channel_authorization(&definition, PLATFORM)
                 .map_err(storage)?
                 .1;
-            let changed = previous
-                .as_ref()
-                .is_none_or(|fact| fact.binding != binding || fact.authorization_digest != digest);
+            let changed = previous.as_ref().is_none_or(|fact| {
+                fact.binding() != binding || fact.authorization_digest != digest
+            });
             if changed {
                 let fact = ChannelFact {
-                    format: 1,
+                    format: FORMAT,
                     owner: owner.into(),
-                    binding,
+                    plugin: binding.plugin,
+                    users: binding.users,
+                    send_users: binding.send_users,
                     enabled: false,
                     authorization_digest: digest,
-                    callback_key: previous.map(|fact| fact.callback_key).unwrap_or(
-                        random_token("anchor-channel-api")
+                    callback_key: match previous {
+                        Some(fact) => fact.callback_key,
+                        None => random_token("anchor-channel-api")
                             .map_err(|_| storage("channel callback identity unavailable"))?,
-                    ),
+                    },
                     account: None,
                 };
-                self.admission(&fact)?;
-                self.publish(fact)?;
+                self.admission(graph, &fact)?;
+                self.publish(graph, fact)?;
             }
-            let mut result = self.public_status(owner).await?;
+            let mut result = self.public_status(owner, graph).await?;
             result["changed"] = json!(changed);
             Ok(result)
         })
@@ -564,134 +566,109 @@ impl ChannelManagementPort for ChannelManagementAdapter {
     fn set_enabled<'a>(
         &'a self,
         owner: &'a str,
-        platform: &'a str,
+        graph: &'a str,
         enabled: bool,
     ) -> BoxFuture<'a, Result<Value, ApplicationError>> {
         Box::pin(async move {
-            supported(platform)?;
-            let mut supervisor = self.supervisor.lock().await;
-            self.assert_managed_owner(owner)?;
-            let mut fact = self.fact()?.ok_or(ApplicationError::Missing)?;
+            let mut supervisors = self.supervisors.lock().await;
+            self.assert_owner(owner, graph)?;
+            let mut fact = self.fact(graph)?.ok_or(ApplicationError::Missing)?;
             let changed = fact.enabled != enabled;
             if enabled {
                 // Validate all credentials before saving an enabled intent.
-                self.admission(&fact)?;
-                let (definition, channel) = self.definition(&fact.binding)?;
-                let credentials = self.credentials(&fact, &definition, &channel)?;
-                if channel.required_environment.iter().any(|field| {
-                    credentials.get(field).is_none_or(|value| {
-                        value.trim().is_empty() || value.chars().any(char::is_control)
-                    })
-                }) {
-                    return Err(ApplicationError::Invalid("channel credentials are missing; use the dedicated credential input before enabling".into()));
-                }
+                self.admission(graph, &fact)?;
+                let (definition, channel) = self.definition(&fact.plugin)?;
+                let credentials = self.credentials(graph, &fact, &definition, &channel)?;
+                Self::complete(&channel, &credentials)?;
                 if changed {
+                    let account = self.register_account(&fact.owner, &credentials)?;
+                    self.check_account(graph, owner, account.as_deref())?;
                     fact.enabled = true;
                     fact.callback_key = random_token("anchor-channel-api")
                         .map_err(|_| storage("channel callback identity unavailable"))?;
-                    fact.account = self.register_account(&fact.owner, &credentials)?;
-                    self.publish(fact.clone())?;
+                    fact.account = account;
+                    self.publish(graph, fact.clone())?;
                 }
-                if supervisor.is_none() {
-                    *supervisor = Some(self.start(&fact).await?);
+                if !supervisors.contains_key(graph) {
+                    let started = self.start(graph, &fact).await?;
+                    supervisors.insert(graph.to_owned(), started);
                 }
             } else {
                 if changed {
                     fact.enabled = false;
-                    self.publish(fact.clone())?;
+                    self.publish(graph, fact.clone())?;
                 }
-                if let Some(mut active) = supervisor.take() {
+                if let Some(mut active) = supervisors.remove(graph) {
                     active.shutdown().await;
                 }
             }
-            let mut result = self.public_status(owner).await?;
+            let mut result = self.public_status(owner, graph).await?;
             result["changed"] = json!(changed);
             Ok(result)
         })
     }
 
-    fn snapshot(&self, platform: &str) -> Result<Option<ChannelRuntimeState>, ApplicationError> {
-        supported(platform)?;
-        if self.external {
-            return Ok(self
-                .configuration
-                .deployment_binding
-                .as_ref()
-                .map(|binding| ChannelRuntimeState {
-                    owner: self.configuration.deployment_owner.clone(),
-                    binding: binding.clone(),
-                    enabled: self.external_descriptors.contains_key("wecom"),
-                    account: self.configuration.deployment_account.clone(),
-                    descriptor: self.external_descriptors.get("wecom").cloned(),
-                }));
-        }
-        self.fact()?
-            .map(|fact| {
-                let enabled = fact.enabled
-                    && self.admission(&fact).is_ok()
-                    && self
-                        .metadata(&fact.binding)
-                        .is_ok_and(|(definition, channel)| {
-                            self.credentials(&fact, &definition, &channel)
-                                .is_ok_and(|values| {
-                                    account_identity(&values) == fact.account
-                                        && channel.required_environment.iter().all(|field| {
-                                            values.get(field).is_some_and(|value| {
-                                                !value.trim().is_empty()
-                                                    && !value.chars().any(char::is_control)
-                                            })
-                                        })
-                                })
-                        });
-                Ok(ChannelRuntimeState {
-                    owner: fact.owner,
-                    binding: fact.binding,
-                    enabled,
-                    account: fact.account,
-                    descriptor: fact.enabled.then(|| {
-                        self.configuration
-                            .data_root
-                            .join("channels/wecom/control.json")
-                    }),
-                })
+    fn snapshot(&self, graph: &str) -> Result<Option<ChannelRuntimeState>, ApplicationError> {
+        Ok(self
+            .fact(graph)?
+            .map(|fact| self.runtime_state(graph, fact)))
+    }
+
+    fn snapshots(&self) -> Result<Vec<ChannelRuntimeState>, ApplicationError> {
+        Ok(self
+            .facts()?
+            .into_iter()
+            .map(|(graph, fact)| self.runtime_state(&graph, fact))
+            .collect())
+    }
+
+    fn callback(&self, key: &str) -> Option<ChannelCallback> {
+        self.facts().ok()?.into_iter().find_map(|(graph, fact)| {
+            (fact.enabled && token_matches(&fact.callback_key, key)).then_some(ChannelCallback {
+                graph,
+                owner: fact.owner,
             })
-            .transpose()
+        })
     }
 
-    fn callback_owner(&self, platform: &str, key: &str) -> Option<String> {
-        if platform != "wecom" {
-            return None;
-        }
-        if self.external {
-            let expected = self.external_callback_keys.get(platform)?;
-            // An explicitly supplied deployment API key retains its existing
-            // API authority. Only Host-generated callback keys are narrowed.
-            if !expected.starts_with("anchor-channel-api-") {
-                return None;
+    fn remove<'a>(&'a self, graph: &'a str) -> BoxFuture<'a, Result<(), ApplicationError>> {
+        Box::pin(async move {
+            let supervisors = self.supervisors.lock().await;
+            let Some(fact) = self.fact(graph)? else {
+                return Ok(());
+            };
+            if fact.enabled || supervisors.contains_key(graph) {
+                return Err(ApplicationError::Conflict(
+                    "此 Graph 的机器人正在运行，请先停用机器人".into(),
+                ));
             }
-            return token_matches(expected, key)
-                .then(|| self.configuration.deployment_owner.clone());
-        }
-        let fact = self.fact().ok()??;
-        if !fact.enabled {
-            return None;
-        }
-        token_matches(&fact.callback_key, key).then_some(fact.owner)
+            crate::credential_store::delete_channel_graph(
+                &self.configuration.data_root,
+                &fact.plugin,
+                &crate::credential_store::channel_target(PLATFORM, graph),
+            )
+            .map_err(storage)?;
+            let state = super::state_directory(&self.configuration.data_root, graph);
+            if fs::symlink_metadata(&state).is_ok() {
+                fs::remove_dir_all(&state)
+                    .map_err(|_| storage("bot gateway state cleanup failed"))?;
+            }
+            fs::remove_file(self.path(graph)).map_err(|_| storage("bot binding removal failed"))?;
+            self.facts
+                .write()
+                .map_err(|_| storage("channel configuration unavailable"))?
+                .remove(graph);
+            Ok(())
+        })
     }
 }
 
-fn supported(platform: &str) -> Result<(), ApplicationError> {
-    if platform == "wecom" {
-        Ok(())
-    } else {
-        Err(ApplicationError::Invalid(
-            "the supported channel is wecom".into(),
-        ))
-    }
-}
+const LEGACY_BINDING: &str = "platform/channels/wecom.json is the single-bot binding of an earlier Host. Migrate it to platform/channels/graphs/<graph>.json with the deployment's migration script before starting this Host";
+
 fn storage(reason: impl Into<String>) -> ApplicationError {
     ApplicationError::Storage(reason.into())
 }
+
 fn account_identity(credentials: &BTreeMap<String, String>) -> Option<String> {
     credentials
         .get("WECOM_BOT_ID")
@@ -715,7 +692,7 @@ fn register_account(
     .and_then(|sessions| {
         sessions.register_channel_account(
             owner,
-            "wecom",
+            PLATFORM,
             &account,
             &[
                 identity.to_owned(),
@@ -737,16 +714,58 @@ fn token_matches(expected: &str, key: &str) -> bool {
         == 0
 }
 
-fn read_fact(root: &Path) -> Result<Option<ChannelFact>, String> {
-    let file = match fs::OpenOptions::new()
-        .read(true)
-        .custom_flags((rustix::fs::OFlags::NOFOLLOW | rustix::fs::OFlags::NONBLOCK).bits() as i32)
-        .open(root.join("wecom.json"))
-    {
-        Ok(file) => file,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+/// The saved binding of one Graph's bot. Node tools of that Graph's Runs read
+/// it for the recipients they may address; the Host adapter owns every write.
+pub(crate) fn saved_binding(
+    data_root: &Path,
+    graph: &str,
+) -> Result<Option<ChannelBinding>, String> {
+    if !identifier(graph) {
+        return Ok(None);
+    }
+    let path = data_root
+        .join("platform/channels/graphs")
+        .join(format!("{graph}.json"));
+    if fs::symlink_metadata(&path).is_err() {
+        return Ok(None);
+    }
+    read_fact(&path).map(|fact| Some(fact.binding()))
+}
+
+fn read_facts(directory: &Path) -> Result<BTreeMap<String, ChannelFact>, String> {
+    let entries = match fs::read_dir(directory) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(BTreeMap::new()),
         Err(_) => return Err("channel configuration unavailable".into()),
     };
+    let mut facts = BTreeMap::new();
+    for entry in entries {
+        let path = entry
+            .map_err(|_| "channel configuration unavailable")?
+            .path();
+        let name = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .ok_or("channel configuration has an invalid file name")?;
+        // Atomic publication stages a temporary file next to the facts.
+        if name.starts_with(".tmp") {
+            continue;
+        }
+        let graph = name
+            .strip_suffix(".json")
+            .filter(|graph| identifier(graph))
+            .ok_or("channel configuration has an invalid file name")?;
+        facts.insert(graph.to_owned(), read_fact(&path)?);
+    }
+    Ok(facts)
+}
+
+fn read_fact(path: &Path) -> Result<ChannelFact, String> {
+    let file = fs::OpenOptions::new()
+        .read(true)
+        .custom_flags((rustix::fs::OFlags::NOFOLLOW | rustix::fs::OFlags::NONBLOCK).bits() as i32)
+        .open(path)
+        .map_err(|_| "channel configuration unavailable")?;
     let metadata = file
         .metadata()
         .map_err(|_| "channel configuration metadata unavailable")?;
@@ -768,10 +787,10 @@ fn read_fact(root: &Path) -> Result<Option<ChannelFact>, String> {
     }
     let fact: ChannelFact =
         serde_json::from_slice(&bytes).map_err(|_| "channel configuration is invalid")?;
-    fact.binding
+    fact.binding()
         .validate()
         .map_err(|_| "channel configuration binding is invalid")?;
-    if fact.format != 1
+    if fact.format != FORMAT
         || fact.owner.is_empty()
         || fact.owner.len() > 500
         || fact.owner.chars().any(char::is_control)
@@ -785,7 +804,7 @@ fn read_fact(root: &Path) -> Result<Option<ChannelFact>, String> {
     {
         return Err("unsupported or invalid channel configuration identity".into());
     }
-    Ok(Some(fact))
+    Ok(fact)
 }
 
 #[cfg(test)]

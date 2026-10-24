@@ -7,12 +7,24 @@ use serde_json::json;
 use std::{fs, os::unix::fs::PermissionsExt};
 
 #[test]
-fn deployment_channel_starts_from_an_editable_catalog_graph_without_a_pilot_entry() {
+fn a_bot_configured_on_its_graph_starts_its_gateway_and_the_graph_stays_editable() {
     let mut graph = json!({
-        "objective":"editable channel", "entry":"assistant",
+        "objective":"editable channel", "entry":"wait_input",
         "agents":{"worker":{"model":"fixture"}},
-        "nodes":[{"id":"assistant","agent":"worker","plugins":["channel"]}],
-        "edges":[]
+        "ops":{
+            "wait_input":{"host":{"operation":"session.wait_input"}},
+            "reply":{"host":{"operation":"session.reply"}}
+        },
+        "nodes":[
+            {"id":"wait_input","op":"wait_input"},
+            {"id":"assistant","agent":"worker","plugins":["channel"]},
+            {"id":"reply","op":"reply"}
+        ],
+        "edges":[
+            {"from":"wait_input","to":"assistant"},
+            {"from":"assistant","to":"reply"},
+            {"from":"reply","to":"wait_input"}
+        ]
     });
     let host = Host::new(&graph);
     let root = host.root.path();
@@ -45,19 +57,33 @@ fn deployment_channel_starts_from_an_editable_catalog_graph_without_a_pilot_entr
     let server = host.serve_configured_without_model(|process| {
         process
             .env_remove("ANCHOR_RUNNER_GRAPH_NAME")
-            .env_remove("ANCHOR_RUNNER_BUNDLE_ROOT")
-            .env("ANCHOR_WECOM_GRAPH", "assistant")
-            .env("ANCHOR_WECOM_REPLY_NODE", "assistant")
-            .env("ANCHOR_WECOM_USERS", "fixture-member");
+            .env_remove("ANCHOR_RUNNER_BUNDLE_ROOT");
     });
-    wait_until("selected channel process", || {
-        host.state_root().join("channels/wecom/started").is_file()
+    let (status, configured) = server.request(
+        "PUT",
+        "/graphs/assistant/channel",
+        Some(&json!({"users":["fixture-member"],"send_users":["fixture-member"]})),
+    );
+    assert_eq!(status, 200, "{configured}");
+    let (status, enabled) = server.request(
+        "POST",
+        "/graphs/assistant/channel/enabled",
+        Some(&json!({"enabled":true,"expected_binding":configured["binding"]})),
+    );
+    assert_eq!(status, 200, "{enabled}");
+    wait_until("the Graph's gateway process", || {
+        host.state_root()
+            .join("channels/graphs/assistant/started")
+            .is_file()
     });
-    let (status, channel) = server.request("GET", "/channels/wecom/configuration", None);
+    let (status, channel) = server.request("GET", "/graphs/assistant/channel", None);
     assert_eq!(status, 200, "{channel}");
     assert_eq!(channel["enabled"], true);
-    assert_eq!(channel["binding"]["graph"], "assistant");
+    assert_eq!(channel["reply_node"], "assistant");
     assert_eq!(channel["binding"]["plugin"], "channel");
+    let (status, listed) = server.request("GET", "/channels", None);
+    assert_eq!(status, 200, "{listed}");
+    assert_eq!(listed["channels"][0]["graph"], "assistant");
     graph["objective"] = json!("updated channel definition");
     let (status, updated) = server.request(
         "PUT",

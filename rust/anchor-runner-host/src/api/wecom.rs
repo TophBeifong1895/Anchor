@@ -59,13 +59,7 @@ struct WecomEvent {
 }
 
 impl WecomEvent {
-    fn validate(&self, config: &WecomSettings) -> Result<(), HttpResponse> {
-        if config.graph.is_empty() || config.reply_node.is_empty() {
-            return Err(error(
-                StatusCode::SERVICE_UNAVAILABLE,
-                "WeCom Graph and reply node are not configured",
-            ));
-        }
+    fn validate(&self, config: &BotSettings) -> Result<(), HttpResponse> {
         self.validate_payload(true)?;
         if !config.allows(&self.sender_id) {
             return Err(error(StatusCode::FORBIDDEN, "WeCom user is not allowed"));
@@ -143,36 +137,56 @@ pub(super) fn inbound_id_for(source: &str, event_id: &str) -> String {
     format!("wecom-{:x}", digest.finalize())
 }
 
-#[allow(clippy::result_large_err)]
-fn current_settings(state: &ApiState, owner: &str) -> Result<WecomSettings, HttpResponse> {
-    if state.application.channel_management().is_err() {
-        return Ok(state.wecom.clone());
+/// The binding a callback addresses. The Graph comes from the route, which
+/// the auth layer already matched against the caller's callback key; the
+/// account, reply node and members are the Host's, never the event's.
+struct BotSettings {
+    graph: String,
+    reply_node: String,
+    account: Option<String>,
+    users: HashSet<String>,
+}
+
+impl BotSettings {
+    fn allows(&self, user: &str) -> bool {
+        self.users.contains("*") || self.users.contains(user)
     }
+}
+
+#[allow(clippy::result_large_err)]
+fn current_settings(
+    state: &ApiState,
+    owner: &str,
+    graph: &str,
+) -> Result<BotSettings, HttpResponse> {
     let channel = state
         .application
-        .channel_snapshot("wecom")
+        .channel_snapshot(graph)
         .map_err(application_error)?
         .ok_or_else(|| {
             error(
                 StatusCode::SERVICE_UNAVAILABLE,
-                "WeCom channel is not configured",
+                "this Graph has no bot binding",
             )
         })?;
     if channel.owner != owner {
         return Err(error(
             StatusCode::FORBIDDEN,
-            "WeCom channel belongs to another owner",
+            "this Graph's bot belongs to another owner",
         ));
     }
-    if !channel.enabled {
-        return Err(error(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "WeCom channel is stopped",
-        ));
-    }
-    Ok(WecomSettings {
-        graph: channel.binding.graph,
-        reply_node: channel.binding.reply_node,
+    let reply_node = match channel.reply_node {
+        Some(reply_node) if channel.enabled => reply_node,
+        _ => {
+            return Err(error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "this Graph's bot is stopped",
+            ));
+        }
+    };
+    Ok(BotSettings {
+        graph: channel.graph,
+        reply_node,
         account: channel.account,
         users: channel.binding.users.into_iter().collect(),
     })
@@ -181,6 +195,7 @@ fn current_settings(state: &ApiState, owner: &str) -> Result<WecomSettings, Http
 pub(super) async fn receive_event(
     State(state): State<ApiState>,
     headers: HeaderMap,
+    AxumPath(graph): AxumPath<String>,
     body: axum::body::Bytes,
 ) -> Result<(StatusCode, Json<Value>), HttpResponse> {
     let payload: Value = serde_json::from_slice(&body)
@@ -188,13 +203,13 @@ pub(super) async fn receive_event(
     if payload.get("settlement").is_some() {
         return Ok((
             StatusCode::OK,
-            settle_delivery_value(&state, &headers, payload).await?,
+            settle_delivery_value(&state, &headers, &graph, payload).await?,
         ));
     }
     let envelope: EventEnvelope = serde_json::from_value(payload)
         .map_err(|_| error(StatusCode::BAD_REQUEST, "invalid WeCom event envelope"))?;
     let owner = private_owner(&state, &headers);
-    let config = current_settings(&state, &owner)?;
+    let config = current_settings(&state, &owner, &graph)?;
     envelope.event.validate(&config)?;
     let prepared_attachments = crate::channel_inputs::prepare(&envelope.event.attachments)
         .map_err(|failure| error(StatusCode::BAD_REQUEST, failure))?;
@@ -708,19 +723,10 @@ pub(super) async fn stop_previous_run(
     }
 }
 
-pub(super) async fn settle_delivery(
-    State(state): State<ApiState>,
-    headers: HeaderMap,
-    body: axum::body::Bytes,
-) -> Result<Json<Value>, HttpResponse> {
-    let payload: Value = serde_json::from_slice(&body)
-        .map_err(|_| error(StatusCode::BAD_REQUEST, "invalid WeCom settlement envelope"))?;
-    settle_delivery_value(&state, &headers, payload).await
-}
-
 async fn settle_delivery_value(
     state: &ApiState,
     headers: &HeaderMap,
+    graph: &str,
     payload: Value,
 ) -> Result<Json<Value>, HttpResponse> {
     let envelope: SettlementEnvelope = serde_json::from_value(payload)
@@ -771,7 +777,8 @@ async fn settle_delivery_value(
     // the platform's own empty text can never match it. The receipt key names
     // this exact inbound and the identity fields below pin the sender and
     // conversation, which is what "the same message" means here.
-    if inbound.request.identity.source != envelope.event.source
+    if inbound.request.graph != graph
+        || inbound.request.identity.source != envelope.event.source
         || Some(inbound.request.identity.conversation_kind) != envelope.event.conversation_kind()
         || inbound.request.identity.conversation_id != envelope.event.conversation_id
         || inbound.request.identity.sender_id != envelope.event.sender_id

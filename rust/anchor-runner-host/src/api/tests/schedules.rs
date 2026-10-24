@@ -183,8 +183,6 @@ fn reload_accepts_legacy_schedule_array_and_skips_downtime_occurrences() {
         api_keys: Vec::new(),
         schedules,
         pilots: crate::pilot_host::PilotService::default(),
-        wecom: Default::default(),
-        channel_descriptors: Default::default(),
         channel_event_locks: Default::default(),
         response_fixture: None,
     };

@@ -1,57 +1,11 @@
 use super::*;
-use crate::application::channel_management::{
-    ChannelBinding, ChannelManagementPort, ChannelRuntimeState,
-};
-use futures_util::future::BoxFuture;
+use crate::application::channel_management::fake::FakeChannels;
 
-struct Port(ChannelRuntimeState);
-
-impl ChannelManagementPort for Port {
-    fn status<'a>(
-        &'a self,
-        _: &'a str,
-        _: &'a str,
-    ) -> BoxFuture<'a, Result<Value, ApplicationError>> {
-        Box::pin(async { Ok(json!({})) })
-    }
-    fn configure<'a>(
-        &'a self,
-        _: &'a str,
-        _: &'a str,
-        _: ChannelBinding,
-    ) -> BoxFuture<'a, Result<Value, ApplicationError>> {
-        Box::pin(async { Err(ApplicationError::Missing) })
-    }
-    fn set_enabled<'a>(
-        &'a self,
-        _: &'a str,
-        _: &'a str,
-        _: bool,
-    ) -> BoxFuture<'a, Result<Value, ApplicationError>> {
-        Box::pin(async { Err(ApplicationError::Missing) })
-    }
-    fn snapshot(&self, _: &str) -> Result<Option<ChannelRuntimeState>, ApplicationError> {
-        Ok(Some(self.0.clone()))
-    }
-    fn callback_owner(&self, _: &str, _: &str) -> Option<String> {
-        None
-    }
-}
-
-fn port(enabled: bool, account: &str) -> std::sync::Arc<Port> {
-    std::sync::Arc::new(Port(ChannelRuntimeState {
-        owner: "local".into(),
-        binding: ChannelBinding {
-            graph: "fixture".into(),
-            reply_node: "assistant".into(),
-            plugin: "wecom".into(),
-            users: vec!["user-a".into()],
-            send_users: vec!["user-a".into()],
-        },
-        enabled,
-        account: Some(account.into()),
-        descriptor: None,
-    }))
+fn port(enabled: bool, account: &str) -> std::sync::Arc<FakeChannels> {
+    let mut bot = FakeChannels::bot("fixture", "local", "assistant", &["user-a"]);
+    bot.enabled = enabled;
+    bot.account = Some(account.into());
+    std::sync::Arc::new(FakeChannels::new().with(bot))
 }
 
 #[tokio::test]
@@ -90,7 +44,7 @@ async fn disabled_or_replaced_deployments_do_not_handover_and_explain_blocked_re
         assert!(
             body["recovery_blocked"]
                 .as_str()
-                .is_some_and(|reason| reason.contains("deployment binding"))
+                .is_some_and(|reason| reason.contains("enabled bot"))
         );
         let (status, _) = call(app, "POST", "/runs/persistent-fixture-run/resume", None).await;
         assert_eq!(status, StatusCode::CONFLICT);

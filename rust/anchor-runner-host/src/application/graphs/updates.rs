@@ -68,6 +68,7 @@ impl RunApplication {
         let _graph_lease = self.graph_admission_lease(&path)?;
         let (path, previous) = self.load_graph(name)?;
         let next = self.validate_graph(&definition)?;
+        self.check_channel_graph_update(name, &next)?;
         let effect = activation(&next)?;
         let mut sessions = None;
         for (run_id, record) in self.runs_for_graph(&Self::graph_identity(&path)?)? {

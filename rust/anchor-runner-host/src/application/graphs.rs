@@ -110,6 +110,16 @@ impl RunApplication {
         FilePluginCatalog::new(crate::library_root(&self.catalog_root))
             .resolve(&ids)
             .map_err(GraphValidationFailure::Unavailable)?;
+        // R2: one channel Plugin per persistent assistant.
+        super::channel_management::channel_plan(
+            &snapshot,
+            &crate::library_root(&self.catalog_root),
+        )
+        .map_err(|_| {
+            GraphValidationFailure::Authoring(GraphError::InvalidSnapshot(
+                super::channel_management::TWO_CHANNELS.into(),
+            ))
+        })?;
         Ok(snapshot)
     }
 
@@ -195,6 +205,12 @@ impl RunApplication {
                 "edges": []
             })
         });
+        if let Ok(snapshot) = GraphSnapshot::from_authoring(definition.clone()) {
+            super::channel_management::channel_plan(
+                &snapshot,
+                &crate::library_root(&self.catalog_root),
+            )?;
+        }
         create_graph_bundle_from_catalog(&path, &definition, &self.catalog_root)?;
         Ok(json!({"graph":name,"definition":definition}))
     }

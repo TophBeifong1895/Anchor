@@ -73,7 +73,7 @@ struct ProgressItem {
 pub(super) async fn wecom_progress(
     State(state): State<ApiState>,
     headers: HeaderMap,
-    AxumPath(event_id): AxumPath<String>,
+    AxumPath((graph, event_id)): AxumPath<(String, String)>,
     AxumQuery(query): AxumQuery<ProgressQuery>,
 ) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, HttpResponse> {
     let last = match headers.get("last-event-id") {
@@ -86,13 +86,21 @@ pub(super) async fn wecom_progress(
     };
     let after = query.after.unwrap_or(0).max(last);
     let owner = private_owner(&state, &headers);
+    // Message ids are unique per bot only: the Graph's own account scopes them.
+    let account = state
+        .application
+        .channel_snapshot(&graph)
+        .map_err(application_error)?
+        .and_then(|channel| channel.account)
+        .unwrap_or_default();
     let inbound = wecom::inbound_id_for("wecom", &event_id);
     let lookup_state = state.clone();
     let lookup_owner = owner.clone();
+    let lookup_account = account.clone();
     let lookup_inbound = inbound.clone();
     let found = blocking(move || {
         store(&lookup_state)?
-            .channel_run_for_inbound(&lookup_owner, &lookup_inbound)
+            .channel_run_for_inbound(&lookup_owner, "wecom", &lookup_account, &lookup_inbound)
             .map_err(session_error)
     })
     .await?;
@@ -102,6 +110,7 @@ pub(super) async fn wecom_progress(
     let cursor = Cursor {
         state: state.clone(),
         owner,
+        account,
         inbound,
         after,
         emitted: BTreeSet::new(),
@@ -130,6 +139,7 @@ pub(super) async fn wecom_progress(
 struct Cursor {
     state: ApiState,
     owner: String,
+    account: String,
     inbound: String,
     after: u64,
     emitted: BTreeSet<String>,
@@ -144,10 +154,11 @@ impl Cursor {
     async fn poll(&mut self) {
         let state = self.state.clone();
         let owner = self.owner.clone();
+        let account = self.account.clone();
         let inbound = self.inbound.clone();
         let lookup = tokio::task::spawn_blocking(move || {
             store(&state)?
-                .channel_run_for_inbound(&owner, &inbound)
+                .channel_run_for_inbound(&owner, "wecom", &account, &inbound)
                 .map_err(session_error)
         })
         .await;

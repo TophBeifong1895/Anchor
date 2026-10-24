@@ -227,31 +227,48 @@ impl SessionStore {
     /// Which channel session, turn and Run an admitted inbound message belongs
     /// to. Read-only: the live progress projection resolves its subject through
     /// this lookup instead of trusting a caller-supplied Run.
+    ///
+    /// Platform message ids are unique only per bot, so the lookup is scoped to
+    /// the bot account that received the message; aliases resolve to the same
+    /// canonical account as admission.
     pub fn channel_run_for_inbound(
         &self,
         owner: &str,
+        source: &str,
+        account: &str,
         inbound_id: &str,
     ) -> Result<Option<ChannelInboundRun>, SessionError> {
         store::validate_identity(owner, "owner")?;
+        validate_channel_value(source, "source", MAX_CHANNEL_VALUE_BYTES)?;
+        if account.len() > MAX_CHANNEL_VALUE_BYTES || account.chars().any(char::is_control) {
+            return Err(SessionError::Invalid("invalid channel account".into()));
+        }
         validate_channel_value(inbound_id, "inbound id", MAX_INBOUND_ID_BYTES)?;
         let connection = self.lock()?;
-        let run = connection
-            .query_row(
-                "SELECT inbound.session_id, inbound.turn_id, inbound.run_id
-                   FROM channel_inbounds inbound
-                   JOIN channel_sessions session ON session.session_id = inbound.session_id
-                  WHERE inbound.inbound_id = ?1 AND session.owner = ?2",
-                params![inbound_id, owner],
-                |row| {
-                    Ok(ChannelInboundRun {
-                        session_id: row.get(0)?,
-                        turn_id: row.get(1)?,
-                        run_id: row.get(2)?,
-                    })
+        let expected = accounts::canonical_account(&connection, owner, source, account)?;
+        let mut statement = connection.prepare(
+            "SELECT inbound.session_id, inbound.turn_id, inbound.run_id, session.account
+               FROM channel_inbounds inbound
+               JOIN channel_sessions session ON session.session_id = inbound.session_id
+              WHERE inbound.inbound_id = ?1 AND session.owner = ?2 AND session.source = ?3",
+        )?;
+        let rows = statement.query_map(params![inbound_id, owner, source], |row| {
+            Ok((
+                ChannelInboundRun {
+                    session_id: row.get(0)?,
+                    turn_id: row.get(1)?,
+                    run_id: row.get(2)?,
                 },
-            )
-            .optional()?;
-        Ok(run)
+                row.get::<_, String>(3)?,
+            ))
+        })?;
+        for row in rows {
+            let (run, saved) = row?;
+            if accounts::canonical_account(&connection, owner, source, &saved)? == expected {
+                return Ok(Some(run));
+            }
+        }
+        Ok(None)
     }
 
     pub fn get_channel_relation(

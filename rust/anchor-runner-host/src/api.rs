@@ -78,51 +78,10 @@ struct ApiState {
     api_keys: Vec<String>,
     schedules: ScheduleStoreHandle,
     pilots: crate::pilot_host::PilotService,
-    wecom: WecomSettings,
-    channel_descriptors: std::collections::BTreeMap<String, PathBuf>,
     channel_event_locks:
         std::sync::Arc<tokio::sync::Mutex<HashMap<String, std::sync::Arc<tokio::sync::Mutex<()>>>>>,
     #[cfg(test)]
     response_fixture: Option<String>,
-}
-
-#[derive(Clone, Default)]
-struct WecomSettings {
-    graph: String,
-    reply_node: String,
-    account: Option<String>,
-    users: HashSet<String>,
-}
-
-impl WecomSettings {
-    fn from_env() -> Self {
-        Self {
-            graph: env::var("ANCHOR_WECOM_GRAPH")
-                .unwrap_or_default()
-                .trim()
-                .to_owned(),
-            reply_node: env::var("ANCHOR_WECOM_REPLY_NODE")
-                .unwrap_or_else(|_| "assistant".into())
-                .trim()
-                .to_owned(),
-            account: env::var("WECOM_BOT_ID")
-                .ok()
-                .map(|value| value.trim().to_owned())
-                .filter(|value| !value.is_empty())
-                .map(|value| crate::channel_supervisor::management::wecom_account_identity(&value)),
-            users: env::var("ANCHOR_WECOM_USERS")
-                .unwrap_or_default()
-                .split(',')
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .map(str::to_owned)
-                .collect(),
-        }
-    }
-
-    fn allows(&self, user: &str) -> bool {
-        self.users.contains("*") || self.users.contains(user)
-    }
 }
 
 fn error(status: StatusCode, message: impl Into<String>) -> HttpResponse {
@@ -141,28 +100,14 @@ async fn auth(
         .and_then(|v| v.to_str().ok())
         .and_then(|v| v.strip_prefix("Bearer "))
         .unwrap_or("");
-    if key.starts_with("anchor-channel-api-")
-        || state
-            .application
-            .channel_callback_owner("wecom", key)
-            .is_some()
-    {
-        let path = request.uri().path();
-        let allowed = (request.method() == axum::http::Method::POST
-            && matches!(
-                path,
-                "/channels/wecom/events" | "/channels/wecom/settlements"
-            ))
-            || (request.method() == axum::http::Method::GET
-                && path
-                    .strip_prefix("/channels/wecom/progress/")
-                    .is_some_and(|event| !event.is_empty() && !event.contains('/')));
-        if !allowed
-            || state
-                .application
-                .channel_callback_owner("wecom", key)
-                .is_none()
-        {
+    // A gateway's callback key reaches only its own bot Graph's two
+    // callback routes; a key of the earlier single-bot shape reaches nothing.
+    let callback = state.application.channel_callback(key);
+    if key.starts_with("anchor-channel-api-") || callback.is_some() {
+        let allowed = callback.is_some_and(|callback| {
+            channel_callback_path(request.method(), request.uri().path(), &callback.graph)
+        });
+        if !allowed {
             return error(
                 StatusCode::UNAUTHORIZED,
                 "invalid channel callback authorization",
@@ -186,6 +131,20 @@ async fn auth(
         };
     }
     next.run(request).await
+}
+
+fn channel_callback_path(method: &axum::http::Method, path: &str, graph: &str) -> bool {
+    let Some(rest) = path
+        .strip_prefix("/channels/")
+        .and_then(|rest| rest.strip_prefix(graph))
+    else {
+        return false;
+    };
+    (method == axum::http::Method::POST && rest == "/events")
+        || (method == axum::http::Method::GET
+            && rest
+                .strip_prefix("/progress/")
+                .is_some_and(|event| !event.is_empty() && !event.contains('/')))
 }
 
 async fn secure_private_responses(request: axum::extract::Request, next: Next) -> HttpResponse {
@@ -333,8 +292,11 @@ pub async fn serve() -> io::Result<()> {
     );
     let mut application = RunApplication::new(data_root.clone(), catalog_root.clone())
         .with_runtime_configuration(runtime_configuration);
-    if configured_bundle.is_some() {
-        application = application.with_configured_graph(graph_name.clone(), bundle_root.clone());
+    let configured_graph_entry = configured_bundle
+        .is_some()
+        .then(|| (graph_name.clone(), bundle_root.clone()));
+    if let Some((name, path)) = configured_graph_entry.clone() {
+        application = application.with_configured_graph(name, path);
     }
     let schedules = ScheduleStore::open(schedules_path).map_err(io::Error::other)?;
     application = application.with_schedule_management(Arc::new(
@@ -354,8 +316,6 @@ pub async fn serve() -> io::Result<()> {
         api_keys,
         schedules,
         pilots: crate::pilot_host::PilotService::default(),
-        wecom: WecomSettings::from_env(),
-        channel_descriptors: Default::default(),
         channel_event_locks: Default::default(),
         #[cfg(test)]
         response_fixture: None,
@@ -380,73 +340,15 @@ pub async fn serve() -> io::Result<()> {
             &callback_listen,
         ),
     ));
-    // A deployment-configured channel selects its own editable catalog Graph;
-    // listening must not require marking that Graph as the protected Pilot entry.
-    let channel_bundle = if !state.wecom.graph.is_empty() {
-        Some(
-            state
-                .application
-                .graph_path_checked(&state.wecom.graph)
-                .map_err(io::Error::other)?,
-        )
-    } else {
-        configured_bundle.clone()
-    };
-    let mut channel_supervisor = if let Some(channel_bundle) = channel_bundle {
-        crate::channel_supervisor::ChannelSupervisor::start(
-            &channel_bundle,
-            &crate::library_root(&state.catalog_root),
-            &state.data_root,
-            &callback_listen,
-            &state.api_keys,
-        )
-        .await?
-    } else {
-        None
-    };
-    if let Some(supervisor) = channel_supervisor.as_ref()
-        && let Some(descriptor) = supervisor.descriptor("wecom")
-        && let Some(existing) = env::var_os("ANCHOR_CHANNEL_CONTROL_DESCRIPTOR")
-        && Path::new(&existing) != descriptor
-    {
-        if let Some(supervisor) = channel_supervisor.as_mut() {
-            supervisor.shutdown().await;
-        }
-        return Err(io::Error::other(
-            "ANCHOR_CHANNEL_CONTROL_DESCRIPTOR conflicts with the discovered WeCom channel",
-        ));
-    }
-    if channel_supervisor.is_some()
-        && (env::var_os("ANCHOR_CHANNEL_CONTROL_SOCKET").is_some()
-            || env::var_os("ANCHOR_CHANNEL_CONTROL_TOKEN").is_some())
-    {
-        if let Some(supervisor) = channel_supervisor.as_mut() {
-            supervisor.shutdown().await;
-        }
-        return Err(io::Error::other(
-            "automatic channel supervision does not accept inherited control socket or token",
-        ));
-    }
-    if let Some(supervisor) = channel_supervisor.as_ref() {
-        state.channel_descriptors = supervisor.descriptors();
-    }
-    let deployment_headers = state
-        .api_keys
-        .first()
-        .and_then(|key| axum::http::HeaderValue::from_str(&format!("Bearer {key}")).ok())
-        .map(|value| HeaderMap::from_iter([(header::AUTHORIZATION, value)]))
-        .unwrap_or_default();
-    let deployment_owner = private_owner(&state, &deployment_headers);
     let channel_manager = Arc::new(
         crate::channel_supervisor::management::ChannelManagementAdapter::open(
-            crate::channel_supervisor::management::ChannelHostConfiguration::from_env(
-                state.data_root.clone(),
-                state.catalog_root.clone(),
-                crate::library_root(&state.catalog_root),
-                callback_listen,
-                deployment_owner,
-            ),
-            channel_supervisor.take(),
+            crate::channel_supervisor::management::ChannelHostConfiguration {
+                data_root: state.data_root.clone(),
+                catalog_root: state.catalog_root.clone(),
+                configured_graph: configured_graph_entry.clone(),
+                library_root: crate::library_root(&state.catalog_root),
+                listen: callback_listen,
+            },
         )
         .map_err(io::Error::other)?,
     );
@@ -1112,9 +1014,9 @@ fn router_with_readiness_and_web_root(
     web_root: PathBuf,
 ) -> Router {
     let wecom_events = Router::new()
-        .route("/channels/wecom/events", post(wecom::receive_event))
+        .route("/channels/{graph}/events", post(wecom::receive_event))
         .route(
-            "/channels/wecom/progress/{event_id}",
+            "/channels/{graph}/progress/{event_id}",
             get(wecom_progress::wecom_progress),
         )
         .layer(DefaultBodyLimit::max(crate::channel_inputs::MAX_BODY_BYTES))
@@ -1177,14 +1079,7 @@ fn router_with_readiness_and_web_root(
         .route("/sessions", get(list_sessions).post(create_session))
         .merge(credential_requests::router())
         .merge(settings::router())
-        .route(
-            "/channels/{platform}/configuration",
-            get(channel_management::status).put(channel_management::configure),
-        )
-        .route(
-            "/channels/{platform}/enabled",
-            post(channel_management::set_enabled),
-        )
+        .merge(channel_management::router())
         .route(
             "/sessions/{session}",
             get(get_session).put(rename_session).delete(delete_session),
@@ -1229,7 +1124,6 @@ fn router_with_readiness_and_web_root(
             "/channel-sessions/{session}/assistant/retire",
             post(retire_channel_assistant),
         )
-        .route("/channels/wecom/settlements", post(wecom::settle_delivery))
         .route(
             "/channel-sessions/{session}/inbounds/{inbound}",
             get(get_channel_relation),

@@ -5,14 +5,13 @@ use std::{sync::Arc, time::Duration};
 const FIELDS: &[&str] = &[
     "WECOM_BOT_ID",
     "WECOM_BOT_SECRET",
-    "ANCHOR_WECOM_GRAPH",
-    "ANCHOR_WECOM_REPLY_NODE",
     "ANCHOR_WECOM_USERS",
     "ANCHOR_WECOM_SEND_USERS",
 ];
 
 use crate::test_support::Environment;
 
+/// Two bot Graphs, `alpha` and `beta`, mount the same channel Plugin.
 struct Fixture {
     root: tempfile::TempDir,
     adapter: Arc<ChannelManagementAdapter>,
@@ -21,85 +20,7 @@ struct Fixture {
     turn: String,
 }
 
-#[cfg(target_os = "linux")]
-#[tokio::test]
-async fn channel_observation_skips_code_reads_but_revalidates_live_authorization_and_resources() {
-    use rustix::{fs::inotify, io::Errno};
-    use std::mem::MaybeUninit;
-
-    let _guard = crate::PROCESS_ENV_LOCK.lock().await;
-    let _environment = Environment::cleared(FIELDS);
-    let fixture = Fixture::new();
-    fixture.prepare().await;
-    let (metadata, channel) = fixture.adapter.metadata(&Fixture::binding()).unwrap();
-    let definition = FilePluginCatalog::new(fixture.root.path().join("library"))
-        .definition("gateway")
-        .unwrap();
-    assert_eq!(
-        crate::credential_store::channel_authorization(&metadata, "wecom").unwrap(),
-        crate::credential_store::target_authorization(&definition, "channel_wecom").unwrap()
-    );
-    let mut fact = fixture.adapter.fact().unwrap().unwrap();
-    let values = fixture
-        .adapter
-        .credentials(&fact, &metadata, &channel)
-        .unwrap();
-    assert_eq!(
-        values,
-        crate::credential_store::environment_values(
-            &fixture.root.path().join("state"),
-            &crate::credential_store::binding_owner("local"),
-            &definition,
-            "channel_wecom",
-        )
-        .unwrap()
-    );
-    fact.enabled = true;
-    fact.account = fixture
-        .adapter
-        .register_account(&fact.owner, &values)
-        .unwrap();
-    fixture.adapter.publish(fact).unwrap();
-
-    let plugin = fixture.root.path().join("library/plugins/gateway");
-    let watcher =
-        inotify::init(inotify::CreateFlags::NONBLOCK | inotify::CreateFlags::CLOEXEC).unwrap();
-    inotify::add_watch(
-        &watcher,
-        plugin.join("bin/gateway"),
-        inotify::WatchFlags::OPEN,
-    )
-    .unwrap();
-    for _ in 0..3 {
-        assert!(fixture.adapter.snapshot("wecom").unwrap().unwrap().enabled);
-        assert_eq!(
-            fixture.adapter.status("local", "wecom").await.unwrap()["available"],
-            true
-        );
-    }
-    let mut buffer = [MaybeUninit::uninit(); 512];
-    assert!(matches!(
-        inotify::Reader::new(&watcher, &mut buffer).next(),
-        Err(Errno::WOULDBLOCK)
-    ));
-    fixture.adapter.definition(&Fixture::binding()).unwrap();
-    assert!(inotify::Reader::new(&watcher, &mut buffer).next().is_ok());
-
-    let declaration = fs::read(plugin.join("channel.json")).unwrap();
-    let mut changed: Value = serde_json::from_slice(&declaration).unwrap();
-    changed["description"] = json!("changed authorization");
-    fs::write(plugin.join("channel.json"), changed.to_string()).unwrap();
-    assert!(!fixture.adapter.snapshot("wecom").unwrap().unwrap().enabled);
-    assert_eq!(
-        fixture.adapter.status("local", "wecom").await.unwrap()["available"],
-        false
-    );
-    fs::write(plugin.join("channel.json"), declaration).unwrap();
-    assert!(fixture.adapter.snapshot("wecom").unwrap().unwrap().enabled);
-    fs::remove_file(plugin.join("bin/gateway")).unwrap();
-    assert!(!fixture.adapter.snapshot("wecom").unwrap().unwrap().enabled);
-    assert!(fixture.adapter.definition(&Fixture::binding()).is_err());
-}
+const ASSISTANT: &str = r#"{"entry":"wait","agents":{"reply":{"model":"fixture","instructions":"fixture"}},"ops":{"wait":{"host":{"operation":"session.wait_input"}},"deliver":{"host":{"operation":"session.reply"}}},"nodes":[{"id":"wait","op":"wait"},{"id":"reply","agent":"reply","plugins":["gateway"]},{"id":"deliver","op":"deliver"}],"edges":[{"from":"wait","to":"reply"},{"from":"reply","to":"deliver"},{"from":"deliver","to":"wait"}]}"#;
 
 impl Fixture {
     fn new() -> Self {
@@ -108,21 +29,24 @@ impl Fixture {
         fs::create_dir_all(plugin.join("bin")).unwrap();
         fs::write(
             plugin.join("plugin.json"),
-            json!({"name":"Fixture gateway","mutable":["observed/"]}).to_string(),
+            json!({"name":"Fixture gateway"}).to_string(),
         )
         .unwrap();
         fs::write(plugin.join("channel.json"), json!({"platform":"wecom","transport":"websocket","entrypoint":"bin/gateway","required_environment":["WECOM_BOT_ID","WECOM_BOT_SECRET"]}).to_string()).unwrap();
+        // Each Graph's gateway reports into its own state directory.
         fs::write(
             plugin.join("bin/gateway"),
             r#"#!/bin/sh
-mkdir -p observed
-printf '%s' "$WECOM_BOT_ID" > observed/account
-printf '%s' "$WECOM_BOT_SECRET" > observed/secret
-printf '%s' "$ANCHOR_API_KEY" > observed/callback
-printf '%s' "$ANCHOR_WECOM_USERS" > observed/users
-printf '%s' "$ANCHOR_WECOM_SEND_USERS" > observed/send-users
-printf 'x' >> observed/starts
-trap 'printf stopped > observed/stopped; exit 0' TERM
+o="$WECOM_CHANNEL_STATE/observed"
+mkdir -p "$o"
+printf '%s' "$WECOM_BOT_ID" > "$o/account"
+printf '%s' "$WECOM_BOT_SECRET" > "$o/secret"
+printf '%s' "$ANCHOR_API_KEY" > "$o/callback"
+printf '%s' "$ANCHOR_CHANNEL_WEBHOOK_URL" > "$o/webhook"
+printf '%s' "$ANCHOR_WECOM_USERS" > "$o/users"
+printf '%s' "$ANCHOR_WECOM_SEND_USERS" > "$o/send-users"
+printf 'x' >> "$o/starts"
+trap 'printf stopped > "$o/stopped"; exit 0' TERM
 while :; do sleep 0.02; done
 "#,
         )
@@ -132,14 +56,15 @@ while :; do sleep 0.02; done
             fs::Permissions::from_mode(0o700),
         )
         .unwrap();
-        let graph = root.path().join("catalog/task");
-        fs::create_dir_all(&graph).unwrap();
-        fs::write(graph.join("graph.json"),json!({"entry":"wait","agents":{"reply":{"model":"fixture","instructions":"fixture"}},"ops":{"wait":{"host":{"operation":"session.wait_input"}},"deliver":{"host":{"operation":"session.reply"}}},"nodes":[{"id":"wait","op":"wait"},{"id":"reply","agent":"reply","plugins":["gateway"]},{"id":"deliver","op":"deliver"}],"edges":[{"from":"wait","to":"reply"},{"from":"reply","to":"deliver"},{"from":"deliver","to":"wait"}]}).to_string()).unwrap();
-        fs::write(
-            graph.join("manifest.json"),
-            json!({"format":1,"graph":"graph.json","plugins":[{"id":"gateway"}]}).to_string(),
-        )
-        .unwrap();
+        for graph in ["alpha", "beta"] {
+            Self::graph(root.path(), graph, ASSISTANT);
+        }
+        // A one-shot Graph that mounts the Plugin is not a bot.
+        Self::graph(
+            root.path(),
+            "task",
+            r#"{"entry":"reply","agents":{"reply":{"model":"fixture","instructions":"fixture"}},"nodes":[{"id":"reply","agent":"reply","plugins":["gateway"]}],"edges":[]}"#,
+        );
         fs::create_dir_all(root.path().join("state/platform")).unwrap();
         let sessions =
             SessionStore::open(root.path().join("state/platform/sessions.sqlite")).unwrap();
@@ -155,9 +80,8 @@ while :; do sleep 0.02; done
         let (turn, _) = sessions
             .create_turn("local", "pilot", "initialize-channel", None)
             .unwrap();
-        let adapter = Arc::new(
-            ChannelManagementAdapter::open(Self::configuration(root.path()), None).unwrap(),
-        );
+        let adapter =
+            Arc::new(ChannelManagementAdapter::open(Self::configuration(root.path())).unwrap());
         Self {
             root,
             adapter,
@@ -167,71 +91,88 @@ while :; do sleep 0.02; done
         }
     }
 
-    fn configuration(root: &Path) -> ChannelHostConfiguration {
-        ChannelHostConfiguration::from_env(
-            root.join("state"),
-            root.join("catalog"),
-            root.join("library"),
-            "127.0.0.1:8077".into(),
-            "local".into(),
+    fn graph(root: &Path, name: &str, graph: &str) {
+        let directory = root.join("catalog").join(name);
+        fs::create_dir_all(&directory).unwrap();
+        fs::write(directory.join("graph.json"), graph).unwrap();
+        fs::write(
+            directory.join("manifest.json"),
+            json!({"format":1,"graph":"graph.json","plugins":[{"id":"gateway"}]}).to_string(),
         )
+        .unwrap();
     }
 
-    fn binding() -> ChannelBinding {
-        ChannelBinding {
-            graph: "task".into(),
-            reply_node: "reply".into(),
-            plugin: "gateway".into(),
-            users: vec!["alice".into()],
-            send_users: vec!["alice".into()],
+    fn configuration(root: &Path) -> ChannelHostConfiguration {
+        ChannelHostConfiguration {
+            data_root: root.join("state"),
+            catalog_root: root.join("catalog"),
+            configured_graph: None,
+            library_root: root.join("library"),
+            listen: "127.0.0.1:8077".into(),
         }
     }
 
-    async fn prepare(&self) {
+    fn binding(user: &str) -> ChannelBinding {
+        ChannelBinding {
+            plugin: "gateway".into(),
+            users: vec![user.into()],
+            send_users: vec![user.into()],
+        }
+    }
+
+    async fn configure(&self, graph: &str, user: &str) {
         self.adapter
-            .configure("local", "wecom", Self::binding())
+            .configure("local", graph, Self::binding(user))
             .await
             .unwrap();
-        for (field, value) in [
-            ("WECOM_BOT_ID", "private-fixture-bot"),
-            ("WECOM_BOT_SECRET", "private-fixture-secret"),
-        ] {
-            let request = crate::credential_store::request(
-                &self.root.path().join("state"),
-                &self.root.path().join("library"),
-                &self.sessions,
-                "local",
-                &self.session,
-                &self.turn,
-                "gateway",
-                "channel_wecom",
-                field,
-                "configure local test gateway",
-            )
-            .unwrap();
-            crate::credential_store::submit(
-                &self.root.path().join("state"),
-                &self.root.path().join("library"),
-                &self.sessions,
-                "local",
-                &self.session,
-                &request.id,
-                value,
-            )
-            .unwrap();
-        }
     }
 
-    fn observed(&self, name: &str) -> PathBuf {
-        self.root
-            .path()
-            .join("library/plugins/gateway/observed")
+    fn credential(&self, graph: &str, field: &str, value: &str) {
+        let request = crate::credential_store::request(
+            &self.root.path().join("state"),
+            &self.root.path().join("library"),
+            &self.sessions,
+            "local",
+            &self.session,
+            &self.turn,
+            "gateway",
+            &crate::credential_store::channel_target(PLATFORM, graph),
+            field,
+            "configure local test gateway",
+        )
+        .unwrap();
+        crate::credential_store::submit(
+            &self.root.path().join("state"),
+            &self.root.path().join("library"),
+            &self.sessions,
+            "local",
+            &self.session,
+            &request.id,
+            value,
+        )
+        .unwrap();
+    }
+
+    /// Configure `graph` for `user` with bot `bot`.
+    async fn prepare(&self, graph: &str, user: &str, bot: &str) {
+        self.configure(graph, user).await;
+        self.credential(graph, "WECOM_BOT_ID", bot);
+        self.credential(graph, "WECOM_BOT_SECRET", &format!("{bot}-secret"));
+    }
+
+    fn observed(&self, graph: &str, name: &str) -> PathBuf {
+        super::super::state_directory(&self.root.path().join("state"), graph)
+            .join("observed")
             .join(name)
     }
 
-    async fn wait_for(&self, name: &str) {
+    fn read(&self, graph: &str, name: &str) -> String {
+        fs::read_to_string(self.observed(graph, name)).unwrap()
+    }
+
+    async fn wait_for(&self, graph: &str, name: &str) {
         tokio::time::timeout(Duration::from_secs(3), async {
-            while !self.observed(name).is_file() {
+            while !self.observed(graph, name).is_file() {
                 tokio::time::sleep(Duration::from_millis(10)).await;
             }
         })
@@ -240,168 +181,285 @@ while :; do sleep 0.02; done
     }
 }
 
+async fn status(fixture: &Fixture, graph: &str) -> Value {
+    fixture.adapter.status("local", graph).await.unwrap()
+}
+
 #[tokio::test]
-async fn managed_channel_uses_private_input_and_shared_binding_without_network_or_mount_grants() {
+async fn two_bot_graphs_run_side_by_side_with_their_own_credentials_members_and_routes() {
     let _guard = crate::PROCESS_ENV_LOCK.lock().await;
     let _environment = Environment::cleared(FIELDS);
     let fixture = Fixture::new();
     let before = fixture.sessions.get("local", "pilot").unwrap();
-    fixture.prepare().await;
-    let status = fixture.adapter.status("local", "wecom").await.unwrap();
-    assert_eq!(status["enabled"], false);
-    assert_eq!(status["credentials"].as_array().unwrap().len(), 2);
+    fixture.prepare("alpha", "alice", "private-alpha-bot").await;
+    fixture.prepare("beta", "bob", "private-beta-bot").await;
+    let alpha = status(&fixture, "alpha").await;
+    assert_eq!(alpha["enabled"], false);
+    assert_eq!(alpha["reply_node"], "reply");
     assert!(
-        status["credentials"]
+        alpha["credentials"]
             .as_array()
             .unwrap()
             .iter()
             .all(|field| field["configured"] == true)
     );
-    assert!(!status.to_string().contains("private-fixture"));
-    assert!(status["account"].as_str().unwrap().starts_with("wecom:"));
-    assert_eq!(status["restart_required"], false);
-    let enabled = fixture
-        .adapter
-        .set_enabled("local", "wecom", true)
-        .await
-        .unwrap();
-    assert_eq!(enabled["enabled"], true);
-    fixture.wait_for("starts").await;
-    assert_eq!(
-        fs::read_to_string(fixture.observed("account")).unwrap(),
-        "private-fixture-bot"
-    );
-    assert_eq!(
-        fs::read_to_string(fixture.observed("secret")).unwrap(),
-        "private-fixture-secret"
-    );
-    assert_eq!(
-        fs::read_to_string(fixture.observed("users")).unwrap(),
-        "alice"
-    );
-    assert_eq!(
-        fs::read_to_string(fixture.observed("send-users")).unwrap(),
-        "alice"
-    );
-    let callback = fs::read_to_string(fixture.observed("callback")).unwrap();
-    assert_eq!(
+    assert!(!alpha.to_string().contains("private-"));
+    for graph in ["alpha", "beta"] {
         fixture
             .adapter
-            .callback_owner("wecom", &callback)
-            .as_deref(),
-        Some("local")
-    );
-    assert!(fixture.adapter.callback_owner("wecom", "wrong").is_none());
-    assert!(
-        fixture
-            .adapter
-            .callback_owner("different-platform", &callback)
-            .is_none()
-    );
-    let snapshot = fixture.adapter.snapshot("wecom").unwrap().unwrap();
-    assert_eq!(snapshot.binding, Fixture::binding());
-    assert!(snapshot.account.unwrap().starts_with("wecom:"));
+            .set_enabled("local", graph, true)
+            .await
+            .unwrap();
+        fixture.wait_for(graph, "starts").await;
+    }
+    for (graph, user, bot) in [
+        ("alpha", "alice", "private-alpha-bot"),
+        ("beta", "bob", "private-beta-bot"),
+    ] {
+        assert_eq!(fixture.read(graph, "account"), bot);
+        assert_eq!(fixture.read(graph, "secret"), format!("{bot}-secret"));
+        assert_eq!(fixture.read(graph, "users"), user);
+        assert_eq!(fixture.read(graph, "send-users"), user);
+        assert!(
+            fixture
+                .read(graph, "webhook")
+                .ends_with(&format!("/channels/{graph}/events"))
+        );
+    }
+    let alpha_key = fixture.read("alpha", "callback");
+    let beta_key = fixture.read("beta", "callback");
+    assert_ne!(alpha_key, beta_key);
+    for (key, graph) in [(&alpha_key, "alpha"), (&beta_key, "beta")] {
+        let callback = fixture.adapter.callback(key).unwrap();
+        assert_eq!(
+            (callback.graph.as_str(), callback.owner.as_str()),
+            (graph, "local")
+        );
+    }
+    assert!(fixture.adapter.callback("wrong").is_none());
+    let snapshots = fixture.adapter.snapshots().unwrap();
+    assert_eq!(snapshots.len(), 2);
+    assert!(snapshots.iter().all(|state| state.enabled));
+    assert_ne!(snapshots[0].account, snapshots[1].account);
+    let listed = fixture.adapter.list("local").await.unwrap();
+    assert_eq!(listed["channels"].as_array().unwrap().len(), 2);
     let after = fixture.sessions.get("local", "pilot").unwrap();
     assert_eq!(before.network_allowed, after.network_allowed);
     assert_eq!(before.plugin_mounts, after.plugin_mounts);
-    assert!(after.run_ids.is_empty());
+
+    // Stopping one bot leaves the other running and its key valid.
     fixture
         .adapter
-        .set_enabled("local", "wecom", false)
+        .set_enabled("local", "alpha", false)
         .await
         .unwrap();
-    fixture.wait_for("stopped").await;
-    assert!(fixture.adapter.callback_owner("wecom", &callback).is_none());
+    fixture.wait_for("alpha", "stopped").await;
+    assert!(fixture.adapter.callback(&alpha_key).is_none());
+    assert!(fixture.adapter.callback(&beta_key).is_some());
+    assert!(!fixture.observed("beta", "stopped").exists());
     assert!(
         fixture
             .adapter
-            .snapshot("wecom")
+            .snapshot("alpha")
             .unwrap()
             .unwrap()
             .descriptor
             .is_none()
     );
+    fixture.adapter.shutdown().await;
 }
 
 #[tokio::test]
-async fn channel_reloads_one_durable_binding_and_rejects_another_owner_or_live_rebinding() {
+async fn one_bot_account_cannot_serve_two_enabled_graphs() {
     let _guard = crate::PROCESS_ENV_LOCK.lock().await;
     let _environment = Environment::cleared(FIELDS);
     let fixture = Fixture::new();
-    fixture.prepare().await;
+    fixture.prepare("alpha", "alice", "shared-bot").await;
+    fixture.prepare("beta", "bob", " shared-bot ").await;
     fixture
         .adapter
-        .set_enabled("local", "wecom", true)
+        .set_enabled("local", "alpha", true)
         .await
         .unwrap();
-    fixture.wait_for("starts").await;
-    let callback = fs::read_to_string(fixture.observed("callback")).unwrap();
+    let refused = fixture.adapter.set_enabled("local", "beta", true).await;
+    assert!(
+        matches!(&refused, Err(ApplicationError::Conflict(reason)) if reason.contains("alpha")),
+        "{:?}",
+        refused.err()
+    );
+    assert_eq!(status(&fixture, "beta").await["enabled"], false);
+    fixture
+        .adapter
+        .set_enabled("local", "alpha", false)
+        .await
+        .unwrap();
+    fixture
+        .adapter
+        .set_enabled("local", "beta", true)
+        .await
+        .unwrap();
+    fixture.adapter.shutdown().await;
+}
+
+#[tokio::test]
+async fn an_account_with_sessions_of_another_graph_cannot_move() {
+    let _guard = crate::PROCESS_ENV_LOCK.lock().await;
+    let _environment = Environment::cleared(FIELDS);
+    let fixture = Fixture::new();
+    fixture.prepare("alpha", "alice", "moving-bot").await;
+    fixture.prepare("beta", "alice", "moving-bot").await;
+    let account = wecom_account_identity("moving-bot");
+    fixture
+        .sessions
+        .create(
+            "local",
+            CreateSession {
+                id: Some("alpha-chat".into()),
+                title: "alpha chat".into(),
+                graph: "alpha".into(),
+                channel: [
+                    ("source".to_owned(), PLATFORM.to_owned()),
+                    ("account".to_owned(), account.clone()),
+                ]
+                .into(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    let refused = fixture.adapter.set_enabled("local", "beta", true).await;
+    assert!(
+        matches!(&refused, Err(ApplicationError::Conflict(reason)) if reason.contains("alpha chat")),
+        "{:?}",
+        refused.err()
+    );
+    // Its own Graph's Sessions do not block it.
+    fixture
+        .adapter
+        .set_enabled("local", "alpha", true)
+        .await
+        .unwrap();
+    fixture.adapter.shutdown().await;
+}
+
+#[tokio::test]
+async fn only_persistent_assistants_with_complete_credentials_become_bots() {
+    let _guard = crate::PROCESS_ENV_LOCK.lock().await;
+    let _environment = Environment::cleared(FIELDS);
+    let fixture = Fixture::new();
     assert!(matches!(
         fixture
             .adapter
-            .configure("local", "wecom", Fixture::binding())
+            .configure("local", "task", Fixture::binding("alice"))
+            .await,
+        Err(ApplicationError::Invalid(reason)) if reason == crate::application::channel_management::NOT_A_BOT
+    ));
+    assert!(
+        !fixture
+            .root
+            .path()
+            .join("state/platform/channels/graphs/task.json")
+            .exists()
+    );
+    assert!(matches!(
+        fixture
+            .adapter
+            .configure("local", "../alpha", Fixture::binding("alice"))
+            .await,
+        Err(ApplicationError::Invalid(_))
+    ));
+    fixture.configure("alpha", "alice").await;
+    assert!(matches!(
+        fixture.adapter.set_enabled("local", "alpha", true).await,
+        Err(ApplicationError::Invalid(_))
+    ));
+    // Another Graph's credentials are not this Graph's.
+    fixture.credential("beta", "WECOM_BOT_ID", "beta-bot");
+    fixture.credential("beta", "WECOM_BOT_SECRET", "beta-secret");
+    fixture.credential("alpha", "WECOM_BOT_ID", "alpha-bot");
+    assert!(matches!(
+        fixture.adapter.set_enabled("local", "alpha", true).await,
+        Err(ApplicationError::Invalid(_))
+    ));
+    assert!(!fixture.adapter.snapshot("alpha").unwrap().unwrap().enabled);
+    assert_eq!(status(&fixture, "unbound").await["configured"], false);
+}
+#[tokio::test]
+async fn bindings_reload_per_graph_and_reject_another_owner_or_live_rebinding() {
+    let _guard = crate::PROCESS_ENV_LOCK.lock().await;
+    let _environment = Environment::cleared(FIELDS);
+    let fixture = Fixture::new();
+    fixture.prepare("alpha", "alice", "alpha-bot").await;
+    fixture.prepare("beta", "bob", "beta-bot").await;
+    fixture
+        .adapter
+        .set_enabled("local", "alpha", true)
+        .await
+        .unwrap();
+    fixture.wait_for("alpha", "starts").await;
+    let callback = fixture.read("alpha", "callback");
+    assert!(matches!(
+        fixture
+            .adapter
+            .configure("local", "alpha", Fixture::binding("carol"))
             .await,
         Err(ApplicationError::Conflict(_))
     ));
     assert!(matches!(
-        fixture.adapter.set_enabled("other", "wecom", false).await,
+        fixture.adapter.set_enabled("other", "alpha", false).await,
         Err(ApplicationError::Conflict(_))
     ));
-    assert_eq!(
-        fixture
-            .adapter
-            .status("other", "wecom")
-            .await
-            .unwrap()
-            .get("binding"),
-        None
-    );
-    assert_eq!(
-        fixture
-            .adapter
-            .status("other", "wecom")
-            .await
-            .unwrap()
-            .get("credentials"),
-        None
-    );
+    let hidden = fixture.adapter.status("other", "alpha").await.unwrap();
+    assert_eq!(hidden["owner_matches"], false);
+    assert!(hidden.get("binding").is_none());
+    assert!(hidden.get("credentials").is_none());
+    assert!(matches!(
+        fixture.adapter.remove("alpha").await,
+        Err(ApplicationError::Conflict(_))
+    ));
     fixture.adapter.shutdown().await;
-    let Fixture {
-        root,
-        adapter,
-        sessions: _,
-        session: _,
-        turn: _,
-    } = fixture;
+    let Fixture { root, adapter, .. } = fixture;
+    // One Host owns the configuration at a time.
+    assert!(ChannelManagementAdapter::open(Fixture::configuration(root.path())).is_err());
     drop(adapter);
-    let reopened =
-        ChannelManagementAdapter::open(Fixture::configuration(root.path()), None).unwrap();
-    assert!(reopened.snapshot("wecom").unwrap().unwrap().enabled);
-    assert_eq!(
-        reopened.callback_owner("wecom", &callback).as_deref(),
-        Some("local")
-    );
+    let reopened = ChannelManagementAdapter::open(Fixture::configuration(root.path())).unwrap();
+    assert!(reopened.snapshot("alpha").unwrap().unwrap().enabled);
+    assert!(!reopened.snapshot("beta").unwrap().unwrap().enabled);
+    assert_eq!(reopened.callback(&callback).unwrap().graph, "alpha");
     reopened.resume().await.unwrap();
+    let starts =
+        super::super::state_directory(&root.path().join("state"), "alpha").join("observed/starts");
     tokio::time::timeout(Duration::from_secs(3), async {
-        while fs::read_to_string(root.path().join("library/plugins/gateway/observed/starts"))
-            .unwrap_or_default()
-            .len()
-            < 2
-        {
+        while fs::read_to_string(&starts).unwrap_or_default().len() < 2 {
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
     })
     .await
     .unwrap();
-    reopened.set_enabled("local", "wecom", false).await.unwrap();
+    reopened.set_enabled("local", "alpha", false).await.unwrap();
+    let path = root
+        .path()
+        .join("state/platform/channels/graphs/alpha.json");
     assert_eq!(
-        fs::metadata(root.path().join("state/platform/channels/wecom.json"))
-            .unwrap()
-            .permissions()
-            .mode()
-            & 0o777,
+        fs::metadata(&path).unwrap().permissions().mode() & 0o777,
         0o600
     );
+
+    // Removing the Graph's binding deletes its credentials and gateway state
+    // and leaves the other Graph's intact.
+    reopened.remove("alpha").await.unwrap();
+    assert!(!path.exists());
+    assert!(reopened.snapshot("alpha").unwrap().is_none());
+    assert!(!super::super::state_directory(&root.path().join("state"), "alpha").exists());
+    let credentials = root
+        .path()
+        .join("state/platform/credentials")
+        .join(crate::credential_store::hash(
+            crate::credential_store::binding_owner("local").as_bytes(),
+        ))
+        .join("gateway/channel_wecom");
+    assert!(!credentials.join("alpha").exists());
+    assert!(credentials.join("beta/WECOM_BOT_ID.json").is_file());
+    reopened.remove("alpha").await.unwrap();
 }
 
 #[tokio::test]
@@ -409,54 +467,46 @@ async fn concurrent_enables_start_one_gateway_and_disabling_waits_for_shutdown()
     let _guard = crate::PROCESS_ENV_LOCK.lock().await;
     let _environment = Environment::cleared(FIELDS);
     let fixture = Fixture::new();
-    fixture.prepare().await;
+    fixture.prepare("alpha", "alice", "alpha-bot").await;
     let (first, second) = tokio::join!(
-        fixture.adapter.set_enabled("local", "wecom", true),
-        fixture.adapter.set_enabled("local", "wecom", true)
+        fixture.adapter.set_enabled("local", "alpha", true),
+        fixture.adapter.set_enabled("local", "alpha", true)
     );
     first.unwrap();
     second.unwrap();
-    fixture.wait_for("starts").await;
-    let previous_key = fs::read_to_string(fixture.observed("callback")).unwrap();
-    assert_eq!(fs::read_to_string(fixture.observed("starts")).unwrap(), "x");
+    fixture.wait_for("alpha", "starts").await;
+    let previous_key = fixture.read("alpha", "callback");
+    assert_eq!(fixture.read("alpha", "starts"), "x");
     let (disabled, enabled) = tokio::join!(
-        fixture.adapter.set_enabled("local", "wecom", false),
-        fixture.adapter.set_enabled("local", "wecom", true)
+        fixture.adapter.set_enabled("local", "alpha", false),
+        fixture.adapter.set_enabled("local", "alpha", true)
     );
     disabled.unwrap();
     enabled.unwrap();
-    assert!(
-        fixture
-            .adapter
-            .callback_owner("wecom", &previous_key)
-            .is_none()
-    );
+    assert!(fixture.adapter.callback(&previous_key).is_none());
     fixture
         .adapter
-        .set_enabled("local", "wecom", false)
+        .set_enabled("local", "alpha", false)
         .await
         .unwrap();
-    assert_eq!(
-        fixture.adapter.status("local", "wecom").await.unwrap()["listener"],
-        "stopped"
-    );
+    assert_eq!(status(&fixture, "alpha").await["listener"], "stopped");
 }
 
 #[tokio::test]
-async fn removing_graph_or_plugin_stops_the_gateway_and_preserves_inspectable_intent() {
+async fn a_graph_that_stops_being_a_bot_stops_its_gateway_and_keeps_its_intent() {
     let _guard = crate::PROCESS_ENV_LOCK.lock().await;
     let _environment = Environment::cleared(FIELDS);
     for remove_graph in [true, false] {
         let fixture = Fixture::new();
-        fixture.prepare().await;
+        fixture.prepare("alpha", "alice", "alpha-bot").await;
         fixture
             .adapter
-            .set_enabled("local", "wecom", true)
+            .set_enabled("local", "alpha", true)
             .await
             .unwrap();
-        fixture.wait_for("starts").await;
+        fixture.wait_for("alpha", "starts").await;
         if remove_graph {
-            fs::remove_dir_all(fixture.root.path().join("catalog/task")).unwrap();
+            fs::remove_dir_all(fixture.root.path().join("catalog/alpha")).unwrap();
         } else {
             fs::remove_file(
                 fixture
@@ -466,169 +516,68 @@ async fn removing_graph_or_plugin_stops_the_gateway_and_preserves_inspectable_in
             )
             .unwrap();
         }
-        fixture.wait_for("stopped").await;
-        let status = fixture.adapter.status("local", "wecom").await.unwrap();
+        fixture.wait_for("alpha", "stopped").await;
+        let status = status(&fixture, "alpha").await;
         assert_eq!(status["enabled"], true);
         assert_eq!(status["available"], false);
         assert_eq!(status["listener"], "unavailable");
-        assert!(!fixture.adapter.snapshot("wecom").unwrap().unwrap().enabled);
-        assert!(
-            fixture
-                .adapter
-                .set_enabled("local", "wecom", true)
-                .await
-                .is_err()
-        );
+        assert!(!fixture.adapter.snapshot("alpha").unwrap().unwrap().enabled);
         fixture
             .adapter
-            .set_enabled("local", "wecom", false)
+            .set_enabled("local", "alpha", false)
             .await
             .unwrap();
+        fixture.adapter.shutdown().await;
     }
 }
 
 #[tokio::test]
-async fn deployment_binding_is_read_only_and_missing_credentials_do_not_enable() {
+async fn changed_channel_declarations_disable_the_binding_until_reconfigured() {
     let _guard = crate::PROCESS_ENV_LOCK.lock().await;
     let _environment = Environment::cleared(FIELDS);
     let fixture = Fixture::new();
+    fixture.prepare("alpha", "alice", "alpha-bot").await;
     fixture
         .adapter
-        .configure("local", "wecom", Fixture::binding())
+        .set_enabled("local", "alpha", true)
         .await
         .unwrap();
-    assert!(matches!(
-        fixture.adapter.set_enabled("local", "wecom", true).await,
-        Err(ApplicationError::Invalid(_))
-    ));
-    assert!(!fixture.adapter.snapshot("wecom").unwrap().unwrap().enabled);
-    let mut configuration = Fixture::configuration(fixture.root.path());
-    configuration.deployment_binding = Some(Fixture::binding());
-    let Fixture {
-        root,
-        adapter,
-        sessions: _,
-        session: _,
-        turn: _,
-    } = fixture;
-    drop(adapter);
-    let external = ChannelManagementAdapter::open(configuration, None).unwrap();
-    assert_eq!(
-        external.status("local", "wecom").await.unwrap()["configuration_owner"],
-        "deployment"
-    );
-    assert_eq!(
-        external.status("local", "wecom").await.unwrap()["binding"]["graph"],
-        "task"
-    );
-    let hidden = external.status("another-owner", "wecom").await.unwrap();
-    assert_eq!(hidden["owner_matches"], false);
-    assert!(hidden.get("binding").is_none());
-    assert!(hidden.get("listener").is_none());
-    assert!(matches!(
-        external
-            .configure("local", "wecom", Fixture::binding())
-            .await,
-        Err(ApplicationError::Conflict(_))
-    ));
-    assert!(matches!(
-        external.set_enabled("local", "wecom", true).await,
-        Err(ApplicationError::Conflict(_))
-    ));
-    assert_eq!(
-        external.snapshot("wecom").unwrap().unwrap().binding.graph,
-        "task"
-    );
-    assert!(
-        root.path()
-            .join("state/platform/channels/wecom.json")
-            .is_file()
-    );
+    assert!(fixture.adapter.snapshot("alpha").unwrap().unwrap().enabled);
+    let plugin = fixture.root.path().join("library/plugins/gateway");
+    let declaration = fs::read(plugin.join("channel.json")).unwrap();
+    let mut changed: Value = serde_json::from_slice(&declaration).unwrap();
+    changed["description"] = json!("changed authorization");
+    fs::write(plugin.join("channel.json"), changed.to_string()).unwrap();
+    assert!(!fixture.adapter.snapshot("alpha").unwrap().unwrap().enabled);
+    assert_eq!(status(&fixture, "alpha").await["available"], false);
+    fs::write(plugin.join("channel.json"), declaration).unwrap();
+    assert!(fixture.adapter.snapshot("alpha").unwrap().unwrap().enabled);
+    fixture.adapter.shutdown().await;
 }
 
 #[tokio::test]
-async fn deployment_and_managed_configuration_share_one_persisted_account_identity() {
+async fn damaged_linked_or_legacy_channel_configuration_is_not_loaded_or_overwritten() {
     let _guard = crate::PROCESS_ENV_LOCK.lock().await;
     let _environment = Environment::cleared(FIELDS);
     let fixture = Fixture::new();
-    fixture.prepare().await;
-    fixture
-        .adapter
-        .set_enabled("local", "wecom", true)
-        .await
-        .unwrap();
-    let managed_account = fixture
-        .adapter
-        .snapshot("wecom")
-        .unwrap()
-        .unwrap()
-        .account
-        .unwrap();
-    fixture
-        .adapter
-        .set_enabled("local", "wecom", false)
-        .await
-        .unwrap();
-    let Fixture {
-        root,
-        adapter,
-        sessions,
-        ..
-    } = fixture;
+    fixture.configure("alpha", "alice").await;
+    let Fixture { root, adapter, .. } = fixture;
     drop(adapter);
-    unsafe {
-        env::set_var("WECOM_BOT_ID", "private-fixture-bot");
-        env::set_var("ANCHOR_WECOM_GRAPH", "task");
-    }
-    let configuration = Fixture::configuration(root.path());
-    let external = ChannelManagementAdapter::open(configuration, None).unwrap();
-    assert_eq!(
-        external
-            .snapshot("wecom")
-            .unwrap()
-            .unwrap()
-            .account
-            .as_deref(),
-        Some(managed_account.as_str())
-    );
-    assert_eq!(
-        sessions
-            .canonical_channel_account("local", "wecom", "private-fixture-bot")
-            .unwrap(),
-        managed_account
-    );
-    assert_eq!(
-        wecom_account_identity(" private-fixture-bot "),
-        managed_account
-    );
-}
-
-#[tokio::test]
-async fn damaged_or_linked_channel_configuration_is_not_loaded_or_overwritten() {
-    let _guard = crate::PROCESS_ENV_LOCK.lock().await;
-    let _environment = Environment::cleared(FIELDS);
-    let fixture = Fixture::new();
-    fixture
-        .adapter
-        .configure("local", "wecom", Fixture::binding())
-        .await
-        .unwrap();
-    let Fixture {
-        root,
-        adapter,
-        sessions: _,
-        session: _,
-        turn: _,
-    } = fixture;
-    assert!(ChannelManagementAdapter::open(Fixture::configuration(root.path()), None).is_err());
-    drop(adapter);
-    let path = root.path().join("state/platform/channels/wecom.json");
+    let open = || ChannelManagementAdapter::open(Fixture::configuration(root.path()));
+    let path = root
+        .path()
+        .join("state/platform/channels/graphs/alpha.json");
     fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
-    assert!(ChannelManagementAdapter::open(Fixture::configuration(root.path()), None).is_err());
+    assert!(open().is_err());
     fs::remove_file(&path).unwrap();
     let outside = root.path().join("outside");
     fs::write(&outside, "sentinel").unwrap();
     std::os::unix::fs::symlink(&outside, &path).unwrap();
-    assert!(ChannelManagementAdapter::open(Fixture::configuration(root.path()), None).is_err());
-    assert_eq!(fs::read_to_string(outside).unwrap(), "sentinel");
+    assert!(open().is_err());
+    assert_eq!(fs::read_to_string(&outside).unwrap(), "sentinel");
+    fs::remove_file(&path).unwrap();
+    open().unwrap();
+    let legacy = root.path().join("state/platform/channels/wecom.json");
+    fs::write(&legacy, "{}").unwrap();
+    assert_eq!(open().err().as_deref(), Some(LEGACY_BINDING));
 }

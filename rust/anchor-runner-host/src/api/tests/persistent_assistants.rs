@@ -475,7 +475,7 @@ async fn stopped_assistant_rejects_inbound_without_leaving_a_running_turn_or_res
     let (root, mut state) = fixture();
     let _environment = PROCESS_ENV.lock().await;
     set_host_env(root.path(), &state.data_root);
-    state.wecom.reply_node = "assistant".into();
+    with_bot(&mut state, "assistant", &["*"]);
     let (sessions, session, _) = saved_assistant(&state, "local");
     let stopped_resource = kernel_resource(&state, "persistent-fixture-run");
     let binding = sessions.get_channel_assistant("local", &session).unwrap();
@@ -491,7 +491,7 @@ async fn stopped_assistant_rejects_inbound_without_leaving_a_running_turn_or_res
         let (status, response) = call(
             app.clone(),
             "POST",
-            "/channels/wecom/events",
+            "/channels/fixture/events",
             Some(&event.to_string()),
         )
         .await;

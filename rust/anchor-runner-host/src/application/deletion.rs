@@ -142,6 +142,12 @@ impl RunApplication {
                 callers.join(", ")
             )));
         }
+        let graph_name = bundle_path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .ok_or(ApplicationError::Missing)?
+            .to_owned();
+        self.check_channel_graph_deletion(&graph_name)?;
         let active = self.admission.lock().await;
         let mut targets = self.runs_for_graph(&graph_path)?;
         let deletion = self
@@ -240,6 +246,9 @@ impl RunApplication {
         // admission can slip in between the Run cleanup and the directory drop.
         crate::assistant_plugins::cleanup_publications(&self.data_root, &graph_path)
             .map_err(ApplicationError::Storage)?;
+        // A stopped bot goes with its Graph: binding, bot credentials and the
+        // gateway's state (D6).
+        self.remove_channel_binding(&graph_name).await?;
         if bundle_path.is_dir() {
             std::fs::remove_dir_all(bundle_path).map_err(storage)?;
         }

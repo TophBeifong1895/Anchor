@@ -11,46 +11,47 @@ pub(super) async fn policy(
 ) -> Result<Vec<ToolResultContent>, ToolError> {
     active(tools, cancellation)?;
     let arguments = Value::Object(arguments.clone());
-    let (message, binding, enable) = match name {
+    let (message, configure, enable) = match name {
         "channel_configure" => {
-            let (platform, binding) =
+            let (graph, members) =
                 crate::pilot_tools::channel_management::configuration_arguments(&arguments)?;
-            // Load the graph before the question; the approved reference and
-            // reply node are then checked again by the application use case.
-            tools
+            // Resolve the bot before the question; the application use case
+            // checks the Graph and its channel Plugin again after approval.
+            let plan = tools
                 .application
-                .load_graph(&binding.graph)
-                .map_err(|error| failure(format!("channel Graph unavailable: {error}")))?;
+                .channel_bot_plan(&graph)
+                .map_err(|error| failure(application_reason(error)))?;
             let message = format!(
-                "配置 {platform} 渠道：Graph {}，回复节点 {}，已安装 Plugin {}。允许接收用户 [{}]，允许发送用户 [{}]。配置不会启用联网或挂载 Plugin；凭据通过专用输入控件提供。",
-                binding.graph,
-                binding.reply_node,
-                binding.plugin,
-                binding.users.join(", "),
-                binding.send_users.join(", ")
+                "配置 Graph {graph} 的机器人：回复节点 {}，渠道 Plugin {}。允许接收用户 [{}]，允许发送用户 [{}]。配置不会启用联网或挂载 Plugin；凭据通过专用输入控件提供。",
+                plan.work_node,
+                plan.plugin,
+                members.users.join(", "),
+                members.send_users.join(", ")
             );
-            (message, Some((platform, binding)), None)
+            (message, Some((graph, members)), None)
         }
         "channel_enable" => {
-            let (platform, enabled) =
+            let (graph, enabled) =
                 crate::pilot_tools::channel_management::enable_arguments(&arguments)?;
             let state = tools
                 .application
-                .channel_snapshot(&platform)
+                .channel_snapshot(&graph)
                 .map_err(|error| failure(application_reason(error)))?
-                .ok_or_else(|| failure("channel is not configured"))?;
+                .ok_or_else(|| failure("this Graph's bot is not configured"))?;
             if state.owner != tools.owner {
-                return Err(failure("the channel binding belongs to another owner"));
+                return Err(failure("this Graph's bot belongs to another owner"));
             }
             let message = format!(
-                "{} {platform} 渠道接入，绑定 Graph {}、回复节点 {}。允许接收用户 [{}]，允许发送用户 [{}]。这只控制 Gateway 接入，现有 Run 的权限保持其准入授权。",
+                "{} Graph {graph} 的机器人接入，回复节点 {}。允许接收用户 [{}]，允许发送用户 [{}]。这只控制 Gateway 接入，现有 Run 的权限保持其准入授权。",
                 if enabled { "启动" } else { "停止" },
-                state.binding.graph,
-                state.binding.reply_node,
+                state
+                    .reply_node
+                    .as_deref()
+                    .unwrap_or("（Graph 当前不可用）"),
                 state.binding.users.join(", "),
                 state.binding.send_users.join(", ")
             );
-            (message, None, Some((platform, enabled, state.binding)))
+            (message, None, Some((graph, enabled, state.binding)))
         }
         _ => return Err(failure("unknown channel confirmation tool")),
     };
@@ -82,12 +83,12 @@ pub(super) async fn policy(
             json!({"changed":false,"approved":false}).to_string(),
         )]);
     }
-    let result = if let Some((platform, binding)) = binding {
-        tools.configure_channel_approved(&platform, binding).await?
-    } else if let Some((platform, enabled, expected)) = enable {
+    let result = if let Some((graph, members)) = configure {
+        tools.configure_channel_approved(&graph, members).await?
+    } else if let Some((graph, enabled, expected)) = enable {
         if tools
             .application
-            .channel_snapshot(&platform)
+            .channel_snapshot(&graph)
             .map_err(|error| failure(application_reason(error)))?
             .is_none_or(|state| state.binding != expected)
         {
@@ -96,7 +97,7 @@ pub(super) async fn policy(
             ));
         }
         tools
-            .enable_channel_approved(&platform, enabled, &expected)
+            .enable_channel_approved(&graph, enabled, &expected)
             .await?
     } else {
         return Err(failure("channel confirmation has no operation"));

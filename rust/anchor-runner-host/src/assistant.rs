@@ -39,6 +39,16 @@ pub(crate) struct AssistantPlan {
 }
 
 impl AssistantPlan {
+    /// The plan of a persistent assistant Graph, whose only Agent is the work
+    /// node. `None` when the Graph is not an assistant at all.
+    pub(crate) fn discover(snapshot: &GraphSnapshot) -> Result<Option<Self>, String> {
+        let mut agents = snapshot.nodes.iter().filter(|node| node.agent.is_some());
+        match (agents.next(), agents.next()) {
+            (Some(agent), None) => Self::from_snapshot(snapshot, &agent.id),
+            _ => Self::from_snapshot(snapshot, ""),
+        }
+    }
+
     pub(crate) fn from_snapshot(
         snapshot: &GraphSnapshot,
         work_node: &str,
@@ -127,7 +137,7 @@ pub(crate) struct TurnBinding {
     pub(crate) pending_truncated: bool,
 }
 
-fn stem(key: &InvocationKey) -> String {
+pub(crate) fn stem(key: &InvocationKey) -> String {
     format!("{:x}", Sha256::digest(key.durable_key().as_bytes()))
 }
 

@@ -20,7 +20,7 @@ fn check_secret(
     if secret.format != 1
         || secret.owner != owner
         || secret.plugin != plugin
-        || secret.server != target
+        || secret.server != split_target(target).0
         || secret.field != field
         || secret.value.is_empty()
     {
@@ -105,41 +105,71 @@ pub(crate) fn credentials(
 ) -> Result<Value, String> {
     let definition = definition(library, plugin)?;
     let _lease = lease(data)?;
-    project(data, owner, &definition)
+    project(data, owner, &definition, &plugin_targets(&definition))
 }
 
-fn project(data: &Path, owner: &str, definition: &PluginDefinition) -> Result<Value, String> {
-    let owner = binding_owner(owner);
-    let targets = definition
+/// The Plugin's shared targets. A bot's channel credentials are listed by its
+/// Graph instead, see [`channel_credentials`].
+fn plugin_targets(definition: &PluginDefinition) -> BTreeSet<String> {
+    definition
         .mcp_servers
         .iter()
         .map(|server| server.name.clone())
-        .chain(
-            definition
-                .channels
-                .iter()
-                .map(|channel| format!("channel_{}", channel.platform)),
-        )
-        .collect::<BTreeSet<_>>();
+        .collect()
+}
+
+/// One bot Graph's channel credential state; values are never returned.
+pub(crate) fn channel_credentials(
+    data: &Path,
+    library: &Path,
+    owner: &str,
+    plugin: &str,
+    target: &str,
+) -> Result<Value, String> {
+    let definition = definition(library, plugin)?;
+    let _lease = lease(data)?;
+    project(
+        data,
+        owner,
+        &definition,
+        &BTreeSet::from([target.to_owned()]),
+    )
+}
+
+fn targets_for(definition: &PluginDefinition, target: &str) -> BTreeSet<String> {
+    if split_target(target).1.is_some() {
+        BTreeSet::from([target.to_owned()])
+    } else {
+        plugin_targets(definition)
+    }
+}
+
+fn project(
+    data: &Path,
+    owner: &str,
+    definition: &PluginDefinition,
+    targets: &BTreeSet<String>,
+) -> Result<Value, String> {
+    let owner = binding_owner(owner);
     let mut records = Vec::new();
     for target in targets {
-        let (fields, digest) = target_authorization(definition, &target)?;
+        let (fields, digest) = target_authorization(definition, target)?;
         if fields.is_empty() {
             continue;
         }
         let mut records_fields = Vec::new();
         for field in fields {
-            if crate::plugin_configuration::logical_field(definition, &target, &field).is_some() {
+            if crate::plugin_configuration::logical_field(definition, target, &field).is_some() {
                 continue;
             }
-            let external = crate::plugin_configuration::is_external(definition, &target, &field)?;
+            let external = crate::plugin_configuration::is_external(definition, target, &field)?;
             let state = if external {
                 "deployment"
             } else {
-                match load::<Secret>(&secret_path(data, &owner, &definition.id, &target, &field))? {
+                match load::<Secret>(&secret_path(data, &owner, &definition.id, target, &field))? {
                     None => "missing",
                     Some(secret) => {
-                        check_secret(&secret, &owner, &definition.id, &target, &field)?;
+                        check_secret(&secret, &owner, &definition.id, target, &field)?;
                         if secret.authorization_digest == digest {
                             "configured"
                         } else {
@@ -175,7 +205,7 @@ pub(crate) fn configure(
 ) -> Result<Value, String> {
     let definition = definition(library, plugin)?;
     let _lease = lease(data)?;
-    let mut projection = project(data, owner, &definition)?;
+    let mut projection = project(data, owner, &definition, &targets_for(&definition, target))?;
     let warning = mutate_locked(
         data,
         owner,
@@ -221,7 +251,7 @@ pub(super) fn mutate_locked(
     value: Option<&str>,
     sessions: &SessionStore,
 ) -> Result<Option<String>, String> {
-    if !crate::pilot_tools::identifier(target) || !valid_field(field) {
+    if !valid_target(target) || !valid_field(field) {
         return Err("invalid credential target or field".into());
     }
     let (fields, digest) = target_authorization(definition, target)?;
@@ -280,7 +310,7 @@ pub(super) fn mutate_locked(
                 format: 1,
                 owner,
                 plugin: definition.id.clone(),
-                server: target.into(),
+                server: split_target(target).0.into(),
                 field: field.into(),
                 authorization_digest: digest.clone(),
                 value: value.into(),

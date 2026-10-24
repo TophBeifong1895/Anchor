@@ -290,7 +290,7 @@ fn inbound_lookup_resolves_the_run_inside_its_owner_scope() {
         .admit_channel_inbound("owner", request("message-1", "conversation-1"))
         .unwrap();
     let lookup = store
-        .channel_run_for_inbound("owner", "message-1")
+        .channel_run_for_inbound("owner", "wecom", "corp-a", "message-1")
         .unwrap()
         .unwrap();
     assert_eq!(lookup.session_id, pending.session.id);
@@ -303,7 +303,7 @@ fn inbound_lookup_resolves_the_run_inside_its_owner_scope() {
     bound.run_id = Some("channel-run-2".into());
     store.admit_channel_inbound("owner", bound).unwrap();
     let lookup = store
-        .channel_run_for_inbound("owner", "message-2")
+        .channel_run_for_inbound("owner", "wecom", "corp-a", "message-2")
         .unwrap()
         .unwrap();
     assert_eq!(lookup.run_id.as_deref(), Some("channel-run-2"));
@@ -311,19 +311,49 @@ fn inbound_lookup_resolves_the_run_inside_its_owner_scope() {
     // Another owner sees nothing, and the identity is validated.
     assert!(
         store
-            .channel_run_for_inbound("other", "message-2")
+            .channel_run_for_inbound("other", "wecom", "corp-a", "message-2")
             .unwrap()
             .is_none()
     );
     assert!(
         store
-            .channel_run_for_inbound("owner", "missing")
+            .channel_run_for_inbound("owner", "wecom", "corp-a", "missing")
             .unwrap()
             .is_none()
     );
-    assert_invalid(store.channel_run_for_inbound("owner", ""));
-    assert_invalid(store.channel_run_for_inbound("owner", "bad\nid"));
-    assert_invalid(store.channel_run_for_inbound("", "message-2"));
+    assert_invalid(store.channel_run_for_inbound("owner", "wecom", "corp-a", ""));
+    assert_invalid(store.channel_run_for_inbound("owner", "wecom", "corp-a", "bad\nid"));
+    assert_invalid(store.channel_run_for_inbound("", "wecom", "corp-a", "message-2"));
+}
+
+#[test]
+fn inbound_lookup_is_scoped_to_the_receiving_bot_account() {
+    let (_directory, store) = fixture();
+    // Two bots receive the same platform message id; each lookup finds only
+    // the Run of the bot that received it.
+    let mut first = request("message-1", "conversation-1");
+    first.run_id = Some("first-bot-run".into());
+    store.admit_channel_inbound("owner", first).unwrap();
+    let mut second = ChannelInboundRequest {
+        graph: "other-graph".into(),
+        ..request("message-1", "conversation-1")
+    };
+    second.identity.account = Some("corp-b".into());
+    second.run_id = Some("second-bot-run".into());
+    store.admit_channel_inbound("owner", second).unwrap();
+    for (account, run) in [("corp-a", "first-bot-run"), ("corp-b", "second-bot-run")] {
+        let lookup = store
+            .channel_run_for_inbound("owner", "wecom", account, "message-1")
+            .unwrap()
+            .unwrap();
+        assert_eq!(lookup.run_id.as_deref(), Some(run));
+    }
+    assert!(
+        store
+            .channel_run_for_inbound("owner", "wecom", "corp-c", "message-1")
+            .unwrap()
+            .is_none()
+    );
 }
 
 #[test]

@@ -125,7 +125,6 @@ impl HostIoResolver {
                         &mounted.bindings,
                         request.key.clone(),
                         self.local_inputs.state_root().to_path_buf(),
-                        conversation.as_ref().map(|value| value.reply_node.clone()),
                         workspace.clone(),
                         readonly_inputs.clone(),
                         request.cancellation.clone(),

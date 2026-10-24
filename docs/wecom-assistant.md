@@ -34,26 +34,26 @@
 
 ## WebUI 配置
 
-安装带有 WeCom 通道声明的插件及助手 Graph 后，在图编排中打开该工作流的「消息触发」，填写回复节点和插件，以及接收与主动发送的成员名单。每个 Host 只有一个企业微信入口，绑定当前工作流会替换原绑定。机器人凭据可在此保存，也可在同一插件详情中轮换或清除；两处使用同一份凭据。确认配置后启用监听，对话框显示 Supervisor 的实际状态，已启用不等于已经连接。各对话的实例在运行看板的「消息会话」中停止、恢复、退役或清理。
+一张常驻助手 Graph 对应一个机器人（[设计卡 004](design-cards/004-multi-bot-channels.md)）。Agent 节点挂载带 WeCom 通道声明的 Plugin 并保存后，这张 Graph 就可以配置自己的机器人：BotID/Secret、接收成员和可主动发送的成员，然后启用。同一个助手节点不能挂两个渠道 Plugin；同一个 Bot 账号不能同时被两张已启用的 Graph 使用，账号下已有别的 Graph 的会话时也不能启用。改成员名单前要先停用；机器人启用时，不能删除这张 Graph，也不能从节点上卸下渠道 Plugin。停用后删除 Graph，绑定、凭据和网关状态目录一起清掉。已启用不等于已经连接，状态里显示 Supervisor 的实际状态。各对话的实例在运行看板的「消息会话」中停止、恢复、退役或清理。
+
+Web 界面的入口在 S4 改为节点 Plugin 详情里的「此 Graph 的机器人」；在此之前用下面的管理 API 或 Pilot（`channel_status`、`channel_configure`、`channel_enable`，凭据用带 `graph` 的 `credential_request`）配置：
+
+- `GET /channels`：列出本 owner 的所有机器人绑定；
+- `GET`/`PUT /graphs/{graph}/channel`：查看状态，或保存 `{users, send_users}`；
+- `POST /graphs/{graph}/channel/enabled`：`{enabled, expected_binding}`；
+- `GET /graphs/{graph}/channel/credentials`，`PUT`/`DELETE /graphs/{graph}/channel/credentials/{field}`：只返回字段状态，不返回明文。
 
 下方会话列表提供当前实例的停止、恢复、退役和清理。停止先等待执行者退出；退役后，下一条可信消息才创建新实例。清理会复核当前实例、未结算投递和待删除 Run，期间出现新消息会阻止清理。部署环境明确提供的字段仍由部署者管理，页面不覆盖。
 
 ## 部署配置
 
-通过服务管理器提供配置环境；不要把凭证写入 Graph、Plugin 包或聊天。若使用部署的 EnvironmentFile，将其权限限制为服务用户可读；二进制不自动加载仓库 `.env`。
+机器人绑定和凭据都由 Host 按 Graph 保存，不再从部署环境读取；`ANCHOR_WECOM_*` 变量和 `WECOM_BOT_ID`/`WECOM_BOT_SECRET` 环境变量已不再生效。不要把凭证写入 Graph、Plugin 包或聊天。
 
-```dotenv
-WECOM_BOT_ID=后台提供的机器人ID
-WECOM_BOT_SECRET=后台提供的机器人Secret
-ANCHOR_WECOM_USERS=已核实的成员userid
-ANCHOR_WECOM_SEND_USERS=
-ANCHOR_WECOM_GRAPH=wecom-persistent-assistant
-ANCHOR_WECOM_REPLY_NODE=assistant
-ANCHOR_API_KEYS=["至少32字节、随机生成的密钥"]
-ANCHOR_API_KEY=与服务白名单匹配的密钥
-```
+- 绑定：`platform/channels/graphs/<graph>.json`（format 2），记录 owner、Plugin、成员名单、启用状态和账号身份；
+- 凭据：凭据库中 `channel_wecom@<graph>` 目标下的字段；
+- 网关状态：`channels/graphs/<graph>/`，回调路由是 `/channels/<graph>/events` 和 `/channels/<graph>/progress/<event_id>`。每个启用的绑定有自己的网关和回调密钥，这把密钥只能访问本 Graph 的路由。
 
-多位成员用英文逗号分隔；空名单拒绝所有成员，`*` 表示明确允许全部平台成员。主动发送名单为空时继承入口名单。`ANCHOR_API_KEYS` 也保护管理 API。修改启动配置后按部署流程重启，保持一个 Bot 只有一个网关。
+状态目录里还留着旧版单绑定文件 `platform/channels/wecom.json` 时，Host 拒绝启动，需要先运行迁移（设计卡 004 §6）。空成员名单拒绝所有成员，`*` 表示明确允许全部平台成员；主动发送名单为空时继承入口名单。`ANCHOR_API_KEYS` 保护管理 API。
 
 按 [Rust 部署指南](rust-production-deployment.md) 安装 Host、固定版本 Goose、`anchor-wecom-gateway` 和 `anchor-wecom-tools`。通过现有 Library/Graph API 安装 [常驻助手示例](../examples/graphs/wecom-persistent-assistant.json) 及原生 WeCom Plugin，确认 Agent 节点挂载 `wecom`。独立应用 API 包不包含通道声明，不能替代完整机器人部署。
 
@@ -63,7 +63,7 @@ ANCHOR_API_KEY=与服务白名单匹配的密钥
 
 Host 使用 `ANCHOR_RUNNER_BUNDLE_ROOT`、`ANCHOR_RUNNER_CATALOG_ROOT`、`ANCHOR_RUNNER_LIBRARY_ROOT`、`ANCHOR_RUNNER_STATE_ROOT` 和 `ANCHOR_RUNNER_WORKSPACE_ROOT` 区分资源、持久事实与工作区。部署配置完成后启动 `anchor-runner-host serve`；监听地址由 `ANCHOR_RUNNER_LISTEN` 配置。不要同时启动另一个共享状态根的服务。
 
-Host 的 ChannelSupervisor 按渠道选择的 Graph 查找 Plugin 声明的原生 Gateway，设置本机回调地址、私有控制 socket 和 descriptor；不要求该 Graph 同时作为部署入口。正常部署不手动启动第二个网关。Gateway 的独立配置和协议见 [原生 Gateway README](../rust/anchor-wecom-gateway/README.md)。
+Host 为每个启用的绑定启动一个 ChannelSupervisor，按该 Graph 助手节点挂载的 Plugin 查找声明的原生 Gateway，设置本机回调地址、私有控制 socket 和 descriptor；不要求该 Graph 同时作为部署入口。正常部署不手动启动第二个网关。Gateway 的独立配置和协议见 [原生 Gateway README](../rust/anchor-wecom-gateway/README.md)。
 
 ## 对话与投递
 
@@ -109,7 +109,7 @@ Pilot 的插件开关归单个 Session 所有；工作流页面的选择归 Grap
 
 修改指令、节点或连线等结构时，仍有 current 助手的保存请求返回 409：先停止并等待执行及投递收束，再退役现有实例，然后保存新版；下一条可信消息创建新实例。普通 Graph 仍保留准入快照。插件准备失败明确报错，不悄悄恢复已移除的权限。
 
-企业微信业务图只需由 `ANCHOR_WECOM_GRAPH` 选择，不应同时设成 `ANCHOR_RUNNER_GRAPH_NAME`/`ANCHOR_RUNNER_BUNDLE_ROOT` 的部署管理入口；后者有意禁止网页改写。联网还须在助手节点允许 `network:true` 并挂载 `network` Plugin，且会话未禁止联网。勾选后需保存，新的插件与联网选择从下一 Turn 生效；会话明确禁止联网仍优先。
+企业微信业务图只需在自己的 Agent 节点上挂载渠道 Plugin 并配置机器人，不应同时设成 `ANCHOR_RUNNER_GRAPH_NAME`/`ANCHOR_RUNNER_BUNDLE_ROOT` 的部署管理入口；后者有意禁止网页改写。联网还须在助手节点允许 `network:true` 并挂载 `network` Plugin，且会话未禁止联网。勾选后需保存，新的插件与联网选择从下一 Turn 生效；会话明确禁止联网仍优先。
 
 Plugin 代码通过既有 Library 安装流程更新，保留声明的可变数据；后续节点准备读取当前代码，并继续校验 Run 的准入权限。升级不要求 abandon 活动 Run，也不扩大权限。独立运行的企微 Gateway 不因文件更新自动换进程，需要由已有 supervisor 重启后加载新程序；凭据和投递账本继续使用原位置。
 

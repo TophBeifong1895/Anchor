@@ -106,13 +106,7 @@ impl Transport {
     }
 
     fn bind_host(&self, host: Host) -> Host {
-        host.with_extra_environment([
-            (
-                "ANCHOR_CHANNEL_CONTROL_DESCRIPTOR",
-                self.descriptor.as_os_str().to_owned(),
-            ),
-            ("ANCHOR_WECOM_SEND_USERS", USER.into()),
-        ])
+        bind_bot(host, &self.descriptor)
     }
 
     fn finish(mut self) -> Vec<DeliveryFact> {
@@ -142,15 +136,14 @@ fn native_goose_sends_through_actual_rust_gateway_and_correlates_platform_acks()
             send(USER).after("accepted"),
             command("printf native-gateway-two-confirmed > evidence.txt; cat evidence.txt")
                 .after("accepted"),
-            complete("verify").after("native-gateway-two-confirmed"),
+            complete("reply").after("native-gateway-two-confirmed"),
         ],
     );
     let gateway = Transport::new();
     let host = gateway.bind_host(Host::new(&graph()).default_runtime());
-    let plugin = install_resource_plugin(&host);
+    let plugin = install_resource_plugin(&host, &gateway.descriptor);
     let server = host.serve(&provider);
-    let run = server.trigger();
-    server.wait_status(&run, "completed");
+    let run = ask(&server, "goose-channel-native-gateway");
     let frames = gateway.frames.lock().unwrap().clone();
     let deliveries = gateway.finish();
     assert_eq!(frames.len(), 2);

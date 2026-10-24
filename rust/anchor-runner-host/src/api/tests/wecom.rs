@@ -41,7 +41,7 @@ async fn deleted_previous_channel_run_does_not_block_a_new_instance() {
 #[tokio::test]
 async fn wecom_event_rejects_untrusted_users_unsupported_chat_types_and_invalid_media() {
     let (root, mut state) = fixture();
-    state.wecom.users = HashSet::from(["user-1".into()]);
+    with_bot(&mut state, "work", &["user-1"]);
     let app = router_with_web_root(state, root.path().join("web"));
 
     let mut body = event("hello");
@@ -49,7 +49,7 @@ async fn wecom_event_rejects_untrusted_users_unsupported_chat_types_and_invalid_
     let (status, _) = call(
         app.clone(),
         "POST",
-        "/channels/wecom/events",
+        "/channels/fixture/events",
         Some(&body.to_string()),
     )
     .await;
@@ -60,7 +60,7 @@ async fn wecom_event_rejects_untrusted_users_unsupported_chat_types_and_invalid_
     let (status, _) = call(
         app.clone(),
         "POST",
-        "/channels/wecom/events",
+        "/channels/fixture/events",
         Some(&body.to_string()),
     )
     .await;
@@ -71,7 +71,7 @@ async fn wecom_event_rejects_untrusted_users_unsupported_chat_types_and_invalid_
     let (status, _) = call(
         app.clone(),
         "POST",
-        "/channels/wecom/events",
+        "/channels/fixture/events",
         Some(&body.to_string()),
     )
     .await;
@@ -83,7 +83,7 @@ async fn wecom_event_rejects_untrusted_users_unsupported_chat_types_and_invalid_
     let (status, _) = call(
         app,
         "POST",
-        "/channels/wecom/events",
+        "/channels/fixture/events",
         Some(&body.to_string()),
     )
     .await;
@@ -92,7 +92,8 @@ async fn wecom_event_rejects_untrusted_users_unsupported_chat_types_and_invalid_
 
 #[tokio::test]
 async fn wecom_attachment_validation_rejects_bad_bytes_names_and_counts_before_admission() {
-    let (root, state) = fixture();
+    let (root, mut state) = fixture();
+    with_bot(&mut state, "assistant", &["*"]);
     let app = router_with_web_root(state.clone(), root.path().join("web"));
     let invalid = vec![
         vec![json!({"name":"bad.txt","data_base64":"not base64!","media_type":null})],
@@ -111,7 +112,7 @@ async fn wecom_attachment_validation_rejects_bad_bytes_names_and_counts_before_a
         let (status, rejected) = call(
             app.clone(),
             "POST",
-            "/channels/wecom/events",
+            "/channels/fixture/events",
             Some(&body.to_string()),
         )
         .await;
@@ -133,7 +134,7 @@ async fn wecom_attachment_validation_rejects_bad_bytes_names_and_counts_before_a
         let (status, rejected) = call(
             app.clone(),
             "POST",
-            "/channels/wecom/events",
+            "/channels/fixture/events",
             Some(&body.to_string()),
         )
         .await;
@@ -152,7 +153,7 @@ async fn wecom_event_for_a_graph_without_an_input_loop_is_refused_before_admissi
     let (root, mut state) = fixture();
     let _env = PROCESS_ENV.lock().await;
     set_host_env(root.path(), &state.data_root);
-    state.wecom.reply_node = "reply".into();
+    with_bot(&mut state, "reply", &["*"]);
     write_graph_bundle(
         &state.bundle_root,
         &json!({
@@ -166,7 +167,7 @@ async fn wecom_event_for_a_graph_without_an_input_loop_is_refused_before_admissi
     let (status, refused) = call(
         app.clone(),
         "POST",
-        "/channels/wecom/events",
+        "/channels/fixture/events",
         Some(&event("hello").to_string()),
     )
     .await;
@@ -200,7 +201,8 @@ async fn wecom_event_for_a_graph_without_an_input_loop_is_refused_before_admissi
 /// content digest is refused, and confirming twice is idempotent.
 #[tokio::test]
 async fn settlement_is_pinned_to_the_admitted_message_and_idempotent() {
-    let (root, state) = fixture();
+    let (root, mut state) = fixture();
+    with_bot(&mut state, "assistant", &["*"]);
     std::fs::create_dir_all(state.data_root.join("platform")).unwrap();
     let sessions = SessionStore::open(state.data_root.join("platform/sessions.sqlite")).unwrap();
     let body = group_event("group-bob-1", "bob", "group-a", "Bob adds details");
@@ -266,7 +268,7 @@ async fn settlement_is_pinned_to_the_admitted_message_and_idempotent() {
         let (status, _) = call(
             app.clone(),
             "POST",
-            "/channels/wecom/events",
+            "/channels/fixture/events",
             Some(&forged.to_string()),
         )
         .await;
@@ -277,7 +279,7 @@ async fn settlement_is_pinned_to_the_admitted_message_and_idempotent() {
     let (status, _) = call(
         app.clone(),
         "POST",
-        "/channels/wecom/events",
+        "/channels/fixture/events",
         Some(&changed.to_string()),
     )
     .await;
@@ -286,7 +288,7 @@ async fn settlement_is_pinned_to_the_admitted_message_and_idempotent() {
         let (status, confirmed) = call(
             app.clone(),
             "POST",
-            "/channels/wecom/events",
+            "/channels/fixture/events",
             Some(&settlement.to_string()),
         )
         .await;
@@ -305,7 +307,8 @@ async fn settlement_is_pinned_to_the_admitted_message_and_idempotent() {
 /// of ordinary routes, and still refuses anything larger.
 #[tokio::test]
 async fn wecom_event_body_limit_admits_attachment_sized_events_only() {
-    let (root, state) = fixture();
+    let (root, mut state) = fixture();
+    with_bot(&mut state, "assistant", &["*"]);
     let app = router_with_web_root(state, root.path().join("web"));
     for length_header in [true, false] {
         for (size, expected) in [
@@ -317,7 +320,7 @@ async fn wecom_event_body_limit_admits_attachment_sized_events_only() {
         ] {
             let mut request = Request::builder()
                 .method("POST")
-                .uri("/channels/wecom/events")
+                .uri("/channels/fixture/events")
                 .header(header::CONTENT_TYPE, "application/json");
             if length_header {
                 request = request.header(header::CONTENT_LENGTH, size);
@@ -361,7 +364,7 @@ async fn wecom_progress_requires_authentication() {
     ] {
         let mut builder = Request::builder()
             .method("GET")
-            .uri("/channels/wecom/progress/message-1");
+            .uri("/channels/fixture/progress/message-1");
         if let Some(value) = &authorization {
             builder = builder.header(header::AUTHORIZATION, value);
         }
@@ -384,7 +387,8 @@ async fn wecom_progress_requires_authentication() {
 async fn persistent_assistant_progress_resolves_the_bound_round() {
     use futures_util::StreamExt;
 
-    let (root, state) = fixture();
+    let (root, mut state) = fixture();
+    with_bot(&mut state, "assistant", &["*"]);
     let _env = PROCESS_ENV.lock().await;
     set_host_env(root.path(), &state.data_root);
     let definition = assistant_definition();
@@ -449,14 +453,14 @@ async fn persistent_assistant_progress_resolves_the_bound_round() {
     let (status, denied) = call(
         app.clone(),
         "GET",
-        "/channels/wecom/progress/never-admitted",
+        "/channels/fixture/progress/never-admitted",
         None,
     )
     .await;
     assert_eq!(status, StatusCode::NOT_FOUND, "{denied}");
     let request = Request::builder()
         .method("GET")
-        .uri("/channels/wecom/progress/message-1")
+        .uri("/channels/fixture/progress/message-1")
         .body(Body::empty())
         .unwrap();
     let response = app.oneshot(request).await.unwrap();
@@ -501,7 +505,8 @@ async fn persistent_assistant_progress_resolves_the_bound_round() {
 /// recorded as superseded rather than lost when a newer message arrives.
 #[tokio::test]
 async fn an_admitted_message_without_a_run_is_not_finished_lost_or_duplicated() {
-    let (root, state) = fixture();
+    let (root, mut state) = fixture();
+    with_bot(&mut state, "assistant", &["*"]);
     let _env = PROCESS_ENV.lock().await;
     set_host_env(root.path(), &state.data_root);
     std::fs::create_dir_all(state.data_root.join("platform")).unwrap();
@@ -587,7 +592,7 @@ fn seed_running_assistant_round(
                 identity: ChannelIdentity {
                     conversation_kind: Default::default(),
                     source: "wecom".into(),
-                    account: None,
+                    account: Some("corp-a".into()),
                     conversation_id: "conversation-1".into(),
                     sender_id: "user-1".into(),
                 },
@@ -690,7 +695,7 @@ async fn progress_prefix(
     let app = router_with_web_root(state.clone(), web_root);
     let request = Request::builder()
         .method("GET")
-        .uri("/channels/wecom/progress/message-1")
+        .uri("/channels/fixture/progress/message-1")
         .body(Body::empty())
         .unwrap();
     let response = app.oneshot(request).await.unwrap();
@@ -708,7 +713,8 @@ async fn progress_prefix(
 /// running Turn: the user must see the guidance line instead of nothing at all.
 #[tokio::test]
 async fn persistent_assistant_progress_shows_guidance_from_narration_alone() {
-    let (root, state) = fixture();
+    let (root, mut state) = fixture();
+    with_bot(&mut state, "assistant", &["*"]);
     let _env = PROCESS_ENV.lock().await;
     set_host_env(root.path(), &state.data_root);
     std::fs::create_dir_all(state.data_root.join("platform")).unwrap();
@@ -763,7 +769,8 @@ async fn persistent_assistant_progress_shows_guidance_from_narration_alone() {
 /// then continues the same stream instead of repeating or renumbering it.
 #[tokio::test]
 async fn persistent_assistant_progress_reports_before_the_live_trace_registers() {
-    let (root, state) = fixture();
+    let (root, mut state) = fixture();
+    with_bot(&mut state, "assistant", &["*"]);
     let _env = PROCESS_ENV.lock().await;
     set_host_env(root.path(), &state.data_root);
     std::fs::create_dir_all(state.data_root.join("platform")).unwrap();

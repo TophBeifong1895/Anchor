@@ -12,7 +12,6 @@ pub(super) const HISTORY_TOOL: &str = "anchor_conversation_history";
 
 pub(super) struct Conversation {
     pub key: String,
-    pub reply_node: String,
     previous: Vec<GraphRunRecord>,
 }
 
@@ -153,7 +152,6 @@ impl HostIoResolver {
         }
         Ok(Some(Conversation {
             key: hint.key,
-            reply_node: binding.reply_node.clone(),
             previous,
         }))
     }

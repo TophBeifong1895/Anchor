@@ -161,7 +161,9 @@ pub(crate) fn is_external(
     field: &str,
 ) -> Result<bool, String> {
     if target.starts_with("channel_") {
-        return Ok(std::env::var_os(field).is_some());
+        // A bot's credentials belong to its Graph binding; the process
+        // environment never supplies them.
+        return Ok(false);
     }
     let key = logical_field(definition, target, field)
         .map(str::to_owned)

@@ -23,7 +23,7 @@ mod goose {
     ) -> Result<(u16, Value), reqwest::Error> {
         server.try_request_with_timeout(
             "POST",
-            "/channels/wecom/events",
+            super::EVENTS,
             Some(event),
             Some(Duration::from_secs(30)),
         )
@@ -37,7 +37,7 @@ use std::{fs, os::unix::fs::PermissionsExt, path::PathBuf, thread, time::Duratio
 
 const ALICE: &str = "plugin-turn-alice";
 const BOB: &str = "plugin-turn-bob";
-const EVENTS: &str = "/channels/wecom/events";
+const EVENTS: &str = "/channels/plugin-assistant/events";
 const GRAPH: &str = "plugin-assistant";
 
 fn graph(mounted: bool) -> Value {
@@ -55,10 +55,8 @@ fn host(mounted: bool) -> Host {
     let definition = graph(mounted);
     let host = Host::new(&definition)
         .default_runtime()
+        .with_bot(GRAPH, &[ALICE, BOB])
         .with_extra_environment([
-            ("ANCHOR_WECOM_GRAPH", GRAPH.to_owned()),
-            ("ANCHOR_WECOM_REPLY_NODE", "assistant".to_owned()),
-            ("ANCHOR_WECOM_USERS", format!("{ALICE},{BOB}")),
             ("ANCHOR_NODE_TOOL_DISCLOSURE", "0".to_owned()),
             ("ANCHOR_ASSISTANT_AUTO_RESUME", "0".to_owned()),
         ]);

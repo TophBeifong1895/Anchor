@@ -1,7 +1,7 @@
 //! Owner-bound credentials are Host configuration. Values never enter Pilot
 //! history, question answers, workspace files, or public request metadata.
 mod management;
-pub(crate) use management::{configure, credentials, resolve_pending_locked};
+pub(crate) use management::{channel_credentials, configure, credentials, resolve_pending_locked};
 
 use anchor_graph_host::{FilePluginCatalog, PluginDefinition, PluginMetadata};
 use anchor_platform_session::{Session, SessionStore, TurnStatus};
@@ -80,12 +80,45 @@ fn requests_root(data: &Path, owner: &str, session: &Session) -> PathBuf {
             .expect("scope hash"),
     )
 }
-fn secret_path(data: &Path, owner: &str, plugin: &str, server: &str, field: &str) -> PathBuf {
-    data.join("platform/credentials")
+fn secret_path(data: &Path, owner: &str, plugin: &str, target: &str, field: &str) -> PathBuf {
+    let (server, graph) = split_target(target);
+    let directory = data
+        .join("platform/credentials")
         .join(hash(owner.as_bytes()))
         .join(plugin)
-        .join(server)
-        .join(format!("{field}.json"))
+        .join(server);
+    match graph {
+        Some(graph) => directory.join(graph),
+        None => directory,
+    }
+    .join(format!("{field}.json"))
+}
+
+/// A bot's credentials belong to its Graph, so a channel target names both the
+/// declaration and the Graph: `channel_<platform>@<graph>`. MCP targets stay
+/// shared by every Graph that mounts the Plugin.
+pub(crate) fn channel_target(platform: &str, graph: &str) -> String {
+    format!("channel_{platform}@{graph}")
+}
+
+/// The declared server of a target and, for a channel, its Graph. The stored
+/// secret records the declared server; the Graph is its directory.
+fn split_target(target: &str) -> (&str, Option<&str>) {
+    match target.split_once('@') {
+        Some((server, graph)) => (server, Some(graph)),
+        None => (target, None),
+    }
+}
+
+pub(crate) fn valid_target(target: &str) -> bool {
+    match split_target(target) {
+        (server, Some(graph)) => {
+            server.starts_with("channel_")
+                && crate::pilot_tools::identifier(server)
+                && crate::pilot_tools::identifier(graph)
+        }
+        (server, None) => !server.starts_with("channel_") && crate::pilot_tools::identifier(server),
+    }
 }
 
 pub(crate) fn binding_owner(owner: &str) -> String {
@@ -241,8 +274,14 @@ pub(crate) fn declared_fields(config: &Value) -> BTreeSet<String> {
 
 pub(crate) fn target_authorization(
     definition: &PluginDefinition,
-    server: &str,
+    target: &str,
 ) -> Result<(BTreeSet<String>, String), String> {
+    if !valid_target(target) {
+        return Err(
+            "credential target is invalid; a channel credential belongs to one bot Graph".into(),
+        );
+    }
+    let (server, _) = split_target(target);
     if let Some(platform) = server.strip_prefix("channel_") {
         channel_authorization(&definition.metadata(), platform)
     } else {
@@ -312,7 +351,7 @@ pub(crate) fn request(
     purpose: &str,
 ) -> Result<CredentialRequest, String> {
     if !crate::pilot_tools::identifier(plugin)
-        || !crate::pilot_tools::identifier(server)
+        || !valid_target(server)
         || !valid_field(field)
         || purpose.len() > 2000
     {
@@ -396,7 +435,7 @@ fn check_fact(fact: &RequestFact, owner: &str, session: &Session) -> Result<(), 
         )
         || !valid_field(&fact.request.field)
         || !crate::pilot_tools::identifier(&fact.request.plugin)
-        || !crate::pilot_tools::identifier(&fact.request.server)
+        || !valid_target(&fact.request.server)
     {
         return Err("credential request ownership or status changed".into());
     }
@@ -596,16 +635,11 @@ pub(crate) fn environment_snapshot_for_execution(
 {
     let _lease = lease(data)?;
     let mut snapshot = crate::plugin_configuration::snapshot_locked(data, owner, definition)?;
+    // Bot credentials go only to the Graph's own gateway, never to node tools.
     for target in definition
         .mcp_servers
         .iter()
         .map(|server| server.name.clone())
-        .chain(
-            definition
-                .channels
-                .iter()
-                .map(|channel| format!("channel_{}", channel.platform)),
-        )
     {
         let values = legacy_environment_values(data, owner, definition, &target)?;
         snapshot
@@ -661,9 +695,6 @@ fn legacy_environment_values(
     definition: &PluginDefinition,
     server: &str,
 ) -> Result<BTreeMap<String, String>, String> {
-    if server.starts_with("channel_") {
-        return channel_environment_values_locked(data, owner, &definition.metadata(), server);
-    }
     let (fields, authorization_digest) = target_authorization(definition, server)?;
     let mut values = BTreeMap::new();
     for field in fields {
@@ -706,11 +737,13 @@ fn channel_environment_values_locked(
     data: &Path,
     owner: &str,
     definition: &PluginMetadata,
-    server: &str,
+    target: &str,
 ) -> Result<BTreeMap<String, String>, String> {
+    let (server, graph) = split_target(target);
     let platform = server
         .strip_prefix("channel_")
-        .ok_or("credential target is not a channel")?;
+        .filter(|_| graph.is_some() && valid_target(target))
+        .ok_or("credential target is not a bot Graph's channel")?;
     let (fields, authorization_digest) = channel_authorization(definition, platform)?;
     let mut values = BTreeMap::new();
     for field in fields {
@@ -718,7 +751,6 @@ fn channel_environment_values_locked(
             .configuration
             .environment_for(server)
             .is_some_and(|mapping| mapping.contains_key(&field))
-            || std::env::var_os(&field).is_some()
         {
             continue;
         }
@@ -726,7 +758,7 @@ fn channel_environment_values_locked(
             data,
             owner,
             &definition.id,
-            server,
+            target,
             &field,
             &authorization_digest,
         )? {
@@ -750,7 +782,7 @@ fn authorized_value(
     if secret.format != 1
         || secret.owner != owner
         || secret.plugin != plugin
-        || secret.server != server
+        || secret.server != split_target(server).0
         || secret.field != field
         || secret.authorization_digest != authorization_digest
     {
@@ -799,6 +831,32 @@ pub(crate) fn delete_plugin(data: &Path, plugin: &str) -> Result<(), String> {
                     fs::remove_file(path)
                         .map_err(|_| "Plugin credential request cleanup failed")?;
                 }
+            }
+        }
+    }
+    Ok(())
+}
+/// Remove one bot Graph's channel credentials for every owner, after its
+/// binding is gone. Shared MCP credentials of the Plugin are kept.
+pub(crate) fn delete_channel_graph(data: &Path, plugin: &str, target: &str) -> Result<(), String> {
+    let (server, Some(graph)) = split_target(target) else {
+        return Err("credential target is not a bot Graph's channel".into());
+    };
+    if !crate::pilot_tools::identifier(plugin) || !valid_target(target) {
+        return Err("invalid channel credential target".into());
+    }
+    let _lease = lease(data)?;
+    let root = data.join("platform/credentials");
+    if private_parent(&root.join("probe"))?.is_some() {
+        for entry in fs::read_dir(&root).map_err(|_| "credential owner directories unavailable")? {
+            let directory = entry
+                .map_err(|_| "credential owner directories unavailable")?
+                .path()
+                .join(plugin)
+                .join(server)
+                .join(graph);
+            if private_parent(&directory.join("probe"))?.is_some() {
+                fs::remove_dir_all(&directory).map_err(|_| "bot credential cleanup failed")?;
             }
         }
     }

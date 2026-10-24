@@ -37,9 +37,13 @@ async fn graph_listener_observes_supervised_route_without_exposing_control_crede
                 .unwrap();
         }
     });
-    state
-        .channel_descriptors
-        .insert("wecom".into(), descriptor.clone());
+    with_bot_of(
+        &mut state,
+        "fixture",
+        "work",
+        &["*"],
+        Some(descriptor.clone()),
+    );
     for expected in [
         "authenticating",
         "authenticated",
@@ -56,10 +60,16 @@ async fn graph_listener_observes_supervised_route_without_exposing_control_crede
         assert!(!projection.to_string().contains("control.sock"));
     }
     gateway.await.unwrap();
-    std::fs::remove_file(descriptor).unwrap();
+    std::fs::remove_file(&descriptor).unwrap();
     let (_, projection) = call(router(state.clone()), "GET", "/graphs", None).await;
     assert_eq!(projection["graphs"][0]["listener"]["status"], "unavailable");
-    state.wecom.graph = "other-graph".into();
+    with_bot_of(
+        &mut state,
+        "other-graph",
+        "work",
+        &["*"],
+        Some(descriptor.clone()),
+    );
     let (_, projection) = call(router(state), "GET", "/graphs", None).await;
     assert!(projection["graphs"][0].get("listener").is_none());
 }

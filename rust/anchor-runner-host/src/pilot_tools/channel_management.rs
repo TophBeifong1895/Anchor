@@ -1,115 +1,106 @@
-//! The Pilot describes non-sensitive channel settings. Mutations are executed
+//! The Pilot describes non-sensitive bot settings. Mutations are executed
 //! only by the existing native confirmation adapter, never by model consent.
 use super::*;
-use crate::application::channel_management::ChannelBinding;
+use crate::application::channel_management::{ChannelBinding, ChannelMembers};
+
+fn only(arguments: &Value, allowed: &[&str], message: &str) -> Result<(), ToolError> {
+    let object = arguments
+        .as_object()
+        .ok_or_else(|| rejected("channel arguments must be an object"))?;
+    if object.keys().any(|key| !allowed.contains(&key.as_str())) {
+        return Err(rejected(message));
+    }
+    Ok(())
+}
+
+fn members(arguments: &Value, name: &str) -> Result<Vec<String>, ToolError> {
+    serde_json::from_value(
+        arguments
+            .get(name)
+            .cloned()
+            .ok_or_else(|| rejected(format!("{name} must be explicitly provided")))?,
+    )
+    .map_err(|_| rejected(format!("{name} must be a string array")))
+}
 
 pub(crate) fn configuration_arguments(
     arguments: &Value,
-) -> Result<(String, ChannelBinding), ToolError> {
-    let object = arguments
-        .as_object()
-        .ok_or_else(|| rejected("channel arguments must be an object"))?;
-    if object.keys().any(|key| {
-        ![
-            "platform",
-            "graph",
-            "reply_node",
-            "plugin",
-            "users",
-            "send_users",
-        ]
-        .contains(&key.as_str())
-    }) {
-        return Err(rejected(
-            "provide only the channel binding; credentials and approval are not model arguments",
-        ));
-    }
-    let platform = parameter(arguments, "platform")?;
-    let binding = ChannelBinding {
-        graph: parameter(arguments, "graph")?,
-        reply_node: parameter(arguments, "reply_node")?,
-        plugin: parameter(arguments, "plugin")?,
-        users: serde_json::from_value(
-            arguments
-                .get("users")
-                .cloned()
-                .ok_or_else(|| rejected("users must be explicitly provided"))?,
-        )
-        .map_err(|_| rejected("users must be a string array"))?,
-        send_users: serde_json::from_value(
-            arguments
-                .get("send_users")
-                .cloned()
-                .ok_or_else(|| rejected("send_users must be explicitly provided"))?,
-        )
-        .map_err(|_| rejected("send_users must be a string array"))?,
+) -> Result<(String, ChannelMembers), ToolError> {
+    only(
+        arguments,
+        &["graph", "users", "send_users"],
+        "provide only the bot's graph and members; credentials and approval are not model arguments",
+    )?;
+    let graph = parameter(arguments, "graph")?;
+    let members = ChannelMembers {
+        users: members(arguments, "users")?,
+        send_users: members(arguments, "send_users")?,
     };
-    if platform != "wecom" {
-        return Err(rejected("the supported channel is wecom"));
+    // Validate the member lists before asking the user; the Plugin is the
+    // Graph's and is checked again by the application use case.
+    ChannelBinding {
+        plugin: "unchecked".into(),
+        users: members.users.clone(),
+        send_users: members.send_users.clone(),
     }
-    binding.validate().map_err(channel_error)?;
-    Ok((platform, binding.normalized()))
+    .validate()
+    .map_err(channel_error)?;
+    Ok((graph, members))
 }
 
 pub(crate) fn enable_arguments(arguments: &Value) -> Result<(String, bool), ToolError> {
-    let object = arguments
-        .as_object()
-        .ok_or_else(|| rejected("channel arguments must be an object"))?;
-    if object
-        .keys()
-        .any(|key| !["platform", "enabled"].contains(&key.as_str()))
-    {
-        return Err(rejected(
-            "provide only platform and enabled; approval is not a model argument",
-        ));
-    }
-    let platform = parameter(arguments, "platform")?;
-    if platform != "wecom" {
-        return Err(rejected("the supported channel is wecom"));
-    }
+    only(
+        arguments,
+        &["graph", "enabled"],
+        "provide only graph and enabled; approval is not a model argument",
+    )?;
+    let graph = parameter(arguments, "graph")?;
     let enabled = arguments
         .get("enabled")
         .and_then(Value::as_bool)
         .ok_or_else(|| rejected("enabled must be a boolean"))?;
-    Ok((platform, enabled))
+    Ok((graph, enabled))
 }
 
 impl PilotTools {
     pub(super) async fn channel_status(&self, arguments: &Value) -> Result<Value, ToolError> {
-        let platform = parameter(arguments, "platform")?;
-        if arguments
-            .as_object()
-            .is_none_or(|object| object.keys().any(|key| key != "platform"))
-        {
-            return Err(rejected("provide platform only"));
+        only(
+            arguments,
+            &["graph"],
+            "provide graph only, or nothing to list every bot",
+        )?;
+        match arguments.get("graph") {
+            None => self.application.channel_list(&self.owner).await,
+            Some(_) => {
+                self.application
+                    .channel_status(&self.owner, &parameter(arguments, "graph")?)
+                    .await
+            }
         }
-        self.application
-            .channel_status(&self.owner, &platform)
-            .await
-            .map_err(channel_error)
+        .map_err(channel_error)
     }
 
     pub(crate) async fn configure_channel_approved(
         &self,
-        platform: &str,
-        binding: ChannelBinding,
+        graph: &str,
+        members: ChannelMembers,
     ) -> Result<Value, ToolError> {
         self.require_active_turn()?;
         self.application
-            .configure_channel(&self.owner, platform, binding)
+            .configure_channel(&self.owner, graph, members)
             .await
             .map_err(channel_error)
     }
 
     pub(crate) async fn enable_channel_approved(
         &self,
-        platform: &str,
+        graph: &str,
         enabled: bool,
         expected: &ChannelBinding,
     ) -> Result<Value, ToolError> {
         self.require_active_turn()?;
         self.application
-            .set_channel_enabled_checked(&self.owner, platform, enabled, expected)
+            .set_channel_enabled_checked(&self.owner, graph, enabled, expected)
             .await
             .map_err(channel_error)
     }
@@ -118,7 +109,7 @@ impl PilotTools {
 fn channel_error(error: crate::application::ApplicationError) -> ToolError {
     match error {
         crate::application::ApplicationError::Missing => {
-            rejected("channel Graph, Plugin, or binding is unavailable")
+            rejected("bot Graph, Plugin, or binding is unavailable")
         }
         crate::application::ApplicationError::Invalid(reason)
         | crate::application::ApplicationError::Conflict(reason)

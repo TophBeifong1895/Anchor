@@ -854,6 +854,8 @@ pub struct Host {
     native: bool,
     runtime_default: bool,
     extra_environment: Vec<(OsString, OsString)>,
+    bot: Option<(String, Vec<String>)>,
+    bot_credentials: Vec<(String, String)>,
 }
 
 impl Host {
@@ -926,7 +928,28 @@ impl Host {
             native: false,
             runtime_default: false,
             extra_environment: Vec::new(),
+            bot: None,
+            bot_credentials: Vec::new(),
         }
+    }
+
+    /// Give `graph` an enabled bot for `users` the first time a server starts;
+    /// restarts reuse the saved binding, as a deployment does.
+    #[allow(dead_code)]
+    pub fn with_bot(mut self, graph: &str, users: &[&str]) -> Self {
+        self.bot = Some((
+            graph.to_owned(),
+            users.iter().map(|user| (*user).to_owned()).collect(),
+        ));
+        self
+    }
+
+    /// Store `field` as the bot Graph's own credential before enabling it.
+    #[allow(dead_code)]
+    pub fn with_bot_credential(mut self, field: &str, value: &str) -> Self {
+        self.bot_credentials
+            .push((field.to_owned(), value.to_owned()));
+        self
     }
 
     pub fn with_allowed_commands(mut self, commands: &str) -> Self {
@@ -1147,6 +1170,9 @@ impl Host {
                 .try_request("GET", "/health", None)
                 .is_ok_and(|(status, _)| status == 200)
         });
+        if let Some((graph, users)) = &self.bot {
+            server.enable_bot(graph, users, &self.bot_credentials);
+        }
         server
     }
 
@@ -1437,13 +1463,49 @@ fn kill_group(child: &mut Child) {
 pub struct HttpHost {
     child: Child,
     killed: bool,
-    url: String,
+    pub url: String,
     log: PathBuf,
     runtime: tokio::runtime::Runtime,
     client: reqwest::Client,
 }
 
 impl HttpHost {
+    /// Configure and enable `graph`'s bot through the per-Graph management API
+    /// unless an earlier server already did.
+    pub fn enable_bot(&self, graph: &str, users: &[String], credentials: &[(String, String)]) {
+        let path = format!("/graphs/{graph}/channel");
+        let (status, current) = self.request("GET", &path, None);
+        assert_eq!(status, 200, "{current}");
+        if current["enabled"] == true {
+            return;
+        }
+        let (status, saved) = self.request(
+            "PUT",
+            &path,
+            Some(&json!({"users":users,"send_users":users})),
+        );
+        assert_eq!(status, 200, "{saved}");
+        if !credentials.is_empty() {
+            let (status, state) = self.request("GET", &format!("{path}/credentials"), None);
+            assert_eq!(status, 200, "{state}");
+            let digest = state["targets"][0]["authorization_digest"].clone();
+            for (field, value) in credentials {
+                let (status, stored) = self.request(
+                    "PUT",
+                    &format!("{path}/credentials/{field}"),
+                    Some(&json!({"authorization_digest":digest,"value":value})),
+                );
+                assert_eq!(status, 200, "{stored}");
+            }
+        }
+        let (status, enabled) = self.request(
+            "POST",
+            &format!("{path}/enabled"),
+            Some(&json!({"enabled":true,"expected_binding":saved["binding"]})),
+        );
+        assert_eq!(status, 200, "{enabled}");
+    }
+
     pub fn kill(&mut self) {
         kill_group(&mut self.child);
         self.killed = true;

@@ -5,20 +5,20 @@ description: 企业微信机器人私聊、主动通知、附件分析和图文�
 
 # 企业微信
 
-以本轮实际注册的工具为准。挂载此 Plugin 后，Anchor 服务维护唯一的机器人 WebSocket 连接；普通助手 Graph 处理消息，不经过 Pilot。凭证统一由根目录 `.env` 配置，不要在参数、文件或回复中复制密钥。
+以本轮实际注册的工具为准。一张常驻助手 Graph 对应一个机器人：在它的 Agent 节点挂载此 Plugin 并配置、启用后，Anchor 为这张 Graph 维护一条机器人 WebSocket 连接；消息由该 Graph 处理，不经过 Pilot。机器人凭据按 Graph 保存在 Anchor 凭据库，不要在参数、文件或回复中复制密钥。
 
 ## 机器人长连接工具
 
-只需 `WECOM_BOT_ID`、`WECOM_BOT_SECRET` 及 Anchor 通道配置，不需要自建应用凭证，也不要求节点 `network=true`。工具通过宿主受限通道委托现有网关；节点拿不到机器人密钥。
+只需本 Graph 机器人的 BotID/Secret 及成员配置，不需要自建应用凭证，也不要求节点 `network=true`。工具通过宿主受限通道委托现有网关；节点拿不到机器人密钥。
 
-- `wecom_send_message(userid, content)`：主动发送 Markdown 给明确指定的企业成员。仅在用户明确要求通知、转发或已授权的定时任务中调用；普通私聊直接在最终 `summary` 答复，不重复调用发送工具。目标必须是可信上下文中的真实 userid，不猜姓名对应账号，不支持群或 `@all`。接收人受 `ANCHOR_WECOM_SEND_USERS` 限制，未设置/留空时继承 `ANCHOR_WECOM_USERS`。返回 `accepted` 表示平台确认接收，不等于已读。超时或结果不确定时如实说明，不自动重发。
+- `wecom_send_message(userid, content)`：主动发送 Markdown 给明确指定的企业成员。仅在用户明确要求通知、转发或已授权的定时任务中调用；普通私聊直接在最终 `summary` 答复，不重复调用发送工具。目标必须是可信上下文中的真实 userid，不猜姓名对应账号，不支持群或 `@all`。接收人受本 Graph 机器人的可主动发送名单限制，留空时继承接收成员名单。返回 `accepted` 表示平台确认接收，不等于已读。超时或结果不确定时如实说明，不自动重发。
 - `wecom_attach_image(path)`：仅指定回复节点提供。把本节点 `/workspace` 或已挂载只读输入（如 `/in/channel`、`/previous`）中的真实 PNG/JPEG 附到最终答复；不会立即发送。不得使用宿主路径、符号链接或 `.git`。每张最多 10 MiB、整轮最多 10 张且 base64 合计不超过 14 MiB；重复图片去重。正文写入 `summary`，图片由网关在终态一并发送。不是任意文件发送工具。
 
-主动发送工具目前仅在 Anchor HTTP 服务启动的 Graph 中注入；离线 CLI 没有网关控制入口。同一平台的通道目前只绑定一个 Graph，可在这个 Graph 内使用多节点、手动或定时触发。
+这两个工具只注入已配置机器人的 Graph 的助手节点，走这张 Graph 自己的网关；普通 Graph 挂载此 Plugin 时没有这两个工具，只有下面的自建应用工具。离线 CLI 没有网关控制入口。
 
 ## 附件与回复
 
-图片、文件和混合消息下载解密后保存在 `state/channels/wecom/events/`；本轮 `input.channel.attachments` 给出只读 `/in/channel` 路径。原件始终保留。
+图片、文件和混合消息下载解密后保存在该 Graph 的网关状态目录 `state/channels/graphs/<graph>/events/`；本轮 `input.channel.attachments` 给出只读 `/in/channel` 路径。原件始终保留。
 
 `input.attachment_content` 提供 UTF-8 文本、PDF 文本层、DOCX 正文和 XLSX 单元格的有界提取结果；扫描 PDF 没有 OCR，Office 图片/嵌入对象不算已读取。遇到 `Not read` 或截断提示，明确指出范围，不能声称读完。PNG/JPEG/WebP 经实际解码验证后通过模型原生图片输入传入；是否理解取决于当前模型，不能把文件存在当成视觉成功。
 
@@ -35,4 +35,4 @@ description: 企业微信机器人私聊、主动通知、附件分析和图文�
 
 应用发送需提供 `touser`、`toparty`、`totag` 至少一项；网络工具需节点 `network=true`。应用 API 工具与智能机器人通道分别使用原生二进制。审批、借款、报销 API、个人账号私聊接管、语音、欢迎语及卡片事件尚未接入。
 
-操作员配置：`ANCHOR_WECOM_GRAPH`、`ANCHOR_WECOM_REPLY_NODE`、`ANCHOR_WECOM_USERS`、可选 `ANCHOR_WECOM_SEND_USERS`；内部 `ANCHOR_API_KEY` 对应服务白名单 `ANCHOR_API_KEYS` 的至少 32 字节密钥。网关状态目录、回调地址和控制 socket 由 Anchor 设置；不要同时手动启动第二个 Bot 网关。完整接入和验收见仓库 `docs/wecom-assistant.md`。
+操作员按 Graph 配置机器人凭据、接收成员、可选的主动发送成员，再启用。网关状态目录、回调地址、回调密钥和控制 socket 由 Anchor 设置；不要为同一个 Bot 手动启动第二个网关。完整接入和验收见仓库 `docs/wecom-assistant.md`。

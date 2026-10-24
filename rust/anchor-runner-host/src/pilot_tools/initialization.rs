@@ -49,6 +49,13 @@ impl PilotTools {
         self.require_active_turn()?;
         let plugin = parameter(arguments, "plugin")?;
         let server = parameter(arguments, "server")?;
+        // A bot's credentials belong to its Graph; MCP credentials do not.
+        let server = match (server.starts_with("channel_"), arguments.get("graph")) {
+            (true, Some(Value::String(graph))) => format!("{server}@{graph}"),
+            (true, _) => return Err(rejected("a channel credential requires the bot's graph")),
+            (false, None) => server,
+            (false, Some(_)) => return Err(rejected("graph applies only to channel credentials")),
+        };
         let field = parameter(arguments, "field")?;
         let session = self
             .sessions

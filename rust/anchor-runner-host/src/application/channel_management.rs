@@ -1,29 +1,41 @@
-//! Host-owned channel configuration; the existing Session/Turn admission and
-//! ChannelSupervisor retain execution and transport semantics.
+//! Host-owned channel bindings: one bot per persistent assistant Graph, keyed
+//! by the Graph name. The existing Session/Turn admission and ChannelSupervisor
+//! retain execution and transport semantics.
 use super::{ApplicationError, RunApplication};
+use anchor_graph_host::FilePluginCatalog;
+use anchor_runtime::graph::GraphSnapshot;
 use futures_util::future::BoxFuture;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::{collections::BTreeSet, path::PathBuf};
+use std::{
+    collections::BTreeSet,
+    path::{Path, PathBuf},
+};
 
+/// The only channel platform this Host supports.
+pub(crate) const PLATFORM: &str = "wecom";
+
+/// The operator-approved settings of one Graph's bot. The Graph is the
+/// binding's key; the reply node is derived from the Graph, never configured.
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct ChannelBinding {
-    pub(crate) graph: String,
-    pub(crate) reply_node: String,
     pub(crate) plugin: String,
+    pub(crate) users: Vec<String>,
+    pub(crate) send_users: Vec<String>,
+}
+
+/// The member lists an operator chooses; the Plugin comes from the Graph.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ChannelMembers {
     pub(crate) users: Vec<String>,
     pub(crate) send_users: Vec<String>,
 }
 
 impl ChannelBinding {
     pub(crate) fn validate(&self) -> Result<(), ApplicationError> {
-        if !identifier(&self.graph)
-            || !identifier(&self.plugin)
-            || self.reply_node.trim().is_empty()
-            || self.reply_node.len() > 200
-            || self.reply_node.chars().any(char::is_control)
-        {
+        if !identifier(&self.plugin) {
             return Err(ApplicationError::Invalid("invalid channel binding".into()));
         }
         for users in [&self.users, &self.send_users] {
@@ -68,7 +80,7 @@ impl ChannelBinding {
     }
 }
 
-fn identifier(value: &str) -> bool {
+pub(crate) fn identifier(value: &str) -> bool {
     !value.is_empty()
         && value != "."
         && value != ".."
@@ -77,50 +89,98 @@ fn identifier(value: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.'))
 }
 
+/// How a Graph serves as a bot: its assistant work node and the one channel
+/// Plugin mounted on it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ChannelPlan {
+    pub(crate) work_node: String,
+    pub(crate) plugin: String,
+}
+
+/// The single rule for "this Graph is a bot Graph": a persistent assistant
+/// whose Agent node mounts a channel Plugin. `None` for any other Graph, which
+/// may still mount the same Plugin for its application tools (R1). More than
+/// one channel Plugin on the assistant is refused (R2).
+pub(crate) fn channel_plan(
+    snapshot: &GraphSnapshot,
+    library: &Path,
+) -> Result<Option<ChannelPlan>, ApplicationError> {
+    let Ok(Some(plan)) = crate::assistant::AssistantPlan::discover(snapshot) else {
+        return Ok(None);
+    };
+    let catalog = FilePluginCatalog::new(library);
+    let node = snapshot
+        .nodes
+        .iter()
+        .find(|node| node.id == plan.work_node)
+        .ok_or(ApplicationError::Missing)?;
+    let mut channels = node.plugins.iter().filter(|reference| {
+        catalog
+            .channels(&reference.id)
+            .is_ok_and(|channels| channels.iter().any(|channel| channel.platform == PLATFORM))
+    });
+    match (channels.next(), channels.next()) {
+        (None, _) => Ok(None),
+        (Some(plugin), None) => Ok(Some(ChannelPlan {
+            work_node: plan.work_node,
+            plugin: plugin.id.clone(),
+        })),
+        (Some(_), Some(_)) => Err(ApplicationError::Invalid(TWO_CHANNELS.into())),
+    }
+}
+
 /// Internal routing data. Credentials and callback tokens are deliberately not
 /// part of this public projection; the adapter retains them privately.
 #[derive(Clone)]
 pub(crate) struct ChannelRuntimeState {
+    pub(crate) graph: String,
     pub(crate) owner: String,
     pub(crate) binding: ChannelBinding,
+    /// The Graph's assistant node while the Graph still admits as this bot.
+    pub(crate) reply_node: Option<String>,
     pub(crate) enabled: bool,
     pub(crate) account: Option<String>,
     pub(crate) descriptor: Option<PathBuf>,
 }
 
+/// The binding a gateway callback key belongs to.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ChannelCallback {
+    pub(crate) graph: String,
+    pub(crate) owner: String,
+}
+
 pub(crate) trait ChannelManagementPort: Send + Sync {
+    /// Every binding the owner can see, with its live gateway status.
+    fn list<'a>(&'a self, owner: &'a str) -> BoxFuture<'a, Result<Value, ApplicationError>>;
     fn status<'a>(
         &'a self,
         owner: &'a str,
-        platform: &'a str,
+        graph: &'a str,
     ) -> BoxFuture<'a, Result<Value, ApplicationError>>;
     fn configure<'a>(
         &'a self,
         owner: &'a str,
-        platform: &'a str,
+        graph: &'a str,
         binding: ChannelBinding,
     ) -> BoxFuture<'a, Result<Value, ApplicationError>>;
     fn set_enabled<'a>(
         &'a self,
         owner: &'a str,
-        platform: &'a str,
+        graph: &'a str,
         enabled: bool,
     ) -> BoxFuture<'a, Result<Value, ApplicationError>>;
-    fn snapshot(&self, platform: &str) -> Result<Option<ChannelRuntimeState>, ApplicationError>;
-    fn callback_owner(&self, platform: &str, key: &str) -> Option<String>;
+    fn snapshot(&self, graph: &str) -> Result<Option<ChannelRuntimeState>, ApplicationError>;
+    fn snapshots(&self) -> Result<Vec<ChannelRuntimeState>, ApplicationError>;
+    fn callback(&self, key: &str) -> Option<ChannelCallback>;
+    /// Remove a stopped binding with its bot credentials and gateway state.
+    fn remove<'a>(&'a self, graph: &'a str) -> BoxFuture<'a, Result<(), ApplicationError>>;
 }
 
-pub(crate) const NOT_AN_ASSISTANT: &str =
-    "channel Graph must be a persistent assistant: a session.wait_input, Agent, session.reply loop";
-
-fn platform_supported(platform: &str) -> Result<(), ApplicationError> {
-    if platform != "wecom" {
-        return Err(ApplicationError::Invalid(
-            "this Host supports the wecom channel".into(),
-        ));
-    }
-    Ok(())
-}
+pub(crate) const NOT_A_BOT: &str = "a bot Graph must be a persistent assistant (a session.wait_input, Agent, session.reply loop) whose Agent node mounts the channel Plugin";
+pub(crate) const TWO_CHANNELS: &str =
+    "a persistent assistant can mount at most one channel Plugin on its Agent node";
+const STOP_FIRST: &str = "此 Graph 的机器人正在运行，请先停用机器人";
 
 impl RunApplication {
     pub(crate) fn ensure_channel_session_eligible(
@@ -149,9 +209,12 @@ impl RunApplication {
         let source = saved.channel.get("source").ok_or_else(|| {
             ApplicationError::Conflict("channel Session has no platform identity".into())
         })?;
-        let current = port.snapshot(source)?.ok_or_else(|| {
-            ApplicationError::Conflict("channel Session no longer has a deployment binding".into())
-        })?;
+        let current = port
+            .snapshot(&saved.graph)?
+            .filter(|current| source == PLATFORM && current.enabled)
+            .ok_or_else(|| {
+                ApplicationError::Conflict("channel Session's Graph has no enabled bot".into())
+            })?;
         let canonical = |account: &str| {
             sessions
                 .canonical_channel_account(owner, source, account)
@@ -160,13 +223,11 @@ impl RunApplication {
         let saved_account = canonical(saved.channel.get("account").map_or("", String::as_str))?;
         let current_account = canonical(current.account.as_deref().unwrap_or(""))?;
         if current.owner != owner
-            || !current.enabled
-            || saved.graph != current.binding.graph
-            || saved.reply_node != current.binding.reply_node
+            || current.reply_node.as_deref() != Some(saved.reply_node.as_str())
             || saved_account != current_account
         {
             return Err(ApplicationError::Conflict(
-                "channel Session does not match an enabled deployment binding".into(),
+                "channel Session does not match its Graph's enabled bot".into(),
             ));
         }
         Ok(())
@@ -180,121 +241,158 @@ impl RunApplication {
         })
     }
 
+    pub(crate) async fn channel_list(&self, owner: &str) -> Result<Value, ApplicationError> {
+        self.channel_management()?.list(owner).await
+    }
+
     pub(crate) async fn channel_status(
         &self,
         owner: &str,
-        platform: &str,
+        graph: &str,
     ) -> Result<Value, ApplicationError> {
-        platform_supported(platform)?;
-        self.channel_management()?.status(owner, platform).await
+        self.channel_management()?.status(owner, graph).await
     }
 
     pub(crate) async fn configure_channel(
         &self,
         owner: &str,
-        platform: &str,
-        binding: ChannelBinding,
+        graph: &str,
+        members: ChannelMembers,
     ) -> Result<Value, ApplicationError> {
-        platform_supported(platform)?;
-        binding.validate()?;
         let port = self.channel_management()?;
         let _catalog_guard = self.graph_catalog_mutation_guard().await;
         let _library_lease = self.plugin_reference_lease().await?;
-        self.validate_channel_graph(&binding)?;
-        port.configure(owner, platform, binding.normalized()).await
+        let plan = self.channel_bot_plan(graph)?;
+        let binding = ChannelBinding {
+            plugin: plan.plugin,
+            users: members.users,
+            send_users: members.send_users,
+        };
+        binding.validate()?;
+        port.configure(owner, graph, binding.normalized()).await
     }
 
     #[cfg(test)]
     pub(crate) async fn set_channel_enabled(
         &self,
         owner: &str,
-        platform: &str,
+        graph: &str,
         enabled: bool,
     ) -> Result<Value, ApplicationError> {
-        self.set_channel_enabled_inner(owner, platform, enabled, None)
+        self.set_channel_enabled_inner(owner, graph, enabled, None)
             .await
     }
 
     pub(crate) async fn set_channel_enabled_checked(
         &self,
         owner: &str,
-        platform: &str,
+        graph: &str,
         enabled: bool,
         expected: &ChannelBinding,
     ) -> Result<Value, ApplicationError> {
-        self.set_channel_enabled_inner(owner, platform, enabled, Some(expected))
+        self.set_channel_enabled_inner(owner, graph, enabled, Some(expected))
             .await
     }
 
     async fn set_channel_enabled_inner(
         &self,
         owner: &str,
-        platform: &str,
+        graph: &str,
         enabled: bool,
         expected: Option<&ChannelBinding>,
     ) -> Result<Value, ApplicationError> {
-        platform_supported(platform)?;
         let port = self.channel_management()?;
         let _catalog_guard = self.graph_catalog_mutation_guard().await;
         let _library_lease = self.plugin_reference_lease().await?;
-        if let Some(expected) = expected
-            && port
-                .snapshot(platform)?
-                .is_none_or(|state| state.owner != owner || &state.binding != expected)
-        {
+        let state = port.snapshot(graph)?.ok_or(ApplicationError::Missing)?;
+        if expected.is_some_and(|expected| state.owner != owner || &state.binding != expected) {
             return Err(ApplicationError::Conflict(
                 "channel binding changed while confirmation was pending; request a fresh form"
                     .into(),
             ));
         }
         if enabled {
-            let state = port.snapshot(platform)?.ok_or(ApplicationError::Missing)?;
-            self.validate_channel_graph(&state.binding)?;
+            let plan = self.channel_bot_plan(graph)?;
+            if plan.plugin != state.binding.plugin {
+                return Err(ApplicationError::Conflict(
+                    "the Graph mounts a different channel Plugin; configure the bot again".into(),
+                ));
+            }
         }
         // Disabling remains possible after a Graph or Plugin has disappeared.
-        port.set_enabled(owner, platform, enabled).await
+        port.set_enabled(owner, graph, enabled).await
     }
 
-    fn validate_channel_graph(&self, binding: &ChannelBinding) -> Result<(), ApplicationError> {
-        let (_, graph) = self
-            .load_graph(&binding.graph)
+    /// The saved Graph as a bot, or the reason it cannot be one.
+    pub(crate) fn channel_bot_plan(&self, graph: &str) -> Result<ChannelPlan, ApplicationError> {
+        let (_, bundle) = self
+            .load_graph(graph)
             .map_err(|_| ApplicationError::Missing)?;
-        if !graph
-            .snapshot
-            .nodes
-            .iter()
-            .any(|node| node.id == binding.reply_node)
-            || !graph.snapshot.nodes.iter().any(|node| {
-                node.plugins
-                    .iter()
-                    .any(|reference| reference.id == binding.plugin)
-            })
+        channel_plan(&bundle.snapshot, &crate::library_root(&self.catalog_root))?
+            .ok_or_else(|| ApplicationError::Invalid(NOT_A_BOT.into()))
+    }
+
+    /// Saving a Graph must not silently take away a running bot's channel.
+    /// The caller holds the catalog guard, which also serializes enabling.
+    pub(crate) fn check_channel_graph_update(
+        &self,
+        graph: &str,
+        next: &GraphSnapshot,
+    ) -> Result<(), ApplicationError> {
+        let plan = channel_plan(next, &crate::library_root(&self.catalog_root))?;
+        let Some(port) = self.channels.as_deref() else {
+            return Ok(());
+        };
+        if let Some(state) = port.snapshot(graph)?
+            && state.enabled
+            && plan.is_none_or(|plan| plan.plugin != state.binding.plugin)
         {
-            return Err(ApplicationError::Invalid(
-                "channel Graph must contain its reply node and reference the channel Plugin".into(),
-            ));
+            return Err(ApplicationError::Conflict(STOP_FIRST.into()));
         }
-        crate::assistant::AssistantPlan::from_snapshot(&graph.snapshot, &binding.reply_node)
-            .map_err(ApplicationError::Invalid)?
-            .ok_or_else(|| ApplicationError::Invalid(NOT_AN_ASSISTANT.into()))?;
         Ok(())
+    }
+
+    /// A Graph with an enabled bot cannot be deleted (D6); a stopped binding
+    /// is removed together with the Graph.
+    pub(crate) fn check_channel_graph_deletion(&self, graph: &str) -> Result<(), ApplicationError> {
+        match self.channels.as_deref() {
+            Some(port) if port.snapshot(graph)?.is_some_and(|state| state.enabled) => {
+                Err(ApplicationError::Conflict(STOP_FIRST.into()))
+            }
+            _ => Ok(()),
+        }
+    }
+
+    pub(crate) async fn remove_channel_binding(&self, graph: &str) -> Result<(), ApplicationError> {
+        match self.channels.as_deref() {
+            Some(port) => port.remove(graph).await,
+            None => Ok(()),
+        }
     }
 
     pub(crate) fn channel_snapshot(
         &self,
-        platform: &str,
+        graph: &str,
     ) -> Result<Option<ChannelRuntimeState>, ApplicationError> {
-        platform_supported(platform)?;
         match self.channels.as_deref() {
-            Some(port) => port.snapshot(platform),
+            Some(port) => port.snapshot(graph),
             None => Ok(None),
         }
     }
 
-    pub(crate) fn channel_callback_owner(&self, platform: &str, key: &str) -> Option<String> {
-        self.channels.as_deref()?.callback_owner(platform, key)
+    pub(crate) fn channel_snapshots(&self) -> Result<Vec<ChannelRuntimeState>, ApplicationError> {
+        match self.channels.as_deref() {
+            Some(port) => port.snapshots(),
+            None => Ok(Vec::new()),
+        }
+    }
+
+    pub(crate) fn channel_callback(&self, key: &str) -> Option<ChannelCallback> {
+        self.channels.as_deref()?.callback(key)
     }
 }
 
+#[cfg(test)]
+pub(crate) mod fake;
 #[cfg(test)]
 mod tests;

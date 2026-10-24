@@ -70,8 +70,8 @@ pub(super) fn private_owner(state: &ApiState, headers: &HeaderMap) -> String {
         .and_then(|value| value.to_str().ok())
         .and_then(|value| value.strip_prefix("Bearer "))
         .unwrap_or_default();
-    if let Some(owner) = state.application.channel_callback_owner("wecom", key) {
-        return owner;
+    if let Some(callback) = state.application.channel_callback(key) {
+        return callback.owner;
     }
     if state.api_keys.is_empty() && state.loopback {
         return "local".to_owned();
