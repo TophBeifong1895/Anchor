@@ -80,7 +80,7 @@ fn fixture() -> (tempfile::TempDir, ApiState, Arc<Port>) {
         r#"{"name":"Gateway"}"#,
     )
     .unwrap();
-    std::fs::write(root.path().join("task/graph.json"), r#"{"entry":"reply","agents":{"reply":{"model":"fixture","instructions":"fixture"}},"nodes":[{"id":"reply","agent":"reply","plugins":["gateway"]}],"edges":[]}"#).unwrap();
+    std::fs::write(root.path().join("task/graph.json"), r#"{"entry":"wait","agents":{"reply":{"model":"fixture","instructions":"fixture"}},"ops":{"wait":{"host":{"operation":"session.wait_input"}},"deliver":{"host":{"operation":"session.reply"}}},"nodes":[{"id":"wait","op":"wait"},{"id":"reply","agent":"reply","plugins":["gateway"]},{"id":"deliver","op":"deliver"}],"edges":[{"from":"wait","to":"reply"},{"from":"reply","to":"deliver"},{"from":"deliver","to":"wait"}]}"#).unwrap();
     std::fs::write(
         root.path().join("task/manifest.json"),
         r#"{"format":1,"graph":"graph.json","plugins":[{"id":"gateway"}]}"#,
@@ -233,4 +233,56 @@ async fn channel_management_http_rejects_secrets_owner_forgery_and_unbound_enabl
         .0,
         StatusCode::UNPROCESSABLE_ENTITY
     );
+}
+
+#[tokio::test]
+async fn channel_binding_requires_a_persistent_assistant_graph() {
+    let _guard = crate::PROCESS_ENV_LOCK.lock().await;
+    let (root, state, port) = fixture();
+    let key = "a".repeat(32);
+    let binding = json!({"graph":"task","reply_node":"reply","plugin":"gateway","users":["alice"],"send_users":["alice"]});
+    let single = r#"{"entry":"reply","agents":{"reply":{"model":"fixture","instructions":"fixture"}},"nodes":[{"id":"reply","agent":"reply","plugins":["gateway"]}],"edges":[]}"#;
+    let persistent = std::fs::read(root.path().join("task/graph.json")).unwrap();
+    std::fs::write(root.path().join("task/graph.json"), single).unwrap();
+    let (status, refused) = call(
+        &state,
+        "PUT",
+        "/channels/wecom/configuration",
+        Some(&key),
+        binding.clone(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{refused}");
+    assert!(
+        refused["error"]
+            .as_str()
+            .unwrap()
+            .contains("persistent assistant"),
+        "{refused}"
+    );
+    assert!(port.0.lock().unwrap().is_none());
+
+    // A binding saved while the Graph was an assistant cannot be enabled once
+    // the Graph has lost its input loop.
+    std::fs::write(root.path().join("task/graph.json"), persistent).unwrap();
+    let (status, result) = call(
+        &state,
+        "PUT",
+        "/channels/wecom/configuration",
+        Some(&key),
+        binding.clone(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{result}");
+    std::fs::write(root.path().join("task/graph.json"), single).unwrap();
+    let (status, refused) = call(
+        &state,
+        "POST",
+        "/channels/wecom/enabled",
+        Some(&key),
+        json!({"enabled":true,"expected_binding":binding}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{refused}");
+    assert!(!port.0.lock().unwrap().as_ref().unwrap().enabled);
 }

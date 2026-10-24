@@ -63,17 +63,6 @@ pub(super) async fn recover_pilot_turns(state: &ApiState) -> Result<(), String> 
                     Err(_) => return Err("Pilot Run association recovery failed".into()),
                 }
             }
-            if let Some(source) = metadata.and_then(|metadata| metadata.channel) {
-                match sessions.associate_channel_run(
-                    &source.owner,
-                    &source.session,
-                    &source.inbound,
-                    run,
-                ) {
-                    Ok(_) | Err(anchor_platform_session::SessionError::Missing) => {}
-                    Err(_) => return Err("Channel Run association recovery failed".into()),
-                }
-            }
         }
         sessions
             .interrupt_running_except_assistants(&recoverable_assistants)

@@ -47,7 +47,7 @@ WECOM_BOT_ID=后台提供的机器人ID
 WECOM_BOT_SECRET=后台提供的机器人Secret
 ANCHOR_WECOM_USERS=已核实的成员userid
 ANCHOR_WECOM_SEND_USERS=
-ANCHOR_WECOM_GRAPH=wecom-assistant
+ANCHOR_WECOM_GRAPH=wecom-persistent-assistant
 ANCHOR_WECOM_REPLY_NODE=assistant
 ANCHOR_API_KEYS=["至少32字节、随机生成的密钥"]
 ANCHOR_API_KEY=与服务白名单匹配的密钥
@@ -55,11 +55,11 @@ ANCHOR_API_KEY=与服务白名单匹配的密钥
 
 多位成员用英文逗号分隔；空名单拒绝所有成员，`*` 表示明确允许全部平台成员。主动发送名单为空时继承入口名单。`ANCHOR_API_KEYS` 也保护管理 API。修改启动配置后按部署流程重启，保持一个 Bot 只有一个网关。
 
-按 [Rust 部署指南](rust-production-deployment.md) 安装 Host、固定版本 Goose、`anchor-wecom-gateway` 和 `anchor-wecom-tools`。通过现有 Library/Graph API 安装 [助手示例](../examples/graphs/wecom-assistant.json) 及原生 WeCom Plugin，确认回复节点挂载 `wecom`。独立应用 API 包不包含通道声明，不能替代完整机器人部署。
+按 [Rust 部署指南](rust-production-deployment.md) 安装 Host、固定版本 Goose、`anchor-wecom-gateway` 和 `anchor-wecom-tools`。通过现有 Library/Graph API 安装 [常驻助手示例](../examples/graphs/wecom-persistent-assistant.json) 及原生 WeCom Plugin，确认 Agent 节点挂载 `wecom`。独立应用 API 包不包含通道声明，不能替代完整机器人部署。
 
-常驻循环须显式安装为独立 Graph [wecom-persistent-assistant](../examples/graphs/wecom-persistent-assistant.json)，并选择 `ANCHOR_WECOM_GRAPH=wecom-persistent-assistant`、`ANCHOR_WECOM_REPLY_NODE=assistant`；不要原地替换已有 `wecom-assistant` 或改写旧 Run。这里的配置结果节点是 Agent `assistant`，投递由图内 `reply` Op 承担。样例可编译不表示手动/standalone 获得 Session host operation 授权；可信渠道接纳才绑定获准的 Session 和节点范围。生产切换仍需主轨独立确认，不因安装样例自动发生。
+渠道只驱动常驻助手：所选 Graph 必须是 `session.wait_input → Agent → session.reply` 循环，否则消息入站与绑定保存都返回 `409`。每条消息一个 Run 的旧形态、`/conversation-runs` 入口和旧 `wecom-assistant` 示例已移除；元数据仍带旧 `channel` 字段的 Run 会被具名拒收。配置结果节点是 Agent `assistant`，投递由图内 `reply` Op 承担。样例可编译不表示手动/standalone 获得 Session host operation 授权；可信渠道接纳才绑定获准的 Session 和节点范围。生产切换仍需主轨独立确认，不因安装样例自动发生。
 
-常驻助手和一次性助手的 Host 等待路径都不设置默认模型耗时上限；网关到 Host 的 HTTP 请求默认也不设置超时。只有明确配置 `ANCHOR_CHANNEL_WEBHOOK_TIMEOUT_MS` 时才启用外部请求超时；超时只表示投递观察窗口结束，不代表 Run 或 Goose 执行已停止。未知投递必须按账本核查，不能盲目重放。
+常驻助手的 Host 等待路径不设置默认模型耗时上限；网关到 Host 的 HTTP 请求默认也不设置超时。只有明确配置 `ANCHOR_CHANNEL_WEBHOOK_TIMEOUT_MS` 时才启用外部请求超时；超时只表示投递观察窗口结束，不代表 Run 或 Goose 执行已停止。未知投递必须按账本核查，不能盲目重放。
 
 Host 使用 `ANCHOR_RUNNER_BUNDLE_ROOT`、`ANCHOR_RUNNER_CATALOG_ROOT`、`ANCHOR_RUNNER_LIBRARY_ROOT`、`ANCHOR_RUNNER_STATE_ROOT` 和 `ANCHOR_RUNNER_WORKSPACE_ROOT` 区分资源、持久事实与工作区。部署配置完成后启动 `anchor-runner-host serve`；监听地址由 `ANCHOR_RUNNER_LISTEN` 配置。不要同时启动另一个共享状态根的服务。
 
@@ -78,8 +78,6 @@ Host 的 ChannelSupervisor 按渠道选择的 Graph 查找 Plugin 声明的原�
 同一 Session 串行，新消息打断旧轮，Host 等 Goose 与工具执行者真正退出，保存未提交文件 checkpoint 与 `Yielded` 事实，再由普通 Runner 提交 `Interruption` 控制 Artifact，沿 `assistant → reply → wait_input` 接续。旧回复标为 `suppressed`，不发送、不假装旧 Agent/Turn 成功，也不把整个助手 stop 后静默复活。已发生的外部操作不回滚，未知结果须先核查现场，不能自动重放。新实例仅在首个 Agent invocation 从可信获准的 previous 文件快照初始化一次，之后直接维护本节点 `/workspace`；跨图或跨会话历史不自动迁移。
 
 入站已保存但 dispatch 拒绝或等待失败时，Host 在 Session 事务中只将仍 Running、尚无 Run 关联且未被新消息取代的 Turn 结算为 Failed。已经领取的 Turn 由其执行和投递事实继续结算。已停止助手返回 `409` 与具名 `assistant_stopped`，网关显示“助手已停止。请在 Anchor 运行看板的「消息会话」中恢复该助手后再发消息。”；拒绝不会留下永久 Running 的孤立 Turn，也不自动重放旧输入。
-
-沿用既有一次性 `wecom-assistant` 时，每条输入仍对应独立 Run：新消息取消旧 Run，待旧执行退出后接续原生 Goose 会话；上轮工作文件通过授权的只读 `/previous` 提供。被取消、且模型尚未看到的用户消息仍作为 `input.interrupted_messages` 带入新 Run（最多 8 条、每条截断到 500 字符；纯附件消息只提示文件数量），这一旧路径不挂载被打断轮的附件，不能与常驻助手的 Turn 快照授权混淆。
 
 Goose 负责 Agent loop、Provider、原生历史和 compaction；Anchor 保存 Session/Turn、Graph/Run、产物和权限事实。原生会话文件与 Host 状态应按部署备份契约一起保存，不能把单个 JSONL 当作完整会话。
 
@@ -127,7 +125,7 @@ Graph cascade 删除须先保护仍 active/未收束执行、共享历史与未�
 - `wecom_attach_image(path)` 是受限回复节点工具，选择工作区或授权只读输入中的真实 PNG/JPEG。登记图片不等于平台成功投递：Host 在交给网关前会重新校验数量、单张/合计大小、PNG/JPEG 与 md5，网关再用三阶段上传换 `media_id` 并以原始回调帧单独发出一条 image 消息，投递结果记录在网关 `deliveries`（`image:<inbound>:<index>`）中，只有确认后才算平台接收。出站任意文件类型平台未证实，本轮不支持。
 - 自建应用 MCP 由 `anchor-wecom-tools` 提供 `wecom_send_text`、`wecom_send_markdown` 和 `wecom_get_user`，另行配置 `WECOM_CORP_ID`、`WECOM_AGENT_ID`、`WECOM_SECRET`。未配置的可选 MCP 不影响基础机器人聊天。
 
-Rust Host 支持可信入口提交规范化 Base64 附件，冻结 SHA-256、大小与 MIME，并以 `/in/channel` 只读挂载；一次性助手按 Run，常驻助手按可信当前 Turn 保存和选择，不把 Run 的所有历史附件开放给模型。入口拒绝宿主路径、非法文件名、伪造类型和越界数据；Goose/provider 是否能理解图片需单独验证。
+Rust Host 支持可信入口提交规范化 Base64 附件，冻结 SHA-256、大小与 MIME，并以 `/in/channel` 只读挂载；常驻助手按可信当前 Turn 保存和选择，不把 Run 的所有历史附件开放给模型。入口拒绝宿主路径、非法文件名、伪造类型和越界数据；Goose/provider 是否能理解图片需单独验证。
 
 常驻等待 invocation 还固定一份有界 `interrupted_messages` 快照：只选当前输入之前、最近一次 confirmed 投递之后最多最近 8 条中断输入，附文本及真实附件引用，分别只读挂载 `/in/channel-pending/<turn>`。模型提供的路径不能扩大范围；后续轮次越过 confirmed 边界后不再自动挂载这批附件。原生 Goose 历史可以保留过去的消息/图片上下文，但不等于 Sandbox 获得全历史文件授权。
 

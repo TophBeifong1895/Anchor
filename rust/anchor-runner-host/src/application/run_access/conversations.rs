@@ -1,22 +1,16 @@
 use super::RunView;
-use crate::application::{
-    ApplicationError, ChannelRunSource, ConversationAdmission, RunApplication, RunMetadata,
-    WECOM_REPLY_KEY_PREFIX, WECOM_REPLY_KIND, metadata, new_control,
-};
-use crate::execution::PreparedExecution;
-use anchor_graph_host::LoadedGraphBundle;
+use crate::application::{ApplicationError, RunApplication, RunMetadata};
 use anchor_kernel::{Outcome, Phase, Waiter};
-use anchor_platform_session::{ChannelDeliveryRequest, SessionError, SessionStore, TurnStatus};
-use anchor_runtime::graph::{GraphRunRecord, RunLease};
-use serde_json::Value;
-use sha2::{Digest, Sha256};
-use std::{collections::BTreeSet, path::Path};
+use anchor_platform_session::{SessionStore, TurnStatus};
+use std::collections::BTreeSet;
 
-fn channel_turn_status(phase: &Phase, assistant: bool) -> Option<TurnStatus> {
+/// An assistant Turn is completed by its delivered reply, never by the Run
+/// settling; a settled or stopped assistant ends its running Turns.
+fn channel_turn_status(phase: &Phase) -> Option<TurnStatus> {
     match phase {
         Phase::Settled {
             result: Outcome::Done,
-        } => (!assistant).then_some(TurnStatus::Completed),
+        } => None,
         Phase::Settled { .. } => Some(TurnStatus::Failed),
         Phase::Waiting {
             waiter: Waiter::Human { reason },
@@ -26,40 +20,6 @@ fn channel_turn_status(phase: &Phase, assistant: bool) -> Option<TurnStatus> {
 }
 
 impl RunApplication {
-    pub(crate) fn wecom_channel_delivery_request<'record>(
-        metadata: &RunMetadata,
-        record: impl Into<RunView<'record>>,
-    ) -> Option<ChannelDeliveryRequest> {
-        let record = record.into();
-        let record = &record.record;
-        let channel = metadata.channel.as_ref()?;
-        let conversation = metadata.conversation.as_ref()?;
-        if record
-            .input
-            .get("channel")
-            .and_then(|channel| channel.get("source"))
-            .and_then(Value::as_str)
-            != Some("wecom")
-        {
-            return None;
-        }
-        let submission = record
-            .results
-            .get(&conversation.reply_node)
-            .and_then(|results| results.last())
-            .map(|result| result.completion.submission.as_str())
-            .filter(|submission| !submission.trim().is_empty())?;
-        let content_sha256 = format!("{:x}", Sha256::digest(submission.as_bytes()));
-        Some(ChannelDeliveryRequest {
-            key: format!(
-                "{WECOM_REPLY_KEY_PREFIX}{}:{}",
-                channel.session, channel.inbound
-            ),
-            kind: WECOM_REPLY_KIND.into(),
-            content_sha256,
-        })
-    }
-
     pub(crate) fn settle_channel_run(&self, run_id: &str) -> Result<(), ApplicationError> {
         let Some(metadata) = self.metadata(run_id)? else {
             return Ok(());
@@ -69,128 +29,39 @@ impl RunApplication {
             return Ok(());
         }
         let phase = view.lifecycle.phase;
-        if let Some(source) = metadata.assistant.as_ref() {
-            let Some(turn_status) = channel_turn_status(&phase, true) else {
-                return Ok(());
-            };
-            let sessions = SessionStore::open(self.data_root.join("platform/sessions.sqlite"))
-                .map_err(|error| ApplicationError::Storage(error.to_string()))?;
-            if sessions
-                .get_channel_assistant(&source.owner, &source.session)
-                .map_err(|error| ApplicationError::Storage(error.to_string()))?
-                .is_none_or(|assistant| assistant.run_id != run_id)
-            {
-                return Ok(());
-            }
-            for turn in sessions
-                .list_turns(&source.owner, &source.session)
-                .map_err(|error| ApplicationError::Storage(error.to_string()))?
-            {
-                if turn.status == TurnStatus::Running {
-                    sessions
-                        .finish_turn(
-                            &source.owner,
-                            &source.session,
-                            &turn.id,
-                            turn_status,
-                            Some("assistant execution stopped"),
-                        )
-                        .map_err(|error| ApplicationError::Storage(error.to_string()))?;
-                }
-            }
-            crate::assistant::signal(&source.session).notify_waiters();
-            return Ok(());
-        }
-        let Some(channel) = metadata.channel.as_ref() else {
+        let Some(source) = metadata.assistant.as_ref() else {
             return Ok(());
         };
-        let Some(turn_status) = channel_turn_status(&phase, false) else {
+        let Some(turn_status) = channel_turn_status(&phase) else {
             return Ok(());
-        };
-        let completed_record = if turn_status == TurnStatus::Completed {
-            self.read_run(run_id)?
-        } else {
-            None
         };
         let sessions = SessionStore::open(self.data_root.join("platform/sessions.sqlite"))
             .map_err(|error| ApplicationError::Storage(error.to_string()))?;
-        match sessions.get_channel_inbound(&channel.owner, &channel.session, &channel.inbound) {
-            Ok(inbound) if inbound.relation.superseded_by_turn_id.is_some() => return Ok(()),
-            Ok(_) | Err(SessionError::Missing) => {}
-            Err(error) => return Err(ApplicationError::Storage(error.to_string())),
-        }
-        match sessions.finish_turn(
-            &channel.owner,
-            &channel.session,
-            &channel.turn,
-            turn_status,
-            None,
-        ) {
-            Ok(_) | Err(SessionError::Missing) => {}
-            Err(error) => return Err(ApplicationError::Storage(error.to_string())),
-        };
-        let Some(record) = completed_record else {
-            return Ok(());
-        };
-        let Some(request) = Self::wecom_channel_delivery_request(&metadata, &record) else {
-            return Ok(());
-        };
-        match sessions.admit_completed_channel_delivery(
-            &channel.owner,
-            &channel.session,
-            &channel.turn,
-            request,
-        ) {
-            Ok(_) | Err(SessionError::Missing) => Ok(()),
-            Err(conflict @ SessionError::Conflict(_)) => {
-                match sessions.get_channel_inbound(
-                    &channel.owner,
-                    &channel.session,
-                    &channel.inbound,
-                ) {
-                    Ok(inbound) if inbound.relation.superseded_by_turn_id.is_some() => Ok(()),
-                    Ok(_) => Err(ApplicationError::Storage(conflict.to_string())),
-                    Err(error) => Err(ApplicationError::Storage(error.to_string())),
-                }
-            }
-            Err(error) => Err(ApplicationError::Storage(error.to_string())),
-        }
-    }
-
-    pub(in crate::application) fn retry_conversation(
-        &self,
-        request: &ConversationAdmission,
-        graph_path: &Path,
-        attachments: &crate::channel_inputs::PreparedAttachments,
-        channel: Option<&ChannelRunSource>,
-    ) -> Result<Option<String>, ApplicationError> {
-        let Some(view) = self.read_run(&request.run)? else {
-            return Ok(None);
-        };
-        let record = view.record;
-        let metadata = self.metadata(&request.run)?.ok_or_else(|| {
-            ApplicationError::Conflict("Run has no immutable conversation identity".into())
-        })?;
-        let repeated = GraphRunRecord::create_with_id(
-            record.snapshot.clone(),
-            request.input.clone(),
-            request.run.clone(),
-        )?;
-        if metadata.graph != request.graph
-            || Self::graph_identity(&metadata.bundle_source)? != Self::graph_identity(graph_path)?
-            || metadata.graph_digest != record.graph_digest
-            || metadata.conversation.as_ref() != Some(&request.source())
-            || metadata.channel.as_ref() != channel
-            || repeated.input != record.input
-            || metadata.attachments != attachments.manifest()
+        if sessions
+            .get_channel_assistant(&source.owner, &source.session)
+            .map_err(|error| ApplicationError::Storage(error.to_string()))?
+            .is_none_or(|assistant| assistant.run_id != run_id)
         {
-            return Err(ApplicationError::Conflict(
-                "Run id was already used for different conversation input".into(),
-            ));
+            return Ok(());
         }
-        crate::channel_inputs::verify(&self.data_root, &metadata)
-            .map_err(ApplicationError::Conflict)?;
-        Ok(Some(request.run.clone()))
+        for turn in sessions
+            .list_turns(&source.owner, &source.session)
+            .map_err(|error| ApplicationError::Storage(error.to_string()))?
+        {
+            if turn.status == TurnStatus::Running {
+                sessions
+                    .finish_turn(
+                        &source.owner,
+                        &source.session,
+                        &turn.id,
+                        turn_status,
+                        Some("assistant execution stopped"),
+                    )
+                    .map_err(|error| ApplicationError::Storage(error.to_string()))?;
+            }
+        }
+        crate::assistant::signal(&source.session).notify_waiters();
+        Ok(())
     }
 
     pub(in crate::application) fn ensure_predecessor_settled<'record>(
@@ -357,143 +228,15 @@ impl RunApplication {
         }
         Ok(false)
     }
-
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) async fn admit_conversation(
-        &self,
-        request: ConversationAdmission,
-        source: &Path,
-        bundle: LoadedGraphBundle,
-        graph_lease: Box<dyn RunLease>,
-        attachments: &crate::channel_inputs::PreparedAttachments,
-        channel: Option<ChannelRunSource>,
-        oauth_owner: String,
-    ) -> Result<String, ApplicationError> {
-        request.validate().map_err(ApplicationError::Invalid)?;
-        let graph_path = Self::graph_identity(source)?;
-        let plugin_lease = if bundle.plugins.is_empty() {
-            None
-        } else {
-            Some(self.plugin_reference_lease().await?)
-        };
-        let active = self.admission.lock().await;
-        if let Some(run) =
-            self.retry_conversation(&request, &graph_path, attachments, channel.as_ref())?
-        {
-            return Ok(run);
-        }
-        if self.metadata(&request.run)?.is_some() {
-            return Err(ApplicationError::Conflict(
-                "Run identity was saved without a complete admission; inspect the retained facts"
-                    .into(),
-            ));
-        }
-        let conversation = request.source();
-        let chain = self.conversation_chain(&conversation, &graph_path)?;
-        if chain.first().map(|(metadata, _)| metadata.run_id.as_str())
-            != request.previous_run.as_deref()
-        {
-            return Err(ApplicationError::Conflict(
-                "previous_run must name the latest Run of this Session".into(),
-            ));
-        }
-        for (_, record) in &chain {
-            self.ensure_predecessor_settled(record, &active)?;
-        }
-        for (id, record) in self.run_views()? {
-            if record.is_settled() {
-                continue;
-            }
-            let metadata = self.metadata(&id)?.ok_or_else(|| {
-                ApplicationError::Conflict(
-                    "an unfinished Run has no immutable Graph identity; admission is quarantined"
-                        .into(),
-                )
-            })?;
-            if Self::graph_identity(&metadata.bundle_source)? == graph_path
-                && metadata.conversation.is_none()
-                && metadata.session_call.is_none()
-            {
-                return Err(ApplicationError::Conflict(
-                    "this graph has an unfinished non-conversation Run".into(),
-                ));
-            }
-        }
-        if !bundle
-            .snapshot
-            .nodes
-            .iter()
-            .any(|node| node.id == request.reply_node)
-        {
-            return Err(ApplicationError::Invalid(
-                "reply_node is not a node in this Graph".into(),
-            ));
-        }
-        let plugin_bindings = self.bundle_plugin_bindings(&bundle)?;
-        let record = GraphRunRecord::create_with_plugins(
-            bundle.snapshot,
-            request.input,
-            request.run.clone(),
-            plugin_bindings.into_values().collect(),
-        )?;
-        self.check_store()?;
-        let mut metadata = RunMetadata::new(
-            request.run.clone(),
-            request.graph.clone(),
-            record.graph_digest.clone(),
-            source,
-        )?;
-        metadata.trigger_source = "channel".into();
-        metadata.oauth_owner = Some(oauth_owner);
-        metadata.conversation = Some(conversation);
-        metadata.channel = channel;
-        metadata.attachments = attachments.manifest();
-        let lease = self.run_leases().acquire_lease(&request.run)?;
-        if chain.is_empty() {
-            let workspaces = crate::env_path("ANCHOR_RUNNER_WORKSPACE_ROOT")
-                .map_err(ApplicationError::Invalid)?;
-            crate::conversation_resources::start_fresh(
-                self,
-                &self.data_root,
-                &graph_path,
-                &request.session,
-                &workspaces,
-            )?;
-        }
-        crate::channel_inputs::freeze(&self.data_root, &metadata, attachments)
-            .map_err(ApplicationError::Conflict)?;
-        // Resolvers read this host-owned context; an orphan metadata file is never an accepted Run.
-        metadata::save(&self.data_root, &metadata)?;
-        let control = new_control();
-        let execution = PreparedExecution::prepare_with_catalog(
-            &record,
-            control.clone(),
-            record.plugin_bindings.clone(),
-            self.catalog_root.clone(),
-            self.clone(),
-        )
-        .map_err(ApplicationError::Invalid)?;
-        execution
-            .bind_local_inputs(&record, &request.graph)
-            .map_err(ApplicationError::Invalid)?;
-        self.kernel_runs(true)?
-            .expect("Run store initialized")
-            .create(&record, u64::MAX)?;
-        drop(active);
-        drop(lease);
-        drop(plugin_lease);
-        drop(graph_lease);
-        self.spawn_kernel(record, execution, control)?;
-        Ok(request.run)
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::super::fixtures;
     use super::*;
-    use anchor_runtime::graph::GraphSnapshot;
+    use anchor_runtime::graph::{GraphRunRecord, GraphSnapshot};
     use serde_json::json;
+    use sha2::{Digest, Sha256};
 
     fn record(run_id: &str) -> GraphRunRecord {
         GraphRunRecord::create_with_id(
@@ -510,16 +253,15 @@ mod tests {
     }
 
     #[test]
-    fn channel_settlement_preserves_assistant_completion_distinction() {
-        for (phase, normal, assistant) in [
-            (Phase::Executing, None, None),
+    fn assistant_settlement_leaves_completion_to_the_delivered_reply() {
+        for (phase, expected) in [
+            (Phase::Executing, None),
             (
                 Phase::Waiting {
                     waiter: Waiter::Human {
                         reason: "paused".into(),
                     },
                 },
-                None,
                 None,
             ),
             (
@@ -529,7 +271,6 @@ mod tests {
                     },
                 },
                 None,
-                None,
             ),
             (
                 Phase::Waiting {
@@ -537,7 +278,6 @@ mod tests {
                         reason: "stopped".into(),
                     },
                 },
-                Some(TurnStatus::Stopped),
                 Some(TurnStatus::Stopped),
             ),
             (
@@ -547,13 +287,11 @@ mod tests {
                     },
                 },
                 None,
-                None,
             ),
             (
                 Phase::Settled {
                     result: Outcome::Done,
                 },
-                Some(TurnStatus::Completed),
                 None,
             ),
             (
@@ -564,7 +302,6 @@ mod tests {
                     },
                 },
                 Some(TurnStatus::Failed),
-                Some(TurnStatus::Failed),
             ),
             (
                 Phase::Settled {
@@ -573,11 +310,9 @@ mod tests {
                     },
                 },
                 Some(TurnStatus::Failed),
-                Some(TurnStatus::Failed),
             ),
         ] {
-            assert_eq!(channel_turn_status(&phase, false), normal, "{phase:?}");
-            assert_eq!(channel_turn_status(&phase, true), assistant, "{phase:?}");
+            assert_eq!(channel_turn_status(&phase), expected, "{phase:?}");
         }
     }
 

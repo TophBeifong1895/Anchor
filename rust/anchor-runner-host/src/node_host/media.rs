@@ -27,19 +27,6 @@ impl HostIoResolver {
                     .map_err(|error| format!("pending channel input metadata: {error:?}"))?
                     .flatten();
                 let selected = match previous {
-                    Some(previous) if previous.assistant.is_none() => {
-                        if previous.channel.as_ref().is_none_or(|channel| {
-                            channel.owner != source.owner
-                                || channel.session != source.session
-                                || channel.inbound != input.relation.inbound_id
-                                || channel.turn != input.relation.turn_id
-                        }) {
-                            return Err(
-                                "pending channel input belongs to another conversation".into()
-                            );
-                        }
-                        previous
-                    }
                     Some(previous)
                         if previous.assistant.as_ref().is_none_or(|binding| {
                             binding.owner != source.owner || binding.session != source.session

@@ -116,7 +116,7 @@ Library 拥有已安装能力、来源摘要和 owner-bound OAuth 事实，Host 
 
 普通企业助手路径为平台事件 → 可信 Session/Turn → 指定普通 Graph → 指定回复节点 → 原来源投递。用户消息不能覆盖服务端选择的 Graph、回复节点、Plugin、路径或权限。
 
-同一 Session 串行，不同用户可以并发同图。当前 opt-in 常驻助手用普通 `wait_input (Op.host session.wait_input) → assistant (Agent) → reply (Op.host session.reply) → wait_input` 循环表达：首条消息惰性创建 Session 的 current assistant Run，后续 Turn 通过等待节点的固定产物进入同 Run，不覆写启动输入。Kernel 只支持通用 host port，不依赖 Session 或 WeCom；具体身份、等待和投递属于 Host，手动/standalone 默认无此授权。一次性助手仍保留跨 Run 的只读 `/previous` 交接，不原地替换已有 `wecom-assistant`。
+同一 Session 串行，不同用户可以并发同图。当前 opt-in 常驻助手用普通 `wait_input (Op.host session.wait_input) → assistant (Agent) → reply (Op.host session.reply) → wait_input` 循环表达：首条消息惰性创建 Session 的 current assistant Run，后续 Turn 通过等待节点的固定产物进入同 Run，不覆写启动输入。Kernel 只支持通用 host port，不依赖 Session 或 WeCom；具体身份、等待和投递属于 Host，手动/standalone 默认无此授权。渠道不再接纳每条消息一个 Run 的旧形态。
 
 新消息打断旧轮，必须等 Goose 与工具执行者真正退出并保存中断事实后再接续；不能用停止整个 Run 后静默复活替代。旧回复 `suppressed` 不算成功，新轮复用绑定的原生历史与本节点现场，持续补充的输入事实应保留，超出当轮有界范围须明确提示。未知业务效果先由 Agent 核查，进程重启仍需显式 resume，不能自动重放。
 

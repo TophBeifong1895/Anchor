@@ -184,9 +184,9 @@ async fn business_graph_examples_are_admitted_without_provider_or_side_effects()
             "validate",
         ),
         (
-            include_str!("../../../../../examples/graphs/wecom-assistant.json"),
-            json!(["assistant"]),
-            "assistant",
+            include_str!("../../../../../examples/graphs/wecom-persistent-assistant.json"),
+            json!(["wait_input", "assistant", "reply"]),
+            "wait_input",
         ),
     ];
     for (source, nodes, entry) in cases {

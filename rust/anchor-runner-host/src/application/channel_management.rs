@@ -110,6 +110,9 @@ pub(crate) trait ChannelManagementPort: Send + Sync {
     fn callback_owner(&self, platform: &str, key: &str) -> Option<String>;
 }
 
+pub(crate) const NOT_AN_ASSISTANT: &str =
+    "channel Graph must be a persistent assistant: a session.wait_input, Agent, session.reply loop";
+
 fn platform_supported(platform: &str) -> Result<(), ApplicationError> {
     if platform != "wecom" {
         return Err(ApplicationError::Invalid(
@@ -271,6 +274,9 @@ impl RunApplication {
                 "channel Graph must contain its reply node and reference the channel Plugin".into(),
             ));
         }
+        crate::assistant::AssistantPlan::from_snapshot(&graph.snapshot, &binding.reply_node)
+            .map_err(ApplicationError::Invalid)?
+            .ok_or_else(|| ApplicationError::Invalid(NOT_AN_ASSISTANT.into()))?;
         Ok(())
     }
 

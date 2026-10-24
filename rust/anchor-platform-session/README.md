@@ -108,9 +108,8 @@ is scoped by the trusted owner and is bound to one Graph/reply node. It creates
 or reuses one channel Session, admits one serialized Turn, and records the
 inbound-to-Session/Turn/Run relation. Repeating an inbound with the same
 immutable text and attachment manifest is read-only; changing the manifest,
-text, Graph or reply node fails closed. `associate_channel_run` can attach the
-Run after Host execution starts. Ordinary `create_turn` cannot use channel
-Sessions.
+text, Graph or reply node fails closed. A persistent assistant attaches its Run
+by claiming the input. Ordinary `create_turn` cannot use channel Sessions.
 
 Attachment manifests are metadata only: each entry freezes a safe workspace
 path, filename, lowercase SHA-256, byte size and optional media type. The store
@@ -209,7 +208,7 @@ their inbound IDs and attachments are not implicitly authorized for this round.
 The Host must persist only the selected IDs and must not describe the bounded
 selection as complete historical retention or silently union in omitted inputs.
 
-Legacy `associate_channel_run` and admission with `request.run_id` still reject
+Legacy admission with `request.run_id` still rejects
 Run reuse across channel Turns, even when the Run belongs to an assistant.
 Persistent callers admit with `request.run_id = None` and use the claim API.
 `channel_inbounds` permits shared assistant Run IDs while retaining Turn

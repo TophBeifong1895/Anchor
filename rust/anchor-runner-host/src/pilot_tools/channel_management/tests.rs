@@ -69,7 +69,7 @@ fn fixture() -> (tempfile::TempDir, PilotTools, Arc<Port>) {
         json!({"name":"Gateway fixture"}).to_string(),
     )
     .unwrap();
-    std::fs::write(graph.join("graph.json"),json!({"entry":"reply","agents":{"reply":{"model":"fixture","instructions":"fixture"}},"nodes":[{"id":"reply","agent":"reply","plugins":["gateway"]}],"edges":[]}).to_string()).unwrap();
+    std::fs::write(graph.join("graph.json"),json!({"entry":"wait","agents":{"reply":{"model":"fixture","instructions":"fixture"}},"ops":{"wait":{"host":{"operation":"session.wait_input"}},"deliver":{"host":{"operation":"session.reply"}}},"nodes":[{"id":"wait","op":"wait"},{"id":"reply","agent":"reply","plugins":["gateway"]},{"id":"deliver","op":"deliver"}],"edges":[{"from":"wait","to":"reply"},{"from":"reply","to":"deliver"},{"from":"deliver","to":"wait"}]}).to_string()).unwrap();
     std::fs::write(
         graph.join("manifest.json"),
         json!({"format":1,"graph":"graph.json","plugins":[{"id":"gateway"}]}).to_string(),

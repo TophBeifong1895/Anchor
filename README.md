@@ -151,7 +151,7 @@ cd Anchor
 | [`survey-modular.json`](examples/graphs/survey-modular.json) | 以内联子图复用一段工作流。 |
 | [`deep-academic-research.json`](examples/graphs/deep-academic-research.json) | 带调查、挑战、综合、评审和门禁的研究 Graph。 |
 | [`rsi.json`](examples/graphs/rsi.json) | 通过证据、评审和确定性门禁生成演进提案；发布提案不会自动修改项目。 |
-| [`wecom-persistent-assistant.json`](examples/graphs/wecom-persistent-assistant.json) | 可选的同 Run 多轮企业微信助手；不会原地替换一次性助手 Graph。 |
+| [`wecom-persistent-assistant.json`](examples/graphs/wecom-persistent-assistant.json) | 同 Run 多轮企业微信助手；渠道只接纳这一常驻形状。 |
 
 `one-search.json`、`deep-academic-research.json` 和其他学术示例还需要先安装 `academic-research` Plugin，并为 Host 提供相应的外部学术服务配置；安装方式见 [Plugin 指南](docs/plugins.md)。它们不属于源码启动即可完成的最小示例。
 

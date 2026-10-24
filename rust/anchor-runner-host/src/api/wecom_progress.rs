@@ -246,17 +246,8 @@ impl Cursor {
             self.push_updates(&notifications);
             return;
         }
-        // A settled Run is reported as settled and nothing else: this projection
-        // describes work in progress, not the history of a finished turn.
-        if self.state.application.channel_progress_is_settled(&run) {
-            self.settle(&self.state.application.channel_progress_status(&run));
-            return;
-        }
-        let notifications = notifications(&self.state, &run)
-            .ok()
-            .flatten()
-            .unwrap_or_default();
-        self.push_updates(&notifications);
+        // Only a persistent assistant answers channel messages.
+        self.settle("missing");
     }
 
     /// Queue every line of the projection the caller has not seen yet.
@@ -316,24 +307,6 @@ fn split_durable_key(value: &str) -> Option<(&str, &str, &str, &str)> {
     let invocation = fields.next()?;
     (!run.is_empty() && !digest.is_empty() && !node.is_empty() && !invocation.is_empty())
         .then_some((run, digest, node, invocation))
-}
-
-fn notifications(state: &ApiState, run: &str) -> Result<Option<Vec<Value>>, ()> {
-    let Some(metadata) =
-        crate::application::metadata::load(&state.data_root, run).map_err(|_| ())?
-    else {
-        return Ok(None);
-    };
-    let Some(conversation) = metadata.conversation.as_ref() else {
-        return Ok(None);
-    };
-    let key = anchor_runtime::graph::InvocationKey {
-        run_id: run.to_owned(),
-        graph_digest: metadata.graph_digest.clone(),
-        node_id: conversation.reply_node.clone(),
-        invocation: 1,
-    };
-    crate::goose_acp::live_notifications(&state.data_root, &key).map_err(|_| ())
 }
 
 /// The incremental step of the stream: project the retained notifications, drop

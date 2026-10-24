@@ -116,8 +116,6 @@ use tower::ServiceExt;
 
 use crate::PROCESS_ENV_LOCK as PROCESS_ENV;
 
-mod channel_attachments;
-mod channel_media;
 mod channel_sessions;
 mod conversations;
 mod graph_deletion;

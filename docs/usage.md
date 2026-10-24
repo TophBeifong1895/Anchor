@@ -33,7 +33,7 @@ cd Anchor
 
 ## 附带的 Graph 与 Plugin
 
-源码启动后，工作流列表中可直接打开 `call-report`、`call-worker`、`revise-loop`、`parallel-audit`、`plugin-research`、`deep-academic-research`、`wecom-assistant` 和 `wecom-persistent-assistant`。建议先运行 `call-report`，输入 `{"report_code":"DEMO-001"}`；它仅使用 Op 和子工作流，无需模型。保存 default Flash 后可尝试写作或调研图。
+源码启动后，工作流列表中可直接打开 `call-report`、`call-worker`、`revise-loop`、`parallel-audit`、`plugin-research`、`deep-academic-research` 和 `wecom-persistent-assistant`。建议先运行 `call-report`，输入 `{"report_code":"DEMO-001"}`；它仅使用 Op 和子工作流，无需模型。保存 default Flash 后可尝试写作或调研图。
 
 插件库已安装联网、学术调研、Docmost、企微和 Anchor 管家。Docmost、企微的服务配置仍在网页按需填写；首次安装不会自动连接账号或启用监听。图与插件的用途、配置条件及其他示例见[上手示例](../examples/README.md)。
 

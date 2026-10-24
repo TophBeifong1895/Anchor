@@ -1184,10 +1184,6 @@ mod tests {
                 include_str!("../../../../examples/graphs/survey-modular.json"),
             ),
             (
-                "wecom-assistant",
-                include_str!("../../../../examples/graphs/wecom-assistant.json"),
-            ),
-            (
                 "weekly-work-report",
                 include_str!("../../../../examples/graphs/weekly-work-report.json"),
             ),

@@ -11,7 +11,7 @@
 | `parallel-audit` | 两个独立审查分支并行，完成后综合报告 | default Flash |
 | `plugin-research` | 单节点学术调研，生成有来源的研究笔记 | default Flash；任务联网 |
 | `deep-academic-research` | 多节点研究、质疑、评审和报告，可能进行多轮模型调用 | default Flash；任务联网 |
-| `wecom-assistant`、`wecom-persistent-assistant` | 普通及常驻企微助手模板 | default Flash；在工作流的消息触发设置中配置账号、允许的用户并启用监听 |
+| `wecom-persistent-assistant` | 常驻企微助手模板 | default Flash；在工作流的消息触发设置中配置账号、允许的用户并启用监听 |
 
 ## 已安装的 Plugin
 

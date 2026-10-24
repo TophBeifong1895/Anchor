@@ -152,16 +152,6 @@ impl RunApplication {
                 trigger["reply_node"] = json!(source.reply_node);
                 trigger["previous_run"] = json!(source.previous_run);
             }
-            if let Some(source) = metadata
-                .as_ref()
-                .and_then(|metadata| metadata.channel.as_ref())
-            {
-                trigger["channel"] = json!({
-                    "session": source.session,
-                    "inbound": source.inbound,
-                    "turn": source.turn,
-                });
-            }
             let view = self.read_run(&id)?.ok_or(ApplicationError::Missing)?;
             let progress = view.progress();
             let executed = progress.executed_nodes();

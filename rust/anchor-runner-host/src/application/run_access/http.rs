@@ -209,13 +209,6 @@ impl RunApplication {
             trigger["reply_node"] = json!(source.reply_node);
             trigger["previous_run"] = json!(source.previous_run);
         }
-        if let Some(source) = metadata.channel.as_ref() {
-            trigger["channel"] = json!({
-                "session": source.session,
-                "inbound": source.inbound,
-                "turn": source.turn,
-            });
-        }
         let channel_reply = metadata.conversation.is_some()
             && self
                 .data_root

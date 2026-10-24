@@ -1,11 +1,6 @@
 use super::*;
-use anchor_platform_session::{
-    ChannelDeliveryStatus, ChannelIdentity, ChannelInboundRequest, SessionStore, TurnStatus,
-};
-use anchor_runtime::graph::{CommitRef, GraphRunRecord, InvocationKey, NodeCompletion};
-use base64::{Engine, engine::general_purpose::STANDARD};
-use image::{DynamicImage, ImageFormat};
-use std::io::Cursor;
+use anchor_platform_session::{ChannelIdentity, ChannelInboundRequest, SessionStore, TurnStatus};
+use anchor_runtime::graph::{GraphRunRecord, InvocationKey};
 
 fn event(text: &str) -> Value {
     json!({
@@ -34,169 +29,6 @@ fn group_event(id: &str, sender: &str, group: &str, text: &str) -> Value {
 }
 
 #[tokio::test]
-async fn group_events_share_context_check_each_actor_and_pin_receipt_identity() {
-    let (root, mut state) = fixture();
-    let _env = PROCESS_ENV.lock().await;
-    set_host_env(root.path(), &state.data_root);
-    unsafe {
-        env::set_var("ANCHOR_RUNNER_ALLOWED_COMMANDS", "true,sh,cat,printf");
-    }
-    state.wecom.reply_node = "reply".into();
-    state.wecom.users = HashSet::from(["alice".into(), "bob".into()]);
-    write_graph_bundle(
-        &state.bundle_root,
-        &json!({
-            "objective":"group identity fixture","entry":"reply","agents":{},
-            "ops":{"reply":{"run":"printf 'group reply'"}},
-            "nodes":[{"id":"reply","op":"reply","plugins":[]}],"edges":[]
-        }),
-    )
-    .unwrap();
-    let app = router_with_web_root(state.clone(), root.path().join("web"));
-    let first = group_event("group-alice-1", "alice", "group-a", "Alice asks a question");
-    let (status, one) = call(
-        app.clone(),
-        "POST",
-        "/channels/wecom/events",
-        Some(&first.to_string()),
-    )
-    .await;
-    assert_eq!(status, StatusCode::OK, "{one}");
-    let session = one["session"].as_str().unwrap();
-    let second = group_event("group-bob-1", "bob", "group-a", "Bob adds details");
-    let (status, two) = call(
-        app.clone(),
-        "POST",
-        "/channels/wecom/events",
-        Some(&second.to_string()),
-    )
-    .await;
-    assert_eq!(status, StatusCode::OK, "{two}");
-    assert_eq!(two["session"], session);
-    let record = fixtures::Reader::new(&state.application)
-        .load(two["run"].as_str().unwrap())
-        .unwrap()
-        .unwrap();
-    assert_eq!(record.input["channel"]["sender_id"], "bob");
-    assert_eq!(record.input["channel"]["conversation_kind"], "group");
-    assert_eq!(
-        record.input["interrupted_messages"][0]["message"],
-        "Alice asks a question"
-    );
-    assert_eq!(
-        record.input["interrupted_messages"][0]["channel"]["sender_id"],
-        "alice"
-    );
-    assert_eq!(
-        record.input["interrupted_messages"][0]["channel"]["conversation_kind"],
-        "group"
-    );
-    let sessions = SessionStore::open(state.data_root.join("platform/sessions.sqlite")).unwrap();
-    let snapshot = sessions.get("local", session).unwrap();
-    assert!(!snapshot.channel.contains_key("sender_id"));
-    let denied = group_event("group-denied", "mallory", "group-a", "denied");
-    let (status, _) = call(
-        app.clone(),
-        "POST",
-        "/channels/wecom/events",
-        Some(&denied.to_string()),
-    )
-    .await;
-    assert_eq!(status, StatusCode::FORBIDDEN);
-    assert_eq!(sessions.list_turns("local", session).unwrap().len(), 2);
-    let forged_actor = group_event("group-bob-1", "alice", "group-a", "Bob adds details");
-    let (status, _) = call(
-        app.clone(),
-        "POST",
-        "/channels/wecom/events",
-        Some(&forged_actor.to_string()),
-    )
-    .await;
-    assert_eq!(status, StatusCode::CONFLICT);
-
-    let settlement = json!({"event":second["event"],"settlement":{
-        "key":two["receipt"]["key"],"content_sha256":two["receipt"]["content_sha256"],"status":"confirmed"
-    }});
-    for (field, value) in [
-        ("sender_id", json!("alice")),
-        ("conversation_id", json!("group-b")),
-        ("chat_type", json!("single")),
-    ] {
-        let mut forged = settlement.clone();
-        if field == "chat_type" {
-            forged["event"]["metadata"][field] = value;
-        } else {
-            forged["event"][field] = value.clone();
-            if field == "conversation_id" {
-                forged["event"]["reply_target"] = value;
-            }
-        }
-        let (status, _) = call(
-            app.clone(),
-            "POST",
-            "/channels/wecom/events",
-            Some(&forged.to_string()),
-        )
-        .await;
-        assert_eq!(status, StatusCode::NOT_FOUND, "forged {field}");
-    }
-    let (status, confirmed) = call(
-        app.clone(),
-        "POST",
-        "/channels/wecom/events",
-        Some(&settlement.to_string()),
-    )
-    .await;
-    assert_eq!(status, StatusCode::OK, "{confirmed}");
-    assert_eq!(confirmed["delivery"]["status"], "confirmed");
-
-    let mut scopes = vec![group_event(
-        "other-group",
-        "bob",
-        "group-b",
-        "another group",
-    )];
-    let mut private = group_event("private-alice", "alice", "group-a", "private content");
-    private["event"]["metadata"]["chat_type"] = json!("single");
-    scopes.push(private.clone());
-    private["event"]["event_id"] = json!("private-bob");
-    private["event"]["sender_id"] = json!("bob");
-    scopes.push(private);
-    let mut ids = HashSet::from([session.to_owned()]);
-    for body in scopes {
-        let (status, response) = call(
-            app.clone(),
-            "POST",
-            "/channels/wecom/events",
-            Some(&body.to_string()),
-        )
-        .await;
-        assert_eq!(status, StatusCode::OK, "{response}");
-        assert!(ids.insert(response["session"].as_str().unwrap().to_owned()));
-        let record = fixtures::Reader::new(&state.application)
-            .load(response["run"].as_str().unwrap())
-            .unwrap()
-            .unwrap();
-        assert!(record.input.get("interrupted_messages").is_none());
-    }
-    let third = group_event("group-alice-2", "alice", "group-a", "Return to the group");
-    let (status, three) = call(
-        app,
-        "POST",
-        "/channels/wecom/events",
-        Some(&third.to_string()),
-    )
-    .await;
-    assert_eq!(status, StatusCode::OK, "{three}");
-    assert_eq!(three["session"], session);
-    let record = fixtures::Reader::new(&state.application)
-        .load(three["run"].as_str().unwrap())
-        .unwrap()
-        .unwrap();
-    assert!(record.input.get("interrupted_messages").is_none());
-}
-
-#[tokio::test]
 async fn deleted_previous_channel_run_does_not_block_a_new_instance() {
     let (_root, state) = fixture();
     assert!(
@@ -204,125 +36,6 @@ async fn deleted_previous_channel_run_does_not_block_a_new_instance() {
             .await
             .unwrap()
     );
-}
-
-#[tokio::test]
-async fn wecom_text_event_runs_host_graph_and_returns_idempotent_delivery_receipt() {
-    let (root, mut state) = fixture();
-    let _env = PROCESS_ENV.lock().await;
-    set_host_env(root.path(), &state.data_root);
-    unsafe {
-        env::set_var("ANCHOR_RUNNER_ALLOWED_COMMANDS", "true,sh,cat,printf");
-    }
-    state.wecom.reply_node = "reply".into();
-    write_graph_bundle(
-        &state.bundle_root,
-        &json!({
-            "objective":"deterministic WeCom webhook fixture",
-            "entry":"reply",
-            "agents":{},
-            "ops":{"reply":{"run":"printf 'reply from fixture'"}},
-            "nodes":[{"id":"reply","op":"reply","plugins":[]}],
-            "edges":[]
-        }),
-    )
-    .unwrap();
-    let app = router_with_web_root(state.clone(), root.path().join("web"));
-    let event_body = event("hello from wecom");
-    let (status, response) = call(
-        app.clone(),
-        "POST",
-        "/channels/wecom/events",
-        Some(&event_body.to_string()),
-    )
-    .await;
-    assert_eq!(status, StatusCode::OK, "{response}");
-    assert_eq!(response["text"], "reply from fixture");
-    let session = response["session"].as_str().unwrap();
-    let run = response["run"].as_str().unwrap();
-    let key = response["receipt"]["key"].as_str().unwrap();
-    let content_sha256 = response["receipt"]["content_sha256"].as_str().unwrap();
-    assert!(key.starts_with(&format!("channel-wecom-reply:{session}:")));
-    assert_eq!(content_sha256.len(), 64);
-
-    let sessions = SessionStore::open(state.data_root.join("platform/sessions.sqlite")).unwrap();
-    let deliveries = sessions
-        .list_unfinished_channel_deliveries("local", session)
-        .unwrap();
-    assert_eq!(deliveries.len(), 1);
-    assert_eq!(deliveries[0].key, key);
-    assert_eq!(deliveries[0].content_sha256, content_sha256);
-    assert_eq!(deliveries[0].status, ChannelDeliveryStatus::Sending);
-    assert_eq!(
-        sessions
-            .get_channel_inbound("local", session, &inbound_id())
-            .unwrap()
-            .relation
-            .run_id
-            .as_deref(),
-        Some(run)
-    );
-
-    let settlement = json!({
-        "event":event_body["event"].clone(),
-        "settlement":{"key":key,"content_sha256":content_sha256,"status":"confirmed"}
-    });
-    let mut invalid_settlement = settlement.clone();
-    invalid_settlement["settlement"]["content_sha256"] = json!("a".repeat(64));
-    let (status, _) = call(
-        app.clone(),
-        "POST",
-        "/channels/wecom/events",
-        Some(&invalid_settlement.to_string()),
-    )
-    .await;
-    assert_eq!(status, StatusCode::CONFLICT);
-
-    let (status, settled) = call(
-        app.clone(),
-        "POST",
-        "/channels/wecom/events",
-        Some(&settlement.to_string()),
-    )
-    .await;
-    assert_eq!(status, StatusCode::OK, "{settled}");
-    assert_eq!(settled["delivery"]["status"], "confirmed");
-    let (status, repeated_settlement) = call(
-        app.clone(),
-        "POST",
-        "/channels/wecom/events",
-        Some(&settlement.to_string()),
-    )
-    .await;
-    assert_eq!(status, StatusCode::OK, "{repeated_settlement}");
-    assert_eq!(repeated_settlement["delivery"]["status"], "confirmed");
-
-    let (status, duplicate) = call(
-        app.clone(),
-        "POST",
-        "/channels/wecom/events",
-        Some(&event_body.to_string()),
-    )
-    .await;
-    assert_eq!(status, StatusCode::OK, "{duplicate}");
-    assert_eq!(duplicate["run"], run);
-    assert_eq!(duplicate["receipt"]["key"], key);
-    assert_eq!(duplicate["receipt"]["content_sha256"], content_sha256);
-    assert!(
-        sessions
-            .list_unfinished_channel_deliveries("local", session)
-            .unwrap()
-            .is_empty()
-    );
-
-    let (status, conflict) = call(
-        app,
-        "POST",
-        "/channels/wecom/events",
-        Some(&event("different content").to_string()),
-    )
-    .await;
-    assert_eq!(status, StatusCode::CONFLICT, "{conflict}");
 }
 
 #[tokio::test]
@@ -431,395 +144,193 @@ async fn wecom_attachment_validation_rejects_bad_bytes_names_and_counts_before_a
     assert!(!state.data_root.join("platform/sessions.sqlite").exists());
 }
 
+/// A channel only drives a persistent assistant. A message for a Graph without
+/// the input, Agent, reply loop is refused before it is admitted, and the
+/// per-message admission route no longer exists.
 #[tokio::test]
-async fn wecom_host_handoff_freezes_image_file_and_mixed_attachment_manifests() {
+async fn wecom_event_for_a_graph_without_an_input_loop_is_refused_before_admission() {
     let (root, mut state) = fixture();
     let _env = PROCESS_ENV.lock().await;
     set_host_env(root.path(), &state.data_root);
-    unsafe {
-        env::set_var("ANCHOR_RUNNER_ALLOWED_COMMANDS", "true,sh,cat,printf");
-    }
     state.wecom.reply_node = "reply".into();
     write_graph_bundle(
         &state.bundle_root,
         &json!({
-            "objective":"deterministic WeCom attachment fixture",
-            "entry":"reply",
-            "agents":{},
-            "ops":{"reply":{"run":"printf 'attachment reply'"}},
-            "nodes":[{"id":"reply","op":"reply","plugins":[]}],
-            "edges":[]
+            "objective":"single-node channel Graph","entry":"reply","agents":{},
+            "ops":{"reply":{"run":"true"}},
+            "nodes":[{"id":"reply","op":"reply","plugins":[]}],"edges":[]
         }),
     )
     .unwrap();
-    let mut png = Cursor::new(Vec::new());
-    DynamicImage::new_rgb8(1, 1)
-        .write_to(&mut png, ImageFormat::Png)
-        .unwrap();
-    let png = png.into_inner();
-    let large_file = vec![b'x'; 2 * 1024 * 1024 + 1];
-    let cases = [
-        (
-            "image",
-            "",
-            vec![("picture.png", png.as_slice(), Some("image/png"))],
-        ),
-        (
-            "file",
-            "",
-            vec![("notes.txt", b"file bytes".as_slice(), Some("text/plain"))],
-        ),
-        (
-            "mixed",
-            "caption",
-            vec![("mixed.png", png.as_slice(), Some("image/png"))],
-        ),
-        (
-            "voice",
-            "",
-            vec![("voice.amr", b"voice bytes".as_slice(), Some("audio/amr"))],
-        ),
-        (
-            "file",
-            "",
-            vec![(
-                "large.bin",
-                large_file.as_slice(),
-                Some("application/octet-stream"),
-            )],
-        ),
-    ];
     let app = router_with_web_root(state.clone(), root.path().join("web"));
-    std::fs::create_dir_all(state.data_root.join("platform")).unwrap();
-    let sessions = SessionStore::open(state.data_root.join("platform/sessions.sqlite")).unwrap();
-
-    for (index, (message_type, text, files)) in cases.into_iter().enumerate() {
-        let event_id = format!("attachment-{message_type}-{index}");
-        let mut body = event(text);
-        body["event"]["event_id"] = json!(event_id);
-        body["event"]["conversation_id"] = json!(format!("conversation-{message_type}-{index}"));
-        body["event"]["reply_target"] = body["event"]["conversation_id"].clone();
-        body["event"]["message_type"] = json!(message_type);
-        body["event"]["attachments"] = json!(
-            files
-                .iter()
-                .map(|(name, bytes, media_type)| json!({
-                    "name":name,
-                    "data_base64":STANDARD.encode(bytes),
-                    "media_type":media_type,
-                }))
-                .collect::<Vec<_>>()
-        );
-
-        let (status, response) = call(
-            app.clone(),
-            "POST",
-            "/channels/wecom/events",
-            Some(&body.to_string()),
-        )
-        .await;
-        assert_eq!(status, StatusCode::OK, "{message_type}: {response}");
-        assert_eq!(response["text"], "attachment reply");
-        let run = response["run"].as_str().unwrap();
-        let session = response["session"].as_str().unwrap();
-        let inbound = sessions
-            .get_channel_inbound("local", session, &inbound_id_for(&event_id))
-            .unwrap();
-        assert_eq!(inbound.request.attachments.format, 1);
-        assert_eq!(inbound.request.attachments.files.len(), files.len());
-        let expected_text = if text.is_empty() {
-            "请查看随附文件并据此回复。"
-        } else {
-            text
-        };
-        assert_eq!(inbound.request.text.as_deref(), Some(expected_text));
-        for (entry, (name, bytes, media_type)) in
-            inbound.request.attachments.files.iter().zip(&files)
-        {
-            assert_eq!(entry.name, *name);
-            assert_eq!(entry.path, format!("/in/channel/{name}"));
-            assert_eq!(entry.sha256, format!("{:x}", Sha256::digest(bytes)));
-            assert_eq!(entry.size, bytes.len() as u64);
-            assert_eq!(entry.media_type.as_deref(), *media_type);
-        }
-
-        let metadata = state.application.metadata(run).unwrap().unwrap();
-        assert_eq!(metadata.attachments.len(), files.len());
-        let key = InvocationKey {
-            run_id: run.into(),
-            graph_digest: metadata.graph_digest.clone(),
-            node_id: "reply".into(),
-            invocation: 1,
-        };
-        let node_inputs =
-            crate::channel_inputs::node_inputs(&state.data_root, &metadata, &key).unwrap();
-        let expected_images = files
-            .iter()
-            .filter(|(_, _, media_type)| {
-                media_type.is_some_and(|value| value.starts_with("image/"))
-            })
-            .collect::<Vec<_>>();
-        assert_eq!(node_inputs.images.len(), expected_images.len());
-        for (image, (name, bytes, media_type)) in node_inputs.images.iter().zip(expected_images) {
-            assert_eq!(image.bytes, *bytes);
-            assert_eq!(image.media_type, media_type.unwrap());
-            assert!(name.ends_with(".png"));
-        }
-        let mount = node_inputs.mount.unwrap();
-        assert_eq!(mount.destination, std::path::Path::new("/in/channel"));
-        for (attachment, (name, bytes, _)) in metadata.attachments.iter().zip(&files) {
-            assert_eq!(attachment.name, *name);
-            assert_eq!(attachment.sha256, format!("{:x}", Sha256::digest(bytes)));
-            assert_eq!(std::fs::read(mount.source.join(name)).unwrap(), *bytes);
-        }
-        let run_record = fixtures::Reader::new(&state.application)
-            .load(run)
+    let (status, refused) = call(
+        app.clone(),
+        "POST",
+        "/channels/wecom/events",
+        Some(&event("hello").to_string()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{refused}");
+    assert!(
+        refused["error"]
+            .as_str()
             .unwrap()
-            .unwrap();
-        assert!(run_record.has_succeeded(), "case {index}");
-    }
+            .contains("not a persistent assistant"),
+        "{refused}"
+    );
+    assert!(state.application.records().unwrap().is_empty());
+    assert!(!state.data_root.join("platform/sessions.sqlite").exists());
+
+    // Like other retired routes, the path now falls through to the static web
+    // root, which has no such file and accepts no POST.
+    let (status, _) = call_text(app.clone(), "GET", "/conversation-runs").await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let (status, _) = call_text(app, "POST", "/conversation-runs").await;
+    assert!(
+        matches!(
+            status,
+            StatusCode::NOT_FOUND | StatusCode::METHOD_NOT_ALLOWED
+        ),
+        "/conversation-runs must stay retired, got {status}"
+    );
 }
 
+/// A gateway settlement names one admitted message by its receipt key; the
+/// actor, conversation and chat type must match that message, a different
+/// content digest is refused, and confirming twice is idempotent.
 #[tokio::test]
-async fn recovery_admits_completed_wecom_delivery_once_without_rerunning_the_graph() {
-    let (_root, state) = fixture();
+async fn settlement_is_pinned_to_the_admitted_message_and_idempotent() {
+    let (root, state) = fixture();
     std::fs::create_dir_all(state.data_root.join("platform")).unwrap();
-    let run_id = "channel-00000000-0000-4000-8000-000000000001";
-    let inbound_id = "wecom-recovery-inbound";
     let sessions = SessionStore::open(state.data_root.join("platform/sessions.sqlite")).unwrap();
+    let body = group_event("group-bob-1", "bob", "group-a", "Bob adds details");
+    let inbound = inbound_id_for("group-bob-1");
     let admission = sessions
         .admit_channel_inbound(
             "local",
             ChannelInboundRequest {
-                inbound_id: inbound_id.into(),
+                inbound_id: inbound.clone(),
                 identity: ChannelIdentity {
-                    conversation_kind: Default::default(),
+                    conversation_kind: anchor_platform_session::ChannelConversationKind::Group,
                     source: "wecom".into(),
-                    account: Some("corp-a".into()),
-                    conversation_id: "conversation-recovery".into(),
-                    sender_id: "user-recovery".into(),
+                    account: None,
+                    conversation_id: "group-a".into(),
+                    sender_id: "bob".into(),
                 },
                 graph: "fixture".into(),
-                reply_node: "work".into(),
-                text: Some("recover this".into()),
-                attachments: Default::default(),
-                run_id: Some(run_id.into()),
-                replace_running: true,
-            },
-        )
-        .unwrap();
-    let bundle = FileGraphBundleLoader::new(&state.bundle_root)
-        .load()
-        .unwrap();
-    let record = GraphRunRecord::create_with_id(
-        bundle.snapshot,
-        json!({
-            "message":"recover this",
-            "channel":{
-                "source":"wecom",
-                "conversation_id":"conversation-recovery",
-                "sender_id":"user-recovery",
-                "reply_target":"conversation-recovery"
-            },
-            "session":admission.session.id,
-        }),
-        run_id,
-    )
-    .unwrap();
-    let mut metadata = RunMetadata::new(
-        run_id.into(),
-        "fixture".into(),
-        record.graph_digest.clone(),
-        &state.bundle_root,
-    )
-    .unwrap();
-    metadata.channel = Some(crate::application::ChannelRunSource {
-        owner: "local".into(),
-        session: admission.session.id.clone(),
-        inbound: inbound_id.into(),
-        turn: admission.turn.id.clone(),
-    });
-    metadata.conversation = Some(crate::application::ConversationSource {
-        session: admission.session.id.clone(),
-        reply_node: "work".into(),
-        previous_run: None,
-    });
-    metadata::save(&state.data_root, &metadata).unwrap();
-    fixtures::create(&state.application, &record);
-    fixtures::complete(
-        &state.application,
-        run_id,
-        "work",
-        NodeCompletion {
-            submission: "recovered reply".into(),
-            route: None,
-            model_requests: 0,
-            output: json!({}),
-        },
-        Some(CommitRef {
-            id: "recovery-commit".into(),
-            node_id: "work".into(),
-            invocation: 1,
-        }),
-    );
-    let before = fixtures::record(&state.application, run_id);
-
-    recover_pilot_turns(&state).await.unwrap();
-    let deliveries = sessions
-        .list_unfinished_channel_deliveries("local", &admission.session.id)
-        .unwrap();
-    assert_eq!(deliveries.len(), 1);
-    assert_eq!(deliveries[0].status, ChannelDeliveryStatus::Pending);
-    assert_eq!(deliveries[0].turn_id, admission.turn.id);
-    assert_eq!(deliveries[0].kind, "wecom_reply");
-    assert_eq!(deliveries[0].content_sha256.len(), 64);
-    assert_eq!(
-        sessions
-            .get_turn("local", &admission.session.id, &admission.turn.id)
-            .unwrap()
-            .status,
-        TurnStatus::Completed
-    );
-    assert_eq!(
-        fixtures::Reader::new(&state.application)
-            .load(run_id)
-            .unwrap()
-            .unwrap()
-            .record,
-        before
-    );
-
-    recover_pilot_turns(&state).await.unwrap();
-    assert_eq!(
-        sessions
-            .list_unfinished_channel_deliveries("local", &admission.session.id)
-            .unwrap()
-            .len(),
-        1
-    );
-}
-
-#[tokio::test]
-async fn superseded_completed_wecom_run_does_not_create_a_reply_delivery() {
-    let (_root, state) = fixture();
-    std::fs::create_dir_all(state.data_root.join("platform")).unwrap();
-    let run_id = "channel-00000000-0000-4000-8000-000000000002";
-    let sessions = SessionStore::open(state.data_root.join("platform/sessions.sqlite")).unwrap();
-    let identity = ChannelIdentity {
-        conversation_kind: Default::default(),
-        source: "wecom".into(),
-        account: Some("corp-a".into()),
-        conversation_id: "conversation-superseded".into(),
-        sender_id: "user-superseded".into(),
-    };
-    let previous = sessions
-        .admit_channel_inbound(
-            "local",
-            ChannelInboundRequest {
-                inbound_id: "wecom-superseded-1".into(),
-                identity: identity.clone(),
-                graph: "fixture".into(),
-                reply_node: "work".into(),
-                text: Some("older message".into()),
-                attachments: Default::default(),
-                run_id: Some(run_id.into()),
-                replace_running: true,
-            },
-        )
-        .unwrap();
-    let current = sessions
-        .admit_channel_inbound(
-            "local",
-            ChannelInboundRequest {
-                inbound_id: "wecom-superseded-2".into(),
-                identity,
-                graph: "fixture".into(),
-                reply_node: "work".into(),
-                text: Some("newer message".into()),
+                reply_node: "assistant".into(),
+                text: Some("Bob adds details".into()),
                 attachments: Default::default(),
                 run_id: None,
                 replace_running: true,
             },
         )
         .unwrap();
-    assert_eq!(
-        sessions
-            .get_channel_inbound("local", &previous.session.id, "wecom-superseded-1")
-            .unwrap()
-            .relation
-            .superseded_by_turn_id
-            .as_deref(),
-        Some(current.turn.id.as_str())
-    );
-
-    let bundle = FileGraphBundleLoader::new(&state.bundle_root)
-        .load()
+    let session = admission.session.id;
+    let turn = admission.turn.id;
+    sessions
+        .finish_turn("local", &session, &turn, TurnStatus::Completed, None)
         .unwrap();
-    let record = GraphRunRecord::create_with_id(
-        bundle.snapshot,
-        json!({
-            "message":"older message",
-            "channel":{"source":"wecom"},
-            "session":previous.session.id,
-        }),
-        run_id,
-    )
-    .unwrap();
-    let mut metadata = RunMetadata::new(
-        run_id.into(),
-        "fixture".into(),
-        record.graph_digest.clone(),
-        &state.bundle_root,
-    )
-    .unwrap();
-    metadata.channel = Some(crate::application::ChannelRunSource {
-        owner: "local".into(),
-        session: previous.session.id.clone(),
-        inbound: "wecom-superseded-1".into(),
-        turn: previous.turn.id.clone(),
-    });
-    metadata.conversation = Some(crate::application::ConversationSource {
-        session: previous.session.id.clone(),
-        reply_node: "work".into(),
-        previous_run: None,
-    });
-    metadata::save(&state.data_root, &metadata).unwrap();
-    fixtures::create(&state.application, &record);
-    fixtures::complete(
-        &state.application,
-        run_id,
-        "work",
-        NodeCompletion {
-            submission: "stale reply".into(),
-            route: None,
-            model_requests: 0,
-            output: json!({}),
-        },
-        Some(CommitRef {
-            id: "superseded-commit".into(),
-            node_id: "work".into(),
-            invocation: 1,
-        }),
-    );
+    let key = format!("channel-wecom-reply:{session}:{inbound}");
+    let content_sha256 = format!("{:x}", Sha256::digest(b"group reply"));
+    let request = anchor_platform_session::ChannelDeliveryRequest {
+        key: key.clone(),
+        kind: "wecom_reply".into(),
+        content_sha256: content_sha256.clone(),
+    };
+    sessions
+        .admit_completed_channel_delivery("local", &session, &turn, request.clone())
+        .unwrap();
+    sessions
+        .begin_channel_delivery("local", &session, &turn, request)
+        .unwrap();
 
-    state.application.settle_channel_run(run_id).unwrap();
-    assert_eq!(
-        sessions
-            .get_turn("local", &previous.session.id, &previous.turn.id)
-            .unwrap()
-            .status,
-        TurnStatus::Interrupted
-    );
+    let app = router_with_web_root(state, root.path().join("web"));
+    let settlement = json!({"event":body["event"],"settlement":{
+        "key":key,"content_sha256":content_sha256,"status":"confirmed"
+    }});
+    for (field, value) in [
+        ("sender_id", json!("alice")),
+        ("conversation_id", json!("group-b")),
+        ("chat_type", json!("single")),
+    ] {
+        let mut forged = settlement.clone();
+        if field == "chat_type" {
+            forged["event"]["metadata"][field] = value;
+        } else {
+            forged["event"][field] = value.clone();
+            if field == "conversation_id" {
+                forged["event"]["reply_target"] = value;
+            }
+        }
+        let (status, _) = call(
+            app.clone(),
+            "POST",
+            "/channels/wecom/events",
+            Some(&forged.to_string()),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "forged {field}");
+    }
+    let mut changed = settlement.clone();
+    changed["settlement"]["content_sha256"] = json!("a".repeat(64));
+    let (status, _) = call(
+        app.clone(),
+        "POST",
+        "/channels/wecom/events",
+        Some(&changed.to_string()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    for _ in 0..2 {
+        let (status, confirmed) = call(
+            app.clone(),
+            "POST",
+            "/channels/wecom/events",
+            Some(&settlement.to_string()),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{confirmed}");
+        assert_eq!(confirmed["delivery"]["status"], "confirmed");
+    }
     assert!(
         sessions
-            .list_unfinished_channel_deliveries("local", &previous.session.id)
+            .list_unfinished_channel_deliveries("local", &session)
             .unwrap()
             .is_empty()
     );
 }
 
-fn inbound_id() -> String {
-    inbound_id_for("message-1")
+/// The event route keeps the attachment-sized body limit, above the 2 MiB limit
+/// of ordinary routes, and still refuses anything larger.
+#[tokio::test]
+async fn wecom_event_body_limit_admits_attachment_sized_events_only() {
+    let (root, state) = fixture();
+    let app = router_with_web_root(state, root.path().join("web"));
+    for length_header in [true, false] {
+        for (size, expected) in [
+            (2 * 1024 * 1024 + 1, StatusCode::BAD_REQUEST),
+            (
+                crate::channel_inputs::MAX_BODY_BYTES + 1,
+                StatusCode::PAYLOAD_TOO_LARGE,
+            ),
+        ] {
+            let mut request = Request::builder()
+                .method("POST")
+                .uri("/channels/wecom/events")
+                .header(header::CONTENT_TYPE, "application/json");
+            if length_header {
+                request = request.header(header::CONTENT_LENGTH, size);
+            }
+            let status = app
+                .clone()
+                .oneshot(request.body(Body::from(vec![b' '; size])).unwrap())
+                .await
+                .unwrap()
+                .status();
+            assert_eq!(status, expected, "{size} bytes, length {length_header}");
+        }
+    }
 }
 
 fn inbound_id_for(event_id: &str) -> String {
@@ -829,162 +340,6 @@ fn inbound_id_for(event_id: &str) -> String {
     digest.update([0]);
     digest.update(event_id.as_bytes());
     format!("wecom-{:x}", digest.finalize())
-}
-
-/// A message that interrupts an unanswered turn travels with the next Run of
-/// the same session, so the interrupted work continues with the new
-/// information instead of disappearing.
-#[tokio::test]
-async fn interrupted_wecom_message_travels_with_the_next_run_of_the_session() {
-    let (root, mut state) = fixture();
-    let _env = PROCESS_ENV.lock().await;
-    set_host_env(root.path(), &state.data_root);
-    unsafe {
-        env::set_var("ANCHOR_RUNNER_ALLOWED_COMMANDS", "true,sh,cat,printf");
-    }
-    state.wecom.reply_node = "reply".into();
-    write_graph_bundle(
-        &state.bundle_root,
-        &json!({
-            "objective":"deterministic WeCom interruption fixture",
-            "entry":"reply",
-            "agents":{},
-            "ops":{"reply":{"run":"printf 'reply from fixture'"}},
-            "nodes":[{"id":"reply","op":"reply","plugins":[]}],
-            "edges":[]
-        }),
-    )
-    .unwrap();
-    let app = router_with_web_root(state.clone(), root.path().join("web"));
-    std::fs::create_dir_all(state.data_root.join("platform")).unwrap();
-
-    let mut first = event("先看第一件事");
-    first["event"]["event_id"] = json!("burst-1");
-    first["event"]["metadata"]["request_id"] = json!("callback-burst-1");
-    let (status, one) = call(
-        app.clone(),
-        "POST",
-        "/channels/wecom/events",
-        Some(&first.to_string()),
-    )
-    .await;
-    assert_eq!(status, StatusCode::OK, "{one}");
-    let run_one = one["run"].as_str().unwrap().to_owned();
-    let session = one["session"].as_str().unwrap().to_owned();
-
-    // The second message arrives before the first reply was confirmed.
-    let mut second = event("现在改成第二件事");
-    second["event"]["event_id"] = json!("burst-2");
-    second["event"]["metadata"]["request_id"] = json!("callback-burst-2");
-    let (status, two) = call(
-        app.clone(),
-        "POST",
-        "/channels/wecom/events",
-        Some(&second.to_string()),
-    )
-    .await;
-    assert_eq!(status, StatusCode::OK, "{two}");
-    let run_two = two["run"].as_str().unwrap().to_owned();
-    assert_ne!(run_one, run_two);
-    let record = fixtures::Reader::new(&state.application)
-        .load(&run_two)
-        .unwrap()
-        .unwrap();
-    assert_eq!(record.input["message"], "现在改成第二件事");
-    assert_eq!(
-        record.input["interrupted_messages"],
-        json!(["先看第一件事"])
-    );
-
-    // Once the platform confirms a reply, earlier messages are no longer
-    // carried into the following Run.
-    let sessions = SessionStore::open(state.data_root.join("platform/sessions.sqlite")).unwrap();
-    let unfinished = sessions
-        .list_unfinished_channel_deliveries("local", &session)
-        .unwrap();
-    let delivery = unfinished
-        .iter()
-        .find(|delivery| delivery.turn_id == run_two.trim_start_matches("channel-"))
-        .unwrap();
-    sessions
-        .settle_channel_delivery_from_gateway(
-            "local",
-            &session,
-            &inbound_id_for("burst-2"),
-            anchor_platform_session::ChannelDeliveryRequest {
-                key: delivery.key.clone(),
-                kind: delivery.kind.clone(),
-                content_sha256: delivery.content_sha256.clone(),
-            },
-            ChannelDeliveryStatus::Confirmed,
-        )
-        .unwrap();
-
-    let mut third = event("第三件事");
-    third["event"]["event_id"] = json!("burst-3");
-    third["event"]["metadata"]["request_id"] = json!("callback-burst-3");
-    let (status, three) = call(
-        app,
-        "POST",
-        "/channels/wecom/events",
-        Some(&third.to_string()),
-    )
-    .await;
-    assert_eq!(status, StatusCode::OK, "{three}");
-    let run_three = three["run"].as_str().unwrap();
-    let record = fixtures::Reader::new(&state.application)
-        .load(run_three)
-        .unwrap()
-        .unwrap();
-    assert!(record.input.get("interrupted_messages").is_none());
-}
-
-/// The progress endpoint is a read-only observation: it reports the terminal
-/// state of an admitted event, refuses unknown identities, and never exposes
-/// anything else.
-#[tokio::test]
-async fn wecom_progress_reports_only_settled_state_for_a_finished_turn() {
-    let (root, mut state) = fixture();
-    let _env = PROCESS_ENV.lock().await;
-    set_host_env(root.path(), &state.data_root);
-    unsafe {
-        env::set_var("ANCHOR_RUNNER_ALLOWED_COMMANDS", "true,sh,cat,printf");
-    }
-    state.wecom.reply_node = "reply".into();
-    write_graph_bundle(
-        &state.bundle_root,
-        &json!({
-            "objective":"deterministic WeCom progress fixture",
-            "entry":"reply",
-            "agents":{},
-            "ops":{"reply":{"run":"printf 'reply from fixture'"}},
-            "nodes":[{"id":"reply","op":"reply","plugins":[]}],
-            "edges":[]
-        }),
-    )
-    .unwrap();
-    let app = router_with_web_root(state.clone(), root.path().join("web"));
-    let (status, response) = call(
-        app.clone(),
-        "POST",
-        "/channels/wecom/events",
-        Some(&event("hello from wecom").to_string()),
-    )
-    .await;
-    assert_eq!(status, StatusCode::OK, "{response}");
-
-    let (status, body) = call_text(app.clone(), "GET", "/channels/wecom/progress/message-1").await;
-    assert_eq!(status, StatusCode::OK, "{body}");
-    // An op reply node has no live Goose invocation, so the only thing this
-    // turn can report is that it is over.
-    assert!(body.contains("event: settled"), "{body}");
-    assert!(body.contains("\"settled\":true"), "{body}");
-    assert!(body.contains("\"status\":\"settled\""), "{body}");
-    assert!(!body.contains("event: update"), "{body}");
-    assert!(!body.contains("正在"), "{body}");
-
-    let (status, denied) = call(app, "GET", "/channels/wecom/progress/never-admitted", None).await;
-    assert_eq!(status, StatusCode::NOT_FOUND, "{denied}");
 }
 
 /// The progress stream is behind the same bearer authentication as every other
@@ -1088,8 +443,17 @@ async fn persistent_assistant_progress_resolves_the_bound_round() {
     .unwrap();
 
     // The endpoint resolves the assistant Turn instead of answering 404, and a
-    // Turn that is still running does not settle.
+    // Turn that is still running does not settle. An event that was never
+    // admitted is not projectable at all.
     let app = router_with_web_root(state.clone(), root.path().join("web"));
+    let (status, denied) = call(
+        app.clone(),
+        "GET",
+        "/channels/wecom/progress/never-admitted",
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{denied}");
     let request = Request::builder()
         .method("GET")
         .uri("/channels/wecom/progress/message-1")
@@ -1132,116 +496,9 @@ async fn persistent_assistant_progress_resolves_the_bound_round() {
     drop(live);
 }
 
-/// Status and the first SSE bytes of a stream that may still be open.
-async fn call_stream_prefix(
-    app: Router,
-    uri: &str,
-    wait: std::time::Duration,
-) -> (StatusCode, String) {
-    use futures_util::StreamExt;
-    let request = Request::builder()
-        .method("GET")
-        .uri(uri)
-        .body(Body::empty())
-        .unwrap();
-    let response = app.oneshot(request).await.unwrap();
-    let status = response.status();
-    let mut body = response.into_body().into_data_stream();
-    let mut text = String::new();
-    let deadline = tokio::time::Instant::now() + wait;
-    while let Ok(Some(chunk)) = tokio::time::timeout_at(deadline, body.next()).await {
-        text.push_str(&String::from_utf8_lossy(&chunk.unwrap()));
-    }
-    (status, text)
-}
-
-/// The inbound row is persisted before the conversation is serialised, so a
-/// message that arrives while another round still runs is already projectable
-/// instead of answering 404.
-#[tokio::test]
-async fn a_message_is_projectable_while_the_previous_round_still_runs() {
-    let (root, mut state) = fixture();
-    let _env = PROCESS_ENV.lock().await;
-    set_host_env(root.path(), &state.data_root);
-    unsafe {
-        env::set_var("ANCHOR_RUNNER_ALLOWED_COMMANDS", "true,sh,cat,printf,sleep");
-    }
-    state.wecom.reply_node = "reply".into();
-    write_graph_bundle(
-        &state.bundle_root,
-        &json!({
-            "objective":"deterministic WeCom serialisation fixture",
-            "entry":"reply",
-            "agents":{},
-            "ops":{"reply":{"run":"sleep 3"}},
-            "nodes":[{"id":"reply","op":"reply","plugins":[]}],
-            "edges":[]
-        }),
-    )
-    .unwrap();
-    let app = router_with_web_root(state.clone(), root.path().join("web"));
-
-    // The first round takes the conversation and keeps it for three seconds.
-    let first_body = event("第一轮还在跑").to_string();
-    let app_first = app.clone();
-    let first = tokio::spawn(async move {
-        call(
-            app_first,
-            "POST",
-            "/channels/wecom/events",
-            Some(&first_body),
-        )
-        .await
-    });
-    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
-
-    let mut second = event("第二轮");
-    second["event"]["event_id"] = json!("message-2");
-    second["event"]["metadata"]["request_id"] = json!("callback-2");
-    let app_second = app.clone();
-    let second_body = second.to_string();
-    let started = tokio::time::Instant::now();
-    let pending = tokio::spawn(async move {
-        call(
-            app_second,
-            "POST",
-            "/channels/wecom/events",
-            Some(&second_body),
-        )
-        .await
-    });
-
-    let mut observed = None;
-    let deadline = tokio::time::Instant::now() + std::time::Duration::from_millis(2_500);
-    while tokio::time::Instant::now() < deadline {
-        let (status, _) = call_stream_prefix(
-            app.clone(),
-            "/channels/wecom/progress/message-2",
-            std::time::Duration::from_millis(120),
-        )
-        .await;
-        observed = Some(status);
-        if status == StatusCode::OK {
-            break;
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(60)).await;
-    }
-    assert_eq!(
-        observed,
-        Some(StatusCode::OK),
-        "an admitted message must be projectable while the previous round still runs"
-    );
-    assert!(
-        started.elapsed() < std::time::Duration::from_millis(2_500),
-        "the message became projectable only after the previous round released the conversation"
-    );
-    let _ = tokio::time::timeout(std::time::Duration::from_secs(30), first).await;
-    let _ = tokio::time::timeout(std::time::Duration::from_secs(30), pending).await;
-}
-
 /// A message whose Run was never admitted — the window a crash leaves behind —
 /// stays a running Turn, survives a restart, is admitted only once, and is
-/// still carried to the model when a newer message supersedes it.
+/// recorded as superseded rather than lost when a newer message arrives.
 #[tokio::test]
 async fn an_admitted_message_without_a_run_is_not_finished_lost_or_duplicated() {
     let (root, state) = fixture();
@@ -1300,15 +557,7 @@ async fn an_admitted_message_without_a_run_is_not_finished_lost_or_duplicated() 
         superseded.relation.superseded_by_turn_id.as_deref(),
         Some(second.turn.id.as_str())
     );
-    let pending = sessions
-        .pending_channel_messages(owner, &first.session.id, &inbound_id_for("crash-2"), 8)
-        .unwrap();
-    assert_eq!(
-        pending.len(),
-        1,
-        "the message the crashed window left behind must still reach the model"
-    );
-    assert_eq!(pending[0].text, "先看这个");
+    assert_eq!(superseded.request.text.as_deref(), Some("先看这个"));
 }
 
 /// The durable shape of one *running* persistent-assistant round.

@@ -78,15 +78,6 @@ fn group_members_share_current_assistant_and_preserve_real_actor_per_turn() {
         ChannelConversationKind::Group
     );
     assert_eq!(store.get("owner", session).unwrap().run_ids, ["shared-run"]);
-    let pending = store
-        .pending_channel_messages("owner", session, "bob-1", 8)
-        .unwrap();
-    assert_eq!(pending.len(), 1);
-    assert_eq!(pending[0].identity.sender_id, "alice");
-    assert!(matches!(
-        store.pending_channel_messages("other-owner", session, "bob-1", 8),
-        Err(SessionError::Missing)
-    ));
     assert!(matches!(
         store.admit_channel_inbound("owner", inbound("bob-1", "alice")),
         Err(SessionError::Conflict(_))

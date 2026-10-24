@@ -21,7 +21,6 @@ pub(crate) struct ChannelReplyResult {
 
 pub(crate) struct ChannelReplyRun {
     replies: BTreeMap<String, Vec<ChannelReplyResult>>,
-    pub(crate) completed: bool,
     pub(crate) unsuccessful: bool,
     pub(crate) assistant_expects_executor: bool,
 }
@@ -30,13 +29,6 @@ impl ChannelReplyRun {
     fn from_view(view: &super::RunView<'_>) -> Self {
         let progress = view.progress();
         Self {
-            completed: matches!(
-                view.phase(),
-                super::RunPhase::Settled {
-                    outcome: super::RunOutcome::Done,
-                    ..
-                }
-            ),
             unsuccessful: channel_reply_is_unsuccessful(view),
             assistant_expects_executor: view.occupies_conversation_execution(),
             replies: progress
@@ -70,13 +62,6 @@ impl ChannelReplyRun {
 
     pub(crate) fn replies_for(&self, node: &str) -> Option<&[ChannelReplyResult]> {
         self.replies.get(node).map(Vec::as_slice)
-    }
-
-    pub(crate) fn latest_reply(&self, node: &str) -> Option<&str> {
-        self.replies
-            .get(node)
-            .and_then(|replies| replies.last())
-            .map(|reply| reply.text.as_str())
     }
 }
 
@@ -127,14 +112,6 @@ fn startup_settlement(view: &super::RunView<'_>) -> Option<StartupChannelSettlem
             outcome: super::RunOutcome::Escalated,
             ..
         } => None,
-    }
-}
-
-fn progress_status(view: &super::RunView<'_>) -> &'static str {
-    match view.phase() {
-        super::RunPhase::Executing => "executing",
-        super::RunPhase::Waiting { .. } => "waiting",
-        super::RunPhase::Settled { .. } => "settled",
     }
 }
 
@@ -243,30 +220,6 @@ impl RunApplication {
         Ok(latest_result.map(|result| result.key.clone()))
     }
 
-    pub(crate) fn channel_progress_status(&self, run: &str) -> String {
-        match self.read_channel_run(run) {
-            Ok(Some(view)) => progress_status(&view).to_owned(),
-            _ => "missing".to_owned(),
-        }
-    }
-
-    pub(crate) fn channel_progress_is_settled(&self, run: &str) -> bool {
-        match self.read_channel_run(run) {
-            Ok(Some(view)) => {
-                view.is_settled()
-                    || (!view.has_pending_recovery()
-                        && matches!(
-                            view.phase(),
-                            super::RunPhase::Waiting {
-                                for_what: super::RunWait::Human,
-                                reason,
-                            } if reason != Some("paused")
-                        ))
-            }
-            _ => true,
-        }
-    }
-
     pub(crate) fn channel_startup_runs(&self) -> Result<Vec<ChannelStartupRun>, ApplicationError> {
         Ok(self
             .run_views()?
@@ -312,14 +265,6 @@ mod tests {
             let completed = id == "done";
             let unsuccessful = matches!(id, "stopped" | "failed" | "aborted");
             let executor = id == "executing";
-            let settled = matches!(id, "budget" | "stopped" | "done" | "failed" | "aborted");
-            let wire = if id == "executing" {
-                "executing"
-            } else if matches!(id, "done" | "failed" | "aborted") {
-                "settled"
-            } else {
-                "waiting"
-            };
             let settlement = match id {
                 "done" => Some(Complete),
                 "failed" => Some(Fail),
@@ -328,15 +273,12 @@ mod tests {
                 _ => None,
             };
             let reply = application.channel_reply_run(id).unwrap().unwrap();
-            assert_eq!(reply.completed, completed, "{id}");
             assert_eq!(reply.unsuccessful, unsuccessful, "{id}");
             assert_eq!(reply.assistant_expects_executor, executor, "{id}");
             assert_eq!(
                 application.channel_reply_is_completed(id).unwrap(),
                 Some(completed)
             );
-            assert_eq!(application.channel_progress_is_settled(id), settled, "{id}");
-            assert_eq!(application.channel_progress_status(id), wire);
             assert!(application.channel_run_is_admitted(id).unwrap());
             let candidate = application
                 .channel_startup_runs()
@@ -387,8 +329,6 @@ mod tests {
                 .unwrap()
                 .is_none()
         );
-        assert!(application.channel_progress_is_settled(run));
-        assert_eq!(application.channel_progress_status(run), "missing");
         assert!(application.channel_startup_runs().unwrap().is_empty());
         std::fs::create_dir_all(root.path().join("runs")).unwrap();
         std::fs::write(root.path().join(format!("runs/{run}.json")), b"not JSON").unwrap();
@@ -421,8 +361,6 @@ mod tests {
                 .err(),
             Some(expected)
         );
-        assert!(application.channel_progress_is_settled(run));
-        assert_eq!(application.channel_progress_status(run), "missing");
         assert!(application.channel_startup_runs().is_err());
     }
 
@@ -479,7 +417,7 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![1, 2]
         );
-        assert_eq!(reply.latest_reply("work"), Some("  reply 2  "));
+        assert_eq!(replies[1].text, "  reply 2  ");
         assert!(replies[1].suppressed);
         assert_eq!(replies[1].reply_for.as_deref(), Some("turn"));
         assert_eq!(replies[1].source_commit, json!("invalid-until-used"));

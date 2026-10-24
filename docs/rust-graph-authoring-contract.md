@@ -56,7 +56,7 @@ Op 在 `run`、`call`、`fanout`、`join`、`host` 中恰好选择一种。`host
 }
 ```
 
-完整 opt-in 样例见 [wecom-persistent-assistant.json](../examples/graphs/wecom-persistent-assistant.json)。这是普通 `wait_input (Op) → assistant (Agent) → reply (Op) → wait_input`，不是新节点类型或专用 Runner；保留已有 `wecom-assistant`，不原地替换。当前渠道 Host 接纳要求恰好一个等待 Op、一个 Agent 和一个回复 Op，入口是等待节点，三条普通边构成上述循环，不设置节点 `max_rounds` 或模块轮次上限。渠道配置的结果节点仍为 Agent `assistant`，与投递 Op `reply` 分别绑定；Kernel 的通用 host port 本身不限定这套业务形状。host Op 当前不能放入并行区域。
+完整 opt-in 样例见 [wecom-persistent-assistant.json](../examples/graphs/wecom-persistent-assistant.json)。这是普通 `wait_input (Op) → assistant (Agent) → reply (Op) → wait_input`，不是新节点类型或专用 Runner；渠道只接纳这一形状。当前渠道 Host 接纳要求恰好一个等待 Op、一个 Agent 和一个回复 Op，入口是等待节点，三条普通边构成上述循环，不设置节点 `max_rounds` 或模块轮次上限。渠道配置的结果节点仍为 Agent `assistant`，与投递 Op `reply` 分别绑定；Kernel 的通用 host port 本身不限定这套业务形状。host Op 当前不能放入并行区域。
 
 - `session.wait_input` 只在可信助手 binding 的 Session 内领取输入，并持久绑定等待 invocation 与 Turn；恢复/重试仍读取同一 Turn。等待不调用模型，不继承 `Op.run` 的默认命令超时，支持暂停/取消。本轮内容位于等待节点 commit 的 `output`（`message`、`channel`、`attachments`、`session`、`turn`、`interrupted_messages`），Agent 读取 `committed_inputs`，不得把冻结的 Run 启动 `input` 当作下一轮消息。
 - `session.reply` 只读取本 Turn 经普通边交接的确切 Agent commit，校验 `source_commit`、`reply_for` 与本轮图片集合，然后结算 Turn 并路由回等待；不要求整个 Run Completed，不读取一个长期 Run 的“最新产物”替代本轮身份。平台 ACK/unknown 属于既有投递账本，不由节点完成状态代替。

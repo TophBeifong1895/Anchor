@@ -170,23 +170,6 @@ pub(super) async fn get_channel_relation(
     .await
 }
 
-pub(super) async fn associate_channel_run(
-    State(state): State<ApiState>,
-    headers: HeaderMap,
-    AxumPath((session, inbound)): AxumPath<(String, String)>,
-    body: axum::body::Bytes,
-) -> Result<Json<Value>, HttpResponse> {
-    let binding: RunBinding = decode(body, &["run_id"])?;
-    let owner = private_owner(&state, &headers);
-    blocking(move || {
-        let relation = store(&state)?
-            .associate_channel_run(&owner, &session, &inbound, &binding.run_id)
-            .map_err(channel_error)?;
-        Ok(Json(json!({"relation": relation})))
-    })
-    .await
-}
-
 pub(super) async fn admit_channel_delivery(
     State(state): State<ApiState>,
     headers: HeaderMap,

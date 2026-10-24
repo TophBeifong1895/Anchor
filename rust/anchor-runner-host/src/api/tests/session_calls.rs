@@ -66,12 +66,37 @@ fn seed_session_call(state: &ApiState, run: &str, mode: &str, bound: bool) {
     fixtures::create(&state.application, &record);
 }
 
-fn foreground(serial: u64, session: &str, previous: Option<&str>) -> Value {
-    json!({
-        "graph":"fixture", "run":format!("channel-00000000-0000-4000-8000-{serial:012x}"),
-        "session":session, "reply_node":"work",
-        "input":{"message":format!("message {serial}")}, "previous_run":previous,
-    })
+/// A foreground turn of `session` on the fixture Graph, parked the way a
+/// stopped assistant instance is persisted: its conversation identity names
+/// `previous` as the Run it was handed over from.
+fn foreground(state: &ApiState, run: &str, session: &str, previous: Option<&str>) -> String {
+    let bundle = FileGraphBundleLoader::new(&state.bundle_root)
+        .load()
+        .unwrap();
+    let mut record =
+        GraphRunRecord::create_with_id(bundle.snapshot, json!({"session":session}), run).unwrap();
+    record.plugin_bindings_initialized = true;
+    fixtures::create(&state.application, &record);
+    fixtures::control(&state.application, run, "stop", "stopped");
+    let mut metadata = RunMetadata::new(
+        run.into(),
+        "fixture".into(),
+        record.graph_digest,
+        &state.bundle_root,
+    )
+    .unwrap();
+    metadata.conversation = Some(ConversationSource {
+        session: session.into(),
+        reply_node: "work".into(),
+        previous_run: previous.map(str::to_owned),
+    });
+    metadata::save(&state.data_root, &metadata).unwrap();
+    run.into()
+}
+
+async fn resume(app: &Router, run: &str) {
+    let (status, resumed) = call(app.clone(), "POST", &format!("/runs/{run}/resume"), None).await;
+    assert!(status.is_success(), "{status}: {resumed}");
 }
 
 async fn execute(
@@ -123,27 +148,16 @@ async fn session_execution_rejects_other_session_and_wrong_previous_identity() {
     let _env = PROCESS_ENV.lock().await;
     set_host_env(root.path(), &state.data_root);
     let app = router(state.clone());
-    let alice = foreground(100, "alice", None);
-    let bob = foreground(101, "bob", None);
-    for body in [&alice, &bob] {
-        let (status, accepted) = call(
-            app.clone(),
-            "POST",
-            "/conversation-runs",
-            Some(&body.to_string()),
-        )
-        .await;
-        assert_eq!(status, StatusCode::ACCEPTED, "{accepted}");
-        wait_idle(&state).await;
-    }
+    let alice = foreground(&state, "alice-foreground", "alice", None);
+    let bob = foreground(&state, "bob-foreground", "bob", None);
     let run = "session-identity";
     seed_session_call(&state, run, "wait", false);
     let original_record = record_bytes(&state, run);
     let original_metadata = metadata_bytes(&state, run);
     for (session, previous) in [
-        ("bob", Some(alice["run"].as_str().unwrap())),
+        ("bob", Some(alice.as_str())),
         ("alice", None),
-        ("alice", Some(bob["run"].as_str().unwrap())),
+        ("alice", Some(bob.as_str())),
         ("alice", Some("missing-run")),
     ] {
         let (status, rejected) = execute(&app, run, session, previous).await;
@@ -152,13 +166,12 @@ async fn session_execution_rejects_other_session_and_wrong_previous_identity() {
         assert_eq!(metadata_bytes(&state, run), original_metadata);
         assert!(state.application.active_runs(None).await.is_empty());
     }
-    let previous = alice["run"].as_str().unwrap();
-    let (status, accepted) = execute(&app, run, "alice", Some(previous)).await;
+    let (status, accepted) = execute(&app, run, "alice", Some(&alice)).await;
     assert_eq!(status, StatusCode::OK, "{accepted}");
     wait_idle(&state).await;
     let original_record = record_bytes(&state, run);
     let original_metadata = metadata_bytes(&state, run);
-    let (status, rejected) = execute(&app, run, "alice", Some(bob["run"].as_str().unwrap())).await;
+    let (status, rejected) = execute(&app, run, "alice", Some(&bob)).await;
     assert_eq!(status, StatusCode::CONFLICT, "{rejected}");
     assert_eq!(record_bytes(&state, run), original_record);
     assert_eq!(metadata_bytes(&state, run), original_metadata);
@@ -177,27 +190,14 @@ async fn queued_session_call_allows_foreground_and_is_not_dispatched_at_startup(
         .unwrap();
     assert!(state.application.active_runs(None).await.is_empty());
     let app = router(state.clone());
-    let body = foreground(110, "alice", None);
-    let (status, accepted) = call(
-        app.clone(),
-        "POST",
-        "/conversation-runs",
-        Some(&body.to_string()),
-    )
-    .await;
-    assert_eq!(status, StatusCode::ACCEPTED, "{accepted}");
+    let foreground = foreground(&state, "queued-foreground", "alice", None);
+    resume(&app, &foreground).await;
     wait_idle(&state).await;
     let store = fixtures::Reader::new(&state.application);
     assert!(is_executing(
         &store.load("queued-session-call").unwrap().unwrap()
     ));
-    assert!(
-        store
-            .load(body["run"].as_str().unwrap())
-            .unwrap()
-            .unwrap()
-            .has_succeeded()
-    );
+    assert!(store.load(&foreground).unwrap().unwrap().has_succeeded());
     let context = state
         .application
         .metadata("queued-session-call")
@@ -234,16 +234,16 @@ async fn bound_session_call_yields_and_continues_same_run_after_foreground_and_r
         .unwrap();
     assert!(stopped.waits_reason("stopped"));
     assert_eq!(stopped.input, frozen.input);
-    let next = foreground(120, "alice", Some(run));
-    let (status, accepted) = call(app, "POST", "/conversation-runs", Some(&next.to_string())).await;
-    assert_eq!(status, StatusCode::ACCEPTED, "{accepted}");
+    let next = foreground(&state, "bound-foreground", "alice", Some(run));
+    resume(&app, &next).await;
     wait_idle(&state).await;
+    drop(app);
 
     state.application = RunApplication::new(state.data_root.clone(), state.catalog_root.clone())
         .with_configured_graph("fixture".into(), state.bundle_root.clone());
     let restarted = state.clone();
     let app = router(restarted.clone());
-    let (status, rejected) = execute(&app, run, "alice", Some(next["run"].as_str().unwrap())).await;
+    let (status, rejected) = execute(&app, run, "alice", Some(&next)).await;
     assert_eq!(status, StatusCode::CONFLICT, "{rejected}");
     let (status, accepted) = execute(&app, run, "alice", None).await;
     assert_eq!(status, StatusCode::OK, "{accepted}");
@@ -333,15 +333,13 @@ async fn active_session_call_yield_releases_execution_without_settling_delivery(
             .status,
         "pending"
     );
-    let next = foreground(130, "alice", Some(run));
-    let (status, accepted) = call(app, "POST", "/conversation-runs", Some(&next.to_string())).await;
-    assert_eq!(status, StatusCode::ACCEPTED, "{accepted}");
+    let next = foreground(&state, "active-foreground", "alice", Some(run));
+    resume(&app, &next).await;
     // Release only the new foreground Op; the interrupted child remains its original Run.
     tokio::time::timeout(Duration::from_secs(5), async {
         loop {
-            let next_run = next["run"].as_str().unwrap();
             let record = fixtures::Reader::new(&state.application)
-                .load(next_run)
+                .load(&next)
                 .unwrap()
                 .unwrap();
             if let Some(cursor) = record.view.dispatches().first() {

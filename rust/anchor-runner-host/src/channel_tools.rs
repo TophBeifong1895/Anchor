@@ -35,18 +35,11 @@ const MAX_IMAGE_BYTES: usize = 10 * 1024 * 1024;
 const MAX_IMAGE_COUNT: usize = 10;
 const MAX_IMAGE_TOTAL_BASE64: usize = 14 * 1024 * 1024;
 
-/// Read the rich reply one Run registered for the channel gateway.
+/// Read the rich reply one assistant Turn registered for the channel gateway.
 ///
 /// The file is the Host's own record, but it is read back after the node
 /// finished, so every item is re-validated here: this is the last point that
 /// still holds the Host's authority over the bytes the gateway will deliver.
-pub(crate) fn read_reply_images(state_root: &Path, run_id: &str) -> Result<Vec<Value>, String> {
-    let path = state_root
-        .join("channel-replies")
-        .join(format!("{run_id}.json"));
-    read_reply_images_at(&path)
-}
-
 pub(crate) fn read_reply_images_for_invocation(
     state_root: &Path,
     key: &anchor_runtime::graph::InvocationKey,
@@ -809,16 +802,16 @@ mod tests {
         host.call(IMAGE_TOOL, json!({"path":"image.png"}))
             .await
             .unwrap();
-        let items = read_reply_images(root.path(), "run").unwrap();
+        let path = host.reply_path().unwrap();
+        let items = read_reply_images_at(&path).unwrap();
         assert_eq!(items.len(), 1);
         assert_eq!(items[0]["msgtype"], "image");
 
         // A digest that no longer matches the bytes must not reach the channel.
-        let path = host.reply_path().unwrap();
         let mut tampered: Vec<Value> = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
         tampered[0]["image"]["md5"] = json!("0".repeat(32));
         fs::write(&path, serde_json::to_vec(&tampered).unwrap()).unwrap();
-        assert!(read_reply_images(root.path(), "run").is_err());
+        assert!(read_reply_images_at(&path).is_err());
 
         // Foreign item shapes are refused instead of being silently downgraded.
         for foreign in [
@@ -827,10 +820,10 @@ mod tests {
             json!([{"msgtype":"image","image":{"base64":"AA==","md5":"0".repeat(32),"extra":1}}]),
         ] {
             fs::write(&path, serde_json::to_vec(&foreign).unwrap()).unwrap();
-            assert!(read_reply_images(root.path(), "run").is_err());
+            assert!(read_reply_images_at(&path).is_err());
         }
         assert!(
-            read_reply_images(root.path(), "unregistered-run")
+            read_reply_images_at(&root.path().join("channel-replies/unregistered-run.json"))
                 .unwrap()
                 .is_empty()
         );

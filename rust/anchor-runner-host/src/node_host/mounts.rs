@@ -273,9 +273,9 @@ impl HostIoResolver {
     /// The Session and Turn this Run's mount switches come from.
     ///
     /// The immutable Run metadata is the only place that says which Session a Run
-    /// belongs to: a pilot Run and a channel Run record Session and Turn, a
-    /// persistent assistant records the Session and takes its Turn from the
-    /// assistant invocation's own immutable binding, and a plain conversation
+    /// belongs to: a pilot Run records Session and Turn, a persistent assistant
+    /// records the Session and takes its Turn from the assistant invocation's
+    /// own immutable binding, and a plain conversation
     /// records the Session only. When no Turn id is recorded, this Run *is* the
     /// unit whose switches are frozen, so it names itself. A Run in no Session
     /// mounts only what its Graph declares.
@@ -290,9 +290,6 @@ impl HostIoResolver {
             return Ok(None);
         };
         if let Some(source) = &metadata.pilot {
-            return Ok(Some((source.session.clone(), source.turn.clone())));
-        }
-        if let Some(source) = &metadata.channel {
             return Ok(Some((source.session.clone(), source.turn.clone())));
         }
         if let Some(source) = &metadata.assistant {

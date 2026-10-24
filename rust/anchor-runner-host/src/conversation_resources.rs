@@ -147,34 +147,3 @@ pub(crate) fn release_unreferenced(
     }
     Ok(())
 }
-
-/// Existing admission semantics start a fresh chain when its head was deleted.
-/// Its native binding must also start fresh, rather than refer to deleted facts.
-pub(crate) fn start_fresh(
-    application: &RunApplication,
-    data: &Path,
-    graph: &Path,
-    session: &str,
-    workspaces: &Path,
-) -> Result<(), ApplicationError> {
-    for id in crate::application::metadata::ids(data)? {
-        if let Some(metadata) = application.metadata(&id)?
-            && RunApplication::graph_identity(&metadata.bundle_source)? == graph
-            && metadata
-                .conversation
-                .as_ref()
-                .is_some_and(|source| source.session == session)
-            && run_access::load(data, &id)?.is_none()
-        {
-            return Err(ApplicationError::Conflict(format!(
-                "Session has retained hand-off `{id}` without its Run"
-            )));
-        }
-    }
-    for ownership in ownerships(data, graph)? {
-        if ownership.session == session {
-            remove(data, workspaces, &ownership.hint)?;
-        }
-    }
-    Ok(())
-}

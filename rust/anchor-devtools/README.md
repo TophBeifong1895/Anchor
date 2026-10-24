@@ -23,7 +23,7 @@ It does not download Goose or load `.env`. It strips inherited `ANCHOR_*`,
 only the verified Goose path and isolated test evidence directory.
 
 It first builds the official WeCom and Docmost tool binaries, then runs each of
-`goose_acp`, `goose_pilot`, `goose_elicitation`, `goose_media`, `goose_conversation`,
+`goose_acp`, `goose_pilot`, `goose_elicitation`, `goose_media`,
 `goose_channel`, `goose_compaction`, `goose_pilot_compaction`, `goose_trace`,
 `goose_session_calls`, `goose_library` and `native_plugins` with `--no-default-features`,
 `--locked` and `-- --ignored --test-threads=4 --nocapture`. No legacy feature is

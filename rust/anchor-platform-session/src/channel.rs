@@ -11,8 +11,8 @@ use uuid::Uuid;
 use crate::{
     AttachmentManifest, ChannelAdmission, ChannelConversationKind, ChannelDelivery,
     ChannelDeliveryRequest, ChannelDeliveryStatus, ChannelIdentity, ChannelInboundRelation,
-    ChannelInboundRequest, ChannelInboundRun, ChannelPendingMessage, Session, SessionError,
-    SessionStatus, SessionStore, Turn, TurnStatus, associations, store, turns,
+    ChannelInboundRequest, ChannelInboundRun, Session, SessionError, SessionStatus, SessionStore,
+    Turn, TurnStatus, associations, store, turns,
 };
 
 mod accounts;
@@ -254,45 +254,6 @@ impl SessionStore {
         Ok(run)
     }
 
-    /// User messages this session has not been answered for: everything newer
-    /// than the newest turn whose reply the platform confirmed. A new message
-    /// folds these into its Run so interrupted work continues with the new
-    /// information instead of disappearing.
-    pub fn pending_channel_messages(
-        &self,
-        owner: &str,
-        session: &str,
-        exclude_inbound: &str,
-        limit: usize,
-    ) -> Result<Vec<ChannelPendingMessage>, SessionError> {
-        validate_channel_lookup(owner, session, exclude_inbound)?;
-        let connection = self.lock()?;
-        store::read_session(&connection, owner, session)?;
-        ensure_channel_session(&connection, owner, session)?;
-        let mut statement = connection.prepare(
-            "SELECT request
-             FROM channel_inbounds
-             WHERE session_id = ?1 AND inbound_id != ?2
-               AND created_at > COALESCE((
-                   SELECT MAX(previous.created_at) FROM channel_inbounds previous
-                    JOIN channel_deliveries delivery ON delivery.turn_id = previous.turn_id
-                   WHERE previous.session_id = ?1 AND delivery.status = 'confirmed'), '')
-             ORDER BY created_at LIMIT ?3",
-        )?;
-        let rows = statement.query_map(params![session, exclude_inbound, limit as i64], |row| {
-            row.get::<_, String>(0)
-        })?;
-        rows.map(|row| {
-            let request: ChannelInboundRequest = serde_json::from_str(&row?)?;
-            Ok(ChannelPendingMessage {
-                identity: request.identity,
-                text: request.text.unwrap_or_default(),
-                attachments: request.attachments.files.len(),
-            })
-        })
-        .collect()
-    }
-
     pub fn get_channel_relation(
         &self,
         owner: &str,
@@ -359,28 +320,6 @@ impl SessionStore {
         }
         transaction.commit()?;
         Ok(rejected)
-    }
-
-    pub fn associate_channel_run(
-        &self,
-        owner: &str,
-        session: &str,
-        inbound_id: &str,
-        run_id: &str,
-    ) -> Result<ChannelInboundRelation, SessionError> {
-        validate_channel_lookup(owner, session, inbound_id)?;
-        store::validate_identity(run_id, "run id")?;
-        let mut connection = self.lock()?;
-        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let mut snapshot = store::read_session(&transaction, owner, session)?;
-        ensure_channel_session(&transaction, owner, session)?;
-        let inbound =
-            read_inbound(&transaction, session, inbound_id)?.ok_or(SessionError::Missing)?;
-        associate_run(&transaction, owner, &mut snapshot, &inbound, run_id)?;
-        let updated =
-            read_inbound(&transaction, session, inbound_id)?.ok_or(SessionError::Missing)?;
-        transaction.commit()?;
-        Ok(relation(&updated))
     }
 
     pub fn delete_channel_session(&self, owner: &str, session: &str) -> Result<(), SessionError> {

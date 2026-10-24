@@ -11,17 +11,6 @@ fn kernel_resource(state: &ApiState, id: &str) -> Option<anchor_kernel::Resource
         .unwrap()
 }
 
-fn request(serial: u64, session: &str, previous: Option<&str>) -> Value {
-    json!({
-        "graph":"fixture",
-        "run":format!("channel-00000000-0000-4000-8000-{serial:012x}"),
-        "session":session,
-        "reply_node":"work",
-        "input":{"message":format!("message {serial}")},
-        "previous_run":previous,
-    })
-}
-
 fn gate_definition() -> Value {
     json!({
         "objective":"conversation admission fixture","entry":"work","agents":{},
@@ -108,41 +97,69 @@ async fn stop_run(app: &Router, state: &ApiState, run: &str) {
     wait_run_status(state, run, |run| run.waits_reason("stopped")).await;
 }
 
+/// One turn of `session` handed over from `previous`: the conversation Run an
+/// assistant handover or a Session call leaves behind, parked until resumed.
+fn seed_turn(
+    state: &ApiState,
+    graph: &str,
+    run: &str,
+    session: &str,
+    reply_node: &str,
+    previous: Option<&str>,
+) {
+    let path = state.application.graph_bundle_path(graph);
+    let bundle = FileGraphBundleLoader::new(&path).load().unwrap();
+    let mut record = anchor_runtime::graph::GraphRunRecord::create_with_id(
+        bundle.snapshot,
+        json!({"session":session}),
+        run,
+    )
+    .unwrap();
+    record.plugin_bindings_initialized = true;
+    fixtures::create(&state.application, &record);
+    fixtures::control(&state.application, run, "stop", "stopped");
+    let mut metadata =
+        RunMetadata::new(run.into(), graph.into(), record.graph_digest, &path).unwrap();
+    metadata.trigger_source = "channel".into();
+    metadata.conversation = Some(crate::application::ConversationSource {
+        session: session.into(),
+        reply_node: reply_node.into(),
+        previous_run: previous.map(str::to_owned),
+    });
+    metadata::save(&state.data_root, &metadata).unwrap();
+}
+
+async fn resume(app: &Router, run: &str) -> (StatusCode, Value) {
+    call(app.clone(), "POST", &format!("/runs/{run}/resume"), None).await
+}
+
+/// Seed a turn of the fixture Graph and run it to completion.
+async fn completed_turn(app: &Router, state: &ApiState, run: &str, previous: Option<&str>) {
+    seed_turn(state, "fixture", run, "alice", "work", previous);
+    let (status, resumed) = resume(app, run).await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{resumed}");
+    wait_run_status(state, run, fixtures::Observation::has_succeeded).await;
+}
+
 #[tokio::test]
-async fn conversation_runs_allow_same_graph_two_sessions_and_protect_previous_runs() {
+async fn sessions_share_a_graph_and_a_handed_over_turn_protects_its_predecessor() {
     let (root, state) = fixture();
     let _env = PROCESS_ENV.lock().await;
     configure_gate(root.path(), &state);
     let app = router(state.clone());
-    let alice = request(1, "alice", None);
-    let bob = request(2, "bob", None);
-    let alice_body = alice.to_string();
-    let bob_body = bob.to_string();
-    let ((alice_status, alice_value), (bob_status, bob_value)) = tokio::join!(
-        call(app.clone(), "POST", "/conversation-runs", Some(&alice_body)),
-        call(app.clone(), "POST", "/conversation-runs", Some(&bob_body)),
-    );
-    assert_eq!(alice_status, StatusCode::ACCEPTED, "{alice_value}");
-    assert_eq!(bob_status, StatusCode::ACCEPTED, "{bob_value}");
-    let alice_run = alice["run"].as_str().unwrap();
-    let bob_run = bob["run"].as_str().unwrap();
+    let (alice_run, bob_run, next_run) = ("alice-1", "bob-1", "alice-2");
+    seed_turn(&state, "fixture", alice_run, "alice", "work", None);
+    seed_turn(&state, "fixture", bob_run, "bob", "work", None);
+    for run in [alice_run, bob_run] {
+        let (status, resumed) = resume(&app, run).await;
+        assert_eq!(status, StatusCode::ACCEPTED, "{resumed}");
+    }
     wait_gate(&state, alice_run).await;
     let bob_workspace = wait_gate(&state, bob_run).await;
     assert_eq!(
         state.application.active_runs(Some("fixture")).await.len(),
         2
     );
-
-    let next = request(3, "alice", Some(alice_run));
-    let (status, rejected) = call(
-        app.clone(),
-        "POST",
-        "/conversation-runs",
-        Some(&next.to_string()),
-    )
-    .await;
-    assert_eq!(status, StatusCode::CONFLICT, "{rejected}");
-    assert_eq!(state.application.records().unwrap().len(), 2);
     let (status, rejected) = call(
         app.clone(),
         "POST",
@@ -151,57 +168,32 @@ async fn conversation_runs_allow_same_graph_two_sessions_and_protect_previous_ru
     )
     .await;
     assert_eq!(status, StatusCode::CONFLICT, "{rejected}");
-    let (status, repeated) = call(
-        app.clone(),
-        "POST",
-        "/conversation-runs",
-        Some(&alice.to_string()),
-    )
-    .await;
-    assert_eq!(status, StatusCode::ACCEPTED, "{repeated}");
-    assert_eq!(repeated["run"], alice["run"]);
-    let mut different = alice.clone();
-    different["input"]["message"] = json!("different");
-    assert_eq!(
-        call(
-            app.clone(),
-            "POST",
-            "/conversation-runs",
-            Some(&different.to_string())
-        )
-        .await
-        .0,
-        StatusCode::CONFLICT
-    );
 
     stop_run(&app, &state, alice_run).await;
-    let (status, accepted) = call(
-        app.clone(),
-        "POST",
-        "/conversation-runs",
-        Some(&next.to_string()),
-    )
-    .await;
-    assert_eq!(status, StatusCode::ACCEPTED, "{accepted}");
-    let next_run = next["run"].as_str().unwrap();
+    seed_turn(
+        &state,
+        "fixture",
+        next_run,
+        "alice",
+        "work",
+        Some(alice_run),
+    );
+    let (status, resumed) = resume(&app, next_run).await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{resumed}");
     wait_gate(&state, next_run).await;
     let original = kernel_resource(&state, alice_run).unwrap();
-    for (method, path, body) in [
-        ("POST", format!("/runs/{alice_run}/resume"), None),
-        ("DELETE", format!("/runs/{alice_run}"), None),
-        (
-            "POST",
-            format!("/runs/{alice_run}/recovery"),
-            Some(r#"{"node_id":"work","invocation":1,"attempt_id":1,"decision":"retry"}"#),
-        ),
+    for (method, path) in [
+        ("POST", format!("/runs/{alice_run}/resume")),
+        ("DELETE", format!("/runs/{alice_run}")),
     ] {
-        let (status, rejected) = call(app.clone(), method, &path, body).await;
+        let (status, rejected) = call(app.clone(), method, &path, None).await;
         assert_eq!(status, StatusCode::CONFLICT, "{rejected}");
         assert!(
             rejected["error"]
                 .as_str()
                 .unwrap()
-                .contains("previous turn")
+                .contains("previous turn"),
+            "{rejected}"
         );
     }
     assert_eq!(kernel_resource(&state, alice_run).unwrap(), original);
@@ -209,6 +201,7 @@ async fn conversation_runs_allow_same_graph_two_sessions_and_protect_previous_ru
     assert_eq!(detail["state"]["trigger"]["session"], "alice");
     assert_eq!(detail["state"]["trigger"]["reply_node"], "work");
     assert_eq!(detail["state"]["trigger"]["previous_run"], alice_run);
+    assert!(detail["state"]["trigger"].get("channel").is_none());
     let (_, listed) = call(app.clone(), "GET", "/runs", None).await;
     assert_eq!(
         listed["runs"]
@@ -252,27 +245,16 @@ async fn conversation_runs_allow_same_graph_two_sessions_and_protect_previous_ru
 async fn conversation_lineage_deletes_any_link_once_nothing_newer_reads_it() {
     let (root, state) = fixture();
     let _env = PROCESS_ENV.lock().await;
-    configure_gate(root.path(), &state);
+    set_host_env(root.path(), &state.data_root);
     let app = router(state.clone());
 
-    // first → second → third, each turn completed before the next is admitted.
-    let mut previous: Option<String> = None;
-    let mut runs = Vec::new();
-    for serial in 20..23 {
-        let body = request(serial, "alice", previous.as_deref());
-        let (status, accepted) = call(
-            app.clone(),
-            "POST",
-            "/conversation-runs",
-            Some(&body.to_string()),
-        )
-        .await;
-        assert_eq!(status, StatusCode::ACCEPTED, "{accepted}");
-        let run = body["run"].as_str().unwrap().to_owned();
-        let workspace = wait_gate(&state, &run).await;
-        // The Run this turn is still reading must stay, and so must the one that
-        // is currently executing.
-        if let Some(previous) = previous.as_deref() {
+    // first → second → third, each turn completed before the next one runs.
+    let runs = ["first", "second", "third"];
+    for (index, run) in runs.iter().enumerate() {
+        let previous = index.checked_sub(1).map(|index| runs[index]);
+        seed_turn(&state, "fixture", run, "alice", "work", previous);
+        // A Run the handed-over turn has not read yet must stay.
+        if let Some(previous) = previous {
             let (status, rejected) =
                 call(app.clone(), "DELETE", &format!("/runs/{previous}"), None).await;
             assert_eq!(status, StatusCode::CONFLICT, "{rejected}");
@@ -283,439 +265,93 @@ async fn conversation_lineage_deletes_any_link_once_nothing_newer_reads_it() {
                     .contains("previous turn")
             );
         }
-        let (status, rejected) = call(app.clone(), "DELETE", &format!("/runs/{run}"), None).await;
-        assert_eq!(status, StatusCode::CONFLICT, "{rejected}");
-        assert!(
-            rejected["error"]
-                .as_str()
-                .unwrap()
-                .contains("still running")
-        );
-        std::fs::write(workspace.join("gate.release"), "release").unwrap();
-        wait_run_status(&state, &run, fixtures::Observation::has_succeeded).await;
-        previous = Some(run.clone());
-        runs.push(run);
+        let (status, resumed) = resume(&app, run).await;
+        assert_eq!(status, StatusCode::ACCEPTED, "{resumed}");
+        wait_run_status(&state, run, fixtures::Observation::has_succeeded).await;
     }
-    let (first_run, second_run, third_run) = (&runs[0], &runs[1], &runs[2]);
 
     // A middle link goes once its successor is settled, and the surviving chain
     // still resolves past the tombstone onto the older link that survives.
-    let (status, deleted) = call(app.clone(), "DELETE", &format!("/runs/{second_run}"), None).await;
+    let (status, deleted) = call(app.clone(), "DELETE", "/runs/second", None).await;
     assert_eq!(status, StatusCode::NO_CONTENT, "{deleted}");
     assert!(
-        crate::run_deletions::load(&state.data_root, second_run)
+        crate::run_deletions::load(&state.data_root, "second")
             .unwrap()
             .unwrap()
             .previous_run()
             .is_some()
     );
-    let fourth = request(23, "alice", Some(third_run));
-    let (status, accepted) = call(
-        app.clone(),
-        "POST",
-        "/conversation-runs",
-        Some(&fourth.to_string()),
-    )
-    .await;
-    assert_eq!(status, StatusCode::ACCEPTED, "{accepted}");
-    let fourth_run = fourth["run"].as_str().unwrap();
-    let workspace = wait_gate(&state, fourth_run).await;
-    std::fs::write(workspace.join("gate.release"), "release").unwrap();
-    wait_run_status(&state, fourth_run, fixtures::Observation::has_succeeded).await;
+    completed_turn(&app, &state, "fourth", Some("third")).await;
 
-    // The newest link may go while older ones survive: every surviving link is
-    // then the predecessor of a deleted one, so the Session has no live chain
-    // and the next accepted turn starts a fresh one.
-    let (status, deleted) = call(app.clone(), "DELETE", &format!("/runs/{fourth_run}"), None).await;
-    assert_eq!(status, StatusCode::NO_CONTENT, "{deleted}");
-    let fifth = request(24, "alice", None);
-    let (status, accepted) = call(
-        app.clone(),
-        "POST",
-        "/conversation-runs",
-        Some(&fifth.to_string()),
-    )
-    .await;
-    assert_eq!(status, StatusCode::ACCEPTED, "{accepted}");
-    let fifth_run = fifth["run"].as_str().unwrap();
-    let workspace = wait_gate(&state, fifth_run).await;
-    std::fs::write(workspace.join("gate.release"), "release").unwrap();
-    wait_run_status(&state, fifth_run, fixtures::Observation::has_succeeded).await;
-
-    // The inert older links can still be cleaned up, in any order.
-    for run in [third_run, first_run] {
+    // The newest link may go while older ones survive, and those inert older
+    // links can still be cleaned up, in any order.
+    for run in ["fourth", "third", "first"] {
         let (status, deleted) = call(app.clone(), "DELETE", &format!("/runs/{run}"), None).await;
         assert_eq!(status, StatusCode::NO_CONTENT, "{run}: {deleted}");
     }
+    assert!(state.application.records().unwrap().is_empty());
 }
 
 #[tokio::test]
-async fn conversation_identity_and_lineage_reject_cross_session_graph_or_reply_changes() {
+async fn superseded_wait_ancestry_stops_at_a_detach_boundary() {
     let (root, state) = fixture();
     let _env = PROCESS_ENV.lock().await;
     set_host_env(root.path(), &state.data_root);
-    let mut graph = gate_definition();
-    // Without the gate, but still writing the reply it declares.
-    graph["ops"]["work"]["run"] = json!("printf once > reply.txt");
-    write_graph_bundle(&state.bundle_root, &graph).unwrap();
-    let other = state.catalog_root.join("other");
-    write_graph_bundle(&other, &graph).unwrap();
     let app = router(state.clone());
-    let first = request(10, "alice", None);
-    let foreign = request(11, "bob", None);
-    for body in [&first, &foreign] {
-        let (status, accepted) = call(
-            app.clone(),
-            "POST",
-            "/conversation-runs",
-            Some(&body.to_string()),
-        )
-        .await;
-        assert_eq!(status, StatusCode::ACCEPTED, "{accepted}");
-        wait_run_status(
-            &state,
-            body["run"].as_str().unwrap(),
-            fixtures::Observation::has_succeeded,
-        )
-        .await;
-    }
-    let first_run = first["run"].as_str().unwrap();
-    let valid_next = request(12, "alice", Some(first_run));
-    let mut wrong_graph = valid_next.clone();
-    wrong_graph["graph"] = json!("other");
-    let mut wrong_reply = valid_next.clone();
-    wrong_reply["reply_node"] = json!("finish");
-    let invalid = [
-        request(12, "alice", None),
-        request(12, "alice", Some(foreign["run"].as_str().unwrap())),
-        request(12, "alice", Some("missing-run")),
-        request(12, "new-session", Some(first_run)),
-        wrong_graph,
-        wrong_reply,
-    ];
-    for body in invalid {
-        let (status, rejected) = call(
-            app.clone(),
-            "POST",
-            "/conversation-runs",
-            Some(&body.to_string()),
-        )
-        .await;
-        assert_eq!(status, StatusCode::CONFLICT, "{body}: {rejected}");
-        assert_eq!(state.application.records().unwrap().len(), 2);
-    }
-    let (status, accepted) = call(
-        app.clone(),
-        "POST",
-        "/conversation-runs",
-        Some(&valid_next.to_string()),
-    )
-    .await;
-    assert_eq!(status, StatusCode::ACCEPTED, "{accepted}");
-    wait_run_status(
-        &state,
-        valid_next["run"].as_str().unwrap(),
-        fixtures::Observation::has_succeeded,
-    )
-    .await;
-    let stale = request(13, "alice", Some(first_run));
-    assert_eq!(
-        call(app, "POST", "/conversation-runs", Some(&stale.to_string()))
-            .await
-            .0,
-        StatusCode::CONFLICT
-    );
-}
-
-#[tokio::test]
-async fn conversation_resume_is_not_blocked_by_another_session_on_the_same_graph() {
-    let (root, state) = fixture();
-    let _env = PROCESS_ENV.lock().await;
-    configure_gate(root.path(), &state);
-    let app = router(state.clone());
-    let alice = request(6, "alice", None);
-    let bob = request(7, "bob", None);
-    for body in [&alice, &bob] {
-        assert_eq!(
-            call(
-                app.clone(),
-                "POST",
-                "/conversation-runs",
-                Some(&body.to_string())
-            )
-            .await
-            .0,
-            StatusCode::ACCEPTED
-        );
-    }
-    let alice_run = alice["run"].as_str().unwrap();
-    let bob_run = bob["run"].as_str().unwrap();
-    wait_gate(&state, alice_run).await;
-    let workspace = wait_gate(&state, bob_run).await;
-    assert_eq!(
-        call(app.clone(), "POST", &format!("/runs/{bob_run}/pause"), None)
-            .await
-            .0,
-        StatusCode::ACCEPTED
-    );
-    std::fs::write(
-        workspace.join("gate.release"),
-        "release after pause request",
+    let first_run = "ancestry-first";
+    completed_turn(&app, &state, first_run, None).await;
+    write_graph_bundle(
+        &state.catalog_root.join("child"),
+        &json!({"entry":"work","objective":"child","agents":{},
+        "ops":{"work":{"run":"true"}},"nodes":[{"id":"work","op":"work"}],"edges":[]}),
     )
     .unwrap();
-    wait_run_status(&state, bob_run, |run| run.waits_reason("paused")).await;
-    let bob_next = request(8, "bob", Some(bob_run));
-    assert_eq!(
-        call(
-            app.clone(),
-            "POST",
-            "/conversation-runs",
-            Some(&bob_next.to_string())
-        )
-        .await
-        .0,
-        StatusCode::CONFLICT
+    seed_call_fixture(&state, "child", "wait-child", first_run, first_run, "wait");
+    seed_call_fixture(
+        &state,
+        "child",
+        "wait-grandchild",
+        "wait-child",
+        first_run,
+        "wait",
     );
-    let (status, resumed) = call(
-        app.clone(),
-        "POST",
-        &format!("/runs/{bob_run}/resume"),
-        None,
-    )
-    .await;
-    assert_eq!(status, StatusCode::ACCEPTED, "{resumed}");
-    wait_run_status(&state, bob_run, fixtures::Observation::has_succeeded).await;
-    let record = fixtures::Reader::new(&state.application)
-        .load(bob_run)
-        .unwrap()
-        .unwrap();
-    assert_eq!(record.results["work"].len(), 1);
-    assert_eq!(record.invocations["work"], 1);
-    assert_eq!(state.application.active_runs(None).await, vec![alice_run]);
-    stop_run(&app, &state, alice_run).await;
-}
-
-#[tokio::test]
-async fn superseded_conversation_cannot_resume_or_recover_its_wait_child() {
-    let (root, state) = fixture();
-    let _env = PROCESS_ENV.lock().await;
-    configure_gate(root.path(), &state);
-    let child_path = state.catalog_root.join("child");
-    write_graph_bundle(&child_path, &gate_definition()).unwrap();
-    let parent = json!({
-        "objective":"conversation with wait child","entry":"work","agents":{},
-        "ops":{"work":{"call":{"graph":"child","mode":"wait"}}},
-        "nodes":[{"id":"work","op":"work"}],"edges":[],
-    });
-    write_graph_bundle(&state.bundle_root, &parent).unwrap();
-    let app = router(state.clone());
-    let first = request(60, "alice", None);
-    let first_run = first["run"].as_str().unwrap();
-    assert_eq!(
-        call(
-            app.clone(),
-            "POST",
-            "/conversation-runs",
-            Some(&first.to_string())
-        )
-        .await
-        .0,
-        StatusCode::ACCEPTED
+    seed_call_fixture(
+        &state,
+        "child",
+        "detached-child",
+        first_run,
+        first_run,
+        "detach",
     );
-    let store = fixtures::Reader::new(&state.application);
-    let child_run = tokio::time::timeout(Duration::from_secs(5), async {
-        loop {
-            let record = store.load(first_run).unwrap().unwrap();
-            if let Some(child) = state
-                .application
-                .child_metadata(first_run)
-                .unwrap()
-                .first()
-                .map(|metadata| metadata.run_id.clone())
-            {
-                break child;
-            }
-            assert!(!is_failed(&record), "{record:?}");
-            tokio::time::sleep(Duration::from_millis(10)).await;
+    seed_call_fixture(
+        &state,
+        "child",
+        "detached-wait-grandchild",
+        "detached-child",
+        first_run,
+        "wait",
+    );
+    completed_turn(&app, &state, "ancestry-next", Some(first_run)).await;
+    for run in ["wait-child", "wait-grandchild"] {
+        let before = kernel_resource(&state, run).unwrap();
+        for (path, body) in [
+            (format!("/runs/{run}/resume"), None),
+            (
+                format!("/runs/{run}/recovery"),
+                Some(r#"{"node_id":"work","invocation":1,"attempt_id":1,"decision":"retry"}"#),
+            ),
+        ] {
+            let (status, value) = call(app.clone(), "POST", &path, body).await;
+            assert_eq!(status, StatusCode::CONFLICT, "{value}");
+            assert!(value["error"].as_str().unwrap().contains("previous turn"));
         }
-    })
-    .await
-    .expect("wait child was not admitted");
-    let workspace = wait_gate(&state, &child_run).await;
-    assert_eq!(
-        call(
-            app.clone(),
-            "POST",
-            &format!("/runs/{child_run}/pause"),
-            None
-        )
-        .await
-        .0,
-        StatusCode::ACCEPTED
-    );
-    std::fs::write(
-        workspace.join("gate.release"),
-        "release after child pause request",
-    )
-    .unwrap();
-    wait_run_status(&state, &child_run, |run| run.waits_reason("paused")).await;
-    wait_run_status(&state, first_run, fixtures::Observation::waits_for_children).await;
-    stop_run(&app, &state, first_run).await;
-    wait_run_status(&state, &child_run, |run| run.waits_reason("stopped")).await;
-
-    // A fresh message uses the current catalog; the original parent and child
-    // retain their frozen Graphs and must become read-only once it is accepted.
-    write_graph_bundle(
-        &state.bundle_root,
-        &json!({
-            "objective":"next message","entry":"work","agents":{},
-            "ops":{"work":{"run":"true"}},"nodes":[{"id":"work","op":"work"}],"edges":[],
-        }),
-    )
-    .unwrap();
-    let next = request(61, "alice", Some(first_run));
-    assert_eq!(
-        call(
-            app.clone(),
-            "POST",
-            "/conversation-runs",
-            Some(&next.to_string())
-        )
-        .await
-        .0,
-        StatusCode::ACCEPTED
-    );
-    wait_run_status(
-        &state,
-        next["run"].as_str().unwrap(),
-        fixtures::Observation::has_succeeded,
-    )
-    .await;
-    let parent_before = kernel_resource(&state, first_run).unwrap();
-    let child_before = kernel_resource(&state, &child_run).unwrap();
-    for (path, body) in [
-        (format!("/runs/{child_run}/resume"), None),
-        (
-            format!("/runs/{child_run}/recovery"),
-            Some(r#"{"node_id":"work","invocation":1,"attempt_id":1,"decision":"retry"}"#),
-        ),
-    ] {
-        let (status, rejected) = call(app.clone(), "POST", &path, body).await;
-        assert_eq!(status, StatusCode::CONFLICT, "{rejected}");
-        assert!(
-            rejected["error"]
-                .as_str()
-                .unwrap()
-                .contains("previous turn")
-        );
+        assert_eq!(kernel_resource(&state, run).unwrap(), before);
     }
-    assert!(state.application.active_runs(None).await.is_empty());
-    assert_eq!(kernel_resource(&state, first_run).unwrap(), parent_before);
-    assert_eq!(kernel_resource(&state, &child_run).unwrap(), child_before);
-    assert_eq!(
-        store.load(&child_run).unwrap().unwrap().results["work"].len(),
-        1
-    );
-    assert!(
-        !store
-            .load(&child_run)
-            .unwrap()
-            .unwrap()
-            .results
-            .contains_key("finish")
-    );
-    let (status, detail) = call(app, "GET", &format!("/runs/{child_run}"), None).await;
-    assert_eq!(status, StatusCode::OK, "{detail}");
-    assert_eq!(detail["projection"]["phase"], "waiting");
-}
-
-#[tokio::test]
-async fn superseded_conversation_keeps_detached_child_independent() {
-    let (root, state) = fixture();
-    let _env = PROCESS_ENV.lock().await;
-    configure_gate(root.path(), &state);
-    write_graph_bundle(&state.catalog_root.join("child"), &gate_definition()).unwrap();
-    write_graph_bundle(
-        &state.bundle_root,
-        &json!({
-            "objective":"conversation with detached child","entry":"work","agents":{},
-            "ops":{"work":{"call":{"graph":"child","mode":"detach"}}},
-            "nodes":[{"id":"work","op":"work"}],"edges":[],
-        }),
-    )
-    .unwrap();
-    let app = router(state.clone());
-    let first = request(62, "alice", None);
-    let first_run = first["run"].as_str().unwrap();
-    assert_eq!(
-        call(
-            app.clone(),
-            "POST",
-            "/conversation-runs",
-            Some(&first.to_string())
-        )
-        .await
-        .0,
-        StatusCode::ACCEPTED
-    );
-    wait_run_status(&state, first_run, fixtures::Observation::has_succeeded).await;
-    let child_run = state.application.child_metadata(first_run).unwrap()[0]
-        .run_id
-        .clone();
-    let workspace = wait_gate(&state, &child_run).await;
-    assert_eq!(
-        call(
-            app.clone(),
-            "POST",
-            &format!("/runs/{child_run}/pause"),
-            None
-        )
-        .await
-        .0,
-        StatusCode::ACCEPTED
-    );
-    std::fs::write(
-        workspace.join("gate.release"),
-        "release after detached child pause request",
-    )
-    .unwrap();
-    wait_run_status(&state, &child_run, |run| run.waits_reason("paused")).await;
-    stop_run(&app, &state, &child_run).await;
-    write_graph_bundle(
-        &state.bundle_root,
-        &json!({
-            "objective":"next message","entry":"work","agents":{},
-            "ops":{"work":{"run":"true"}},"nodes":[{"id":"work","op":"work"}],"edges":[],
-        }),
-    )
-    .unwrap();
-    let next = request(63, "alice", Some(first_run));
-    assert_eq!(
-        call(
-            app.clone(),
-            "POST",
-            "/conversation-runs",
-            Some(&next.to_string())
-        )
-        .await
-        .0,
-        StatusCode::ACCEPTED
-    );
-    wait_run_status(
-        &state,
-        next["run"].as_str().unwrap(),
-        fixtures::Observation::has_succeeded,
-    )
-    .await;
-    let (status, resumed) = call(app, "POST", &format!("/runs/{child_run}/resume"), None).await;
-    assert_eq!(status, StatusCode::ACCEPTED, "{resumed}");
-    wait_run_status(&state, &child_run, fixtures::Observation::has_succeeded).await;
-    let record = fixtures::Reader::new(&state.application)
-        .load(&child_run)
-        .unwrap()
-        .unwrap();
-    assert_eq!(record.results["work"].len(), 1);
-    assert_eq!(record.results["finish"].len(), 1);
+    for run in ["detached-child", "detached-wait-grandchild"] {
+        let (status, value) = call(app.clone(), "POST", &format!("/runs/{run}/resume"), None).await;
+        assert_eq!(status, StatusCode::ACCEPTED, "{value}");
+        wait_run_status(&state, run, fixtures::Observation::has_succeeded).await;
+    }
 }
 
 fn seed_call_fixture(
@@ -761,97 +397,6 @@ fn seed_call_fixture(
     metadata::save(&state.data_root, &metadata).unwrap();
     fixtures::create(&state.application, &record);
     fixtures::control(&state.application, run, "stop", "stopped");
-}
-
-#[tokio::test]
-async fn superseded_wait_ancestry_stops_at_a_detach_boundary() {
-    let (root, state) = fixture();
-    let _env = PROCESS_ENV.lock().await;
-    set_host_env(root.path(), &state.data_root);
-    let app = router(state.clone());
-    let first = request(64, "alice", None);
-    let first_run = first["run"].as_str().unwrap();
-    assert_eq!(
-        call(
-            app.clone(),
-            "POST",
-            "/conversation-runs",
-            Some(&first.to_string())
-        )
-        .await
-        .0,
-        StatusCode::ACCEPTED
-    );
-    wait_run_status(&state, first_run, fixtures::Observation::has_succeeded).await;
-    write_graph_bundle(
-        &state.catalog_root.join("child"),
-        &json!({"entry":"work","objective":"child","agents":{},
-        "ops":{"work":{"run":"true"}},"nodes":[{"id":"work","op":"work"}],"edges":[]}),
-    )
-    .unwrap();
-    seed_call_fixture(&state, "child", "wait-child", first_run, first_run, "wait");
-    seed_call_fixture(
-        &state,
-        "child",
-        "wait-grandchild",
-        "wait-child",
-        first_run,
-        "wait",
-    );
-    seed_call_fixture(
-        &state,
-        "child",
-        "detached-child",
-        first_run,
-        first_run,
-        "detach",
-    );
-    seed_call_fixture(
-        &state,
-        "child",
-        "detached-wait-grandchild",
-        "detached-child",
-        first_run,
-        "wait",
-    );
-    let next = request(65, "alice", Some(first_run));
-    assert_eq!(
-        call(
-            app.clone(),
-            "POST",
-            "/conversation-runs",
-            Some(&next.to_string())
-        )
-        .await
-        .0,
-        StatusCode::ACCEPTED
-    );
-    wait_run_status(
-        &state,
-        next["run"].as_str().unwrap(),
-        fixtures::Observation::has_succeeded,
-    )
-    .await;
-    for run in ["wait-child", "wait-grandchild"] {
-        let before = kernel_resource(&state, run).unwrap();
-        for (path, body) in [
-            (format!("/runs/{run}/resume"), None),
-            (
-                format!("/runs/{run}/recovery"),
-                Some(r#"{"node_id":"work","invocation":1,"attempt_id":1,"decision":"retry"}"#),
-            ),
-        ] {
-            let (status, value) = call(app.clone(), "POST", &path, body).await;
-            assert_eq!(status, StatusCode::CONFLICT, "{value}");
-            assert!(value["error"].as_str().unwrap().contains("previous turn"));
-        }
-        assert_eq!(kernel_resource(&state, run).unwrap(), before);
-    }
-    for run in ["detached-child", "detached-wait-grandchild"] {
-        let (status, value) = call(app.clone(), "POST", &format!("/runs/{run}/resume"), None).await;
-        assert_eq!(status, StatusCode::ACCEPTED, "{value}");
-        wait_run_status(&state, run, fixtures::Observation::has_succeeded).await;
-    }
 }
 
 #[tokio::test]
@@ -1060,25 +605,16 @@ async fn graph_delete_cleans_legacy_scopes_and_preserves_other_graph_history() {
     set_host_env(root.path(), &state.data_root);
     write_graph_bundle(&state.bundle_root, &two_node_definition("true")).unwrap();
     let app = router(state.clone());
-    let mut first = request(66, "alice", None);
-    first["reply_node"] = json!("first");
-    assert_eq!(
-        call(
-            app.clone(),
-            "POST",
-            "/conversation-runs",
-            Some(&first.to_string())
-        )
-        .await
-        .0,
-        StatusCode::ACCEPTED
-    );
-    wait_run_status(
-        &state,
-        first["run"].as_str().unwrap(),
-        fixtures::Observation::has_succeeded,
-    )
-    .await;
+    let turn = |graph: &'static str, run: &'static str, session: &'static str, previous| {
+        let (app, state) = (app.clone(), state.clone());
+        async move {
+            seed_turn(&state, graph, run, session, "first", previous);
+            let (status, resumed) = resume(&app, run).await;
+            assert_eq!(status, StatusCode::ACCEPTED, "{resumed}");
+            wait_run_status(&state, run, fixtures::Observation::has_succeeded).await;
+        }
+    };
+    turn("fixture", "scope-first", "alice", None).await;
     let new_definition = json!({"objective":"new graph","entry":"first","agents":{},
         "ops":{"first":{"run":"true"}},"nodes":[{"id":"first","op":"first"}],"edges":[]});
     assert_eq!(
@@ -1092,57 +628,20 @@ async fn graph_delete_cleans_legacy_scopes_and_preserves_other_graph_history() {
         .0,
         StatusCode::OK
     );
-    let mut next = request(67, "alice", first["run"].as_str());
-    next["reply_node"] = json!("first");
-    assert_eq!(
-        call(
-            app.clone(),
-            "POST",
-            "/conversation-runs",
-            Some(&next.to_string())
-        )
-        .await
-        .0,
-        StatusCode::ACCEPTED
-    );
-    wait_run_status(
-        &state,
-        next["run"].as_str().unwrap(),
-        fixtures::Observation::has_succeeded,
-    )
-    .await;
+    turn("fixture", "scope-next", "alice", Some("scope-first")).await;
     write_graph_bundle(&state.catalog_root.join("other"), &new_definition).unwrap();
-    let mut other = request(68, "bob", None);
-    other["graph"] = json!("other");
-    other["reply_node"] = json!("first");
-    assert_eq!(
-        call(
-            app.clone(),
-            "POST",
-            "/conversation-runs",
-            Some(&other.to_string())
-        )
-        .await
-        .0,
-        StatusCode::ACCEPTED
-    );
-    wait_run_status(
-        &state,
-        other["run"].as_str().unwrap(),
-        fixtures::Observation::has_succeeded,
-    )
-    .await;
-    let first_scope = seed_legacy_scope(&state, first["run"].as_str().unwrap(), "first");
-    let same_scope = seed_legacy_scope(&state, next["run"].as_str().unwrap(), "first");
-    let old_node_scope = seed_legacy_scope(&state, first["run"].as_str().unwrap(), "second");
-    let other_scope = seed_legacy_scope(&state, other["run"].as_str().unwrap(), "first");
+    turn("other", "scope-other", "bob", None).await;
+    let first_scope = seed_legacy_scope(&state, "scope-first", "first");
+    let same_scope = seed_legacy_scope(&state, "scope-next", "first");
+    let old_node_scope = seed_legacy_scope(&state, "scope-first", "second");
+    let other_scope = seed_legacy_scope(&state, "scope-other", "first");
     assert_eq!(first_scope.0, same_scope.0);
     seed_call_fixture(
         &state,
         "other",
         "orphan-wait-child",
-        first["run"].as_str().unwrap(),
-        first["run"].as_str().unwrap(),
+        "scope-first",
+        "scope-first",
         "wait",
     );
     fixtures::control(&state.application, "orphan-wait-child", "resume", "resumed");
@@ -1152,13 +651,7 @@ async fn graph_delete_cleans_legacy_scopes_and_preserves_other_graph_history() {
     stop_run(&app, &state, "orphan-wait-child").await;
     // A single conversation Run may now be deleted, and that cleanup must still
     // leave the Session-owned legacy scopes to the Graph cascade.
-    let (status, value) = call(
-        app.clone(),
-        "DELETE",
-        &format!("/runs/{}", next["run"].as_str().unwrap()),
-        None,
-    )
-    .await;
+    let (status, value) = call(app.clone(), "DELETE", "/runs/scope-next", None).await;
     assert_eq!(status, StatusCode::NO_CONTENT, "{value}");
     assert!(first_scope.0.exists());
     let (status, value) = call(app.clone(), "DELETE", "/graphs/fixture", None).await;
@@ -1171,11 +664,9 @@ async fn graph_delete_cleans_legacy_scopes_and_preserves_other_graph_history() {
     assert!(other_scope.0.join("framework.sqlite3").is_file());
     assert!(other_scope.1.is_dir());
     assert!(other_scope.2.is_file());
-    assert_eq!(state.application.records().unwrap().len(), 2);
-    assert_eq!(
-        state.application.records().unwrap()[0].0,
-        other["run"].as_str().unwrap()
-    );
+    let remaining = state.application.records().unwrap();
+    assert_eq!(remaining.len(), 2);
+    assert!(remaining.iter().any(|(id, _)| id == "scope-other"));
     let (status, value) = call(
         app.clone(),
         "POST",
@@ -1184,17 +675,8 @@ async fn graph_delete_cleans_legacy_scopes_and_preserves_other_graph_history() {
     )
     .await;
     assert_eq!(status, StatusCode::CREATED, "{value}");
-    let mut fresh = request(69, "alice", None);
-    fresh["reply_node"] = json!("first");
-    let (status, value) = call(app, "POST", "/conversation-runs", Some(&fresh.to_string())).await;
-    assert_eq!(status, StatusCode::ACCEPTED, "{value}");
-    wait_run_status(
-        &state,
-        fresh["run"].as_str().unwrap(),
-        fixtures::Observation::has_succeeded,
-    )
-    .await;
-    let native = seed_legacy_scope(&state, fresh["run"].as_str().unwrap(), "first");
+    turn("fixture", "scope-fresh", "alice", None).await;
+    let native = seed_legacy_scope(&state, "scope-fresh", "first");
     assert_eq!(
         std::fs::read(native.0.join("framework.sqlite3")).unwrap(),
         b"opaque legacy cleanup fixture"
@@ -1218,16 +700,23 @@ async fn graph_delete_allows_a_completed_caller_after_its_callee_was_deleted() {
         )
         .unwrap();
         let app = router(state.clone());
-        let (endpoint, body) = if conversation {
-            ("/conversation-runs", request(70, "alice", None))
+        let run = if conversation {
+            completed_turn(&app, &state, "caller", None).await;
+            "caller".to_owned()
         } else {
-            ("/trigger", json!({"graph":"fixture"}))
+            let (status, value) = call(
+                app.clone(),
+                "POST",
+                "/trigger",
+                Some(r#"{"graph":"fixture"}"#),
+            )
+            .await;
+            assert_eq!(status, StatusCode::ACCEPTED, "{value}");
+            let run = value["run"].as_str().unwrap().to_owned();
+            wait_run_status(&state, &run, fixtures::Observation::has_succeeded).await;
+            run
         };
-        let (status, value) = call(app.clone(), "POST", endpoint, Some(&body.to_string())).await;
-        assert_eq!(status, StatusCode::ACCEPTED, "{value}");
-        let run = value["run"].as_str().unwrap();
-        wait_run_status(&state, run, fixtures::Observation::has_succeeded).await;
-        let scope = conversation.then(|| seed_legacy_scope(&state, run, "work"));
+        let scope = conversation.then(|| seed_legacy_scope(&state, &run, "work"));
         assert_eq!(
             call(
                 app.clone(),
@@ -1253,82 +742,14 @@ async fn graph_delete_allows_a_completed_caller_after_its_callee_was_deleted() {
 }
 
 #[tokio::test]
-async fn conversation_retry_uses_frozen_input_after_catalog_change_and_never_dispatches() {
-    let (root, mut state) = fixture();
-    let _env = PROCESS_ENV.lock().await;
-    set_host_env(root.path(), &state.data_root);
-    let mut original = json!({"entry":"work","objective":"original","input":{"default":7},"agents":{},
-        "ops":{"work":{"run":"true"}},"nodes":[{"id":"work","op":"work"}],"edges":[]});
-    write_graph_bundle(&state.bundle_root, &original).unwrap();
-    let app = router(state.clone());
-    let body = request(20, "alice", None);
-    let (status, accepted) = call(
-        app.clone(),
-        "POST",
-        "/conversation-runs",
-        Some(&body.to_string()),
-    )
-    .await;
-    assert_eq!(status, StatusCode::ACCEPTED, "{accepted}");
-    let run = body["run"].as_str().unwrap();
-    wait_run_status(&state, run, fixtures::Observation::has_succeeded).await;
-    let before = kernel_resource(&state, run).unwrap();
-    original["input"] = json!({"default":99});
-    original["ops"]["work"]["run"] = json!("not-an-authorized-command");
-    write_graph_bundle(&state.bundle_root, &original).unwrap();
-    drop(app);
-    state.application = RunApplication::new(state.data_root.clone(), state.catalog_root.clone())
-        .with_configured_graph("fixture".into(), state.bundle_root.clone());
-    let restarted = state.clone();
-    let app = router(restarted.clone());
-    let mut equivalent = body.clone();
-    equivalent["input"]["default"] = json!(7);
-    for body in [&body, &equivalent] {
-        let (status, repeated) = call(
-            app.clone(),
-            "POST",
-            "/conversation-runs",
-            Some(&body.to_string()),
-        )
-        .await;
-        assert_eq!(status, StatusCode::ACCEPTED, "{repeated}");
-        assert_eq!(repeated["run"], run);
-    }
-    let mut changed = equivalent;
-    changed["input"]["default"] = json!(99);
-    assert_eq!(
-        call(
-            app.clone(),
-            "POST",
-            "/conversation-runs",
-            Some(&changed.to_string())
-        )
-        .await
-        .0,
-        StatusCode::CONFLICT
-    );
-    assert!(restarted.application.active_runs(None).await.is_empty());
-    assert_eq!(state.application.records().unwrap().len(), 1);
-    assert_eq!(kernel_resource(&state, run).unwrap(), before);
-    std::fs::remove_file(state.bundle_root.join("graph.json")).unwrap();
-    assert_eq!(
-        call(app, "POST", "/conversation-runs", Some(&body.to_string()))
-            .await
-            .0,
-        StatusCode::ACCEPTED
-    );
-}
-
-#[tokio::test]
 async fn conversation_orphan_running_requires_explicit_stop_before_a_new_turn() {
     let (root, mut state) = fixture();
     let _env = PROCESS_ENV.lock().await;
     set_host_env(root.path(), &state.data_root);
-    let first = request(30, "alice", None);
-    let run = first["run"].as_str().unwrap();
+    let run = "orphan-first";
     let record = anchor_runtime::graph::GraphRunRecord::create_with_id(
         state.application.load_graph("fixture").unwrap().1.snapshot,
-        first["input"].clone(),
+        json!({"session":"alice"}),
         run,
     )
     .unwrap();
@@ -1351,57 +772,34 @@ async fn conversation_orphan_running_requires_explicit_stop_before_a_new_turn() 
         .with_configured_graph("fixture".into(), state.bundle_root.clone());
     let restarted = state.clone();
     let app = router(restarted.clone());
-    let next = request(31, "alice", Some(run));
     let (_, detail) = call(app.clone(), "GET", &format!("/runs/{run}"), None).await;
     assert_eq!(detail["projection"]["phase"], "executing");
     assert_eq!(detail["active"], false);
-    assert_eq!(
-        call(
-            app.clone(),
-            "POST",
-            "/conversation-runs",
-            Some(&next.to_string())
-        )
-        .await
-        .0,
-        StatusCode::CONFLICT
+    seed_turn(
+        &restarted,
+        "fixture",
+        "orphan-next",
+        "alice",
+        "work",
+        Some(run),
     );
-    assert_eq!(
-        call(
-            app.clone(),
-            "POST",
-            "/conversation-runs",
-            Some(&first.to_string())
-        )
-        .await
-        .0,
-        StatusCode::ACCEPTED
-    );
+    assert_eq!(resume(&app, "orphan-next").await.0, StatusCode::CONFLICT);
     assert!(restarted.application.active_runs(None).await.is_empty());
     // A durable Running orphan is never silently replayed; the trusted host must
-    // settle it explicitly before admitting the next conversation turn.
+    // settle it explicitly before the next conversation turn executes.
     stop_run(&app, &restarted, run).await;
-    assert_eq!(
-        call(
-            app.clone(),
-            "POST",
-            "/conversation-runs",
-            Some(&next.to_string())
-        )
-        .await
-        .0,
-        StatusCode::ACCEPTED
-    );
+    let (status, resumed) = resume(&app, "orphan-next").await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{resumed}");
     wait_run_status(
         &restarted,
-        next["run"].as_str().unwrap(),
+        "orphan-next",
         fixtures::Observation::has_succeeded,
     )
     .await;
 }
 
 #[tokio::test]
-async fn conversation_manual_run_conflict_and_request_validation_leave_no_facts() {
+async fn an_unfinished_manual_run_blocks_conversation_execution_on_its_graph() {
     let (root, state) = fixture();
     let _env = PROCESS_ENV.lock().await;
     configure_gate(root.path(), &state);
@@ -1416,56 +814,12 @@ async fn conversation_manual_run_conflict_and_request_validation_leave_no_facts(
     assert_eq!(status, StatusCode::ACCEPTED, "{manual}");
     let run = manual["run"].as_str().unwrap();
     wait_gate(&state, run).await;
-    let conversation = request(40, "alice", None);
-    assert_eq!(
-        call(
-            app.clone(),
-            "POST",
-            "/conversation-runs",
-            Some(&conversation.to_string())
-        )
-        .await
-        .0,
-        StatusCode::CONFLICT
-    );
-    let mut invalid = conversation.clone();
-    invalid["run"] = json!("../escape");
-    let mut unknown = conversation.clone();
-    unknown["permissions"] = json!({"all":true});
-    let mut invalid_input = conversation.clone();
-    invalid_input["input"] = json!([]);
-    for body in [invalid, unknown, invalid_input] {
-        assert_eq!(
-            call(
-                app.clone(),
-                "POST",
-                "/conversation-runs",
-                Some(&body.to_string())
-            )
-            .await
-            .0,
-            StatusCode::BAD_REQUEST
-        );
-    }
-    assert_eq!(state.application.records().unwrap().len(), 1);
-    assert_eq!(
-        std::fs::read_dir(state.data_root.join("run-metadata"))
-            .unwrap()
-            .count(),
-        1
-    );
+    seed_turn(&state, "fixture", "blocked-turn", "alice", "work", None);
+    let before = kernel_resource(&state, "blocked-turn").unwrap();
+    assert_eq!(resume(&app, "blocked-turn").await.0, StatusCode::CONFLICT);
     stop_run(&app, &state, run).await;
-    assert_eq!(
-        call(
-            app.clone(),
-            "POST",
-            "/conversation-runs",
-            Some(&conversation.to_string())
-        )
-        .await
-        .0,
-        StatusCode::CONFLICT
-    );
+    assert_eq!(resume(&app, "blocked-turn").await.0, StatusCode::CONFLICT);
+    assert_eq!(kernel_resource(&state, "blocked-turn").unwrap(), before);
     assert_eq!(
         call(app.clone(), "DELETE", &format!("/runs/{run}"), None)
             .await
@@ -1488,7 +842,7 @@ async fn conversation_waiting_recovery_stop_keeps_unknown_attempts_without_execu
     let record = anchor_runtime::graph::GraphRunRecord::create_with_id(
         snapshot,
         Value::Null,
-        "channel-00000000-0000-4000-8000-000000000032",
+        "recovery-first",
     )
     .unwrap();
     let store = fixtures::Reader::new(&state.application);
@@ -1520,18 +874,6 @@ async fn conversation_waiting_recovery_stop_keeps_unknown_attempts_without_execu
     });
     metadata::save(&state.data_root, &metadata).unwrap();
     let app = router(state.clone());
-    let body = request(51, "alice", Some(&record.run_id));
-    assert_eq!(
-        call(
-            app.clone(),
-            "POST",
-            "/conversation-runs",
-            Some(&body.to_string())
-        )
-        .await
-        .0,
-        StatusCode::CONFLICT
-    );
     stop_run(&app, &state, &record.run_id).await;
     let stopped = store.load(&record.run_id).unwrap().unwrap();
     assert_eq!(stopped.recovery(), before.recovery());
@@ -1551,17 +893,6 @@ async fn conversation_waiting_recovery_stop_keeps_unknown_attempts_without_execu
     );
     assert!(stopped.results.is_empty());
     assert!(!state.data_root.join("io-harness").exists());
-    assert_eq!(
-        call(
-            app.clone(),
-            "POST",
-            "/conversation-runs",
-            Some(&body.to_string())
-        )
-        .await
-        .0,
-        StatusCode::CONFLICT
-    );
     fixtures::control(
         &state.application,
         &record.run_id,
@@ -1570,17 +901,21 @@ async fn conversation_waiting_recovery_stop_keeps_unknown_attempts_without_execu
     );
     let abandoned = store.load(&record.run_id).unwrap().unwrap();
     assert!(is_aborted(&abandoned));
-    let (status, accepted) = call(
-        app.clone(),
-        "POST",
-        "/conversation-runs",
-        Some(&body.to_string()),
-    )
-    .await;
-    assert_eq!(status, StatusCode::ACCEPTED, "{accepted}");
+    // Only the abandoned Run can hand the Session over; the next turn executes
+    // without touching its retained attempts.
+    seed_turn(
+        &state,
+        "fixture",
+        "recovery-next",
+        "alice",
+        "work",
+        Some(&record.run_id),
+    );
+    let (status, resumed) = resume(&app, "recovery-next").await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{resumed}");
     wait_run_status(
         &state,
-        body["run"].as_str().unwrap(),
+        "recovery-next",
         fixtures::Observation::has_succeeded,
     )
     .await;

@@ -110,14 +110,6 @@ pub struct ChannelInboundRun {
     pub run_id: Option<String>,
 }
 
-/// One admitted channel message that still has no confirmed reply.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ChannelPendingMessage {
-    pub identity: ChannelIdentity,
-    pub text: String,
-    pub attachments: usize,
-}
-
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct ChannelInboundRequest {
     pub inbound_id: String,

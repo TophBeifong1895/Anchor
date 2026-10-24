@@ -84,8 +84,10 @@ pub(crate) struct RunMetadata {
     pub(crate) graph_call: Option<GraphCallSource>,
     #[serde(default)]
     pub(crate) conversation: Option<ConversationSource>,
-    #[serde(default)]
-    pub(crate) channel: Option<ChannelRunSource>,
+    /// Only read to refuse a per-message channel Run by name; every Run before
+    /// that shape was removed recorded `"channel": null` here.
+    #[serde(default, rename = "channel", skip_serializing)]
+    legacy_channel: Option<serde::de::IgnoredAny>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) assistant: Option<AssistantSource>,
     #[serde(default)]
@@ -106,15 +108,6 @@ pub(crate) struct ConversationSource {
     pub(crate) session: String,
     pub(crate) reply_node: String,
     pub(crate) previous_run: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct ChannelRunSource {
-    pub(crate) owner: String,
-    pub(crate) session: String,
-    pub(crate) inbound: String,
-    pub(crate) turn: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -172,7 +165,7 @@ impl RunMetadata {
             oauth_owner: None,
             graph_call: None,
             conversation: None,
-            channel: None,
+            legacy_channel: None,
             assistant: None,
             pilot: None,
             session_call: None,
@@ -299,6 +292,11 @@ pub(crate) fn load(root: &Path, id: &str) -> Result<Option<RunMetadata>, Applica
         return Err(ApplicationError::Storage(
             "Run identity metadata is corrupt".into(),
         ));
+    }
+    if metadata.legacy_channel.is_some() {
+        return Err(ApplicationError::Storage(format!(
+            "legacy_channel_run: Run {id} is a per-message channel Run, which is no longer supported; remove it offline before continuing"
+        )));
     }
     Ok(Some(metadata))
 }

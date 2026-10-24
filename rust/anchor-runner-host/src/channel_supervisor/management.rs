@@ -400,6 +400,13 @@ impl ChannelManagementAdapter {
                 "the channel Graph no longer contains the bound reply node and Plugin".into(),
             ));
         }
+        crate::assistant::AssistantPlan::from_snapshot(&bundle.snapshot, &fact.binding.reply_node)
+            .map_err(ApplicationError::Invalid)?
+            .ok_or_else(|| {
+                ApplicationError::Invalid(
+                    crate::application::channel_management::NOT_AN_ASSISTANT.into(),
+                )
+            })?;
         Ok(())
     }
 

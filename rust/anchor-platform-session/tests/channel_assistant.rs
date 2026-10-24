@@ -252,7 +252,6 @@ fn two_turns_share_one_run_only_through_first_input_claims() {
     });
     let second = store.admit_channel_inbound("owner", next.clone()).unwrap();
     assert_eq!(second.relation.run_id, None);
-    assert_conflict(store.associate_channel_run("owner", session, "message-2", "assistant-run"));
     let claimed = store
         .claim_channel_assistant_input("owner", session, "assistant-run", "wait/2")
         .unwrap()
@@ -286,8 +285,6 @@ fn two_turns_share_one_run_only_through_first_input_claims() {
             None
         );
     }
-    assert_conflict(store.associate_channel_run("owner", session, "message-1", "assistant-run"));
-    assert_conflict(store.associate_channel_run("owner", session, "message-2", "assistant-run"));
     assert_eq!(store.get("owner", session).unwrap(), snapshot);
     assert_eq!(store.events("owner", session, 0).unwrap(), events);
 }
@@ -392,19 +389,9 @@ fn assistants_and_inputs_cannot_cross_owners_sessions_or_untrusted_projections()
     let other_owner = store
         .admit_channel_inbound("other", request("message-1", "conversation-1"))
         .unwrap();
-    for (owner, other_session, inbound, turn) in [
-        (
-            "owner",
-            &same_owner.session.id,
-            "other-message",
-            &same_owner.turn.id,
-        ),
-        (
-            "other",
-            &other_owner.session.id,
-            "message-1",
-            &other_owner.turn.id,
-        ),
+    for (owner, other_session, turn) in [
+        ("owner", &same_owner.session.id, &same_owner.turn.id),
+        ("other", &other_owner.session.id, &other_owner.turn.id),
     ] {
         assert_conflict(store.bind_channel_assistant(
             owner,
@@ -413,12 +400,6 @@ fn assistants_and_inputs_cannot_cross_owners_sessions_or_untrusted_projections()
             "wait",
             "assistant",
             "reply",
-        ));
-        assert_conflict(store.associate_channel_run(
-            owner,
-            other_session,
-            inbound,
-            "assistant-run",
         ));
         assert_conflict(store.attach_run(owner, other_session, "assistant-run"));
         assert_conflict(store.associate_run(owner, other_session, turn, "assistant-run"));
@@ -539,9 +520,9 @@ fn prior_run_facts_in_other_sessions_and_incompatible_input_runs_are_rejected() 
         "assistant",
         "reply",
     ));
-    store
-        .associate_channel_run("owner", &first.session.id, "message-1", "old-run")
-        .unwrap();
+    let mut old = request("message-1", "conversation-1");
+    old.run_id = Some("old-run".into());
+    store.admit_channel_inbound("owner", old).unwrap();
     bind(&store, &first.session.id);
     let events = store.events("owner", &first.session.id, 0).unwrap();
     assert_conflict(store.claim_channel_assistant_input(
@@ -743,12 +724,9 @@ fn opaque_wait_keys_are_validated_without_runtime_parsing_or_normalization() {
 }
 
 #[test]
-fn legacy_admission_and_association_keep_one_turn_per_run_without_an_assistant() {
+fn legacy_admission_keeps_one_turn_per_run_without_an_assistant() {
     let (_directory, store, first) = fixture();
     let session = &first.session.id;
-    store
-        .associate_channel_run("owner", session, "message-1", "legacy-run")
-        .unwrap();
     store
         .finish_turn(
             "owner",
@@ -758,31 +736,26 @@ fn legacy_admission_and_association_keep_one_turn_per_run_without_an_assistant()
             None,
         )
         .unwrap();
+    let mut legacy = request("message-2", "conversation-1");
+    legacy.run_id = Some("legacy-run".into());
+    let admitted = store.admit_channel_inbound("owner", legacy).unwrap();
+    assert_eq!(admitted.relation.run_id.as_deref(), Some("legacy-run"));
+    store
+        .finish_turn(
+            "owner",
+            session,
+            &admitted.turn.id,
+            TurnStatus::Completed,
+            None,
+        )
+        .unwrap();
     let snapshot = store.get("owner", session).unwrap();
     let events = store.events("owner", session, 0).unwrap();
-    let mut second = request("message-2", "conversation-1");
-    second.run_id = Some("legacy-run".into());
-    assert_conflict(store.admit_channel_inbound("owner", second));
-    assert_eq!(store.list_turns("owner", session).unwrap().len(), 1);
+    let mut third = request("message-3", "conversation-1");
+    third.run_id = Some("legacy-run".into());
+    assert_conflict(store.admit_channel_inbound("owner", third));
+    assert_eq!(store.list_turns("owner", session).unwrap().len(), 2);
     assert_eq!(store.get("owner", session).unwrap(), snapshot);
     assert_eq!(store.events("owner", session, 0).unwrap(), events);
-    let second = store
-        .admit_channel_inbound("owner", request("message-2", "conversation-1"))
-        .unwrap();
-    assert_conflict(store.associate_channel_run("owner", session, "message-2", "legacy-run"));
-    assert_eq!(
-        store
-            .get_channel_relation("owner", session, "message-2")
-            .unwrap()
-            .run_id,
-        None
-    );
-    assert!(
-        store
-            .get_turn("owner", session, &second.turn.id)
-            .unwrap()
-            .runs
-            .is_empty()
-    );
     assert_eq!(store.get_channel_assistant("owner", session).unwrap(), None);
 }

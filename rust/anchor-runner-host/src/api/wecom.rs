@@ -9,9 +9,6 @@ use sha2::{Digest, Sha256};
 use std::time::Duration;
 
 const MAX_EVENT_TEXT_BYTES: usize = 100_000;
-/// Interrupted user messages folded into the next Run of the same session.
-const MAX_INTERRUPTED_MESSAGES: usize = 8;
-const MAX_INTERRUPTED_MESSAGE_CHARS: usize = 500;
 const RUN_POLL: Duration = Duration::from_millis(50);
 
 #[cfg(test)]
@@ -234,8 +231,6 @@ pub(super) async fn receive_event(
             "configured WeCom Graph is unavailable",
         )
     })?;
-    let assistant_plan =
-        crate::assistant::AssistantPlan::from_snapshot(&bundle.snapshot, &config.reply_node);
     if !bundle
         .snapshot
         .nodes
@@ -247,8 +242,18 @@ pub(super) async fn receive_event(
             "configured WeCom reply node is not in the Graph",
         ));
     }
+    // A channel only drives a persistent assistant. A Graph without the
+    // input, Agent, reply loop is refused before its message is admitted.
+    let plan = crate::assistant::AssistantPlan::from_snapshot(&bundle.snapshot, &config.reply_node)
+        .map_err(|message| error(StatusCode::BAD_REQUEST, message))?
+        .ok_or_else(|| {
+            error(
+                StatusCode::CONFLICT,
+                "configured WeCom Graph is not a persistent assistant; a channel requires the session.wait_input, Agent, session.reply loop",
+            )
+        })?;
 
-    let mut event = envelope.event;
+    let event = envelope.event;
     let input_message = if event.text.trim().is_empty() {
         "请查看随附文件并据此回复。".to_owned()
     } else {
@@ -298,40 +303,33 @@ pub(super) async fn receive_event(
             .or_insert_with(|| std::sync::Arc::new(tokio::sync::Mutex::new(())))
             .clone()
     };
-    let admitted = async {
-        let _guard = channel_lock.lock().await;
-        // Authoritative state under the lock: between admission and
-        // serialisation another message may have superseded this Turn.
-        let current =
-            read_channel_inbound(&state, &owner, &admission.session.id, &inbound_id).await?;
-        if current.relation.superseded_by_turn_id.is_some() {
-            return Ok(None);
-        }
-        let saved_assistant = store(&state)?
-            .get_channel_assistant(&owner, &admission.session.id)
-            .map_err(session_error)?;
-        if current.relation.run_id.is_none() && current.turn.status != TurnStatus::Running {
-            if let Some(binding) = saved_assistant.as_ref()
-                && !state.application.run_is_active(&binding.run_id).await
-            {
-                return Err(assistant_stopped());
+    let admitted =
+        async {
+            let _guard = channel_lock.lock().await;
+            // Authoritative state under the lock: between admission and
+            // serialisation another message may have superseded this Turn.
+            let current =
+                read_channel_inbound(&state, &owner, &admission.session.id, &inbound_id).await?;
+            if current.relation.superseded_by_turn_id.is_some() {
+                return Ok(None);
             }
-            return Err(error(
-                StatusCode::CONFLICT,
-                "WeCom input was already rejected before execution",
-            ));
-        }
-        let persistent_assistant =
-            assistant_plan.as_ref().is_ok_and(Option::is_some) || saved_assistant.is_some();
-        if persistent_assistant {
+            let saved_assistant = store(&state)?
+                .get_channel_assistant(&owner, &admission.session.id)
+                .map_err(session_error)?;
+            if current.relation.run_id.is_none() && current.turn.status != TurnStatus::Running {
+                if let Some(binding) = saved_assistant.as_ref()
+                    && !state.application.run_is_active(&binding.run_id).await
+                {
+                    return Err(assistant_stopped());
+                }
+                return Err(error(
+                    StatusCode::CONFLICT,
+                    "WeCom input was already rejected before execution",
+                ));
+            }
             let run = match saved_assistant {
                 Some(binding) => binding.run_id,
                 None => {
-                    let plan = assistant_plan
-                        .map_err(|message| error(StatusCode::BAD_REQUEST, message))?
-                        .ok_or_else(|| {
-                            error(StatusCode::CONFLICT, "assistant Graph has no input loop")
-                        })?;
                     let previous_run = match current.previous_run.as_deref() {
                         Some(previous) if stop_previous_run(&state, previous).await? => {
                             Some(previous.to_owned())
@@ -385,60 +383,8 @@ pub(super) async fn receive_event(
                 run_id: run,
                 session: admission.session.id.clone(),
             }))
-        } else {
-            assistant_plan.map_err(|message| error(StatusCode::BAD_REQUEST, message))?;
-            let run = format!("channel-{}", admission.turn.id);
-            let previous_run = match current.previous_run.as_deref() {
-                Some(previous) if stop_previous_run(&state, previous).await? => {
-                    Some(previous.to_owned())
-                }
-                _ => None,
-            };
-            let mut channel = json!(current.request.identity);
-            channel["reply_target"] = json!(event.reply_target);
-            // A new message interrupts the previous turn. Whatever the model has
-            // not been asked yet travels with this Run, so the interrupted work
-            // continues with the new information instead of disappearing.
-            let interrupted =
-                read_interrupted_messages(&state, &owner, &admission.session.id, &inbound_id)
-                    .await?;
-            let mut input = json!({
-                "message":input_message,
-                "channel":channel,
-                "session":admission.session.id,
-            });
-            if !interrupted.is_empty() {
-                input["interrupted_messages"] = json!(interrupted);
-            }
-            let request = crate::application::ConversationAdmission {
-                graph: config.graph.clone(),
-                run: run.clone(),
-                session: admission.session.id.clone(),
-                reply_node: config.reply_node.clone(),
-                input,
-                previous_run,
-                attachments: std::mem::take(&mut event.attachments),
-                channel_inbound: Some(inbound_id.clone()),
-            };
-            let (status, accepted) = super::runs::conversation_run(
-                State(state.clone()),
-                headers.clone(),
-                Ok(Json(request)),
-            )
-            .await?;
-            if status != StatusCode::ACCEPTED || accepted.0["run"] != run {
-                return Err(error(
-                    StatusCode::BAD_GATEWAY,
-                    "WeCom Graph admission returned an unexpected Run",
-                ));
-            }
-            Ok(Some(AdmittedRun {
-                run_id: run,
-                session: admission.session.id.clone(),
-            }))
         }
-    }
-    .await;
+        .await;
     let admitted = match admitted {
         Ok(Some(admitted)) => admitted,
         Ok(None) => {
@@ -453,7 +399,6 @@ pub(super) async fn receive_event(
     let reply = wait_for_channel_reply(
         &state,
         &owner,
-        &config.reply_node,
         &admitted.session,
         &event.inbound_id(),
         &admitted.run_id,
@@ -581,7 +526,6 @@ fn assistant_stopped() -> HttpResponse {
 async fn wait_for_channel_reply(
     state: &ApiState,
     owner: &str,
-    reply_node: &str,
     session: &str,
     inbound_id: &str,
     run_id: &str,
@@ -597,181 +541,87 @@ async fn wait_for_channel_reply(
             .application
             .channel_reply_run(run_id)
             .map_err(|message| error(StatusCode::INTERNAL_SERVER_ERROR, message))?;
-        if let Some(record) = record.as_ref() {
-            let metadata = crate::application::metadata::load(&state.data_root, run_id)
-                .map_err(application_error)?;
-            if let Some(source) = metadata
-                .as_ref()
-                .and_then(|metadata| metadata.assistant.as_ref())
-            {
-                if source.owner != owner || source.session != session {
-                    return Err(error(
-                        StatusCode::FORBIDDEN,
-                        "assistant reply belongs to another Session",
-                    ));
-                }
-                if let Some(results) = record.replies_for(&source.reply_node) {
-                    for result in results.iter().rev() {
-                        let Some(binding) =
-                            crate::assistant::binding(&state.data_root, &result.key)
-                                .map_err(|message| error(StatusCode::CONFLICT, message))?
-                        else {
-                            continue;
-                        };
-                        if binding.turn != inbound.relation.turn_id || binding.inbound != inbound_id
-                        {
-                            continue;
-                        }
-                        if result.suppressed {
-                            return Ok(None);
-                        }
-                        if result.reply_for.as_deref() != Some(binding.turn.as_str())
-                            || result.text.trim().is_empty()
-                        {
-                            return Err(error(
-                                StatusCode::CONFLICT,
-                                "assistant reply identity changed",
-                            ));
-                        }
-                        let commit: anchor_runtime::graph::CommitRef =
-                            serde_json::from_value(result.source_commit.clone()).map_err(|_| {
-                                error(StatusCode::CONFLICT, "assistant reply source is missing")
-                            })?;
-                        let work_key = anchor_runtime::graph::InvocationKey {
-                            node_id: commit.node_id,
-                            invocation: commit.invocation,
-                            ..result.key.clone()
-                        };
-                        let items = if result.host_reply {
-                            Vec::new()
-                        } else {
-                            crate::channel_tools::read_reply_images_for_invocation(
-                                &state.data_root,
-                                &work_key,
-                            )
-                            .map_err(|message| error(StatusCode::UNPROCESSABLE_ENTITY, message))?
-                        };
-                        if json!(items) != result.items {
-                            return Err(error(
-                                StatusCode::CONFLICT,
-                                "assistant reply image set changed",
-                            ));
-                        }
-                        if inbound.turn.status == TurnStatus::Running {
-                            store(state)?
-                                .finish_turn(
-                                    owner,
-                                    session,
-                                    &binding.turn,
-                                    TurnStatus::Completed,
-                                    None,
-                                )
-                                .map_err(session_error)?;
-                        }
-                        return Ok(Some(ChannelReply {
-                            session: session.to_owned(),
-                            turn: binding.turn,
-                            text: result.text.clone(),
-                            items,
-                        }));
-                    }
-                }
-                if record.unsuccessful
-                    || (record.assistant_expects_executor
-                        && !state.application.run_is_active(run_id).await)
-                {
-                    return Err(assistant_stopped());
-                }
-                tokio::time::sleep(RUN_POLL).await;
-                continue;
-            }
+        let Some(record) = record else {
+            tokio::time::sleep(RUN_POLL).await;
+            continue;
+        };
+        let metadata = crate::application::metadata::load(&state.data_root, run_id)
+            .map_err(application_error)?;
+        let source = metadata
+            .as_ref()
+            .and_then(|metadata| metadata.assistant.as_ref())
+            .ok_or_else(|| error(StatusCode::CONFLICT, "channel Run is not an assistant"))?;
+        if source.owner != owner || source.session != session {
+            return Err(error(
+                StatusCode::FORBIDDEN,
+                "assistant reply belongs to another Session",
+            ));
         }
-        if let Some(record) = record
-            && !state
-                .application
-                .active_runs(None)
-                .await
-                .contains(&run_id.to_owned())
-        {
-            if record.completed {
-                if inbound.turn.status != TurnStatus::Completed {
-                    tokio::time::sleep(RUN_POLL).await;
+        if let Some(results) = record.replies_for(&source.reply_node) {
+            for result in results.iter().rev() {
+                let Some(binding) = crate::assistant::binding(&state.data_root, &result.key)
+                    .map_err(|message| error(StatusCode::CONFLICT, message))?
+                else {
+                    continue;
+                };
+                if binding.turn != inbound.relation.turn_id || binding.inbound != inbound_id {
                     continue;
                 }
-                let Some(text) = record.latest_reply(reply_node) else {
+                if result.suppressed {
+                    return Ok(None);
+                }
+                if result.reply_for.as_deref() != Some(binding.turn.as_str())
+                    || result.text.trim().is_empty()
+                {
                     return Err(error(
-                        StatusCode::BAD_GATEWAY,
-                        "WeCom reply node produced no result",
-                    ));
-                };
-                if text.trim().is_empty() {
-                    return Err(error(
-                        StatusCode::BAD_GATEWAY,
-                        "WeCom reply node produced an empty reply",
+                        StatusCode::CONFLICT,
+                        "assistant reply identity changed",
                     ));
                 }
-                // The configured Gateway delivers text plus validated reply
-                // images. Anything else in the file is refused here rather
-                // than silently dropped by the transport.
-                let items = crate::channel_tools::read_reply_images(&state.data_root, run_id)
-                    .map_err(|failure| error(StatusCode::UNPROCESSABLE_ENTITY, failure))?;
+                let commit: anchor_runtime::graph::CommitRef =
+                    serde_json::from_value(result.source_commit.clone()).map_err(|_| {
+                        error(StatusCode::CONFLICT, "assistant reply source is missing")
+                    })?;
+                let work_key = anchor_runtime::graph::InvocationKey {
+                    node_id: commit.node_id,
+                    invocation: commit.invocation,
+                    ..result.key.clone()
+                };
+                let items = if result.host_reply {
+                    Vec::new()
+                } else {
+                    crate::channel_tools::read_reply_images_for_invocation(
+                        &state.data_root,
+                        &work_key,
+                    )
+                    .map_err(|message| error(StatusCode::UNPROCESSABLE_ENTITY, message))?
+                };
+                if json!(items) != result.items {
+                    return Err(error(
+                        StatusCode::CONFLICT,
+                        "assistant reply image set changed",
+                    ));
+                }
+                if inbound.turn.status == TurnStatus::Running {
+                    store(state)?
+                        .finish_turn(owner, session, &binding.turn, TurnStatus::Completed, None)
+                        .map_err(session_error)?;
+                }
                 return Ok(Some(ChannelReply {
                     session: session.to_owned(),
-                    turn: inbound.relation.turn_id,
-                    text: text.to_owned(),
+                    turn: binding.turn,
+                    text: result.text.clone(),
                     items,
                 }));
             }
-            if record.unsuccessful {
-                return Err(error(
-                    StatusCode::BAD_GATEWAY,
-                    "WeCom Graph Run did not complete successfully",
-                ));
-            }
+        }
+        if record.unsuccessful
+            || (record.assistant_expects_executor && !state.application.run_is_active(run_id).await)
+        {
+            return Err(assistant_stopped());
         }
         tokio::time::sleep(RUN_POLL).await;
     }
-}
-
-/// User messages this session has no confirmed reply for, newest last.
-async fn read_interrupted_messages(
-    state: &ApiState,
-    owner: &str,
-    session: &str,
-    inbound_id: &str,
-) -> Result<Vec<Value>, HttpResponse> {
-    let state = state.clone();
-    let owner = owner.to_owned();
-    let session = session.to_owned();
-    let inbound_id = inbound_id.to_owned();
-    blocking(move || {
-        let pending = store(&state)?
-            .pending_channel_messages(&owner, &session, &inbound_id, MAX_INTERRUPTED_MESSAGES)
-            .map_err(session_error)?;
-        Ok(pending
-            .iter()
-            .filter_map(interrupted_text)
-            .collect::<Vec<_>>())
-    })
-    .await
-}
-
-fn interrupted_text(message: &anchor_platform_session::ChannelPendingMessage) -> Option<Value> {
-    let text = message.text.trim();
-    let rendered = match (text.is_empty(), message.attachments) {
-        (false, 0) => text.to_owned(),
-        (false, count) => format!("{text}（同一条消息还附带了 {count} 个文件）"),
-        (true, 0) => return None,
-        (true, count) => format!("（用户发来 {count} 个文件，本轮工作区没有挂载这些文件）"),
-    };
-    let text = rendered
-        .chars()
-        .take(MAX_INTERRUPTED_MESSAGE_CHARS)
-        .collect::<String>();
-    Some(match message.identity.conversation_kind {
-        ChannelConversationKind::Single => json!(text),
-        ChannelConversationKind::Group => json!({"message":text,"channel":message.identity}),
-    })
 }
 
 async fn read_channel_inbound(

@@ -1111,12 +1111,6 @@ fn router_with_readiness_and_web_root(
     ready: Arc<AtomicBool>,
     web_root: PathBuf,
 ) -> Router {
-    let conversations = Router::new()
-        .route("/conversation-runs", post(conversation_run))
-        .layer(DefaultBodyLimit::max(crate::channel_inputs::MAX_BODY_BYTES))
-        .layer(RequestBodyLimitLayer::new(
-            crate::channel_inputs::MAX_BODY_BYTES,
-        ));
     let wecom_events = Router::new()
         .route("/channels/wecom/events", post(wecom::receive_event))
         .route(
@@ -1241,10 +1235,6 @@ fn router_with_readiness_and_web_root(
             get(get_channel_relation),
         )
         .route(
-            "/channel-sessions/{session}/inbounds/{inbound}/run",
-            post(associate_channel_run),
-        )
-        .route(
             "/channel-sessions/{session}/turns/{turn}/deliveries",
             post(admit_channel_delivery),
         )
@@ -1284,7 +1274,6 @@ fn router_with_readiness_and_web_root(
         .layer(RequestBodyLimitLayer::new(2 * 1024 * 1024))
         .merge(plugin_management::router())
         .merge(pilot_turns)
-        .merge(conversations)
         .merge(wecom_events)
         .with_state(state.clone())
         .layer(middleware::from_fn_with_state(state.clone(), auth));

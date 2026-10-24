@@ -1,93 +1,11 @@
 use super::*;
 use anchor_platform_session::SessionStore;
-use serde::Deserialize;
 use std::collections::BTreeSet;
 
 pub(crate) const WECOM_REPLY_KIND: &str = "wecom_reply";
 pub(crate) const WECOM_REPLY_KEY_PREFIX: &str = "channel-wecom-reply:";
 
-/// Identity is supplied by the trusted host, separately from model-visible input.
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct ConversationAdmission {
-    pub(crate) graph: String,
-    pub(crate) run: String,
-    pub(crate) session: String,
-    pub(crate) reply_node: String,
-    #[serde(default)]
-    pub(crate) input: Value,
-    #[serde(default)]
-    pub(crate) previous_run: Option<String>,
-    #[serde(default)]
-    pub(crate) attachments: Vec<crate::channel_inputs::UploadedAttachment>,
-    #[serde(default)]
-    pub(crate) channel_inbound: Option<String>,
-}
-
-fn valid_id(value: &str) -> bool {
-    !value.is_empty()
-        && value.len() <= 200
-        && value != "."
-        && value != ".."
-        && value
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || b"-_.".contains(&byte))
-}
-
-impl ConversationAdmission {
-    pub(crate) fn validate(&self) -> Result<(), String> {
-        let uuid = self.run.strip_prefix("channel-").unwrap_or("");
-        if uuid.len() != 36
-            || !uuid.bytes().enumerate().all(|(index, byte)| {
-                if matches!(index, 8 | 13 | 18 | 23) {
-                    byte == b'-'
-                } else {
-                    byte.is_ascii_hexdigit()
-                }
-            })
-        {
-            return Err("run must be channel-<turn UUID>".into());
-        }
-        if !valid_id(&self.session) || self.reply_node.trim().is_empty() {
-            return Err("session and reply_node are required".into());
-        }
-        if self.previous_run.as_ref().is_some_and(|id| !valid_id(id)) {
-            return Err("invalid previous_run".into());
-        }
-        if self
-            .channel_inbound
-            .as_ref()
-            .is_some_and(|id| !valid_id(id))
-        {
-            return Err("invalid channel_inbound".into());
-        }
-        if !self.input.is_null() && !self.input.is_object() {
-            return Err("input must be an object".into());
-        }
-        Ok(())
-    }
-
-    pub(in crate::application) fn source(&self) -> ConversationSource {
-        ConversationSource {
-            session: self.session.clone(),
-            reply_node: self.reply_node.clone(),
-            previous_run: self.previous_run.clone(),
-        }
-    }
-}
-
 impl RunApplication {
-    pub(crate) async fn retry_conversation_admission(
-        &self,
-        request: &ConversationAdmission,
-        graph_path: &Path,
-        attachments: &crate::channel_inputs::PreparedAttachments,
-        channel: Option<&ChannelRunSource>,
-    ) -> Result<Option<String>, ApplicationError> {
-        let _active = self.admission.lock().await;
-        self.retry_conversation(request, graph_path, attachments, channel)
-    }
-
     pub(super) fn conversation_chain(
         &self,
         source: &ConversationSource,
@@ -219,31 +137,6 @@ impl RunApplication {
         Ok(())
     }
 
-    /// A channel Turn whose reply is still pending or of unknown outcome keeps
-    /// its Run: the frozen reply is what a later verification is derived from,
-    /// and deleting it would fake a settled delivery.
-    pub(super) fn ensure_channel_delivery_settled(
-        &self,
-        metadata: &RunMetadata,
-    ) -> Result<(), ApplicationError> {
-        let Some(channel) = metadata.channel.as_ref() else {
-            return Ok(());
-        };
-        let unsettled = SessionStore::open(self.data_root.join("platform/sessions.sqlite"))
-            .map_err(|error| ApplicationError::Storage(error.to_string()))?
-            .list_unfinished_channel_deliveries(&channel.owner, &channel.session)
-            .map_err(|error| ApplicationError::Storage(error.to_string()))?
-            .into_iter()
-            .any(|delivery| delivery.turn_id == channel.turn);
-        if unsettled {
-            return Err(ApplicationError::Conflict(
-                "Run has an unsettled channel delivery; settle it before deleting the record"
-                    .into(),
-            ));
-        }
-        Ok(())
-    }
-
     /// Decide whether one conversation Run may be deleted on its own.
     ///
     /// Conversation Runs form one chain per Session, and a later Run reads the
@@ -254,7 +147,6 @@ impl RunApplication {
     ///
     /// - it must not be the current assistant instance, which the Session still
     ///   points at (retire that instance first);
-    /// - it must have no unsettled channel delivery;
     /// - every later Run that names it must either be unable to execute again
     ///   or have completed the first invocation of every node that reads it.
     ///

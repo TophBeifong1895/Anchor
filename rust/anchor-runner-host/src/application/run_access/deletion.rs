@@ -83,9 +83,6 @@ impl RunApplication {
         let record = &view.record;
         let metadata = self.metadata(run_id)?;
         self.reject_pending_session_delivery(run_id)?;
-        if let Some(metadata) = metadata.as_ref() {
-            self.ensure_channel_delivery_settled(metadata)?;
-        }
         match metadata
             .as_ref()
             .filter(|metadata| metadata.conversation.is_some())
