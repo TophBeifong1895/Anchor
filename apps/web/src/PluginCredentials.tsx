@@ -9,14 +9,16 @@ const labels: Record<CredentialField['state'], string> = {
   configured: '已保存', missing: '未配置', stale: '插件权限已变化，需重新配置', deployment: '由部署管理',
 };
 
-type Props = { pluginId: string; target?: string; onChanged?: () => void; hideEmpty?: boolean };
+/** `endpoint` defaults to the Plugin's shared targets; a bot Graph passes its own credentials path. */
+type Props = { pluginId: string; target?: string; endpoint?: string; onChanged?: () => void; hideEmpty?: boolean };
 
 /** Owner-bound metadata and ephemeral inputs; values never enter browser storage. */
 export function PluginCredentials(props: Props) {
-  return <CurrentPluginCredentials key={`${props.pluginId}/${props.target ?? ''}`} {...props} />;
+  return <CurrentPluginCredentials key={`${props.pluginId}/${props.target ?? ''}/${props.endpoint ?? ''}`} {...props} />;
 }
 
-function CurrentPluginCredentials({ pluginId, target, onChanged, hideEmpty = false }: Props) {
+function CurrentPluginCredentials({ pluginId, target, endpoint, onChanged, hideEmpty = false }: Props) {
+  const base = endpoint ?? `/plugins/${encodeURIComponent(pluginId)}/credentials`;
   const [data, setData] = useState<Credentials | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -52,7 +54,7 @@ function CurrentPluginCredentials({ pluginId, target, onChanged, hideEmpty = fal
       const version = ++sequence.current;
       setLoading(true); setReadError('');
       try {
-        const response = valid(await api<Credentials>(`/plugins/${encodeURIComponent(pluginId)}/credentials`, 'GET', undefined, controller.signal));
+        const response = valid(await api<Credentials>(base, 'GET', undefined, controller.signal));
         if (alive && version === sequence.current) setData(response);
       } catch (problem) { if (alive && version === sequence.current) setReadError(reason(problem)); }
       finally {
@@ -63,7 +65,7 @@ function CurrentPluginCredentials({ pluginId, target, onChanged, hideEmpty = fal
     const focus = () => { if (!busy.current && !editingRef.current) void refresh(); };
     void refresh(); window.addEventListener('focus', focus);
     return () => { alive = false; sequence.current += 1; request.current?.abort(); clearInput(); window.removeEventListener('focus', focus); };
-  }, [pluginId, revision]);
+  }, [base, revision]);
   const change = async (record: CredentialTarget, field: CredentialField, clear: boolean) => {
     if (busy.current || loading || readError || !field.editable) return;
     busy.current = true; const version = ++sequence.current; const controller = startRequest();
@@ -71,7 +73,7 @@ function CurrentPluginCredentials({ pluginId, target, onChanged, hideEmpty = fal
     setPending(key); setError(''); setMessage('');
     const value = input.current?.value ?? ''; clearInput();
     try {
-      const response = valid(await api<Credentials>(`/plugins/${encodeURIComponent(pluginId)}/credentials/${encodeURIComponent(record.target)}/${encodeURIComponent(field.field)}`,
+      const response = valid(await api<Credentials>(endpoint ? `${endpoint}/${encodeURIComponent(field.field)}` : `${base}/${encodeURIComponent(record.target)}/${encodeURIComponent(field.field)}`,
         clear ? 'DELETE' : 'PUT', { authorization_digest: record.authorization_digest, ...(clear ? {} : { value }) }, controller.signal));
       if (version !== sequence.current || controller.signal.aborted) return;
       setData(response); setEditing(''); clearInput();

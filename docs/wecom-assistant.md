@@ -36,7 +36,7 @@
 
 一张常驻助手 Graph 对应一个机器人（[设计卡 004](design-cards/004-multi-bot-channels.md)）。Agent 节点挂载带 WeCom 通道声明的 Plugin 并保存后，这张 Graph 就可以配置自己的机器人：BotID/Secret、接收成员和可主动发送的成员，然后启用。同一个助手节点不能挂两个渠道 Plugin；同一个 Bot 账号不能同时被两张已启用的 Graph 使用，账号下已有别的 Graph 的会话时也不能启用。改成员名单前要先停用；机器人启用时，不能删除这张 Graph，也不能从节点上卸下渠道 Plugin。停用后删除 Graph，绑定、凭据和网关状态目录一起清掉。已启用不等于已经连接，状态里显示 Supervisor 的实际状态。各对话的实例在运行看板的「消息会话」中停止、恢复、退役或清理。
 
-Web 界面的入口在 S4 改为节点 Plugin 详情里的「此 Graph 的机器人」；在此之前用下面的管理 API 或 Pilot（`channel_status`、`channel_configure`、`channel_enable`，凭据用带 `graph` 的 `credential_request`）配置：
+在 Web 中，选中 Graph 的 Agent 节点，打开所挂渠道 Plugin 的详情，「此 Graph 的机器人」一栏可以保存成员、设置凭据、启停并查看网关状态；草稿未保存时先保存 Graph。从插件库打开同一 Plugin 只列出在用它的 Graph。Pilot 使用 `channel_status`、`channel_configure`、`channel_enable`，凭据用带 `graph` 的 `credential_request`。两者调用同一组管理 API：
 
 - `GET /channels`：列出本 owner 的所有机器人绑定；
 - `GET`/`PUT /graphs/{graph}/channel`：查看状态，或保存 `{users, send_users}`；

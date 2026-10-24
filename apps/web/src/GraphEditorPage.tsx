@@ -26,12 +26,12 @@ type Props = {
   selectGraph: (graph: string) => boolean; create: () => Promise<void>; deleteGraph: (graph: string, precondition: string) => Promise<void>;
   save: () => Promise<void>; check: () => Promise<void>; trigger: () => Promise<void>;
   openRun: (run: OurRun) => void; navigateGraph: (graph: string, node?: string, remember?: boolean, sourceNode?: string) => void;
-  onPilot: () => void; onInspect: () => void; onRelations: () => void; onTriggerConfig: () => void; graphReturn: { graph: string; node?: string } | null; onReturn: () => void;
+  onPilot: () => void; onInspect: () => void; onRelations: () => void; graphReturn: { graph: string; node?: string } | null; onReturn: () => void;
 };
 /** Graph-only controls are local; the editor owner survives cross-page navigation. */
 export function GraphEditorPage({ name, editor, graphs, runs, graphColors, busy, notice, setNotice,
   selectGraph, create, deleteGraph, save, check, trigger, openRun, navigateGraph, onInspect,
-  onRelations, graphReturn, onReturn, onPilot, onTriggerConfig }: Props) {
+  onRelations, graphReturn, onReturn, onPilot }: Props) {
   const { doc, dirty, pick, setPick, patch, selectedNode, selectedOp, selectedAgent, selectedEdge,
     selectedPlugins, setPlugins, patchNode, patchAgent, patchEdge, patchOperation, addNode, addOperation,
     addParallel, addAgent, duplicateNode, removePicked, entry, routing } = editor;
@@ -117,7 +117,6 @@ export function GraphEditorPage({ name, editor, graphs, runs, graphColors, busy,
               </div>
               <div className="document-actions">
                 <button disabled={!name} onClick={onPilot}>在 Pilot 中协助</button>
-                <button disabled={!name} onClick={() => onTriggerConfig()}>消息触发</button>
                 <button onClick={() => onRelations()}>工作流关系</button>
                 {graphReturn && <button onClick={onReturn}>返回来源工作流 ←</button>}
                 <select aria-label="当前工作流" value={name} onChange={event => selectGraph(event.target.value)}>
@@ -210,7 +209,7 @@ export function GraphEditorPage({ name, editor, graphs, runs, graphColors, busy,
             <div className="section-heading"><h3><SlidersHorizontal size={15} />{pick ? '选中项属性' : '工作流设置'}</h3></div>
             {selectedNode && !selectedNode.op && !selectedNode.graph && <Suspense fallback={<p role="status">正在打开插件设置…</p>}><Plugins
               key={`${name}/${selectedNode.id}`} selected={selectedPlugins} disabled={!editable}
-              activationMode={editor.pluginActivation?.mode} onChange={setPlugins} /></Suspense>}
+              activationMode={editor.pluginActivation?.mode} onChange={setPlugins} graph={{ name, saved: !dirty }} /></Suspense>}
             <fieldset disabled={!editable}>
               {selectedNode && doc && <>
                 <div className="inspector-kind">

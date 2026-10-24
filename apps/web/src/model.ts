@@ -102,6 +102,7 @@ export type Plugin = {
   mcpServers?: Record<string, { transport: string; auth?: string }>;
   available?: boolean; error?: string; instructions?: string;
   requiresNetwork?: boolean;
+  channels?: { platform: string }[];
   definitionValid?: boolean; dependenciesReady?: boolean | null;
   contextAuthorized?: boolean | null; connectionVerified?: boolean | null;
 };

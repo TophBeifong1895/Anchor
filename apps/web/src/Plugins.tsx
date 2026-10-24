@@ -6,8 +6,8 @@ import { PluginDetails, PluginSettings, pluginSettingStatus } from './PluginPane
 import { LibraryPluginDetails } from './LibraryPluginDetails';
 
 /** Graph owns draft references; Run owns captured metadata; the Library owns current definitions. */
-export function Plugins({ selected, onChange, disabled = false, recorded, management = false, onChanged, refreshRevision = 0, activationMode }:
-  { selected?: string[]; onChange?: (ids: string[]) => void; disabled?: boolean; recorded?: Plugin[]; management?: boolean; onChanged?: () => void; refreshRevision?: number; activationMode?: GraphPluginActivation['mode'] }) {
+export function Plugins({ selected, onChange, disabled = false, recorded, management = false, onChanged, refreshRevision = 0, activationMode, graph }:
+  { selected?: string[]; onChange?: (ids: string[]) => void; disabled?: boolean; recorded?: Plugin[]; management?: boolean; onChanged?: () => void; refreshRevision?: number; activationMode?: GraphPluginActivation['mode']; graph?: { name: string; saved: boolean } }) {
   const [catalog, setCatalog] = useState<Plugin[]>([]);
   const [catalogKnown, setCatalogKnown] = useState(false);
   const [error, setError] = useState('');
@@ -48,7 +48,7 @@ export function Plugins({ selected, onChange, disabled = false, recorded, manage
       empty={<div className="plugin-empty"><strong>{recorded !== undefined ? '没有插件绑定记录' : '还没有安装插件'}</strong>
         <p>{recorded !== undefined ? '此运行没有保存插件绑定信息。' : management ? '从“安装或导入插件”选择插件目录或 GitHub 链接。' : '告诉 Pilot 你需要什么能力。安装完成后刷新，即可为节点选择插件。'}</p></div>} />
     {opened && (recorded !== undefined ? <PluginDetails plugin={opened} status={status(opened)} recorded close={() => setOpened(null)} />
-      : <LibraryPluginDetails key={opened.id} plugin={opened} status={status(opened)} management={management}
+      : <LibraryPluginDetails key={opened.id} plugin={opened} status={status(opened)} management={management} graph={selectedIds.has(opened.id) ? graph : undefined}
         onChanged={() => { setRevision(value => value + 1); onChanged?.(); }} close={() => setOpened(null)} />)}
   </section>;
 }

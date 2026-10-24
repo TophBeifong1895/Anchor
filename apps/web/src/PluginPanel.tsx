@@ -7,7 +7,7 @@ import './PluginPanel.css';
 export type PluginInformation = {
   id: string; name: string; description?: string; skills?: string[]; digest?: string;
   mcpServers?: Record<string, { transport: string; auth?: string }>;
-  mcpServerNames?: string[]; instructions?: string; error?: string | null; unsupported?: string[];
+  mcpServerNames?: string[]; instructions?: string; error?: string | null; unsupported?: string[]; channels?: { platform: string }[];
   available?: boolean; requiresNetwork?: boolean;
   definitionValid?: boolean; dependenciesReady?: boolean | null;
   contextAuthorized?: boolean | null; connectionVerified?: boolean | null;

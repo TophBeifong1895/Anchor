@@ -4,11 +4,14 @@ import type { Plugin } from './model';
 import { PluginDetails, type PluginInformation } from './PluginPanel';
 import { PluginConfiguration } from './PluginConfiguration';
 import { PluginInstall, PluginUninstall } from './PluginLifecycle';
+import { GraphBot, PluginBots } from './GraphBot';
 
 type Authorization = { state: 'loading' | 'authorized' | 'unauthorized' | 'unknown'; error?: string };
 
 type Props = {
   plugin: PluginInformation; status: string; problem?: string | null; close: () => void; management?: boolean; onChanged?: () => void;
+  /** The Graph whose node opened these details; `saved` is false while the draft differs from the saved Graph. */
+  graph?: { name: string; saved: boolean };
 };
 
 /** Current-library adapter. Historical run details never mount this component. */
@@ -16,7 +19,7 @@ export function LibraryPluginDetails(props: Props) {
   return <CurrentLibraryPluginDetails key={props.plugin.id} {...props} />;
 }
 
-function CurrentLibraryPluginDetails({ plugin, status, problem, close, management = false, onChanged }: Props) {
+function CurrentLibraryPluginDetails({ plugin, status, problem, close, management = false, onChanged, graph }: Props) {
   const [updating, setUpdating] = useState(false);
   const [definition, setDefinition] = useState<PluginInformation | null>(null);
   const [loading, setLoading] = useState(true);
@@ -94,6 +97,7 @@ function CurrentLibraryPluginDetails({ plugin, status, problem, close, managemen
   return <><PluginDetails plugin={information} status={status} loading={loading} error={error}
     retry={() => setRevision(value => value + 1)} close={close}>
     <PluginConfiguration pluginId={plugin.id} onChanged={onChanged} />
+    {!!definition?.channels?.length && (graph ? <GraphBot graph={graph.name} pluginId={plugin.id} saved={graph.saved} /> : <PluginBots pluginId={plugin.id} />)}
     {management && <section className="plugin-details-section"><div className="plugin-management-heading"><h3>插件版本</h3>
       <button type="button" onClick={() => setUpdating(true)}>更新插件</button></div></section>}
     {!!oauth.length && <section className="plugin-details-section plugin-authorization"><h3>服务授权 <span>OAuth</span></h3>

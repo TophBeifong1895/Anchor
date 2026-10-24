@@ -9,7 +9,6 @@ import { PageActivity } from './PageActivity';
 import { graphRunAction } from './GraphRunButton';
 import { ApiKeyDialog } from './ApiKeyDialog';
 import { ChannelSessions } from './ChannelSessions';
-import { MessageTrigger } from './MessageTrigger';
 import { CreateGraphDialog, RunInputDialog } from './WorkbenchDialogs';
 import { anchorRef, anchorTarget, type AnchorRef } from './links';
 import { api } from './api';
@@ -56,7 +55,6 @@ export function App() {
   const [assistance, setAssistance] = useState('');
   const [relations, setRelations] = useState(false);
   const [sessions, setSessions] = useState(false);
-  const [triggerConfig, setTriggerConfig] = useState(false);
   const [graphReturn, setGraphReturn] = useState<{ graph: string; node?: string } | null>(null);
   // The return session after opening a Graph, Run or artifact from Pilot.
   const [chat, setChat] = useState('');
@@ -247,12 +245,10 @@ export function App() {
         : null}</Suspense>
       <PageActivity active={view === 'graph'}><GraphEditorPage name={name} editor={editor} graphs={graphs} runs={runs} graphColors={graphColors}
           busy={busy} notice={notice} setNotice={setNotice} selectGraph={selectGraph} create={create}
-          onTriggerConfig={() => setTriggerConfig(true)}
           onPilot={() => askPilot('graph')} deleteGraph={deleteGraph} save={save} check={check} trigger={trigger} openRun={openRun} navigateGraph={navigateGraph}
           onInspect={() => setInspectorOpen(true)} onRelations={() => setRelations(true)} graphReturn={graphReturn}
           onReturn={() => { if (graphReturn) navigateGraph(graphReturn.graph, graphReturn.node); setGraphReturn(null); }} /></PageActivity>
       {sessions && <ChannelSessions onOpenRun={(id, graph) => void navigateRun(id, graph)} close={() => setSessions(false)} />}
-      {triggerConfig && name && <MessageTrigger graph={name} close={() => setTriggerConfig(false)} />}
       {relations && <GraphRelations graph={name} close={() => setRelations(false)} onOpen={navigateGraph} />}
       {dialog === 'create' && <CreateGraphDialog close={() => setDialog(null)} create={async wanted => {
         await api('/graphs', 'POST', { name: wanted });

@@ -40,13 +40,13 @@ export function ChannelSessions({ onOpenRun, close }: { onOpenRun?: (run: string
   const refresh = () => setRevision(value => value + 1);
   const open = onOpenRun && ((run: string, graph: string) => { close(); onOpenRun(run, graph); });
   return <Modal title="消息会话" close={close} className="channels-dialog channels-sessions-dialog">
-    <div className="channels-dialog-intro"><p>每段可信对话拥有独立运行实例与工作现场。消息触发在工作流编辑页配置。</p>
+    <div className="channels-dialog-intro"><p>每段可信对话拥有独立运行实例与工作现场。机器人在工作流 Agent 节点的插件详情中配置，「Graph」列就是消息到达的机器人。</p>
       <span className="channels-count">{sessionsRead === 'ready' ? sessions.length : '未知'}</span>
       <button type="button" onClick={refresh}><RefreshCw size={14} />刷新状态</button></div>
     {readError && <div className="channels-message bad" role="alert"><strong>读取未完成</strong><p>{readError}</p><span>检查服务状态后重试。</span></div>}
     <section className="channels-assistants" aria-label="消息会话列表">
       {sessions.length ? <div className="channels-session-list">{sessions.map(session => <AssistantRow key={session.id} session={session} revision={revision} onChanged={refresh} onOpenRun={open} />)}</div>
-        : <div className="channels-empty"><Radio size={24} /><strong>{sessionsRead === 'failed' ? '消息会话读取失败' : sessionsRead === 'ready' ? '还没有消息会话' : '正在读取会话…'}</strong><p>{sessionsRead === 'failed' ? '无法确认当前消息会话。请刷新状态重试。' : '在工作流编辑页配置并启用消息触发后，首条可信消息会创建会话；绑定的 Graph 会惰性创建运行实例。'}</p></div>}
+        : <div className="channels-empty"><Radio size={24} /><strong>{sessionsRead === 'failed' ? '消息会话读取失败' : sessionsRead === 'ready' ? '还没有消息会话' : '正在读取会话…'}</strong><p>{sessionsRead === 'failed' ? '无法确认当前消息会话。请刷新状态重试。' : '在工作流 Agent 节点的插件详情中配置并启用机器人后，首条可信消息会创建会话；绑定的 Graph 会惰性创建运行实例。'}</p></div>}
       <p className="channels-footer-note">支持热更新的 Graph 保存插件配置后，各会话从下一条消息使用新配置。退役会解除当前绑定，下一条可信消息创建新实例。</p>
     </section>
   </Modal>;
