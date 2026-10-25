@@ -23,6 +23,7 @@
 | Graph 编译、模块与组合 | [作者契约](rust-graph-authoring-contract.md)、[组合契约](graph-composition-design.md)、[Kernel 模块](rust-graph-module-design.md) |
 | HTTP API 与 Web 投影 | [API 契约](rust-frontend-api-contract.md) |
 | Host 的 Run 访问边界与迁移 | [Run 访问门面与围栏](run-access-facade.md) |
+| Host 依赖方向与重复规则收敛（进行中） | [任务书](host-convergence-task.md) |
 | Runtime 或发行验证 | [确定性回归](runtime-contract-tests.md)、[候选回归](rust-production-candidate.md) |
 | 部署与运行预检 | [部署](rust-production-deployment.md) |
 | 渠道与业务 Graph | [企业微信](wecom-assistant.md)、[RSI](rsi.md)、[周报](weekly-work-report.md) |
