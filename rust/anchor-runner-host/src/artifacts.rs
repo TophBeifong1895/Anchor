@@ -1,5 +1,6 @@
 //! Host-owned, immutable file snapshots behind the shared ArtifactPort.
 
+use crate::host_fs::invocation_stem as key_hash;
 use anchor_runtime::{
     ReadOnlyInput,
     graph::{
@@ -887,9 +888,6 @@ fn scan_hash_directory(
 fn corrupt(message: impl Into<String>) -> GraphError {
     GraphError::CorruptRun(message.into())
 }
-fn key_hash(key: &InvocationKey) -> String {
-    format!("{:x}", Sha256::digest(key.durable_key().as_bytes()))
-}
 fn commit_for(key: &InvocationKey) -> CommitRef {
     CommitRef {
         id: format!("fs2-{}", key_hash(key)),
@@ -915,13 +913,7 @@ fn valid_fs_id(id: &str) -> bool {
         })
 }
 fn validate_component(value: &str) -> Result<(), GraphError> {
-    if value.is_empty()
-        || value == "."
-        || value == ".."
-        || !value
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || b"_.-".contains(&byte))
-    {
+    if !anchor_runtime::identifier::is_name(value) {
         return Err(corrupt("unsafe artifact identity component"));
     }
     Ok(())

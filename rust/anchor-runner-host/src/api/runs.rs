@@ -166,13 +166,7 @@ pub(super) async fn delete_run(
     State(state): State<ApiState>,
     AxumPath(id): AxumPath<String>,
 ) -> Result<StatusCode, HttpResponse> {
-    if id.is_empty()
-        || id == "."
-        || id == ".."
-        || !id
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
-    {
+    if !anchor_runtime::identifier::is_name(&id) {
         return Err(error(StatusCode::NOT_FOUND, "no such run"));
     }
     state

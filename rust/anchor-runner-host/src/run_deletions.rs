@@ -95,13 +95,7 @@ impl RunDeletion {
 }
 
 fn valid_id(value: &str) -> bool {
-    !value.is_empty()
-        && value.len() <= 200
-        && value != "."
-        && value != ".."
-        && value
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || b"-_.".contains(&byte))
+    value.len() <= 200 && anchor_runtime::identifier::is_name(value)
 }
 
 fn path(root: &Path, run_id: &str) -> Result<PathBuf, String> {

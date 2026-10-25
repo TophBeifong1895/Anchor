@@ -848,11 +848,7 @@ impl ToolEnvironment {
                 .file_name()
                 .and_then(|id| id.to_str())
                 .ok_or("invalid tool id")?;
-            if !id.chars().next().is_some_and(|c| c.is_ascii_alphanumeric())
-                || !id
-                    .chars()
-                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.'))
-            {
+            if !anchor_runtime::identifier::is_plugin_id(id) {
                 return Err(format!("invalid tool id: {id}"));
             }
             let spec: ToolSpec = serde_json::from_slice(

@@ -66,7 +66,11 @@ fn record_decision(
 
 impl GooseNodePort {
     fn recovery_fact(&self, key: &InvocationKey) -> Result<Option<Fact>, GraphError> {
-        let fact = read_fact(&self.facts.join(format!("{}.json", Self::stem(key))))?;
+        let fact = read_fact(
+            &self
+                .facts
+                .join(format!("{}.json", crate::host_fs::invocation_stem(key))),
+        )?;
         if fact.as_ref().is_some_and(|f| {
             self.fixture || f.version != 2 || f.key != *key || f.binary_sha256 != self.binary_sha256
         }) {
@@ -102,7 +106,12 @@ impl GooseNodePort {
             GraphError::CorruptRun("native recovery invocation is missing".into())
         })?;
         record_decision(&mut fact, attempt_id, decision)?;
-        store_fact(&self.facts.join(format!("{}.json", Self::stem(key))), &fact)
+        store_fact(
+            &self
+                .facts
+                .join(format!("{}.json", crate::host_fs::invocation_stem(key))),
+            &fact,
+        )
     }
 }
 

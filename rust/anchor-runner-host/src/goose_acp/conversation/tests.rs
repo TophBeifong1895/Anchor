@@ -46,7 +46,7 @@ impl Fixture {
         super::super::store_fact(
             &self.facts.join(format!(
                 "{}.json",
-                super::super::GooseNodePort::stem(&fact.key)
+                crate::host_fs::invocation_stem(&fact.key)
             )),
             fact,
         )
@@ -308,7 +308,7 @@ fn identity_model_session_and_untrusted_predecessor_changes_are_refused() {
         super::super::store_fact(
             &fixture.facts.join(format!(
                 "{}.json",
-                super::super::GooseNodePort::stem(&first.key)
+                crate::host_fs::invocation_stem(&first.key)
             )),
             &changed,
         )

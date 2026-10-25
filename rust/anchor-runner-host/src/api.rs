@@ -204,7 +204,7 @@ pub async fn serve() -> io::Result<()> {
                 .to_path_buf()
         });
     for root in [&data_root, &workspace_root, &catalog_root] {
-        crate::goose_acp::pilot::directory(root).map_err(io::Error::other)?;
+        crate::host_fs::directory(root).map_err(io::Error::other)?;
     }
     let configured_graph_ready =
         validate_service_configuration(&bundle_root, &data_root, &workspace_root, &catalog_root)?;
@@ -656,15 +656,6 @@ fn session_plugin_declarations(
     declarations
 }
 
-/// The same Plugin-id rule the Library catalog applies to `plugins/<id>`.
-fn valid_plugin_id(value: &str) -> bool {
-    !value.is_empty()
-        && value.as_bytes()[0].is_ascii_alphanumeric()
-        && value
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || b"_.-".contains(&byte))
-}
-
 /// One installed Plugin's row for the Session view.
 ///
 /// `available` is a report, not an action: this reads whether the view the
@@ -806,7 +797,7 @@ async fn set_session_plugin(
         .get("on")
         .and_then(Value::as_bool)
         .ok_or_else(|| error(StatusCode::BAD_REQUEST, "on must be a boolean"))?;
-    if !valid_plugin_id(&plugin) {
+    if !anchor_runtime::identifier::is_plugin_id(&plugin) {
         return Err(error(
             StatusCode::BAD_REQUEST,
             format!("插件 id `{plugin}` 不合法"),

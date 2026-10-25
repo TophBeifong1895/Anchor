@@ -2,16 +2,10 @@
 
 use crate::{MutablePaths, invalid};
 use anchor_runtime::graph::GraphError;
+pub(crate) use anchor_runtime::identifier::is_plugin_id as valid_reference;
 use serde_json::Value;
 use std::path::{Component, Path, PathBuf};
 
-pub(crate) fn valid_reference(value: &str) -> bool {
-    !value.is_empty()
-        && value.as_bytes()[0].is_ascii_alphanumeric()
-        && value
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || b"_.-".contains(&b))
-}
 pub(crate) fn read_object(path: &Path) -> Result<serde_json::Map<String, Value>, GraphError> {
     read_object_bytes(path).map(|(object, _)| object)
 }

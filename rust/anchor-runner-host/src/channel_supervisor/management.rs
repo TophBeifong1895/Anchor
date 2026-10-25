@@ -6,7 +6,7 @@ use crate::application::{
     ApplicationError,
     channel_management::{
         ChannelBinding, ChannelCallback, ChannelManagementPort, ChannelRuntimeState, PLATFORM,
-        channel_plan, identifier,
+        channel_plan,
     },
 };
 use anchor_graph_host::{
@@ -92,7 +92,7 @@ pub(crate) struct ChannelManagementAdapter {
 impl ChannelManagementAdapter {
     pub(crate) fn open(configuration: ChannelHostConfiguration) -> Result<Self, String> {
         let root = configuration.data_root.join("platform/channels");
-        crate::goose_acp::pilot::directory(&root)?;
+        crate::host_fs::directory(&root)?;
         let metadata = fs::metadata(&root).map_err(|_| "channel configuration root unavailable")?;
         if metadata.uid() != rustix::process::geteuid().as_raw()
             || metadata.permissions().mode() & 0o777 != 0o700
@@ -223,7 +223,7 @@ impl ChannelManagementAdapter {
         if owner.is_empty() || owner.len() > 500 || owner.chars().any(char::is_control) {
             return Err(ApplicationError::Invalid("invalid channel owner".into()));
         }
-        if !identifier(graph) {
+        if !anchor_runtime::identifier::is_name(graph) {
             return Err(ApplicationError::Invalid("invalid bot Graph name".into()));
         }
         self.assert_readable(graph)?;
@@ -250,10 +250,10 @@ impl ChannelManagementAdapter {
 
     fn publish(&self, graph: &str, fact: ChannelFact) -> Result<(), ApplicationError> {
         let directory = self.root.join("graphs");
-        crate::goose_acp::pilot::directory(&directory).map_err(storage)?;
+        crate::host_fs::directory(&directory).map_err(storage)?;
         // Staged beside, not inside, the bindings: any name in graphs/ is a Graph.
         let staging = self.root.join("staging");
-        crate::goose_acp::pilot::directory(&staging).map_err(storage)?;
+        crate::host_fs::directory(&staging).map_err(storage)?;
         let mut temporary = tempfile::NamedTempFile::new_in(&staging)
             .map_err(|_| storage("channel configuration staging unavailable"))?;
         fs::set_permissions(temporary.path(), fs::Permissions::from_mode(0o600))
@@ -743,7 +743,7 @@ fn register_account(
     identity: &str,
 ) -> Result<String, String> {
     let account = wecom_account_identity(identity);
-    crate::goose_acp::pilot::directory(&configuration.data_root.join("platform"))?;
+    crate::host_fs::directory(&configuration.data_root.join("platform"))?;
     anchor_platform_session::SessionStore::open(
         configuration.data_root.join("platform/sessions.sqlite"),
     )
@@ -778,7 +778,7 @@ pub(crate) fn saved_binding(
     data_root: &Path,
     graph: &str,
 ) -> Result<Option<ChannelBinding>, String> {
-    if !identifier(graph) {
+    if !anchor_runtime::identifier::is_name(graph) {
         return Ok(None);
     }
     let path = data_root
@@ -813,7 +813,7 @@ fn read_facts(directory: &Path) -> Result<Facts, String> {
             .file_name()
             .and_then(|name| name.to_str())
             .and_then(|name| name.strip_suffix(".json"))
-            .filter(|graph| identifier(graph))
+            .filter(|graph| anchor_runtime::identifier::is_name(graph))
         else {
             eprintln!(
                 "anchor channel wecom: ignoring {} in the bot bindings directory",

@@ -1,0 +1,28 @@
+   Compiling anchor-runner-host v0.1.0 (/home/mansteinl/Anchor/rust/anchor-runner-host)
+    Finished `test` profile [optimized + debuginfo] target(s) in 13.90s
+     Running unittests src/main.rs (rust/target/debug/deps/anchor_runner_host-c1aaaabe35671170)
+
+running 2 tests
+
+thread 'plugin_configuration::tests::plugin_ids_require_an_alphanumeric_prefix_at_configuration_entry_points' (1393651) panicked at anchor-runner-host/src/plugin_configuration/tests.rs:67:9:
+assertion `left == right` failed
+  left: "Plugin configuration target unavailable"
+ right: "invalid Plugin configuration ID"
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+thread 'credential_store::tests::plugin_ids_require_an_alphanumeric_prefix_at_credential_entry_points' (1393650) panicked at anchor-runner-host/src/credential_store.rs:927:13:
+assertion `left == right` failed
+  left: Some("credential target Plugin is not installed")
+ right: Some("invalid credential request")
+test plugin_configuration::tests::plugin_ids_require_an_alphanumeric_prefix_at_configuration_entry_points ... FAILED
+test credential_store::tests::plugin_ids_require_an_alphanumeric_prefix_at_credential_entry_points ... FAILED
+
+failures:
+
+failures:
+    credential_store::tests::plugin_ids_require_an_alphanumeric_prefix_at_credential_entry_points
+    plugin_configuration::tests::plugin_ids_require_an_alphanumeric_prefix_at_configuration_entry_points
+
+test result: FAILED. 0 passed; 2 failed; 0 ignored; 0 measured; 1033 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p anchor-runner-host --bin anchor-runner-host`

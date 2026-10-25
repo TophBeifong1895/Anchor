@@ -212,13 +212,7 @@ impl RunMetadata {
 }
 
 fn path(root: &Path, id: &str) -> Result<PathBuf, ApplicationError> {
-    if id.is_empty()
-        || id == "."
-        || id == ".."
-        || !id
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || "-_.".contains(c))
-    {
+    if !anchor_runtime::identifier::is_name(id) {
         return Err(ApplicationError::Invalid("invalid Run id".into()));
     }
     Ok(root.join("run-metadata").join(format!("{id}.json")))

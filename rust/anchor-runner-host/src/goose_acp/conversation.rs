@@ -43,7 +43,7 @@ fn scope_name(hint: &str) -> Result<String, String> {
 
 fn lease(process_root: &Path, scope: &str) -> Result<anchor_file_lease::FileLease, String> {
     let directory = process_root.join("conversation-locks");
-    super::pilot::directory(&directory)?;
+    crate::host_fs::directory(&directory)?;
     let file = OpenOptions::new()
         .read(true)
         .write(true)
@@ -105,7 +105,7 @@ impl ConversationScope {
         let scope = scope_name(hint).map_err(GraphError::Unsupported)?;
         let held = lease(process_root, &scope).map_err(GraphError::Unsupported)?;
         let root = process_root.join("conversations").join(&scope);
-        super::pilot::directory(&root).map_err(GraphError::Unsupported)?;
+        crate::host_fs::directory(&root).map_err(GraphError::Unsupported)?;
         fs::set_permissions(&root, fs::Permissions::from_mode(0o700))?;
         if let Some(current) = current
             && (current.conversation_scope.as_deref() != Some(scope.as_str())
@@ -124,7 +124,10 @@ impl ConversationScope {
             .and_then(|binding| binding.latest.as_ref());
         let mut previous = None;
         for predecessor in predecessors {
-            let path = facts.join(format!("{}.json", super::GooseNodePort::stem(predecessor)));
+            let path = facts.join(format!(
+                "{}.json",
+                crate::host_fs::invocation_stem(predecessor)
+            ));
             if let Some(fact) = read_fact(&path)? {
                 if fact.key != *predecessor
                     || fact.version != 2
@@ -306,6 +309,6 @@ pub(crate) fn remove(process_root: &Path, hint: &str) -> Result<(), String> {
     if metadata.file_type().is_symlink() {
         return Err("Goose conversation directory must not be a symlink".into());
     }
-    super::pilot::directory(&root)?;
+    crate::host_fs::directory(&root)?;
     fs::remove_dir_all(&root).map_err(|error| error.to_string())
 }

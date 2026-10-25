@@ -356,7 +356,7 @@ impl RunApplication {
             .values()
             .flatten()
             .map(|result| result.commit.id.as_str())
-            .filter(|id| crate::run_data::safe_component(id))
+            .filter(|id| anchor_runtime::identifier::is_name(id))
             .collect::<Vec<_>>();
         commits.sort();
         commits.dedup();

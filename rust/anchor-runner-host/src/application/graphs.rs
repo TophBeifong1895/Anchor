@@ -67,7 +67,7 @@ impl From<ApplicationError> for GraphManagementError {
 
 impl RunApplication {
     pub(crate) fn graph_path_checked(&self, name: &str) -> Result<PathBuf, GraphManagementError> {
-        if !valid_graph_name(name) {
+        if !anchor_runtime::identifier::is_name(name) {
             return Err(GraphManagementError::BadRequest(
                 "invalid graph name".into(),
             ));
@@ -140,7 +140,7 @@ impl RunApplication {
                         continue;
                     }
                     let name = entry.file_name().to_string_lossy().into_owned();
-                    if valid_graph_name(&name)
+                    if anchor_runtime::identifier::is_name(&name)
                         && !names.contains(&name)
                         && FileGraphBundleLoader::new(entry.path())
                             .with_library_root(crate::library_root(&self.catalog_root))
@@ -226,15 +226,6 @@ impl RunApplication {
         let removed_runs = self.delete_graph(name, &path, workspace_root).await?;
         Ok(removed_runs)
     }
-}
-
-fn valid_graph_name(name: &str) -> bool {
-    !name.is_empty()
-        && name != "."
-        && name != ".."
-        && name
-            .chars()
-            .all(|character| character.is_ascii_alphanumeric() || "-_.".contains(character))
 }
 
 fn invalid(failure: impl std::fmt::Display) -> GraphManagementError {

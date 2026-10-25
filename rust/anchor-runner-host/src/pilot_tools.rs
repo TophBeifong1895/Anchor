@@ -824,15 +824,6 @@ pub(crate) struct PilotTools {
     pub(crate) context: Option<Arc<PilotTurnContext>>,
 }
 
-pub(crate) fn identifier(value: &str) -> bool {
-    !value.is_empty()
-        && value != "."
-        && value != ".."
-        && value
-            .chars()
-            .all(|character| character.is_ascii_alphanumeric() || "-_.".contains(character))
-}
-
 fn parameter(arguments: &Value, name: &str) -> Result<String, ToolError> {
     arguments
         .get(name)

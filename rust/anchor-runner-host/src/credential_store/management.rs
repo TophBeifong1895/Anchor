@@ -2,7 +2,7 @@
 use super::*;
 
 fn definition(library: &Path, plugin: &str) -> Result<PluginDefinition, String> {
-    if !crate::pilot_tools::identifier(plugin) {
+    if !anchor_runtime::identifier::is_plugin_id(plugin) {
         return Err("invalid credential Plugin ID".into());
     }
     FilePluginCatalog::new(library)

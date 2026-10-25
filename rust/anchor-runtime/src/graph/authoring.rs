@@ -224,14 +224,7 @@ fn plugin_refs(value: Option<&Value>, where_: &str) -> Result<Vec<PluginRef>, Gr
 }
 
 fn valid_plugin_ref(name: &str, where_: &str) -> Result<String, GraphError> {
-    let valid = {
-        let mut chars = name.chars();
-        chars
-            .next()
-            .is_some_and(|first| first.is_ascii_alphanumeric())
-            && chars.all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-' | '.'))
-    };
-    if valid {
+    if crate::identifier::is_plugin_id(name) {
         Ok(name.to_owned())
     } else {
         Err(invalid(format!(

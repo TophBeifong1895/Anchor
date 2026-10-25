@@ -640,12 +640,7 @@ pub(crate) fn scope_of(node_id: &str) -> String {
         .unwrap_or_default()
 }
 pub(crate) fn validate_component(s: &str) -> Result<(), GraphError> {
-    if s.is_empty()
-        || s == "."
-        || s == ".."
-        || s.chars()
-            .any(|c| !(c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.')))
-    {
+    if !crate::identifier::is_name(s) {
         Err(GraphError::InvalidRunId(s.to_owned()))
     } else {
         Ok(())
@@ -653,15 +648,8 @@ pub(crate) fn validate_component(s: &str) -> Result<(), GraphError> {
 }
 pub(crate) fn validate_node_id(s: &str) -> Result<(), GraphError> {
     if s.is_empty()
-        || s.split('/').any(|part| {
-            part.is_empty()
-                || part == "."
-                || part == ".."
-                || part == ".graph-calls"
-                || part
-                    .chars()
-                    .any(|c| !(c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.')))
-        })
+        || s.split('/')
+            .any(|part| !crate::identifier::is_name(part) || part == ".graph-calls")
     {
         Err(GraphError::InvalidSnapshot(format!("unsafe node id `{s}`")))
     } else {

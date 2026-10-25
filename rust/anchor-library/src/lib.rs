@@ -440,11 +440,7 @@ fn stage_candidate(
 }
 
 fn validate_id(id: &str) -> Result<(), InstallError> {
-    if id.as_bytes().first().is_some_and(u8::is_ascii_alphanumeric)
-        && id
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || b"_.-".contains(&byte))
-    {
+    if anchor_runtime::identifier::is_plugin_id(id) {
         Ok(())
     } else {
         Err(InstallError::InvalidId)

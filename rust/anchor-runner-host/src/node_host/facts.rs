@@ -2,7 +2,7 @@
 use super::*;
 
 pub(super) fn fact_stem(key: &InvocationKey) -> String {
-    format!("nf1-{:x}", Sha256::digest(key.durable_key().as_bytes()))
+    format!("nf1-{}", crate::host_fs::invocation_stem(key))
 }
 
 fn read_optional(path: &Path) -> Result<Option<Vec<u8>>, GraphError> {

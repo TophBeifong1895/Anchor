@@ -1,9 +1,9 @@
 use crate::application::metadata::{AssistantSource, RunMetadata};
 use crate::application::run_access;
+use crate::host_fs::invocation_stem as stem;
 use anchor_platform_session::{ChannelInboundAdmission, SessionStore};
 use anchor_runtime::graph::{GraphError, GraphSnapshot, InvocationKey, NodeExecutionRequest};
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 use std::{
     fs,
     io::Write,
@@ -135,10 +135,6 @@ pub(crate) struct TurnBinding {
     pub(crate) pending_inbounds: Vec<String>,
     #[serde(default)]
     pub(crate) pending_truncated: bool,
-}
-
-pub(crate) fn stem(key: &InvocationKey) -> String {
-    format!("{:x}", Sha256::digest(key.durable_key().as_bytes()))
 }
 
 fn binding_path(root: &Path, key: &InvocationKey) -> PathBuf {

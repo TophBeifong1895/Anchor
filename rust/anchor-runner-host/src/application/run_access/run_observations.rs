@@ -48,7 +48,7 @@ impl SubmissionObserver for RunObservations {
     fn accepted(&self, resource_id: &str) -> Result<(), GraphError> {
         let id = resource_id
             .strip_prefix("run/")
-            .filter(|id| super::RunApplication::valid_run_component(id))
+            .filter(|id| anchor_runtime::identifier::is_name(id))
             .ok_or_else(|| GraphError::CorruptRun("invalid observation Run id".into()))?;
         let _writer = self.writer.lock().unwrap();
         std::fs::create_dir_all(&self.root)?;

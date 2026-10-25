@@ -1,0 +1,9 @@
+   Compiling anchor-runner-host v0.1.0 (/home/mansteinl/Anchor/rust/anchor-runner-host)
+    Finished `test` profile [optimized + debuginfo] target(s) in 40.05s
+     Running unittests src/main.rs (rust/target/debug/deps/anchor_runner_host-c1aaaabe35671170)
+
+running 2 tests
+test plugin_configuration::tests::plugin_ids_require_an_alphanumeric_prefix_at_configuration_entry_points ... ok
+test credential_store::tests::plugin_ids_require_an_alphanumeric_prefix_at_credential_entry_points ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 1034 filtered out; finished in 0.00s

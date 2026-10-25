@@ -114,10 +114,12 @@ pub(crate) fn valid_target(target: &str) -> bool {
     match split_target(target) {
         (server, Some(graph)) => {
             server.starts_with("channel_")
-                && crate::pilot_tools::identifier(server)
-                && crate::pilot_tools::identifier(graph)
+                && anchor_runtime::identifier::is_name(server)
+                && anchor_runtime::identifier::is_name(graph)
         }
-        (server, None) => !server.starts_with("channel_") && crate::pilot_tools::identifier(server),
+        (server, None) => {
+            !server.starts_with("channel_") && anchor_runtime::identifier::is_name(server)
+        }
     }
 }
 
@@ -217,7 +219,7 @@ pub(crate) fn save(path: &Path, value: &impl Serialize) -> Result<(), String> {
     let parent = path
         .parent()
         .ok_or("private credential parent unavailable")?;
-    crate::goose_acp::pilot::directory(parent)?;
+    crate::host_fs::directory(parent)?;
     private_parent(path)?.ok_or("private credential parent unavailable")?;
     let mut file = tempfile::NamedTempFile::new_in(parent)
         .map_err(|_| "private credential staging unavailable")?;
@@ -234,7 +236,7 @@ pub(crate) fn save(path: &Path, value: &impl Serialize) -> Result<(), String> {
 }
 pub(crate) fn lease(data: &Path) -> Result<anchor_file_lease::FileLease, String> {
     let root = data.join("platform");
-    crate::goose_acp::pilot::directory(&root)?;
+    crate::host_fs::directory(&root)?;
     let file = fs::OpenOptions::new()
         .create(true)
         .truncate(false)
@@ -350,7 +352,7 @@ pub(crate) fn request(
     field: &str,
     purpose: &str,
 ) -> Result<CredentialRequest, String> {
-    if !crate::pilot_tools::identifier(plugin)
+    if !anchor_runtime::identifier::is_plugin_id(plugin)
         || !valid_target(server)
         || !valid_field(field)
         || purpose.len() > 2000
@@ -434,7 +436,7 @@ fn check_fact(fact: &RequestFact, owner: &str, session: &Session) -> Result<(), 
             "pending" | "configured" | "cancelled" | "interrupted"
         )
         || !valid_field(&fact.request.field)
-        || !crate::pilot_tools::identifier(&fact.request.plugin)
+        || !anchor_runtime::identifier::is_plugin_id(&fact.request.plugin)
         || !valid_target(&fact.request.server)
     {
         return Err("credential request ownership or status changed".into());
@@ -810,13 +812,13 @@ pub(crate) fn delete_requests(data: &Path, owner: &str, session: &Session) -> Re
     let _lease = lease(data)?;
     let root = requests_root(data, owner, session);
     if root.exists() {
-        crate::goose_acp::pilot::directory(&root)?;
+        crate::host_fs::directory(&root)?;
         fs::remove_dir_all(root).map_err(|_| "credential request cleanup failed")?;
     }
     Ok(())
 }
 pub(crate) fn delete_plugin(data: &Path, plugin: &str) -> Result<(), String> {
-    if !crate::pilot_tools::identifier(plugin) {
+    if !anchor_runtime::identifier::is_plugin_id(plugin) {
         return Err("invalid credential Plugin ID".into());
     }
     let _lease = lease(data)?;
@@ -918,6 +920,38 @@ mod tests {
             .create_turn("owner-a", &session.id, "test", Some("configure"))
             .unwrap();
         (root, sessions, session, turn.id)
+    }
+    #[test]
+    fn plugin_ids_require_an_alphanumeric_prefix_at_credential_entry_points() {
+        let (root, sessions, session, turn) = fixture();
+        let data = root.path().join("state");
+        for plugin in ["-x", "_x"] {
+            assert_eq!(
+                request(
+                    &data,
+                    root.path(),
+                    &sessions,
+                    "owner-a",
+                    &session,
+                    &turn,
+                    plugin,
+                    "api",
+                    "ANCHOR_TEST_PRIVATE_CREDENTIAL",
+                    "configure test",
+                )
+                .err()
+                .as_deref(),
+                Some("invalid credential request"),
+            );
+            assert_eq!(
+                credentials(&data, root.path(), "owner-a", plugin).unwrap_err(),
+                "invalid credential Plugin ID",
+            );
+            assert_eq!(
+                delete_plugin(&data, plugin).unwrap_err(),
+                "invalid credential Plugin ID",
+            );
+        }
     }
     #[test]
     fn private_input_is_owner_bound_and_never_public_and_conflicting_retry_is_rejected() {

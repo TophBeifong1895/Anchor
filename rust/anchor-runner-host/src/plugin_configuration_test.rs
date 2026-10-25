@@ -17,7 +17,7 @@ pub(crate) async fn test(
     authorization_digest: String,
     revision: u64,
 ) -> Result<Value, String> {
-    if !crate::pilot_tools::identifier(&plugin) {
+    if !anchor_runtime::identifier::is_plugin_id(&plugin) {
         return Err("invalid Plugin configuration ID".into());
     }
     let root = library.clone();

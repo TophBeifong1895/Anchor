@@ -42,7 +42,7 @@ pub(crate) fn save(data: &Path, state: &str, link: &PilotOAuthLink) -> Result<()
 
 fn save_path(path: &Path, link: &PilotOAuthLink) -> Result<(), String> {
     let parent = path.parent().expect("OAuth link parent");
-    crate::goose_acp::pilot::directory(parent)?;
+    crate::host_fs::directory(parent)?;
     check_directory(parent)?;
     let mut file =
         tempfile::NamedTempFile::new_in(parent).map_err(|_| "OAuth association staging failed")?;

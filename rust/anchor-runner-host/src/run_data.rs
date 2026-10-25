@@ -7,23 +7,11 @@
 //! Bindings survive until their dependent data is removed, so cleanup tolerates
 //! missing files and a partial delete can be replayed without losing ownership.
 
+use crate::host_fs::invocation_stem as key_hash;
 use anchor_runtime::graph::{GraphRunRecord, InvocationKey};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-
-pub(crate) fn safe_component(value: &str) -> bool {
-    !value.is_empty()
-        && value != "."
-        && value != ".."
-        && value
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || b"_.-".contains(&byte))
-}
-
-fn key_hash(key: &InvocationKey) -> String {
-    format!("{:x}", Sha256::digest(key.durable_key().as_bytes()))
-}
 
 fn owns_invocation(record: &GraphRunRecord, key: &InvocationKey) -> bool {
     key.run_id == record.run_id
@@ -133,7 +121,7 @@ pub(crate) fn remove_legacy_conversation(data_root: &Path, hint: &str) -> Result
         let Some(stem) = name.strip_suffix(".conversation.json") else {
             continue;
         };
-        if !stem.starts_with("np1-") || !safe_component(stem) {
+        if !stem.starts_with("np1-") || !anchor_runtime::identifier::is_name(stem) {
             continue;
         }
         let value: serde_json::Value = serde_json::from_slice(
@@ -299,7 +287,7 @@ pub(crate) fn artifact_paths(record: &GraphRunRecord, artifacts_root: &Path) -> 
     let mut paths = Vec::new();
     for result in record.results.values().flatten() {
         let id = result.commit.id.as_str();
-        if safe_component(id) {
+        if anchor_runtime::identifier::is_name(id) {
             paths.push(artifacts_root.join(id));
             paths.push(artifacts_root.join(format!("{id}.json")));
         }
@@ -423,7 +411,7 @@ pub(crate) fn delete_run_data(
             std::fs::remove_file(&path).map_err(|error| error.to_string())?;
         }
     }
-    if safe_component(&record.run_id) {
+    if anchor_runtime::identifier::is_name(&record.run_id) {
         crate::channel_inputs::remove(data_root, &record.run_id)?;
         let local_inputs = crate::local_inputs::fact_path(data_root, &record.run_id);
         match std::fs::remove_file(local_inputs) {
@@ -476,7 +464,7 @@ pub(crate) fn delete_run_data(
 }
 
 pub(crate) fn remove_run_files(data_root: &Path, run_id: &str) -> Result<(), String> {
-    if !safe_component(run_id) {
+    if !anchor_runtime::identifier::is_name(run_id) {
         return Err(format!("unsafe Run id `{run_id}`"));
     }
     let record = data_root.join("runs").join(format!("{run_id}.json"));

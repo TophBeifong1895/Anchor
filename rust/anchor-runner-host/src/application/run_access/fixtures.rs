@@ -13,7 +13,6 @@ use anchor_runtime::graph::{
     NodeExecutionRequest,
 };
 use serde_json::json;
-use sha2::{Digest, Sha256};
 use std::{
     future::Future,
     pin::Pin,
@@ -350,7 +349,7 @@ fn submit_completion(
         invocation: dispatch.invocation,
     };
     let commit = commit.unwrap_or_else(|| CommitRef {
-        id: format!("fixture-{:x}", Sha256::digest(key.durable_key().as_bytes())),
+        id: format!("fixture-{}", crate::host_fs::invocation_stem(&key)),
         node_id: node.into(),
         invocation: dispatch.invocation,
     });

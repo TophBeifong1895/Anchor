@@ -1,4 +1,4 @@
-use super::{Fact, GooseNodePort};
+use super::Fact;
 use crate::resource_read::open_resource;
 use anchor_runtime::graph::{GraphError, InvocationKey};
 use serde_json::{Value, json};
@@ -43,7 +43,7 @@ pub(crate) fn live_notifications(
     state: &Path,
     key: &InvocationKey,
 ) -> Result<Option<Vec<Value>>, String> {
-    let stem = GooseNodePort::stem(key);
+    let stem = crate::host_fs::invocation_stem(key);
     for directory in ["goose-acp", "goose-acp-spike"] {
         let fact = state.join(directory).join(format!("{stem}.json"));
         if let Some(notifications) = live::notifications(&fact)? {
@@ -54,7 +54,7 @@ pub(crate) fn live_notifications(
 }
 
 pub(crate) fn trace_messages(state: &Path, key: &InvocationKey) -> Result<Vec<Value>, String> {
-    let stem = GooseNodePort::stem(key);
+    let stem = crate::host_fs::invocation_stem(key);
     let mut selected = None;
     for (directory, version, runtime) in [
         ("goose-acp", 2, "goose"),
@@ -247,7 +247,7 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let root = directory.path().join("goose-acp");
         fact(&root, &key(), Value::Null);
-        let name = format!("{}.evidence.json", GooseNodePort::stem(&key()));
+        let name = format!("{}.evidence.json", crate::host_fs::invocation_stem(&key()));
         let path = root.join(&name);
         let versions = ["previous".repeat(8192), "current".repeat(4096)].map(|text| {
             json!({"version":1,"runtime":"goose","key":key(),"notifications":[
@@ -406,7 +406,7 @@ mod tests {
     fn fact(root: &Path, key: &InvocationKey, observation: Value) {
         write(
             root,
-            &format!("{}.json", GooseNodePort::stem(key)),
+            &format!("{}.json", crate::host_fs::invocation_stem(key)),
             &json!({
                 "version":2,"key":key,"binary_sha256":"fixture","session_id":"native-session",
                 "completion":null,"reason":null,"model_binding":null,"tool_observation":observation
@@ -425,7 +425,7 @@ mod tests {
         fact(&root, &key(), Value::Null);
         write(
             &root,
-            &format!("{}.evidence.json", GooseNodePort::stem(&key())),
+            &format!("{}.evidence.json", crate::host_fs::invocation_stem(&key())),
             &json!({
                 "version":1,"runtime":"goose","key":key(),"restored_history":[],"notifications":[
                     update(json!({"sessionUpdate":"agent_message_chunk","content":{"text":"Inspect "}})),
@@ -470,7 +470,7 @@ mod tests {
         assert!(trace_messages(directory.path(), &key()).unwrap().is_empty());
         let root = directory.path().join("goose-acp");
         fact(&root, &key(), Value::Null);
-        let name = format!("{}.evidence.json", GooseNodePort::stem(&key()));
+        let name = format!("{}.evidence.json", crate::host_fs::invocation_stem(&key()));
         write(
             &root,
             &name,
@@ -498,7 +498,10 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let root = directory.path().join("goose-acp");
         fact(&root, &key(), Value::Null);
-        let path = root.join(format!("{}.evidence.json", GooseNodePort::stem(&key())));
+        let path = root.join(format!(
+            "{}.evidence.json",
+            crate::host_fs::invocation_stem(&key())
+        ));
         std::os::unix::fs::symlink(root.join("missing"), &path).unwrap();
         assert!(trace_messages(directory.path(), &key()).is_err());
         std::fs::remove_file(&path).unwrap();

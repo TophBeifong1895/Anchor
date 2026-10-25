@@ -35,7 +35,7 @@ pub(crate) struct ChannelMembers {
 
 impl ChannelBinding {
     pub(crate) fn validate(&self) -> Result<(), ApplicationError> {
-        if !identifier(&self.plugin) {
+        if !anchor_runtime::identifier::is_plugin_id(&self.plugin) {
             return Err(ApplicationError::Invalid("invalid channel binding".into()));
         }
         for users in [&self.users, &self.send_users] {
@@ -78,15 +78,6 @@ impl ChannelBinding {
             .collect();
         self
     }
-}
-
-pub(crate) fn identifier(value: &str) -> bool {
-    !value.is_empty()
-        && value != "."
-        && value != ".."
-        && value
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.'))
 }
 
 /// How a Graph serves as a bot: its assistant work node and the one channel

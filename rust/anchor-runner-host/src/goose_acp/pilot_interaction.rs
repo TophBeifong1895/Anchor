@@ -1,5 +1,5 @@
 use crate::application::plugins::{PluginInstallPrecondition, PluginUninstallPrecondition};
-use crate::pilot_tools::{PilotTools, identifier, workspace_directory};
+use crate::pilot_tools::{PilotTools, workspace_directory};
 use anchor_runtime::{Cancellation, ToolDefinition, ToolError, ToolResultContent};
 use rmcp::{
     Peer, RoleServer,
@@ -334,7 +334,7 @@ pub(crate) async fn uninstall_with_answer(
     cancellation: &Cancellation,
 ) -> Result<Value, ToolError> {
     let plugin = &precondition.id;
-    if !identifier(plugin) {
+    if !anchor_runtime::identifier::is_plugin_id(plugin) {
         return Err(failure("plugin must be a Plugin identifier"));
     }
     // Uninstalling the Plugin that provides this assistant's own instructions is
@@ -495,7 +495,7 @@ fn install_arguments(
         .ok_or_else(|| failure("directory must be a nonempty workspace-relative path"))?
         .to_owned();
     let id = match arguments.get("id").and_then(Value::as_str) {
-        Some(id) if identifier(id) => Some(id.to_owned()),
+        Some(id) if anchor_runtime::identifier::is_plugin_id(id) => Some(id.to_owned()),
         Some(_) => return Err(failure("id must be a Plugin identifier")),
         None => None,
     };
@@ -668,7 +668,7 @@ async fn install(
         None => candidate
             .file_name()
             .and_then(|name| name.to_str())
-            .filter(|name| identifier(name))
+            .filter(|name| anchor_runtime::identifier::is_plugin_id(name))
             .ok_or_else(|| failure("the directory name is not a usable Plugin id; pass `id`"))?
             .to_owned(),
     };

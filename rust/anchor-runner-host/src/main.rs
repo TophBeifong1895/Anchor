@@ -14,6 +14,7 @@ mod execution;
 mod fact_recorder;
 mod goose_acp;
 mod goose_tool_context;
+mod host_fs;
 mod local_inputs;
 mod pilot_attachments;
 
@@ -68,6 +69,7 @@ const MAX_FRAME: usize = 1024 * 1024;
 pub(crate) static PROCESS_ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 fn create_durable_directory(path: &std::path::Path) -> io::Result<()> {
+    // This general helper follows symlinks; host_fs::directory deliberately does not.
     std::fs::create_dir_all(path)?;
     // Sync directory entries too: syncing a file in a newly created directory
     // does not make that directory's link from its parent durable.
@@ -848,6 +850,20 @@ async fn main() -> io::Result<()> {
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    #[test]
+    fn invocation_filenames_preserve_the_durable_key_hash_bytes() {
+        let key = InvocationKey {
+            run_id: "run-1".into(),
+            graph_digest: "digest".into(),
+            node_id: "branch/work".into(),
+            invocation: 7,
+        };
+        assert_eq!(
+            host_fs::invocation_stem(&key),
+            "542df885ca2f936d298143ede4b5c911630784e4b567b799524ed60302b9d540"
+        );
+    }
 
     /// A standalone Run carries the deployment's runtime configuration, so
     /// its nodes get the configured Python rather than the sandbox's system

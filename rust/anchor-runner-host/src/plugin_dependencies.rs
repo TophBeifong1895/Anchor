@@ -1152,7 +1152,7 @@ pub(crate) async fn write_lock(
     access: &DependencyAccess,
 ) -> Result<anchor_file_lease::FileLease, ProvisionError> {
     use std::os::unix::fs::OpenOptionsExt;
-    crate::goose_acp::pilot::directory(root).map_err(ProvisionError::Failed)?;
+    crate::host_fs::directory(root).map_err(ProvisionError::Failed)?;
     let path = root.join(".lock");
     let file = std::fs::OpenOptions::new()
         .create(true)

@@ -288,7 +288,7 @@ fn reclaim_locked(root: &Path, apply: bool) -> Result<ReclaimReport, ReclaimErro
             .file_name()
             .map(|name| name.to_string_lossy().into_owned())
             .unwrap_or_default();
-        if !valid_plugin_id(&id) {
+        if !anchor_runtime::identifier::is_plugin_id(&id) {
             // The installer stages its transaction inside `plugins/`
             // (`.anchor-plugin-<random>`). It is not a Plugin, and enumerating it
             // as one would (correctly) fail closed and block every reclamation.
@@ -597,20 +597,6 @@ fn store_references(view: &Path, store: &Path) -> Result<BTreeSet<PathBuf>, io::
 fn is_private_name(path: &Path) -> bool {
     path.file_name()
         .is_some_and(|name| name.to_string_lossy().starts_with('.'))
-}
-
-/// Whether a directory name can be a Plugin id.
-///
-/// The same rule the installer enforces (`validate_id`): a Plugin id starts
-/// alphanumerically and contains only alphanumerics, `_`, `.` and `-`. Everything
-/// else under `plugins/` is the installer's own staging or an operator's litter.
-fn valid_plugin_id(name: &str) -> bool {
-    name.as_bytes()
-        .first()
-        .is_some_and(u8::is_ascii_alphanumeric)
-        && name
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || b"_.-".contains(&byte))
 }
 
 fn normalize(path: &Path) -> PathBuf {

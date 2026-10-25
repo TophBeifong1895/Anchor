@@ -1,0 +1,26 @@
+{
+  "anchor-graph-host": {
+    "passed": 65,
+    "failed": 0,
+    "ignored": 0,
+    "test_or_doc_test_results": 3
+  },
+  "anchor-library": {
+    "passed": 74,
+    "failed": 0,
+    "ignored": 0,
+    "test_or_doc_test_results": 8
+  },
+  "anchor-runner-host": {
+    "passed": 1229,
+    "failed": 0,
+    "ignored": 110,
+    "test_or_doc_test_results": 40
+  },
+  "anchor-runtime": {
+    "passed": 157,
+    "failed": 0,
+    "ignored": 0,
+    "test_or_doc_test_results": 3
+  }
+}

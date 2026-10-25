@@ -1,0 +1,27 @@
+{
+  "baseline": "6ca72054bd28f99289cf1a6334946a4baba3492c",
+  "after_tree": "a64737137426d8d5417e01e430c27320326bacfb",
+  "method": "Reuse experiments/constitution-host-preflight/final/measure_lines.py test_partition; physical lines excluding test-only files and cfg(test) spans, including whitespace and comments in the owning section. Not SLOC. Scope is the four H1 crates.",
+  "crates": {
+    "anchor-runner-host": {
+      "production_physical_lines_before": 50958,
+      "production_physical_lines_after": 50878,
+      "production_delta": -80
+    },
+    "anchor-runtime": {
+      "production_physical_lines_before": 6032,
+      "production_physical_lines_after": 6034,
+      "production_delta": 2
+    },
+    "anchor-graph-host": {
+      "production_physical_lines_before": 3416,
+      "production_physical_lines_after": 3410,
+      "production_delta": -6
+    },
+    "anchor-library": {
+      "production_physical_lines_before": 4216,
+      "production_physical_lines_after": 4198,
+      "production_delta": -18
+    }
+  }
+}

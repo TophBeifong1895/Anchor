@@ -50,7 +50,7 @@ impl RuntimeManagement {
         state_root: &Path,
     ) -> Result<Self, String> {
         let root = state_root.join("managed");
-        crate::goose_acp::pilot::directory(&root)?;
+        crate::host_fs::directory(&root)?;
         let mut operation = Self::load(&root)?;
         if let Some(operation) = &mut operation
             && matches!(operation.status.as_str(), "running" | "cancelling")

@@ -72,21 +72,11 @@ impl RunApplication {
             .join(format!("{run_id}.json"))
     }
 
-    /// A Run id that is safe to use as one path component.
-    pub(crate) fn valid_run_component(run_id: &str) -> bool {
-        !run_id.is_empty()
-            && run_id != "."
-            && run_id != ".."
-            && run_id
-                .chars()
-                .all(|character| character.is_ascii_alphanumeric() || "-_.".contains(character))
-    }
-
     pub(crate) fn abandon_intent(
         &self,
         run_id: &str,
     ) -> Result<Option<AbandonIntent>, ApplicationError> {
-        if !Self::valid_run_component(run_id) {
+        if !anchor_runtime::identifier::is_name(run_id) {
             return Err(ApplicationError::Invalid("invalid Run id".into()));
         }
         let intent =
@@ -113,7 +103,7 @@ impl RunApplication {
         run_id: &str,
         reason: Option<&str>,
     ) -> Result<AbandonResult, ApplicationError> {
-        if !Self::valid_run_component(run_id) {
+        if !anchor_runtime::identifier::is_name(run_id) {
             return Err(ApplicationError::Invalid("invalid Run id".into()));
         }
         let reason = parse_reason(reason)?;

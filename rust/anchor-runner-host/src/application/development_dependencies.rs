@@ -187,7 +187,7 @@ pub(crate) fn release_development_scope(library_root: &Path, scope: &Path) -> Re
     let development = scope.join("development");
     match std::fs::symlink_metadata(&development) {
         Ok(metadata) if metadata.is_dir() && !metadata.file_type().is_symlink() => {
-            crate::goose_acp::pilot::directory(&development)?;
+            crate::host_fs::directory(&development)?;
             std::fs::remove_dir_all(development).map_err(|e| e.to_string())
         }
         Ok(_) => Err("private development storage is no longer a Host-owned directory".into()),

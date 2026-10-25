@@ -1,3 +1,6 @@
+#[path = "../../src/host_fs.rs"]
+mod host_fs;
+
 use axum::{
     Json, Router,
     body::Body,
@@ -1259,7 +1262,7 @@ impl Host {
             node_id: node.into(),
             invocation,
         };
-        let stem = format!("{:x}", Sha256::digest(key.durable_key().as_bytes()));
+        let stem = host_fs::invocation_stem(&key);
         let facts = self.base.root.path().join(if self.native {
             "state/goose-acp"
         } else {

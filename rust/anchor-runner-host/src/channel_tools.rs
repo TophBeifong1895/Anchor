@@ -575,7 +575,7 @@ mod tests {
         crate::assistant::save_immutable(
             &root
                 .join("assistant-invocations")
-                .join(format!("{}.json", crate::assistant::stem(&key))),
+                .join(format!("{}.json", crate::host_fs::invocation_stem(&key))),
             &crate::assistant::TurnBinding {
                 key: key.clone(),
                 wait_key: "wait".into(),

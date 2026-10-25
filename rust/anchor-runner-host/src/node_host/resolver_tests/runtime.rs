@@ -51,7 +51,7 @@ async fn managed_python_is_shared_by_agent_commands_and_op_without_dependency_pl
     .into_iter()
     .find(|path| std::path::Path::new(path).is_file())
     .expect("managed runtime fixture needs supported system Python");
-    crate::goose_acp::pilot::directory(python.parent().unwrap()).unwrap();
+    crate::host_fs::directory(python.parent().unwrap()).unwrap();
     std::fs::copy(source, &python).unwrap();
     let config = managed.join("runtime-config.json");
     std::fs::write(

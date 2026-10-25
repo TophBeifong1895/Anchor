@@ -365,7 +365,7 @@ impl RunApplication {
         &self,
         id: &str,
     ) -> Result<Option<Arc<KernelRuns>>, ApplicationError> {
-        if !Self::valid_run_component(id) {
+        if !anchor_runtime::identifier::is_name(id) {
             return Err(ApplicationError::Invalid("invalid Run id".into()));
         }
         self.reject_legacy_run(id)?;

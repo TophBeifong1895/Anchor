@@ -105,7 +105,7 @@ fn save_selection(root: &Path, selected: &Selection) -> Result<(), String> {
 fn remove_env(env: &Path) -> Result<(), String> {
     match std::fs::symlink_metadata(env) {
         Ok(metadata) if metadata.is_dir() && !metadata.file_type().is_symlink() => {
-            crate::goose_acp::pilot::directory(env)?;
+            crate::host_fs::directory(env)?;
             std::fs::remove_dir_all(env).map_err(|e| e.to_string())
         }
         Ok(_) => Err(
@@ -475,7 +475,7 @@ impl RunApplication {
             // through default ensure.
             let creating = root.join("creating");
             remove_env(&creating).map_err(invalid)?;
-            crate::goose_acp::pilot::directory(&creating).map_err(invalid)?;
+            crate::host_fs::directory(&creating).map_err(invalid)?;
             create_environment(&provisioner, &creating, access)
                 .await
                 .map_err(invalid)?;

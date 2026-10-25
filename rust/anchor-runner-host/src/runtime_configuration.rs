@@ -151,7 +151,7 @@ pub(crate) fn install_release_network(library_root: &Path) -> Result<(), String>
 impl RuntimeConfiguration {
     pub(crate) fn from_env(state: &Path, library: &Path, bwrap: PathBuf) -> Result<Self, String> {
         let root = state.join("managed");
-        crate::goose_acp::pilot::directory(&root)?;
+        crate::host_fs::directory(&root)?;
         let release = release_root()?;
         let bootstrap = if let Some(release) = &release {
             let manifest: Value = serde_json::from_slice(
@@ -580,9 +580,9 @@ impl RuntimeConfiguration {
                 } else {
                     let uv = self.bootstrap_tool("uv")?;
                     let python_root = self.root.join("python");
-                    crate::goose_acp::pilot::directory(&python_root)?;
+                    crate::host_fs::directory(&python_root)?;
                     let home = self.root.join("bootstrap-home");
-                    crate::goose_acp::pilot::directory(&home)?;
+                    crate::host_fs::directory(&home)?;
                     let environment = [
                         ("HOME", home.as_path()),
                         ("UV_PYTHON_INSTALL_DIR", python_root.as_path()),
@@ -670,7 +670,7 @@ impl RuntimeConfiguration {
                 let cargo = self.root.join("rust/cargo");
                 let rustup = self.root.join("rust/rustup");
                 for root in [&home, &cargo, &rustup] {
-                    crate::goose_acp::pilot::directory(root)?;
+                    crate::host_fs::directory(root)?;
                 }
                 let environment = [
                     ("HOME", home.as_path()),
@@ -853,8 +853,8 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let release = root.path().join("release");
         let managed = root.path().join("state/managed");
-        crate::goose_acp::pilot::directory(&release).unwrap();
-        crate::goose_acp::pilot::directory(&managed).unwrap();
+        crate::host_fs::directory(&release).unwrap();
+        crate::host_fs::directory(&managed).unwrap();
         let uv = release.join("uv");
         let script = r#"#!/bin/sh
 set -eu
@@ -1153,7 +1153,7 @@ cp "$CARGO_HOME/bin/rustup" "$CARGO_HOME/bin/rustc"
             source: "https://example.com/rustup-init".into(),
         });
         for directory in ["bootstrap-home", "rust/cargo", "rust/rustup"] {
-            crate::goose_acp::pilot::directory(&configuration.root.join(directory)).unwrap();
+            crate::host_fs::directory(&configuration.root.join(directory)).unwrap();
         }
         (root, configuration)
     }

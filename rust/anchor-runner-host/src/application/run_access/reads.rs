@@ -4,7 +4,7 @@ use anchor_runtime::graph::{GraphError, GraphRunRecord};
 use std::path::Path;
 
 fn reject_legacy(data_root: &Path, run_id: &str) -> Result<(), GraphError> {
-    if !RunApplication::valid_run_component(run_id) {
+    if !anchor_runtime::identifier::is_name(run_id) {
         return Err(GraphError::InvalidRunId(run_id.into()));
     }
     match std::fs::symlink_metadata(data_root.join("runs").join(format!("{run_id}.json"))) {

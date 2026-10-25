@@ -31,12 +31,7 @@ struct FrozenInputs {
 }
 
 fn safe_run(run: &str) -> bool {
-    !run.is_empty()
-        && run.len() <= 200
-        && !matches!(run, "." | "..")
-        && run
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || b"-_.".contains(&byte))
+    run.len() <= 200 && anchor_runtime::identifier::is_name(run)
 }
 
 pub(crate) fn input_directory(data_root: &Path, run: &str) -> Result<PathBuf, String> {

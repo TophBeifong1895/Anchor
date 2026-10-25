@@ -15,7 +15,7 @@ pub(super) async fn policy(
         let plugin = arguments
             .get("plugin")
             .and_then(Value::as_str)
-            .filter(|plugin| crate::pilot_tools::identifier(plugin))
+            .filter(|plugin| anchor_runtime::identifier::is_plugin_id(plugin))
             .ok_or_else(|| failure("plugin must be an installed Plugin identifier"))?;
         let on = arguments
             .get("on")

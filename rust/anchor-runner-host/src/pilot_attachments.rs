@@ -52,7 +52,7 @@ pub(crate) struct InputSource {
 }
 
 fn directory(data: &Path, owner: &str, session: &Session, turn: &Turn) -> Result<PathBuf, String> {
-    if turn.session != session.id || !crate::pilot_tools::identifier(&turn.id) {
+    if turn.session != session.id || !anchor_runtime::identifier::is_name(&turn.id) {
         return Err("Pilot attachment Turn identity changed".into());
     }
     Ok(crate::pilot_host::scope(data, owner, session)
@@ -396,7 +396,7 @@ pub(crate) fn read(
                 })
                 .find(|item| item.id == id)
                 .ok_or("Pilot attachment not found")?;
-            if !crate::pilot_tools::identifier(id) {
+            if !anchor_runtime::identifier::is_name(id) {
                 return Err("invalid Pilot attachment id".into());
             }
             (

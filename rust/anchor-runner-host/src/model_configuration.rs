@@ -142,7 +142,7 @@ impl ModelConfiguration {
     fn new(state: &Path, mut external: BTreeMap<String, String>) -> Result<Self, String> {
         external.retain(|name, _| ENV_FIELDS.iter().any(|(_, allowed)| name == allowed));
         let root = state.join("managed");
-        crate::goose_acp::pilot::directory(&root)?;
+        crate::host_fs::directory(&root)?;
         Ok(Self { root, external })
     }
     fn load(&self) -> Result<ManagedModel, String> {

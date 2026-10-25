@@ -60,7 +60,7 @@ pub(crate) fn register(
 fn remove_directory(path: &Path) -> Result<(), String> {
     match std::fs::symlink_metadata(path) {
         Ok(metadata) if metadata.is_dir() && !metadata.file_type().is_symlink() => {
-            crate::goose_acp::pilot::directory(path)?;
+            crate::host_fs::directory(path)?;
             std::fs::remove_dir_all(path).map_err(|error| error.to_string())
         }
         Ok(_) => Err("owned Pilot resource is no longer a non-symlink directory".into()),

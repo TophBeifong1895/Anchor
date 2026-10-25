@@ -128,7 +128,7 @@ fn read_fact(path: &Path) -> Result<Option<Fact>, GraphError> {
 /// Read the durable execution claim without preparing a provider or loading a
 /// native Session. Retention must also cover interrupted, uncommitted history.
 pub(crate) fn has_invocation_fact(state: &Path, key: &InvocationKey) -> Result<bool, GraphError> {
-    let stem = GooseNodePort::stem(key);
+    let stem = crate::host_fs::invocation_stem(key);
     let mut started = false;
     for (directory, version) in [("goose-acp", 2), ("goose-acp-spike", 1)] {
         if let Some(fact) = read_fact(&state.join(directory).join(format!("{stem}.json")))? {
@@ -384,15 +384,16 @@ impl GooseNodePort {
         }))
     }
 
-    fn stem(key: &InvocationKey) -> String {
-        format!("{:x}", Sha256::digest(key.durable_key().as_bytes()))
-    }
-
     pub(crate) fn completion_fact(
         &self,
         key: &InvocationKey,
     ) -> Result<CompletionFact, GraphError> {
-        let Some(fact) = read_fact(&self.facts.join(format!("{}.json", Self::stem(key))))? else {
+        let Some(fact) = read_fact(
+            &self
+                .facts
+                .join(format!("{}.json", crate::host_fs::invocation_stem(key))),
+        )?
+        else {
             return Ok(CompletionFact::NotStarted);
         };
         if fact.version != if self.fixture { 1 } else { 2 }
@@ -420,11 +421,13 @@ impl GooseNodePort {
         &self,
         key: &InvocationKey,
     ) -> Result<Option<String>, GraphError> {
-        Ok(
-            read_fact(&self.facts.join(format!("{}.json", Self::stem(key))))?
-                .filter(|fact| fact.key == *key && fact.completion.is_none())
-                .and_then(|fact| fact.provider_failure),
-        )
+        Ok(read_fact(
+            &self
+                .facts
+                .join(format!("{}.json", crate::host_fs::invocation_stem(key))),
+        )?
+        .filter(|fact| fact.key == *key && fact.completion.is_none())
+        .and_then(|fact| fact.provider_failure))
     }
 
     pub(crate) async fn execute(
@@ -490,7 +493,7 @@ impl GooseNodePort {
             ));
         }
         let deadline = timeout.map(|timeout| tokio::time::Instant::now() + timeout);
-        let stem = Self::stem(&request.key);
+        let stem = crate::host_fs::invocation_stem(&request.key);
         let fact_path = self.facts.join(format!("{stem}.json"));
         let retained = read_fact(&fact_path)?;
         let retained_binding = retained
@@ -544,8 +547,8 @@ impl GooseNodePort {
             || self.process_root.join(&stem),
             |scope| scope.root.join("process"),
         );
-        pilot::directory(&directory).map_err(GraphError::Unsupported)?;
-        pilot::directory(&directory.join("config")).map_err(GraphError::Unsupported)?;
+        crate::host_fs::directory(&directory).map_err(GraphError::Unsupported)?;
+        crate::host_fs::directory(&directory.join("config")).map_err(GraphError::Unsupported)?;
         write_durable(
             &directory.join("config/config.yaml"),
             b"GOOSE_MODE: auto\nextensions:\n  developer:\n    name: developer\n    type: builtin\n    enabled: false\n",

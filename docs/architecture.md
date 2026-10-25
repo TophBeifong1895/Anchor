@@ -66,6 +66,8 @@ Host 托管的模型配置将公开字段、用于恢复的旧绑定和按槽/�
 
 Host 的[依赖方向围栏](../rust/anchor-runner-host/tests/layer_fence.rs)固定组合根（`main.rs`、`bin/`、`execution.rs`）、入口适配（`api`、`pilot_tools`、`node_tools` 模块及 `channel_tools.rs`）、用例（`application` 模块）与其余 Host 服务的角色。服务引用用例或入口、用例引用入口的现有次数由[逐文件上限](../rust/anchor-runner-host/layer-fence.txt)限制，新增引用失败，下降时提示降低上限。它与 Run 围栏共用生产源码扫描器，排除测试、注释和字面量；统计显式 `crate::` 路径（含分组导入、原始标识符与宏输入），不做名称解析、相对路径解析或宏展开。Run 的运行时豁免不改变这里的层次归属；现有反向依赖尚未清零，阶段状态见[收敛任务书](host-convergence-task.md)。
 
+Plugin id 与名称的字符规则统一归 [anchor-runtime::identifier](../rust/anchor-runtime/src/identifier.rs)：名称非空、非 `.`/`..`，仅含 ASCII 字母、数字和 `_.-`；Plugin id 另要求首字节为字母或数字。Library 安装/回收、Graph 编译/catalog 与 Host 入口共用此规则，凭据和配置入口同样先校验 Plugin id。Host 的不跟随符号链接的持久建目录与 invocation 文件名哈希归 [host_fs](../rust/anchor-runner-host/src/host_fs.rs)，各存储保留原前缀和路径；组合根的 `create_durable_directory` 仍保留跟随符号链接的原语义。
+
 | 实现入口 | 内部边界 |
 | --- | --- |
 | [Graph Host](../rust/anchor-graph-host/src/lib.rs) | bundle、Graph/Plugin catalog、资源校验、MCP 声明、授权摘要和 Graph Call；公共契约仍由 crate 根导出 |

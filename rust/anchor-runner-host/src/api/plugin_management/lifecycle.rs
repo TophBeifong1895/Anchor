@@ -343,7 +343,9 @@ async fn prepare_install(
     headers: HeaderMap,
     Json(body): Json<InstallInput>,
 ) -> Result<Json<Value>, HttpResponse> {
-    if !crate::pilot_tools::identifier(&body.id) || body.source.is_some() == body.files.is_some() {
+    if !anchor_runtime::identifier::is_plugin_id(&body.id)
+        || body.source.is_some() == body.files.is_some()
+    {
         return Err(error(
             StatusCode::BAD_REQUEST,
             "provide a Plugin id and exactly one GitHub source or file upload",

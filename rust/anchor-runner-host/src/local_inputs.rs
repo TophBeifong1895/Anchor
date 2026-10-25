@@ -160,7 +160,7 @@ impl LocalInputs {
         let (graph, source_file) = match &self.config_root {
             Some(root) => {
                 let graph = graph
-                    .filter(|name| valid_graph_name(name))
+                    .filter(|name| anchor_runtime::identifier::is_name(name))
                     .ok_or("local input authorization requires the immutable Graph name")?;
                 (
                     Some(graph.to_owned()),
@@ -238,23 +238,6 @@ impl LocalInputs {
     }
 }
 
-fn valid_name(name: &str) -> bool {
-    name.chars()
-        .next()
-        .is_some_and(|c| c.is_ascii_alphanumeric())
-        && name
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.'))
-}
-
-fn valid_graph_name(name: &str) -> bool {
-    !name.is_empty()
-        && !matches!(name, "." | "..")
-        && name
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.'))
-}
-
 fn read_grants(path: &Path, snapshot: &GraphSnapshot) -> Result<Grants, String> {
     let bytes = match fs::read(path) {
         Ok(bytes) => bytes,
@@ -278,7 +261,7 @@ fn read_grants(path: &Path, snapshot: &GraphSnapshot) -> Result<Grants, String> 
             .ok_or("local inputs must map names to absolute paths")?;
         let mut sources = BTreeMap::new();
         for (name, source) in inputs {
-            if !valid_name(name) {
+            if !anchor_runtime::identifier::is_plugin_id(name) {
                 return Err(format!("invalid local input name `{name}`"));
             }
             let source = Path::new(

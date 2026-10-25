@@ -14,7 +14,7 @@ use std::{
     future::Future,
     io::{Read, Write},
     os::unix::fs::{OpenOptionsExt, PermissionsExt},
-    path::{Component, Path, PathBuf},
+    path::{Path, PathBuf},
     pin::Pin,
     sync::{
         Arc, Mutex,
@@ -120,32 +120,8 @@ fn load(root: &Path) -> Result<Option<PilotFact>, String> {
     }
 }
 
-pub(crate) fn directory(root: &Path) -> Result<(), String> {
-    use rustix::fs::{Mode, OFlags, fsync, mkdirat, open, openat};
-    let flags = OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC;
-    let mut parent = open("/", flags, Mode::empty()).map_err(|_| "Pilot directory unavailable")?;
-    for component in root.components() {
-        match component {
-            Component::RootDir => {}
-            Component::Normal(name) => {
-                match mkdirat(&parent, name, Mode::RWXU) {
-                    Ok(()) => {
-                        fsync(&parent).map_err(|_| "Pilot directory could not be persisted")?
-                    }
-                    Err(error) if error == rustix::io::Errno::EXIST => {}
-                    Err(_) => return Err("Pilot directory unavailable".into()),
-                }
-                parent = openat(&parent, name, flags, Mode::empty())
-                    .map_err(|_| "Pilot directory must not contain symlinks")?;
-            }
-            _ => return Err("Pilot directory must be an absolute host path".into()),
-        }
-    }
-    Ok(())
-}
-
 pub(crate) fn execution_lease(root: &Path) -> Result<anchor_file_lease::FileLease, String> {
-    directory(root)?;
+    crate::host_fs::directory(root)?;
     let lease = OpenOptions::new()
         .create(true)
         .truncate(false)
@@ -213,7 +189,7 @@ impl GoosePilot {
         plugin_tools: Vec<Arc<dyn ToolPort>>,
         mut catalog: crate::plugin_disclosure::PluginDisclosureCatalog,
     ) -> Result<TurnStatus, PilotError> {
-        directory(&request.root)?;
+        crate::host_fs::directory(&request.root)?;
         fs::set_permissions(&request.root, fs::Permissions::from_mode(0o700))
             .map_err(|error| error.to_string())?;
         let lease = execution_lease(&request.root)?;
@@ -293,7 +269,7 @@ impl GoosePilot {
         binding: &configuration::ModelBinding,
     ) -> Result<TurnStatus, PilotError> {
         let directory = request.root.join("process");
-        self::directory(&directory)?;
+        crate::host_fs::directory(&directory)?;
         fs::set_permissions(&directory, fs::Permissions::from_mode(0o700))
             .map_err(|error| error.to_string())?;
         // Keep the socket path short: the kernel caps a UNIX socket path at `sun_path`.
@@ -837,7 +813,7 @@ mod tests {
         let outside = root.path().join("outside");
         fs::create_dir(&outside).unwrap();
         std::os::unix::fs::symlink(&outside, root.path().join("link")).unwrap();
-        assert!(directory(&root.path().join("link/child")).is_err());
+        assert!(crate::host_fs::directory(&root.path().join("link/child")).is_err());
         assert!(!outside.join("child").exists());
         let oversized = File::create(root.path().join("goose.json")).unwrap();
         oversized.set_len(MAX_FACT_BYTES + 1).unwrap();

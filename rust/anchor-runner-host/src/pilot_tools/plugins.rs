@@ -22,7 +22,7 @@ impl PilotTools {
             .get("id")
             .and_then(Value::as_str)
             .or_else(|| candidate.file_name().and_then(|name| name.to_str()))
-            .filter(|id| identifier(id))
+            .filter(|id| anchor_runtime::identifier::is_plugin_id(id))
             .ok_or_else(|| rejected("id must be a Plugin identifier"))?;
         let invocation = match (arguments.get("server"), arguments.get("tool")) {
             (None, None) if arguments.get("arguments").is_none() => None,
@@ -144,12 +144,12 @@ impl PilotTools {
         let directory = parameter(arguments, "directory")?;
         let candidate = workspace_directory(&self.task_workspace(), &directory)?;
         let id = match arguments.get("id").and_then(Value::as_str) {
-            Some(id) if identifier(id) => id.to_owned(),
+            Some(id) if anchor_runtime::identifier::is_plugin_id(id) => id.to_owned(),
             Some(_) => return Err(rejected("id must be a Plugin identifier")),
             None => candidate
                 .file_name()
                 .and_then(|name| name.to_str())
-                .filter(|name| identifier(name))
+                .filter(|name| anchor_runtime::identifier::is_plugin_id(name))
                 .ok_or_else(|| rejected("the directory name is not a usable Plugin id; pass `id`"))?
                 .to_owned(),
         };

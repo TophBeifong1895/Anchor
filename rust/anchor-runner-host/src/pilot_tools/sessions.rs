@@ -10,7 +10,7 @@ impl PilotTools {
         let run = parameter(arguments, "run")?;
         let node = parameter(arguments, "node")?;
         let path = parameter(arguments, "path")?;
-        if !identifier(&run) {
+        if !anchor_runtime::identifier::is_name(&run) {
             return Err(failed());
         }
         let record = self

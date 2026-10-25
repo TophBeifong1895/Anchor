@@ -237,7 +237,7 @@ impl RunApplication {
         access: &DependencyAccess,
     ) -> Result<PreparedCandidate, ApplicationError> {
         access.check().map_err(invalid)?;
-        crate::goose_acp::pilot::directory(preparation_root).map_err(invalid)?;
+        crate::host_fs::directory(preparation_root).map_err(invalid)?;
         let temporary = tempfile::Builder::new()
             .prefix("candidate-")
             .tempdir_in(preparation_root)
@@ -246,7 +246,7 @@ impl RunApplication {
             .stage_directory(id, directory, temporary.path())
             .map_err(invalid)?;
         let root = preparation_root.join(id).join(&review.digest);
-        crate::goose_acp::pilot::directory(&root).map_err(invalid)?;
+        crate::host_fs::directory(&root).map_err(invalid)?;
         let lease = std::fs::OpenOptions::new()
             .read(true)
             .write(true)

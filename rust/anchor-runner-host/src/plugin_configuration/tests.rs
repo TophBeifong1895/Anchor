@@ -60,6 +60,30 @@ fn owner_snapshot(
 }
 
 #[test]
+fn plugin_ids_require_an_alphanumeric_prefix_at_configuration_entry_points() {
+    let (root, sessions, definition) = fixture();
+    let data = root.path().join("state");
+    for plugin in ["-x", "_x"] {
+        assert_eq!(
+            configuration(&data, root.path(), "owner-a", plugin).unwrap_err(),
+            "invalid Plugin configuration ID",
+        );
+        assert_eq!(
+            configure(
+                &data,
+                root.path(),
+                "owner-a",
+                plugin,
+                update(&definition, 0, json!({})),
+                &sessions,
+            )
+            .unwrap_err(),
+            "invalid Plugin configuration ID",
+        );
+    }
+}
+
+#[test]
 fn shared_secret_is_atomic_owner_bound_private_and_rotatable_without_environment_fallback() {
     let (root, sessions, definition) = fixture();
     let data = root.path().join("state");

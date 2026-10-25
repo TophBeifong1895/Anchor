@@ -13,7 +13,7 @@ impl PilotTools {
     ) -> Result<Value, ToolError> {
         self.require_active_turn()?;
         let run = parameter(arguments, "run")?;
-        if !identifier(&run) {
+        if !anchor_runtime::identifier::is_name(&run) {
             return Err(failed());
         }
         let operation = name.strip_prefix("run_").expect("matched Run control");
@@ -33,7 +33,7 @@ impl PilotTools {
 
     pub(super) async fn run_status(&self, arguments: &Value) -> Result<Value, ToolError> {
         let run = parameter(arguments, "run")?;
-        if !identifier(&run) {
+        if !anchor_runtime::identifier::is_name(&run) {
             return Err(failed());
         }
         self.application
