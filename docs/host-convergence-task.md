@@ -12,7 +12,7 @@
   - Plugin id 有两种规则。Library、graph-host、runtime authoring 和 `api.rs:660` 要求首字节为字母或数字；`pilot_tools::identifier` 不要求，却被凭据和插件配置拿去校验 Plugin id（例如 `credential_store.rs:353`、`plugin_configuration.rs:63`）。
   - 上下文窗口：设置层 `model_configuration.rs:232` 接受 0，运行时 `goose_acp/configuration.rs:390` 才拒绝。
   - 「`required` 只对 Pilot Graph 生效」及挂载默认值写了 3 份：`api.rs:641-652`、`node_host/mounts.rs:400-450`、`node_host/turn_plugins.rs:128-160`。
-  - `FilePluginCatalog::new` 有 72 处、分布在 27 个生产文件；`Library::new` 有 33 处。目录租约在每个调用点各自决定。
+  - 生产代码中 `FilePluginCatalog::new` 有 46 处、`Library::new` 有 17 处，共分布在 29 个文件（H4 设计实测）。目录租约在每个调用点各自决定。
   - Pilot 与 AgentNode 各写了一条工具组装管线：`pilot_tools.rs:125-310` 与 `node_host/preparation.rs:41-170`，流程都是 prepare_plugins → authorize_oauth → assemble_with_sandbox → attach_tools，只有失败策略不同。
   - `sha256(durable_key)` 文件名主干有 7 份；`goose_acp::pilot::directory`（不跟随符号链接的持久建目录）被 14 个文件借用。
   - `ANCHOR_BWRAP`、`ANCHOR_RUNNER_LIBRARY_ROOT`、`ANCHOR_RUNNER_CATALOG_ROOT`、`ANCHOR_RUNNER_STATE_ROOT` 在 `main.rs` 之外仍被重复读取，与 `main.rs:248` 的注释相违。
@@ -33,11 +33,11 @@
 
 | 任务 | 规模 | 依赖 | 状态 |
 | --- | --- | --- | --- |
-| H0 依赖方向围栏 | S | — | 开发完成，待架构验收；实测基线 58 / 35 / 1，[证据](../experiments/host-convergence/h0/verification.md) |
+| H0 依赖方向围栏 | S | — | 已验收（`a0de84b`）；实测基线 58 / 35 / 1，[证据](../experiments/host-convergence/h0/verification.md) |
 | H1 共享原语与已分叉规则 | M | H0 | 未开始 |
 | H2 Run 元数据下沉 | M | H1 | 未开始 |
 | H3 配置只在组合根读取 | M | H2 | 未开始 |
-| H4 Plugin 领域单一主人 | L | H3；调研可提前 | [只读设计草案](../experiments/host-convergence/h4/design.md)待确认，未实施 |
+| H4 Plugin 领域单一主人 | L | H3；调研可提前 | [设计](../experiments/host-convergence/h4/design.md)已确认，按下文三项修改实施；未开始 |
 | H5 剩余反向依赖清零 | M | H4 | 未开始 |
 
 规模：S 约半天，M 约 1–2 天，L 约 3–5 天（按 Agent 工作量估计）。
@@ -69,7 +69,7 @@
 
 ### H4 Plugin 领域单一主人
 
-- 第一步是设计说明，只读即可，可以和 H1–H3 并行：列出 72 处 catalog 构造与 33 处 Library 构造各自的用途和租约，对照决定 5 给出新模块的接口（函数签名级别），以及 Pilot 与 Node 共用管线的形状。设计说明交验收者确认后再动代码。
+- 第一步是设计说明，只读即可，可以和 H1–H3 并行：列出全部 catalog 与 Library 构造各自的用途和租约，对照决定 5 给出新模块的接口（函数签名级别），以及 Pilot 与 Node 共用管线的形状。设计说明交验收者确认后再动代码。
 - 实现：
   - 挂载声明（含 `required && pilot` 与默认值）只在新模块求一次，`api.rs`、`node_host/mounts.rs`、`node_host/turn_plugins.rs` 改为调用它；
   - 读定义加摘要重验只留一份；
@@ -77,6 +77,12 @@
 - 验收：
   - `FilePluginCatalog::new` 与 `Library::new` 在新模块之外的生产代码中为 0，或者每处保留的调用在设计说明里有理由；
   - 现有 Plugin、Pilot、Node 相关测试全部不改断言即通过。只能因为调用路径变化改测试的构造代码。
+
+验收者对设计的确认（2026-10-25）：租约分类、构造清单、`checked_definition` 保留四种比较、挂载声明复用 `plugin_mounts::resolve`、失败策略矩阵均照设计执行。另有三项修改：
+
+- **`Catalog` 只包装实际用到的方法**，不镜像 `FilePluginCatalog` 的全部 API。错误优先沿用现有类型（`GraphError`、`InstallError`）；只有调用方确实需要区分取消等情形时才加新枚举。目的是避免薄包装层本身变成新增行数。
+- **工具管线不用回调，也不用策略枚举。** 共用的是步骤实现，不是调用顺序：拆成几个普通函数，例如「准备一组」「授权 OAuth」「连接并挂接披露」。Pilot 和 Node 各自按现有顺序调用，Node 自己的配置保留与观察记录写在调用之间。分组（逐项还是整批）和错误处理（记原因还是 `?`）留在各自调用方。设计里的时序约束照旧，接口形状以此为准。
+- **验收基线以设计实测为准**：生产代码中 `FilePluginCatalog::new` 46 处、`Library::new` 17 处，在 `plugin_library` 之外降为 0。
 
 ### H5 剩余反向依赖清零
 
