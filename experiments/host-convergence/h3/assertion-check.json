@@ -1,0 +1,12 @@
+{
+  "baseline": "2a9fdad",
+  "existing_assertions_checked": 5896,
+  "result": "unchanged after formatting and constructor/library-root accessor substitutions",
+  "new_behavior_test": "saving_zero_context_window_leaves_saved_configuration_unchanged",
+  "moved_test": "oauth_token_store_follows_the_deployment_library_root: tool_host/oauth_tests.rs -> main.rs",
+  "normalizations": [
+    "resolve_oauth_library_root -> configured_library (test configuration constructor)",
+    "crate::library_root(&state.catalog_root) -> state.application.library_root().to_path_buf()",
+    "FileGraphBundleLoader constructor uses state.application.library_root() instead of &state.catalog_root"
+  ]
+}

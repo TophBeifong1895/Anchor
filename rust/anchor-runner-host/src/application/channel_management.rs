@@ -325,7 +325,7 @@ impl RunApplication {
         let (_, bundle) = self
             .load_graph(graph)
             .map_err(|_| ApplicationError::Missing)?;
-        channel_plan(&bundle.snapshot, &crate::library_root(&self.catalog_root))?
+        channel_plan(&bundle.snapshot, self.library_root())?
             .ok_or_else(|| ApplicationError::Invalid(NOT_A_BOT.into()))
     }
 
@@ -336,7 +336,7 @@ impl RunApplication {
         graph: &str,
         next: &GraphSnapshot,
     ) -> Result<(), ApplicationError> {
-        let plan = channel_plan(next, &crate::library_root(&self.catalog_root))?;
+        let plan = channel_plan(next, self.library_root())?;
         let Some(port) = self.channels.as_deref() else {
             return Ok(());
         };

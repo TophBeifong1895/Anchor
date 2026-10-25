@@ -115,15 +115,10 @@ impl RunApplication {
         if origin == UpdateOrigin::Operator && effect["mode"] == "next_turn" {
             // Record approval before publishing the Graph. The receipt has no
             // effect until the authoritative Graph matches its exact digest.
-            crate::assistant_plugins::publish(
-                &self.data_root,
-                &path,
-                &next,
-                &crate::library_root(&self.catalog_root),
-            )
-            .map_err(invalid)?;
+            crate::assistant_plugins::publish(&self.data_root, &path, &next, self.library_root())
+                .map_err(invalid)?;
         }
-        write_graph_bundle_from_catalog(&path, &definition, &self.catalog_root)?;
+        write_graph_bundle_from_catalog(&path, &definition, self.library_root())?;
         Ok(json!({"graph":name,"definition":definition,"plugin_activation":effect}))
     }
 }

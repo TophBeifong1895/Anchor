@@ -146,7 +146,6 @@ impl RunApplication {
             &record,
             control.clone(),
             record.plugin_bindings.clone(),
-            self.catalog_root.clone(),
             self.clone(),
         )
         .map_err(ApplicationError::Invalid)?;

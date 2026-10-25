@@ -1,0 +1,39 @@
+   Compiling ring v0.17.14
+   Compiling rustls v0.23.45
+   Compiling rustls-webpki v0.103.15
+   Compiling tokio-rustls v0.26.6
+   Compiling rustls-platform-verifier v0.7.1
+   Compiling tungstenite v0.29.0
+   Compiling hyper-rustls v0.27.10
+   Compiling reqwest v0.13.5
+   Compiling reqwest v0.12.28
+   Compiling tokio-tungstenite v0.29.0
+   Compiling rmcp v2.2.0
+   Compiling anchor-wecom-gateway v0.1.0 (/tmp/anchor-host-h3/rust/anchor-wecom-gateway)
+   Compiling anchor-mcp-host v0.1.0 (/tmp/anchor-host-h3/rust/anchor-mcp-host)
+   Compiling anchor-runner-host v0.1.0 (/tmp/anchor-host-h3/rust/anchor-runner-host)
+    Finished `test` profile [optimized + debuginfo] target(s) in 15.13s
+     Running tests/configuration_fence.rs (/home/mansteinl/Anchor/rust/target/debug/deps/configuration_fence-9821391cebe289e4)
+
+running 1 test
+test deployment_environment_is_owned_by_main ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+     Running tests/layer_fence.rs (/home/mansteinl/Anchor/rust/target/debug/deps/layer_fence-8c4c53771eef07f4)
+
+running 3 tests
+test layer_classification ... ok
+test dependency_counting ... ok
+layer_fence: 176 production files; service_application 25; service_adapter 23; application_adapter 1
+test layer_fence ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+     Running tests/run_access_fence.rs (/home/mansteinl/Anchor/rust/target/debug/deps/run_access_fence-eb0dbe7be4a523ff)
+
+running 1 test
+run_access_fence: 176 production files; business 0; runtime 56
+test run_access_fence ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s

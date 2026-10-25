@@ -142,7 +142,7 @@ async fn completed_session_call(state: &ApiState, app: &Router, run: &str) {
 async fn session_execution_rejects_other_session_and_wrong_previous_identity() {
     let (root, state) = fixture();
     let _env = PROCESS_ENV.lock().await;
-    set_host_env(root.path(), &state.data_root);
+    set_host_env(root.path());
     let app = router(state.clone());
     let alice = foreground(&state, "alice-foreground", "alice", None);
     let bob = foreground(&state, "bob-foreground", "bob", None);
@@ -177,7 +177,7 @@ async fn session_execution_rejects_other_session_and_wrong_previous_identity() {
 async fn queued_session_call_allows_foreground_and_is_not_dispatched_at_startup() {
     let (root, state) = fixture();
     let _env = PROCESS_ENV.lock().await;
-    set_host_env(root.path(), &state.data_root);
+    set_host_env(root.path());
     seed_session_call(&state, "queued-session-call", "detach", false);
     state
         .application
@@ -207,7 +207,7 @@ async fn queued_session_call_allows_foreground_and_is_not_dispatched_at_startup(
 async fn bound_session_call_yields_and_continues_same_run_after_foreground_and_restart() {
     let (root, mut state) = fixture();
     let _env = PROCESS_ENV.lock().await;
-    set_host_env(root.path(), &state.data_root);
+    set_host_env(root.path());
     let run = "bound-session-call";
     // This is the durable boundary after binding and before dispatch on a prior host.
     seed_session_call(&state, run, "wait", true);
@@ -263,7 +263,7 @@ async fn bound_session_call_yields_and_continues_same_run_after_foreground_and_r
 async fn active_session_call_yield_releases_execution_without_settling_delivery() {
     let (root, state) = fixture();
     let _env = PROCESS_ENV.lock().await;
-    set_host_env(root.path(), &state.data_root);
+    set_host_env(root.path());
     unsafe {
         env::set_var("ANCHOR_RUNNER_ALLOWED_COMMANDS", "true,sh,cat,sleep,printf");
     }
@@ -373,7 +373,7 @@ async fn active_session_call_yield_releases_execution_without_settling_delivery(
 async fn completed_session_execution_stays_waiting_until_delivery_settlement() {
     let (root, state) = fixture();
     let _env = PROCESS_ENV.lock().await;
-    set_host_env(root.path(), &state.data_root);
+    set_host_env(root.path());
     let app = router(state.clone());
     let run = "session-delivery";
     completed_session_call(&state, &app, run).await;
@@ -427,7 +427,7 @@ async fn completed_session_execution_stays_waiting_until_delivery_settlement() {
 async fn completed_pending_wait_child_recovers_delivery_and_parent_after_restart() {
     let (root, mut state) = fixture();
     let _env = PROCESS_ENV.lock().await;
-    set_host_env(root.path(), &state.data_root);
+    set_host_env(root.path());
     let session_host = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let session_host_url = format!("http://{}", session_host.local_addr().unwrap());
     let session_host_task = tokio::spawn(async move {
@@ -625,7 +625,7 @@ async fn completed_pending_wait_child_recovers_delivery_and_parent_after_restart
 async fn stopping_completed_pending_session_call_preserves_completed_run() {
     let (root, state) = fixture();
     let _env = PROCESS_ENV.lock().await;
-    set_host_env(root.path(), &state.data_root);
+    set_host_env(root.path());
     let app = router(state.clone());
     let run = "session-stop-delivery";
     completed_session_call(&state, &app, run).await;
@@ -725,10 +725,8 @@ async fn session_recovery_native_persistence_failure_keeps_attempt_pending_witho
         }
     }
     let names = [
-        "ANCHOR_RUNNER_STATE_ROOT",
         "ANCHOR_RUNNER_WORKSPACE_ROOT",
         "ANCHOR_RUNNER_ALLOWED_COMMANDS",
-        "ANCHOR_RUNNER_CATALOG_ROOT",
         "ANCHOR_RUNNER_AGENT_RUNTIME",
         "ANCHOR_GOOSE_BINARY",
         "ANCHOR_GOOSE_BINARY_SHA256",
@@ -745,7 +743,7 @@ async fn session_recovery_native_persistence_failure_keeps_attempt_pending_witho
             .map(|name| (*name, env::var_os(name)))
             .collect(),
     );
-    set_host_env(root.path(), &state.data_root);
+    set_host_env(root.path());
     let binary = root.path().join("unstarted-goose");
     let bytes = b"This fixture must stop before dispatch";
     std::fs::write(&binary, bytes).unwrap();
@@ -890,7 +888,7 @@ async fn session_recovery_native_persistence_failure_keeps_attempt_pending_witho
 async fn pending_session_delivery_blocks_graph_mutation_and_deletion() {
     let (root, state) = fixture();
     let _env = PROCESS_ENV.lock().await;
-    set_host_env(root.path(), &state.data_root);
+    set_host_env(root.path());
     let app = router(state.clone());
     let run = "session-retained-delivery";
     completed_session_call(&state, &app, run).await;

@@ -62,6 +62,8 @@ HTTP、Session、Pilot 的插件基础目录读取归 `InstalledPluginCatalog`�
 
 Host 托管的模型配置将公开字段、用于恢复的旧绑定和按槽/服务索引的密钥分别表示。执行直接读取保存的槽配置，旧托管字段仅用于未保存 default 时的兼容默认与原显式别名；模型服务字段和凭据不读取环境变量，Web 与执行共用唯一私有存储。新 Turn/invocation 通过 Goose 原生接口选择最新模型并延续历史，当前执行及同 invocation 恢复保留冻结绑定。运行环境初始化和插件安装的进度只描述管理操作，不成为 Agent loop 或通用恢复引擎。接口见 [Web 管理契约](rust-frontend-api-contract.md#web-管理入口)。
 
+模型公开字段统一使用 [ModelFields](../rust/anchor-runner-host/src/model_fields.rs)，设置保存与 Goose 执行均通过 `ModelRegistry::from_fields` 校验 URL、凭据、模型名、协议、别名与正数限制；类型化字段不再转回环境变量字符串表解析。上下文窗口和输出上限为 0 时不能保存，保存失败不改写已有配置。
+
 同一事实所有者内部按职责分模块，入口负责组合：
 
 Host 的[依赖方向围栏](../rust/anchor-runner-host/tests/layer_fence.rs)固定组合根（`main.rs`、`bin/`、`execution.rs`）、入口适配（`api`、`pilot_tools`、`node_tools` 模块及 `channel_tools.rs`）、用例（`application` 模块）与其余 Host 服务的角色。服务引用用例或入口、用例引用入口的现有次数由[逐文件上限](../rust/anchor-runner-host/layer-fence.txt)限制，新增引用失败，下降时提示降低上限。它与 Run 围栏共用生产源码扫描器，排除测试、注释和字面量；统计显式 `crate::` 路径（含分组导入、原始标识符与宏输入），不做名称解析、相对路径解析或宏展开。Run 的运行时豁免不改变这里的层次归属；现有反向依赖尚未清零，阶段状态见[收敛任务书](host-convergence-task.md)。
@@ -102,6 +104,8 @@ AgentNode 引用角色与节点级 `plugins`，角色只复用模型、指令和
 ## 数据布局
 
 Host 分别配置 bundle、catalog、state、workspace 和 Library 根。release 目录只读；可写根放在 release 外。Host 在监听前验证配置并持有 state-root `deployment-writer` 锁。开发脚本使用独立数据根，旧本地记录不会被重新接管。
+
+`ANCHOR_BWRAP`、`ANCHOR_RUNNER_LIBRARY_ROOT`、`ANCHOR_RUNNER_CATALOG_ROOT`、`ANCHOR_RUNNER_STATE_ROOT` 由 `main.rs` 在进程入口各读取一次，形成 `HostConfiguration` 传给 HTTP、独立执行、Run 用例、Pilot 和工具服务。Library 的显式根优先于调用方已解析的 catalog 根；工具环境仍只从显式 Library 根加载，保留原回退语义。[配置围栏](../rust/anchor-runner-host/tests/configuration_fence.rs)限制四个变量名的生产字面量归属；其他环境读取尚未迁移，清单见 [H3 交回](../experiments/host-convergence/h3/environment-inventory.md)。
 
 ```text
 <release>/anchor-runtime/

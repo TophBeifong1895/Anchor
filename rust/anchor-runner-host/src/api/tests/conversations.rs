@@ -26,7 +26,7 @@ fn gate_definition() -> Value {
 }
 
 fn configure_gate(root: &std::path::Path, state: &ApiState) {
-    set_host_env(root, &state.data_root);
+    set_host_env(root);
     unsafe {
         env::set_var("ANCHOR_RUNNER_ALLOWED_COMMANDS", "true,sh,cat,sleep,printf");
     }
@@ -261,7 +261,7 @@ async fn sessions_share_a_graph_and_a_handed_over_turn_protects_its_predecessor(
 async fn conversation_lineage_deletes_any_link_once_nothing_newer_reads_it() {
     let (root, state) = fixture();
     let _env = PROCESS_ENV.lock().await;
-    set_host_env(root.path(), &state.data_root);
+    set_host_env(root.path());
     let app = router(state.clone());
 
     // first → second → third, each turn completed before the next one runs.
@@ -312,7 +312,7 @@ async fn conversation_lineage_deletes_any_link_once_nothing_newer_reads_it() {
 async fn superseded_wait_ancestry_stops_at_a_detach_boundary() {
     let (root, state) = fixture();
     let _env = PROCESS_ENV.lock().await;
-    set_host_env(root.path(), &state.data_root);
+    set_host_env(root.path());
     let app = router(state.clone());
     let first_run = "ancestry-first";
     completed_turn(&app, &state, first_run, None).await;
@@ -419,7 +419,7 @@ fn seed_call_fixture(
 async fn publishing_graph_preserves_plugin_conversation_history_and_child_runs() {
     let (root, state) = fixture();
     let _env = PROCESS_ENV.lock().await;
-    set_host_env(root.path(), &state.data_root);
+    set_host_env(root.path());
     let plugin = state.catalog_root.join("plugins/demo");
     std::fs::create_dir_all(plugin.join("skills/example")).unwrap();
     std::fs::write(
@@ -618,7 +618,7 @@ fn seed_legacy_scope(state: &ApiState, run: &str, node: &str) -> (PathBuf, PathB
 async fn graph_delete_cleans_legacy_scopes_and_preserves_other_graph_history() {
     let (root, state) = fixture();
     let _env = PROCESS_ENV.lock().await;
-    set_host_env(root.path(), &state.data_root);
+    set_host_env(root.path());
     write_graph_bundle(&state.bundle_root, &two_node_definition("true")).unwrap();
     let app = router(state.clone());
     let turn = |graph: &'static str, run: &'static str, session: &'static str, previous| {
@@ -704,7 +704,7 @@ async fn graph_delete_allows_a_completed_caller_after_its_callee_was_deleted() {
     let _env = PROCESS_ENV.lock().await;
     for conversation in [false, true] {
         let (root, state) = fixture();
-        set_host_env(root.path(), &state.data_root);
+        set_host_env(root.path());
         let completed = json!({"objective":"completed node","entry":"work","agents":{},
             "ops":{"work":{"run":"true"}},"nodes":[{"id":"work","op":"work"}],"edges":[]});
         write_graph_bundle(&state.catalog_root.join("child"), &completed).unwrap();
@@ -761,7 +761,7 @@ async fn graph_delete_allows_a_completed_caller_after_its_callee_was_deleted() {
 async fn conversation_orphan_running_requires_explicit_stop_before_a_new_turn() {
     let (root, mut state) = fixture();
     let _env = PROCESS_ENV.lock().await;
-    set_host_env(root.path(), &state.data_root);
+    set_host_env(root.path());
     let run = "orphan-first";
     let record = anchor_runtime::graph::GraphRunRecord::create_with_id(
         state.application.load_graph("fixture").unwrap().1.snapshot,
@@ -848,7 +848,7 @@ async fn an_unfinished_manual_run_blocks_conversation_execution_on_its_graph() {
 async fn conversation_waiting_recovery_stop_keeps_unknown_attempts_without_execution() {
     let (root, state) = fixture();
     let _env = PROCESS_ENV.lock().await;
-    set_host_env(root.path(), &state.data_root);
+    set_host_env(root.path());
     let snapshot = anchor_runtime::graph::GraphSnapshot::admit(json!({
         "objective":"unknown-effect fixture","entry":"work",
         "agents":{"worker":{"model":"fixture","instructions":"fixture"}},
@@ -945,7 +945,7 @@ async fn conversation_waiting_recovery_stop_keeps_unknown_attempts_without_execu
 async fn graph_node_plugins_project_expanded_nodes_and_legacy_metadata_remains_readable() {
     let (root, state) = fixture();
     let _env = PROCESS_ENV.lock().await;
-    set_host_env(root.path(), &state.data_root);
+    set_host_env(root.path());
     let plugin = state.catalog_root.join("plugins/demo");
     std::fs::create_dir_all(plugin.join("skills/example")).unwrap();
     std::fs::write(

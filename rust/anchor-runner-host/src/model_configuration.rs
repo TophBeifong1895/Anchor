@@ -3,7 +3,6 @@
 use crate::goose_acp::configuration::ModelRegistry;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use sha2::{Digest, Sha256};
 mod connection_test;
 mod execution;
 mod providers;
@@ -24,60 +23,7 @@ const ENV_FIELDS: [(&str, &str); 3] = [
     ("direct", "ANCHOR_MODEL_DIRECT"),
 ];
 
-#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
-pub(crate) struct ModelFields {
-    pub(crate) endpoint: String,
-    pub(crate) wire_api: String,
-    pub(crate) model: String,
-    pub(crate) context_window: Option<u64>,
-    pub(crate) max_tokens: Option<u64>,
-    pub(crate) aliases: BTreeMap<String, String>,
-}
-impl Default for ModelFields {
-    fn default() -> Self {
-        Self {
-            endpoint: String::new(),
-            wire_api: "responses".into(),
-            model: "default".into(),
-            context_window: None,
-            max_tokens: None,
-            aliases: BTreeMap::new(),
-        }
-    }
-}
-impl ModelFields {
-    fn values(&self) -> BTreeMap<String, String> {
-        let mut values = BTreeMap::from([
-            ("ANCHOR_MODEL_URL".into(), self.endpoint.clone()),
-            ("ANCHOR_MODEL_WIRE_API".into(), self.wire_api.clone()),
-            ("ANCHOR_MODEL_NAME".into(), self.model.clone()),
-            (
-                "ANCHOR_MODEL_ALIASES".into(),
-                serde_json::to_string(&self.aliases).expect("aliases serialize"),
-            ),
-        ]);
-        for (name, value) in [
-            ("ANCHOR_MODEL_CONTEXT_WINDOW", self.context_window),
-            ("ANCHOR_MODEL_MAX_TOKENS", self.max_tokens),
-        ] {
-            if let Some(value) = value {
-                values.insert(name.into(), value.to_string());
-            }
-        }
-        values
-    }
-    fn provider_id(&self) -> String {
-        // ModelRegistry normalizes and validates the URL before this is used.
-        let endpoint = reqwest::Url::parse(&self.endpoint)
-            .map(|url| url.to_string().trim_end_matches('/').to_owned())
-            .unwrap_or_default();
-        format!(
-            "{:x}",
-            Sha256::digest(format!("{}\n{endpoint}", self.wire_api))
-        )
-    }
-}
+pub(crate) use crate::model_fields::ModelFields;
 
 #[derive(Default, Deserialize)]
 #[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
@@ -231,17 +177,11 @@ impl ModelConfiguration {
             match name.as_str() {
                 "ANCHOR_MODEL_CONTEXT_WINDOW" => {
                     fields.context_window =
-                        Some(value.trim().parse().map_err(
-                            |_| "ANCHOR_MODEL_CONTEXT_WINDOW must be a positive integer",
-                        )?)
+                        crate::goose_acp::configuration::parse_limit(Some(value), name)?;
                 }
                 "ANCHOR_MODEL_MAX_TOKENS" => {
-                    fields.max_tokens = Some(
-                        value
-                            .trim()
-                            .parse()
-                            .map_err(|_| "ANCHOR_MODEL_MAX_TOKENS must be a positive integer")?,
-                    )
+                    fields.max_tokens =
+                        crate::goose_acp::configuration::parse_limit(Some(value), name)?;
                 }
                 _ => {}
             }
@@ -268,17 +208,16 @@ impl ModelConfiguration {
         if !validation && self.key(managed, fields).is_none() {
             return Err("the selected provider has no API key configured".into());
         }
-        let mut values = fields.values();
-        if let Some(key) = self
+        let key = self
             .key(managed, fields)
-            .or(validation.then_some("validation-placeholder"))
-        {
-            values.insert("ANCHOR_MODEL_API_KEY".into(), key.into());
-        }
-        if let Some(direct) = self.external.get("ANCHOR_MODEL_DIRECT") {
-            values.insert("ANCHOR_MODEL_DIRECT".into(), direct.clone());
-        }
-        ModelRegistry::from_values(false, |name| values.get(name).cloned())
+            .or(validation.then_some("validation-placeholder"));
+        ModelRegistry::from_fields(
+            fields,
+            key.unwrap_or_default(),
+            self.external
+                .get("ANCHOR_MODEL_DIRECT")
+                .is_some_and(|value| value == "1"),
+        )
     }
     #[cfg(test)]
     pub(crate) fn snapshot(
@@ -361,9 +300,7 @@ impl ModelConfiguration {
             KeyUpdate::Keep => {}
             KeyUpdate::Set { value } => {
                 // Reuse the registry's credential validation; values are never formatted.
-                let mut values = draft.values();
-                values.insert("ANCHOR_MODEL_API_KEY".into(), value.clone());
-                ModelRegistry::from_values(false, |name| values.get(name).cloned())?;
+                ModelRegistry::from_fields(&draft, &value, false)?;
                 managed.credentials.insert(id, value);
             }
             KeyUpdate::Clear => {
@@ -394,9 +331,7 @@ impl ModelConfiguration {
             .chain(&managed.history)
             .find(|fields| fields.provider_id() == id)
             .ok_or("model provider not found")?;
-        let mut values = fields.values();
-        values.insert("ANCHOR_MODEL_API_KEY".into(), value.clone());
-        ModelRegistry::from_values(false, |name| values.get(name).cloned())?;
+        ModelRegistry::from_fields(fields, &value, false)?;
         managed.credentials.insert(id.to_owned(), value);
         self.publish(&managed)?;
         self.project(&managed)

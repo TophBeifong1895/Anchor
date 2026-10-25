@@ -10,6 +10,7 @@ use std::{
 };
 
 pub(crate) async fn test(
+    bwrap: PathBuf,
     data: PathBuf,
     library: PathBuf,
     owner: String,
@@ -77,15 +78,11 @@ pub(crate) async fn test(
     let (workspace, sandbox, environment) = tokio::task::spawn_blocking(move || {
         let workspace = tempfile::tempdir().map_err(|_| "connection test workspace unavailable")?;
         let commands = std::env::var("ANCHOR_RUNNER_ALLOWED_COMMANDS").unwrap_or_default();
-        let policy = BubblewrapPolicy::new(
-            std::env::var_os("ANCHOR_BWRAP")
-                .map(PathBuf::from)
-                .unwrap_or_else(|| "bwrap".into()),
-            commands.split(',').filter(|value| !value.is_empty()),
-        )
-        .authorize_workspace_root(workspace.path())
-        .authorize_readonly_destination_root("/plugins")
-        .allow_network();
+        let policy =
+            BubblewrapPolicy::new(bwrap, commands.split(',').filter(|value| !value.is_empty()))
+                .authorize_workspace_root(workspace.path())
+                .authorize_readonly_destination_root("/plugins")
+                .allow_network();
         let environment = crate::tool_environment::ToolEnvironment::load(&sandbox_library)
             .map_err(|_| "connection test tool environment unavailable")?;
         let sandbox = BubblewrapSandbox::new(environment.authorize(policy))

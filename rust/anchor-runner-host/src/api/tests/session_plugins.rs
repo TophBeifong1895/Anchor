@@ -110,7 +110,7 @@ fn library_bytes(state: &ApiState) -> Vec<(String, Vec<u8>)> {
             }
         }
     }
-    let root = crate::library_root(&state.catalog_root);
+    let root = state.application.library_root().to_path_buf();
     let mut files = Vec::new();
     for subtree in ["plugins", "dependencies"] {
         let path = root.join(subtree);
@@ -159,7 +159,7 @@ async fn concurrent_session_mount_and_uninstall_publish_one_consistent_result() 
     let _env_guard = PROCESS_ENV.lock().await;
     for mount_first in [true, false] {
         let (root, state) = fixture();
-        let _library = EnvVar::set("ANCHOR_RUNNER_LIBRARY_ROOT", root.path());
+
         write_plugin(&state, "demo", json!({"name":"Demo"}));
         let app = router(state.clone());
         create_session(app.clone(), "sess").await;
@@ -805,8 +805,8 @@ async fn a_plugin_switch_on_a_terminal_turn_saves_policy_without_reviving_the_ta
         TurnStatus::Interrupted,
         TurnStatus::Stopped,
     ] {
-        let (root, state) = fixture();
-        let _library = EnvVar::set("ANCHOR_RUNNER_LIBRARY_ROOT", root.path());
+        let (_root, state) = fixture();
+
         write_plugin(&state, "demo", json!({"name":"Demo"}));
         let app = router(state.clone());
         create_session(app.clone(), "sess").await;
@@ -1099,7 +1099,7 @@ mod served_router_tests {
     async fn the_session_page_url_reaches_the_plugin_route_through_the_served_router() {
         let _env_guard = PROCESS_ENV.lock().await;
         let (root, state) = fixture();
-        let _library = EnvVar::set("ANCHOR_RUNNER_LIBRARY_ROOT", root.path());
+
         let key = "k".repeat(32);
         let app = router_with_readiness_and_web_root(
             state.clone(),

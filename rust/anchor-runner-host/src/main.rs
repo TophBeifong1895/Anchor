@@ -21,6 +21,7 @@ mod pilot_attachments;
 mod conversation_resources;
 mod credential_store;
 mod model_configuration;
+mod model_fields;
 mod oauth_links;
 mod pilot_host;
 mod pilot_resources;
@@ -249,18 +250,60 @@ fn reject_standalone_snapshot(snapshot: &GraphSnapshot) -> Result<(), String> {
     Ok(())
 }
 
-/// The one Library root this deployment resolves Plugins from. The caller
-/// supplies its configured catalog; lower layers do not read it again.
-pub(crate) fn library_root(configured_catalog_root: &std::path::Path) -> PathBuf {
-    std::env::var_os("ANCHOR_RUNNER_LIBRARY_ROOT")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| configured_catalog_root.to_path_buf())
+/// Deployment paths are read once at the process entry and passed to consumers.
+#[derive(Clone)]
+pub(crate) struct HostConfiguration {
+    pub(crate) state_root: Option<PathBuf>,
+    pub(crate) catalog_root: Option<PathBuf>,
+    pub(crate) library_root: Option<PathBuf>,
+    pub(crate) bwrap: PathBuf,
 }
 
-fn standalone_library_root() -> Option<PathBuf> {
-    env::var_os("ANCHOR_RUNNER_LIBRARY_ROOT")
-        .or_else(|| env::var_os("ANCHOR_RUNNER_CATALOG_ROOT"))
-        .map(PathBuf::from)
+impl Default for HostConfiguration {
+    fn default() -> Self {
+        Self {
+            state_root: None,
+            catalog_root: None,
+            library_root: None,
+            bwrap: "bwrap".into(),
+        }
+    }
+}
+
+impl HostConfiguration {
+    fn from_env() -> Self {
+        Self {
+            state_root: env::var_os("ANCHOR_RUNNER_STATE_ROOT").map(PathBuf::from),
+            catalog_root: env::var_os("ANCHOR_RUNNER_CATALOG_ROOT").map(PathBuf::from),
+            library_root: env::var_os("ANCHOR_RUNNER_LIBRARY_ROOT").map(PathBuf::from),
+            bwrap: env::var_os("ANCHOR_BWRAP")
+                .map(PathBuf::from)
+                .unwrap_or_else(|| "bwrap".into()),
+        }
+    }
+
+    fn state_root(&self) -> Result<&std::path::Path, String> {
+        self.state_root
+            .as_deref()
+            .ok_or_else(|| "ANCHOR_RUNNER_STATE_ROOT is required".into())
+    }
+
+    fn library_root<'a>(&'a self, catalog_root: &'a std::path::Path) -> &'a std::path::Path {
+        self.library_root.as_deref().unwrap_or(catalog_root)
+    }
+
+    fn standalone_library_root(&self) -> Option<PathBuf> {
+        self.library_root
+            .clone()
+            .or_else(|| self.catalog_root.clone())
+    }
+
+    fn tool_environment(&self) -> Result<tool_environment::ToolEnvironment, String> {
+        self.library_root
+            .as_deref()
+            .map(tool_environment::ToolEnvironment::load)
+            .unwrap_or_else(|| Ok(Default::default()))
+    }
 }
 
 fn env_path(name: &str) -> Result<PathBuf, String> {
@@ -269,19 +312,21 @@ fn env_path(name: &str) -> Result<PathBuf, String> {
         .ok_or_else(|| format!("{name} is required"))
 }
 
-fn acquire_deployment_writer() -> Result<Box<dyn anchor_runtime::graph::RunLease>, String> {
-    let root = env_path("ANCHOR_RUNNER_STATE_ROOT")?;
+fn acquire_deployment_writer(
+    root: &std::path::Path,
+) -> Result<Box<dyn anchor_runtime::graph::RunLease>, String> {
     anchor_runtime::graph::FileRunLeaseProvider::new(root.join("deployment-locks"))
         .acquire_lease("deployment-writer")
         .map_err(|error| format!("state root already has a writing host: {error}"))
 }
 fn make_host_with_control(
+    configuration: &HostConfiguration,
     run_id: &str,
     _control: HostControl,
     library_root: Option<PathBuf>,
     runtime_configuration: Option<Arc<runtime_configuration::RuntimeConfiguration>>,
 ) -> Result<(HostArtifacts, HostNodes), String> {
-    let state = env_path("ANCHOR_RUNNER_STATE_ROOT")?;
+    let state = configuration.state_root()?.to_path_buf();
     let work_root = env_path("ANCHOR_RUNNER_WORKSPACE_ROOT")?;
     let _ = run_id;
     create_durable_directory(&state.join("artifacts")).map_err(|e| e.to_string())?;
@@ -292,9 +337,7 @@ fn make_host_with_control(
     let commands = env::var("ANCHOR_RUNNER_ALLOWED_COMMANDS")
         .map_err(|_| "ANCHOR_RUNNER_ALLOWED_COMMANDS is required".to_owned())?;
     let policy = BubblewrapPolicy::new(
-        env::var_os("ANCHOR_BWRAP")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| PathBuf::from("bwrap")),
+        configuration.bwrap.clone(),
         commands
             .split(',')
             .filter(|s| !s.is_empty())
@@ -311,7 +354,7 @@ fn make_host_with_control(
     .allow_network();
     // Each invocation authorizes its current Plugin views and mutable paths;
     // the deployment policy does not grant the entire Library.
-    let tool_environment = tool_environment::ToolEnvironment::from_env()?;
+    let tool_environment = configuration.tool_environment()?;
     let sandbox = Arc::new(
         BubblewrapSandbox::new(tool_environment.authorize(policy)).map_err(|e| e.to_string())?,
     );
@@ -392,29 +435,33 @@ async fn standalone_response(
     }
 }
 
-fn standalone_application() -> Result<application::RunApplication, String> {
-    let state = env_path("ANCHOR_RUNNER_STATE_ROOT")?;
-    let catalog = env::var_os("ANCHOR_RUNNER_CATALOG_ROOT")
-        .map(PathBuf::from)
+fn standalone_application(
+    configuration: &Arc<HostConfiguration>,
+) -> Result<application::RunApplication, String> {
+    let state = configuration.state_root()?.to_path_buf();
+    let catalog = configuration
+        .catalog_root
+        .clone()
         .unwrap_or_else(|| state.clone());
     // The same runtime configuration `serve` uses: nodes run the Python and
     // Rust the deployment configured, not whatever the sandbox's system
     // directories happen to resolve.
     // Without a configured Library there is none to share; dependency
     // preparation then gets the same disjoint default `serve` uses.
-    let dependency_library = standalone_library_root().unwrap_or_else(|| state.join("catalog"));
+    let dependency_library = configuration
+        .standalone_library_root()
+        .unwrap_or_else(|| state.join("catalog"));
     let runtime_configuration = runtime_configuration::RuntimeConfiguration::from_env(
         &state,
         &dependency_library,
-        env::var_os("ANCHOR_BWRAP")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| PathBuf::from("bwrap")),
+        configuration.bwrap.clone(),
     )?;
     Ok(application::RunApplication::new(state, catalog)
+        .with_host_configuration(configuration.clone())
         .with_runtime_configuration(Arc::new(runtime_configuration)))
 }
 
-async fn handle(request: Request) -> Response {
+async fn handle(request: Request, configuration: &Arc<HostConfiguration>) -> Response {
     match request {
         Request::StartBundle {
             version,
@@ -440,7 +487,7 @@ async fn handle(request: Request) -> Response {
                 }
             };
             let mut loader = anchor_graph_host::FileGraphBundleLoader::new(bundle_root.clone());
-            if let Some(root) = standalone_library_root() {
+            if let Some(root) = configuration.standalone_library_root() {
                 loader = loader.with_library_root(root);
             }
             let bundle = match loader.load() {
@@ -461,6 +508,7 @@ async fn handle(request: Request) -> Response {
                 };
             }
             execute_snapshot(
+                configuration,
                 bundle.snapshot,
                 input,
                 run_id,
@@ -481,7 +529,7 @@ async fn handle(request: Request) -> Response {
                     reason: "unsupported protocol version".into(),
                 };
             }
-            let application = match standalone_application() {
+            let application = match standalone_application(configuration) {
                 Ok(application) => application,
                 Err(reason) => {
                     return Response::Rejected {
@@ -526,22 +574,33 @@ async fn handle(request: Request) -> Response {
                     reason,
                 };
             }
-            execute_snapshot(*snapshot, input, run_id, request_id, None).await
+            execute_snapshot(configuration, *snapshot, input, run_id, request_id, None).await
         }
     }
 }
 
 async fn execute_snapshot(
+    configuration: &Arc<HostConfiguration>,
     snapshot: GraphSnapshot,
     input: Value,
     run_id: String,
     request_id: String,
     bundle_root: Option<PathBuf>,
 ) -> Response {
-    execute_snapshot_with_control(snapshot, input, run_id, request_id, None, bundle_root).await
+    execute_snapshot_with_control(
+        configuration,
+        snapshot,
+        input,
+        run_id,
+        request_id,
+        None,
+        bundle_root,
+    )
+    .await
 }
 
 async fn execute_snapshot_with_control(
+    configuration: &Arc<HostConfiguration>,
     snapshot: GraphSnapshot,
     input: Value,
     run_id: String,
@@ -549,7 +608,16 @@ async fn execute_snapshot_with_control(
     supplied_control: Option<HostControl>,
     bundle_root: Option<PathBuf>,
 ) -> Response {
-    let _writer = match acquire_deployment_writer() {
+    let _writer = match acquire_deployment_writer(match configuration.state_root() {
+        Ok(root) => root,
+        Err(reason) => {
+            return Response::Rejected {
+                version: 1,
+                request_id,
+                reason,
+            };
+        }
+    }) {
         Ok(lease) => lease,
         Err(reason) => {
             return Response::Rejected {
@@ -560,7 +628,7 @@ async fn execute_snapshot_with_control(
         }
     };
     if let (Ok(data_root), Ok(workspace_root)) = (
-        env_path("ANCHOR_RUNNER_STATE_ROOT"),
+        configuration.state_root().map(std::path::Path::to_path_buf),
         env_path("ANCHOR_RUNNER_WORKSPACE_ROOT"),
     ) {
         durable_write::cleanup_at_startup(&data_root, &workspace_root);
@@ -578,7 +646,7 @@ async fn execute_snapshot_with_control(
     let control = supplied_control.unwrap_or_else(|| HostControl {
         cancellation: Arc::new(std::sync::atomic::AtomicBool::new(false)),
     });
-    let library_root = standalone_library_root();
+    let library_root = configuration.standalone_library_root();
     let plugin_ids = expected
         .snapshot
         .nodes
@@ -650,7 +718,7 @@ async fn execute_snapshot_with_control(
             };
         }
     };
-    let application = match standalone_application() {
+    let application = match standalone_application(configuration) {
         Ok(application) => application,
         Err(reason) => {
             return Response::Rejected {
@@ -686,7 +754,7 @@ async fn execute_snapshot_with_control(
         .ops
         .values()
         .any(|op| op.get("call").is_some())
-        && env::var_os("ANCHOR_RUNNER_CATALOG_ROOT").is_none()
+        && configuration.catalog_root.is_none()
     {
         return Response::Rejected {
             version: 1,
@@ -694,7 +762,9 @@ async fn execute_snapshot_with_control(
             reason: "ANCHOR_RUNNER_CATALOG_ROOT is required for Op.call".into(),
         };
     }
-    if let Err(reason) = ensure_standalone_run_metadata(&expected, bundle_root.as_deref()) {
+    if let Err(reason) =
+        ensure_standalone_run_metadata(configuration, &expected, bundle_root.as_deref())
+    {
         return Response::Rejected {
             version: 1,
             request_id,
@@ -721,6 +791,7 @@ async fn execute_snapshot_with_control(
 /// RunApplication writes. This is idempotent, verifies graph/source/digest on
 /// replay, and never fabricates metadata for a Graph-call child.
 fn ensure_standalone_run_metadata(
+    configuration: &HostConfiguration,
     record: &GraphRunRecord,
     bundle_root: Option<&std::path::Path>,
 ) -> Result<(), String> {
@@ -765,7 +836,7 @@ fn ensure_standalone_run_metadata(
     let source = bundle_root
         .canonicalize()
         .map_err(|error| format!("standalone bundle source unavailable: {error}"))?;
-    let state = env_path("ANCHOR_RUNNER_STATE_ROOT")?;
+    let state = configuration.state_root()?.to_path_buf();
     let expected = crate::run_metadata::RunMetadata::new(
         record.run_id.clone(),
         graph,
@@ -826,8 +897,9 @@ async fn main() -> io::Result<()> {
     if let Some(args) = op::route_cli_args() {
         std::process::exit(op::run_route_cli(&args));
     }
+    let configuration = Arc::new(HostConfiguration::from_env());
     if env::args().nth(1).as_deref() == Some("serve") {
-        return api::serve().await;
+        return api::serve(configuration).await;
     }
     let stdin = tokio::io::stdin();
     let stdout = tokio::io::stdout();
@@ -835,7 +907,7 @@ async fn main() -> io::Result<()> {
     let mut writer = stdout;
     while let Some(frame) = read_frame(&mut reader).await? {
         let response = match serde_json::from_slice::<Request>(&frame) {
-            Ok(request) => handle(request).await,
+            Ok(request) => handle(request, &configuration).await,
             Err(error) => Response::Rejected {
                 version: 1,
                 request_id: "unknown".into(),
@@ -851,6 +923,46 @@ async fn main() -> io::Result<()> {
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    fn configured_library(
+        catalog: &std::path::Path,
+        library_root: Option<PathBuf>,
+        configured_catalog: Option<PathBuf>,
+    ) -> PathBuf {
+        let catalog = configured_catalog.unwrap_or_else(|| catalog.to_path_buf());
+        application::RunApplication::new(PathBuf::new(), catalog)
+            .with_host_configuration(Arc::new(HostConfiguration {
+                library_root,
+                ..Default::default()
+            }))
+            .library_root()
+            .to_path_buf()
+    }
+
+    #[test]
+    fn oauth_token_store_follows_the_deployment_library_root() {
+        let catalog = std::path::Path::new("/srv/anchor/catalog");
+        // The deployment's Library root, when it configured one.
+        assert_eq!(
+            configured_library(
+                catalog,
+                Some(PathBuf::from("/srv/anchor/library")),
+                Some(PathBuf::from("/srv/anchor/catalog")),
+            ),
+            PathBuf::from("/srv/anchor/library")
+        );
+        // Otherwise the Graph catalog it configured — never a path inferred from the
+        // bundle, which is where the Graph is, not where a Plugin is.
+        assert_eq!(configured_library(catalog, None, None), catalog);
+        assert_eq!(
+            configured_library(
+                catalog,
+                None,
+                Some(PathBuf::from("/srv/anchor/catalog/bundles/main")),
+            ),
+            PathBuf::from("/srv/anchor/catalog/bundles/main")
+        );
+    }
 
     #[test]
     fn invocation_filenames_preserve_the_durable_key_hash_bytes() {
@@ -885,32 +997,20 @@ mod tests {
         };
         let _env = PROCESS_ENV_LOCK.blocking_lock();
         let root = tempdir().unwrap();
-        let saved: Vec<_> = [
-            "ANCHOR_RUNNER_STATE_ROOT",
-            "ANCHOR_RUNNER_CATALOG_ROOT",
-            "ANCHOR_RUNNER_LIBRARY_ROOT",
-            "ANCHOR_DEPENDENCIES_PYTHON",
-            "ANCHOR_PILOT_PYTHON_ENABLED",
-        ]
-        .into_iter()
-        .map(|name| (name, env::var_os(name)))
-        .collect();
+        let saved: Vec<_> = ["ANCHOR_DEPENDENCIES_PYTHON", "ANCHOR_PILOT_PYTHON_ENABLED"]
+            .into_iter()
+            .map(|name| (name, env::var_os(name)))
+            .collect();
         let set = |name: &str, value: &std::ffi::OsStr| unsafe { env::set_var(name, value) };
-        set(
-            "ANCHOR_RUNNER_STATE_ROOT",
-            root.path().join("state").as_os_str(),
-        );
-        set(
-            "ANCHOR_RUNNER_CATALOG_ROOT",
-            root.path().join("catalog").as_os_str(),
-        );
-        set(
-            "ANCHOR_RUNNER_LIBRARY_ROOT",
-            root.path().join("library").as_os_str(),
-        );
         set("ANCHOR_DEPENDENCIES_PYTHON", python.as_os_str());
         set("ANCHOR_PILOT_PYTHON_ENABLED", "1".as_ref());
-        let snapshot = standalone_application().and_then(|application| {
+        let snapshot = standalone_application(&Arc::new(HostConfiguration {
+            state_root: Some(root.path().join("state")),
+            catalog_root: Some(root.path().join("catalog")),
+            library_root: Some(root.path().join("library")),
+            ..Default::default()
+        }))
+        .and_then(|application| {
             application
                 .runtime_snapshot()
                 .map_err(|error| format!("{error:?}"))
@@ -1139,11 +1239,14 @@ mod tests {
 
     #[tokio::test]
     async fn protocol_version_is_checked_before_host_setup() {
-        let response = handle(Request::Status {
-            version: 2,
-            request_id: "req".into(),
-            run_id: "run".into(),
-        })
+        let response = handle(
+            Request::Status {
+                version: 2,
+                request_id: "req".into(),
+                run_id: "run".into(),
+            },
+            &Arc::new(HostConfiguration::default()),
+        )
         .await;
         assert!(
             matches!(response, Response::Rejected { reason, .. } if reason.contains("version"))

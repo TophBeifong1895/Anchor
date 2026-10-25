@@ -49,8 +49,8 @@ fn fake_plugin_ids() -> Vec<String> {
 /// The node sandbox a Pilot Turn's stdio Plugin servers launch in, and the
 /// session-level workspace they share.
 ///
-/// The authority is the deployment's, read from the same configuration a node
-/// call reads: `ANCHOR_BWRAP`, `ANCHOR_RUNNER_ALLOWED_COMMANDS`, the deployment
+/// The authority is the deployment's, from the same configuration a node
+/// receives: the Bubblewrap executable, `ANCHOR_RUNNER_ALLOWED_COMMANDS`, the deployment
 /// tool environment, and `ANCHOR_RUNNER_WORKSPACE_ROOT` as the authorized
 /// workspace root. No new permission is invented here — a Plugin server gets
 /// exactly the authority a node call's server gets, and only because a human
@@ -70,28 +70,29 @@ pub(crate) fn session_workspace(workspace_root: &Path, owner: &str, session: &st
 }
 
 fn pilot_plugin_sandbox(
+    configuration: &crate::HostConfiguration,
     workspace_root: &Path,
     owner: &str,
     session: &str,
 ) -> Result<(BubblewrapSandbox, PathBuf), String> {
     pilot_plugin_sandbox_with_environment(
+        configuration,
         workspace_root,
         owner,
         session,
-        &crate::tool_environment::ToolEnvironment::from_env()?,
+        &configuration.tool_environment()?,
     )
 }
 
 fn pilot_plugin_sandbox_with_environment(
+    configuration: &crate::HostConfiguration,
     workspace_root: &Path,
     owner: &str,
     session: &str,
     environment: &crate::tool_environment::ToolEnvironment,
 ) -> Result<(BubblewrapSandbox, PathBuf), String> {
     let commands = std::env::var("ANCHOR_RUNNER_ALLOWED_COMMANDS").unwrap_or_default();
-    let bwrap = std::env::var_os("ANCHOR_BWRAP")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("bwrap"));
+    let bwrap = configuration.bwrap.clone();
     let workspace = session_workspace(workspace_root, owner, session);
     std::fs::create_dir_all(&workspace)
         .map_err(|error| format!("Pilot Plugin workspace is unavailable: {error}"))?;
@@ -124,6 +125,7 @@ fn pilot_plugin_sandbox_with_environment(
 /// builds or repairs a view, or fetches a package.
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn frozen_turn_tools(
+    configuration: &crate::HostConfiguration,
     data_root: &Path,
     library_root: &Path,
     workspace_root: &Path,
@@ -172,7 +174,7 @@ pub(crate) async fn frozen_turn_tools(
                 .to_owned(),
         );
     }
-    let environment = crate::tool_environment::ToolEnvironment::from_env()?;
+    let environment = configuration.tool_environment()?;
     let environment = match runtime {
         Some(snapshot) => environment.with_runtime_snapshot(snapshot)?,
         None => environment,
@@ -219,6 +221,7 @@ pub(crate) async fn frozen_turn_tools(
         if declares_stdio && !stdio_checked {
             stdio_checked = true;
             match pilot_plugin_sandbox_with_environment(
+                configuration,
                 workspace_root,
                 owner,
                 session,
@@ -318,6 +321,10 @@ async fn frozen_plugin_tools(
     turn: &str,
 ) -> Result<(Vec<Arc<dyn ToolPort>>, Vec<String>), String> {
     frozen_turn_tools(
+        &crate::HostConfiguration {
+            library_root: Some(library_root.to_path_buf()),
+            ..Default::default()
+        },
         data_root,
         library_root,
         workspace_root,
@@ -343,6 +350,7 @@ async fn frozen_plugin_tools(
 
 /// Host assembly for a single frozen Turn. It owns no model history or planning.
 pub(crate) struct PilotTurnContext {
+    configuration: crate::HostConfiguration,
     pub(crate) workspace: PathBuf,
     pub(crate) sandbox: Arc<BubblewrapSandbox>,
     pub(crate) network: bool,
@@ -364,20 +372,23 @@ impl PilotTurnContext {
             .pilot_platform_status(self.network, application.pilot_dependency_status())
     }
     pub(crate) fn new(
+        configuration: &crate::HostConfiguration,
         workspace_root: &Path,
         owner: &str,
         session: &str,
         network: bool,
         cancellation: anchor_runtime::Cancellation,
     ) -> Result<Self, String> {
-        let (sandbox, workspace) = pilot_plugin_sandbox(workspace_root, owner, session)?;
+        let (sandbox, workspace) =
+            pilot_plugin_sandbox(configuration, workspace_root, owner, session)?;
         let sandbox = Arc::new(sandbox);
         // This empty Plugin port refuses unknown names; it never points back at
         // PilotPort, so dispatch cannot recurse into the observing adapter.
         let empty = tool_host::PluginToolHost::new(Vec::<String>::new())
             .for_bindings(&[])
             .map_err(|error| error.to_string())?;
-        let environment = crate::tool_environment::ToolEnvironment::from_env()?
+        let environment = configuration
+            .tool_environment()?
             .with_pilot_rust()?
             .with_pilot_python()?;
         let commands = crate::node_tools::NodeTools::new(
@@ -391,6 +402,7 @@ impl PilotTurnContext {
         .with_timeout_ceiling(std::time::Duration::from_secs(600))
         .with_environment(environment.clone());
         Ok(Self {
+            configuration: configuration.clone(),
             workspace,
             sandbox,
             network,
@@ -439,7 +451,9 @@ impl PilotTurnContext {
         library: &Path,
         scope: &Path,
     ) -> Result<(), String> {
-        self.environment = crate::tool_environment::ToolEnvironment::from_env()?
+        self.environment = self
+            .configuration
+            .tool_environment()?
             .with_runtime_snapshot(snapshot)?;
         let empty = tool_host::PluginToolHost::new(Vec::<String>::new())
             .for_bindings(&[])
@@ -1456,8 +1470,7 @@ mod frozen_mounts_tests {
      {
         let _env = crate::PROCESS_ENV_LOCK.lock().await;
         let _commands = EnvVar::set("ANCHOR_RUNNER_ALLOWED_COMMANDS", "sh,cat,printf,true");
-        let _library = EnvVar::unset("ANCHOR_RUNNER_LIBRARY_ROOT");
-        let _bwrap = EnvVar::unset("ANCHOR_BWRAP");
+
         let fixture = Fixture::new();
         let executable = network_binary();
         // The same network client installed as an offline Plugin: it must run,

@@ -67,7 +67,7 @@ async fn schedules_crud_reload_and_timeline_keep_platform_contract() {
 async fn busy_due_schedule_skips_existing_admission_without_creating_a_run() {
     let (root, state) = fixture();
     let _env_guard = PROCESS_ENV.lock().await;
-    set_host_env(root.path(), &state.data_root);
+    set_host_env(root.path());
     write_graph_bundle(&state.bundle_root, &two_node_definition("true")).unwrap();
     let app = router(state.clone());
     let run = start_and_pause(&state, &app).await;

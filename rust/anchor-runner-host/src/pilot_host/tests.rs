@@ -661,6 +661,7 @@ use crate::test_support::Environment;
 struct Fixture {
     _root: tempfile::TempDir,
     catalog: PathBuf,
+    bwrap: PathBuf,
     data: PathBuf,
     workspace: PathBuf,
     sessions: SessionStore,
@@ -695,6 +696,7 @@ impl Fixture {
         Self {
             _root: root,
             catalog,
+            bwrap: "bwrap".into(),
             data,
             workspace,
             sessions,
@@ -722,11 +724,11 @@ impl Fixture {
         environment.set("ANCHOR_PILOT_PYTHON_ENABLED", "0");
         environment.remove("ANCHOR_MODEL_ALIASES");
         environment.remove("ANCHOR_MODEL_CONTEXT_WINDOW");
-        environment.remove("ANCHOR_RUNNER_LIBRARY_ROOT");
+
         environment.remove("ANCHOR_RUNNER_FAKE_PLUGINS");
         environment.remove("ANCHOR_PILOT_RUSTUP");
         environment.remove("ANCHOR_PILOT_PYTHON");
-        environment.remove("ANCHOR_BWRAP");
+
         crate::model_configuration::ModelConfiguration::from_env(&self.data)
             .unwrap()
             .save(serde_json::from_value(json!({"endpoint":"http://127.0.0.1:1/v1","wire_api":"chat","model":"admission-fixture","api_key":{"action":"set","value":"admission-fixture-only"}})).unwrap())
@@ -777,7 +779,12 @@ impl Fixture {
             application: crate::application::RunApplication::new(
                 self.data.clone(),
                 self.catalog.clone(),
-            ),
+            )
+            .with_host_configuration(Arc::new(crate::HostConfiguration {
+                state_root: Some(self.data.clone()),
+                bwrap: self.bwrap.clone(),
+                ..Default::default()
+            })),
             graph_name: "pilot".into(),
             library_root: self.catalog.clone(),
             data_root: self.data.clone(),
@@ -1080,9 +1087,9 @@ async fn mount_snapshot_failure_settles_the_turn_before_registering_execution() 
 #[tokio::test]
 async fn stopping_an_accepted_turn_before_startup_skips_the_sandbox() {
     let _env = crate::PROCESS_ENV_LOCK.lock().await;
-    let fixture = Fixture::new();
-    let mut configured = fixture.configure();
-    configured.set("ANCHOR_BWRAP", fixture.catalog.join("missing-bwrap"));
+    let mut fixture = Fixture::new();
+    let _configured = fixture.configure();
+    fixture.bwrap = fixture.catalog.join("missing-bwrap");
     let session = fixture.create("stop-before-startup");
     let turn = fixture.admit(&session, "stop").await;
     // Admission spawned the executor without yielding after active registration;
@@ -1101,9 +1108,9 @@ async fn stopping_an_accepted_turn_before_startup_skips_the_sandbox() {
 #[tokio::test]
 async fn background_context_failure_settles_and_releases_the_accepted_turn() {
     let _env = crate::PROCESS_ENV_LOCK.lock().await;
-    let fixture = Fixture::new();
-    let mut configured = fixture.configure();
-    configured.set("ANCHOR_BWRAP", fixture.catalog.join("missing-bwrap"));
+    let mut fixture = Fixture::new();
+    let _configured = fixture.configure();
+    fixture.bwrap = fixture.catalog.join("missing-bwrap");
     let session = fixture.create("context-failure");
     let turn = fixture.admit(&session, "fail").await;
     let saved = fixture.terminal(&session, &turn).await;

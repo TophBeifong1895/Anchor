@@ -95,7 +95,7 @@ fn seed_waiting_recovery(state: &ApiState, run: &str) -> fixtures::Observation {
 async fn abandon_cancels_the_running_node_and_makes_the_run_terminal_aborted() {
     let (root, state) = fixture();
     let _env = PROCESS_ENV.lock().await;
-    set_host_env(root.path(), &state.data_root);
+    set_host_env(root.path());
     write_graph_bundle(
         &state.bundle_root,
         &json!({
@@ -307,7 +307,7 @@ async fn abandon_is_idempotent_and_rejects_terminal_unknown_or_invalid_requests(
 async fn graph_updates_do_not_require_abandoning_stopped_plugin_runs() {
     let (_root, state) = fixture();
     let _env = PROCESS_ENV.lock().await;
-    set_host_env(_root.path(), &state.data_root);
+    set_host_env(_root.path());
     let plugin = state.catalog_root.join("plugins/demo");
     std::fs::create_dir_all(plugin.join("skills/example")).unwrap();
     std::fs::write(
@@ -535,7 +535,7 @@ fn assistant_fixture(state: &ApiState) -> (SessionStore, String, String) {
 async fn abandon_keeps_the_assistant_binding_workspace_and_history_for_handover() {
     let (root, state) = fixture();
     let _env = PROCESS_ENV.lock().await;
-    set_host_env(root.path(), &state.data_root);
+    set_host_env(root.path());
     let (sessions, session, turn) = assistant_fixture(&state);
     let run = "abandon-assistant-run";
     let before = record_of(&state, run);
@@ -658,7 +658,7 @@ async fn abandon_keeps_the_assistant_binding_workspace_and_history_for_handover(
 async fn abandon_leaves_other_runs_and_their_recovery_entry_points_unchanged() {
     let (root, state) = fixture();
     let _env = PROCESS_ENV.lock().await;
-    set_host_env(root.path(), &state.data_root);
+    set_host_env(root.path());
     // The ordinary paused Run is started first: a *new* Run of the same Graph
     // cannot be admitted while any unfinished Run of that Graph exists, and the
     // seeded `WaitingRecovery` siblings are unfinished by design. Resuming this

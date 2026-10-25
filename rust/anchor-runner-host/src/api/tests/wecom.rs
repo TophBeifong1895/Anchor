@@ -152,7 +152,7 @@ async fn wecom_attachment_validation_rejects_bad_bytes_names_and_counts_before_a
 async fn wecom_event_for_a_graph_without_an_input_loop_is_refused_before_admission() {
     let (root, mut state) = fixture();
     let _env = PROCESS_ENV.lock().await;
-    set_host_env(root.path(), &state.data_root);
+    set_host_env(root.path());
     with_bot(&mut state, "reply", &["*"]);
     write_graph_bundle(
         &state.bundle_root,
@@ -358,7 +358,7 @@ async fn persistent_assistant_progress_resolves_the_bound_round() {
     let (root, mut state) = fixture();
     with_bot(&mut state, "assistant", &["*"]);
     let _env = PROCESS_ENV.lock().await;
-    set_host_env(root.path(), &state.data_root);
+    set_host_env(root.path());
     let definition = assistant_definition();
     let (session, turn, expected_work, fact) =
         seed_running_assistant_round(&state, &definition, "message-1", 1);
@@ -476,7 +476,7 @@ async fn an_admitted_message_without_a_run_is_not_finished_lost_or_duplicated() 
     let (root, mut state) = fixture();
     with_bot(&mut state, "assistant", &["*"]);
     let _env = PROCESS_ENV.lock().await;
-    set_host_env(root.path(), &state.data_root);
+    set_host_env(root.path());
     std::fs::create_dir_all(state.data_root.join("platform")).unwrap();
     let owner = "local";
     let inbound = |event_id: &str, text: &str| ChannelInboundRequest {
@@ -684,7 +684,7 @@ async fn persistent_assistant_progress_shows_guidance_from_narration_alone() {
     let (root, mut state) = fixture();
     with_bot(&mut state, "assistant", &["*"]);
     let _env = PROCESS_ENV.lock().await;
-    set_host_env(root.path(), &state.data_root);
+    set_host_env(root.path());
     std::fs::create_dir_all(state.data_root.join("platform")).unwrap();
     let definition = assistant_definition();
     let (_, _, _, fact) = seed_running_assistant_round(&state, &definition, "message-1", 1);
@@ -740,7 +740,7 @@ async fn persistent_assistant_progress_reports_before_the_live_trace_registers()
     let (root, mut state) = fixture();
     with_bot(&mut state, "assistant", &["*"]);
     let _env = PROCESS_ENV.lock().await;
-    set_host_env(root.path(), &state.data_root);
+    set_host_env(root.path());
     std::fs::create_dir_all(state.data_root.join("platform")).unwrap();
     let definition = assistant_definition();
     let (_, _, _, fact) = seed_running_assistant_round(&state, &definition, "message-1", 1);

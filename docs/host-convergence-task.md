@@ -36,7 +36,7 @@
 | H0 依赖方向围栏 | S | — | 已验收（`a0de84b`）；实测基线 58 / 35 / 1，[证据](../experiments/host-convergence/h0/verification.md) |
 | H1 共享原语与已分叉规则 | M | H0 | 已验收（7dd8204）；依赖计数 58 / 23 / 1；本机已安装 Plugin id 均合规，[证据](../experiments/host-convergence/h1/verification.md) |
 | H2 Run 元数据下沉 | M | H1 | 已验收（ebc9919）；依赖计数 25 / 23 / 1，服务 → 用例减少 33（按下文确认口径），[证据](../experiments/host-convergence/h2/verification.md) |
-| H3 配置只在组合根读取 | M | H2 | 未开始 |
+| H3 配置只在组合根读取 | M | H2 | 开发与规定检查完成，待架构验收；四变量在入口各读一次，模型保存与执行共用类型化校验；依赖计数 25 / 23 / 1，[证据](../experiments/host-convergence/h3/verification.md) |
 | H4 Plugin 领域单一主人 | L | H3；调研可提前 | [设计](../experiments/host-convergence/h4/design.md)已确认，按下文三项修改实施；未开始 |
 | H5 剩余反向依赖清零 | M | H4 | 未开始 |
 

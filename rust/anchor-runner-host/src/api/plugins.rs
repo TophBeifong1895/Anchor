@@ -71,7 +71,7 @@ pub(super) async fn plugin_catalog(
 
 #[allow(clippy::result_large_err)]
 fn plugin_catalog_rows(state: &ApiState) -> Result<Vec<Value>, HttpResponse> {
-    let root = crate::library_root(&state.catalog_root);
+    let root = state.application.library_root().to_path_buf();
     let catalog = crate::application::plugins::catalog::InstalledPluginCatalog::read(&root)
         .map_err(application_error)?;
     Ok(catalog
@@ -99,7 +99,7 @@ pub(super) async fn plugin_detail(
     AxumPath(plugin): AxumPath<String>,
 ) -> Result<Json<Value>, HttpResponse> {
     let catalog = crate::application::plugins::catalog::InstalledPluginCatalog::read_selected(
-        &crate::library_root(&state.catalog_root),
+        state.application.library_root(),
         &plugin,
     )
     .map_err(application_error)?;
@@ -124,7 +124,7 @@ pub(super) async fn plugin_file(
     State(state): State<ApiState>,
     AxumPath((plugin, path)): AxumPath<(String, String)>,
 ) -> Result<HttpResponse, HttpResponse> {
-    let catalog = FilePluginCatalog::new(crate::library_root(&state.catalog_root));
+    let catalog = FilePluginCatalog::new(state.application.library_root().to_path_buf());
     let definition = catalog
         .definition(&plugin)
         .map_err(|failure| error(StatusCode::BAD_REQUEST, public_catalog_error(failure)))?;

@@ -1,31 +1,9 @@
 use super::*;
 
-struct LibraryRoot(Option<std::ffi::OsString>);
-
-impl LibraryRoot {
-    fn set(path: &Path) -> Self {
-        let previous = std::env::var_os("ANCHOR_RUNNER_LIBRARY_ROOT");
-        unsafe { std::env::set_var("ANCHOR_RUNNER_LIBRARY_ROOT", path) };
-        Self(previous)
-    }
-}
-
-impl Drop for LibraryRoot {
-    fn drop(&mut self) {
-        unsafe {
-            match &self.0 {
-                Some(previous) => std::env::set_var("ANCHOR_RUNNER_LIBRARY_ROOT", previous),
-                None => std::env::remove_var("ANCHOR_RUNNER_LIBRARY_ROOT"),
-            }
-        }
-    }
-}
-
 /// Saving the next Graph must not rewrite live authorization or remove the
 /// Library, including the supported layout where Library and bundle share a root.
 #[tokio::test]
 async fn publishing_network_and_plugin_changes_preserves_live_runs_and_library_bytes() {
-    let _environment = crate::PROCESS_ENV_LOCK.lock().await;
     for single_root in [false, true] {
         let root = tempfile::tempdir().unwrap();
         let catalog = root.path().join("catalog");
@@ -34,7 +12,6 @@ async fn publishing_network_and_plugin_changes_preserves_live_runs_and_library_b
         } else {
             catalog.join("assistant")
         };
-        let _library = LibraryRoot::set(&catalog);
         for (id, network) in [("offline", false), ("network", true)] {
             let plugin = catalog.join("plugins").join(id);
             std::fs::create_dir_all(&plugin).unwrap();

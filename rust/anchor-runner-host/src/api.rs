@@ -159,13 +159,14 @@ fn is_oauth_path(path: &str) -> bool {
     segments.len() == 4 && segments[0] == "plugins" && matches!(segments[2], "oauth" | "authorize")
 }
 
-pub async fn serve() -> io::Result<()> {
+pub async fn serve(configuration: Arc<crate::HostConfiguration>) -> io::Result<()> {
     let configured_bundle = env::var_os("ANCHOR_RUNNER_BUNDLE_ROOT")
         .filter(|path| !path.is_empty())
         .map(PathBuf::from);
-    let data_root = env::var_os("ANCHOR_RUNNER_STATE_ROOT")
-        .map(PathBuf::from)
-        .ok_or_else(|| io::Error::other("ANCHOR_RUNNER_STATE_ROOT is required"))?;
+    let data_root = configuration
+        .state_root()
+        .map_err(io::Error::other)?
+        .to_path_buf();
     let workspace_root = env::var_os("ANCHOR_RUNNER_WORKSPACE_ROOT")
         .map(PathBuf::from)
         .ok_or_else(|| io::Error::other("ANCHOR_RUNNER_WORKSPACE_ROOT is required"))?;
@@ -192,23 +193,21 @@ pub async fn serve() -> io::Result<()> {
         ));
     }
     let owner = sessions::installation_owner(&data_root)?;
-    let catalog_root = env::var_os("ANCHOR_RUNNER_CATALOG_ROOT")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| {
-            if configured_bundle.is_none() {
-                return data_root.join("catalog");
-            }
-            bundle_root
-                .parent()
-                .unwrap_or_else(|| std::path::Path::new("."))
-                .to_path_buf()
-        });
+    let catalog_root = configuration.catalog_root.clone().unwrap_or_else(|| {
+        if configured_bundle.is_none() {
+            return data_root.join("catalog");
+        }
+        bundle_root
+            .parent()
+            .unwrap_or_else(|| std::path::Path::new("."))
+            .to_path_buf()
+    });
     for root in [&data_root, &workspace_root, &catalog_root] {
         crate::host_fs::directory(root).map_err(io::Error::other)?;
     }
     let configured_graph_ready =
         validate_service_configuration(&bundle_root, &data_root, &workspace_root, &catalog_root)?;
-    let _writer = crate::acquire_deployment_writer().map_err(io::Error::other)?;
+    let _writer = crate::acquire_deployment_writer(&data_root).map_err(io::Error::other)?;
     let retention = crate::retention::Policy::from_env().map_err(io::Error::other)?;
     crate::durable_write::cleanup_at_startup(&data_root, &workspace_root);
     let swept = plugin_management::sweep_staging(&data_root);
@@ -217,14 +216,14 @@ pub async fn serve() -> io::Result<()> {
             "anchor-runner-host: removed {swept} Plugin staging directories left by an earlier process"
         );
     }
-    crate::runtime_configuration::install_release_network(&crate::library_root(&catalog_root))
+    let library_root = configuration.library_root(&catalog_root);
+    crate::runtime_configuration::install_release_network(library_root)
         .map_err(io::Error::other)?;
     // Start-up reclamation is best effort: a Library that cannot be swept (a busy
     // writer, an unreadable manifest) must never keep the host from starting, and
     // the sweep only deletes what it can prove is unreferenced.
     {
-        let root = crate::library_root(&catalog_root);
-        match anchor_library::reclaim(&root, true) {
+        match anchor_library::reclaim(library_root, true) {
             // Anything that happened, or was refused, is worth one line; a Library
             // with nothing to reclaim stays quiet.
             Ok(report)
@@ -251,14 +250,11 @@ pub async fn serve() -> io::Result<()> {
     // The root dependency preparation writes its wheelhouse into: the
     // explicit Library root, otherwise the Graph catalog the Plugin API also
     // falls back to. The build root must stay disjoint from it.
-    let dependency_library_root = crate::library_root(&catalog_root);
     let runtime_configuration = Arc::new(
         crate::runtime_configuration::RuntimeConfiguration::from_env(
             &data_root,
-            &dependency_library_root,
-            env::var_os("ANCHOR_BWRAP")
-                .map(PathBuf::from)
-                .unwrap_or_else(|| PathBuf::from("bwrap")),
+            library_root,
+            configuration.bwrap.clone(),
         )
         .map_err(io::Error::other)?,
     );
@@ -274,6 +270,7 @@ pub async fn serve() -> io::Result<()> {
         .map_err(io::Error::other)?,
     );
     let mut application = RunApplication::new(data_root.clone(), catalog_root.clone())
+        .with_host_configuration(configuration)
         .with_runtime_configuration(runtime_configuration);
     let configured_graph_entry = configured_bundle
         .is_some()
@@ -318,7 +315,7 @@ pub async fn serve() -> io::Result<()> {
     state.application = state.application.clone().with_oauth_management(Arc::new(
         oauth::OAuthManagementAdapter::new(
             state.data_root.clone(),
-            crate::library_root(&state.catalog_root),
+            state.application.library_root().to_path_buf(),
             &callback_listen,
         ),
     ));
@@ -328,7 +325,7 @@ pub async fn serve() -> io::Result<()> {
                 data_root: state.data_root.clone(),
                 catalog_root: state.catalog_root.clone(),
                 configured_graph: configured_graph_entry.clone(),
-                library_root: crate::library_root(&state.catalog_root),
+                library_root: state.application.library_root().to_path_buf(),
                 listen: callback_listen,
             },
         )
@@ -702,7 +699,7 @@ fn session_plugin_rows(
     state: &ApiState,
     session: &anchor_platform_session::Session,
 ) -> Result<Vec<Value>, HttpResponse> {
-    let root = crate::library_root(&state.catalog_root);
+    let root = state.application.library_root().to_path_buf();
     let mut catalog = crate::application::plugins::catalog::InstalledPluginCatalog::read(&root)
         .map_err(application_error)?;
     let declarations = session_plugin_declarations(state, session);
@@ -895,7 +892,7 @@ fn session_plugin_mount_target(
         ));
     }
     if on {
-        let root = crate::library_root(&state.catalog_root);
+        let root = state.application.library_root().to_path_buf();
         FilePluginCatalog::new(&root)
             .definition(plugin)
             .map_err(|_| {

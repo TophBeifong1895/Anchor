@@ -495,7 +495,7 @@ impl RunApplication {
         &self,
     ) -> Result<anchor_library::InstallLease, ApplicationError> {
         plugin_publication_lease(
-            &crate::library_root(&self.catalog_root),
+            self.library_root(),
             &DependencyAccess::default(),
             "reference publication",
         )
@@ -1728,15 +1728,12 @@ mod impact_tests {
         let bundle = root.path().join("bundles/main");
         fs::create_dir_all(&bundle).unwrap();
         let _guard = crate::PROCESS_ENV_LOCK.lock().await;
-        let mut environment = crate::test_support::Environment::cleared(&[
-            "ANCHOR_RUNNER_LIBRARY_ROOT",
-            "ANCHOR_RUNNER_CATALOG_ROOT",
-        ]);
+        let mut environment = crate::test_support::Environment::cleared(&[]);
         environment.set("ANCHOR_RUNNER_BUNDLE_ROOT", &bundle);
         // The same root the API serves and the resolver binds from.
         let catalog_root = bundle.parent().unwrap();
-        let library_root = crate::library_root(catalog_root);
         let application = RunApplication::new(state.clone(), catalog_root.to_path_buf());
+        let library_root = application.library_root().to_path_buf();
         let source = candidate(root.path(), "only-bundle");
         let installed = application
             .install_plugin_if_unchanged(

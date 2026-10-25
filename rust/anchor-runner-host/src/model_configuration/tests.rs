@@ -420,3 +420,29 @@ async fn environment_cannot_configure_or_override_model_services_or_credentials(
             .contains("ignored-environment")
     );
 }
+
+#[test]
+fn saving_zero_context_window_leaves_saved_configuration_unchanged() {
+    let (_root, configuration) = fixture();
+    configuration
+        .save(update(
+            "https://provider.example/v1",
+            "first",
+            json!({"action":"set", "value":"fixture-key"}),
+        ))
+        .unwrap();
+    let before = fs::read(configuration.root.join("model-config.json")).unwrap();
+    let mut invalid = update(
+        "https://provider.example/v1",
+        "first",
+        json!({"action":"keep"}),
+    );
+    invalid.fields.context_window = Some(0);
+    assert!(
+        matches!(configuration.save(invalid), Err(message) if message == "ANCHOR_MODEL_CONTEXT_WINDOW must be a positive integer")
+    );
+    assert_eq!(
+        fs::read(configuration.root.join("model-config.json")).unwrap(),
+        before
+    );
+}

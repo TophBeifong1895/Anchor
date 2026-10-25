@@ -10,10 +10,7 @@ use crate::test_support::Environment;
 
 fn environment(root: &Path) -> Environment {
     let names = [
-        "ANCHOR_RUNNER_STATE_ROOT",
         "ANCHOR_RUNNER_WORKSPACE_ROOT",
-        "ANCHOR_RUNNER_CATALOG_ROOT",
-        "ANCHOR_RUNNER_LIBRARY_ROOT",
         "ANCHOR_RUNNER_ALLOWED_COMMANDS",
         "ANCHOR_RUNNER_LOCAL_INPUTS_ROOT",
         "ANCHOR_MODEL_API_KEY",
@@ -36,10 +33,9 @@ fn environment(root: &Path) -> Environment {
     let binary = root.join("unstarted-goose");
     let bytes = b"Goose must not execute in this reference admission fixture";
     fs::write(&binary, bytes).unwrap();
-    environment.set("ANCHOR_RUNNER_STATE_ROOT", root.join("state"));
+
     environment.set("ANCHOR_RUNNER_WORKSPACE_ROOT", root.join("workspaces"));
-    environment.set("ANCHOR_RUNNER_CATALOG_ROOT", root);
-    environment.set("ANCHOR_RUNNER_LIBRARY_ROOT", root.join("library"));
+
     environment.set("ANCHOR_RUNNER_ALLOWED_COMMANDS", "sh,sleep,printf");
     environment.set("ANCHOR_RUNNER_AGENT_RUNTIME", "goose");
     environment.set("ANCHOR_GOOSE_BINARY", &binary);
@@ -100,6 +96,11 @@ fn fixture(root: &Path) -> (RunApplication, SessionStore) {
     sessions.create("local", CreateSession::default()).unwrap();
     (
         RunApplication::new(root.join("state"), root.to_path_buf())
+            .with_host_configuration(Arc::new(crate::HostConfiguration {
+                state_root: Some(root.join("state")),
+                library_root: Some(root.join("library")),
+                ..Default::default()
+            }))
             .with_configured_graph("fixture".into(), bundle),
         sessions,
     )

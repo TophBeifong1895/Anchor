@@ -1,0 +1,259 @@
+{
+  "command": "CARGO_TARGET_DIR=/home/mansteinl/Anchor/rust/target XDG_RUNTIME_DIR=/run/user/1001 scripts/test.sh -p anchor-runner-host --locked",
+  "exit_code": 0,
+  "test_binaries": 41,
+  "totals": {
+    "passed": 1231,
+    "failed": 0,
+    "ignored": 110,
+    "filtered": 0
+  },
+  "results": [
+    {
+      "passed": 3,
+      "failed": 0,
+      "ignored": 0,
+      "filtered": 0
+    },
+    {
+      "passed": 1035,
+      "failed": 0,
+      "ignored": 2,
+      "filtered": 0
+    },
+    {
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0,
+      "filtered": 0
+    },
+    {
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0,
+      "filtered": 0
+    },
+    {
+      "passed": 8,
+      "failed": 0,
+      "ignored": 15,
+      "filtered": 0
+    },
+    {
+      "passed": 6,
+      "failed": 0,
+      "ignored": 4,
+      "filtered": 0
+    },
+    {
+      "passed": 6,
+      "failed": 0,
+      "ignored": 4,
+      "filtered": 0
+    },
+    {
+      "passed": 6,
+      "failed": 0,
+      "ignored": 10,
+      "filtered": 0
+    },
+    {
+      "passed": 6,
+      "failed": 0,
+      "ignored": 1,
+      "filtered": 0
+    },
+    {
+      "passed": 6,
+      "failed": 0,
+      "ignored": 1,
+      "filtered": 0
+    },
+    {
+      "passed": 6,
+      "failed": 0,
+      "ignored": 10,
+      "filtered": 0
+    },
+    {
+      "passed": 6,
+      "failed": 0,
+      "ignored": 1,
+      "filtered": 0
+    },
+    {
+      "passed": 6,
+      "failed": 0,
+      "ignored": 1,
+      "filtered": 0
+    },
+    {
+      "passed": 6,
+      "failed": 0,
+      "ignored": 6,
+      "filtered": 0
+    },
+    {
+      "passed": 6,
+      "failed": 0,
+      "ignored": 2,
+      "filtered": 0
+    },
+    {
+      "passed": 6,
+      "failed": 0,
+      "ignored": 14,
+      "filtered": 0
+    },
+    {
+      "passed": 6,
+      "failed": 0,
+      "ignored": 2,
+      "filtered": 0
+    },
+    {
+      "passed": 6,
+      "failed": 0,
+      "ignored": 2,
+      "filtered": 0
+    },
+    {
+      "passed": 6,
+      "failed": 0,
+      "ignored": 4,
+      "filtered": 0
+    },
+    {
+      "passed": 6,
+      "failed": 0,
+      "ignored": 3,
+      "filtered": 0
+    },
+    {
+      "passed": 6,
+      "failed": 0,
+      "ignored": 1,
+      "filtered": 0
+    },
+    {
+      "passed": 6,
+      "failed": 0,
+      "ignored": 1,
+      "filtered": 0
+    },
+    {
+      "passed": 6,
+      "failed": 0,
+      "ignored": 2,
+      "filtered": 0
+    },
+    {
+      "passed": 6,
+      "failed": 0,
+      "ignored": 2,
+      "filtered": 0
+    },
+    {
+      "passed": 6,
+      "failed": 0,
+      "ignored": 7,
+      "filtered": 0
+    },
+    {
+      "passed": 6,
+      "failed": 0,
+      "ignored": 4,
+      "filtered": 0
+    },
+    {
+      "passed": 6,
+      "failed": 0,
+      "ignored": 2,
+      "filtered": 0
+    },
+    {
+      "passed": 6,
+      "failed": 0,
+      "ignored": 5,
+      "filtered": 0
+    },
+    {
+      "passed": 6,
+      "failed": 0,
+      "ignored": 2,
+      "filtered": 0
+    },
+    {
+      "passed": 3,
+      "failed": 0,
+      "ignored": 0,
+      "filtered": 0
+    },
+    {
+      "passed": 4,
+      "failed": 0,
+      "ignored": 0,
+      "filtered": 0
+    },
+    {
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0,
+      "filtered": 0
+    },
+    {
+      "passed": 4,
+      "failed": 0,
+      "ignored": 0,
+      "filtered": 0
+    },
+    {
+      "passed": 6,
+      "failed": 0,
+      "ignored": 2,
+      "filtered": 0
+    },
+    {
+      "passed": 3,
+      "failed": 0,
+      "ignored": 0,
+      "filtered": 0
+    },
+    {
+      "passed": 5,
+      "failed": 0,
+      "ignored": 0,
+      "filtered": 0
+    },
+    {
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0,
+      "filtered": 0
+    },
+    {
+      "passed": 3,
+      "failed": 0,
+      "ignored": 0,
+      "filtered": 0
+    },
+    {
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0,
+      "filtered": 0
+    },
+    {
+      "passed": 3,
+      "failed": 0,
+      "ignored": 0,
+      "filtered": 0
+    },
+    {
+      "passed": 5,
+      "failed": 0,
+      "ignored": 0,
+      "filtered": 0
+    }
+  ]
+}

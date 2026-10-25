@@ -154,7 +154,7 @@ pub(super) fn validate_link(
         return Err("OAuth source Session was stopped, deleted, or recreated".into());
     }
     let route = resolve_binding_at_root(
-        &library_root(&state.catalog_root),
+        state.application.library_root(),
         binding.plugin(),
         binding.server(),
         binding.owner(),
@@ -177,7 +177,7 @@ pub(super) async fn publish_and_continue(
     grant: OAuthGrant,
     link: Option<PilotOAuthLink>,
 ) -> Result<(), OAuthError> {
-    let library = library_root(&state.catalog_root);
+    let library = state.application.library_root().to_path_buf();
     let Some(mut link) = link else {
         return persist_authorization(grant, library).await;
     };
@@ -212,7 +212,7 @@ pub(super) async fn publish_and_continue(
     let tools = crate::pilot_tools::PilotTools {
         application: state.application.clone(),
         graph_name: state.graph_name.clone(),
-        library_root: library_root(&state.catalog_root),
+        library_root: state.application.library_root().to_path_buf(),
         data_root: state.data_root.clone(),
         workspace_root: state.workspace_root.clone(),
         sessions: sessions.clone(),

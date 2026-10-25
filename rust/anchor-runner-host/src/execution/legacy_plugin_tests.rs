@@ -11,10 +11,7 @@ use crate::test_support::Environment;
 
 fn environment(root: &Path) -> Environment {
     let names = [
-        "ANCHOR_RUNNER_STATE_ROOT",
         "ANCHOR_RUNNER_WORKSPACE_ROOT",
-        "ANCHOR_RUNNER_CATALOG_ROOT",
-        "ANCHOR_RUNNER_LIBRARY_ROOT",
         "ANCHOR_RUNNER_ALLOWED_COMMANDS",
         "ANCHOR_RUNNER_LOCAL_INPUTS_ROOT",
         "ANCHOR_RUNNER_FAKE_PLUGINS",
@@ -36,10 +33,9 @@ fn environment(root: &Path) -> Environment {
     let binary = root.join("unstarted-goose");
     let bytes = b"This fixture pauses before any Agent or MCP client can start";
     fs::write(&binary, bytes).unwrap();
-    environment.set("ANCHOR_RUNNER_STATE_ROOT", root.join("state"));
+
     environment.set("ANCHOR_RUNNER_WORKSPACE_ROOT", root.join("workspaces"));
-    environment.set("ANCHOR_RUNNER_CATALOG_ROOT", root);
-    environment.set("ANCHOR_RUNNER_LIBRARY_ROOT", root.join("library"));
+
     environment.set("ANCHOR_RUNNER_ALLOWED_COMMANDS", "true");
     environment.set("ANCHOR_RUNNER_AGENT_RUNTIME", "goose");
     environment.set("ANCHOR_GOOSE_BINARY", binary);
@@ -120,7 +116,11 @@ fn prepare(
             cancellation: Default::default(),
         },
         bindings,
-        Some(root.to_path_buf()),
+        &crate::HostConfiguration {
+            state_root: Some(root.join("state")),
+            library_root: Some(root.join("library")),
+            ..Default::default()
+        },
         None,
         Some(root.join("library")),
     )

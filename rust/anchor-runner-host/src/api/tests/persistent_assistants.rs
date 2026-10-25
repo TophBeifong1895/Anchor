@@ -24,7 +24,7 @@ async fn claimed_input_survives_restart_before_artifact_even_after_new_input_arr
     };
     let (root, state) = fixture();
     let _environment = PROCESS_ENV.lock().await;
-    set_host_env(root.path(), &state.data_root);
+    set_host_env(root.path());
     let (sessions, session, _) = saved_assistant(&state, "local");
     let inbound = |id: &str| ChannelInboundRequest {
         inbound_id: id.into(),
@@ -86,9 +86,10 @@ async fn claimed_input_survives_restart_before_artifact_even_after_new_input_arr
             cancellation: std::sync::Arc::new(AtomicBool::new(false)),
         };
         let (_, nodes) = crate::make_host_with_control(
+            state.application.host_configuration(),
             &record.run_id,
             control,
-            Some(crate::library_root(&state.catalog_root)),
+            Some(state.application.library_root().to_path_buf()),
             None,
         )
         .unwrap();
@@ -313,7 +314,7 @@ async fn group_wait_input_preserves_current_and_interrupted_actors_and_turn_atta
     };
     let (root, state) = fixture();
     let _environment = PROCESS_ENV.lock().await;
-    set_host_env(root.path(), &state.data_root);
+    set_host_env(root.path());
     let (sessions, session, _) =
         saved_assistant_with_kind(&state, "local", ChannelConversationKind::Group);
     let record = fixtures::Reader::new(&state.application)
@@ -405,9 +406,10 @@ async fn group_wait_input_preserves_current_and_interrupted_actors_and_turn_atta
         cancellation: std::sync::Arc::new(AtomicBool::new(false)),
     };
     let (_, nodes) = crate::make_host_with_control(
+        state.application.host_configuration(),
         &record.run_id,
         control,
-        Some(crate::library_root(&state.catalog_root)),
+        Some(state.application.library_root().to_path_buf()),
         None,
     )
     .unwrap();
@@ -474,7 +476,7 @@ async fn group_wait_input_preserves_current_and_interrupted_actors_and_turn_atta
 async fn stopped_assistant_rejects_inbound_without_leaving_a_running_turn_or_resuming() {
     let (root, mut state) = fixture();
     let _environment = PROCESS_ENV.lock().await;
-    set_host_env(root.path(), &state.data_root);
+    set_host_env(root.path());
     with_bot(&mut state, "assistant", &["*"]);
     let (sessions, session, _) = saved_assistant(&state, "local");
     let stopped_resource = kernel_resource(&state, "persistent-fixture-run");
@@ -543,7 +545,7 @@ fn host_operations_require_platform_admission_and_known_capabilities() {
 async fn unbound_host_operation_is_rejected_before_a_run_is_saved() {
     let (root, state) = fixture();
     let _environment = PROCESS_ENV.lock().await;
-    set_host_env(root.path(), &state.data_root);
+    set_host_env(root.path());
     let snapshot = GraphSnapshot::admit(json!({"objective":"unbound host capability fixture", "entry":"wait", "ops":{"wait":{"host":{"operation":"session.wait_input"}}}, "nodes":[{"id":"wait","op":"wait"}], "edges":[]})).unwrap();
     let record = GraphRunRecord::create_with_id(
         snapshot,
@@ -558,7 +560,7 @@ async fn unbound_host_operation_is_rejected_before_a_run_is_saved() {
         &record,
         control,
         Default::default(),
-        None,
+        state.application.host_configuration(),
         None,
         None,
     );
@@ -579,7 +581,7 @@ async fn pending_input_scope_reports_truncation_and_authorizes_only_the_latest_e
     };
     let (root, state) = fixture();
     let _environment = PROCESS_ENV.lock().await;
-    set_host_env(root.path(), &state.data_root);
+    set_host_env(root.path());
     let (sessions, session, _) = saved_assistant(&state, "local");
     let inbound = |id: &str| ChannelInboundRequest {
         inbound_id: id.into(),
@@ -645,9 +647,10 @@ async fn pending_input_scope_reports_truncation_and_authorizes_only_the_latest_e
         cancellation: std::sync::Arc::new(AtomicBool::new(false)),
     };
     let (_, nodes) = crate::make_host_with_control(
+        state.application.host_configuration(),
         &record.run_id,
         control,
-        Some(crate::library_root(&state.catalog_root)),
+        Some(state.application.library_root().to_path_buf()),
         None,
     )
     .unwrap();
@@ -888,7 +891,7 @@ async fn a_bot_saved_enabled_keeps_its_graph_history_even_when_not_running() {
 async fn assistant_projection_reports_derived_needs_recovery() {
     let (root, state) = fixture();
     let _env = PROCESS_ENV.lock().await;
-    set_host_env(root.path(), &state.data_root);
+    set_host_env(root.path());
     std::fs::create_dir_all(state.data_root.join("platform")).unwrap();
     let app = router_with_web_root(state.clone(), root.path().join("web"));
     let owner = "local";
@@ -1003,7 +1006,7 @@ fn auto_resume_events(
 async fn restart_hands_a_live_assistant_instance_over_and_carries_its_round() {
     let (root, state) = fixture();
     let _environment = PROCESS_ENV.lock().await;
-    set_host_env(root.path(), &state.data_root);
+    set_host_env(root.path());
     let (sessions, session, _) = saved_assistant(&state, "local");
     fixtures::control(
         &state.application,
@@ -1126,7 +1129,7 @@ async fn restart_hands_a_live_assistant_instance_over_and_carries_its_round() {
 async fn restart_adopts_a_committed_handover_whose_admission_never_ran() {
     let (root, state) = fixture();
     let _environment = PROCESS_ENV.lock().await;
-    set_host_env(root.path(), &state.data_root);
+    set_host_env(root.path());
     let (sessions, session, _) = saved_assistant(&state, "local");
     let stale = run_store(&state)
         .load("persistent-fixture-run")
@@ -1211,7 +1214,7 @@ async fn restart_adopts_a_committed_handover_whose_admission_never_ran() {
 async fn automatic_recovery_ignores_retired_and_unbound_sessions() {
     let (root, state) = fixture();
     let _environment = PROCESS_ENV.lock().await;
-    set_host_env(root.path(), &state.data_root);
+    set_host_env(root.path());
     let (sessions, session, _) = saved_assistant(&state, "local");
     sessions
         .retire_channel_assistant("local", &session, "persistent-fixture-run")
@@ -1254,7 +1257,7 @@ async fn automatic_recovery_ignores_retired_and_unbound_sessions() {
 async fn automatic_recovery_can_be_disabled_by_environment() {
     let (root, state) = fixture();
     let _environment = PROCESS_ENV.lock().await;
-    set_host_env(root.path(), &state.data_root);
+    set_host_env(root.path());
     let (sessions, session, _) = saved_assistant(&state, "local");
     unsafe { env::set_var(crate::api::assistant_recovery::AUTO_RESUME_ENV, "0") };
     let resumed = crate::api::assistant_recovery::resume_channel_assistants(&state).await;
@@ -1283,7 +1286,7 @@ async fn automatic_recovery_can_be_disabled_by_environment() {
 async fn timeline_places_a_resident_run_by_its_turn_windows() {
     let (root, state) = fixture();
     let _environment = PROCESS_ENV.lock().await;
-    set_host_env(root.path(), &state.data_root);
+    set_host_env(root.path());
     let (sessions, session, turn) = saved_assistant(&state, "local");
     let turn = sessions.get_turn("local", &session, &turn).unwrap();
 
@@ -1353,7 +1356,7 @@ async fn timeline_places_a_resident_run_by_its_turn_windows() {
 async fn timeline_marks_an_idle_resident_run_without_turn_windows() {
     let (root, state) = fixture();
     let _environment = PROCESS_ENV.lock().await;
-    set_host_env(root.path(), &state.data_root);
+    set_host_env(root.path());
     let (sessions, _, _) = saved_assistant(&state, "local");
     let idle = "idle-fixture-run";
     let session = sessions

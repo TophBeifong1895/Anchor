@@ -9,7 +9,7 @@ use std::sync::{
 #[tokio::test]
 async fn pilot_oauth_uses_host_callback_and_cancelled_session_never_becomes_http_authorization() {
     let _env = PROCESS_ENV.lock().await;
-    let names = ["ANCHOR_RUNNER_LIBRARY_ROOT", "ANCHOR_OAUTH_REDIRECT_URI"];
+    let names = ["ANCHOR_OAUTH_REDIRECT_URI"];
     let previous = names
         .iter()
         .map(|name| (*name, std::env::var_os(name)))

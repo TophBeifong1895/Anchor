@@ -51,7 +51,6 @@ async fn plugin_configuration_api_keeps_secrets_private_and_rejects_stale_update
     }
     let _restore = Restore(
         [
-            "ANCHOR_RUNNER_LIBRARY_ROOT",
             "ANCHOR_PLUGIN_EXTERNAL_CONFIGURATION",
             "ANCHOR_CONFIG_TEST_KEY",
             "ANCHOR_CONFIG_TEST_ENDPOINT",
@@ -60,12 +59,14 @@ async fn plugin_configuration_api_keeps_secrets_private_and_rejects_stale_update
         .map(|name| (name, std::env::var_os(name)))
         .collect(),
     );
-    unsafe {
-        std::env::remove_var("ANCHOR_RUNNER_LIBRARY_ROOT");
-    }
+
     let (_root, state) = crate::api::tests::fixture();
     let key = "a".repeat(32);
-    let plugin = crate::library_root(&state.catalog_root).join("plugins/config-demo");
+    let plugin = state
+        .application
+        .library_root()
+        .to_path_buf()
+        .join("plugins/config-demo");
     std::fs::create_dir_all(&plugin).unwrap();
     std::fs::write(plugin.join("plugin.json"), json!({"name":"Config demo","configuration":{
         "fields":{"endpoint":{"type":"url","default":"http://127.0.0.1:1"},"key":{"type":"secret"}},

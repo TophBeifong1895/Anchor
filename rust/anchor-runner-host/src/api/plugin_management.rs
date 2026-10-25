@@ -42,7 +42,7 @@ async fn credentials(
     blocking(move || {
         crate::credential_store::credentials(
             &state.data_root,
-            &crate::library_root(&state.catalog_root),
+            state.application.library_root(),
             &private_owner(&state, &headers),
             &plugin,
         )
@@ -117,7 +117,7 @@ async fn mutate(
     blocking(move || {
         crate::credential_store::configure(
             &state.data_root,
-            &crate::library_root(&state.catalog_root),
+            state.application.library_root(),
             &private_owner(&state, &headers),
             &plugin,
             &target,

@@ -362,7 +362,7 @@ pub(super) async fn create_response(
         let tools = crate::pilot_tools::PilotTools {
             application: state.application.clone(),
             graph_name: state.graph_name.clone(),
-            library_root: library_root(&state.catalog_root),
+            library_root: state.application.library_root().to_path_buf(),
             data_root: state.data_root.clone(),
             workspace_root: state.workspace_root.clone(),
             sessions: sessions.clone(),

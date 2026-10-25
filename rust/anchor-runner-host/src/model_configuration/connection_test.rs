@@ -93,12 +93,8 @@ mod tests {
             model: "working".into(),
             ..Default::default()
         };
-        let mut values = fields.values();
-        values.insert(
-            "ANCHOR_MODEL_API_KEY".into(),
-            "connection-private-key".into(),
-        );
-        let registry = ModelRegistry::from_values(false, |name| values.get(name).cloned()).unwrap();
+        let registry =
+            ModelRegistry::from_fields(&fields, "connection-private-key", false).unwrap();
         (registry, fields)
     }
 

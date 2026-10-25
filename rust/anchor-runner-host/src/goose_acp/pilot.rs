@@ -26,6 +26,7 @@ mod transcript;
 
 pub(crate) struct GoosePilot {
     binary: PathBuf,
+    bwrap: PathBuf,
     binary_sha256: String,
     models: configuration::ModelRegistry,
     /// How the Pilot sandbox reaches the bridge and the model proxy.
@@ -151,16 +152,18 @@ impl GoosePilot {
         root: &Path,
         retained: Option<&GooseExecution>,
         state: &Path,
+        bwrap: PathBuf,
     ) -> Result<Self, String> {
         let models = crate::model_configuration::ModelConfiguration::from_env(state)?
             .execution_snapshot(None, None)?;
-        Self::from_registry(root, retained, models)
+        Self::from_registry(root, retained, models, bwrap)
     }
 
     fn from_registry(
         root: &Path,
         retained: Option<&GooseExecution>,
         models: configuration::ModelRegistry,
+        bwrap: PathBuf,
     ) -> Result<Self, String> {
         if !root.is_absolute() {
             return Err("Pilot root must be absolute".into());
@@ -173,6 +176,7 @@ impl GoosePilot {
         validate_binding(fact.as_ref(), retained, &binary_sha256)?;
         let relay = configuration::RelaySettings::from_env(&binary)?;
         Ok(Self {
+            bwrap,
             binary,
             binary_sha256,
             models,
@@ -283,14 +287,9 @@ impl GoosePilot {
         let transport = self.relay.transport(socket);
         let endpoint = transport.endpoint(&bridge.url);
         let sandbox = BubblewrapSandbox::new(
-            BubblewrapPolicy::new(
-                std::env::var_os("ANCHOR_BWRAP")
-                    .map(PathBuf::from)
-                    .unwrap_or_else(|| "bwrap".into()),
-                ["goose"],
-            )
-            .authorize_workspace_root(&directory)
-            .allow_network(),
+            BubblewrapPolicy::new(self.bwrap.clone(), ["goose"])
+                .authorize_workspace_root(&directory)
+                .allow_network(),
         )
         .map_err(|error| error.to_string())?;
         let mut environment = self.models.environment(binding, &endpoint, &bridge.token);

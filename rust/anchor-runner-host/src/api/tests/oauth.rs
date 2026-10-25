@@ -110,7 +110,7 @@ fn seed_oauth_authorization(state: &ApiState) {
 #[tokio::test]
 async fn oauth_status_and_revoke_never_return_secrets() {
     let _environment = PROCESS_ENV.lock().await;
-    let _variables = Environment::cleared(&["ANCHOR_RUNNER_LIBRARY_ROOT"]);
+
     let (_root, state) = fixture();
     write_oauth_plugin(&state);
     let first = "a".repeat(32);
@@ -149,8 +149,7 @@ async fn oauth_status_and_revoke_never_return_secrets() {
 #[tokio::test]
 async fn oauth_browser_authorization_persists_tokens_and_completes_callback() {
     let _environment = PROCESS_ENV.lock().await;
-    let _variables =
-        Environment::cleared(&["ANCHOR_RUNNER_LIBRARY_ROOT", "ANCHOR_OAUTH_REDIRECT_URI"]);
+    let _variables = Environment::cleared(&["ANCHOR_OAUTH_REDIRECT_URI"]);
     unsafe {
         std::env::set_var(
             "ANCHOR_OAUTH_REDIRECT_URI",
@@ -330,7 +329,7 @@ async fn oauth_browser_authorization_persists_tokens_and_completes_callback() {
 #[tokio::test]
 async fn oauth_routes_reject_token_payloads_and_non_oauth_servers() {
     let _environment = PROCESS_ENV.lock().await;
-    let _variables = Environment::cleared(&["ANCHOR_RUNNER_LIBRARY_ROOT"]);
+
     let (_root, state) = fixture();
     write_oauth_plugin(&state);
     let key = "a".repeat(32);
@@ -378,8 +377,7 @@ async fn oauth_routes_reject_token_payloads_and_non_oauth_servers() {
 #[tokio::test]
 async fn oauth_provider_discovery_rejects_redirect_responses() {
     let _environment = PROCESS_ENV.lock().await;
-    let _variables =
-        Environment::cleared(&["ANCHOR_RUNNER_LIBRARY_ROOT", "ANCHOR_OAUTH_REDIRECT_URI"]);
+    let _variables = Environment::cleared(&["ANCHOR_OAUTH_REDIRECT_URI"]);
     unsafe {
         std::env::set_var(
             "ANCHOR_OAUTH_REDIRECT_URI",

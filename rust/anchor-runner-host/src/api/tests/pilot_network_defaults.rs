@@ -1,27 +1,6 @@
 use super::*;
 use anchor_platform_session::{CreateSession, SessionStore, TurnStatus};
 
-struct LibraryRoot(Option<std::ffi::OsString>);
-
-impl LibraryRoot {
-    fn set(root: &std::path::Path) -> Self {
-        let previous = env::var_os("ANCHOR_RUNNER_LIBRARY_ROOT");
-        unsafe { env::set_var("ANCHOR_RUNNER_LIBRARY_ROOT", root) };
-        Self(previous)
-    }
-}
-
-impl Drop for LibraryRoot {
-    fn drop(&mut self) {
-        unsafe {
-            match &self.0 {
-                Some(value) => env::set_var("ANCHOR_RUNNER_LIBRARY_ROOT", value),
-                None => env::remove_var("ANCHOR_RUNNER_LIBRARY_ROOT"),
-            }
-        }
-    }
-}
-
 fn sessions(state: &ApiState) -> SessionStore {
     SessionStore::open(state.data_root.join("platform/sessions.sqlite")).unwrap()
 }
@@ -42,6 +21,7 @@ async fn freeze(
     turn: &str,
 ) -> crate::pilot_tools::PreparedPilotPlugins {
     crate::pilot_tools::frozen_turn_tools(
+        state.application.host_configuration(),
         &state.data_root,
         &state.catalog_root,
         &state.workspace_root,
@@ -59,8 +39,7 @@ async fn freeze(
 #[tokio::test]
 async fn new_pilot_policy_is_durable_and_explicit_disable_survives_restart_and_next_turn() {
     let _guard = PROCESS_ENV.lock().await;
-    let (root, state) = fixture();
-    let _library = LibraryRoot::set(root.path());
+    let (_root, state) = fixture();
     network_plugin(&state, true);
     let app = router(state.clone());
     let (status, created) = call(
@@ -130,8 +109,7 @@ async fn new_pilot_policy_is_durable_and_explicit_disable_survives_restart_and_n
 #[tokio::test]
 async fn responses_default_and_continuation_preserve_mount_disable_and_network_denial() {
     let _guard = PROCESS_ENV.lock().await;
-    let (root, state) = fixture();
-    let _library = LibraryRoot::set(root.path());
+    let (_root, state) = fixture();
     network_plugin(&state, true);
     for (mounted, permission) in [(false, true), (true, false)] {
         let app = router(state.clone());
@@ -211,7 +189,6 @@ async fn a_default_mount_requires_an_installed_valid_network_plugin_and_api_cann
     let _guard = PROCESS_ENV.lock().await;
     for invalid in [false, true] {
         let (root, state) = fixture();
-        let _library = LibraryRoot::set(root.path());
         if invalid {
             network_plugin(&state, false);
         }
@@ -262,8 +239,7 @@ async fn a_default_mount_requires_an_installed_valid_network_plugin_and_api_cann
 #[tokio::test]
 async fn legacy_pilot_read_and_responses_continuation_do_not_backfill_empty_mounts() {
     let _guard = PROCESS_ENV.lock().await;
-    let (root, state) = fixture();
-    let _library = LibraryRoot::set(root.path());
+    let (_root, state) = fixture();
     network_plugin(&state, true);
     std::fs::create_dir_all(state.data_root.join("platform")).unwrap();
     let store = sessions(&state);

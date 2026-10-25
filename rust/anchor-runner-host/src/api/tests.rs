@@ -173,15 +173,14 @@ fn installation_owner_is_local_unless_a_former_key_identity_was_recorded() {
     }
 }
 
-fn set_host_env(root: &std::path::Path, state_root: &std::path::Path) {
+fn set_host_env(root: &std::path::Path) {
     // The subprocess host currently obtains sandbox configuration from
     // process configuration. Serialize this test and set only isolated
     // temporary paths; production API requests cannot mutate them.
     unsafe {
-        env::set_var("ANCHOR_RUNNER_STATE_ROOT", state_root);
         env::set_var("ANCHOR_RUNNER_WORKSPACE_ROOT", root.join("workspaces"));
         env::set_var("ANCHOR_RUNNER_ALLOWED_COMMANDS", "true,sh,cat");
-        env::set_var("ANCHOR_RUNNER_CATALOG_ROOT", root);
+
         env::remove_var("ANCHOR_MODEL_API_KEY");
         env::remove_var("ANCHOR_MODEL_URL");
         env::remove_var("ANCHOR_MODEL_NAME");
@@ -452,7 +451,7 @@ async fn graph_mutation_lease_is_released_before_forked_child_executes() {
 async fn graph_crud_round_trips_authoring_modules_and_layout() {
     let (_root, state) = fixture();
     let _env_guard = PROCESS_ENV.lock().await;
-    set_host_env(_root.path(), &state.data_root);
+    set_host_env(_root.path());
     let app = router(state);
     let authoring = r#"{
         "objective":"authoring graph",
@@ -520,7 +519,7 @@ async fn graph_crud_round_trips_authoring_modules_and_layout() {
 async fn graph_crud_binds_plugin_resources_and_removes_stale_bundle_plugins() {
     let (_root, state) = fixture();
     let _env_guard = PROCESS_ENV.lock().await;
-    set_host_env(_root.path(), &state.data_root);
+    set_host_env(_root.path());
     let plugin = state.catalog_root.join("plugins/demo");
     std::fs::create_dir_all(plugin.join("skills/example")).unwrap();
     std::fs::write(
@@ -546,7 +545,7 @@ async fn graph_crud_binds_plugin_resources_and_removes_stale_bundle_plugins() {
     .await;
     assert_eq!(status, StatusCode::OK, "{value}");
     let bundle = FileGraphBundleLoader::new(&state.bundle_root)
-        .with_library_root(&state.catalog_root)
+        .with_library_root(state.application.library_root())
         .load()
         .unwrap();
     // The bundle references the Plugin by id and carries no Plugin bytes.
@@ -568,7 +567,7 @@ async fn graph_crud_binds_plugin_resources_and_removes_stale_bundle_plugins() {
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{failure}");
     assert!(
         FileGraphBundleLoader::new(&state.bundle_root)
-            .with_library_root(&state.catalog_root)
+            .with_library_root(state.application.library_root())
             .load()
             .is_ok()
     );
@@ -617,7 +616,7 @@ async fn rust_host_serves_the_workbench_and_api_without_a_key() {
 async fn trigger_persists_run_and_projects_list_detail_and_control() {
     let (_root, state) = fixture();
     let _env_guard = PROCESS_ENV.lock().await;
-    set_host_env(_root.path(), &state.data_root);
+    set_host_env(_root.path());
     let mut definition: Value =
         serde_json::from_slice(&std::fs::read(state.bundle_root.join("graph.json")).unwrap())
             .unwrap();
@@ -754,7 +753,7 @@ async fn trigger_persists_run_and_projects_list_detail_and_control() {
 async fn startup_recovery_dispatches_only_ready_detached_children() {
     let (root, state) = fixture();
     let _env_guard = PROCESS_ENV.lock().await;
-    set_host_env(root.path(), &state.data_root);
+    set_host_env(root.path());
     let child_bundle = root.path().join("child");
     std::fs::create_dir_all(&child_bundle).unwrap();
     let definition = json!({
@@ -823,7 +822,7 @@ async fn startup_recovery_dispatches_only_ready_detached_children() {
 async fn paused_wait_child_resumes_independently_then_releases_parent() {
     let (root, state) = fixture();
     let _env_guard = PROCESS_ENV.lock().await;
-    set_host_env(root.path(), &state.data_root);
+    set_host_env(root.path());
     let child = root.path().join("child");
     std::fs::create_dir_all(&child).unwrap();
     let child_definition = json!({
@@ -934,7 +933,7 @@ async fn paused_wait_child_resumes_independently_then_releases_parent() {
 async fn stopping_wait_parent_stops_only_its_wait_child() {
     let (root, state) = fixture();
     let _env_guard = PROCESS_ENV.lock().await;
-    set_host_env(root.path(), &state.data_root);
+    set_host_env(root.path());
     let child = root.path().join("child");
     std::fs::create_dir_all(&child).unwrap();
     let child_definition = json!({
@@ -1026,7 +1025,7 @@ async fn stopping_wait_parent_stops_only_its_wait_child() {
 async fn stopping_detach_parent_does_not_cancel_detached_child() {
     let (root, state) = fixture();
     let _env_guard = PROCESS_ENV.lock().await;
-    set_host_env(root.path(), &state.data_root);
+    set_host_env(root.path());
     let child = root.path().join("child");
     std::fs::create_dir_all(&child).unwrap();
     let child_definition = json!({"objective":"child","entry":"slow","agents":{},
@@ -1101,7 +1100,7 @@ async fn stopping_detach_parent_does_not_cancel_detached_child() {
 async fn distinct_parent_call_identities_run_same_target_concurrently() {
     let (root, state) = fixture();
     let _env_guard = PROCESS_ENV.lock().await;
-    set_host_env(root.path(), &state.data_root);
+    set_host_env(root.path());
     let child = root.path().join("child");
     std::fs::create_dir_all(&child).unwrap();
     let child_definition = json!({"objective":"child","entry":"slow","agents":{},
@@ -1249,7 +1248,7 @@ async fn stopped_and_budget_stopped_runs_block_graph_retrigger_but_allow_update(
 async fn admission_is_per_graph_and_same_graph_is_atomic() {
     let (_root, state) = fixture();
     let _env_guard = PROCESS_ENV.lock().await;
-    set_host_env(_root.path(), &state.data_root);
+    set_host_env(_root.path());
     let mut definition: Value =
         serde_json::from_slice(&std::fs::read(state.bundle_root.join("graph.json")).unwrap())
             .unwrap();
@@ -1369,7 +1368,7 @@ async fn start_and_pause_request(state: &ApiState, app: &Router, body: &str) -> 
 async fn pause_resume_uses_same_frozen_run_after_graph_edit_and_service_object_restart() {
     let (root, mut state) = fixture();
     let _env_guard = PROCESS_ENV.lock().await;
-    set_host_env(root.path(), &state.data_root);
+    set_host_env(root.path());
     let original = two_node_definition("sh -c 'cat /in/first/count.txt > frozen.txt'");
     write_graph_bundle(&state.bundle_root, &original).unwrap();
     let app = router(state.clone());
@@ -1444,7 +1443,7 @@ async fn pause_resume_uses_same_frozen_run_after_graph_edit_and_service_object_r
 async fn active_run_can_update_graph_and_finishes_from_its_admitted_snapshot() {
     let (root, state) = fixture();
     let _env_guard = PROCESS_ENV.lock().await;
-    set_host_env(root.path(), &state.data_root);
+    set_host_env(root.path());
     let original = json!({"objective":"active snapshot","entry":"work","agents":{},
         "ops":{"work":{"run":"sh -c 'sleep 0.4; printf original > snapshot.txt'"}},
         "nodes":[{"id":"work","op":"work","plugins":[]}],"edges":[]});
@@ -1564,7 +1563,7 @@ async fn graph_delete_is_rejected_while_its_own_run_is_unfinished() {
 async fn configured_bundle_alias_shares_identity_for_edit_run_and_delete() {
     let (root, state) = fixture();
     let _env_guard = PROCESS_ENV.lock().await;
-    set_host_env(root.path(), &state.data_root);
+    set_host_env(root.path());
     let app = router(state.clone());
 
     // The configured name ("fixture") and the bundle's directory name ("bundle")
@@ -1657,7 +1656,7 @@ async fn configured_bundle_alias_shares_identity_for_edit_run_and_delete() {
 async fn missing_configured_bundle_starts_lists_missing_and_can_be_recreated() {
     let (root, state) = fixture();
     let _env_guard = PROCESS_ENV.lock().await;
-    set_host_env(root.path(), &state.data_root);
+    set_host_env(root.path());
     std::fs::remove_dir_all(&state.bundle_root).unwrap();
 
     // Simulate a service restart whose configured bundle was deleted.
@@ -1714,7 +1713,7 @@ async fn missing_configured_bundle_starts_lists_missing_and_can_be_recreated() {
 async fn graph_delete_removes_only_its_run_data_and_preserves_other_graph_runs() {
     let (root, state) = fixture();
     let _env_guard = PROCESS_ENV.lock().await;
-    set_host_env(root.path(), &state.data_root);
+    set_host_env(root.path());
 
     let definition = |objective: &str| {
         json!({"objective":objective,"entry":"work","agents":{},
@@ -1837,7 +1836,7 @@ async fn graph_delete_removes_only_its_run_data_and_preserves_other_graph_runs()
 async fn graph_delete_is_rejected_while_a_current_graph_definition_calls_it() {
     let (root, state) = fixture();
     let _env_guard = PROCESS_ENV.lock().await;
-    set_host_env(root.path(), &state.data_root);
+    set_host_env(root.path());
     let target_path = state.catalog_root.join("target");
     let caller_path = state.catalog_root.join("caller");
     let definition = |objective: &str| {
@@ -1900,7 +1899,7 @@ async fn graph_delete_is_rejected_while_a_current_graph_definition_calls_it() {
 async fn unfinished_run_snapshot_blocks_delete_after_current_definition_is_edited() {
     let (root, state) = fixture();
     let _env_guard = PROCESS_ENV.lock().await;
-    set_host_env(root.path(), &state.data_root);
+    set_host_env(root.path());
     let target_path = state.catalog_root.join("target");
     let caller_path = state.catalog_root.join("caller");
     let target_definition = json!({"objective":"target","entry":"work","agents":{},
@@ -1969,7 +1968,7 @@ async fn unfinished_run_snapshot_blocks_delete_after_current_definition_is_edite
 async fn graph_delete_waits_out_a_concurrent_admission_lease() {
     let (root, state) = fixture();
     let _env_guard = PROCESS_ENV.lock().await;
-    set_host_env(root.path(), &state.data_root);
+    set_host_env(root.path());
     let target_path = state.catalog_root.join("target");
     write_graph_bundle(
         &target_path,
@@ -1999,7 +1998,7 @@ async fn graph_delete_waits_out_a_concurrent_admission_lease() {
 async fn graph_reference_edit_and_delete_are_serialized_by_catalog_gate() {
     let (root, state) = fixture();
     let _env_guard = PROCESS_ENV.lock().await;
-    set_host_env(root.path(), &state.data_root);
+    set_host_env(root.path());
     let target_path = state.catalog_root.join("target");
     let caller_path = state.catalog_root.join("caller");
     let simple = |objective: &str| {
@@ -2048,7 +2047,7 @@ async fn graph_reference_edit_and_delete_are_serialized_by_catalog_gate() {
 async fn missing_host_config_or_shell_authority_reject_before_acceptance() {
     let (root, state) = fixture();
     let _env_guard = PROCESS_ENV.lock().await;
-    set_host_env(root.path(), &state.data_root);
+    set_host_env(root.path());
     unsafe {
         env::remove_var("ANCHOR_RUNNER_ALLOWED_COMMANDS");
     }
@@ -2062,7 +2061,7 @@ async fn missing_host_config_or_shell_authority_reject_before_acceptance() {
     .await;
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
     assert!(state.application.records().unwrap().is_empty());
-    set_host_env(root.path(), &state.data_root);
+    set_host_env(root.path());
     unsafe {
         env::set_var("ANCHOR_RUNNER_ALLOWED_COMMANDS", "cat");
     }
@@ -2079,7 +2078,7 @@ async fn missing_host_config_or_shell_authority_reject_before_acceptance() {
     assert!(state.application.records().unwrap().is_empty());
     // The operator authorizes the shell. It can run an absolute
     // system command inside its sandbox without granting host paths.
-    set_host_env(root.path(), &state.data_root);
+    set_host_env(root.path());
     assert_eq!(
         call(app, "POST", "/trigger", Some(r#"{"graph":"fixture"}"#))
             .await
@@ -2119,7 +2118,7 @@ async fn legacy_unfinished_run_quarantines_admission_and_graph_creation() {
 async fn downstream_failure_does_not_reclassify_committed_upstream_result() {
     let (root, state) = fixture();
     let _env_guard = PROCESS_ENV.lock().await;
-    set_host_env(root.path(), &state.data_root);
+    set_host_env(root.path());
     write_graph_bundle(&state.bundle_root, &two_node_definition("sh -c 'exit 7'")).unwrap();
     let app = router(state.clone());
     let (status, accepted) = call(
@@ -2229,7 +2228,7 @@ async fn waiting_parent_rejects_child_grant_drift_then_restores_same_child_witho
 
     let (root, state) = fixture();
     let _env_guard = PROCESS_ENV.lock().await;
-    set_host_env(root.path(), &state.data_root);
+    set_host_env(root.path());
     let _local_root_guard = RestoreLocalInputRoot(env::var_os("ANCHOR_RUNNER_LOCAL_INPUTS_ROOT"));
     let operator_root = root.path().join("operator-workspaces");
     let original_source = root.path().join("original-history");

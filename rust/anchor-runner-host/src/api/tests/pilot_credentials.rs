@@ -32,19 +32,6 @@ async fn private_call(
 #[tokio::test]
 async fn pilot_credential_http_is_private_and_accepts_only_value() {
     let _env = PROCESS_ENV.lock().await;
-    struct Restore(Option<std::ffi::OsString>);
-    impl Drop for Restore {
-        fn drop(&mut self) {
-            unsafe {
-                match self.0.take() {
-                    Some(value) => std::env::set_var("ANCHOR_RUNNER_LIBRARY_ROOT", value),
-                    None => std::env::remove_var("ANCHOR_RUNNER_LIBRARY_ROOT"),
-                }
-            }
-        }
-    }
-    let _restore = Restore(std::env::var_os("ANCHOR_RUNNER_LIBRARY_ROOT"));
-    unsafe { std::env::remove_var("ANCHOR_RUNNER_LIBRARY_ROOT") };
     let (_root, state) = fixture();
     let keys = ["a".repeat(32)];
     let headers = HeaderMap::from_iter([(
@@ -65,7 +52,7 @@ async fn pilot_credential_http_is_private_and_accepts_only_value() {
     let (turn, _) = sessions
         .create_turn(&owner, &session.id, "credential-request", Some("configure"))
         .unwrap();
-    let library = crate::library_root(&state.catalog_root);
+    let library = state.application.library_root().to_path_buf();
     let plugin = library.join("plugins/private-http-fixture");
     std::fs::create_dir_all(&plugin).unwrap();
     std::fs::write(

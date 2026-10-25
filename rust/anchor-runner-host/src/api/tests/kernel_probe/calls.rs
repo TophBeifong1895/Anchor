@@ -7,7 +7,7 @@ mod recovery;
 async fn kernel_op_call_wait_projects_durable_child_run_through_host_api() {
     let (root, state) = fixture();
     let _env_guard = PROCESS_ENV.lock().await;
-    set_host_env(root.path(), &state.data_root);
+    set_host_env(root.path());
     let child = root.path().join("child");
     std::fs::create_dir_all(&child).unwrap();
     std::fs::write(
@@ -101,7 +101,7 @@ async fn kernel_op_call_wait_projects_durable_child_run_through_host_api() {
 async fn kernel_op_call_wait_hands_off_input_map_files_and_selected_result() {
     let (root, state) = fixture();
     let _env_guard = PROCESS_ENV.lock().await;
-    set_host_env(root.path(), &state.data_root);
+    set_host_env(root.path());
     let child = root.path().join("child");
     std::fs::create_dir_all(&child).unwrap();
     std::fs::write(
@@ -209,7 +209,7 @@ async fn kernel_op_call_wait_hands_off_input_map_files_and_selected_result() {
 async fn kernel_op_call_wait_fails_closed_on_missing_input_map_pointer() {
     let (root, state) = fixture();
     let _env_guard = PROCESS_ENV.lock().await;
-    set_host_env(root.path(), &state.data_root);
+    set_host_env(root.path());
     let child = root.path().join("child");
     std::fs::create_dir_all(&child).unwrap();
     std::fs::write(
@@ -264,7 +264,7 @@ async fn kernel_op_call_wait_fails_closed_on_missing_input_map_pointer() {
 async fn kernel_op_call_detach_dispatches_child_and_projects_parent_relation() {
     let (root, state) = fixture();
     let _env_guard = PROCESS_ENV.lock().await;
-    set_host_env(root.path(), &state.data_root);
+    set_host_env(root.path());
     let child = root.path().join("child");
     std::fs::create_dir_all(&child).unwrap();
     std::fs::write(child.join("graph.json"), r#"{"objective":"child","entry":"work","agents":{},"ops":{"work":{"run":"true"}},"nodes":[{"id":"work","op":"work","plugins":[]}],"edges":[]}"#).unwrap();
@@ -402,7 +402,7 @@ async fn kernel_call_rechecks_a_child_that_settled_before_parent_worker_release(
     for outcome in ["done", "failed", "unknown"] {
         let (root, state) = fixture();
         let _env_guard = PROCESS_ENV.lock().await;
-        set_host_env(root.path(), &state.data_root);
+        set_host_env(root.path());
         let parent_definition = json!({"objective":"parent","entry":"call","agents":{},
         "ops":{"call":{"call":{"graph":"child","mode":"wait"}}},
         "nodes":[{"id":"call","op":"call"}],"edges":[]});

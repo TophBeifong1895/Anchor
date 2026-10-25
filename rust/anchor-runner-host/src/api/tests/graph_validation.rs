@@ -67,11 +67,9 @@ async fn validate(app: &Router, definition: &Value) -> (StatusCode, Value) {
 async fn original_graphs_validate_without_provider_and_without_filesystem_changes() {
     let _env_guard = PROCESS_ENV.lock().await;
     let _environment = Environment::cleared(&[
-        "ANCHOR_RUNNER_LIBRARY_ROOT",
         "ANCHOR_MODEL_API_KEY",
         "ANCHOR_MODEL_URL",
         "ANCHOR_MODEL_NAME",
-        "ANCHOR_RUNNER_STATE_ROOT",
         "ANCHOR_RUNNER_WORKSPACE_ROOT",
         "ANCHOR_RUNNER_ALLOWED_COMMANDS",
     ]);
@@ -113,11 +111,9 @@ async fn original_graphs_validate_without_provider_and_without_filesystem_change
 async fn business_graph_examples_are_admitted_without_provider_or_side_effects() {
     let _env_guard = PROCESS_ENV.lock().await;
     let _environment = Environment::cleared(&[
-        "ANCHOR_RUNNER_LIBRARY_ROOT",
         "ANCHOR_MODEL_API_KEY",
         "ANCHOR_MODEL_URL",
         "ANCHOR_MODEL_NAME",
-        "ANCHOR_RUNNER_STATE_ROOT",
         "ANCHOR_RUNNER_WORKSPACE_ROOT",
         "ANCHOR_RUNNER_ALLOWED_COMMANDS",
     ]);
@@ -204,7 +200,7 @@ async fn business_graph_examples_are_admitted_without_provider_or_side_effects()
 #[tokio::test]
 async fn catalog_plugins_are_resolved_and_invalid_resources_are_rejected_readonly() {
     let _env_guard = PROCESS_ENV.lock().await;
-    let _environment = Environment::cleared(&["ANCHOR_RUNNER_LIBRARY_ROOT"]);
+
     let (root, state) = fixture();
     let plugin = install_skill(&state.catalog_root, "academic-research");
     let app = router(state.clone());
@@ -241,13 +237,21 @@ async fn catalog_plugins_are_resolved_and_invalid_resources_are_rejected_readonl
 #[tokio::test]
 async fn operator_library_has_the_same_precedence_as_graph_save() {
     let _env_guard = PROCESS_ENV.lock().await;
-    let _environment = Environment::cleared(&["ANCHOR_RUNNER_LIBRARY_ROOT"]);
-    let (root, state) = fixture();
+
+    let (root, mut state) = fixture();
     let catalog_plugin = install_skill(&state.catalog_root, "academic-research");
     std::fs::write(catalog_plugin.join("plugin.json"), r#"{"name":12}"#).unwrap();
     let library = root.path().join("operator-library");
     install_skill(&library, "academic-research");
-    unsafe { env::set_var("ANCHOR_RUNNER_LIBRARY_ROOT", &library) };
+    let original = state.application.clone();
+    state.application =
+        state
+            .application
+            .clone()
+            .with_host_configuration(Arc::new(crate::HostConfiguration {
+                library_root: Some(library),
+                ..state.application.host_configuration().as_ref().clone()
+            }));
     let app = router(state.clone());
     let definition = serde_json::from_str(include_str!(
         "../../../../../examples/graphs/plugin-research.json"
@@ -258,7 +262,8 @@ async fn operator_library_has_the_same_precedence_as_graph_save() {
     assert_eq!(status, StatusCode::OK, "{result}");
     assert_eq!(filesystem(root.path()), before);
 
-    unsafe { env::remove_var("ANCHOR_RUNNER_LIBRARY_ROOT") };
+    state.application = original;
+    let app = router(state.clone());
     let (status, result) = validate(&app, &definition).await;
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{result}");
     assert_eq!(result["valid"], false);
@@ -271,7 +276,6 @@ async fn validation_does_not_launch_commands_mcp_or_expand_transport_secrets() {
 
     let _env_guard = PROCESS_ENV.lock().await;
     let _environment = Environment::cleared(&[
-        "ANCHOR_RUNNER_LIBRARY_ROOT",
         "ANCHOR_MODEL_API_KEY",
         "ANCHOR_MODEL_URL",
         "ANCHOR_RUNNER_ALLOWED_COMMANDS",
@@ -316,7 +320,7 @@ async fn validation_does_not_launch_commands_mcp_or_expand_transport_secrets() {
 #[tokio::test]
 async fn existing_graph_lease_and_unfinished_run_do_not_conflict_with_validation() {
     let _env_guard = PROCESS_ENV.lock().await;
-    let _environment = Environment::cleared(&["ANCHOR_RUNNER_LIBRARY_ROOT"]);
+
     let (root, state) = fixture();
     let lease = state
         .application
@@ -343,7 +347,7 @@ async fn existing_graph_lease_and_unfinished_run_do_not_conflict_with_validation
 #[tokio::test]
 async fn malformed_input_and_semantic_errors_have_distinct_readonly_results() {
     let _env_guard = PROCESS_ENV.lock().await;
-    let _environment = Environment::cleared(&["ANCHOR_RUNNER_LIBRARY_ROOT"]);
+
     let (root, state) = fixture();
     let app = router(state.clone());
     let before = filesystem(root.path());
@@ -388,7 +392,7 @@ async fn malformed_input_and_semantic_errors_have_distinct_readonly_results() {
 #[tokio::test]
 async fn graph_validation_does_not_mutate() {
     let _env_guard = PROCESS_ENV.lock().await;
-    let _environment = Environment::cleared(&["ANCHOR_RUNNER_LIBRARY_ROOT"]);
+
     let (root, state) = fixture();
     let definition = FileGraphBundleLoader::new(&state.bundle_root)
         .load()

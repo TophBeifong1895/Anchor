@@ -12,7 +12,7 @@ use std::{collections::BTreeMap, fs, path::Path};
 // Skip only each guarded item/field, not the rest of its file, and resume scanning
 // after its balanced delimiters. Other cfg expressions are deliberately counted;
 // macros are not expanded. Each fence defines its own exemptions and checks.
-fn tokens(source: &str) -> Vec<&str> {
+fn tokens(source: &str, retain_literals: bool) -> Vec<&str> {
     let bytes = source.as_bytes();
     let mut result = Vec::new();
     let mut offset = 0;
@@ -36,6 +36,9 @@ fn tokens(source: &str) -> Vec<&str> {
             }
             assert_eq!(depth, 0, "unterminated block comment");
         } else if let Some(length) = literal_length(rest) {
+            if retain_literals {
+                result.push(&source[offset..offset + length]);
+            }
             offset += length;
         } else {
             let character = rest.chars().next().unwrap();
@@ -132,7 +135,15 @@ pub fn production_tokens<'source>(
     source: &'source str,
     external_tests: &mut Vec<String>,
 ) -> Vec<&'source str> {
-    let tokens = tokens(source);
+    production_tokens_inner(source, external_tests, false)
+}
+
+fn production_tokens_inner<'source>(
+    source: &'source str,
+    external_tests: &mut Vec<String>,
+    retain_literals: bool,
+) -> Vec<&'source str> {
+    let tokens = tokens(source, retain_literals);
     let mut production = Vec::new();
     let mut offset = 0;
     while offset < tokens.len() {
@@ -185,9 +196,27 @@ fn source_files(directory: &Path, files: &mut Vec<std::path::PathBuf>) {
 }
 
 /// Apply a fence to the same production tokens and file exclusions.
+#[allow(dead_code)]
 pub fn production_counts<T>(
     source_root: &Path,
     count: impl Fn(&str, &[&str]) -> T,
+) -> BTreeMap<String, T> {
+    production_counts_inner(source_root, count, false)
+}
+
+/// Configuration fences also inspect literal arguments; ordinary fences ignore them.
+#[allow(dead_code)]
+pub fn production_literal_counts<T>(
+    source_root: &Path,
+    count: impl Fn(&str, &[&str]) -> T,
+) -> BTreeMap<String, T> {
+    production_counts_inner(source_root, count, true)
+}
+
+fn production_counts_inner<T>(
+    source_root: &Path,
+    count: impl Fn(&str, &[&str]) -> T,
+    retain_literals: bool,
 ) -> BTreeMap<String, T> {
     let mut files = Vec::new();
     source_files(source_root, &mut files);
@@ -203,7 +232,11 @@ pub fn production_counts<T>(
             .replace('\\', "/");
         let mut external_tests = Vec::new();
         let source = fs::read_to_string(file).unwrap();
-        let tokens = production_tokens(&source, &mut external_tests);
+        let tokens = if retain_literals {
+            production_tokens_inner(&source, &mut external_tests, true)
+        } else {
+            production_tokens(&source, &mut external_tests)
+        };
         let occurrences = count(&path, &tokens);
         let module_directory = if file.file_name().unwrap() == "mod.rs" || path == "main.rs" {
             file.parent().unwrap().to_owned()

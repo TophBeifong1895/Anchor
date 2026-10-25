@@ -18,7 +18,7 @@ async fn read(
     blocking(move || {
         crate::plugin_configuration::configuration(
             &state.data_root,
-            &crate::library_root(&state.catalog_root),
+            state.application.library_root(),
             &private_owner(&state, &headers),
             &plugin,
         )
@@ -43,7 +43,7 @@ async fn write(
     blocking(move || {
         crate::plugin_configuration::configure(
             &state.data_root,
-            &crate::library_root(&state.catalog_root),
+            state.application.library_root(),
             &private_owner(&state, &headers),
             &plugin,
             update,
@@ -69,8 +69,9 @@ async fn test(
     // Preparation owns the publication lease. Holding the management reference
     // lease here would recursively acquire the same Library lock and deadlock.
     crate::plugin_configuration_test::test(
+        state.application.host_configuration().bwrap.clone(),
         state.data_root.clone(),
-        crate::library_root(&state.catalog_root),
+        state.application.library_root().to_path_buf(),
         crate::credential_store::binding_owner(&private_owner(&state, &headers)),
         plugin,
         body.authorization_digest,

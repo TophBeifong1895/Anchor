@@ -74,6 +74,7 @@ impl From<GraphError> for ApplicationError {
 #[derive(Clone)]
 pub(crate) struct RunApplication {
     data_root: PathBuf,
+    host_configuration: Arc<crate::HostConfiguration>,
     catalog_root: PathBuf,
     configured_graph: Option<(String, PathBuf)>,
     admission: Arc<Mutex<()>>,
@@ -256,7 +257,13 @@ impl RunApplication {
     }
 
     pub(crate) fn new(data_root: PathBuf, catalog_root: PathBuf) -> Self {
+        let host_configuration = Arc::new(crate::HostConfiguration {
+            state_root: Some(data_root.clone()),
+            catalog_root: Some(catalog_root.clone()),
+            ..Default::default()
+        });
         Self {
+            host_configuration,
             data_root,
             catalog_root,
             configured_graph: None,
@@ -271,6 +278,22 @@ impl RunApplication {
             executor: tokio::runtime::Handle::try_current().ok(),
             kernel_run_owner: Arc::default(),
         }
+    }
+
+    pub(crate) fn with_host_configuration(
+        mut self,
+        configuration: Arc<crate::HostConfiguration>,
+    ) -> Self {
+        self.host_configuration = configuration;
+        self
+    }
+
+    pub(crate) fn host_configuration(&self) -> &Arc<crate::HostConfiguration> {
+        &self.host_configuration
+    }
+
+    pub(crate) fn library_root(&self) -> &Path {
+        self.host_configuration.library_root(&self.catalog_root)
     }
 
     /// Serialize Graph definition mutations with reference checks and deletion.
@@ -311,7 +334,9 @@ impl RunApplication {
                 self.data_root.canonicalize()
             })
             .map_err(storage)?;
-        let configured = crate::env_path("ANCHOR_RUNNER_STATE_ROOT")
+        let configured = self
+            .host_configuration
+            .state_root()
             .map_err(ApplicationError::Invalid)?
             .canonicalize()
             .map_err(storage)?;

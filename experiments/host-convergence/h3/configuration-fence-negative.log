@@ -1,0 +1,17 @@
+
+running 1 test
+test deployment_environment_is_owned_by_main ... FAILED
+
+failures:
+
+failures:
+    deployment_environment_is_owned_by_main
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+
+thread 'deployment_environment_is_owned_by_main' (1553070) panicked at anchor-runner-host/tests/configuration_fence.rs:31:13:
+assertion `left == right` failed: pass typed configuration into tool_environment.rs
+  left: [1, 0, 0, 0]
+ right: [0, 0, 0, 0]
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace

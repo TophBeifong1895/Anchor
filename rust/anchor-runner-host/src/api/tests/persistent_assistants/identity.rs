@@ -13,7 +13,7 @@ async fn disabled_or_replaced_deployments_do_not_handover_and_explain_blocked_re
     let _environment = PROCESS_ENV.lock().await;
     for (enabled, account) in [(false, "corp-a"), (true, "another-bot")] {
         let (root, mut state) = fixture();
-        set_host_env(root.path(), &state.data_root);
+        set_host_env(root.path());
         let (sessions, session, _) = saved_assistant(&state, "local");
         state.application = state
             .application
@@ -56,7 +56,7 @@ async fn account_alias_collision_recovers_only_the_canonical_session_without_era
  {
     let (root, mut state) = fixture();
     let _environment = PROCESS_ENV.lock().await;
-    set_host_env(root.path(), &state.data_root);
+    set_host_env(root.path());
     let (sessions, old_session, _) = saved_assistant(&state, "local");
     let old_history = sessions.get("local", &old_session).unwrap();
     let old_run = run_store(&state)

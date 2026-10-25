@@ -4,7 +4,7 @@ use super::*;
 async fn channel_plugin_status_readers_share_a_lease_without_allowing_graph_writes() {
     let _environment = PROCESS_ENV.lock().await;
     let (root, state) = fixture();
-    set_host_env(root.path(), &state.data_root);
+    set_host_env(root.path());
     let (_, session, _) = saved_assistant(&state, "local");
     let before = fixtures::record(&state.application, "persistent-fixture-run");
     let graph_path = state.bundle_root.join("graph.json");
@@ -57,9 +57,13 @@ async fn channel_plugin_status_readers_share_a_lease_without_allowing_graph_writ
 async fn operator_plugin_save_preserves_run_and_delivery_and_reports_pending() {
     let _environment = PROCESS_ENV.lock().await;
     let (root, state) = fixture();
-    set_host_env(root.path(), &state.data_root);
+    set_host_env(root.path());
     let (sessions, session, turn) = saved_assistant(&state, "local");
-    let plugin = crate::library_root(&state.catalog_root).join("plugins/docmost");
+    let plugin = state
+        .application
+        .library_root()
+        .to_path_buf()
+        .join("plugins/docmost");
     std::fs::create_dir_all(&plugin).unwrap();
     std::fs::write(plugin.join("plugin.json"), r#"{"name":"Docmost"}"#).unwrap();
     sessions
@@ -172,9 +176,13 @@ async fn operator_plugin_save_preserves_run_and_delivery_and_reports_pending() {
 async fn agent_grant_and_structural_save_require_explicit_version_boundary() {
     let _environment = PROCESS_ENV.lock().await;
     let (root, state) = fixture();
-    set_host_env(root.path(), &state.data_root);
+    set_host_env(root.path());
     let (sessions, session, _) = saved_assistant(&state, "local");
-    let plugin = crate::library_root(&state.catalog_root).join("plugins/docmost");
+    let plugin = state
+        .application
+        .library_root()
+        .to_path_buf()
+        .join("plugins/docmost");
     std::fs::create_dir_all(&plugin).unwrap();
     std::fs::write(plugin.join("plugin.json"), r#"{"name":"Docmost"}"#).unwrap();
     let original = std::fs::read(state.bundle_root.join("graph.json")).unwrap();

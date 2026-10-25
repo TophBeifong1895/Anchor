@@ -210,7 +210,9 @@ pub(super) async fn oauth_callback(
         return callback_error_response(StatusCode::BAD_REQUEST);
     };
     let callback_result = if values.contains_key("error") {
-        let store = anchor_library::FileOAuthTokenStore::new(library_root(&state.catalog_root));
+        let store = anchor_library::FileOAuthTokenStore::new(
+            state.application.library_root().to_path_buf(),
+        );
         let callback_state = state_value.to_owned();
         match tokio::task::spawn_blocking(move || {
             store.consume_pending(
@@ -230,7 +232,7 @@ pub(super) async fn oauth_callback(
         let Some(code_value) = values.get("code") else {
             return callback_error_response(StatusCode::BAD_REQUEST);
         };
-        let root = library_root(&state.catalog_root);
+        let root = state.application.library_root().to_path_buf();
         let store = anchor_library::FileOAuthTokenStore::new(root.clone());
         let callback_state = state_value.to_owned();
         let callback_code = code_value.to_owned();
@@ -294,7 +296,7 @@ fn resolve_binding(
     server: &str,
     owner: &str,
 ) -> Result<OAuthRouteBinding, HttpResponse> {
-    resolve_binding_at_root(&library_root(&state.catalog_root), plugin, server, owner)
+    resolve_binding_at_root(state.application.library_root(), plugin, server, owner)
 }
 
 fn resolve_binding_at_root(

@@ -8,7 +8,7 @@ fn persisted_updated(state: &ApiState, run: &str) -> String {
 async fn trigger_freezes_objective_and_manual_or_schedule_source() {
     let (root, state) = fixture();
     let _env_guard = PROCESS_ENV.lock().await;
-    set_host_env(root.path(), &state.data_root);
+    set_host_env(root.path());
     let app = router(state.clone());
     let manual = json!({"source":"manual","schedule":null,"scheduled_at":null});
     let cases = [
@@ -133,7 +133,7 @@ async fn invalid_trigger_is_rejected_before_creating_a_run() {
 async fn busy_schedule_creates_no_run_or_source_metadata() {
     let (root, state) = fixture();
     let _env_guard = PROCESS_ENV.lock().await;
-    set_host_env(root.path(), &state.data_root);
+    set_host_env(root.path());
     write_graph_bundle(&state.bundle_root, &two_node_definition("true")).unwrap();
     let app = router(state.clone());
     let run = start_and_pause(&state, &app).await;
@@ -171,7 +171,7 @@ async fn busy_schedule_creates_no_run_or_source_metadata() {
 async fn updated_tracks_persisted_pause_stop_and_resume_after_restart() {
     let (root, mut state) = fixture();
     let _env_guard = PROCESS_ENV.lock().await;
-    set_host_env(root.path(), &state.data_root);
+    set_host_env(root.path());
     write_graph_bundle(&state.bundle_root, &two_node_definition("true")).unwrap();
     let app = router(state.clone());
     let original_trigger = json!({"source":"schedule","schedule":"resume-schedule",
@@ -328,7 +328,7 @@ async fn create_graph_publishes_initial_authoring_definition_and_plugins() {
     assert_eq!(fetched["definition"], definition);
     assert_eq!(fetched["node_plugins"]["work"], json!(["demo"]));
     let bundle = FileGraphBundleLoader::new(state.catalog_root.join("initial"))
-        .with_library_root(&state.catalog_root)
+        .with_library_root(state.application.library_root())
         .load()
         .unwrap();
     assert_eq!(bundle.authoring_definition, definition);

@@ -302,11 +302,7 @@ impl McpToolConfig {
             servers,
             disabled,
             environment: Default::default(),
-            oauth_library_root: Some(resolve_oauth_library_root(
-                root,
-                std::env::var_os("ANCHOR_RUNNER_LIBRARY_ROOT").map(PathBuf::from),
-                std::env::var_os("ANCHOR_RUNNER_CATALOG_ROOT").map(PathBuf::from),
-            )),
+            oauth_library_root: Some(root.to_path_buf()),
             startup_cancellation: None,
             startup_timeout: None,
             configuration_revisions,
@@ -766,21 +762,6 @@ impl McpToolConfig {
             .into()),
         }
     }
-}
-
-/// Where an OAuth token for a remote Plugin server lives.
-///
-/// The deployment's own answer, or the Graph catalog it configured — never a path
-/// guessed from the bundle. The bundle is where the Graph is; the Library is where
-/// a Plugin is, and this must agree with the node call that runs it.
-fn resolve_oauth_library_root(
-    catalog: &Path,
-    library_root: Option<PathBuf>,
-    configured_catalog_root: Option<PathBuf>,
-) -> PathBuf {
-    library_root
-        .or(configured_catalog_root)
-        .unwrap_or_else(|| catalog.to_path_buf())
 }
 
 fn is_oauth_config(config: &Value) -> bool {

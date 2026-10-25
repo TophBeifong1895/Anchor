@@ -67,21 +67,6 @@ fn candidate(name: &str) -> Value {
 #[tokio::test]
 async fn standalone_install_credentials_rotation_update_and_uninstall_keep_secrets_private() {
     let _env = crate::PROCESS_ENV_LOCK.lock().await;
-    struct Restore(Option<std::ffi::OsString>);
-    impl Drop for Restore {
-        fn drop(&mut self) {
-            unsafe {
-                match self.0.take() {
-                    Some(value) => std::env::set_var("ANCHOR_RUNNER_LIBRARY_ROOT", value),
-                    None => std::env::remove_var("ANCHOR_RUNNER_LIBRARY_ROOT"),
-                }
-            }
-        }
-    }
-    let _restore = Restore(std::env::var_os("ANCHOR_RUNNER_LIBRARY_ROOT"));
-    unsafe {
-        std::env::remove_var("ANCHOR_RUNNER_LIBRARY_ROOT");
-    }
     let (_root, state) = crate::api::tests::fixture();
     let key = "a".repeat(32);
     let (status, review) = call(
@@ -101,7 +86,10 @@ async fn standalone_install_credentials_rotation_update_and_uninstall_keep_secre
         .count();
     assert_eq!(staged, 1);
     assert!(
-        !crate::library_root(&state.catalog_root)
+        !state
+            .application
+            .library_root()
+            .to_path_buf()
             .join("plugins/managed-demo")
             .exists()
     );
@@ -161,7 +149,7 @@ async fn standalone_install_credentials_rotation_update_and_uninstall_keep_secre
     // A real pending request is optional: management itself never creates one.
     let request = crate::credential_store::request(
         &state.data_root,
-        &crate::library_root(&state.catalog_root),
+        state.application.library_root(),
         &sessions,
         &owner,
         &session,
@@ -331,7 +319,10 @@ async fn standalone_install_credentials_rotation_update_and_uninstall_keep_secre
         "succeeded"
     );
     assert!(
-        !crate::library_root(&state.catalog_root)
+        !state
+            .application
+            .library_root()
+            .to_path_buf()
             .join("plugins/managed-demo")
             .exists()
     );

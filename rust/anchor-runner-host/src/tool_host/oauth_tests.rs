@@ -1,5 +1,4 @@
 use super::*;
-use crate::PROCESS_ENV_LOCK;
 use anchor_graph_host::PluginCatalog;
 use anchor_library::{
     FileOAuthTokenStore, OAuthAuthorizationMetadata, OAuthBinding, OAuthClient,
@@ -14,8 +13,6 @@ use std::{
 };
 use tempfile::tempdir;
 
-use crate::test_support::Environment;
-
 struct NoRefresh;
 
 impl OAuthRefreshTransport for NoRefresh {
@@ -29,12 +26,6 @@ impl OAuthRefreshTransport for NoRefresh {
 
 #[tokio::test]
 async fn mcp_oauth_header_uses_the_frozen_run_owner_and_is_redacted_from_debug() {
-    let _environment_guard = PROCESS_ENV_LOCK.lock().await;
-    let _environment = Environment::cleared(&[
-        "ANCHOR_RUNNER_LIBRARY_ROOT",
-        "ANCHOR_RUNNER_CATALOG_ROOT",
-        "ANCHOR_RUNNER_BUNDLE_ROOT",
-    ]);
     let root = tempdir().unwrap();
     let plugin_directory = root.path().join("plugins/oauth-demo");
     std::fs::create_dir_all(&plugin_directory).unwrap();
@@ -108,12 +99,6 @@ async fn mcp_oauth_header_uses_the_frozen_run_owner_and_is_redacted_from_debug()
 
 #[tokio::test]
 async fn expired_oauth_token_refreshes_through_pinned_loopback_transport() {
-    let _environment_guard = PROCESS_ENV_LOCK.lock().await;
-    let _environment = Environment::cleared(&[
-        "ANCHOR_RUNNER_LIBRARY_ROOT",
-        "ANCHOR_RUNNER_CATALOG_ROOT",
-        "ANCHOR_RUNNER_BUNDLE_ROOT",
-    ]);
     let root = tempdir().unwrap();
     let plugin_directory = root.path().join("plugins/oauth-demo");
     std::fs::create_dir_all(&plugin_directory).unwrap();
@@ -200,29 +185,4 @@ async fn expired_oauth_token_refreshes_through_pinned_loopback_transport() {
     assert_eq!(request["client_id"], "fixture-client");
     assert_eq!(request["resource"], resource);
     provider_task.abort();
-}
-
-#[test]
-fn oauth_token_store_follows_the_deployment_library_root() {
-    let catalog = Path::new("/srv/anchor/catalog");
-    // The deployment's Library root, when it configured one.
-    assert_eq!(
-        resolve_oauth_library_root(
-            catalog,
-            Some(PathBuf::from("/srv/anchor/library")),
-            Some(PathBuf::from("/srv/anchor/catalog")),
-        ),
-        PathBuf::from("/srv/anchor/library")
-    );
-    // Otherwise the Graph catalog it configured — never a path inferred from the
-    // bundle, which is where the Graph is, not where a Plugin is.
-    assert_eq!(resolve_oauth_library_root(catalog, None, None), catalog);
-    assert_eq!(
-        resolve_oauth_library_root(
-            catalog,
-            None,
-            Some(PathBuf::from("/srv/anchor/catalog/bundles/main")),
-        ),
-        PathBuf::from("/srv/anchor/catalog/bundles/main")
-    );
 }

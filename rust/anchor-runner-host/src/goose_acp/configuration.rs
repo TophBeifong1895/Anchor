@@ -338,9 +338,7 @@ impl ModelRegistry {
         fixture: bool,
         mut value: impl FnMut(&str) -> Option<String>,
     ) -> Result<Self, String> {
-        // The sandbox-dials-the-provider lever exists only for native mode.
-        let direct = !fixture && value("ANCHOR_MODEL_DIRECT").as_deref() == Some("1");
-        let (endpoint, wire, model, api_key, aliases) = if fixture {
+        if fixture {
             let host =
                 value("ANCHOR_GOOSE_OPENAI_HOST").ok_or("ANCHOR_GOOSE_OPENAI_HOST is required")?;
             let mut endpoint = configured_url(&host, true)?;
@@ -349,78 +347,75 @@ impl ModelRegistry {
                 value("ANCHOR_GOOSE_MODEL").unwrap_or_else(|| "fixture-goose".into()),
                 "ANCHOR_GOOSE_MODEL",
             )?;
-            (endpoint, "chat", model, String::new(), BTreeMap::new())
-        } else {
-            let host = value("ANCHOR_MODEL_URL").ok_or("ANCHOR_MODEL_URL is required")?;
-            let mut endpoint = configured_url(&host, false)?;
-            let api_key =
-                value("ANCHOR_MODEL_API_KEY").ok_or("ANCHOR_MODEL_API_KEY is required")?;
-            if !api_key.bytes().all(|byte| matches!(byte, 0x21..=0x7e)) {
-                return Err(
-                    "ANCHOR_MODEL_API_KEY 格式不正确，请检查是否混入中文、空格或换行。".into(),
-                );
-            }
-            validate_text(&api_key, "ANCHOR_MODEL_API_KEY")?;
-            let model = model_name(
-                value("ANCHOR_MODEL_NAME").unwrap_or_else(|| "default".into()),
-                "ANCHOR_MODEL_NAME",
-            )?;
-            let wire = value("ANCHOR_MODEL_WIRE_API").unwrap_or_else(|| "responses".into());
-            let (wire, suffix) = match wire.as_str() {
-                "chat" => ("chat", "chat/completions"),
-                "responses" => ("responses", "responses"),
-                _ => return Err("ANCHOR_MODEL_WIRE_API must be chat or responses".into()),
-            };
-            let path = format!("{}/{suffix}", endpoint.path().trim_end_matches('/'));
-            endpoint.set_path(&path);
-            let aliases = model_aliases(value("ANCHOR_MODEL_ALIASES").as_deref())?;
-            (endpoint, wire, model, api_key, aliases)
+            return Ok(Self {
+                fixture: true,
+                direct: false,
+                context_limit: None,
+                max_tokens: None,
+                endpoint,
+                wire: "chat",
+                model,
+                api_key: String::new(),
+                aliases: BTreeMap::new(),
+                credential_scope: None,
+                retained: vec![],
+            });
+        }
+        let direct = value("ANCHOR_MODEL_DIRECT").as_deref() == Some("1");
+        let endpoint = value("ANCHOR_MODEL_URL").ok_or("ANCHOR_MODEL_URL is required")?;
+        let key = value("ANCHOR_MODEL_API_KEY").ok_or("ANCHOR_MODEL_API_KEY is required")?;
+        let model = value("ANCHOR_MODEL_NAME").unwrap_or_else(|| "default".into());
+        let wire_api = value("ANCHOR_MODEL_WIRE_API").unwrap_or_else(|| "responses".into());
+        let fields = crate::model_fields::ModelFields {
+            endpoint,
+            wire_api,
+            model,
+            aliases: model_aliases(value("ANCHOR_MODEL_ALIASES").as_deref())?,
+            context_window: parse_limit(
+                value("ANCHOR_MODEL_CONTEXT_WINDOW").as_deref(),
+                "ANCHOR_MODEL_CONTEXT_WINDOW",
+            )?,
+            max_tokens: parse_limit(
+                value("ANCHOR_MODEL_MAX_TOKENS").as_deref(),
+                "ANCHOR_MODEL_MAX_TOKENS",
+            )?,
         };
-        // Only a real provider needs an explicit window: the scripted fixture
-        // transport reports its own limits.
-        let context_limit = if fixture {
-            None
-        } else {
-            match value("ANCHOR_MODEL_CONTEXT_WINDOW") {
-                None => None,
-                Some(window) => {
-                    let parsed = window.trim().parse::<u64>().map_err(|_| {
-                        "ANCHOR_MODEL_CONTEXT_WINDOW must be a positive integer".to_owned()
-                    })?;
-                    if parsed == 0 {
-                        return Err(
-                            "ANCHOR_MODEL_CONTEXT_WINDOW must be a positive integer".to_owned()
-                        );
-                    }
-                    Some(parsed)
-                }
+        Self::from_fields(&fields, &key, direct)
+    }
+
+    /// Settings validation and native execution use the same typed constructor.
+    pub(crate) fn from_fields(
+        fields: &crate::model_fields::ModelFields,
+        api_key: &str,
+        direct: bool,
+    ) -> Result<Self, String> {
+        let mut endpoint = configured_url(&fields.endpoint, false)?;
+        if !api_key.bytes().all(|byte| matches!(byte, 0x21..=0x7e)) {
+            return Err("ANCHOR_MODEL_API_KEY 格式不正确，请检查是否混入中文、空格或换行。".into());
+        }
+        validate_text(api_key, "ANCHOR_MODEL_API_KEY")?;
+        let model = model_name(fields.model.clone(), "ANCHOR_MODEL_NAME")?;
+        let (wire, suffix) = wire_api(&fields.wire_api)?;
+        let path = format!("{}/{suffix}", endpoint.path().trim_end_matches('/'));
+        endpoint.set_path(&path);
+        let aliases = validate_aliases(&fields.aliases)?;
+        for (value, name) in [
+            (fields.context_window, "ANCHOR_MODEL_CONTEXT_WINDOW"),
+            (fields.max_tokens, "ANCHOR_MODEL_MAX_TOKENS"),
+        ] {
+            if value == Some(0) {
+                return Err(format!("{name} must be a positive integer"));
             }
-        };
-        let max_tokens = if fixture {
-            None
-        } else {
-            match value("ANCHOR_MODEL_MAX_TOKENS") {
-                None => None,
-                Some(tokens) => {
-                    let parsed = tokens.trim().parse::<u64>().map_err(|_| {
-                        "ANCHOR_MODEL_MAX_TOKENS must be a positive integer".to_owned()
-                    })?;
-                    if parsed == 0 {
-                        return Err("ANCHOR_MODEL_MAX_TOKENS must be a positive integer".to_owned());
-                    }
-                    Some(parsed)
-                }
-            }
-        };
+        }
         Ok(Self {
-            fixture,
+            fixture: false,
             direct,
-            context_limit,
-            max_tokens,
+            context_limit: fields.context_window,
+            max_tokens: fields.max_tokens,
             endpoint,
             wire,
             model,
-            api_key,
+            api_key: api_key.into(),
             aliases,
             credential_scope: None,
             retained: vec![],
@@ -605,6 +600,20 @@ fn model_aliases(value: Option<&str>) -> Result<BTreeMap<String, String>, String
     let aliases = aliases
         .as_object()
         .ok_or("ANCHOR_MODEL_ALIASES must be a JSON object")?;
+    aliases
+        .iter()
+        .map(|(reference, model)| {
+            let model = model
+                .as_str()
+                .ok_or("model aliases require a nonempty model name without control characters")?;
+            Ok((reference.clone(), model.to_owned()))
+        })
+        .collect()
+}
+
+fn validate_aliases(
+    aliases: &BTreeMap<String, String>,
+) -> Result<BTreeMap<String, String>, String> {
     let mut models = BTreeMap::new();
     for (reference, model) in aliases {
         if !reference.starts_with("models.")
@@ -615,13 +624,29 @@ fn model_aliases(value: Option<&str>) -> Result<BTreeMap<String, String>, String
         {
             return Err("model aliases require a non-default models.* reference".into());
         }
-        let model = model
-            .as_str()
-            .ok_or("model aliases require a nonempty model name without control characters")?;
         let model = model_name(model.to_owned(), "model alias name")?;
         models.insert(reference.clone(), model);
     }
     Ok(models)
+}
+
+pub(crate) fn wire_api(value: &str) -> Result<(&'static str, &'static str), String> {
+    match value {
+        "chat" => Ok(("chat", "chat/completions")),
+        "responses" => Ok(("responses", "responses")),
+        _ => Err("ANCHOR_MODEL_WIRE_API must be chat or responses".into()),
+    }
+}
+
+pub(crate) fn parse_limit(value: Option<&str>, name: &str) -> Result<Option<u64>, String> {
+    value
+        .map(|value| {
+            value
+                .trim()
+                .parse()
+                .map_err(|_| format!("{name} must be a positive integer"))
+        })
+        .transpose()
 }
 
 #[cfg(test)]

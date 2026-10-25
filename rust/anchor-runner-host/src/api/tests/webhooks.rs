@@ -4,7 +4,7 @@ use super::*;
 async fn graph_webhook_validates_body_and_starts_existing_graph() {
     let (root, state) = fixture();
     let _env_guard = PROCESS_ENV.lock().await;
-    set_host_env(root.path(), &state.data_root);
+    set_host_env(root.path());
     unsafe {
         env::set_var("ANCHOR_RUNNER_ALLOWED_COMMANDS", "true,sh,cat,sleep,printf");
     }
@@ -71,7 +71,7 @@ async fn graph_webhook_validates_body_and_starts_existing_graph() {
 async fn graph_webhook_missing_input_defaults_to_empty_object() {
     let (root, state) = fixture();
     let _env_guard = PROCESS_ENV.lock().await;
-    set_host_env(root.path(), &state.data_root);
+    set_host_env(root.path());
     let app = router_with_web_root(state.clone(), root.path().join("web"));
     let (status, accepted) = call(app, "POST", "/v1/webhooks/graphs/fixture", Some("{}")).await;
     assert_eq!(status, StatusCode::ACCEPTED, "{accepted}");
@@ -88,7 +88,7 @@ async fn graph_webhook_missing_input_defaults_to_empty_object() {
 async fn graph_webhook_admits_a_run() {
     let (root, state) = fixture();
     let _env_guard = PROCESS_ENV.lock().await;
-    set_host_env(root.path(), &state.data_root);
+    set_host_env(root.path());
     let key = "a".repeat(32);
     let app = router_with_web_root(state.clone(), root.path().join("web"));
 

@@ -9,7 +9,7 @@ async fn kernel_restart_dispatches_detach_child_only_with_staged_call_inputs() {
     };
     let (root, mut state) = fixture();
     let _env_guard = PROCESS_ENV.lock().await;
-    set_host_env(root.path(), &state.data_root);
+    set_host_env(root.path());
     let child_bundle = root.path().join("child");
     std::fs::create_dir_all(&child_bundle).unwrap();
     let definition = json!({
@@ -132,7 +132,7 @@ async fn kernel_restart_parks_started_detach_child_without_replaying_effects() {
 
     let (root, mut state) = fixture();
     let _env_guard = PROCESS_ENV.lock().await;
-    set_host_env(root.path(), &state.data_root);
+    set_host_env(root.path());
     let child_bundle = root.path().join("child");
     let definition = json!({
         "objective":"child","entry":"work","agents":{},

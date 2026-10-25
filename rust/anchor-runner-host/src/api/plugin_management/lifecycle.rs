@@ -432,7 +432,7 @@ async fn build_install(
     let precondition = state
         .application
         .plugin_install_precondition_with_access(
-            crate::library_root(&state.catalog_root),
+            state.application.library_root().to_path_buf(),
             candidate,
             id,
             access,
@@ -465,11 +465,7 @@ async fn prepare_uninstall(
 ) -> Result<Json<Value>, HttpResponse> {
     let precondition = state
         .application
-        .plugin_uninstall_precondition(
-            &crate::library_root(&state.catalog_root),
-            &plugin,
-            &store(&state)?,
-        )
+        .plugin_uninstall_precondition(state.application.library_root(), &plugin, &store(&state)?)
         .await
         .map_err(application_error)?;
     let projection = json!({"operation":"uninstall","plugin":precondition.id,"name":precondition.name,"digest":precondition.digest,
@@ -570,7 +566,7 @@ async fn confirm(
         (action, review.snapshot(&token))
     };
     tokio::spawn(async move {
-        let library = crate::library_root(&state.catalog_root);
+        let library = state.application.library_root().to_path_buf();
         let outcome = match action {
             Action::Install {
                 precondition,

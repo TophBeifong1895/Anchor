@@ -84,7 +84,7 @@ impl RunApplication {
             return Err(GraphManagementError::Missing("no such graph".into()));
         }
         let bundle = FileGraphBundleLoader::new(&path)
-            .with_library_root(crate::library_root(&self.catalog_root))
+            .with_library_root(self.library_root().to_path_buf())
             .load()
             .map_err(invalid)?;
         Ok((path, bundle))
@@ -107,15 +107,11 @@ impl RunApplication {
             .map_err(GraphError::Unsupported)
             .map_err(GraphValidationFailure::Unavailable)?;
         let ids = snapshot_plugin_ids(&snapshot);
-        FilePluginCatalog::new(crate::library_root(&self.catalog_root))
+        FilePluginCatalog::new(self.library_root().to_path_buf())
             .resolve(&ids)
             .map_err(GraphValidationFailure::Unavailable)?;
         // R2: one channel Plugin per persistent assistant.
-        super::channel_management::channel_plan(
-            &snapshot,
-            &crate::library_root(&self.catalog_root),
-        )
-        .map_err(|_| {
+        super::channel_management::channel_plan(&snapshot, self.library_root()).map_err(|_| {
             GraphValidationFailure::Authoring(GraphError::InvalidSnapshot(
                 super::channel_management::TWO_CHANNELS.into(),
             ))
@@ -143,7 +139,7 @@ impl RunApplication {
                     if anchor_runtime::identifier::is_name(&name)
                         && !names.contains(&name)
                         && FileGraphBundleLoader::new(entry.path())
-                            .with_library_root(crate::library_root(&self.catalog_root))
+                            .with_library_root(self.library_root().to_path_buf())
                             .load()
                             .is_ok()
                     {
@@ -206,12 +202,9 @@ impl RunApplication {
             })
         });
         if let Ok(snapshot) = GraphSnapshot::from_authoring(definition.clone()) {
-            super::channel_management::channel_plan(
-                &snapshot,
-                &crate::library_root(&self.catalog_root),
-            )?;
+            super::channel_management::channel_plan(&snapshot, self.library_root())?;
         }
-        create_graph_bundle_from_catalog(&path, &definition, &self.catalog_root)?;
+        create_graph_bundle_from_catalog(&path, &definition, self.library_root())?;
         Ok(json!({"graph":name,"definition":definition}))
     }
 
@@ -257,7 +250,7 @@ fn resolve_graph_definition(
 ) -> Result<(GraphSnapshot, FilePluginCatalog, Vec<PluginBinding>), GraphError> {
     let snapshot = GraphSnapshot::from_authoring(definition.clone())?;
     let ids = snapshot_plugin_ids(&snapshot);
-    let catalog = FilePluginCatalog::new(crate::library_root(catalog_root));
+    let catalog = FilePluginCatalog::new(catalog_root.to_path_buf());
     let bindings = catalog.resolve(&ids)?;
     Ok((snapshot, catalog, bindings))
 }
@@ -352,7 +345,7 @@ fn write_graph_bundle_from_catalog(
     definition: &Value,
     catalog_root: &Path,
 ) -> Result<(), GraphManagementError> {
-    let _library_guard = anchor_library::Library::new(crate::library_root(catalog_root))
+    let _library_guard = anchor_library::Library::new(catalog_root.to_path_buf())
         .catalog_read_guard()
         .map_err(|failure| match failure {
             anchor_library::InstallError::CatalogBusy => {

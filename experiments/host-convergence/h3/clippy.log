@@ -1,0 +1,24 @@
+   Compiling ring v0.17.14
+    Checking anchor-file-lease v0.1.0 (/tmp/anchor-host-h3/rust/anchor-file-lease)
+    Checking anchor-platform-session v0.1.0 (/tmp/anchor-host-h3/rust/anchor-platform-session)
+    Checking anchor-kernel v0.1.0 (/tmp/anchor-host-h3/rust/anchor-kernel)
+    Checking anchor-runtime v0.1.0 (/tmp/anchor-host-h3/rust/anchor-runtime)
+    Checking anchor-facts v0.1.0 (/tmp/anchor-host-h3/rust/anchor-facts)
+   Compiling rustls v0.23.45
+    Checking rustls-webpki v0.103.15
+    Checking anchor-graph-host v0.1.0 (/tmp/anchor-host-h3/rust/anchor-graph-host)
+    Checking anchor-sandbox-bwrap v0.1.0 (/tmp/anchor-host-h3/rust/anchor-sandbox-bwrap)
+    Checking anchor-library v0.1.0 (/tmp/anchor-host-h3/rust/anchor-library)
+    Checking anchor-distribution v0.1.0 (/tmp/anchor-host-h3/rust/anchor-distribution)
+    Checking tokio-rustls v0.26.6
+    Checking rustls-platform-verifier v0.7.1
+    Checking tungstenite v0.29.0
+    Checking hyper-rustls v0.27.10
+    Checking reqwest v0.13.5
+    Checking reqwest v0.12.28
+    Checking tokio-tungstenite v0.29.0
+    Checking rmcp v2.2.0
+    Checking anchor-wecom-gateway v0.1.0 (/tmp/anchor-host-h3/rust/anchor-wecom-gateway)
+    Checking anchor-mcp-host v0.1.0 (/tmp/anchor-host-h3/rust/anchor-mcp-host)
+    Checking anchor-runner-host v0.1.0 (/tmp/anchor-host-h3/rust/anchor-runner-host)
+    Finished `dev` profile [optimized + debuginfo] target(s) in 22.12s

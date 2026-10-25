@@ -7,7 +7,7 @@ use anchor_kernel::{Outcome, Phase};
 async fn parallel_call_is_rejected_by_shared_admission_without_persisting_parent_or_child() {
     let (root, state) = fixture();
     let _env = PROCESS_ENV.lock().await;
-    set_host_env(root.path(), &state.data_root);
+    set_host_env(root.path());
     let definition = json!({"objective":"parallel call admission", "entry":"fan", "agents":{},
         "ops":{"fan":{"fanout":{"join":"join"}},"call":{"call":{"graph":"child","mode":"wait"}},"work":{"run":"true"},"join":{"join":{}}},
         "nodes":[{"id":"fan","op":"fan"},{"id":"nested-call","op":"call"},{"id":"work","op":"work"},{"id":"join","op":"join"}],
@@ -34,7 +34,7 @@ async fn parallel_call_is_rejected_by_shared_admission_without_persisting_parent
 async fn explicit_kernel_probe_runs_real_host_ops_and_projects_existing_queries() {
     let (root, state) = fixture();
     let _env = PROCESS_ENV.lock().await;
-    set_host_env(root.path(), &state.data_root);
+    set_host_env(root.path());
     let definition = json!({"objective":"kernel probe","entry":"a","agents":{},
         "ops":{"work":{"run":"sh -c 'printf kernel-artifact > report.txt'"}},
         "nodes":[{"id":"a","op":"work"},{"id":"b","op":"work"},{"id":"c","op":"work"}],
@@ -129,7 +129,7 @@ async fn kernel_read_view_http_tracks_running_human_wait_and_settlement_with_hos
     }
     let (root, state) = fixture();
     let _env = PROCESS_ENV.lock().await;
-    set_host_env(root.path(), &state.data_root);
+    set_host_env(root.path());
     let id = "r-http-view";
     let record=GraphRunRecord::create_with_id(serde_json::from_value(json!({"objective":"read","entry":"work","agents":{"role":{"model":"fixture","instructions":"work"}},"nodes":[{"id":"work","agent":"role"}],"edges":[]})).unwrap(),json!({}),id).unwrap();
     let metadata = crate::run_metadata::RunMetadata::new(
@@ -225,7 +225,7 @@ async fn legacy_and_kernel_http_share_executing_paused_and_settled_projections()
 
     let (root, state) = fixture();
     let _env = PROCESS_ENV.lock().await;
-    set_host_env(root.path(), &state.data_root);
+    set_host_env(root.path());
     unsafe {
         env::set_var("ANCHOR_RUNNER_ALLOWED_COMMANDS", "true,sh,cat,sleep,printf");
     }

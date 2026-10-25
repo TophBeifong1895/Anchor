@@ -330,6 +330,12 @@ impl PilotService {
                         &admission.root,
                         turns.iter().find_map(|turn| turn.goose.as_ref()),
                         &admission.tools.data_root,
+                        admission
+                            .tools
+                            .application
+                            .host_configuration()
+                            .bwrap
+                            .clone(),
                     )
                     .map_err(|reason| {
                         eprintln!("anchor-runner-host: Pilot provider unavailable: {reason}");
@@ -847,6 +853,7 @@ async fn execute_turn(
         &turn,
     )?;
     let mut context = crate::pilot_tools::PilotTurnContext::new(
+        tools.application.host_configuration(),
         &tools.workspace_root,
         &request.owner,
         &request.session,
@@ -866,6 +873,7 @@ async fn execute_turn(
             .with_frozen_runtime_snapshot(snapshot.clone());
     }
     let (plugin_tools, network, disclosure) = match crate::pilot_tools::frozen_turn_tools(
+        tools.application.host_configuration(),
         &tools.data_root,
         &tools.library_root,
         &tools.workspace_root,

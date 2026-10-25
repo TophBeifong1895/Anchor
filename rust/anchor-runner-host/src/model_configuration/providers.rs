@@ -120,14 +120,11 @@ impl ProviderFields {
             && self.model_fields("").provider_id() == other.model_fields("").provider_id()
     }
     fn registry(&self, model: &str, key: &str) -> Result<ModelRegistry, String> {
-        let mut values = self.model_fields(model).values();
-        values.insert("ANCHOR_MODEL_API_KEY".into(), key.into());
-        ModelRegistry::from_values(false, |name| values.get(name).cloned())
+        ModelRegistry::from_fields(&self.model_fields(model), key, false)
     }
     fn validate(&self, key: Option<&str>) -> Result<(), String> {
-        if !matches!(self.wire_api.as_str(), "chat" | "responses") {
-            return Err("wire_api must be chat or responses".into());
-        }
+        crate::goose_acp::configuration::wire_api(&self.wire_api)
+            .map_err(|_| "wire_api must be chat or responses")?;
         if self.endpoint.is_empty() && self.flash.is_empty() && self.pro.is_empty() && key.is_none()
         {
             return Ok(());

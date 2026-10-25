@@ -100,7 +100,7 @@ pub(super) async fn submit(
         let (sessions, owner, session) = owned_session(&state, &headers, &session)?;
         let request = crate::credential_store::submit(
             &state.data_root,
-            &crate::library_root(&state.catalog_root),
+            state.application.library_root(),
             &sessions,
             &owner,
             &session,

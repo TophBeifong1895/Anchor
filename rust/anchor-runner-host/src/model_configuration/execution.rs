@@ -135,14 +135,15 @@ impl ModelConfiguration {
         }
         let mut selected = fields.model_fields(model);
         selected.aliases.insert(reference.into(), model.into());
-        let mut values = selected.values();
-        values.insert("ANCHOR_MODEL_API_KEY".into(), key.into());
-        if let Some(direct) = self.external.get("ANCHOR_MODEL_DIRECT") {
-            values.insert("ANCHOR_MODEL_DIRECT".into(), direct.clone());
-        }
         let (slot, _, _) = selection(Some(reference)).ok_or("invalid named model reference")?;
-        ModelRegistry::from_values(false, |name| values.get(name).cloned())
-            .map(|registry| registry.with_credential_scope(slot.credential_id()))
+        ModelRegistry::from_fields(
+            &selected,
+            key,
+            self.external
+                .get("ANCHOR_MODEL_DIRECT")
+                .is_some_and(|value| value == "1"),
+        )
+        .map(|registry| registry.with_credential_scope(slot.credential_id()))
     }
 
     fn legacy_default_snapshot(

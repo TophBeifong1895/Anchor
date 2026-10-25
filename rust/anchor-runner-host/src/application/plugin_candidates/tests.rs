@@ -36,15 +36,14 @@ for line in sys.stdin:
 
 use crate::test_support::Environment;
 
-fn environment(root: &Path) -> Environment {
+fn environment() -> Environment {
     let mut environment = Environment::cleared(&[
-        "ANCHOR_RUNNER_LIBRARY_ROOT",
         "ANCHOR_RUNNER_ALLOWED_COMMANDS",
         "ANCHOR_PILOT_RUSTUP",
         "ANCHOR_PILOT_RUSTUP_HOME",
         "ANCHOR_PILOT_CARGO_HOME",
     ]);
-    environment.set("ANCHOR_RUNNER_LIBRARY_ROOT", root);
+
     environment.set("ANCHOR_RUNNER_ALLOWED_COMMANDS", "python3,sh,cat");
     environment
 }
@@ -55,7 +54,7 @@ async fn candidate_host_templates_are_rejected_before_any_server_launch_or_conne
     let root = tempfile::tempdir().unwrap();
     let library = root.path().join("library");
     std::fs::create_dir_all(&library).unwrap();
-    let mut environment = environment(&library);
+    let mut environment = environment();
     let fixture_secret = format!(
         "private-{}",
         root.path().file_name().unwrap().to_string_lossy()
@@ -64,6 +63,10 @@ async fn candidate_host_templates_are_rejected_before_any_server_launch_or_conne
     environment.set("anchor_candidate_host_secret", &fixture_secret);
     let application = RunApplication::new(root.path().join("state"), library.clone());
     let context = crate::pilot_tools::PilotTurnContext::new(
+        &crate::HostConfiguration {
+            library_root: Some(library.clone()),
+            ..Default::default()
+        },
         &root.path().join("work"),
         "owner",
         "session",
@@ -196,7 +199,7 @@ async fn candidate_does_not_inherit_an_installed_plugins_owner_credentials() {
     let root = tempfile::tempdir().unwrap();
     let library = root.path().join("library");
     std::fs::create_dir_all(&library).unwrap();
-    let mut environment = environment(&library);
+    let mut environment = environment();
     environment.remove("ANCHOR_CANDIDATE_PRIVATE_SECRET");
     let wheels = root.path().join("wheels");
     std::fs::create_dir_all(&wheels).unwrap();
@@ -220,6 +223,10 @@ async fn candidate_does_not_inherit_an_installed_plugins_owner_credentials() {
         .create_turn("owner", &session.id, "configure", Some("fixture"))
         .unwrap();
     let context = crate::pilot_tools::PilotTurnContext::new(
+        &crate::HostConfiguration {
+            library_root: Some(library.clone()),
+            ..Default::default()
+        },
         &root.path().join("work"),
         "owner",
         &session.id,
@@ -408,7 +415,7 @@ async fn unchanged_candidate_reprepares_for_a_new_turn_interpreter_and_retains_t
     let root = tempfile::tempdir().unwrap();
     let library = root.path().join("library");
     std::fs::create_dir_all(&library).unwrap();
-    let _environment = environment(&library);
+    let _environment = environment();
     let wheels = root.path().join("wheels");
     std::fs::create_dir(&wheels).unwrap();
     let wheel = test_support::fixture_wheel(&wheels, "idna", "3.6");
@@ -473,6 +480,10 @@ async fn unchanged_candidate_reprepares_for_a_new_turn_interpreter_and_retains_t
         .clone()
         .with_frozen_runtime_snapshot(old_snapshot.clone());
     let mut old_context = crate::pilot_tools::PilotTurnContext::new(
+        &crate::HostConfiguration {
+            library_root: Some(library.clone()),
+            ..Default::default()
+        },
         &root.path().join("work"),
         "owner",
         "session",
@@ -541,6 +552,10 @@ async fn unchanged_candidate_reprepares_for_a_new_turn_interpreter_and_retains_t
         .clone()
         .with_frozen_runtime_snapshot(new_snapshot.clone());
     let mut new_context = crate::pilot_tools::PilotTurnContext::new(
+        &crate::HostConfiguration {
+            library_root: Some(library.clone()),
+            ..Default::default()
+        },
         &root.path().join("work"),
         "owner",
         "session",
@@ -705,7 +720,7 @@ async fn candidate_prepares_calls_offline_and_installs_independently_of_its_sess
     let root = tempfile::tempdir().unwrap();
     let library = root.path().join("library");
     std::fs::create_dir_all(&library).unwrap();
-    let mut environment = environment(&library);
+    let mut environment = environment();
     let fixture_secret = format!(
         "private-{}",
         root.path().file_name().unwrap().to_string_lossy()
@@ -729,6 +744,10 @@ async fn candidate_prepares_calls_offline_and_installs_independently_of_its_sess
     let application = RunApplication::new(root.path().join("state"), library.clone())
         .with_dependency_provisioner(provisioner);
     let context = crate::pilot_tools::PilotTurnContext::new(
+        &crate::HostConfiguration {
+            library_root: Some(library.clone()),
+            ..Default::default()
+        },
         &root.path().join("work"),
         "owner",
         "session",
@@ -886,7 +905,7 @@ async fn candidate_startup_and_call_cancellation_reap_the_actual_processes() {
     let root = tempfile::tempdir().unwrap();
     let library = root.path().join("library");
     std::fs::create_dir_all(&library).unwrap();
-    let _environment = environment(&library);
+    let _environment = environment();
     let wheels = root.path().join("wheels");
     std::fs::create_dir(&wheels).unwrap();
     test_support::fixture_wheel(&wheels, "idna", "3.6");
@@ -898,6 +917,10 @@ async fn candidate_startup_and_call_cancellation_reap_the_actual_processes() {
     for mode in ["hang_start", "hang_call"] {
         let cancel = Arc::new(AtomicBool::new(false));
         let context = crate::pilot_tools::PilotTurnContext::new(
+            &crate::HostConfiguration {
+                library_root: Some(library.clone()),
+                ..Default::default()
+            },
             &root.path().join("work"),
             "owner",
             mode,

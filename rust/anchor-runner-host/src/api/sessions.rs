@@ -416,7 +416,7 @@ pub(super) async fn delete_session(
             sessions,
             state.data_root,
             state.workspace_root,
-            crate::library_root(&state.catalog_root),
+            state.application.library_root().to_path_buf(),
             owner,
             session.clone(),
         )

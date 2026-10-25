@@ -792,12 +792,6 @@ impl ToolEnvironment {
         })
     }
 
-    pub fn from_env() -> Result<Self, String> {
-        std::env::var_os("ANCHOR_RUNNER_LIBRARY_ROOT")
-            .map(|root| Self::load(Path::new(&root)))
-            .unwrap_or_else(|| Ok(Self::default()))
-    }
-
     pub(crate) fn with_runtime_snapshot(
         mut self,
         snapshot: &crate::runtime_configuration::RuntimeSnapshot,
