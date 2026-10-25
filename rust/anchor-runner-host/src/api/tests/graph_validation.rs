@@ -386,31 +386,21 @@ async fn malformed_input_and_semantic_errors_have_distinct_readonly_results() {
 }
 
 #[tokio::test]
-async fn graph_validation_uses_existing_bearer_auth_without_mutation() {
+async fn graph_validation_does_not_mutate() {
     let _env_guard = PROCESS_ENV.lock().await;
     let _environment = Environment::cleared(&["ANCHOR_RUNNER_LIBRARY_ROOT"]);
-    let (root, mut state) = fixture();
-    state.loopback = false;
-    let secret = "v".repeat(32);
-    state.api_keys = vec![secret.clone()];
+    let (root, state) = fixture();
     let definition = FileGraphBundleLoader::new(&state.bundle_root)
         .load()
         .unwrap()
         .authoring_definition;
     let app = router(state);
     let before = filesystem(root.path());
-    for (authorization, expected) in [
-        (None, StatusCode::UNAUTHORIZED),
-        (Some("Bearer wrong".to_owned()), StatusCode::UNAUTHORIZED),
-        (Some(format!("Bearer {secret}")), StatusCode::OK),
-    ] {
-        let mut request = Request::builder()
+    for expected in [StatusCode::OK, StatusCode::OK] {
+        let request = Request::builder()
             .method("POST")
             .uri("/graph-validation")
             .header(header::CONTENT_TYPE, "application/json");
-        if let Some(authorization) = authorization {
-            request = request.header(header::AUTHORIZATION, authorization);
-        }
         let response = app
             .clone()
             .oneshot(
@@ -423,11 +413,7 @@ async fn graph_validation_uses_existing_bearer_auth_without_mutation() {
         assert_eq!(response.status(), expected);
         let bytes = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
         let result: Value = serde_json::from_slice(&bytes).unwrap();
-        if expected == StatusCode::OK {
-            assert_eq!(result["valid"], true);
-        } else {
-            assert!(result["error"].is_string());
-        }
+        assert_eq!(result["valid"], true);
         assert_eq!(filesystem(root.path()), before);
     }
 }

@@ -54,16 +54,6 @@ web_url="http://127.0.0.1:$web_port"
 api_pid="$state/native-host.pid"
 web_pid="$state/vite.pid"
 
-api_key=$(node <<'AUTH'
-const configured = process.env.ANCHOR_API_KEYS || '';
-try {
-  const keys = configured.trim().startsWith('[') ? JSON.parse(configured) : configured.split(',').map(key => key.trim()).filter(Boolean);
-  if (!Array.isArray(keys) || keys.some(key => typeof key !== 'string')) process.exit(1);
-  process.stdout.write(keys[0] || '');
-} catch { process.exit(1); }
-AUTH
-)
-
 endpoint_open() {
   node - "$1" <<'PORT'
 const net = require('node:net');
@@ -77,12 +67,7 @@ PORT
 }
 
 api_response() {
-  if [[ -n "$api_key" ]]; then
-    printf 'Authorization: Bearer %s\n' "$api_key" |
-      curl -fsS --max-time 1 --header @- "$ANCHOR_WEB_API_URL/$1" 2>/dev/null
-  else
-    curl -fsS --max-time 1 "$ANCHOR_WEB_API_URL/$1" 2>/dev/null
-  fi
+  curl -fsS --max-time 1 "$ANCHOR_WEB_API_URL/$1" 2>/dev/null
 }
 
 json_status() {
@@ -236,7 +221,7 @@ prepare_example_graphs() {
   if alive "$api_pid" && (( source_examples )); then
     # Also handles `git pull` followed by `start` on an already managed Host.
     node "$repo/scripts/dev-examples.mjs" plugins "$(realpath -m -- "${CARGO_TARGET_DIR:-$repo/rust/target}")/debug"
-    ANCHOR_STARTER_API_KEY="$api_key" node "$repo/scripts/dev-examples.mjs" graphs
+    node "$repo/scripts/dev-examples.mjs" graphs
   fi
 }
 

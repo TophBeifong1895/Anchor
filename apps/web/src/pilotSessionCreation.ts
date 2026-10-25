@@ -1,10 +1,10 @@
-import { api, bearerKey } from './api';
+import { api } from './api';
 
 const pending = new Map<string, string>();
 
 export async function createPilotSession<Session extends { id: string }>(): Promise<{ session: Session }> {
-  const identity = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(bearerKey())));
-  const scope = `pilot:creation:${Array.from(identity, byte => byte.toString(16).padStart(2, '0')).join('')}`;
+  // One installation, one creation request per pending session id.
+  const scope = 'pilot:creation';
   let key = pending.get(scope);
   try { key ??= localStorage.getItem(scope) ?? undefined; } catch {}
   key ??= crypto.randomUUID();

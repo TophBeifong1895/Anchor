@@ -7,7 +7,7 @@ import { api } from './api';
 import type { Question } from './pilotQuestions';
 import { PageActivity } from './PageActivity';
 
-vi.mock('./api', async original => ({ ...await original<object>(), api: vi.fn(), bearerKey: () => '' }));
+vi.mock('./api', async original => ({ ...await original<object>(), api: vi.fn() }));
 vi.mock('./markdown', () => ({ Markdown: ({ text }: { text: string }) => <div data-testid="reply">{text}</div> }));
 
 const turn: Turn = { id: 'turn-1', session: 'session-1', status: 'running', error: '', created_at: '2026-10-19T00:00:00Z', prompt: 'Hello' };

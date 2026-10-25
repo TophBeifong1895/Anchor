@@ -73,7 +73,7 @@ Host 托管的模型配置将公开字段、用于恢复的旧绑定和按槽/�
 
 Web 工作台的颜色、字体、控件、面板标题和默认栏宽由 [共享样式](../apps/web/src/style.css) 统一定义。[Pilot 页面样式](../apps/web/src/Pilot.css) 独占会话页面布局与断点；插件面板复用同一列表、搜索与详情组件，窄屏使用抽屉，不通过插件局部样式改写聊天网格。Pilot 的 [阅读布局](../apps/web/src/PilotConversationLayout.tsx) 负责两侧拖动、键盘调宽与重置，正文和输入框共用居中宽度；浏览器只保存用户阅读偏好，窗口与插件栏变化限制实际显示宽度，不覆写偏好或产生 Host 写请求，窄屏自动适配。
 
-Graph Call 的 `wait` 子执行在 Runner 返回成功、错误或合作取消后都注销登记。取消转发任务由该登记持有，退出时在 active 锁外中止并等待回收；正常结束不写入停止请求。Web 只在 Graph/Run 消费页面轮询工作台数据，其他页面拥有各自请求；首次直达仍核验 API key，返回消费页面立即刷新，离开页面后丢弃迟到响应。
+Graph Call 的 `wait` 子执行在 Runner 返回成功、错误或合作取消后都注销登记。取消转发任务由该登记持有，退出时在 active 锁外中止并等待回收；正常结束不写入停止请求。Web 只在 Graph/Run 消费页面轮询工作台数据，其他页面拥有各自请求；首次直达直接读取，返回消费页面立即刷新，离开页面后丢弃迟到响应。
 
 Web 的图编排与 Pilot 仅在首次访问后保留页面 DOM 和本地阅读状态；隐藏时通过 React Activity 清理 effects、请求和流订阅，返回后重新读取 Host 事实，不以页面保留替代授权或有效性检查。相同工作台投影保持对象身份，未变的 Markdown 不重复解析；Pilot 同一会话返回不先清空消息，已删除会话仍在列表校验后清理。运行过程只保留可重建的文本、工具投影和已消费 SSE 游标，返回从该游标接续，终态不重复回放，不改变服务端执行。图布局使用至多 30 项的 LRU，缓存命中在首 render 即可读取；拓扑、标签或保存位置变化仍失效，画布保留视口，仅几何或可见尺寸变化时自动适配。ELK 和非首屏页面按需加载，不删除 StrictMode，不修改轮询周期或超时；浏览器刷新仍需重新核验和构建当前页面。
 
@@ -179,7 +179,7 @@ Pilot 接纳保存网络和工具授权快照，执行启动时读取一次 `Run
 
 停止与结算/接纳共用 Pilot gate：执行已返回成功但尚未结算时，取消仍结算为 Stopped；来源已经 Completed 时保留该历史，通过幂等 `pilot.continuation.cancelled` 事件取消该来源的后续推进，即使尚无 requested 事件也适用。取消在重启后仍有效；OAuth 回调在交换 token 前和持 gate 发布授权前都核查该事实，迟到回调不能交换/保存 token 或恢复任务。该事件是 Session 控制事实，不是新审批流程或 Agent 恢复日志。
 
-允许联网的沙箱通过独立网络 namespace 与 `anchor-sandbox-network`/slirp4netns 出网，禁用 host-loopback；失败不会退回共享宿主网络。relay 和网络进程在取消、父进程退出及启动失败时收束。Host 的无 Key 管理 API 仅允许 loopback 监听，非 loopback 必须配置 API key；模型控制通道与任务授权分开。
+允许联网的沙箱通过独立网络 namespace 与 `anchor-sandbox-network`/slirp4netns 出网，禁用 host-loopback；失败不会退回共享宿主网络。relay 和网络进程在取消、父进程退出及启动失败时收束。Host 的管理 API 没有登录、仅允许 loopback 监听，非 loopback 直接拒绝启动；模型控制通道与任务授权分开。
 
 `credential_request` 只发起 owner/Session/Turn、已安装 Plugin、server 和声明字段绑定的专用输入。Web 的 password 控件直接提交 Host，值不进入聊天、工具结果或 Goose 历史；Host 私有 600/700 文件保存凭据，下一 Turn 向该 owner 的正式 MCP 配置注入。取消、删除、过期、版本或授权变化拒绝旧输入，返回 `no-store`/`no-referrer`。`oauth_authorize`/`oauth_status` 复用 Library OAuth transaction 和原 token 流程；Pilot 来源另持关联事实，停止或删除后迟到 callback 不交换 token，也不降级成无来源旧流程。
 
@@ -233,9 +233,9 @@ Web 编辑画布的监听入口和工作流列表在已认证且空闲时使用 
 
 Pilot 的 `channel_configure`/`channel_enable` 经原生确认管理 owner-bound 的按 Graph 绑定，专用凭据输入复用上述机制；Web 在节点 Plugin 详情中管理同一绑定。同一配置供 Supervisor、WeCom 入站和 Graph listener 使用，凭据只来自凭据库，不读部署环境。一个账号同时只能服务一张启用的 Graph；机器人保存为启用期间，不能改成员和凭据、删除 Graph 或卸下渠道 Plugin。损坏的绑定文件只让它自己的 Graph 停用，不阻止 Host 启动。空 users 默认拒绝所有用户，users 非空时 send_users 必须显式声明。停用立即撤销 callback key，重新启用轮换；回调授权仅限事件、单条进度查询和结算，不授予管理 API、任务联网或 Plugin 挂载。渠道控制能力已接入，真实企微收发仍须独立验收。
 
-手动触发、计划、Webhook 与 Responses 子集共用接纳。Pilot 的 schedule 创建、列出、修改和删除复用同一 ScheduleStore 与 Dispatcher，按 owner 校验 Graph 和触发规则，不另建调度器。Responses 只实现文档中的子集；健康 `/health` 与就绪 `/ready` 不发送模型请求。API-key 和 Graph/工具授权由 Host 强制执行，Plugin 说明和提示词不授予权限。
+手动触发、计划、Webhook 与 Responses 子集共用接纳。Pilot 的 schedule 创建、列出、修改和删除复用同一 ScheduleStore 与 Dispatcher，按 owner 校验 Graph 和触发规则，不另建调度器。Responses 只实现文档中的子集；健康 `/health` 与就绪 `/ready` 不发送模型请求。Graph/工具授权由 Host 强制执行，Plugin 说明和提示词不授予权限。
 
-WebUI 的 Anchor API key 只保存在当前标签页。输入框先检查请求头可接受的格式，再通过只读 `GET /graphs` 验证；成功才保存并关闭，错误 key、格式错误或服务异常保留输入框并分别提示。JSON 请求与 Pilot SSE 共用缓存恢复：含非 ASCII 字符、空格或控制字符的无效缓存不会进入请求头，401 后重新输入；较早请求的迟到 401 不丢弃其他请求刚验证成功的新 key。取消验证会中止请求，迟到结果不保存。
+WebUI 不需要登录；JSON 请求与 Pilot SSE 各自读取本机 Host，取消即中止请求，迟到结果不保存。
 
 工作台定时刷新在上一轮请求尚未结束时跳过本次 tick，不取消并重发首屏或验证中的请求；一项投影失败时取消同批其他读取，释放在途标记后下一轮仍可重试，慢 timeline 读取同样受保护。手动刷新、导航及删除继续使旧投影失效，旧请求迟到结束不能释放新请求的在途标记。轮询周期与请求超时保持原值。
 

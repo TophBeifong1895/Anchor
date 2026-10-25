@@ -47,7 +47,7 @@ cd Anchor
 
 Host 可以在没有模型配置时启动。Pilot 发送消息或继续回复遇到服务不可用时，网页读取 Host 的默认模型执行状态；确认配置尚未齐备后，提示先配置默认服务的地址、Flash 模型和 API key，并提供「前往模型设置」按钮。原文字和附件保留，保存设置后返回即可重试；已配置或状态读取失败时保留原错误，不推断是配置缺失。
 
-WebUI「设置 → 模型服务」固定提供 `default`、`backup` 两组，每组填写服务地址、接口协议、模型服务商提供的 API key，以及 `flash`、`pro` 两个模型名。模型密钥与登录 Anchor 的密钥用途不同。两组独立保存，可只填写一部分；未填全会显示待配置。密钥不回显、不保存在浏览器，即使两组地址相同，也能分别使用和清除不同账户的密钥。连接测试会区分模型服务的认证失败（401）、权限拒绝（403）、接口错误、限流和临时故障，不把 Anchor 管理接口的 400 显示为上游服务状态。
+WebUI「设置 → 模型服务」固定提供 `default`、`backup` 两组，每组填写服务地址、接口协议、模型服务商提供的 API key，以及 `flash`、`pro` 两个模型名。两组独立保存，可只填写一部分；未填全会显示待配置。密钥不回显、不保存在浏览器，即使两组地址相同，也能分别使用和清除不同账户的密钥。连接测试会区分模型服务的认证失败（401）、权限拒绝（403）、接口错误、限流和临时故障，不把 Anchor 管理接口的 400 显示为上游服务状态。
 
 点击「测试 Flash」或「测试 Pro」会发送一条小请求，可能产生少量费用；测试不保存草稿，保存也不会自动测试。**保存后，Pilot 下一轮使用 default 的 Flash 模型；当前正在执行的一轮保持原配置，无需重启服务。** 已有对话会保留历史。Graph 未指定模型时也使用 default Flash，可明确选择两组服务的 Flash/Pro；backup 不会自动接管失败任务。旧配置可预填 default 的地址、协议与 Flash，Pro 留空；首次在原地址保存可沿用密钥，随后各自独立。更换地址或协议需重新填密钥。
 
@@ -100,14 +100,14 @@ WebUI「设置 → 模型服务」固定提供 `default`、`backup` 两组，每
 | `ANCHOR_RUNNER_GRAPH_NAME` | 可选的部署管理入口 Graph 名，与 bundle 使用同一身份及修改保护 |
 | `ANCHOR_RUNNER_LISTEN` | 默认 `127.0.0.1:8077` |
 | `ANCHOR_RUNNER_ALLOWED_COMMANDS` | 显式命令列表，例如 `sh,git` |
-| `ANCHOR_API_KEYS` | 可选部署 Bearer 白名单，JSON 字符串数组；非 loopback 必填，每项至少 32 字节且不可重复 |
+| `ANCHOR_RUNNER_LISTEN` | 必须监听 loopback（默认 `127.0.0.1:8077`）。Anchor 没有登录，远程访问经 SSH 隧道或操作员自己的已认证入口；旧配置里的 `ANCHOR_API_KEYS` 会让 Host 拒绝启动，删掉即可 |
 | `ANCHOR_DEPENDENCIES_PYTHON`、`ANCHOR_PILOT_PYTHON_ENABLED` | 开发部署已有 Python 路径及可选 Pilot 使用许可；完整平台在网页初始化 |
 | `ANCHOR_DEPENDENCIES_UV`、`ANCHOR_DEPENDENCIES_UV_SHA256`、`ANCHOR_DEPENDENCIES_SOURCES` | 开发部署显式登记固定依赖工具与软件源；三项配套，完整平台由发行 manifest 提供 |
 | `ANCHOR_RETENTION_DAYS`、`ANCHOR_RETENTION_MAX_GB` | 已结束 Run 的自动回收：超过天数（默认 30），或 Run 数据总量超过上限（默认 20 GB，从最旧的删起），就回收。启动时执行一次，之后每小时一次。`0` 或 `off` 关闭对应限制；数据中枢的事实和评分不回收。见[设计卡 003](design-cards/003-data-retention.md) |
 
 可写根应彼此隔离并在 release 外。Host 在监听前验证 bundle、探测可写根并获取 deployment-writer lease；同一 state root 只允许一个 writer。第三方工具环境与本地输入只按明确注册/授权挂载，不因模型提出路径就允许读取。
 
-正式平台部署使用 [systemd 模板](../deploy/systemd/anchor.service)，由安装启动器设置以上路径与控制参数，无需环境文件。非 loopback 监听必须配置有效唯一 Bearer secrets 并有对应网络边界；本地白名单不等于完整多租户模型。
+正式平台部署使用 [systemd 模板](../deploy/systemd/anchor.service)，由安装启动器设置以上路径与控制参数，无需环境文件。服务只监听本机，没有登录；需要远程访问时由操作员自行加一层认证入口。
 
 ## Graph 与 WebUI
 
@@ -128,7 +128,7 @@ node -e 'const fs=require("fs");process.stdout.write(JSON.stringify({definition:
     -H 'Content-Type: application/json' --data-binary @-
 ```
 
-若部署配置 API keys，向上述请求追加 `Authorization: Bearer <key>`。Graph PUT 的接受格式、资源错误和诊断以 [Web API 契约](rust-frontend-api-contract.md) 为准。Plugin 必须先安装到 Host canonical Library；名称存在不代表外部服务或模型凭据可用。
+本机 API 不需要凭据。Graph PUT 的接受格式、资源错误和诊断以 [Web API 契约](rust-frontend-api-contract.md) 为准。Plugin 必须先安装到 Host canonical Library；名称存在不代表外部服务或模型凭据可用。
 
 AgentNode 负责模型工作，OpNode 负责确定性命令/调用。Plugin 直接挂到 AgentNode。反馈边允许带具体总结返工，节点在同 Run 的已提交产物基础上继续；读写声明、只读输入和 Sandbox 权限由运行时检查。研究完成来自目标与证据，不能以轮次数代替内容验收。
 

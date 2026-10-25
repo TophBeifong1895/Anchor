@@ -7,7 +7,6 @@ import { Workspace } from './Workspace';
 import { GraphEditorPage } from './GraphEditorPage';
 import { PageActivity } from './PageActivity';
 import { graphRunAction } from './GraphRunButton';
-import { ApiKeyDialog } from './ApiKeyDialog';
 import { ChannelSessions } from './ChannelSessions';
 import { CreateGraphDialog, RunInputDialog } from './WorkbenchDialogs';
 import { anchorRef, anchorTarget, type AnchorRef } from './links';
@@ -260,7 +259,6 @@ export function App() {
         const result = await api<{ run: string }>('/trigger', 'POST', { graph: name, input });
         setRun(result.run); setNode(''); setTargetPath(''); setView('runDetail'); await refresh();
       }} />}
-      <ApiKeyDialog />
     </div>
   );
 }

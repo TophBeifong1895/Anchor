@@ -89,13 +89,11 @@ separate gateway systemd unit or environment template is required. Existing
 separately managed gateways must be stopped before enabling the Host-owned path;
 this guide does not switch a running legacy deployment automatically.
 
-Use an authenticated reverse proxy for remote access. Keep the platform listener
-on loopback and apply the deployment's authentication and network boundary at the
-proxy. For Responses streaming, disable proxy buffering and permit long-lived SSE
-connections. Raw `anchor-runner-host serve` retains its explicit deployment
-process controls, including the requirement for unique Bearer credentials of at
-least 32 bytes on non-loopback listeners; the installed launcher does not inherit
-such overrides.
+Anchor has no login: the Host refuses to start on a non-loopback listener, and a
+leftover `ANCHOR_API_KEYS` is reported instead of being read. For remote access,
+tunnel to the loopback listener or put an authenticated proxy in front of it and
+apply the deployment's authentication and network boundary there. For Responses
+streaming, disable proxy buffering and permit long-lived SSE connections.
 
 ## Health, failures and existing data
 

@@ -17,12 +17,9 @@ fn inbound(id: &str, conversation: &str) -> Value {
 }
 
 #[tokio::test]
-async fn channel_admission_is_authenticated_idempotent_and_owner_scoped() {
-    let (root, mut state) = fixture();
+async fn channel_admission_is_idempotent() {
+    let (root, state) = fixture();
     let first_key = "a".repeat(32);
-    let second_key = "b".repeat(32);
-    state.loopback = false;
-    state.api_keys = vec![first_key.clone(), second_key.clone()];
     let app = router_with_web_root(state.clone(), root.path().join("web"));
 
     let (status, first) = authorized_call(
@@ -54,17 +51,6 @@ async fn channel_admission_is_authenticated_idempotent_and_owner_scoped() {
     assert_eq!(duplicate["session"]["plugin_mounts"], json!({}));
     assert_eq!(duplicate["turn"]["id"], turn);
 
-    let (status, other) = authorized_call(
-        app.clone(),
-        "POST",
-        "/channel-sessions/inbound",
-        &second_key,
-        inbound("message-1", "conversation-1"),
-    )
-    .await;
-    assert_eq!(status, StatusCode::ACCEPTED, "{other}");
-    assert_ne!(other["session"]["id"], session);
-
     let (status, relation) = authorized_call(
         app.clone(),
         "GET",
@@ -75,16 +61,6 @@ async fn channel_admission_is_authenticated_idempotent_and_owner_scoped() {
     .await;
     assert_eq!(status, StatusCode::OK, "{relation}");
     assert_eq!(relation["relation"]["turn_id"], turn);
-
-    let (status, forbidden) = authorized_call(
-        app.clone(),
-        "GET",
-        &format!("/channel-sessions/{session}/inbounds/message-1"),
-        &second_key,
-        json!({}),
-    )
-    .await;
-    assert_eq!(status, StatusCode::NOT_FOUND, "{forbidden}");
 
     let (status, detail) = authorized_call(
         app.clone(),
@@ -97,16 +73,6 @@ async fn channel_admission_is_authenticated_idempotent_and_owner_scoped() {
     assert_eq!(status, StatusCode::OK, "{detail}");
     assert_eq!(detail["session"]["id"], session);
     assert_eq!(detail["session"]["run_ids"], json!([]));
-    let (status, _) = authorized_call(
-        app.clone(),
-        "GET",
-        &format!("/channel-sessions/{session}"),
-        &second_key,
-        json!({}),
-    )
-    .await;
-    assert_eq!(status, StatusCode::NOT_FOUND);
-
     let (status, _) = authorized_call(
         app,
         "POST",

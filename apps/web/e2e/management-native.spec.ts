@@ -5,23 +5,19 @@ import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import { nativeHost, repo, stop } from './fixtures/native-host';
 
-const key = 'native-management-operator-fixture-32';
-const otherKey = 'native-management-other-operator-32';
-const headers = { Authorization: `Bearer ${key}` };
 const graphName = 'management-graph';
 type Host = Awaited<ReturnType<typeof nativeHost>>;
-const environment = { ANCHOR_API_KEYS: JSON.stringify([key, otherKey]) };
+const environment = { };
 
 async function ready(host: Host, request: APIRequestContext) {
   await expect(async () => {
-    expect((await request.get(`${host.base}/health`, { headers })).status(), host.logs).toBe(200);
+    expect((await request.get(`${host.base}/health`)).status(), host.logs).toBe(200);
   }).toPass({ timeout: 20000 });
 }
 async function open(page: Page, host: Host, view: string) {
-  await page.addInitScript(({ key, view }) => {
-    sessionStorage.setItem('anchor-api-key', key);
+  await page.addInitScript(view => {
     localStorage.setItem('anchor:view', view);
-  }, { key, view });
+  }, view);
   await page.goto(host.base);
 }
 async function screenshot(page: Page, root: string, name: string, info: TestInfo) {
@@ -84,14 +80,11 @@ test('native plugin directory install, owner-bound private credentials and unins
     await input.fill('native-plugin-fixture-private-key');
     await details.getByRole('button', { name: '保存凭据', exact: true }).click();
     await expect(details.getByRole('status')).toContainText('已保存 ANCHOR_NATIVE_MANAGEMENT_KEY');
-    expect((await request.get(credentialsUrl)).status()).toBe(401);
-    const savedResponse = await request.get(credentialsUrl, { headers });
+    const savedResponse = await request.get(credentialsUrl);
     expect(savedResponse.headers()['cache-control']).toContain('no-store');
     const saved = await savedResponse.json();
     expect(saved.targets[0].fields[0].state).toBe('configured');
     expect(JSON.stringify(saved)).not.toContain('native-plugin-fixture-private-key');
-    const other = await (await request.get(credentialsUrl, { headers: { Authorization: `Bearer ${otherKey}` } })).json();
-    expect(other.targets[0].fields[0].state).toBe('missing');
     await noSecretInBrowser(page, 'native-plugin-fixture-private-key');
     await screenshot(page, root, 'plugin-credentials-desktop', info);
     await page.reload();
@@ -100,16 +93,16 @@ test('native plugin directory install, owner-bound private credentials and unins
     await details.getByRole('button', { name: '清除 ANCHOR_NATIVE_MANAGEMENT_KEY', exact: true }).click();
     await details.getByRole('button', { name: '确认清除', exact: true }).click();
     await expect(details.getByRole('status')).toContainText('已清除 ANCHOR_NATIVE_MANAGEMENT_KEY');
-    expect((await (await request.get(credentialsUrl, { headers })).json()).targets[0].fields[0].state).toBe('missing');
+    expect((await (await request.get(credentialsUrl)).json()).targets[0].fields[0].state).toBe('missing');
     await details.getByRole('button', { name: '查看卸载影响', exact: true }).click();
     await details.getByRole('checkbox', { name: '确认卸载插件 native-lifecycle-plugin', exact: true }).check({ timeout: 30000 });
     await details.getByRole('checkbox', { name: '确认删除这个插件唯一的一份数据，不可恢复', exact: true }).check();
     await screenshot(page, root, 'plugin-uninstall-preflight', info);
     await details.getByRole('button', { name: '确认卸载', exact: true }).click();
     await expect(details).not.toBeVisible({ timeout: 30000 }); await expect(card).toHaveCount(0);
-    const catalog = await (await request.get(`${host.base}/plugins`, { headers })).json();
+    const catalog = await (await request.get(`${host.base}/plugins`)).json();
     expect(catalog.plugins.some((plugin: { id: string }) => plugin.id === 'native-lifecycle-plugin')).toBe(false);
-    expect((await (await request.get(`${host.base}/settings/model`, { headers })).json()).configured).toBe(false);
+    expect((await (await request.get(`${host.base}/settings/model`)).json()).configured).toBe(false);
     expect(problems).toEqual([]);
     await evidence(root, { scenario: 'plugin-lifecycle', provider_requests: 0, install_source: 'uploaded fixture directory',
       private_credential_owner_isolated: true, credential_cleared: true, uninstall_completed: true,
@@ -138,15 +131,15 @@ test('native run JSON, schedules and Graph or Run assistance preserve facts and 
     await expect(input).toHaveValue(JSON.stringify({ topic: 'default-topic' }, null, 2));
     await input.fill('[]'); await inputDialog.getByRole('button', { name: '开始运行', exact: true }).click();
     await expect(inputDialog.getByRole('alert')).toContainText('运行输入需要一个 JSON 对象');
-    expect((await (await request.get(`${host.base}/runs`, { headers })).json()).runs).toHaveLength(0);
+    expect((await (await request.get(`${host.base}/runs`)).json()).runs).toHaveLength(0);
     const runInput = { topic: 'native-json-input', nested: { count: 3 }, tags: ['a', 'b'] };
     await input.fill(JSON.stringify(runInput)); await inputDialog.getByRole('button', { name: '格式化 JSON', exact: true }).click();
     await expect(input).toHaveValue(JSON.stringify(runInput, null, 2));
     const triggered = page.waitForResponse(value => value.url() === `${host.base}/trigger` && value.request().method() === 'POST');
     await inputDialog.getByRole('button', { name: '开始运行', exact: true }).click();
     const accepted = await triggered; expect(accepted.status()).toBe(202); const run = (await accepted.json()).run as string;
-    await expect.poll(async () => (await (await request.get(`${host.base}/runs/${run}`, { headers })).json()).state.status, { timeout: 30000 }).toBe('completed');
-    const detail = await (await request.get(`${host.base}/runs/${run}`, { headers })).json();
+    await expect.poll(async () => (await (await request.get(`${host.base}/runs/${run}`)).json()).projection.outcome, { timeout: 30000 }).toBe('done');
+    const detail = await (await request.get(`${host.base}/runs/${run}`)).json();
     expect(detail.state.input).toEqual(runInput);
     await expect(page.locator('.execution-node.state-completed')).toHaveCount(1);
     await screenshot(page, root, 'run-json-completed', info);
@@ -158,7 +151,7 @@ test('native run JSON, schedules and Graph or Run assistance preserve facts and 
     await expect(page.getByLabel('发送给 Anchor Pilot', { exact: true })).toHaveValue(new RegExp(`#anchor/graph/${graphName}`));
     expect(submissions).toHaveLength(0);
     await screenshot(page, root, 'pilot-reference-draft', info);
-    expect((await (await request.get(`${host.base}/sessions`, { headers })).json()).sessions).toHaveLength(0);
+    expect((await (await request.get(`${host.base}/sessions`)).json()).sessions).toHaveLength(0);
 
     await page.getByRole('button', { name: '运行看板', exact: true }).click();
     await page.getByRole('button', { name: '添加计划', exact: true }).click();
@@ -168,7 +161,7 @@ test('native run JSON, schedules and Graph or Run assistance preserve facts and 
     await plans.getByRole('textbox', { name: '运行输入（可选 JSON）', exact: true }).fill('{"topic":"scheduled-topic"}');
     await plans.getByRole('button', { name: '保存计划', exact: true }).click();
     await expect(plans.getByRole('status')).toContainText('计划已创建');
-    const list = async () => (await (await request.get(`${host.base}/schedules`, { headers })).json()).schedules;
+    const list = async () => (await (await request.get(`${host.base}/schedules`)).json()).schedules;
     await expect.poll(async () => (await list()).length).toBe(1);
     const created = (await list())[0]; expect(created.rule).toEqual({ type: 'interval', seconds: 86400 });
     await plans.getByRole('button', { name: `编辑 ${graphName} 计划`, exact: true }).click();
@@ -194,8 +187,8 @@ test('native run JSON, schedules and Graph or Run assistance preserve facts and 
     await plans.getByRole('button', { name: `删除 ${graphName} 计划`, exact: true }).click();
     await plans.getByRole('button', { name: '确认删除', exact: true }).click();
     await expect.poll(async () => (await list()).length).toBe(0);
-    const retained = await (await request.get(`${host.base}/runs/${run}`, { headers })).json();
-    expect(retained.state.status).toBe('completed'); expect(retained.state.input).toEqual(runInput);
+    const retained = await (await request.get(`${host.base}/runs/${run}`)).json();
+    expect(retained.projection.outcome).toBe('done'); expect(retained.state.input).toEqual(runInput);
     expect(submissions).toHaveLength(0); expect(problems).toEqual([]);
     await evidence(root, { scenario: 'schedules-run-assistance', provider_requests: 0, graph: graphName, run,
       runtime_path: 'native Host / Kernel / deterministic Op', schedule_created_edited_paused_resumed_deleted: true,

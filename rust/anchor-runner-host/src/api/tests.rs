@@ -145,19 +145,32 @@ mod webhooks;
 mod wecom;
 
 #[test]
-fn api_keys_follow_json_array_and_strength_contract() {
-    let first = "a".repeat(32);
-    let second = "b".repeat(32);
-    assert_eq!(parse_api_keys("").unwrap(), Vec::<String>::new());
+fn installation_owner_is_local_unless_a_former_key_identity_was_recorded() {
+    let root = tempfile::tempdir().unwrap();
     assert_eq!(
-        parse_api_keys(&serde_json::to_string(&vec![first.clone(), second.clone()]).unwrap())
-            .unwrap(),
-        vec![first.clone(), second]
+        crate::api::sessions::installation_owner(root.path()).unwrap(),
+        "local"
     );
-    assert!(parse_api_keys("a,b").is_err());
-    assert!(parse_api_keys("[]").is_err());
-    assert!(parse_api_keys(&serde_json::to_string(&vec!["short"]).unwrap()).is_err());
-    assert!(parse_api_keys(&serde_json::to_string(&vec![first.clone(), first]).unwrap()).is_err());
+    let path = root.path().join("platform/installation-owner.json");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let legacy = format!("api:{}", "a".repeat(64));
+    std::fs::write(&path, json!({"format":1,"owner":legacy}).to_string()).unwrap();
+    assert_eq!(
+        crate::api::sessions::installation_owner(root.path()).unwrap(),
+        legacy
+    );
+    for invalid in [
+        json!({"format":1,"owner":"api:short"}),
+        json!({"format":1,"owner":"someone"}),
+        json!({"format":2,"owner":"local"}),
+        json!({"format":1,"owner":"local","extra":true}),
+    ] {
+        std::fs::write(&path, invalid.to_string()).unwrap();
+        assert!(
+            crate::api::sessions::installation_owner(root.path()).is_err(),
+            "{invalid}"
+        );
+    }
 }
 
 fn set_host_env(root: &std::path::Path, state_root: &std::path::Path) {
@@ -226,8 +239,7 @@ pub(super) fn fixture() -> (tempfile::TempDir, ApiState) {
         data_root: root.path().join("state"),
         workspace_root: root.path().join("workspaces"),
         graph_name: "fixture".into(),
-        loopback: true,
-        api_keys: Vec::new(),
+        owner: "local".into(),
         // Keep the schedule fixture outside data_root: static graph validation
         // must leave that root absent and otherwise unchanged.
         schedules,
@@ -584,47 +596,14 @@ async fn graph_crud_binds_plugin_resources_and_removes_stale_bundle_plugins() {
 }
 
 #[tokio::test]
-async fn non_loopback_projection_requires_configured_bearer_key() {
-    let (_root, mut state) = fixture();
-    state.loopback = false;
-    state.api_keys = vec!["secret-test-key".into()];
-    let app = router(state);
-    let denied = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .uri("/health")
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(denied.status(), StatusCode::UNAUTHORIZED);
-    let accepted = app
-        .oneshot(
-            Request::builder()
-                .uri("/health")
-                .header(header::AUTHORIZATION, "Bearer secret-test-key")
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(accepted.status(), StatusCode::OK);
-}
-
-#[tokio::test]
-async fn rust_host_serves_workbench_before_key_entry_but_keeps_api_protected() {
-    let (root, mut state) = fixture();
-    state.loopback = false;
-    state.api_keys = vec!["secret-test-key".into()];
+async fn rust_host_serves_the_workbench_and_api_without_a_key() {
+    let (root, state) = fixture();
     let web_root = root.path().join("web");
     std::fs::create_dir_all(web_root.join("assets")).unwrap();
     std::fs::write(web_root.join("index.html"), "<html>Anchor</html>").unwrap();
     std::fs::write(web_root.join("assets/app.js"), "console.log('app')").unwrap();
     let app = router_with_web_root(state, web_root);
-
-    for path in ["/", "/assets/app.js"] {
+    for path in ["/", "/assets/app.js", "/health", "/graphs"] {
         let response = app
             .clone()
             .oneshot(Request::builder().uri(path).body(Body::empty()).unwrap())
@@ -632,28 +611,6 @@ async fn rust_host_serves_workbench_before_key_entry_but_keeps_api_protected() {
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK, "{path}");
     }
-    let denied = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .uri("/graphs")
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(denied.status(), StatusCode::UNAUTHORIZED);
-    let accepted = app
-        .oneshot(
-            Request::builder()
-                .uri("/graphs")
-                .header(header::AUTHORIZATION, "Bearer secret-test-key")
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(accepted.status(), StatusCode::OK);
 }
 
 #[tokio::test]

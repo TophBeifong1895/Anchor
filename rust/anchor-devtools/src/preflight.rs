@@ -229,20 +229,11 @@ fn check_api_keys(env: &BTreeMap<String, String>) -> Result<(), String> {
         return Err(invalid());
     }
     let loopback = host == "localhost" || host.parse::<IpAddr>().is_ok_and(|ip| ip.is_loopback());
-    let raw_keys = value(env, "ANCHOR_API_KEYS", "").trim();
-    let keys: Vec<String> = if raw_keys.is_empty() {
-        Vec::new()
-    } else {
-        serde_json::from_str(raw_keys)
-            .map_err(|_| "ANCHOR_API_KEYS must be a JSON array of strings".to_owned())?
-    };
-    if keys.iter().any(|key| key.len() < 32)
-        || keys.iter().collect::<BTreeSet<_>>().len() != keys.len()
-    {
-        return Err("ANCHOR_API_KEYS must contain unique secrets of at least 32 bytes".into());
+    if !loopback {
+        return Err("ANCHOR_RUNNER_LISTEN must be a loopback address".into());
     }
-    if !loopback && keys.is_empty() {
-        return Err("ANCHOR_API_KEYS is required for non-loopback listeners".into());
+    if !matches!(value(env, "ANCHOR_API_KEYS", "").trim(), "" | "[]") {
+        return Err("ANCHOR_API_KEYS was removed: Anchor no longer has API key login".into());
     }
     Ok(())
 }

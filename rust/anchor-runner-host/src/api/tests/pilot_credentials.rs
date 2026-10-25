@@ -30,7 +30,7 @@ async fn private_call(
 }
 
 #[tokio::test]
-async fn pilot_credential_http_is_owner_bound_private_and_accepts_only_value() {
+async fn pilot_credential_http_is_private_and_accepts_only_value() {
     let _env = PROCESS_ENV.lock().await;
     struct Restore(Option<std::ffi::OsString>);
     impl Drop for Restore {
@@ -45,9 +45,8 @@ async fn pilot_credential_http_is_owner_bound_private_and_accepts_only_value() {
     }
     let _restore = Restore(std::env::var_os("ANCHOR_RUNNER_LIBRARY_ROOT"));
     unsafe { std::env::remove_var("ANCHOR_RUNNER_LIBRARY_ROOT") };
-    let (_root, mut state) = fixture();
-    let keys = ["a".repeat(32), "b".repeat(32)];
-    state.api_keys = keys.to_vec();
+    let (_root, state) = fixture();
+    let keys = ["a".repeat(32)];
     let headers = HeaderMap::from_iter([(
         header::AUTHORIZATION,
         format!("Bearer {}", keys[0]).parse().unwrap(),
@@ -89,10 +88,6 @@ async fn pilot_credential_http_is_owner_bound_private_and_accepts_only_value() {
     let list_uri = format!("/sessions/{}/credential-requests", session.id);
     let value_uri = format!("{list_uri}/{}/value", request.id);
     let app = router(state.clone());
-    let (status, _) = private_call(app.clone(), "GET", &list_uri, "invalid", "").await;
-    assert_eq!(status, StatusCode::UNAUTHORIZED);
-    let (status, _) = private_call(app.clone(), "GET", &list_uri, &keys[1], "").await;
-    assert_eq!(status, StatusCode::NOT_FOUND);
     let (status, body) = private_call(app.clone(), "GET", &list_uri, &keys[0], "").await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(
@@ -100,15 +95,6 @@ async fn pilot_credential_http_is_owner_bound_private_and_accepts_only_value() {
         "pending"
     );
     let value = "private-credential-value-for-http-fixture";
-    let (status, _) = private_call(
-        app.clone(),
-        "POST",
-        &value_uri,
-        &keys[1],
-        &json!({"value":value}).to_string(),
-    )
-    .await;
-    assert_eq!(status, StatusCode::NOT_FOUND);
     let (status, _) = private_call(
         app.clone(),
         "POST",

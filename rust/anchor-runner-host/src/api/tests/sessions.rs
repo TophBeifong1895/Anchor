@@ -1,11 +1,9 @@
 use super::*;
 
 #[tokio::test]
-async fn keyed_pilot_creation_replays_without_overwriting_and_isolates_owners() {
-    let (_root, mut state) = fixture();
+async fn keyed_pilot_creation_replays_without_overwriting() {
+    let (_root, state) = fixture();
     let first_owner = "a".repeat(32);
-    let second_owner = "b".repeat(32);
-    state.api_keys = vec![first_owner.clone(), second_owner.clone()];
     async fn create(app: Router, owner: &str, key: &str, body: Value) -> (StatusCode, Value) {
         let request = Request::builder()
             .method("POST")
@@ -30,7 +28,7 @@ async fn keyed_pilot_creation_replays_without_overwriting_and_isolates_owners() 
     .await;
     assert_eq!(status, StatusCode::CREATED, "{first}");
     let id = first["session"]["id"].as_str().unwrap();
-    let owner = format!("api:{:x}", Sha256::digest(first_owner.as_bytes()));
+    let owner = state.owner.clone();
     store(&state).unwrap().rename(&owner, id, "edited").unwrap();
     let (status, replay) = create(
         router(state.clone()),
@@ -50,15 +48,6 @@ async fn keyed_pilot_creation_replays_without_overwriting_and_isolates_owners() 
     )
     .await;
     assert_eq!(status, StatusCode::CONFLICT);
-    let (status, other) = create(
-        app.clone(),
-        &second_owner,
-        "create",
-        json!({"title":"original"}),
-    )
-    .await;
-    assert_eq!(status, StatusCode::CREATED);
-    assert_ne!(other["session"]["id"], id);
     let (_, other_operation) = create(
         app.clone(),
         &first_owner,
@@ -67,15 +56,6 @@ async fn keyed_pilot_creation_replays_without_overwriting_and_isolates_owners() 
     )
     .await;
     assert_ne!(other_operation["session"]["id"], id);
-    let (status, _) = authorized_call(
-        app.clone(),
-        "GET",
-        &format!("/sessions/{id}"),
-        &second_owner,
-        json!({}),
-    )
-    .await;
-    assert_eq!(status, StatusCode::NOT_FOUND);
     for key in ["", "has space"] {
         assert_eq!(
             create(app.clone(), &first_owner, key, json!({})).await.0,
@@ -382,103 +362,6 @@ async fn native_session_create_supports_the_existing_web_composers_empty_post() 
 }
 
 #[tokio::test]
-async fn native_private_sessions_are_isolated_without_changing_shared_pilot_visibility() {
-    let (root, mut state) = fixture();
-    let first = "a".repeat(32);
-    let second = "b".repeat(32);
-    state.api_keys = vec![first.clone(), second.clone()];
-    let app = router_with_web_root(state.clone(), root.path().join("web"));
-    let (status, _) = authorized_call(
-        app.clone(),
-        "POST",
-        "/sessions",
-        &first,
-        json!({"id":"responses-private"}),
-    )
-    .await;
-    assert_eq!(status, StatusCode::CREATED);
-    for (method, uri, body) in [
-        ("GET", "/sessions/responses-private", json!({})),
-        ("GET", "/sessions/responses-private/events", json!({})),
-        ("GET", "/sessions/responses-private/messages", json!({})),
-        ("GET", "/sessions/responses-private/turns", json!({})),
-        (
-            "GET",
-            "/sessions/responses-private/turns/missing",
-            json!({}),
-        ),
-        (
-            "GET",
-            "/sessions/responses-private/turns/missing/events",
-            json!({}),
-        ),
-        ("POST", "/sessions/responses-private/stop", json!({})),
-        (
-            "PUT",
-            "/sessions/responses-private",
-            json!({"title":"stolen"}),
-        ),
-        (
-            "POST",
-            "/sessions/responses-private/status",
-            json!({"status":"archived"}),
-        ),
-        (
-            "POST",
-            "/sessions/responses-private/turns",
-            json!({"message":"stolen"}),
-        ),
-        ("DELETE", "/sessions/responses-private", json!({})),
-    ] {
-        let (status, _) = authorized_call(app.clone(), method, uri, &second, body).await;
-        assert_eq!(status, StatusCode::NOT_FOUND, "{method} {uri}");
-    }
-    let (status, listing) =
-        authorized_call(app.clone(), "GET", "/sessions", &second, json!({})).await;
-    assert_eq!(status, StatusCode::OK);
-    assert_eq!(listing["sessions"], json!([]));
-    let (status, _) = authorized_call(
-        app.clone(),
-        "POST",
-        "/sessions",
-        &first,
-        json!({"id":"operator-shared"}),
-    )
-    .await;
-    assert_eq!(status, StatusCode::CREATED);
-    let (status, listing) =
-        authorized_call(app.clone(), "GET", "/sessions", &second, json!({})).await;
-    assert_eq!(status, StatusCode::OK);
-    assert_eq!(listing["sessions"][0]["id"], "operator-shared");
-    let (status, _) = authorized_call(
-        app.clone(),
-        "GET",
-        "/sessions/operator-shared",
-        "unknown",
-        json!({}),
-    )
-    .await;
-    assert_eq!(status, StatusCode::UNAUTHORIZED);
-    for filename in [
-        "sessions.sqlite",
-        "sessions.sqlite-wal",
-        "sessions.sqlite-shm",
-    ] {
-        let path = state.data_root.join("platform").join(filename);
-        if path.exists() {
-            let database = std::fs::read(path).unwrap();
-            for key in [&first, &second] {
-                assert!(
-                    !database
-                        .windows(key.len())
-                        .any(|window| window == key.as_bytes())
-                );
-            }
-        }
-    }
-}
-
-#[tokio::test]
 async fn native_session_storage_does_not_create_files_through_symlinked_parent() {
     use std::os::unix::fs::symlink;
     let (root, state) = fixture();
@@ -716,52 +599,4 @@ async fn native_sessions_reject_body_authority_invalid_updates_and_retained_run_
     )
     .await;
     assert_eq!(status, StatusCode::CONFLICT);
-}
-
-#[tokio::test]
-async fn enabling_authentication_does_not_publish_previous_loopback_private_sessions() {
-    let (root, mut state) = fixture();
-    let app = router_with_web_root(state.clone(), root.path().join("web"));
-    for identifier in ["responses-loopback-private", "operator-shared-before-auth"] {
-        let body = json!({"id":identifier}).to_string();
-        let (status, _) = call(app.clone(), "POST", "/sessions", Some(&body)).await;
-        assert_eq!(status, StatusCode::CREATED);
-    }
-    let first = "a".repeat(32);
-    let second = "b".repeat(32);
-    state.api_keys = vec![first.clone(), second.clone()];
-    let app = router_with_web_root(state.clone(), root.path().join("web"));
-    for key in [&first, &second] {
-        let (status, listing) =
-            authorized_call(app.clone(), "GET", "/sessions", key, json!({})).await;
-        assert_eq!(status, StatusCode::OK);
-        assert_eq!(listing["sessions"].as_array().unwrap().len(), 1);
-        assert_eq!(listing["sessions"][0]["id"], "operator-shared-before-auth");
-        let (status, _) = authorized_call(
-            app.clone(),
-            "GET",
-            "/sessions/responses-loopback-private",
-            key,
-            json!({}),
-        )
-        .await;
-        assert_eq!(status, StatusCode::NOT_FOUND);
-        let (status, _) = authorized_call(
-            app.clone(),
-            "POST",
-            "/sessions",
-            key,
-            json!({"id":"responses-loopback-private"}),
-        )
-        .await;
-        assert_eq!(status, StatusCode::CONFLICT);
-    }
-    let retained = SessionStore::open(state.data_root.join("platform/sessions.sqlite")).unwrap();
-    assert_eq!(
-        retained
-            .get("local", "responses-loopback-private")
-            .unwrap()
-            .id,
-        "responses-loopback-private"
-    );
 }

@@ -74,8 +74,8 @@ struct ApiState {
     application: RunApplication,
     model_configuration: Arc<crate::model_configuration::ModelConfiguration>,
     runtime_management: Arc<crate::runtime_management::RuntimeManagement>,
-    loopback: bool,
-    api_keys: Vec<String>,
+    /// The one identity every Web/API request of this installation acts as.
+    owner: String,
     schedules: ScheduleStoreHandle,
     pilots: crate::pilot_host::PilotService,
     channel_event_locks:
@@ -94,7 +94,6 @@ async fn auth(
     request: axum::extract::Request,
     next: Next,
 ) -> HttpResponse {
-    let oauth_request = is_oauth_path(request.uri().path());
     let key = headers
         .get(header::AUTHORIZATION)
         .and_then(|v| v.to_str().ok())
@@ -102,6 +101,8 @@ async fn auth(
         .unwrap_or("");
     // A gateway's callback key reaches only its own bot Graph's two
     // callback routes; a key of the earlier single-bot shape reaches nothing.
+    // Every other request is this installation's own: the Host listens on
+    // loopback only and has no login.
     let callback = state.application.channel_callback(key);
     if key.starts_with("anchor-channel-api-") || callback.is_some() {
         let allowed = callback.is_some_and(|callback| {
@@ -114,21 +115,6 @@ async fn auth(
             );
         }
         return next.run(request).await;
-    }
-    if state.api_keys.is_empty() && state.loopback {
-        return next.run(request).await;
-    }
-    if !state
-        .api_keys
-        .iter()
-        .any(|expected| constant_time_eq(expected, key))
-    {
-        let response = error(StatusCode::UNAUTHORIZED, "invalid API key");
-        return if oauth_request {
-            oauth::secure_oauth_response(response)
-        } else {
-            response
-        };
     }
     next.run(request).await
 }
@@ -173,16 +159,6 @@ fn is_oauth_path(path: &str) -> bool {
     segments.len() == 4 && segments[0] == "plugins" && matches!(segments[2], "oauth" | "authorize")
 }
 
-fn constant_time_eq(left: &str, right: &str) -> bool {
-    let (a, b) = (left.as_bytes(), right.as_bytes());
-    let mut difference = a.len() ^ b.len();
-    for index in 0..a.len().max(b.len()) {
-        difference |=
-            usize::from(a.get(index).copied().unwrap_or(0) ^ b.get(index).copied().unwrap_or(0));
-    }
-    difference == 0
-}
-
 pub async fn serve() -> io::Result<()> {
     let configured_bundle = env::var_os("ANCHOR_RUNNER_BUNDLE_ROOT")
         .filter(|path| !path.is_empty())
@@ -203,12 +179,19 @@ pub async fn serve() -> io::Result<()> {
         .parse::<std::net::SocketAddr>()
         .is_ok_and(|addr| addr.ip().is_loopback())
         || listen.starts_with("localhost:");
-    let api_keys = parse_api_keys(&env::var("ANCHOR_API_KEYS").unwrap_or_default())?;
-    if !loopback && api_keys.is_empty() {
+    // There is no login: the Host serves only this machine. Remote use goes
+    // through an SSH tunnel or another authenticated front of the operator's.
+    if !loopback {
         return Err(io::Error::other(
-            "ANCHOR_API_KEYS required on non-loopback bind",
+            "ANCHOR_RUNNER_LISTEN must be a loopback address; Anchor has no login, use an SSH tunnel for remote access",
         ));
     }
+    if env::var("ANCHOR_API_KEYS").is_ok_and(|value| !matches!(value.trim(), "" | "[]")) {
+        return Err(io::Error::other(
+            "ANCHOR_API_KEYS was removed: Anchor no longer has API key login; unset it",
+        ));
+    }
+    let owner = sessions::installation_owner(&data_root)?;
     let catalog_root = env::var_os("ANCHOR_RUNNER_CATALOG_ROOT")
         .map(PathBuf::from)
         .unwrap_or_else(|| {
@@ -312,8 +295,7 @@ pub async fn serve() -> io::Result<()> {
         data_root,
         workspace_root,
         graph_name,
-        loopback,
-        api_keys,
+        owner,
         schedules,
         pilots: crate::pilot_host::PilotService::default(),
         channel_event_locks: Default::default(),
@@ -970,22 +952,6 @@ async fn set_session_network(
         ))
     })
     .await
-}
-
-fn parse_api_keys(raw: &str) -> io::Result<Vec<String>> {
-    let raw = raw.trim();
-    if raw.is_empty() {
-        return Ok(Vec::new());
-    }
-    let keys = serde_json::from_str::<Vec<String>>(raw)
-        .map_err(|_| io::Error::other("ANCHOR_API_KEYS must be a JSON array of strings"))?;
-    let unique = keys.iter().collect::<HashSet<_>>().len() == keys.len();
-    if keys.is_empty() || keys.iter().any(|key| key.is_empty() || key.len() < 32) || !unique {
-        return Err(io::Error::other(
-            "ANCHOR_API_KEYS must contain unique secrets of at least 32 bytes",
-        ));
-    }
-    Ok(keys)
 }
 
 #[cfg(test)]

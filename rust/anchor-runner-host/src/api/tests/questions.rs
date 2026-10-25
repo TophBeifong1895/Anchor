@@ -128,12 +128,9 @@ async fn question_api_preserves_the_turn_and_validates_answer_retries() {
 }
 
 #[tokio::test]
-async fn question_api_is_owner_scoped_and_rejects_late_answers_after_recovery() {
-    let (root, mut state) = fixture();
-    state.loopback = false;
+async fn question_api_rejects_late_answers_after_recovery() {
+    let (root, state) = fixture();
     let first = "a".repeat(32);
-    let second = "b".repeat(32);
-    state.api_keys = vec![first.clone(), second.clone()];
     let app = router_with_web_root(state.clone(), root.path().join("web"));
     assert_eq!(
         question_call(
@@ -171,24 +168,6 @@ async fn question_api_is_owner_scoped_and_rejects_late_answers_after_recovery() 
         turn.id
     );
     let answer_uri = format!("{uri}/{}/answer", question.id);
-    assert_eq!(
-        question_call(app.clone(), "GET", &uri, &second, Value::Null)
-            .await
-            .0,
-        StatusCode::NOT_FOUND
-    );
-    assert_eq!(
-        question_call(
-            app.clone(),
-            "POST",
-            &answer_uri,
-            &second,
-            json!({"action":"decline"})
-        )
-        .await
-        .0,
-        StatusCode::NOT_FOUND
-    );
     recover_pilot_turns(&state).await.unwrap();
     let (status, saved) = question_call(app.clone(), "GET", &uri, &first, Value::Null).await;
     assert_eq!(status, StatusCode::OK, "{saved}");

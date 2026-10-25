@@ -345,38 +345,6 @@ fn inbound_id_for(event_id: &str) -> String {
     format!("wecom-{:x}", digest.finalize())
 }
 
-/// The progress stream is behind the same bearer authentication as every other
-/// channel route.
-#[tokio::test]
-async fn wecom_progress_requires_authentication() {
-    let (root, mut state) = fixture();
-    let _env = PROCESS_ENV.lock().await;
-    set_host_env(root.path(), &state.data_root);
-    state.loopback = false;
-    state.api_keys = vec!["p".repeat(32)];
-    let app = router_with_web_root(state.clone(), root.path().join("web"));
-    for (authorization, expected) in [
-        (None, StatusCode::UNAUTHORIZED),
-        (
-            Some(format!("Bearer {}", "w".repeat(32))),
-            StatusCode::UNAUTHORIZED,
-        ),
-    ] {
-        let mut builder = Request::builder()
-            .method("GET")
-            .uri("/channels/fixture/progress/message-1");
-        if let Some(value) = &authorization {
-            builder = builder.header(header::AUTHORIZATION, value);
-        }
-        let response = app
-            .clone()
-            .oneshot(builder.body(Body::empty()).unwrap())
-            .await
-            .unwrap();
-        assert_eq!(response.status(), expected);
-    }
-}
-
 /// A persistent assistant has no per-message Run, and its `reply` node is an Op
 /// without a Goose trace. The progress stream therefore has to locate the work
 /// node of the round that claimed this message through the association the

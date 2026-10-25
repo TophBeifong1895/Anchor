@@ -10,9 +10,8 @@ test('native Library health stays visible and broken dependencies or definitions
   test.setTimeout(60000);
   const root = await mkdtemp(join(tmpdir(), 'anchor-broken-plugin-browser-'));
   const key = 'shared-plugin-browser-key-fixture-32';
-  const headers = { Authorization: `Bearer ${key}` };
-  const session = 'broken-plugin-session';
-  const host = await nativeHost(root, { environment: { ANCHOR_API_KEYS: JSON.stringify([key]) } });
+    const session = 'broken-plugin-session';
+  const host = await nativeHost(root, { environment: { } });
   const directory = await fixturePlugin(host.environment.ANCHOR_RUNNER_LIBRARY_ROOT!);
   const manifestPath = join(directory, 'plugin.json');
   const original = await readFile(manifestPath, 'utf8');
@@ -20,9 +19,9 @@ test('native Library health stays visible and broken dependencies or definitions
   try {
     backend = host.start();
     await expect.poll(async () => {
-      try { return (await request.get(`${host.base}/health`, { headers })).status(); } catch { return 0; }
+      try { return (await request.get(`${host.base}/health`)).status(); } catch { return 0; }
     }, { timeout: 20000 }).toBe(200);
-    expect((await request.post(`${host.base}/sessions`, { headers, data: { id: session } })).status()).toBe(201);
+    expect((await request.post(`${host.base}/sessions`, { data: { id: session } })).status()).toBe(201);
     await page.addInitScript(({ key, session }) => {
       sessionStorage.setItem('anchor-api-key', key);
       localStorage.setItem('anchor:view', 'pilot');
@@ -41,8 +40,8 @@ test('native Library health stays visible and broken dependencies or definitions
     await writeFile(manifestPath, JSON.stringify({ ...JSON.parse(original), dependencies: { python: ['idna==3.7'] } }));
     await expect(card).toContainText('Plugin dependency view is missing or unusable', { timeout: 10000 });
     const row = (body: { plugins: { id: string; [key: string]: unknown }[] }) => body.plugins.find(plugin => plugin.id === 'browser-plugin')!;
-    const catalog = row(await (await request.get(`${host.base}/plugins`, { headers })).json());
-    const mounted = row(await (await request.get(`${host.base}/sessions/${session}/plugins`, { headers })).json());
+    const catalog = row(await (await request.get(`${host.base}/plugins`)).json());
+    const mounted = row(await (await request.get(`${host.base}/sessions/${session}/plugins`)).json());
     expect(catalog.definitionValid).toBe(true);
     expect(catalog.dependenciesReady).toBe(false);
     expect(catalog.available).toBe(false);
@@ -60,7 +59,7 @@ test('native Library health stays visible and broken dependencies or definitions
     await expect(broken).toContainText('Plugin is unavailable or malformed', { timeout: 10000 });
     await expect(broken.getByRole('switch')).toHaveAttribute('aria-checked', 'true');
     await switchPlugin('browser-plugin', false);
-    const revoked = row(await (await request.get(`${host.base}/sessions/${session}/plugins`, { headers })).json());
+    const revoked = row(await (await request.get(`${host.base}/sessions/${session}/plugins`)).json());
     expect(revoked.on).toBe(false);
     expect(revoked.definitionValid).toBe(false);
     expect(revoked.dependenciesReady).toBeNull();
@@ -122,19 +121,18 @@ test('web mounting keeps the active Goose Turn frozen, continues once with lates
     throw new Error(`unexpected Provider request ${position}`);
   });
   const key = 'plugin-mount-browser-operator-key-32';
-  const headers = { Authorization: `Bearer ${key}` };
-  const session = 'mount-browser-session';
+    const session = 'mount-browser-session';
   let backend: ChildProcess | undefined;
   const host = await nativeHost(root, { graphName: 'mount-browser',
     definition: { objective: 'original-task-marker', entry: 'idle', ops: { idle: { run: 'true' } },
       nodes: [{ id: 'idle', op: 'idle' }], edges: [] },
-    environment: { ...await gooseEnvironment(provider.url), ANCHOR_API_KEYS: JSON.stringify([key]),
+    environment: { ...await gooseEnvironment(provider.url),
       ANCHOR_NODE_TOOL_DISCLOSURE: '1' },
   });
   await fixturePlugin(host.environment.ANCHOR_RUNNER_LIBRARY_ROOT!);
   const base = host.base;
-  const turns = async () => (await (await request.get(`${base}/sessions/${session}/turns`, { headers })).json()).turns;
-  const events = async () => (await (await request.get(`${base}/sessions/${session}/events`, { headers })).json()).events;
+  const turns = async () => (await (await request.get(`${base}/sessions/${session}/turns`)).json()).turns;
+  const events = async () => (await (await request.get(`${base}/sessions/${session}/events`)).json()).events;
   const clickMount = async (on: boolean) => {
     const response = page.waitForResponse(value => value.url() === `${base}/sessions/${session}/plugins/browser-plugin`
       && value.request().method() === 'POST');
@@ -146,9 +144,9 @@ test('web mounting keeps the active Goose Turn frozen, continues once with lates
   try {
     backend = host.start();
     await expect.poll(async () => {
-      try { return (await request.get(`${base}/health`, { headers })).status(); } catch { return 0; }
+      try { return (await request.get(`${base}/health`)).status(); } catch { return 0; }
     }).toBe(200);
-    expect((await request.post(`${base}/sessions`, { headers, data: { id: session } })).status()).toBe(201);
+    expect((await request.post(`${base}/sessions`, { data: { id: session } })).status()).toBe(201);
     await page.addInitScript(({ key, session }) => {
       sessionStorage.setItem('anchor-api-key', key);
       localStorage.setItem('anchor:view', 'pilot');
@@ -188,7 +186,7 @@ test('web mounting keeps the active Goose Turn frozen, continues once with lates
     expect(completed[0].goose.session).toBe(completed[1].goose.session);
     const fresh = JSON.parse(await readFile(join(root, 'state/plugin-mounts', session, `${completed[0].id}.json`), 'utf8'));
     expect(fresh.mounts['browser-plugin']).toBe(true);
-    const continuationTrace = await (await request.get(`${base}/sessions/${session}/turns/${completed[0].id}/events`, { headers })).text();
+    const continuationTrace = await (await request.get(`${base}/sessions/${session}/turns/${completed[0].id}/events`)).text();
     expect(continuationTrace).not.toContain('"toolName":"graph_read"');
     expect(provider.calls).toHaveLength(6);
 

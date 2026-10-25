@@ -5,18 +5,15 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { nativeHost, repo, stop } from './fixtures/native-host';
 
-const key = 'native-configuration-owner-fixture-32';
-const other = 'native-configuration-other-fixture-32';
 const first = 'native-configuration-first-private';
 const second = 'native-configuration-second-private';
 const ambient = 'native-configuration-ambient-ignored';
-const headers = { Authorization: `Bearer ${key}` };
 
 test('native plugin connection settings save, test, rotate and clear without env changes or restart', async ({ page, request }, info) => {
   test.setTimeout(90000);
   const root = await mkdtemp(join(tmpdir(), 'anchor-plugin-configuration-'));
   const host = await nativeHost(root, { environment: {
-    ANCHOR_API_KEYS: JSON.stringify([key, other]), FIXTURE_TOKEN: ambient,
+    FIXTURE_TOKEN: ambient,
   } });
   const plugin = join(root, 'library/plugins/configured');
   await mkdir(join(plugin, 'bin'), { recursive: true });
@@ -34,8 +31,8 @@ test('native plugin connection settings save, test, rotate and clear without env
   const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
   let backend: ChildProcess | undefined;
   const endpoint = `${host.base}/plugins/configured/configuration`;
-  const metadata = async (authorization = headers) => {
-    const response = await request.get(endpoint, { headers: authorization });
+  const metadata = async () => {
+    const response = await request.get(endpoint);
     expect(response.status(), host.logs).toBe(200);
     return response.json();
   };
@@ -49,10 +46,10 @@ test('native plugin connection settings save, test, rotate and clear without env
   };
   try {
     backend = host.start();
-    await expect(async () => expect((await request.get(`${host.base}/health`, { headers })).status(), host.logs).toBe(200)).toPass({ timeout: 20000 });
-    await page.addInitScript(key => {
-      sessionStorage.setItem('anchor-api-key', key); localStorage.setItem('anchor:view', 'plugins');
-    }, key);
+    await expect(async () => expect((await request.get(`${host.base}/health`)).status(), host.logs).toBe(200)).toPass({ timeout: 20000 });
+    await page.addInitScript(() => {
+      localStorage.setItem('anchor:view', 'plugins');
+    });
     await page.goto(host.base);
     const card = page.locator('.plugin-card').filter({ has: page.getByRole('heading', { name: '连接配置验收插件', exact: true }) });
     await card.getByRole('button', { name: '查看 连接配置验收插件 的详情', exact: true }).click();
@@ -66,8 +63,6 @@ test('native plugin connection settings save, test, rotate and clear without env
     await expect(configuration).toContainText('配置已保存');
     await expect(secret).toHaveValue('');
     expect((await metadata()).revision).toBe(1);
-    const otherConfiguration = await metadata({ Authorization: `Bearer ${other}` });
-    expect(otherConfiguration.fields.find((field: { id: string }) => field.id === 'api_key').state).toBe('missing');
     await configuration.getByRole('button', { name: '测试连接', exact: true }).click();
     const results = configuration.getByRole('status').filter({ hasText: '连接通过' });
     await expect(results).toContainText('remote', { timeout: 30000 });

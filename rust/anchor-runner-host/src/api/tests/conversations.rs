@@ -209,7 +209,10 @@ async fn sessions_share_a_graph_and_a_handed_over_turn_protects_its_predecessor(
         "{previous}"
     );
     let (_, current) = call(app.clone(), "GET", &format!("/runs/{next_run}"), None).await;
-    assert!(current["projection"].get("superseded").is_none(), "{current}");
+    assert!(
+        current["projection"].get("superseded").is_none(),
+        "{current}"
+    );
     let (_, detail) = call(app.clone(), "GET", &format!("/runs/{next_run}"), None).await;
     assert_eq!(detail["state"]["trigger"]["session"], "alice");
     assert_eq!(detail["state"]["trigger"]["reply_node"], "work");

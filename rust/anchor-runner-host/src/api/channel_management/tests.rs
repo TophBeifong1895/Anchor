@@ -5,7 +5,6 @@ use axum::{
     http::Request,
 };
 use serde_json::Value;
-use sha2::{Digest, Sha256};
 use std::sync::Arc;
 use tower::ServiceExt;
 
@@ -32,8 +31,7 @@ fn fixture() -> (tempfile::TempDir, ApiState, Arc<FakeChannels>) {
         graph_name: String::new(),
         application: RunApplication::new(root.path().join("state"), root.path().into())
             .with_channel_management(port.clone()),
-        loopback: false,
-        api_keys: vec!["a".repeat(32), "b".repeat(32)],
+        owner: "local".into(),
         schedules: super::super::schedules::ScheduleStore::open(root.path().join("schedules.json"))
             .unwrap(),
         pilots: Default::default(),
@@ -71,26 +69,18 @@ async fn call(
 }
 
 #[tokio::test]
-async fn channel_management_http_is_authenticated_owner_bound_and_checks_expected_binding() {
+async fn channel_management_http_is_owner_bound_and_checks_expected_binding() {
     let _guard = crate::PROCESS_ENV_LOCK.lock().await;
     let (_root, state, port) = fixture();
     let key = "a".repeat(32);
     let path = "/graphs/task/channel";
-    assert_eq!(
-        call(&state, "GET", path, None, json!({})).await.0,
-        StatusCode::UNAUTHORIZED
-    );
     let members = json!({"users":["alice"],"send_users":["alice"]});
     let (status, result) = call(&state, "PUT", path, Some(&key), members).await;
     assert_eq!(status, StatusCode::OK, "{result}");
     let saved = port.get("task").unwrap();
-    let actual_owner = format!("api:{:x}", Sha256::digest(key.as_bytes()));
-    assert_eq!(saved.owner, actual_owner);
+    assert_eq!(saved.owner, "local");
     // The Plugin comes from the Graph, never from the request.
     assert_eq!(saved.binding.plugin, "gateway");
-    let (_, other) = call(&state, "GET", path, Some(&"b".repeat(32)), json!({})).await;
-    assert_eq!(other["owner_matches"], false);
-    assert!(other.get("binding").is_none());
     let binding = serde_json::to_value(&saved.binding).unwrap();
     let mut stale = binding.clone();
     stale["users"] = json!(["bob"]);

@@ -1,14 +1,13 @@
 /** @vitest-environment jsdom */
 import { webcrypto } from 'node:crypto';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import { api, bearerKey } from './api';
+import { api } from './api';
 
-vi.mock('./api', () => ({ api: vi.fn(), bearerKey: vi.fn(() => 'owner-a') }));
+vi.mock('./api', () => ({ api: vi.fn() }));
 
 beforeEach(() => {
   vi.resetModules();
   vi.mocked(api).mockReset();
-  vi.mocked(bearerKey).mockReturnValue('owner-a');
   localStorage.clear();
   vi.stubGlobal('crypto', webcrypto);
 });
@@ -31,17 +30,6 @@ it('retains a creation key across failure and reload, clears it only on success'
   expect(localStorage.length).toBe(0);
   await createPilotSession();
   expect(vi.mocked(api).mock.calls[2][4]).not.toEqual(headers);
-});
-
-it('does not reuse another owner creation key', async () => {
-  const { createPilotSession } = await import('./pilotSessionCreation');
-  vi.mocked(api).mockRejectedValueOnce(new Error('response lost'));
-  await expect(createPilotSession()).rejects.toThrow();
-  const first = vi.mocked(api).mock.calls[0][4];
-  vi.mocked(bearerKey).mockReturnValue('owner-b');
-  vi.mocked(api).mockResolvedValue({ session: { id: 'second' } });
-  await createPilotSession();
-  expect(vi.mocked(api).mock.calls[1][4]).not.toEqual(first);
 });
 
 it('keeps the key when a successful response lacks the created session identity', async () => {

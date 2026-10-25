@@ -331,30 +331,20 @@ fn first_start_needs_no_model_environment_and_ignores_retired_service_fields() {
 }
 
 #[test]
-fn non_loopback_listeners_require_valid_unique_private_api_keys() {
+fn non_loopback_listeners_are_refused_and_leftover_api_keys_are_reported() {
     let mut fixture = Fixture::new();
     for listen in ["0.0.0.0:8077", "[::]:8077", "provider.example:8077"] {
         fixture.set("ANCHOR_RUNNER_LISTEN", listen);
-        fixture.rejects("non-loopback");
+        fixture.rejects("loopback");
     }
-    fixture.set(
-        "ANCHOR_API_KEYS",
-        "[\"fixture-api-secret-with-at-least-32-bytes\"]",
-    );
+    fixture.set("ANCHOR_RUNNER_LISTEN", "127.0.0.1:8077");
     fixture.check().unwrap();
-    for keys in [
-        "not-json-with-private-secret",
-        "{}",
-        "[42]",
-        "[\"short-private-secret\"]",
-        "[\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"]",
-    ] {
-        fixture.set("ANCHOR_API_KEYS", keys);
-        let error = fixture.check().unwrap_err();
-        assert!(error.contains("ANCHOR_API_KEYS"));
-        assert!(!error.contains(keys));
-        assert!(!error.contains("private-secret"));
-    }
+    // A leftover key setting is reported, without echoing it.
+    let leftover = "[\"fixture-api-secret-with-at-least-32-bytes\"]";
+    fixture.set("ANCHOR_API_KEYS", leftover);
+    let error = fixture.check().unwrap_err();
+    assert!(error.contains("ANCHOR_API_KEYS"));
+    assert!(!error.contains("fixture-api-secret"));
     fixture.set("ANCHOR_API_KEYS", "[]");
     for listen in ["localhost:8077", "127.1.2.3:8077", "[::1]:8077"] {
         fixture.set("ANCHOR_RUNNER_LISTEN", listen);

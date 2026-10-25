@@ -132,25 +132,6 @@ async fn malformed_plugin_is_unavailable_without_exposing_manifest_values() {
 }
 
 #[tokio::test]
-async fn plugin_routes_require_bearer_auth_when_configured() {
-    // The Library root is process configuration: another test that sets
-    // `ANCHOR_RUNNER_LIBRARY_ROOT` must not be able to swap this test's Library
-    // out from under it.
-    let _environment = PROCESS_ENV.lock().await;
-    let (_root, mut state) = fixture();
-    write_plugin(&state);
-    let key = "k".repeat(32);
-    state.loopback = false;
-    state.api_keys = vec![key.clone()];
-    let app = router(state);
-    let (status, _) = raw(app.clone(), "GET", "/plugins", None).await;
-    assert_eq!(status, StatusCode::UNAUTHORIZED);
-    let (status, _) = raw(app, "GET", "/plugins", Some(&format!("Bearer {key}"))).await;
-    assert_eq!(status, StatusCode::OK);
-}
-
-#[cfg(unix)]
-#[tokio::test]
 async fn plugin_internal_symlink_is_rejected() {
     use std::os::unix::fs::symlink;
     // The Library root is process configuration: another test that sets

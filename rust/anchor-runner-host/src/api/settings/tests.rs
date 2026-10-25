@@ -37,29 +37,12 @@ async fn request(
 }
 
 #[tokio::test]
-async fn named_provider_settings_require_host_auth_and_keep_secrets_private() {
-    let (_root, mut state) = crate::api::tests::fixture();
+async fn named_provider_settings_keep_secrets_private() {
+    let (_root, state) = crate::api::tests::fixture();
     let token = "a".repeat(32);
-    state.api_keys = vec![token.clone()];
     let configuration = state.model_configuration.clone();
     let app = crate::api::router(state);
     let body = json!({"endpoint":"https://provider.example/v1","wire_api":"chat","flash":"fast","pro":"strong","api_key":{"action":"set","value":"slot-private-key"}});
-    for (method, path, body) in [
-        ("GET", "/settings/model", None),
-        (
-            "PUT",
-            "/settings/model/providers/default",
-            Some(body.clone()),
-        ),
-        (
-            "POST",
-            "/settings/model/providers/default/test",
-            Some(json!({"tier":"flash"})),
-        ),
-    ] {
-        let (status, value) = request(app.clone(), method, path, None, body).await;
-        assert_eq!(status, StatusCode::UNAUTHORIZED, "{value}");
-    }
     assert_eq!(
         configuration.status().unwrap()["providers"]["default"]["source"],
         "empty"
@@ -132,9 +115,8 @@ async fn named_provider_http_test_calls_only_requested_model_without_saving() {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let endpoint = format!("http://{}/v1", listener.local_addr().unwrap());
     let server = tokio::spawn(async move { axum::serve(listener, provider).await.unwrap() });
-    let (_root, mut state) = crate::api::tests::fixture();
+    let (_root, state) = crate::api::tests::fixture();
     let token = "a".repeat(32);
-    state.api_keys = vec![token.clone()];
     let configuration = state.model_configuration.clone();
     let before = configuration.status().unwrap();
     let app = crate::api::router(state);

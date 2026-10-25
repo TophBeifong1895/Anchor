@@ -1,6 +1,5 @@
 use super::*;
 use anchor_platform_session::{CreateSession, Session, SessionError, SessionStatus, SessionStore};
-use sha2::{Digest, Sha256};
 use std::path::Component;
 
 pub(super) fn store(state: &ApiState) -> Result<SessionStore, HttpResponse> {
@@ -73,10 +72,39 @@ pub(super) fn private_owner(state: &ApiState, headers: &HeaderMap) -> String {
     if let Some(callback) = state.application.channel_callback(key) {
         return callback.owner;
     }
-    if state.api_keys.is_empty() && state.loopback {
-        return "local".to_owned();
+    state.owner.clone()
+}
+
+/// The identity this installation's Sessions, credentials and bots belong to.
+///
+/// A new installation is `local`. An installation that used API key login
+/// before it was removed keeps the identity its data was saved under, recorded
+/// once in `platform/installation-owner.json`; nothing else writes that file.
+pub(crate) fn installation_owner(data_root: &std::path::Path) -> std::io::Result<String> {
+    #[derive(serde::Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Saved {
+        format: u32,
+        owner: String,
     }
-    format!("api:{:x}", Sha256::digest(key.as_bytes()))
+    let path = data_root.join("platform/installation-owner.json");
+    let bytes = match std::fs::read(&path) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok("local".into()),
+        Err(_) => return Err(std::io::Error::other("installation owner is unreadable")),
+    };
+    let saved: Saved = serde_json::from_slice(&bytes)
+        .map_err(|_| std::io::Error::other("installation owner is invalid"))?;
+    let legacy = saved.owner.strip_prefix("api:").is_some_and(|digest| {
+        digest.len() == 64
+            && digest
+                .bytes()
+                .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
+    });
+    if saved.format != 1 || !(saved.owner == "local" || legacy) {
+        return Err(std::io::Error::other("installation owner is invalid"));
+    }
+    Ok(saved.owner)
 }
 
 pub(super) fn idempotency_key(headers: &HeaderMap) -> Result<Option<String>, HttpResponse> {

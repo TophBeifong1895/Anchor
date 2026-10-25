@@ -25,8 +25,6 @@ async fn operation_call(
 async fn keyed_responses_reuse_session_turn_and_output_across_reopen_and_continuation() {
     let (root, mut state) = fixture();
     let first_owner = "a".repeat(32);
-    let second_owner = "b".repeat(32);
-    state.api_keys = vec![first_owner.clone(), second_owner.clone()];
     let app = router(state.clone());
     let body = json!({"input":"hello"});
     let (status, first) = operation_call(
@@ -88,16 +86,6 @@ async fn keyed_responses_reuse_session_turn_and_output_across_reopen_and_continu
     )
     .await;
     assert_eq!(status, StatusCode::CONFLICT);
-    let (status, other) = operation_call(
-        reloaded.clone(),
-        "/v1/responses",
-        &second_owner,
-        "first",
-        body.clone(),
-    )
-    .await;
-    assert_eq!(status, StatusCode::OK);
-    assert_ne!(other["id"], first["id"]);
     let (_, distinct) = operation_call(
         reloaded.clone(),
         "/v1/responses",
@@ -107,7 +95,7 @@ async fn keyed_responses_reuse_session_turn_and_output_across_reopen_and_continu
     )
     .await;
     assert_ne!(distinct["id"], first["id"]);
-    let owner = format!("api:{:x}", Sha256::digest(first_owner.as_bytes()));
+    let owner = state.owner.clone();
     let sessions = store(&state).unwrap();
     let own = sessions.list(&owner).unwrap();
     assert_eq!(own.len(), 2);
@@ -177,12 +165,10 @@ async fn keyed_call(
 }
 
 #[tokio::test]
-async fn responses_json_continuation_and_bearer_owner_isolation() {
-    let (root, mut state) = fixture();
-    state.api_keys = vec!["a".repeat(32), "b".repeat(32)];
+async fn responses_json_continuation() {
+    let (root, state) = fixture();
     let app = router_with_web_root(state, root.path().join("web"));
     let first = "a".repeat(32);
-    let second = "b".repeat(32);
     let (status, headers, body) = keyed_call(
         app.clone(),
         "POST",
@@ -206,15 +192,6 @@ async fn responses_json_continuation_and_bearer_owner_isolation() {
     );
     let response_id = first_response["id"].as_str().unwrap();
 
-    let (status, _, _) = keyed_call(
-        app.clone(),
-        "POST",
-        "/v1/responses",
-        &second,
-        &json!({"input":"cross-key","previous_response_id":response_id}).to_string(),
-    )
-    .await;
-    assert_eq!(status, StatusCode::NOT_FOUND);
     let (status, _, _) = keyed_call(
         app.clone(),
         "POST",
@@ -246,8 +223,7 @@ async fn responses_json_continuation_and_bearer_owner_isolation() {
 
 #[tokio::test]
 async fn responses_sse_has_protocol_events_and_text_delta() {
-    let (root, mut state) = fixture();
-    state.api_keys = vec!["a".repeat(32)];
+    let (root, state) = fixture();
     let app = router_with_web_root(state, root.path().join("web"));
     let (status, headers, body) = keyed_call(
         app,
@@ -276,8 +252,7 @@ async fn responses_sse_has_protocol_events_and_text_delta() {
 
 #[tokio::test]
 async fn responses_rejects_invalid_fields_and_input_shapes() {
-    let (root, mut state) = fixture();
-    state.api_keys = vec!["a".repeat(32)];
+    let (root, state) = fixture();
     let app = router_with_web_root(state, root.path().join("web"));
     for body in [
         "{",
@@ -310,24 +285,5 @@ async fn responses_rejects_invalid_fields_and_input_shapes() {
     )
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "{response}");
-    let missing_auth = Request::builder()
-        .method("POST")
-        .uri("/v1/responses")
-        .header(header::CONTENT_TYPE, "application/json")
-        .body(Body::from(r#"{"input":"unauthorized"}"#))
-        .unwrap();
-    assert_eq!(
-        app.clone().oneshot(missing_auth).await.unwrap().status(),
-        StatusCode::UNAUTHORIZED
-    );
-    let (status, _, _) = keyed_call(
-        app.clone(),
-        "POST",
-        "/v1/responses",
-        &"c".repeat(32),
-        r#"{"input":"unauthorized"}"#,
-    )
-    .await;
-    assert_eq!(status, StatusCode::UNAUTHORIZED);
     assert!(!root.path().join("state/platform/pilot").exists());
 }

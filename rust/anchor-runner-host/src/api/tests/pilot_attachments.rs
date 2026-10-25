@@ -25,12 +25,9 @@ async fn raw(app: Router, uri: &str, key: &str) -> (StatusCode, HeaderMap, Vec<u
 }
 
 #[tokio::test]
-async fn pilot_attachments_download_requires_owner_and_frozen_turn_identity() {
-    let (root, mut state) = fixture();
-    state.loopback = false;
+async fn pilot_attachments_download_requires_the_frozen_turn_identity() {
+    let (root, state) = fixture();
     let first = "a".repeat(32);
-    let second = "b".repeat(32);
-    state.api_keys = vec![first.clone(), second.clone()];
     let mut headers = HeaderMap::new();
     headers.insert(
         header::AUTHORIZATION,
@@ -100,14 +97,6 @@ async fn pilot_attachments_download_requires_owner_and_frozen_turn_identity() {
             .to_str()
             .unwrap()
             .contains("%E4%B8%AD")
-    );
-    assert_eq!(
-        raw(app.clone(), &reference.url, &second).await.0,
-        StatusCode::NOT_FOUND
-    );
-    assert_eq!(
-        raw(app.clone(), &reference.url, "wrong-key").await.0,
-        StatusCode::UNAUTHORIZED
     );
     assert_eq!(
         raw(

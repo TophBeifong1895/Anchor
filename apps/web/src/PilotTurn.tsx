@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Anchor, LoaderCircle } from 'lucide-react';
 import { Markdown } from './markdown';
-import { api, bearerKey, recoverBearerKey, setBearerKey } from './api';
+import { api } from './api';
 import { PilotQuestion } from './PilotQuestion';
 import { mergeQuestions, questionsPath, type Question } from './pilotQuestions';
 import { PilotAttachments } from './PilotAttachments';
@@ -125,18 +125,10 @@ export function PilotTurn({ turn, saved = false, stopping = false, onComplete, o
         let watchdog = window.setTimeout(() => attempt.abort(), 30000);
         let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
         try {
-          const headers: Record<string, string> = { Accept: 'text/event-stream' };
-          const key = bearerKey();
-          if (key) headers.Authorization = `Bearer ${key}`;
           const response = await fetch(`/sessions/${encodeURIComponent(turn.session)}/turns/${turn.id}/events?after=${last}`, {
-            headers, signal: AbortSignal.any([controller.signal, attempt.signal]),
+            headers: { Accept: 'text/event-stream' }, signal: AbortSignal.any([controller.signal, attempt.signal]),
           });
           if (ended) return;
-          if (response.status === 401) {
-            const entered = await recoverBearerKey(key);
-            if (!entered) { setConnection('需要 API key 才能读取执行记录。'); return; }
-            setBearerKey(entered); continue;
-          }
           if (!response.ok || !response.body) throw new Error(`HTTP ${response.status}`);
           setConnection('');
           reader = response.body.getReader();

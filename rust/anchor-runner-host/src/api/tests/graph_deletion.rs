@@ -131,37 +131,3 @@ async fn conditional_graph_delete_http_rejects_malformed_headers_without_deletin
     let (status, _) = call(app, "GET", "/graphs/missing/delete-precondition", None).await;
     assert_eq!(status, StatusCode::NOT_FOUND);
 }
-
-#[tokio::test]
-async fn conditional_graph_delete_http_preserves_host_authentication() {
-    let (_root, mut state) = fixture();
-    let key = "operator-key-".repeat(4);
-    state.api_keys = vec![key.clone()];
-    let app = router(state.clone());
-    let (status, _) = call(
-        app.clone(),
-        "GET",
-        "/graphs/fixture/delete-precondition",
-        None,
-    )
-    .await;
-    assert_eq!(status, StatusCode::UNAUTHORIZED);
-    let response = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .uri("/graphs/fixture/delete-precondition")
-                .header(header::AUTHORIZATION, format!("Bearer {key}"))
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(response.status(), StatusCode::OK);
-    let body = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
-    let snapshot: Value = serde_json::from_slice(&body).unwrap();
-    let expected = format!("\"{}\"", snapshot["precondition"].as_str().unwrap());
-    let (status, _) = conditional_delete(app, "fixture", &[&expected]).await;
-    assert_eq!(status, StatusCode::UNAUTHORIZED);
-    assert!(state.bundle_root.is_dir());
-}

@@ -65,8 +65,7 @@ fn candidate(name: &str) -> Value {
 }
 
 #[tokio::test]
-async fn standalone_install_credentials_rotation_update_and_uninstall_are_private_and_owner_bound()
-{
+async fn standalone_install_credentials_rotation_update_and_uninstall_keep_secrets_private() {
     let _env = crate::PROCESS_ENV_LOCK.lock().await;
     struct Restore(Option<std::ffi::OsString>);
     impl Drop for Restore {
@@ -83,19 +82,8 @@ async fn standalone_install_credentials_rotation_update_and_uninstall_are_privat
     unsafe {
         std::env::remove_var("ANCHOR_RUNNER_LIBRARY_ROOT");
     }
-    let (_root, mut state) = crate::api::tests::fixture();
-    state.api_keys = vec!["a".repeat(32), "b".repeat(32)];
-    let key = state.api_keys[0].clone();
-    let other = state.api_keys[1].clone();
-    let (status, _) = call(
-        &state,
-        "GET",
-        "/plugins/managed-demo/credentials",
-        "invalid",
-        json!({}),
-    )
-    .await;
-    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    let (_root, state) = crate::api::tests::fixture();
+    let key = "a".repeat(32);
     let (status, review) = call(
         &state,
         "POST",
@@ -112,24 +100,6 @@ async fn standalone_install_credentials_rotation_update_and_uninstall_are_privat
         .unwrap()
         .count();
     assert_eq!(staged, 1);
-    assert_eq!(
-        call(&state, "GET", "/plugins/preflights", &other, json!({}))
-            .await
-            .1["reviews"],
-        json!([])
-    );
-    assert_eq!(
-        call(
-            &state,
-            "GET",
-            &format!("/plugins/preflights/{}", review["token"].as_str().unwrap()),
-            &other,
-            json!({})
-        )
-        .await
-        .0,
-        StatusCode::NOT_FOUND
-    );
     assert!(
         !crate::library_root(&state.catalog_root)
             .join("plugins/managed-demo")
@@ -139,8 +109,6 @@ async fn standalone_install_credentials_rotation_update_and_uninstall_are_privat
         "/plugins/preflights/{}/confirm",
         review["token"].as_str().unwrap()
     );
-    let (status, _) = call(&state, "POST", &uri, &other, json!({"confirm":true})).await;
-    assert_eq!(status, StatusCode::NOT_FOUND);
     let guard = state.application.graph_catalog_mutation_guard().await;
     let (status, result) = call(&state, "POST", &uri, &key, json!({"confirm":true})).await;
     assert_eq!(result["state"], "running");
@@ -178,25 +146,6 @@ async fn standalone_install_credentials_rotation_update_and_uninstall_are_privat
     assert_eq!(status, StatusCode::CREATED);
     let session_id = created["session"]["id"].as_str().unwrap();
     assert!(session_id.starts_with("pilot-private-"));
-    assert_eq!(
-        call(
-            &state,
-            "GET",
-            &format!("/sessions/{session_id}"),
-            &other,
-            json!({})
-        )
-        .await
-        .0,
-        StatusCode::NOT_FOUND
-    );
-    assert!(
-        !call(&state, "GET", "/sessions", &other, json!({}))
-            .await
-            .1
-            .to_string()
-            .contains(session_id)
-    );
     assert!(
         call(&state, "GET", "/sessions", &key, json!({}))
             .await
@@ -205,7 +154,7 @@ async fn standalone_install_credentials_rotation_update_and_uninstall_are_privat
             .contains(session_id)
     );
     let session = sessions.get(&owner, session_id).unwrap();
-    assert!(sessions.get("local", session_id).is_err());
+    assert_eq!(owner, "local");
     let (turn, _) = sessions
         .create_turn(&owner, &session.id, "credential-fixture", Some("configure"))
         .unwrap();
@@ -258,10 +207,6 @@ async fn standalone_install_credentials_rotation_update_and_uninstall_are_privat
         .await
         .0,
         StatusCode::CONFLICT
-    );
-    assert_eq!(
-        call(&state, "GET", path, &other, json!({})).await.1["targets"][0]["fields"][0]["state"],
-        "missing"
     );
     assert_eq!(
         call(

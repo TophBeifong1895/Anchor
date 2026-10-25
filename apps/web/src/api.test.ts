@@ -1,114 +1,27 @@
 /** @vitest-environment jsdom */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { api, apiBlob, bearerKey, registerApiKeyPrompt, setBearerKey, verifyBearerKey } from './api';
+import { api, apiBlob } from './api';
 
-describe('Anchor API key recovery', () => {
+describe('Anchor API transport', () => {
   let fetchMock: ReturnType<typeof vi.fn>;
-  let unregister: (() => void) | undefined;
-  beforeEach(() => {
-    sessionStorage.clear();
-    fetchMock = vi.fn();
-    vi.stubGlobal('fetch', fetchMock);
-  });
-  afterEach(() => { unregister?.(); unregister = undefined; vi.unstubAllGlobals(); });
+  beforeEach(() => { fetchMock = vi.fn(); vi.stubGlobal('fetch', fetchMock); });
+  afterEach(() => { vi.unstubAllGlobals(); });
 
-  it('recovers from an invalid cached header and retries with the entered key', async () => {
-    sessionStorage.setItem('anchor-api-key', '旧的中文密钥');
-    fetchMock.mockResolvedValueOnce(Response.json({ error: 'unauthorized' }, { status: 401 }))
-      .mockResolvedValueOnce(Response.json({ graphs: [] }));
-    unregister = registerApiKeyPrompt(async () => 'valid-key');
-
-    await expect(api('/graphs')).resolves.toEqual({ graphs: [] });
+  it('sends no credentials and surfaces the server message on failure', async () => {
+    fetchMock.mockResolvedValueOnce(Response.json({ error: 'no such graph' }, { status: 404 }));
+    await expect(api('/graphs/missing')).rejects.toThrow('no such graph');
     expect(new Headers(fetchMock.mock.calls[0][1].headers).has('Authorization')).toBe(false);
-    expect(new Headers(fetchMock.mock.calls[1][1].headers).get('Authorization')).toBe('Bearer valid-key');
-    expect(bearerKey()).toBe('valid-key');
   });
 
-  it('recovers blob downloads through the same key dialog and keeps the key out of URLs', async () => {
-    setBearerKey('expired-key');
-    const path = '/sessions/s/turns/t/attachments/a?download=1';
-    fetchMock.mockResolvedValueOnce(Response.json({ error: 'unauthorized' }, { status: 401 }))
-      .mockResolvedValueOnce(new Response('immutable file', { headers: { 'Content-Type': 'text/csv' } }));
-    unregister = registerApiKeyPrompt(async () => 'new-key');
-    const blob = await apiBlob(path);
-    expect(await blob.text()).toBe('immutable file');
-    expect(blob.type).toBe('text/csv');
-    expect(fetchMock.mock.calls.map(call => call[0])).toEqual([path, path]);
-    expect(new Headers(fetchMock.mock.calls[1][1].headers).get('Authorization')).toBe('Bearer new-key');
+  it('treats an empty success as no body and a missing body as a transport problem', async () => {
+    fetchMock.mockResolvedValueOnce(new Response(null, { status: 204 }));
+    await expect(api('/runs/x', 'DELETE')).resolves.toBeUndefined();
+    fetchMock.mockResolvedValueOnce(new Response('', { status: 200 }));
+    await expect(api('/graphs')).rejects.toThrow('未返回有效 JSON');
   });
 
-  it('preserves version preconditions across authentication retry and keeps Authorization managed', async () => {
-    setBearerKey('expired-key');
-    fetchMock.mockResolvedValueOnce(Response.json({ error: 'unauthorized' }, { status: 401 }))
-      .mockResolvedValueOnce(new Response(null, { status: 204 }));
-    unregister = registerApiKeyPrompt(async () => 'new-key');
-    await api('/graphs/g', 'DELETE', undefined, undefined, { 'If-Match': '"version-1"', authorization: 'untrusted' });
-    expect(fetchMock).toHaveBeenCalledTimes(2);
-    for (const call of fetchMock.mock.calls) expect(new Headers(call[1].headers).get('If-Match')).toBe('"version-1"');
-    expect(new Headers(fetchMock.mock.calls[0][1].headers).get('Authorization')).toBe('Bearer expired-key');
-    expect(new Headers(fetchMock.mock.calls[1][1].headers).get('Authorization')).toBe('Bearer new-key');
-  });
-
-  it('drops a rejected cached key even when the user cancels the prompt', async () => {
-    setBearerKey('rejected-key');
-    fetchMock.mockResolvedValue(Response.json({ error: 'unauthorized' }, { status: 401 }));
-    unregister = registerApiKeyPrompt(async () => '');
-
-    await expect(api('/graphs')).rejects.toMatchObject({ status: 401 });
-    expect(sessionStorage.getItem('anchor-api-key')).toBeNull();
-    expect(fetchMock).toHaveBeenCalledOnce();
-  });
-
-  it('does not save or send an unsafe newly entered key', async () => {
-    fetchMock.mockResolvedValue(Response.json({ error: 'unauthorized' }, { status: 401 }));
-    unregister = registerApiKeyPrompt(async () => '错误密钥');
-
-    await expect(api('/graphs')).rejects.toThrow('API key 格式不正确');
-    expect(fetchMock).toHaveBeenCalledOnce();
-    expect(sessionStorage.getItem('anchor-api-key')).toBeNull();
-  });
-
-  it('uses a recently verified key when an older request returns a delayed 401', async () => {
-    setBearerKey('old-key');
-    let rejectOld: ((response: Response) => void) | undefined;
-    fetchMock.mockImplementationOnce(() => new Promise<Response>(resolve => { rejectOld = resolve; }))
-      .mockResolvedValueOnce(Response.json({ graphs: [] }));
-    const prompt = vi.fn(async () => 'should-not-be-needed');
-    unregister = registerApiKeyPrompt(prompt);
-    const pending = api('/graphs');
-    setBearerKey('recently-verified-key');
-    rejectOld!(Response.json({ error: 'unauthorized' }, { status: 401 }));
-
-    await expect(pending).resolves.toEqual({ graphs: [] });
-    expect(prompt).not.toHaveBeenCalled();
-    expect(new Headers(fetchMock.mock.calls[1][1].headers).get('Authorization')).toBe('Bearer recently-verified-key');
-    expect(bearerKey()).toBe('recently-verified-key');
-  });
-
-  it.each(['中文', 'key with spaces', 'key\nvalue', 'key\u007f', 'key\u00e9'])('rejects %j before a validation request', async key => {
-    await expect(verifyBearerKey(key)).rejects.toThrow('API key 格式不正确');
-    expect(fetchMock).not.toHaveBeenCalled();
-    expect(sessionStorage.getItem('anchor-api-key')).toBeNull();
-  });
-
-  it('distinguishes a wrong key from a service failure without exposing the key', async () => {
-    fetchMock.mockResolvedValueOnce(Response.json({ error: 'do not display submitted-secret' }, { status: 401 }))
-      .mockResolvedValueOnce(new Response('proxy error', { status: 502 }))
-      .mockResolvedValueOnce(new Response('<html>frontend fallback</html>'));
-
-    await expect(verifyBearerKey('submitted-secret')).rejects.toThrow('API key 不正确');
-    await expect(verifyBearerKey('submitted-secret')).rejects.toThrow('服务返回 502');
-    await expect(verifyBearerKey('submitted-secret')).rejects.toThrow('请检查 API 服务连接');
-    expect(sessionStorage.getItem('anchor-api-key')).toBeNull();
-  });
-
-  it('normalizes a valid key and only saves it when accepted by the caller', async () => {
-    fetchMock.mockResolvedValue(Response.json({ graphs: [] }));
-    const key = await verifyBearerKey('  valid-key  ');
-    expect(key).toBe('valid-key');
-    expect(new Headers(fetchMock.mock.calls[0][1].headers).get('Authorization')).toBe('Bearer valid-key');
-    expect(sessionStorage.getItem('anchor-api-key')).toBeNull();
-    setBearerKey(key);
-    expect(bearerKey()).toBe('valid-key');
+  it('reports a blob download failure like any other request', async () => {
+    fetchMock.mockResolvedValueOnce(Response.json({ error: 'gone' }, { status: 404 }));
+    await expect(apiBlob('/runs/x/files/a.txt')).rejects.toThrow('gone');
   });
 });

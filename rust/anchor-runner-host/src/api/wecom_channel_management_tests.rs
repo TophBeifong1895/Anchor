@@ -6,7 +6,6 @@ use tower::ServiceExt;
 
 const CALLBACK: &str = "anchor-channel-api-fixture";
 const OTHER_CALLBACK: &str = "anchor-channel-api-other";
-const ADMIN: &str = "administrative-api-key-long-enough-for-fixture";
 
 fn fixture() -> (tempfile::TempDir, ApiState, Arc<FakeChannels>) {
     let root = tempfile::tempdir().unwrap();
@@ -39,8 +38,7 @@ fn fixture() -> (tempfile::TempDir, ApiState, Arc<FakeChannels>) {
         workspace_root: root.path().join("workspaces"),
         graph_name: String::new(),
         application,
-        loopback: true,
-        api_keys: vec![ADMIN.into()],
+        owner: "local".into(),
         schedules,
         pilots: Default::default(),
         channel_event_locks: Default::default(),
@@ -66,11 +64,8 @@ async fn request(state: &ApiState, method: &str, path: &str, key: &str) -> Statu
 
 #[tokio::test]
 async fn callback_key_reaches_only_its_own_graphs_callback_routes_even_on_loopback() {
-    let (_root, mut state, port) = fixture();
-    for unrestricted_loopback in [false, true] {
-        if unrestricted_loopback {
-            state.api_keys.clear();
-        }
+    let (_root, state, port) = fixture();
+    for _ in 0..2 {
         for path in ["/graphs", "/sessions", "/schedules", "/plugins"] {
             assert_eq!(
                 request(&state, "GET", path, CALLBACK).await,
@@ -156,19 +151,15 @@ async fn callback_key_reaches_only_its_own_graphs_callback_routes_even_on_loopba
     }
 }
 
+/// The Web/API needs no key; a callback key stays confined to its own routes.
 #[tokio::test]
-async fn explicitly_configured_api_keys_keep_existing_admin_authority() {
+async fn the_web_api_needs_no_key() {
     let (_root, state, _port) = fixture();
-    assert_eq!(
-        request(&state, "GET", "/graphs", ADMIN).await,
-        StatusCode::OK
-    );
-    assert_eq!(
-        request(&state, "GET", "/sessions", ADMIN).await,
-        StatusCode::OK
-    );
-    assert_eq!(
-        request(&state, "GET", "/graphs", "wrong-api-key").await,
-        StatusCode::UNAUTHORIZED
-    );
+    for path in ["/graphs", "/sessions"] {
+        assert_eq!(
+            request(&state, "GET", path, "").await,
+            StatusCode::OK,
+            "{path}"
+        );
+    }
 }

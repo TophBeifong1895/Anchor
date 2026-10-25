@@ -6,8 +6,6 @@ import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import { nativeHost, repo, stop } from './fixtures/native-host';
 
-const operatorKey = 'model-settings-operator-fixture-32';
-const headers = { Authorization: `Bearer ${operatorKey}` };
 const defaultKey = 'default-provider-private-fixture';
 const backupKey = 'backup-provider-private-fixture';
 
@@ -44,7 +42,6 @@ for (const deployment of [false, true]) {
     await mkdir(artifacts, { recursive: true });
     const probe = await provider();
     const host = await nativeHost(root, { environment: {
-      ANCHOR_API_KEYS: JSON.stringify([operatorKey]),
       ...(deployment ? {
         ANCHOR_MODEL_URL: probe.url, ANCHOR_MODEL_API_KEY: defaultKey,
         ANCHOR_MODEL_NAME: 'legacy-execution-model', ANCHOR_MODEL_WIRE_API: 'chat',
@@ -55,10 +52,10 @@ for (const deployment of [false, true]) {
     const problems: string[] = [];
     page.on('pageerror', error => problems.push(error.message));
     const ready = async () => {
-      await expect(async () => expect((await request.get(`${host.base}/health`, { headers })).status(), host.logs).toBe(200)).toPass({ timeout: 20000 });
+      await expect(async () => expect((await request.get(`${host.base}/health`)).status(), host.logs).toBe(200)).toPass({ timeout: 20000 });
     };
     const read = async () => {
-      const response = await request.get(`${host.base}/settings/model`, { headers });
+      const response = await request.get(`${host.base}/settings/model`);
       expect(response.status()).toBe(200); expect(response.headers()['cache-control']).toContain('no-store');
       const text = await response.text();
       expect(text).not.toContain(defaultKey); expect(text).not.toContain(backupKey);
@@ -67,13 +64,12 @@ for (const deployment of [false, true]) {
     const group = (slot: 'default' | 'backup') => page.getByTestId(`model-provider-${slot}`);
     try {
       backend = host.start(); await ready();
-      expect((await request.get(`${host.base}/settings/model`)).status()).toBe(401);
       const before = await read();
       expect(before.execution).toMatchObject({ default_reference: 'models.default.flash', source: deployment ? 'legacy' : 'empty', configured: deployment, api_key_present: deployment });
       if (deployment) expect(before.execution.fields.model).toBe('legacy-execution-model');
-      await page.addInitScript(key => {
-        sessionStorage.setItem('anchor-api-key', key); localStorage.setItem('anchor:view', 'settings');
-      }, operatorKey);
+      await page.addInitScript(() => {
+        localStorage.setItem('anchor:view', 'settings');
+      });
       await page.goto(host.base);
       await expect(group('default').getByLabel('Flash 模型', { exact: true })).toHaveValue(deployment ? 'legacy-execution-model' : '');
       for (const slot of ['default', 'backup'] as const) {
@@ -131,7 +127,7 @@ for (const deployment of [false, true]) {
       expect(unavailable.execution.error).toBeTruthy();
       await expect(page.getByText('下一轮默认模型尚不可用', { exact: false })).toBeVisible();
       await expect(group('default').getByLabel('Pro 模型', { exact: true })).toHaveValue('unsaved-default-pro');
-      const restored = await request.put(`${host.base}/settings/model/providers/default`, { headers, data: { ...saved.providers.default.fields, api_key: { action: 'set', value: defaultKey } } });
+      const restored = await request.put(`${host.base}/settings/model/providers/default`, { data: { ...saved.providers.default.fields, api_key: { action: 'set', value: defaultKey } } });
       expect(restored.status()).toBe(200);
       expect((await read()).execution).toEqual(saved.execution);
       await page.getByRole('button', { name: '刷新状态', exact: true }).click();
@@ -149,7 +145,7 @@ for (const deployment of [false, true]) {
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
       await page.screenshot({ path: join(artifacts, 'mobile.png'), fullPage: true });
       expect(probe.calls).toHaveLength(4); expect(probe.failures).toEqual([]); expect(problems).toEqual([]);
-      expect((await (await request.get(`${host.base}/sessions`, { headers })).json()).sessions).toEqual([]);
+      expect((await (await request.get(`${host.base}/sessions`)).json()).sessions).toEqual([]);
       const evidence = { status: 'passed', actual_host: true, deployment_configuration_present: deployment,
         both_slots_and_tiers: true, restart_persistence: true, independent_keys_on_same_endpoint: true,
         draft_preserved: true, next_default_projection: saved.execution, partial_default_flash_usable: true,

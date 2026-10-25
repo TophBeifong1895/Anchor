@@ -94,11 +94,9 @@ async fn graph_relations_preserves_schedule_count_when_bundle_is_missing() {
 
 #[tokio::test]
 async fn channel_session_projection_is_owner_scoped_and_hides_archived_sessions() {
-    let (_root, mut state) = fixture();
+    let (_root, state) = fixture();
     let key = "a".repeat(32);
-    let owner = format!("api:{:x}", Sha256::digest(key.as_bytes()));
-    state.loopback = false;
-    state.api_keys = vec![key.clone()];
+    let owner = state.owner.clone();
     let sessions = store(&state).unwrap();
     sessions
         .create(

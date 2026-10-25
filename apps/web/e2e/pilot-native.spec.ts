@@ -22,33 +22,30 @@ test('native Goose Pilot serves React chat, tool history and restart through the
     }
     throw new Error('unexpected Provider request');
   });
-  const key = 'native-browser-operator-key-32-bytes';
-  const headers = { Authorization: `Bearer ${key}` };
-  let backend: ChildProcess | undefined;
+    let backend: ChildProcess | undefined;
   const host = await nativeHost(root, { graphName: 'native-browser',
     definition: { objective: 'native-browser-marker', entry: 'idle', ops: { idle: { run: 'true' } },
       nodes: [{ id: 'idle', op: 'idle' }], edges: [] },
-    environment: { ...await gooseEnvironment(provider.url), ANCHOR_API_KEYS: JSON.stringify([key]) },
+    environment: { ...await gooseEnvironment(provider.url) },
   });
   const base = host.base;
   const ready = async () => expect.poll(async () => {
-    try { return (await request.get(`${base}/health`, { headers })).status(); } catch { return 0; }
+    try { return (await request.get(`${base}/health`)).status(); } catch { return 0; }
   }).toBe(200);
   try {
     backend = host.start(); await ready();
     expect(provider.calls).toHaveLength(0);
-    await page.addInitScript(key => sessionStorage.setItem('anchor-api-key', key), key);
-    await page.goto(base);
+        await page.goto(base);
     await page.getByRole('button', { name: 'Pilot', exact: true }).click();
     const input = page.getByLabel('发送给 Anchor Pilot');
     await input.fill('Read the native-browser graph without running it.'); await input.press('Enter');
     await expect(page.locator('.pilot-message.assistant').last()).toContainText('native-browser-marker');
     await expect(input).toBeEnabled();
-    const sessions = (await (await request.get(`${base}/sessions`, { headers })).json()).sessions;
+    const sessions = (await (await request.get(`${base}/sessions`)).json()).sessions;
     expect(sessions).toHaveLength(1);
     const session = sessions[0].id;
-    const turns = (await (await request.get(`${base}/sessions/${session}/turns`, { headers })).json()).turns;
-    const events = await request.get(`${base}/sessions/${session}/turns/${turns[0].id}/events`, { headers });
+    const turns = (await (await request.get(`${base}/sessions/${session}/turns`)).json()).turns;
+    const events = await request.get(`${base}/sessions/${session}/turns/${turns[0].id}/events`);
     expect(await events.text()).toContain('tool-output-available');
     await stop(backend); backend = host.start(); await ready();
     await page.reload();

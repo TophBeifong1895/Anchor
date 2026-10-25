@@ -43,7 +43,7 @@
 - 凭据：凭据库中 `channel_wecom@<graph>` 目标下的字段；
 - 网关状态：`channels/graphs/<sha256(graph) 前 16 位>/`（网关的控制 socket 在这个目录里，Unix socket 路径有长度上限，所以目录名用固定长度的摘要，不用 Graph 名）；回调路由是 `/channels/<graph>/events` 和 `/channels/<graph>/progress/<event_id>`。每个启用的绑定有自己的网关和回调密钥，这把密钥只能访问本 Graph 的路由。
 
-状态目录里还留着旧版单绑定文件 `platform/channels/wecom.json` 时，Host 拒绝启动，需要先运行迁移（设计卡 004 §6）。空成员名单拒绝所有成员，`*` 表示明确允许全部平台成员；接收名单不为空时，主动发送名单必须显式填写（至少包含需要回复的成员）。`ANCHOR_API_KEYS` 保护管理 API。
+状态目录里还留着旧版单绑定文件 `platform/channels/wecom.json` 时，Host 拒绝启动，需要先运行迁移（设计卡 004 §6）。空成员名单拒绝所有成员，`*` 表示明确允许全部平台成员；接收名单不为空时，主动发送名单必须显式填写（至少包含需要回复的成员）。管理 API 只监听本机、不需要凭据；网关回调仍只接受自己 Graph 的回调凭据。
 
 按 [Rust 部署指南](rust-production-deployment.md) 安装 Host、固定版本 Goose、`anchor-wecom-gateway` 和 `anchor-wecom-tools`。通过现有 Library/Graph API 安装 [常驻助手示例](../examples/graphs/wecom-persistent-assistant.json) 及原生 WeCom Plugin，确认 Agent 节点挂载 `wecom`。独立应用 API 包不包含通道声明，不能替代完整机器人部署。
 

@@ -6,19 +6,16 @@ import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import { nativeHost, nativeHostBinary, repo, stop } from './fixtures/native-host';
 
-const key = 'shared-facts-native-fixture-operator-32';
-const headers = { Authorization: `Bearer ${key}` };
 type Host = Awaited<ReturnType<typeof nativeHost>>;
 async function ready(host: Host, request: APIRequestContext) {
   await expect(async () => {
-    expect((await request.get(`${host.base}/health`, { headers })).status(), host.logs).toBe(200);
+    expect((await request.get(`${host.base}/health`)).status(), host.logs).toBe(200);
   }).toPass({ timeout: 20000 });
 }
 async function open(page: Page, host: Host) {
-  await page.addInitScript(key => {
-    sessionStorage.setItem('anchor-api-key', key);
+  await page.addInitScript(() => {
     localStorage.setItem('anchor:view', 'graph');
-  }, key);
+  });
   await page.goto(host.base);
 }
 async function directory(root: string) {
@@ -40,7 +37,7 @@ async function evidence(root: string, page: Page, info: TestInfo, facts: Record<
 test('native Graph discovery excludes broken bundles and both role creation paths consume the Host default', async ({ page, request }, info) => {
   test.setTimeout(90000);
   const root = await mkdtemp(join(tmpdir(), 'anchor-shared-facts-authoring-'));
-  const host = await nativeHost(root, { graphName: 'deployment-fixture', environment: { ANCHOR_API_KEYS: JSON.stringify([key]) } });
+  const host = await nativeHost(root, { graphName: 'deployment-fixture', environment: { } });
   const broken = join(root, 'catalog/broken-bundle');
   await mkdir(broken, { recursive: true });
   await writeFile(join(broken, 'graph.json'), JSON.stringify({ entry: 'missing', nodes: [], edges: [] }));
@@ -49,18 +46,18 @@ test('native Graph discovery excludes broken bundles and both role creation path
   const problems: string[] = []; page.on('pageerror', error => problems.push(error.message));
   try {
     backend = host.start(); await ready(host, request);
-    const provider = await request.put(`${host.base}/settings/model/providers/default`, { headers, data: {
+    const provider = await request.put(`${host.base}/settings/model/providers/default`, { data: {
       endpoint: 'https://example.invalid/v1', wire_api: 'chat', flash: 'fixture-default-flash', pro: 'fixture-default-pro',
       api_key: { action: 'set', value: 'fixture-only-no-provider-requests' },
     } });
     expect(provider.ok(), await provider.text()).toBeTruthy();
     const defaultReference = (await provider.json()).execution.default_reference as string;
     expect(defaultReference).toBe('models.default.flash');
-    expect((await request.post(`${host.base}/graphs`, { headers, data: { name: 'authoring-role' } })).ok()).toBeTruthy();
-    expect((await request.post(`${host.base}/graphs`, { headers, data: { name: 'authoring-parallel' } })).ok()).toBeTruthy();
-    const listing = (await (await request.get(`${host.base}/graphs`, { headers })).json()).graphs;
+    expect((await request.post(`${host.base}/graphs`, { data: { name: 'authoring-role' } })).ok()).toBeTruthy();
+    expect((await request.post(`${host.base}/graphs`, { data: { name: 'authoring-parallel' } })).ok()).toBeTruthy();
+    const listing = (await (await request.get(`${host.base}/graphs`)).json()).graphs;
     expect(listing.map((graph: { graph: string }) => graph.graph)).toEqual(['authoring-parallel', 'authoring-role', 'deployment-fixture']);
-    expect((await request.get(`${host.base}/graphs/broken-bundle`, { headers })).ok()).toBe(false);
+    expect((await request.get(`${host.base}/graphs/broken-bundle`)).ok()).toBe(false);
     await open(page, host);
     await expect(page.getByLabel('当前工作流').locator('option[value="broken-bundle"]')).toHaveCount(0);
     await page.getByLabel('当前工作流').selectOption('authoring-role');
@@ -68,7 +65,7 @@ test('native Graph discovery excludes broken bundles and both role creation path
     await expect(page.getByLabel('模型', { exact: true })).toHaveValue(defaultReference);
     await page.getByRole('button', { name: '保存', exact: true }).click();
     await expect(page.getByText('已保存。', { exact: true })).toBeVisible();
-    const role = (await (await request.get(`${host.base}/graphs/authoring-role`, { headers })).json()).definition.agents.agent;
+    const role = (await (await request.get(`${host.base}/graphs/authoring-role`)).json()).definition.agents.agent;
     expect(role.model).toBe(defaultReference);
     await page.getByLabel('当前工作流').selectOption('authoring-parallel');
     await page.getByRole('button', { name: '添加节点', exact: true }).click();
@@ -76,7 +73,7 @@ test('native Graph discovery excludes broken bundles and both role creation path
     await expect(page.getByLabel('配对收束节点')).toHaveValue('join');
     await page.getByRole('button', { name: '保存', exact: true }).click();
     await expect(page.getByText('已保存。', { exact: true })).toBeVisible();
-    const parallel = (await (await request.get(`${host.base}/graphs/authoring-parallel`, { headers })).json()).definition;
+    const parallel = (await (await request.get(`${host.base}/graphs/authoring-parallel`)).json()).definition;
     expect(parallel.agents['parallel-agent'].model).toBe(defaultReference);
     expect(problems).toEqual([]);
     await evidence(root, page, info, { scenario: 'authoring-defaults-and-discovery', malformed_bundle_hidden: true,
@@ -86,11 +83,11 @@ test('native Graph discovery excludes broken bundles and both role creation path
   }
 });
 
-test('native Run file download carries the tab Bearer key and produces the committed artifact', async ({ page, request }, info) => {
+test('native Run file download produces the committed artifact', async ({ page, request }, info) => {
   test.setTimeout(90000);
   const root = await mkdtemp(join(tmpdir(), 'anchor-shared-facts-download-'));
   const content = 'shared-facts-download\n';
-  const host = await nativeHost(root, { graphName: 'artifact-download', environment: { ANCHOR_API_KEYS: JSON.stringify([key]) },
+  const host = await nativeHost(root, { graphName: 'artifact-download', environment: { },
     definition: { entry: 'write', ops: { write: { run: "printf 'shared-facts-download\\n' > evidence.txt", writes: ['evidence.txt'] } },
       nodes: [{ id: 'write', op: 'write' }], edges: [] } });
   let backend: ChildProcess | undefined;
@@ -107,7 +104,6 @@ test('native Run file download carries the tab Bearer key and produces the commi
     await page.getByRole('button', { name: '文件', exact: true }).click();
     await expect(page.getByRole('button', { name: '下载 evidence.txt', exact: true })).toBeVisible();
     const path = `/runs/${run}/files/write/evidence.txt?download=1`;
-    expect((await request.get(host.base + path)).status()).toBe(401);
     const response = page.waitForResponse(value => value.url() === host.base + path);
     const downloading = page.waitForEvent('download');
     await page.getByRole('button', { name: '下载 evidence.txt', exact: true }).click();
@@ -116,10 +112,9 @@ test('native Run file download carries the tab Bearer key and produces the commi
     expect(await readFile((await downloaded.path())!, 'utf8')).toBe(content);
     const received = await response;
     expect(received.status()).toBe(200);
-    expect((await received.request().allHeaders()).authorization).toBe(`Bearer ${key}`);
     expect(problems).toEqual([]);
     await evidence(root, page, info, { scenario: 'authenticated-run-download', run,
-      without_bearer_status: 401, browser_download_status: 200, downloaded_bytes: Buffer.byteLength(content), provider_invoked: false });
+      browser_download_status: 200, downloaded_bytes: Buffer.byteLength(content), provider_invoked: false });
   } finally {
     await stop(backend); await writeFile(join(await directory(root), 'host.log'), host.logs);
   }

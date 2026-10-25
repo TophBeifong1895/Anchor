@@ -38,20 +38,19 @@ test('native Pilot uploads files and images, publishes downloads, and preserves 
     throw new Error(`unexpected Provider request ${position}`);
   });
   const key = 'attachment-browser-operator-key-32';
-  const headers = { Authorization: `Bearer ${key}` };
-  const host = await nativeHost(root, { environment: { ...await gooseEnvironment(provider.url),
-    ANCHOR_MODEL_NAME: 'gpt-4o', ANCHOR_NODE_TOOL_DISCLOSURE: '0', ANCHOR_API_KEYS: JSON.stringify([key]) } });
+    const host = await nativeHost(root, { environment: { ...await gooseEnvironment(provider.url),
+    ANCHOR_MODEL_NAME: 'gpt-4o', ANCHOR_NODE_TOOL_DISCLOSURE: '0' } });
   let backend: ChildProcess | undefined;
   const ready = async () => expect.poll(async () => {
-    try { return (await request.get(`${host.base}/health`, { headers })).status(); } catch { return 0; }
+    try { return (await request.get(`${host.base}/health`)).status(); } catch { return 0; }
   }).toBe(200);
   const errors: string[] = [];
   page.on('pageerror', error => errors.push(error.message));
   try {
     backend = host.start(); await ready();
-    await page.addInitScript(key => {
-      sessionStorage.setItem('anchor-api-key', key); localStorage.setItem('anchor:view', 'pilot');
-    }, key);
+    await page.addInitScript(() => {
+      localStorage.setItem('anchor:view', 'pilot');
+    });
     await page.goto(host.base);
     const input = page.getByLabel('发送给 Anchor Pilot');
     await expect(input).toBeEnabled();
@@ -60,18 +59,18 @@ test('native Pilot uploads files and images, publishes downloads, and preserves 
       { name: 'chart.png', mimeType: 'image/png', buffer: picture },
     ]);
     await expect(page.getByLabel('已选附件').locator('.pilot-attachment')).toHaveCount(2);
-    expect((await (await request.get(`${host.base}/sessions`, { headers })).json()).sessions).toHaveLength(0);
+    expect((await (await request.get(`${host.base}/sessions`)).json()).sessions).toHaveLength(0);
     await input.fill('读取附件，交付 CSV 和图片。'); await input.press('Enter');
     await expect.poll(() => provider.calls.length, { timeout: 30000 }).toBe(5);
     const assistant = page.locator('article.pilot-message.assistant');
     await expect(assistant.getByRole('button', { name: '下载 报告.csv', exact: true })).toBeVisible();
     await expect(assistant.getByRole('button', { name: '下载 预览.png', exact: true })).toBeVisible();
     await expect.poll(() => assistant.getByAltText('预览.png', { exact: true }).evaluate(image => (image as HTMLImageElement).naturalWidth)).toBeGreaterThan(0);
-    const sessions = (await (await request.get(`${host.base}/sessions`, { headers })).json()).sessions;
+    const sessions = (await (await request.get(`${host.base}/sessions`)).json()).sessions;
     expect(sessions).toHaveLength(1);
     const sid = sessions[0].id;
     const turnsUrl = `${host.base}/sessions/${sid}/turns`;
-    const turns = (await (await request.get(turnsUrl, { headers })).json()).turns;
+    const turns = (await (await request.get(turnsUrl)).json()).turns;
     expect(turns).toHaveLength(1); expect(turns[0].status).toBe('running');
     expect(turns[0].attachments).toHaveLength(2);
     const download = page.waitForEvent('download');
@@ -88,14 +87,14 @@ test('native Pilot uploads files and images, publishes downloads, and preserves 
     await expect(input).toBeEnabled({ timeout: 20000 });
     await expect(assistant.last()).toContainText('文件已准备好');
     const historyUrl = `${host.base}/sessions/${sid}/messages`;
-    const history = (await (await request.get(historyUrl, { headers })).json()).messages;
+    const history = (await (await request.get(historyUrl)).json()).messages;
     const output: Attachment[] = history.filter((message: { role: string }) => message.role === 'assistant')
       .flatMap((message: { attachments?: Attachment[] }) => message.attachments ?? []);
     expect(output).toHaveLength(2);
     for (const attachment of output) {
       expect(attachment.url).toMatch(/^\/sessions\//); expect(attachment.url).not.toContain(key);
       expect((await request.get(host.base + attachment.download_url)).status()).toBe(401);
-      const result = await request.get(host.base + attachment.download_url, { headers });
+      const result = await request.get(host.base + attachment.download_url);
       expect(result.ok()).toBeTruthy();
       const bytes = await result.body();
       expect(digest(bytes)).toBe(attachment.sha256);
@@ -109,10 +108,10 @@ test('native Pilot uploads files and images, publishes downloads, and preserves 
     await expect(page.locator('.pilot-message.user .pilot-attachment')).toHaveCount(2);
     await expect(page.locator('.pilot-message.assistant .pilot-attachment')).toHaveCount(2);
     await expect.poll(() => page.getByAltText('预览.png', { exact: true }).evaluate(image => (image as HTMLImageElement).naturalWidth)).toBeGreaterThan(0);
-    expect((await (await request.get(historyUrl, { headers })).json()).messages).toEqual(history);
+    expect((await (await request.get(historyUrl)).json()).messages).toEqual(history);
     expect(provider.calls).toHaveLength(5);
     for (const attachment of output) {
-      const response = await request.get(host.base + attachment.download_url, { headers });
+      const response = await request.get(host.base + attachment.download_url);
       expect(digest(await response.body())).toBe(attachment.sha256);
     }
     await page.screenshot({ path: join(root, 'pilot-attachments-desktop.png'), fullPage: true });
@@ -120,8 +119,8 @@ test('native Pilot uploads files and images, publishes downloads, and preserves 
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBeTruthy();
     await page.getByAltText('预览.png', { exact: true }).scrollIntoViewIfNeeded();
     await page.screenshot({ path: join(root, 'pilot-attachments-mobile.png'), fullPage: true });
-    expect((await request.delete(`${host.base}/sessions/${sid}`, { headers })).status()).toBe(200);
-    expect((await request.get(host.base + output[0].download_url, { headers })).status()).toBe(404);
+    expect((await request.delete(`${host.base}/sessions/${sid}`)).status()).toBe(200);
+    expect((await request.get(host.base + output[0].download_url)).status()).toBe(404);
     expect(provider.failures).toEqual([]); expect(errors).toEqual([]);
     await writeFile(join(root, 'evidence.json'), JSON.stringify({ status: 'passed', provider: 'deterministic loopback',
       actual_host: true, actual_goose: true, real_model_calls: 0, session: sid, image_input_on_model_wire: true,

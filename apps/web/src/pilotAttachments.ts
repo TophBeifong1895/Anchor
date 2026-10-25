@@ -50,7 +50,7 @@ export function encodeAttachment(file: DraftAttachment): Promise<AttachmentInput
   });
 }
 
-/** Only Host-issued URLs for this exact attachment may carry the tab's API key. */
+/** Only a Host-issued URL for this exact attachment, never one pointing elsewhere. */
 export function attachmentPath(attachment: Attachment, session: string, turn: string, download = false): string | null {
   if (!attachment.id || !session || !turn) return null;
   const expected = `/sessions/${encodeURIComponent(session)}/turns/${encodeURIComponent(turn)}/attachments/${encodeURIComponent(attachment.id)}`;

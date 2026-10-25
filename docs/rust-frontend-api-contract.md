@@ -73,7 +73,7 @@ Webhook 与 Responses 共用接纳和身份校验。Responses 只实现冻结子
 
 Web 异步操作反馈绑定发起时的上下文：删除旧 Run 的迟到响应仍刷新列表，但不能清空后来选中的 Run/节点。环境状态读取与初始化/取消共用版本保护，旧 GET 不覆盖已接纳的操作；后台轮询不重叠，慢响应仍可推进当前状态，关闭页面只取消本地观察。
 
-`POST /sessions` 未指定 ID 时创建 `pilot-private-` 会话，与 `responses-` 会话一样按当前 API key 归属；无认证的 loopback 使用 `local`。因此新 Web 会话与插件详情共享同一 owner 的凭据。旧显式普通 ID 仍属共享 `local`，不自动迁移或跨 owner 复用密钥；旧会话表单明确显示该作用域，完成的配置请求只代表历史操作。
+`POST /sessions` 未指定 ID 时创建 `pilot-private-` 会话，与 `responses-` 会话一样归属本安装的身份：新安装是 `local`，从 API key 登录时代升级来的安装沿用当时记录的旧身份。因此新 Web 会话与插件详情共享同一 owner 的凭据。旧显式普通 ID 仍属共享 `local`，不自动迁移或跨 owner 复用密钥；旧会话表单明确显示该作用域，完成的配置请求只代表历史操作。
 
 | API | 契约 |
 | --- | --- |
@@ -108,7 +108,7 @@ Runtime 状态的 `python_prepare_available` 表示当前配置满足 Python 准
 
 ## 权限、观察与验收
 
-API key、工具范围、路径/网络、原生 Session scope 与精确删除前置条件由 Host 强制执行。提示词、Plugin 说明、前端隐藏按钮和模型输出都不是授权。
+工具范围、路径/网络、原生 Session scope 与精确删除前置条件由 Host 强制执行。提示词、Plugin 说明、前端隐藏按钮和模型输出都不是授权。
 
 trace 展示 ACP 的原生文本/工具内容，按 `tool_call_id` 配对；媒体有独立可接受类型/解码边界。投影用于查看，恢复仍使用持久 Run/工具事实与 Goose 原生 Session。普通 assistant text 不冒充 canonical 完成摘要。
 

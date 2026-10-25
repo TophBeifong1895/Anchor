@@ -34,7 +34,7 @@ async fn call(
 }
 
 #[tokio::test]
-async fn plugin_configuration_api_is_private_owner_bound_and_rejects_stale_updates_and_tests() {
+async fn plugin_configuration_api_keeps_secrets_private_and_rejects_stale_updates_and_tests() {
     let _env = crate::PROCESS_ENV_LOCK.lock().await;
     struct Restore(Vec<(&'static str, Option<std::ffi::OsString>)>);
     impl Drop for Restore {
@@ -63,18 +63,14 @@ async fn plugin_configuration_api_is_private_owner_bound_and_rejects_stale_updat
     unsafe {
         std::env::remove_var("ANCHOR_RUNNER_LIBRARY_ROOT");
     }
-    let (_root, mut state) = crate::api::tests::fixture();
-    state.api_keys = vec!["a".repeat(32), "b".repeat(32)];
-    let key = state.api_keys[0].clone();
-    let other = state.api_keys[1].clone();
+    let (_root, state) = crate::api::tests::fixture();
+    let key = "a".repeat(32);
     let plugin = crate::library_root(&state.catalog_root).join("plugins/config-demo");
     std::fs::create_dir_all(&plugin).unwrap();
     std::fs::write(plugin.join("plugin.json"), json!({"name":"Config demo","configuration":{
         "fields":{"endpoint":{"type":"url","default":"http://127.0.0.1:1"},"key":{"type":"secret"}},
         "environment":{"api":{"ANCHOR_CONFIG_TEST_ENDPOINT":"endpoint","ANCHOR_CONFIG_TEST_KEY":"key"}}},
         "mcpServers":{"api":{"url":"${ANCHOR_CONFIG_TEST_ENDPOINT}/mcp","bearer_token_env_var":"ANCHOR_CONFIG_TEST_KEY"}}}).to_string()).unwrap();
-    let (status, _) = call(&state, "GET", "invalid", "", json!({})).await;
-    assert_eq!(status, StatusCode::UNAUTHORIZED);
     let (status, initial) = call(&state, "GET", &key, "", json!({})).await;
     assert_eq!(status, StatusCode::OK, "{initial}");
     assert_eq!(initial["revision"], 0);
@@ -85,9 +81,6 @@ async fn plugin_configuration_api_is_private_owner_bound_and_rejects_stale_updat
     assert_eq!(saved["revision"], 1);
     assert_eq!(saved["fields"][1]["state"], "configured");
     assert!(saved["fields"][1].get("value").is_none());
-    let (_, other_view) = call(&state, "GET", &other, "", json!({})).await;
-    assert_eq!(other_view["revision"], 0);
-    assert_eq!(other_view["fields"][1]["state"], "missing");
     assert_eq!(
         call(&state, "PUT", &key, "", update).await.0,
         StatusCode::CONFLICT

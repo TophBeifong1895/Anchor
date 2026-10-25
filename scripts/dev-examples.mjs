@@ -51,8 +51,7 @@ async function graphs() {
   const root = process.env.ANCHOR_RUNNER_CATALOG_ROOT;
   if (await exists(marker(root))) return;
   const api = process.env.ANCHOR_WEB_API_URL.replace(/\/$/, '');
-  const key = process.env.ANCHOR_STARTER_API_KEY;
-  const headers = { 'Content-Type': 'application/json', ...(key ? { Authorization: `Bearer ${key}` } : {}) };
+  const headers = { 'Content-Type': 'application/json' };
   for (const name of starter.graphs) {
     const current = await fetch(`${api}/graphs/${name}`, { headers, signal: AbortSignal.timeout(30000) });
     if (current.ok) continue;

@@ -77,9 +77,8 @@ fn write_oauth_plugin_with_resource(state: &ApiState, resource: &str) {
     .unwrap();
 }
 
-fn seed_oauth_authorization(state: &ApiState, key: &str) {
-    let owner = format!("api:{:x}", Sha256::digest(key.as_bytes()));
-    let owner = format!("{:x}", Sha256::digest(owner.as_bytes()));
+fn seed_oauth_authorization(state: &ApiState) {
+    let owner = crate::api::oauth::binding_owner(&state.owner);
     let binding = OAuthBinding::new(
         format!("{:x}", Sha256::digest(b"https://mcp.example.test")),
         "oauth-demo",
@@ -109,16 +108,13 @@ fn seed_oauth_authorization(state: &ApiState, key: &str) {
 }
 
 #[tokio::test]
-async fn oauth_status_and_revoke_are_owner_scoped_and_never_return_secrets() {
+async fn oauth_status_and_revoke_never_return_secrets() {
     let _environment = PROCESS_ENV.lock().await;
     let _variables = Environment::cleared(&["ANCHOR_RUNNER_LIBRARY_ROOT"]);
-    let (_root, mut state) = fixture();
+    let (_root, state) = fixture();
     write_oauth_plugin(&state);
     let first = "a".repeat(32);
-    let second = "b".repeat(32);
-    seed_oauth_authorization(&state, &first);
-    state.loopback = false;
-    state.api_keys = vec![first.clone(), second.clone()];
+    seed_oauth_authorization(&state);
     let app = router(state);
 
     let (status, first_status) = authorized_call(
@@ -133,39 +129,10 @@ async fn oauth_status_and_revoke_are_owner_scoped_and_never_return_secrets() {
     assert_eq!(first_status["authorized"], true);
     assert_eq!(first_status["scope"], "read write");
 
-    let (status, second_status) = authorized_call(
-        app.clone(),
-        "GET",
-        "/plugins/oauth-demo/oauth/remote",
-        &second,
-        None,
-    )
-    .await;
-    assert_eq!(status, StatusCode::OK, "{second_status}");
-    assert_eq!(second_status, json!({"authorized":false}));
+    assert!(!first_status.to_string().contains("secret"));
 
     let (status, revoked) = authorized_call(
         app.clone(),
-        "DELETE",
-        "/plugins/oauth-demo/oauth/remote",
-        &second,
-        None,
-    )
-    .await;
-    assert_eq!(status, StatusCode::OK, "{revoked}");
-    let (status, still_authorized) = authorized_call(
-        app.clone(),
-        "GET",
-        "/plugins/oauth-demo/oauth/remote",
-        &first,
-        None,
-    )
-    .await;
-    assert_eq!(status, StatusCode::OK, "{still_authorized}");
-    assert_eq!(still_authorized["authorized"], true);
-
-    let (status, revoked) = authorized_call(
-        app,
         "DELETE",
         "/plugins/oauth-demo/oauth/remote",
         &first,
@@ -173,10 +140,14 @@ async fn oauth_status_and_revoke_are_owner_scoped_and_never_return_secrets() {
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{revoked}");
+    let (status, after) =
+        authorized_call(app, "GET", "/plugins/oauth-demo/oauth/remote", &first, None).await;
+    assert_eq!(status, StatusCode::OK, "{after}");
+    assert_eq!(after, json!({"authorized":false}));
 }
 
 #[tokio::test]
-async fn oauth_browser_authorization_persists_owner_bound_tokens_and_completes_callback() {
+async fn oauth_browser_authorization_persists_tokens_and_completes_callback() {
     let _environment = PROCESS_ENV.lock().await;
     let _variables =
         Environment::cleared(&["ANCHOR_RUNNER_LIBRARY_ROOT", "ANCHOR_OAUTH_REDIRECT_URI"]);
@@ -186,7 +157,7 @@ async fn oauth_browser_authorization_persists_owner_bound_tokens_and_completes_c
             "http://127.0.0.1:8077/oauth/callback",
         );
     }
-    let (_root, mut state) = fixture();
+    let (_root, state) = fixture();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     let base = format!("http://{address}");
@@ -244,9 +215,6 @@ async fn oauth_browser_authorization_persists_owner_bound_tokens_and_completes_c
     });
     write_oauth_plugin_with_resource(&state, &resource);
     let first = "a".repeat(32);
-    let second = "b".repeat(32);
-    state.loopback = false;
-    state.api_keys = vec![first.clone(), second.clone()];
     let app = router(state);
 
     let start_response = authorized_response(
@@ -326,16 +294,6 @@ async fn oauth_browser_authorization_persists_owner_bound_tokens_and_completes_c
     assert_eq!(status, StatusCode::OK, "{first_status}");
     assert_eq!(first_status["authorized"], true);
     assert!(!first_status.to_string().contains("mcp-access-secret"));
-    let (status, other_status) = authorized_call(
-        app.clone(),
-        "GET",
-        "/plugins/oauth-demo/oauth/remote",
-        &second,
-        None,
-    )
-    .await;
-    assert_eq!(status, StatusCode::OK, "{other_status}");
-    assert_eq!(other_status, json!({"authorized":false}));
 
     let posted = token_form.lock().unwrap().clone().unwrap();
     assert_eq!(posted["grant_type"], "authorization_code");
@@ -373,25 +331,10 @@ async fn oauth_browser_authorization_persists_owner_bound_tokens_and_completes_c
 async fn oauth_routes_reject_token_payloads_and_non_oauth_servers() {
     let _environment = PROCESS_ENV.lock().await;
     let _variables = Environment::cleared(&["ANCHOR_RUNNER_LIBRARY_ROOT"]);
-    let (_root, mut state) = fixture();
+    let (_root, state) = fixture();
     write_oauth_plugin(&state);
     let key = "a".repeat(32);
-    state.loopback = false;
-    state.api_keys = vec![key.clone()];
     let app = router(state);
-
-    let unauthenticated = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .uri("/plugins/oauth-demo/oauth/remote")
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(unauthenticated.status(), StatusCode::UNAUTHORIZED);
-    assert_eq!(unauthenticated.headers()[header::CACHE_CONTROL], "no-store");
 
     let rejected_payload = authorized_response(
         app.clone(),
@@ -443,7 +386,7 @@ async fn oauth_provider_discovery_rejects_redirect_responses() {
             "http://127.0.0.1:8077/oauth/callback",
         );
     }
-    let (_root, mut state) = fixture();
+    let (_root, state) = fixture();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     let base = format!("http://{address}");
@@ -489,8 +432,6 @@ async fn oauth_provider_discovery_rejects_redirect_responses() {
     });
     write_oauth_plugin_with_resource(&state, &resource);
     let key = "a".repeat(32);
-    state.loopback = false;
-    state.api_keys = vec![key.clone()];
     let app = router(state);
 
     let response =
