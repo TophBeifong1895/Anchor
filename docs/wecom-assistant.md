@@ -6,7 +6,7 @@
 
 2026-10-20 本机常驻实例因 `database is locked` 退出：等待输入的空闲查询和已领取输入的重读误用 SQLite 写事务，放大跨连接写锁竞争。现改为只读事务；确有待领取输入时先结束读事务，再取得写事务，重新检查 current binding、领取 key 和最新输入。未延长 busy timeout，也未自动重放失败输入；当时实际持锁者未确认。Session 194 项、兼容 Host 常驻助手 23 项及固定 Goose 重启定向 3 项通过；首次恢复保留了旧事实，见 [锁竞争修复](../.local/assistant-lock-20261020/README.md)。
 
-当前本机部署是 `78e8ecc`：在 `e806a22` 的基础上修复了常驻助手在线时其他 Run 不记 Harness 事实的问题（[记录](../.local/recorder-deploy-20261025/README.md)），以及独立审查发现的问题（[记录](../.local/review-fix-deploy-20261025/README.md)），都只换二进制。`e806a22`（[设计卡 004](design-cards/004-multi-bot-channels.md)：一张 Graph 一个机器人），2026-10-25 按用户确认切换。旧的单绑定 `wecom.json`、机器人凭据和网关状态（含投递账本）迁移到 `wecom-persistent-assistant` 这张 Graph 名下：凭据和账本按原字节移动，绑定逐字段核对；账号、成员和启用状态不变，唯一的消息会话保留当前助手并恢复。旧的每条消息一个 Run 的示例 `wecom-assistant` 已删除（D8）。
+当前本机部署是 `24c9557`：重启时空闲的助手在原 Run 上继续，被接替的 Run 显示为已接替（[记录](../.local/inplace-resume-deploy-20261025/README.md)）。此前 `78e8ecc` 在 `e806a22` 的基础上修复了常驻助手在线时其他 Run 不记 Harness 事实的问题（[记录](../.local/recorder-deploy-20261025/README.md)），以及独立审查发现的问题（[记录](../.local/review-fix-deploy-20261025/README.md)），都只换二进制。`e806a22`（[设计卡 004](design-cards/004-multi-bot-channels.md)：一张 Graph 一个机器人），2026-10-25 按用户确认切换。旧的单绑定 `wecom.json`、机器人凭据和网关状态（含投递账本）迁移到 `wecom-persistent-assistant` 这张 Graph 名下：凭据和账本按原字节移动，绑定逐字段核对；账号、成员和启用状态不变，唯一的消息会话保留当前助手并恢复。旧的每条消息一个 Run 的示例 `wecom-assistant` 已删除（D8）。
 
 验证：网关重新认证，模型和运行时设置、其他凭据、Graph 授权和计划的摘要不变，不调模型的冒烟 Run 通过。没有发送真实企微消息，也没有调用真实模型，真实对话由用户验收。部署记录见 [渠道部署 10-25](../.local/channel-deploy-20261024/README.md)，上一次部署见 [10-23](../.local/kernel-deploy-20261023/README.md)。
 
