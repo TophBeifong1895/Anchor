@@ -64,6 +64,8 @@ Host 托管的模型配置将公开字段、用于恢复的旧绑定和按槽/�
 
 同一事实所有者内部按职责分模块，入口负责组合：
 
+Host 的[依赖方向围栏](../rust/anchor-runner-host/tests/layer_fence.rs)固定组合根（`main.rs`、`bin/`、`execution.rs`）、入口适配（`api`、`pilot_tools`、`node_tools` 模块及 `channel_tools.rs`）、用例（`application` 模块）与其余 Host 服务的角色。服务引用用例或入口、用例引用入口的现有次数由[逐文件上限](../rust/anchor-runner-host/layer-fence.txt)限制，新增引用失败，下降时提示降低上限。它与 Run 围栏共用生产源码扫描器，排除测试、注释和字面量；统计显式 `crate::` 路径（含分组导入、原始标识符与宏输入），不做名称解析、相对路径解析或宏展开。Run 的运行时豁免不改变这里的层次归属；现有反向依赖尚未清零，阶段状态见[收敛任务书](host-convergence-task.md)。
+
 | 实现入口 | 内部边界 |
 | --- | --- |
 | [Graph Host](../rust/anchor-graph-host/src/lib.rs) | bundle、Graph/Plugin catalog、资源校验、MCP 声明、授权摘要和 Graph Call；公共契约仍由 crate 根导出 |

@@ -1,0 +1,9 @@
+{
+  "baseline": "2152fd9d17e7969dba21666f5bdb414c8bcc4dab",
+  "crate": "anchor-runner-host",
+  "production_physical_lines_before": 50958,
+  "production_physical_lines_after": 50958,
+  "production_delta": 0,
+  "method": "Reuse experiments/constitution-host-preflight/final/measure_lines.py test_partition on the baseline Host crate; count physical lines outside test-only files and cfg(test) spans. Production source is unchanged; assert every tracked src file matches baseline bytes.",
+  "src_files": 276
+}

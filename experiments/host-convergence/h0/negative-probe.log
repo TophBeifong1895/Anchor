@@ -1,0 +1,34 @@
+Temporary source copy: /tmp/anchor-host-h0-probe-2_qw3e_b
+Inject new service references (2), new application reference (1), existing-file reference (1).
+Expected failure exit: 101
+
+running 1 test
+test layer_fence ... FAILED
+
+failures:
+
+failures:
+    layer_fence
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.10s
+
+layer_fence: 176 production files; service_application 60; service_adapter 36; application_adapter 2
+
+thread 'layer_fence' (1333833) panicked at /tmp/anchor-host-h0-probe-2_qw3e_b/tests/layer_fence.rs:251:5:
+Host layer ratchet exceeded:
+application/h0_probe.rs application_adapter 1 (maximum 0; fix the dependency, not the baseline)
+assistant.rs service_application 9 (maximum 8; fix the dependency, not the baseline)
+h0_probe.rs service_application 1 (maximum 0; fix the dependency, not the baseline)
+h0_probe.rs service_adapter 1 (maximum 0; fix the dependency, not the baseline)
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+After reverting only the temporary injections:
+
+running 3 tests
+test layer_classification ... ok
+test dependency_counting ... ok
+test layer_fence ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.10s
+
+layer_fence: 174 production files; service_application 58; service_adapter 35; application_adapter 1
