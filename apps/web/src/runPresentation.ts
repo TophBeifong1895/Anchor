@@ -7,16 +7,21 @@ export type ProjectedRun = { projection?: RunProjection | null };
 
 /** All entry points consume the Host's actions; a missing projection grants nothing. */
 export const runPhase = (run: ProjectedRun) => run.projection?.phase ?? 'unavailable';
-export const runNeedsAttention = ({ projection: p }: ProjectedRun) => !p || p.phase === 'waiting'
-  || (p.phase === 'executing' && !p.active) || (p.phase === 'settled' && p.outcome !== 'done');
+export const runNeedsAttention = ({ projection: p }: ProjectedRun) => !p || (!p.superseded && (p.phase === 'waiting'
+  || (p.phase === 'executing' && !p.active) || (p.phase === 'settled' && p.outcome !== 'done')));
 export const runQuiescent = (p?: RunProjection) => !!p && !p.active
   && (p.phase === 'settled' || (p.phase === 'waiting' && p.waiting_for === 'human'));
+const supersededLabel = '已由新实例接替';
 
 export function runPhaseLabel(value?: RunProjection | string | null): string {
   if (!value) return '运行状态不可用';
   if (typeof value === 'string') return ({ executing: '执行中', waiting: '等待处理', settled: '已结算',
     unavailable: '运行状态不可用', planned: '已计划', missed_busy: '忙碌错过', missed_downtime: '停机错过',
   }[value] ?? label(value));
+  if (value.superseded && !value.active && value.outcome !== 'done') {
+    if (value.phase !== 'settled') return supersededLabel;
+    return `${runPhaseLabel({ ...value, superseded: false })}，${supersededLabel}`;
+  }
   if (value.phase === 'executing') return value.active ? '执行中' : '等待接续';
   if (value.phase === 'waiting') {
     const who = { human: '你处理', child: '子任务', effect: '核查效果' }[value.waiting_for ?? 'human'];

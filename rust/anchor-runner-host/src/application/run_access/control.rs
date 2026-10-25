@@ -26,6 +26,44 @@ impl RunApplication {
         self.control_expected(run_id, "resume", None).await
     }
 
+    /// Continue the current assistant instance in its own Run after a restart.
+    ///
+    /// Only an instance that was idle at its input wait qualifies: it is still
+    /// executing with nothing running it, its single frontier is the wait node,
+    /// no Turn is bound there and no attempt is unresolved, so continuing
+    /// replays nothing and needs no human release. Returns `false` when the
+    /// instance does not qualify; the caller then hands it over instead.
+    pub(crate) async fn resume_idle_assistant(
+        &self,
+        run_id: &str,
+    ) -> Result<bool, ApplicationError> {
+        let Some(metadata) = self.metadata(run_id)? else {
+            return Ok(false);
+        };
+        let Some(source) = metadata.assistant.as_ref() else {
+            return Ok(false);
+        };
+        let Some(view) = self.read_run(run_id)? else {
+            return Ok(false);
+        };
+        if view.active() || !view.can_dispatch() || view.has_pending_recovery() {
+            return Ok(false);
+        }
+        let [cursor] = view.dispatches() else {
+            return Ok(false);
+        };
+        if cursor.node_id != source.wait_node
+            || crate::assistant::binding(&self.data_root, &cursor.key)
+                .map_err(ApplicationError::Storage)?
+                .is_some()
+            || self.abandon_intent(run_id)?.is_some()
+        {
+            return Ok(false);
+        }
+        self.resume(run_id).await?;
+        Ok(true)
+    }
+
     /// Stop every child Run a parked parent still waits on, plus their pending
     /// Session deliveries, exactly as an explicit `stop` does.
     pub(in crate::application) async fn stop_wait_children(

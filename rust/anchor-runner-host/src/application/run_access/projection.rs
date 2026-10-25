@@ -20,6 +20,10 @@ pub(crate) struct RunProjection {
     pub(crate) outcome: Option<&'static str>,
     pub(crate) reason: Option<String>,
     pub(crate) active: bool,
+    /// A later conversation Run took this one over; it can never execute again.
+    /// Omitted otherwise, so existing projections keep their bytes.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) superseded: bool,
     pub(crate) actions: RunActions,
     pub(crate) updated: Option<String>,
 }
@@ -58,6 +62,7 @@ impl RunProjection {
             outcome,
             reason,
             active: view.worker,
+            superseded: false,
             actions: view.actions(),
             updated: view.updated.clone(),
         }
@@ -90,13 +95,21 @@ impl RunApplication {
             projection.actions.abandon = false;
         }
         projection.actions.pause &= !coordinated;
+        // A lineage that cannot be read refuses resume, as before, without
+        // claiming a takeover it did not see.
+        let superseded = self.superseded_conversation_ancestor(&record.run_id);
+        projection.superseded = matches!(superseded, Ok(Some(_)));
         projection.actions.resume = projection.actions.resume
             && !coordinated
             && identity.is_some_and(|m| self.ensure_current_assistant(m).is_ok())
             && self.abandon_intent(&record.run_id)?.is_none()
-            && self
-                .reject_superseded_conversation_execution(&record.run_id)
-                .is_ok();
+            && matches!(superseded, Ok(None));
+        if projection.superseded {
+            // A taken-over Run only keeps the control that ends a live worker.
+            projection.actions.pause = false;
+            projection.actions.abandon = false;
+            projection.actions.stop &= view.worker;
+        }
         Ok(projection)
     }
     pub(crate) fn pilot_session_runs(

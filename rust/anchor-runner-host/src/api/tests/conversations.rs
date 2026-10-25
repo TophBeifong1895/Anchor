@@ -197,6 +197,19 @@ async fn sessions_share_a_graph_and_a_handed_over_turn_protects_its_predecessor(
         );
     }
     assert_eq!(kernel_resource(&state, alice_run).unwrap(), original);
+    // The taken-over turn reads as replaced, not as waiting for a person, and
+    // offers no control: resuming and abandoning it are both refused.
+    let (_, previous) = call(app.clone(), "GET", &format!("/runs/{alice_run}"), None).await;
+    let projection = &previous["projection"];
+    assert_eq!(projection["phase"], "waiting", "{previous}");
+    assert_eq!(projection["superseded"], true, "{previous}");
+    assert_eq!(
+        projection["actions"],
+        json!({"pause":false,"stop":false,"resume":false,"abandon":false}),
+        "{previous}"
+    );
+    let (_, current) = call(app.clone(), "GET", &format!("/runs/{next_run}"), None).await;
+    assert!(current["projection"].get("superseded").is_none(), "{current}");
     let (_, detail) = call(app.clone(), "GET", &format!("/runs/{next_run}"), None).await;
     assert_eq!(detail["state"]["trigger"]["session"], "alice");
     assert_eq!(detail["state"]["trigger"]["reply_node"], "work");

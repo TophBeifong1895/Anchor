@@ -209,7 +209,7 @@ Run 详情和 Web 节点投影将 `RunResult.interruption` 显示为“已中断
 
 首次 wait binding 查询最近 9 条以检测截断，实际只授权最近 8 条并保存 `pending_truncated`；当 `output.interrupted_messages_truncated=true`，Agent 必须如实说明更早中断输入未自动纳入/未完整阅读，不能声称信息全保留。该标记无需额外数据库 schema 迁移，旧 binding facts 缺省为 `false`。
 
-停止/恢复保留 current binding；停止请求须等到执行者退出和真实 `Stopped`，本进程内的新消息或连接恢复不自动恢复已停止实例。Host 重启是否自动交接按 [助手恢复契约](wecom-assistant.md#停止恢复与退役) 执行，不重放未知效果。`GET /channel-sessions/{session}/assistant` 读取 current 实例；`POST /channel-sessions/{session}/assistant/retire` 接收 `{ "run_id": "…" }`，仅在 Run 已真实 `Stopped` 或终态且非 active、Session 无 Running Turn 和 pending/sending/unknown delivery 时允许退役。retire 保留历史但解除 current，禁止该 Run resume/重新绑定；下一条可信消息才惰性创建新实例。Graph 结构更新不热改旧 Run 快照，合法新版经退役后的新实例接纳；仅助手工作节点的插件选择及对应 Agent 的 network 可经操作员保存，在下一 Turn 应用。仍有 current 助手时，结构变化或 Agent 自行修改其在线权限均拒绝保存。
+停止/恢复保留 current binding；停止请求须等到执行者退出和真实 `Stopped`，本进程内的新消息或连接恢复不自动恢复已停止实例。Host 重启时空闲在输入等待的实例在原 Run 上继续，其余按 [助手恢复契约](wecom-assistant.md#停止恢复与退役) 自动交接，均不重放未知效果。`GET /channel-sessions/{session}/assistant` 读取 current 实例；`POST /channel-sessions/{session}/assistant/retire` 接收 `{ "run_id": "…" }`，仅在 Run 已真实 `Stopped` 或终态且非 active、Session 无 Running Turn 和 pending/sending/unknown delivery 时允许退役。retire 保留历史但解除 current，禁止该 Run resume/重新绑定；下一条可信消息才惰性创建新实例。Graph 结构更新不热改旧 Run 快照，合法新版经退役后的新实例接纳；仅助手工作节点的插件选择及对应 Agent 的 network 可经操作员保存，在下一 Turn 应用。仍有 current 助手时，结构变化或 Agent 自行修改其在线权限均拒绝保存。
 
 Graph cascade 删除先保护 active/未收束执行、共享原生历史与未结算投递，再退役目标助手；清理只按 owned Run/Turn/invocation binding 删除输入、回复、yield、checkpoint、工作区和 Artifact。它不是全 workspace-root 扫除或生产旧数据迁移，部分删除重试保留可核查的所有权事实。
 

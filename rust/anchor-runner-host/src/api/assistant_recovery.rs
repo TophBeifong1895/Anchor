@@ -1,10 +1,11 @@
 //! Startup recovery of persistent channel assistants.
 //!
 //! A restart must give every channel Session back the assistant instance its
-//! binding still owns. Recovery never revives the old Run: it hands the
-//! instance over to a new Run of the same Graph, which continues the same Goose
-//! conversation and inherits the old Run's workspace scene, exactly like an
-//! operator-requested handover — only without the operator.
+//! binding still owns. An instance that was idle at its input wait continues in
+//! its own Run: nothing was in flight, so nothing can be replayed. Any other
+//! instance is handed over to a new Run of the same Graph, which continues the
+//! same Goose conversation and inherits the old Run's workspace scene, exactly
+//! like an operator-requested handover — only without the operator.
 
 use super::*;
 use crate::application::{AssistantAdmission, metadata};
@@ -148,6 +149,9 @@ async fn resume_instance(
                         .into(),
                 );
             }
+            if resume_in_place(state, owner, &session, &from).await? {
+                return Ok(());
+            }
             let (path, bundle) = load_graph_definition(state, &saved.graph).map_err(|failure| {
                 format!("assistant Graph is unavailable: {:?}", failure.status())
             })?;
@@ -273,6 +277,43 @@ async fn resume_instance(
         session, recovery.previous
     );
     Ok(())
+}
+
+/// Continue an instance that was idle at its input wait in its own Run, so a
+/// restart does not lengthen the Session's Run chain. Any running Turn, bound
+/// invocation or unresolved attempt keeps the handover path, which carries the
+/// in-flight round explicitly; a refused in-place resume falls back to it too.
+async fn resume_in_place(
+    state: &ApiState,
+    owner: &str,
+    session: &str,
+    run: &str,
+) -> Result<bool, String> {
+    let sessions = store(state)
+        .map_err(|_| "assistant auto resume could not open the Session store".to_owned())?;
+    let running = sessions
+        .list_turns(owner, session)
+        .map_err(|error| error.to_string())?
+        .iter()
+        .any(|turn| turn.status == anchor_platform_session::TurnStatus::Running);
+    if running {
+        return Ok(false);
+    }
+    match state.application.resume_idle_assistant(run).await {
+        Ok(true) => {}
+        Ok(false) => return Ok(false),
+        Err(error) => {
+            eprintln!(
+                "anchor-runner-host: assistant {owner}/{session} could not continue {run} in place, handing it over: {error:?}"
+            );
+            return Ok(false);
+        }
+    }
+    sessions
+        .record_channel_assistant_resumed_in_place(owner, session, run)
+        .map_err(|error| error.to_string())?;
+    eprintln!("anchor-runner-host: assistant {owner}/{session} resumed {run} in place");
+    Ok(true)
 }
 
 fn plan_for(

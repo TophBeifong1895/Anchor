@@ -1368,9 +1368,9 @@ fn host_restart_recovers_only_the_canonical_account_and_preserves_legacy_history
         None,
     );
     assert_eq!(status, 200, "{binding}");
+    // The idle instance continues in its own Run.
     let resumed = binding["assistant"]["run_id"].as_str().unwrap().to_owned();
-    assert_ne!(resumed, run);
-    assert!(resumed.starts_with("assistant-resume-"), "{binding}");
+    assert_eq!(resumed, run, "{binding}");
     assert_eq!(binding["needs_recovery"], false, "{binding}");
     wait_until(
         "canonical account assistant recovered and waiting for input",
@@ -1378,14 +1378,10 @@ fn host_restart_recovers_only_the_canonical_account_and_preserves_legacy_history
             let saved = host.record(&resumed);
             saved["projection"]["phase"] == "executing"
                 && saved["frontier"][0]["node_id"] == "wait_input"
-                && saved["frontier"][0]["key"]["invocation"] == 1
-                && saved["results"].get("reply").is_none()
+                && saved["frontier"][0]["key"]["invocation"] == 2
         },
     );
     assert_eq!(provider.requests().len(), 2);
-    let previous = host.record(&run);
-    assert_eq!(previous["projection"]["phase"], "waiting");
-    assert_eq!(previous["projection"]["waiter"]["on"], "human");
     let (status, listed) = restarted.request("GET", "/runs", None);
     assert_eq!(status, 200, "{listed}");
     let active = listed["runs"]
@@ -1396,7 +1392,7 @@ fn host_restart_recovers_only_the_canonical_account_and_preserves_legacy_history
         .map(|candidate| candidate["run"].as_str().unwrap())
         .collect::<Vec<_>>();
     assert_eq!(active, vec![resumed.as_str()], "{listed}");
-    assert_eq!(runs(&host).len(), 2);
+    assert_eq!(runs(&host).len(), 1);
 
     let sessions =
         SessionStore::open(host.base.state_root().join("platform/sessions.sqlite")).unwrap();
@@ -1417,6 +1413,7 @@ fn host_restart_recovers_only_the_canonical_account_and_preserves_legacy_history
     assert_eq!(automatic.len(), 1, "{automatic:?}");
     assert_eq!(automatic[0].data["from"], json!(run));
     assert_eq!(automatic[0].data["to"], json!(resumed));
+    assert_eq!(automatic[0].data["in_place"], json!(true));
     let (status, blocked) = restarted.request(
         "GET",
         &format!("/channel-sessions/{legacy_session}/assistant"),
@@ -1441,8 +1438,8 @@ fn host_restart_recovers_only_the_canonical_account_and_preserves_legacy_history
     let second = submit_any(&restarted, &second_event, "persistent-account-second-reply");
     assert_eq!(second["run"], json!(resumed));
     assert_eq!(second["session"], json!(session));
-    waiting(&host, &resumed, 1);
-    let continued = native_round(&host, &provider, &resumed, 1);
+    waiting(&host, &resumed, 2);
+    let continued = native_round(&host, &provider, &resumed, 2);
     assert_eq!(continued["session_id"], native["session_id"]);
     assert_eq!(
         continued["conversation_scope"],
@@ -1458,7 +1455,7 @@ fn host_restart_recovers_only_the_canonical_account_and_preserves_legacy_history
         b"continued"
     );
     assert_eq!(snapshot_inventory(&first_artifact), first_snapshot);
-    assert_eq!(runs(&host).len(), 2);
+    assert_eq!(runs(&host).len(), 1);
     assert_eq!(provider.requests().len(), 4);
     let stopped = stop(&restarted, &provider, &resumed);
     let sessions =
@@ -1485,9 +1482,9 @@ fn host_restart_recovers_only_the_canonical_account_and_preserves_legacy_history
     restarted.kill();
 }
 
-/// A Host restart resumes the bound assistant instance on its own: the same
-/// Goose conversation continues in a new Run that inherited the old workspace
-/// scene, while the old Run and its committed Artifact stay byte-identical.
+/// A Host restart continues an instance that was idle at its input wait in its
+/// own Run: no new Run, the same workspace and the same Goose conversation, and
+/// the committed Artifact stays byte-identical.
 #[test]
 #[ignore = "requires pinned real Goose binary and local Bubblewrap"]
 fn host_restart_automatically_resumes_the_instance_with_its_workspace_and_session() {
@@ -1531,39 +1528,28 @@ fn host_restart_automatically_resumes_the_instance_with_its_workspace_and_sessio
     .unwrap();
     let restarted = host.serve(&provider);
 
-    // The restart handed the instance over without any operator action, and the
-    // stopped old Run is history rather than a live instance.
+    // The restart continued the instance without any operator action and
+    // without a new Run: it was idle, so there was nothing to hand over.
     let (status, binding) = restarted.request(
         "GET",
         &format!("/channel-sessions/{session}/assistant"),
         None,
     );
     assert_eq!(status, 200, "{binding}");
-    let resumed = binding["assistant"]["run_id"]
-        .as_str()
-        .expect("assistant binding after restart")
-        .to_owned();
-    assert_ne!(resumed, run);
-    assert!(
-        resumed.starts_with("assistant-resume-"),
-        "unexpected recovery Run: {resumed}"
-    );
+    assert_eq!(binding["assistant"]["run_id"], json!(run), "{binding}");
     assert_eq!(binding["needs_recovery"], json!(false), "{binding}");
-    let previous = host.record(&run);
-    assert_eq!(previous["projection"]["phase"], "waiting");
-    assert_eq!(previous["projection"]["waiter"]["on"], "human");
-    assert!(
-        previous["projection"]["waiter"]["reason"]
-            .as_str()
-            .is_some_and(|reason| !reason.is_empty())
-    );
-    wait_until("recovered assistant waiting for input", || {
-        let saved = host.record(&resumed);
+    wait_until("resumed assistant live and waiting for input", || {
+        let saved = host.record(&run);
         saved["projection"]["phase"] == "executing"
             && saved["frontier"][0]["node_id"] == "wait_input"
-            && saved["frontier"][0]["key"]["invocation"] == 1
-            && saved["results"].get("reply").is_none()
+            && saved["frontier"][0]["key"]["invocation"] == 2
     });
+    let (status, listed) = restarted.request("GET", "/runs", None);
+    assert_eq!(status, 200, "{listed}");
+    let projection = &listed["runs"][0]["projection"];
+    assert_eq!(listed["runs"].as_array().unwrap().len(), 1, "{listed}");
+    assert_eq!(projection["active"], json!(true), "{listed}");
+    assert!(projection.get("superseded").is_none(), "{listed}");
     idle(&provider, 2);
 
     let sessions =
@@ -1574,13 +1560,20 @@ fn host_restart_automatically_resumes_the_instance_with_its_workspace_and_sessio
         .find(|event| event.kind == "channel.assistant_auto_resume")
         .expect("automatic recovery was not recorded");
     assert_eq!(automatic.data["from"], json!(run));
-    assert_eq!(automatic.data["to"], json!(resumed));
+    assert_eq!(automatic.data["to"], json!(run));
+    assert_eq!(automatic.data["in_place"], json!(true));
+    assert!(
+        !events
+            .iter()
+            .any(|event| event.kind == "channel.assistant_handover"),
+        "{events:?}"
+    );
     drop(sessions);
 
     provider.append(vec![
-        command("set -eu; test \"$(cat inherited.txt)\" = auto-resume-seed; printf inherited > continued.txt; printf auto-resume-workspace-inherited")
+        command("set -eu; test \"$(cat inherited.txt)\" = auto-resume-seed; printf continued > continued.txt; printf auto-resume-workspace-kept")
             .expect_request_contains("persistent-auto-resume-second-input"),
-        finish("persistent-auto-resume-second-reply").after("auto-resume-workspace-inherited"),
+        finish("persistent-auto-resume-second-reply").after("auto-resume-workspace-kept"),
     ]);
     idle(&provider, 2);
     let second_event = event(
@@ -1593,38 +1586,27 @@ fn host_restart_automatically_resumes_the_instance_with_its_workspace_and_sessio
         &second_event,
         "persistent-auto-resume-second-reply",
     );
-    assert_eq!(second["run"], json!(resumed));
+    assert_eq!(second["run"], json!(run));
     assert_eq!(second["session"], json!(session));
-    let resumed_saved = waiting(&host, &resumed, 1);
-    // The recovery replaced the old Run instead of adding a second instance.
-    assert_eq!(runs(&host).len(), 2);
-    // Same Goose conversation, new Run: the recovered instance continues the
-    // native session instead of starting one.
-    let resumed_native = native_round(&host, &provider, &resumed, 1);
+    let resumed_saved = waiting(&host, &run, 2);
+    assert_eq!(runs(&host).len(), 1);
+    // Same Run, same Goose conversation.
+    let resumed_native = native_round(&host, &provider, &run, 2);
     assert_eq!(resumed_native["session_id"], native["session_id"]);
     assert_eq!(
         resumed_native["conversation_scope"],
         native["conversation_scope"]
     );
-    // The new workspace inherited the old scene, including the uncommitted
-    // file, and the old Run's Artifact is unchanged.
-    let resumed_directory = workspace(&host, &resumed);
-    assert_ne!(resumed_directory, directory);
+    // The same workspace carried the uncommitted file, and the first Artifact
+    // is unchanged.
+    assert_eq!(workspace(&host, &run), directory);
     assert_eq!(
-        fs::read(resumed_directory.join("inherited.txt")).unwrap(),
-        b"auto-resume-seed"
-    );
-    assert_eq!(
-        fs::read(resumed_directory.join("continued.txt")).unwrap(),
-        b"inherited"
-    );
-    assert_eq!(
-        fs::read(directory.join("inherited.txt")).unwrap(),
-        b"auto-resume-seed"
+        fs::read(directory.join("continued.txt")).unwrap(),
+        b"continued"
     );
     assert_eq!(snapshot_inventory(&first_artifact), first_snapshot);
     assert_eq!(
-        resumed_saved["results"]["assistant"][0]["completion"]["submission"],
+        resumed_saved["results"]["assistant"][1]["completion"]["submission"],
         "persistent-auto-resume-second-reply"
     );
     assert!(
@@ -1633,18 +1615,16 @@ fn host_restart_automatically_resumes_the_instance_with_its_workspace_and_sessio
             .contains("persistent-auto-resume-first-input")
     );
     idle(&provider, 4);
-    let stopped = stop(&restarted, &provider, &resumed);
+    let stopped = stop(&restarted, &provider, &run);
     evidence(
         &host,
         &provider,
-        &resumed,
+        &run,
         json!({
             "case_source":CASE_SOURCE,"first_response":first,"second_response":second,
             "recovery_binding":binding,"automatic_event":automatic.data,
-            "resumed_run":resumed,"previous_run":run,"previous_projection":host.record(&run)["projection"],
-            "same_native_session":native["session_id"],
-            "new_workspace":resumed_directory,"old_workspace":directory,
-            "inherited_workspace":true,"old_fs2_snapshot_unchanged":true,"stopped":stopped
+            "resumed_in_place":run,"same_native_session":native["session_id"],
+            "same_workspace":directory,"old_fs2_snapshot_unchanged":true,"stopped":stopped
         }),
     );
 }

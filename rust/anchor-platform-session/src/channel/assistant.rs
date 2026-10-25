@@ -448,6 +448,45 @@ impl SessionStore {
         Ok(())
     }
 
+    /// Record that a restart continued the current instance in its own Run.
+    ///
+    /// Same event as a restart-driven handover, with `from == to` and
+    /// `in_place`, so every automatic recovery leaves one fact of one kind. It
+    /// is only accepted while the Run is the current, unretired binding.
+    pub fn record_channel_assistant_resumed_in_place(
+        &self,
+        owner: &str,
+        session: &str,
+        run: &str,
+    ) -> Result<(), SessionError> {
+        validate_assistant_lookup(owner, session, run)?;
+        let mut connection = self.lock()?;
+        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let mut snapshot = store::read_session(&transaction, owner, session)?;
+        ensure_channel_session(&transaction, owner, session)?;
+        let (_, retired) =
+            read_assistant_for_run(&transaction, session, run)?.ok_or(SessionError::Missing)?;
+        if retired {
+            return Err(SessionError::Conflict(
+                "assistant resumed in place is not the current instance".into(),
+            ));
+        }
+        touch_channel_session(
+            &transaction,
+            owner,
+            &mut snapshot,
+            "channel.assistant_auto_resume",
+            BTreeMap::from([
+                ("from".into(), json!(run)),
+                ("to".into(), json!(run)),
+                ("in_place".into(), json!(true)),
+            ]),
+            Utc::now(),
+        )?;
+        transaction.commit()?;
+        Ok(())
+    }
+
     pub fn pending_channel_assistant_inputs(
         &self,
         owner: &str,
@@ -1200,6 +1239,30 @@ mod tests {
         assert_eq!(resumed.len(), 1);
         assert_eq!(resumed[0].data["from"], json!("assistant-old"));
         assert_eq!(resumed[0].data["to"], json!("assistant-new"));
+
+        // An in-place resume names only the current instance.
+        assert!(
+            store
+                .record_channel_assistant_resumed_in_place(owner, &session, "assistant-old")
+                .is_err()
+        );
+        store
+            .record_channel_assistant_resumed_in_place(owner, &session, "assistant-new")
+            .unwrap();
+        let in_place = store
+            .events(owner, &session, 0)
+            .unwrap()
+            .into_iter()
+            .rfind(|event| event.kind == "channel.assistant_auto_resume")
+            .unwrap();
+        assert_eq!(
+            in_place.data,
+            BTreeMap::from([
+                ("from".into(), json!("assistant-new")),
+                ("to".into(), json!("assistant-new")),
+                ("in_place".into(), json!(true)),
+            ])
+        );
 
         // A second handover chains the predecessors in binding order.
         store

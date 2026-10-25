@@ -233,6 +233,8 @@ export type RunProjection = {
   outcome?: 'done' | 'failed' | 'escalated' | 'unknown' | 'aborted';
   reason: string | null;
   active: boolean;
+  /** A later Run of the same conversation took this one over; it never executes again. */
+  superseded?: boolean;
   actions: { pause: boolean; stop: boolean; resume: boolean; abandon: boolean };
   updated: string | null;
 };
