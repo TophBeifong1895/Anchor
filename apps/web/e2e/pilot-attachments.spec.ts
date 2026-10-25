@@ -9,14 +9,14 @@ type Body = { request_id: string; message?: string; attachments?: { name: string
 type SavedTurn = { id: string; session: string; status: string; prompt: string | null; request_id: string; error: string; created_at: string; attachments: Attachment[] };
 type Message = { role: string; text: string; turn: string; attachments?: Attachment[] };
 
-async function fixture(page: Page, options: { existing?: boolean; failFirst?: boolean; holdLive?: boolean; failPreview?: boolean; rejectBlobKey?: boolean; unsafeOutput?: boolean; persistLiveOutput?: boolean } = {}) {
+async function fixture(page: Page, options: { existing?: boolean; failFirst?: boolean; holdLive?: boolean; failPreview?: boolean; unsafeOutput?: boolean; persistLiveOutput?: boolean } = {}) {
   const session = (id: string) => ({ id, title: id === 'one' ? '第一个对话' : id === 'two' ? '第二个对话' : '', status: 'active', waiting_reason: '', updated_at: '2026-10-14T03:00:00Z', approval: null });
   const sessions = options.existing ? [session('one'), session('two')] : [];
   const histories: Record<string, Message[]> = {};
   const executions: Record<string, SavedTurn[]> = {};
   const blobs = new Map<string, { data: Buffer; type: string }>();
   const facts = { sessionWrites: 0, turnWrites: [] as Body[], unexpected: [] as string[], mediaReads: [] as { url: string; authorization?: string }[],
-    finish: !options.holdLive, allowPreview: !options.failPreview, rejectedKey: false,
+    finish: !options.holdLive, allowPreview: !options.failPreview,
     inheritInput(requestId: string) {
       const sid = 'created-1', origin = executions[sid][0];
       executions[sid] = [{ ...origin, id: 'turn-resume', request_id: requestId, prompt: null, status: 'running' }, ...executions[sid]];
@@ -30,7 +30,6 @@ async function fixture(page: Page, options: { existing?: boolean; failFirst?: bo
   };
   await page.addInitScript(() => {
     localStorage.setItem('anchor:view', 'pilot');
-    if (!sessionStorage.getItem('anchor-api-key')) sessionStorage.setItem('anchor-api-key', 'tab-secret');
   });
   await page.route('**/*', async route => {
     const request = route.request();
@@ -43,6 +42,8 @@ async function fixture(page: Page, options: { existing?: boolean; failFirst?: bo
     if (path === '/graphs') return route.fulfill({ json: { graphs: [] } });
     if (path === '/runs') return route.fulfill({ json: { runs: [] } });
     if (path === '/timeline') return route.fulfill({ json: { runs: [], scheduled: [], schedules: [] } });
+    // A 503 asks the Host whether a default model can execute; the fixture has one.
+    if (path === '/settings/model') return route.fulfill({ json: { execution: { configured: true } } });
     if (path === '/sessions') {
       if (method === 'POST') { const created = session(`created-${++facts.sessionWrites}`); sessions.unshift(created); return route.fulfill({ status: 201, json: { session: created } }); }
       return route.fulfill({ json: { sessions } });
@@ -84,7 +85,6 @@ async function fixture(page: Page, options: { existing?: boolean; failFirst?: bo
       const blob = blobs.get(path);
       if (blob) {
         facts.mediaReads.push({ url: request.url(), authorization: request.headers().authorization });
-        if (options.rejectBlobKey && request.headers().authorization !== 'Bearer renewed-tab-key') { facts.rejectedKey = true; return route.fulfill({ status: 401, json: { error: 'unauthorized' } }); }
         if (options.failPreview && path.endsWith('/output-image') && !url.search && !facts.allowPreview) { return route.fulfill({ status: 503, json: { error: '图片暂时不可用' } }); }
         return route.fulfill({ contentType: blob.type, body: blob.data });
       }
@@ -198,20 +198,13 @@ test('live output previews retry independently, authenticated downloads and hist
     const downloaded = page.waitForEvent('download'); await assistant.getByRole('button', { name: `下载 ${name}` }).click();
     expect((await downloaded).suggestedFilename()).toBe(name);
   }
-  expect(facts.mediaReads.every(read => read.authorization === 'Bearer tab-secret')).toBeTruthy();
+  expect(facts.mediaReads.every(read => !read.authorization)).toBeTruthy();
   expect(facts.mediaReads.every(read => !read.url.includes('tab-secret'))).toBeTruthy();
   const liveNames = await assistant.locator('.pilot-attachment strong').allTextContents(); facts.finish = true; await complete(page);
   await page.reload(); await expect(assistant.locator('img[alt="chart.png"]')).toBeVisible(); expect(await assistant.locator('.pilot-attachment strong').allTextContents()).toEqual(liveNames);
   await expect(assistant).toHaveCount(1); expect(facts.turnWrites).toHaveLength(1); expect(facts.unexpected).toEqual([]);
 });
 
-test('protected attachment fetch uses the existing API key dialog after a 401', async ({ page }) => {
-  const facts = await fixture(page, { rejectBlobKey: true }); await ready(page); await input(page).fill('生成图表'); await input(page).press('Enter');
-  const dialog = page.getByRole('dialog', { name: '连接 Anchor 服务' }); await expect(dialog).toBeVisible(); await dialog.getByLabel('Anchor API key').fill('renewed-tab-key'); await dialog.getByRole('button', { name: '连接', exact: true }).click();
-  await expect(dialog).not.toBeVisible(); await expect(page.locator('article.pilot-message.assistant img')).toBeVisible();
-  expect(facts.mediaReads.some(read => read.authorization === 'Bearer renewed-tab-key')).toBeTruthy();
-  expect(facts.mediaReads.every(read => !read.url.includes('key'))).toBeTruthy(); expect(facts.unexpected).toEqual([]);
-});
 
 test('untrusted output attachment URLs never receive the tab key or become images', async ({ page }) => {
   const facts = await fixture(page, { unsafeOutput: true }); await ready(page); await input(page).fill('生成图表'); await input(page).press('Enter'); await complete(page);

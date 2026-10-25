@@ -1,6 +1,7 @@
 import { expect, test } from '@playwright/test';
 import type { ChildProcess } from 'node:child_process';
 import { createServer } from 'node:http';
+import { createHash } from 'node:crypto';
 import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
@@ -41,13 +42,21 @@ for (const deployment of [false, true]) {
     const artifacts = join(repo, '.local/model-slots-20261015/browser', basename(root));
     await mkdir(artifacts, { recursive: true });
     const probe = await provider();
-    const host = await nativeHost(root, { environment: {
-      ...(deployment ? {
-        ANCHOR_MODEL_URL: probe.url, ANCHOR_MODEL_API_KEY: defaultKey,
-        ANCHOR_MODEL_NAME: 'legacy-execution-model', ANCHOR_MODEL_WIRE_API: 'chat',
-        ANCHOR_MODEL_ALIASES: JSON.stringify({ 'models.research': 'legacy-research' }),
-      } : {}),
-    } });
+    const host = await nativeHost(root);
+    // Existing deployment configuration means Host-managed state saved by an
+    // earlier release, not ANCHOR_MODEL_* process variables: those stopped
+    // being a configuration source, and the Host ignores them now.
+    if (deployment) {
+      const managed = join(root, 'state/managed');
+      await mkdir(managed, { recursive: true });
+      const providerId = createHash('sha256').update(`chat\n${probe.url}`).digest('hex');
+      await writeFile(join(managed, 'model-config.json'), JSON.stringify({
+        format: 3,
+        current: { endpoint: probe.url, wire_api: 'chat', model: 'legacy-execution-model',
+          context_window: null, max_tokens: null, aliases: { 'models.research': 'legacy-research' } },
+        history: [], credentials: { [providerId]: defaultKey }, providers: {},
+      }), { mode: 0o600 });
+    }
     let backend: ChildProcess | undefined;
     const problems: string[] = [];
     page.on('pageerror', error => problems.push(error.message));
