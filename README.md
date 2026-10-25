@@ -1,239 +1,114 @@
 # Anchor
 
 <p align="center">
-  <strong>用 Graph 组织 Agent 的长期工作，让每次执行都可观察、可恢复、可交付。</strong>
+  <strong>把大模型的判断力接到真实业务上，而不把边界交给概率。</strong>
 </p>
 
 <p align="center">
-  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-111827.svg" alt="MIT License"></a>
-  <a href="rust/Cargo.toml"><img src="https://img.shields.io/badge/backend-Rust-DEA584.svg" alt="Rust backend"></a>
-  <a href="apps/web/package.json"><img src="https://img.shields.io/badge/web-React%20%2B%20TypeScript-3178C6.svg" alt="React and TypeScript web UI"></a>
-  <a href="docs/architecture.md"><img src="https://img.shields.io/badge/runtime-Goose%20ACP-2563EB.svg" alt="Goose ACP runtime"></a>
+  <a href="LICENSE">MIT</a> ·
+  Rust Host + 共享 Runtime Kernel ·
+  <a href="docs/architecture.md">Goose ACP</a> ·
+  React / TypeScript WebUI
 </p>
 
-<p align="center">
-  <a href="#快速开始">快速开始</a> ·
-  <a href="#核心概念">核心概念</a> ·
-  <a href="#示例">示例</a> ·
-  <a href="#后续主方向harness-数据中枢">方向</a> ·
-  <a href="#文档导航">文档</a> ·
-  <a href="#开发与验证">开发</a>
-</p>
+Anchor 是一个**个人 agent 平台**：作者用自己的工作和生活负载在跑它，用它承接反复占用时间和注意力的事，再用它自己的执行记录改进它自己。
 
-Anchor 是一个本地优先、可观察、可恢复的 Agent 工作系统。你用 **Graph** 描述任务拆分、检查、返工和交付；用 **AgentNode** 处理需要理解和取舍的工作；用 **OpNode** 执行确定性步骤；用 **Plugin** 提供明确授权的知识、工具和外部系统连接。
+它不是给陌生人的 SaaS，也不是又一个拖图工具。它回答的是更窄的问题：
 
-每次 **Run** 都会冻结 Graph 定义、输入和资源绑定，并保存节点历史、工具观察、工作区和不可变 Artifact。**Session/Turn** 负责持续协作、必要提问、事件重连和入口幂等。服务中断后，Anchor 先保存事实，再让 Agent 核查现场并继续；它不会把未知的外部副作用当成可以安全重放的操作。
+> 大模型是概率系统。要让它在真实业务上长期工作，需要什么样的条件？
 
-> **当前状态**  · Anchor 正在持续开发，当前维护路径是 Rust Host + 共享 Runtime Kernel + Goose ACP + React/TypeScript WebUI，默认面向 Linux x86_64 的本地单进程部署。核心运行链有确定性本地回归；真实模型、真实 WeCom/Docmost/学术服务、目标机发行、旧数据迁移和生产切换按独立验收记录，详见[开发台账](docs/pilot-development-plan.md)。
+## 一个判断
 
-<p align="center">
-  <img src="docs/images/anchor-graph-editor.png" alt="Anchor Graph 编辑器：任务节点、反馈回路和布局" width="960">
-</p>
+今天的 agent 系统几乎都在优化同一件事：让模型更会做事。但把 agent 接进真实业务，卡住人的是另一类问题——它做了什么、花了多少、为什么失败、能不能接着做、这次和上次的差别是变好还是只是变了。
 
-## 为什么使用 Anchor
+这些问题回答不了，不是因为模型不够强，而是因为**执行过程从来没有被记成数据**。聊天记录不是记录：它没有结构、没有成本、没有权限边界、没有可恢复的游标，也没法比较两次执行。
 
-| 关注点 | Anchor 的做法 |
+Anchor 的选择是：**先把执行变成事实，再谈智能。**
+
+## 押注：给条件，不捏雪花
+
+把业务直接扔给模型，得到的是不可控的概率。所以 Anchor 划了一条线：
+
+- **交给代码**：身份、权限、schema、路由、持久化、机械门禁、幂等、冻结。这些错了不会有人提醒你，模型再强也补不回来。
+- **交给模型**：怎么拆、读到什么、怎么综合、返工几次、结论是什么。这些钉死了，模型变强也没有空间。
+
+这条线由 Graph 落地：**AgentNode** 承担需要理解、搜索、取舍和综合的工作；**OpNode** 承担需要代码严格控制的步骤——命令、Graph 调用、扇出与汇合、获授权的宿主操作。两者在同一条边上协作，而不是让模型独自决定整条流程。
+
+由此有一个可检验的标准：**把模型换成更强的一代，这个平台应该删代码，而不是改代码。** 如果每次换模型都要重新适配拓扑和门禁，说明约束渗进了判断层——那是在用编排补偿模型，永远追不上。
+
+## 四个设计决定
+
+**执行是一条记录，不是一段日志。** 每笔提交经同一个 `Kernel::submit` 落成同一种历史记录；时间、成本、身份由宿主盖章，内核只记录、不据此裁决。Run 开始即冻结 Graph、输入和资源授权。可观察、可恢复、可度量都是这一个决定的推论，不是三个独立功能——UI、摘要和模型上下文都只是事实的投影。
+
+**能力是文件，所以能被交付，也能被改写。** Graph 是 JSON，能 diff、能在画布上编辑、能随每条 Run 冻结快照、能打成不含源码的包交给别的机器。Plugin 是显式资产；节点声明了工具不等于拿到权限，授权由 Host 与 Sandbox 执行——模型被注入、图被改坏，边界还在。
+
+**边界在执行层，不在提示词里。** 每节点稳定的 workspace（`<run>/nodes/<node-hash>`）+ 不可变产物谱系 + Bubblewrap 沙箱。外部副作用结果未知时，先保存观察，再让 Agent 核查现场，然后继续、补偿或提问——不自动重放。
+
+**因此它能改进自己。** 执行记录是统一口径，Graph 和 Plugin 是文件资产，于是「读记录 → 提出改动 → 改图 → 跑一次 → 比较 → 回写」是一条闭环，不需要外挂任何东西。这是 Anchor 最不像其他工具的地方：**它的产物就是它自己的输入。**
+
+## 它不是什么
+
+说清边界比列功能更有用：
+
+- **不是多租户云平台。** 单进程、本机、一个安装身份，面向 Linux x86_64；没有 HA、滚动升级和集中告警。
+- **不追求第一小时的顺滑。** 要编译 Rust、装 Bubblewrap、用固定版 Goose，上手成本是真的。
+- **不承诺外部副作用的 exactly-once。** 它承诺的是：未知的操作不会被当成已知重放，事后能查清发生了什么。
+- **隔离强度是短板。** Bubblewrap 是沙箱方案里较轻的一端，Host 与图执行同进程。它在记账上很严，在隔离上一般。
+
+如果你的 agent 只是跑在自己电脑上、结果发条消息就算完，n8n、Dify、扣子更省事，那是更好的答案。Anchor 值得用的场景很窄：**能力要装到不能上云的机器上、有外部副作用、要一直活着，而且你希望它靠测量而不是感觉变好。**
+
+## 现在能做什么
+
+| | |
 | --- | --- |
-| 复杂任务如何拆分 | Graph 把 Agent 推理、确定性操作、条件路由、反馈、子图和并行分支放在同一份可编辑定义里。 |
-| 结果如何复查 | Run 记录实际路径、每次 invocation、工具请求与结果、工作区和 Artifact；UI 只是这些事实的投影。 |
-| 中断后如何继续 | Goose 保存原生 Agent loop、Provider、会话和 compaction；Anchor 保存 Graph cursor、权限、产物和恢复事实。继续前先核查现场，不自动重放未知副作用。 |
-| 能力如何受控 | Plugin、Library、MCP 和 Bubblewrap Sandbox 由 Host 显式绑定和授权；模型输出、提示词和 Plugin 描述本身不增加权限。 |
+| 编排 | 条件路由、反馈回路、内联子图、独立 Graph Call、`wait/detach`、配对 `fanout/join`；可在画布编辑，也可由 Pilot 生成 |
+| 运行 | 路径、节点对话、工具轨迹、工作区、Artifact；暂停、停止、继续、受保护删除 |
+| 持续协作 | Session/Turn、SSE 重连、必要提问、原生会话续聊与压缩 |
+| 能力插拔 | Plugin = Skill + 资源 + stdio/HTTP MCP + 凭据引用；Library 安装后由 Graph 显式引用 |
+| 触发与渠道 | 手动、计划、Webhook、Responses、企业微信；一张常驻助手 Graph 对应一个机器人，每会话一个常驻 Run，重启原地接续 |
+| 自我改进 | `rsi` Graph 采集执行记录与代码，并行专项审查，机械门禁校验证据与提案，产出带验收和回滚条件的变更提议 |
 
-## 核心概念
-
-| 对象 | 作用 |
-| --- | --- |
-| **Graph** | 可编辑的任务定义，包含节点、边、目标、输入接口和画布布局；开始运行后会形成自己的冻结快照。 |
-| **AgentNode** | 负责理解、搜索、综合、判断和结构化完成；通过固定版本 Goose ACP 与模型交互。 |
-| **OpNode** | 负责命令、Graph Call、`fanout/join` 或获授权的 Host operation；适合需要代码严格控制的步骤。 |
-| **Plugin** | 一组 Skill、资源、MCP 工具或渠道入口；安装到 Library 后由 Graph 显式引用。 |
-| **Run** | 一次实际执行，拥有 cursor、工作区、工具观察、节点历史、Artifact、控制和恢复事实。 |
-| **Session / Turn** | 持续对话和单次输入的身份边界，提供幂等请求、SSE 事件游标、必要提问和渠道投递事实。 |
-
-### 一次执行如何发生
-
-```mermaid
-flowchart LR
-    A[WebUI / CLI / Webhook / Channel] --> B[Rust Host]
-    B --> C[GraphRunner]
-    C --> D[AgentNode]
-    C --> E[OpNode]
-    D --> F[Goose ACP]
-    F --> G[授权 MCP / Plugin]
-    G --> H[Sandbox]
-    E --> H
-    C --> I[Run / Session / Turn / Artifact]
-    H --> I
-```
-
-Goose 拥有 Agent loop、Provider、原生会话和上下文压缩；Anchor 拥有 Graph、Run、Artifact、Sandbox、Library 和平台 Session/Turn。两者通过稳定的 ACP、MCP 和节点执行端口协作，Anchor 不再维护第二套通用 Agent loop。
-
-## 能力地图
-
-| 能力 | 当前入口 | 说明与边界 |
-| --- | --- | --- |
-| Graph 编辑与执行 | WebUI、Graph API | 创建、校验、条件路由、反馈、内联子图、独立 Graph Call、`wait/detach`、配对 `fanout/join`。 |
-| Run 观察与控制 | Run 页面、API | 查看路径、节点对话、工具轨迹、文件和 Artifact；支持暂停、停止、继续、历史和受保护删除。 |
-| Pilot Session | WebUI、Session API | 持续对话、SSE 重连、必要提问与回答、原生会话续聊和压缩；Responses 仅实现文档列出的子集。 |
-| Plugin 与工具 | Library、MCP、Sandbox | 支持 Skill、资源、stdio/HTTP MCP、凭据引用和 OAuth 基础；权限由 Host/Sandbox 强制校验。 |
-| 触发与渠道 | 手动、计划、Webhook、Responses、WeCom | 入口共用同一 Run 接纳。一张常驻助手 Graph 对应一个企业微信机器人，由 Host 监管各自的原生 Gateway；每个会话一个常驻 Run，重启后自动接续。真实客户端收发按实际环境验收。 |
-| 官方工具 | `anchor-scholarly`、`anchor-docmost-tools`、`anchor-wecom-tools` | Rust 官方工具作为显式 Plugin 资源进入 Graph 闭包，外部服务凭据和业务结果不随仓库提供。 |
-| 独立交付 | `anchor-distribution`、systemd | 构建 source-free Graph/Plugin 闭包，状态、凭据和可写根目录留在发行包之外。 |
+首次启动提供 7 张示例 Graph 和 5 个官方 Plugin。建议先跑不需要模型的 `call-report`，再配置模型尝试 `revise-loop` 和 `plugin-research`；清单见[上手示例](examples/README.md)。
 
 ## 快速开始
-
-### 运行方式与环境要求
-
-从源码开发和运行预构建发行包使用同一套 Host 与 Runtime，所需环境有所不同：
-
-| 依赖 | 从源码构建与开发 | 运行完整发行包 |
-| --- | --- | --- |
-| Linux x86_64 | 需要 | 需要，并满足包内二进制的系统兼容要求 |
-| Rust stable、`rustup` | 构建 Rust 和固定 Goose 时需要 | 不需要 |
-| Node.js、npm | 构建 WebUI、运行 Vite 时需要；Node.js 20.19+ 或 22.12+ | 不需要；Rust Host 直接提供编译后的 WebUI |
-| Git、`sh`、Bubblewrap、slirp4netns | 需要，沙箱须有可用的 user/mount/network namespace | 同样需要 |
-| Goose ACP 二进制 | 首次启动自动构建固定版本与仓库补丁，使用本机产物 | 发行包已包含 `bin/goose` |
-| 系统动态库 | 满足所构建 ELF 的依赖 | 按 `runtime-manifest.json` 中 Host 和工具的 ELF 依赖准备 |
-| 模型与外部服务配置 | 运行相应 Agent/Plugin 时需要 | 同样需要；凭据和状态放在包外 |
-
-### 使用预构建发行包
-
-完整平台包包含 Host、固定 Goose、编译后的 WebUI、联网 Plugin 和语言初始化工具，不附带业务 Graph 或用户凭据。安装后运行 `bin/anchor-platform start`，再在网页配置模型与其他能力；systemd 也调用同一启动器。独立 Graph 包仍包含自己的 Graph bundle 和声明的 Plugin 资源。部署步骤见[生产部署指南](docs/rust-production-deployment.md)。
-
-只有一个 `anchor-runner-host` 可执行文件时，还需要配齐 Goose、Graph/Plugin 资源和所需 Web 资产。官方发行不依赖 Python；第三方 Plugin 若使用其他语言，其运行环境由该 Plugin 的声明决定。Goose 是静态 musl 二进制，Host 和工具仍可能依赖动态库，具体以发行 manifest 为准。
-
-`scripts/dev.sh` 会运行 Node 并启动 Vite，适用于下面的开发路径；成品包直接运行 Host 时不使用该脚本，也无需在目标机重建 Goose 或 WebUI。
-
-### 从源码启动本地开发服务
 
 ```sh
 git clone https://github.com/manstein-lzn/Anchor.git
 cd Anchor
-./scripts/dev.sh start
+./scripts/dev.sh start     # 首次编译 Host、WebUI 与固定版 Goose，需要几分钟
 ```
 
-首次启动自动下载依赖并编译 Host、WebUI 与 Goose，通常需要几分钟，耗时取决于机器和网络；后续启动复用 Goose/前端依赖并对 Host 做增量构建。系统依赖与故障提示见[使用指南](docs/usage.md#安装与本地启动)。只准备依赖而不启动服务可执行 `./scripts/dev.sh setup`。
+打开 <http://127.0.0.1:5173>，在「设置 → 模型服务」填服务地址、协议、API key 和模型名，即可与 Pilot 对话。无需 `.env`，凭据存在 Host 私有存储里。`scripts/dev.sh` 使用独立的 `.local/rust` 数据根，不会接管仓库里已有的 Graph 和运行记录。
 
-打开 <http://127.0.0.1:5173>，在「设置 → 模型服务」保存 default 的服务地址、协议、API key 和 Flash 模型名，再返回 Pilot 对话。无需 `.env`，不用手动安装 Goose 或填写二进制摘要。也可打开 <http://127.0.0.1:8077> 使用 Rust Host 提供的 WebUI/API。`scripts/dev.sh` 使用独立的 `.local/rust` 数据根，不会接管仓库里已有的 Graph、运行记录或环境。
+需要 Linux + Rust stable + Node.js 20.19+/22.12+ + Git + Bubblewrap + slirp4netns；细分要求见[使用指南](docs/usage.md#安装与本地启动)。
 
-首次启动会在 WebUI 提供 **7 张示例 Graph 和 5 个官方 Plugin**，包括工作流调用、写作反馈、并行审查、学术调研和常驻企微助手模板。建议先运行无需模型的 `call-report`，再配置模型尝试 `plugin-research`。Docmost 和企微机器人按需在网页配置，默认不连接。已有同名内容、用户修改和删除会保留；完整清单见[上手示例](examples/README.md)。
+## 当前状态
 
-停止或重启服务：
+维护路径是 Rust Host + 共享 Runtime Kernel + Goose ACP + React/TypeScript WebUI，默认面向本机单进程部署。核心运行链有确定性本地回归（小型 fixture Graph + 确定性本地 Provider，实际经过 Host、GraphRunner、Goose ACP 与授权 MCP）；真实模型、真实外部服务、目标机发行和旧数据迁移分别验收，结论与未关闭事项见[验收台账](docs/pilot-development-plan.md)。本地回归通过不等于生产流量已经切换。
 
-```sh
-./scripts/dev.sh stop
-./scripts/dev.sh restart
-```
+## 文档
 
-### 从源码启用 AgentNode 与 Pilot
-
-`./scripts/dev.sh start` 自动安装锁定的 Web 依赖，增量构建 debug Host 与 `anchor-net-relay`，并将 Goose v1.53.0 加仓库补丁的 lean ACP 准备到 `.local/bin/goose`。Goose 构建脚本安装其固定 Rust 工具链的 musl target，不要求用户另外执行 `rustup target add`；源码构建记录本机产物摘要，由启动脚本自动传给 Host，不要求匹配其他机器的产物。版本、补丁或构建脚本变动后自动重新准备，未变则复用缓存。
-
-启动后到 WebUI「设置 → 模型服务」填写服务地址、协议、API key 和 Flash 模型名，即可与 Pilot 对话；Pro/backup 可暂不配置。模型设置保存后下一轮生效，无需重启。凭据保存在 Host 私有存储，无需创建或编辑 `.env`。
-
-成品平台使用安装后的 `bin/anchor-platform start`，自动定位随包工具与独立数据目录；模型、插件、渠道和语言环境通过 WebUI 管理。开发脚本与 Web 构建均忽略遗留 `.env` 文件；开发者需要覆盖路径或端口时，可显式传入进程设置，见[使用指南](docs/usage.md)。
-
-### 第一次运行开发示例
-
-1. 打开 WebUI，Graph 目录里已有上面的示例。先运行无需模型的 `call-report`，输入 `{"report_code":"DEMO-001"}`，看主工作流如何调用子工作流并读取返回文件。
-2. 到「设置 → 模型服务」保存 default Flash 配置，再运行 `revise-loop`，观察 Artifact 和反馈返工路径。
-3. 回到 Pilot 对话，让它协助创建工作流，或在图编排页面新建 Graph。
-4. Graph API 导入格式见[使用指南中的 Graph 小节](docs/usage.md#graph-与-webui)；Graph 保存时会校验作者定义和 Plugin 资源绑定。
-
-## 示例
-
-仓库中的 Graph 都是普通 Graph，不依赖另一套业务执行器：
-
-| 示例 | 用途 |
+| 想了解 | 从这里开始 |
 | --- | --- |
-| [`call-report.json`](examples/graphs/call-report.json) / [`call-worker.json`](examples/graphs/call-worker.json) | 主工作流经 Graph Call 调用子工作流并读取返回文件；无需模型。 |
-| [`revise-loop.json`](examples/graphs/revise-loop.json) | 草稿、审阅和返工反馈回路。 |
-| [`parallel-audit.json`](examples/graphs/parallel-audit.json) | 两个独立审查分支通过 `fanout/join` 汇总。 |
-| [`survey-modular.json`](examples/graphs/survey-modular.json) | 以内联子图复用一段工作流。 |
-| [`plugin-research.json`](examples/graphs/plugin-research.json) | 单节点学术调研，生成有来源的研究笔记。 |
-| [`deep-academic-research.json`](examples/graphs/deep-academic-research.json) | 带调查、挑战、综合、评审和门禁的研究 Graph。 |
-| [`rsi.json`](examples/graphs/rsi.json) | 通过证据、评审和确定性门禁生成演进提案；发布提案不会自动修改项目。 |
-| [`wecom-persistent-assistant.json`](examples/graphs/wecom-persistent-assistant.json) | 常驻企业微信助手：这张 Graph 配一个机器人，每个会话一个同 Run 多轮的实例。 |
+| 安装、Graph、Run、Session | [使用指南](docs/usage.md) |
+| 当前实现与事实所有者 | [当前架构](docs/architecture.md) |
+| 产品边界、执行不变量、设计原则 | [产品与系统架构](docs/product-architecture.md) |
+| 为什么值得投入：执行记录与自我改进 | [Harness 数据中枢](docs/harness-data-hub.md) |
+| 自我改进的具体做法 | [RSI](docs/rsi.md) |
+| Plugin、Skill、MCP | [Plugin 指南](docs/plugins.md) |
+| 企业微信助手 | [企业微信指南](docs/wecom-assistant.md) |
+| 验收结论与待办 | [验收台账](docs/pilot-development-plan.md) |
 
-除 `survey-modular` 和 `rsi` 外，表中 Graph 都随首次启动导入。学术示例使用随附的 `academic-research` Plugin，实际访问取决于论文服务；RSI、周报等其他示例依赖授权的本机输入目录，见[上手示例](examples/README.md)。
-
-<p align="center">
-  <img src="docs/images/anchor-run-evidence.png" alt="Anchor Run 记录：执行路径、节点对话和生成文件" width="900">
-</p>
-
-## 后续主方向：Harness 数据中枢
-
-Anchor 本身是一个 Harness。长期目标是把每次执行的事实（提交、时间、成本、身份、人工介入）统一落成同一种历史记录，再用专门的分析工具和算法找出哪些 Harness、Graph、Plugin 的组织方式真正提高任务质量和效率，最终由算法驱动系统自我改进（RSI）。分析只读；改进建议作为提交，由人或 Validator 裁决。目标与判据见[方向文档](docs/harness-data-hub.md)，代码组织与阶段见[总体架构](docs/harness-data-hub-architecture.md)；信号驱动的 RSI 示例见 [RSI](docs/rsi.md)，当前结论与待办见[验收台账](docs/pilot-development-plan.md)。
-
-## 安全、恢复与部署边界
-
-Anchor 的安全模型依赖可核查的事实和明确的授权边界：
-
-- Graph、Run、Session、Artifact、Library 和 Sandbox 各自拥有稳定事实；UI 缓存、摘要和模型上下文不是权威状态。
-- 每个 Run 冻结 Graph、Plugin 和输入授权；Graph 或 Library 后续更新不会静默改变已经开始的 Run。
-- 外部工具返回缺失、进程中断或发送结果未知时，系统保存观察事实，让 Agent 核查工作区和外部状态，再决定继续、补偿或提问。
-- 不自动重放未知的外部操作，也不承诺外部副作用的 exactly-once；重启后恢复保存的事实，不重放旧确认。
-- Plugin 清单和提示词不等于权限。文件、命令、网络、凭据和控制动作由 Host、Library 和 Bubblewrap Sandbox 共同校验。
-- 默认部署是本机单服务进程，不是托管云服务或多租户工作流集群；非 loopback 监听必须自行配置身份、网络边界和 Bearer key。
-
-生产发行需要先构建并审查 source-free 包，再由 systemd 使用包外的 state、workspace、catalog 和凭据目录。请按[生产部署指南](docs/rust-production-deployment.md)和[候选回归](docs/rust-production-candidate.md)操作；本地回归通过不等于生产流量、旧数据或公网业务已经切换。
-
-## 仓库结构
-
-```text
-rust/             Rust Cargo workspace：Runtime、Host、官方工具、发行与开发检查
-apps/web/         React/TypeScript WebUI、单元测试和浏览器测试
-plugins/          官方 Plugin 清单、Skill、资源和渠道声明
-examples/         Graph、独立 bundle 和 RSI 示例
-deploy/           systemd unit 与受保护环境模板
-scripts/          本地服务管理与固定 Goose 构建脚本
-docs/             使用、架构、设计卡、验收台账、部署和历史归档
-experiments/      宪法迁移、数据中枢与 RSI 的测量、实验记录和评分
-```
-
-## 文档导航
-
-| 你想了解什么 | 从这里开始 |
-| --- | --- |
-| 安装、配置、Graph、Run 和 Session | [使用指南](docs/usage.md) |
-| 当前 Rust 实现和事实所有者 | [当前架构](docs/architecture.md) |
-| 产品边界、执行不变量和设计原则 | [产品与系统架构](docs/product-architecture.md) |
-| Plugin、Skill、MCP 和授权资源 | [Plugin 指南](docs/plugins.md) |
-| 确定性 Runtime 回归与证据格式 | [小型 Graph 回归](docs/runtime-contract-tests.md) |
-| source-free 包和 systemd | [生产部署](docs/rust-production-deployment.md) |
-| Web API、状态、错误和事件游标 | [Web API 契约](docs/rust-frontend-api-contract.md) |
-| 企业微信助手和渠道边界 | [企业微信指南](docs/wecom-assistant.md) |
-| 运行事实分析与 RSI 方向 | [Harness 数据中枢](docs/harness-data-hub.md) |
-| 当前验收结论、证据入口和未关闭事项 | [当前验收与待办](docs/pilot-development-plan.md) |
-| 早期设计和迁移记录 | [历史归档](docs/archive/README.md) |
-
-完整索引见[文档目录](docs/README.md)。
-
-## 开发与验证
-
-后端和官方工具使用 Rust，前端使用 React/TypeScript。开始改动前请阅读 [AGENTS.md](AGENTS.md) 和[开发指南](docs/development.md)，并先运行与改动直接相关的检查。
+## 开发
 
 ```sh
-# Rust workspace（scripts/test.sh 是把测试临时文件放到 tmpfs 的 cargo test 包装）
-cargo +stable test --manifest-path rust/Cargo.toml --workspace --all-features --all-targets --locked
-cargo +stable clippy --manifest-path rust/Cargo.toml --workspace --all-features --all-targets --locked -- -D warnings
-cargo +stable fmt --manifest-path rust/Cargo.toml --all -- --check
-
-# WebUI
-npm --prefix apps/web test
-npm --prefix apps/web run build
+./scripts/test.sh                        # cargo test，测试临时文件放 tmpfs
+cargo +stable clippy --manifest-path rust/Cargo.toml --workspace --all-targets --locked -- -D warnings
+npm --prefix apps/web test && npm --prefix apps/web run build
 ```
 
-需要验证实际 Host、GraphRunner、Goose ACP、MCP、Sandbox 和 Artifact 时，使用固定 Goose 与确定性本地 Provider 的回归入口：
-
-```sh
-ANCHOR_GOOSE_BINARY=/absolute/path/to/goose \
-cargo +stable run --manifest-path rust/Cargo.toml -p anchor-devtools --locked -- \
-  regression goose-fixture --evidence-root /tmp/anchor-goose-regression
-```
-
-该回归不调用真实模型、不发送公网消息，也不证明外部业务内容质量；缺少 Goose、浏览器或外部凭据时，跳过/未配置必须按未验收处理。执行方法见[回归指南](docs/runtime-contract-tests.md)，当前结论与未关闭范围见[验收摘要](docs/pilot-development-plan.md)。
+开始改动前请读 [AGENTS.md](AGENTS.md)。Kernel 契约冻结，业务代码只能通过 `application/run_access` 门面读写 Run。
 
 ## 许可证
 
-Anchor 使用 [MIT License](LICENSE)。
+[MIT](LICENSE)
