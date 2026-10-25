@@ -34,7 +34,7 @@
 | 任务 | 规模 | 依赖 | 状态 |
 | --- | --- | --- | --- |
 | H0 依赖方向围栏 | S | — | 已验收（`a0de84b`）；实测基线 58 / 35 / 1，[证据](../experiments/host-convergence/h0/verification.md) |
-| H1 共享原语与已分叉规则 | M | H0 | 开发完成，待架构验收；依赖计数 58 / 23 / 1，[证据](../experiments/host-convergence/h1/verification.md) |
+| H1 共享原语与已分叉规则 | M | H0 | 已验收（7dd8204）；依赖计数 58 / 23 / 1；本机已安装 Plugin id 均合规，[证据](../experiments/host-convergence/h1/verification.md) |
 | H2 Run 元数据下沉 | M | H1 | 未开始 |
 | H3 配置只在组合根读取 | M | H2 | 未开始 |
 | H4 Plugin 领域单一主人 | L | H3；调研可提前 | [设计](../experiments/host-convergence/h4/design.md)已确认，按下文三项修改实施；未开始 |
