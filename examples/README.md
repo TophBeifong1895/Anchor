@@ -1,6 +1,6 @@
 # 随源码提供的 Graph 与 Plugin
 
-执行 `./scripts/dev.sh start` 后，首次启动会把 [starter.json](starter.json) 中的示例导入可编辑 catalog，并把官方 Plugin 安装到 Library。网页中的 Graph 和插件库可直接查看、修改；安装插件本身不会执行工作流、连接外部账号或启用企微监听。
+执行 `./scripts/dev.sh start` 后，首次启动会把 [starter.json](starter.json) 中的示例导入可编辑 catalog，并把官方 Plugin 安装到 Library。网页中的 Graph 和插件库可直接查看、修改；安装插件本身不会执行工作流、连接外部账号或启用企微机器人。
 
 ## 从哪个 Graph 开始
 
@@ -11,7 +11,7 @@
 | `parallel-audit` | 两个独立审查分支并行，完成后综合报告 | default Flash |
 | `plugin-research` | 单节点学术调研，生成有来源的研究笔记 | default Flash；任务联网 |
 | `deep-academic-research` | 多节点研究、质疑、评审和报告，可能进行多轮模型调用 | default Flash；任务联网 |
-| `wecom-persistent-assistant` | 常驻企微助手模板 | default Flash；在工作流的消息触发设置中配置账号、允许的用户并启用监听 |
+| `wecom-persistent-assistant` | 常驻企微助手模板：这张 Graph 配一个机器人，每个会话一个常驻实例 | default Flash；在 Agent 节点所挂 `wecom` Plugin 详情的「此 Graph 的机器人」中保存成员、设置凭据并启用 |
 
 ## 已安装的 Plugin
 
@@ -20,7 +20,7 @@
 | `network` | 隔离网络中的 HTTP 请求、文件下载与联网说明 | 无需单独账号；受会话和节点网络权限限制 |
 | `academic-research` | 学术检索、原文读取和研究 Skill | 无需仓库附带的账号；访问情况取决于实际论文服务 |
 | `docmost` | 页面 MCP 与图片附件工具 | 在插件详情填写 Docmost URL 和 API key |
-| `wecom` | 企微工具、Gateway 和使用说明 | 按企微消息触发/插件配置设置；默认不开启监听 |
+| `wecom` | 企微工具、Gateway 和使用说明 | 机器人按 Graph 配置，见上；默认不连接 |
 | `anchor-steward` | Anchor 插件开发和适配说明 | 无额外服务配置 |
 
 插件的本地 Rust 工具随源码首次准备编译和安装，用户不用手动复制二进制。模型、插件连接和渠道配置仍由网页管理，不附带任何凭据。

@@ -15,6 +15,7 @@
   <a href="#快速开始">快速开始</a> ·
   <a href="#核心概念">核心概念</a> ·
   <a href="#示例">示例</a> ·
+  <a href="#后续主方向harness-数据中枢">方向</a> ·
   <a href="#文档导航">文档</a> ·
   <a href="#开发与验证">开发</a>
 </p>
@@ -75,7 +76,7 @@ Goose 拥有 Agent loop、Provider、原生会话和上下文压缩；Anchor 拥
 | Run 观察与控制 | Run 页面、API | 查看路径、节点对话、工具轨迹、文件和 Artifact；支持暂停、停止、继续、历史和受保护删除。 |
 | Pilot Session | WebUI、Session API | 持续对话、SSE 重连、必要提问与回答、原生会话续聊和压缩；Responses 仅实现文档列出的子集。 |
 | Plugin 与工具 | Library、MCP、Sandbox | 支持 Skill、资源、stdio/HTTP MCP、凭据引用和 OAuth 基础；权限由 Host/Sandbox 强制校验。 |
-| 触发与渠道 | 手动、计划、Webhook、Responses、WeCom | 入口共用同一 Run 接纳；WeCom 使用 Host 监管的原生 Gateway，具体公网能力仍按真实环境验收。 |
+| 触发与渠道 | 手动、计划、Webhook、Responses、WeCom | 入口共用同一 Run 接纳。一张常驻助手 Graph 对应一个企业微信机器人，由 Host 监管各自的原生 Gateway；每个会话一个常驻 Run，重启后自动接续。真实客户端收发按实际环境验收。 |
 | 官方工具 | `anchor-scholarly`、`anchor-docmost-tools`、`anchor-wecom-tools` | Rust 官方工具作为显式 Plugin 资源进入 Graph 闭包，外部服务凭据和业务结果不随仓库提供。 |
 | 独立交付 | `anchor-distribution`、systemd | 构建 source-free Graph/Plugin 闭包，状态、凭据和可写根目录留在发行包之外。 |
 
@@ -115,7 +116,7 @@ cd Anchor
 
 打开 <http://127.0.0.1:5173>，在「设置 → 模型服务」保存 default 的服务地址、协议、API key 和 Flash 模型名，再返回 Pilot 对话。无需 `.env`，不用手动安装 Goose 或填写二进制摘要。也可打开 <http://127.0.0.1:8077> 使用 Rust Host 提供的 WebUI/API。`scripts/dev.sh` 使用独立的 `.local/rust` 数据根，不会接管仓库里已有的 Graph、运行记录或环境。
 
-首次启动会在 WebUI 提供 **8 张示例 Graph 和 5 个官方 Plugin**，包括工作流调用、写作反馈、并行审查、学术调研和企微模板。建议先运行无需模型的 `call-report`，再配置模型尝试 `plugin-research`。Docmost 和企微按需在网页配置，默认不启用监听。已有同名内容、用户修改和删除会保留；完整清单见[上手示例](examples/README.md)。
+首次启动会在 WebUI 提供 **7 张示例 Graph 和 5 个官方 Plugin**，包括工作流调用、写作反馈、并行审查、学术调研和常驻企微助手模板。建议先运行无需模型的 `call-report`，再配置模型尝试 `plugin-research`。Docmost 和企微机器人按需在网页配置，默认不连接。已有同名内容、用户修改和删除会保留；完整清单见[上手示例](examples/README.md)。
 
 停止或重启服务：
 
@@ -134,9 +135,9 @@ cd Anchor
 
 ### 第一次运行开发示例
 
-1. 打开 WebUI；首次启动的 Graph 目录为空，先到「设置 → 模型服务」保存 default Flash 配置。
-2. 返回 Pilot 对话，让它协助创建工作流，或在图编排页面新建 Graph。
-3. 需要 AgentNode 示例时，可导入不依赖外部 Plugin 的 `examples/graphs/revise-loop.json`，观察 Artifact 和反馈路径。
+1. 打开 WebUI，Graph 目录里已有上面的示例。先运行无需模型的 `call-report`，输入 `{"report_code":"DEMO-001"}`，看主工作流如何调用子工作流并读取返回文件。
+2. 到「设置 → 模型服务」保存 default Flash 配置，再运行 `revise-loop`，观察 Artifact 和反馈返工路径。
+3. 回到 Pilot 对话，让它协助创建工作流，或在图编排页面新建 Graph。
 4. Graph API 导入格式见[使用指南中的 Graph 小节](docs/usage.md#graph-与-webui)；Graph 保存时会校验作者定义和 Plugin 资源绑定。
 
 ## 示例
@@ -145,19 +146,24 @@ cd Anchor
 
 | 示例 | 用途 |
 | --- | --- |
-| [`one-search.json`](examples/graphs/one-search.json) | 单 Agent 的最小检索示例。 |
+| [`call-report.json`](examples/graphs/call-report.json) / [`call-worker.json`](examples/graphs/call-worker.json) | 主工作流经 Graph Call 调用子工作流并读取返回文件；无需模型。 |
 | [`revise-loop.json`](examples/graphs/revise-loop.json) | 草稿、审阅和返工反馈回路。 |
 | [`parallel-audit.json`](examples/graphs/parallel-audit.json) | 两个独立审查分支通过 `fanout/join` 汇总。 |
 | [`survey-modular.json`](examples/graphs/survey-modular.json) | 以内联子图复用一段工作流。 |
+| [`plugin-research.json`](examples/graphs/plugin-research.json) | 单节点学术调研，生成有来源的研究笔记。 |
 | [`deep-academic-research.json`](examples/graphs/deep-academic-research.json) | 带调查、挑战、综合、评审和门禁的研究 Graph。 |
 | [`rsi.json`](examples/graphs/rsi.json) | 通过证据、评审和确定性门禁生成演进提案；发布提案不会自动修改项目。 |
-| [`wecom-persistent-assistant.json`](examples/graphs/wecom-persistent-assistant.json) | 同 Run 多轮企业微信助手；渠道只接纳这一常驻形状。 |
+| [`wecom-persistent-assistant.json`](examples/graphs/wecom-persistent-assistant.json) | 常驻企业微信助手：这张 Graph 配一个机器人，每个会话一个同 Run 多轮的实例。 |
 
-`one-search.json`、`deep-academic-research.json` 和其他学术示例还需要先安装 `academic-research` Plugin，并为 Host 提供相应的外部学术服务配置；安装方式见 [Plugin 指南](docs/plugins.md)。它们不属于源码启动即可完成的最小示例。
+除 `survey-modular` 和 `rsi` 外，表中 Graph 都随首次启动导入。学术示例使用随附的 `academic-research` Plugin，实际访问取决于论文服务；RSI、周报等其他示例依赖授权的本机输入目录，见[上手示例](examples/README.md)。
 
 <p align="center">
   <img src="docs/images/anchor-run-evidence.png" alt="Anchor Run 记录：执行路径、节点对话和生成文件" width="900">
 </p>
+
+## 后续主方向：Harness 数据中枢
+
+Anchor 本身是一个 Harness。长期目标是把每次执行的事实（提交、时间、成本、身份、人工介入）统一落成同一种历史记录，再用专门的分析工具和算法找出哪些 Harness、Graph、Plugin 的组织方式真正提高任务质量和效率，最终由算法驱动系统自我改进（RSI）。分析只读；改进建议作为提交，由人或 Validator 裁决。目标与判据见[方向文档](docs/harness-data-hub.md)，代码组织与阶段见[总体架构](docs/harness-data-hub-architecture.md)；信号驱动的 RSI 示例见 [RSI](docs/rsi.md)，当前结论与待办见[验收台账](docs/pilot-development-plan.md)。
 
 ## 安全、恢复与部署边界
 
@@ -181,7 +187,8 @@ plugins/          官方 Plugin 清单、Skill、资源和渠道声明
 examples/         Graph、独立 bundle 和 RSI 示例
 deploy/           systemd unit 与受保护环境模板
 scripts/          本地服务管理与固定 Goose 构建脚本
-docs/             使用、架构、验收台账、部署和历史归档
+docs/             使用、架构、设计卡、验收台账、部署和历史归档
+experiments/      宪法迁移、数据中枢与 RSI 的测量、实验记录和评分
 ```
 
 ## 文档导航
@@ -196,6 +203,7 @@ docs/             使用、架构、验收台账、部署和历史归档
 | source-free 包和 systemd | [生产部署](docs/rust-production-deployment.md) |
 | Web API、状态、错误和事件游标 | [Web API 契约](docs/rust-frontend-api-contract.md) |
 | 企业微信助手和渠道边界 | [企业微信指南](docs/wecom-assistant.md) |
+| 运行事实分析与 RSI 方向 | [Harness 数据中枢](docs/harness-data-hub.md) |
 | 当前验收结论、证据入口和未关闭事项 | [当前验收与待办](docs/pilot-development-plan.md) |
 | 早期设计和迁移记录 | [历史归档](docs/archive/README.md) |
 
@@ -206,7 +214,7 @@ docs/             使用、架构、验收台账、部署和历史归档
 后端和官方工具使用 Rust，前端使用 React/TypeScript。开始改动前请阅读 [AGENTS.md](AGENTS.md) 和[开发指南](docs/development.md)，并先运行与改动直接相关的检查。
 
 ```sh
-# Rust workspace
+# Rust workspace（scripts/test.sh 是把测试临时文件放到 tmpfs 的 cargo test 包装）
 cargo +stable test --manifest-path rust/Cargo.toml --workspace --all-features --all-targets --locked
 cargo +stable clippy --manifest-path rust/Cargo.toml --workspace --all-features --all-targets --locked -- -D warnings
 cargo +stable fmt --manifest-path rust/Cargo.toml --all -- --check
