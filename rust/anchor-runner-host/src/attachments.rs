@@ -229,7 +229,7 @@ pub(crate) fn freeze_directory(
     let temporary = parent.join(format!(
         ".attachment-{}-{}.tmp",
         std::process::id(),
-        crate::application::metadata::now_nanos()
+        crate::run_metadata::now_nanos()
     ));
     fs::create_dir(&temporary).map_err(|error| error.to_string())?;
     let result = (|| {

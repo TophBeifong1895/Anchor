@@ -132,14 +132,14 @@ async fn kernel_read_view_http_tracks_running_human_wait_and_settlement_with_hos
     set_host_env(root.path(), &state.data_root);
     let id = "r-http-view";
     let record=GraphRunRecord::create_with_id(serde_json::from_value(json!({"objective":"read","entry":"work","agents":{"role":{"model":"fixture","instructions":"work"}},"nodes":[{"id":"work","agent":"role"}],"edges":[]})).unwrap(),json!({}),id).unwrap();
-    let metadata = crate::application::RunMetadata::new(
+    let metadata = crate::run_metadata::RunMetadata::new(
         id.into(),
         "fixture".into(),
         record.graph_digest.clone(),
         &state.bundle_root.join("graph.json"),
     )
     .unwrap();
-    crate::application::metadata::save(&state.data_root, &metadata).unwrap();
+    crate::run_metadata::save(&state.data_root, &metadata).unwrap();
     let runs = state.application.kernel_runs(true).unwrap().unwrap();
     runs.create(&record, 50).unwrap();
     let gate = Arc::new(Gate {

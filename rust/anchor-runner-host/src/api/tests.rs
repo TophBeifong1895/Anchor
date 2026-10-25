@@ -1,6 +1,6 @@
 use super::*;
 use crate::application::run_access::fixtures;
-use crate::application::{RunMetadata, metadata};
+use crate::run_metadata::{self as metadata, RunMetadata};
 
 fn is_executing(run: &fixtures::Observation) -> bool {
     matches!(run.phase, anchor_kernel::Phase::Executing)
@@ -780,7 +780,7 @@ async fn startup_recovery_dispatches_only_ready_detached_children() {
             "child".into(),
             record.graph_digest.clone(),
             &child_bundle,
-            crate::application::metadata::GraphCallSource {
+            crate::run_metadata::GraphCallSource {
                 parent_run: "missing-parent".into(),
                 parent_graph: "parent".into(),
                 parent_graph_digest: parent_digest.clone(),
@@ -1201,7 +1201,7 @@ async fn stopped_and_budget_stopped_runs_block_graph_retrigger_but_allow_update(
             state.graph_name.clone(),
             record.graph_digest.clone(),
             &state.bundle_root,
-            crate::application::metadata::GraphCallSource {
+            crate::run_metadata::GraphCallSource {
                 parent_run: "parent-run".into(),
                 parent_graph: "parent".into(),
                 parent_graph_digest: "parent-digest".into(),
@@ -1783,7 +1783,7 @@ async fn graph_delete_removes_only_its_run_data_and_preserves_other_graph_runs()
         &grandchild_path,
     )
     .unwrap();
-    grandchild_meta.graph_call = Some(crate::application::metadata::GraphCallSource {
+    grandchild_meta.graph_call = Some(crate::run_metadata::GraphCallSource {
         parent_run: "target-run".into(),
         parent_graph: "target".into(),
         parent_graph_digest: target_run.graph_digest.clone(),

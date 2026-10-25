@@ -263,7 +263,7 @@ pub(crate) fn abandon_response(run: &str, result: &AbandonResult) -> Value {
 mod tests {
     use super::super::fixtures;
     use super::*;
-    use crate::application::{RunMetadata, metadata};
+    use crate::run_metadata::{self as metadata, RunMetadata};
     use anchor_runtime::graph::{ArtifactPort, RecoveryAttempt};
 
     #[tokio::test]

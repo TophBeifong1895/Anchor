@@ -284,7 +284,7 @@ fn create_graph_bundle_from_catalog(
     let staged = parent.join(format!(
         ".graph-create-{}-{}~",
         std::process::id(),
-        crate::application::metadata::now_nanos(),
+        crate::run_metadata::now_nanos(),
     ));
     std::fs::create_dir(&staged).map_err(storage)?;
     let prepared = (|| {

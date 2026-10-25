@@ -43,6 +43,7 @@ mod op;
 mod retention;
 mod run_data;
 mod run_deletions;
+mod run_metadata;
 #[cfg(test)]
 mod test_support;
 mod tool_disclosure;
@@ -765,7 +766,7 @@ fn ensure_standalone_run_metadata(
         .canonicalize()
         .map_err(|error| format!("standalone bundle source unavailable: {error}"))?;
     let state = env_path("ANCHOR_RUNNER_STATE_ROOT")?;
-    let expected = crate::application::RunMetadata::new(
+    let expected = crate::run_metadata::RunMetadata::new(
         record.run_id.clone(),
         graph,
         record.graph_digest.clone(),
@@ -773,7 +774,7 @@ fn ensure_standalone_run_metadata(
     )
     .map_err(|error| format!("{error:?}"))?;
     if let Some(existing) =
-        crate::application::metadata::load(&state, &record.run_id).map_err(|e| format!("{e:?}"))?
+        crate::run_metadata::load(&state, &record.run_id).map_err(|e| format!("{e:?}"))?
     {
         if existing.trigger_source == "graph_call" {
             return Err("standalone Run id collides with a Graph-call child identity".into());
@@ -786,7 +787,7 @@ fn ensure_standalone_run_metadata(
         }
         return Ok(());
     }
-    crate::application::metadata::save(&state, &expected).map_err(|error| format!("{error:?}"))
+    crate::run_metadata::save(&state, &expected).map_err(|error| format!("{error:?}"))
 }
 
 async fn read_frame<R: AsyncRead + Unpin>(reader: &mut R) -> io::Result<Option<Vec<u8>>> {

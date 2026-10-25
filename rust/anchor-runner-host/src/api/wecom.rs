@@ -377,7 +377,9 @@ pub(super) async fn receive_event(
                         .map_err(application_error)?
                 }
             };
-            let metadata = crate::application::metadata::load(&state.data_root, &run)
+            let metadata = state
+                .application
+                .metadata(&run)
                 .map_err(application_error)?
                 .ok_or_else(|| error(StatusCode::CONFLICT, "assistant metadata is missing"))?;
             if metadata.assistant.as_ref().is_none_or(|binding| {
@@ -560,7 +562,9 @@ async fn wait_for_channel_reply(
             tokio::time::sleep(RUN_POLL).await;
             continue;
         };
-        let metadata = crate::application::metadata::load(&state.data_root, run_id)
+        let metadata = state
+            .application
+            .metadata(run_id)
             .map_err(application_error)?;
         let source = metadata
             .as_ref()

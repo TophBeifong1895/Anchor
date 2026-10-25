@@ -1,7 +1,7 @@
 use super::*;
 use crate::api::tests::{finish_with_artifacts, seed_scenario};
 use crate::application::run_access::fixtures;
-use crate::application::{RunMetadata, metadata};
+use crate::run_metadata::{self as metadata, RunMetadata};
 
 fn frozen_record(state: &ApiState) -> GraphRunRecord {
     let snapshot = GraphSnapshot::from_authoring(json!({

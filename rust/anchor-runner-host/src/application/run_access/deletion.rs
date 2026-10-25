@@ -142,7 +142,8 @@ impl RunApplication {
                 &self.data_root,
                 &crate::run_deletions::RunDeletion::new(
                     run_id,
-                    &Self::graph_identity(&metadata.bundle_source)?.to_string_lossy(),
+                    &crate::run_metadata::graph_identity(&metadata.bundle_source)?
+                        .to_string_lossy(),
                     &source.session,
                     &source.reply_node,
                     source.previous_run.as_deref(),
@@ -152,7 +153,7 @@ impl RunApplication {
             crate::conversation_resources::release_unreferenced(
                 self,
                 &self.data_root,
-                &Self::graph_identity(&metadata.bundle_source)?,
+                &crate::run_metadata::graph_identity(&metadata.bundle_source)?,
                 run_id,
                 workspace_root,
             )?;

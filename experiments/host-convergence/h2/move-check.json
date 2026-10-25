@@ -1,0 +1,9 @@
+{
+  "baseline": "6d31798",
+  "metadata_and_storage_bodies": "unchanged after owner/type/visibility substitutions",
+  "session_dtos": "unchanged",
+  "graph_identity": "unchanged after error owner substitution",
+  "lower_to_application_references": 0,
+  "existing_assertions_checked": 1509,
+  "assertion_changes": "module owner substitutions and formatting only"
+}

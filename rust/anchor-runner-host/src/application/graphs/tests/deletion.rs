@@ -515,7 +515,7 @@ async fn guarded_delete_rechecks_active_execution_even_with_a_terminal_record() 
 
 #[tokio::test]
 async fn guarded_delete_preserves_pending_session_delivery() {
-    use crate::application::session_calls::{SessionCall, SessionContext};
+    use crate::run_metadata::{SessionCall, SessionContext};
 
     let (root, application) = fixture();
     let expected = delete_snapshot(&application, "fixture").await;

@@ -1,0 +1,23 @@
+   Compiling anchor-runner-host v0.1.0 (/tmp/anchor-host-h2/rust/anchor-runner-host)
+    Finished `test` profile [optimized + debuginfo] target(s) in 52.21s
+     Running unittests src/main.rs (/home/mansteinl/Anchor/rust/target/debug/deps/anchor_runner_host-c1aaaabe35671170)
+
+running 16 tests
+test api::oauth::tests::discovery_metadata_urls_preserve_provider_path_trailing_slashes ... ok
+test goose_acp::completion::tests::batch_metadata_requires_unique_valid_trusted_fields ... ok
+test goose_acp::bridge::tests::native_identity_requires_bound_session_and_unique_unspoofed_metadata ... ok
+test channel_inputs::tests::animated_png_and_webp_are_rejected_using_decoder_metadata ... ok
+test plugin_disclosure::tests::persistent_summary_uses_only_prepared_metadata_and_states_availability ... ok
+test channel_inputs::tests::removal_is_idempotent_and_no_attachment_metadata_stays_compatible ... ok
+test plugin_disclosure::tests::persistent_summary_encodes_metadata_and_oversized_ids_cannot_overrun_budget ... ok
+test plugin_disclosure::tests::metadata_obeys_the_same_private_boundary_as_file_reads ... ok
+test application::tests::detached_invalid_metadata_leaves_admission_and_workers_unchanged ... ok
+test pilot_tools::tests::plugin_management_metadata_and_reads_share_the_library_publication_guard ... ok
+test goose_acp::transport::tests::provider_failures_use_only_validated_prompt_error_metadata ... ok
+test api::tests::platform_contract::legacy_metadata_without_schedule_fields_remains_readable ... ok
+test assistant::tests::handover_source_requires_the_binding_and_the_metadata_to_agree ... ok
+test api::tests::a_changed_plugin_does_not_block_resume_but_mismatched_metadata_does ... ok
+test api::tests::platform_contract::busy_schedule_creates_no_run_or_source_metadata ... ok
+test api::tests::conversations::graph_node_plugins_project_expanded_nodes_and_legacy_metadata_remains_readable ... ok
+
+test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 1020 filtered out; finished in 0.21s

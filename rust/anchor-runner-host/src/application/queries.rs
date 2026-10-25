@@ -2,13 +2,17 @@ use super::{ApplicationError, RunApplication, RunMetadata, metadata, storage};
 
 impl RunApplication {
     pub(crate) async fn active_runs(&self, graph: Option<&str>) -> Vec<String> {
-        let graph_path =
-            graph.and_then(|name| Self::graph_identity(&self.graph_bundle_path(name)).ok());
+        let graph_path = graph.and_then(|name| {
+            crate::run_metadata::graph_identity(&self.graph_bundle_path(name)).ok()
+        });
         let mut ids = Vec::new();
         for (id, run) in self.run_views().unwrap_or_default() {
             let matches_graph = graph_path.as_ref().is_none_or(|path| {
                 self.metadata(&id).ok().flatten().is_some_and(|metadata| {
-                    Self::graph_identity(&metadata.bundle_source).ok().as_ref() == Some(path)
+                    crate::run_metadata::graph_identity(&metadata.bundle_source)
+                        .ok()
+                        .as_ref()
+                        == Some(path)
                 })
             });
             if run.active() && matches_graph {
@@ -28,7 +32,7 @@ impl RunApplication {
     }
 
     pub(crate) fn metadata(&self, run_id: &str) -> Result<Option<RunMetadata>, ApplicationError> {
-        metadata::load(&self.data_root, run_id)
+        metadata::load(&self.data_root, run_id).map_err(Into::into)
     }
 
     pub(crate) fn child_metadata(

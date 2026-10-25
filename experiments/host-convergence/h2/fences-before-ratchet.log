@@ -1,0 +1,42 @@
+   Compiling anchor-file-lease v0.1.0 (/tmp/anchor-host-h2/rust/anchor-file-lease)
+   Compiling anchor-platform-session v0.1.0 (/tmp/anchor-host-h2/rust/anchor-platform-session)
+   Compiling anchor-kernel v0.1.0 (/tmp/anchor-host-h2/rust/anchor-kernel)
+   Compiling anchor-wecom-gateway v0.1.0 (/tmp/anchor-host-h2/rust/anchor-wecom-gateway)
+   Compiling anchor-runtime v0.1.0 (/tmp/anchor-host-h2/rust/anchor-runtime)
+   Compiling anchor-facts v0.1.0 (/tmp/anchor-host-h2/rust/anchor-facts)
+   Compiling anchor-graph-host v0.1.0 (/tmp/anchor-host-h2/rust/anchor-graph-host)
+   Compiling anchor-mcp-host v0.1.0 (/tmp/anchor-host-h2/rust/anchor-mcp-host)
+   Compiling anchor-sandbox-bwrap v0.1.0 (/tmp/anchor-host-h2/rust/anchor-sandbox-bwrap)
+   Compiling anchor-library v0.1.0 (/tmp/anchor-host-h2/rust/anchor-library)
+   Compiling anchor-distribution v0.1.0 (/tmp/anchor-host-h2/rust/anchor-distribution)
+   Compiling anchor-runner-host v0.1.0 (/tmp/anchor-host-h2/rust/anchor-runner-host)
+    Finished `test` profile [optimized + debuginfo] target(s) in 33.37s
+     Running tests/layer_fence.rs (/home/mansteinl/Anchor/rust/target/debug/deps/layer_fence-8c4c53771eef07f4)
+
+running 3 tests
+test dependency_counting ... ok
+test layer_classification ... ok
+layer_fence: lower layer-fence.txt: assistant.rs service_application 8 -> 1
+layer_fence: lower layer-fence.txt: assistant_plugins.rs service_application 9 -> 2
+layer_fence: lower layer-fence.txt: attachments.rs service_application 1 -> 0
+layer_fence: lower layer-fence.txt: channel_inputs.rs service_application 1 -> 0
+layer_fence: lower layer-fence.txt: conversation_resources.rs service_application 3 -> 2
+layer_fence: lower layer-fence.txt: node_host.rs service_application 4 -> 3
+layer_fence: lower layer-fence.txt: node_host/assistant.rs service_application 1 -> 0
+layer_fence: lower layer-fence.txt: node_host/conversation.rs service_application 5 -> 1
+layer_fence: lower layer-fence.txt: node_host/inputs.rs service_application 1 -> 0
+layer_fence: lower layer-fence.txt: node_host/media.rs service_application 3 -> 0
+layer_fence: lower layer-fence.txt: node_host/mounts.rs service_application 3 -> 0
+layer_fence: lower layer-fence.txt: node_host/turn_plugins.rs service_application 4 -> 1
+layer_fence: 175 production files; service_application 25; service_adapter 23; application_adapter 1
+test layer_fence ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+     Running tests/run_access_fence.rs (/home/mansteinl/Anchor/rust/target/debug/deps/run_access_fence-eb0dbe7be4a523ff)
+
+running 1 test
+run_access_fence: 175 production files; business 0; runtime 56
+test run_access_fence ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s

@@ -135,7 +135,7 @@ impl RunApplication {
         let mut runs = Vec::new();
         for (id, record) in self.raw_records()? {
             if let Some(metadata) = self.metadata(&id)?
-                && Self::graph_identity(&metadata.bundle_source)? == graph_path
+                && crate::run_metadata::graph_identity(&metadata.bundle_source)? == graph_path
             {
                 runs.push((id, record));
             }

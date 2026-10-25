@@ -1,9 +1,9 @@
 use crate::application::{
-    ApplicationError, RunApplication, RunMetadata,
+    ApplicationError, RunApplication,
     assistants::{AssistantAdmission, assistant_session_error},
-    metadata::{self, AssistantSource, ConversationSource},
     new_control, storage,
 };
+use crate::run_metadata::{self as metadata, AssistantSource, ConversationSource, RunMetadata};
 use crate::{HostArtifacts, assistant::AssistantPlan, execution::PreparedExecution};
 use anchor_graph_host::LoadedGraphBundle;
 use anchor_platform_session::SessionStore;
@@ -33,7 +33,7 @@ impl RunApplication {
             Some(self.plugin_reference_lease().await?)
         };
         let active = self.admission.lock().await;
-        let graph_path = Self::graph_identity(source)?;
+        let graph_path = crate::run_metadata::graph_identity(source)?;
         if let Some(saved) = self.metadata(&run)? {
             let binding = saved.assistant.ok_or_else(|| {
                 ApplicationError::Conflict("Run is not an assistant instance".into())
@@ -85,7 +85,7 @@ impl RunApplication {
                         run_id
                     )));
                 }
-                if Self::graph_identity(&metadata.bundle_source)? == graph_path
+                if crate::run_metadata::graph_identity(&metadata.bundle_source)? == graph_path
                     && metadata.conversation.is_none()
                     && metadata.session_call.is_none()
                 {

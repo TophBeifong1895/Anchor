@@ -8,8 +8,9 @@
 //! like an operator-requested handover — only without the operator.
 
 use super::*;
-use crate::application::{AssistantAdmission, metadata};
+use crate::application::AssistantAdmission;
 use crate::assistant::AssistantPlan;
+use crate::run_metadata::{self as metadata};
 use anchor_platform_session::ChannelAssistant;
 use anchor_runtime::graph::InvocationKey;
 use sha2::{Digest, Sha256};

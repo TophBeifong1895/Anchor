@@ -11,7 +11,7 @@ impl HostIoResolver {
         cancellation: anchor_runtime::Cancellation,
     ) -> Result<(), String> {
         let root = self.local_inputs.state_root();
-        let metadata = crate::application::metadata::load(root, &key.run_id)
+        let metadata = crate::run_metadata::load(root, &key.run_id)
             .map_err(|error| format!("assistant identity unavailable: {error:?}"))?
             .ok_or("assistant identity is missing")?;
         let source = metadata
@@ -241,7 +241,7 @@ impl HostIoResolver {
     /// not establish that an older Run ever claimed this input.
     fn inherited_plugin_policy(
         &self,
-        metadata: &crate::application::RunMetadata,
+        metadata: &crate::run_metadata::RunMetadata,
         current: &GraphRunRecord,
         turn: &str,
     ) -> Result<Option<TurnPluginPolicy>, String> {
@@ -290,7 +290,7 @@ impl HostIoResolver {
             }) {
                 return Err("assistant Plugin handover predecessor changed".into());
             }
-            let prior = crate::application::metadata::load(root, &previous)
+            let prior = crate::run_metadata::load(root, &previous)
                 .map_err(|error| format!("assistant Plugin predecessor unavailable: {error:?}"))?
                 .ok_or("assistant Plugin predecessor metadata is missing")?;
             let prior_source = prior

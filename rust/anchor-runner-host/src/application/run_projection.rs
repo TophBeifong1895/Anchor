@@ -45,7 +45,8 @@ pub(crate) fn run_definition(snapshot: &GraphSnapshot) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::application::{RunApplication, RunMetadata, run_access::fixtures};
+    use crate::application::{RunApplication, run_access::fixtures};
+    use crate::run_metadata::RunMetadata;
 
     fn metadata(application: &RunApplication, id: &str) -> RunMetadata {
         let record = fixtures::record(application, id);

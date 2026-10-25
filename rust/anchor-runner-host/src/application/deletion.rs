@@ -39,7 +39,7 @@ impl RunApplication {
             else {
                 continue;
             };
-            if Self::graph_identity(&self.graph_bundle_path(graph))? == target_path {
+            if crate::run_metadata::graph_identity(&self.graph_bundle_path(graph))? == target_path {
                 return Ok(true);
             }
         }
@@ -123,7 +123,7 @@ impl RunApplication {
         bundle_path: &Path,
         workspace_root: &Path,
     ) -> Result<usize, ApplicationError> {
-        let graph_path = Self::graph_identity(bundle_path)?;
+        let graph_path = crate::run_metadata::graph_identity(bundle_path)?;
         let graph_lease = self.acquire_graph_lease_waiting(&graph_path).await?;
         self.delete_graph_with_lease(graph_name, bundle_path, workspace_root, graph_lease)
             .await
@@ -138,7 +138,7 @@ impl RunApplication {
         workspace_root: &Path,
         _graph_lease: Box<dyn RunLease>,
     ) -> Result<usize, ApplicationError> {
-        let graph_path = Self::graph_identity(bundle_path)?;
+        let graph_path = crate::run_metadata::graph_identity(bundle_path)?;
         let callers = self.graph_callers(&graph_path)?;
         if !callers.is_empty() {
             return Err(ApplicationError::Conflict(format!(
@@ -160,7 +160,7 @@ impl RunApplication {
         // still owns history and cannot be erased by an empty cascade.
         for id in metadata::ids(&self.data_root)? {
             if let Some(retained) = self.metadata(&id)?
-                && Self::graph_identity(&retained.bundle_source)? == graph_path
+                && crate::run_metadata::graph_identity(&retained.bundle_source)? == graph_path
                 && !targets.iter().any(|(run, _)| run == &id)
             {
                 return Err(ApplicationError::Conflict(format!(
@@ -229,7 +229,8 @@ impl RunApplication {
                     &self.data_root,
                     &crate::run_deletions::RunDeletion::new(
                         id,
-                        &Self::graph_identity(&metadata.bundle_source)?.to_string_lossy(),
+                        &crate::run_metadata::graph_identity(&metadata.bundle_source)?
+                            .to_string_lossy(),
                         &source.session,
                         &source.reply_node,
                         source.previous_run.as_deref(),

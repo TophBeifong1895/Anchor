@@ -121,7 +121,7 @@ fn seed_turn(
     let mut metadata =
         RunMetadata::new(run.into(), graph.into(), record.graph_digest, &path).unwrap();
     metadata.trigger_source = "channel".into();
-    metadata.conversation = Some(crate::application::ConversationSource {
+    metadata.conversation = Some(crate::run_metadata::ConversationSource {
         session: session.into(),
         reply_node: reply_node.into(),
         previous_run: previous.map(str::to_owned),
@@ -399,7 +399,7 @@ fn seed_call_fixture(
         graph.into(),
         record.graph_digest.clone(),
         &path,
-        crate::application::metadata::GraphCallSource {
+        crate::run_metadata::GraphCallSource {
             parent_run: parent.into(),
             parent_graph: parent_metadata.graph,
             parent_graph_digest: parent_record.graph_digest.clone(),
@@ -467,7 +467,7 @@ async fn publishing_graph_preserves_plugin_conversation_history_and_child_runs()
         &state.bundle_root,
     )
     .unwrap();
-    first_metadata.conversation = Some(crate::application::ConversationSource {
+    first_metadata.conversation = Some(crate::run_metadata::ConversationSource {
         session: "alice".into(),
         reply_node: "work".into(),
         previous_run: None,
@@ -501,7 +501,7 @@ async fn publishing_graph_preserves_plugin_conversation_history_and_child_runs()
         &state.bundle_root,
     )
     .unwrap();
-    next_metadata.conversation = Some(crate::application::ConversationSource {
+    next_metadata.conversation = Some(crate::run_metadata::ConversationSource {
         session: "alice".into(),
         reply_node: "work".into(),
         previous_run: Some(first.run_id.clone()),
@@ -778,7 +778,7 @@ async fn conversation_orphan_running_requires_explicit_stop_before_a_new_turn() 
     )
     .unwrap();
     saved.trigger_source = "channel".into();
-    saved.conversation = Some(crate::application::ConversationSource {
+    saved.conversation = Some(crate::run_metadata::ConversationSource {
         session: "alice".into(),
         reply_node: "work".into(),
         previous_run: None,
@@ -883,7 +883,7 @@ async fn conversation_waiting_recovery_stop_keeps_unknown_attempts_without_execu
     )
     .unwrap();
     metadata.trigger_source = "channel".into();
-    metadata.conversation = Some(crate::application::ConversationSource {
+    metadata.conversation = Some(crate::run_metadata::ConversationSource {
         session: "alice".into(),
         reply_node: "work".into(),
         previous_run: None,

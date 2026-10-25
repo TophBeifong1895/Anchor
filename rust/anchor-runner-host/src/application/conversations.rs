@@ -11,7 +11,7 @@ impl RunApplication {
         source: &ConversationSource,
         graph_path: &Path,
     ) -> Result<Vec<(RunMetadata, run_access::RunView<'static>)>, ApplicationError> {
-        let identity = Self::graph_identity(graph_path)?;
+        let identity = crate::run_metadata::graph_identity(graph_path)?;
         let identity_key = identity.to_string_lossy().into_owned();
         let mut entries = Vec::new();
         for (id, record) in self.run_views()? {
@@ -24,7 +24,7 @@ impl RunApplication {
             if conversation.session != source.session {
                 continue;
             }
-            if Self::graph_identity(&metadata.bundle_source)? != identity
+            if crate::run_metadata::graph_identity(&metadata.bundle_source)? != identity
                 || conversation.reply_node != source.reply_node
                 || metadata.graph_digest != record.progress().graph_digest
             {
@@ -191,7 +191,7 @@ impl RunApplication {
     /// still retains the predecessor it needs to be admitted at all.
     fn conversation_successors(&self, run_id: &str) -> Result<Vec<String>, ApplicationError> {
         let mut successors = Vec::new();
-        for id in crate::application::metadata::ids(&self.data_root)? {
+        for id in crate::run_metadata::ids(&self.data_root)? {
             if id == run_id {
                 continue;
             }
@@ -273,7 +273,7 @@ impl RunApplication {
             self.reject_superseded_conversation_execution(&metadata.run_id)?;
             return Ok(());
         }
-        let graph_path = Self::graph_identity(&metadata.bundle_source)?;
+        let graph_path = crate::run_metadata::graph_identity(&metadata.bundle_source)?;
         if let Some(source) = metadata.conversation.as_ref() {
             self.reject_conversation_successor(&metadata.run_id)?;
             let chain = self.conversation_chain(source, &graph_path)?;
@@ -295,7 +295,7 @@ impl RunApplication {
                         "an unfinished Run has no immutable Graph identity".into(),
                     ));
                 };
-                if Self::graph_identity(&other.bundle_source)? == graph_path
+                if crate::run_metadata::graph_identity(&other.bundle_source)? == graph_path
                     && ((other.conversation.is_none() && other.session_call.is_none())
                         || other
                             .conversation
@@ -315,7 +315,7 @@ impl RunApplication {
                 }
                 if let Some(other) = self.metadata(&id)?
                     && other.conversation.is_some()
-                    && Self::graph_identity(&other.bundle_source)? == graph_path
+                    && crate::run_metadata::graph_identity(&other.bundle_source)? == graph_path
                 {
                     return Err(ApplicationError::Conflict(
                         "this graph has an unfinished conversation Run".into(),

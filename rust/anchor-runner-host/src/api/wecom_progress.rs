@@ -183,7 +183,7 @@ impl Cursor {
         let Some(run) = found.run_id else {
             return;
         };
-        if let Ok(Some(metadata)) = crate::application::metadata::load(&self.state.data_root, &run)
+        if let Ok(Some(metadata)) = crate::run_metadata::load(&self.state.data_root, &run)
             && let Some(source) = metadata.assistant.as_ref()
         {
             let input = store(&self.state).and_then(|sessions| {

@@ -63,10 +63,7 @@ async fn keyed_pilot_creation_replays_without_overwriting() {
         );
     }
 }
-use crate::application::{
-    ConversationSource,
-    session_calls::{SessionCall, SessionContext},
-};
+use crate::run_metadata::{ConversationSource, SessionCall, SessionContext};
 use anchor_platform_session::{CreateSession, SessionStore};
 
 #[tokio::test]

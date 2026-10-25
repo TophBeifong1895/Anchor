@@ -1326,7 +1326,7 @@ async fn timeline_places_a_resident_run_by_its_turn_windows() {
     // keep it while it still worked inside the page.
     let mut saved = state.application.metadata(run).unwrap().unwrap();
     saved.created = (chrono::Utc::now() - chrono::Duration::days(40)).to_rfc3339();
-    crate::application::metadata::save(&state.data_root, &saved).unwrap();
+    crate::run_metadata::save(&state.data_root, &saved).unwrap();
     let app = router(state.clone());
     let (status, history) = call(app, "GET", "/timeline?days=30", None).await;
     assert_eq!(status, StatusCode::OK);

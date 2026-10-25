@@ -417,14 +417,14 @@ async fn kernel_call_rechecks_a_child_that_settled_before_parent_worker_release(
             "call-race-parent",
         )
         .unwrap();
-        let metadata = crate::application::RunMetadata::new(
+        let metadata = crate::run_metadata::RunMetadata::new(
             parent.run_id.clone(),
             "fixture".into(),
             parent.graph_digest.clone(),
             &state.bundle_root,
         )
         .unwrap();
-        crate::application::metadata::save(&state.data_root, &metadata).unwrap();
+        crate::run_metadata::save(&state.data_root, &metadata).unwrap();
         let runs = state.application.kernel_runs(true).unwrap().unwrap();
         runs.create(&parent, u64::MAX).unwrap();
         let resource = runs.load(&parent.run_id).unwrap().unwrap();

@@ -1,6 +1,6 @@
-use crate::application::metadata::{AssistantSource, RunMetadata};
 use crate::application::run_access;
 use crate::host_fs::invocation_stem as stem;
+use crate::run_metadata::{AssistantSource, RunMetadata};
 use anchor_platform_session::{ChannelInboundAdmission, SessionStore};
 use anchor_runtime::graph::{GraphError, GraphSnapshot, InvocationKey, NodeExecutionRequest};
 use serde::{Deserialize, Serialize};
@@ -199,8 +199,8 @@ pub(crate) fn read_json<T: for<'de> Deserialize<'de>>(path: &Path) -> Result<Opt
 }
 
 pub(crate) fn source(root: &Path, key: &InvocationKey) -> Result<Option<AssistantSource>, String> {
-    let Some(metadata) = crate::application::metadata::load(root, &key.run_id)
-        .map_err(|error| format!("{error:?}"))?
+    let Some(metadata) =
+        crate::run_metadata::load(root, &key.run_id).map_err(|error| format!("{error:?}"))?
     else {
         return Ok(None);
     };
@@ -228,7 +228,7 @@ pub(crate) fn handover_predecessor(
     root: &Path,
     key: &InvocationKey,
 ) -> Result<Option<InvocationKey>, String> {
-    let Some(metadata) = crate::application::metadata::load(root, &key.run_id)
+    let Some(metadata) = crate::run_metadata::load(root, &key.run_id)
         .map_err(|error| format!("assistant metadata: {error:?}"))?
     else {
         return Ok(None);
@@ -278,7 +278,7 @@ pub(crate) fn handover_predecessor(
     }
     // The handover is real. From here on the facts must agree, so a mismatch is
     // retained corruption instead of a silently skipped copy.
-    let Some(prior) = crate::application::metadata::load(root, previous)
+    let Some(prior) = crate::run_metadata::load(root, previous)
         .map_err(|error| format!("assistant handover source: {error:?}"))?
     else {
         // A deleted source cannot be inherited. Deletion refuses to remove a Run
@@ -373,7 +373,7 @@ pub(crate) fn handover_workspace_source(
     let Some(mut previous) = handover_predecessor(root, key)? else {
         return Ok(None);
     };
-    let metadata = crate::application::metadata::load(root, &key.run_id)
+    let metadata = crate::run_metadata::load(root, &key.run_id)
         .map_err(|error| format!("assistant metadata unavailable: {error:?}"))?
         .ok_or("assistant metadata is missing")?;
     let source = metadata
@@ -396,7 +396,7 @@ pub(crate) fn handover_workspace_source(
         {
             return Ok(Some(owner));
         }
-        let prior = crate::application::metadata::load(root, &previous.run_id)
+        let prior = crate::run_metadata::load(root, &previous.run_id)
             .map_err(|error| format!("assistant workspace predecessor unavailable: {error:?}"))?
             .ok_or("assistant workspace predecessor metadata is missing")?;
         let Some(older) = prior
@@ -415,7 +415,7 @@ pub(crate) fn handover_workspace_source(
         {
             return Err("assistant workspace predecessor identity changed".into());
         }
-        let older_meta = crate::application::metadata::load(root, older)
+        let older_meta = crate::run_metadata::load(root, older)
             .map_err(|error| format!("assistant workspace ancestor unavailable: {error:?}"))?
             .ok_or("assistant workspace ancestor metadata is missing")?;
         let older_source = older_meta
@@ -625,8 +625,8 @@ pub(crate) fn graph_error(error: impl std::fmt::Display) -> GraphError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::application::metadata::{AssistantSource, ConversationSource, RunMetadata};
     use crate::application::{RunApplication, run_access::fixtures};
+    use crate::run_metadata::{AssistantSource, ConversationSource, RunMetadata};
     use anchor_platform_session::{ChannelIdentity, ChannelInboundRequest};
     use anchor_runtime::graph::{GraphRunRecord, GraphSnapshot};
     use serde_json::json;
@@ -742,7 +742,7 @@ mod tests {
             reply_node: "assistant".into(),
             previous_run: previous.map(str::to_owned),
         });
-        crate::application::metadata::save(&fixture.root, &metadata).unwrap();
+        crate::run_metadata::save(&fixture.root, &metadata).unwrap();
         InvocationKey {
             run_id: run.into(),
             graph_digest: digest,
@@ -956,11 +956,11 @@ mod tests {
         );
 
         // The old binding must still agree with its own immutable metadata.
-        let mut metadata = crate::application::metadata::load(&fixture.root, &old.run_id)
+        let mut metadata = crate::run_metadata::load(&fixture.root, &old.run_id)
             .unwrap()
             .unwrap();
         metadata.assistant.as_mut().unwrap().wait_node = "tampered_wait".into();
-        crate::application::metadata::save(&fixture.root, &metadata).unwrap();
+        crate::run_metadata::save(&fixture.root, &metadata).unwrap();
         assert!(
             handover_workspace_source(&fixture.root, &new, &artifacts)
                 .unwrap_err()
@@ -1008,7 +1008,7 @@ mod tests {
         )
         .unwrap();
         foreign.assistant = None;
-        crate::application::metadata::save(&fixture.root, &foreign).unwrap();
+        crate::run_metadata::save(&fixture.root, &foreign).unwrap();
         assert!(
             handover_predecessor(&fixture.root, &new)
                 .unwrap_err()

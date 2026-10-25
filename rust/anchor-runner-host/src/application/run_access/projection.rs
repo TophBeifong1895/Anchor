@@ -1,6 +1,7 @@
 use super::run_view::RunView as LifecycleView;
 use super::{RunView, validate_control_identity};
-use crate::application::{ApplicationError, RunApplication, RunMetadata};
+use crate::application::{ApplicationError, RunApplication};
+use crate::run_metadata::RunMetadata;
 use anchor_kernel::{Outcome, Phase, Waiter};
 use serde::Serialize;
 use serde_json::{Value, json};

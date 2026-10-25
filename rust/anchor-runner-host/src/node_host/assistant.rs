@@ -342,7 +342,7 @@ impl HostNodes {
                             .map_err(graph_error)?;
                         let selected = assistant::attachment_metadata(
                             root,
-                            &crate::application::metadata::load(root, &request.key.run_id)
+                            &crate::run_metadata::load(root, &request.key.run_id)
                                 .map_err(|error| graph_error(format!("{error:?}")))?
                                 .ok_or_else(|| graph_error("assistant metadata is missing"))?,
                             &request.key,

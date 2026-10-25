@@ -25,9 +25,10 @@ mod scheduling;
 mod sessions;
 
 use crate::{
-    application::{AdmissionOptions, RunApplication, RunTrigger, metadata::PilotRunSource},
+    application::{AdmissionOptions, RunApplication},
     artifacts::HostArtifacts,
     resource_read::open_resource,
+    run_metadata::{PilotRunSource, RunTrigger},
     tool_host,
 };
 

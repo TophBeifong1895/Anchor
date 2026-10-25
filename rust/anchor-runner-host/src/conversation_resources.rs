@@ -2,7 +2,8 @@
 //! leases and surviving Run/hand-off checks remain the cleanup authorities.
 
 use crate::application::run_access::{self, RunView};
-use crate::application::{ApplicationError, RunApplication, RunMetadata};
+use crate::application::{ApplicationError, RunApplication};
+use crate::run_metadata::RunMetadata;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
@@ -26,7 +27,7 @@ pub(crate) fn retain<'record>(
     let Some(conversation) = &metadata.conversation else {
         return Ok(());
     };
-    let graph = RunApplication::graph_identity(&metadata.bundle_source)?;
+    let graph = crate::run_metadata::graph_identity(&metadata.bundle_source)?;
     for node in &record.snapshot.nodes {
         if let Some(hint) = crate::node_host::conversation_hint_for(metadata, &node.id) {
             let ownership = Ownership {
@@ -110,7 +111,7 @@ pub(crate) fn release_unreferenced(
     deleting: &str,
     workspaces: &Path,
 ) -> Result<(), ApplicationError> {
-    let references = crate::application::metadata::ids(data)?
+    let references = crate::run_metadata::ids(data)?
         .into_iter()
         .filter(|id| id != deleting)
         .map(|id| application.metadata(&id).map(|metadata| (id, metadata)))
@@ -121,7 +122,7 @@ pub(crate) fn release_unreferenced(
             let Some(metadata) = metadata else {
                 continue;
             };
-            if RunApplication::graph_identity(&metadata.bundle_source)? != ownership.graph
+            if crate::run_metadata::graph_identity(&metadata.bundle_source)? != ownership.graph
                 || metadata
                     .conversation
                     .as_ref()

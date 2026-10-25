@@ -35,7 +35,7 @@
 | --- | --- | --- | --- |
 | H0 依赖方向围栏 | S | — | 已验收（`a0de84b`）；实测基线 58 / 35 / 1，[证据](../experiments/host-convergence/h0/verification.md) |
 | H1 共享原语与已分叉规则 | M | H0 | 已验收（7dd8204）；依赖计数 58 / 23 / 1；本机已安装 Plugin id 均合规，[证据](../experiments/host-convergence/h1/verification.md) |
-| H2 Run 元数据下沉 | M | H1 | 未开始 |
+| H2 Run 元数据下沉 | M | H1 | 开发与规定检查完成，待架构验收；依赖计数 25 / 23 / 1，服务 → 用例减少 33（按下文确认口径），[证据](../experiments/host-convergence/h2/verification.md) |
 | H3 配置只在组合根读取 | M | H2 | 未开始 |
 | H4 Plugin 领域单一主人 | L | H3；调研可提前 | [设计](../experiments/host-convergence/h4/design.md)已确认，按下文三项修改实施；未开始 |
 | H5 剩余反向依赖清零 | M | H4 | 未开始 |
@@ -60,6 +60,8 @@
 - 按决定 2 移动 `application::metadata`（339 行）。`execution.rs`、`assistant.rs`、`assistant_plugins.rs`、`node_host/*`、`conversation_resources.rs` 等处改为引用 `run_metadata`。`graph_identity` 的 8 处调用改为调用自由函数。
 - 只移动，不改字段、不改文件格式、不改 save/load 语义。错误映射在 `application` 边界处做一次。
 - 验收：`layer-fence.txt` 中 Host 服务 → 用例层的计数至少下降 40。
+
+2026-10-25 开发实测与范围确认：H1 基线为 58 / 23 / 1；纯元数据下沉后为 25 / 23 / 1，服务 → 用例实际减少 33，与原预估的 40 不一致。余下引用指向 Run 门面、Plugin 租约及其它用例接口。用户已确认保持 H2 范围、按减少 33 交回验收；剩余依赖按 H3–H5 处理，不为满足预估计数扩大本阶段。
 
 ### H3 配置只在组合根读取
 

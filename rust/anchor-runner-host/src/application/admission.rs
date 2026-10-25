@@ -7,7 +7,7 @@ impl RunApplication {
         &self,
         graph_path: &Path,
     ) -> Result<Box<dyn RunLease>, ApplicationError> {
-        let graph_path = Self::graph_identity(graph_path)?;
+        let graph_path = crate::run_metadata::graph_identity(graph_path)?;
         let lease = self.graph_lease(&graph_path)?;
         // An unfinished Run with no immutable Graph identity cannot be attributed
         // to any Graph, so refuse to admit or create Runs until it is resolved.

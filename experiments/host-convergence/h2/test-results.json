@@ -1,0 +1,251 @@
+{
+  "command": "CARGO_TARGET_DIR=/home/mansteinl/Anchor/rust/target XDG_RUNTIME_DIR=/run/user/1001 scripts/test.sh -p anchor-runner-host --locked",
+  "exit_code": 0,
+  "test_binaries": 40,
+  "passed": 1229,
+  "failed": 0,
+  "ignored": 110,
+  "raw_log": "/tmp/anchor-host-h2-tests.log",
+  "results": [
+    {
+      "status": "ok",
+      "passed": 3,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "status": "ok",
+      "passed": 1034,
+      "failed": 0,
+      "ignored": 2
+    },
+    {
+      "status": "ok",
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "status": "ok",
+      "passed": 8,
+      "failed": 0,
+      "ignored": 15
+    },
+    {
+      "status": "ok",
+      "passed": 6,
+      "failed": 0,
+      "ignored": 4
+    },
+    {
+      "status": "ok",
+      "passed": 6,
+      "failed": 0,
+      "ignored": 4
+    },
+    {
+      "status": "ok",
+      "passed": 6,
+      "failed": 0,
+      "ignored": 10
+    },
+    {
+      "status": "ok",
+      "passed": 6,
+      "failed": 0,
+      "ignored": 1
+    },
+    {
+      "status": "ok",
+      "passed": 6,
+      "failed": 0,
+      "ignored": 1
+    },
+    {
+      "status": "ok",
+      "passed": 6,
+      "failed": 0,
+      "ignored": 10
+    },
+    {
+      "status": "ok",
+      "passed": 6,
+      "failed": 0,
+      "ignored": 1
+    },
+    {
+      "status": "ok",
+      "passed": 6,
+      "failed": 0,
+      "ignored": 1
+    },
+    {
+      "status": "ok",
+      "passed": 6,
+      "failed": 0,
+      "ignored": 6
+    },
+    {
+      "status": "ok",
+      "passed": 6,
+      "failed": 0,
+      "ignored": 2
+    },
+    {
+      "status": "ok",
+      "passed": 6,
+      "failed": 0,
+      "ignored": 14
+    },
+    {
+      "status": "ok",
+      "passed": 6,
+      "failed": 0,
+      "ignored": 2
+    },
+    {
+      "status": "ok",
+      "passed": 6,
+      "failed": 0,
+      "ignored": 2
+    },
+    {
+      "status": "ok",
+      "passed": 6,
+      "failed": 0,
+      "ignored": 4
+    },
+    {
+      "status": "ok",
+      "passed": 6,
+      "failed": 0,
+      "ignored": 3
+    },
+    {
+      "status": "ok",
+      "passed": 6,
+      "failed": 0,
+      "ignored": 1
+    },
+    {
+      "status": "ok",
+      "passed": 6,
+      "failed": 0,
+      "ignored": 1
+    },
+    {
+      "status": "ok",
+      "passed": 6,
+      "failed": 0,
+      "ignored": 2
+    },
+    {
+      "status": "ok",
+      "passed": 6,
+      "failed": 0,
+      "ignored": 2
+    },
+    {
+      "status": "ok",
+      "passed": 6,
+      "failed": 0,
+      "ignored": 7
+    },
+    {
+      "status": "ok",
+      "passed": 6,
+      "failed": 0,
+      "ignored": 4
+    },
+    {
+      "status": "ok",
+      "passed": 6,
+      "failed": 0,
+      "ignored": 2
+    },
+    {
+      "status": "ok",
+      "passed": 6,
+      "failed": 0,
+      "ignored": 5
+    },
+    {
+      "status": "ok",
+      "passed": 6,
+      "failed": 0,
+      "ignored": 2
+    },
+    {
+      "status": "ok",
+      "passed": 3,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "status": "ok",
+      "passed": 4,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "status": "ok",
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "status": "ok",
+      "passed": 4,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "status": "ok",
+      "passed": 6,
+      "failed": 0,
+      "ignored": 2
+    },
+    {
+      "status": "ok",
+      "passed": 3,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "status": "ok",
+      "passed": 5,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "status": "ok",
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "status": "ok",
+      "passed": 3,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "status": "ok",
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "status": "ok",
+      "passed": 3,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "status": "ok",
+      "passed": 5,
+      "failed": 0,
+      "ignored": 0
+    }
+  ]
+}

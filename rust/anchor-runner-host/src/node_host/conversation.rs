@@ -25,7 +25,7 @@ impl HostIoResolver {
         };
         let mut keys = Vec::new();
         let root = self.local_inputs.state_root();
-        let current = crate::application::metadata::load(root, &key.run_id)
+        let current = crate::run_metadata::load(root, &key.run_id)
             .map_err(|error| format!("conversation metadata: {error:?}"))?
             .ok_or("conversation metadata is missing")?;
         let successors = self
@@ -82,7 +82,7 @@ impl HostIoResolver {
     }
     pub(super) fn conversation(&self, key: &InvocationKey) -> Result<Option<Conversation>, String> {
         let root = self.local_inputs.state_root();
-        let Some(current) = crate::application::metadata::load(root, &key.run_id)
+        let Some(current) = crate::run_metadata::load(root, &key.run_id)
             .map_err(|error| format!("conversation metadata: {error:?}"))?
         else {
             return Ok(None);
@@ -95,7 +95,7 @@ impl HostIoResolver {
         }
         let hint = conversation_hint_for(&current, &key.node_id)
             .expect("conversation binding checked above");
-        let graph = crate::application::RunApplication::graph_identity(&current.bundle_source)
+        let graph = crate::run_metadata::graph_identity(&current.bundle_source)
             .map_err(|error| format!("conversation graph identity: {error:?}"))?
             .to_string_lossy()
             .into_owned();
@@ -103,7 +103,7 @@ impl HostIoResolver {
         let mut seen = BTreeSet::from([key.run_id.clone()]);
         let mut previous = Vec::new();
         while let Some(id) = next {
-            let Some(metadata) = crate::application::metadata::load(root, &id)
+            let Some(metadata) = crate::run_metadata::load(root, &id)
                 .map_err(|error| format!("conversation predecessor: {error:?}"))?
             else {
                 // A deleted link is bridged by its tombstone: it still names the
@@ -317,7 +317,7 @@ impl ToolPort for HistoryTools {
 mod tests {
     use super::*;
     use crate::application::run_access::fixtures;
-    use crate::application::{ConversationSource, RunMetadata, metadata};
+    use crate::run_metadata::{self as metadata, ConversationSource, RunMetadata};
     use anchor_runtime::graph::GraphSnapshot;
     use anchor_sandbox_bwrap::BubblewrapPolicy;
 
@@ -412,10 +412,7 @@ mod tests {
 
     #[test]
     fn only_pending_session_calls_include_settled_successors_for_native_resume() {
-        use crate::application::{
-            metadata::GraphCallSource,
-            session_calls::{SessionCall, SessionContext},
-        };
+        use crate::run_metadata::{GraphCallSource, SessionCall, SessionContext};
         let root = tempfile::tempdir().unwrap();
         let resolver = resolver(root.path());
         let first = admit(&resolver, "first", "alice", None);
@@ -499,12 +496,10 @@ mod tests {
                 .unwrap()
                 .contains("metadata is missing")
         );
-        let graph = crate::application::RunApplication::graph_identity(
-            &root.path().canonicalize().unwrap(),
-        )
-        .unwrap()
-        .to_string_lossy()
-        .into_owned();
+        let graph = crate::run_metadata::graph_identity(&root.path().canonicalize().unwrap())
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
         // A tombstone from another conversation explains nothing.
         crate::run_deletions::save(
             root.path(),
@@ -543,12 +538,10 @@ mod tests {
         let first = admit(&resolver, "first", "alice", None);
         admit(&resolver, "second", "alice", Some("first"));
         let third = admit(&resolver, "third", "alice", Some("second"));
-        let graph = crate::application::RunApplication::graph_identity(
-            &root.path().canonicalize().unwrap(),
-        )
-        .unwrap()
-        .to_string_lossy()
-        .into_owned();
+        let graph = crate::run_metadata::graph_identity(&root.path().canonicalize().unwrap())
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
         crate::run_deletions::save(
             root.path(),
             &crate::run_deletions::RunDeletion::new(

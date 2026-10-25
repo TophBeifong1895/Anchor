@@ -107,8 +107,8 @@ fn duplicate_account_sessions_have_one_recovery_target_but_keep_both_histories()
 
 #[tokio::test]
 async fn assistant_projection_releases_liveness_lock_and_skips_retired_deployment_checks() {
-    use crate::application::metadata::{AssistantSource, RunMetadata};
     use crate::application::run_access::fixtures;
+    use crate::run_metadata::{AssistantSource, RunMetadata};
     use anchor_platform_session::TurnStatus;
     use anchor_runtime::graph::{GraphRunRecord, GraphSnapshot};
     use std::sync::atomic::{AtomicUsize, Ordering};

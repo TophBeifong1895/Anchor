@@ -290,7 +290,7 @@ pub(super) async fn create_response(
     } else {
         let sessions = sessions.clone();
         let owner = owner.clone();
-        let id = format!("responses-{}", crate::application::metadata::now_nanos());
+        let id = format!("responses-{}", crate::run_metadata::now_nanos());
         blocking(move || {
             crate::application::pilot_sessions::create(
                 &sessions,
@@ -318,7 +318,7 @@ pub(super) async fn create_response(
         .map(|key| {
             crate::application::pilot_sessions::request_identity(&owner, "responses-turn", key)
         })
-        .unwrap_or_else(|| format!("responses-{}", crate::application::metadata::now_nanos()));
+        .unwrap_or_else(|| format!("responses-{}", crate::run_metadata::now_nanos()));
     let turn = if let Some(reply_prefix) = fixture_reply {
         let sessions_for_turn = sessions.clone();
         let (turn, created) = blocking({

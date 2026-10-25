@@ -78,7 +78,7 @@ impl HostIoResolver {
         self.local_inputs.verify(record)?;
         if self.local_inputs.configured() {
             let metadata =
-                crate::application::metadata::load(self.local_inputs.state_root(), &record.run_id)
+                crate::run_metadata::load(self.local_inputs.state_root(), &record.run_id)
                     .map_err(|error| format!("local input Run identity unavailable: {error:?}"))?
                     .ok_or("local input authorization requires immutable Run Graph metadata")?;
             if metadata.graph_digest != record.graph_digest {

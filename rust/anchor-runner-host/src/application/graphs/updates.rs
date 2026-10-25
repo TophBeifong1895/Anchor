@@ -71,7 +71,9 @@ impl RunApplication {
         self.check_channel_graph_update(name, &next)?;
         let effect = activation(&next)?;
         let mut sessions = None;
-        for (run_id, record) in self.runs_for_graph(&Self::graph_identity(&path)?)? {
+        for (run_id, record) in self.runs_for_graph(
+            &crate::run_metadata::graph_identity(&path).map_err(ApplicationError::from)?,
+        )? {
             let metadata = self.metadata(&run_id)?;
             if let Some(source) = metadata
                 .as_ref()

@@ -1,4 +1,5 @@
-use crate::application::{ApplicationError, RunApplication, RunMetadata};
+use crate::application::{ApplicationError, RunApplication};
+use crate::run_metadata::RunMetadata;
 use anchor_runtime::graph::{CommitRef, InvocationKey};
 use serde_json::Value;
 use std::collections::BTreeMap;

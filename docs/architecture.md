@@ -68,6 +68,8 @@ Host 的[依赖方向围栏](../rust/anchor-runner-host/tests/layer_fence.rs)固
 
 Plugin id 与名称的字符规则统一归 [anchor-runtime::identifier](../rust/anchor-runtime/src/identifier.rs)：名称非空、非 `.`/`..`，仅含 ASCII 字母、数字和 `_.-`；Plugin id 另要求首字节为字母或数字。Library 安装/回收、Graph 编译/catalog 与 Host 入口共用此规则，凭据和配置入口同样先校验 Plugin id。Host 的不跟随符号链接的持久建目录与 invocation 文件名哈希归 [host_fs](../rust/anchor-runner-host/src/host_fs.rs)，各存储保留原前缀和路径；组合根的 `create_durable_directory` 仍保留跟随符号链接的原语义。
 
+Run 身份元数据存储、触发来源、Session 调用数据结构与 Graph 路径身份归顶层 [run_metadata](../rust/anchor-runner-host/src/run_metadata.rs)，不依赖用例层。它使用独立的 `MetadataError`，由 `application` 中唯一的转换实现映射到 `ApplicationError`；持久字段、序列化、路径与保存/读取语义保持原样。接纳、查询、Session 授权和执行协调仍归各自用例或组合根。
+
 | 实现入口 | 内部边界 |
 | --- | --- |
 | [Graph Host](../rust/anchor-graph-host/src/lib.rs) | bundle、Graph/Plugin catalog、资源校验、MCP 声明、授权摘要和 Graph Call；公共契约仍由 crate 根导出 |

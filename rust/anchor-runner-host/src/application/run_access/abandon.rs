@@ -264,7 +264,7 @@ mod tests {
 
     #[tokio::test]
     async fn retired_assistant_can_be_abandoned_without_restoring_its_session_binding() {
-        use crate::application::{RunMetadata, metadata};
+        use crate::run_metadata::{self as metadata, RunMetadata};
         use anchor_platform_session::{
             ChannelIdentity, ChannelInboundRequest, SessionStore, TurnStatus,
         };

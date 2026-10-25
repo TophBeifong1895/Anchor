@@ -1,26 +1,8 @@
 //! Session authority belongs to the platform host; execution belongs to this application.
 use super::*;
+use crate::run_metadata::{SessionCall, SessionContext};
 use anchor_runtime::graph::{CallIdentity, GraphCallOutcome};
-use serde::{Deserialize, Serialize};
 use std::time::Duration;
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct SessionContext {
-    pub session: String,
-    pub reply_node: String,
-    pub conversation_id: String,
-    pub channel: Value,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct SessionCall {
-    pub context: SessionContext,
-    pub status: String,
-    #[serde(default)]
-    pub error: String,
-}
 
 pub(crate) async fn resolve(
     identity: &CallIdentity,
@@ -126,7 +108,7 @@ impl RunApplication {
             return Ok(());
         }
         metadata.session_call = Some(call);
-        metadata::save(&self.data_root, &metadata)
+        metadata::save(&self.data_root, &metadata).map_err(Into::into)
     }
 
     pub(crate) fn session_call_outcome(

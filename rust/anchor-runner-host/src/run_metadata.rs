@@ -1,12 +1,25 @@
-use super::{ApplicationError, storage};
+//! Durable Run identity metadata and Graph source identity; independent of application use cases.
 use crate::create_durable_directory;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::{
+    collections::VecDeque,
     fs::OpenOptions,
     io::Write,
     path::{Path, PathBuf},
     time::{SystemTime, UNIX_EPOCH},
 };
+
+#[derive(Debug)]
+pub(crate) enum MetadataError {
+    Conflict(String),
+    Invalid(String),
+    Storage(String),
+}
+
+fn storage(error: impl std::fmt::Display) -> MetadataError {
+    MetadataError::Storage(error.to_string())
+}
 
 #[derive(Debug, Clone, Copy, Default, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -57,7 +70,7 @@ impl RunTrigger {
         }
     }
 
-    pub(super) fn apply(self, metadata: &mut RunMetadata) {
+    pub(crate) fn apply(self, metadata: &mut RunMetadata) {
         metadata.trigger_source = match self.source {
             TriggerSource::Manual => "manual",
             TriggerSource::Schedule => "schedule",
@@ -93,7 +106,7 @@ pub(crate) struct RunMetadata {
     #[serde(default)]
     pub(crate) pilot: Option<PilotRunSource>,
     #[serde(default)]
-    pub(crate) session_call: Option<super::session_calls::SessionCall>,
+    pub(crate) session_call: Option<SessionCall>,
     #[serde(default)]
     pub(crate) attachments: Vec<crate::channel_inputs::AttachmentManifest>,
     #[serde(default)]
@@ -140,6 +153,58 @@ pub(crate) struct GraphCallSource {
     pub(crate) root_run: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct SessionContext {
+    pub session: String,
+    pub reply_node: String,
+    pub conversation_id: String,
+    pub channel: Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct SessionCall {
+    pub context: SessionContext,
+    pub status: String,
+    #[serde(default)]
+    pub error: String,
+}
+
+pub(crate) fn graph_identity(path: &Path) -> Result<PathBuf, MetadataError> {
+    let absolute = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir().map_err(storage)?.join(path)
+    };
+    let mut normalized = PathBuf::new();
+    for component in absolute.components() {
+        match component {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                normalized.pop();
+            }
+            other => normalized.push(other.as_os_str()),
+        }
+    }
+    let mut missing = VecDeque::new();
+    let mut ancestor = normalized.as_path();
+    while !ancestor.exists() {
+        let name = ancestor.file_name().ok_or_else(|| {
+            MetadataError::Invalid("Graph bundle path has no existing ancestor".into())
+        })?;
+        missing.push_front(name.to_os_string());
+        ancestor = ancestor
+            .parent()
+            .ok_or_else(|| MetadataError::Invalid("Graph bundle path has no parent".into()))?;
+    }
+    let mut identity = ancestor.canonicalize().map_err(storage)?;
+    for component in missing {
+        identity.push(component);
+    }
+    Ok(identity)
+}
+
 pub(crate) fn now_nanos() -> u128 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -153,7 +218,7 @@ impl RunMetadata {
         graph: String,
         graph_digest: String,
         source: &Path,
-    ) -> Result<Self, ApplicationError> {
+    ) -> Result<Self, MetadataError> {
         Ok(Self {
             format: 2,
             run_id,
@@ -180,7 +245,7 @@ impl RunMetadata {
         graph: String,
         graph_digest: String,
         source: &Path,
-    ) -> Result<Self, ApplicationError> {
+    ) -> Result<Self, MetadataError> {
         let mut metadata = Self::new(run_id, graph, graph_digest, source)?;
         metadata.trigger_source = "graph_call".into();
         Ok(metadata)
@@ -192,7 +257,7 @@ impl RunMetadata {
         graph_digest: String,
         source: &Path,
         call: GraphCallSource,
-    ) -> Result<Self, ApplicationError> {
+    ) -> Result<Self, MetadataError> {
         let mut metadata = Self::child(run_id, graph, graph_digest, source)?;
         if !matches!(call.mode.as_str(), "wait" | "detach")
             || call.parent_run.is_empty()
@@ -202,7 +267,7 @@ impl RunMetadata {
             || call.invocation == 0
             || call.root_run.is_empty()
         {
-            return Err(ApplicationError::Invalid(
+            return Err(MetadataError::Invalid(
                 "invalid Graph call source metadata".into(),
             ));
         }
@@ -211,14 +276,14 @@ impl RunMetadata {
     }
 }
 
-fn path(root: &Path, id: &str) -> Result<PathBuf, ApplicationError> {
+fn path(root: &Path, id: &str) -> Result<PathBuf, MetadataError> {
     if !anchor_runtime::identifier::is_name(id) {
-        return Err(ApplicationError::Invalid("invalid Run id".into()));
+        return Err(MetadataError::Invalid("invalid Run id".into()));
     }
     Ok(root.join("run-metadata").join(format!("{id}.json")))
 }
 
-pub(crate) fn save(root: &Path, metadata: &RunMetadata) -> Result<(), ApplicationError> {
+pub(crate) fn save(root: &Path, metadata: &RunMetadata) -> Result<(), MetadataError> {
     let target = path(root, &metadata.run_id)?;
     let directory = target.parent().expect("metadata path has parent");
     create_durable_directory(directory).map_err(storage)?;
@@ -246,7 +311,7 @@ pub(crate) fn save_child_once(
     source: &Path,
     call: GraphCallSource,
     oauth_owner: Option<String>,
-) -> Result<(), ApplicationError> {
+) -> Result<(), MetadataError> {
     let mut expected =
         RunMetadata::graph_call_child(run_id.clone(), graph, graph_digest, source, call)?;
     expected.oauth_owner = oauth_owner;
@@ -258,7 +323,7 @@ pub(crate) fn save_child_once(
             || existing.graph_call != expected.graph_call
             || existing.oauth_owner != expected.oauth_owner
         {
-            return Err(ApplicationError::Conflict(
+            return Err(MetadataError::Conflict(
                 "child Run identity metadata conflicts with its durable admission".into(),
             ));
         }
@@ -267,12 +332,12 @@ pub(crate) fn save_child_once(
     save(root, &expected)
 }
 
-pub(crate) fn load(root: &Path, id: &str) -> Result<Option<RunMetadata>, ApplicationError> {
+pub(crate) fn load(root: &Path, id: &str) -> Result<Option<RunMetadata>, MetadataError> {
     let bytes = match std::fs::read(path(root, id)?) {
         Ok(bytes) => bytes,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(error) => {
-            return Err(ApplicationError::Storage(format!(
+            return Err(MetadataError::Storage(format!(
                 "Run identity metadata unavailable: {error}"
             )));
         }
@@ -283,12 +348,12 @@ pub(crate) fn load(root: &Path, id: &str) -> Result<Option<RunMetadata>, Applica
         || metadata.graph.is_empty()
         || metadata.graph_digest.is_empty()
     {
-        return Err(ApplicationError::Storage(
+        return Err(MetadataError::Storage(
             "Run identity metadata is corrupt".into(),
         ));
     }
     if metadata.legacy_channel.is_some() {
-        return Err(ApplicationError::Storage(format!(
+        return Err(MetadataError::Storage(format!(
             "legacy_channel_run: Run {id} is a per-message channel Run, which is no longer supported; remove it offline before continuing"
         )));
     }
@@ -300,20 +365,20 @@ pub(crate) fn load(root: &Path, id: &str) -> Result<Option<RunMetadata>, Applica
 /// Metadata is written before a Run's admitted record, so a handover that died
 /// in between is only visible here. Listings that must not miss such a pending
 /// obligation use this instead of the Run store.
-pub(crate) fn ids(root: &Path) -> Result<Vec<String>, ApplicationError> {
+pub(crate) fn ids(root: &Path) -> Result<Vec<String>, MetadataError> {
     let directory = root.join("run-metadata");
     let entries = match std::fs::read_dir(&directory) {
         Ok(entries) => entries,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
         Err(error) => {
-            return Err(ApplicationError::Storage(format!(
+            return Err(MetadataError::Storage(format!(
                 "Run identity metadata unavailable: {error}"
             )));
         }
     };
     let mut ids = Vec::new();
     for entry in entries {
-        let entry = entry.map_err(|error| ApplicationError::Storage(error.to_string()))?;
+        let entry = entry.map_err(|error| MetadataError::Storage(error.to_string()))?;
         let name = entry.file_name();
         let Some(name) = name.to_str() else {
             continue;

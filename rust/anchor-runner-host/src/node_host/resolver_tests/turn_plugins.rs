@@ -26,21 +26,21 @@ fn assistant_fixture(
     let bundle = root.path().join("assistant-graph");
     std::fs::create_dir_all(&bundle).unwrap();
     write_bundle(&bundle, &snapshot);
-    let mut metadata = crate::application::RunMetadata::new(
+    let mut metadata = crate::run_metadata::RunMetadata::new(
         record.run_id.clone(),
         "assistant".into(),
         record.graph_digest.clone(),
         &bundle,
     )
     .unwrap();
-    metadata.assistant = Some(crate::application::metadata::AssistantSource {
+    metadata.assistant = Some(crate::run_metadata::AssistantSource {
         owner: "alice".into(),
         session: "assistant-session".into(),
         wait_node: "wait".into(),
         work_node: "agent".into(),
         reply_node: "reply".into(),
     });
-    crate::application::metadata::save(state, &metadata).unwrap();
+    crate::run_metadata::save(state, &metadata).unwrap();
     request.key.graph_digest = record.graph_digest;
     request.plugins = record.plugin_bindings.into_values().collect();
     (root, resolver, request)
@@ -81,7 +81,7 @@ fn desired(
     approve: bool,
 ) {
     let metadata =
-        crate::application::metadata::load(resolver.local_inputs.state_root(), &request.key.run_id)
+        crate::run_metadata::load(resolver.local_inputs.state_root(), &request.key.run_id)
             .unwrap()
             .unwrap();
     let mut snapshot = resolver
@@ -217,16 +217,16 @@ async fn same_turn_policy_survives_repeated_handover_before_replacement_prepares
         .unwrap();
     let session = admission.session.id;
     let carried_turn = admission.turn.id;
-    let mut original_meta = crate::application::metadata::load(state, &request.key.run_id)
+    let mut original_meta = crate::run_metadata::load(state, &request.key.run_id)
         .unwrap()
         .unwrap();
     original_meta.assistant.as_mut().unwrap().session = session.clone();
-    original_meta.conversation = Some(crate::application::metadata::ConversationSource {
+    original_meta.conversation = Some(crate::run_metadata::ConversationSource {
         session: session.clone(),
         reply_node: "agent".into(),
         previous_run: None,
     });
-    crate::application::metadata::save(state, &original_meta).unwrap();
+    crate::run_metadata::save(state, &original_meta).unwrap();
     sessions
         .bind_channel_assistant(
             "alice",
@@ -258,7 +258,7 @@ async fn same_turn_policy_survives_repeated_handover_before_replacement_prepares
         let mut metadata = original_meta.clone();
         metadata.run_id = next.into();
         metadata.conversation.as_mut().unwrap().previous_run = Some(previous.clone());
-        crate::application::metadata::save(state, &metadata).unwrap();
+        crate::run_metadata::save(state, &metadata).unwrap();
         sessions
             .handover_channel_assistant("alice", &session, &previous, next, &format!("key-{next}"))
             .unwrap();
@@ -322,7 +322,7 @@ async fn new_turn_after_idle_handover_ignores_earlier_explicit_instance_replacem
         )
         .unwrap();
     let original = resolver.load_run(&request.key.run_id).unwrap().unwrap();
-    let mut metadata = crate::application::metadata::load(state, &request.key.run_id)
+    let mut metadata = crate::run_metadata::load(state, &request.key.run_id)
         .unwrap()
         .unwrap();
     metadata.assistant.as_mut().unwrap().session = session.clone();
@@ -334,12 +334,12 @@ async fn new_turn_after_idle_handover_ignores_earlier_explicit_instance_replacem
         let mut meta = metadata.clone();
         meta.run_id = run.into();
         meta.graph_digest = record.graph_digest;
-        meta.conversation = Some(crate::application::metadata::ConversationSource {
+        meta.conversation = Some(crate::run_metadata::ConversationSource {
             session: session.clone(),
             reply_node: "agent".into(),
             previous_run: previous.map(str::to_owned),
         });
-        crate::application::metadata::save(state, &meta).unwrap();
+        crate::run_metadata::save(state, &meta).unwrap();
     };
     let mut historical_graph = original.snapshot.clone();
     historical_graph
@@ -378,12 +378,12 @@ async fn new_turn_after_idle_handover_ignores_earlier_explicit_instance_replacem
     // Explicitly recreate from an older conversation scene. Its conversation
     // predecessor differs from the most recently retired assistant instance.
     let mut recreated = metadata.clone();
-    recreated.conversation = Some(crate::application::metadata::ConversationSource {
+    recreated.conversation = Some(crate::run_metadata::ConversationSource {
         session: session.clone(),
         reply_node: "agent".into(),
         previous_run: Some("history-origin".into()),
     });
-    crate::application::metadata::save(state, &recreated).unwrap();
+    crate::run_metadata::save(state, &recreated).unwrap();
     sessions
         .bind_channel_assistant(
             "alice",
@@ -508,7 +508,7 @@ async fn unapproved_or_structural_graph_and_corrupt_turn_policy_never_grant_tool
             .contains("policy is missing")
     );
     let metadata =
-        crate::application::metadata::load(resolver.local_inputs.state_root(), &request.key.run_id)
+        crate::run_metadata::load(resolver.local_inputs.state_root(), &request.key.run_id)
             .unwrap()
             .unwrap();
     let mut changed = resolver

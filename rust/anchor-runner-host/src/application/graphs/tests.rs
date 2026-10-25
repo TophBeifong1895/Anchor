@@ -1,6 +1,6 @@
 use super::*;
 use crate::application::run_access::fixtures;
-use crate::application::{RunMetadata, metadata};
+use crate::run_metadata::{self as metadata, RunMetadata};
 use anchor_runtime::graph::GraphRunRecord;
 use std::{collections::BTreeMap, time::Duration};
 

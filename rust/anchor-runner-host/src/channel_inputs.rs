@@ -1,9 +1,9 @@
 //! Run-owned attachment identity and authorization; bounded bytes use shared Host primitives.
-use crate::application::RunMetadata;
 pub(crate) use crate::attachments::{
     AttachmentManifest, MAX_BODY_BYTES, PreparedAttachments, UploadedAttachment, prepare,
 };
 use crate::attachments::{Sizes, checked_mime, checked_path, safe_name, sync_directory};
+use crate::run_metadata::RunMetadata;
 use anchor_runtime::{ReadOnlyInput, graph::InvocationKey};
 use serde::{Deserialize, Serialize};
 use std::{

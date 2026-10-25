@@ -14,7 +14,6 @@ pub(crate) mod channel_management;
 pub(crate) mod development_dependencies;
 pub(crate) mod development_environment;
 pub(crate) mod graphs;
-pub(crate) mod metadata;
 pub(crate) mod oauth_management;
 pub(crate) mod pilot_sessions;
 pub(crate) mod plugin_candidates;
@@ -23,10 +22,8 @@ pub(crate) mod run_access;
 pub(crate) mod run_projection;
 pub(crate) mod scheduling;
 pub(crate) mod session_calls;
+use crate::run_metadata::{self as metadata, ConversationSource, RunMetadata, RunTrigger};
 pub(crate) use conversations::{WECOM_REPLY_KEY_PREFIX, WECOM_REPLY_KIND};
-pub(crate) use metadata::ConversationSource;
-pub(crate) use metadata::RunMetadata;
-pub(crate) use metadata::RunTrigger;
 
 use crate::{HostControl, create_durable_directory};
 #[cfg(test)]
@@ -34,7 +31,6 @@ use anchor_runtime::graph::GraphRunRecord;
 use anchor_runtime::graph::{GraphError, RunLease};
 use serde_json::Value;
 use std::{
-    collections::VecDeque,
     path::{Path, PathBuf},
     sync::{Arc, atomic::AtomicBool},
 };
@@ -53,6 +49,17 @@ pub(crate) struct AdmissionOptions {
     pub(crate) trigger: RunTrigger,
     pub(crate) pilot: Option<metadata::PilotRunSource>,
     pub(crate) oauth_owner: Option<String>,
+}
+
+impl From<crate::run_metadata::MetadataError> for ApplicationError {
+    fn from(error: crate::run_metadata::MetadataError) -> Self {
+        use crate::run_metadata::MetadataError;
+        match error {
+            MetadataError::Conflict(message) => Self::Conflict(message),
+            MetadataError::Invalid(message) => Self::Invalid(message),
+            MetadataError::Storage(message) => Self::Storage(message),
+        }
+    }
 }
 
 impl From<GraphError> for ApplicationError {
@@ -284,40 +291,6 @@ impl RunApplication {
             .filter(|(configured_name, _)| configured_name == name)
             .map(|(_, path)| path.clone())
             .unwrap_or_else(|| self.catalog_root.join(name))
-    }
-
-    pub(crate) fn graph_identity(path: &Path) -> Result<PathBuf, ApplicationError> {
-        let absolute = if path.is_absolute() {
-            path.to_path_buf()
-        } else {
-            std::env::current_dir().map_err(storage)?.join(path)
-        };
-        let mut normalized = PathBuf::new();
-        for component in absolute.components() {
-            match component {
-                std::path::Component::CurDir => {}
-                std::path::Component::ParentDir => {
-                    normalized.pop();
-                }
-                other => normalized.push(other.as_os_str()),
-            }
-        }
-        let mut missing = VecDeque::new();
-        let mut ancestor = normalized.as_path();
-        while !ancestor.exists() {
-            let name = ancestor.file_name().ok_or_else(|| {
-                ApplicationError::Invalid("Graph bundle path has no existing ancestor".into())
-            })?;
-            missing.push_front(name.to_os_string());
-            ancestor = ancestor.parent().ok_or_else(|| {
-                ApplicationError::Invalid("Graph bundle path has no parent".into())
-            })?;
-        }
-        let mut identity = ancestor.canonicalize().map_err(storage)?;
-        for component in missing {
-            identity.push(component);
-        }
-        Ok(identity)
     }
 
     fn graph_lease(&self, graph_path: &Path) -> Result<Box<dyn RunLease>, ApplicationError> {

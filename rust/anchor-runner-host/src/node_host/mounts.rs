@@ -265,7 +265,7 @@ impl HostIoResolver {
     }
 
     pub(super) fn oauth_owner_for_run(&self, run_id: &str) -> Result<Option<String>, String> {
-        crate::application::metadata::load(self.local_inputs.state_root(), run_id)
+        crate::run_metadata::load(self.local_inputs.state_root(), run_id)
             .map(|metadata| metadata.and_then(|metadata| metadata.oauth_owner))
             .map_err(|error| format!("OAuth Run owner is unavailable: {error:?}"))
     }
@@ -284,7 +284,7 @@ impl HostIoResolver {
         key: &InvocationKey,
     ) -> Result<Option<(String, String)>, String> {
         let root = self.local_inputs.state_root();
-        let Some(metadata) = crate::application::metadata::load(root, &key.run_id)
+        let Some(metadata) = crate::run_metadata::load(root, &key.run_id)
             .map_err(|error| format!("Run Session metadata unavailable: {error:?}"))?
         else {
             return Ok(None);
@@ -400,7 +400,7 @@ impl HostIoResolver {
         // switch off. It still mounts when the Session's switches say so.
         // The one authority the API's graph routes and the Session view also read.
         let declaring_graph =
-            crate::application::metadata::load(self.local_inputs.state_root(), &key.run_id)
+            crate::run_metadata::load(self.local_inputs.state_root(), &key.run_id)
                 .ok()
                 .flatten()
                 .map(|metadata| metadata.graph);

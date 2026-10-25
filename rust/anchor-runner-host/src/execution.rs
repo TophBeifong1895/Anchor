@@ -90,7 +90,7 @@ impl PreparedExecution {
             nodes,
             application,
         };
-        let metadata = crate::application::metadata::load(
+        let metadata = crate::run_metadata::load(
             &crate::env_path("ANCHOR_RUNNER_STATE_ROOT")?,
             &record.run_id,
         )
@@ -212,11 +212,11 @@ impl PreparedExecution {
             {
                 Self::validate_plugin_bindings(&self.nodes, &record.plugin_bindings)?;
             }
-            let metadata = crate::application::metadata::load(
-                self.nodes.io_resolver.state_root(),
-                &record.run_id,
-            )
-            .map_err(|error| format!("Run configuration identity unavailable: {error:?}"))?;
+            let metadata =
+                crate::run_metadata::load(self.nodes.io_resolver.state_root(), &record.run_id)
+                    .map_err(|error| {
+                        format!("Run configuration identity unavailable: {error:?}")
+                    })?;
             self.nodes.io_resolver.bind_local_inputs(
                 &record,
                 metadata.as_ref().map(|metadata| metadata.graph.as_str()),
@@ -375,7 +375,7 @@ impl GraphCatalog for HostGraphCatalog {
             if !seen.insert(current.clone()) {
                 return Err(GraphError::CorruptRun("cyclic call ancestry".into()));
             }
-            let metadata = crate::application::metadata::load(&self.state, &current)
+            let metadata = crate::run_metadata::load(&self.state, &current)
                 .map_err(|error| GraphError::Unsupported(format!("Run ancestry: {error:?}")))?
                 .ok_or_else(|| {
                     GraphError::CorruptRun(format!("missing Run ancestry for `{current}`"))
@@ -454,7 +454,7 @@ impl GraphCatalog for HostGraphCatalog {
                 if !seen.insert(id.clone()) {
                     return Err(GraphError::CorruptRun("cyclic call ancestry".into()));
                 }
-                let metadata = crate::application::metadata::load(&self.state, &id)
+                let metadata = crate::run_metadata::load(&self.state, &id)
                     .map_err(|error| {
                         GraphError::Unsupported(format!("parent identity: {error:?}"))
                     })?
@@ -468,11 +468,11 @@ impl GraphCatalog for HostGraphCatalog {
             }
             // Admission freezes the authorized recipient. A resumed wait consumes
             // that same fact; the Session host revalidates it before execution/send.
-            if let Some(metadata) = crate::application::metadata::load(
-                &self.state,
-                &format!("call-{}", identity.durable_key()),
-            )
-            .map_err(|error| GraphError::Unsupported(format!("Session identity: {error:?}")))?
+            if let Some(metadata) =
+                crate::run_metadata::load(&self.state, &format!("call-{}", identity.durable_key()))
+                    .map_err(|error| {
+                        GraphError::Unsupported(format!("Session identity: {error:?}"))
+                    })?
                 && let Some(call) = metadata.session_call
             {
                 if call.context.session != session || metadata.graph != graph {
@@ -581,24 +581,23 @@ impl GraphCatalog for HostGraphCatalog {
                 )
             })
             .map_err(GraphError::Unsupported)?;
-        let parent_metadata =
-            crate::application::metadata::load(&self.state, &identity.parent_run_id)
-                .map_err(|error| GraphError::Unsupported(format!("parent metadata: {error:?}")))?
-                .ok_or_else(|| {
-                    GraphError::CorruptRun("parent Run source metadata is missing".into())
-                })?;
+        let parent_metadata = crate::run_metadata::load(&self.state, &identity.parent_run_id)
+            .map_err(|error| GraphError::Unsupported(format!("parent metadata: {error:?}")))?
+            .ok_or_else(|| {
+                GraphError::CorruptRun("parent Run source metadata is missing".into())
+            })?;
         let root_run = parent_metadata
             .graph_call
             .as_ref()
             .map(|source| source.root_run.clone())
             .unwrap_or_else(|| identity.parent_run_id.clone());
-        crate::application::metadata::save_child_once(
+        crate::run_metadata::save_child_once(
             &self.state,
             run_id.to_owned(),
             graph.to_owned(),
             snapshot.digest()?,
             &path,
-            crate::application::metadata::GraphCallSource {
+            crate::run_metadata::GraphCallSource {
                 parent_run: identity.parent_run_id.clone(),
                 parent_graph: parent_metadata.graph,
                 parent_graph_digest: identity.parent_graph_digest.clone(),
@@ -620,7 +619,7 @@ impl GraphCatalog for HostGraphCatalog {
         identity: &CallIdentity,
         mode: &str,
     ) -> Result<(), GraphError> {
-        let metadata = crate::application::metadata::load(&self.state, run_id)
+        let metadata = crate::run_metadata::load(&self.state, run_id)
             .map_err(|error| GraphError::Unsupported(format!("child metadata: {error:?}")))?
             .ok_or_else(|| {
                 GraphError::CorruptRun("child Run has no immutable source metadata".into())
@@ -662,7 +661,7 @@ impl GraphCatalog for HostGraphCatalog {
     }
 
     fn has_child_admission(&self, run_id: &str) -> Result<bool, GraphError> {
-        crate::application::metadata::load(&self.state, run_id)
+        crate::run_metadata::load(&self.state, run_id)
             .map(|metadata| {
                 metadata.is_some_and(|metadata| metadata.trigger_source == "graph_call")
             })
@@ -764,7 +763,7 @@ mod legacy_plugin_tests;
 #[cfg(test)]
 mod graph_call_ancestry_tests {
     use super::*;
-    use crate::application::metadata::{self, GraphCallSource, RunMetadata};
+    use crate::run_metadata::{self as metadata, GraphCallSource, RunMetadata};
 
     fn catalog(state: &std::path::Path) -> HostGraphCatalog {
         HostGraphCatalog {

@@ -1,5 +1,5 @@
 use super::RunView;
-use crate::{application::RunMetadata, assistant::TurnBinding};
+use crate::{assistant::TurnBinding, run_metadata::RunMetadata};
 use anchor_runtime::graph::{FileRunLeaseProvider, GraphError, InvocationKey, RunLease};
 use std::path::Path;
 
@@ -77,7 +77,8 @@ impl RunView<'_> {
 mod tests {
     use super::super::fixtures;
     use super::*;
-    use crate::application::{RunApplication, metadata::AssistantSource};
+    use crate::application::RunApplication;
+    use crate::run_metadata::AssistantSource;
     use anchor_runtime::graph::{GraphRunRecord, GraphSnapshot};
     use serde_json::json;
     use sha2::{Digest, Sha256};

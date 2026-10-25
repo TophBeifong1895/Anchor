@@ -3,10 +3,8 @@
 //! Graph remains the desired configuration. These secret-free facts prove an
 //! operator authorized its grants and what a particular Turn actually received.
 use crate::application::run_access::RunProgress;
-use crate::application::{
-    RunMetadata,
-    run_access::{self, RunView},
-};
+use crate::application::run_access::{self, RunView};
+use crate::run_metadata::RunMetadata;
 use anchor_graph_host::{FilePluginCatalog, PluginCatalog};
 #[cfg(test)]
 use anchor_runtime::graph::GraphRunRecord;
@@ -36,7 +34,7 @@ pub(crate) fn graph_read_lease(
 }
 
 pub(crate) fn graph_lease_key(source: &Path) -> Result<String, GraphError> {
-    let identity = crate::application::RunApplication::graph_identity(source).map_err(|error| {
+    let identity = crate::run_metadata::graph_identity(source).map_err(|error| {
         GraphError::Unsupported(format!("Graph identity unavailable: {error:?}"))
     })?;
     Ok(format!(
@@ -74,7 +72,7 @@ pub(crate) struct Publication {
 }
 
 fn publication_path(root: &Path, source: &Path, digest: &str) -> Result<PathBuf, String> {
-    let source = crate::application::RunApplication::graph_identity(source)
+    let source = crate::run_metadata::graph_identity(source)
         .map_err(|error| format!("Graph identity unavailable: {error:?}"))?;
     Ok(root
         .join("graph-plugin-authorizations")
@@ -117,7 +115,7 @@ pub(crate) fn publish(
     let digest = snapshot.digest().map_err(|error| error.to_string())?;
     let publication = Publication {
         format: 1,
-        source: crate::application::RunApplication::graph_identity(source)
+        source: crate::run_metadata::graph_identity(source)
             .map_err(|error| format!("Graph identity unavailable: {error:?}"))?,
         graph_digest: digest.clone(),
         bindings,
@@ -163,7 +161,7 @@ pub(crate) fn publication(
     let saved: Option<Publication> =
         crate::assistant::read_json(&publication_path(root, source, digest)?)?;
     if let Some(saved) = &saved {
-        let source = crate::application::RunApplication::graph_identity(source)
+        let source = crate::run_metadata::graph_identity(source)
             .map_err(|error| format!("Graph identity unavailable: {error:?}"))?;
         if saved.format != 1
             || saved.source != source
@@ -250,7 +248,7 @@ pub(crate) fn invocation_authority<'record>(
     record: impl Into<RunProgress<'record>>,
 ) -> Result<bool, String> {
     let progress = record.into();
-    let Some(metadata) = crate::application::metadata::load(root, progress.run_id)
+    let Some(metadata) = crate::run_metadata::load(root, progress.run_id)
         .map_err(|error| format!("Run identity unavailable: {error:?}"))?
     else {
         return Ok(false);
@@ -374,7 +372,7 @@ pub(crate) fn cleanup<'record>(
     record: impl Into<RunProgress<'record>>,
 ) -> Result<(), String> {
     let progress = record.into();
-    let metadata = crate::application::metadata::load(root, progress.run_id)
+    let metadata = crate::run_metadata::load(root, progress.run_id)
         .map_err(|error| format!("policy cleanup identity unavailable: {error:?}"))?;
     remove_owned_facts(
         root,
@@ -410,7 +408,7 @@ pub(crate) fn cleanup<'record>(
 }
 
 pub(crate) fn cleanup_publications(root: &Path, source: &Path) -> Result<(), String> {
-    let identity = crate::application::RunApplication::graph_identity(source)
+    let identity = crate::run_metadata::graph_identity(source)
         .map_err(|error| format!("Graph cleanup identity unavailable: {error:?}"))?;
     remove_owned_facts(
         root,

@@ -1,7 +1,6 @@
 use super::*;
-use crate::application::{
-    ConversationSource, RunMetadata, metadata,
-    session_calls::{SessionCall, SessionContext},
+use crate::run_metadata::{
+    self as metadata, ConversationSource, RunMetadata, SessionCall, SessionContext,
 };
 use anchor_kernel::Outcome;
 use anchor_runtime::graph::{

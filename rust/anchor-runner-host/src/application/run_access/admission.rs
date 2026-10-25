@@ -1,7 +1,6 @@
-use crate::application::{
-    AdmissionOptions, ApplicationError, RunApplication, RunMetadata, metadata, new_control,
-};
+use crate::application::{AdmissionOptions, ApplicationError, RunApplication, new_control};
 use crate::execution::PreparedExecution;
+use crate::run_metadata::{self as metadata, RunMetadata};
 use anchor_graph_host::LoadedGraphBundle;
 use anchor_runtime::graph::{GraphRunRecord, RunLease};
 use serde_json::Value;
@@ -24,7 +23,7 @@ impl RunApplication {
         if let Some(objective) = options.objective.filter(|value| !value.is_empty()) {
             bundle.snapshot.objective = objective;
         }
-        let graph_path = Self::graph_identity(source)?;
+        let graph_path = crate::run_metadata::graph_identity(source)?;
         let plugin_lease = if bundle.plugins.is_empty() {
             None
         } else {
@@ -36,7 +35,7 @@ impl RunApplication {
             if !record.is_settled() {
                 match self.metadata(&id)? {
                     Some(meta)
-                        if Self::graph_identity(&meta.bundle_source)? == graph_path =>
+                        if crate::run_metadata::graph_identity(&meta.bundle_source)? == graph_path =>
                     {
                         return Err(ApplicationError::Conflict(
                             "this graph has an unfinished Run; resume it, or stop and delete its record".into(),

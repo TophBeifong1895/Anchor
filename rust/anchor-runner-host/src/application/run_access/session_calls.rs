@@ -1,7 +1,6 @@
 use super::RunView;
-use crate::application::{
-    ApplicationError, ConversationSource, RunApplication, RunMetadata, metadata, new_control,
-};
+use crate::application::{ApplicationError, RunApplication, new_control};
+use crate::run_metadata::{self as metadata, ConversationSource, RunMetadata};
 use anchor_runtime::graph::GraphRunRecord;
 
 impl RunView<'_> {
@@ -168,13 +167,13 @@ impl RunApplication {
                 "Session call Graph identity changed".into(),
             ));
         }
-        let graph_path = Self::graph_identity(&metadata.bundle_source)?;
+        let graph_path = crate::run_metadata::graph_identity(&metadata.bundle_source)?;
         for (id, other) in self.run_views()? {
             if id == run_id || other.is_settled() {
                 continue;
             }
             if let Some(identity) = self.metadata(&id)?
-                && Self::graph_identity(&identity.bundle_source)? == graph_path
+                && crate::run_metadata::graph_identity(&identity.bundle_source)? == graph_path
                 && identity.conversation.is_none()
                 && identity.session_call.is_none()
             {

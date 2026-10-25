@@ -7,7 +7,7 @@ impl HostIoResolver {
         key: &InvocationKey,
     ) -> Result<Vec<crate::channel_inputs::ChannelNodeInputs>, String> {
         let root = self.local_inputs.state_root();
-        let Some(metadata) = crate::application::metadata::load(root, &key.run_id)
+        let Some(metadata) = crate::run_metadata::load(root, &key.run_id)
             .map_err(|error| format!("channel input metadata: {error:?}"))?
         else {
             return Ok(Vec::new());
@@ -22,7 +22,7 @@ impl HostIoResolver {
                     .relation
                     .run_id
                     .as_ref()
-                    .map(|run| crate::application::metadata::load(root, run))
+                    .map(|run| crate::run_metadata::load(root, run))
                     .transpose()
                     .map_err(|error| format!("pending channel input metadata: {error:?}"))?
                     .flatten();
@@ -59,7 +59,7 @@ impl HostIoResolver {
         key: &InvocationKey,
     ) -> Result<crate::channel_inputs::ChannelNodeInputs, String> {
         let root = self.local_inputs.state_root();
-        let Some(metadata) = crate::application::metadata::load(root, &key.run_id)
+        let Some(metadata) = crate::run_metadata::load(root, &key.run_id)
             .map_err(|error| format!("channel input metadata: {error:?}"))?
         else {
             return Ok(crate::channel_inputs::ChannelNodeInputs {

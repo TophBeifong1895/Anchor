@@ -141,7 +141,7 @@ pub(crate) fn wrap(
     readonly_inputs: Vec<ReadOnlyInput>,
     cancellation: Cancellation,
 ) -> std::sync::Arc<dyn ToolPort> {
-    let Ok(Some(metadata)) = crate::application::metadata::load(&state_root, &key.run_id) else {
+    let Ok(Some(metadata)) = crate::run_metadata::load(&state_root, &key.run_id) else {
         return inner;
     };
     if metadata

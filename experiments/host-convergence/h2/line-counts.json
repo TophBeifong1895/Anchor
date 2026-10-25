@@ -1,0 +1,16 @@
+{
+  "method": "measure_lines.py::test_partition; Host physical lines outside test-only files and cfg(test) spans, including owning comments and whitespace",
+  "revisions": {
+    "before": "6d31798",
+    "after_code_tree": "6204537d4d36829fc6aeb9f7a75d7b065258e687"
+  },
+  "counts": {
+    "before": {
+      "production_physical_lines": 50878
+    },
+    "after_code_tree": {
+      "production_physical_lines": 50909
+    }
+  },
+  "delta": 31
+}

@@ -67,7 +67,7 @@ pub(crate) fn missing_outputs_reason(missing: &[String]) -> String {
 }
 
 pub(crate) fn conversation_hint_for(
-    metadata: &crate::application::RunMetadata,
+    metadata: &crate::run_metadata::RunMetadata,
     node: &str,
 ) -> Option<NodeConversationHint> {
     let binding = metadata.conversation.as_ref()?;

@@ -37,8 +37,8 @@ pub(super) async fn trigger_as_owner(
         Some(_) => return Err(error(StatusCode::BAD_REQUEST, "objective must be a string")),
     };
     let trigger = match body.get("trigger") {
-        None | Some(Value::Null) => crate::application::RunTrigger::default(),
-        Some(value) => serde_json::from_value::<crate::application::RunTrigger>(value.clone())
+        None | Some(Value::Null) => crate::run_metadata::RunTrigger::default(),
+        Some(value) => serde_json::from_value::<crate::run_metadata::RunTrigger>(value.clone())
             .map_err(|message| error(StatusCode::BAD_REQUEST, message.to_string()))?,
     };
     trigger

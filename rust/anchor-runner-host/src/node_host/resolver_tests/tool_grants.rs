@@ -151,9 +151,9 @@ async fn agent_tools_mount_plugins_without_a_run_policy_grant() {
         .collect();
     record.plugin_bindings_initialized = true;
     test_runs::seed(&state, &record);
-    crate::application::metadata::save(
+    crate::run_metadata::save(
         &state,
-        &crate::application::RunMetadata::new(
+        &crate::run_metadata::RunMetadata::new(
             record.run_id.clone(),
             "mount".into(),
             record.graph_digest.clone(),
@@ -253,9 +253,9 @@ async fn agent_command_tools_receive_only_the_nodes_frozen_local_inputs() {
         )
         .unwrap();
     test_runs::seed(&state, &record);
-    crate::application::metadata::save(
+    crate::run_metadata::save(
         &state,
-        &crate::application::RunMetadata::new(
+        &crate::run_metadata::RunMetadata::new(
             record.run_id.clone(),
             "weekly".into(),
             record.graph_digest.clone(),

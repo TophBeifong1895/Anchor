@@ -122,19 +122,19 @@ fn session_fixture_with_snapshot(
         .collect();
     record.plugin_bindings_initialized = true;
     test_runs::seed(&state, &record);
-    let mut metadata = crate::application::RunMetadata::new(
+    let mut metadata = crate::run_metadata::RunMetadata::new(
         record.run_id.clone(),
         "session-mounts".into(),
         record.graph_digest.clone(),
         &library,
     )
     .unwrap();
-    metadata.pilot = Some(crate::application::metadata::PilotRunSource {
+    metadata.pilot = Some(crate::run_metadata::PilotRunSource {
         owner: "alice".into(),
         session: "session-one".into(),
         turn: "turn-one".into(),
     });
-    crate::application::metadata::save(&state, &metadata).unwrap();
+    crate::run_metadata::save(&state, &metadata).unwrap();
     let mounts = std::sync::Arc::new(FixedMounts::new(switches));
     let resolver = HostIoResolver::new(
         HostArtifacts::new(artifacts, workspace.clone()),

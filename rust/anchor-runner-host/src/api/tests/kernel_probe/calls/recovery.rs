@@ -76,7 +76,7 @@ async fn kernel_restart_dispatches_detach_child_only_with_staged_call_inputs() {
         "child".into(),
         record.graph_digest.clone(),
         &child_bundle,
-        crate::application::metadata::GraphCallSource {
+        crate::run_metadata::GraphCallSource {
             parent_run: "missing-parent".into(),
             parent_graph: "parent".into(),
             parent_graph_digest: "parent-digest".into(),
@@ -175,7 +175,7 @@ async fn kernel_restart_parks_started_detach_child_without_replaying_effects() {
         "child".into(),
         record.graph_digest.clone(),
         &child_bundle,
-        crate::application::metadata::GraphCallSource {
+        crate::run_metadata::GraphCallSource {
             parent_run: "missing-parent".into(),
             parent_graph: "parent".into(),
             parent_graph_digest: "parent-digest".into(),

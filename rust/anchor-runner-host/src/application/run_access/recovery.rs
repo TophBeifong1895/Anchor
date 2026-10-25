@@ -1,7 +1,8 @@
 use crate::{
     HostControl,
-    application::{ApplicationError, RunApplication, RunMetadata, new_control},
+    application::{ApplicationError, RunApplication, new_control},
     execution::PreparedExecution,
+    run_metadata::RunMetadata,
 };
 use anchor_runtime::graph::{GraphRunRecord, InvocationKey, RecoveryDecision};
 

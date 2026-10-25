@@ -638,7 +638,7 @@ fn session_plugin_declarations(
         // The same comparison, from the same two facts, as `mounted_plugins`: the
         // Run's own recorded Graph name, and the deployment's configured pilot
         // Graph.
-        let declaring_graph = crate::application::metadata::load(&state.data_root, run)
+        let declaring_graph = crate::run_metadata::load(&state.data_root, run)
             .ok()
             .flatten()
             .map(|metadata| metadata.graph);

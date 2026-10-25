@@ -128,14 +128,14 @@ fn owned_policy(root: &Path, run: &str) -> GraphRunRecord {
         &source,
     )
     .unwrap();
-    metadata.assistant = Some(crate::application::metadata::AssistantSource {
+    metadata.assistant = Some(crate::run_metadata::AssistantSource {
         owner: "owner".into(),
         session: "session".into(),
         wait_node: "wait".into(),
         work_node: "agent".into(),
         reply_node: "reply".into(),
     });
-    crate::application::metadata::save(root, &metadata).unwrap();
+    crate::run_metadata::save(root, &metadata).unwrap();
     let policy = TurnPluginPolicy {
         format: 1,
         run: run.into(),
