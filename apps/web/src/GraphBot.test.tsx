@@ -51,6 +51,8 @@ describe('a Graph bot', () => {
     await act(async () => button('启用机器人').click());
     expect(container.textContent).toContain('常驻监听');
     expect(container.querySelector('fieldset')?.disabled).toBe(true);
+    expect(container.querySelector('[data-testid="credentials"]')).toBeNull();
+    expect(container.textContent).toContain('停用后才能修改凭据');
     const writes = requests().filter(request => request.method !== 'GET');
     expect(writes).toEqual([
       { path: '/graphs/helper/channel', method: 'PUT', body: { users: ['alice'], send_users: ['alice', 'bob'] } },

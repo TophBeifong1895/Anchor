@@ -223,7 +223,7 @@ impl RunApplication {
         let _catalog_guard = self.graph_catalog_mutation_guard().await;
         let path = self.graph_path_checked(name)?;
         self.load_graph(name)?;
-        let removed_runs = self.delete_graph(&path, workspace_root).await?;
+        let removed_runs = self.delete_graph(name, &path, workspace_root).await?;
         Ok(removed_runs)
     }
 }

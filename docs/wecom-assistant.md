@@ -24,11 +24,11 @@
 
 ## WebUI 配置
 
-一张常驻助手 Graph 对应一个机器人（[设计卡 004](design-cards/004-multi-bot-channels.md)）。Agent 节点挂载带 WeCom 通道声明的 Plugin 并保存后，这张 Graph 就可以配置自己的机器人：BotID/Secret、接收成员和可主动发送的成员，然后启用。同一个助手节点不能挂两个渠道 Plugin；同一个 Bot 账号不能同时被两张已启用的 Graph 使用，账号下已有别的 Graph 的会话时也不能启用。改成员名单前要先停用；机器人启用时，不能删除这张 Graph，也不能从节点上卸下渠道 Plugin。停用后删除 Graph，绑定、凭据和网关状态目录一起清掉。已启用不等于已经连接，状态里显示 Supervisor 的实际状态。各对话的实例在运行看板的「消息会话」中停止、恢复、退役或清理。
+一张常驻助手 Graph 对应一个机器人（[设计卡 004](design-cards/004-multi-bot-channels.md)）。Agent 节点挂载带 WeCom 通道声明的 Plugin 并保存后，这张 Graph 就可以配置自己的机器人：BotID/Secret、接收成员和可主动发送的成员，然后启用。同一个助手节点不能挂两个渠道 Plugin；同一个 Bot 账号不能同时被两张已启用的 Graph 使用，账号下已有别的 Graph 的会话时也不能启用。改成员名单或凭据前要先停用；机器人启用时，不能删除这张 Graph，也不能从节点上卸下渠道 Plugin。停用后删除 Graph，绑定、凭据和网关状态目录一起清掉。已启用不等于已经连接，状态里显示 Supervisor 的实际状态。各对话的实例在运行看板的「消息会话」中停止、恢复、退役或清理。
 
 在 Web 中，选中 Graph 的 Agent 节点，打开所挂渠道 Plugin 的详情，「此 Graph 的机器人」一栏可以保存成员、设置凭据、启停并查看网关状态；草稿未保存时先保存 Graph。从插件库打开同一 Plugin 只列出在用它的 Graph。Pilot 使用 `channel_status`、`channel_configure`、`channel_enable`，凭据用带 `graph` 的 `credential_request`。两者调用同一组管理 API：
 
-- `GET /channels`：列出本 owner 的所有机器人绑定；
+- `GET /channels`：列出所有机器人绑定，属于其他 owner 的只显示 Graph 名和 `owner_matches: false`；
 - `GET`/`PUT /graphs/{graph}/channel`：查看状态，或保存 `{users, send_users}`；
 - `POST /graphs/{graph}/channel/enabled`：`{enabled, expected_binding}`；
 - `GET /graphs/{graph}/channel/credentials`，`PUT`/`DELETE /graphs/{graph}/channel/credentials/{field}`：只返回字段状态，不返回明文。
@@ -43,7 +43,7 @@
 - 凭据：凭据库中 `channel_wecom@<graph>` 目标下的字段；
 - 网关状态：`channels/graphs/<sha256(graph) 前 16 位>/`（网关的控制 socket 在这个目录里，Unix socket 路径有长度上限，所以目录名用固定长度的摘要，不用 Graph 名）；回调路由是 `/channels/<graph>/events` 和 `/channels/<graph>/progress/<event_id>`。每个启用的绑定有自己的网关和回调密钥，这把密钥只能访问本 Graph 的路由。
 
-状态目录里还留着旧版单绑定文件 `platform/channels/wecom.json` 时，Host 拒绝启动，需要先运行迁移（设计卡 004 §6）。空成员名单拒绝所有成员，`*` 表示明确允许全部平台成员；主动发送名单为空时继承入口名单。`ANCHOR_API_KEYS` 保护管理 API。
+状态目录里还留着旧版单绑定文件 `platform/channels/wecom.json` 时，Host 拒绝启动，需要先运行迁移（设计卡 004 §6）。空成员名单拒绝所有成员，`*` 表示明确允许全部平台成员；接收名单不为空时，主动发送名单必须显式填写（至少包含需要回复的成员）。`ANCHOR_API_KEYS` 保护管理 API。
 
 按 [Rust 部署指南](rust-production-deployment.md) 安装 Host、固定版本 Goose、`anchor-wecom-gateway` 和 `anchor-wecom-tools`。通过现有 Library/Graph API 安装 [常驻助手示例](../examples/graphs/wecom-persistent-assistant.json) 及原生 WeCom Plugin，确认 Agent 节点挂载 `wecom`。独立应用 API 包不包含通道声明，不能替代完整机器人部署。
 

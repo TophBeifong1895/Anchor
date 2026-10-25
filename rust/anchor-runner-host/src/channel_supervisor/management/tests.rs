@@ -561,23 +561,184 @@ async fn damaged_linked_or_legacy_channel_configuration_is_not_loaded_or_overwri
     let _environment = Environment::cleared(FIELDS);
     let fixture = Fixture::new();
     fixture.configure("alpha", "alice").await;
+    fixture.configure("beta", "bob").await;
     let Fixture { root, adapter, .. } = fixture;
     drop(adapter);
     let open = || ChannelManagementAdapter::open(Fixture::configuration(root.path()));
-    let path = root
-        .path()
-        .join("state/platform/channels/graphs/alpha.json");
+    let graphs = root.path().join("state/platform/channels/graphs");
+    let path = graphs.join("alpha.json");
+    let saved = fs::read(&path).unwrap();
+    // One unusable binding keeps its own Graph out of service, untouched,
+    // and lets the Host and the other bots start.
     fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
-    assert!(open().is_err());
+    let opened = open().unwrap();
+    assert_eq!(
+        opened.status("local", "alpha").await.unwrap()["damaged"],
+        true
+    );
+    assert!(opened.snapshot("alpha").is_err());
+    assert!(matches!(
+        opened
+            .configure("local", "alpha", Fixture::binding("carol"))
+            .await,
+        Err(ApplicationError::Conflict(_))
+    ));
+    assert!(opened.remove("alpha").await.is_err());
+    assert_eq!(
+        opened
+            .snapshots()
+            .unwrap()
+            .into_iter()
+            .map(|state| state.graph)
+            .collect::<Vec<_>>(),
+        ["beta"]
+    );
+    assert!(opened.snapshot("beta").unwrap().is_some());
+    assert_eq!(fs::read(&path).unwrap(), saved);
+    assert_eq!(
+        fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+        0o644
+    );
+    drop(opened);
     fs::remove_file(&path).unwrap();
     let outside = root.path().join("outside");
     fs::write(&outside, "sentinel").unwrap();
     std::os::unix::fs::symlink(&outside, &path).unwrap();
-    assert!(open().is_err());
+    let opened = open().unwrap();
+    assert!(opened.snapshot("alpha").is_err());
+    assert!(
+        opened
+            .configure("local", "alpha", Fixture::binding("carol"))
+            .await
+            .is_err()
+    );
     assert_eq!(fs::read_to_string(&outside).unwrap(), "sentinel");
+    drop(opened);
     fs::remove_file(&path).unwrap();
-    open().unwrap();
+    // Files that are not `<graph>.json` are not bindings.
+    fs::write(graphs.join(".DS_Store"), "index").unwrap();
+    fs::write(graphs.join("beta.json~"), "backup").unwrap();
+    let opened = open().unwrap();
+    assert!(opened.snapshot("alpha").unwrap().is_none());
+    assert!(opened.snapshot("beta").unwrap().is_some());
+    // A Graph may be named like a staging file.
+    opened
+        .configure("local", ".tmpgraph", Fixture::binding("dave"))
+        .await
+        .unwrap_err();
+    drop(opened);
     let legacy = root.path().join("state/platform/channels/wecom.json");
     fs::write(&legacy, "{}").unwrap();
     assert_eq!(open().err().as_deref(), Some(LEGACY_BINDING));
+}
+
+#[tokio::test]
+async fn a_restart_keeps_a_bot_stopped_whose_changed_account_is_taken() {
+    let _guard = crate::PROCESS_ENV_LOCK.lock().await;
+    let _environment = Environment::cleared(FIELDS);
+    let fixture = Fixture::new();
+    fixture.prepare("alpha", "alice", "alpha-bot").await;
+    fixture.prepare("beta", "bob", "beta-bot").await;
+    for graph in ["alpha", "beta"] {
+        fixture
+            .adapter
+            .set_enabled("local", graph, true)
+            .await
+            .unwrap();
+        fixture.wait_for(graph, "starts").await;
+    }
+    // alpha's Bot ID is changed outside the API to the account beta serves.
+    let state_root = fixture.root.path().join("state");
+    let library = fixture.root.path().join("library");
+    fixture
+        .sessions
+        .finish_turn(
+            "local",
+            "pilot",
+            &fixture.turn,
+            anchor_platform_session::TurnStatus::Completed,
+            None,
+        )
+        .unwrap();
+    let (turn, _) = fixture
+        .sessions
+        .create_turn("local", "pilot", "change-bot", None)
+        .unwrap();
+    let request = crate::credential_store::request(
+        &state_root,
+        &library,
+        &fixture.sessions,
+        "local",
+        &fixture.session,
+        &turn.id,
+        "gateway",
+        &crate::credential_store::channel_target(PLATFORM, "alpha"),
+        "WECOM_BOT_ID",
+        "change the bot outside the management API",
+    )
+    .unwrap();
+    crate::credential_store::submit(
+        &state_root,
+        &library,
+        &fixture.sessions,
+        "local",
+        &fixture.session,
+        &request.id,
+        "beta-bot",
+    )
+    .unwrap();
+    let state = fixture.adapter.snapshot("alpha").unwrap().unwrap();
+    assert!(!state.enabled, "a changed account is not served");
+    assert!(state.saved_enabled, "but the bot is still saved as enabled");
+    fixture.adapter.shutdown().await;
+    let Fixture { root, adapter, .. } = fixture;
+    drop(adapter);
+    let reopened = ChannelManagementAdapter::open(Fixture::configuration(root.path())).unwrap();
+    reopened.resume().await.unwrap();
+    let starts = |graph| {
+        fs::read_to_string(
+            super::super::state_directory(&root.path().join("state"), graph)
+                .join("observed/starts"),
+        )
+        .unwrap_or_default()
+        .len()
+    };
+    tokio::time::timeout(Duration::from_secs(3), async {
+        while starts("beta") < 2 {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert_eq!(starts("alpha"), 1, "alpha must not start on beta's account");
+    let refused = reopened.set_enabled("local", "alpha", true).await;
+    assert!(
+        matches!(&refused, Err(ApplicationError::Conflict(reason)) if reason.contains("beta")),
+        "{:?}",
+        refused.err()
+    );
+    assert_eq!(starts("alpha"), 1);
+    reopened.shutdown().await;
+}
+
+#[tokio::test]
+async fn removing_a_graph_deletes_bot_credentials_saved_without_a_binding() {
+    let _guard = crate::PROCESS_ENV_LOCK.lock().await;
+    let _environment = Environment::cleared(FIELDS);
+    let fixture = Fixture::new();
+    fixture.credential("alpha", "WECOM_BOT_ID", "alpha-bot");
+    fixture.prepare("beta", "bob", "beta-bot").await;
+    let credentials = fixture
+        .root
+        .path()
+        .join("state/platform/credentials")
+        .join(crate::credential_store::hash(
+            crate::credential_store::binding_owner("local").as_bytes(),
+        ))
+        .join("gateway/channel_wecom");
+    assert!(credentials.join("alpha/WECOM_BOT_ID.json").is_file());
+    fixture.adapter.remove("alpha").await.unwrap();
+    assert!(!credentials.join("alpha").exists());
+    assert!(credentials.join("beta/WECOM_BOT_ID.json").is_file());
 }

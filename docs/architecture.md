@@ -225,13 +225,13 @@ Kernel 的 `NodeExecutionPort::invocation_plugin_authority` 默认关闭，普�
 
 ### 渠道适配与监听
 
-`call.session` 继承的是绑定会话与显式输入映射，持有稳定来源身份。未知发送效果由 Agent 核查，ACK 与效果事实分别保存。Host 按 Graph 的 `channel.json` 自动监管原生 WeCom Gateway，私有控制路径由 state root 派生。Gateway 接受私聊与群内 @ 回调，群按 chatid 共用进度与最新输入判断，允许名单和回执仍核对真实 actor。私聊 image/file/voice 及群 mixed 中的媒体由网关下载短时 URL、做 AES-256-CBC 解密，再交给 Host 冻结 SHA-256/大小/MIME 并只读挂载 `/in/channel`；临时 URL 与 AES key 不进入 Host 或 ledger。出站图片使用 Host 校验的 `channel-replies` 项，由网关三阶段上传换 `media_id` 后按原回调回复，发送前 durable claim、未确认结果不重发。不新增主动群发；任意文件出站、video 与真实公网投递/文档理解仍按具体场景验收。
+`call.session` 继承的是绑定会话与显式输入映射，持有稳定来源身份。未知发送效果由 Agent 核查，ACK 与效果事实分别保存。一张常驻助手 Graph 对应一个机器人（[设计卡 004](design-cards/004-multi-bot-channels.md)）：每个启用的绑定由 Host 监管一个原生 WeCom Gateway，状态目录 `channels/graphs/<Graph 摘要>/` 与回调路由 `/channels/<graph>/…` 按 Graph 分开，回调密钥只能访问本 Graph 的路由。Gateway 接受私聊与群内 @ 回调，群按 chatid 共用进度与最新输入判断，允许名单和回执仍核对真实 actor。私聊 image/file/voice 及群 mixed 中的媒体由网关下载短时 URL、做 AES-256-CBC 解密，再交给 Host 冻结 SHA-256/大小/MIME 并只读挂载 `/in/channel`；临时 URL 与 AES key 不进入 Host 或 ledger。出站图片使用 Host 校验的 `channel-replies` 项，由网关三阶段上传换 `media_id` 后按原回调回复，发送前 durable claim、未确认结果不重发。不新增主动群发；任意文件出站、video 与真实公网投递/文档理解仍按具体场景验收。
 
-Gateway 常驻连接与 Graph Run 的执行状态分别投影。`GET /graphs` 只为实际受监管且被配置为 WeCom 事件目标的 Graph 返回 `listener`，通过鉴权的私有 NDJSON `status` 请求读取连接状态；已认证、连接中、认证中、重连、停止和不可用有独立状态，读取超时或异常不会冒充在线，也不返回控制凭据。`active_nodes` 来自仍有宿主执行者的 Running Run 游标及正在执行的并行分支，不把遗留游标当成当前工作。
+Gateway 常驻连接与 Graph Run 的执行状态分别投影。`GET /graphs` 只为配置了机器人的 Graph 返回 `listener`，通过鉴权的私有 NDJSON `status` 请求读取连接状态；已认证、连接中、认证中、重连、停止和不可用有独立状态，读取超时或异常不会冒充在线，也不返回控制凭据。`active_nodes` 来自仍有宿主执行者的 Running Run 游标及正在执行的并行分支，不把遗留游标当成当前工作。
 
 Web 编辑画布的监听入口和工作流列表在已认证且空闲时使用 1px 虚线，并标注“常驻监听”；实际执行节点及活动工作流使用 3px 实线，空闲后恢复。重连或状态不可用显示对应文字与普通细实线。运行详情继续展示所选 Run 的历史事实；网关连接本身不创建 Run，惰性创建的常驻 Run 在 `wait_input` 时可以仍为 Running，但等待节点不计入 `active_nodes`，也不触发模型调用。
 
-Pilot 的 `channel_configure`/`channel_enable` 经原生确认管理 owner-bound 渠道绑定，专用凭据输入复用上述机制。同一配置供 Supervisor、WeCom 入站和 Graph listener 使用；外部部署字段只读，单个 Gateway owner 冲突拒绝。空 users 默认拒绝所有用户，send_users 必须显式声明。停用立即撤销 callback key，重新启用轮换；回调授权仅限事件、单条进度查询和结算，不授予管理 API、任务联网或 Plugin 挂载。渠道控制能力已接入，真实企微收发仍须独立验收。
+Pilot 的 `channel_configure`/`channel_enable` 经原生确认管理 owner-bound 的按 Graph 绑定，专用凭据输入复用上述机制；Web 在节点 Plugin 详情中管理同一绑定。同一配置供 Supervisor、WeCom 入站和 Graph listener 使用，凭据只来自凭据库，不读部署环境。一个账号同时只能服务一张启用的 Graph；机器人保存为启用期间，不能改成员和凭据、删除 Graph 或卸下渠道 Plugin。损坏的绑定文件只让它自己的 Graph 停用，不阻止 Host 启动。空 users 默认拒绝所有用户，users 非空时 send_users 必须显式声明。停用立即撤销 callback key，重新启用轮换；回调授权仅限事件、单条进度查询和结算，不授予管理 API、任务联网或 Plugin 挂载。渠道控制能力已接入，真实企微收发仍须独立验收。
 
 手动触发、计划、Webhook 与 Responses 子集共用接纳。Pilot 的 schedule 创建、列出、修改和删除复用同一 ScheduleStore 与 Dispatcher，按 owner 校验 Graph 和触发规则，不另建调度器。Responses 只实现文档中的子集；健康 `/health` 与就绪 `/ready` 不发送模型请求。API-key 和 Graph/工具授权由 Host 强制执行，Plugin 说明和提示词不授予权限。
 

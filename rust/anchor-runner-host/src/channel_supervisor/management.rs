@@ -79,6 +79,10 @@ pub(crate) struct ChannelManagementAdapter {
     configuration: ChannelHostConfiguration,
     root: PathBuf,
     facts: RwLock<BTreeMap<String, ChannelFact>>,
+    /// Binding files that exist but cannot be read, by Graph. Each stays out
+    /// of service and refuses every change to its Graph until an operator
+    /// repairs or removes it; the other bots and the Host still start.
+    damaged: BTreeMap<String, String>,
     /// Running gateways by Graph. Holding this lock serializes every binding
     /// change, so account uniqueness (R4) is checked against settled facts.
     supervisors: Mutex<BTreeMap<String, ChannelSupervisor>>,
@@ -123,11 +127,17 @@ impl ChannelManagementAdapter {
         if fs::symlink_metadata(root.join("wecom.json")).is_ok() {
             return Err(LEGACY_BINDING.into());
         }
-        let facts = read_facts(&root.join("graphs"))?;
+        let (facts, damaged) = read_facts(&root.join("graphs"))?;
+        for (graph, reason) in &damaged {
+            eprintln!(
+                "anchor channel wecom: the bot binding of Graph {graph} is unusable ({reason}); repair or remove it"
+            );
+        }
         Ok(Self {
             configuration,
             root,
             facts: RwLock::new(facts),
+            damaged,
             supervisors: Mutex::new(BTreeMap::new()),
             _owner_lease: owner_lease,
         })
@@ -145,7 +155,24 @@ impl ChannelManagementAdapter {
             if let Ok((definition, channel)) = self.definition(&fact.plugin)
                 && let Ok(credentials) = self.credentials(&graph, &fact, &definition, &channel)
             {
-                let account = self.register_account(&fact.owner, &credentials)?;
+                // Credentials changed outside the API take the same account
+                // checks as enabling; a conflict keeps this bot stopped.
+                let account = match self.register_account(&fact.owner, &credentials).and_then(
+                    |account| {
+                        if fact.account != account {
+                            self.check_account(&graph, &fact.owner, account.as_deref())?;
+                        }
+                        Ok(account)
+                    },
+                ) {
+                    Ok(account) => account,
+                    Err(error) => {
+                        eprintln!(
+                            "anchor channel wecom: the bot of Graph {graph} stays stopped: {error:?}"
+                        );
+                        continue;
+                    }
+                };
                 if fact.account != account {
                     fact.account = account;
                     self.publish(&graph, fact.clone())?;
@@ -199,12 +226,22 @@ impl ChannelManagementAdapter {
         if !identifier(graph) {
             return Err(ApplicationError::Invalid("invalid bot Graph name".into()));
         }
+        self.assert_readable(graph)?;
         if self.fact(graph)?.is_some_and(|fact| fact.owner != owner) {
             return Err(ApplicationError::Conflict(
                 "this Graph's bot belongs to another owner".into(),
             ));
         }
         Ok(())
+    }
+
+    fn assert_readable(&self, graph: &str) -> Result<(), ApplicationError> {
+        match self.damaged.get(graph) {
+            Some(reason) => Err(ApplicationError::Conflict(format!(
+                "the bot binding file of Graph {graph} is unusable ({reason}); repair or remove platform/channels/graphs/{graph}.json"
+            ))),
+            None => Ok(()),
+        }
     }
 
     fn path(&self, graph: &str) -> PathBuf {
@@ -214,7 +251,10 @@ impl ChannelManagementAdapter {
     fn publish(&self, graph: &str, fact: ChannelFact) -> Result<(), ApplicationError> {
         let directory = self.root.join("graphs");
         crate::goose_acp::pilot::directory(&directory).map_err(storage)?;
-        let mut temporary = tempfile::NamedTempFile::new_in(&directory)
+        // Staged beside, not inside, the bindings: any name in graphs/ is a Graph.
+        let staging = self.root.join("staging");
+        crate::goose_acp::pilot::directory(&staging).map_err(storage)?;
+        let mut temporary = tempfile::NamedTempFile::new_in(&staging)
             .map_err(|_| storage("channel configuration staging unavailable"))?;
         fs::set_permissions(temporary.path(), fs::Permissions::from_mode(0o600))
             .map_err(|_| storage("channel configuration permissions unavailable"))?;
@@ -417,6 +457,10 @@ impl ChannelManagementAdapter {
     }
 
     async fn public_status(&self, owner: &str, graph: &str) -> Result<Value, ApplicationError> {
+        if self.damaged.contains_key(graph) {
+            return Ok(json!({"graph":graph,"platform":PLATFORM,"configured":true,
+                "damaged":true,"enabled":false,"listener":"unavailable","mutable":false}));
+        }
         let Some(fact) = self.fact(graph)? else {
             return Ok(json!({"graph":graph,"platform":PLATFORM,"configured":false,
                 "enabled":false,"listener":"stopped","mutable":true}));
@@ -488,6 +532,7 @@ impl ChannelManagementAdapter {
             binding: fact.binding(),
             reply_node,
             enabled,
+            saved_enabled: fact.enabled,
             account: fact.account.clone(),
             descriptor: fact
                 .enabled
@@ -500,7 +545,10 @@ impl ChannelManagementPort for ChannelManagementAdapter {
     fn list<'a>(&'a self, owner: &'a str) -> BoxFuture<'a, Result<Value, ApplicationError>> {
         Box::pin(async move {
             let mut channels = Vec::new();
-            for graph in self.facts()?.into_keys() {
+            let mut graphs = self.facts()?.into_keys().collect::<Vec<_>>();
+            graphs.extend(self.damaged.keys().cloned());
+            graphs.sort();
+            for graph in graphs {
                 channels.push(self.public_status(owner, &graph).await?);
             }
             Ok(json!({"channels":channels}))
@@ -580,12 +628,18 @@ impl ChannelManagementPort for ChannelManagementAdapter {
                 let (definition, channel) = self.definition(&fact.plugin)?;
                 let credentials = self.credentials(graph, &fact, &definition, &channel)?;
                 Self::complete(&channel, &credentials)?;
-                if changed {
-                    let account = self.register_account(&fact.owner, &credentials)?;
+                // Re-enabling a saved-enabled bot that is not running must
+                // pass the same account checks as a first enable.
+                let account = self.register_account(&fact.owner, &credentials)?;
+                if changed || fact.account != account {
                     self.check_account(graph, owner, account.as_deref())?;
+                }
+                if changed {
                     fact.enabled = true;
                     fact.callback_key = random_token("anchor-channel-api")
                         .map_err(|_| storage("channel callback identity unavailable"))?;
+                }
+                if changed || fact.account != account {
                     fact.account = account;
                     self.publish(graph, fact.clone())?;
                 }
@@ -609,6 +663,7 @@ impl ChannelManagementPort for ChannelManagementAdapter {
     }
 
     fn snapshot(&self, graph: &str) -> Result<Option<ChannelRuntimeState>, ApplicationError> {
+        self.assert_readable(graph)?;
         Ok(self
             .fact(graph)?
             .map(|fact| self.runtime_state(graph, fact)))
@@ -634,17 +689,17 @@ impl ChannelManagementPort for ChannelManagementAdapter {
     fn remove<'a>(&'a self, graph: &'a str) -> BoxFuture<'a, Result<(), ApplicationError>> {
         Box::pin(async move {
             let supervisors = self.supervisors.lock().await;
-            let Some(fact) = self.fact(graph)? else {
-                return Ok(());
-            };
-            if fact.enabled || supervisors.contains_key(graph) {
+            self.assert_readable(graph)?;
+            let fact = self.fact(graph)?;
+            if fact.as_ref().is_some_and(|fact| fact.enabled) || supervisors.contains_key(graph) {
                 return Err(ApplicationError::Conflict(
                     "此 Graph 的机器人正在运行，请先停用机器人".into(),
                 ));
             }
+            // Credentials may exist without a binding (entered before the
+            // members) or under a Plugin the Graph no longer mounts.
             crate::credential_store::delete_channel_graph(
                 &self.configuration.data_root,
-                &fact.plugin,
                 &crate::credential_store::channel_target(PLATFORM, graph),
             )
             .map_err(storage)?;
@@ -653,7 +708,10 @@ impl ChannelManagementPort for ChannelManagementAdapter {
                 fs::remove_dir_all(&state)
                     .map_err(|_| storage("bot gateway state cleanup failed"))?;
             }
-            fs::remove_file(self.path(graph)).map_err(|_| storage("bot binding removal failed"))?;
+            if fact.is_some() {
+                fs::remove_file(self.path(graph))
+                    .map_err(|_| storage("bot binding removal failed"))?;
+            }
             self.facts
                 .write()
                 .map_err(|_| storage("channel configuration unavailable"))?
@@ -732,32 +790,47 @@ pub(crate) fn saved_binding(
     read_fact(&path).map(|fact| Some(fact.binding()))
 }
 
-fn read_facts(directory: &Path) -> Result<BTreeMap<String, ChannelFact>, String> {
+type Facts = (BTreeMap<String, ChannelFact>, BTreeMap<String, String>);
+
+/// Bindings by Graph, and the Graphs whose binding file is unusable. Entries
+/// that are not `<graph>.json` (a desktop index file, an editor backup) are
+/// not bindings and are left alone.
+fn read_facts(directory: &Path) -> Result<Facts, String> {
     let entries = match fs::read_dir(directory) {
         Ok(entries) => entries,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(BTreeMap::new()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok((BTreeMap::new(), BTreeMap::new()));
+        }
         Err(_) => return Err("channel configuration unavailable".into()),
     };
     let mut facts = BTreeMap::new();
+    let mut damaged = BTreeMap::new();
     for entry in entries {
         let path = entry
             .map_err(|_| "channel configuration unavailable")?
             .path();
-        let name = path
+        let Some(graph) = path
             .file_name()
             .and_then(|name| name.to_str())
-            .ok_or("channel configuration has an invalid file name")?;
-        // Atomic publication stages a temporary file next to the facts.
-        if name.starts_with(".tmp") {
-            continue;
-        }
-        let graph = name
-            .strip_suffix(".json")
+            .and_then(|name| name.strip_suffix(".json"))
             .filter(|graph| identifier(graph))
-            .ok_or("channel configuration has an invalid file name")?;
-        facts.insert(graph.to_owned(), read_fact(&path)?);
+        else {
+            eprintln!(
+                "anchor channel wecom: ignoring {} in the bot bindings directory",
+                path.display()
+            );
+            continue;
+        };
+        match read_fact(&path) {
+            Ok(fact) => {
+                facts.insert(graph.to_owned(), fact);
+            }
+            Err(reason) => {
+                damaged.insert(graph.to_owned(), reason);
+            }
+        }
     }
-    Ok(facts)
+    Ok((facts, damaged))
 }
 
 fn read_fact(path: &Path) -> Result<ChannelFact, String> {

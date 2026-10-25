@@ -119,17 +119,21 @@ impl RunApplication {
     /// targets alive; completed history does not prevent deletion.
     pub(crate) async fn delete_graph(
         &self,
+        graph_name: &str,
         bundle_path: &Path,
         workspace_root: &Path,
     ) -> Result<usize, ApplicationError> {
         let graph_path = Self::graph_identity(bundle_path)?;
         let graph_lease = self.acquire_graph_lease_waiting(&graph_path).await?;
-        self.delete_graph_with_lease(bundle_path, workspace_root, graph_lease)
+        self.delete_graph_with_lease(graph_name, bundle_path, workspace_root, graph_lease)
             .await
     }
 
+    /// `graph_name` is the catalog name; the configured Graph's bundle
+    /// directory may be named otherwise, and the bot is bound by name.
     pub(crate) async fn delete_graph_with_lease(
         &self,
+        graph_name: &str,
         bundle_path: &Path,
         workspace_root: &Path,
         _graph_lease: Box<dyn RunLease>,
@@ -142,12 +146,7 @@ impl RunApplication {
                 callers.join(", ")
             )));
         }
-        let graph_name = bundle_path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .ok_or(ApplicationError::Missing)?
-            .to_owned();
-        self.check_channel_graph_deletion(&graph_name)?;
+        self.check_channel_graph_deletion(graph_name)?;
         let active = self.admission.lock().await;
         let mut targets = self.runs_for_graph(&graph_path)?;
         let deletion = self
@@ -248,7 +247,7 @@ impl RunApplication {
             .map_err(ApplicationError::Storage)?;
         // A stopped bot goes with its Graph: binding, bot credentials and the
         // gateway's state (D6).
-        self.remove_channel_binding(&graph_name).await?;
+        self.remove_channel_binding(graph_name).await?;
         if bundle_path.is_dir() {
             std::fs::remove_dir_all(bundle_path).map_err(storage)?;
         }

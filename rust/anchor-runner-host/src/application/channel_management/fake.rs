@@ -66,6 +66,7 @@ impl FakeChannels {
             },
             reply_node: Some(reply_node.into()),
             enabled: true,
+            saved_enabled: true,
             account: Some("corp-a".into()),
             descriptor: None,
         }
@@ -154,7 +155,7 @@ impl ChannelManagementPort for FakeChannels {
                 if state.owner != owner {
                     return Err(ApplicationError::Conflict("another owner".into()));
                 }
-                if state.enabled {
+                if state.saved_enabled {
                     return Err(ApplicationError::Conflict("stop the bot first".into()));
                 }
             }
@@ -164,6 +165,7 @@ impl ChannelManagementPort for FakeChannels {
                 binding,
                 reply_node: None,
                 enabled: false,
+                saved_enabled: false,
                 account: None,
                 descriptor: None,
             };
@@ -186,6 +188,7 @@ impl ChannelManagementPort for FakeChannels {
                 return Err(ApplicationError::Conflict("another owner".into()));
             }
             state.enabled = enabled;
+            state.saved_enabled = enabled;
             Ok(Self::public(Some(state), owner, graph))
         })
     }
@@ -213,7 +216,7 @@ impl ChannelManagementPort for FakeChannels {
     fn remove<'a>(&'a self, graph: &'a str) -> BoxFuture<'a, Result<(), ApplicationError>> {
         Box::pin(async move {
             let mut states = self.states.lock().unwrap();
-            if states.get(graph).is_some_and(|state| state.enabled) {
+            if states.get(graph).is_some_and(|state| state.saved_enabled) {
                 return Err(ApplicationError::Conflict(STOP_FIRST.into()));
             }
             states.remove(graph);

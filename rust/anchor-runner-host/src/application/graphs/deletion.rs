@@ -46,7 +46,7 @@ impl RunApplication {
             return Err(changed());
         }
         authorize()?;
-        self.delete_graph_with_lease(&path, workspace_root, graph_lease)
+        self.delete_graph_with_lease(name, &path, workspace_root, graph_lease)
             .await
             .map_err(Into::into)
     }

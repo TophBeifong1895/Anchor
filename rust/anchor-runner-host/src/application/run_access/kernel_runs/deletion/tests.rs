@@ -139,7 +139,11 @@ async fn kernel_graph_delete_removes_only_its_run_data_and_preserves_other_graph
     assert!(artifact.exists());
     assert_eq!(
         application
-            .delete_graph(&application.catalog_root.join("target"), &workspace)
+            .delete_graph(
+                "target",
+                &application.catalog_root.join("target"),
+                &workspace
+            )
             .await
             .unwrap(),
         1
@@ -183,7 +187,7 @@ async fn kernel_graph_delete_is_rejected_while_its_own_run_is_unfinished() {
             runs.control("unfinished", "stop", Some(reason)).unwrap();
         }
         assert!(
-            matches!(application.delete_graph(&application.catalog_root.join("target"), &workspace).await,
+            matches!(application.delete_graph("target", &application.catalog_root.join("target"), &workspace).await,
             Err(ApplicationError::Conflict(message)) if message.contains("unfinished Run"))
         );
         assert!(runs.load("unfinished").unwrap().is_some());
@@ -208,7 +212,11 @@ async fn kernel_delete_rechecks_active_worker_even_with_a_settled_resource() {
     ));
     assert!(matches!(
         application
-            .delete_graph(&application.catalog_root.join("target"), &workspace)
+            .delete_graph(
+                "target",
+                &application.catalog_root.join("target"),
+                &workspace
+            )
             .await,
         Err(ApplicationError::Conflict(_))
     ));
@@ -285,7 +293,11 @@ async fn kernel_delete_preserves_pending_session_delivery() {
     for result in [
         application.delete_run("pending", &workspace).await,
         application
-            .delete_graph(&application.catalog_root.join("target"), &workspace)
+            .delete_graph(
+                "target",
+                &application.catalog_root.join("target"),
+                &workspace,
+            )
             .await
             .map(|_| ()),
     ] {
@@ -395,7 +407,7 @@ async fn kernel_graph_conversation_delete_rechecks_wait_child_phase_and_worker()
     });
     metadata::save(&application.data_root, &child).unwrap();
     assert!(
-        matches!(application.delete_graph(&application.catalog_root.join("target"), &workspace).await,
+        matches!(application.delete_graph("target", &application.catalog_root.join("target"), &workspace).await,
         Err(ApplicationError::Conflict(message)) if message.contains("has not stopped"))
     );
     complete(&application, &workspace, "wait-child").await;
@@ -403,13 +415,17 @@ async fn kernel_graph_conversation_delete_rechecks_wait_child_phase_and_worker()
     let registered = runs.drive("wait-child", &Artifacts, &port, cancellation());
     assert!(runs.active("wait-child"));
     assert!(
-        matches!(application.delete_graph(&application.catalog_root.join("target"), &workspace).await,
+        matches!(application.delete_graph("target", &application.catalog_root.join("target"), &workspace).await,
             Err(ApplicationError::Conflict(message)) if message.contains("has not stopped"))
     );
     drop(registered);
     assert_eq!(
         application
-            .delete_graph(&application.catalog_root.join("target"), &workspace)
+            .delete_graph(
+                "target",
+                &application.catalog_root.join("target"),
+                &workspace
+            )
             .await
             .unwrap(),
         1
@@ -470,7 +486,7 @@ async fn kernel_graph_conversation_delete_preserves_pause_and_budget_waits() {
     for reason in ["paused", "budget"] {
         runs.control("held-turn", "stop", Some(reason)).unwrap();
         assert!(
-            matches!(application.delete_graph(&application.catalog_root.join("target"), &workspace).await,
+            matches!(application.delete_graph("target", &application.catalog_root.join("target"), &workspace).await,
             Err(ApplicationError::Conflict(message)) if message.contains("has not stopped"))
         );
         assert!(runs.load("held-turn").unwrap().is_some());
@@ -479,7 +495,11 @@ async fn kernel_graph_conversation_delete_preserves_pause_and_budget_waits() {
     runs.control("held-turn", "stop", None).unwrap();
     assert_eq!(
         application
-            .delete_graph(&application.catalog_root.join("target"), &workspace)
+            .delete_graph(
+                "target",
+                &application.catalog_root.join("target"),
+                &workspace
+            )
             .await
             .unwrap(),
         1

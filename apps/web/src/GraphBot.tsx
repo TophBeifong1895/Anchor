@@ -70,9 +70,10 @@ export function GraphBot({ graph, pluginId, saved }: { graph: string; pluginId: 
           () => api<BotStatus>(path(graph), 'PUT', members), '成员已保存；启用后按新名单接收消息。',
         )} />
         <div className="channels-credentials"><h3>机器人账户与凭据</h3>
-          <p>Bot ID 和 Secret 只属于此 Graph 的机器人。更换账户或密钥后，请停用并重新启用。</p>
+          <p>Bot ID 和 Secret 只属于此 Graph 的机器人。机器人启用时不能修改，停用后再轮换或清除。</p>
           {status.account && <p className="channels-account">当前账户指纹 <code title={status.account}>{status.account.slice(0, 22)}…</code></p>}
-          <PluginCredentials pluginId={pluginId} endpoint={`${path(graph)}/credentials`} onChanged={refresh} />
+          {status.enabled ? <p className="channels-message">机器人已启用。停用后才能修改凭据。</p>
+            : <PluginCredentials pluginId={pluginId} endpoint={`${path(graph)}/credentials`} onChanged={refresh} />}
         </div>
         <div className="channels-enable"><button type="button" className={status.enabled ? '' : 'primary'} disabled={busy || !status.binding} onClick={() => {
           if (!status.binding) return;
@@ -98,8 +99,8 @@ function Members({ status, busy, save }: { status: BotStatus; busy: boolean; sav
     <div className="channels-section-title"><h3>成员</h3>{status.enabled && <small>停用机器人后可修改</small>}</div>
     <fieldset disabled={disabled}>
       <label>允许接收的成员<textarea rows={3} value={users} onChange={event => { setUsers(event.target.value); setDirty(true); }} placeholder="每行一个成员 ID" /></label>
-      <label>允许主动发送的成员<textarea rows={3} value={sendUsers} onChange={event => { setSendUsers(event.target.value); setDirty(true); }} placeholder="每行一个成员 ID；留空时同接收名单" /></label>
-    </fieldset><p className="channels-field-help">成员 ID 以换行或逗号分隔。空接收名单拒绝所有成员；<code>*</code> 允许所有成员。</p>
+      <label>允许主动发送的成员<textarea rows={3} value={sendUsers} onChange={event => { setSendUsers(event.target.value); setDirty(true); }} placeholder="每行一个成员 ID；需显式填写，包含要回复的成员" /></label>
+    </fieldset><p className="channels-field-help">成员 ID 以换行或逗号分隔。空接收名单拒绝所有成员；<code>*</code> 允许所有成员。接收名单不为空时，主动发送名单也必须填写。</p>
     <div className="channels-form-actions"><button type="submit" disabled={disabled}><Check size={14} />保存成员</button>
       {dirty && <button type="button" disabled={busy} onClick={() => setDirty(false)}>恢复已保存值</button>}</div>
   </form>;

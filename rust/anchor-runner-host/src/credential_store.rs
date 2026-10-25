@@ -594,6 +594,22 @@ pub(crate) fn submit(
     save(&path, &fact)?;
     Ok(fact.request)
 }
+/// The bot Graph a pending request's credential belongs to, if it is a
+/// channel credential, so the caller can apply the bot's rules before submit.
+pub(crate) fn request_channel_graph(
+    data: &Path,
+    owner: &str,
+    session: &Session,
+    id: &str,
+) -> Result<Option<(String, String)>, String> {
+    let _lease = lease(data)?;
+    let fact = load::<RequestFact>(&request_path(data, owner, session, id)?)?
+        .ok_or("credential request unavailable")?;
+    check_fact(&fact, owner, session)?;
+    Ok(split_target(&fact.request.server)
+        .1
+        .map(|graph| (fact.request.plugin.clone(), graph.to_owned())))
+}
 pub(crate) fn cancel(
     data: &Path,
     owner: &str,
@@ -838,23 +854,35 @@ pub(crate) fn delete_plugin(data: &Path, plugin: &str) -> Result<(), String> {
 }
 /// Remove one bot Graph's channel credentials for every owner, after its
 /// binding is gone. Shared MCP credentials of the Plugin are kept.
-pub(crate) fn delete_channel_graph(data: &Path, plugin: &str, target: &str) -> Result<(), String> {
+fn real_directory(path: &Path) -> bool {
+    fs::symlink_metadata(path).is_ok_and(|metadata| metadata.is_dir())
+}
+
+/// Remove one bot Graph's channel credentials of every owner and Plugin.
+pub(crate) fn delete_channel_graph(data: &Path, target: &str) -> Result<(), String> {
     let (server, Some(graph)) = split_target(target) else {
         return Err("credential target is not a bot Graph's channel".into());
     };
-    if !crate::pilot_tools::identifier(plugin) || !valid_target(target) {
+    if !valid_target(target) {
         return Err("invalid channel credential target".into());
     }
     let _lease = lease(data)?;
     let root = data.join("platform/credentials");
-    if private_parent(&root.join("probe"))?.is_some() {
-        for entry in fs::read_dir(&root).map_err(|_| "credential owner directories unavailable")? {
-            let directory = entry
-                .map_err(|_| "credential owner directories unavailable")?
-                .path()
-                .join(plugin)
-                .join(server)
-                .join(graph);
+    if private_parent(&root.join("probe"))?.is_none() {
+        return Ok(());
+    }
+    let unavailable = "credential directories unavailable";
+    for owner in fs::read_dir(&root).map_err(|_| unavailable)? {
+        let owner = owner.map_err(|_| unavailable)?.path();
+        if !real_directory(&owner) {
+            continue;
+        }
+        for plugin in fs::read_dir(&owner).map_err(|_| unavailable)? {
+            let plugin = plugin.map_err(|_| unavailable)?.path();
+            if !real_directory(&plugin) {
+                continue;
+            }
+            let directory = plugin.join(server).join(graph);
             if private_parent(&directory.join("probe"))?.is_some() {
                 fs::remove_dir_all(&directory).map_err(|_| "bot credential cleanup failed")?;
             }

@@ -229,3 +229,35 @@ async fn channel_binding_requires_a_persistent_assistant_graph() {
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{refused}");
     assert!(!port.get("task").unwrap().enabled);
 }
+
+#[tokio::test]
+async fn credentials_of_a_bot_saved_enabled_cannot_change_even_when_it_is_not_running() {
+    let _guard = crate::PROCESS_ENV_LOCK.lock().await;
+    let (_root, state, port) = fixture();
+    let key = "a".repeat(32);
+    let (status, _) = call(
+        &state,
+        "PUT",
+        "/graphs/task/channel",
+        Some(&key),
+        json!({"users":["alice"],"send_users":["alice"]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    port.update("task", |bot| bot.saved_enabled = true);
+    let write = json!({"authorization_digest":"0".repeat(64),"value":"another-bot"});
+    let path = "/graphs/task/channel/credentials/WECOM_BOT_ID";
+    let (status, refused) = call(&state, "PUT", path, Some(&key), write.clone()).await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert!(
+        refused.to_string().contains("stop this Graph's bot"),
+        "{refused}"
+    );
+    // Once stopped, the request reaches the credential store's own checks.
+    port.update("task", |bot| bot.saved_enabled = false);
+    let (_, response) = call(&state, "PUT", path, Some(&key), write).await;
+    assert!(
+        !response.to_string().contains("stop this Graph's bot"),
+        "{response}"
+    );
+}

@@ -51,7 +51,16 @@ impl PilotTools {
         let server = parameter(arguments, "server")?;
         // A bot's credentials belong to its Graph; MCP credentials do not.
         let server = match (server.starts_with("channel_"), arguments.get("graph")) {
-            (true, Some(Value::String(graph))) => format!("{server}@{graph}"),
+            (true, Some(Value::String(graph))) => {
+                let plan = self
+                    .application
+                    .check_channel_credentials_mutable(&self.owner, graph)
+                    .map_err(|error| rejected(format!("{error:?}")))?;
+                if plan.plugin != plugin {
+                    return Err(rejected("this Graph's bot uses another Plugin"));
+                }
+                format!("{server}@{graph}")
+            }
             (true, _) => return Err(rejected("a channel credential requires the bot's graph")),
             (false, None) => server,
             (false, Some(_)) => return Err(rejected("graph applies only to channel credentials")),

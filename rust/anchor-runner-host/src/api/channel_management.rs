@@ -202,19 +202,8 @@ async fn mutate(
     let owner = private_owner(&state, &headers);
     let plan = state
         .application
-        .channel_bot_plan(&graph)
+        .check_channel_credentials_mutable(&owner, &graph)
         .map_err(channel_error)?;
-    if let Some(saved) = state
-        .application
-        .channel_snapshot(&graph)
-        .map_err(channel_error)?
-        && saved.owner != owner
-    {
-        return Err(error(
-            StatusCode::CONFLICT,
-            "this Graph's bot belongs to another owner",
-        ));
-    }
     blocking(move || {
         crate::credential_store::configure(
             &state.data_root,

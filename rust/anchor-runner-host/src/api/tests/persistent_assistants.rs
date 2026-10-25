@@ -855,6 +855,32 @@ async fn unknown_delivery_blocks_retirement_and_graph_delete_until_settled() {
     assert!(state.application.records().unwrap().is_empty());
 }
 
+#[tokio::test]
+async fn a_bot_saved_enabled_keeps_its_graph_history_even_when_not_running() {
+    use crate::application::channel_management::fake::FakeChannels;
+    let (root, mut state) = fixture();
+    let (sessions, session, _) = saved_assistant(&state, "local");
+    // Saved enabled, but not running: its credentials name another account.
+    let mut bot = FakeChannels::bot("fixture", "local", "assistant", &["*"]);
+    bot.enabled = false;
+    state.application = state
+        .application
+        .clone()
+        .with_channel_management(Arc::new(FakeChannels::new().with(bot)));
+    let app = router_with_web_root(state.clone(), root.path().join("web"));
+    let (status, response) = call(app, "DELETE", "/graphs/fixture", None).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{response}");
+    assert!(state.bundle_root.exists());
+    assert!(
+        sessions
+            .get_channel_assistant("local", &session)
+            .unwrap()
+            .is_some(),
+        "deletion must be refused before any history is touched"
+    );
+    assert!(!state.application.records().unwrap().is_empty());
+}
+
 /// `needs_recovery` is derived from liveness, so a handover whose admission has
 /// not run yet — a bound instance with no Run record — still reads as needing
 /// recovery, while an unbound Session does not.

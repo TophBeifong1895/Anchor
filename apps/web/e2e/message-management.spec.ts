@@ -66,6 +66,7 @@ for (const width of [1440, 390]) {
     await bot.getByRole('button', { name: '启用机器人', exact: true }).click();
     await expect(bot).toContainText('常驻监听');
     await expect(bot.getByLabel('允许接收的成员')).toBeDisabled();
+    await expect(bot.getByRole('region', { name: '插件凭据', exact: true })).toHaveCount(0);
     expect(await dialog.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
     await page.screenshot({ path: info.outputPath(`graph-bot-${width}.png`), fullPage: true });
     await page.keyboard.press('Escape');

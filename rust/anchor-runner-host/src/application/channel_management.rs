@@ -138,7 +138,13 @@ pub(crate) struct ChannelRuntimeState {
     pub(crate) binding: ChannelBinding,
     /// The Graph's assistant node while the Graph still admits as this bot.
     pub(crate) reply_node: Option<String>,
+    /// Effective: saved enabled and still able to run (Graph admits, credentials
+    /// complete and of the saved account). Inbound routing reads this.
     pub(crate) enabled: bool,
+    /// The saved intent. Changes that a running gateway depends on (deleting
+    /// the Graph, dropping its channel, credentials) are refused while it is
+    /// set, whether or not the gateway currently manages to run.
+    pub(crate) saved_enabled: bool,
     pub(crate) account: Option<String>,
     pub(crate) descriptor: Option<PathBuf>,
 }
@@ -344,7 +350,7 @@ impl RunApplication {
             return Ok(());
         };
         if let Some(state) = port.snapshot(graph)?
-            && state.enabled
+            && state.saved_enabled
             && plan.is_none_or(|plan| plan.plugin != state.binding.plugin)
         {
             return Err(ApplicationError::Conflict(STOP_FIRST.into()));
@@ -356,11 +362,40 @@ impl RunApplication {
     /// is removed together with the Graph.
     pub(crate) fn check_channel_graph_deletion(&self, graph: &str) -> Result<(), ApplicationError> {
         match self.channels.as_deref() {
-            Some(port) if port.snapshot(graph)?.is_some_and(|state| state.enabled) => {
+            Some(port)
+                if port
+                    .snapshot(graph)?
+                    .is_some_and(|state| state.saved_enabled) =>
+            {
                 Err(ApplicationError::Conflict(STOP_FIRST.into()))
             }
             _ => Ok(()),
         }
+    }
+
+    /// The one rule for changing a bot's credentials, from the HTTP API or a
+    /// Pilot credential form: the Graph is a bot, the caller owns its binding,
+    /// and the bot is stopped, so its account cannot change under a running
+    /// gateway or bypass the account checks made when enabling.
+    pub(crate) fn check_channel_credentials_mutable(
+        &self,
+        owner: &str,
+        graph: &str,
+    ) -> Result<ChannelPlan, ApplicationError> {
+        let plan = self.channel_bot_plan(graph)?;
+        if let Some(state) = self.channel_snapshot(graph)? {
+            if state.owner != owner {
+                return Err(ApplicationError::Conflict(
+                    "this Graph's bot belongs to another owner".into(),
+                ));
+            }
+            if state.saved_enabled {
+                return Err(ApplicationError::Conflict(
+                    "stop this Graph's bot before changing its credentials".into(),
+                ));
+            }
+        }
+        Ok(plan)
     }
 
     pub(crate) async fn remove_channel_binding(&self, graph: &str) -> Result<(), ApplicationError> {

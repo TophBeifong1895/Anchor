@@ -78,6 +78,23 @@ pub(super) async fn submit(
         .plugin_reference_lease()
         .await
         .map_err(application_error)?;
+    // A bot's credentials follow the bot's rules: re-checked at submission
+    // because the bot may have been enabled since the form was requested.
+    if let Some((plugin, graph)) =
+        crate::credential_store::request_channel_graph(&state.data_root, &owner, &current, &request)
+            .map_err(|reason| error(StatusCode::CONFLICT, reason))?
+    {
+        let plan = state
+            .application
+            .check_channel_credentials_mutable(&owner, &graph)
+            .map_err(application_error)?;
+        if plan.plugin != plugin {
+            return Err(error(
+                StatusCode::CONFLICT,
+                "this Graph's bot no longer uses that Plugin; request a fresh credential form",
+            ));
+        }
+    }
     #[allow(clippy::result_large_err)]
     blocking(move || {
         let (sessions, owner, session) = owned_session(&state, &headers, &session)?;
