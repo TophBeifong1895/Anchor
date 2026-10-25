@@ -122,7 +122,7 @@ test('mocked: show wait/detach child Runs, source links and active controls', as
   await expect(preview).toContainText('等待目标完成');
   await expect(preview).toContainText('report / notify · 第 2 轮');
   await preview.getByRole('button', { name: '查看来源运行' }).click();
-  await expect(page.locator('.document-title h2')).toHaveText('report');
+  await expect(page.locator('.workspace:visible .document-title h2')).toHaveText('report');
   await page.locator('[data-id="notify"]').click();
   await expect(page.getByRole('region', { name: '工作流调用记录' })).toContainText('wait-child');
   await page.getByRole('button', { name: '返回时间线' }).click();
@@ -131,7 +131,7 @@ test('mocked: show wait/detach child Runs, source links and active controls', as
   await expect(detachedPreview).toContainText('启动后独立运行');
   await expect(detachedPreview).toContainText('report / notify · 第 2 轮');
   await detachedPreview.getByRole('button', { name: '查看来源运行' }).click();
-  await expect(page.locator('.document-title h2')).toHaveText('report');
+  await expect(page.locator('.workspace:visible .document-title h2')).toHaveText('report');
   await page.getByRole('button', { name: '返回时间线' }).click();
   await page.locator('[data-run-id="other-child"]').click();
   await page.getByRole('button', { name: '查看节点与产物' }).click();

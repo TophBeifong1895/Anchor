@@ -136,7 +136,7 @@ for (const width of [1440, 390]) {
 
 test('one plugin experience preserves Graph drafts, immediate Session writes and read-only historical facts', async ({ page }) => {
   const facts = await fixture(page);
-  const editor = page.locator('.inspector .plugins-panel');
+  const editor = page.locator('.workspace:visible .inspector .plugins-panel');
   const editorCard = editor.locator('.plugin-card');
   await expect(editorCard).toContainText(plugin.description);
   await expect(editorCard).not.toContainText(plugin.id);
@@ -180,7 +180,7 @@ test('one plugin experience preserves Graph drafts, immediate Session writes and
   await page.getByRole('link', { name: '运行记录', exact: true }).click();
   await page.locator('[data-id="worker"]').click();
   await page.getByRole('button', { name: '插件', exact: true }).click();
-  const history = page.locator('.inspector .plugins-panel');
+  const history = page.locator('.workspace:visible .inspector .plugins-panel');
   const historyCard = history.locator('.plugin-card');
   await expect(historyCard).toContainText(captured.description);
   expect(await typography(historyCard)).toEqual(type);

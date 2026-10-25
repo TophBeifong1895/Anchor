@@ -33,24 +33,26 @@ test('native Rust Host owns manual and scheduled Runs, restart recovery, files a
     expect(pause.status(), await pause.text()).toBe(202);
     await expect(page.locator('.canvas-head .pill')).toHaveText('等待你处理：paused', { timeout: 15000 });
     const runId = (await (await request.get(`${base}/runs`)).json()).runs[0].run;
-    const runFile = join(root, 'state/runs', `${runId}.json`);
-    const paused = JSON.parse(await readFile(runFile, 'utf8'));
-    expect(paused.status).toBe('paused'); expect(paused.results.first).toHaveLength(1);
+    // Run facts are read through the Host, never from an internal file layout.
+    const runView = async () => (await request.get(`${base}/runs/${runId}`)).json();
+    const paused = await runView();
+    expect(paused.projection).toMatchObject({ phase: 'waiting', waiting_for: 'human', reason: 'paused' });
+    expect(paused.state.nodes.first).toBeTruthy();
     expect((await request.post(`${base}/trigger`, { data: { graph: 'work' } })).status()).toBe(409);
     await stop(backend); backend = host.start(); await ready(); await page.reload();
     await page.getByRole('button', { name: '图编排', exact: true }).click();
     await page.getByRole('button', { name: '查看最近运行', exact: true }).click();
     await expect(page.getByRole('button', { name: '继续', exact: true })).toBeVisible();
     await page.getByRole('button', { name: '继续', exact: true }).click();
-    await expect.poll(async () => JSON.parse(await readFile(runFile, 'utf8')).status, { timeout: 15000 }).toBe('completed');
-    const final = JSON.parse(await readFile(runFile, 'utf8'));
-    expect(final.results.first).toEqual(paused.results.first);
+    await expect.poll(async () => (await runView()).projection.outcome, { timeout: 15000 }).toBe('done');
+    const final = await runView();
+    expect(final.state.nodes.first).toEqual(paused.state.nodes.first);
     const download = await request.get(`${base}/runs/${runId}/files/last/result.txt?download=1`);
     expect(download.ok()).toBeTruthy(); expect(await download.text()).toBe('first');
     expect(download.headers()['content-disposition']).toContain('attachment');
     await page.locator('[data-id="last"]').click();
     await page.getByRole('button', { name: '文件', exact: true }).click();
-    await page.getByRole('button', { name: /result\.txt/ }).click();
+    await page.locator('.workspace:visible .file-name', { hasText: 'result.txt' }).click();
     await expect(page.locator('.file-preview')).toHaveText('first');
     await page.screenshot({ path: join(root, 'manual-file.png') });
 

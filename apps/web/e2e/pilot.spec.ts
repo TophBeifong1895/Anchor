@@ -392,7 +392,7 @@ test('a reply opens the Graph, the Run and the file it links, and returns to the
 
   // The file link opens that Run at that node and expands the linked artifact.
   await page.getByRole('link', { name: 'result.txt' }).click();
-  await expect(page.locator('aside.inspector h3')).toContainText('write');
+  await expect(page.locator('.workspace:visible aside.inspector h3')).toContainText('write');
   await expect(page.locator('.file-preview')).toContainText('artifact-opened');
   await page.getByRole('button', { name: 'Pilot', exact: true }).click();
   await expect(page.locator('.pilot-chat-heading strong')).toHaveAttribute('title', session.id);

@@ -66,7 +66,7 @@ test('native Rust Library preserves Plugin selection, lazy resources and Op arti
     await expect(page.locator('.file-preview')).toHaveText('native-plugin-management');
     const runs = (await (await request.get(`${base}/runs`)).json()).runs;
     expect(runs).toHaveLength(1);
-    expect(runs[0].status).toBe('completed');
+    expect(runs[0].projection.outcome).toBe('done');
     const artifact = await (await request.get(`${base}/runs/${runs[0].run}/files/build/result.txt`)).json();
     expect(artifact.text).toBe('native-plugin-management');
     await writeFile(test.info().outputPath('plugin-evidence.json'), JSON.stringify({ status: 'passed',

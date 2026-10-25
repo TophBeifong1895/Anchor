@@ -63,7 +63,7 @@ test('projected native trace images, ordering and tool identities remain usable 
   await page.setViewportSize({ width: 390, height: 844 });
   await image.scrollIntoViewIfNeeded();
   await expect(image).toBeVisible();
-  const overflow = await page.locator('.inspector').evaluate(element => element.scrollWidth - element.clientWidth);
+  const overflow = await page.locator('.workspace:visible .inspector').evaluate(element => element.scrollWidth - element.clientWidth);
   expect(overflow).toBeLessThanOrEqual(1);
   await page.screenshot({ path: test.info().outputPath('media-mobile.png'), fullPage: true });
   expect(remote).toEqual([]); expect(errors).toEqual([]);

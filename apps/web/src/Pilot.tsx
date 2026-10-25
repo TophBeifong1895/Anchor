@@ -171,13 +171,23 @@ export function Pilot({ session = '', onSession, initialDraft = '', onDraftConsu
         ? [...savedMessages, { role: 'user', text: prompt, ...(running ? { turn: latest.id, attachments } : {}) }] : savedMessages);
       if (version === listVersion.current) setSessions(result.sessions);
       setCurrentTurn(latest ?? null);
+      // Keep the watched continuation identical to its previous value when nothing changed: the
+      // follow-up effect keys on it, and a new object every poll would restart the wait instead of
+      // letting it run on its interval.
+      const settled = (previous: PluginContinuation, state: PluginContinuation['state']) =>
+        previous.state.status === state.status && previous.state.request_id === state.request_id
+          && previous.state.turn === state.turn ? previous : { ...previous, state };
       setContinuation(previous => {
-        if (latest?.continuation?.status === 'scheduled') return { session: id, source: latest.id, state: latest.continuation };
+        if (latest?.continuation?.status === 'scheduled') {
+          const state = latest.continuation;
+          return previous && previous.session === id && previous.source === latest.id
+            ? settled(previous, state) : { session: id, source: latest.id, state };
+        }
         if (!previous || previous.session !== id) return previous;
         if (latest?.id === previous.source) return latest.continuation
-          ? { ...previous, state: latest.continuation } : previous;
-        return { ...previous, state: { status: latest?.request_id === `continuation:${previous.source}` ? 'admitted' : 'superseded',
-          ...(latest?.request_id === `continuation:${previous.source}` ? { turn: latest.id } : {}) } };
+          ? settled(previous, latest.continuation) : previous;
+        return settled(previous, { status: latest?.request_id === `continuation:${previous.source}` ? 'admitted' : 'superseded',
+          ...(latest?.request_id === `continuation:${previous.source}` ? { turn: latest.id } : {}) });
       });
       if (latest?.status !== 'running') { setWaitingQuestion(false); setStopping(false); }
       setSyncedTurn(latest && latest.status !== 'running' ? latest.id : '');

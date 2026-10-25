@@ -21,7 +21,10 @@ test('unknown tool result resumes through the normal Agent context path', async 
 
   await page.route('**/graphs', route => route.fulfill({ json: { graphs: [{ graph: run.graph, running: null, active_runs: [] }] } }));
   await page.route('**/graphs/*', route => route.fulfill({ json: { definition: graph } }));
-  await page.route('**/runs', route => route.fulfill({ json: { runs: [run] } }));
+  // The list carries the Run's current projection, so a resumed Run reaches the detail page
+  // the same way it does from a real Host: the list changes and the detail is read again.
+  const listed = () => (route: Parameters<Parameters<typeof page.route>[1]>[0]) => route.fulfill({ json: { runs: [{ ...run, projection: detail().projection }] } });
+  await page.route('**/runs', listed());
   await page.route('**/timeline*', route => route.fulfill({ json: { runs: [run], schedules: [], scheduled: [] } }));
   await page.route('**/runs/**', async route => {
     const url = new URL(route.request().url());
@@ -62,7 +65,7 @@ test('inactive running Run can be resumed from its existing detail page', async 
 
   await page.route('**/graphs', route => route.fulfill({ json: { graphs: [{ graph: run.graph, running: null, active_runs: [] }] } }));
   await page.route('**/graphs/*', route => route.fulfill({ json: { definition: graph } }));
-  await page.route('**/runs', route => route.fulfill({ json: { runs: [run] } }));
+  await page.route('**/runs', route => route.fulfill({ json: { runs: [{ ...run, projection: detail().projection }] } }));
   await page.route('**/timeline*', route => route.fulfill({ json: { runs: [run], schedules: [], scheduled: [] } }));
   await page.route('**/runs/**', async route => {
     const url = new URL(route.request().url());

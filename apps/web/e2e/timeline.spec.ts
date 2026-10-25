@@ -119,7 +119,7 @@ test('timeline fills the workspace and renders runs and plans on the same time s
     for (const entry of await page.locator('.timeline-entry').all()) {
       expect(await entry.boundingBox()).toEqual(await entry.locator('i').boundingBox());
     }
-    await expect(page.getByLabel('最大化详情面板')).not.toBeVisible();
+    await expect(page.locator('.workspace:visible').getByLabel('最大化详情面板')).not.toBeVisible();
     await surface.evaluate(el => { el.scrollLeft = el.scrollWidth; });
     await plan.hover();
     await expect(page.getByRole('tooltip')).toBeInViewport();

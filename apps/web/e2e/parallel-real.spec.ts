@@ -54,7 +54,7 @@ test('real backend: paired authoring, simultaneous native nodes, joined artifact
     await page.getByRole('button', { name: '运行工作流', exact: true }).click();
     await page.getByRole('button', { name: '开始运行', exact: true }).click();
     const run = (await (await triggered).json()).run as string;
-    await expect(page.locator('.execution-node.state-running')).toHaveCount(2);
+    await expect(page.locator('.execution-node.state-executing')).toHaveCount(2);
     await expect(page.getByLabel('活动节点', { exact: true })).toContainText('branch-a');
     await expect(page.getByLabel('活动节点', { exact: true })).toContainText('branch-b');
     await expect(page.locator('[data-id="join"]')).toContainText('尚未执行');
@@ -71,7 +71,7 @@ test('real backend: paired authoring, simultaneous native nodes, joined artifact
     expect(JSON.parse(manifest.text).branches).toHaveLength(2);
     expect((await (await request.get(`${base}/runs`)).json()).runs).toHaveLength(1);
     await writeFile(join(root, 'evidence.json'), JSON.stringify({ detail, manifest, result, errors }, null, 2));
-    await expect(page.locator('.execution-node.state-running')).toHaveCount(0);
+    await expect(page.locator('.execution-node.state-executing')).toHaveCount(0);
     await expect(page.locator('.execution-node.state-completed')).toHaveCount(5);
     await page.screenshot({ path: join(root, 'parallel-finished.png'), fullPage: true });
     await page.setViewportSize({ width: 390, height: 844 });

@@ -48,14 +48,17 @@ test('Pilot saves a credential through the dedicated input without putting its v
   await input.fill(secret);
   await expect(page.getByRole('log', { name: '对话消息' })).not.toContainText(secret);
   await form.getByRole('button', { name: '保存凭据并继续', exact: true }).click();
-  await expect(form.getByRole('status')).toHaveText('凭据已配置');
+  // A settled request is history: it folds into the record, where its state is read once opened.
   await expect(input).toHaveCount(0);
+  await page.getByText(/凭据配置记录/).click();
+  await expect(page.getByText('本次配置请求已完成', { exact: true })).toBeVisible();
   expect(submissions).toEqual([{ path: '/sessions/initialize/credential-requests/service-key/value', body: { value: secret } }]);
   const storage = await page.evaluate(() => JSON.stringify({ local: { ...localStorage }, session: { ...sessionStorage }, history: history.state }));
   expect(storage).not.toContain(secret);
   await expect(page.locator('body')).not.toContainText(secret);
   await page.reload();
-  await expect(form.getByRole('status')).toHaveText('凭据已配置');
+  await page.getByText(/凭据配置记录/).click();
+  await expect(page.getByText('本次配置请求已完成', { exact: true })).toBeVisible();
   await expect(page.locator('body')).not.toContainText(secret);
 });
 
@@ -76,8 +79,9 @@ test('Pilot cancels a credential request and removes its unsaved value', async (
   const form = page.getByRole('region', { name: '配置插件凭据' });
   await form.getByLabel('SERVICE_API_KEY', { exact: true }).fill('discarded-secret');
   await form.getByRole('button', { name: '取消', exact: true }).click();
-  await expect(form.getByRole('status')).toHaveText('配置已取消');
-  await expect(form.locator('input')).toHaveCount(0);
+  await expect(page.getByRole('region', { name: '配置插件凭据' }).locator('input')).toHaveCount(0);
+  await page.getByText(/凭据配置记录/).click();
+  await expect(page.getByText('配置已取消', { exact: true })).toBeVisible();
   expect(saved).toBe(false);
 });
 
