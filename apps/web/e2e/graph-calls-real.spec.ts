@@ -84,12 +84,17 @@ test('real backend: author wait and detach calls, follow results and concurrent 
     await expect(async () => {
       const detail = await json(request, `${base}/runs/${waitRun}`);
       expect(detail.calls).toHaveLength(1);
-      expect(detail.projection?.phase).toBe('executing');
+      // A `wait` call parks the parent on its child: the parent is waiting on that child,
+      // while the child itself is the one executing.
+      expect(detail.projection?.phase).toBe('waiting');
+      expect(detail.projection?.waiting_for).toBe('child');
       expect(detail.calls[0].projection.phase).toBe('executing');
     }).toPass({ timeout: 10000 });
     await page.locator('[data-id="call"]').click();
     const records = page.getByRole('region', { name: '工作流调用记录' });
-    await expect(records).toContainText('正在等待目标完成');
+    // The record names the mode and the target's own projection, not a prose promise.
+    await expect(records).toContainText('等待完成');
+    await expect(records).toContainText('目标运行：执行中');
     await records.getByRole('button', { name: '查看目标运行' }).click();
     await expect(page.locator('.run-origin')).toContainText('source / call');
     await page.getByRole('button', { name: '返回来源运行' }).click();

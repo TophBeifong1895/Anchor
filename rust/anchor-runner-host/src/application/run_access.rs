@@ -193,6 +193,7 @@ impl<'record> RunView<'record> {
                     },
                     input_commits: dispatch.inputs,
                     prepared_input: serde_json::Value::Null,
+                    branch: dispatch.branch,
                 })
                 .collect();
         }

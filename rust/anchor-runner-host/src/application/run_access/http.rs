@@ -89,6 +89,26 @@ impl RunApplication {
         let cursor = view
             .cursor()
             .map(|cursor| json!({"node":cursor.node_id,"pass":cursor.key.invocation,"dir":""}));
+        // A parallel region opens one slot per branch, so more than one node can be
+        // running at once. The stored activation only records what each branch
+        // completed; which branch is executing now is the live frontier, read here
+        // and never written back as a second progress fact.
+        let mut parallel = serde_json::to_value(&record.parallel)
+            .map_err(|error| RunHttpError::Internal(error.to_string()))?;
+        if let Some(branches) = parallel.get_mut("branches").and_then(Value::as_array_mut) {
+            for dispatch in view.dispatches() {
+                let Some(branch) = dispatch.branch.and_then(|index| branches.get_mut(index)) else {
+                    continue;
+                };
+                if branch.get("status").and_then(Value::as_str) == Some("ready") {
+                    branch["status"] = json!("running");
+                }
+                branch["cursor"] = json!({
+                    "node_id": dispatch.node_id,
+                    "key": {"invocation": dispatch.key.invocation},
+                });
+            }
+        }
         let executed = record.executed_nodes();
         let mut traces = serde_json::Map::new();
         let mut trace_keys = record
@@ -224,7 +244,7 @@ impl RunApplication {
             ""
         };
         Ok(
-            json!({"session_call":metadata.session_call,"channel_reply":channel_reply,"graph":metadata.graph,"run":id,"attachments":metadata.attachments,"plugins":plugins,"definition":definition,"state":{"objective":record.snapshot.objective,"started":metadata.created,"updated":updated,"trigger":trigger,"input":record.input,"cursor":cursor,"passes":record.passes,"decided":decided,"nodes":nodes,"executed":executed,"skipped":[],"error":error,"parallel":record.parallel,"recovery":view.recovery},"calls":calls,"traces":traces,"nodes":record.snapshot.nodes.iter().map(|node|node.id.clone()).collect::<Vec<_>>(),"active":projection.active,"projection":projection}),
+            json!({"session_call":metadata.session_call,"channel_reply":channel_reply,"graph":metadata.graph,"run":id,"attachments":metadata.attachments,"plugins":plugins,"definition":definition,"state":{"objective":record.snapshot.objective,"started":metadata.created,"updated":updated,"trigger":trigger,"input":record.input,"cursor":cursor,"passes":record.passes,"decided":decided,"nodes":nodes,"executed":executed,"skipped":[],"error":error,"parallel":parallel,"recovery":view.recovery},"calls":calls,"traces":traces,"nodes":record.snapshot.nodes.iter().map(|node|node.id.clone()).collect::<Vec<_>>(),"active":projection.active,"projection":projection}),
         )
     }
 }

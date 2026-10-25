@@ -248,5 +248,6 @@ pub async fn dispatch_input<A: ArtifactPort + ?Sized>(
         key,
         input_commits: dispatch.inputs.clone(),
         prepared_input,
+        branch: dispatch.branch,
     })
 }

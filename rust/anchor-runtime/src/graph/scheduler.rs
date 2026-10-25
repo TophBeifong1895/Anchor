@@ -22,6 +22,8 @@ pub struct DispatchInput {
     pub key: InvocationKey,
     pub input_commits: Vec<CommitRef>,
     pub prepared_input: Value,
+    /// The parallel branch this dispatch runs, when the frontier opened one.
+    pub branch: Option<usize>,
 }
 
 pub const EXECUTOR_ID: &str = "anchor/executor";
