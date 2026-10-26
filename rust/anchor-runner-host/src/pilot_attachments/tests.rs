@@ -225,7 +225,7 @@ fn published_files_are_immutable_bounded_replayable_and_removed_by_existing_life
         &PreparedAttachments::default(),
         None,
     );
-    let workspace = crate::pilot_tools::session_workspace(&f.work, "owner", "pilot");
+    let workspace = crate::pilot_resources::session_workspace(&f.work, "owner", "pilot");
     fs::create_dir_all(&workspace).unwrap();
     fs::write(workspace.join("report.txt"), b"original report").unwrap();
     let output = publish_workspace_file(
@@ -436,7 +436,7 @@ fn publishing_reads_only_regular_workspace_files_and_input_scope_selects_one_tur
     let mounted = readonly_inputs(&f.data, &f.sessions, "owner", &f.session, &fresh).unwrap();
     assert_eq!(mounted.len(), 1);
     assert!(!mounted[0].source.join("first.txt").exists());
-    let workspace = crate::pilot_tools::session_workspace(&f.work, "owner", "pilot");
+    let workspace = crate::pilot_resources::session_workspace(&f.work, "owner", "pilot");
     fs::create_dir_all(&workspace).unwrap();
     fs::write(workspace.join("normal"), "normal").unwrap();
     std::os::unix::fs::symlink(workspace.join("normal"), workspace.join("link")).unwrap();

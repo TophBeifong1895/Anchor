@@ -38,7 +38,7 @@
 | H2 Run 元数据下沉 | M | H1 | 已验收（ebc9919）；依赖计数 25 / 23 / 1，服务 → 用例减少 33（按下文确认口径），[证据](../experiments/host-convergence/h2/verification.md) |
 | H3 配置只在组合根读取 | M | H2 | 已验收（c87ef57）；本机已保存模型设置通过新校验；四变量在入口各读一次，模型保存与执行共用类型化校验；依赖计数 25 / 23 / 1，[证据](../experiments/host-convergence/h3/verification.md) |
 | H4 Plugin 领域单一主人 | L | H3；调研可提前 | 已验收（3a8096c）；生产 +288 行；构造外部 0 / 0，依赖计数 22 / 23 / 1，[证据](../experiments/host-convergence/h4/verification.md) |
-| H5 剩余反向依赖清零 | M | H4 | 编辑前盘点完成；行数预算待裁决，生产开发未开始，[清单与预算](../experiments/host-convergence/h5/inventory.md)、[基线证据](../experiments/host-convergence/h5/verification.md) |
+| H5 剩余反向依赖清零 | M | H4 | 开发与规定检查完成，待架构验收；生产净减 5 行，实际依赖 20 / 14 / 1 均为命名欠债，未登记计数 0 / 0 / 0，[证据](../experiments/host-convergence/h5/verification.md) |
 
 规模：S 约半天，M 约 1–2 天，L 约 3–5 天（按 Agent 工作量估计）。
 
@@ -69,7 +69,7 @@
 - 模型字段：抽出唯一的校验函数，设置保存和 Goose 配置都调用它；补一个「保存上下文窗口 0 被拒绝」的测试。开发 Agent 不读取 `.local/` 下的任何设置或凭据文件；本机已保存的设置能否被新校验接受，由验收者核查。
 - 其余 `ANCHOR_*` 变量本轮不动，只在交回里列出 `main.rs` 之外仍有读取的清单。
 
-验收者遗留（2026-10-26，不阻塞）：`RunApplication` 同时保存 `data_root`/`catalog_root` 与一份 `HostConfiguration`，`check_store` 的 state 根比较因此恒等、已无检查作用，H4/H5 中改为只保存 Library 覆盖与 bwrap 并删去该比较；`node_host.rs`、`execution.rs`、`durable_write.rs` 三处以默认配置构造 `RunApplication`，并入 H5 由组合根注入。
+验收者遗留（2026-10-26，不阻塞）：`RunApplication` 同时保存 `data_root`/`catalog_root` 与一份 `HostConfiguration`，`check_store` 的 state 根比较因此恒等、已无检查作用，H4/H5 中改为只保存 Library 覆盖与 bwrap 并删去该比较；`node_host.rs`、`execution.rs`、`durable_write.rs` 三处以默认配置构造 `RunApplication`，并入 H5 由组合根注入。 H5 已删除配置副本与恒等比较，execution reader 和 durable cleanup 已由入口注入；`node_host` 的默认 reader 随 G2 保留为命名架构欠债。
 
 ### H4 Plugin 领域单一主人
 
@@ -92,12 +92,30 @@
 
 ### H5 剩余反向依赖清零
 
-- 处理 H2–H4 之后 `layer-fence.txt` 剩下的计数。已知的大头：
-  - `node_host` 自己构造 `RunApplication`（`node_host.rs:100,189`、`node_host/conversation.rs:228`），改为由组合根注入所需的小端口；
-  - `durable_write.rs:238`；
-  - `goose_acp/pilot_interaction*` 引用用例层的错误与前置条件类型，改为由入口适配转换；
-  - `credential_store`、`tool_host`、`pilot_host` 对 `pilot_tools`、`api` 的引用。
-- 目标是三类计数全部为 0。确有必要保留的，在本页逐项写出理由，并在测试里固定为命名例外。
+架构验收者裁决（2026-10-26）：第一层按 G13/G14/G6/G7/G11/G12/G4（含 A22、B20）执行，Host 生产物理行数必须低于 H4 基线 51,256；第二层接受下表命名架构欠债。原盘点的全量端口方案预算净增 +186 行未实施，清单保留为历史估算。
+
+- 已完成的归属迁移：工具名归中立 `tool_names`，已保存回复图片读取归 `channel_replies`，Session workspace 与开发作用域释放归 `pilot_resources`；原路径与转发均删除。G6/G7/G11/G12 对应引用全部消除。
+- G13/G4：`RunApplication` 删除整份配置副本和恒等 state 根比较；Pilot/工具装配接收 Library 覆盖与 bwrap 参数，execution reader 和 durable cleanup 惰性回调由入口注入。保留原清理扫描顺序及失败计数。
+- G14 复核偏离：`runtime_configuration::install_release_network` 有生产调用，`PluginLibrary::install_directory` 不能加 `cfg(test)`；保留原入口与安装锁语义。其余转发也都有调用，没有可直接删除的闲置方法。此前“只有测试调用”的盘点结论已纠正。
+- 实际依赖 22 / 23 / 1 → 20 / 14 / 1，消除 11 处；剩余 35 处均在下表，未获准计数为 0 / 0 / 0。围栏继续检查原分类和逐文件上限，未提高数字。Host 生产物理行数 51,256 → 51,251（净减 5），使用既有 `measure_lines.py::test_partition`。
+
+| 命名例外 | 文件 | 实际计数（服务→用例 / 服务→适配 / 用例→适配） | 保留理由与关闭条件 |
+| --- | --- | --- | --- |
+| G1-assistant-run | `assistant.rs` | 1 / 0 / 0 | 随 G2 保留交接 Run 查询；待 Node 端口迁移一起关闭，避免拆开在线 owner 语义 |
+| G1-assistant-plugins | `assistant_plugins.rs` | 2 / 0 / 0 | 随 G2 保留 RunProgress、授权投影与租约调用；随 Run 查询端口迁移关闭 |
+| G1-conversation-resources | `conversation_resources.rs` | 2 / 0 / 0 | 随 G2 保留 Run 删除协调及引用检查；待删除用例与 Node 端口迁移关闭 |
+| G1-local-inputs | `local_inputs.rs` | 1 / 0 / 0 | 随 G2 保留 RunProgress 的输入校验、挂载契约；随共享 Run 快照契约迁移关闭 |
+| G2-node-host | `node_host.rs`（基线 :100、189、192） | 3 / 0 / 0 | NodeHost 继续持 RunApplication 与默认 reader；端口接线预算 +70 行，暂不实施，保留为架构欠债 |
+| G2-node-conversation | `node_host/conversation.rs`（基线 :228） | 1 / 0 / 0 | 随 G2 保留历史投影的 Run 查询；待 Node 端口迁移关闭 |
+| G3-channel-management | `channel_supervisor/management.rs` | 2 / 0 / 0 | 随 G8/G9 保留渠道用例契约及错误映射；待渠道契约迁移和交互端口接线关闭 |
+| G5-node-preparation | `node_host/preparation.rs`（基线 :110–151） | 0 / 4 / 0 | 随 G2/G8 保留 sandbox 工具与渠道包装的装配；3 处工具名引用已消除，剩余待装配端口迁移关闭 |
+| G8-goose-pilot | `goose_acp/pilot.rs`（基线 :5、640、641） | 0 / 3 / 0 | Goose 仍使用 Pilot 适配器与权限表；端口接线预算 +35 行，暂不实施，保留为架构欠债（B01–B03） |
+| G8-pilot-interaction | `goose_acp/pilot_interaction.rs` | 8 / 2 / 0 | 随 G8 保留原生交互的用例前置条件、错误及工具权限映射（A09–A16、B04–B05）；待交互端口迁移关闭 |
+| G8-channel-interaction | `goose_acp/pilot_interaction/channel_management.rs` | 0 / 2 / 0 | 随 G8 保留渠道参数解析调用（B06–B07），继续共用唯一实现；待交互端口迁移关闭 |
+| G9-pilot-host | `pilot_host.rs`（基线 :10、855、875） | 0 / 3 / 0 | 保留 Pilot Turn 具体执行端口；端口接线预算 +35 行，暂不实施，保留为架构欠债 |
+| G10-candidate-context | `application/plugin_candidates.rs`（基线 :357，C01） | 0 / 0 / 1 | 随 G9 保留候选自测的 PilotTurnContext；待 Turn 执行端口及所需参数拆分关闭 |
+
+这些是仍存在的反向依赖，不表示实际三类引用已经清零。命名标识固定在 `tests/layer_fence.rs`，文件路径、上限和保留理由写在 `layer-fence.txt` 对应行注释中。验证命令、删除路径、计数与偏离见 [H5 交回](../experiments/host-convergence/h5/verification.md)。
 
 ## 共同要求
 

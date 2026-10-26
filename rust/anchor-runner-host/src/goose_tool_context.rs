@@ -45,7 +45,7 @@ pub(crate) fn channel_request_id(key: &InvocationKey) -> Result<String, ToolErro
                 key,
                 &identity.session,
                 &identity.tool_call,
-                crate::channel_tools::SEND_TOOL,
+                crate::tool_names::SEND_TOOL,
             ))
             .map_err(|_| invalid_identity())?;
             let mut digest = Sha256::new();

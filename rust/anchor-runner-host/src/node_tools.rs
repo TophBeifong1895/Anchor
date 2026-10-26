@@ -1,5 +1,7 @@
 //! AgentNode command tools delegated to the host-authorized Bubblewrap adapter.
 
+use crate::tool_names::{EDIT_TOOL_NAME, READ_TOOL_NAME, RUN_TOOL_NAME};
+
 use anchor_runtime::{
     Cancellation, NetworkPolicy, ReadOnlyInput, SandboxError, SandboxPort, SandboxRequest,
     SandboxStatus, SpillPolicy, ToolDefinition, ToolError, ToolName, ToolPort, ToolResultContent,
@@ -18,9 +20,6 @@ use std::{
 
 mod workspace_files;
 
-pub(crate) const RUN_TOOL_NAME: &str = "anchor_run";
-pub(crate) const READ_TOOL_NAME: &str = "anchor_read";
-pub(crate) const EDIT_TOOL_NAME: &str = "anchor_edit";
 /// Where the sandbox mounts the workspace, as a path prefix.
 const WORKSPACE_PREFIX: &str = "/workspace/";
 

@@ -193,7 +193,7 @@ async fn legacy_project_views_share_bytes_and_selection_rejects_inconsistent_fac
     let two = select_development_view(&library, &scope_path, "two").unwrap();
     assert_ne!(one.view.view(), two.view.view());
     assert!(
-        release_development_scope(&library, &scope_path)
+        crate::pilot_resources::release_development_scope(&library, &scope_path)
             .unwrap_err()
             .contains("in use")
     );
@@ -357,7 +357,7 @@ async fn legacy_project_views_share_bytes_and_selection_rejects_inconsistent_fac
     drop(one);
     drop(two);
     tokio::time::timeout(Duration::from_secs(2), async {
-        release_development_scope(&library, &scope_path)
+        crate::pilot_resources::release_development_scope(&library, &scope_path)
     })
     .await
     .unwrap()

@@ -588,9 +588,9 @@ async fn legacy_view_is_preserved_and_store_only_offline_install_is_explicitly_u
     )
     .await
     .unwrap();
-    assert!(development_dependencies::release_development_scope(&f.library, &f.scope).is_err());
+    assert!(crate::pilot_resources::release_development_scope(&f.library, &f.scope).is_err());
     drop(leased);
-    development_dependencies::release_development_scope(&f.library, &f.scope).unwrap();
+    crate::pilot_resources::release_development_scope(&f.library, &f.scope).unwrap();
     assert!(!f.scope.join("development").exists());
     assert!(f.workspace.join("one").exists());
     assert!(f.prepare("one", PrepareAction::Ensure, &[]).await.is_err());

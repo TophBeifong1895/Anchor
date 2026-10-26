@@ -1,9 +1,11 @@
 //! Durable, narrow ownership needed to delete Pilot files. This contains no
 //! recovery cursor and never interprets Goose history.
 
+use crate::plugin_library::PluginLibrary;
 use anchor_platform_session::{Session, SessionError, SessionStore, Turn};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use sha2::Digest as _;
 use std::path::{Path, PathBuf};
 
 #[cfg(test)]
@@ -20,18 +22,55 @@ struct Binding {
     goose: PathBuf,
 }
 
+/// The node sandbox a Pilot Turn's stdio Plugin servers launch in, and the
+/// session-level workspace they share.
+///
+/// The authority is the deployment's, from the same configuration a node
+/// receives: the Bubblewrap executable, `ANCHOR_RUNNER_ALLOWED_COMMANDS`, the deployment
+/// tool environment, and `ANCHOR_RUNNER_WORKSPACE_ROOT` as the authorized
+/// workspace root. No new permission is invented here — a Plugin server gets
+/// exactly the authority a node call's server gets, and only because a human
+/// mounted that Plugin in this Session. A deployment that authorized no commands
+/// gets no stdio Plugin tools, with a reason.
+///
+/// A Pilot Turn has no Run, so there is no node workspace to reuse. The Plugin
+/// servers get one session-level workspace instead, stable per (owner, session)
+/// under the deployment's workspace root, so a Plugin's own state survives the
+/// Turn that created it.
+pub(crate) fn session_workspace(workspace_root: &Path, owner: &str, session: &str) -> PathBuf {
+    let identity =
+        serde_json::to_vec(&(owner, session)).expect("Session workspace identity is JSON");
+    workspace_root
+        .join("pilot")
+        .join(format!("{:x}", sha2::Sha256::digest(identity)))
+}
+
+pub(crate) fn release_development_scope(library_root: &Path, scope: &Path) -> Result<(), String> {
+    PluginLibrary::new(library_root)
+        .release_development_scope(scope)
+        .map_err(|error| error.to_string())?;
+    // The Library tombstone now prevents any stale caller acquiring a scope
+    // lease. The private tree is outside its reference scan and is Host-owned.
+    let development = scope.join("development");
+    match std::fs::symlink_metadata(&development) {
+        Ok(metadata) if metadata.is_dir() && !metadata.file_type().is_symlink() => {
+            crate::host_fs::directory(&development)?;
+            std::fs::remove_dir_all(development).map_err(|e| e.to_string())
+        }
+        Ok(_) => Err("private development storage is no longer a Host-owned directory".into()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error.to_string()),
+    }
+}
+
 fn binding(data: &Path, workspaces: &Path, owner: &str, session: &Session) -> Binding {
     Binding {
         format: 1,
         owner: owner.into(),
         session: session.id.clone(),
         created_at: session.created_at.to_rfc3339(),
-        workspace: std::path::absolute(crate::pilot_tools::session_workspace(
-            workspaces,
-            owner,
-            &session.id,
-        ))
-        .expect("Host workspace path"),
+        workspace: std::path::absolute(session_workspace(workspaces, owner, &session.id))
+            .expect("Host workspace path"),
         goose: crate::pilot_host::scope(data, owner, session),
     }
 }

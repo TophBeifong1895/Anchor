@@ -83,7 +83,7 @@ async fn resolver_returns_owned_anchor_tools_under_admitted_plugin_authority() {
     assert!(
         names
             .iter()
-            .any(|name| name == crate::node_tools::RUN_TOOL_NAME)
+            .any(|name| name == crate::tool_names::RUN_TOOL_NAME)
     );
     assert!(workspace.is_dir());
 
@@ -207,7 +207,7 @@ async fn agent_tools_mount_plugins_without_a_run_policy_grant() {
     let tools = resolver.tools(&request).await.unwrap().tools;
     let result = tools
         .call(
-            crate::node_tools::RUN_TOOL_NAME,
+            crate::tool_names::RUN_TOOL_NAME,
             json!({"command":["sh","-c","cat /plugins/demo/resources/note.txt"]}),
         )
         .await
@@ -305,7 +305,7 @@ async fn agent_command_tools_receive_only_the_nodes_frozen_local_inputs() {
         cancellation: std::sync::Arc::new(AtomicBool::new(false)),
     };
     let tools = resolver.tools(&request).await.unwrap().tools;
-    let result = tools.call(crate::node_tools::RUN_TOOL_NAME, json!({"command":["sh","-c","cat /local-inputs/history/history.txt; ! touch /local-inputs/history/forbidden"]})).await.unwrap();
+    let result = tools.call(crate::tool_names::RUN_TOOL_NAME, json!({"command":["sh","-c","cat /local-inputs/history/history.txt; ! touch /local-inputs/history/forbidden"]})).await.unwrap();
     assert_eq!(result[0].as_json().unwrap()["exit_code"], 0);
     assert_eq!(
         result[0].as_json().unwrap()["stdout"],
@@ -316,7 +316,7 @@ async fn agent_command_tools_receive_only_the_nodes_frozen_local_inputs() {
     let tools = resolver.tools(&request).await.unwrap().tools;
     let result = tools
         .call(
-            crate::node_tools::RUN_TOOL_NAME,
+            crate::tool_names::RUN_TOOL_NAME,
             json!({"command":["sh","-c","test ! -e /local-inputs/history/history.txt"]}),
         )
         .await

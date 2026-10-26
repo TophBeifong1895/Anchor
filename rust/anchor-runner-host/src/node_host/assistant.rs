@@ -454,7 +454,7 @@ impl HostNodes {
                         return Err(graph_error("assistant reply is empty"));
                     }
                     let items =
-                        crate::channel_tools::read_reply_images_for_invocation(root, &work_key)
+                        crate::channel_replies::read_reply_images_for_invocation(root, &work_key)
                             .map_err(graph_error)?;
                     NodeCompletion {
                         submission: completion.submission,

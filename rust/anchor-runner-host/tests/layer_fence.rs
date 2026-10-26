@@ -197,6 +197,27 @@ fn dependency_counting() {
     assert_eq!(check_count("known.rs", RULES[0], 1, 1), Ok(None));
 }
 
+// Only these architecture-reviewed debts may carry an inline exception name.
+// Keep layer roles and per-file maxima enforced even for named debts.
+fn named_exception(path: &str) -> Option<&'static str> {
+    match path {
+        "application/plugin_candidates.rs" => Some("G10-candidate-context"),
+        "assistant.rs" => Some("G1-assistant-run"),
+        "assistant_plugins.rs" => Some("G1-assistant-plugins"),
+        "channel_supervisor/management.rs" => Some("G3-channel-management"),
+        "conversation_resources.rs" => Some("G1-conversation-resources"),
+        "goose_acp/pilot.rs" => Some("G8-goose-pilot"),
+        "goose_acp/pilot_interaction.rs" => Some("G8-pilot-interaction"),
+        "goose_acp/pilot_interaction/channel_management.rs" => Some("G8-channel-interaction"),
+        "local_inputs.rs" => Some("G1-local-inputs"),
+        "node_host.rs" => Some("G2-node-host"),
+        "node_host/conversation.rs" => Some("G2-node-conversation"),
+        "node_host/preparation.rs" => Some("G5-node-preparation"),
+        "pilot_host.rs" => Some("G9-pilot-host"),
+        _ => None,
+    }
+}
+
 #[test]
 fn layer_fence() {
     let source_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
@@ -206,11 +227,22 @@ fn layer_fence() {
         if line.trim().is_empty() || line.starts_with('#') {
             continue;
         }
-        let fields: Vec<_> = line.split_whitespace().collect();
+        let (limits, explanation) = line.split_once('#').expect("missing named exception");
+        let fields: Vec<_> = limits.split_whitespace().collect();
         assert_eq!(fields.len(), 4, "expected path and three counts: {line}");
         assert!(
             matches!(layer(fields[0]), Layer::Service | Layer::Application),
             "unrestricted source in baseline: {line}"
+        );
+        let name = explanation
+            .trim()
+            .split_once(':')
+            .expect("missing exception reason")
+            .0;
+        assert_eq!(
+            Some(name),
+            named_exception(fields[0]),
+            "unapproved exception: {line}"
         );
         let maximum: [usize; 3] =
             std::array::from_fn(|i| fields[i + 1].parse().expect("invalid baseline count"));
@@ -221,10 +253,14 @@ fn layer_fence() {
     }
     let mut violations = Vec::new();
     let mut totals = [0; 3];
+    let mut named = [0; 3];
+    let mut unapproved = [0; 3];
     for (path, actual) in &counts {
         let maximum = baseline.get(path.as_str()).copied().unwrap_or([0; 3]);
         for i in 0..RULES.len() {
             totals[i] += actual[i];
+            named[i] += actual[i].min(maximum[i]);
+            unapproved[i] += actual[i].saturating_sub(maximum[i]);
             if let Err(message) = check_count(path, RULES[i], actual[i], maximum[i]) {
                 violations.push(message);
             }
@@ -248,6 +284,7 @@ fn layer_fence() {
         RULES[2],
         totals[2]
     );
+    eprintln!("layer_fence: named exceptions {named:?}; unapproved {unapproved:?}");
     assert!(
         violations.is_empty(),
         "Host layer ratchet exceeded:\n{}",

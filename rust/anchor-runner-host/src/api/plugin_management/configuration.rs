@@ -69,7 +69,7 @@ async fn test(
     // Preparation owns the publication lease. Holding the management reference
     // lease here would recursively acquire the same Library lock and deadlock.
     crate::plugin_configuration_test::test(
-        state.application.host_configuration().bwrap.clone(),
+        state.application.bwrap.clone(),
         state.data_root.clone(),
         state.application.library_root().to_path_buf(),
         crate::credential_store::binding_owner(&private_owner(&state, &headers)),

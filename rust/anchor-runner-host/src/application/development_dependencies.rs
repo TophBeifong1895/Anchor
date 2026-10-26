@@ -179,24 +179,6 @@ pub(crate) fn select_development_view(
     })
 }
 
-pub(crate) fn release_development_scope(library_root: &Path, scope: &Path) -> Result<(), String> {
-    PluginLibrary::new(library_root)
-        .release_development_scope(scope)
-        .map_err(|error| error.to_string())?;
-    // The Library tombstone now prevents any stale caller acquiring a scope
-    // lease. The private tree is outside its reference scan and is Host-owned.
-    let development = scope.join("development");
-    match std::fs::symlink_metadata(&development) {
-        Ok(metadata) if metadata.is_dir() && !metadata.file_type().is_symlink() => {
-            crate::host_fs::directory(&development)?;
-            std::fs::remove_dir_all(development).map_err(|e| e.to_string())
-        }
-        Ok(_) => Err("private development storage is no longer a Host-owned directory".into()),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(error) => Err(error.to_string()),
-    }
-}
-
 #[cfg(test)]
 pub(crate) mod test_support;
 

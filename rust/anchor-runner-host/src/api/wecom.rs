@@ -609,7 +609,7 @@ async fn wait_for_channel_reply(
                 let items = if result.host_reply {
                     Vec::new()
                 } else {
-                    crate::channel_tools::read_reply_images_for_invocation(
+                    crate::channel_replies::read_reply_images_for_invocation(
                         &state.data_root,
                         &work_key,
                     )

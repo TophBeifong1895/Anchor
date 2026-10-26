@@ -1,0 +1,16 @@
+   Compiling anchor-runner-host v0.1.0 (/tmp/anchor-host-h5/rust/anchor-runner-host)
+    Finished `test` profile [optimized + debuginfo] target(s) in 51.75s
+     Running unittests src/main.rs (/home/mansteinl/Anchor/rust/target/debug/deps/anchor_runner_host-c1aaaabe35671170)
+
+running 9 tests
+test durable_write::tests::crash_writer_child ... ok
+test durable_write::tests::missing_cleanup_root_is_a_noop ... ok
+test durable_write::tests::cleanup_removes_only_reserved_regular_files_without_following_links ... ok
+test durable_write::tests::publication_uses_locked_directory_after_temporary_file_creation ... ok
+test durable_write::tests::busy_leaf_does_not_prevent_cleanup_of_other_writer_directories ... ok
+test durable_write::tests::writer_stays_on_locked_directory_when_parent_path_is_replaced ... ok
+test durable_write::tests::startup_cleanup_visits_only_known_writer_directory_layouts ... ok
+test durable_write::tests::startup_cleanup_preserves_live_writer_then_removes_its_crash_residue ... ok
+test durable_write::tests::startup_cleanup_targets_only_recorded_wait_input_workspaces ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 1028 filtered out; finished in 0.00s

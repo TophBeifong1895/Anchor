@@ -105,7 +105,7 @@ AgentNode 引用角色与节点级 `plugins`，角色只复用模型、指令和
 
 Host 分别配置 bundle、catalog、state、workspace 和 Library 根。release 目录只读；可写根放在 release 外。Host 在监听前验证配置并持有 state-root `deployment-writer` 锁。开发脚本使用独立数据根，旧本地记录不会被重新接管。
 
-`ANCHOR_BWRAP`、`ANCHOR_RUNNER_LIBRARY_ROOT`、`ANCHOR_RUNNER_CATALOG_ROOT`、`ANCHOR_RUNNER_STATE_ROOT` 由 `main.rs` 在进程入口各读取一次，形成 `HostConfiguration` 传给 HTTP、独立执行、Run 用例、Pilot 和工具服务。Library 的显式根优先于调用方已解析的 catalog 根；工具环境仍只从显式 Library 根加载，保留原回退语义。[配置围栏](../rust/anchor-runner-host/tests/configuration_fence.rs)限制四个变量名的生产字面量归属；其他环境读取尚未迁移，清单见 [H3 交回](../experiments/host-convergence/h3/environment-inventory.md)。
+`ANCHOR_BWRAP`、`ANCHOR_RUNNER_LIBRARY_ROOT`、`ANCHOR_RUNNER_CATALOG_ROOT`、`ANCHOR_RUNNER_STATE_ROOT` 由 `main.rs` 在进程入口各读取一次，形成 `HostConfiguration` 交给组合根。`RunApplication` 在已有 state/catalog 根之外只保存 Library 覆盖与 bwrap；Pilot 和工具装配接收这些已解析参数，执行准备接收入口提供的 reader，启动清理接收惰性的工作区枚举回调。Library 的显式根优先于调用方已解析的 catalog 根；工具环境仍只从显式 Library 根加载，保留原回退语义。[配置围栏](../rust/anchor-runner-host/tests/configuration_fence.rs)限制四个变量名的生产字面量归属；其他环境读取尚未迁移，清单见 [H3 交回](../experiments/host-convergence/h3/environment-inventory.md)。
 
 ```text
 <release>/anchor-runtime/

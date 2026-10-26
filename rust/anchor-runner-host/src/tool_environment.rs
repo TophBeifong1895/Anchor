@@ -818,6 +818,11 @@ impl ToolEnvironment {
         Ok(self)
     }
 
+    pub(crate) fn for_library(root: Option<&Path>) -> Result<Self, String> {
+        root.map(Self::load)
+            .unwrap_or_else(|| Ok(Default::default()))
+    }
+
     pub fn load(root: &Path) -> Result<Self, String> {
         let mut result = Self::default();
         let directory = root

@@ -21,7 +21,8 @@ async fn freeze(
     turn: &str,
 ) -> crate::pilot_tools::PreparedPilotPlugins {
     crate::pilot_tools::frozen_turn_tools(
-        state.application.host_configuration(),
+        &state.application.bwrap,
+        state.application.library_root_override.as_deref(),
         &state.data_root,
         &state.catalog_root,
         &state.workspace_root,

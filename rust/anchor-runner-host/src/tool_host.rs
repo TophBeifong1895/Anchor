@@ -1217,9 +1217,9 @@ impl LiveMcpTools {
                 if crate::tool_disclosure::is_meta(&exposed)
                     || exposed == "final_result"
                     || exposed == FAKE_ECHO_TOOL
-                    || exposed == crate::node_tools::RUN_TOOL_NAME
-                    || exposed == crate::channel_tools::SEND_TOOL
-                    || exposed == crate::channel_tools::IMAGE_TOOL
+                    || exposed == crate::tool_names::RUN_TOOL_NAME
+                    || exposed == crate::tool_names::SEND_TOOL
+                    || exposed == crate::tool_names::IMAGE_TOOL
                 {
                     return Err(format!(
                         "MCP tool `{exposed}` is reserved by the Anchor node host"

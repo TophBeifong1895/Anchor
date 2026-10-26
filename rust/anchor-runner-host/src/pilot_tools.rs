@@ -14,6 +14,7 @@ use anchor_runtime::graph::GraphSnapshot;
 use anchor_runtime::{ToolDefinition, ToolError, ToolPort, ToolResultContent};
 use anchor_sandbox_bwrap::{BubblewrapPolicy, BubblewrapSandbox};
 use serde_json::{Value, json};
+#[cfg(test)]
 use sha2::Digest as _;
 
 pub(crate) mod channel_management;
@@ -46,58 +47,19 @@ fn fake_plugin_ids() -> Vec<String> {
         .collect()
 }
 
-/// The node sandbox a Pilot Turn's stdio Plugin servers launch in, and the
-/// session-level workspace they share.
-///
-/// The authority is the deployment's, from the same configuration a node
-/// receives: the Bubblewrap executable, `ANCHOR_RUNNER_ALLOWED_COMMANDS`, the deployment
-/// tool environment, and `ANCHOR_RUNNER_WORKSPACE_ROOT` as the authorized
-/// workspace root. No new permission is invented here — a Plugin server gets
-/// exactly the authority a node call's server gets, and only because a human
-/// mounted that Plugin in this Session. A deployment that authorized no commands
-/// gets no stdio Plugin tools, with a reason.
-///
-/// A Pilot Turn has no Run, so there is no node workspace to reuse. The Plugin
-/// servers get one session-level workspace instead, stable per (owner, session)
-/// under the deployment's workspace root, so a Plugin's own state survives the
-/// Turn that created it.
-pub(crate) fn session_workspace(workspace_root: &Path, owner: &str, session: &str) -> PathBuf {
-    let identity =
-        serde_json::to_vec(&(owner, session)).expect("Session workspace identity is JSON");
-    workspace_root
-        .join("pilot")
-        .join(format!("{:x}", sha2::Sha256::digest(identity)))
-}
-
-fn pilot_plugin_sandbox(
-    configuration: &crate::HostConfiguration,
-    workspace_root: &Path,
-    owner: &str,
-    session: &str,
-) -> Result<(BubblewrapSandbox, PathBuf), String> {
-    pilot_plugin_sandbox_with_environment(
-        configuration,
-        workspace_root,
-        owner,
-        session,
-        &configuration.tool_environment()?,
-    )
-}
-
 fn pilot_plugin_sandbox_with_environment(
-    configuration: &crate::HostConfiguration,
+    bwrap: &Path,
     workspace_root: &Path,
     owner: &str,
     session: &str,
     environment: &crate::tool_environment::ToolEnvironment,
 ) -> Result<(BubblewrapSandbox, PathBuf), String> {
     let commands = std::env::var("ANCHOR_RUNNER_ALLOWED_COMMANDS").unwrap_or_default();
-    let bwrap = configuration.bwrap.clone();
-    let workspace = session_workspace(workspace_root, owner, session);
+    let workspace = crate::pilot_resources::session_workspace(workspace_root, owner, session);
     std::fs::create_dir_all(&workspace)
         .map_err(|error| format!("Pilot Plugin workspace is unavailable: {error}"))?;
     let policy = BubblewrapPolicy::new(
-        bwrap,
+        bwrap.to_path_buf(),
         commands
             .split(',')
             .filter(|command| !command.is_empty())
@@ -125,7 +87,8 @@ fn pilot_plugin_sandbox_with_environment(
 /// builds or repairs a view, or fetches a package.
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn frozen_turn_tools(
-    configuration: &crate::HostConfiguration,
+    bwrap: &Path,
+    tool_library: Option<&Path>,
     data_root: &Path,
     library_root: &Path,
     workspace_root: &Path,
@@ -174,7 +137,7 @@ pub(crate) async fn frozen_turn_tools(
                 .to_owned(),
         );
     }
-    let environment = configuration.tool_environment()?;
+    let environment = crate::tool_environment::ToolEnvironment::for_library(tool_library)?;
     let environment = match runtime {
         Some(snapshot) => environment.with_runtime_snapshot(snapshot)?,
         None => environment,
@@ -221,7 +184,7 @@ pub(crate) async fn frozen_turn_tools(
         if declares_stdio && !stdio_checked {
             stdio_checked = true;
             match pilot_plugin_sandbox_with_environment(
-                configuration,
+                bwrap,
                 workspace_root,
                 owner,
                 session,
@@ -337,10 +300,8 @@ async fn frozen_plugin_tools(
     turn: &str,
 ) -> Result<(Vec<Arc<dyn ToolPort>>, Vec<String>), String> {
     frozen_turn_tools(
-        &crate::HostConfiguration {
-            library_root: Some(library_root.to_path_buf()),
-            ..Default::default()
-        },
+        Path::new("bwrap"),
+        Some(library_root),
         data_root,
         library_root,
         workspace_root,
@@ -366,7 +327,7 @@ async fn frozen_plugin_tools(
 
 /// Host assembly for a single frozen Turn. It owns no model history or planning.
 pub(crate) struct PilotTurnContext {
-    configuration: crate::HostConfiguration,
+    tool_library: Option<PathBuf>,
     pub(crate) workspace: PathBuf,
     pub(crate) sandbox: Arc<BubblewrapSandbox>,
     pub(crate) network: bool,
@@ -388,23 +349,28 @@ impl PilotTurnContext {
             .pilot_platform_status(self.network, application.pilot_dependency_status())
     }
     pub(crate) fn new(
-        configuration: &crate::HostConfiguration,
+        bwrap: &Path,
+        tool_library: Option<&Path>,
         workspace_root: &Path,
         owner: &str,
         session: &str,
         network: bool,
         cancellation: anchor_runtime::Cancellation,
     ) -> Result<Self, String> {
-        let (sandbox, workspace) =
-            pilot_plugin_sandbox(configuration, workspace_root, owner, session)?;
+        let (sandbox, workspace) = pilot_plugin_sandbox_with_environment(
+            bwrap,
+            workspace_root,
+            owner,
+            session,
+            &crate::tool_environment::ToolEnvironment::for_library(tool_library)?,
+        )?;
         let sandbox = Arc::new(sandbox);
         // This empty Plugin port refuses unknown names; it never points back at
         // PilotPort, so dispatch cannot recurse into the observing adapter.
         let empty = tool_host::PluginToolHost::new(Vec::<String>::new())
             .for_bindings(&[])
             .map_err(|error| error.to_string())?;
-        let environment = configuration
-            .tool_environment()?
+        let environment = crate::tool_environment::ToolEnvironment::for_library(tool_library)?
             .with_pilot_rust()?
             .with_pilot_python()?;
         let commands = crate::node_tools::NodeTools::new(
@@ -418,7 +384,7 @@ impl PilotTurnContext {
         .with_timeout_ceiling(std::time::Duration::from_secs(600))
         .with_environment(environment.clone());
         Ok(Self {
-            configuration: configuration.clone(),
+            tool_library: tool_library.map(Path::to_path_buf),
             workspace,
             sandbox,
             network,
@@ -467,10 +433,9 @@ impl PilotTurnContext {
         library: &Path,
         scope: &Path,
     ) -> Result<(), String> {
-        self.environment = self
-            .configuration
-            .tool_environment()?
-            .with_runtime_snapshot(snapshot)?;
+        self.environment =
+            crate::tool_environment::ToolEnvironment::for_library(self.tool_library.as_deref())?
+                .with_runtime_snapshot(snapshot)?;
         let empty = tool_host::PluginToolHost::new(Vec::<String>::new())
             .for_bindings(&[])
             .map_err(|error| error.to_string())?;
@@ -924,7 +889,13 @@ impl PilotTools {
         self.context
             .as_ref()
             .map(|context| context.workspace.clone())
-            .unwrap_or_else(|| session_workspace(&self.workspace_root, &self.owner, &self.session))
+            .unwrap_or_else(|| {
+                crate::pilot_resources::session_workspace(
+                    &self.workspace_root,
+                    &self.owner,
+                    &self.session,
+                )
+            })
     }
 
     pub(crate) fn preparation_root(&self) -> Result<PathBuf, ToolError> {
@@ -1064,7 +1035,7 @@ impl ToolPort for PilotTools {
     }
 
     fn is_read_only(&self, name: &str) -> bool {
-        effect(name) == Some(ToolEffect::Read) || name == crate::node_tools::READ_TOOL_NAME
+        effect(name) == Some(ToolEffect::Read) || name == crate::tool_names::READ_TOOL_NAME
     }
     fn call<'a>(
         &'a self,

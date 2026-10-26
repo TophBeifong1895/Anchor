@@ -27,12 +27,11 @@ impl PreparedExecution {
         // One answer for "where does a Plugin live": the deployment's Library root,
         // or the catalog this application was configured with.
         let library_root = Some(application.library_root().to_path_buf());
-        let configuration = application.host_configuration().clone();
         Self::prepare_with_bindings(
             record,
             control,
             bindings,
-            &configuration,
+            application.clone(),
             Some(application),
             library_root,
         )
@@ -42,18 +41,18 @@ impl PreparedExecution {
         record: &GraphRunRecord,
         control: HostControl,
         bindings: BTreeMap<String, PluginBinding>,
-        configuration: &crate::HostConfiguration,
+        reader: RunApplication,
         application: Option<RunApplication>,
         library_root: Option<std::path::PathBuf>,
     ) -> Result<Self, String> {
         reject_snapshot(&record.snapshot)?;
-        let state_root = configuration.state_root()?.to_path_buf();
+        let state_root = reader.data_root.clone();
         // Old storage has no Kernel lifecycle authority. Refuse it before host
         // setup can publish any execution state or invocation inputs.
         crate::application::run_access::load(&state_root, &record.run_id)
             .map_err(|error| error.to_string())?;
         let (artifacts, nodes) = make_host_with_control(
-            configuration,
+            &reader,
             &record.run_id,
             control,
             library_root,
@@ -61,9 +60,6 @@ impl PreparedExecution {
                 .as_ref()
                 .and_then(|application| application.runtime_configuration().cloned()),
         )?;
-        let reader = application
-            .clone()
-            .unwrap_or_else(|| RunApplication::new(state_root.clone(), state_root));
         let _ = nodes.io_resolver.run_application.set(reader);
         // Admission validates the Plugin declarations and host wiring. The
         // per-node network flag is enforced when the node is dispatched.
@@ -91,7 +87,7 @@ impl PreparedExecution {
             nodes,
             application,
         };
-        let metadata = crate::run_metadata::load(configuration.state_root()?, &record.run_id)
+        let metadata = crate::run_metadata::load(&state_root, &record.run_id)
             .map_err(|error| format!("local input Run identity unavailable: {error:?}"))?;
         if record
             .snapshot

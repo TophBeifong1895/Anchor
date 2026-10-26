@@ -1100,7 +1100,8 @@ async fn stopping_an_accepted_turn_before_startup_skips_the_sandbox() {
         TurnStatus::Stopped
     );
     assert!(
-        !crate::pilot_tools::session_workspace(&fixture.workspace, "owner", &session.id).exists()
+        !crate::pilot_resources::session_workspace(&fixture.workspace, "owner", &session.id)
+            .exists()
     );
     fixture.delete(&session).await.unwrap();
 }
@@ -1202,7 +1203,8 @@ time.sleep(600)
         .set_plugin_mount("owner", &session.id, "healthy", true, "operator", "fixture")
         .unwrap();
     let turn = fixture.admit(&session, "cleanup-request").await;
-    let workspace = crate::pilot_tools::session_workspace(&fixture.workspace, "owner", &session.id);
+    let workspace =
+        crate::pilot_resources::session_workspace(&fixture.workspace, "owner", &session.id);
     let initialized = tokio::time::timeout(Duration::from_secs(2), async {
         while !workspace.join("connected").is_file() {
             tokio::time::sleep(Duration::from_millis(10)).await;
@@ -1278,7 +1280,7 @@ async fn stale_admission_and_delete_cannot_reach_a_recreated_session() {
     let current = fixture.create("reused");
     assert_ne!(old.created_at, current.created_at);
     crate::pilot_resources::register(&fixture.data, &fixture.workspace, "owner", &current).unwrap();
-    let task = crate::pilot_tools::session_workspace(&fixture.workspace, "owner", "reused");
+    let task = crate::pilot_resources::session_workspace(&fixture.workspace, "owner", "reused");
     std::fs::create_dir_all(&task).unwrap();
     std::fs::write(task.join("keep"), "new Session").unwrap();
     let rejected = fixture.delete(&old).await;

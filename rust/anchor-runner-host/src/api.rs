@@ -210,7 +210,11 @@ pub async fn serve(configuration: Arc<crate::HostConfiguration>) -> io::Result<(
         validate_service_configuration(&bundle_root, &data_root, &workspace_root, &catalog_root)?;
     let _writer = crate::acquire_deployment_writer(&data_root).map_err(io::Error::other)?;
     let retention = crate::retention::Policy::from_env().map_err(io::Error::other)?;
-    crate::durable_write::cleanup_at_startup(&data_root, &workspace_root);
+    crate::durable_write::cleanup_at_startup(&data_root, &workspace_root, || {
+        crate::application::RunApplication::new(data_root.clone(), data_root.clone())
+            .durable_input_workspaces(&workspace_root)
+            .ok()
+    });
     let swept = plugin_management::sweep_staging(&data_root);
     if swept > 0 {
         eprintln!(

@@ -250,7 +250,8 @@ async fn operator_library_has_the_same_precedence_as_graph_save() {
             .clone()
             .with_host_configuration(Arc::new(crate::HostConfiguration {
                 library_root: Some(library),
-                ..state.application.host_configuration().as_ref().clone()
+                bwrap: state.application.bwrap.clone(),
+                ..Default::default()
             }));
     let app = router(state.clone());
     let definition = serde_json::from_str(include_str!(

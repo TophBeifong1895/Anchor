@@ -206,8 +206,12 @@ fn cleanup(root: &Path, path: &[Directory], report: &mut CleanupReport) {
     }
 }
 
-pub(crate) fn cleanup_at_startup(data_root: &Path, workspace_root: &Path) {
-    let report = cleanup_host_directories(data_root, workspace_root);
+pub(crate) fn cleanup_at_startup(
+    data_root: &Path,
+    workspace_root: &Path,
+    input_workspaces: impl FnOnce() -> Option<Vec<PathBuf>>,
+) {
+    let report = cleanup_host_directories(data_root, workspace_root, input_workspaces);
     if report != CleanupReport::default() {
         eprintln!(
             "anchor-runner-host: durable write cleanup: removed={}, busy={}, failed={}",
@@ -216,7 +220,11 @@ pub(crate) fn cleanup_at_startup(data_root: &Path, workspace_root: &Path) {
     }
 }
 
-fn cleanup_host_directories(data_root: &Path, workspace_root: &Path) -> CleanupReport {
+fn cleanup_host_directories(
+    data_root: &Path,
+    workspace_root: &Path,
+    input_workspaces: impl FnOnce() -> Option<Vec<PathBuf>>,
+) -> CleanupReport {
     use Directory::{Conversation, Hash, Named};
 
     let mut report = CleanupReport::default();
@@ -235,14 +243,13 @@ fn cleanup_host_directories(data_root: &Path, workspace_root: &Path) -> CleanupR
     ] {
         cleanup(workspace_root, path, &mut report);
     }
-    let application = crate::application::RunApplication::new(data_root.into(), data_root.into());
-    match application.durable_input_workspaces(workspace_root) {
-        Ok(paths) => {
+    match input_workspaces() {
+        Some(paths) => {
             for path in paths {
                 cleanup(&path, &[], &mut report);
             }
         }
-        Err(_) => report.failed += 1,
+        None => report.failed += 1,
     }
     report
 }
@@ -257,6 +264,14 @@ mod tests {
         sync::mpsc,
         time::Duration,
     };
+
+    fn cleanup_host_directories(data: &Path, work: &Path) -> CleanupReport {
+        super::cleanup_host_directories(data, work, || {
+            crate::application::RunApplication::new(data.into(), data.into())
+                .durable_input_workspaces(work)
+                .ok()
+        })
+    }
 
     fn clean(root: &Path) -> CleanupReport {
         let mut report = CleanupReport::default();

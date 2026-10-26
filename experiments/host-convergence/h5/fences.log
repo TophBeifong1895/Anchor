@@ -1,0 +1,37 @@
+    Blocking waiting for file lock on artifact directory
+   Compiling anchor-runner-host v0.1.0 (/tmp/anchor-host-h5/rust/anchor-runner-host)
+    Finished `test` profile [optimized + debuginfo] target(s) in 28.96s
+     Running tests/configuration_fence.rs (/home/mansteinl/Anchor/rust/target/debug/deps/configuration_fence-9821391cebe289e4)
+
+running 1 test
+test deployment_environment_is_owned_by_main ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+     Running tests/layer_fence.rs (/home/mansteinl/Anchor/rust/target/debug/deps/layer_fence-8c4c53771eef07f4)
+
+running 3 tests
+test layer_classification ... ok
+test dependency_counting ... ok
+layer_fence: 180 production files; service_application 20; service_adapter 14; application_adapter 1
+layer_fence: named exceptions [20, 14, 1]; unapproved [0, 0, 0]
+test layer_fence ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+     Running tests/plugin_library_fence.rs (/home/mansteinl/Anchor/rust/target/debug/deps/plugin_library_fence-324e7d90bcdb9858)
+
+running 2 tests
+test ownership_counting ... ok
+plugin_library_fence: 180 production files; external owned types 0 / 0 required
+test plugin_library_owns_catalog_and_library_construction ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+     Running tests/run_access_fence.rs (/home/mansteinl/Anchor/rust/target/debug/deps/run_access_fence-eb0dbe7be4a523ff)
+
+running 1 test
+run_access_fence: 180 production files; business 0; runtime 56
+test run_access_fence ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s

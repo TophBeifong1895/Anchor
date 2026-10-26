@@ -86,7 +86,7 @@ async fn claimed_input_survives_restart_before_artifact_even_after_new_input_arr
             cancellation: std::sync::Arc::new(AtomicBool::new(false)),
         };
         let (_, nodes) = crate::make_host_with_control(
-            state.application.host_configuration(),
+            &state.application,
             &record.run_id,
             control,
             Some(state.application.library_root().to_path_buf()),
@@ -406,7 +406,7 @@ async fn group_wait_input_preserves_current_and_interrupted_actors_and_turn_atta
         cancellation: std::sync::Arc::new(AtomicBool::new(false)),
     };
     let (_, nodes) = crate::make_host_with_control(
-        state.application.host_configuration(),
+        &state.application,
         &record.run_id,
         control,
         Some(state.application.library_root().to_path_buf()),
@@ -560,7 +560,7 @@ async fn unbound_host_operation_is_rejected_before_a_run_is_saved() {
         &record,
         control,
         Default::default(),
-        state.application.host_configuration(),
+        state.application.clone(),
         None,
         None,
     );
@@ -647,7 +647,7 @@ async fn pending_input_scope_reports_truncation_and_authorizes_only_the_latest_e
         cancellation: std::sync::Arc::new(AtomicBool::new(false)),
     };
     let (_, nodes) = crate::make_host_with_control(
-        state.application.host_configuration(),
+        &state.application,
         &record.run_id,
         control,
         Some(state.application.library_root().to_path_buf()),

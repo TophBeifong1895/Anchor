@@ -117,11 +117,11 @@ fn prepare(
             cancellation: Default::default(),
         },
         bindings,
-        &crate::HostConfiguration {
-            state_root: Some(root.join("state")),
-            library_root: Some(root.join("library")),
-            ..Default::default()
-        },
+        crate::application::RunApplication::new(root.join("state"), root.join("state"))
+            .with_host_configuration(std::sync::Arc::new(crate::HostConfiguration {
+                library_root: Some(root.join("library")),
+                ..Default::default()
+            })),
         None,
         Some(root.join("library")),
     )

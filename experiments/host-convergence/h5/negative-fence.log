@@ -1,0 +1,37 @@
+   Compiling ring v0.17.14
+   Compiling rustls-webpki v0.103.15
+   Compiling rustls v0.23.45
+   Compiling tokio-rustls v0.26.6
+   Compiling rustls-platform-verifier v0.7.1
+   Compiling tungstenite v0.29.0
+   Compiling hyper-rustls v0.27.10
+   Compiling reqwest v0.13.5
+   Compiling reqwest v0.12.28
+   Compiling tokio-tungstenite v0.29.0
+   Compiling anchor-wecom-gateway v0.1.0 (/tmp/anchor-host-h5/rust/anchor-wecom-gateway)
+   Compiling rmcp v2.2.0
+   Compiling anchor-mcp-host v0.1.0 (/tmp/anchor-host-h5/rust/anchor-mcp-host)
+   Compiling anchor-runner-host v0.1.0 (/tmp/anchor-host-h5/rust/anchor-runner-host)
+    Finished `test` profile [optimized + debuginfo] target(s) in 23.44s
+     Running tests/layer_fence.rs (/home/mansteinl/Anchor/rust/target/debug/deps/layer_fence-8c4c53771eef07f4)
+
+running 1 test
+layer_fence: 180 production files; service_application 21; service_adapter 14; application_adapter 1
+layer_fence: named exceptions [20, 14, 1]; unapproved [1, 0, 0]
+
+thread 'layer_fence' (2112213) panicked at anchor-runner-host/tests/layer_fence.rs:288:5:
+Host layer ratchet exceeded:
+durable_write.rs service_application 1 (maximum 0; fix the dependency, not the baseline)
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test layer_fence ... FAILED
+
+failures:
+
+failures:
+    layer_fence
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 2 filtered out; finished in 0.02s
+
+error: test failed, to rerun pass `-p anchor-runner-host --test layer_fence`
+
+Restored original durable_write.rs bytes; SHA-256 e1f98b3187f1f0a57b1fe5eae9533b0d82d92c6188eaa78aec5ba26bcde264da

@@ -82,8 +82,9 @@ impl From<crate::plugin_library::PublicationError> for ApplicationError {
 
 #[derive(Clone)]
 pub(crate) struct RunApplication {
-    data_root: PathBuf,
-    host_configuration: Arc<crate::HostConfiguration>,
+    pub(crate) data_root: PathBuf,
+    pub(crate) library_root_override: Option<PathBuf>,
+    pub(crate) bwrap: PathBuf,
     catalog_root: PathBuf,
     configured_graph: Option<(String, PathBuf)>,
     admission: Arc<Mutex<()>>,
@@ -266,13 +267,9 @@ impl RunApplication {
     }
 
     pub(crate) fn new(data_root: PathBuf, catalog_root: PathBuf) -> Self {
-        let host_configuration = Arc::new(crate::HostConfiguration {
-            state_root: Some(data_root.clone()),
-            catalog_root: Some(catalog_root.clone()),
-            ..Default::default()
-        });
         Self {
-            host_configuration,
+            library_root_override: None,
+            bwrap: "bwrap".into(),
             data_root,
             catalog_root,
             configured_graph: None,
@@ -293,16 +290,15 @@ impl RunApplication {
         mut self,
         configuration: Arc<crate::HostConfiguration>,
     ) -> Self {
-        self.host_configuration = configuration;
+        self.library_root_override = configuration.library_root.clone();
+        self.bwrap = configuration.bwrap.clone();
         self
     }
 
-    pub(crate) fn host_configuration(&self) -> &Arc<crate::HostConfiguration> {
-        &self.host_configuration
-    }
-
     pub(crate) fn library_root(&self) -> &Path {
-        self.host_configuration.library_root(&self.catalog_root)
+        self.library_root_override
+            .as_deref()
+            .unwrap_or(&self.catalog_root)
     }
 
     /// Serialize Graph definition mutations with reference checks and deletion.
@@ -335,25 +331,13 @@ impl RunApplication {
     fn check_store(&self) -> Result<(), ApplicationError> {
         self.executor()?;
         // The host uses deployment environment, never HTTP-supplied paths.
-        let expected = self
-            .data_root
+        self.data_root
             .canonicalize()
             .or_else(|_| {
                 create_durable_directory(&self.data_root)?;
                 self.data_root.canonicalize()
             })
             .map_err(storage)?;
-        let configured = self
-            .host_configuration
-            .state_root()
-            .map_err(ApplicationError::Invalid)?
-            .canonicalize()
-            .map_err(storage)?;
-        if expected != configured {
-            return Err(ApplicationError::Invalid(
-                "host state root does not match application state root".into(),
-            ));
-        }
         Ok(())
     }
 }

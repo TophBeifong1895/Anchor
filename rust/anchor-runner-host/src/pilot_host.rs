@@ -330,12 +330,7 @@ impl PilotService {
                         &admission.root,
                         turns.iter().find_map(|turn| turn.goose.as_ref()),
                         &admission.tools.data_root,
-                        admission
-                            .tools
-                            .application
-                            .host_configuration()
-                            .bwrap
-                            .clone(),
+                        admission.tools.application.bwrap.clone(),
                     )
                     .map_err(|reason| {
                         eprintln!("anchor-runner-host: Pilot provider unavailable: {reason}");
@@ -713,10 +708,8 @@ impl PilotService {
             ));
         }
         tokio::task::spawn_blocking(move || {
-            crate::application::development_dependencies::release_development_scope(
-                &library, &root,
-            )
-            .map_err(SessionError::Conflict)?;
+            crate::pilot_resources::release_development_scope(&library, &root)
+                .map_err(SessionError::Conflict)?;
             crate::credential_store::delete_requests(&data, &owner, &current)
                 .map_err(SessionError::Storage)?;
             crate::oauth_links::delete_session(&data, &owner, &current)
@@ -853,7 +846,8 @@ async fn execute_turn(
         &turn,
     )?;
     let mut context = crate::pilot_tools::PilotTurnContext::new(
-        tools.application.host_configuration(),
+        &tools.application.bwrap,
+        tools.application.library_root_override.as_deref(),
         &tools.workspace_root,
         &request.owner,
         &request.session,
@@ -873,7 +867,8 @@ async fn execute_turn(
             .with_frozen_runtime_snapshot(snapshot.clone());
     }
     let (plugin_tools, network, disclosure) = match crate::pilot_tools::frozen_turn_tools(
-        tools.application.host_configuration(),
+        &tools.application.bwrap,
+        tools.application.library_root_override.as_deref(),
         &tools.data_root,
         &tools.library_root,
         &tools.workspace_root,

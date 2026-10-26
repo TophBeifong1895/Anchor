@@ -5,6 +5,7 @@ mod assistant;
 mod assistant_plugins;
 mod attachments;
 mod channel_inputs;
+mod channel_replies;
 mod channel_supervisor;
 mod channel_tools;
 mod dependency_provision;
@@ -51,6 +52,7 @@ mod test_support;
 mod tool_disclosure;
 mod tool_environment;
 mod tool_host;
+mod tool_names;
 use durable_write::write_durable;
 use node_host::HostNodes;
 #[cfg(test)]
@@ -298,13 +300,6 @@ impl HostConfiguration {
             .clone()
             .or_else(|| self.catalog_root.clone())
     }
-
-    fn tool_environment(&self) -> Result<tool_environment::ToolEnvironment, String> {
-        self.library_root
-            .as_deref()
-            .map(tool_environment::ToolEnvironment::load)
-            .unwrap_or_else(|| Ok(Default::default()))
-    }
 }
 
 fn env_path(name: &str) -> Result<PathBuf, String> {
@@ -321,13 +316,13 @@ fn acquire_deployment_writer(
         .map_err(|error| format!("state root already has a writing host: {error}"))
 }
 fn make_host_with_control(
-    configuration: &HostConfiguration,
+    application: &application::RunApplication,
     run_id: &str,
     _control: HostControl,
     library_root: Option<PathBuf>,
     runtime_configuration: Option<Arc<runtime_configuration::RuntimeConfiguration>>,
 ) -> Result<(HostArtifacts, HostNodes), String> {
-    let state = configuration.state_root()?.to_path_buf();
+    let state = &application.data_root;
     let work_root = env_path("ANCHOR_RUNNER_WORKSPACE_ROOT")?;
     let _ = run_id;
     create_durable_directory(&state.join("artifacts")).map_err(|e| e.to_string())?;
@@ -338,7 +333,7 @@ fn make_host_with_control(
     let commands = env::var("ANCHOR_RUNNER_ALLOWED_COMMANDS")
         .map_err(|_| "ANCHOR_RUNNER_ALLOWED_COMMANDS is required".to_owned())?;
     let policy = BubblewrapPolicy::new(
-        configuration.bwrap.clone(),
+        application.bwrap.clone(),
         commands
             .split(',')
             .filter(|s| !s.is_empty())
@@ -355,7 +350,9 @@ fn make_host_with_control(
     .allow_network();
     // Each invocation authorizes its current Plugin views and mutable paths;
     // the deployment policy does not grant the entire Library.
-    let tool_environment = configuration.tool_environment()?;
+    let tool_environment = tool_environment::ToolEnvironment::for_library(
+        application.library_root_override.as_deref(),
+    )?;
     let sandbox = Arc::new(
         BubblewrapSandbox::new(tool_environment.authorize(policy)).map_err(|e| e.to_string())?,
     );
@@ -371,7 +368,7 @@ fn make_host_with_control(
     let tools = tool_host::PluginToolHost::new(fake_plugin_ids);
     // The Session store is the platform's; this host only asks it what the
     // Session mounted. The resolver never opens that database itself.
-    let session_mounts = Arc::new(plugin_mounts::SessionMounts::open(&state)?);
+    let session_mounts = Arc::new(plugin_mounts::SessionMounts::open(state)?);
     let io_resolver = Arc::new(
         node_host::HostIoResolver::new(
             artifacts.clone(),
@@ -386,7 +383,7 @@ fn make_host_with_control(
         .with_runtime_configuration(runtime_configuration),
     );
     let goose_nodes = goose_acp::GooseNodePort::from_env(
-        &state,
+        state,
         &work_root,
         Arc::clone(&io_resolver),
         Arc::clone(&sandbox),
@@ -632,7 +629,11 @@ async fn execute_snapshot_with_control(
         configuration.state_root().map(std::path::Path::to_path_buf),
         env_path("ANCHOR_RUNNER_WORKSPACE_ROOT"),
     ) {
-        durable_write::cleanup_at_startup(&data_root, &workspace_root);
+        durable_write::cleanup_at_startup(&data_root, &workspace_root, || {
+            crate::application::RunApplication::new(data_root.clone(), data_root.clone())
+                .durable_input_workspaces(&workspace_root)
+                .ok()
+        });
     }
     let expected = match GraphRunRecord::create_with_id(snapshot, input, run_id.clone()) {
         Ok(record) => record,
