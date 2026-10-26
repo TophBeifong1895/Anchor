@@ -36,7 +36,7 @@
 | H0 依赖方向围栏 | S | — | 已验收（`a0de84b`）；实测基线 58 / 35 / 1，[证据](../experiments/host-convergence/h0/verification.md) |
 | H1 共享原语与已分叉规则 | M | H0 | 已验收（7dd8204）；依赖计数 58 / 23 / 1；本机已安装 Plugin id 均合规，[证据](../experiments/host-convergence/h1/verification.md) |
 | H2 Run 元数据下沉 | M | H1 | 已验收（ebc9919）；依赖计数 25 / 23 / 1，服务 → 用例减少 33（按下文确认口径），[证据](../experiments/host-convergence/h2/verification.md) |
-| H3 配置只在组合根读取 | M | H2 | 开发与规定检查完成，待架构验收；四变量在入口各读一次，模型保存与执行共用类型化校验；依赖计数 25 / 23 / 1，[证据](../experiments/host-convergence/h3/verification.md) |
+| H3 配置只在组合根读取 | M | H2 | 已验收（c87ef57）；本机已保存模型设置通过新校验；四变量在入口各读一次，模型保存与执行共用类型化校验；依赖计数 25 / 23 / 1，[证据](../experiments/host-convergence/h3/verification.md) |
 | H4 Plugin 领域单一主人 | L | H3；调研可提前 | [设计](../experiments/host-convergence/h4/design.md)已确认，按下文三项修改实施；未开始 |
 | H5 剩余反向依赖清零 | M | H4 | 未开始 |
 
@@ -68,6 +68,8 @@
 - 按决定 4，四个变量在 `main.rs` 之外的读取清零（`tool_host.rs:307-308`、`tool_environment.rs:796`、`api.rs:166/195/259`、`pilot_tools.rs:91`、`goose_acp/pilot.rs:311`、`execution.rs:50/94`、`application.rs:341`）。测试里改环境变量的用例同步改为传参，不再依赖全局环境锁。
 - 模型字段：抽出唯一的校验函数，设置保存和 Goose 配置都调用它；补一个「保存上下文窗口 0 被拒绝」的测试。开发 Agent 不读取 `.local/` 下的任何设置或凭据文件；本机已保存的设置能否被新校验接受，由验收者核查。
 - 其余 `ANCHOR_*` 变量本轮不动，只在交回里列出 `main.rs` 之外仍有读取的清单。
+
+验收者遗留（2026-10-26，不阻塞）：`RunApplication` 同时保存 `data_root`/`catalog_root` 与一份 `HostConfiguration`，`check_store` 的 state 根比较因此恒等、已无检查作用，H4/H5 中改为只保存 Library 覆盖与 bwrap 并删去该比较；`node_host.rs`、`execution.rs`、`durable_write.rs` 三处以默认配置构造 `RunApplication`，并入 H5 由组合根注入。
 
 ### H4 Plugin 领域单一主人
 
