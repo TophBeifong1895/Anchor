@@ -314,7 +314,10 @@ pub(super) async fn tick_schedules(state: &ApiState, now: NaiveDateTime) -> Resu
                 "scheduled_at": format_local_datetime(at),
             }
         });
-        match super::runs::trigger_as_owner(state.clone(), payload, state.owner.clone()).await {
+        // A planned Run acts as this installation's identity, like a manual
+        // or Webhook Run, so it reaches the same Plugin credentials and bots.
+        let owner = super::oauth::binding_owner(&state.owner);
+        match super::runs::trigger_as_owner(state.clone(), payload, owner).await {
             Ok((status, _)) if status.is_success() => {}
             Ok((status, _)) => eprintln!("schedule occurrence skipped with HTTP {status}"),
             Err(response) => eprintln!(

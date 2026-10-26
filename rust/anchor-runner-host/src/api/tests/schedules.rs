@@ -104,6 +104,62 @@ async fn busy_due_schedule_skips_existing_admission_without_creating_a_run() {
     assert!(state.application.metadata(&run).unwrap().is_some());
 }
 
+#[tokio::test]
+async fn due_schedule_runs_as_the_same_owner_as_a_manual_trigger() {
+    // A legacy API-key installation keeps an `api:<digest>` owner. Every
+    // trigger must record the same credential owner, or a scheduled Run
+    // cannot reach the Plugin credentials a manual Run of the same Graph uses.
+    let (root, mut state) = fixture();
+    state.owner = format!("api:{}", "a".repeat(64));
+    let _env_guard = PROCESS_ENV.lock().await;
+    set_host_env(root.path());
+    let app = router(state.clone());
+    let (status, accepted) = call(app, "POST", "/trigger", Some(r#"{"graph":"fixture"}"#)).await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{accepted}");
+    let manual_id = accepted["run"].as_str().unwrap().to_owned();
+    // Let the manual Run finish so it no longer blocks the scheduled admission.
+    for _ in 0..500 {
+        let record = fixtures::Reader::new(&state.application)
+            .load(&manual_id)
+            .unwrap()
+            .unwrap();
+        if !record.active() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    }
+    let manual = state.application.metadata(&manual_id).unwrap().unwrap();
+    let due = Local::now().naive_local().with_nanosecond(0).unwrap();
+    {
+        let mut store = state.schedules.lock().unwrap();
+        store.items.push(crate::api::schedules::ScheduleItem {
+            id: "owner-test".into(),
+            graph: "fixture".into(),
+            rule: json!({"type":"once","at":due.format("%Y-%m-%dT%H:%M:%S").to_string()}),
+            input: json!({}),
+            created_at: (due - chrono::Duration::seconds(1))
+                .format("%Y-%m-%dT%H:%M:%S")
+                .to_string(),
+            next_at: due.format("%Y-%m-%dT%H:%M:%S").to_string(),
+            enabled: true,
+        });
+        store.persist().unwrap();
+    }
+    crate::api::schedules::tick_schedules(&state, due)
+        .await
+        .unwrap();
+    let scheduled = state
+        .application
+        .records()
+        .unwrap()
+        .into_iter()
+        .filter_map(|(id, _)| state.application.metadata(&id).unwrap())
+        .find(|metadata| metadata.trigger_source == "schedule")
+        .expect("the due schedule admitted a Run");
+    assert_eq!(scheduled.oauth_owner, manual.oauth_owner);
+    assert_ne!(scheduled.oauth_owner.as_deref(), Some(state.owner.as_str()));
+}
+
 #[test]
 fn timeline_marks_persisted_admission_blockers_busy_across_history_pages() {
     let (_root, state) = fixture();
