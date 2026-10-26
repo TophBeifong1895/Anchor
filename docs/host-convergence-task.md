@@ -38,7 +38,7 @@
 | H2 Run 元数据下沉 | M | H1 | 已验收（ebc9919）；依赖计数 25 / 23 / 1，服务 → 用例减少 33（按下文确认口径），[证据](../experiments/host-convergence/h2/verification.md) |
 | H3 配置只在组合根读取 | M | H2 | 已验收（c87ef57）；本机已保存模型设置通过新校验；四变量在入口各读一次，模型保存与执行共用类型化校验；依赖计数 25 / 23 / 1，[证据](../experiments/host-convergence/h3/verification.md) |
 | H4 Plugin 领域单一主人 | L | H3；调研可提前 | 已验收（3a8096c）；生产 +288 行；构造外部 0 / 0，依赖计数 22 / 23 / 1，[证据](../experiments/host-convergence/h4/verification.md) |
-| H5 剩余反向依赖清零 | M | H4 | 未开始 |
+| H5 剩余反向依赖清零 | M | H4 | 编辑前盘点完成；行数预算待裁决，生产开发未开始，[清单与预算](../experiments/host-convergence/h5/inventory.md)、[基线证据](../experiments/host-convergence/h5/verification.md) |
 
 规模：S 约半天，M 约 1–2 天，L 约 3–5 天（按 Agent 工作量估计）。
 
