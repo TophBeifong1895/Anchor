@@ -37,7 +37,7 @@
 | H1 共享原语与已分叉规则 | M | H0 | 已验收（7dd8204）；依赖计数 58 / 23 / 1；本机已安装 Plugin id 均合规，[证据](../experiments/host-convergence/h1/verification.md) |
 | H2 Run 元数据下沉 | M | H1 | 已验收（ebc9919）；依赖计数 25 / 23 / 1，服务 → 用例减少 33（按下文确认口径），[证据](../experiments/host-convergence/h2/verification.md) |
 | H3 配置只在组合根读取 | M | H2 | 已验收（c87ef57）；本机已保存模型设置通过新校验；四变量在入口各读一次，模型保存与执行共用类型化校验；依赖计数 25 / 23 / 1，[证据](../experiments/host-convergence/h3/verification.md) |
-| H4 Plugin 领域单一主人 | L | H3；调研可提前 | 开发与规定检查完成，待架构验收；构造外部 0 / 0，依赖计数 22 / 23 / 1，[证据](../experiments/host-convergence/h4/verification.md) |
+| H4 Plugin 领域单一主人 | L | H3；调研可提前 | 已验收（3a8096c）；生产 +288 行；构造外部 0 / 0，依赖计数 22 / 23 / 1，[证据](../experiments/host-convergence/h4/verification.md) |
 | H5 剩余反向依赖清零 | M | H4 | 未开始 |
 
 规模：S 约半天，M 约 1–2 天，L 约 3–5 天（按 Agent 工作量估计）。
@@ -87,6 +87,8 @@
 - **`Catalog` 只包装实际用到的方法**，不镜像 `FilePluginCatalog` 的全部 API。错误优先沿用现有类型（`GraphError`、`InstallError`）；只有调用方确实需要区分取消等情形时才加新枚举。目的是避免薄包装层本身变成新增行数。
 - **工具管线不用回调，也不用策略枚举。** 共用的是步骤实现，不是调用顺序：拆成几个普通函数，例如「准备一组」「授权 OAuth」「连接并挂接披露」。Pilot 和 Node 各自按现有顺序调用，Node 自己的配置保留与观察记录写在调用之间。分组（逐项还是整批）和错误处理（记原因还是 `?`）留在各自调用方。设计里的时序约束照旧，接口形状以此为准。
 - **验收基线以设计实测为准**：生产代码中 `FilePluginCatalog::new` 46 处、`Library::new` 17 处，在 `plugin_library` 之外降为 0。
+
+验收者结论（2026-10-26）：挂载声明、Pilot 授权判断、Pilot 连接错误文本与披露挂接时机逐处对照旧实现，语义等价。H0–H4 生产行数累计约 +300，本轮至今没有瘦身；H4 的增量主要是 `Catalog`/`PluginLibrary` 的约 20 个转发方法，以及准备步骤迁入新模块。转发层的价值在于所有权围栏，不在于减少行数。H5 不得再净增生产行数。
 
 ### H5 剩余反向依赖清零
 
