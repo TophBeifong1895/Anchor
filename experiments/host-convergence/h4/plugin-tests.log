@@ -1,0 +1,238 @@
+   Compiling ring v0.17.14
+   Compiling anchor-file-lease v0.1.0 (/tmp/anchor-host-h4/rust/anchor-file-lease)
+   Compiling anchor-platform-session v0.1.0 (/tmp/anchor-host-h4/rust/anchor-platform-session)
+   Compiling anchor-kernel v0.1.0 (/tmp/anchor-host-h4/rust/anchor-kernel)
+   Compiling anchor-runtime v0.1.0 (/tmp/anchor-host-h4/rust/anchor-runtime)
+   Compiling anchor-facts v0.1.0 (/tmp/anchor-host-h4/rust/anchor-facts)
+   Compiling rustls-webpki v0.103.15
+   Compiling rustls v0.23.45
+   Compiling anchor-graph-host v0.1.0 (/tmp/anchor-host-h4/rust/anchor-graph-host)
+   Compiling anchor-sandbox-bwrap v0.1.0 (/tmp/anchor-host-h4/rust/anchor-sandbox-bwrap)
+   Compiling tokio-rustls v0.26.6
+   Compiling rustls-platform-verifier v0.7.1
+   Compiling tungstenite v0.29.0
+   Compiling hyper-rustls v0.27.10
+   Compiling reqwest v0.13.5
+   Compiling reqwest v0.12.28
+   Compiling tokio-tungstenite v0.29.0
+   Compiling anchor-library v0.1.0 (/tmp/anchor-host-h4/rust/anchor-library)
+   Compiling anchor-distribution v0.1.0 (/tmp/anchor-host-h4/rust/anchor-distribution)
+   Compiling rmcp v2.2.0
+   Compiling anchor-wecom-gateway v0.1.0 (/tmp/anchor-host-h4/rust/anchor-wecom-gateway)
+   Compiling anchor-mcp-host v0.1.0 (/tmp/anchor-host-h4/rust/anchor-mcp-host)
+   Compiling anchor-runner-host v0.1.0 (/tmp/anchor-host-h4/rust/anchor-runner-host)
+    Finished `test` profile [optimized + debuginfo] target(s) in 1m 03s
+     Running unittests src/main.rs (/home/mansteinl/Anchor/rust/target/debug/deps/anchor_runner_host-c1aaaabe35671170)
+
+running 169 tests
+test api::plugin_management::lifecycle::tests::candidate_limits_are_checked_without_reading_large_files_or_following_links ... ok
+test api::plugin_management::lifecycle::tests::uploaded_paths_cannot_escape_or_create_file_parent_conflicts ... ok
+test api::plugin_management::tests::start_up_removes_staging_an_earlier_process_left ... ok
+test application::graphs::tests::publication::publishing_network_and_plugin_changes_preserves_live_runs_and_library_bytes ... ok
+test api::tests::a_changed_plugin_does_not_block_resume_but_mismatched_metadata_does ... ok
+test api::tests::session_plugins::stopping_a_scheduled_completed_turn_preserves_history_and_cancels_once ... ok
+test api::plugin_management::configuration::tests::plugin_configuration_api_keeps_secrets_private_and_rejects_stale_updates_and_tests ... ok
+test api::plugin_management::tests::upload_rejects_links_unknown_fields_and_traversal_privately ... ok
+test application::plugins::catalog::tests::catalog_distinguishes_definition_and_dependencies_without_claiming_authorization ... ok
+test application::plugins::impact_tests::a_declaration_on_a_deployment_that_authorizes_no_install_is_refused ... ok
+test api::tests::run_plugins::run_plugins_retain_frozen_identity_order_and_node_scope_after_library_drift ... ok
+test application::plugins::impact_tests::an_unreadable_graph_is_reported_as_a_gap_not_left_out ... ok
+test application::plugins::impact_tests::replacing_a_plugin_takes_effect_without_a_second_decision ... ok
+test api::plugin_management::tests::standalone_install_credentials_rotation_update_and_uninstall_keep_secrets_private ... ok
+test api::tests::graph_validation::catalog_plugins_are_resolved_and_invalid_resources_are_rejected_readonly ... ok
+test api::tests::persistent_assistants::plugin_updates::agent_grant_and_structural_save_require_explicit_version_boundary ... ok
+test application::plugins::tests::a_candidate_that_changed_after_review_is_never_installed ... ok
+test application::plugins::tests::a_library_that_changed_after_review_is_not_overwritten ... ok
+test application::plugins::tests::a_precondition_reports_creation_then_an_identical_install ... ok
+test application::plugins::tests::an_approved_precondition_replaces_only_the_reviewed_version ... ok
+test api::tests::persistent_assistants::plugin_updates::channel_plugin_status_readers_share_a_lease_without_allowing_graph_writes ... ok
+test api::tests::persistent_assistants::plugin_updates::operator_plugin_save_preserves_run_and_delivery_and_reports_pending ... ok
+test api::tests::platform_contract::create_graph_publishes_initial_authoring_definition_and_plugins ... ok
+test api::tests::plugin_library::malformed_plugin_is_unavailable_without_exposing_manifest_values ... ok
+test api::tests::plugin_library::plugin_catalog_detail_and_file_projection_are_read_only ... ok
+test application::plugins::tests::rollback_preserves_a_view_referenced_by_the_current_plugin ... ok
+test application::plugins::uninstall_tests::a_confirmed_uninstall_removes_the_plugin_its_view_and_frees_its_store_version ... ok
+test application::plugins::uninstall_tests::a_second_uninstall_is_a_named_refusal ... ok
+test application::plugins::uninstall_tests::a_session_mounting_the_plugin_refuses_the_uninstall_and_moves_no_bytes ... ok
+test application::plugins::uninstall_tests::a_session_using_a_network_dependent_plugin_holds_the_network_provider ... ok
+test application::plugins::uninstall_tests::an_unfinished_run_binding_the_plugin_refuses_the_uninstall ... ok
+test application::plugins::uninstall_tests::the_precondition_lists_the_declared_mutable_paths_with_their_bytes ... ok
+test application::plugins::uninstall_tests::uninstall_rechecks_holders_after_waiting_for_publication ... ok
+test application::plugins::uninstall_tests::uninstall_rechecks_the_approved_version_after_waiting_for_publication ... ok
+test application::plugins::tests::dependency_index_planning_cancels_a_pending_http_probe_and_can_retry ... ok
+test artifacts::workspace_binding::tests::plugin_revision_handover_preserves_scene_and_requires_an_exact_receipt ... ok
+test assistant_plugins::tests::cleanup_only_removes_owned_policy_and_is_idempotent ... ok
+test assistant_plugins::tests::cleanup_refuses_symlinks_and_corrupt_facts_without_deleting_neighbors ... ok
+test assistant_plugins::tests::corrupt_or_foreign_turn_policy_fails_closed ... ok
+test assistant_plugins::tests::only_work_plugins_and_network_are_hot ... ok
+test assistant_plugins::tests::operator_approval_refreshes_authority_and_stays_scoped_to_bundle_and_graph_digest ... ok
+test application::plugins::tests::a_candidate_changed_while_waiting_for_the_library_lease_is_not_installed ... ok
+test assistant_plugins::tests::simultaneous_switch_snapshots_all_observe_the_first_durable_writer ... ok
+test channel_supervisor::tests::discovers_a_channel_from_the_library_when_the_bundle_carries_no_plugins ... ok
+test credential_store::tests::plugin_ids_require_an_alphanumeric_prefix_at_credential_entry_points ... ok
+test credential_store::tests::cancellation_stopped_turn_expiry_and_changed_plugin_reject_late_secret ... ok
+test application::plugins::tests::an_installed_version_changed_during_the_library_lease_wait_is_not_overwritten ... ok
+anchor environment fetch: directory:/run/user/1001/at.Ishy7j/.tmpjRiy21/build/artifacts failed 1 package(s): holdpkg==0.1.0 (no distribution with the approved digest)
+anchor environment fetch: directory:/run/user/1001/at.Ishy7j/.tmpjRiy21/wheels served 1 package(s): holdpkg==0.1.0
+test application::plugins::uninstall_tests::uninstall_waits_can_be_cancelled_without_deleting_and_then_retried ... ok
+test application::plugins::tests::installation_waits_cancel_without_publishing_and_a_later_install_can_continue ... ok
+test goose_acp::bridge::tests::mcp_initialize_carries_persistent_discovery_instructions_even_without_plugins ... ok
+test goose_acp::pilot_interaction::tests::an_already_installed_plugin_without_its_view_is_repair_work ... ok
+test goose_acp::pilot_interaction::uninstall_tool_tests::a_confirmed_uninstall_removes_the_plugin_reclaims_and_audits ... ok
+test goose_acp::pilot_interaction::uninstall_tool_tests::a_session_mounted_plugin_is_refused_and_moves_no_bytes ... ok
+anchor environment fetch: directory:/run/user/1001/at.Ishy7j/.tmp6xklHT/build/artifacts failed 1 package(s): probepkg==0.1.0 (no distribution with the approved digest)
+anchor environment fetch: directory:/run/user/1001/at.Ishy7j/.tmp6xklHT/wheels served 1 package(s): probepkg==0.1.0
+anchor environment fetch: directory:/run/user/1001/at.Ishy7j/.tmp7V17aX/build/artifacts failed 1 package(s): idna==3.6 (no distribution with the approved digest)
+anchor environment fetch: directory:/run/user/1001/at.Ishy7j/.tmp7V17aX/wheels served 1 package(s): idna==3.6
+test dependency_provision::tests::a_directory_source_keeps_a_plugin_package_deliverable_when_an_index_answers_html ... ok
+test goose_acp::pilot_interaction::uninstall_tool_tests::platform_pilot_without_a_graph_can_confirm_a_plugin_uninstall ... ok
+test node_host::resolver_tests::mounts::a_plugin_authorization_change_still_fails_closed ... ok
+test node_host::resolver_tests::mounts::a_required_plugin_from_the_pilot_graph_cannot_be_switched_off ... ok
+test node_host::resolver_tests::mounts::a_session_mounted_plugin_the_graph_never_declared_is_mounted ... ok
+test node_host::resolver_tests::mounts::a_session_switched_off_plugin_is_not_mounted ... ok
+test application::plugins::tests::failed_publication_removes_its_new_view_before_releasing_the_library_lease ... ok
+test node_host::resolver_tests::mounts::an_uninstalled_plugin_is_not_mounted_and_says_so ... ok
+test application::plugins::tests::dependency_preparation_publishes_only_the_private_approved_snapshot ... ok
+test node_host::resolver_tests::runtime::an_installed_plugin_code_and_resource_update_is_used_by_the_next_call ... ok
+test node_host::resolver_tests::runtime::node_tool_selection_waits_for_real_plugin_publication_and_returns_current_skills ... ok
+test node_host::resolver_tests::tool_grants::resolver_returns_owned_anchor_tools_under_admitted_plugin_authority ... ok
+test node_host::resolver_tests::tool_grants::agent_tools_mount_plugins_without_a_run_policy_grant ... ok
+test node_host::resolver_tests::turn_plugins::assistant_session_switch_off_wins_and_frozen_authority_drift_fails_closed ... ok
+test node_host::resolver_tests::turn_plugins::assistant_turn_add_remove_and_retry_preserve_original_run_and_current_turn ... ok
+test node_host::resolver_tests::turn_plugins::graph_network_and_session_denial_are_frozen_instead_of_stale_request_network ... ok
+test node_host::resolver_tests::turn_plugins::new_turn_after_idle_handover_ignores_earlier_explicit_instance_replacement ... ok
+test node_host::resolver_tests::turn_plugins::unapproved_or_structural_graph_and_corrupt_turn_policy_never_grant_tools ... ok
+test pilot_host::tests::plugin_mount_changes_bind_one_request_to_the_registered_running_turn ... ok
+test node_host::resolver_tests::turn_plugins::same_turn_policy_survives_repeated_handover_before_replacement_prepares ... ok
+test application::plugin_candidates::tests::candidate_does_not_inherit_an_installed_plugins_owner_credentials ... ok
+test api::tests::session_plugins::served_router_tests::the_session_page_url_reaches_the_plugin_route_through_the_served_router ... ok
+test api::tests::plugin_library::plugin_internal_symlink_is_rejected ... ok
+test api::tests::conversations::graph_node_plugins_project_expanded_nodes_and_legacy_metadata_remains_readable ... ok
+test pilot_tools::plugins::tests::plugin_management_catalog_projects_library_health_without_execution_grants ... ok
+test api::tests::conversations::publishing_graph_preserves_plugin_conversation_history_and_child_runs ... ok
+test pilot_tools::tests::plugin_management_metadata_and_reads_share_the_library_publication_guard ... ok
+test plugin_configuration::tests::atomic_validation_rejects_invalid_endpoint_and_stale_authorization ... ok
+test plugin_configuration::tests::changing_connection_identity_clears_unconfirmed_keys_in_the_same_revision ... ok
+test api::tests::pilot_network_defaults::a_default_mount_requires_an_installed_valid_network_plugin_and_api_cannot_inject_policy ... ok
+test plugin_configuration::tests::clearing_default_endpoint_is_a_tombstone_and_never_restores_the_manifest_default ... ok
+test plugin_configuration::tests::connection_changes_cannot_carry_unmapped_legacy_credentials_to_a_new_destination ... ok
+test plugin_configuration::tests::concurrent_configuration_writes_accept_exactly_one_revision ... ok
+test plugin_configuration::tests::legacy_api_and_pilot_share_logical_fact_without_duplicate_management ... ok
+test plugin_configuration::tests::legacy_mcp_rotation_and_clear_invalidate_the_connection_test_version ... ok
+test plugin_configuration::tests::pending_logical_request_accepts_submission_at_its_pinned_revision ... ok
+test plugin_configuration::tests::pending_logical_request_can_be_requested_again_in_the_same_turn_after_url_change ... ok
+test plugin_configuration::tests::pending_logical_request_rejects_key_clear_without_mutating_current_configuration ... ok
+test plugin_configuration::tests::pending_logical_request_rejects_revision_change_even_when_pending_fact_is_restored ... ok
+test plugin_configuration::tests::pending_logical_request_rejects_url_change_without_mutating_current_configuration ... ok
+test plugin_configuration::tests::plugin_ids_require_an_alphanumeric_prefix_at_configuration_entry_points ... ok
+test plugin_configuration::tests::private_configuration_is_removed_with_plugin_and_uses_private_permissions ... ok
+test plugin_configuration::tests::recovery_binding_tracks_owner_endpoint_and_source_but_never_secret_values ... ok
+test plugin_configuration::tests::root_origin_slash_is_normalized_without_clearing_keys_or_changing_recovery_identity ... ok
+test plugin_configuration::tests::shared_secret_is_atomic_owner_bound_private_and_rotatable_without_environment_fallback ... ok
+test api::tests::session_plugins::concurrent_session_mount_and_uninstall_publish_one_consistent_result ... ok
+test api::tests::session_plugins::only_the_configured_pilot_graph_may_declare_a_plugin_required ... ok
+test api::tests::session_plugins::switching_an_uninstalled_plugin_is_refused_and_changes_no_bytes ... ok
+test api::tests::graph_crud_binds_plugin_resources_and_removes_stale_bundle_plugins ... ok
+test plugin_dependencies::tests::a_view_that_does_not_point_at_the_one_interpreter_is_refused ... ok
+test api::tests::session_plugins::a_plugin_switch_on_a_terminal_turn_saves_policy_without_reviving_the_task ... ok
+test api::tests::session_plugins::catalog_and_session_share_base_health_and_allow_revoking_broken_mounts ... ok
+test api::tests::session_plugins::networking_is_enabled_by_dependencies_without_writing_a_provider_switch_and_denial_wins ... ok
+test plugin_dependencies::tests::only_generated_entry_point_interpreter_bindings_are_ignored_when_comparing_store_bytes ... ok
+test api::tests::session_plugins::a_successful_switch_writes_the_session_mount_and_its_audit_event ... ok
+test plugin_dependencies::tests::the_built_in_python_probe_is_a_valid_declaration ... ok
+test plugin_disclosure::tests::alternate_config_spellings_and_live_reclassification_cannot_leak_secrets ... ok
+test api::tests::session_plugins::a_run_the_assistant_added_cannot_unlock_a_plugin_the_pilot_graph_requires ... ok
+test plugin_disclosure::tests::formerly_private_instructions_never_enter_the_prepared_public_read_set ... ok
+test plugin_disclosure::tests::metadata_obeys_the_same_private_boundary_as_file_reads ... ok
+test plugin_disclosure::tests::persistent_summary_encodes_metadata_and_oversized_ids_cannot_overrun_budget ... ok
+test api::tests::session_plugins::a_session_lists_installed_plugins_from_the_frozen_run_not_the_graph_file ... ok
+test plugin_disclosure::tests::persistent_summary_uses_only_prepared_metadata_and_states_availability ... ok
+test plugin_disclosure::tests::public_text_updates_work_and_formal_publication_refuses_reads_until_released ... ok
+test plugin_disclosure::tests::search_uses_skill_description_beyond_the_display_summary ... ok
+test plugin_disclosure::tests::selected_files_do_not_merge_other_instructions_and_private_manifests_stay_private ... ok
+test plugin_disclosure::tests::text_pages_preserve_utf8_digest_and_explicit_end_and_detect_updates ... ok
+test plugin_mounts::tests::a_missing_snapshot_reads_as_none_instead_of_failing ... ok
+test plugin_mounts::tests::a_snapshot_is_written_once_and_a_retry_keeps_the_first_one ... ok
+test plugin_mounts::tests::a_snapshot_wins_over_the_sessions_current_switches ... ok
+test plugin_mounts::tests::an_uninstalled_plugin_is_never_mounted_and_says_so ... ok
+test plugin_mounts::tests::required_is_always_mounted_and_optional_follows_the_session ... ok
+test plugin_view::tests::a_changed_digest_binds_to_the_current_plugin_and_its_current_view ... ok
+test api::tests::session_plugins::a_pilot_graph_named_by_the_bundle_root_keeps_its_lock ... ok
+test plugin_view::tests::a_declared_view_that_is_missing_or_not_an_environment_refuses ... ok
+test plugin_view::tests::a_pointer_outside_the_store_or_at_missing_bytes_is_refused ... ok
+test plugin_view::tests::a_view_mounts_the_store_directories_it_points_at ... ok
+test tool_environment::tests::plugin_only_library_needs_no_tool_registrations ... ok
+test tool_host::path_template_tests::injected_stdio_credentials_are_not_view_or_plugin_path_templates ... ok
+test tool_host::tests::catalog_uses_plugin_server_keys_and_does_not_require_tool_allowlists ... ok
+test tool_host::tests::disabled_plugin_unknown_tool_and_path_like_arguments_are_rejected ... ok
+test tool_host::tests::explicitly_enabled_plugin_advertises_and_calls_fake_echo ... ok
+test tool_host::tests::optional_unconfigured_mcp_is_absent_without_disabling_the_plugin ... ok
+test tool_host::tests::plugin_host_assembles_owned_trait_object_for_node_resolvers ... ok
+test api::tests::run_abandon::graph_updates_do_not_require_abandoning_stopped_plugin_runs ... ok
+test plugin_dependencies::tests::store_lease_wait_cancels_and_a_later_preparation_can_continue ... ok
+test plugin_disclosure::tests::persistent_summary_is_byte_bounded_and_omitted_plugins_remain_discoverable ... ok
+test application::plugin_candidates::tests::candidate_host_templates_are_rejected_before_any_server_launch_or_connection ... ok
+anchor environment fetch: directory:/run/user/1001/at.Ishy7j/.tmpwTI0ik/environment-build/build/artifacts failed 1 package(s): idna==3.6 (no distribution with the approved digest)
+anchor environment fetch: directory:/run/user/1001/at.Ishy7j/.tmpwTI0ik/wheels served 1 package(s): idna==3.6
+anchor environment fetch: directory:/run/user/1001/at.Ishy7j/.tmpMaRk7I/environment-build/build/artifacts failed 1 package(s): idna==3.6 (no distribution with the approved digest)
+anchor environment fetch: directory:/run/user/1001/at.Ishy7j/.tmpMaRk7I/wheels served 1 package(s): idna==3.6
+anchor environment fetch: directory:/run/user/1001/at.Ishy7j/.tmpq4F9MA/environment-build/build/artifacts failed 1 package(s): idna==3.6 (no distribution with the approved digest)
+anchor environment fetch: directory:/run/user/1001/at.Ishy7j/.tmpq4F9MA/wheels served 1 package(s): idna==3.6
+anchor environment fetch: directory:/run/user/1001/at.Ishy7j/.tmpPvYMAL/environment-build/build/artifacts failed 1 package(s): idna==3.6 (no distribution with the approved digest)
+anchor environment fetch: directory:/run/user/1001/at.Ishy7j/.tmpPvYMAL/wheels served 1 package(s): idna==3.6
+anchor environment fetch: directory:/run/user/1001/at.Ishy7j/.tmpyElzl9/environment-build/build/artifacts failed 1 package(s): idna==3.6 (no distribution with the approved digest)
+anchor environment fetch: directory:/run/user/1001/at.Ishy7j/.tmpyElzl9/wheels served 1 package(s): idna==3.6
+anchor environment fetch: directory:/run/user/1001/at.Ishy7j/.tmpofl6K1/environment-build/build/artifacts failed 1 package(s): idna==3.6 (no distribution with the approved digest)
+anchor environment fetch: directory:/run/user/1001/at.Ishy7j/.tmpofl6K1/wheels served 1 package(s): idna==3.6
+anchor environment fetch: directory:/run/user/1001/at.Ishy7j/.tmpQXcozC/environment-build/build/artifacts failed 1 package(s): idna==3.6 (no distribution with the approved digest)
+anchor environment fetch: directory:/run/user/1001/at.Ishy7j/.tmpQXcozC/wheels served 1 package(s): idna==3.6
+test plugin_view::tests::mutable_authority_works_without_a_python_view_for_installed_and_candidate_plugins ... ok
+anchor environment fetch: directory:/run/user/1001/at.Ishy7j/.tmpndYusM/build/artifacts failed 1 package(s): idna==3.6 (no distribution with the approved digest)
+anchor environment fetch: directory:/run/user/1001/at.Ishy7j/.tmpndYusM/wheels served 1 package(s): idna==3.6
+anchor environment fetch: directory:/run/user/1001/at.Ishy7j/.tmpMaRk7I/environment-build/build/artifacts failed 1 package(s): idna==3.6 (no distribution with the approved digest)
+anchor environment fetch: directory:/run/user/1001/at.Ishy7j/.tmpMaRk7I/wheels served 1 package(s): idna==3.6
+test plugin_dependencies::tests::a_plugin_resolved_from_a_bundle_root_still_runs_on_its_library_view ... ok
+anchor environment fetch: directory:/run/user/1001/at.Ishy7j/.tmpwTI0ik/environment-build/build/artifacts not used; no package needed it
+anchor environment fetch: directory:/run/user/1001/at.Ishy7j/.tmpwTI0ik/wheels not used; no package needed it
+anchor environment fetch: directory:/run/user/1001/at.Ishy7j/.tmpofl6K1/environment-build/build/artifacts failed 1 package(s): idna==3.6 (no distribution with the approved digest)
+anchor environment fetch: directory:/run/user/1001/at.Ishy7j/.tmpofl6K1/wheels served 1 package(s): idna==3.6
+anchor environment fetch: directory:/run/user/1001/at.Ishy7j/.tmpQXcozC/environment-build/build/artifacts failed 1 package(s): idna==3.7 (no distribution with the approved digest)
+anchor environment fetch: directory:/run/user/1001/at.Ishy7j/.tmpQXcozC/wheels served 1 package(s): idna==3.7
+test plugin_dependencies::tests::a_plugin_tool_imports_its_declared_package_from_its_view_without_network ... ok
+test plugin_dependencies::tests::a_deleted_view_is_rebuilt_by_installing_the_same_plugin_again ... ok
+test plugin_dependencies::tests::a_second_byte_set_for_one_package_version_is_refused ... ok
+test plugin_dependencies::tests::an_unpinned_declaration_never_disagrees_with_the_view_it_reuses ... ok
+anchor environment fetch: directory:/run/user/1001/at.Ishy7j/.tmpndYusM/build/artifacts not used; no package needed it
+anchor environment fetch: directory:/run/user/1001/at.Ishy7j/.tmpndYusM/wheels not used; no package needed it
+anchor environment fetch: directory:/run/user/1001/at.Ishy7j/.tmpMaRk7I/environment-build/build/artifacts not used; no package needed it
+anchor environment fetch: directory:/run/user/1001/at.Ishy7j/.tmpMaRk7I/wheels not used; no package needed it
+test plugin_dependencies::tests::an_upgrade_takes_effect_at_the_next_call_and_keeps_the_plugins_data ... ok
+test plugin_disclosure::tests::catalog_pages_are_byte_bounded_and_exact_cold_entries_remain_reachable ... ok
+test plugin_dependencies::tests::identical_package_bytes_from_two_artifacts_keep_both_locks_reusable_offline ... ok
+test application::plugin_candidates::tests::candidate_prepares_calls_offline_and_installs_independently_of_its_session ... ok
+anchor environment fetch: directory:/run/user/1001/at.Ishy7j/.tmpokKyjY/build/artifacts failed 1 package(s): idna==3.6 (no distribution with the approved digest)
+anchor environment fetch: directory:/run/user/1001/at.Ishy7j/.tmpokKyjY/wheels served 1 package(s): idna==3.6
+test application::plugin_candidates::tests::candidate_startup_and_call_cancellation_reap_the_actual_processes ... ok
+anchor environment fetch: directory:/run/user/1001/at.Ishy7j/.tmpuwVXFr/old-build/build/artifacts failed 1 package(s): idna==3.6 (no distribution with the approved digest)
+anchor environment fetch: directory:/run/user/1001/at.Ishy7j/.tmpuwVXFr/wheels served 1 package(s): idna==3.6
+anchor environment fetch: directory:/run/user/1001/at.Ishy7j/.tmpuwVXFr/new-build/build/artifacts failed 1 package(s): idna==3.6 (no distribution with the approved digest)
+anchor environment fetch: directory:/run/user/1001/at.Ishy7j/.tmpuwVXFr/wheels served 1 package(s): idna==3.6
+test application::plugin_candidates::tests::unchanged_candidate_reprepares_for_a_new_turn_interpreter_and_retains_the_old_turn_fact ... ok
+test application::plugins::impact_tests::a_deployment_with_only_a_bundle_root_has_one_library_root ... ok
+test application::plugins::reference_tests::an_uninstalled_plugin_cannot_be_admitted_from_an_already_loaded_bundle ... ok
+test application::plugins::reference_tests::concurrent_run_admission_publishes_its_reference_before_uninstall_rechecks ... ok
+test execution::legacy_plugin_tests::a_waiting_parents_preparation_validates_its_legacy_child_without_upgrading_either ... ok
+test execution::legacy_plugin_tests::current_run_preparation_refuses_mutable_declaration_files ... ok
+test execution::legacy_plugin_tests::legacy_mcp_preparation_and_load_refuse_retired_records_without_rewrite ... ok
+test goose_acp::pilot_interaction::uninstall_tool_tests::configured_instruction_plugins_remain_protected_for_install_and_uninstall ... ok
+test node_host::resolver_tests::runtime::managed_python_is_shared_by_agent_commands_and_op_without_dependency_plugin ... ok
+test pilot_tools::frozen_mounts_tests::a_session_mounted_plugin_reaches_the_pilots_tool_list ... ok
+test pilot_tools::frozen_mounts_tests::an_absent_or_unusable_plugin_is_absent_with_a_reason ... ok
+test pilot_tools::frozen_mounts_tests::an_installed_plugin_with_an_http_server_reaches_the_pilots_tool_list ... ok
+test pilot_tools::frozen_mounts_tests::an_installed_stdio_plugin_reaches_the_pilots_tool_list_and_runs ... ok
+test pilot_tools::tests::graph_paths_symlinks_and_plugin_credentials_fail_closed ... ok
+test pilot_tools::tests::graph_validate_hides_private_plugin_paths_and_host_configuration_failures ... ok
+test plugin_configuration::tests::explicitly_external_binding_is_read_only_and_cannot_fallback_after_removal ... ok
+test tool_host::tests::stdio_mcp_runs_inside_the_plugin_mount_and_exposes_direct_tools ... ok
+
+test result: ok. 169 passed; 0 failed; 0 ignored; 0 measured; 868 filtered out; finished in 17.15s

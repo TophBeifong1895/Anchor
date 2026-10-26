@@ -48,7 +48,7 @@ impl HostIoResolver {
         }
         let _library = match &self.library_root {
             Some(library) => Some(
-                crate::application::plugins::plugin_publication_lease(
+                crate::plugin_library::publication_lease(
                     library,
                     &crate::dependency_provision::DependencyAccess {
                         network: false,
@@ -125,18 +125,12 @@ impl HostIoResolver {
             .iter()
             .find(|node| node.id == source.work_node)
             .ok_or("assistant work node is missing")?;
-        let declared = node
-            .plugins
-            .iter()
-            .map(|plugin| {
-                (
-                    plugin.id.as_str(),
-                    plugin.required && self.pilot_graph.as_deref() == Some(metadata.graph.as_str()),
-                    plugin.default,
-                )
-            })
-            .collect::<Vec<_>>();
-        let catalog = anchor_graph_host::FilePluginCatalog::new(self.plugin_library_root()?);
+        let declared = crate::plugin_library::mount_declarations(
+            &node.plugins,
+            Some(metadata.graph.as_str()),
+            self.pilot_graph.as_deref(),
+        );
+        let catalog = crate::plugin_library::Catalog::new(self.plugin_library_root()?);
         let mut installed = BTreeMap::new();
         for id in declared
             .iter()

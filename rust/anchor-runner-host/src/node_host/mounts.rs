@@ -94,7 +94,7 @@ pub(crate) fn session_plugin_mounts(
     fixture: &tool_host::PluginToolHost,
     switches: &BTreeMap<String, bool>,
 ) -> Result<(Vec<PluginBinding>, Vec<String>), String> {
-    let catalog = anchor_graph_host::FilePluginCatalog::new(library_root);
+    let catalog = crate::plugin_library::Catalog::new(library_root);
     let mut installed = BTreeMap::new();
     let mut definitions = BTreeMap::new();
     for id in switches.keys() {
@@ -331,7 +331,7 @@ impl HostIoResolver {
             .library_root
             .as_ref()
             .map(|root| {
-                anchor_library::Library::new(root)
+                crate::plugin_library::PluginLibrary::new(root)
                     .catalog_read_guard()
                     .map_err(|error| format!("Plugin mount catalog is unavailable: {error}"))
             })
@@ -389,7 +389,7 @@ impl HostIoResolver {
             });
         }
         let mut reasons = Vec::new();
-        let catalog = anchor_graph_host::FilePluginCatalog::new(self.plugin_library_root()?);
+        let catalog = crate::plugin_library::Catalog::new(self.plugin_library_root()?);
         // `declared` only scopes the reasons; the mounted set may name a Plugin
         // the Graph never declared, which is exactly the point.
         // A `required: true` declaration is an authorization, so only the
@@ -404,8 +404,10 @@ impl HostIoResolver {
                 .ok()
                 .flatten()
                 .map(|metadata| metadata.graph);
-        let required_is_authoritative =
-            declaring_graph.is_some() && declaring_graph.as_deref() == self.pilot_graph.as_deref();
+        let required_is_authoritative = crate::plugin_library::pilot_authority(
+            declaring_graph.as_deref(),
+            self.pilot_graph.as_deref(),
+        );
         if !required_is_authoritative
             && admitted
                 .snapshot
@@ -424,16 +426,11 @@ impl HostIoResolver {
             .iter()
             .find(|node| node.id == key.node_id)
             .map(|node| {
-                node.plugins
-                    .iter()
-                    .map(|reference| {
-                        (
-                            reference.id.as_str(),
-                            reference.required && required_is_authoritative,
-                            reference.default,
-                        )
-                    })
-                    .collect::<Vec<_>>()
+                crate::plugin_library::mount_declarations(
+                    &node.plugins,
+                    declaring_graph.as_deref(),
+                    self.pilot_graph.as_deref(),
+                )
             })
             .unwrap_or_default();
         let mut installed = BTreeMap::new();

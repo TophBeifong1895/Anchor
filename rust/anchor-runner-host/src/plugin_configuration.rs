@@ -1,6 +1,7 @@
 //! Host-owned, owner-bound default Plugin connections. Logical fields have one
 //! atomic authority even when several MCP servers consume the same secret.
-use anchor_graph_host::{FilePluginCatalog, PluginDefinition};
+use crate::plugin_library::Catalog;
+use anchor_graph_host::PluginDefinition;
 use anchor_platform_session::SessionStore;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -63,7 +64,7 @@ fn definition(library: &Path, plugin: &str) -> Result<PluginDefinition, String> 
     if !anchor_runtime::identifier::is_plugin_id(plugin) {
         return Err("invalid Plugin configuration ID".into());
     }
-    FilePluginCatalog::new(library)
+    Catalog::new(library)
         .definition(plugin)
         .map_err(|_| "Plugin configuration target unavailable".into())
 }

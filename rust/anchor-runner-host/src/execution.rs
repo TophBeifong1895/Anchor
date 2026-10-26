@@ -353,7 +353,7 @@ impl GraphCatalog for HostGraphCatalog {
                 network: false,
                 cancellation,
             };
-            let lease = crate::application::plugins::plugin_publication_lease(
+            let lease = crate::plugin_library::publication_lease(
                 &root,
                 &access,
                 "child reference publication",

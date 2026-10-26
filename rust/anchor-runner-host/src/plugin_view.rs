@@ -11,14 +11,15 @@
 //! would leave the server running without its environment, and a request the
 //! grant does not authorize is refused by the sandbox adapter.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use crate::plugin_library::Catalog;
 use anchor_graph_host::{
-    FilePluginCatalog, PluginDefinition, PluginDependencies, plugin_view_path,
-    resolved_library_root, store_root,
+    PluginDefinition, PluginDependencies, plugin_view_path, resolved_library_root, store_root,
 };
+#[cfg(test)]
 use anchor_runtime::graph::PluginBinding;
 use anchor_runtime::{ReadOnlyInput, SandboxRequest, WritableInput};
 use anchor_sandbox_bwrap::BubblewrapSandbox;
@@ -194,7 +195,7 @@ pub(crate) fn prepare_for_plugin(
     library_root: &Path,
     plugin: &str,
 ) -> Result<Option<PreparedView>, Unusable> {
-    let catalog = FilePluginCatalog::new(library_root);
+    let catalog = Catalog::new(library_root);
     let definition = catalog
         .definition(plugin)
         .map_err(|error| Unusable::recorded(error.to_string()))?;
@@ -275,7 +276,7 @@ impl PreparedPlugin {
     }
 
     pub(crate) fn for_candidate(
-        catalog: &FilePluginCatalog,
+        catalog: &Catalog,
         id: &str,
         dependency_view: Option<PreparedView>,
     ) -> Result<Self, String> {
@@ -475,131 +476,10 @@ pub(crate) fn site_packages_directories(view: &Path) -> Result<Vec<PathBuf>, Str
     Ok(found.into_iter().collect())
 }
 
-/// Everything a Host invocation derives from its verified Plugin definitions.
-/// The bindings, MCP declarations, mounts and views all describe the same read.
-pub(crate) struct PreparedPlugins {
-    pub(crate) bindings: Vec<PluginBinding>,
-    pub(crate) mcp: crate::tool_host::McpToolConfig,
-    pub(crate) mounts: Vec<ReadOnlyInput>,
-    pub(crate) views: BTreeMap<String, PreparedPlugin>,
-    pub(crate) disclosure: crate::plugin_disclosure::PluginDisclosureCatalog,
-}
-
-/// Prepare current Library code under the selected authorization baseline.
-/// The publication lease covers every filesystem read and is released before
-/// callers perform OAuth authorization or start any MCP connection.
-#[cfg(test)]
-pub(crate) async fn prepare_plugins_async(
-    bindings: Vec<PluginBinding>,
-    library_root: Option<PathBuf>,
-    fixture: crate::tool_host::PluginToolHost,
-    cancellation: anchor_runtime::Cancellation,
-) -> Result<PreparedPlugins, Unusable> {
-    prepare_plugins_for_owner_async(bindings, library_root, fixture, cancellation, None).await
-}
-
-pub(crate) async fn prepare_plugins_for_owner_async(
-    bindings: Vec<PluginBinding>,
-    library_root: Option<PathBuf>,
-    fixture: crate::tool_host::PluginToolHost,
-    cancellation: anchor_runtime::Cancellation,
-    credentials: Option<(PathBuf, String)>,
-) -> Result<PreparedPlugins, Unusable> {
-    fixture
-        .for_bindings(&bindings)
-        .map_err(|error| Unusable::recorded(error.to_string()))?;
-    let needs_library = bindings
-        .iter()
-        .any(|binding| !crate::tool_host::is_fake_fixture(binding));
-    let lease = if needs_library {
-        let root = library_root.as_ref().ok_or_else(|| {
-            Unusable::unconfigured("Plugin preparation requires the deployment Library root")
-        })?;
-        let access = crate::dependency_provision::DependencyAccess {
-            network: false,
-            cancellation: cancellation.clone(),
-        };
-        Some(
-            crate::application::plugins::plugin_publication_lease(
-                root,
-                &access,
-                "invocation preparation",
-            )
-            .await
-            .map_err(|error| Unusable::unconfigured(format!("{error:?}")))?,
-        )
-    } else {
-        None
-    };
-    tokio::task::spawn_blocking(move || {
-        let _lease = lease;
-        let root = library_root.unwrap_or_default();
-        let catalog = FilePluginCatalog::new(&root);
-        let mut definitions = BTreeMap::new();
-        let mut current = Vec::with_capacity(bindings.len());
-        let mut mounts = Vec::new();
-        let mut views = BTreeMap::new();
-        let mut disclosure = crate::plugin_disclosure::PluginDisclosureCatalog::default();
-        for binding in &bindings {
-            if cancellation.load(std::sync::atomic::Ordering::Acquire) {
-                return Err(Unusable::unconfigured("Plugin preparation was cancelled"));
-            }
-            if crate::tool_host::is_fake_fixture(binding) {
-                current.extend(
-                    fixture
-                        .resolve_fixture_plugins(std::slice::from_ref(&binding.id))
-                        .map_err(Unusable::recorded)?,
-                );
-                continue;
-            }
-            let definition = catalog
-                .definition(&binding.id)
-                .map_err(|error| Unusable::recorded(error.to_string()))?;
-            let current_binding = definition.binding();
-            if !binding.same_authorization(&current_binding) {
-                return Err(Unusable::recorded(format!(
-                    "Plugin `{}` authorization changed during preparation",
-                    binding.id
-                )));
-            }
-            views.insert(
-                binding.id.clone(),
-                PreparedPlugin::from_definition(&root, &definition)?,
-            );
-            mounts.push(ReadOnlyInput::new(
-                &definition.directory,
-                format!("/plugins/{}", definition.id),
-            ));
-            current.push(current_binding);
-            disclosure.insert(definition.clone());
-            definitions.insert(binding.id.clone(), definition);
-        }
-        let mcp = crate::tool_host::McpToolConfig::from_definitions_for_owner_execution(
-            &root,
-            &current,
-            &definitions,
-            credentials
-                .as_ref()
-                .map(|(data, owner)| (data.as_path(), owner.as_str())),
-        )
-        .map_err(Unusable::from)?;
-        Ok(PreparedPlugins {
-            bindings: current,
-            mcp,
-            mounts,
-            views,
-            disclosure,
-        })
-    })
-    .await
-    .map_err(|error| {
-        Unusable::unconfigured(format!("Plugin invocation preparation failed: {error}"))
-    })?
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::plugin_library::tools::prepare_plugins_async;
     use anchor_graph_host::PluginCatalog;
     use anchor_runtime::SandboxPort;
     use anchor_sandbox_bwrap::BubblewrapPolicy;
@@ -618,7 +498,7 @@ mod tests {
         )
         .unwrap();
         fs::write(plugin.join("code.txt"), "unchanged").unwrap();
-        let catalog = FilePluginCatalog::new(root.path());
+        let catalog = Catalog::new(root.path());
         let binding = catalog.resolve(&["stateful".into()]).unwrap().remove(0);
         let prepared = prepare_plugins_async(
             vec![binding],
@@ -737,7 +617,7 @@ mod tests {
             r#"{"name":"Probe","dependencies":{"python":["idna==3.6"]}}"#,
         )
         .unwrap();
-        let catalog = FilePluginCatalog::new(root.path());
+        let catalog = Catalog::new(root.path());
         let binding = catalog.resolve(&["probe".into()]).unwrap().remove(0);
 
         // Nothing installed under the declared view yet.
@@ -789,7 +669,7 @@ mod tests {
             r#"{"name":"Probe","dependencies":{"python":["idna==3.6"]}}"#,
         )
         .unwrap();
-        let catalog = FilePluginCatalog::new(root.path());
+        let catalog = Catalog::new(root.path());
         let mut binding = catalog.resolve(&["probe".into()]).unwrap().remove(0);
         binding.digest = "b".repeat(64);
         // Nothing about the view itself changed, so the only failure left is that

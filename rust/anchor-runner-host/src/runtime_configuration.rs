@@ -120,7 +120,7 @@ pub(crate) fn install_release_network(library_root: &Path) -> Result<(), String>
     if !source.is_dir() {
         return Ok(());
     }
-    let catalog = anchor_graph_host::FilePluginCatalog::new(library_root);
+    let catalog = crate::plugin_library::Catalog::new(library_root);
     if catalog.definition("network").is_ok() {
         return Ok(());
     }
@@ -129,7 +129,7 @@ pub(crate) fn install_release_network(library_root: &Path) -> Result<(), String>
             "installed network Plugin is invalid; bundled bootstrap will not overwrite it".into(),
         );
     }
-    let library = anchor_library::Library::new(library_root);
+    let library = crate::plugin_library::PluginLibrary::new(library_root);
     let review = library
         .review_directory("network", &source)
         .map_err(|error| error.to_string())?;

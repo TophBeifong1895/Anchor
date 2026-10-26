@@ -2,7 +2,7 @@
 //! A read never prepares dependencies, connects servers or grants execution.
 
 use super::ApplicationError;
-use anchor_graph_host::{FilePluginCatalog, PluginDefinition, PluginMetadata};
+use anchor_graph_host::{PluginDefinition, PluginMetadata};
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
 
@@ -50,25 +50,23 @@ impl InstalledPlugin {
 pub(crate) struct InstalledPluginCatalog {
     root: PathBuf,
     pub(crate) entries: Vec<InstalledPlugin>,
-    _guard: Option<anchor_file_lease::FileLease>,
+    read: crate::plugin_library::ReadCatalog,
 }
 
 impl InstalledPluginCatalog {
     fn open(root: &Path) -> Result<Self, ApplicationError> {
-        let guard = anchor_library::Library::new(root)
-            .catalog_read_guard()
-            .map_err(|_| {
-                ApplicationError::Conflict("Plugin Library is changing; retry this read".into())
-            })?;
+        let read = crate::plugin_library::ReadCatalog::open(root).map_err(|_| {
+            ApplicationError::Conflict("Plugin Library is changing; retry this read".into())
+        })?;
         Ok(Self {
             root: root.into(),
             entries: Vec::new(),
-            _guard: guard,
+            read,
         })
     }
 
     fn inspect(&self, id: String) -> InstalledPlugin {
-        let metadata = FilePluginCatalog::new(&self.root).metadata(&id).ok();
+        let metadata = self.read.catalog.metadata(&id).ok();
         let dependencies_ready = metadata.as_ref().map(|metadata| {
             crate::plugin_view::prepare_dependency_view(&self.root, &id, &metadata.dependencies)
                 .is_ok()
@@ -83,7 +81,7 @@ impl InstalledPluginCatalog {
     /// Selected detail reads do not scan unrelated installed assets.
     pub(crate) fn read_selected(root: &Path, id: &str) -> Result<Self, ApplicationError> {
         let mut catalog = Self::open(root)?;
-        if catalog._guard.is_some() {
+        if catalog.read.exists() {
             catalog.entries.push(catalog.inspect(id.into()));
         }
         Ok(catalog)
@@ -91,7 +89,7 @@ impl InstalledPluginCatalog {
 
     pub(crate) fn read(root: &Path) -> Result<Self, ApplicationError> {
         let mut catalog = Self::open(root)?;
-        if catalog._guard.is_none() {
+        if !catalog.read.exists() {
             return Ok(catalog);
         }
         let directories = match std::fs::read_dir(root.join("plugins")) {
@@ -119,7 +117,8 @@ impl InstalledPluginCatalog {
     }
 
     pub(crate) fn definition(&self, id: &str) -> Result<PluginDefinition, ApplicationError> {
-        FilePluginCatalog::new(&self.root)
+        self.read
+            .catalog
             .definition(id)
             .map_err(|_| ApplicationError::Invalid(INVALID_DEFINITION.into()))
     }

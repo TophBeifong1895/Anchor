@@ -1,5 +1,5 @@
 use super::*;
-use anchor_graph_host::FilePluginCatalog;
+use crate::plugin_library::Catalog;
 use anchor_library::{
     OAuthAuthorizationMetadata, OAuthAuthorizationResponse, OAuthAuthorizationTransaction,
     OAuthBinding, OAuthError, OAuthTokenResponse,
@@ -305,7 +305,7 @@ fn resolve_binding_at_root(
     server: &str,
     owner: &str,
 ) -> Result<OAuthRouteBinding, HttpResponse> {
-    let definition = FilePluginCatalog::new(library_root)
+    let definition = Catalog::new(library_root)
         .definition(plugin)
         .map_err(|_| error(StatusCode::NOT_FOUND, "no such Plugin"))?;
     let declaration = definition

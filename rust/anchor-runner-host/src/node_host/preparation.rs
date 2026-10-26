@@ -22,16 +22,18 @@ impl HostIoResolver {
             .for_bindings(bindings)
             .map_err(|error| error.to_string())?;
         for binding in bindings.iter().filter(|binding| !is_fake_fixture(binding)) {
-            let definition = anchor_graph_host::FilePluginCatalog::new(self.plugin_library_root()?)
-                .definition(&binding.id)
-                .map_err(|error| error.to_string())?;
-            let current = definition.binding();
-            if !binding.same_authorization(&current) {
-                return Err(format!(
-                    "Plugin `{}` authorization changed before admission",
-                    binding.id
-                ));
-            }
+            crate::plugin_library::Catalog::new(self.plugin_library_root()?)
+                .checked_definition(
+                    &binding.id,
+                    crate::plugin_library::ExpectedDefinition::Authorization(binding),
+                )
+                .map_err(|error| match error {
+                    crate::plugin_library::DefinitionError::Read(error) => error.to_string(),
+                    crate::plugin_library::DefinitionError::Mismatch => format!(
+                        "Plugin `{}` authorization changed before admission",
+                        binding.id,
+                    ),
+                })?;
         }
         Ok(())
     }
@@ -89,21 +91,20 @@ impl HostIoResolver {
                     &mounted,
                     &mcp.configuration_revisions,
                 );
-                let plugins = self
-                    .tools
-                    .assemble_with_sandbox_for_execution(
-                        &mcp,
-                        &mounted.bindings,
-                        mounted.network,
-                        crate::tool_host::SandboxLaunch {
-                            sandbox: &sandbox,
-                            workspace: &workspace,
-                            readonly_inputs: &readonly_inputs,
-                            plugin_views: &plugin_views,
-                        },
-                    )
-                    .await?;
-                disclosure.attach_tools(plugins.tool_owners());
+                let plugins = crate::plugin_library::tools::connect(
+                    &self.tools,
+                    &mcp,
+                    &mounted.bindings,
+                    mounted.network,
+                    Some(crate::tool_host::SandboxLaunch {
+                        sandbox: &sandbox,
+                        workspace: &workspace,
+                        readonly_inputs: &readonly_inputs,
+                        plugin_views: &plugin_views,
+                    }),
+                    &mut disclosure,
+                )
+                .await?;
                 // Output beyond the stream previews is retained host-side and mounted
                 // read-only at /spill, so a model can read what was cut off.
                 let spill = crate::node_tools::SpillDirectory::new(
@@ -187,7 +188,13 @@ impl HostIoResolver {
     async fn select_invocation_plugins(
         &self,
         request: &NodeExecutionRequest,
-    ) -> Result<(MountedPlugins, crate::plugin_view::PreparedPlugins), ResolutionError> {
+    ) -> Result<
+        (
+            MountedPlugins,
+            crate::plugin_library::tools::PreparedPlugins,
+        ),
+        ResolutionError,
+    > {
         if let Some(source) =
             crate::assistant::source(self.local_inputs.state_root(), &request.key)?
         {
@@ -238,7 +245,7 @@ impl HostIoResolver {
                     cancellation: request.cancellation.clone(),
                 };
                 Some(
-                    crate::application::plugins::plugin_publication_lease(
+                    crate::plugin_library::publication_lease(
                         root,
                         &access,
                         "invocation mount selection",
@@ -252,7 +259,7 @@ impl HostIoResolver {
         let mounted = self.mounted_plugins_unlocked(request)?;
         drop(mount_lease);
         self.validate_invocation_plugins(&admitted, request, &mounted.bindings)?;
-        let prepared = crate::plugin_view::prepare_plugins_for_owner_async(
+        let prepared = crate::plugin_library::tools::prepare_plugins_for_owner_async(
             mounted.bindings.clone(),
             self.library_root.clone(),
             self.tools.as_ref().clone(),

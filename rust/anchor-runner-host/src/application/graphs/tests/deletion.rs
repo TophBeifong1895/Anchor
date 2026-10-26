@@ -52,7 +52,7 @@ fn plugin_bundle(application: &RunApplication) -> PathBuf {
 }
 
 fn seal_plugin_bundle(library_root: &Path, path: &Path) {
-    let binding = FilePluginCatalog::new(library_root)
+    let binding = Catalog::new(library_root)
         .resolve(&["demo".into()])
         .unwrap()
         .remove(0);

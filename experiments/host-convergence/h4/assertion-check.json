@@ -1,0 +1,14 @@
+{
+  "baseline": "ac062db",
+  "existing_assertions_checked": 5898,
+  "current_assertions_checked": 5898,
+  "removed": 0,
+  "added": 0,
+  "result": "unchanged after constructor names and moved preparation module paths are normalized",
+  "method": "tests/common tokenizer with literal retention; balanced assertion macro bodies; multiset comparison across Host src; ignores formatting, comments and trailing commas",
+  "normalizations": [
+    "anchor_graph_host::FilePluginCatalog / FilePluginCatalog / crate::plugin_library::Catalog -> Catalog",
+    "anchor_library::Library / Library / PluginLibrary / crate::plugin_library::PluginLibrary -> Library",
+    "crate::plugin_view / crate::plugin_library::tools -> plugin_preparation"
+  ]
+}

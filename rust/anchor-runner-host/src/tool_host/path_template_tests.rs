@@ -111,9 +111,7 @@ fn owner_snapshot_preserves_shared_http_and_stdio_credential_bytes() {
             "local":{"command":"echo", "env_vars":["REQUIRED_KEY"], "optional_env_vars":["OPTIONAL_KEY"], "env":{"ROOT":"${PLUGIN_ROOT}/data"}}
         }
     }).to_string()).unwrap();
-    let definition = FilePluginCatalog::new(root.path())
-        .definition("demo")
-        .unwrap();
+    let definition = Catalog::new(root.path()).definition("demo").unwrap();
     let secret = format!(
         "opaque-${{ANCHOR_PLUGIN_VIEW}}-{}/token",
         definition.directory.display()

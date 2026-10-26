@@ -1195,8 +1195,9 @@ mod tests {
     use crate::dependency_provision::test_support::{
         builder_required, config, fixture_wheel, toolchain,
     };
+    use crate::plugin_library::Catalog;
     use crate::tool_host::{McpToolConfig, SandboxLaunch};
-    use anchor_graph_host::{FilePluginCatalog, PluginCatalog, PluginDependencies};
+    use anchor_graph_host::{PluginCatalog, PluginDependencies};
     use anchor_runtime::ToolPort;
     use anchor_sandbox_bwrap::{BubblewrapPolicy, BubblewrapSandbox};
     use std::collections::BTreeMap;
@@ -1426,7 +1427,7 @@ mod tests {
         assert_eq!(outcome.id, "python-probe");
 
         // 2. The view is a real environment whose pointer names the shared store.
-        let catalog = FilePluginCatalog::new(&library);
+        let catalog = Catalog::new(&library);
         let view = catalog.view_path("python-probe").unwrap().expect("a view");
         assert!(view.join("pyvenv.cfg").is_file(), "{}", view.display());
         assert!(
@@ -1625,7 +1626,7 @@ for line in sys.stdin:
         let plugin_views = BTreeMap::from([(
             binding.id.clone(),
             crate::plugin_view::PreparedPlugin::for_candidate(
-                &FilePluginCatalog::new(library),
+                &Catalog::new(library),
                 &binding.id,
                 Some(prepared),
             )
@@ -1686,7 +1687,7 @@ for line in sys.stdin:
         deployment.install().await.unwrap();
 
         // The Run froze this binding when the declaration was 3.6.
-        let binding = FilePluginCatalog::new(&deployment.library)
+        let binding = Catalog::new(&deployment.library)
             .resolve(&["python-probe".into()])
             .unwrap()
             .remove(0);
@@ -1753,7 +1754,7 @@ for line in sys.stdin:
     fn the_built_in_python_probe_is_a_valid_declaration() {
         let directory = built_in_probe();
         let root = directory.parent().unwrap().parent().unwrap();
-        let catalog = FilePluginCatalog::new(root);
+        let catalog = Catalog::new(root);
         let definition = catalog.definition("python-probe").unwrap();
         assert_eq!(definition.dependencies.python, vec!["idna==3.6"]);
         // The view exists, and the manifest names it as a deployment path: the
@@ -1831,7 +1832,7 @@ for line in sys.stdin:
     impl Deployment {
         /// The view the declaration maps to, whether or not it exists.
         fn view(&self) -> PathBuf {
-            FilePluginCatalog::new(&self.library)
+            Catalog::new(&self.library)
                 .view_path("python-probe")
                 .unwrap()
                 .expect("the Plugin declares dependencies")
@@ -2094,7 +2095,7 @@ for line in sys.stdin:
             &deployment.provisioner,
             &deployment.library,
             "python-probe",
-            &FilePluginCatalog::new(&deployment.library)
+            &Catalog::new(&deployment.library)
                 .definition("python-probe")
                 .unwrap()
                 .dependencies
@@ -2207,10 +2208,10 @@ for line in sys.stdin:
 
         // The binding is resolved through the *catalog*, exactly as the node host
         // does when a bundle serves the Plugin.
-        let catalog_source = FilePluginCatalog::new(&bundle);
+        let catalog_source = Catalog::new(&bundle);
         assert_eq!(
             catalog_source.definition("python-probe").unwrap().digest,
-            FilePluginCatalog::new(&deployment.library)
+            Catalog::new(&deployment.library)
                 .definition("python-probe")
                 .unwrap()
                 .digest,

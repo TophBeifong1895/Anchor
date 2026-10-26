@@ -1,5 +1,5 @@
 use super::*;
-use anchor_graph_host::FilePluginCatalog;
+use crate::plugin_library::Catalog;
 use std::fs;
 
 fn fixture() -> (tempfile::TempDir, SessionStore, PluginDefinition) {
@@ -12,9 +12,7 @@ fn fixture() -> (tempfile::TempDir, SessionStore, PluginDefinition) {
     )
     .unwrap();
     let sessions = SessionStore::open(root.path().join("state/platform/sessions.sqlite")).unwrap();
-    let definition = FilePluginCatalog::new(root.path())
-        .definition("demo")
-        .unwrap();
+    let definition = Catalog::new(root.path()).definition("demo").unwrap();
     (root, sessions, definition)
 }
 fn manifest(url: &str) -> Value {
@@ -188,9 +186,7 @@ fn atomic_validation_rejects_invalid_endpoint_and_stale_authorization() {
         )
         .is_err()
     );
-    let changed = FilePluginCatalog::new(root.path())
-        .definition("demo")
-        .unwrap();
+    let changed = Catalog::new(root.path()).definition("demo").unwrap();
     assert!(
         snapshot(
             &data,
@@ -531,7 +527,7 @@ async fn explicitly_external_binding_is_read_only_and_cannot_fallback_after_remo
         root.path().join("plugins/external-demo"),
     )
     .unwrap();
-    let definition = FilePluginCatalog::new(root.path())
+    let definition = Catalog::new(root.path())
         .definition("external-demo")
         .unwrap();
     let data = root.path().join("state");
@@ -700,9 +696,7 @@ fn legacy_mcp_rotation_and_clear_invalidate_the_connection_test_version() {
         .to_string(),
     )
     .unwrap();
-    let definition = FilePluginCatalog::new(root.path())
-        .definition("demo")
-        .unwrap();
+    let definition = Catalog::new(root.path()).definition("demo").unwrap();
     let data = root.path().join("state");
     let owner = crate::credential_store::binding_owner("owner-a");
     assert_eq!(
@@ -884,9 +878,7 @@ fn connection_changes_cannot_carry_unmapped_legacy_credentials_to_a_new_destinat
         mixed.to_string(),
     )
     .unwrap();
-    let definition = FilePluginCatalog::new(root.path())
-        .definition("demo")
-        .unwrap();
+    let definition = Catalog::new(root.path()).definition("demo").unwrap();
     let data = root.path().join("state");
     configure_fields(
         root.path(),

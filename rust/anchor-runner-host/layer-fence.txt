@@ -14,9 +14,7 @@ local_inputs.rs 1 0 0
 node_host.rs 3 0 0
 node_host/assistant.rs 0 1 0
 node_host/conversation.rs 1 0 0
-node_host/preparation.rs 1 7 0
-node_host/turn_plugins.rs 1 0 0
+node_host/preparation.rs 0 7 0
 pilot_host.rs 1 3 0
 pilot_resources.rs 0 1 0
-plugin_view.rs 1 0 0
 tool_host.rs 0 3 0

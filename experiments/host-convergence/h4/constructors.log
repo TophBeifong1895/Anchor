@@ -1,0 +1,35 @@
+Before: ac062db
+api.rs: catalog=1 library=0
+api/oauth.rs: catalog=1 library=0
+api/plugins.rs: catalog=1 library=0
+application/channel_management.rs: catalog=1 library=0
+application/development_dependencies.rs: catalog=0 library=2
+application/development_environment.rs: catalog=0 library=1
+application/graphs.rs: catalog=3 library=1
+application/plugin_candidates.rs: catalog=2 library=2
+application/plugins.rs: catalog=8 library=5
+application/plugins/catalog.rs: catalog=2 library=1
+application/run_access/kernel_calls.rs: catalog=1 library=0
+assistant_plugins.rs: catalog=1 library=1
+channel_supervisor.rs: catalog=2 library=0
+channel_supervisor/management.rs: catalog=2 library=0
+credential_store.rs: catalog=2 library=0
+credential_store/management.rs: catalog=1 library=0
+goose_acp/pilot_interaction/initialization.rs: catalog=2 library=0
+node_host/mounts.rs: catalog=2 library=1
+node_host/preparation.rs: catalog=1 library=0
+node_host/resolution.rs: catalog=1 library=0
+node_host/turn_plugins.rs: catalog=1 library=0
+pilot_tools/plugins.rs: catalog=0 library=1
+plugin_configuration.rs: catalog=1 library=0
+plugin_configuration_test.rs: catalog=2 library=0
+plugin_disclosure.rs: catalog=1 library=1
+plugin_network.rs: catalog=2 library=0
+plugin_view.rs: catalog=2 library=0
+runtime_configuration.rs: catalog=1 library=1
+tool_host.rs: catalog=2 library=0
+Total: [46, 17]; files: [26, 11]; union files: 29; scanned files: 176
+
+After: H4 code tree
+plugin_library.rs: catalog=1 library=2
+Total: [1, 2]; files: [1, 1]; union files: 1; scanned files: 178

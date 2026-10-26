@@ -153,7 +153,7 @@ async fn wait_for_plugin_writer(application: &RunApplication) {
 
 #[tokio::test]
 async fn concurrent_session_mount_and_uninstall_publish_one_consistent_result() {
-    use anchor_library::Library;
+    use crate::plugin_library::PluginLibrary;
     use std::time::Duration;
 
     let _env_guard = PROCESS_ENV.lock().await;
@@ -170,7 +170,7 @@ async fn concurrent_session_mount_and_uninstall_publish_one_consistent_result() 
             .await
             .unwrap();
         assert!(precondition.refusal().is_none());
-        let lease = Library::new(root.path()).install_lease().unwrap();
+        let lease = PluginLibrary::new(root.path()).install_lease().unwrap();
         let before = library_bytes(&state);
         let mount = async move {
             call(

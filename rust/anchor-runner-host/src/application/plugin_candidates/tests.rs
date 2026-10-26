@@ -1,5 +1,6 @@
 use super::*;
 use crate::dependency_provision::{DependencyProvisioner, test_support};
+use anchor_graph_host::PluginCatalog;
 use std::sync::{
     Arc,
     atomic::{AtomicBool, Ordering},
@@ -249,7 +250,7 @@ async fn candidate_does_not_inherit_an_installed_plugins_owner_credentials() {
         "report = {'private_credential_visible':'ANCHOR_CANDIDATE_PRIVATE_SECRET' in os.environ}"
     ));
     std::fs::write(source.join("server.py"), server).unwrap();
-    Library::new(&library)
+    crate::plugin_library::PluginLibrary::new(&library)
         .install_directory("candidate", &source, false)
         .unwrap();
     let request = crate::credential_store::request(
@@ -279,9 +280,7 @@ async fn candidate_does_not_inherit_an_installed_plugins_owner_credentials() {
         &fixture_secret,
     )
     .unwrap();
-    let installed = FilePluginCatalog::new(&library)
-        .definition("candidate")
-        .unwrap();
+    let installed = Catalog::new(&library).definition("candidate").unwrap();
     let private_values = crate::credential_store::environment_values(
         &data,
         &crate::credential_store::binding_owner("owner"),
@@ -855,13 +854,13 @@ async fn candidate_prepares_calls_offline_and_installs_independently_of_its_sess
         .await
         .unwrap();
     drop(prepared);
-    Library::new(&library)
+    crate::plugin_library::PluginLibrary::new(&library)
         .release_development_scope(preparations.parent().unwrap())
         .unwrap();
     assert!(!candidate_view.exists());
     std::fs::remove_dir_all(&preparations).unwrap();
     std::fs::remove_dir_all(&source).unwrap();
-    let catalog = FilePluginCatalog::new(&library);
+    let catalog = Catalog::new(&library);
     let binding = catalog.resolve(&["candidate".into()]).unwrap().remove(0);
     let views = BTreeMap::from([(
         "candidate".into(),

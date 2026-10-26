@@ -30,6 +30,7 @@ mod plugin_configuration;
 mod plugin_configuration_test;
 mod plugin_dependencies;
 mod plugin_disclosure;
+mod plugin_library;
 mod plugin_mounts;
 mod plugin_network;
 mod plugin_view;
@@ -669,7 +670,7 @@ async fn execute_snapshot_with_control(
             network: false,
             cancellation: control.cancellation.clone(),
         };
-        match crate::application::plugins::plugin_publication_lease(
+        match crate::plugin_library::publication_lease(
             root,
             &access,
             "standalone reference publication",

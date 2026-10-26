@@ -1,6 +1,7 @@
 use super::*;
 use crate::application::run_access::fixtures;
-use anchor_graph_host::{FilePluginCatalog, PluginCatalog};
+use crate::plugin_library::Catalog;
+use anchor_graph_host::PluginCatalog;
 use serde_json::{Value, json};
 use std::{
     fs,
@@ -68,7 +69,7 @@ fn plugin(root: &Path) -> (PathBuf, PluginBinding) {
     .unwrap();
     fs::write(directory.join("README.md"), "original code resources").unwrap();
     fs::write(directory.join("state/results.json"), "[]").unwrap();
-    let binding = FilePluginCatalog::new(root.join("library"))
+    let binding = Catalog::new(root.join("library"))
         .resolve(&["research".into()])
         .unwrap()
         .remove(0);

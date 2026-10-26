@@ -1,0 +1,17 @@
+
+running 2 tests
+test ownership_counting ... ok
+plugin_library_fence: 178 production files; external owned types 0 / 0 required
+
+thread 'plugin_library_owns_catalog_and_library_construction' (1903627) panicked at anchor-runner-host/tests/plugin_library_fence.rs:56:5:
+Plugin ownership boundary exceeded:
+runtime_configuration.rs: FilePluginCatalog 1 (use plugin_library)
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test plugin_library_owns_catalog_and_library_construction ... FAILED
+
+failures:
+
+failures:
+    plugin_library_owns_catalog_and_library_construction
+
+test result: FAILED. 1 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s

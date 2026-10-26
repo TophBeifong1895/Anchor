@@ -29,7 +29,8 @@ mod wecom_progress;
 use super::*;
 use crate::application::{ApplicationError, RunApplication};
 use crate::deployment::configured_pilot_graph;
-use anchor_graph_host::{FileGraphBundleLoader, FilePluginCatalog};
+use crate::plugin_library::Catalog;
+use anchor_graph_host::FileGraphBundleLoader;
 use axum::{
     Json, Router,
     extract::{DefaultBodyLimit, Path as AxumPath, Query, State},
@@ -568,11 +569,7 @@ async fn channel_sessions_projection(
 /// would mount it with no Session switch (it is required, or its `default` is
 /// not explicitly false). For a single declaring node this is exactly what the
 /// mount filter does for that node.
-#[derive(Debug, Clone, Copy, Default)]
-struct PluginDeclaration {
-    required: bool,
-    mounts_by_default: bool,
-}
+use crate::plugin_library::DeclarationProjection as PluginDeclaration;
 
 /// The declarations the Session's **attached Runs froze**, by Plugin id.
 ///
@@ -639,15 +636,15 @@ fn session_plugin_declarations(
             .ok()
             .flatten()
             .map(|metadata| metadata.graph);
-        let required_is_authoritative = declaring_graph.is_some()
-            && declaring_graph.as_deref() == configured_pilot_graph.as_deref();
         for node in &record.snapshot.nodes {
-            for reference in &node.plugins {
-                let required = reference.required && required_is_authoritative;
-                let entry = declarations.entry(reference.id.clone()).or_default();
-                entry.required |= required;
-                entry.mounts_by_default |= required || reference.default.unwrap_or(true);
-            }
+            crate::plugin_library::merge_declarations(
+                &mut declarations,
+                &crate::plugin_library::mount_declarations(
+                    &node.plugins,
+                    declaring_graph.as_deref(),
+                    configured_pilot_graph.as_deref(),
+                ),
+            );
         }
     }
     declarations
@@ -893,14 +890,12 @@ fn session_plugin_mount_target(
     }
     if on {
         let root = state.application.library_root().to_path_buf();
-        FilePluginCatalog::new(&root)
-            .definition(plugin)
-            .map_err(|_| {
-                error(
-                    StatusCode::BAD_REQUEST,
-                    format!("插件 `{plugin}` 尚未安装，不能挂载"),
-                )
-            })?;
+        Catalog::new(&root).definition(plugin).map_err(|_| {
+            error(
+                StatusCode::BAD_REQUEST,
+                format!("插件 `{plugin}` 尚未安装，不能挂载"),
+            )
+        })?;
         if let Err(unusable) = crate::plugin_view::prepare_for_plugin(&root, plugin) {
             return Err(error(StatusCode::CONFLICT, unusable.to_string()));
         }

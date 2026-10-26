@@ -1,6 +1,7 @@
 use super::*;
+use crate::plugin_library::Catalog;
 use crate::resource_read::open_resource;
-use anchor_graph_host::{FilePluginCatalog, PluginDefinition, PluginMetadata};
+use anchor_graph_host::{PluginDefinition, PluginMetadata};
 use anchor_runtime::graph::GraphError;
 use std::io::Read;
 use std::path::Path;
@@ -124,7 +125,7 @@ pub(super) async fn plugin_file(
     State(state): State<ApiState>,
     AxumPath((plugin, path)): AxumPath<(String, String)>,
 ) -> Result<HttpResponse, HttpResponse> {
-    let catalog = FilePluginCatalog::new(state.application.library_root().to_path_buf());
+    let catalog = Catalog::new(state.application.library_root().to_path_buf());
     let definition = catalog
         .definition(&plugin)
         .map_err(|failure| error(StatusCode::BAD_REQUEST, public_catalog_error(failure)))?;

@@ -1,5 +1,6 @@
 use super::*;
-use anchor_graph_host::{FilePluginCatalog, PluginCatalog};
+use crate::plugin_library::Catalog;
+use anchor_graph_host::PluginCatalog;
 use anchor_runtime::graph::RecoveryAttempt;
 use std::time::Duration;
 
@@ -387,7 +388,7 @@ fn seed_call_fixture(
         anchor_runtime::graph::GraphRunRecord::create_with_id(bundle.snapshot, Value::Null, run)
             .unwrap();
     // A bundle references Plugins by id; the code lives in the Library.
-    record.plugin_bindings = FilePluginCatalog::new(&state.catalog_root)
+    record.plugin_bindings = Catalog::new(&state.catalog_root)
         .resolve(&bundle.plugins)
         .unwrap()
         .into_iter()
@@ -453,7 +454,7 @@ async fn publishing_graph_preserves_plugin_conversation_history_and_child_runs()
         "plugin-first",
     )
     .unwrap();
-    first.plugin_bindings = FilePluginCatalog::new(&state.catalog_root)
+    first.plugin_bindings = Catalog::new(&state.catalog_root)
         .resolve(&bundle.plugins)
         .unwrap()
         .into_iter()

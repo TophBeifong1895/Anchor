@@ -153,7 +153,7 @@ impl PilotTools {
                 .ok_or_else(|| rejected("the directory name is not a usable Plugin id; pass `id`"))?
                 .to_owned(),
         };
-        let review = anchor_library::Library::new(&self.library_root)
+        let review = crate::plugin_library::PluginLibrary::new(&self.library_root)
             .review_directory(&id, &candidate)
             .map_err(|failure| match failure {
                 // The assistant needs the catalog's reason to fix the

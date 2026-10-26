@@ -9,9 +9,8 @@ use crate::application::{
         channel_plan,
     },
 };
-use anchor_graph_host::{
-    ChannelDefinition, FileGraphBundleLoader, FilePluginCatalog, PluginMetadata,
-};
+use crate::plugin_library::Catalog;
+use anchor_graph_host::{ChannelDefinition, FileGraphBundleLoader, PluginMetadata};
 use futures_util::future::BoxFuture;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -287,7 +286,7 @@ impl ChannelManagementAdapter {
         &self,
         plugin: &str,
     ) -> Result<(PluginMetadata, ChannelDefinition), ApplicationError> {
-        let definition = FilePluginCatalog::new(&self.configuration.library_root)
+        let definition = Catalog::new(&self.configuration.library_root)
             .definition(plugin)
             .map_err(|_| ApplicationError::Missing)?;
         Self::channel(definition.metadata())
@@ -297,7 +296,7 @@ impl ChannelManagementAdapter {
         &self,
         plugin: &str,
     ) -> Result<(PluginMetadata, ChannelDefinition), ApplicationError> {
-        let definition = FilePluginCatalog::new(&self.configuration.library_root)
+        let definition = Catalog::new(&self.configuration.library_root)
             .metadata(plugin)
             .map_err(|_| ApplicationError::Missing)?;
         Self::channel(definition)

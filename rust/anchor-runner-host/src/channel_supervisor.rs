@@ -1,4 +1,5 @@
-use anchor_graph_host::{ChannelDefinition, FileGraphBundleLoader, FilePluginCatalog};
+use crate::plugin_library::Catalog;
+use anchor_graph_host::{ChannelDefinition, FileGraphBundleLoader};
 use std::{
     collections::{BTreeMap, BTreeSet},
     env,
@@ -63,7 +64,7 @@ impl ChannelResourceGuard {
                 .join(&self.definition.plugin)
                 .join("plugin.json")
                 .is_file()
-            && FilePluginCatalog::new(&self.library_root)
+            && Catalog::new(&self.library_root)
                 .channels(&self.definition.plugin)
                 .is_ok_and(|channels| channels.contains(&self.definition))
     }
@@ -254,7 +255,7 @@ fn discover(bundle_root: &Path, library_root: &Path) -> io::Result<Vec<Discovere
         .iter()
         .flat_map(|node| node.plugins.iter().map(|reference| reference.id.clone()))
         .collect::<BTreeSet<_>>();
-    let catalog = FilePluginCatalog::new(library_root);
+    let catalog = Catalog::new(library_root);
     let mut channels = BTreeMap::<String, DiscoveredChannel>::new();
     for id in ids {
         let plugin_dir = catalog
@@ -513,9 +514,7 @@ mod tests {
             "edges": []
         });
         fs::write(root.path().join("graph.json"), graph.to_string()).unwrap();
-        let bindings = FilePluginCatalog::new(root.path())
-            .resolve(&plugin_ids)
-            .unwrap();
+        let bindings = Catalog::new(root.path()).resolve(&plugin_ids).unwrap();
         for binding in bindings {
             summaries.push(json!({"id": binding.id}));
         }
@@ -528,7 +527,7 @@ mod tests {
     }
 
     fn refresh_manifest(root: &std::path::Path, plugin_ids: &[&str]) {
-        let bindings = FilePluginCatalog::new(root)
+        let bindings = Catalog::new(root)
             .resolve(
                 &plugin_ids
                     .iter()

@@ -3,7 +3,8 @@
 mod management;
 pub(crate) use management::{channel_credentials, configure, credentials, resolve_pending_locked};
 
-use anchor_graph_host::{FilePluginCatalog, PluginDefinition, PluginMetadata};
+use crate::plugin_library::Catalog;
+use anchor_graph_host::{PluginDefinition, PluginMetadata};
 use anchor_platform_session::{Session, SessionStore, TurnStatus};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -367,7 +368,7 @@ pub(crate) fn request(
     {
         return Err("credential request requires an active Pilot Turn".into());
     }
-    let definition = FilePluginCatalog::new(library)
+    let definition = Catalog::new(library)
         .definition(plugin)
         .map_err(|_| "credential target Plugin is not installed")?;
     let (fields, authorization_digest) = target_authorization(&definition, server)?;
@@ -513,7 +514,7 @@ pub(crate) fn submit(
     let path = request_path(data, owner, session, id)?;
     let mut fact = load::<RequestFact>(&path)?.ok_or("credential request unavailable")?;
     check_fact(&fact, owner, session)?;
-    let definition = FilePluginCatalog::new(library)
+    let definition = Catalog::new(library)
         .definition(&fact.request.plugin)
         .map_err(|_| "credential target no longer installed")?;
     if fact.request.status == "configured" {
@@ -1022,9 +1023,7 @@ mod tests {
             )
             .is_err()
         );
-        let definition = FilePluginCatalog::new(root.path())
-            .definition("demo")
-            .unwrap();
+        let definition = Catalog::new(root.path()).definition("demo").unwrap();
         assert_eq!(
             environment_values(&data, &binding_owner("owner-a"), &definition, "api").unwrap()["ANCHOR_TEST_PRIVATE_CREDENTIAL"],
             "private-value"
@@ -1240,9 +1239,7 @@ mod tests {
             "private-value",
         )
         .unwrap();
-        let definition = FilePluginCatalog::new(root.path())
-            .definition("demo")
-            .unwrap();
+        let definition = Catalog::new(root.path()).definition("demo").unwrap();
         let path = secret_path(
             &data,
             &binding_owner("owner-a"),

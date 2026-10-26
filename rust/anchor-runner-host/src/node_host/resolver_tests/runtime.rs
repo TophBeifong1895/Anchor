@@ -101,7 +101,7 @@ async fn an_installed_plugin_code_and_resource_update_is_used_by_the_next_call()
     let (_root, resolver, _mounts, mut request) =
         session_fixture(&["review"], &[("review", true, None)], &[]);
     let library = resolver.plugin_library_root().unwrap();
-    let catalog = anchor_graph_host::FilePluginCatalog::new(library);
+    let catalog = crate::plugin_library::Catalog::new(library);
     let admitted = catalog.resolve(&["review".into()]).unwrap().remove(0);
     seed_admitted_binding(&resolver, &mut request, admitted.clone());
 
@@ -136,7 +136,7 @@ async fn node_tool_selection_waits_for_real_plugin_publication_and_returns_curre
     )
     .unwrap();
     std::fs::write(source.join("skills/current/SKILL.md"), "current generation").unwrap();
-    let library = anchor_library::Library::new(library_root);
+    let library = crate::plugin_library::PluginLibrary::new(library_root);
     let lease = library.install_lease().unwrap();
     let mut resolving = resolver.tools(&request);
     assert!(
@@ -147,7 +147,7 @@ async fn node_tool_selection_waits_for_real_plugin_publication_and_returns_curre
     library
         .install_directory_locked("review", &source, true, &lease)
         .unwrap();
-    let current = anchor_graph_host::FilePluginCatalog::new(library_root)
+    let current = crate::plugin_library::Catalog::new(library_root)
         .definition("review")
         .unwrap()
         .binding();

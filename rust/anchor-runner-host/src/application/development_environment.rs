@@ -3,7 +3,8 @@
 
 use super::{ApplicationError, RunApplication, development_dependencies};
 use crate::dependency_provision::{DependencyAccess, DependencyProvisioner};
-use anchor_library::{DevelopmentScope, Library};
+use crate::plugin_library::PluginLibrary;
+use anchor_library::DevelopmentScope;
 use anchor_runtime::{
     NetworkPolicy, ReadOnlyInput, SandboxEnvironment, SandboxPort, SandboxRequest, SandboxResult,
     SandboxStatus, WritableInput,
@@ -173,7 +174,7 @@ async fn lease(
     access: &DependencyAccess,
 ) -> Result<DevelopmentScope, String> {
     access.check().map_err(|e| e.to_string())?;
-    let library_handle = Library::new(library);
+    let library_handle = PluginLibrary::new(library);
     if let Some(leased) = library_handle
         .development_scope(scope, false)
         .map_err(|e| e.to_string())?

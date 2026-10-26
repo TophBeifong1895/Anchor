@@ -7,7 +7,7 @@ use std::{
 };
 
 #[cfg(test)]
-use anchor_graph_host::{FilePluginCatalog, PluginCatalog};
+use anchor_graph_host::PluginCatalog;
 use anchor_platform_session::SessionStore;
 #[cfg(test)]
 use anchor_runtime::graph::GraphSnapshot;
@@ -150,7 +150,7 @@ pub(crate) async fn frozen_turn_tools(
         None
     } else {
         Some(
-            crate::application::plugins::plugin_publication_lease(
+            crate::plugin_library::publication_lease(
                 library_root,
                 &selection_access,
                 "Pilot mount selection",
@@ -193,7 +193,7 @@ pub(crate) async fn frozen_turn_tools(
         if cancellation.load(std::sync::atomic::Ordering::Acquire) {
             break;
         }
-        let prepared = match crate::plugin_view::prepare_plugins_for_owner_async(
+        let prepared = match crate::plugin_library::tools::prepare_plugins_for_owner_async(
             vec![binding.clone()],
             Some(library_root.to_path_buf()),
             fixture.clone(),
@@ -246,7 +246,15 @@ pub(crate) async fn frozen_turn_tools(
             )
         };
         let assembled = if crate::node_host::is_fake_fixture(binding) {
-            fixture.assemble(&mcp, single, network).await
+            crate::plugin_library::tools::connect(
+                &fixture,
+                &mcp,
+                single,
+                network,
+                None,
+                &mut disclosure,
+            )
+            .await
         } else if declares_stdio {
             let Some((sandbox, workspace)) = &stdio else {
                 // The sandbox reason is already recorded; a stdio Plugin never
@@ -258,28 +266,36 @@ pub(crate) async fn frozen_turn_tools(
             let sandbox = sandbox
                 .with_readonly_grants(input_mounts)
                 .map_err(|error| error.to_string())?;
-            fixture
-                .assemble_with_sandbox(
-                    &mcp,
-                    single,
-                    network,
-                    tool_host::SandboxLaunch {
-                        sandbox: &sandbox,
-                        workspace,
-                        readonly_inputs: &readonly,
-                        plugin_views: &prepared.views,
-                    },
-                )
-                .await
+            crate::plugin_library::tools::connect(
+                &fixture,
+                &mcp,
+                single,
+                network,
+                Some(tool_host::SandboxLaunch {
+                    sandbox: &sandbox,
+                    workspace,
+                    readonly_inputs: &readonly,
+                    plugin_views: &prepared.views,
+                }),
+                &mut disclosure,
+            )
+            .await
         } else {
-            fixture.assemble(&mcp, single, network).await
+            crate::plugin_library::tools::connect(
+                &fixture,
+                &mcp,
+                single,
+                network,
+                None,
+                &mut disclosure,
+            )
+            .await
         };
         match assembled {
             Ok(port) => {
-                disclosure.attach_tools(port.tool_owners());
                 ports.push(port);
             }
-            Err(reason) => reasons.push(unavailable(reason)),
+            Err(reason) => reasons.push(unavailable(reason.to_string())),
         }
     }
     if cancellation.load(std::sync::atomic::Ordering::Acquire) {

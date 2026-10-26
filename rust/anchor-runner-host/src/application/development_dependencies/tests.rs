@@ -333,7 +333,7 @@ async fn legacy_project_views_share_bytes_and_selection_rejects_inconsistent_fac
         crate::plugin_view::referenced_store_directories(&formal, &store).unwrap(),
         vec![store.join("idna/3.6")]
     );
-    let scope = Library::new(&library)
+    let scope = crate::plugin_library::PluginLibrary::new(&library)
         .development_scope(&scope_path, true)
         .unwrap()
         .unwrap();

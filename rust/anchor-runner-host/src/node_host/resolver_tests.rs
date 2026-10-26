@@ -109,7 +109,7 @@ fn session_fixture_with_snapshot(
         .unwrap()
     });
     let mut record = GraphRunRecord::create_with_id(snapshot, json!({}), "session-mounts").unwrap();
-    record.plugin_bindings = anchor_graph_host::FilePluginCatalog::new(&library)
+    record.plugin_bindings = crate::plugin_library::Catalog::new(&library)
         .resolve(
             &declared
                 .iter()

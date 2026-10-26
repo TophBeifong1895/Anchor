@@ -1,6 +1,6 @@
 use super::*;
+use crate::plugin_library::PluginLibrary;
 use anchor_graph_host::{PluginCatalog, plugin_view_path, store_root};
-use anchor_library::Library;
 use anchor_platform_session::{CreateSession, SessionStore};
 use anchor_sandbox_bwrap::BubblewrapPolicy;
 use std::{fs, sync::atomic::AtomicBool, time::Duration};
@@ -126,10 +126,10 @@ async fn empty_dependency_mcp_uses_shared_python_and_private_credentials_without
         .to_string(),
     )
     .unwrap();
-    Library::new(&library)
+    PluginLibrary::new(&library)
         .install_directory("stdlib", &source, false)
         .unwrap();
-    let binding = FilePluginCatalog::new(&library)
+    let binding = Catalog::new(&library)
         .resolve(&["stdlib".into()])
         .unwrap()
         .remove(0);
@@ -162,7 +162,7 @@ async fn empty_dependency_mcp_uses_shared_python_and_private_credentials_without
         &secret,
     )
     .unwrap();
-    let prepared = crate::plugin_view::prepare_plugins_for_owner_async(
+    let prepared = crate::plugin_library::tools::prepare_plugins_for_owner_async(
         vec![binding],
         Some(library.clone()),
         PluginToolHost::new(Vec::<String>::new()),
@@ -268,7 +268,7 @@ async fn dependency_view_mcp_keeps_its_own_interpreter_with_shared_python_author
         .to_string(),
     )
     .unwrap();
-    let catalog = FilePluginCatalog::new(root.path());
+    let catalog = Catalog::new(root.path());
     let definition = catalog.definition("viewed").unwrap();
     let view = plugin_view_path(
         root.path(),
@@ -283,7 +283,7 @@ async fn dependency_view_mcp_keeps_its_own_interpreter_with_shared_python_author
         .output()
         .unwrap();
     assert!(output.status.success(), "venv fixture must be created");
-    let prepared = crate::plugin_view::prepare_plugins_async(
+    let prepared = crate::plugin_library::tools::prepare_plugins_async(
         vec![definition.binding()],
         Some(root.path().to_owned()),
         PluginToolHost::new(Vec::<String>::new()),

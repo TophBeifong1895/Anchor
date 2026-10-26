@@ -861,7 +861,7 @@ mod tests {
             .to_string(),
         )
         .unwrap();
-        let review = anchor_library::Library::new(root.path().join("library"))
+        let review = crate::plugin_library::PluginLibrary::new(root.path().join("library"))
             .review_directory("probe", &candidate)
             .unwrap();
         let view = root.path().join("library/dependencies/views/probe/abc123");
@@ -1386,7 +1386,7 @@ mod uninstall_tool_tests {
         let view = plugin_view_path(
             &resolved,
             "demo",
-            &anchor_graph_host::FilePluginCatalog::new(&tools.library_root)
+            &crate::plugin_library::Catalog::new(&tools.library_root)
                 .definition("demo")
                 .unwrap()
                 .dependencies

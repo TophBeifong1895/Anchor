@@ -4,9 +4,8 @@
 
 use std::{collections::BTreeMap, path::Path};
 
-use anchor_graph_host::{
-    FilePluginCatalog, McpServerDefinition, PluginCatalog, PluginDefinition, PluginMetadata,
-};
+use crate::plugin_library::Catalog;
+use anchor_graph_host::{McpServerDefinition, PluginCatalog, PluginDefinition, PluginMetadata};
 use anchor_runtime::graph::PluginBinding;
 
 pub(crate) const NETWORK_PLUGIN: &str = "network";
@@ -35,7 +34,7 @@ pub(crate) struct NetworkResolution {
 }
 
 pub(crate) fn resolve(root: &Path, mounted: &[String], permission: bool) -> NetworkResolution {
-    let catalog = FilePluginCatalog::new(root);
+    let catalog = Catalog::new(root);
     resolve_with(
         mounted,
         permission,
@@ -139,7 +138,7 @@ pub(crate) fn apply(
         }
     });
     if resolution.allowed && !bindings.iter().any(|binding| binding.id == NETWORK_PLUGIN) {
-        let binding = FilePluginCatalog::new(root)
+        let binding = Catalog::new(root)
             .resolve(&[NETWORK_PLUGIN.to_owned()])
             .map_err(|error| error.to_string())?
             .pop()

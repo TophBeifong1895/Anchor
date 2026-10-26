@@ -5,7 +5,7 @@ fn definition(library: &Path, plugin: &str) -> Result<PluginDefinition, String> 
     if !anchor_runtime::identifier::is_plugin_id(plugin) {
         return Err("invalid credential Plugin ID".into());
     }
-    FilePluginCatalog::new(library)
+    Catalog::new(library)
         .definition(plugin)
         .map_err(|_| "credential target Plugin is unavailable".into())
 }
@@ -392,9 +392,7 @@ mod tests {
             &sessions,
         )
         .unwrap();
-        let definition = FilePluginCatalog::new(root.path())
-            .definition("demo")
-            .unwrap();
+        let definition = Catalog::new(root.path()).definition("demo").unwrap();
         assert_eq!(
             environment_values(&data, &binding_owner("owner-a"), &definition, "api").unwrap()
                 [field],
@@ -519,9 +517,7 @@ mod tests {
             )
             .is_err()
         );
-        let definition = FilePluginCatalog::new(root.path())
-            .definition("demo")
-            .unwrap();
+        let definition = Catalog::new(root.path()).definition("demo").unwrap();
         assert_eq!(
             environment_values(&data, &binding_owner("owner-a"), &definition, "api").unwrap()
                 [field],
@@ -557,9 +553,7 @@ mod tests {
         assert_eq!(result["targets"][0]["fields"][0]["state"], "configured");
         assert!(result["warning"].as_str().unwrap().contains("凭据已保存"));
         assert!(!result.to_string().contains("saved-private-value"));
-        let definition = FilePluginCatalog::new(root.path())
-            .definition("demo")
-            .unwrap();
+        let definition = Catalog::new(root.path()).definition("demo").unwrap();
         assert_eq!(
             environment_values(&data, &binding_owner("owner-a"), &definition, "api").unwrap()["ANCHOR_TEST_PRIVATE_CREDENTIAL"],
             "saved-private-value"

@@ -1,9 +1,9 @@
 use super::*;
-use anchor_graph_host::FilePluginCatalog;
+use crate::plugin_library::Catalog;
 use std::fs;
 
 fn definition(root: &std::path::Path, id: &str) -> PluginDefinition {
-    FilePluginCatalog::new(root).definition(id).unwrap()
+    Catalog::new(root).definition(id).unwrap()
 }
 
 fn fixture() -> tempfile::TempDir {
@@ -199,7 +199,7 @@ fn public_text_updates_work_and_formal_publication_refuses_reads_until_released(
     let root = fixture();
     let mut catalog = PluginDisclosureCatalog::default();
     catalog.insert(definition(root.path(), "demo"));
-    let lease = anchor_library::Library::new(root.path())
+    let lease = crate::plugin_library::PluginLibrary::new(root.path())
         .try_install_lease()
         .unwrap();
     let args = json!({"plugin":"demo","section":"resource","path":"note.txt"});

@@ -1,6 +1,6 @@
 //! An explicit management probe reuses the invocation's MCP preparation and
 //! sandbox launch. It initializes and lists tools, and never calls a tool.
-use anchor_graph_host::FilePluginCatalog;
+use crate::plugin_library::{Catalog, DefinitionError, ExpectedDefinition};
 use anchor_sandbox_bwrap::{BubblewrapPolicy, BubblewrapSandbox};
 use serde_json::{Value, json};
 use std::{
@@ -30,14 +30,17 @@ pub(crate) async fn test(
     // Both current authority and the owner-bound revision are checked again by
     // invocation preparation, which captures the material actually tested.
     let definition = tokio::task::spawn_blocking(move || {
-        let definition = FilePluginCatalog::new(root)
-            .definition(&id)
-            .map_err(|_| "Plugin connection definition unavailable")?;
-        if definition.authorization_digest.as_ref() != expected_authorization.as_str() {
-            return Err(
-                "Plugin authorization changed; reload configuration before testing".to_owned(),
-            );
-        }
+        let definition = Catalog::new(root)
+            .checked_definition(
+                &id,
+                ExpectedDefinition::AuthorizationDigest(&expected_authorization),
+            )
+            .map_err(|error| match error {
+                DefinitionError::Read(_) => "Plugin connection definition unavailable".to_owned(),
+                DefinitionError::Mismatch => {
+                    "Plugin authorization changed; reload configuration before testing".to_owned()
+                }
+            })?;
         let snapshot = crate::credential_store::environment_snapshot(
             &snapshot_data,
             &snapshot_owner,
@@ -51,7 +54,7 @@ pub(crate) async fn test(
     .await
     .map_err(|_| "Plugin connection preparation unavailable")??;
     let cancellation = Arc::new(AtomicBool::new(false));
-    let prepared = crate::plugin_view::prepare_plugins_for_owner_async(
+    let prepared = crate::plugin_library::tools::prepare_plugins_for_owner_async(
         vec![definition.binding()],
         Some(library.clone()),
         crate::tool_host::PluginToolHost::new(Vec::<String>::new()),
@@ -109,10 +112,12 @@ pub(crate) async fn test(
         .await;
     let tested_binding = mcp.configuration_bindings.get(&plugin).cloned();
     let current = tokio::task::spawn_blocking(move || {
-        let definition = FilePluginCatalog::new(&library).definition(&plugin).ok()?;
-        if definition.authorization_digest.as_ref() != authorization_digest.as_str() {
-            return None;
-        }
+        let definition = Catalog::new(&library)
+            .checked_definition(
+                &plugin,
+                ExpectedDefinition::AuthorizationDigest(&authorization_digest),
+            )
+            .ok()?;
         let binding = definition.binding();
         let definitions = std::collections::BTreeMap::from([(plugin.clone(), definition)]);
         let current = crate::tool_host::McpToolConfig::from_definitions_for_owner(

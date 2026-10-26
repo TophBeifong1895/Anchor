@@ -15,7 +15,7 @@ pub(crate) async fn legacy_view(
     access: &DependencyAccess,
 ) -> Result<DevelopmentPreparation, String> {
     let project = normalize_project(project)?;
-    let scope = Library::new(library_root)
+    let scope = crate::plugin_library::PluginLibrary::new(library_root)
         .development_scope(scope, true)
         .map_err(|error| error.to_string())?
         .ok_or("development scope unavailable")?;

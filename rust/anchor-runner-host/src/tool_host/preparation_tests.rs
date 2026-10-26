@@ -1,6 +1,7 @@
 use super::*;
+use crate::plugin_library::PluginLibrary;
 use anchor_graph_host::{PluginCatalog, plugin_view_path, resolved_library_root, store_root};
-use anchor_library::{Library, OAuthAuthorizationMetadata};
+use anchor_library::OAuthAuthorizationMetadata;
 use anchor_sandbox_bwrap::BubblewrapPolicy;
 use axum::{Json, Router, routing::post};
 use std::{fs, os::unix::fs::PermissionsExt, sync::atomic::AtomicBool, time::Duration};
@@ -60,8 +61,11 @@ fn seed_view(root: &Path, definition: &PluginDefinition, dependency: &str) -> Pa
     view
 }
 
-async fn prepare(root: &Path, binding: PluginBinding) -> crate::plugin_view::PreparedPlugins {
-    crate::plugin_view::prepare_plugins_async(
+async fn prepare(
+    root: &Path,
+    binding: PluginBinding,
+) -> crate::plugin_library::tools::PreparedPlugins {
+    crate::plugin_library::tools::prepare_plugins_async(
         vec![binding],
         Some(root.to_path_buf()),
         PluginToolHost::new(Vec::<String>::new()),
@@ -72,7 +76,7 @@ async fn prepare(root: &Path, binding: PluginBinding) -> crate::plugin_view::Pre
 }
 
 fn assert_generation(
-    prepared: &crate::plugin_view::PreparedPlugins,
+    prepared: &crate::plugin_library::tools::PreparedPlugins,
     definition: &PluginDefinition,
     revision: &str,
 ) {
@@ -121,11 +125,11 @@ async fn a_real_install_during_publication_wait_prepares_one_current_definition(
     let next_source = root.path().join("next");
     generation(&first_source, "first", "3.6", None);
     generation(&next_source, "next", "3.7", None);
-    let library = Library::new(&library_root);
+    let library = PluginLibrary::new(&library_root);
     library
         .install_directory(PLUGIN, &first_source, false)
         .unwrap();
-    let catalog = FilePluginCatalog::new(&library_root);
+    let catalog = Catalog::new(&library_root);
     let first = catalog.definition(PLUGIN).unwrap();
     seed_view(&library_root, &first, "3.6");
 
@@ -192,11 +196,11 @@ async fn oauth_releases_publication_lease_and_cannot_mix_a_reclaimed_view_with_n
     let next_source = root.path().join("next");
     generation(&first_source, "first", "3.6", Some(&resource));
     generation(&next_source, "next", "3.7", Some(&resource));
-    let library = Library::new(&library_root);
+    let library = PluginLibrary::new(&library_root);
     library
         .install_directory(PLUGIN, &first_source, false)
         .unwrap();
-    let catalog = FilePluginCatalog::new(&library_root);
+    let catalog = Catalog::new(&library_root);
     let first = catalog.definition(PLUGIN).unwrap();
     let old_view = seed_view(&library_root, &first, "3.6");
     let owner = "preparation-owner";
@@ -292,7 +296,7 @@ fn preliminary_wiring_refuses_legacy_identity_and_validates_skill_authority() {
     let plugin = root.path().join("plugins/skill");
     fs::create_dir_all(&plugin).unwrap();
     fs::write(plugin.join("plugin.json"), r#"{"name":"Skill"}"#).unwrap();
-    let catalog = FilePluginCatalog::new(root.path());
+    let catalog = Catalog::new(root.path());
     let binding = catalog.resolve(&["skill".into()]).unwrap().remove(0);
     assert!(binding.mcp_servers.is_empty());
     let mut legacy = serde_json::to_value(&binding).unwrap();
@@ -324,13 +328,13 @@ async fn preparation_requires_real_skill_authority_and_deployment_enabled_exact_
     let plugin = root.path().join("plugins/skill");
     fs::create_dir_all(&plugin).unwrap();
     fs::write(plugin.join("plugin.json"), r#"{"name":"Skill"}"#).unwrap();
-    let catalog = FilePluginCatalog::new(root.path());
+    let catalog = Catalog::new(root.path());
     let mut skill = catalog.resolve(&["skill".into()]).unwrap().remove(0);
     skill.authorization_digest = "forged".try_into().expect("non-empty fixture authority");
     let enabled = PluginToolHost::new(["fake-tools".into()]);
     let cancellation = || Arc::new(AtomicBool::new(false));
     assert!(
-        crate::plugin_view::prepare_plugins_async(
+        crate::plugin_library::tools::prepare_plugins_async(
             vec![skill.clone()],
             Some(root.path().to_path_buf()),
             enabled.clone(),
@@ -340,7 +344,7 @@ async fn preparation_requires_real_skill_authority_and_deployment_enabled_exact_
         .is_err()
     );
     assert!(
-        crate::plugin_view::prepare_plugins_async(
+        crate::plugin_library::tools::prepare_plugins_async(
             vec![skill],
             None,
             enabled.clone(),
@@ -353,7 +357,7 @@ async fn preparation_requires_real_skill_authority_and_deployment_enabled_exact_
     forged.id = "skill".into();
     assert!(McpToolConfig::from_catalog(root.path(), std::slice::from_ref(&forged)).is_err());
     assert!(
-        crate::plugin_view::prepare_plugins_async(
+        crate::plugin_library::tools::prepare_plugins_async(
             vec![forged],
             Some(root.path().to_path_buf()),
             enabled.clone(),
@@ -363,7 +367,7 @@ async fn preparation_requires_real_skill_authority_and_deployment_enabled_exact_
         .is_err()
     );
     assert!(
-        crate::plugin_view::prepare_plugins_async(
+        crate::plugin_library::tools::prepare_plugins_async(
             vec![fake_binding()],
             None,
             PluginToolHost::new(Vec::<String>::new()),
@@ -372,7 +376,7 @@ async fn preparation_requires_real_skill_authority_and_deployment_enabled_exact_
         .await
         .is_err()
     );
-    let prepared = crate::plugin_view::prepare_plugins_async(
+    let prepared = crate::plugin_library::tools::prepare_plugins_async(
         vec![fake_binding()],
         None,
         enabled,

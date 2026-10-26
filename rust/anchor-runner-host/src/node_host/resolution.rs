@@ -26,7 +26,7 @@ impl NodeHostResolver for HostIoResolver {
     }
 
     fn resolve_plugins(&self, ids: &[String]) -> Result<Vec<PluginBinding>, String> {
-        let catalog = anchor_graph_host::FilePluginCatalog::new(self.plugin_library_root()?);
+        let catalog = crate::plugin_library::Catalog::new(self.plugin_library_root()?);
         ids.iter()
             .map(|id| {
                 self.tools

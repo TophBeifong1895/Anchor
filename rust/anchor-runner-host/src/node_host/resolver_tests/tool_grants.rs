@@ -126,7 +126,7 @@ async fn agent_tools_mount_plugins_without_a_run_policy_grant() {
     .unwrap();
     std::fs::write(plugin.join("resources/note.txt"), "plugin-resource").unwrap();
     let bindings = anchor_graph_host::PluginCatalog::resolve(
-        &anchor_graph_host::FilePluginCatalog::new(&library),
+        &crate::plugin_library::Catalog::new(&library),
         &["demo".into()],
     )
     .unwrap();

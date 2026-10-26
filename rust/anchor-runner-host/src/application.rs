@@ -71,6 +71,15 @@ impl From<GraphError> for ApplicationError {
     }
 }
 
+impl From<crate::plugin_library::PublicationError> for ApplicationError {
+    fn from(error: crate::plugin_library::PublicationError) -> Self {
+        match error {
+            crate::plugin_library::PublicationError::Invalid(reason) => Self::Invalid(reason),
+            crate::plugin_library::PublicationError::Storage(reason) => Self::Storage(reason),
+        }
+    }
+}
+
 #[derive(Clone)]
 pub(crate) struct RunApplication {
     data_root: PathBuf,

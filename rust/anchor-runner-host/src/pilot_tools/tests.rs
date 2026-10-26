@@ -6,6 +6,7 @@
 use super::*;
 
 use crate::application::run_access::fixtures;
+use crate::plugin_library::Catalog;
 use anchor_platform_session::CreateSession;
 
 #[tokio::test]
@@ -19,7 +20,7 @@ async fn plugin_management_metadata_and_reads_share_the_library_publication_guar
         "# Public Skill\nPurpose",
     )
     .unwrap();
-    let lease = anchor_library::Library::new(root.path())
+    let lease = crate::plugin_library::PluginLibrary::new(root.path())
         .try_install_lease()
         .unwrap();
     for (name, args) in [
@@ -494,7 +495,7 @@ async fn graph_validate_hides_private_plugin_paths_and_host_configuration_failur
     let private = root.path().join("host-private-config.json");
     std::fs::write(&private, r#"{"name":"Private","secret":"private-key"}"#).unwrap();
     std::os::unix::fs::symlink(&private, plugin.join("plugin.json")).unwrap();
-    let raw = FilePluginCatalog::new(root.path())
+    let raw = Catalog::new(root.path())
         .resolve(&["private".into()])
         .unwrap_err()
         .to_string();

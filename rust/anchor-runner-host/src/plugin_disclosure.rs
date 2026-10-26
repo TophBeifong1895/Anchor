@@ -455,20 +455,25 @@ impl PluginDisclosureCatalog {
         // whole classification/open/read. A busy update is retryable, and never
         // blocks an async worker. This is a safety check of one selected asset,
         // not a second executable inventory or a new authorization source.
-        let _guard = anchor_library::Library::new(library_root)
+        let _guard = crate::plugin_library::PluginLibrary::new(library_root)
             .catalog_read_guard()
             .map_err(|_| rejected("Plugin Library is changing; retry this read"))?
             .ok_or_else(|| rejected("Plugin Library unavailable"))?;
-        let current = anchor_graph_host::FilePluginCatalog::new(library_root)
-            .definition(id)
-            .map_err(|_| {
-                rejected("Plugin changed or is unavailable; retry after preparing a new invocation")
+        let current = crate::plugin_library::Catalog::new(library_root)
+            .checked_definition(
+                id,
+                crate::plugin_library::ExpectedDefinition::AuthorizationDigest(
+                    definition.authorization_digest.as_ref(),
+                ),
+            )
+            .map_err(|error| match error {
+                crate::plugin_library::DefinitionError::Read(_) => rejected(
+                    "Plugin changed or is unavailable; retry after preparing a new invocation",
+                ),
+                crate::plugin_library::DefinitionError::Mismatch => rejected(
+                    "Plugin authorization changed; prepare a new invocation before reading",
+                ),
             })?;
-        if current.authorization_digest != definition.authorization_digest {
-            return Err(rejected(
-                "Plugin authorization changed; prepare a new invocation before reading",
-            ));
-        }
         let section = arguments
             .get("section")
             .and_then(Value::as_str)

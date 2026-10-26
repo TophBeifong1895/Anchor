@@ -61,7 +61,7 @@ fn fixture(root: &Path) -> (RunApplication, SessionStore) {
         json!({"name":"Demo","mutable":["state/"]}).to_string(),
     )
     .unwrap();
-    Library::new(root.join("library"))
+    crate::plugin_library::PluginLibrary::new(root.join("library"))
         .install_directory("demo", &candidate, false)
         .unwrap();
     fs::write(
@@ -118,7 +118,7 @@ fn admission_options() -> AdmissionOptions {
 async fn wait_for_library_reader(library: &Path) {
     tokio::time::timeout(Duration::from_secs(3), async {
         loop {
-            match Library::new(library).try_install_lease() {
+            match crate::plugin_library::PluginLibrary::new(library).try_install_lease() {
                 Err(InstallError::CatalogBusy) => return,
                 Ok(lease) => drop(lease),
                 Err(error) => panic!("cannot inspect the Library lease: {error}"),
@@ -153,7 +153,7 @@ async fn stop_gate(application: &RunApplication, root: &Path, run: &str) {
     .expect("the real Op did not reach its fixture gate");
     // The short publication protection has ended while execution is running.
     drop(
-        Library::new(root.join("library"))
+        crate::plugin_library::PluginLibrary::new(root.join("library"))
             .try_install_lease()
             .expect("model/Op execution must not retain the publication lease"),
     );

@@ -45,7 +45,7 @@ async fn mcp_oauth_header_uses_the_frozen_run_owner_and_is_redacted_from_debug()
         .unwrap(),
     )
     .unwrap();
-    let catalog = FilePluginCatalog::new(root.path());
+    let catalog = Catalog::new(root.path());
     let bindings = catalog.resolve(&["oauth-demo".into()]).unwrap();
     let owner = "run-owner-hash";
     let binding = OAuthBinding::new(
@@ -139,7 +139,7 @@ async fn expired_oauth_token_refreshes_through_pinned_loopback_transport() {
         .unwrap(),
     )
     .unwrap();
-    let catalog = FilePluginCatalog::new(root.path());
+    let catalog = Catalog::new(root.path());
     let bindings = catalog.resolve(&["oauth-demo".into()]).unwrap();
     let owner = "run-owner-hash";
     let binding = OAuthBinding::new(

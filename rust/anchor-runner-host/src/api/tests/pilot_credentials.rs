@@ -123,7 +123,7 @@ async fn pilot_credential_http_is_private_and_accepts_only_value() {
             .unwrap()
             .contains(value)
     );
-    let definition = FilePluginCatalog::new(&library)
+    let definition = Catalog::new(&library)
         .definition("private-http-fixture")
         .unwrap();
     assert_eq!(

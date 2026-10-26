@@ -1,8 +1,7 @@
 //! Shared Call admission over authoritative Kernel resources and dispatch facts.
 use super::{ApplicationError, RunApplication, kernel_runs::KernelRuns};
-use anchor_graph_host::{
-    CallRun, CallRunAccess, ChildExecutionPort, FilePluginCatalog, InProcessGraphHost,
-};
+use crate::plugin_library::Catalog;
+use anchor_graph_host::{CallRun, CallRunAccess, ChildExecutionPort, InProcessGraphHost};
 use anchor_kernel::{Phase, Waiter};
 use anchor_runtime::{Cancellation, graph::*};
 use std::{collections::BTreeMap, future::Future, pin::Pin};
@@ -182,7 +181,7 @@ impl<A: ArtifactPort, N: NodeExecutionPort> GraphCallPort for KernelCallNodes<'_
                 state: self.application.data_root.clone(),
                 application: Some(self.application.clone()),
             };
-            let plugins = FilePluginCatalog::new(self.application.library_root().to_path_buf());
+            let plugins = Catalog::new(self.application.library_root().to_path_buf());
             let host = InProcessGraphHost::new(&catalog, &store, self.artifacts, self.nodes)
                 .with_plugin_catalog(&plugins)
                 .with_child_executor(self, defer);

@@ -2,7 +2,8 @@
 //! the Pilot scope; the model supplies only a confined project and requirements.
 
 use crate::dependency_provision::ResolvedRequirements;
-use anchor_library::{DevelopmentScope, Library};
+use crate::plugin_library::PluginLibrary;
+use anchor_library::DevelopmentScope;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -113,7 +114,7 @@ pub(crate) fn select_development_view(
     project: &str,
 ) -> Result<LeasedDevelopmentView, String> {
     let project = normalize_project(project)?;
-    let scope = Library::new(library_root)
+    let scope = PluginLibrary::new(library_root)
         .development_scope(scope, false)
         .map_err(|error| error.to_string())?
         .ok_or("this Session has no prepared development dependencies")?;
@@ -179,7 +180,7 @@ pub(crate) fn select_development_view(
 }
 
 pub(crate) fn release_development_scope(library_root: &Path, scope: &Path) -> Result<(), String> {
-    Library::new(library_root)
+    PluginLibrary::new(library_root)
         .release_development_scope(scope)
         .map_err(|error| error.to_string())?;
     // The Library tombstone now prevents any stale caller acquiring a scope

@@ -1,5 +1,5 @@
 use super::*;
-use anchor_graph_host::FilePluginCatalog;
+use crate::plugin_library::Catalog;
 
 pub(super) async fn policy(
     tools: &PilotTools,
@@ -32,7 +32,7 @@ pub(super) async fn policy(
             .ok_or_else(|| failure("allowed must be a boolean"))?;
         (crate::plugin_network::NETWORK_PLUGIN, allowed)
     };
-    let definition = FilePluginCatalog::new(&tools.library_root)
+    let definition = Catalog::new(&tools.library_root)
         .definition(plugin)
         .map_err(|_| failure("the Plugin is not installed; mounting cannot install it"))?;
     if name == "session_network" && on && !definition.network {
@@ -76,14 +76,19 @@ pub(super) async fn policy(
         .await
         .map_err(|error| failure(application_reason(error)))?;
     active(tools, cancellation)?;
-    let current = FilePluginCatalog::new(&tools.library_root)
-        .definition(plugin)
-        .map_err(|_| failure("Plugin changed while authorization was pending"))?;
-    if current.binding() != expected {
-        return Err(failure(
-            "Plugin changed while authorization was pending; request a fresh confirmation",
-        ));
-    }
+    Catalog::new(&tools.library_root)
+        .checked_definition(
+            plugin,
+            crate::plugin_library::ExpectedDefinition::ExactBinding(&expected),
+        )
+        .map_err(|error| match error {
+            crate::plugin_library::DefinitionError::Read(_) => {
+                failure("Plugin changed while authorization was pending")
+            }
+            crate::plugin_library::DefinitionError::Mismatch => failure(
+                "Plugin changed while authorization was pending; request a fresh confirmation",
+            ),
+        })?;
     if on {
         crate::plugin_view::prepare_for_plugin(&tools.library_root, plugin)
             .map_err(|error| failure(error.to_string()))?;

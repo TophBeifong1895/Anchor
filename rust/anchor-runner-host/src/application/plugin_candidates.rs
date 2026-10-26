@@ -3,8 +3,10 @@
 
 use super::{ApplicationError, RunApplication};
 use crate::dependency_provision::{DependencyAccess, ResolvedRequirements};
-use anchor_graph_host::{FilePluginCatalog, PluginCatalog, host_environment_references};
-use anchor_library::{Library, PluginReview};
+use crate::plugin_library::Catalog;
+use crate::plugin_library::PluginLibrary;
+use anchor_graph_host::host_environment_references;
+use anchor_library::PluginReview;
 use anchor_runtime::{ToolPort, graph::PluginBinding};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -242,7 +244,7 @@ impl RunApplication {
             .prefix("candidate-")
             .tempdir_in(preparation_root)
             .map_err(invalid)?;
-        let (layout, review) = Library::new(library_root)
+        let (layout, review) = PluginLibrary::new(library_root)
             .stage_directory(id, directory, temporary.path())
             .map_err(invalid)?;
         let root = preparation_root.join(id).join(&review.digest);
@@ -263,17 +265,17 @@ impl RunApplication {
         if !staged.exists() {
             std::fs::rename(layout, &staged).map_err(invalid)?;
         }
-        let binding = FilePluginCatalog::new(&staged)
-            .resolve(&[id.to_owned()])
-            .map_err(invalid)?
-            .into_iter()
-            .next()
-            .ok_or_else(|| invalid("candidate binding unavailable"))?;
-        if binding.digest != review.digest {
-            return Err(invalid(
-                "the staged candidate changed; retained preparation cannot cover it",
-            ));
-        }
+        Catalog::new(&staged)
+            .checked_definition(
+                id,
+                crate::plugin_library::ExpectedDefinition::CodeDigest(&review.digest),
+            )
+            .map_err(|error| match error {
+                crate::plugin_library::DefinitionError::Read(error) => invalid(error),
+                crate::plugin_library::DefinitionError::Mismatch => {
+                    invalid("the staged candidate changed; retained preparation cannot cover it")
+                }
+            })?;
         let existing = load_fact(preparation_root, id, &review.digest)?;
         let interpreter = if review.dependencies.is_empty() {
             None
@@ -296,7 +298,7 @@ impl RunApplication {
         };
         let mut dependency_scope = None;
         let view = if let Some(resolved) = &resolved {
-            let scope = Library::new(library_root)
+            let scope = PluginLibrary::new(library_root)
                 .development_scope(
                     preparation_root
                         .parent()
@@ -357,17 +359,15 @@ impl RunApplication {
     ) -> Result<Value, ApplicationError> {
         let access = context.dependency_access();
         access.check().map_err(invalid)?;
-        let catalog = FilePluginCatalog::new(&prepared.root);
-        let binding: PluginBinding = catalog
-            .resolve(std::slice::from_ref(&prepared.fact.id))
-            .map_err(invalid)?
-            .into_iter()
-            .next()
-            .ok_or_else(|| invalid("candidate binding unavailable"))?;
+        let catalog = Catalog::new(&prepared.root);
+        let definition = catalog.definition(&prepared.fact.id).map_err(invalid)?;
+        let binding: PluginBinding = definition.binding();
         if binding.mcp_servers.is_empty() {
             return Err(invalid("candidate declares no enabled MCP server to test"));
         }
-        if binding.digest != prepared.fact.digest {
+        if !crate::plugin_library::ExpectedDefinition::CodeDigest(&prepared.fact.digest)
+            .matches(&definition)
+        {
             return Err(invalid("candidate code changed after preparation"));
         }
         if prepared.view.is_some() != prepared.fact.resolved.is_some() {

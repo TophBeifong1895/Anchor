@@ -1,7 +1,6 @@
 use super::{ApplicationError, RunApplication};
-use anchor_graph_host::{
-    FileGraphBundleLoader, FilePluginCatalog, LoadedGraphBundle, PluginCatalog,
-};
+use crate::plugin_library::Catalog;
+use anchor_graph_host::{FileGraphBundleLoader, LoadedGraphBundle, PluginCatalog};
 use anchor_runtime::graph::{GraphError, GraphSnapshot, PluginBinding};
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
@@ -107,7 +106,7 @@ impl RunApplication {
             .map_err(GraphError::Unsupported)
             .map_err(GraphValidationFailure::Unavailable)?;
         let ids = snapshot_plugin_ids(&snapshot);
-        FilePluginCatalog::new(self.library_root().to_path_buf())
+        Catalog::new(self.library_root().to_path_buf())
             .resolve(&ids)
             .map_err(GraphValidationFailure::Unavailable)?;
         // R2: one channel Plugin per persistent assistant.
@@ -237,7 +236,7 @@ pub(crate) fn referenced_plugin_bindings(
     library_root: &Path,
     ids: &[String],
 ) -> Result<std::collections::BTreeMap<String, PluginBinding>, GraphError> {
-    Ok(FilePluginCatalog::new(library_root)
+    Ok(Catalog::new(library_root)
         .resolve(ids)?
         .into_iter()
         .map(|binding| (binding.id.clone(), binding))
@@ -247,10 +246,10 @@ pub(crate) fn referenced_plugin_bindings(
 fn resolve_graph_definition(
     definition: &Value,
     catalog_root: &Path,
-) -> Result<(GraphSnapshot, FilePluginCatalog, Vec<PluginBinding>), GraphError> {
+) -> Result<(GraphSnapshot, Catalog, Vec<PluginBinding>), GraphError> {
     let snapshot = GraphSnapshot::from_authoring(definition.clone())?;
     let ids = snapshot_plugin_ids(&snapshot);
-    let catalog = FilePluginCatalog::new(catalog_root.to_path_buf());
+    let catalog = Catalog::new(catalog_root.to_path_buf());
     let bindings = catalog.resolve(&ids)?;
     Ok((snapshot, catalog, bindings))
 }
@@ -345,7 +344,7 @@ fn write_graph_bundle_from_catalog(
     definition: &Value,
     catalog_root: &Path,
 ) -> Result<(), GraphManagementError> {
-    let _library_guard = anchor_library::Library::new(catalog_root.to_path_buf())
+    let _library_guard = crate::plugin_library::PluginLibrary::new(catalog_root.to_path_buf())
         .catalog_read_guard()
         .map_err(|failure| match failure {
             anchor_library::InstallError::CatalogBusy => {

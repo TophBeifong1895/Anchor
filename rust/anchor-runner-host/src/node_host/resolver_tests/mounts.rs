@@ -6,7 +6,7 @@ fn a_plugin_authorization_change_still_fails_closed() {
     let (_root, resolver, _mounts, mut request) =
         session_fixture(&["review"], &[("review", true, None)], &[]);
     let library = resolver.plugin_library_root().unwrap();
-    let admitted = anchor_graph_host::FilePluginCatalog::new(library)
+    let admitted = crate::plugin_library::Catalog::new(library)
         .resolve(&["review".into()])
         .unwrap()
         .remove(0);

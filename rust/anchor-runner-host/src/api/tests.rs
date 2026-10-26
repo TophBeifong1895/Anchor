@@ -2145,7 +2145,8 @@ async fn downstream_failure_does_not_reclassify_committed_upstream_result() {
 
 #[tokio::test]
 async fn a_changed_plugin_does_not_block_resume_but_mismatched_metadata_does() {
-    use anchor_graph_host::{FilePluginCatalog, PluginCatalog};
+    use crate::plugin_library::Catalog;
+    use anchor_graph_host::PluginCatalog;
     let (_root, state) = fixture();
     let plugin = state.catalog_root.join("plugins/fixture");
     std::fs::create_dir_all(&plugin).unwrap();
@@ -2154,7 +2155,7 @@ async fn a_changed_plugin_does_not_block_resume_but_mismatched_metadata_does() {
         r#"{"name":"Fixture","description":"test"}"#,
     )
     .unwrap();
-    let bindings = FilePluginCatalog::new(&state.catalog_root)
+    let bindings = Catalog::new(&state.catalog_root)
         .resolve(&["fixture".into()])
         .unwrap();
     let snapshot = GraphSnapshot::admit(json!({"objective":"plugin","entry":"work",

@@ -4,8 +4,9 @@
 //! operator authorized its grants and what a particular Turn actually received.
 use crate::application::run_access::RunProgress;
 use crate::application::run_access::{self, RunView};
+use crate::plugin_library::Catalog;
 use crate::run_metadata::RunMetadata;
-use anchor_graph_host::{FilePluginCatalog, PluginCatalog};
+use anchor_graph_host::PluginCatalog;
 #[cfg(test)]
 use anchor_runtime::graph::GraphRunRecord;
 use anchor_runtime::graph::{GraphError, GraphSnapshot, PluginBinding, PluginRef, RunLease};
@@ -88,10 +89,10 @@ pub(crate) fn publish(
     snapshot: &GraphSnapshot,
     library_root: &Path,
 ) -> Result<(), String> {
-    let _library = anchor_library::Library::new(library_root)
+    let _library = crate::plugin_library::PluginLibrary::new(library_root)
         .catalog_read_guard()
         .map_err(|error| error.to_string())?;
-    let catalog = FilePluginCatalog::new(library_root);
+    let catalog = Catalog::new(library_root);
     let ids = snapshot
         .nodes
         .iter()

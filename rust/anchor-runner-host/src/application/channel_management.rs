@@ -2,7 +2,7 @@
 //! by the Graph name. The existing Session/Turn admission and ChannelSupervisor
 //! retain execution and transport semantics.
 use super::{ApplicationError, RunApplication};
-use anchor_graph_host::FilePluginCatalog;
+use crate::plugin_library::Catalog;
 use anchor_runtime::graph::GraphSnapshot;
 use futures_util::future::BoxFuture;
 use serde::{Deserialize, Serialize};
@@ -99,7 +99,7 @@ pub(crate) fn channel_plan(
     let Ok(Some(plan)) = crate::assistant::AssistantPlan::discover(snapshot) else {
         return Ok(None);
     };
-    let catalog = FilePluginCatalog::new(library);
+    let catalog = Catalog::new(library);
     let node = snapshot
         .nodes
         .iter()

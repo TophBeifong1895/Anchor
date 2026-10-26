@@ -4,7 +4,8 @@
 //! credential capability. A Plugin identity must name its server and the host
 //! must independently enable that Plugin before any tool is advertised.
 
-use anchor_graph_host::{FilePluginCatalog, PluginDefinition};
+use crate::plugin_library::Catalog;
+use anchor_graph_host::PluginDefinition;
 use anchor_library::{
     FileOAuthTokenStore, OAuthBinding, OAuthClient, OAuthRefreshRequest, OAuthRefreshTransport,
     OAuthTokenResponse, OAuthTransportError,
@@ -154,7 +155,7 @@ impl McpToolConfig {
         bindings: &[PluginBinding],
     ) -> Result<Self, String> {
         let root = root.into();
-        let catalog = FilePluginCatalog::new(root.clone());
+        let catalog = Catalog::new(root.clone());
         let mut definitions = BTreeMap::new();
         // This is preliminary wiring validation. Its caller owns any admission
         // publication lease; invocation preparation uses `from_definitions`
@@ -194,7 +195,7 @@ impl McpToolConfig {
         definitions: &BTreeMap<String, PluginDefinition>,
         credentials: Option<(&Path, &str)>,
     ) -> Result<Self, PreparationError> {
-        let catalog = FilePluginCatalog::new(root);
+        let catalog = Catalog::new(root);
         let mut servers: BTreeMap<String, ResolvedMcpServer> = BTreeMap::new();
         let mut disabled = BTreeSet::new();
         let mut configuration_revisions = BTreeMap::new();
@@ -206,8 +207,9 @@ impl McpToolConfig {
             let declaration = definitions
                 .get(&binding.id)
                 .ok_or_else(|| format!("Plugin `{}` MCP definition is unavailable", binding.id))?;
-            let current = declaration.binding();
-            if !binding.same_authorization(&current) {
+            if !crate::plugin_library::ExpectedDefinition::Authorization(binding)
+                .matches(declaration)
+            {
                 return Err(PreparationError::KnownFailure(format!(
                     "Plugin `{}` Host authorization changed before MCP assembly",
                     binding.id
@@ -374,6 +376,7 @@ impl McpToolConfig {
         Ok(())
     }
 
+    #[cfg(test)]
     pub async fn bind(
         &self,
         bindings: &[PluginBinding],
@@ -1401,44 +1404,29 @@ impl PluginToolHost {
     /// Resolve the Plugin tools for one admitted node request into an owned
     /// port. The returned trait object retains the exact fake/live bindings
     /// and is suitable for an asynchronous node-host resolver.
+    #[cfg(test)]
     pub async fn assemble(
         &self,
         mcp: &McpToolConfig,
         bindings: &[PluginBinding],
         network: bool,
     ) -> Result<Arc<CombinedPluginTools>, String> {
-        let fake = self
-            .for_bindings(bindings)
-            .map_err(|error| error.to_string())?;
-        let live = mcp.bind(bindings, network).await?;
-        Ok(Arc::new(CombinedPluginTools::new(fake, live)))
-    }
-
-    /// Assemble Plugin tools for a node whose stdio MCP servers must be
-    /// launched through the host's Bubblewrap sandbox.
-    pub async fn assemble_with_sandbox(
-        &self,
-        mcp: &McpToolConfig,
-        bindings: &[PluginBinding],
-        network: bool,
-        launch: SandboxLaunch<'_>,
-    ) -> Result<Arc<CombinedPluginTools>, String> {
-        self.assemble_with_sandbox_for_execution(mcp, bindings, network, launch)
+        self.assemble_for_execution(mcp, bindings, network, None)
             .await
             .map_err(|error| error.to_string())
     }
 
-    pub(crate) async fn assemble_with_sandbox_for_execution(
+    pub(crate) async fn assemble_for_execution(
         &self,
         mcp: &McpToolConfig,
         bindings: &[PluginBinding],
         network: bool,
-        launch: SandboxLaunch<'_>,
+        launch: Option<SandboxLaunch<'_>>,
     ) -> Result<Arc<CombinedPluginTools>, PreparationError> {
         let fake = self
             .for_bindings(bindings)
             .map_err(|error| error.to_string())?;
-        let live = mcp.bind_inner(bindings, network, Some(launch)).await?;
+        let live = mcp.bind_inner(bindings, network, launch).await?;
         Ok(Arc::new(CombinedPluginTools::new(fake, live)))
     }
 }
@@ -1606,7 +1594,7 @@ mod tests {
             r#"{"name":"Research","mcpServers":{"papers":{"type":"http","url":"http://127.0.0.1:9/mcp"}}}"#,
         )
         .unwrap();
-        let binding = anchor_graph_host::FilePluginCatalog::new(root.path())
+        let binding = crate::plugin_library::Catalog::new(root.path())
             .resolve(&["research".into()])
             .unwrap()
             .remove(0);
@@ -1638,7 +1626,7 @@ mod tests {
         std::fs::create_dir_all(&plugin).unwrap();
         std::fs::write(plugin.join("plugin.json"),
             r#"{"name":"Optional","mcpServers":{"api":{"command":"bash5","args":["server.sh","inspect"],"optional_env_vars":["ANCHOR_TEST_UNCONFIGURED_OPTIONAL_MCP_7F90"]}}}"#).unwrap();
-        let binding = anchor_graph_host::FilePluginCatalog::new(root.path())
+        let binding = crate::plugin_library::Catalog::new(root.path())
             .resolve(&["optional".into()])
             .unwrap()
             .remove(0);
@@ -1742,7 +1730,7 @@ exec ./mcp-fixture --stdio inspect
             .to_string(),
         )
         .unwrap();
-        let binding = FilePluginCatalog::new(root.path())
+        let binding = Catalog::new(root.path())
             .resolve(&["reader".into()])
             .unwrap()
             .remove(0);
@@ -1880,7 +1868,7 @@ exec ./mcp-fixture --stdio inspect
                 }
             }
         }).to_string()).unwrap();
-        let binding = FilePluginCatalog::new(root.path())
+        let binding = Catalog::new(root.path())
             .resolve(&["research".into()])
             .unwrap()
             .remove(0);
