@@ -1,0 +1,59 @@
+{
+  "entry": "validate",
+  "objective": "可选的周报通知包装图。等待独立 weekly-work-report Graph 完成本地发布，再把报告标题和摘要作为一条文本消息，经操作员授权的企业微信机器人发给指定收件人；不重复采集、写作或评审，不生成新内容。",
+  "input": {
+    "end": null,
+    "notify_bot": null,
+    "notify_userid": null
+  },
+  "ops": {
+    "validate": {
+      "run": "set -eu\npython3 -c '\nimport json, os\ndata = json.loads(os.environ[\"ANCHOR_INPUT\"])\nfor field in (\"notify_bot\", \"notify_userid\"):\n    value = data.get(field)\n    if not isinstance(value, str) or not value.strip():\n        raise SystemExit(field + \" must be a non-empty string\")\n'"
+    },
+    "report": {
+      "call": {
+        "graph": "weekly-work-report",
+        "mode": "wait",
+        "input_map": {
+          "end": "/end"
+        },
+        "result": {
+          "node": "publish",
+          "files": [
+            "report.md"
+          ]
+        }
+      }
+    },
+    "notify": {
+      "reads": [
+        "result/report.md"
+      ],
+      "run": "set -eu\npython3 -c '\nimport json, os, subprocess, sys\ndata = json.loads(os.environ[\"ANCHOR_INPUT\"])\nbot, user = data[\"notify_bot\"].strip(), data[\"notify_userid\"].strip()\nlines = open(\"/in/report/result/report.md\", encoding=\"utf-8\").read().splitlines()\nheadline = lines[0].lstrip(\"# \").strip() if lines else \"\"\nbody = \" \".join(line.strip() for line in lines[1:] if line.strip())[:1200]\nmessage = headline + (\"\\n\\n\" + body if body else \"\")\nsent = subprocess.run(\n    [\"anchor-channel-send\", \"--bot\", bot, \"--userid\", user],\n    input=message.encode(\"utf-8\"), capture_output=True)\nsys.stdout.write(sent.stdout.decode(\"utf-8\"))\nsys.stderr.write(sent.stderr.decode(\"utf-8\"))\nraise SystemExit(sent.returncode)\n'"
+    }
+  },
+  "nodes": [
+    {
+      "id": "validate",
+      "op": "validate"
+    },
+    {
+      "id": "report",
+      "op": "report"
+    },
+    {
+      "id": "notify",
+      "op": "notify"
+    }
+  ],
+  "edges": [
+    {
+      "from": "validate",
+      "to": "report"
+    },
+    {
+      "from": "report",
+      "to": "notify"
+    }
+  ]
+}

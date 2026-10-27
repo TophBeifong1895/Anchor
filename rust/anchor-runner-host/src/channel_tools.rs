@@ -5,6 +5,7 @@
 //! call its private Unix socket, or persist the final rich reply for the host
 //! adapter to deliver.
 
+use crate::channel_control::{self, SendError};
 use crate::channel_replies::{MAX_IMAGE_BYTES, MAX_IMAGE_COUNT, MAX_IMAGE_TOTAL_BASE64};
 use crate::tool_names::{IMAGE_TOOL, SEND_TOOL};
 
@@ -23,13 +24,8 @@ use std::{
     path::{Component, Path, PathBuf},
     pin::Pin,
     sync::atomic::Ordering,
-    time::Duration,
 };
-use tokio::{
-    io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
-    net::UnixStream,
-    time::timeout,
-};
+use tokio::{net::UnixStream, time::timeout};
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -102,6 +98,13 @@ struct ChannelTools {
 
 fn uncertain() -> ToolError {
     ToolError::Failed("channel delivery was not confirmed; do not resend automatically".into())
+}
+
+fn send_error(error: SendError) -> ToolError {
+    match error {
+        SendError::Refused(reason) | SendError::Gateway(reason) => ToolError::Failed(reason),
+        SendError::Uncertain => uncertain(),
+    }
 }
 
 /// Open each component relative to its descriptor: a sandbox process cannot
@@ -357,49 +360,24 @@ impl ChannelTools {
         }
         let request_id = self.send_request_id()?;
         let (socket, token) = self.control_endpoint()?;
-        let payload = json!({"operation":"send","request_id":request_id,"userid":args.userid,"content":args.content,"token":token});
-        if args.content.len() > 20480 || args.userid.chars().count() > 200 {
-            return Err(ToolError::Failed(
-                "message or identifier exceeds platform limits".into(),
-            ));
-        }
-        self.deliver(socket, payload).await
+        let frame = channel_control::send_frame(&request_id, &args.userid, &args.content, &token)
+            .map_err(send_error)?;
+        self.deliver(socket, &frame, &request_id).await
     }
 
-    async fn deliver(&self, socket: PathBuf, payload: Value) -> Result<Value, ToolError> {
+    async fn deliver(
+        &self,
+        socket: PathBuf,
+        frame: &[u8],
+        request_id: &str,
+    ) -> Result<Value, ToolError> {
         self.check_active()?;
-        let mut bytes =
-            serde_json::to_vec(&payload).map_err(|e| ToolError::Failed(e.to_string()))?;
-        bytes.push(b'\n');
-        if bytes.len() > 64 * 1024 {
-            return Err(ToolError::Failed(
-                "message or identifier exceeds platform limits".into(),
-            ));
-        }
-        let value = timeout(Duration::from_secs(20), async {
+        let value = timeout(channel_control::ACK_TIMEOUT, async {
             let mut stream = UnixStream::connect(socket).await.map_err(|_| uncertain())?;
             self.check_active()?;
-            stream.write_all(&bytes).await.map_err(|_| uncertain())?;
-            let mut response = Vec::new();
-            use tokio::io::AsyncReadExt;
-            BufReader::new(stream)
-                .take(65537)
-                .read_until(b'\n', &mut response)
+            channel_control::send_async(&mut stream, frame, request_id)
                 .await
-                .map_err(|_| uncertain())?;
-            if response.len() > 65536 {
-                return Err(uncertain());
-            }
-            let value: Value = serde_json::from_slice(&response).map_err(|_| uncertain())?;
-            if let Some(error) = value.get("error").and_then(Value::as_str) {
-                return Err(ToolError::Failed(error.to_owned()));
-            }
-            if value.get("accepted") != Some(&Value::Bool(true))
-                || value.get("request_id") != payload.get("request_id")
-            {
-                return Err(uncertain());
-            }
-            Ok(value)
+                .map_err(send_error)
         })
         .await
         .map_err(|_| uncertain())??;
@@ -465,6 +443,8 @@ impl ToolPort for ChannelTools {
 mod tests {
     use super::*;
     use std::sync::{Arc, atomic::AtomicBool};
+    use std::time::Duration;
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
     struct Empty;
     impl ToolPort for Empty {
         fn definitions(&self) -> Vec<ToolDefinition> {
@@ -536,8 +516,9 @@ mod tests {
         assert!(!host.state_root.join("io-harness").exists());
     }
 
-    fn delivery_payload(request_id: &str) -> Value {
-        json!({"operation":"send","request_id":request_id,"userid":"fixture-user","content":"same body","token":"fixture-token"})
+    fn delivery_frame(request_id: &str) -> Vec<u8> {
+        channel_control::send_frame(request_id, "fixture-user", "same body", "fixture-token")
+            .unwrap()
     }
 
     async fn gateway_request(stream: &mut UnixStream) -> Value {
@@ -579,7 +560,7 @@ mod tests {
                 }),
                 async {
                     let request_id = host.send_request_id().unwrap();
-                    host.deliver(socket.clone(), delivery_payload(&request_id))
+                    host.deliver(socket.clone(), &delivery_frame(&request_id), &request_id)
                         .await
                         .unwrap()
                 },
@@ -614,10 +595,8 @@ mod tests {
                 .await
                 .unwrap();
         };
-        let (result, _) = tokio::join!(
-            host.deliver(socket, delivery_payload("fixture-request")),
-            gateway
-        );
+        let frame = delivery_frame("fixture-request");
+        let (result, _) = tokio::join!(host.deliver(socket, &frame, "fixture-request"), gateway);
         assert_eq!(result.unwrap()["accepted"], true);
         assert!(host.check_active().is_err());
     }
@@ -637,9 +616,13 @@ mod tests {
         assert!(error.to_string().contains("invalid WeCom send arguments"));
         host.cancellation.store(true, Ordering::SeqCst);
         assert!(
-            host.deliver(socket, delivery_payload("fixture-request"))
-                .await
-                .is_err()
+            host.deliver(
+                socket,
+                &delivery_frame("fixture-request"),
+                "fixture-request"
+            )
+            .await
+            .is_err()
         );
         assert!(
             timeout(Duration::from_millis(20), listener.accept())
@@ -667,7 +650,7 @@ mod tests {
         ] {
             let result = scope(identity, async {
                 let request_id = host.send_request_id()?;
-                host.deliver(socket.clone(), delivery_payload(&request_id))
+                host.deliver(socket.clone(), &delivery_frame(&request_id), &request_id)
                     .await
             })
             .await;
@@ -702,10 +685,9 @@ mod tests {
                 gateway_request(&mut stream).await;
                 stream.write_all(response.as_bytes()).await.unwrap();
             };
-            let (result, _) = tokio::join!(
-                host.deliver(socket, delivery_payload("fixture-request")),
-                gateway
-            );
+            let frame = delivery_frame("fixture-request");
+            let (result, _) =
+                tokio::join!(host.deliver(socket, &frame, "fixture-request"), gateway);
             assert!(
                 result
                     .unwrap_err()

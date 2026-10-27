@@ -178,3 +178,56 @@ async fn cli_rejects_legacy_events_ledger_without_taking_over_or_leaking_secrets
     assert!(!settings.socket_path().exists());
     platform.no_command("aibot_subscribe").await;
 }
+
+/// Design card 005 T22/T23: a delegated send is still bounded by the binding's
+/// `send_users`. The gateway — not the calling Graph and not the helper — is the
+/// authority, so a recipient the operator never authorized and `@all` are both
+/// refused before any platform frame exists.
+#[tokio::test]
+async fn control_send_refuses_unauthorized_recipients_and_at_all() {
+    let root = tempfile::tempdir().unwrap();
+    let mut platform = Platform::new(Some(0)).await;
+    let mut settings = config(root.path(), &platform, None);
+    settings.send_users = std::collections::BTreeSet::from(["alice".into()]);
+    let mut process = Process::start(&settings);
+    platform.next("aibot_subscribe").await;
+    platform.next("ping").await;
+
+    for (request_id, userid) in [
+        ("delegated-stranger", "mallory"),
+        ("delegated-at-all", "@all"),
+    ] {
+        let response = control(
+            &settings.socket_path(),
+            &settings.control_token,
+            send_request(request_id, userid, "weekly is ready"),
+        )
+        .await;
+        assert_eq!(
+            response["error"], "recipient is not allowed",
+            "{request_id}: {response}"
+        );
+        assert!(response.get("accepted").is_none(), "{response}");
+    }
+    // The refusal happened before the platform saw anything.
+    platform.no_command("aibot_send_msg").await;
+
+    // The same payload to an authorized recipient is still dispatched, so the
+    // rejections above are about the recipient and not about the request shape.
+    let socket = settings.socket_path();
+    let token = settings.control_token.clone();
+    let allowed = tokio::spawn(async move {
+        control(
+            &socket,
+            &token,
+            send_request("delegated-allowed", "alice", "weekly is ready"),
+        )
+        .await
+    });
+    let wire = platform.next("aibot_send_msg").await;
+    assert_eq!(wire["body"]["chatid"], "alice");
+    platform.acknowledge(&wire, 0).await;
+    assert_eq!(allowed.await.unwrap()["accepted"], true);
+
+    let _ = process.0.kill();
+}

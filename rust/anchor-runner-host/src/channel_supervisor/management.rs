@@ -57,6 +57,10 @@ struct ChannelFact {
     plugin: String,
     users: Vec<String>,
     send_users: Vec<String>,
+    /// Graphs this bot will speak for outside their own assistant Run.
+    /// Absent in bindings written before design card 005, which read as empty.
+    #[serde(default)]
+    delegate_graphs: Vec<String>,
     enabled: bool,
     authorization_digest: String,
     callback_key: String,
@@ -70,6 +74,7 @@ impl ChannelFact {
             plugin: self.plugin.clone(),
             users: self.users.clone(),
             send_users: self.send_users.clone(),
+            delegate_graphs: self.delegate_graphs.clone(),
         }
     }
 }
@@ -373,6 +378,25 @@ impl ChannelManagementAdapter {
         }
     }
 
+    /// Every Graph named in the delegation list must exist and load before the
+    /// bot can be enabled. A stale name is otherwise harmless at send time, but
+    /// an operator who mistyped a name should learn about it here, while the
+    /// binding is still easily editable, rather than from a node that fails
+    /// once a week.
+    fn check_delegated_graphs(&self, fact: &ChannelFact) -> Result<(), ApplicationError> {
+        for delegated in &fact.delegate_graphs {
+            FileGraphBundleLoader::new(self.configuration.graph_path(delegated))
+                .with_library_root(&self.configuration.library_root)
+                .load()
+                .map_err(|_| {
+                    ApplicationError::Invalid(format!(
+                        "delegated Graph `{delegated}` cannot be loaded; remove it from the list or restore the Graph"
+                    ))
+                })?;
+        }
+        Ok(())
+    }
+
     async fn start(
         &self,
         graph: &str,
@@ -571,7 +595,7 @@ impl ChannelManagementPort for ChannelManagementAdapter {
         Box::pin(async move {
             let _supervisors = self.supervisors.lock().await;
             self.assert_owner(owner, graph)?;
-            binding.validate()?;
+            binding.validate_for(graph)?;
             let previous = self.fact(graph)?;
             if previous.as_ref().is_some_and(|fact| fact.enabled) {
                 return Err(ApplicationError::Conflict(
@@ -592,6 +616,7 @@ impl ChannelManagementPort for ChannelManagementAdapter {
                     plugin: binding.plugin,
                     users: binding.users,
                     send_users: binding.send_users,
+                    delegate_graphs: binding.delegate_graphs,
                     enabled: false,
                     authorization_digest: digest,
                     callback_key: match previous {
@@ -622,6 +647,7 @@ impl ChannelManagementPort for ChannelManagementAdapter {
             let mut fact = self.fact(graph)?.ok_or(ApplicationError::Missing)?;
             let changed = fact.enabled != enabled;
             if enabled {
+                self.check_delegated_graphs(&fact)?;
                 // Validate all credentials before saving an enabled intent.
                 self.admission(graph, &fact)?;
                 let (definition, channel) = self.definition(&fact.plugin)?;
@@ -787,6 +813,51 @@ pub(crate) fn saved_binding(
         return Ok(None);
     }
     read_fact(&path).map(|fact| Some(fact.binding()))
+}
+
+/// One enabled bot that has authorized `graph` to speak through it.
+pub(crate) struct DelegatedBot {
+    /// The bot Graph, which is also the sandbox mount name.
+    pub(crate) graph: String,
+    pub(crate) descriptor: PathBuf,
+    pub(crate) socket: PathBuf,
+}
+
+/// The bots that delegated their channel to `graph`'s Runs.
+///
+/// This is the authorization, and it is read here rather than inside the
+/// sandbox: `Op.run` sees none of the Host's data root, so what the Host mounts
+/// is exactly what the Run may use. A Graph that is not listed gets no mount
+/// and therefore no way to reach a gateway.
+pub(crate) fn delegated_bots(data_root: &Path, graph: &str) -> Result<Vec<DelegatedBot>, String> {
+    if !anchor_runtime::identifier::is_name(graph) {
+        return Ok(Vec::new());
+    }
+    let (facts, _) = read_facts(&data_root.join("platform/channels/graphs"))?;
+    let mut delegated = Vec::new();
+    for (bot, fact) in facts {
+        if !fact.enabled || !fact.delegate_graphs.iter().any(|name| name == graph) {
+            continue;
+        }
+        let descriptor = super::descriptor_path(data_root, &bot);
+        let Ok(raw) = fs::read(&descriptor) else {
+            // Enabled but not running: there is nothing to mount, and the Run
+            // reports the missing grant rather than a stale socket.
+            continue;
+        };
+        let Ok(value) = serde_json::from_slice::<Value>(&raw) else {
+            continue;
+        };
+        let Some(socket) = value.get("socket").and_then(Value::as_str) else {
+            continue;
+        };
+        delegated.push(DelegatedBot {
+            graph: bot,
+            descriptor,
+            socket: PathBuf::from(socket),
+        });
+    }
+    Ok(delegated)
 }
 
 type Facts = (BTreeMap<String, ChannelFact>, BTreeMap<String, String>);

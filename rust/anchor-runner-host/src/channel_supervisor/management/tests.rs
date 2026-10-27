@@ -117,6 +117,7 @@ while :; do sleep 0.02; done
             plugin: "gateway".into(),
             users: vec![user.into()],
             send_users: vec![user.into()],
+            delegate_graphs: Vec::new(),
         }
     }
 
@@ -741,4 +742,153 @@ async fn removing_a_graph_deletes_bot_credentials_saved_without_a_binding() {
     fixture.adapter.remove("alpha").await.unwrap();
     assert!(!credentials.join("alpha").exists());
     assert!(credentials.join("beta/WECOM_BOT_ID.json").is_file());
+}
+
+/// Design card 005: the delegation list is an operator authorization, and a
+/// bot cannot delegate to itself.
+#[tokio::test]
+async fn delegated_graphs_are_operator_authorized_and_bind_the_whole_graph() {
+    let _guard = crate::PROCESS_ENV_LOCK.lock().await;
+    let _environment = Environment::cleared(FIELDS);
+    let fixture = Fixture::new();
+    fixture.prepare("alpha", "alice", "alpha-bot").await;
+
+    let mut delegated = Fixture::binding("alice");
+    delegated.delegate_graphs = vec!["report".into()];
+    fixture
+        .adapter
+        .configure("local", "alpha", delegated)
+        .await
+        .unwrap();
+    assert_eq!(
+        fixture
+            .adapter
+            .snapshot("alpha")
+            .unwrap()
+            .unwrap()
+            .binding
+            .delegate_graphs,
+        vec!["report".to_owned()]
+    );
+
+    // A bot Graph never needs to delegate to its own binding: its assistant Run
+    // already carries the send tool, and allowing it would blur the two paths.
+    let mut itself = Fixture::binding("alice");
+    itself.delegate_graphs = vec!["alpha".into()];
+    let refused = fixture.adapter.configure("local", "alpha", itself).await;
+    assert!(
+        matches!(&refused, Err(ApplicationError::Invalid(reason)) if reason.contains("itself")),
+        "{:?}",
+        refused.err()
+    );
+}
+/// A binding written before design card 005 has no `delegate_graphs`; it must
+/// keep loading, and it delegates to nobody.
+#[tokio::test]
+async fn a_binding_without_the_delegation_field_reads_as_empty() {
+    let _guard = crate::PROCESS_ENV_LOCK.lock().await;
+    let _environment = Environment::cleared(FIELDS);
+    let fixture = Fixture::new();
+    let directory = fixture.root.path().join("state/platform/channels/graphs");
+    fs::create_dir_all(&directory).unwrap();
+    let path = directory.join("alpha.json");
+    let digest = "0".repeat(64);
+    let callback = format!("anchor-channel-api-{}", "0".repeat(64));
+    fs::write(
+        &path,
+        json!({"format":2,"owner":"local","plugin":"gateway","users":["alice"],
+               "send_users":["alice"],"enabled":false,
+               "authorization_digest":digest,"callback_key":callback})
+        .to_string(),
+    )
+    .unwrap();
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+    // The adapter holds an exclusive lease on the configuration; reopen only
+    // after releasing it, as the other reopen tests do.
+    let Fixture { root, adapter, .. } = fixture;
+    drop(adapter);
+    let reopened = ChannelManagementAdapter::open(Fixture::configuration(root.path())).unwrap();
+    let binding = reopened.snapshot("alpha").unwrap().unwrap().binding;
+    assert_eq!(binding.delegate_graphs, Vec::<String>::new());
+    drop(reopened);
+
+    // And it round-trips once written with a list.
+    let reopened = ChannelManagementAdapter::open(Fixture::configuration(root.path())).unwrap();
+    let mut delegated = Fixture::binding("alice");
+    delegated.delegate_graphs = vec!["report".into()];
+    reopened
+        .configure("local", "alpha", delegated)
+        .await
+        .unwrap();
+    let saved = fs::read_to_string(&path).unwrap();
+    assert!(saved.contains("\"report\""), "{saved}");
+    assert!(saved.contains("\"delegate_graphs\""), "{saved}");
+}
+
+/// Only an enabled bot that names this Graph is delegated to it.
+#[tokio::test]
+async fn delegation_requires_an_enabled_bot_that_names_the_graph() {
+    let _guard = crate::PROCESS_ENV_LOCK.lock().await;
+    let _environment = Environment::cleared(FIELDS);
+    let fixture = Fixture::new();
+    fixture.prepare("alpha", "alice", "alpha-bot").await;
+    assert!(
+        super::delegated_bots(&fixture.root.path().join("state"), "report")
+            .unwrap()
+            .is_empty()
+    );
+    let mut delegated = Fixture::binding("alice");
+    delegated.delegate_graphs = vec!["report".into()];
+    fixture
+        .adapter
+        .configure("local", "alpha", delegated)
+        .await
+        .unwrap();
+
+    // Saved but not enabled: the gateway is not running, so there is no
+    // control surface to grant.
+    assert!(
+        super::delegated_bots(&fixture.root.path().join("state"), "report")
+            .unwrap()
+            .is_empty()
+    );
+    // Some other Graph is not named by anyone.
+    assert!(
+        super::delegated_bots(&fixture.root.path().join("state"), "other")
+            .unwrap()
+            .is_empty()
+    );
+}
+
+/// T29: a name that does not resolve to a Graph is refused at enable time, so
+/// a typo surfaces while the operator is still editing the binding rather than
+/// from a node that fails at send time.
+#[tokio::test]
+async fn enabling_refuses_a_delegated_graph_that_does_not_exist() {
+    let _guard = crate::PROCESS_ENV_LOCK.lock().await;
+    let _environment = Environment::cleared(FIELDS);
+    let fixture = Fixture::new();
+    fixture.prepare("alpha", "alice", "alpha-bot").await;
+    let mut delegated = Fixture::binding("alice");
+    delegated.delegate_graphs = vec!["ghost".into()];
+    fixture
+        .adapter
+        .configure("local", "alpha", delegated)
+        .await
+        .unwrap();
+
+    let refused = fixture.adapter.set_enabled("local", "alpha", true).await;
+    assert!(
+        matches!(&refused, Err(ApplicationError::Invalid(reason)) if reason.contains("ghost")),
+        "{:?}",
+        refused.err()
+    );
+    // The refused enable left the binding stopped and undelegated.
+    let binding = fixture.adapter.snapshot("alpha").unwrap().unwrap();
+    assert!(!binding.enabled);
+    assert!(
+        super::delegated_bots(&fixture.root.path().join("state"), "ghost")
+            .unwrap()
+            .is_empty()
+    );
 }

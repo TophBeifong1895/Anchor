@@ -29,7 +29,7 @@
 在 Web 中，选中 Graph 的 Agent 节点，打开所挂渠道 Plugin 的详情，「此 Graph 的机器人」一栏可以保存成员、设置凭据、启停并查看网关状态；草稿未保存时先保存 Graph。从插件库打开同一 Plugin 只列出在用它的 Graph。Pilot 使用 `channel_status`、`channel_configure`、`channel_enable`，凭据用带 `graph` 的 `credential_request`。两者调用同一组管理 API：
 
 - `GET /channels`：列出所有机器人绑定，属于其他 owner 的只显示 Graph 名和 `owner_matches: false`；
-- `GET`/`PUT /graphs/{graph}/channel`：查看状态，或保存 `{users, send_users}`；
+- `GET`/`PUT /graphs/{graph}/channel`：查看状态，或保存 `{users, send_users, delegate_graphs?}`；省略 `delegate_graphs` 时保留已保存的代发名单；
 - `POST /graphs/{graph}/channel/enabled`：`{enabled, expected_binding}`；
 - `GET /graphs/{graph}/channel/credentials`，`PUT`/`DELETE /graphs/{graph}/channel/credentials/{field}`：只返回字段状态，不返回明文。
 
@@ -126,6 +126,30 @@ Host 首次 wait binding 查询最近 9 条来检测截断，只授权最近 8 �
 官方 image/file/voice 回调由原生 Gateway 自己接入：回调只带短时下载 URL 与 AES key，网关在自身进程内完成 HTTPS 下载与 AES-256-CBC 解密（限额 16 项、20 MiB/项、50 MiB/事件），只把解密后的 `{name,data_base64,media_type}` 交给 Host 的既有契约，临时 URL 与 key 不进入 Host 或 ledger；ledger 只保存描述符，所以重启恢复时会重新下载，URL 过期就如实失败而不是伪造成功。含媒体的 mixed 消息支持文本与媒体混排。boundary 仍然明确：不支持 video/audio 回调；Host 不做旧文本提取、Office/PDF/OCR，文档内容以 `/in/channel` 中的真实字节可读为前提，能否理解由模型与授权工具决定；不通过模型提示词绕过这些边界。
 
 成员名单控制助手入口；业务 MCP 使用操作员配置的凭证。对话隔离不能代替下游系统的逐用户数据授权。审批、借款与报销等 API 仍需按实际业务模板接入。
+
+## 定时任务借机器人发消息
+
+机器人自己的助手 Run 用 `wecom_send_message` 主动说话，这条能力只挂在永续助手的 Agent 节点上（[设计卡 004](design-cards/004-multi-bot-channels.md) 的有意收紧）。周报这类定时 Graph 不是助手，拿不到这个工具。要让它发出通知，用[设计卡 005](design-cards/005-delegated-channel-send.md) 的代发授权：绑定上显式列出「允许借这个机器人发消息的 Graph」，被点名的 Graph 的 `Op.run` 节点再调用 `anchor-channel-send`。
+
+配置在 WebUI 的同一个机器人面板里：成员、可发送成员之后，第三个文本区「允许借这个机器人发消息的 Graph」每行一个 Graph 名。它是操作员授权，Pilot 看不到也改不了这一项；Pilot 改成员时，这一项原样保留。已经在跑的机器人要先停用再改，和成员名单的规则一致；启用时名单里的每张 Graph 都必须存在且能加载，也不能写机器人自己的 Graph。
+
+命令只有两个参数，正文走 stdin：
+
+```sh
+printf '%s\n' "本周周报已发布" | anchor-channel-send --bot weekly-assistant --userid alice
+```
+
+`--bot` 是要借的那张机器人 Graph，必然不是当前 Run 自己的 Graph。成功时 stdout 是一行 `{"accepted":true,"request_id":"…"}`；失败时非零退出并在 stderr 说明原因。节点失败、Run 停在失败状态，和 `publish` 一样，不会静默丢通知。
+
+三条边界：
+
+- **权限在挂载，不在参数。** Host 启动 `Op.run` 前读到这个 Run 的 Graph 名，只把点名授权给它的那些机器人的 `control.json` 与 `control.sock` 只读挂进 `/channel/<bot>/`。没被授权、机器人未启用或网关没在运行时一个挂载都没有，命令只能报 `no bot is delegated to this Graph under /channel/<bot>`；沙箱里看不到 Host 的数据目录，所以也找不到别的机器人。
+- **收件人仍由网关判定。** 只有绑定的 `send_users` 里的人能收到，`@all` 和群发在网关就过不去（`recipient is not allowed`）。代发名单扩大不了收件人范围。
+- **只发文本。** 图片沿用助手通路，文件、音频、视频的出站还没有控制面协议，见设计卡 005 §9。
+
+回执只在网关确认收到**这一条**请求时才算数：回执缺失、格式错误或属于别的请求时，命令报 `channel delivery was not confirmed; do not resend automatically` 并失败。这时消息可能已经发出，不要让节点自动重发；同一节点重试用的是同一个 `request_id`，网关不会发第二条。
+
+可直接抄的样例是 `examples/graphs/weekly-work-report-notify.json`：`validate` 检查 Run input 里的 `notify_bot`/`notify_userid` 非空，`report` 以 `wait` 模式调用 `weekly-work-report` 并只取 `report.md`，`notify` 把一级标题和正文摘要交给 `anchor-channel-send`。`Op.run` 本身要求 `ANCHOR_RUNNER_ALLOWED_COMMANDS` 含 `sh`；样例另用沙箱里的 `python3` 读 input、拼消息，`anchor-channel-send` 由 Host 挂载，不用另外放行。它不重新采集、写作或评审，也不生成本地之外的新内容。
 
 ## Docmost 和验收
 

@@ -63,6 +63,7 @@ impl FakeChannels {
                 plugin: "wecom".into(),
                 users: users.clone(),
                 send_users: users,
+                delegate_graphs: Vec::new(),
             },
             reply_node: Some(reply_node.into()),
             enabled: true,

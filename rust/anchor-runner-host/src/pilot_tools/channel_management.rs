@@ -35,6 +35,9 @@ pub(crate) fn configuration_arguments(
     let members = ChannelMembers {
         users: members(arguments, "users")?,
         send_users: members(arguments, "send_users")?,
+        // Delegation is an operator authorization, not something the model
+        // may grant itself; the WebUI is the only writer.
+        delegate_graphs: None,
     };
     // Validate the member lists before asking the user; the Plugin is the
     // Graph's and is checked again by the application use case.
@@ -42,6 +45,7 @@ pub(crate) fn configuration_arguments(
         plugin: "unchecked".into(),
         users: members.users.clone(),
         send_users: members.send_users.clone(),
+        delegate_graphs: Vec::new(),
     }
     .validate()
     .map_err(channel_error)?;

@@ -4,6 +4,7 @@ mod artifacts;
 mod assistant;
 mod assistant_plugins;
 mod attachments;
+mod channel_control;
 mod channel_inputs;
 mod channel_replies;
 mod channel_supervisor;
@@ -326,6 +327,9 @@ fn make_host_with_control(
     let work_root = env_path("ANCHOR_RUNNER_WORKSPACE_ROOT")?;
     let _ = run_id;
     create_durable_directory(&state.join("artifacts")).map_err(|e| e.to_string())?;
+    // Bot control surfaces live here; the sandbox mounts individual bots out of
+    // it, and the Host alone decides which ones.
+    create_durable_directory(&state.join("channels")).map_err(|e| e.to_string())?;
     // Authorized roots are canonicalized when the sandbox is built, so the
     // retention root must exist before then.
     create_durable_directory(&state.join("spill")).map_err(|e| e.to_string())?;
@@ -341,8 +345,11 @@ fn make_host_with_control(
     )
     .authorize_workspace_root(&work_root)
     .authorize_readonly_input_root(state.join("artifacts"))
+    .authorize_readonly_input_root(state.join("channels"))
     .authorize_readonly_destination_root("/in")
     .authorize_readonly_destination_root("/plugins")
+    // Delegated bots: only the gateways this Run's Graph is authorized to use.
+    .authorize_readonly_destination_root("/channel")
     // Node command output beyond the stream previews is retained here and
     // mounted read-only at /spill.
     .authorize_readonly_destination_root("/spill")
@@ -898,6 +905,9 @@ async fn write_frame<W: AsyncWrite + Unpin>(writer: &mut W, value: &Response) ->
 async fn main() -> io::Result<()> {
     if let Some(args) = op::route_cli_args() {
         std::process::exit(op::run_route_cli(&args));
+    }
+    if let Some(args) = op::channel_send_cli_args() {
+        std::process::exit(op::run_channel_send_cli(&args));
     }
     let configuration = Arc::new(HostConfiguration::from_env());
     if env::args().nth(1).as_deref() == Some("serve") {

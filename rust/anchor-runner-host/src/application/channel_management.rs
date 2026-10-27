@@ -23,6 +23,10 @@ pub(crate) struct ChannelBinding {
     pub(crate) plugin: String,
     pub(crate) users: Vec<String>,
     pub(crate) send_users: Vec<String>,
+    /// Graphs allowed to send through this bot outside their own assistant Run
+    /// (design card 005). Empty means no Graph may delegate.
+    #[serde(default)]
+    pub(crate) delegate_graphs: Vec<String>,
 }
 
 /// The member lists an operator chooses; the Plugin comes from the Graph.
@@ -31,6 +35,11 @@ pub(crate) struct ChannelBinding {
 pub(crate) struct ChannelMembers {
     pub(crate) users: Vec<String>,
     pub(crate) send_users: Vec<String>,
+    /// Omitted means "leave the saved delegation list unchanged": the Pilot's
+    /// member form does not carry it, so an unrelated edit must not clear an
+    /// authorization an operator set in the WebUI.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) delegate_graphs: Option<Vec<String>>,
 }
 
 impl ChannelBinding {
@@ -60,6 +69,33 @@ impl ChannelBinding {
                 "send_users must explicitly authorize the intended reply users".into(),
             ));
         }
+        if self.delegate_graphs.len() > MAX_DELEGATE_GRAPHS
+            || self
+                .delegate_graphs
+                .iter()
+                .any(|graph| !anchor_runtime::identifier::is_name(graph))
+        {
+            return Err(ApplicationError::Invalid(
+                "invalid delegated Graph authorization".into(),
+            ));
+        }
+        Ok(())
+    }
+
+    /// The binding of `graph` itself. A bot Graph never needs to delegate to
+    /// its own binding: its assistant Run already carries the send tool, and
+    /// allowing it would blur the two authorization paths.
+    pub(crate) fn validate_for(&self, graph: &str) -> Result<(), ApplicationError> {
+        self.validate()?;
+        if self
+            .delegate_graphs
+            .iter()
+            .any(|delegated| delegated == graph)
+        {
+            return Err(ApplicationError::Invalid(
+                "a bot cannot delegate to itself; its assistant Run already sends".into(),
+            ));
+        }
         Ok(())
     }
 
@@ -76,9 +112,19 @@ impl ChannelBinding {
             .collect::<BTreeSet<_>>()
             .into_iter()
             .collect();
+        self.delegate_graphs = self
+            .delegate_graphs
+            .into_iter()
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect();
         self
     }
 }
+
+/// A bot's delegation list is a hand-maintained authorization, not a member
+/// roster; anything larger is a mistake, not a use case.
+pub(crate) const MAX_DELEGATE_GRAPHS: usize = 32;
 
 /// How a Graph serves as a bot: its assistant work node and the one channel
 /// Plugin mounted on it.
@@ -260,12 +306,22 @@ impl RunApplication {
         let _catalog_guard = self.graph_catalog_mutation_guard().await;
         let _library_lease = self.plugin_reference_lease().await?;
         let plan = self.channel_bot_plan(graph)?;
+        // The Pilot's member form does not carry the delegation list, so an
+        // omitted field keeps whatever the operator authorized in the WebUI.
+        let delegate_graphs = match members.delegate_graphs {
+            Some(delegate) => delegate,
+            None => port
+                .snapshot(graph)?
+                .map(|state| state.binding.delegate_graphs)
+                .unwrap_or_default(),
+        };
         let binding = ChannelBinding {
             plugin: plan.plugin,
             users: members.users,
             send_users: members.send_users,
+            delegate_graphs,
         };
-        binding.validate()?;
+        binding.validate_for(graph)?;
         port.configure(owner, graph, binding.normalized()).await
     }
 

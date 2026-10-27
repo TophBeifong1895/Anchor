@@ -155,3 +155,34 @@ async fn malformed_bindings_unknown_graphs_and_model_credentials_or_approval_are
             .is_err()
     );
 }
+
+/// T32: the Pilot's member form does not carry the delegation list, so editing
+/// recipients there must leave an operator's saved authorization in place.
+#[tokio::test]
+async fn pilot_member_edits_leave_the_delegation_list_alone() {
+    // The bot plan resolves the Library root from the process environment.
+    let _guard = crate::PROCESS_ENV_LOCK.lock().await;
+    let (_root, mut tools, port) = fixture();
+    let (turn, _) = tools
+        .sessions
+        .create_turn("local", "pilot", "edit-members", None)
+        .unwrap();
+    tools = tools.for_turn(&turn.id);
+    let mut saved = FakeChannels::bot("task", "local", "reply", &["alice"]);
+    saved.binding.delegate_graphs = vec!["report".into()];
+    saved.enabled = false;
+    saved.saved_enabled = false;
+    port.put(saved);
+
+    let (graph, members) = configuration_arguments(&json!({
+        "graph": "task", "users": ["alice", "bob"], "send_users": ["bob"]
+    }))
+    .unwrap();
+    tools
+        .configure_channel_approved(&graph, members)
+        .await
+        .unwrap();
+    let binding = port.get("task").unwrap().binding;
+    assert_eq!(binding.send_users, vec!["bob".to_owned()]);
+    assert_eq!(binding.delegate_graphs, vec!["report".to_owned()]);
+}

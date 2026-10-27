@@ -4,6 +4,7 @@ use std::collections::BTreeSet;
 
 const CORE: &str = include_str!("../../../examples/graphs/weekly-work-report.json");
 const DOCMOST: &str = include_str!("../../../examples/graphs/weekly-work-report-docmost.json");
+const NOTIFY: &str = include_str!("../../../examples/graphs/weekly-work-report-notify.json");
 
 fn compile(source: &str) -> GraphSnapshot {
     GraphSnapshot::from_authoring(serde_json::from_str(source).unwrap()).unwrap()
@@ -11,11 +12,34 @@ fn compile(source: &str) -> GraphSnapshot {
 
 #[test]
 fn weekly_examples_compile_and_admit() {
-    for source in [CORE, DOCMOST] {
+    for source in [CORE, DOCMOST, NOTIFY] {
         let snapshot = compile(source);
         let admitted = GraphSnapshot::admit(serde_json::to_value(&snapshot).unwrap()).unwrap();
         assert_eq!(snapshot, admitted);
     }
+}
+
+/// The notify wrapper is a thin call-and-send: it adds no agents, no Plugins
+/// and no second publication path.
+#[test]
+fn notify_wrapper_calls_the_core_graph_and_sends_through_the_host_helper() {
+    let snapshot = compile(NOTIFY);
+    assert_eq!(snapshot.entry, "validate");
+    assert!(snapshot.agents.is_empty());
+    assert_eq!(
+        snapshot.ops["report"]["call"]["graph"],
+        Value::from("weekly-work-report")
+    );
+    assert_eq!(snapshot.ops["report"]["call"]["mode"], Value::from("wait"));
+    let notify = snapshot.ops["notify"]["run"].as_str().unwrap();
+    assert!(
+        notify.contains("anchor-channel-send --bot")
+            || notify.contains("\"anchor-channel-send\", \"--bot\""),
+        "{notify}"
+    );
+    assert!(notify.contains("/in/report/result/report.md"), "{notify}");
+    // The send target is the operator's input, never a literal in the Graph.
+    assert!(notify.contains("notify_bot") && notify.contains("notify_userid"));
 }
 
 #[test]

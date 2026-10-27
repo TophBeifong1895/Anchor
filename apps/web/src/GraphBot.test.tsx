@@ -55,9 +55,21 @@ describe('a Graph bot', () => {
     expect(container.textContent).toContain('停用后才能修改凭据');
     const writes = requests().filter(request => request.method !== 'GET');
     expect(writes).toEqual([
-      { path: '/graphs/helper/channel', method: 'PUT', body: { users: ['alice'], send_users: ['alice', 'bob'] } },
-      { path: '/graphs/helper/channel/enabled', method: 'POST', body: { enabled: true, expected_binding: { plugin: 'wecom', users: ['alice'], send_users: ['alice', 'bob'] } } },
+      { path: '/graphs/helper/channel', method: 'PUT', body: { users: ['alice'], send_users: ['alice', 'bob'], delegate_graphs: [] } },
+      { path: '/graphs/helper/channel/enabled', method: 'POST', body: { enabled: true, expected_binding: { plugin: 'wecom', users: ['alice'], send_users: ['alice', 'bob'], delegate_graphs: [] } } },
     ]);
+  });
+
+  it('saves the Graphs allowed to send through this bot', async () => {
+    await render(<GraphBot graph="helper" pluginId="wecom" saved />);
+    const delegated = container.querySelectorAll('textarea')[2];
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!.call(delegated, 'report\nweekly\nreport');
+      delegated.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    await act(async () => button('保存成员').click());
+    const write = requests().find(request => request.method === 'PUT');
+    expect(write?.body).toEqual({ users: ['alice'], send_users: [], delegate_graphs: ['report', 'weekly'] });
   });
 
   it('cannot be enabled before members are saved', async () => {

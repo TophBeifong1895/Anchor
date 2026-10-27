@@ -5,7 +5,7 @@ import { listenerLabel, type GraphSummary } from './model';
 import { PluginCredentials } from './PluginCredentials';
 import './Channels.css';
 
-type Binding = { plugin: string; users: string[]; send_users: string[] };
+type Binding = { plugin: string; users: string[]; send_users: string[]; delegate_graphs: string[] };
 type BotStatus = {
   graph: string; configured: boolean; mutable?: boolean; enabled?: boolean; owner_matches?: boolean; available?: boolean;
   binding?: Binding; listener?: NonNullable<GraphSummary['listener']>['status']; account?: string | null; restart_required?: boolean;
@@ -84,23 +84,27 @@ export function GraphBot({ graph, pluginId, saved }: { graph: string; pluginId: 
   </section>;
 }
 
-function Members({ status, busy, save }: { status: BotStatus; busy: boolean; save: (members: { users: string[]; send_users: string[] }) => Promise<boolean> }) {
+function Members({ status, busy, save }: { status: BotStatus; busy: boolean; save: (members: { users: string[]; send_users: string[]; delegate_graphs: string[] }) => Promise<boolean> }) {
   const savedUsers = (status.binding?.users ?? []).join('\n');
   const savedSend = (status.binding?.send_users ?? []).join('\n');
+  const savedDelegated = (status.binding?.delegate_graphs ?? []).join('\n');
   const [users, setUsers] = useState(savedUsers);
   const [sendUsers, setSendUsers] = useState(savedSend);
+  const [delegated, setDelegated] = useState(savedDelegated);
   const [dirty, setDirty] = useState(false);
-  useEffect(() => { if (!dirty) { setUsers(savedUsers); setSendUsers(savedSend); } }, [savedUsers, savedSend, dirty]);
+  useEffect(() => { if (!dirty) { setUsers(savedUsers); setSendUsers(savedSend); setDelegated(savedDelegated); } }, [savedUsers, savedSend, savedDelegated, dirty]);
   const disabled = Boolean(status.enabled) || busy;
   return <form className="channels-binding" onSubmit={event => {
     event.preventDefault(); if (disabled) return;
-    void save({ users: recipients(users), send_users: recipients(sendUsers) }).then(done => { if (done) setDirty(false); });
+    void save({ users: recipients(users), send_users: recipients(sendUsers), delegate_graphs: recipients(delegated) }).then(done => { if (done) setDirty(false); });
   }}>
     <div className="channels-section-title"><h3>成员</h3>{status.enabled && <small>停用机器人后可修改</small>}</div>
     <fieldset disabled={disabled}>
       <label>允许接收的成员<textarea rows={3} value={users} onChange={event => { setUsers(event.target.value); setDirty(true); }} placeholder="每行一个成员 ID" /></label>
       <label>允许主动发送的成员<textarea rows={3} value={sendUsers} onChange={event => { setSendUsers(event.target.value); setDirty(true); }} placeholder="每行一个成员 ID；需显式填写，包含要回复的成员" /></label>
+      <label>允许借这个机器人发消息的 Graph<textarea rows={3} value={delegated} onChange={event => { setDelegated(event.target.value); setDirty(true); }} placeholder="每行一个 Graph 名；留空则任何 Graph 都不能代发" /></label>
     </fieldset><p className="channels-field-help">成员 ID 以换行或逗号分隔。空接收名单拒绝所有成员；<code>*</code> 允许所有成员。接收名单不为空时，主动发送名单也必须填写。</p>
+    <p className="channels-field-help">代发名单只影响「这个机器人替别的 Graph 主动发消息」；列出名字的 Graph 用 <code>anchor-channel-send</code> 给它自己的成员发文本。名单里的 Graph 不会因此获得别的收件人。</p>
     <div className="channels-form-actions"><button type="submit" disabled={disabled}><Check size={14} />保存成员</button>
       {dirty && <button type="button" disabled={busy} onClick={() => setDirty(false)}>恢复已保存值</button>}</div>
   </form>;

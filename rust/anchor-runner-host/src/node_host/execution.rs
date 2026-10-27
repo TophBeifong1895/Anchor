@@ -65,6 +65,39 @@ impl HostNodes {
         let argv =
             op::shell_command(command, &self.allowed_commands).map_err(GraphError::Unsupported)?;
         let route_helper = op::route_helper_mount().map_err(GraphError::Unsupported)?;
+        let channel_send_helper =
+            op::channel_send_helper_mount().map_err(GraphError::Unsupported)?;
+        // Delegated bots are read from the Run's own Graph identity, never from
+        // the Op's command line. A Graph that is not authorized gets no mount,
+        // and mounting is what grants the ability. A Run with no readable
+        // identity can delegate to nothing: fail closed by mounting no bot
+        // rather than by refusing an Op that does not concern channels at all.
+        let state_root = self.io_resolver.local_inputs.state_root();
+        let delegated = match crate::run_metadata::load(state_root, &request.key.run_id) {
+            Ok(Some(metadata)) => {
+                crate::channel_supervisor::management::delegated_bots(state_root, &metadata.graph)
+                    .map_err(GraphError::Unsupported)?
+            }
+            Ok(None) => Vec::new(),
+            Err(error) => {
+                return Err(GraphError::Unsupported(format!(
+                    "delegated channel authorization unavailable: {error:?}"
+                )));
+            }
+        };
+        let mut channel_mounts = Vec::new();
+        let mut channel_inputs = Vec::new();
+        for bot in &delegated {
+            // A gateway that stopped between the authorization read and the
+            // mount is simply absent from the set: the node then reports "no
+            // bot is delegated" instead of failing on an unresolvable grant.
+            if bot.descriptor.canonicalize().is_err() || bot.socket.canonicalize().is_err() {
+                continue;
+            }
+            let mounts = op::channel_mounts(&bot.graph, &bot.descriptor, &bot.socket);
+            channel_inputs.extend(mounts.iter().cloned());
+            channel_mounts.extend(mounts);
+        }
         let environment = self
             .io_resolver
             .tool_environment()
@@ -74,6 +107,10 @@ impl HostNodes {
             .map_err(GraphError::Unsupported)?
             .with_readonly_grants(&local_inputs)
             .and_then(|sandbox| sandbox.with_readonly_grants(std::slice::from_ref(&route_helper)))
+            .and_then(|sandbox| {
+                sandbox.with_readonly_grants(std::slice::from_ref(&channel_send_helper))
+            })
+            .and_then(|sandbox| sandbox.with_readonly_grants(&channel_mounts))
             .map_err(|error| GraphError::Unsupported(error.to_string()))?;
         let network = self
             .io_resolver
@@ -91,6 +128,18 @@ impl HostNodes {
             devices: Vec::new(),
             environment: vec![
                 anchor_runtime::SandboxEnvironment::new("ANCHOR_NODE", request.key.node_id.clone()),
+                // The delegated-send helper derives its idempotency key from the
+                // Run identity, never from the message text: a weekly report
+                // that repeats last week's wording is a new delivery, while a
+                // retried node must stay one.
+                anchor_runtime::SandboxEnvironment::new(
+                    "ANCHOR_RUN_ID",
+                    request.key.run_id.clone(),
+                ),
+                anchor_runtime::SandboxEnvironment::new(
+                    "ANCHOR_INVOCATION",
+                    request.key.invocation.to_string(),
+                ),
                 anchor_runtime::SandboxEnvironment::new("ANCHOR_ROUTES", request.routes.join(",")),
                 anchor_runtime::SandboxEnvironment::new("ANCHOR_INPUT", input),
             ],
@@ -108,6 +157,10 @@ impl HostNodes {
         // authority: an Op.run reaches them by absolute path, and nothing else
         // grants them.
         op::add_route_helper(&mut sandbox_request, route_helper);
+        sandbox_request
+            .readonly_inputs
+            .push(channel_send_helper.clone());
+        sandbox_request.readonly_inputs.extend(channel_inputs);
         environment.apply(&mut sandbox_request);
         self.start(&request.key)?;
         let result = match sandbox.run(sandbox_request).await {

@@ -32,6 +32,47 @@ fn spawn(root: &Path, run_id: &str, graph: &Value, input: &Value) -> Child {
     spawn_with_library(root, run_id, graph, input, None)
 }
 
+/// Same Host entry, with `allowed` as the deployment's command authority. A
+/// test that exercises a documented example needs the interpreter that example
+/// declares, not the narrower default.
+fn spawn_allowed(root: &Path, run_id: &str, graph: &Value, input: &Value, allowed: &str) -> Child {
+    let bundle = root.join("bundle");
+    fs::create_dir_all(&bundle).unwrap();
+    fs::write(bundle.join("graph.json"), graph.to_string()).unwrap();
+    fs::write(
+        bundle.join("manifest.json"),
+        r#"{"format":1,"graph":"graph.json","plugins":[]}"#,
+    )
+    .unwrap();
+    let mut child = Command::new(env!("CARGO_BIN_EXE_anchor-runner-host"))
+        .env_remove("ANCHOR_RUNNER_LIBRARY_ROOT")
+        .env("ANCHOR_RUNNER_STATE_ROOT", root.join("state"))
+        .env("ANCHOR_RUNNER_WORKSPACE_ROOT", root.join("work"))
+        .env("ANCHOR_RUNNER_BUNDLE_ROOT", bundle)
+        .env("ANCHOR_RUNNER_ALLOWED_COMMANDS", allowed)
+        .env_remove("ANCHOR_MODEL_API_KEY")
+        .env_remove("ANCHOR_MODEL_URL")
+        .env_remove("ANCHOR_MODEL_NAME")
+        .env_remove("ANCHOR_RUST_MCP_SERVERS")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let bytes = serde_json::to_vec(&json!({
+        "op":"start_bundle", "version":1, "request_id":run_id,
+        "run_id":run_id, "input":input
+    }))
+    .unwrap();
+    let mut stdin = child.stdin.take().unwrap();
+    stdin
+        .write_all(&(bytes.len() as u32).to_be_bytes())
+        .unwrap();
+    stdin.write_all(&bytes).unwrap();
+    drop(stdin);
+    child
+}
+
 fn spawn_with_library(
     root: &Path,
     run_id: &str,
@@ -348,4 +389,309 @@ fn op_network_declaration_controls_business_network_access() {
     ));
     assert_eq!(allowed["projection"]["outcome"], "done", "{allowed}");
     assert_eq!(received.join().unwrap(), "business-network-authorized");
+}
+
+/// Design card 005: a Run's delegated bots are decided from its own Graph
+/// identity, and the sandbox mounts exactly those. `report` may speak through
+/// `weekly`; nobody delegates to `other`, and `daily` names a different Graph.
+mod delegated_channel {
+    use super::*;
+    use sha2::{Digest, Sha256};
+    use std::{
+        io::{BufRead, BufReader},
+        os::unix::{fs::PermissionsExt, net::UnixListener},
+        path::PathBuf,
+    };
+
+    /// The Host's own state directory for a Graph's gateway.
+    fn gateway_directory(state: &Path, graph: &str) -> PathBuf {
+        let digest = format!("{:x}", Sha256::digest(graph.as_bytes()));
+        state.join("channels/graphs").join(&digest[..16])
+    }
+
+    fn binding(state: &Path, bot: &str, delegated: &[&str], enabled: bool) {
+        let directory = state.join("platform/channels/graphs");
+        fs::create_dir_all(&directory).unwrap();
+        let path = directory.join(format!("{bot}.json"));
+        fs::write(
+            &path,
+            json!({
+                "format": 2, "owner": "local", "plugin": "gateway",
+                "users": ["alice"], "send_users": ["alice"],
+                "delegate_graphs": delegated, "enabled": enabled,
+                "authorization_digest": "0".repeat(64),
+                "callback_key": format!("anchor-channel-api-{}", "0".repeat(64)),
+            })
+            .to_string(),
+        )
+        .unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+    }
+
+    /// A running gateway: a real socket that acknowledges one request by its
+    /// id, as the real gateway does, and hands back what it received.
+    fn gateway(state: &Path, bot: &str) -> std::sync::mpsc::Receiver<String> {
+        let directory = gateway_directory(state, bot);
+        fs::create_dir_all(&directory).unwrap();
+        let socket = directory.join("control.sock");
+        fs::write(
+            directory.join("control.json"),
+            json!({"socket": socket.display().to_string(), "token": "t".repeat(40)}).to_string(),
+        )
+        .unwrap();
+        // A second gateway for the same bot replaces the first one's socket
+        // path; unlinking is what the real supervisor does on restart.
+        let _ = fs::remove_file(&socket);
+        let listener = UnixListener::bind(&socket).unwrap();
+        let (sender, receiver) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let Ok((mut stream, _)) = listener.accept() else {
+                return;
+            };
+            let mut line = String::new();
+            let _ = BufReader::new(&stream).read_line(&mut line);
+            let request_id = serde_json::from_str::<Value>(&line)
+                .ok()
+                .and_then(|request| request["request_id"].as_str().map(str::to_owned))
+                .unwrap_or_default();
+            let _ = sender.send(line);
+            let ack = json!({"accepted": true, "request_id": request_id});
+            let _ = stream.write_all(format!("{ack}\n").as_bytes());
+            let _ = stream.flush();
+            // Hold the connection open until the sandboxed helper has read the
+            // reply; dropping it immediately would race the read.
+            std::thread::sleep(std::time::Duration::from_millis(200));
+        });
+        receiver
+    }
+
+    /// A `start_bundle` Run that records a Run identity for `graph`, which is
+    /// what the Host reads to decide the delegated set.
+    fn spawn_as_graph(root: &Path, run_id: &str, graph: &str, definition: &Value) -> Child {
+        let local = root.join("local-inputs");
+        fs::create_dir_all(&local).unwrap();
+        let bundle = root.join(format!("bundle-{run_id}"));
+        fs::create_dir_all(&bundle).unwrap();
+        fs::write(bundle.join("graph.json"), definition.to_string()).unwrap();
+        fs::write(
+            bundle.join("manifest.json"),
+            r#"{"format":1,"graph":"graph.json","plugins":[]}"#,
+        )
+        .unwrap();
+        let mut child = Command::new(env!("CARGO_BIN_EXE_anchor-runner-host"))
+            .env_remove("ANCHOR_RUNNER_LIBRARY_ROOT")
+            .env("ANCHOR_RUNNER_STATE_ROOT", root.join("state"))
+            .env("ANCHOR_RUNNER_WORKSPACE_ROOT", root.join("work"))
+            .env("ANCHOR_RUNNER_BUNDLE_ROOT", bundle)
+            .env("ANCHOR_RUNNER_LOCAL_INPUTS_ROOT", &local)
+            .env("ANCHOR_RUNNER_GRAPH_NAME", graph)
+            .env("ANCHOR_RUNNER_ALLOWED_COMMANDS", "sh,true")
+            .env_remove("ANCHOR_MODEL_API_KEY")
+            .env_remove("ANCHOR_MODEL_URL")
+            .env_remove("ANCHOR_MODEL_NAME")
+            .env_remove("ANCHOR_RUST_MCP_SERVERS")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let bytes = serde_json::to_vec(&json!({
+            "op":"start_bundle", "version":1, "request_id":run_id,
+            "run_id":run_id, "input":{}
+        }))
+        .unwrap();
+        let mut stdin = child.stdin.take().unwrap();
+        stdin
+            .write_all(&(bytes.len() as u32).to_be_bytes())
+            .unwrap();
+        stdin.write_all(&bytes).unwrap();
+        drop(stdin);
+        child
+    }
+
+    fn probe(command: &str) -> Value {
+        json!({
+            "entry": "probe",
+            "ops": {"probe": {"run": command}},
+            "nodes": [{"id": "probe", "op": "probe"}],
+            "edges": []
+        })
+    }
+
+    fn submission(root: &Path, run_id: &str) -> String {
+        record(root, run_id)["results"]["probe"][0]["completion"]["submission"]
+            .as_str()
+            .unwrap()
+            .to_owned()
+    }
+
+    /// T20/T33: the delegated Graph's Op reaches the gateway, and the receipt
+    /// carries only the accepted flag and the request id.
+    #[test]
+    fn a_delegated_graph_can_send_through_the_bot_it_was_granted() {
+        let root = tempfile::tempdir().unwrap();
+        let state = root.path().join("state");
+        binding(&state, "weekly", &["report"], true);
+        let received = gateway(&state, "weekly");
+        let response = finish(spawn_as_graph(
+            root.path(),
+            "delegated-send",
+            "report",
+            &probe("printf 'weekly is ready' | anchor-channel-send --bot weekly --userid alice"),
+        ));
+        assert_eq!(response["projection"]["outcome"], "done", "{response}");
+        let received = received
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .unwrap();
+        let request: Value = serde_json::from_str(&received).unwrap();
+        assert_eq!(request["operation"], "send");
+        assert_eq!(request["userid"], "alice");
+        assert_eq!(request["content"], "weekly is ready");
+        let receipt: Value = serde_json::from_str(&submission(root.path(), "delegated-send"))
+            .expect("receipt is one JSON line");
+        assert_eq!(receipt["accepted"], true);
+        assert_eq!(receipt["request_id"], request["request_id"]);
+        let printed = receipt.to_string();
+        assert!(!printed.contains(&"t".repeat(40)), "{printed}");
+        assert!(!printed.contains("control.json"), "{printed}");
+    }
+
+    /// T26 across Runs: the second week's report repeats last week's wording.
+    /// Two Runs must produce two distinct request ids, or the gateway would
+    /// acknowledge the second one as a duplicate without sending it.
+    #[test]
+    fn the_same_text_in_a_new_run_reaches_the_gateway_again() {
+        let root = tempfile::tempdir().unwrap();
+        let state = root.path().join("state");
+        binding(&state, "weekly", &["report"], true);
+
+        let mut ids = Vec::new();
+        for run in ["week-one", "week-two"] {
+            let received = gateway(&state, "weekly");
+            let response = finish(spawn_as_graph(
+                root.path(),
+                run,
+                "report",
+                &probe(
+                    "printf 'weekly is ready' | anchor-channel-send --bot weekly --userid alice",
+                ),
+            ));
+            assert_eq!(response["projection"]["outcome"], "done", "{response}");
+            let received = received
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .unwrap();
+            let request: Value = serde_json::from_str(&received).unwrap();
+            ids.push(request["request_id"].as_str().unwrap().to_owned());
+            // Both Runs sent the identical body; only their identity differs.
+            assert_eq!(request["content"], "weekly is ready");
+        }
+        assert_ne!(ids[0], ids[1], "{ids:?}");
+    }
+
+    /// T21: nothing is mounted for a Graph that no enabled binding names, and
+    /// the helper refuses instead of discovering a gateway by itself.
+    #[test]
+    fn an_undelegated_graph_sees_no_channel_mount() {
+        let root = tempfile::tempdir().unwrap();
+        let state = root.path().join("state");
+        binding(&state, "weekly", &["report"], true);
+        let _received = gateway(&state, "weekly");
+        let response = finish(spawn_as_graph(
+            root.path(),
+            "no-delegation",
+            "other",
+            &probe("printf hi | anchor-channel-send --bot weekly --userid alice"),
+        ));
+        assert_eq!(response["projection"]["outcome"], "failed", "{response}");
+        let reason = response["projection"]["reason"].as_str().unwrap();
+        assert!(reason.contains("no bot is delegated"), "{response}");
+    }
+
+    /// T24: an enabled binding whose list names the Run's Graph is still not a
+    /// grant once the bot is stopped.
+    #[test]
+    fn a_stopped_bot_grants_nothing() {
+        let root = tempfile::tempdir().unwrap();
+        let state = root.path().join("state");
+        binding(&state, "weekly", &["report"], false);
+        let _received = gateway(&state, "weekly");
+        let response = finish(spawn_as_graph(
+            root.path(),
+            "stopped-bot",
+            "report",
+            &probe("printf hi | anchor-channel-send --bot weekly --userid alice"),
+        ));
+        assert_eq!(response["projection"]["outcome"], "failed", "{response}");
+        assert!(
+            response["projection"]["reason"]
+                .as_str()
+                .unwrap()
+                .contains("no bot is delegated"),
+            "{response}"
+        );
+    }
+
+    /// T25: a delegated Run naming a bot it was not granted is refused, even
+    /// though it holds a valid grant for a different one.
+    #[test]
+    fn a_delegated_run_cannot_name_a_bot_it_was_not_granted() {
+        let root = tempfile::tempdir().unwrap();
+        let state = root.path().join("state");
+        binding(&state, "weekly", &["report"], true);
+        binding(&state, "daily", &["somebody-else"], true);
+        let _weekly = gateway(&state, "weekly");
+        let _daily = gateway(&state, "daily");
+        let response = finish(spawn_as_graph(
+            root.path(),
+            "wrong-bot",
+            "report",
+            &probe("printf hi | anchor-channel-send --bot daily --userid alice"),
+        ));
+        assert_eq!(response["projection"]["outcome"], "failed", "{response}");
+        assert!(
+            response["projection"]["reason"]
+                .as_str()
+                .unwrap()
+                .contains("no bot is delegated"),
+            "{response}"
+        );
+    }
+
+    /// T34: the documented example's validation step runs as written. It reads
+    /// its two targets from the Run input and refuses an empty one, so a
+    /// wrapper missing its destination fails before the report is generated.
+    #[test]
+    fn the_notify_example_validates_its_destination_before_running() {
+        let example: Value = serde_json::from_str(include_str!(
+            "../../../examples/graphs/weekly-work-report-notify.json"
+        ))
+        .unwrap();
+        let validate = example["ops"]["validate"]["run"].as_str().unwrap();
+        let definition = json!({
+            "entry": "validate",
+            "ops": {"validate": {"run": validate}},
+            "nodes": [{"id": "validate", "op": "validate"}],
+            "edges": []
+        });
+
+        let root = tempfile::tempdir().unwrap();
+        let refused = finish(spawn_allowed(
+            root.path(),
+            "notify-missing",
+            &definition,
+            &json!({"notify_bot": "weekly", "notify_userid": "  "}),
+            "sh,true,python3",
+        ));
+        assert_eq!(refused["projection"]["outcome"], "failed", "{refused}");
+
+        let root = tempfile::tempdir().unwrap();
+        let accepted = finish(spawn_allowed(
+            root.path(),
+            "notify-ok",
+            &definition,
+            &json!({"notify_bot": "weekly", "notify_userid": "alice"}),
+            "sh,true,python3",
+        ));
+        assert_eq!(accepted["projection"]["outcome"], "done", "{accepted}");
+    }
 }

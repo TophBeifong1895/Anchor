@@ -180,6 +180,11 @@ async fn business_graph_examples_are_admitted_without_provider_or_side_effects()
             "validate",
         ),
         (
+            include_str!("../../../../../examples/graphs/weekly-work-report-notify.json"),
+            json!(["validate", "report", "notify"]),
+            "validate",
+        ),
+        (
             include_str!("../../../../../examples/graphs/wecom-persistent-assistant.json"),
             json!(["wait_input", "assistant", "reply"]),
             "wait_input",
