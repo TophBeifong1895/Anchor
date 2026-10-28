@@ -8,7 +8,7 @@ for (const width of [1440, 390]) {
     const definition = { objective: '消息触发测试', entry: 'assistant', agents: { assistant: { model: 'fixture' } },
       nodes: [{ id: 'assistant', agent: 'assistant', plugins: ['gateway'] }], edges: [] };
     const graph = 'message-workflow';
-    const binding = { plugin: 'gateway', users: [] as string[], send_users: [] as string[] };
+    const binding = { plugin: 'gateway', users: [] as string[], send_users: [] as string[], delegate_graphs: [] as string[] };
     let configuration: Record<string, unknown> = { graph, configured: false, enabled: false, listener: 'stopped', mutable: true };
     const writes: { path: string; method: string; body: unknown }[] = [];
     const problems: string[] = [];
