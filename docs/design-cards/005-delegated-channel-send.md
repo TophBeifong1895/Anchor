@@ -262,3 +262,14 @@ delegate_graphs: Vec<String>,
 5. **S5 文档与样例**：`docs/wecom-assistant.md` 补一节，`examples/graphs/` 加一个带 `notify` 的周报变体，`docs/pilot-development-plan.md` 更新当前验收条目。
 
 **没有部署步骤。** 本卡不改变任何现有行为，部署与否不影响线上；等 §6 的第 2、3 步由使用方决定。
+
+## 11. Deployment verification (2026-10-28)
+
+One operator-approved deployment exercised the real private-message path: a
+non-assistant Graph's Op invoked `anchor-channel-send` through an explicitly
+delegated bot. The returned request id matched a gateway `send/confirmed` ledger
+entry, and the notification receipt gate passed. Existing channel Sessions
+recovered; the original member lists and model settings were retained. No model
+call or full report publication was needed for this test. This verifies platform
+acknowledgement, not recipient reading, the next scheduled full report, group
+sends, media delivery or simultaneous use of multiple real bot accounts.
