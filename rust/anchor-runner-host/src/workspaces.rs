@@ -219,6 +219,47 @@ impl Workspaces {
         Ok(owner.map(|owner| owner.key))
     }
 
+    /// Publication may certify an interruption without re-entering execution.
+    /// Borrow only its existing owner; a committed historical artifact may be
+    /// replayed after ownership moved, but must never release that newer scene.
+    pub(crate) fn lease_interrupted_owner(
+        &self,
+        key: &InvocationKey,
+        allow_replaced_owner: bool,
+    ) -> Result<Option<WorkspaceExecutionLease>, GraphError> {
+        validate_key(key)?;
+        let _registry = self.registry_lease()?;
+        let Some(binding) = self.binding(key)? else {
+            return Ok(None);
+        };
+        self.read_resource(&binding.resource_id)?;
+        let directory = self.resource_directory(&binding.resource_id)?;
+        let Some(owner) = read_owner(&directory)? else {
+            return Ok(None);
+        };
+        if owner.release.is_some() {
+            return Ok(None);
+        }
+        if owner.key != *key {
+            return if allow_replaced_owner {
+                Ok(None)
+            } else {
+                Err(GraphError::RunConflict)
+            };
+        }
+        let execution = lease(&directory.join("execution.lock"))?;
+        // A live writer may have released while we acquired its process lock.
+        let owner = read_owner(&directory)?.ok_or(GraphError::RunConflict)?;
+        if owner.key != *key {
+            return Err(GraphError::RunConflict);
+        }
+        Ok(owner.release.is_none().then_some(WorkspaceExecutionLease {
+            owner_path: directory.join("owner.json"),
+            owner,
+            _lease: execution,
+        }))
+    }
+
     /// Bind a Host-authorized resource id. No Graph-supplied host path enters
     /// this service. Sharing promotes the scene out of per-Run deletion.
     pub(crate) fn bind_resource(

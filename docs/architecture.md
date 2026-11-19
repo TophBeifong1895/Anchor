@@ -183,6 +183,8 @@ Library 审查、候选准备与导入共用代码暂存规则：选中 root 或
 引用发布与卸载共用 Library lease。Run 在读取 Plugin 至保存持久引用之间持有此锁，执行前释放；Run 准入持 Graph lease 时不等待 catalog guard。Session 挂载与安装/卸载按 catalog guard → Library lease 排序，并在锁内复核版本和引用。卸载沿用用户批准的前置条件，不在确认后刷新；安装失败的视图清理也在锁内核查，已引用或状态不确定的内容保留。
 所有节点默认按 `(Run, node)` 绑定稳定 Workspace，后续 invocation 复用同一目录；新 Run 默认独立。资源现场位于 `<workspace-root>/.resources/<resource>/files`，Kernel 保存资源及绑定授权，磁盘绑定是投影。跨 Run 通过 Host 授权绑定同一资源，渠道交接复用同一用例。执行租约覆盖写入者退出和选择性交付发布；未发布候选保留原现场且不能被其他 invocation 接管。失败、中断和取消保留修改，不生成全目录 checkpoint 或 `/previous` 副本。
 
+恢复时从既有完成事实发布 `Interruption`，同样须取得原 invocation 的执行租约，在控制 Artifact 持久化后释放它的目录占用。发布失败保留占用，重放已发布的中断可补齐遗漏的释放；历史中断不得释放后续 invocation 的目录。回归见 [中断发布测试](../rust/anchor-runner-host/src/artifacts/interruption_tests.rs)。
+
 `final_result.files` 必填，`[]` 表示纯文字，目录递归选择；节点 `writes` 是必交子集。Op.run 按 `writes` 交付，Call 只交付显式导出文件。Host 只读取选集，未选中的依赖、缓存、项目 Git 和链接不参与归档。内容对象与可写现场不共用可变字节，发布后再由 Kernel 接受结果引用；同 invocation 重试复用已发布交付。Artifact 字节可独立保留或过期，历史清单不永久保留字节；当前执行/恢复输入及显式保留交付受保护，来源 Run 删除不直接删除共享对象。
 
 ## Goose 与恢复

@@ -110,6 +110,16 @@ impl HostArtifacts {
         completion: &NodeCompletion,
         context: &ArtifactFreezeContext,
     ) -> Result<CommitRef, GraphError> {
+        if context.kind == ArtifactKind::Interruption {
+            let lease = self
+                .workspaces()
+                .lease_interrupted_owner(key, self.published_commit(key).is_some())?;
+            let commit = self.freeze_snapshot(key, completion, context)?;
+            if let Some(lease) = lease {
+                lease.finish_interrupted()?;
+            }
+            return Ok(commit);
+        }
         if self.published_commit(key).is_some()
             || !matches!(context.kind, ArtifactKind::Node | ArtifactKind::GraphCall)
         {
@@ -878,6 +888,10 @@ mod tests;
 #[cfg(test)]
 #[path = "artifacts/provenance_tests.rs"]
 mod provenance_tests;
+
+#[cfg(test)]
+#[path = "artifacts/interruption_tests.rs"]
+mod interruption_tests;
 
 #[cfg(test)]
 #[path = "artifacts/coordinator_tests.rs"]
